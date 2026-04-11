@@ -156,6 +156,18 @@ pub enum CheckError {
         capability: String,
         span: Span,
     },
+
+    // ── Information flow control (#23) ───────────────────────────────────
+    /// `declassify()` applied to a non-`Secret<T>` type.
+    InvalidDeclassify {
+        found: String,
+        span: Span,
+    },
+    /// `sanitize()` applied to a non-`Tainted<T>` type.
+    InvalidSanitize {
+        found: String,
+        span: Span,
+    },
 }
 
 impl CheckError {
@@ -187,7 +199,9 @@ impl CheckError {
             | CheckError::MissingEffect { span, .. }
             | CheckError::UnboundedLoopInTotal { span }
             | CheckError::PartialCallInTotal { span, .. }
-            | CheckError::CapabilityViolation { span, .. } => *span,
+            | CheckError::CapabilityViolation { span, .. }
+            | CheckError::InvalidDeclassify { span, .. }
+            | CheckError::InvalidSanitize { span, .. } => *span,
         }
     }
 
@@ -279,6 +293,12 @@ impl CheckError {
                 param, capability, ..
             } => format!(
                 "`{capability}` capability of `{param}` cannot be sent across actor boundary; use `iso` or `val`"
+            ),
+            CheckError::InvalidDeclassify { found, .. } => format!(
+                "`declassify()` requires `Secret<T>`, found `{found}` — only Secret data can be declassified (for Tainted data use `sanitize()` instead)"
+            ),
+            CheckError::InvalidSanitize { found, .. } => format!(
+                "`sanitize()` requires `Tainted<T>`, found `{found}` — only Tainted data can be sanitized (for Secret data use `declassify()` instead)"
             ),
         }
     }

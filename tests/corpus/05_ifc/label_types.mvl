@@ -1,0 +1,44 @@
+// Corpus: Security label type checking (Requirement 11, #24)
+// Validates: Public/Tainted/Secret/Clean as distinct labeled types.
+
+// ── Basic labeled parameters and returns ──────────────────────────────────
+
+fn echo_public(s: Public<String>) -> Public<String> {
+    s
+}
+
+fn echo_tainted(s: Tainted<String>) -> Tainted<String> {
+    s
+}
+
+fn echo_secret(k: Secret<Int>) -> Secret<Int> {
+    k
+}
+
+fn echo_clean(s: Clean<String>) -> Clean<String> {
+    s
+}
+
+// ── Upward flow: lower-sensitivity data may flow to higher slot ───────────
+
+fn promote_to_secret(x: Public<Int>) -> Secret<Int> {
+    x
+}
+
+fn promote_to_tainted(x: Public<String>) -> Tainted<String> {
+    x
+}
+
+fn promote_to_clean(x: Public<String>) -> Clean<String> {
+    x
+}
+
+// ── Labeled types as generic arguments ───────────────────────────────────
+
+fn wrap_option(x: Option<Secret<Int>>) -> Option<Secret<Int>> {
+    x
+}
+
+fn wrap_result(res: Result<Tainted<String>, Error>) -> Result<Tainted<String>, Error> {
+    res
+}
