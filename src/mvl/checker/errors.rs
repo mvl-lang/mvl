@@ -1,0 +1,215 @@
+//! Type checker error variants.
+//!
+//! Each variant carries a [`Span`] for precise source location reporting and
+//! enough context to produce a human-readable message.
+
+use crate::mvl::parser::lexer::Span;
+
+/// A type-system violation found during checking.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CheckError {
+    // ── Basic type checking (#11) ────────────────────────────────────────
+    TypeMismatch {
+        expected: String,
+        found: String,
+        span: Span,
+    },
+    UndefinedVariable {
+        name: String,
+        span: Span,
+    },
+    UndefinedType {
+        name: String,
+        span: Span,
+    },
+    NonNumericArithmetic {
+        ty: String,
+        span: Span,
+    },
+    ArithmeticTypeMismatch {
+        op: String,
+        left: String,
+        right: String,
+        span: Span,
+    },
+    LogicTypeMismatch {
+        op: String,
+        ty: String,
+        span: Span,
+    },
+    UndefinedFunction {
+        name: String,
+        span: Span,
+    },
+    WrongArgCount {
+        name: String,
+        expected: usize,
+        found: usize,
+        span: Span,
+    },
+
+    // ── ADT checking (#12) ───────────────────────────────────────────────
+    MissingField {
+        ty: String,
+        field: String,
+        span: Span,
+    },
+    UnknownField {
+        ty: String,
+        field: String,
+        span: Span,
+    },
+    FieldNotFound {
+        ty: String,
+        field: String,
+        span: Span,
+    },
+    FieldAccessOnEnum {
+        ty: String,
+        span: Span,
+    },
+    UnknownVariant {
+        ty: String,
+        variant: String,
+        span: Span,
+    },
+    NotAStruct {
+        ty: String,
+        span: Span,
+    },
+
+    // ── Exhaustive match (#13) ───────────────────────────────────────────
+    NonExhaustiveMatch {
+        missing: Vec<String>,
+        span: Span,
+    },
+
+    // ── Option/Result enforcement (#14) ─────────────────────────────────
+    OptionDirectAccess {
+        span: Span,
+    },
+    ResultIgnored {
+        span: Span,
+    },
+    PropagateNotResult {
+        ty: String,
+        span: Span,
+    },
+
+    // ── Immutability enforcement (#17) ───────────────────────────────────
+    AssignToImmutable {
+        name: String,
+        span: Span,
+    },
+    MutateImmutableField {
+        ty: String,
+        field: String,
+        span: Span,
+    },
+
+    // ── Ownership (#15) ──────────────────────────────────────────────────
+    UseAfterMove {
+        name: String,
+        span: Span,
+    },
+
+    // ── Refinement types (#16) ───────────────────────────────────────────
+    RefinementViolated {
+        pred: String,
+        span: Span,
+    },
+}
+
+impl CheckError {
+    pub fn span(&self) -> Span {
+        match self {
+            CheckError::TypeMismatch { span, .. }
+            | CheckError::UndefinedVariable { span, .. }
+            | CheckError::UndefinedType { span, .. }
+            | CheckError::NonNumericArithmetic { span, .. }
+            | CheckError::ArithmeticTypeMismatch { span, .. }
+            | CheckError::LogicTypeMismatch { span, .. }
+            | CheckError::UndefinedFunction { span, .. }
+            | CheckError::WrongArgCount { span, .. }
+            | CheckError::MissingField { span, .. }
+            | CheckError::UnknownField { span, .. }
+            | CheckError::FieldNotFound { span, .. }
+            | CheckError::FieldAccessOnEnum { span, .. }
+            | CheckError::UnknownVariant { span, .. }
+            | CheckError::NotAStruct { span, .. }
+            | CheckError::NonExhaustiveMatch { span, .. }
+            | CheckError::OptionDirectAccess { span }
+            | CheckError::ResultIgnored { span }
+            | CheckError::PropagateNotResult { span, .. }
+            | CheckError::AssignToImmutable { span, .. }
+            | CheckError::MutateImmutableField { span, .. }
+            | CheckError::UseAfterMove { span, .. }
+            | CheckError::RefinementViolated { span, .. } => *span,
+        }
+    }
+
+    pub fn message(&self) -> String {
+        match self {
+            CheckError::TypeMismatch {
+                expected, found, ..
+            } => format!("type mismatch: expected `{expected}`, found `{found}`"),
+            CheckError::UndefinedVariable { name, .. } => format!("undefined variable `{name}`"),
+            CheckError::UndefinedType { name, .. } => format!("undefined type `{name}`"),
+            CheckError::NonNumericArithmetic { ty, .. } => {
+                format!("arithmetic operation requires numeric type, found `{ty}`")
+            }
+            CheckError::ArithmeticTypeMismatch {
+                op, left, right, ..
+            } => format!("type mismatch in `{op}`: `{left}` vs `{right}`"),
+            CheckError::LogicTypeMismatch { op, ty, .. } => {
+                format!("logical operator `{op}` requires `Bool`, found `{ty}`")
+            }
+            CheckError::UndefinedFunction { name, .. } => format!("undefined function `{name}`"),
+            CheckError::WrongArgCount {
+                name,
+                expected,
+                found,
+                ..
+            } => format!("function `{name}` expects {expected} argument(s), got {found}"),
+            CheckError::MissingField { ty, field, .. } => {
+                format!("missing field `{field}` in construction of `{ty}`")
+            }
+            CheckError::UnknownField { ty, field, .. } => {
+                format!("unknown field `{field}` in construction of `{ty}`")
+            }
+            CheckError::FieldNotFound { ty, field, .. } => {
+                format!("no field `{field}` on type `{ty}`")
+            }
+            CheckError::FieldAccessOnEnum { ty, .. } => {
+                format!("cannot access field directly on enum `{ty}` — use `match`")
+            }
+            CheckError::UnknownVariant { ty, variant, .. } => {
+                format!("no variant `{variant}` on enum `{ty}`")
+            }
+            CheckError::NotAStruct { ty, .. } => format!("`{ty}` is not a struct type"),
+            CheckError::NonExhaustiveMatch { missing, .. } => {
+                format!("non-exhaustive `match`: missing {}", missing.join(", "))
+            }
+            CheckError::OptionDirectAccess { .. } => {
+                "cannot access `Option<T>` value directly — use `match` or `?`".to_string()
+            }
+            CheckError::ResultIgnored { .. } => {
+                "`Result` value must be used — handle with `match` or propagate with `?`"
+                    .to_string()
+            }
+            CheckError::PropagateNotResult { ty, .. } => {
+                format!("`?` applied to `{ty}`, which is neither `Result` nor `Option`")
+            }
+            CheckError::AssignToImmutable { name, .. } => {
+                format!("cannot assign to immutable binding `{name}`")
+            }
+            CheckError::MutateImmutableField { ty, field, .. } => {
+                format!("cannot assign to immutable field `{field}` on `{ty}`")
+            }
+            CheckError::UseAfterMove { name, .. } => format!("use of moved value `{name}`"),
+            CheckError::RefinementViolated { pred, .. } => {
+                format!("refinement predicate violated: `{pred}`")
+            }
+        }
+    }
+}
