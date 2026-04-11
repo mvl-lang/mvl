@@ -1,0 +1,78 @@
+// Corpus: MVL function declarations with effects
+
+// Single effect
+fn read_file(path: Path) -> Result<String, IOError> ! FileRead {
+    file.read(path)
+}
+
+fn write_file(path: Path, content: String) -> Result<Unit, IOError> ! FileWrite {
+    file.write(path, content)
+}
+
+fn http_get(url: String) -> Result<Response, NetError> ! Net {
+    http.get(url)
+}
+
+fn query_db(sql: String) -> Result<Rows, DBError> ! DB {
+    db.execute(sql)
+}
+
+fn print_line(msg: String) -> Unit ! Console {
+    console.log(msg)
+}
+
+fn read_input() -> String ! IO {
+    io.read_line()
+}
+
+// Multiple effects
+fn log_and_store(event: Event) -> Result<Unit, Error> ! DB, Console {
+    console.log("storing event");
+    db.insert(event)
+}
+
+fn fetch_and_cache(key: String) -> Result<Value, Error> ! Net, DB {
+    let value = http.get(key)?;
+    db.cache(key, value)?;
+    Ok(value)
+}
+
+fn full_pipeline(
+    input: Tainted<String>,
+    path: Path,
+) -> Result<Public<Report>, Error> ! IO, FileRead, FileWrite, DB, Console {
+    let clean = sanitize(input);
+    let template = file.read(path)?;
+    let report = db.generate_report(clean, template)?;
+    file.write(path, report.to_string())?;
+    console.log("report generated");
+    Ok(declassify(report))
+}
+
+// No effects (pure functions)
+total fn pure_add(a: Int, b: Int) -> Int { a + b }
+
+total fn pure_map<A, B>(f: fn(A) -> B, xs: List<A>) -> List<B> {
+    xs.map(f)
+}
+
+// Effect in function type parameter
+fn apply_with_io(f: fn(String) -> Result<String, Error> ! IO, input: String)
+    -> Result<String, Error> ! IO {
+    f(input)
+}
+
+// Total with effects (terminates, but uses I/O)
+total fn log_count(n: Int where self >= 0) -> Unit ! Console {
+    console.log(n.to_string())
+}
+
+// Partial with effects
+partial fn poll_until_ready(resource: &Resource) -> Result<Data, Error> ! Net, Console {
+    loop {
+        match resource.check()? {
+            Ready(data) => return Ok(data),
+            Pending => console.log("waiting..."),
+        }
+    }
+}

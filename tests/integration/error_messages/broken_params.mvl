@@ -1,0 +1,6 @@
+// Intentionally broken: missing `:` in parameter, missing `)`, wrong keyword
+fn broken1(x Int, y: Int) -> Int { x + y }
+
+fn broken2(a: -> Int { a }
+
+fn valid() -> Int { 42 }

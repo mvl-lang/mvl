@@ -1,0 +1,70 @@
+// Corpus: MVL security labels and information-flow control
+
+// ── Security-labeled types ────────────────────────────────────────────────
+
+// Public: data that has been declassified and may be revealed
+fn use_public(data: Public<String>) -> String {
+    data.to_string()
+}
+
+// Tainted: untrusted external input that must be sanitized before use
+fn use_tainted(input: Tainted<String>) -> Clean<String> {
+    sanitize(input)
+}
+
+// Secret: confidential data that must be declassified explicitly
+fn use_secret(key: Secret<ApiKey>) -> Public<Token> {
+    declassify(key.sign())
+}
+
+// Clean: sanitized data safe for use
+fn use_clean(s: Clean<String>) -> String {
+    s.into_inner()
+}
+
+// ── Nested labels ─────────────────────────────────────────────────────────
+
+// Public<Option<Secret<Key>>>: outer label on an optional secret
+fn nested_labels(opt: Public<Option<Secret<Key>>>) -> Bool {
+    opt.is_some()
+}
+
+// Tainted inside a Result
+fn tainted_result(res: Result<Tainted<String>, Error>) -> Clean<String> {
+    match res {
+        Ok(raw) => sanitize(raw),
+        Err(e) => "".to_string(),
+    }
+}
+
+// ── Labels in function signatures ─────────────────────────────────────────
+
+// Authentication: takes tainted password, returns public session token
+total fn authenticate(
+    iso db: &DbConn,
+    password: Tainted<String>,
+    user_id: Public<UserId>,
+) -> Result<Public<Session>, AuthError> ! DB {
+    db.verify_and_create_session(user_id, sanitize(password))
+}
+
+// Declassify: explicitly lower the secrecy level
+fn release_report(report: Secret<Report>) -> Public<Report> {
+    declassify(report)
+}
+
+// ── Labels as type arguments ──────────────────────────────────────────────
+
+fn process_list(items: List<Tainted<String>>) -> List<Clean<String>> {
+    items.map(sanitize)
+}
+
+fn wrap_public(data: String) -> Public<String> {
+    Public::new(data)
+}
+
+// ── Capability combined with security label ───────────────────────────────
+
+fn iso_tainted(iso raw: Tainted<Resource>) -> Clean<Resource> {
+    sanitize(raw)
+}
