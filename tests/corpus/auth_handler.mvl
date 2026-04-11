@@ -1,0 +1,57 @@
+// Reference Example 1: User Authentication
+// Demonstrates: all 11 requirements
+//
+// Req 1:  ADTs (AuthError enum, Session struct)
+// Req 2:  Memory safety (ownership, no raw pointers)
+// Req 3:  Exhaustive match on Option
+// Req 4:  Option<User> — no null
+// Req 5:  Result<Session, AuthError> — errors in signature
+// Req 6:  Ownership — token moved, not copied
+// Req 7:  Effects declared: ! DB, Console
+// Req 8:  total — must terminate
+// Req 9:  iso db — isolated, no concurrent access
+// Req 10: UserId refinement (> 0)
+// Req 11: Tainted input, Secret password, Public output
+
+type UserId = Int where self > 0
+
+type AuthError = enum {
+    NotFound,
+    InvalidPassword,
+    AccountLocked { attempts: Int where self >= 0 },
+}
+
+type Session = struct {
+    token: Secret<String>,
+    user_id: Public<UserId>,
+    expires_at: Public<Timestamp>,
+}
+
+total fn authenticate(
+    iso db: &DbConn,
+    input_password: Tainted<String>,
+    user_id: Public<UserId>,
+) -> Result<Session, AuthError> ! DB, Console {
+
+    let user: Option<User> = db.find_user(user_id)?;
+
+    match user {
+        None => Err(AuthError::NotFound),
+        Some(u) => {
+            let clean_pwd: Clean<String> = sanitize(input_password);
+            let stored: Secret<Hash> = u.password_hash;
+            let valid: Public<bool> = verify_hash(clean_pwd, stored);
+
+            if valid {
+                let token = generate_token(u.id);
+                Ok(Session {
+                    token: token,
+                    user_id: user_id,
+                    expires_at: now_plus(3600),
+                })
+            } else {
+                Err(AuthError::InvalidPassword)
+            }
+        }
+    }
+}

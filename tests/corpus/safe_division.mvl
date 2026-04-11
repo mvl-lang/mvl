@@ -1,0 +1,38 @@
+// Reference Example 2: Safe Division with Audit Trail
+// Demonstrates: refinement types, IFC, effects, totality
+//
+// Req 7:  Effects (Console, DB)
+// Req 8:  total — pure math provably terminates
+// Req 10: NonZero refinement, Amount non-negative, positive parties
+// Req 11: Secret account ID, Public amounts, no secret leakage to log
+
+type Amount = Float where self >= 0.0
+type NonZero = Float where self != 0.0
+type AccountId = Secret<String>
+
+type DivError = enum { DivisionByZero }
+
+total fn safe_divide(
+    numerator: Public<Amount>,
+    denominator: Public<NonZero>,
+) -> Public<Float> {
+    numerator / denominator
+}
+
+total fn calculate_share(
+    iso account: Secret<AccountId>,
+    total_amount: Public<Amount>,
+    num_parties: Public<Int where self > 0>,
+) -> Result<Public<Float>, DivError> ! Console {
+
+    let divisor: Public<NonZero> = to_nonzero(num_parties.to_float())?;
+    let share = safe_divide(total_amount, divisor);
+
+    // OK: share is Public
+    console.log("Calculated share: {}", share);
+
+    // COMPILE ERROR if uncommented: Secret cannot flow to Console
+    // console.log("Account: {}", account);
+
+    Ok(share)
+}
