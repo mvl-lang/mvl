@@ -16,6 +16,7 @@
 
 pub mod context;
 pub mod errors;
+pub mod ifc;
 pub mod types;
 
 use crate::mvl::checker::context::{
@@ -25,7 +26,8 @@ use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
 use crate::mvl::parser::ast::{
     BinaryOp, Block, Capability, ConstDecl, Decl, ElseBranch, Expr, FnDecl, LValue, Literal,
-    MatchArm, MatchBody, ModuleDecl, Pattern, Program, Stmt, Totality, TypeBody, TypeDecl, UnaryOp,
+    MatchArm, MatchBody, ModuleDecl, Pattern, Program, SecurityLabel, Stmt, Totality, TypeBody,
+    TypeDecl, UnaryOp,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -339,7 +341,7 @@ impl TypeChecker {
                 ..
             } => {
                 let iter_ty = self.infer_expr(iter);
-                let elem_ty = match iter_ty.base() {
+                let elem_ty = match iter_ty.unlabeled() {
                     Ty::List(inner) => *inner.clone(),
                     _ => Ty::Unknown,
                 };
@@ -430,7 +432,7 @@ impl TypeChecker {
     }
 
     fn check_field_mutation(&mut self, ty: &Ty, field: &str, span: Span) {
-        let base = ty.base();
+        let base = ty.unlabeled();
         if let Ty::Named(name, _) = base {
             if let Some(type_info) = self.env.lookup_type(name).cloned() {
                 if let TypeBodyInfo::Struct(fields) = &type_info.body {
@@ -621,8 +623,42 @@ impl TypeChecker {
             }
 
             Expr::Consume { expr, .. } => self.infer_expr(expr),
-            Expr::Declassify { expr, .. } => self.infer_expr(expr),
-            Expr::Sanitize { expr, .. } => self.infer_expr(expr),
+
+            // #27: declassify() — converts Secret<T> to Public<T>
+            Expr::Declassify { expr, span } => {
+                let inner_ty = self.infer_expr(expr);
+                match inner_ty.base() {
+                    Ty::Labeled(SecurityLabel::Secret, inner) => {
+                        Ty::Labeled(SecurityLabel::Public, inner.clone())
+                    }
+                    Ty::Unknown => Ty::Labeled(SecurityLabel::Public, Box::new(Ty::Unknown)),
+                    _ => {
+                        self.emit(CheckError::InvalidDeclassify {
+                            found: inner_ty.display(),
+                            span: *span,
+                        });
+                        Ty::Unknown
+                    }
+                }
+            }
+
+            // #27: sanitize() — converts Tainted<T> to Clean<T>
+            Expr::Sanitize { expr, span } => {
+                let inner_ty = self.infer_expr(expr);
+                match inner_ty.base() {
+                    Ty::Labeled(SecurityLabel::Tainted, inner) => {
+                        Ty::Labeled(SecurityLabel::Clean, inner.clone())
+                    }
+                    Ty::Unknown => Ty::Labeled(SecurityLabel::Clean, Box::new(Ty::Unknown)),
+                    _ => {
+                        self.emit(CheckError::InvalidSanitize {
+                            found: inner_ty.display(),
+                            span: *span,
+                        });
+                        Ty::Unknown
+                    }
+                }
+            }
 
             Expr::Lambda {
                 params,
@@ -679,7 +715,8 @@ impl TypeChecker {
         let rt = self.infer_expr(right);
 
         match op {
-            // Arithmetic: both operands must be numeric and the same type
+            // Arithmetic: both operands must be numeric and the same type.
+            // Labels propagate via join: Secret<Int> + Public<Int> → Secret<Int>.
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
                 if !matches!(lt, Ty::Unknown) && !lt.is_numeric() {
                     self.emit(CheckError::NonNumericArithmetic {
@@ -695,7 +732,13 @@ impl TypeChecker {
                     });
                     return Ty::Unknown;
                 }
-                if !matches!(lt, Ty::Unknown) && !matches!(rt, Ty::Unknown) && lt != rt {
+                // Compare unlabeled base types to allow mixed-label arithmetic
+                let lt_inner = lt.unlabeled().clone();
+                let rt_inner = rt.unlabeled().clone();
+                if !matches!(lt_inner, Ty::Unknown)
+                    && !matches!(rt_inner, Ty::Unknown)
+                    && lt_inner != rt_inner
+                {
                     self.emit(CheckError::ArithmeticTypeMismatch {
                         op: format!("{op:?}").to_lowercase(),
                         left: lt.display(),
@@ -704,11 +747,14 @@ impl TypeChecker {
                     });
                     return Ty::Unknown;
                 }
-                if matches!(lt, Ty::Unknown) {
-                    rt
+                // Propagate the join of labels to the result (#26)
+                let label = ifc::join_opt(ifc::label_of(&lt), ifc::label_of(&rt));
+                let base = if matches!(lt_inner, Ty::Unknown) {
+                    rt_inner
                 } else {
-                    lt
-                }
+                    lt_inner
+                };
+                ifc::apply_label(label, base)
             }
 
             // Comparison: both sides same type → Bool
@@ -731,17 +777,17 @@ impl TypeChecker {
                 Ty::Bool
             }
 
-            // Logic: both must be Bool
+            // Logic: both must be Bool (labels stripped — Bool logic yields Bool)
             BinaryOp::And | BinaryOp::Or => {
                 let op_str = format!("{op:?}").to_lowercase();
-                if !matches!(lt, Ty::Bool | Ty::Unknown) {
+                if !matches!(lt.unlabeled(), Ty::Bool | Ty::Unknown) {
                     self.emit(CheckError::LogicTypeMismatch {
                         op: op_str.clone(),
                         ty: lt.display(),
                         span: left.span(),
                     });
                 }
-                if !matches!(rt, Ty::Bool | Ty::Unknown) {
+                if !matches!(rt.unlabeled(), Ty::Bool | Ty::Unknown) {
                     self.emit(CheckError::LogicTypeMismatch {
                         op: op_str,
                         ty: rt.display(),
@@ -768,7 +814,7 @@ impl TypeChecker {
                 }
             }
             UnaryOp::Not => {
-                if !matches!(ty, Ty::Bool | Ty::Unknown) {
+                if !matches!(ty.unlabeled(), Ty::Bool | Ty::Unknown) {
                     self.emit(CheckError::TypeMismatch {
                         expected: "Bool".to_string(),
                         found: ty.display(),
@@ -885,7 +931,7 @@ impl TypeChecker {
 
     /// Look up a field type without emitting errors.
     fn field_type(&self, ty: &Ty, field: &str) -> Option<Ty> {
-        let base = ty.base();
+        let base = ty.unlabeled();
         if let Ty::Named(name, _) = base {
             if let Some(type_info) = self.env.lookup_type(name) {
                 if let TypeBodyInfo::Struct(fields) = &type_info.body {
@@ -901,7 +947,7 @@ impl TypeChecker {
 
     /// Look up a field type, emitting errors for violations.
     fn field_type_checked(&mut self, ty: &Ty, field: &str, span: Span) -> Ty {
-        let base = ty.base().clone();
+        let base = ty.unlabeled().clone();
         match &base {
             Ty::Named(name, _) => {
                 if let Some(type_info) = self.env.lookup_type(name).cloned() {
@@ -1045,7 +1091,7 @@ impl TypeChecker {
     }
 
     fn check_exhaustiveness(&mut self, arms: &[MatchArm], scrutinee_ty: &Ty, span: Span) {
-        let base = scrutinee_ty.base().clone();
+        let base = scrutinee_ty.unlabeled().clone();
 
         match &base {
             // Option<T>: must cover Some(_) and None
@@ -1147,7 +1193,7 @@ impl TypeChecker {
             }
             Pattern::Wildcard(_) => {}
             Pattern::Tuple { elems, .. } => {
-                if let Ty::Tuple(elem_tys) = ty.base() {
+                if let Ty::Tuple(elem_tys) = ty.unlabeled() {
                     for (p, t) in elems.iter().zip(elem_tys.iter()) {
                         self.bind_pattern(p, t, mutable);
                     }
@@ -1173,21 +1219,21 @@ impl TypeChecker {
             }
             Pattern::Wildcard(_) | Pattern::Literal(_, _) | Pattern::None(_) => {}
             Pattern::Some { inner, .. } => {
-                let inner_ty = match scrutinee_ty.base() {
+                let inner_ty = match scrutinee_ty.unlabeled() {
                     Ty::Option(t) => *t.clone(),
                     _ => Ty::Unknown,
                 };
                 self.bind_match_pattern(inner, &inner_ty);
             }
             Pattern::Ok { inner, .. } => {
-                let inner_ty = match scrutinee_ty.base() {
+                let inner_ty = match scrutinee_ty.unlabeled() {
                     Ty::Result(ok, _) => *ok.clone(),
                     _ => Ty::Unknown,
                 };
                 self.bind_match_pattern(inner, &inner_ty);
             }
             Pattern::Err { inner, .. } => {
-                let inner_ty = match scrutinee_ty.base() {
+                let inner_ty = match scrutinee_ty.unlabeled() {
                     Ty::Result(_, err) => *err.clone(),
                     _ => Ty::Unknown,
                 };
@@ -1204,7 +1250,7 @@ impl TypeChecker {
                 }
             }
             Pattern::Tuple { elems, .. } => {
-                let elem_tys = match scrutinee_ty.base() {
+                let elem_tys = match scrutinee_ty.unlabeled() {
                     Ty::Tuple(ts) => ts.clone(),
                     _ => vec![],
                 };

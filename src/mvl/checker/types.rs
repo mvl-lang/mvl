@@ -3,7 +3,8 @@
 //! [`Ty`] is the checker's resolved type — separate from the AST's [`TypeExpr`]
 //! which is an unresolved syntactic form.  Conversion happens in [`resolve`].
 
-use crate::mvl::parser::ast::TypeExpr;
+use crate::mvl::checker::ifc;
+use crate::mvl::parser::ast::{SecurityLabel, TypeExpr};
 
 /// Resolved type used throughout the checker.
 #[derive(Debug, Clone, PartialEq)]
@@ -27,6 +28,8 @@ pub enum Ty {
     List(Box<Ty>),
     // Refined type wrapper: underlying type + predicate source text
     Refined(Box<Ty>, String),
+    // Security label wrapper: label + inner type (Requirement 11)
+    Labeled(SecurityLabel, Box<Ty>),
     // Placeholder for inference failures (error propagation)
     Unknown,
 }
@@ -65,19 +68,22 @@ impl Ty {
             }
             Ty::List(inner) => format!("List<{}>", inner.display()),
             Ty::Refined(inner, _pred) => inner.display(),
+            Ty::Labeled(label, inner) => {
+                format!("{}<{}>", ifc::label_name(*label), inner.display())
+            }
             Ty::Unknown => "<unknown>".to_string(),
         }
     }
 
     pub fn is_numeric(&self) -> bool {
-        matches!(self, Ty::Int | Ty::Float)
+        matches!(self.unlabeled(), Ty::Int | Ty::Float)
     }
 
     pub fn is_bool(&self) -> bool {
-        matches!(self, Ty::Bool)
+        matches!(self.unlabeled(), Ty::Bool)
     }
 
-    /// Strip refinement wrappers to get the base type.
+    /// Strip Refined wrappers to get the base type (labels are preserved).
     pub fn base(&self) -> &Ty {
         match self {
             Ty::Refined(inner, _) => inner.base(),
@@ -85,14 +91,22 @@ impl Ty {
         }
     }
 
+    /// Strip both Refined and Labeled wrappers for structural operations.
+    pub fn unlabeled(&self) -> &Ty {
+        match self {
+            Ty::Refined(inner, _) | Ty::Labeled(_, inner) => inner.unlabeled(),
+            other => other,
+        }
+    }
+
     /// True if this type is or wraps an `Option`.
     pub fn is_option(&self) -> bool {
-        matches!(self.base(), Ty::Option(_))
+        matches!(self.unlabeled(), Ty::Option(_))
     }
 
     /// True if this type is or wraps a `Result`.
     pub fn is_result(&self) -> bool {
-        matches!(self.base(), Ty::Result(_, _))
+        matches!(self.unlabeled(), Ty::Result(_, _))
     }
 
     /// True if `?` can be applied (Option or Result).
@@ -102,7 +116,7 @@ impl Ty {
 
     /// Return the success type after unwrapping Result/Option for `?`.
     pub fn propagate_inner(&self) -> Ty {
-        match self.base() {
+        match self.unlabeled() {
             Ty::Result(ok, _) => *ok.clone(),
             Ty::Option(inner) => *inner.clone(),
             _ => Ty::Unknown,
@@ -131,8 +145,8 @@ pub fn resolve(expr: &TypeExpr) -> Ty {
             Ty::Result(Box::new(resolve(ok)), Box::new(resolve(err)))
         }
         TypeExpr::Ref { mutable, inner, .. } => Ty::Ref(*mutable, Box::new(resolve(inner))),
-        // Security labels are transparent to the type checker in Phase 1
-        TypeExpr::Labeled { inner, .. } => resolve(inner),
+        // Security labels are preserved as Ty::Labeled wrappers (Requirement 11)
+        TypeExpr::Labeled { label, inner, .. } => Ty::Labeled(*label, Box::new(resolve(inner))),
         TypeExpr::Refined { inner, pred, .. } => {
             Ty::Refined(Box::new(resolve(inner)), format!("{pred:?}"))
         }
@@ -143,18 +157,30 @@ pub fn resolve(expr: &TypeExpr) -> Ty {
     }
 }
 
-/// Structural compatibility ignoring refinement wrappers and Unknown.
+/// Structural compatibility with label-aware flow checking.
 ///
-/// `Unknown` unifies with anything at any depth (error recovery).  This means
-/// `Result<Int, Unknown>` (produced when we only know one type argument, e.g.
-/// from `Ok(1)`) is compatible with `Result<Int, String>`.
+/// `Unknown` unifies with anything at any depth (error recovery).
+/// Security labels enforce the IFC lattice: upward flows are allowed,
+/// downward flows are rejected (require explicit declassify/sanitize).
 pub fn types_compatible(a: &Ty, b: &Ty) -> bool {
+    // Strip Refined wrappers but preserve Labeled
     let a = a.base();
     let b = b.base();
     if matches!(a, Ty::Unknown) || matches!(b, Ty::Unknown) {
         return true;
     }
     match (a, b) {
+        // Both labeled: enforce lattice flow from b (found) to a (expected),
+        // then check structural compatibility of the inner types.
+        (Ty::Labeled(la, ia), Ty::Labeled(lb, ib)) => {
+            ifc::can_flow(*lb, *la) && types_compatible(ia, ib)
+        }
+        // Expected labeled, found unlabeled: check inner of expected vs found.
+        // Unlabeled data may be assigned to a labeled context (treated as Public).
+        (Ty::Labeled(_, ia), _) => types_compatible(ia, b),
+        // Expected unlabeled, found labeled: strip found label and check structurally.
+        (_, Ty::Labeled(_, ib)) => types_compatible(a, ib),
+        // Structural cases
         (Ty::Option(ai), Ty::Option(bi)) => types_compatible(ai, bi),
         (Ty::Result(ao, ae), Ty::Result(bo, be)) => {
             types_compatible(ao, bo) && types_compatible(ae, be)
@@ -244,6 +270,23 @@ mod tests {
     }
 
     #[test]
+    fn resolve_labeled_preserves_label() {
+        let expr = TypeExpr::Labeled {
+            label: SecurityLabel::Secret,
+            inner: Box::new(TypeExpr::Base {
+                name: "String".to_string(),
+                args: vec![],
+                span: s(),
+            }),
+            span: s(),
+        };
+        assert_eq!(
+            resolve(&expr),
+            Ty::Labeled(SecurityLabel::Secret, Box::new(Ty::String))
+        );
+    }
+
+    #[test]
     fn types_compatible_with_unknown() {
         assert!(types_compatible(&Ty::Unknown, &Ty::Int));
         assert!(types_compatible(&Ty::Int, &Ty::Unknown));
@@ -260,5 +303,54 @@ mod tests {
     fn types_compatible_different() {
         assert!(!types_compatible(&Ty::Int, &Ty::String));
         assert!(!types_compatible(&Ty::Bool, &Ty::Int));
+    }
+
+    #[test]
+    fn types_compatible_upward_flow_allowed() {
+        // Public<String> may flow to Secret<String> slot (upward)
+        let public_str = Ty::Labeled(SecurityLabel::Public, Box::new(Ty::String));
+        let secret_str = Ty::Labeled(SecurityLabel::Secret, Box::new(Ty::String));
+        assert!(types_compatible(&secret_str, &public_str)); // expected=Secret, found=Public → ok
+    }
+
+    #[test]
+    fn types_compatible_downward_flow_rejected() {
+        // Secret<String> must NOT flow to Public<String> slot (downward)
+        let public_str = Ty::Labeled(SecurityLabel::Public, Box::new(Ty::String));
+        let secret_str = Ty::Labeled(SecurityLabel::Secret, Box::new(Ty::String));
+        assert!(!types_compatible(&public_str, &secret_str)); // expected=Public, found=Secret → rejected
+    }
+
+    #[test]
+    fn types_compatible_same_label() {
+        let s1 = Ty::Labeled(SecurityLabel::Tainted, Box::new(Ty::String));
+        let s2 = Ty::Labeled(SecurityLabel::Tainted, Box::new(Ty::String));
+        assert!(types_compatible(&s1, &s2));
+    }
+
+    #[test]
+    fn types_compatible_label_inner_mismatch() {
+        // Secret<Int> vs Secret<String> — same label, different inner → incompatible
+        let si = Ty::Labeled(SecurityLabel::Secret, Box::new(Ty::Int));
+        let ss = Ty::Labeled(SecurityLabel::Secret, Box::new(Ty::String));
+        assert!(!types_compatible(&si, &ss));
+    }
+
+    #[test]
+    fn unlabeled_strips_label() {
+        let labeled = Ty::Labeled(SecurityLabel::Secret, Box::new(Ty::Int));
+        assert_eq!(labeled.unlabeled(), &Ty::Int);
+    }
+
+    #[test]
+    fn is_numeric_through_label() {
+        let labeled = Ty::Labeled(SecurityLabel::Secret, Box::new(Ty::Int));
+        assert!(labeled.is_numeric());
+    }
+
+    #[test]
+    fn is_bool_through_label() {
+        let labeled = Ty::Labeled(SecurityLabel::Tainted, Box::new(Ty::Bool));
+        assert!(labeled.is_bool());
     }
 }
