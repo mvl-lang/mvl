@@ -31,6 +31,7 @@ Derived from cross-language analysis of Rust std, Go std, Python stdlib, and C l
 | **Time** | `Instant`, `DateTime`, `Duration`, `now()`, `sleep()`, `format()`, `parse()`, timezone (IANA) |
 | **Concurrency** | `spawn(fn)` → `Handle<T>`, `Channel<T>`, `Mutex<T>`, `RwLock<T>`, `Atomic<T>`, `select` |
 | **JSON** | `json.encode(value)` → `Result<String>`, `json.decode<T>(string)` → `Result<T>` |
+| **TOML** | `toml.encode(value)` → `Result<String>`, `toml.decode<T>(string)` → `Result<T>`. Config file format — MVL's own `dependency.toml` uses it. |
 | **Crypto (basic)** | `sha256`, `sha512`, `crypto_random.bytes` |
 | **Process** | `process.spawn(cmd, args)` -> `Result<Child> ! ProcessSpawn` with `.stdin(Pipe)`, `.stdout(Capture)`, `.stderr(Capture)`. `child.wait()` -> `ExitStatus`. Process stdout is `Tainted`. |
 | **OS** | `env.set`, `env.all`, `current_dir`, `chdir`, `getuid`, `getgid`, `signal.on(SIGINT, handler)` |
@@ -39,7 +40,9 @@ Derived from cross-language analysis of Rust std, Go std, Python stdlib, and C l
 
 #### Extended (packages, not stdlib)
 
-Networking (TCP, HTTP, TLS, DNS, WebSocket), serialization extras (YAML, TOML, XML, CSV, protobuf), crypto extras (AES, RSA, ECDSA, bcrypt, argon2, X.509), database drivers, CLI argument parsing, compression, advanced data structures (B-tree, trie, bloom filter, LRU).
+Networking (TCP, HTTP, TLS, DNS, WebSocket), serialization extras (YAML, XML, CSV, protobuf), crypto extras (AES, RSA, ECDSA, bcrypt, argon2, X.509), database drivers, CLI argument parsing, compression, advanced data structures (B-tree, trie, bloom filter, LRU).
+
+Note: YAML is deliberately in extended, not standard. Complex spec (anchors, aliases, implicit typing), security footguns (`Norway` becomes `false`). TOML covers the config use case in stdlib.
 
 **Key decisions vs other languages:**
 - **JSON in stdlib** (unlike Rust, C) — universal interchange format, can't be optional
