@@ -54,6 +54,7 @@ nav:
     - 18. Keywords Reference: manual/18-keywords.md
     - 19. Operators and Precedence: manual/19-operators.md
     - 20. Grammar: manual/20-grammar.md
+    - 21. Testing Strategy: manual/21-testing.md
   - Quick Reference:
     - Language Reference: language.md
     - Grammar (EBNF): grammar.md

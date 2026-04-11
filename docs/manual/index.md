@@ -29,6 +29,7 @@ For design rationale, see the [ADRs](../adr/0001-eleven-requirements.md). For fo
 18. [Keywords Reference](18-keywords.md) — complete keyword list with definitions
 19. [Operators and Precedence](19-operators.md) — operator table, associativity
 20. [Grammar](20-grammar.md) — complete EBNF reference
+21. [Testing Strategy](21-testing.md) — unit, integration, mocking, property testing, model checking
 
 ## Conventions
 
