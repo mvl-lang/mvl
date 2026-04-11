@@ -2,7 +2,6 @@
 id = "mvl"
 name = "MVL"
 version = "0.0.1"
-schema_version = 1
 description = "MVL (Minimum Verification Language) — syntax highlighting and editor support"
 authors = ["MVL Team <https://github.com/LAB271>"]
 repository = "https://github.com/LAB271/mvl_language"
@@ -18,4 +17,4 @@ repository = "https://github.com/LAB271/mvl_language"
 #   commit = "<sha>"
 [grammars.mvl]
 repository = "https://github.com/LAB271/mvl_language"
-commit = "fed4a29"  # update this to the commit where grammar.js lands at repo root
+commit = "fed4a29"
