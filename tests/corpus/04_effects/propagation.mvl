@@ -1,0 +1,52 @@
+// Corpus: effect propagation (Req 7 / issue #20)
+// Callee effects must be declared by the caller.
+
+// Leaf: reads from FileRead
+fn read_config(path: Path) -> Result<String, IOError> ! FileRead {
+    path.read()
+}
+
+// Leaf: writes
+fn write_output(path: Path, data: String) -> Result<Unit, IOError> ! FileWrite {
+    path.write(data)
+}
+
+// Leaf: net
+fn fetch_data(url: String) -> Result<String, NetError> ! Net {
+    url.get()
+}
+
+// Caller declares FileRead (correct propagation)
+fn load_app_config(path: Path) -> Result<String, Error> ! FileRead {
+    let raw = read_config(path)?;
+    Ok(raw)
+}
+
+// Transitive caller also declares FileRead + Console
+fn bootstrap(path: Path) -> Result<Unit, Error> ! FileRead, Console {
+    let cfg = load_app_config(path)?;
+    cfg.print();
+    Ok(())
+}
+
+// Effect union: caller declares union of all callees
+fn fetch_and_write(url: String, path: Path) -> Result<Unit, Error> ! Net, FileWrite {
+    let data = fetch_data(url)?;
+    write_output(path, data)?;
+    Ok(())
+}
+
+// Pure callers only call pure helpers (no propagation needed)
+total fn double(x: Int) -> Int {
+    multiply(x, 2)
+}
+
+total fn multiply(a: Int, b: Int) -> Int {
+    a * b
+}
+
+total fn sum_of_squares(a: Int, b: Int) -> Int {
+    let sq_a = multiply(a, a);
+    let sq_b = multiply(b, b);
+    sq_a + sq_b
+}

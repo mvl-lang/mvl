@@ -391,3 +391,278 @@ fn refinements_corpus_parses() {
     // Type check also runs without panicking
     let _ = check(&prog);
 }
+
+// ── #19: Effect checking — reject side effects in pure functions ──────────────
+
+#[test]
+fn pure_vs_effectful_corpus_parses_and_checks() {
+    // GIVEN: valid corpus of pure/effectful declarations with correct annotations
+    // THEN: no type errors
+    let src = include_str!("corpus/04_effects/pure_vs_effectful.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "pure_vs_effectful corpus should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn pure_function_calling_effectful_rejected() {
+    // GIVEN: pure fn calls effectful fn ! Console
+    // THEN: UndeclaredEffect reported
+    let src = r#"
+        fn effectful_fn() -> Unit ! Console { console.log("hi") }
+        fn pure_fn() -> Unit { effectful_fn() }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::UndeclaredEffect { callee, effect, .. }
+                if callee == "effectful_fn" && effect == "Console")
+        ),
+        "expected UndeclaredEffect(effectful_fn, Console), got: {errors:?}"
+    );
+}
+
+#[test]
+fn effectful_function_with_correct_declaration_accepted() {
+    // GIVEN: fn caller ! Console calls fn log_it ! Console
+    // THEN: no effect errors
+    let src = r#"
+        fn log_it() -> Unit ! Console { console.log("hi") }
+        fn caller() -> Unit ! Console { log_it() }
+    "#;
+    let errors = errors_for(src);
+    let effect_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                CheckError::UndeclaredEffect { .. } | CheckError::MissingEffect { .. }
+            )
+        })
+        .collect();
+    assert!(
+        effect_errors.is_empty(),
+        "caller with matching effect should be accepted, got: {effect_errors:?}"
+    );
+}
+
+// ── #20: Effect propagation — callee effects declared by caller ───────────────
+
+#[test]
+fn propagation_corpus_parses_and_checks() {
+    // GIVEN: valid corpus of effect propagation patterns
+    // THEN: no type errors
+    let src = include_str!("corpus/04_effects/propagation.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "propagation corpus should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn caller_missing_callee_effect_rejected() {
+    // GIVEN: fn read_file ! FileRead; fn caller ! Net calls read_file
+    // THEN: MissingEffect(read_file, FileRead) reported
+    let src = r#"
+        fn read_file() -> Unit ! FileRead { file.read("x") }
+        fn caller() -> Unit ! Net { read_file() }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            CheckError::MissingEffect { callee, effect, .. }
+            if callee == "read_file" && effect == "FileRead"
+        )),
+        "expected MissingEffect(read_file, FileRead), got: {errors:?}"
+    );
+}
+
+#[test]
+fn caller_declaring_effect_union_accepted() {
+    // GIVEN: fn a ! FileRead, fn b ! Net, fn c ! FileRead, Net calls both
+    // THEN: no effect errors
+    let src = r#"
+        fn read_fn() -> Unit ! FileRead { file.read("x") }
+        fn net_fn() -> Unit ! Net { http.get("url") }
+        fn union_caller() -> Unit ! FileRead, Net { read_fn(); net_fn() }
+    "#;
+    let errors = errors_for(src);
+    let effect_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                CheckError::UndeclaredEffect { .. } | CheckError::MissingEffect { .. }
+            )
+        })
+        .collect();
+    assert!(
+        effect_errors.is_empty(),
+        "union caller should be accepted, got: {effect_errors:?}"
+    );
+}
+
+// ── #21: Totality checking — reject unbounded loops in total functions ─────────
+
+#[test]
+fn totality_corpus_parses_and_checks() {
+    // GIVEN: valid corpus of total/partial function declarations
+    // THEN: no type errors
+    let src = include_str!("corpus/07_termination/total_vs_partial.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "totality corpus should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn while_loop_in_total_function_rejected() {
+    // GIVEN: total fn with while loop
+    // THEN: UnboundedLoopInTotal reported
+    let src = "total fn spin() -> Unit { while true { } }";
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnboundedLoopInTotal { .. })),
+        "expected UnboundedLoopInTotal, got: {errors:?}"
+    );
+}
+
+#[test]
+fn while_loop_in_implicit_total_function_rejected() {
+    // GIVEN: fn without totality annotation (implicitly total) with while loop
+    // THEN: UnboundedLoopInTotal reported
+    let src = "fn loop_forever() -> Unit { while true { } }";
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnboundedLoopInTotal { .. })),
+        "expected UnboundedLoopInTotal for implicit total fn, got: {errors:?}"
+    );
+}
+
+#[test]
+fn while_loop_in_partial_function_accepted() {
+    // GIVEN: partial fn with while loop
+    // THEN: no UnboundedLoopInTotal error
+    let src = "partial fn server() -> Unit { while true { } }";
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnboundedLoopInTotal { .. })),
+        "partial fn should allow while loops, got: {errors:?}"
+    );
+}
+
+#[test]
+fn for_loop_in_total_function_accepted() {
+    // GIVEN: total fn with for loop (bounded)
+    // THEN: no totality error
+    let src = "total fn f(items: List<Int>) -> Unit { for x in items { } }";
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnboundedLoopInTotal { .. })),
+        "total fn should allow for loops, got: {errors:?}"
+    );
+}
+
+#[test]
+fn partial_call_in_total_function_rejected() {
+    // GIVEN: total fn calls partial fn
+    // THEN: PartialCallInTotal reported
+    let src = r#"
+        partial fn infinite() -> Unit { while true { } }
+        total fn caller() -> Unit { infinite() }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::PartialCallInTotal { callee, .. }
+                if callee == "infinite")
+        ),
+        "expected PartialCallInTotal(infinite), got: {errors:?}"
+    );
+}
+
+// ── #22: Reference capability checking — iso/val/ref/tag on actor boundaries ──
+
+#[test]
+fn capabilities_corpus_parses_and_checks() {
+    // GIVEN: valid corpus of capability-annotated functions
+    // THEN: no type errors
+    let src = include_str!("corpus/08_concurrency/capabilities.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "capabilities corpus should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn sending_ref_param_rejected() {
+    // GIVEN: fn with `ref` param attempts channel.send(param)
+    // THEN: CapabilityViolation reported
+    let src = r#"
+        fn send_ref(channel: Channel, ref data: Payload) -> Unit {
+            channel.send(data)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::CapabilityViolation { param, capability, .. }
+                if param == "data" && capability == "ref")
+        ),
+        "expected CapabilityViolation(data, ref), got: {errors:?}"
+    );
+}
+
+#[test]
+fn sending_iso_param_accepted() {
+    // GIVEN: fn with `iso` param attempts channel.send(param)
+    // THEN: no CapabilityViolation (iso is sendable)
+    let src = r#"
+        fn send_iso(channel: Channel, iso data: Payload) -> Unit {
+            channel.send(data)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::CapabilityViolation { .. })),
+        "iso param should be sendable, got: {errors:?}"
+    );
+}
+
+#[test]
+fn sending_val_param_accepted() {
+    // GIVEN: fn with `val` param attempts channel.send(param)
+    // THEN: no CapabilityViolation (val is sendable)
+    let src = r#"
+        fn broadcast(channel: Channel, val msg: Message) -> Unit {
+            channel.send(msg)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::CapabilityViolation { .. })),
+        "val param should be sendable, got: {errors:?}"
+    );
+}

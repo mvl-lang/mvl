@@ -27,11 +27,17 @@ impl Parser {
 
         let mut stmts = Vec::new();
         while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+            let pos_before = self.pos;
             match self.parse_stmt() {
                 Ok(s) => stmts.push(s),
                 Err(()) => {
                     if matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
                         break;
+                    }
+                    // Fix: if recovery stalled at a keyword (e.g. `fn`, `total`) without
+                    // consuming any tokens, force-advance to prevent an infinite loop.
+                    if self.pos == pos_before {
+                        self.advance();
                     }
                 }
             }

@@ -118,6 +118,44 @@ pub enum CheckError {
         pred: String,
         span: Span,
     },
+
+    // ── Effect checking (#19) ────────────────────────────────────────────
+    /// Pure function body calls an effectful function.
+    UndeclaredEffect {
+        /// The effectful callee.
+        callee: String,
+        /// The required effect name.
+        effect: String,
+        span: Span,
+    },
+
+    // ── Effect propagation (#20) ─────────────────────────────────────────
+    /// Caller does not declare all effects required by callee.
+    MissingEffect {
+        caller: String,
+        callee: String,
+        effect: String,
+        span: Span,
+    },
+
+    // ── Totality checking (#21) ──────────────────────────────────────────
+    /// `while` (unbounded loop) inside a total function.
+    UnboundedLoopInTotal {
+        span: Span,
+    },
+    /// Total function calls a `partial` function.
+    PartialCallInTotal {
+        callee: String,
+        span: Span,
+    },
+
+    // ── Reference capability checking (#22) ──────────────────────────────
+    /// Value with `ref` (or non-sendable) capability sent across actor boundary.
+    CapabilityViolation {
+        param: String,
+        capability: String,
+        span: Span,
+    },
 }
 
 impl CheckError {
@@ -144,7 +182,12 @@ impl CheckError {
             | CheckError::AssignToImmutable { span, .. }
             | CheckError::MutateImmutableField { span, .. }
             | CheckError::UseAfterMove { span, .. }
-            | CheckError::RefinementViolated { span, .. } => *span,
+            | CheckError::RefinementViolated { span, .. }
+            | CheckError::UndeclaredEffect { span, .. }
+            | CheckError::MissingEffect { span, .. }
+            | CheckError::UnboundedLoopInTotal { span }
+            | CheckError::PartialCallInTotal { span, .. }
+            | CheckError::CapabilityViolation { span, .. } => *span,
         }
     }
 
@@ -210,6 +253,33 @@ impl CheckError {
             CheckError::RefinementViolated { pred, .. } => {
                 format!("refinement predicate violated: `{pred}`")
             }
+            CheckError::UndeclaredEffect { callee, effect, .. } => {
+                format!(
+                    "function has no effect declaration but calls `{callee}` which requires `! {effect}`"
+                )
+            }
+            CheckError::MissingEffect {
+                caller,
+                callee,
+                effect,
+                ..
+            } => format!(
+                "function `{caller}` calls `{callee}` which requires `! {effect}` but `{caller}` does not declare it"
+            ),
+            CheckError::UnboundedLoopInTotal { .. } => {
+                "unbounded loop in total function — use `partial` to allow non-termination"
+                    .to_string()
+            }
+            CheckError::PartialCallInTotal { callee, .. } => {
+                format!(
+                    "total function calls `partial` function `{callee}` — total functions cannot call partial ones"
+                )
+            }
+            CheckError::CapabilityViolation {
+                param, capability, ..
+            } => format!(
+                "`{capability}` capability of `{param}` cannot be sent across actor boundary; use `iso` or `val`"
+            ),
         }
     }
 }

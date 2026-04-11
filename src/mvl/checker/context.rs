@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::mvl::checker::types::Ty;
-use crate::mvl::parser::ast::{FieldDecl, Variant};
+use crate::mvl::parser::ast::{Capability, FieldDecl, Totality, Variant};
 
 // ── Variable binding ─────────────────────────────────────────────────────────
 
@@ -12,6 +12,8 @@ pub struct VarInfo {
     pub ty: Ty,
     pub mutable: bool,
     pub moved: bool,
+    /// Reference capability for actor-boundary checking (Req 9).
+    pub capability: Option<Capability>,
 }
 
 impl VarInfo {
@@ -20,7 +22,13 @@ impl VarInfo {
             ty,
             mutable,
             moved: false,
+            capability: None,
         }
+    }
+
+    pub fn with_capability(mut self, cap: Option<Capability>) -> Self {
+        self.capability = cap;
+        self
     }
 }
 
@@ -65,6 +73,10 @@ pub enum VariantFieldsInfo {
 pub struct FnInfo {
     pub params: Vec<Ty>,
     pub ret: Ty,
+    /// Declared effects (Req 7): `! DB, Console`
+    pub effects: Vec<String>,
+    /// Totality annotation (Req 8): None = implicitly total, Some(Partial) = partial.
+    pub totality: Option<Totality>,
 }
 
 // ── Type environment ─────────────────────────────────────────────────────────

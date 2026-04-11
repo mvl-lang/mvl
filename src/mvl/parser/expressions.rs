@@ -232,9 +232,15 @@ impl Parser {
                 Ok(Expr::Block(block))
             }
 
-            // ── Parenthesised expression ─────────────────────────────────────
+            // ── Parenthesised expression or unit `()` ────────────────────────
             TokenKind::LParen => {
+                let lp_span = self.peek_span();
                 self.advance();
+                if self.eat(&TokenKind::RParen) {
+                    // Unit literal `()`
+                    let span = self.span_from(lp_span);
+                    return Ok(Expr::Literal(Literal::Unit, span));
+                }
                 let inner = self.parse_expr()?;
                 let rp = self.expect(&TokenKind::RParen);
                 self.require(rp)?;
