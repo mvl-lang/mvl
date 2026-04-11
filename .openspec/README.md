@@ -2,10 +2,28 @@
 
 Specifications, architectural decisions, and design documents for the Minimum Verification Language.
 
+## ISPE Philosophy
+
+This project follows the ISPE model (Intent → Spec → Program → Executable) for its own development:
+
+- **Intent:** GitHub issues (epics + stories)
+- **Spec:** `.openspec/specs/` — requirements with scenarios, implementation links, test links, corpus links
+- **Program:** `src/` — Rust implementation traced back to spec requirements
+- **Executable:** `cargo build` + `cargo test`
+
+Every requirement in a spec MUST have:
+- `**Implementation:**` link to the source file
+- `**Tests:**` link to the test location
+- `**Corpus:**` link to MVL example files (where applicable)
+- At least one `#### Scenario:` in Given-When-Then format
+
+Run `make assurance` to validate traceability. Run `make assurance-gate` in CI.
+
 ## Specs
 
 | # | Spec | Focus | Status |
 |---|------|-------|--------|
+| [000](specs/000-parser/spec.md) | Parser | Lexer, AST, type/function/statement/expression parsing, diagnostics | Draft |
 | [001](specs/001-type-system/spec.md) | Type System | ADTs, Option, Result, refinement types, security labels | Draft |
 | [002](specs/002-effect-system/spec.md) | Effect System | Effect tracking, capabilities, purity | Draft |
 | [003](specs/003-information-flow/spec.md) | Information Flow Control | Tainted/Clean/Secret labels, security lattice, declassification | Draft |

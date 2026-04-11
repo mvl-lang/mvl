@@ -55,6 +55,17 @@ format: ## Format code
 format-check: ## Check formatting without changing files
 	cargo fmt -- --check
 
+# === Assurance ===
+
+assurance: ## Check ISPE traceability: spec → implementation → tests
+	@python3 tools/assurance.py
+
+assurance-verbose: ## Assurance dashboard with per-requirement detail
+	@python3 tools/assurance.py --verbose
+
+assurance-gate: ## CI gate: fail if below 75% completeness/coverage
+	@python3 tools/assurance.py --min 0.75
+
 # === Documentation ===
 
 docs: ## Build documentation site
