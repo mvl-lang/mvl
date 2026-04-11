@@ -6,6 +6,24 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-04-11 (Epic 2: MVL type checker)
+
+### Added
+- Type checker: two-pass design (collect declarations → check bodies) with full error accumulation (#10)
+- Type inference for basic types: Int, Float, String, Bool, Char, Byte; arithmetic, comparison, logic ops (#11)
+- ADT checking: struct field presence/type validation, enum field-access rejection (#12)
+- Exhaustive match: enums, Option<T>, Result<T,E>; bare-ident variant patterns handled (#13)
+- Option/Result enforcement: no direct field access on Option, ResultIgnored detection, `?` propagation check (#14)
+- Immutability enforcement: reject assignment to non-`mut` bindings and non-`mut` struct fields (#17)
+- Ownership/borrow checking: use-after-`move(x)` detection (#15)
+- Refinement types: integer-predicate refinements parse and type-check; corpus validates grammar (#16)
+- 7 corpus files + 22 integration tests + 7 new unit tests; 163 total tests
+- `types_compatible` made recursive: `Result<Int, Unknown>` unifies with `Result<Int, String>`
+- Enum constructors as expressions (`Ok`, `Err`, `Some`, `None`, user variants) no longer emit false errors
+- Assignment type-compatibility check (not just mutability)
+- `infer_block_type` helper: implicit return values not flagged as `ResultIgnored`
+- If-expression branch type mismatch detection
+
 ## [0.2.0] — 2026-04-11 (Epic 1: MVL parser, source → AST)
 
 ### Added
