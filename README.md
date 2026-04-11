@@ -1,8 +1,8 @@
 # MVL — Minimum Verification Language
 
-**The smallest language where the compiler verifies the most.**
+What if we turn things around? Code generation just became frictionless. LLMs write code in any language, at any verbosity, with any annotation burden — for free. So why are we still designing languages for humans to write? What if we designed a language that maximized everything a compiler can verify — type safety, memory safety, termination, data race freedom, information flow — and let the LLM handle the fact that it's verbose, heavily annotated, and ugly to write by hand?
 
-MVL is a programming language designed for a world where LLMs generate all code and compilers verify it. Not for human ergonomics — for maximum verification density per token.
+That's the MVL. The smallest language where the compiler verifies the most. Not for human ergonomics — for maximum verification density per generated token.
 
 ## Why
 
