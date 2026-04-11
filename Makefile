@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help build test lint docs docs-serve clean
+.PHONY: help build test lint docs docs-serve tree-sitter-build tree-sitter-test clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -73,6 +73,16 @@ docs: ## Build documentation site
 
 docs-serve: ## Serve documentation locally (http://localhost:8000)
 	uv run mkdocs serve
+
+# === Clean ===
+
+# === Tree-sitter (editor support) ===
+
+tree-sitter-build: ## Build tree-sitter grammar for Zed/Neovim
+	cd etc/tree-sitter-mvl && npm install && npm run build
+
+tree-sitter-test: ## Run tree-sitter corpus tests
+	cd etc/tree-sitter-mvl && npm test
 
 # === Clean ===
 

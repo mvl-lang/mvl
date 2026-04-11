@@ -1,0 +1,419 @@
+===============================================================================
+Line comment
+===============================================================================
+
+// This is a comment
+
+-------------------------------------------------------------------------------
+
+(program
+  (line_comment))
+
+===============================================================================
+Boolean literals
+===============================================================================
+
+const YES: Bool = true;
+const NO: Bool = false;
+
+-------------------------------------------------------------------------------
+
+(program
+  (const_decl
+    (identifier)
+    (base_type (identifier))
+    (boolean_literal))
+  (const_decl
+    (identifier)
+    (base_type (identifier))
+    (boolean_literal)))
+
+===============================================================================
+Integer literal
+===============================================================================
+
+const ZERO: Int = 0;
+
+-------------------------------------------------------------------------------
+
+(program
+  (const_decl
+    (identifier)
+    (base_type (identifier))
+    (integer_literal)))
+
+===============================================================================
+Float literal
+===============================================================================
+
+const PI: Float = 3.14;
+
+-------------------------------------------------------------------------------
+
+(program
+  (const_decl
+    (identifier)
+    (base_type (identifier))
+    (float_literal)))
+
+===============================================================================
+Type alias — refined
+===============================================================================
+
+type UserId = Int where self > 0
+
+-------------------------------------------------------------------------------
+
+(program
+  (type_decl
+    (identifier)
+    (refined_type
+      (base_type (identifier))
+      (refinement
+        (ref_expr
+          (ref_term
+            (ref_atom (identifier))
+            (ref_atom (integer_literal))))))))
+
+===============================================================================
+Type — struct
+===============================================================================
+
+type Point = struct {
+  x: Float,
+  y: Float,
+}
+
+-------------------------------------------------------------------------------
+
+(program
+  (type_decl
+    (identifier)
+    (struct_body
+      (field_decl (identifier) (base_type (identifier)))
+      (field_decl (identifier) (base_type (identifier))))))
+
+===============================================================================
+Type — enum
+===============================================================================
+
+type Color = enum {
+  Red,
+  Green,
+  Blue,
+}
+
+-------------------------------------------------------------------------------
+
+(program
+  (type_decl
+    (identifier)
+    (enum_body
+      (variant (identifier))
+      (variant (identifier))
+      (variant (identifier)))))
+
+===============================================================================
+Type — enum with tuple variant
+===============================================================================
+
+type Shape = enum {
+  Circle(Float),
+  Rect(Float, Float),
+}
+
+-------------------------------------------------------------------------------
+
+(program
+  (type_decl
+    (identifier)
+    (enum_body
+      (variant
+        (identifier)
+        (type_list (base_type (identifier))))
+      (variant
+        (identifier)
+        (type_list
+          (base_type (identifier))
+          (base_type (identifier)))))))
+
+===============================================================================
+Type — generic parameters
+===============================================================================
+
+type Pair<A, B> = struct {
+  first: A,
+  second: B,
+}
+
+-------------------------------------------------------------------------------
+
+(program
+  (type_decl
+    (identifier)
+    (type_params (identifier) (identifier))
+    (struct_body
+      (field_decl (identifier) (base_type (identifier)))
+      (field_decl (identifier) (base_type (identifier))))))
+
+===============================================================================
+Security-labeled field
+===============================================================================
+
+type Credentials = struct {
+  username: Public<String>,
+  password: Secret<String>,
+}
+
+-------------------------------------------------------------------------------
+
+(program
+  (type_decl
+    (identifier)
+    (struct_body
+      (field_decl
+        (identifier)
+        (labeled_type (security_label) (base_type (identifier))))
+      (field_decl
+        (identifier)
+        (labeled_type (security_label) (base_type (identifier)))))))
+
+===============================================================================
+Simple function — total
+===============================================================================
+
+total fn add(x: Int, y: Int) -> Int {
+  return x + y;
+}
+
+-------------------------------------------------------------------------------
+
+(program
+  (fn_decl
+    (totality)
+    (identifier)
+    (param_list
+      (param (identifier) (base_type (identifier)))
+      (param (identifier) (base_type (identifier))))
+    (return_type (base_type (identifier)))
+    (block
+      (return_stmt
+        (binary_expr
+          (identifier)
+          (identifier))))))
+
+===============================================================================
+Function — with effects
+===============================================================================
+
+total fn greet(name: String) -> Unit ! Console {
+  console.log(name);
+}
+
+-------------------------------------------------------------------------------
+
+(program
+  (fn_decl
+    (totality)
+    (identifier)
+    (param_list
+      (param (identifier) (base_type (identifier))))
+    (return_type (base_type (identifier)))
+    (effect_list (effect))
+    (block
+      (expr_stmt
+        (method_call_expr
+          (identifier)
+          (identifier)
+          (arg_list (identifier)))))))
+
+===============================================================================
+Function — capability annotation
+===============================================================================
+
+total fn use_db(iso db: &DbConn) -> Unit {
+  return;
+}
+
+-------------------------------------------------------------------------------
+
+(program
+  (fn_decl
+    (totality)
+    (identifier)
+    (param_list
+      (param
+        (capability)
+        (identifier)
+        (ref_type (base_type (identifier)))))
+    (return_type (base_type (identifier)))
+    (block
+      (return_stmt))))
+
+===============================================================================
+Let binding with type annotation
+===============================================================================
+
+total fn example() -> Unit {
+  let x: Int = 42;
+  let mut y: Int = 0;
+}
+
+-------------------------------------------------------------------------------
+
+(program
+  (fn_decl
+    (totality)
+    (identifier)
+    (return_type (base_type (identifier)))
+    (block
+      (let_stmt
+        (identifier)
+        (base_type (identifier))
+        (integer_literal))
+      (let_stmt
+        (identifier)
+        (base_type (identifier))
+        (integer_literal)))))
+
+===============================================================================
+Match — None and Some patterns
+===============================================================================
+
+total fn unwrap_or(v: Option<Int>, def: Int) -> Int {
+  match v {
+    None => def,
+    Some(x) => x,
+  }
+}
+
+-------------------------------------------------------------------------------
+
+(program
+  (fn_decl
+    (totality)
+    (identifier)
+    (param_list
+      (param (identifier) (option_type (base_type (identifier))))
+      (param (identifier) (base_type (identifier))))
+    (return_type (base_type (identifier)))
+    (block
+      (match_stmt
+        (identifier)
+        (match_arm
+          (none_pattern)
+          (identifier))
+        (match_arm
+          (some_pattern (identifier))
+          (identifier))))))
+
+===============================================================================
+Result propagation with ?
+===============================================================================
+
+total fn parse_id(s: String) -> Result<Int, String> {
+  let n: Int = parse(s)?;
+  Ok(n)
+}
+
+-------------------------------------------------------------------------------
+
+(program
+  (fn_decl
+    (totality)
+    (identifier)
+    (param_list
+      (param (identifier) (base_type (identifier))))
+    (return_type
+      (result_type
+        (base_type (identifier))
+        (base_type (identifier))))
+    (block
+      (let_stmt
+        (identifier)
+        (base_type (identifier))
+        (propagate_expr
+          (fn_call_expr (identifier) (arg_list (identifier)))))
+      (expr_stmt
+        (fn_call_expr (identifier) (arg_list (identifier)))))))
+
+===============================================================================
+Lambda expression
+===============================================================================
+
+total fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+  let result = f(x);
+  return result;
+}
+
+-------------------------------------------------------------------------------
+
+(program
+  (fn_decl
+    (totality)
+    (identifier)
+    (param_list
+      (param
+        (identifier)
+        (fn_type
+          (type_list (base_type (identifier)))
+          (base_type (identifier))))
+      (param (identifier) (base_type (identifier))))
+    (return_type (base_type (identifier)))
+    (block
+      (let_stmt
+        (identifier)
+        (fn_call_expr
+          (identifier)
+          (arg_list (identifier))))
+      (return_stmt (identifier)))))
+
+===============================================================================
+sanitize and declassify
+===============================================================================
+
+total fn process(raw: Tainted<String>) -> Clean<String> {
+  let clean = sanitize(raw);
+  return clean;
+}
+
+-------------------------------------------------------------------------------
+
+(program
+  (fn_decl
+    (totality)
+    (identifier)
+    (param_list
+      (param
+        (identifier)
+        (labeled_type (security_label) (base_type (identifier)))))
+    (return_type
+      (labeled_type (security_label) (base_type (identifier))))
+    (block
+      (let_stmt
+        (identifier)
+        (sanitize_expr (identifier)))
+      (return_stmt (identifier)))))
+
+===============================================================================
+Module declaration
+===============================================================================
+
+module Auth {
+  type UserId = Int where self > 0
+}
+
+-------------------------------------------------------------------------------
+
+(program
+  (module_decl
+    (identifier)
+    (type_decl
+      (identifier)
+      (refined_type
+        (base_type (identifier))
+        (refinement
+          (ref_expr
+            (ref_term
+              (ref_atom (identifier))
+              (ref_atom (integer_literal)))))))))
