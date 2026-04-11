@@ -1,0 +1,8 @@
+// Three intentional syntax errors — parser must report all three
+fn first_bad( -> Int { 1 }
+
+fn second_bad(x Int) -> Int { x }
+
+fn third_bad() -> { 0 }
+
+fn valid_fn() -> Int { 42 }

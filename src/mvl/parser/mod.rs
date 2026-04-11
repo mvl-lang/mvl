@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod diagnostics;
 pub mod expressions;
 pub mod functions;
 pub mod lexer;
