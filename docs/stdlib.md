@@ -16,15 +16,15 @@ Derived from cross-language analysis of Rust std, Go std, Python stdlib, and C l
 
 **I/O (core):** `print`, `println`, `eprint`, `eprintln`, `stdin`, `stdout`, `stderr`.
 
-**OS (core):** `env.get(key)` → `Option<String>`, `args()` → `Array<String>`, `exit(code)`.
+**OS (core):** `env.get(key)` → `Option<String>`, `args()` → `Array<String>`, `exit(code)`, `current_dir()` → `Result<Path>`, `chdir(path)` → `Result ! Env`.
 
 #### Standard (most programs need these)
 
 | Category | What's included |
 |----------|----------------|
 | **File I/O** | `File.open` → `Result ! FileRead`, `File.create` → `Result ! FileWrite`, `read_to_string`, `write`, `BufReader`/`BufWriter`, `Reader`/`Writer` traits |
-| **Path** | `Path` type, `join`, `parent`, `file_name`, `extension`, `exists`, `is_file`, `is_dir` |
-| **Filesystem** | `create_dir_all`, `remove_file`, `remove_dir`, `read_dir`, `metadata`, `copy`, `rename` |
+| **Path** | `Path` type, `join`, `parent`, `file_name`, `extension`, `exists`, `is_file`, `is_dir`, `is_symlink` |
+| **Filesystem** | `create_dir_all`, `remove_file`, `remove_dir`, `read_dir`, `metadata`, `copy`, `rename`, `create_symlink`, `read_link`, `set_permissions`, `permissions` |
 | **Regex** | `Regex` type with `match`, `find_all`, `replace`, `captures` |
 | **Math** | `floor`, `ceil`, `round`, `sqrt`, `pow`, `sin`, `cos`, `tan`, `log`, `exp`, `PI`, `E`, `NAN`, `INFINITY` |
 | **Random** | `random.int(min,max)`, `random.float()`, `random.choice()`, `crypto_random.bytes(n)` |
@@ -32,7 +32,8 @@ Derived from cross-language analysis of Rust std, Go std, Python stdlib, and C l
 | **Concurrency** | `spawn(fn)` → `Handle<T>`, `Channel<T>`, `Mutex<T>`, `RwLock<T>`, `Atomic<T>`, `select` |
 | **JSON** | `json.encode(value)` → `Result<String>`, `json.decode<T>(string)` → `Result<T>` |
 | **Crypto (basic)** | `sha256`, `sha512`, `crypto_random.bytes` |
-| **OS** | `env.set`, `env.all`, `process.spawn` → `Result ! ProcessSpawn`, `signal.on()`, `current_dir` |
+| **Process** | `process.spawn(cmd, args)` -> `Result<Child> ! ProcessSpawn` with `.stdin(Pipe)`, `.stdout(Capture)`, `.stderr(Capture)`. `child.wait()` -> `ExitStatus`. Process stdout is `Tainted`. |
+| **OS** | `env.set`, `env.all`, `current_dir`, `chdir`, `getuid`, `getgid`, `signal.on(SIGINT, handler)` |
 | **Testing** | `#[test]`, `assert`, `assert_eq`, `assert_ne`, built-in test runner, `#[bench]` |
 | **Logging** | `log.debug`, `log.info`, `log.warn`, `log.error`, structured key-value pairs |
 
