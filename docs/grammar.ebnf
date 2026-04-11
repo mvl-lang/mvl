@@ -95,8 +95,12 @@ pattern        = "_" | IDENT | literal
 pattern_list   = pattern { "," pattern } ;
 
 (* === Literals === *)
-literal        = INTEGER | FLOAT | STRING | CHAR | "true" | "false" | list_literal ;
+literal        = INTEGER | FLOAT | STRING | CHAR | "true" | "false"
+               | list_literal | map_literal | set_literal ;
 list_literal   = "[" [ expr { "," expr } ] "]" ;
+map_literal    = "{" expr ":" expr { "," expr ":" expr } "}" ;
+set_literal    = "{" expr { "," expr } "}" ;
+(* Note: empty "{}" is ambiguous — requires type annotation: let m: Map<K,V> = {} *)
 
 (* === Constants === *)
 const_decl     = "const" IDENT ":" type_expr "=" expr ";" ;
