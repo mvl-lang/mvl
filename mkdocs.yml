@@ -65,6 +65,7 @@ nav:
     - ADR-0004 Language Size: adr/0004-language-size.md
     - ADR-0005 Recursive Descent Parser: adr/0005-recursive-descent-parser.md
   - Specs:
+    - 000 Parser: specs/000-parser.md
     - 001 Type System: specs/001-type-system.md
     - 002 Effect System: specs/002-effect-system.md
     - 003 Information Flow: specs/003-information-flow.md
