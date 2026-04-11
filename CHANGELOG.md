@@ -6,6 +6,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-04-11
+
+### Added
+- **Tree-sitter grammar** (`etc/tree-sitter-mvl/`) — full GLR grammar for MVL covering all language constructs: totality modifiers, security labels, capability annotations, effects, refinement types, sanitize/declassify special forms, and path expressions. Includes 24 corpus tests and highlight queries (`highlights.scm`, `folds.scm`, `indents.scm`). (#35)
+- **VS Code extension** (`etc/vscode-mvl/`) — TextMate grammar with syntax highlighting for all MVL constructs, bracket matching, auto-close pairs, comment toggling, code folding, and 4-space indent rules.
+- **Zed extension** (`etc/zed-mvl/`) — Native tree-sitter integration with highlight queries, smart indentation, and bracket matching for `.mvl` files.
+- **Neovim plugin** (`etc/nvim-mvl/`) — nvim-treesitter integration with parser registration, highlight queries, smart indentation (`indents.scm`), folding, and MVL-specific filetype settings (`commentstring`, 4-space indent).
+
 ## [0.3.0] — 2026-04-11 (Epic 2: MVL type checker)
 
 ### Added
@@ -52,14 +60,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 ### Changed
 - `Parser::errors` field is now `pub(crate)`; external code uses the `errors()` accessor
 
-## [0.1.0] — TBD (Phase 1 complete)
+## [0.1.0] — 2026-04-10
 
-Target: both corpus examples compile via Rust transpilation, all 11 requirements demonstrated.
-
-## [0.2.0] — TBD (Phase 2 complete)
-
-Target: LLVM IR backend, self-hosting.
-
-## [0.3.0] — TBD (Phase 3 complete)
-
-Target: MVL compiler written in MVL, ecosystem (package manager, tooling).
+### Added
+- Project structure: `src/mvl/{parser,checker,transpiler}`, test hierarchy
+- OpenSpec: 3 specs (type system, effect system, IFC), 5 ADRs
+- EBNF grammar (~100 productions, LL(1))
+- Standard library specification (three tiers: core, standard, extended)
+- Language reference and introduction documentation
+- mkdocs site with Material theme
+- Two corpus examples: auth_handler.mvl, safe_division.mvl
+- 34 GitHub issues across 5 epics (Phase 1: Rust transpilation)
