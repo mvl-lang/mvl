@@ -226,6 +226,23 @@ impl TypeChecker {
             if i + 1 == n {
                 if let Stmt::Expr { expr, .. } = stmt {
                     last_ty = self.infer_expr(expr);
+
+                    // Check implicit return type against declared return type.
+                    // For Result types, ResultIgnored below is the more specific error.
+                    if let Some(ret) = return_ty {
+                        if !matches!(last_ty, Ty::Unknown)
+                            && !matches!(ret, Ty::Unknown)
+                            && !last_ty.is_result()
+                            && !types_compatible(ret, &last_ty)
+                        {
+                            self.emit(CheckError::TypeMismatch {
+                                expected: ret.display(),
+                                found: last_ty.display(),
+                                span: expr.span(),
+                            });
+                        }
+                    }
+
                     // Suppress ResultIgnored only when the block's expected return
                     // type is itself compatible with Result (the value is used).
                     // If the expected return type is Unit or incompatible, the

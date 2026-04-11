@@ -1,4 +1,5 @@
 //! Integration tests for the MVL type checker (Epic #10, Requirements 1, 3, 4, 5, 6, 10).
+//! Also: Epic #23 (Requirement 11) — Information Flow Control.
 //!
 //! Each test group corresponds to a sub-ticket:
 //!   #11 — Basic type inference
@@ -8,6 +9,10 @@
 //!   #17 — Immutability
 //!   #15 — Ownership / use-after-move
 //!   #16 — Refinement types (corpus parse-only)
+//!   #24 — Security label checking
+//!   #25 — Lattice enforcement
+//!   #26 — Label propagation
+//!   #27 — Declassify/sanitize validation
 
 use mvl::mvl::checker::errors::CheckError;
 use mvl::mvl::checker::{check, CheckResult};
@@ -664,5 +669,250 @@ fn sending_val_param_accepted() {
             .iter()
             .any(|e| matches!(e, CheckError::CapabilityViolation { .. })),
         "val param should be sendable, got: {errors:?}"
+    );
+}
+
+// ── #24: Security label checking (Requirement 11) ────────────────────────────
+
+#[test]
+fn labels_corpus_parses_and_checks() {
+    // GIVEN: the existing labels corpus (valid labeled programs)
+    // THEN: no IFC violations (UndefinedFunction for stdlib is OK)
+    let src = include_str!("corpus/05_ifc/labels.mvl");
+    let result = check_src(src);
+    let serious_errors: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| !matches!(e, CheckError::UndefinedFunction { .. }))
+        .collect();
+    assert!(
+        serious_errors.is_empty(),
+        "labels corpus should have no IFC violations, got: {serious_errors:?}"
+    );
+}
+
+#[test]
+fn label_types_corpus_parses_and_checks() {
+    // GIVEN: the label_types corpus (labeled parameters and upward flows)
+    // THEN: no type errors
+    let src = include_str!("corpus/05_ifc/label_types.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "label_types corpus should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn secret_flows_to_public_rejected() {
+    // GIVEN: a function returning Public<String> but body is Secret<String>
+    // THEN: TypeMismatch (downward flow rejected)
+    let errors = errors_for(r#"fn leak(k: Secret<String>) -> Public<String> { k }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "expected TypeMismatch for Secret→Public leak, got: {errors:?}"
+    );
+}
+
+#[test]
+fn public_flows_to_secret_accepted() {
+    // GIVEN: a function accepting Public<String> parameter assigned to Secret<String>
+    // THEN: no type error (upward flow)
+    let errors = errors_for(r#"fn store(x: Public<String>) -> Secret<String> { x }"#);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "upward flow Public→Secret should be accepted, got: {errors:?}"
+    );
+}
+
+#[test]
+fn tainted_flows_to_clean_rejected() {
+    // GIVEN: a function returning Clean<String> but body is Tainted<String>
+    // THEN: TypeMismatch (downward flow rejected — needs sanitize)
+    let errors = errors_for(r#"fn use_raw(input: Tainted<String>) -> Clean<String> { input }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "expected TypeMismatch for Tainted→Clean without sanitize, got: {errors:?}"
+    );
+}
+
+// ── #25: Lattice enforcement ──────────────────────────────────────────────────
+
+#[test]
+fn lattice_corpus_parses_and_checks() {
+    // GIVEN: lattice corpus (valid upward flows)
+    // THEN: no type errors
+    let src = include_str!("corpus/05_ifc/lattice.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "lattice corpus should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn secret_to_tainted_rejected() {
+    // GIVEN: function returns Tainted<Int> but body is Secret<Int> (downward)
+    // THEN: TypeMismatch
+    let errors = errors_for(r#"fn downgrade(s: Secret<Int>) -> Tainted<Int> { s }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "expected TypeMismatch for Secret→Tainted downgrade, got: {errors:?}"
+    );
+}
+
+#[test]
+fn clean_to_public_rejected() {
+    // GIVEN: function returns Public<Int> but body is Clean<Int> (downward)
+    // THEN: TypeMismatch
+    let errors = errors_for(r#"fn expose(s: Clean<Int>) -> Public<Int> { s }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "expected TypeMismatch for Clean→Public downgrade, got: {errors:?}"
+    );
+}
+
+// ── #26: Label propagation through expressions ───────────────────────────────
+
+#[test]
+fn propagation_ifc_corpus_parses_and_checks() {
+    // GIVEN: propagation corpus (arithmetic label join)
+    // THEN: no type errors
+    let src = include_str!("corpus/05_ifc/propagation.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "propagation corpus should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn arithmetic_label_join_propagates() {
+    // GIVEN: Secret<Int> + Public<Int> — the result carries the join (Secret)
+    // THEN: no type error when assigned to Secret<Int>
+    let errors = errors_for(r#"fn add(a: Secret<Int>, b: Public<Int>) -> Secret<Int> { a + b }"#);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "Secret<Int> + Public<Int> should yield Secret<Int>, got: {errors:?}"
+    );
+}
+
+#[test]
+fn arithmetic_label_join_downgrade_rejected() {
+    // GIVEN: Secret<Int> + Public<Int> — trying to assign to Public<Int>
+    // THEN: TypeMismatch (result is Secret, expected Public)
+    let errors = errors_for(r#"fn add(a: Secret<Int>, b: Public<Int>) -> Public<Int> { a + b }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "Secret+Public result cannot flow to Public<Int>, got: {errors:?}"
+    );
+}
+
+// ── #27: Declassify/sanitize as auditable chokepoints ────────────────────────
+
+#[test]
+fn declassification_corpus_parses_and_checks() {
+    // GIVEN: declassification corpus (valid declassify/sanitize usage)
+    // THEN: no type errors (UndefinedFunction for User types is OK)
+    let src = include_str!("corpus/05_ifc/declassification.mvl");
+    let result = check_src(src);
+    let serious_errors: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| !matches!(e, CheckError::UndefinedFunction { .. }))
+        .collect();
+    assert!(
+        serious_errors.is_empty(),
+        "declassification corpus should have no IFC violations, got: {serious_errors:?}"
+    );
+}
+
+#[test]
+fn sanitize_tainted_returns_clean() {
+    // GIVEN: sanitize(tainted_string) where tainted_string: Tainted<String>
+    // THEN: no type error when returning Clean<String>
+    let errors =
+        errors_for(r#"fn clean_up(input: Tainted<String>) -> Clean<String> { sanitize(input) }"#);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "sanitize(Tainted<String>) should yield Clean<String>, got: {errors:?}"
+    );
+}
+
+#[test]
+fn declassify_secret_returns_public() {
+    // GIVEN: declassify(secret) where secret: Secret<Int>
+    // THEN: no type error when returning Public<Int>
+    let errors =
+        errors_for(r#"fn expose(secret: Secret<Int>) -> Public<Int> { declassify(secret) }"#);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "declassify(Secret<Int>) should yield Public<Int>, got: {errors:?}"
+    );
+}
+
+#[test]
+fn sanitize_on_non_tainted_rejected() {
+    // GIVEN: sanitize() applied to Public<String> (not Tainted)
+    // THEN: InvalidSanitize error
+    let errors =
+        errors_for(r#"fn bad(input: Public<String>) -> Clean<String> { sanitize(input) }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::InvalidSanitize { .. })),
+        "sanitize on non-Tainted type should emit InvalidSanitize, got: {errors:?}"
+    );
+}
+
+#[test]
+fn declassify_on_non_secret_rejected() {
+    // GIVEN: declassify() applied to Tainted<Int> (not Secret)
+    // THEN: InvalidDeclassify error
+    let errors = errors_for(r#"fn bad(input: Tainted<Int>) -> Public<Int> { declassify(input) }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::InvalidDeclassify { .. })),
+        "declassify on non-Secret type should emit InvalidDeclassify, got: {errors:?}"
+    );
+}
+
+#[test]
+fn direct_tainted_to_clean_without_sanitize_rejected() {
+    // GIVEN: assigning Tainted<String> directly to Clean<String> param
+    // THEN: TypeMismatch (must use sanitize explicitly)
+    let errors = errors_for(
+        r#"
+        fn needs_clean(s: Clean<String>) -> Clean<String> { s }
+        fn caller(raw: Tainted<String>) -> Clean<String> { needs_clean(raw) }
+    "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "Tainted should not flow to Clean<String> param, got: {errors:?}"
     );
 }
