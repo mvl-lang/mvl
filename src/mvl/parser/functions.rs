@@ -5,7 +5,7 @@
 //! - Parameters with optional capability (`iso`/`val`/`ref`/`tag`), `mut`, type, and refinement
 //! - Totality annotations, effect lists, and where-clause constraints
 
-use crate::mvl::parser::ast::{Block, Constraint, FnDecl, Param, Totality};
+use crate::mvl::parser::ast::{Constraint, FnDecl, Param, Totality};
 use crate::mvl::parser::lexer::TokenKind;
 use crate::mvl::parser::{ParseError, Parser};
 
@@ -202,45 +202,6 @@ impl Parser {
         let ident_result2 = self.expect_ident();
         let (bound, _) = self.require(ident_result2)?;
         Ok(Constraint { name, bound })
-    }
-
-    // ── Block (stub — full implementation in statements.rs) ───────────────
-
-    /// Parse `{ stmts }`.  Returns an empty block until the statement parser
-    /// is implemented in #6.
-    pub fn parse_block(&mut self) -> Result<Block, ()> {
-        let start = self.peek_span();
-        let brace = self.expect(&TokenKind::LBrace);
-        self.require(brace)?;
-
-        // Skip tokens until matching `}` (depth-aware)
-        let mut depth = 1usize;
-        while !self.at_eof() {
-            match self.peek_kind() {
-                TokenKind::LBrace => {
-                    depth += 1;
-                    self.advance();
-                }
-                TokenKind::RBrace => {
-                    depth -= 1;
-                    if depth == 0 {
-                        break;
-                    }
-                    self.advance();
-                }
-                _ => {
-                    self.advance();
-                }
-            }
-        }
-
-        let rbrace = self.expect(&TokenKind::RBrace);
-        self.require(rbrace)?;
-        let span = self.span_from(start);
-        Ok(Block {
-            stmts: Vec::new(),
-            span,
-        })
     }
 
     // ── Top-level declarations (dispatches to type/fn/const/module) ───────

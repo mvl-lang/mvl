@@ -1,6 +1,8 @@
 pub mod ast;
+pub mod expressions;
 pub mod functions;
 pub mod lexer;
+pub mod statements;
 pub mod types;
 
 use crate::mvl::parser::lexer::{LexError, Lexer, Span, Token, TokenKind};
