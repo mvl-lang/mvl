@@ -36,6 +36,10 @@ partial fn name(params) -> ReturnType { }      // may not terminate
 module Name { declarations }          // namespace
 
 const NAME: Type = expr;              // compile-time constant
+
+extern "rust" {                       // foreign function interface
+    fn name(params) -> Type;          // trust boundary — not verified by MVL
+}
 ```
 
 ### Statements
@@ -134,6 +138,7 @@ Code that compiles is well-formed. Code that passes tests is validated. Both are
 | Module system | `module Name { }` in EBNF | Not specced | Imports, visibility, packages | #47 |
 | Generics | Type params `<T>` in EBNF | Not specced | Constraints, monomorphization | #48 |
 | Memory model | Ownership + borrow in spec 001 | Partially specced | Allocator, stack vs heap | — |
+| FFI / interop | `extern "rust"` blocks with trust boundaries | Not specced | Explicit, greppable, assurance-tracked | #52 |
 | Build system | `mvl build` = transpile + cargo | In ADR-0003 | Package manager not designed | — |
 
 ~85% designed, ~60% specced. The language shape is complete. Remaining gaps are module system and generics — implementation-critical but don't change the 11 requirements.
