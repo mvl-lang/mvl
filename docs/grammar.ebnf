@@ -101,6 +101,10 @@ list_literal   = "[" [ expr { "," expr } ] "]" ;
 (* === Constants === *)
 const_decl     = "const" IDENT ":" type_expr "=" expr ";" ;
 
+(* === Comments === *)
+COMMENT        = "//" { ANY_CHAR } NEWLINE ;     (* line comment only, no block comments *)
+DOC_COMMENT    = "///" { ANY_CHAR } NEWLINE ;    (* doc comment — convention, not syntax *)
+
 (* === Lexical === *)
 IDENT          = ALPHA { ALPHA | DIGIT | "_" } ;
 INTEGER        = DIGIT { DIGIT } ;
