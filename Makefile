@@ -55,21 +55,6 @@ docs: ## Build documentation site
 docs-serve: ## Serve documentation locally (http://localhost:8000)
 	uv run mkdocs serve
 
-docs-pdf: ## Generate PDF from introduction
-	@mkdir -p build
-	pandoc docs/introduction.md \
-		-o build/mvl_introduction.pdf \
-		--pdf-engine=xelatex \
-		-V geometry:margin=2.5cm \
-		-V fontsize=11pt \
-		-V mainfont="Helvetica Neue" \
-		-V monofont="Menlo" \
-		-V colorlinks=true \
-		-M title="MVL — Minimum Verification Language" \
-		-M author="Ilja Heitlager" \
-		-M date="April 2026"
-	@echo "PDF: build/mvl_introduction.pdf"
-
 # === Clean ===
 
 clean: ## Clean build artifacts
