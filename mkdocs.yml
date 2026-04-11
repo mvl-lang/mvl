@@ -32,8 +32,30 @@ theme:
 nav:
   - Home: index.md
   - Introduction: introduction.md
-  - Language:
-    - Reference: language.md
+  - Language Manual:
+    - Overview: manual/index.md
+    - 1. Lexical Structure: manual/01-lexical.md
+    - 2. Types: manual/02-types.md
+    - 3. Declarations: manual/03-declarations.md
+    - 4. Statements: manual/04-statements.md
+    - 5. Expressions: manual/05-expressions.md
+    - 6. Pattern Matching: manual/06-patterns.md
+    - 7. Ownership and Borrowing: manual/07-ownership.md
+    - 8. Effect System: manual/08-effects.md
+    - 9. Totality and Termination: manual/09-totality.md
+    - 10. Information Flow Control: manual/10-ifc.md
+    - 11. Refinement Types: manual/11-refinements.md
+    - 12. Concurrency: manual/12-concurrency.md
+    - 13. Module System: manual/13-modules.md
+    - 14. Foreign Function Interface: manual/14-ffi.md
+    - 15. Error Handling: manual/15-errors.md
+    - 16. Standard Library: manual/16-stdlib.md
+    - 17. Compilation Model: manual/17-compilation.md
+    - 18. Keywords Reference: manual/18-keywords.md
+    - 19. Operators and Precedence: manual/19-operators.md
+    - 20. Grammar: manual/20-grammar.md
+  - Quick Reference:
+    - Language Reference: language.md
     - Grammar (EBNF): grammar.md
     - Standard Library: stdlib.md
   - Design:

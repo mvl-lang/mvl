@@ -5,36 +5,20 @@ local M = {}
 
 ---Register the MVL parser with nvim-treesitter.
 ---Called automatically by plugin/mvl.lua on startup.
+---
+---Works with:
+---  - nvim-treesitter master branch (get_parser_configs API)
+---  - nvim-treesitter main branch  (plain-table parsers module)
 function M.setup()
-  -- Guard: nvim-treesitter must be installed
-  local ok, parsers = pcall(require, "nvim-treesitter.parsers")
-  if not ok then
-    vim.notify(
-      "[nvim-mvl] nvim-treesitter is required. Install it first.",
-      vim.log.levels.WARN
-    )
-    return
-  end
+  -- Resolve grammar path relative to this file
+  local runtime_files = vim.api.nvim_get_runtime_file("lua/mvl/init.lua", false)
+  local grammar_path = runtime_files[1]
+    and vim.fn.fnamemodify(runtime_files[1], ":h:h:h:h") .. "/tree-sitter-mvl"
+    or "https://github.com/LAB271/mvl_language"
 
-  local parser_configs = parsers.get_parser_configs()
-
-  -- Only register if not already present (idempotent)
-  if parser_configs.mvl then
-    return
-  end
-
-  parser_configs.mvl = {
+  local mvl_config = {
     install_info = {
-      -- Points to the tree-sitter grammar inside the mvl_language repo.
-      -- Change this to the GitHub URL once the repo is public:
-      --   url = "https://github.com/LAB271/mvl_language",
-      --   files = { "etc/tree-sitter-mvl/src/parser.c" },
-      --
-      -- For local development, use the absolute path:
-      url = vim.fn.fnamemodify(
-        vim.api.nvim_get_runtime_file("lua/mvl/init.lua", false)[1],
-        ":h:h:h:h"  -- go up: lua/mvl → lua → nvim-mvl → etc → repo root
-      ) .. "/etc/tree-sitter-mvl",
+      url = grammar_path,
       files = { "src/parser.c" },
       generate_requires_npm = false,
       requires_generate_from_grammar = false,
@@ -43,10 +27,24 @@ function M.setup()
     maintainers = { "@LAB271" },
   }
 
+  local ok, parsers = pcall(require, "nvim-treesitter.parsers")
+  if ok and type(parsers) == "table" then
+    if type(parsers.get_parser_configs) == "function" then
+      -- Old API (master branch)
+      local configs = parsers.get_parser_configs()
+      if not configs.mvl then
+        configs.mvl = mvl_config
+      end
+    else
+      -- New API (main branch): parsers is a plain table
+      if not parsers.mvl then
+        parsers.mvl = mvl_config
+      end
+    end
+  end
+
   -- Associate .mvl files with the parser
-  vim.filetype.add({
-    extension = { mvl = "mvl" },
-  })
+  vim.filetype.add({ extension = { mvl = "mvl" } })
 end
 
 return M
