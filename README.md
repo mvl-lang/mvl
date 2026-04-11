@@ -86,9 +86,78 @@ No anonymous lambdas, no list comprehensions, no decorators, no operator overloa
 
 ~10 statement forms. ~5 expression forms. ~3 declaration forms. The smallest general-purpose language.
 
+## Getting Started
+
+### Prerequisites
+
+- [Rust](https://rustup.rs/) (stable toolchain)
+- [uv](https://github.com/astral-sh/uv) (for mkdocs documentation only)
+
+### Setup
+
+```bash
+git clone git@github.com:LAB271/mvl_language.git
+cd mvl_language
+make setup    # installs git hooks, verifies tooling
+```
+
+`make setup` configures git to use `.githooks/` for pre-commit hooks. Every commit automatically runs:
+
+1. `cargo fmt -- --check` — formatting
+2. `cargo clippy -- -D warnings` — lint (warnings are errors)
+3. `cargo test --quiet` — all tests pass
+
+No Python dependencies — hooks are plain bash scripts.
+
+### Build and test
+
+```bash
+make build    # cargo build
+make test     # cargo test (unit + integration)
+make lint     # cargo clippy
+make format   # cargo fmt
+```
+
+### Documentation
+
+```bash
+make docs       # build mkdocs site
+make docs-serve # serve locally at http://localhost:8000
+make help       # show all available targets
+```
+
+## Project Structure
+
+```
+mvl_language/
+├── .openspec/              # specs, ADRs, language reference (source of truth)
+├── .githooks/              # pre-commit: fmt + clippy + test
+├── .github/workflows/      # CI: same checks on push/PR
+├── docs/                   # mkdocs site content
+│   ├── introduction.md     # 1000-word introduction
+│   ├── language.md         # language reference
+│   ├── grammar.ebnf        # formal EBNF (~100 productions)
+│   ├── stdlib.md           # three-tier stdlib spec
+│   ├── references.md       # validated academic references
+│   ├── adr/                # architectural decision records
+│   └── specs/              # behavioral specifications
+├── src/mvl/
+│   ├── parser/             # MVL source → AST (Rust)
+│   ├── checker/            # AST → typed AST, 11 requirements (Rust)
+│   └── transpiler/         # typed AST → Rust source (Rust)
+├── tests/
+│   ├── corpus/             # MVL example programs (LLM training seed)
+│   ├── integration/        # end-to-end: .mvl → compile → run → verify
+│   └── spikes/             # experiments
+├── Makefile                # make help for all targets
+├── mkdocs.yml              # documentation site config
+├── CHANGELOG.md
+└── README.md
+```
+
 ## Research
 
-Full research, EBNF grammar, code examples, language scorecard, OWASP mapping, and references: see `my-brain/study/mvl_research.md` and `my-brain/study/mvl_references.bib`.
+Full research, EBNF grammar, code examples, language scorecard, OWASP mapping, and references: see `docs/` or run `make docs-serve`.
 
 ## License
 

@@ -1,0 +1,10 @@
+[package]
+name = "mvl"
+version = "0.1.0"
+edition = "2021"
+description = "MVL — Minimum Verification Language compiler"
+license = "MIT"
+
+[dependencies]
+
+[dev-dependencies]
