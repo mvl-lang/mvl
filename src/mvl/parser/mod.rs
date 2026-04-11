@@ -35,7 +35,9 @@ pub struct Parser {
     pos: usize,
     /// Span of the most recently consumed token (used for span_from).
     last_span: Span,
-    pub errors: Vec<ParseError>,
+    /// Fix #15: pub(crate) so external callers use the `errors()` accessor
+    /// method rather than being able to mutate the error list directly.
+    pub(crate) errors: Vec<ParseError>,
 }
 
 impl Parser {

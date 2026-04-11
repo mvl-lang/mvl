@@ -148,6 +148,9 @@ impl Parser {
     /// Heuristic: if `where` is next and the token after is `IDENT ":"`,
     /// it's a function constraint — skip. Otherwise treat it as a type
     /// refinement.
+    ///
+    /// Fix #2: position and error-list are restored atomically if refinement
+    /// parsing fails, preventing the parser from getting stuck mid-stream.
     fn try_parse_return_refinement(&mut self) -> Option<crate::mvl::parser::ast::RefExpr> {
         if !matches!(self.peek_kind(), TokenKind::Where) {
             return None;
@@ -167,8 +170,21 @@ impl Parser {
             return None;
         }
 
+        // Save state before consuming `where` so we can fully roll back if
+        // parse_ref_expr fails (e.g. the `where` turns out to belong to an
+        // outer construct that we cannot see yet).
+        let saved_pos = self.pos;
+        let saved_err_len = self.errors.len();
         self.advance(); // consume `where`
-        self.parse_ref_expr().ok()
+        match self.parse_ref_expr() {
+            Ok(expr) => Some(expr),
+            Err(()) => {
+                // Roll back position and any errors pushed during the failed attempt.
+                self.pos = saved_pos;
+                self.errors.truncate(saved_err_len);
+                None
+            }
+        }
     }
 
     // ── Where-clause constraints ──────────────────────────────────────────
@@ -239,21 +255,15 @@ impl Parser {
         let ty = self.parse_type_expr()?;
         let eq = self.expect(&TokenKind::Eq);
         self.require(eq)?;
-        // Parse the value expression as a stub: collect tokens until `;`
-        // Full expression parser comes in #7
-        let value_span = self.peek_span();
-        while !matches!(self.peek_kind(), TokenKind::Semicolon | TokenKind::Eof) {
-            self.advance();
-        }
+        // Fix #4: wire up the real expression parser instead of skipping to `;`
+        let value = self.parse_expr()?;
         let semi = self.expect(&TokenKind::Semicolon);
         self.require(semi)?;
         let span = self.span_from(start);
-        // Return a stub with an identifier expression as value
-        use crate::mvl::parser::ast::Expr;
         Ok(crate::mvl::parser::ast::ConstDecl {
             name,
             ty,
-            value: Expr::Ident("_stub_".into(), value_span),
+            value,
             span,
         })
     }
@@ -287,8 +297,15 @@ impl Parser {
         let start = self.peek_span();
         let mut declarations = Vec::new();
         while !self.at_eof() {
+            let pos_before = self.pos;
             if let Ok(d) = self.parse_decl() {
                 declarations.push(d);
+            }
+            // Fix #10: if parse_decl returned Err without consuming any tokens
+            // (e.g. recovery stopped at a sync point that is itself the bad token),
+            // force-advance to prevent an infinite loop.
+            if !self.at_eof() && self.pos == pos_before {
+                self.advance();
             }
         }
         let span = self.span_from(start);

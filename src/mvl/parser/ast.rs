@@ -398,6 +398,9 @@ impl Expr {
     }
 }
 
+/// Fix #14: `Literal` intentionally derives only `PartialEq`, not `Eq`, because
+/// `Float(f64)` does not have a total equality relation (NaN != NaN).
+/// Use `PartialEq` for comparisons, or match on the variant to handle floats.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
     Integer(i64),

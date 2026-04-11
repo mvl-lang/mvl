@@ -44,14 +44,15 @@ impl Parser {
 
     /// Parse `struct { … }`, `enum { … }`, or a type expression (alias).
     fn parse_type_body(&mut self) -> Result<TypeBody, ()> {
-        let kind = self.peek_kind().clone();
-        match kind {
-            TokenKind::Ident(ref s) if s == "struct" => {
+        match self.peek_kind() {
+            // Fix #5: match reserved TokenKind::Struct / TokenKind::Enum instead of
+            // string-guarded Ident, so these keywords are properly reserved.
+            TokenKind::Struct => {
                 self.advance();
                 let fields = self.parse_struct_body()?;
                 Ok(TypeBody::Struct(fields))
             }
-            TokenKind::Ident(ref s) if s == "enum" => {
+            TokenKind::Enum => {
                 self.advance();
                 let variants = self.parse_enum_body()?;
                 Ok(TypeBody::Enum(variants))
@@ -99,8 +100,11 @@ impl Parser {
             if matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
                 break;
             }
+            // Fix #7: break on variant parse failure (mirrors parse_struct_body)
             if let Ok(v) = self.parse_variant() {
                 variants.push(v);
+            } else {
+                break;
             }
             // Variants are comma-separated; trailing comma allowed
             if !self.eat(&TokenKind::Comma) {
@@ -228,7 +232,14 @@ impl Parser {
                 break;
             }
         }
-        self.eat(&TokenKind::Gt);
+        // Fix #13: report a diagnostic if the closing `>` is missing rather
+        // than silently accepting `fn f<T(x: T) -> T` as valid syntax.
+        if !self.eat(&TokenKind::Gt) {
+            self.push_error(ParseError {
+                message: "expected `>` to close type parameter list".into(),
+                span: self.peek_span(),
+            });
+        }
         params
     }
 
@@ -454,28 +465,18 @@ impl Parser {
     }
 
     /// Parse a non-empty comma-separated list of effect names.
+    ///
+    /// Effect names must be plain identifiers.  Accepting keyword tokens here
+    /// caused `where` and other keywords to be silently consumed as effect names
+    /// (Fix #6).
     pub fn parse_effect_list(&mut self) -> Vec<String> {
         let mut effects = Vec::new();
-        loop {
-            // Effects can be keywords (IO, DB) or identifiers
-            let name = match self.peek_kind().clone() {
-                TokenKind::Ident(s) => {
-                    self.advance();
-                    s
-                }
-                // Some effects happen to share names with other keywords; allow them
-                other => {
-                    let s = other.to_string();
-                    // Stop if this doesn't look like an effect name
-                    if s.starts_with(|c: char| c.is_alphabetic()) {
-                        self.advance();
-                        s
-                    } else {
-                        break;
-                    }
-                }
-            };
-            effects.push(name);
+        // Fix #6: only plain Ident tokens are valid effect names.
+        // Previously the fallback accepted any alphabetic token string,
+        // which incorrectly consumed `where`, `fn`, `let`, etc.
+        while let TokenKind::Ident(s) = self.peek_kind().clone() {
+            self.advance();
+            effects.push(s);
             if !self.eat(&TokenKind::Comma) {
                 break;
             }

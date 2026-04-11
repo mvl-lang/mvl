@@ -64,6 +64,10 @@ pub enum TokenKind {
     Const,
     Where,
     In,
+    /// `struct` — keyword inside type declarations (`type Foo = struct { … }`)
+    Struct,
+    /// `enum` — keyword inside type declarations (`type Foo = enum { … }`)
+    Enum,
 
     // ── Security labels ───────────────────────────────────────────────────
     Public,
@@ -153,6 +157,8 @@ impl fmt::Display for TokenKind {
             TokenKind::Const => write!(f, "const"),
             TokenKind::Where => write!(f, "where"),
             TokenKind::In => write!(f, "in"),
+            TokenKind::Struct => write!(f, "struct"),
+            TokenKind::Enum => write!(f, "enum"),
             TokenKind::Public => write!(f, "Public"),
             TokenKind::Tainted => write!(f, "Tainted"),
             TokenKind::Secret => write!(f, "Secret"),
@@ -333,6 +339,12 @@ impl<'src> Lexer<'src> {
 
     fn make_span(&self, start_offset: usize, start_line: u32, start_col: u32) -> Span {
         let end = self.peek_offset();
+        // Fix #3: guard against silent truncation on hypothetical very large files
+        debug_assert!(
+            start_offset <= u32::MAX as usize,
+            "source offset {} exceeds u32::MAX",
+            start_offset
+        );
         Span::new(
             start_line,
             start_col,
@@ -343,148 +355,155 @@ impl<'src> Lexer<'src> {
 
     // ── Token dispatch ────────────────────────────────────────────────────
 
+    /// Produce the next token.  Unknown characters are recorded as lex errors
+    /// and skipped iteratively (no recursion, no stack growth).
     pub fn next_token(&mut self) -> Token {
-        self.skip_whitespace_and_comments();
+        // Fix #1: iterative loop instead of recursive call for unknown chars.
+        loop {
+            self.skip_whitespace_and_comments();
 
-        let start_line = self.line;
-        let start_col = self.col;
-        let start_offset = self.peek_offset();
+            let start_line = self.line;
+            let start_col = self.col;
+            let start_offset = self.peek_offset();
 
-        let ch = match self.advance() {
-            None => {
-                return Token::new(
-                    TokenKind::Eof,
-                    Span::new(start_line, start_col, start_offset as u32, 0),
-                );
-            }
-            Some(c) => c,
-        };
+            let ch = match self.advance() {
+                None => {
+                    return Token::new(
+                        TokenKind::Eof,
+                        Span::new(start_line, start_col, start_offset as u32, 0),
+                    );
+                }
+                Some(c) => c,
+            };
 
-        let kind = match ch {
-            // ── Single-character tokens ───────────────────────────────
-            '+' => TokenKind::Plus,
-            '*' => TokenKind::Star,
-            '/' => TokenKind::Slash,
-            '%' => TokenKind::Percent,
-            ';' => TokenKind::Semicolon,
-            ',' => TokenKind::Comma,
-            '(' => TokenKind::LParen,
-            ')' => TokenKind::RParen,
-            '{' => TokenKind::LBrace,
-            '}' => TokenKind::RBrace,
-            '[' => TokenKind::LBracket,
-            ']' => TokenKind::RBracket,
-            '?' => TokenKind::Question,
-            '.' => TokenKind::Dot,
+            let kind = match ch {
+                // ── Single-character tokens ───────────────────────────────
+                '+' => TokenKind::Plus,
+                '*' => TokenKind::Star,
+                '/' => TokenKind::Slash,
+                '%' => TokenKind::Percent,
+                ';' => TokenKind::Semicolon,
+                ',' => TokenKind::Comma,
+                '(' => TokenKind::LParen,
+                ')' => TokenKind::RParen,
+                '{' => TokenKind::LBrace,
+                '}' => TokenKind::RBrace,
+                '[' => TokenKind::LBracket,
+                ']' => TokenKind::RBracket,
+                '?' => TokenKind::Question,
+                '.' => TokenKind::Dot,
 
-            // ── One-or-two character tokens ───────────────────────────
-            '|' => {
-                if self.peek_char() == Some('|') {
-                    self.advance();
-                    TokenKind::PipePipe
-                } else {
-                    TokenKind::Pipe
+                // ── One-or-two character tokens ───────────────────────────
+                '|' => {
+                    if self.peek_char() == Some('|') {
+                        self.advance();
+                        TokenKind::PipePipe
+                    } else {
+                        TokenKind::Pipe
+                    }
                 }
-            }
-            '&' => {
-                if self.peek_char() == Some('&') {
-                    self.advance();
-                    TokenKind::AmpAmp
-                } else {
-                    TokenKind::Amp
+                '&' => {
+                    if self.peek_char() == Some('&') {
+                        self.advance();
+                        TokenKind::AmpAmp
+                    } else {
+                        TokenKind::Amp
+                    }
                 }
-            }
-            '!' => {
-                if self.peek_char() == Some('=') {
-                    self.advance();
-                    TokenKind::BangEq
-                } else {
-                    TokenKind::Bang
+                '!' => {
+                    if self.peek_char() == Some('=') {
+                        self.advance();
+                        TokenKind::BangEq
+                    } else {
+                        TokenKind::Bang
+                    }
                 }
-            }
-            '=' => {
-                if self.peek_char() == Some('=') {
-                    self.advance();
-                    TokenKind::EqEq
-                } else if self.peek_char() == Some('>') {
-                    self.advance();
-                    TokenKind::FatArrow
-                } else {
-                    TokenKind::Eq
+                '=' => {
+                    if self.peek_char() == Some('=') {
+                        self.advance();
+                        TokenKind::EqEq
+                    } else if self.peek_char() == Some('>') {
+                        self.advance();
+                        TokenKind::FatArrow
+                    } else {
+                        TokenKind::Eq
+                    }
                 }
-            }
-            '<' => {
-                if self.peek_char() == Some('=') {
-                    self.advance();
-                    TokenKind::LtEq
-                } else {
-                    TokenKind::Lt
+                '<' => {
+                    if self.peek_char() == Some('=') {
+                        self.advance();
+                        TokenKind::LtEq
+                    } else {
+                        TokenKind::Lt
+                    }
                 }
-            }
-            '>' => {
-                if self.peek_char() == Some('=') {
-                    self.advance();
-                    TokenKind::GtEq
-                } else {
-                    TokenKind::Gt
+                '>' => {
+                    if self.peek_char() == Some('=') {
+                        self.advance();
+                        TokenKind::GtEq
+                    } else {
+                        TokenKind::Gt
+                    }
                 }
-            }
-            '-' => {
-                if self.peek_char() == Some('>') {
-                    self.advance();
-                    TokenKind::Arrow
-                } else {
-                    TokenKind::Minus
+                '-' => {
+                    if self.peek_char() == Some('>') {
+                        self.advance();
+                        TokenKind::Arrow
+                    } else {
+                        TokenKind::Minus
+                    }
                 }
-            }
-            ':' => {
-                if self.peek_char() == Some(':') {
-                    self.advance();
-                    TokenKind::ColonColon
-                } else {
-                    TokenKind::Colon
+                ':' => {
+                    if self.peek_char() == Some(':') {
+                        self.advance();
+                        TokenKind::ColonColon
+                    } else {
+                        TokenKind::Colon
+                    }
                 }
-            }
 
-            // ── String literal ────────────────────────────────────────
-            '"' => self.lex_string(start_line, start_col, start_offset),
+                // ── String literal ────────────────────────────────────────
+                '"' => self.lex_string(start_line, start_col, start_offset),
 
-            // ── Char literal ──────────────────────────────────────────
-            '\'' => self.lex_char(start_line, start_col, start_offset),
+                // ── Char literal ──────────────────────────────────────────
+                '\'' => self.lex_char(start_line, start_col, start_offset),
 
-            // ── Numeric literal ───────────────────────────────────────
-            c if c.is_ascii_digit() => self.lex_number(c),
+                // ── Numeric literal ───────────────────────────────────────
+                c if c.is_ascii_digit() => self.lex_number(c, start_line, start_col, start_offset),
 
-            // ── Identifier or keyword (including `_foo`) ──────────────
-            c if c.is_alphabetic() || c == '_' => {
-                let mut s = String::from(c);
-                while self
-                    .peek_char()
-                    .is_some_and(|nc| nc.is_alphanumeric() || nc == '_')
-                {
-                    s.push(self.advance().unwrap());
+                // ── Identifier or keyword (including `_foo`) ──────────────
+                c if c.is_alphabetic() || c == '_' => {
+                    let mut s = String::from(c);
+                    while self
+                        .peek_char()
+                        .is_some_and(|nc| nc.is_alphanumeric() || nc == '_')
+                    {
+                        s.push(self.advance().unwrap());
+                    }
+                    // Single bare `_` is the wildcard pattern, not an ident
+                    if s == "_" {
+                        TokenKind::Underscore
+                    } else {
+                        keyword_or_ident(s)
+                    }
                 }
-                // Single bare `_` is the wildcard pattern, not an ident
-                if s == "_" {
-                    TokenKind::Underscore
-                } else {
-                    keyword_or_ident(s)
+
+                // ── Unknown character ─────────────────────────────────────
+                c => {
+                    let span = Span::new(start_line, start_col, start_offset as u32, 1);
+                    self.errors.push(LexError {
+                        message: format!("unexpected character '{}'", c),
+                        span,
+                    });
+                    // Fix #1: continue the loop instead of recursing, preventing
+                    // stack overflow on inputs with many consecutive unknown chars.
+                    continue;
                 }
-            }
+            };
 
-            // ── Unknown character ─────────────────────────────────────
-            c => {
-                let span = Span::new(start_line, start_col, start_offset as u32, 1);
-                self.errors.push(LexError {
-                    message: format!("unexpected character '{}'", c),
-                    span,
-                });
-                return self.next_token();
-            }
-        };
-
-        let span = self.make_span(start_offset, start_line, start_col);
-        Token::new(kind, span)
+            let span = self.make_span(start_offset, start_line, start_col);
+            return Token::new(kind, span);
+        } // end loop
     }
 
     // ── Literal helpers ───────────────────────────────────────────────────
@@ -543,7 +562,13 @@ impl<'src> Lexer<'src> {
         TokenKind::Char(c)
     }
 
-    fn lex_number(&mut self, first: char) -> TokenKind {
+    fn lex_number(
+        &mut self,
+        first: char,
+        start_line: u32,
+        start_col: u32,
+        start_offset: usize,
+    ) -> TokenKind {
         let mut s = String::from(first);
         let mut is_float = false;
 
@@ -570,7 +595,20 @@ impl<'src> Lexer<'src> {
         if is_float {
             TokenKind::Float(s.parse().unwrap_or(0.0))
         } else {
-            TokenKind::Integer(s.parse().unwrap_or(0))
+            // Fix #3: report overflow instead of silently producing 0
+            match s.parse::<i64>() {
+                Ok(n) => TokenKind::Integer(n),
+                Err(_) => {
+                    self.errors.push(LexError {
+                        message: format!(
+                            "integer literal `{}` overflows i64; value is too large",
+                            s
+                        ),
+                        span: Span::new(start_line, start_col, start_offset as u32, s.len() as u32),
+                    });
+                    TokenKind::Integer(0)
+                }
+            }
         }
     }
 }
@@ -600,6 +638,8 @@ fn keyword_or_ident(s: String) -> TokenKind {
         "const" => TokenKind::Const,
         "where" => TokenKind::Where,
         "in" => TokenKind::In,
+        "struct" => TokenKind::Struct,
+        "enum" => TokenKind::Enum,
         // Boolean literals
         "true" => TokenKind::True,
         "false" => TokenKind::False,
@@ -880,6 +920,37 @@ mod tests {
         let kinds: Vec<_> = tokens.iter().map(|t| &t.kind).collect();
         assert!(kinds.contains(&&TokenKind::Fn));
         assert!(kinds.contains(&&TokenKind::Let));
+    }
+
+    // Fix #1: many unknown chars must not overflow the stack
+    #[test]
+    fn many_unknown_chars_no_stack_overflow() {
+        let src = "@".repeat(10_000);
+        let (tokens, errors) = Lexer::new(&src).tokenize();
+        assert_eq!(errors.len(), 10_000);
+        assert_eq!(tokens.last().unwrap().kind, TokenKind::Eof);
+    }
+
+    // Fix #3: integer overflow produces an error, not silent 0
+    #[test]
+    fn integer_overflow_produces_lex_error() {
+        let src = "99999999999999999999999"; // too big for i64
+        let (tokens, errors) = Lexer::new(src).tokenize();
+        assert_eq!(errors.len(), 1, "expected one overflow error");
+        assert!(
+            errors[0].message.contains("overflows"),
+            "got: {}",
+            errors[0].message
+        );
+        // Still produces a token (value 0) for error-recovery
+        assert!(matches!(tokens[0].kind, TokenKind::Integer(0)));
+    }
+
+    // Fix #5: struct and enum are reserved keywords, not plain identifiers
+    #[test]
+    fn struct_and_enum_are_keywords() {
+        let kinds = lex_kinds_no_eof("struct enum");
+        assert_eq!(kinds, vec![TokenKind::Struct, TokenKind::Enum]);
     }
 
     // ── Escape sequences ──────────────────────────────────────────────────

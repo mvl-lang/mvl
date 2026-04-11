@@ -20,10 +20,10 @@ fn parser_reports_multiple_errors() {
     let _prog = p.parse_program();
     // There are 3 broken functions; parser should report at least 3 errors
     assert!(
-        p.errors.len() >= 3,
+        p.errors().len() >= 3,
         "expected at least 3 errors, got {}: {:?}",
-        p.errors.len(),
-        p.errors
+        p.errors().len(),
+        p.errors()
     );
 }
 
@@ -36,8 +36,8 @@ fn error_includes_line_and_column() {
     let src = "fn bad( -> Int { }";
     let (mut p, _) = Parser::new(src);
     let _ = p.parse_fn_decl();
-    assert!(!p.errors.is_empty(), "expected parse errors");
-    let first = &p.errors[0];
+    assert!(!p.errors().is_empty(), "expected parse errors");
+    let first = &p.errors()[0];
     assert!(first.span.line >= 1, "line must be >= 1");
     assert!(first.span.col >= 1, "col must be >= 1");
 }
@@ -53,7 +53,10 @@ fn parser_recovers_after_error() {
     let (mut p, _) = Parser::new(src);
     let prog = p.parse_program();
     // At least one error from `broken`
-    assert!(!p.errors.is_empty(), "expected errors from broken function");
+    assert!(
+        !p.errors().is_empty(),
+        "expected errors from broken function"
+    );
     // `valid` should have been parsed successfully — check declarations
     let fn_names: Vec<_> = prog
         .declarations
@@ -79,7 +82,7 @@ fn render_errors_format() {
     let src = "fn f( -> Int { }";
     let (mut p, _) = Parser::new(src);
     let _ = p.parse_fn_decl();
-    let rendered = render_errors(src, &p.errors);
+    let rendered = render_errors(src, p.errors());
     assert!(!rendered.is_empty(), "expected rendered diagnostic output");
     // Should contain "error at"
     assert!(

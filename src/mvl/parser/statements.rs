@@ -258,6 +258,9 @@ impl Parser {
         self.eat(&TokenKind::Comma);
 
         let span = self.span_from(start);
+        // Fix #9 / TODO: guard patterns (`pat if expr =>`) are not yet parsed.
+        // `guard` is always None. A literal `if` after the pattern will be
+        // parsed as an if-expression in the arm body instead, which is wrong.
         Ok(MatchArm {
             pattern,
             guard: None,
@@ -279,6 +282,24 @@ impl Parser {
             TokenKind::Integer(n) => {
                 let span = self.advance().span;
                 Ok(Pattern::Literal(Literal::Integer(n), span))
+            }
+            // Fix #8: support negative integer literal patterns like `match n { -1 => … }`
+            TokenKind::Minus => {
+                self.advance(); // consume `-`
+                match self.peek_kind().clone() {
+                    TokenKind::Integer(n) => {
+                        let span = self.advance().span;
+                        Ok(Pattern::Literal(Literal::Integer(-n), span))
+                    }
+                    _ => {
+                        let err = ParseError {
+                            message: "expected integer literal after `-` in pattern".into(),
+                            span: self.peek_span(),
+                        };
+                        self.push_recover(err);
+                        Err(())
+                    }
+                }
             }
             TokenKind::Str(s) => {
                 let span = self.advance().span;
@@ -670,6 +691,31 @@ mod tests {
                 );
             }
             _ => panic!("got: {:?}", s),
+        }
+    }
+
+    // ── Fix #8: negative integer literal patterns ──────────────────────────
+
+    #[test]
+    fn parse_negative_integer_pattern() {
+        // GIVEN: match n { -1 => "neg", 0 => "zero", _ => "pos" }
+        // THEN: first arm has Pattern::Literal(Integer(-1))
+        let s = one_stmt("{ match n { -1 => x, 0 => y, _ => z } }");
+        match &s {
+            Stmt::Match { arms, .. } => {
+                assert_eq!(arms.len(), 3);
+                assert!(
+                    matches!(arms[0].pattern, Pattern::Literal(Literal::Integer(-1), _)),
+                    "expected Integer(-1) pattern, got {:?}",
+                    arms[0].pattern
+                );
+                assert!(matches!(
+                    arms[1].pattern,
+                    Pattern::Literal(Literal::Integer(0), _)
+                ));
+                assert!(matches!(arms[2].pattern, Pattern::Wildcard(_)));
+            }
+            _ => panic!("expected match stmt, got: {:?}", s),
         }
     }
 }
