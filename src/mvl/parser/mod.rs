@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod functions;
 pub mod lexer;
 pub mod types;
 
