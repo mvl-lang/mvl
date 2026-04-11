@@ -84,6 +84,42 @@ def parse_specs():
     return requirements
 
 
+def _get_test_coverage():
+    """Try to get line coverage from cargo-tarpaulin or cargo-llvm-cov output.
+
+    Returns a string like '87.3%' or None if no coverage tool is available.
+    Doesn't run coverage itself — reads cached results if present.
+    """
+    import subprocess
+
+    # Try tarpaulin cache
+    tarpaulin_out = Path(__file__).parent.parent / "target" / "tarpaulin" / "coverage.json"
+    if tarpaulin_out.exists():
+        try:
+            import json
+            data = json.loads(tarpaulin_out.read_text())
+            if "coverage" in data:
+                return f"{data['coverage']:.1f}%"
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    # Try running cargo test to at least count tests
+    try:
+        result = subprocess.run(
+            ["cargo", "test", "--", "--list"],
+            capture_output=True, text=True, timeout=30,
+            cwd=Path(__file__).parent.parent,
+        )
+        if result.returncode == 0:
+            test_count = sum(1 for line in result.stdout.splitlines() if ": test" in line)
+            if test_count > 0:
+                return f"{test_count} tests (run `cargo tarpaulin` for line coverage)"
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    return None
+
+
 def report(requirements, verbose=False):
     """Print assurance dashboard."""
     total = len(requirements)
@@ -103,25 +139,30 @@ def report(requirements, verbose=False):
     completeness = impl_exists / total if total else 0
     coverage = tests_linked / total if total else 0
 
-    # Assurance = of the implemented requirements, how many are also tested?
+    # Assurance = of the implemented requirements, how many have evidence (tests)?
     assured = sum(
         1 for r in requirements if r["impl_exists"] and r["tests_linked"]
     )
     assurance = assured / impl_exists if impl_exists else 1.0  # no impl = nothing to assure = 100%
 
+    # Test coverage: run cargo test with coverage if available
+    test_coverage = _get_test_coverage()
+
     print("=" * 60)
-    print("MVL Assurance Dashboard")
+    print("MVL Assurance Dashboard (ISPE)")
     print("=" * 60)
     print(f"Requirements:     {total}")
     print(f"Scenarios:        {total_scenarios}")
     print()
-    print(f"Completeness (S->P):  {impl_exists}/{total} implemented  ({completeness:.0%})")
+    print(f"Completeness (S->P):  {impl_exists}/{total} spec -> implementation  ({completeness:.0%})")
     print(f"  - Linked:           {impl_linked}/{total}")
     print(f"  - File exists:      {impl_exists}/{total}")
     print()
-    print(f"Coverage (T->P):      {tests_linked}/{total} test-linked  ({coverage:.0%})")
+    print(f"Coverage (E->P):      {tests_linked}/{total} evidence linked  ({coverage:.0%})")
+    if test_coverage is not None:
+        print(f"  - Line coverage:    {test_coverage}")
     print()
-    print(f"Assurance (T/P):      {assured}/{impl_exists} of implemented are tested  ({assurance:.0%})")
+    print(f"Assurance (E/P):      {assured}/{impl_exists} of implemented have evidence  ({assurance:.0%})")
     print()
     if corpus_total:
         print(f"Corpus:               {corpus_present}/{corpus_total} present")
