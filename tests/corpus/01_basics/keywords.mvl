@@ -1,0 +1,71 @@
+// Corpus: MVL keywords
+// Demonstrates all keyword tokens the lexer must recognize.
+
+// Declaration keywords
+fn total_add(a: Int, b: Int) -> Int {
+    return a + b;
+}
+
+// Totality modifiers
+total fn always_terminates(x: Int) -> Int {
+    x
+}
+
+partial fn may_loop(x: Int) -> Int {
+    x
+}
+
+// Type declaration
+type UserId = Int where self > 0;
+
+// Module
+module math {
+    const PI: Float = 3.14159;
+}
+
+// Control flow: if, else, for, match
+fn demo(x: Int) -> Int {
+    let mut result = 0;
+    if x > 0 {
+        for i in [1, 2, 3] {
+            result = result + i;
+        }
+    } else {
+        result = match x {
+            0 => 0,
+            _ => x,
+        };
+    }
+    return result;
+}
+
+// Ownership keywords
+fn consume_val(consume v: String) -> String {
+    move v
+}
+
+// IFC keywords
+fn check_tainted(input: Tainted<String>) -> Clean<String> {
+    sanitize(input)
+}
+
+fn reveal(s: Secret<String>) -> Public<String> {
+    declassify(s)
+}
+
+// Capability markers
+fn iso_fn(iso db: &DbConn) -> Int { 0 }
+fn val_fn(val x: Int) -> Int { x }
+fn ref_fn(ref x: Int) -> Int { x }
+fn tag_fn(tag x: Int) -> Int { 0 }
+
+// where keyword in refinement
+fn positive(x: Int where self > 0) -> Int { x }
+
+// while (partial functions only)
+partial fn countdown(mut n: Int) -> Int {
+    while n > 0 {
+        n = n - 1;
+    }
+    n
+}
