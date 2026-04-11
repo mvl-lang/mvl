@@ -5,3 +5,5 @@
 | [0001](0001-eleven-requirements.md) | Eleven compiler-verified requirements | Accepted |
 | [0002](0002-language-contraction.md) | Language contraction — what to drop and why | Accepted |
 | [0003](0003-compilation-strategy.md) | Compilation strategy — prototype Rust, production LLVM | Accepted |
+| [0004](0004-language-size.md) | Language size — deliberately the smallest | Accepted |
+| [0005](0005-recursive-descent-parser.md) | Hand-written recursive descent parser | Accepted |
