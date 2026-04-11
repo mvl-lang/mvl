@@ -10,5 +10,5 @@ repository = "https://github.com/LAB271/mvl_language"
 # Until tree-sitter-mvl is a standalone repo, this points to the monorepo.
 # For dev install, Zed will attempt to fetch and compile from this commit.
 [grammars.mvl]
-repository = "https://github.com/LAB271/mvl_language"
-commit = "fed4a29"
+repository = "https://github.com/LAB271/tree-sitter-mvl"
+commit = "ecb7111"
