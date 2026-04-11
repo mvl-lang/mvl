@@ -1,0 +1,190 @@
+//! Type environment: symbol tables for variables, types, and functions.
+
+use std::collections::HashMap;
+
+use crate::mvl::checker::types::Ty;
+use crate::mvl::parser::ast::{FieldDecl, Variant};
+
+// ── Variable binding ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct VarInfo {
+    pub ty: Ty,
+    pub mutable: bool,
+    pub moved: bool,
+}
+
+impl VarInfo {
+    pub fn new(ty: Ty, mutable: bool) -> Self {
+        VarInfo {
+            ty,
+            mutable,
+            moved: false,
+        }
+    }
+}
+
+// ── Type definition ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct TypeInfo {
+    pub params: Vec<String>,
+    pub body: TypeBodyInfo,
+}
+
+#[derive(Debug, Clone)]
+pub enum TypeBodyInfo {
+    Struct(Vec<FieldInfo>),
+    Enum(Vec<VariantInfo>),
+    Alias(Ty),
+}
+
+#[derive(Debug, Clone)]
+pub struct FieldInfo {
+    pub name: String,
+    pub ty: Ty,
+    pub mutable: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct VariantInfo {
+    pub name: String,
+    pub fields: VariantFieldsInfo,
+}
+
+#[derive(Debug, Clone)]
+pub enum VariantFieldsInfo {
+    Unit,
+    Tuple(Vec<Ty>),
+    Struct(Vec<FieldInfo>),
+}
+
+// ── Function signature ───────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct FnInfo {
+    pub params: Vec<Ty>,
+    pub ret: Ty,
+}
+
+// ── Type environment ─────────────────────────────────────────────────────────
+
+/// Lexically-scoped variable environment + global type/function tables.
+pub struct TypeEnv {
+    /// Stack of variable scopes (innermost last).
+    scopes: Vec<HashMap<String, VarInfo>>,
+    /// User-defined type declarations.
+    pub types: HashMap<String, TypeInfo>,
+    /// Known function signatures.
+    pub fns: HashMap<String, FnInfo>,
+}
+
+impl Default for TypeEnv {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TypeEnv {
+    pub fn new() -> Self {
+        TypeEnv {
+            scopes: vec![HashMap::new()],
+            types: HashMap::new(),
+            fns: HashMap::new(),
+        }
+    }
+
+    // ── Scope management ─────────────────────────────────────────────────
+
+    pub fn push_scope(&mut self) {
+        self.scopes.push(HashMap::new());
+    }
+
+    pub fn pop_scope(&mut self) {
+        self.scopes.pop();
+    }
+
+    // ── Variable operations ──────────────────────────────────────────────
+
+    pub fn define(&mut self, name: String, info: VarInfo) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.insert(name, info);
+        }
+    }
+
+    pub fn lookup(&self, name: &str) -> Option<&VarInfo> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(info) = scope.get(name) {
+                return Some(info);
+            }
+        }
+        None
+    }
+
+    pub fn lookup_mut_var(&mut self, name: &str) -> Option<&mut VarInfo> {
+        for scope in self.scopes.iter_mut().rev() {
+            if scope.contains_key(name) {
+                return scope.get_mut(name);
+            }
+        }
+        None
+    }
+
+    pub fn mark_moved(&mut self, name: &str) {
+        if let Some(info) = self.lookup_mut_var(name) {
+            info.moved = true;
+        }
+    }
+
+    // ── Type table ───────────────────────────────────────────────────────
+
+    pub fn define_type(&mut self, name: String, info: TypeInfo) {
+        self.types.insert(name, info);
+    }
+
+    pub fn lookup_type(&self, name: &str) -> Option<&TypeInfo> {
+        self.types.get(name)
+    }
+
+    // ── Function table ───────────────────────────────────────────────────
+
+    pub fn define_fn(&mut self, name: String, info: FnInfo) {
+        self.fns.insert(name, info);
+    }
+
+    pub fn lookup_fn(&self, name: &str) -> Option<&FnInfo> {
+        self.fns.get(name)
+    }
+}
+
+// ── Helpers to build TypeInfo from AST ──────────────────────────────────────
+
+use crate::mvl::checker::types::resolve;
+
+pub fn field_infos(fields: &[FieldDecl]) -> Vec<FieldInfo> {
+    fields
+        .iter()
+        .map(|f| FieldInfo {
+            name: f.name.clone(),
+            ty: resolve(&f.ty),
+            mutable: f.mutable,
+        })
+        .collect()
+}
+
+pub fn variant_infos(variants: &[Variant]) -> Vec<VariantInfo> {
+    use crate::mvl::parser::ast::VariantFields;
+    variants
+        .iter()
+        .map(|v| VariantInfo {
+            name: v.name.clone(),
+            fields: match &v.fields {
+                VariantFields::Unit => VariantFieldsInfo::Unit,
+                VariantFields::Tuple(tys) => {
+                    VariantFieldsInfo::Tuple(tys.iter().map(resolve).collect())
+                }
+                VariantFields::Struct(fields) => VariantFieldsInfo::Struct(field_infos(fields)),
+            },
+        })
+        .collect()
+}
