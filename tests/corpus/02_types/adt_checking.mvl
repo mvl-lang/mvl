@@ -1,0 +1,57 @@
+// Corpus: ADT checking — struct and enum usage (Req 1)
+
+// ── Struct types ──────────────────────────────────────────────────────────────
+
+type Point = struct {
+    x: Float,
+    y: Float,
+}
+
+type Person = struct {
+    name: String,
+    age: Int,
+}
+
+type Counter = struct {
+    mut count: Int,
+    label: String,
+}
+
+// ── Enum types ────────────────────────────────────────────────────────────────
+
+type Direction = enum {
+    North,
+    South,
+    East,
+    West,
+}
+
+type Shape = enum {
+    Circle(Float),
+    Rectangle(Float, Float),
+}
+
+// ── Valid construction and access ─────────────────────────────────────────────
+
+fn make_point(x: Float, y: Float) -> Point {
+    Point { x: x, y: y }
+}
+
+fn get_name(p: Person) -> String {
+    p.name
+}
+
+fn get_age(p: Person) -> Int {
+    p.age
+}
+
+// ── Valid enum matching ───────────────────────────────────────────────────────
+
+fn direction_label(d: Direction) -> String {
+    match d {
+        North => "north",
+        South => "south",
+        East  => "east",
+        West  => "west",
+    }
+}
