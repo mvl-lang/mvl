@@ -295,10 +295,10 @@ impl CheckError {
                 "`{capability}` capability of `{param}` cannot be sent across actor boundary; use `iso` or `val`"
             ),
             CheckError::InvalidDeclassify { found, .. } => format!(
-                "`declassify()` requires `Secret<T>`, found `{found}` — only Secret data can be declassified"
+                "`declassify()` requires `Secret<T>`, found `{found}` — only Secret data can be declassified (for Tainted data use `sanitize()` instead)"
             ),
             CheckError::InvalidSanitize { found, .. } => format!(
-                "`sanitize()` requires `Tainted<T>`, found `{found}` — only Tainted data can be sanitized"
+                "`sanitize()` requires `Tainted<T>`, found `{found}` — only Tainted data can be sanitized (for Secret data use `declassify()` instead)"
             ),
         }
     }

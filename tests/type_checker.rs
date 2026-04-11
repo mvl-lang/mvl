@@ -916,3 +916,100 @@ fn direct_tainted_to_clean_without_sanitize_rejected() {
         "Tainted should not flow to Clean<String> param, got: {errors:?}"
     );
 }
+
+#[test]
+fn sanitize_on_clean_rejected() {
+    // GIVEN: sanitize() applied to Clean<String> (not Tainted)
+    // THEN: InvalidSanitize error
+    let errors = errors_for(r#"fn bad(input: Clean<String>) -> Clean<String> { sanitize(input) }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::InvalidSanitize { .. })),
+        "sanitize on Clean type should emit InvalidSanitize, got: {errors:?}"
+    );
+}
+
+#[test]
+fn sanitize_on_secret_rejected() {
+    // GIVEN: sanitize() applied to Secret<String> (not Tainted)
+    // THEN: InvalidSanitize error (use declassify for Secret)
+    let errors =
+        errors_for(r#"fn bad(input: Secret<String>) -> Clean<String> { sanitize(input) }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::InvalidSanitize { .. })),
+        "sanitize on Secret type should emit InvalidSanitize, got: {errors:?}"
+    );
+}
+
+#[test]
+fn secret_to_unlabeled_param_rejected() {
+    // GIVEN: function with unlabeled String param called with Secret<String>
+    // THEN: TypeMismatch — unlabeled context is treated as Public, downward flow rejected
+    let errors = errors_for(
+        r#"
+        fn sink(s: String) -> String { s }
+        fn caller(k: Secret<String>) -> String { sink(k) }
+    "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "Secret<String> must not flow silently to unlabeled String param, got: {errors:?}"
+    );
+}
+
+#[test]
+fn unlabeled_to_secret_param_accepted() {
+    // GIVEN: function with Secret<String> param called with unlabeled String
+    // THEN: accepted — unlabeled data is treated as Public, upward flow to Secret is fine
+    let errors = errors_for(
+        r#"
+        fn vault(s: Secret<String>) -> Secret<String> { s }
+        fn caller(name: String) -> Secret<String> { vault(name) }
+    "#,
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "unlabeled String should flow up to Secret<String> param, got: {errors:?}"
+    );
+}
+
+#[test]
+fn if_with_labeled_bool_condition_promotes_result() {
+    // GIVEN: if-condition is Secret<Bool>, branch results are Public<Int>
+    // THEN: result type is Secret<Int> — cannot be returned as Public<Int>
+    let errors = errors_for(
+        r#"fn select(flag: Secret<Bool>, a: Public<Int>, b: Public<Int>) -> Public<Int> {
+            if flag { a } else { b }
+        }"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "if Secret<Bool> must promote result to Secret<Int>, rejecting Public<Int> return, got: {errors:?}"
+    );
+}
+
+#[test]
+fn if_with_unlabeled_bool_condition_unchanged() {
+    // GIVEN: if-condition is Bool (unlabeled), branches are Int
+    // THEN: no type error — unlabeled condition adds no label to result
+    let errors = errors_for(
+        r#"fn choose(flag: Bool, a: Int, b: Int) -> Int {
+        if flag { a } else { b }
+    }"#,
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "unlabeled if-condition should not affect result type, got: {errors:?}"
+    );
+}

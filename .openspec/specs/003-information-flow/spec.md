@@ -52,7 +52,9 @@ Every type MUST support security labels: `Public<T>`, `Tainted<T>`, `Secret<T>`,
 - WHEN the caller passes `public_name: Public<String>`
 - THEN the compiler MUST accept: `Public` flows up to `Secret` freely
 
-### Requirement 2: External Input is Tainted [MUST]
+### Requirement 2: External Input is Tainted [MUST] *(Deferred — Phase 2)*
+
+> **Status:** Not yet implemented. Auto-tainting requires runtime/stdlib integration (HTTP, stdin, env-var APIs). Tracked in #28.
 
 Data from external sources MUST be automatically labeled `Tainted`. This includes:
 - HTTP request bodies, headers, query parameters
@@ -110,7 +112,9 @@ Functions that process secrets MUST return secrets. The label MUST propagate thr
 - GIVEN `fn verify(pwd: Secret<String>, stored: Secret<Hash>) -> Public<Bool>`
 - THEN the boolean result is `Public` — one bit of information from high-entropy source is safe
 
-### Requirement 5: Error Messages Must Not Leak Secrets [MUST]
+### Requirement 5: Error Messages Must Not Leak Secrets [MUST] *(Deferred — Phase 2)*
+
+> **Status:** Not yet implemented. Requires ADT field-label analysis and channel-type tracking. Tracked in #29.
 
 Error types containing `Secret` fields MUST NOT be sendable to `Public` channels (HTTP responses, logs, stdout).
 
@@ -126,7 +130,9 @@ Error types containing `Secret` fields MUST NOT be sendable to `Public` channels
 - WHEN `http_respond(Err(AuthError::InvalidPassword))`
 - THEN the compiler MUST accept: error type is fully `Public`
 
-### Requirement 6: Logging Respects Labels [MUST]
+### Requirement 6: Logging Respects Labels [MUST] *(Deferred — Phase 2)*
+
+> **Status:** Not yet implemented. Requires stdlib `log` module type integration. Tracked in #30.
 
 Logging functions MUST accept only `Public<T>` arguments. Logging a `Secret` or `Tainted` value MUST be a compile error.
 

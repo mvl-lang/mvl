@@ -40,6 +40,9 @@ pub fn join(a: SecurityLabel, b: SecurityLabel) -> SecurityLabel {
 
 /// Compute the join of two optional labels.
 /// `None` represents an unlabeled type (treated as Public for join purposes).
+///
+/// Invariant: `join_opt(Some(L), None) == Some(L)` because `join(L, Public) == L`
+/// for any `L >= Public`. This follows from the "unlabeled = Public" convention.
 pub fn join_opt(a: Option<SecurityLabel>, b: Option<SecurityLabel>) -> Option<SecurityLabel> {
     match (a, b) {
         (None, None) => None,
@@ -50,6 +53,10 @@ pub fn join_opt(a: Option<SecurityLabel>, b: Option<SecurityLabel>) -> Option<Se
 
 /// Extract the outermost security label from a type, if any.
 /// Looks through Refined wrappers to find the label.
+///
+/// NOTE: Nested `Labeled` types (e.g., `Labeled(A, Labeled(B, T))`) are not
+/// valid IR — the parser and checker must never produce them. This function
+/// only reads the outermost label, which is sufficient for valid IR.
 pub fn label_of(ty: &Ty) -> Option<SecurityLabel> {
     match ty {
         Ty::Labeled(l, _) => Some(*l),
@@ -73,5 +80,53 @@ pub fn label_name(label: SecurityLabel) -> &'static str {
         SecurityLabel::Tainted => "Tainted",
         SecurityLabel::Secret => "Secret",
         SecurityLabel::Clean => "Clean",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn join_opt_both_none_is_none() {
+        assert_eq!(join_opt(None, None), None);
+    }
+
+    #[test]
+    fn join_opt_with_one_none_preserves_label() {
+        // Invariant: None (= unlabeled = Public) does not lower the result
+        assert_eq!(
+            join_opt(Some(SecurityLabel::Secret), None),
+            Some(SecurityLabel::Secret)
+        );
+        assert_eq!(
+            join_opt(None, Some(SecurityLabel::Tainted)),
+            Some(SecurityLabel::Tainted)
+        );
+    }
+
+    #[test]
+    fn join_opt_takes_higher_label() {
+        assert_eq!(
+            join_opt(Some(SecurityLabel::Public), Some(SecurityLabel::Secret)),
+            Some(SecurityLabel::Secret)
+        );
+        assert_eq!(
+            join_opt(Some(SecurityLabel::Clean), Some(SecurityLabel::Tainted)),
+            Some(SecurityLabel::Tainted)
+        );
+    }
+
+    #[test]
+    fn can_flow_upward_allowed() {
+        assert!(can_flow(SecurityLabel::Public, SecurityLabel::Secret));
+        assert!(can_flow(SecurityLabel::Clean, SecurityLabel::Tainted));
+        assert!(can_flow(SecurityLabel::Public, SecurityLabel::Public));
+    }
+
+    #[test]
+    fn can_flow_downward_rejected() {
+        assert!(!can_flow(SecurityLabel::Secret, SecurityLabel::Public));
+        assert!(!can_flow(SecurityLabel::Tainted, SecurityLabel::Clean));
     }
 }

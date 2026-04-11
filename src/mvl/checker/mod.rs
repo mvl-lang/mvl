@@ -566,7 +566,11 @@ impl TypeChecker {
                 span,
             } => {
                 let cond_ty = self.infer_expr(cond);
-                if !matches!(cond_ty, Ty::Bool | Ty::Unknown) {
+                // IFC: extract the condition's security label for implicit flow promotion.
+                // Branching on Secret<Bool> must promote the result to at least Secret<T>;
+                // otherwise the choice of branch would leak the guard's value.
+                let cond_label = ifc::label_of(&cond_ty);
+                if !cond_ty.is_bool() && !matches!(cond_ty, Ty::Unknown) {
                     self.emit(CheckError::TypeMismatch {
                         expected: "Bool".to_string(),
                         found: cond_ty.display(),
@@ -574,25 +578,34 @@ impl TypeChecker {
                     });
                 }
                 let then_ty = self.infer_block_type(then, None);
+                // Promote branch type by joining with the condition's label (#26 implicit flow).
+                let promoted_then = {
+                    let label = ifc::join_opt(cond_label, ifc::label_of(&then_ty));
+                    ifc::apply_label(label, then_ty.unlabeled().clone())
+                };
                 if let Some(else_expr) = else_ {
                     let else_ty = self.infer_expr(else_expr);
-                    if !matches!(then_ty, Ty::Unknown)
-                        && !matches!(else_ty, Ty::Unknown)
-                        && !types_compatible(&then_ty, &else_ty)
+                    let promoted_else = {
+                        let label = ifc::join_opt(cond_label, ifc::label_of(&else_ty));
+                        ifc::apply_label(label, else_ty.unlabeled().clone())
+                    };
+                    if !matches!(promoted_then, Ty::Unknown)
+                        && !matches!(promoted_else, Ty::Unknown)
+                        && !types_compatible(&promoted_then, &promoted_else)
                     {
                         self.emit(CheckError::TypeMismatch {
-                            expected: then_ty.display(),
-                            found: else_ty.display(),
+                            expected: promoted_then.display(),
+                            found: promoted_else.display(),
                             span: *span,
                         });
                     }
-                    if matches!(then_ty, Ty::Unknown) {
-                        else_ty
+                    if matches!(promoted_then, Ty::Unknown) {
+                        promoted_else
                     } else {
-                        then_ty
+                        promoted_then
                     }
                 } else {
-                    then_ty
+                    promoted_then
                 }
             }
 

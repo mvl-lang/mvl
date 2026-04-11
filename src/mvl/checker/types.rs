@@ -162,6 +162,11 @@ pub fn resolve(expr: &TypeExpr) -> Ty {
 /// `Unknown` unifies with anything at any depth (error recovery).
 /// Security labels enforce the IFC lattice: upward flows are allowed,
 /// downward flows are rejected (require explicit declassify/sanitize).
+///
+/// # INVARIANT
+/// `a` = expected type, `b` = found type. Reversing the arguments silently
+/// inverts security enforcement (can_flow is asymmetric). All call sites MUST
+/// maintain this order.
 pub fn types_compatible(a: &Ty, b: &Ty) -> bool {
     // Strip Refined wrappers but preserve Labeled
     let a = a.base();
@@ -178,8 +183,13 @@ pub fn types_compatible(a: &Ty, b: &Ty) -> bool {
         // Expected labeled, found unlabeled: check inner of expected vs found.
         // Unlabeled data may be assigned to a labeled context (treated as Public).
         (Ty::Labeled(_, ia), _) => types_compatible(ia, b),
-        // Expected unlabeled, found labeled: strip found label and check structurally.
-        (_, Ty::Labeled(_, ib)) => types_compatible(a, ib),
+        // Expected unlabeled (treated as Public context), found labeled:
+        // Only allow if the found label can flow to Public — i.e., found = Public<T>.
+        // Secret<T>, Tainted<T>, Clean<T> must NOT flow silently to an unlabeled context;
+        // that would make any untyped parameter an implicit declassification sink.
+        (_, Ty::Labeled(lb, ib)) => {
+            ifc::can_flow(*lb, SecurityLabel::Public) && types_compatible(a, ib)
+        }
         // Structural cases
         (Ty::Option(ai), Ty::Option(bi)) => types_compatible(ai, bi),
         (Ty::Result(ao, ae), Ty::Result(bo, be)) => {
