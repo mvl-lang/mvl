@@ -69,10 +69,10 @@ assurance-gate: ## CI gate: fail if below 75% completeness/coverage
 # === Documentation ===
 
 docs: ## Build documentation site
-	uv run mkdocs build
+	uvx --with mkdocs-material mkdocs build
 
 docs-serve: ## Serve documentation locally (http://localhost:8000)
-	uv run mkdocs serve
+	uvx --with mkdocs-material mkdocs serve
 
 # === Clean ===
 
