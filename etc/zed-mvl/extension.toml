@@ -1,20 +1,14 @@
-[extension]
 id = "mvl"
 name = "MVL"
 version = "0.0.1"
+schema_version = 1
 description = "MVL (Minimum Verification Language) — syntax highlighting and editor support"
 authors = ["MVL Team <https://github.com/LAB271>"]
 repository = "https://github.com/LAB271/mvl_language"
 
-# Tree-sitter grammar.
-# NOTE: Zed requires the grammar repository to contain grammar.js at its root.
-# Until tree-sitter-mvl is published as a standalone repo, use local dev mode:
-#   zed: extensions → Install Dev Extension → point to etc/zed-mvl/
-#
-# Once published:
-#   [grammars.mvl]
-#   repository = "https://github.com/LAB271/tree-sitter-mvl"
-#   commit = "<sha>"
+# NOTE: Zed requires grammar.js at the root of the grammar repository.
+# Until tree-sitter-mvl is a standalone repo, this points to the monorepo.
+# For dev install, Zed will attempt to fetch and compile from this commit.
 [grammars.mvl]
 repository = "https://github.com/LAB271/mvl_language"
 commit = "fed4a29"
