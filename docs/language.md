@@ -7,15 +7,47 @@ This is the complete language reference for the Minimum Verification Language. F
 
 ## Overview
 
-The MVL has three layers:
-1. **Type system** (Spec 001) — ADTs, Option, Result, ownership, refinements, immutability
-2. **Effect system** (Spec 002) — fine-grained effects, capabilities, totality, concurrency
-3. **Information flow control** (Spec 003) — security labels, taint tracking, declassification
+The MVL design has three layers, ordered by stability:
 
-Three architectural decisions govern the design:
-1. **ADR-0001:** Eleven compiler-verified requirements
-2. **ADR-0002:** Language contraction — minimal syntax surface
-3. **ADR-0003:** Compilation strategy — prototype Rust, production LLVM
+### 1. Eleven Requirements (frozen)
+
+What the compiler verifies. Well-formedness — internal quality proven at compile time.
+
+Derived from the convergence of formal methods (Curry-Howard, Hoare, Girard, Plotkin & Pretnar) and safety-critical practice (MISRA C, DO-178C, IEC 61508). Requirements 8-11 added because LLM generation makes the annotation burden zero. Adding a 12th needs the same bar: "catches bugs no combination of the other 11 catches."
+
+**Spec:** ADR-0001. Specs 001 (type system), 002 (effects), 003 (IFC).
+
+### 2. Language Constructs (nearly frozen)
+
+The minimal syntax to express programs. ~25 keywords, ~10 statement forms, LL(1) grammar. Validated against Python, Rust, Go, and Zig for expressiveness — no missing constructs, all gaps resolved as stdlib.
+
+The contraction principle: features are only added if they increase verification density. The language shrinks by policy. The grammar fits in 100 EBNF productions.
+
+**Spec:** ADR-0002 (contraction), ADR-0004 (size), ADR-0005 (parser). Grammar: `docs/grammar.ebnf`.
+
+### 3. Standard Library + External Packages (evolves)
+
+How programs do work. Collection ops, formatting, I/O, networking, crypto — all here. This is where the language grows without the language changing. Vocabulary compression: named, typed, verifiable functions that the compiler understands.
+
+Three tiers: core (~30 types), standard (~200 functions), extended (packages with extern inside, verified API outside).
+
+**Spec:** `docs/stdlib.md`. Epic 6 (#41).
+
+### The boundary
+
+Requirements define what the compiler proves. Constructs define what the programmer writes. Stdlib defines how work gets done. The boundary only moves in one direction: **stdlib grows, language doesn't.**
+
+Testing, BDD, property testing, and model checking are all tooling on top of the same AST — zero language extensions. Mocking is free because effects are explicit. The language is the minimum. Everything else is tooling or library.
+
+### Architectural decisions
+
+| ADR | Decision |
+|-----|----------|
+| ADR-0001 | Eleven compiler-verified requirements |
+| ADR-0002 | Language contraction — what to drop and why |
+| ADR-0003 | Compilation strategy — prototype Rust, production LLVM |
+| ADR-0004 | Language size — deliberately the smallest |
+| ADR-0005 | Hand-written recursive descent parser |
 
 ## Grammar Summary
 
