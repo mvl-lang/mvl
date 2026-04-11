@@ -42,6 +42,15 @@ extern "rust" {                       // foreign function interface
 }
 ```
 
+### Comments
+
+```
+// line comment                       // the only comment form
+/// doc comment                       // convention — parser sees //, doc tool reads ///
+```
+
+`//` line comments only. No `/* */` block comments. Rationale: the LLM generates all code — it doesn't need block comments for "commenting out large sections." One comment form means one parsing rule. Block comments nest badly (`/* /* */ */`) and add parser complexity for zero verification value. Go made the same choice. `///` is not separate syntax — it's a `//` comment that the doc tool recognizes by convention.
+
 ### Statements
 
 ```
