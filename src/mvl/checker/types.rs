@@ -143,13 +143,41 @@ pub fn resolve(expr: &TypeExpr) -> Ty {
     }
 }
 
-/// Structural equality ignoring refinement wrappers and Unknown.
-/// `Unknown` unifies with anything (error recovery).
+/// Structural compatibility ignoring refinement wrappers and Unknown.
+///
+/// `Unknown` unifies with anything at any depth (error recovery).  This means
+/// `Result<Int, Unknown>` (produced when we only know one type argument, e.g.
+/// from `Ok(1)`) is compatible with `Result<Int, String>`.
 pub fn types_compatible(a: &Ty, b: &Ty) -> bool {
+    let a = a.base();
+    let b = b.base();
     if matches!(a, Ty::Unknown) || matches!(b, Ty::Unknown) {
         return true;
     }
-    a.base() == b.base()
+    match (a, b) {
+        (Ty::Option(ai), Ty::Option(bi)) => types_compatible(ai, bi),
+        (Ty::Result(ao, ae), Ty::Result(bo, be)) => {
+            types_compatible(ao, bo) && types_compatible(ae, be)
+        }
+        (Ty::List(ai), Ty::List(bi)) => types_compatible(ai, bi),
+        (Ty::Ref(am, ai), Ty::Ref(bm, bi)) => am == bm && types_compatible(ai, bi),
+        (Ty::Tuple(aes), Ty::Tuple(bes)) => {
+            aes.len() == bes.len()
+                && aes
+                    .iter()
+                    .zip(bes.iter())
+                    .all(|(x, y)| types_compatible(x, y))
+        }
+        (Ty::Named(an, aa), Ty::Named(bn, ba)) => {
+            an == bn
+                && aa.len() == ba.len()
+                && aa
+                    .iter()
+                    .zip(ba.iter())
+                    .all(|(x, y)| types_compatible(x, y))
+        }
+        _ => a == b,
+    }
 }
 
 #[cfg(test)]

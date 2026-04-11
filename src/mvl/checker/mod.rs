@@ -141,7 +141,11 @@ impl TypeChecker {
                 .define(param.name.clone(), VarInfo::new(ty, param.mutable));
         }
 
-        self.check_block(&fd.body, Some(&ret_ty));
+        // Use infer_block_type so that the last expression in the body is
+        // treated as the implicit return value rather than a discarded statement.
+        // This prevents false ResultIgnored errors for `Ok(...)` / `Err(...)`
+        // at the end of Result-returning functions.
+        self.infer_block_type(&fd.body, Some(&ret_ty));
         self.env.pop_scope();
         self.current_return_ty = prev_ret;
     }
@@ -159,7 +163,9 @@ impl TypeChecker {
     }
 
     fn check_module_decl(&mut self, md: &ModuleDecl) {
-        self.collect_declarations(&md.declarations);
+        // Note: declarations were already registered in pass 1 (collect_declarations).
+        // Do NOT call collect_declarations again here — it would double-register all
+        // types and functions in this module.
         for decl in &md.declarations {
             self.check_decl(decl);
         }
@@ -173,6 +179,42 @@ impl TypeChecker {
             self.check_stmt(stmt, expected_ty);
         }
         self.env.pop_scope();
+    }
+
+    /// Check a block and return the type of its final expression (or Unit).
+    ///
+    /// Used for if-expression then-branches where the block's value matters.
+    /// The last `Stmt::Expr` provides the block's type; earlier statements
+    /// are checked normally. Unlike `check_block`, the final expression is
+    /// NOT flagged as `ResultIgnored` because its value is consumed.
+    fn infer_block_type(&mut self, block: &Block, return_ty: Option<&Ty>) -> Ty {
+        self.env.push_scope();
+        let stmts = &block.stmts;
+        let n = stmts.len();
+        let mut last_ty = Ty::Unit;
+        for (i, stmt) in stmts.iter().enumerate() {
+            if i + 1 == n {
+                if let Stmt::Expr { expr, .. } = stmt {
+                    last_ty = self.infer_expr(expr);
+                    // Suppress ResultIgnored only when the block's expected return
+                    // type is itself compatible with Result (the value is used).
+                    // If the expected return type is Unit or incompatible, the
+                    // caller is discarding the Result — emit ResultIgnored as usual.
+                    if last_ty.is_result() {
+                        let consumed_by_caller = return_ty
+                            .map(|rt| types_compatible(rt, &last_ty))
+                            .unwrap_or(false);
+                        if !consumed_by_caller {
+                            self.emit(CheckError::ResultIgnored { span: expr.span() });
+                        }
+                    }
+                    break;
+                }
+            }
+            self.check_stmt(stmt, return_ty);
+        }
+        self.env.pop_scope();
+        last_ty
     }
 
     fn check_stmt(&mut self, stmt: &Stmt, return_ty: Option<&Ty>) {
@@ -303,13 +345,21 @@ impl TypeChecker {
 
     // ── Assignment target (#17 immutability) ─────────────────────────────
 
-    fn check_assignment(&mut self, target: &LValue, _val_ty: &Ty, span: Span) {
+    fn check_assignment(&mut self, target: &LValue, val_ty: &Ty, span: Span) {
         match target {
             LValue::Ident(name, _) => {
-                if let Some(info) = self.env.lookup(name) {
+                if let Some(info) = self.env.lookup(name).cloned() {
                     if !info.mutable {
                         self.emit(CheckError::AssignToImmutable {
                             name: name.clone(),
+                            span,
+                        });
+                    }
+                    // #17: also verify the assigned value is type-compatible
+                    if !types_compatible(&info.ty, val_ty) {
+                        self.emit(CheckError::TypeMismatch {
+                            expected: info.ty.display(),
+                            found: val_ty.display(),
                             span,
                         });
                     }
@@ -328,7 +378,7 @@ impl TypeChecker {
                 // Check that the base is accessible
                 let base_ty = self.infer_lvalue(base);
                 self.check_field_mutation(&base_ty, field, *field_span);
-                self.check_assignment(base, _val_ty, span);
+                self.check_assignment(base, val_ty, span);
             }
         }
     }
@@ -368,7 +418,7 @@ impl TypeChecker {
 
     // ── Expression type inference ─────────────────────────────────────────
 
-    pub fn infer_expr(&mut self, expr: &Expr) -> Ty {
+    fn infer_expr(&mut self, expr: &Expr) -> Ty {
         match expr {
             // #11: Literals
             Expr::Literal(lit, _) => self.infer_literal(lit),
@@ -386,6 +436,14 @@ impl TypeChecker {
                     }
                     info.ty.clone()
                 } else {
+                    // Before emitting UndefinedVariable, check whether the ident
+                    // is a known enum unit-variant or the built-in `None`.
+                    if name == "None" {
+                        return Ty::Option(Box::new(Ty::Unknown));
+                    }
+                    if let Some(enum_ty) = self.lookup_enum_for_variant(name) {
+                        return enum_ty;
+                    }
                     self.emit(CheckError::UndefinedVariable {
                         name: name.clone(),
                         span: *span,
@@ -458,18 +516,33 @@ impl TypeChecker {
                         span: cond.span(),
                     });
                 }
-                self.check_block(then, None);
+                let then_ty = self.infer_block_type(then, None);
                 if let Some(else_expr) = else_ {
-                    self.infer_expr(else_expr)
+                    let else_ty = self.infer_expr(else_expr);
+                    if !matches!(then_ty, Ty::Unknown)
+                        && !matches!(else_ty, Ty::Unknown)
+                        && !types_compatible(&then_ty, &else_ty)
+                    {
+                        self.emit(CheckError::TypeMismatch {
+                            expected: then_ty.display(),
+                            found: else_ty.display(),
+                            span: *span,
+                        });
+                    }
+                    if matches!(then_ty, Ty::Unknown) {
+                        else_ty
+                    } else {
+                        then_ty
+                    }
                 } else {
-                    let _ = span;
-                    Ty::Unit
+                    then_ty
                 }
             }
 
             Expr::Block(block) => {
-                self.check_block(block, None);
-                Ty::Unit
+                // Infer the type of the last expression so that block-expressions
+                // (e.g. the else-branch of an if-expression) return the correct type.
+                self.infer_block_type(block, None)
             }
 
             // #12: Struct construction
@@ -530,7 +603,18 @@ impl TypeChecker {
                     })
                     .collect();
                 let ret_ty = ret_type.as_ref().map(|t| resolve(t)).unwrap_or(Ty::Unknown);
-                self.infer_expr(body);
+                let body_ty = self.infer_expr(body);
+                // Verify body type matches declared return annotation
+                if !matches!(ret_ty, Ty::Unknown)
+                    && !matches!(body_ty, Ty::Unknown)
+                    && !types_compatible(&ret_ty, &body_ty)
+                {
+                    self.emit(CheckError::TypeMismatch {
+                        expected: ret_ty.display(),
+                        found: body_ty.display(),
+                        span: body.span(),
+                    });
+                }
                 self.env.pop_scope();
                 Ty::Fn(param_tys, Box::new(ret_ty))
             }
@@ -657,6 +741,25 @@ impl TypeChecker {
         }
     }
 
+    // ── Enum constructor resolution (#12) ────────────────────────────────
+    //
+    // `Some(v)`, `Ok(v)`, `Err(e)` and user-defined tuple-variant constructors
+    // are parsed as `Expr::FnCall` because they syntactically look like calls.
+    // `None` and unit variants are `Expr::Ident`.  We must recognise them
+    // before falling through to UndefinedFunction / UndefinedVariable.
+
+    /// Return the enum type that contains a variant named `variant`, or `None`.
+    fn lookup_enum_for_variant(&self, variant: &str) -> Option<Ty> {
+        for (type_name, type_info) in &self.env.types {
+            if let TypeBodyInfo::Enum(variants) = &type_info.body {
+                if variants.iter().any(|v| v.name == variant) {
+                    return Some(Ty::Named(type_name.clone(), vec![]));
+                }
+            }
+        }
+        None
+    }
+
     // ── Function calls (#11) ──────────────────────────────────────────────
 
     fn infer_fn_call(&mut self, name: &str, args: &[Expr], span: Span) -> Ty {
@@ -684,6 +787,19 @@ impl TypeChecker {
             }
             fn_info.ret.clone()
         } else {
+            // ── Built-in enum constructors ────────────────────────────────
+            // These are not in the function table but are valid expressions.
+            let first_arg = arg_tys.into_iter().next().unwrap_or(Ty::Unknown);
+            match name {
+                "Some" => return Ty::Option(Box::new(first_arg)),
+                "Ok" => return Ty::Result(Box::new(first_arg), Box::new(Ty::Unknown)),
+                "Err" => return Ty::Result(Box::new(Ty::Unknown), Box::new(first_arg)),
+                _ => {}
+            }
+            // User-defined enum tuple-variant constructor
+            if let Some(enum_ty) = self.lookup_enum_for_variant(name) {
+                return enum_ty;
+            }
             // Not in function table — could be builtin or foreign; emit Unknown
             self.emit(CheckError::UndefinedFunction {
                 name: name.to_string(),
@@ -1312,6 +1428,104 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, CheckError::UseAfterMove { name, .. } if name == "x")),
             "expected UseAfterMove(x), got: {errors:?}"
+        );
+    }
+
+    // ── Fix: enum constructors as expressions ─────────────────────────────
+
+    #[test]
+    fn some_constructor_no_undefined_function() {
+        let src = "fn f(x: Int) -> Option<Int> { Some(x) }";
+        let errors = errors_for(src);
+        assert!(
+            !errors
+                .iter()
+                .any(|e| matches!(e, CheckError::UndefinedFunction { name, .. } if name == "Some")),
+            "Some() should not emit UndefinedFunction, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn ok_constructor_no_undefined_function() {
+        let src = "fn produce() -> Result<Int, String> { Ok(1) }";
+        let errors = errors_for(src);
+        assert!(
+            !errors
+                .iter()
+                .any(|e| matches!(e, CheckError::UndefinedFunction { name, .. } if name == "Ok")),
+            "Ok() should not emit UndefinedFunction, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn err_constructor_no_undefined_function() {
+        let src = "fn f() -> Result<Int, String> { Err(\"oops\") }";
+        let errors = errors_for(src);
+        assert!(
+            !errors
+                .iter()
+                .any(|e| matches!(e, CheckError::UndefinedFunction { name, .. } if name == "Err")),
+            "Err() should not emit UndefinedFunction, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn none_ident_no_undefined_variable() {
+        let src = "fn f() -> Option<Int> { None }";
+        let errors = errors_for(src);
+        assert!(
+            !errors
+                .iter()
+                .any(|e| matches!(e, CheckError::UndefinedVariable { name, .. } if name == "None")),
+            "None should not emit UndefinedVariable, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn user_enum_unit_variant_no_undefined_variable() {
+        let src = "type Dir = enum { North, South }\nfn f() -> Dir { North }";
+        let errors = errors_for(src);
+        assert!(
+            !errors.iter().any(
+                |e| matches!(e, CheckError::UndefinedVariable { name, .. } if name == "North")
+            ),
+            "enum unit variant should not emit UndefinedVariable, got: {errors:?}"
+        );
+    }
+
+    // ── Fix: assignment type-check ────────────────────────────────────────
+
+    #[test]
+    fn assign_type_mismatch_rejected() {
+        let src = "fn f() -> Unit { let mut x = 1; x = true; }";
+        let errors = errors_for(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            "expected TypeMismatch on type-incompatible assignment, got: {errors:?}"
+        );
+    }
+
+    // ── Fix: lambda return type check ─────────────────────────────────────
+    //
+    // Lambda parsing is not yet implemented in the parser; the lambda return-type
+    // check in infer_expr is exercised via direct AST construction in the
+    // integration test suite when lambda parsing lands.  The check itself is
+    // verified by ensuring the guard condition compiles and the path exists.
+
+    // ── Fix: if-expression branch type check ─────────────────────────────
+
+    #[test]
+    fn if_expr_branch_type_mismatch_rejected() {
+        // The `if` must be in expression position (init of `let`) to hit Expr::If.
+        let src = "fn f(b: Bool) -> Int { let x = if b { 1 } else { true }; x }";
+        let errors = errors_for(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            "expected TypeMismatch for mismatched if-expression branches, got: {errors:?}"
         );
     }
 }
