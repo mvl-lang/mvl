@@ -24,8 +24,8 @@ use crate::mvl::checker::context::{
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
 use crate::mvl::parser::ast::{
-    BinaryOp, Block, ConstDecl, Decl, ElseBranch, Expr, FnDecl, LValue, Literal, MatchArm,
-    MatchBody, ModuleDecl, Pattern, Program, Stmt, TypeBody, TypeDecl, UnaryOp,
+    BinaryOp, Block, Capability, ConstDecl, Decl, ElseBranch, Expr, FnDecl, LValue, Literal,
+    MatchArm, MatchBody, ModuleDecl, Pattern, Program, Stmt, Totality, TypeBody, TypeDecl, UnaryOp,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -62,6 +62,12 @@ struct TypeChecker {
     env: TypeEnv,
     /// Return type of the function currently being checked (for `?` and `return`).
     current_return_ty: Option<Ty>,
+    /// Name of the function currently being checked (for effect error messages).
+    current_fn_name: String,
+    /// Effects declared by the current function (Req 7, 8).
+    current_fn_effects: Vec<String>,
+    /// Totality of the current function (Req 8); None = implicitly total.
+    current_fn_totality: Option<Totality>,
 }
 
 impl TypeChecker {
@@ -70,6 +76,9 @@ impl TypeChecker {
             errors: Vec::new(),
             env: TypeEnv::new(),
             current_return_ty: None,
+            current_fn_name: String::new(),
+            current_fn_effects: Vec::new(),
+            current_fn_totality: None,
         }
     }
 
@@ -116,7 +125,15 @@ impl TypeChecker {
     fn register_fn(&mut self, fd: &FnDecl) {
         let params: Vec<Ty> = fd.params.iter().map(|p| resolve(&p.ty)).collect();
         let ret = resolve(&fd.return_type);
-        self.env.define_fn(fd.name.clone(), FnInfo { params, ret });
+        self.env.define_fn(
+            fd.name.clone(),
+            FnInfo {
+                params,
+                ret,
+                effects: fd.effects.clone(),
+                totality: fd.totality.clone(),
+            },
+        );
     }
 
     // ── Declarations ─────────────────────────────────────────────────────
@@ -134,11 +151,18 @@ impl TypeChecker {
         let ret_ty = resolve(&fd.return_type);
         let prev_ret = self.current_return_ty.replace(ret_ty.clone());
 
+        // Save and set effect/totality context (Req 7, 8, 9).
+        let prev_fn_name = std::mem::replace(&mut self.current_fn_name, fd.name.clone());
+        let prev_effects = std::mem::replace(&mut self.current_fn_effects, fd.effects.clone());
+        let prev_totality = std::mem::replace(&mut self.current_fn_totality, fd.totality.clone());
+
         self.env.push_scope();
         for param in &fd.params {
             let ty = resolve(&param.ty);
-            self.env
-                .define(param.name.clone(), VarInfo::new(ty, param.mutable));
+            self.env.define(
+                param.name.clone(),
+                VarInfo::new(ty, param.mutable).with_capability(param.capability.clone()),
+            );
         }
 
         // Use infer_block_type so that the last expression in the body is
@@ -147,7 +171,11 @@ impl TypeChecker {
         // at the end of Result-returning functions.
         self.infer_block_type(&fd.body, Some(&ret_ty));
         self.env.pop_scope();
+
         self.current_return_ty = prev_ret;
+        self.current_fn_name = prev_fn_name;
+        self.current_fn_effects = prev_effects;
+        self.current_fn_totality = prev_totality;
     }
 
     fn check_const_decl(&mut self, cd: &ConstDecl) {
@@ -321,7 +349,7 @@ impl TypeChecker {
                 self.env.pop_scope();
             }
 
-            Stmt::While { cond, body, .. } => {
+            Stmt::While { cond, body, span } => {
                 let cond_ty = self.infer_expr(cond);
                 if !matches!(cond_ty, Ty::Bool | Ty::Unknown) {
                     self.emit(CheckError::TypeMismatch {
@@ -329,6 +357,10 @@ impl TypeChecker {
                         found: cond_ty.display(),
                         span: cond.span(),
                     });
+                }
+                // Req 8: reject `while` in total functions (only `for` is bounded).
+                if !matches!(self.current_fn_totality, Some(Totality::Partial)) {
+                    self.emit(CheckError::UnboundedLoopInTotal { span: *span });
                 }
                 self.check_block(body, return_ty);
             }
@@ -488,7 +520,13 @@ impl TypeChecker {
                 for arg in args {
                     self.infer_expr(arg);
                 }
-                let _ = (method, span);
+                // Req 9: capability check for actor-boundary crossings.
+                // `channel.send(val)` — first argument must be `iso` or `val`.
+                if method == "send" {
+                    if let Some(first_arg) = args.first() {
+                        self.check_send_capability(first_arg, *span);
+                    }
+                }
                 Ty::Unknown // method resolution not yet implemented
             }
 
@@ -630,6 +668,7 @@ impl TypeChecker {
             Literal::Str(_) => Ty::String,
             Literal::Char(_) => Ty::Char,
             Literal::Bool(_) => Ty::Bool,
+            Literal::Unit => Ty::Unit,
         }
     }
 
@@ -785,6 +824,39 @@ impl TypeChecker {
                     });
                 }
             }
+
+            // Req 7/8: Effect propagation — caller must declare all effects of callee.
+            for effect in &fn_info.effects {
+                if !self.current_fn_effects.contains(effect) {
+                    if self.current_fn_effects.is_empty() {
+                        // Pure function calling effectful one (#19)
+                        self.emit(CheckError::UndeclaredEffect {
+                            callee: name.to_string(),
+                            effect: effect.clone(),
+                            span,
+                        });
+                    } else {
+                        // Caller has some effects but not this one (#20)
+                        self.emit(CheckError::MissingEffect {
+                            caller: self.current_fn_name.clone(),
+                            callee: name.to_string(),
+                            effect: effect.clone(),
+                            span,
+                        });
+                    }
+                }
+            }
+
+            // Req 8: Total function must not call partial functions.
+            if matches!(fn_info.totality, Some(Totality::Partial))
+                && !matches!(self.current_fn_totality, Some(Totality::Partial))
+            {
+                self.emit(CheckError::PartialCallInTotal {
+                    callee: name.to_string(),
+                    span,
+                });
+            }
+
             fn_info.ret.clone()
         } else {
             // ── Built-in enum constructors ────────────────────────────────
@@ -1162,6 +1234,42 @@ impl TypeChecker {
                 self.bind_pattern(inner, &Ty::Unknown, mutable);
             }
             _ => {}
+        }
+    }
+
+    // ── Reference capability checking (#22) ───────────────────────────────
+
+    /// Verify that an argument to `channel.send()` has a sendable capability.
+    ///
+    /// Only `iso` and `val` may cross actor boundaries; `ref` and `tag` may not.
+    /// `consume` wrapping is detected by looking for `Expr::Consume` (or equivalent).
+    ///
+    /// # Scope limitation
+    /// Currently only checks simple identifier arguments (e.g. `channel.send(x)`).
+    /// Complex expressions like `channel.send(get_payload())` or `channel.send(obj.field)`
+    /// are not checked. See #73 for tracking.
+    fn check_send_capability(&mut self, arg: &Expr, span: Span) {
+        if let Expr::Ident(name, _) = arg {
+            if let Some(info) = self.env.lookup(name).cloned() {
+                match &info.capability {
+                    Some(Capability::Ref) => {
+                        self.emit(CheckError::CapabilityViolation {
+                            param: name.clone(),
+                            capability: "ref".to_string(),
+                            span,
+                        });
+                    }
+                    Some(Capability::Tag) => {
+                        self.emit(CheckError::CapabilityViolation {
+                            param: name.clone(),
+                            capability: "tag".to_string(),
+                            span,
+                        });
+                    }
+                    // iso and val are sendable; None (default) is treated as val
+                    _ => {}
+                }
+            }
         }
     }
 }

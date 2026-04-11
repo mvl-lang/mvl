@@ -278,8 +278,15 @@ impl Parser {
 
         let mut declarations = Vec::new();
         while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+            let pos_before = self.pos;
             if let Ok(d) = self.parse_decl() {
                 declarations.push(d);
+            }
+            // Fix: if recovery stalled without consuming tokens, force-advance.
+            if !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof)
+                && self.pos == pos_before
+            {
+                self.advance();
             }
         }
         let rbrace = self.expect(&TokenKind::RBrace);
