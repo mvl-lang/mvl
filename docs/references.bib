@@ -1,0 +1,320 @@
+% MVL Research — Validated References
+% Last updated: 2026-04-11
+
+% === Foundations (Type Theory, Logic) ===
+
+@article{curry1934functionality,
+  author  = {Haskell B. Curry},
+  title   = {Functionality in Combinatory Logic},
+  journal = {Proceedings of the National Academy of Sciences},
+  volume  = {20},
+  number  = {11},
+  pages   = {584--590},
+  year    = {1934},
+  note    = {First observation that types of combinators correspond to axiom-schemes for intuitionistic logic}
+}
+
+@incollection{howard1980formulae,
+  author    = {William A. Howard},
+  title     = {The Formulae-as-Types Notion of Construction},
+  booktitle = {To H.B. Curry: Essays on Combinatory Logic, Lambda Calculus and Formalism},
+  editor    = {J.P. Seldin and J.R. Hindley},
+  publisher = {Academic Press},
+  year      = {1980},
+  note      = {Manuscript written 1969, published 1980. Full Curry-Howard correspondence: propositions as types, proofs as programs}
+}
+
+@book{martinlof1984intuitionistic,
+  author    = {Per Martin-L{\"o}f},
+  title     = {Intuitionistic Type Theory},
+  publisher = {Bibliopolis},
+  year      = {1984},
+  note      = {Constructive type theory. Original presentation 1972 (corrected version). Foundation for dependent types and termination checking in proof assistants}
+}
+
+@article{girard1987linear,
+  author  = {Jean-Yves Girard},
+  title   = {Linear Logic},
+  journal = {Theoretical Computer Science},
+  volume  = {50},
+  number  = {1},
+  pages   = {1--101},
+  year    = {1987},
+  note    = {Linear logic: each resource used exactly once. Foundation for ownership types and Rust's borrow checker}
+}
+
+% === Programming Language Design ===
+
+@article{hoare1969axiomatic,
+  author  = {C. A. R. Hoare},
+  title   = {An Axiomatic Basis for Computer Programming},
+  journal = {Communications of the ACM},
+  volume  = {12},
+  number  = {10},
+  pages   = {576--580},
+  year    = {1969},
+  doi     = {10.1145/363235.363259},
+  note    = {Hoare triples: \{P\} C \{Q\}. Foundation for program verification}
+}
+
+@misc{hoare2009null,
+  author = {C. A. R. Hoare},
+  title  = {Null References: The Billion Dollar Mistake},
+  year   = {2009},
+  note   = {QCon London 2009 keynote. Hoare calls his 1965 invention of null references his billion dollar mistake},
+  url    = {https://www.infoq.com/presentations/Null-References-The-Billion-Dollar-Mistake-Tony-Hoare/}
+}
+
+@inproceedings{burstall1980hope,
+  author    = {R. M. Burstall and D. B. MacQueen and D. T. Sannella},
+  title     = {HOPE: An Experimental Applicative Language},
+  booktitle = {1980 LISP Conference},
+  year      = {1980},
+  pages     = {136--143},
+  note      = {Introduced algebraic data types and exhaustive pattern matching. Adopted into Standard ML}
+}
+
+@book{milner1997definition,
+  author    = {Robin Milner and Mads Tofte and Robert Harper and David MacQueen},
+  title     = {The Definition of Standard ML (Revised)},
+  publisher = {MIT Press},
+  year      = {1997},
+  note      = {Standard ML definition. ML family pioneered type inference (Milner 1978), ADTs (from Hope), Option types}
+}
+
+@book{meyer1988oosc,
+  author    = {Bertrand Meyer},
+  title     = {Object-Oriented Software Construction},
+  publisher = {Prentice Hall},
+  year      = {1988},
+  note      = {First edition. Introduced Design by Contract. IEEE Computer paper 1992}
+}
+
+@inproceedings{plotkin2009handlers,
+  author    = {Gordon Plotkin and Matija Pretnar},
+  title     = {Handlers of Algebraic Effects},
+  booktitle = {ESOP 2009},
+  series    = {LNCS},
+  volume    = {5502},
+  pages     = {80--94},
+  year      = {2009},
+  publisher = {Springer},
+  note      = {Introduced effect handlers. Won ETAPS Test of Time Award 2022}
+}
+
+@inproceedings{leijen2014koka,
+  author    = {Daan Leijen},
+  title     = {Koka: Programming with Row Polymorphic Effect Types},
+  booktitle = {MSFP 2014},
+  year      = {2014},
+  note      = {Algebraic effects in a practical language. Microsoft Research},
+  url       = {https://koka-lang.github.io/koka/doc/index.html}
+}
+
+% === Information Flow Control ===
+
+@article{denning1976lattice,
+  author  = {Dorothy E. Denning},
+  title   = {A Lattice Model of Secure Information Flow},
+  journal = {Communications of the ACM},
+  volume  = {19},
+  number  = {5},
+  pages   = {236--243},
+  year    = {1976},
+  doi     = {10.1145/360051.360056},
+  note    = {Security lattice for information flow control. Foundation for taint tracking in type systems}
+}
+
+% === Safety-Critical Standards ===
+
+@standard{misra2023,
+  title        = {MISRA C:2023 — Guidelines for the Use of the C Language in Critical Systems},
+  organization = {Motor Industry Software Reliability Association},
+  year         = {2023},
+  note         = {143 rules + 16 directives restricting C to a safe subset. 30+ years of automotive safety-critical practice. Applied beyond automotive: medical, rail, industrial}
+}
+
+@standard{do178c,
+  title        = {DO-178C — Software Considerations in Airborne Systems and Equipment Certification},
+  organization = {RTCA},
+  year         = {2011},
+  note         = {Primary standard for airborne software certification. Level A (catastrophic failure) requires formal methods}
+}
+
+@standard{iec61508,
+  title        = {IEC 61508 — Functional Safety of Electrical/Electronic/Programmable Electronic Safety-related Systems},
+  organization = {International Electrotechnical Commission},
+  year         = {2010},
+  note         = {Functional safety standard. SIL 1-4 levels. SIL 4 requires formal verification}
+}
+
+% === Compiler Verification ===
+
+@inproceedings{leroy2006compcert,
+  author    = {Xavier Leroy},
+  title     = {Formal Certification of a Compiler Back-end},
+  booktitle = {POPL 2006},
+  pages     = {42--54},
+  year      = {2006},
+  publisher = {ACM},
+  note      = {CompCert verified C compiler. INRIA. Won ACM Software System Award 2021. Proves P→E is proof-preserving}
+}
+
+% === Modern Languages ===
+
+@inproceedings{demoura2021lean4,
+  author    = {Leonardo de Moura and Sebastian Ullrich},
+  title     = {The Lean 4 Theorem Prover and Programming Language},
+  booktitle = {CADE 2021},
+  year      = {2021},
+  note      = {Lean 4. Proof assistant + general programming. Microsoft Research → Lean FRO. Powers Mathlib. Scores 9/11 on MVL requirements}
+}
+
+@article{brady2021idris2,
+  author  = {Edwin Brady},
+  title   = {Idris 2: Quantitative Type Theory in Practice},
+  journal = {ECOOP 2021},
+  year    = {2021},
+  note    = {Idris 2 with quantitative type theory. University of St Andrews. Total by default, dependent types. Scores 8.5/11},
+  url     = {https://www.idris-lang.org/}
+}
+
+@phdthesis{clebsch2018pony,
+  author = {Sylvan Clebsch},
+  title  = {Pony: Co-Designing a Type System and a Runtime},
+  school = {Imperial College London},
+  year   = {2018},
+  note   = {Pony language. Reference capabilities (iso, val, ref, tag) guarantee data race freedom at compile time. Actor model for concurrency}
+}
+
+@misc{lisette2026,
+  author = {Ivan Ovejero},
+  title  = {Lisette — A Rust-inspired Language That Compiles to Go},
+  year   = {2026},
+  url    = {https://lisette.run/},
+  note   = {ADTs, pattern matching, Hindley-Milner type inference, immutability by default. Compiles to Go. Scores ~4.5/11}
+}
+
+% === LLM Code Generation Research ===
+
+@article{cassano2023multiple,
+  author  = {Federico Cassano and John Gouwar and Daniel Nguyen and Sydney Nguyen and Luna Phipps-Costin and Donald Pinckney and Ming-Ho Yee and Yangtian Zi and Carolyn Jane Anderson and Molly Q. Feldman and Arjun Guha and Michael Greenberg and Abhinav Jangda},
+  title   = {MultiPL-E: A Scalable and Polyglot Approach to Benchmarks for Evaluation of Code},
+  journal = {IEEE Transactions on Software Engineering},
+  year    = {2023},
+  doi     = {10.1109/TSE.2023.3267446},
+  note    = {Cross-language LLM benchmark. 18+ languages. Key evidence for corpus-quality correlation}
+}
+
+@article{chen2021codex,
+  author  = {Mark Chen and Jerry Tworek and Heewoo Jun and Qiming Yuan and others},
+  title   = {Evaluating Large Language Models Trained on Code},
+  journal = {arXiv preprint arXiv:2107.03374},
+  year    = {2021},
+  note    = {Codex / HumanEval benchmark. Noted pass@k scales better for typed languages}
+}
+
+@inproceedings{pourreza2024dinsql,
+  author    = {Mohammadreza Pourreza and Davood Rafiei},
+  title     = {DIN-SQL: Decomposed In-Context Learning of Text-to-SQL},
+  booktitle = {NeurIPS 2024},
+  year      = {2024},
+  note      = {GPT-4 achieves 85\%+ on Spider benchmark. Evidence for DSL boundedness improving generation quality}
+}
+
+% === Security Standards ===
+
+@standard{owasp2021top10,
+  title        = {OWASP Top 10:2021},
+  organization = {Open Worldwide Application Security Project},
+  year         = {2021},
+  url          = {https://owasp.org/Top10/},
+  note         = {Industry-standard ranking of critical web application security risks. A01-A10}
+}
+
+@standard{nist800218,
+  title        = {NIST SP 800-218 — Secure Software Development Framework (SSDF) v1.1},
+  organization = {National Institute of Standards and Technology},
+  year         = {2022},
+  url          = {https://csrc.nist.gov/publications/detail/sp/800-218/final},
+  note         = {US federal framework for secure software development. Required for federal suppliers}
+}
+
+@standard{cwe2024top25,
+  title        = {CWE Top 25 Most Dangerous Software Weaknesses (2024)},
+  organization = {MITRE Corporation},
+  year         = {2024},
+  url          = {https://cwe.mitre.org/top25/},
+  note         = {Data-driven ranking from CVE analysis. Maps to injection, memory safety, XSS}
+}
+
+@misc{cisa2024securebydesign,
+  title        = {Secure by Design Principles},
+  organization = {Cybersecurity and Infrastructure Security Agency},
+  year         = {2024},
+  url          = {https://www.cisa.gov/securebydesign},
+  note         = {US government guidance on eliminating vulnerability classes. Advocates memory-safe languages}
+}
+
+@book{google2020securereliable,
+  author    = {Heather Adkins and Betsy Beyer and Paul Blankinship and Piotr Lewandowski and Ana Oprea and Adam Stubblefield},
+  title     = {Building Secure and Reliable Systems},
+  publisher = {O'Reilly Media},
+  year      = {2020},
+  url       = {https://google.github.io/building-secure-and-reliable-systems/},
+  note      = {Google's public book on secure systems engineering. Free online. The actual Google source}
+}
+
+@misc{msrc2019memory,
+  author       = {Matt Miller},
+  title        = {A Proactive Approach to More Secure Code},
+  organization = {Microsoft Security Response Center},
+  year         = {2019},
+  url          = {https://msrc.microsoft.com/blog/2019/07/a-proactive-approach-to-more-secure-code/},
+  note         = {Source for the claim: ~70\% of Microsoft CVEs are memory safety issues. Consistent 2006-2018}
+}
+
+% === Cognitive Debt ===
+
+@article{storey2026tripledebt,
+  author  = {Margaret-Anne Storey and others},
+  title   = {From Technical Debt to Cognitive and Intent Debt},
+  journal = {arXiv preprint arXiv:2603.22106},
+  year    = {2026},
+  note    = {Triple debt model: technical, cognitive, intent. GenAI reduces tech debt but accelerates cognitive and intent debt}
+}
+
+% === Mythos / AI Security ===
+
+@misc{anthropic2026mythos,
+  author       = {Anthropic},
+  title        = {Claude Mythos Preview and Project Glasswing},
+  year         = {2026},
+  note         = {Announced Apr 8, 2026. Model tier above Opus. Autonomous vulnerability discovery: 27-year-old OpenBSD bug for \$50, FreeBSD RCE, 181 Firefox exploits. 99\%+ of findings unpatched. Project Glasswing: 40+ partners, \$100M compute credits for defensive scanning}
+}
+
+% === Other References ===
+
+@misc{karpathy2026software,
+  author = {Andrej Karpathy},
+  title  = {LLM-maintained knowledge bases},
+  year   = {2026},
+  url    = {https://x.com/karpathy/status/2039805659525644595},
+  note   = {Convergent architecture: markdown + git + LLM. Called it "a hacky collection of scripts"}
+}
+
+@misc{slsa2023,
+  title        = {SLSA: Supply-chain Levels for Software Artifacts},
+  organization = {Google / OpenSSF},
+  year         = {2023},
+  url          = {https://slsa.dev/},
+  note         = {Framework for supply chain integrity. Levels 1-4. Relevant to OWASP A06 and A08}
+}
+
+@misc{mawan2026securecoding,
+  author = {Ade Mawan},
+  title  = {Stop Writing Insecure Code: 10 Rules Used by Engineers at Google and Netflix},
+  year   = {2026},
+  url    = {https://medium.com/@ademawan/stop-writing-insecure-code-10-rules-used-by-engineers-at-google-and-netflix-6b1fb591f4b1},
+  note   = {Practitioner summary. Rules trace back to OWASP, CERT, NIST. Used as layman's validation in Appendix B}
+}

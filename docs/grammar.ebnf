@@ -1,0 +1,111 @@
+(* === Top-level === *)
+program        = { declaration } ;
+declaration    = type_decl | fn_decl | const_decl | module_decl ;
+
+(* === Modules === *)
+module_decl    = "module" IDENT "{" { declaration } "}" ;
+
+(* === Type declarations === *)
+type_decl      = "type" IDENT [ type_params ] "=" type_body ;
+type_params    = "<" IDENT { "," IDENT } ">" ;
+type_body      = struct_body | enum_body | alias_type ;
+struct_body    = "struct" "{" { field_decl } "}" ;
+enum_body      = "enum" "{" variant { "," variant } "}" ;
+variant        = IDENT [ "(" type_list ")" | "{" field_list "}" ] ;
+field_decl     = [ "mut" ] IDENT ":" type_expr [ "where" refinement ] ;
+field_list     = field_decl { "," field_decl } ;
+alias_type     = type_expr ;
+
+(* === Function declarations === *)
+fn_decl        = [ totality ] [ security ] "fn" IDENT [ type_params ]
+                 "(" [ param_list ] ")" "->" return_type
+                 [ "!" effect_list ] [ "where" constraints ]
+                 block ;
+totality       = "total" | "partial" ;
+security       = "public" | "tainted" | "secret" ;
+param_list     = param { "," param } ;
+param          = [ capability ] [ "mut" ] IDENT ":" type_expr [ "where" refinement ] ;
+capability     = "iso" | "val" | "ref" | "tag" ;
+return_type    = type_expr [ "where" refinement ] ;
+effect_list    = effect { "," effect } ;
+effect         = "IO" | "Console" | "FileRead" | "FileWrite" | "Net" | "DB" | IDENT ;
+constraints    = constraint { "," constraint } ;
+constraint     = IDENT ":" trait_bound ;
+
+(* === Type expressions === *)
+type_expr      = base_type | option_type | result_type | ref_type
+               | labeled_type | refined_type | fn_type | tuple_type ;
+base_type      = IDENT [ "<" type_list ">" ] ;
+option_type    = "Option" "<" type_expr ">" ;
+result_type    = "Result" "<" type_expr "," type_expr ">" ;
+ref_type       = "&" [ "mut" ] type_expr ;
+labeled_type   = security_label "<" type_expr ">" ;
+security_label = "Public" | "Tainted" | "Secret" ;
+refined_type   = type_expr "where" refinement ;
+fn_type        = "fn" "(" type_list ")" "->" type_expr [ "!" effect_list ] ;
+tuple_type     = "(" type_expr "," type_list ")" ;
+type_list      = type_expr { "," type_expr } ;
+
+(* === Refinement predicates === *)
+refinement     = ref_expr ;
+ref_expr       = ref_term { ( "&&" | "||" ) ref_term } ;
+ref_term       = ref_atom [ ( "==" | "!=" | "<" | ">" | "<=" | ">=" ) ref_atom ] ;
+ref_atom       = IDENT | INTEGER | "len" "(" IDENT ")"
+               | "(" ref_expr ")" | "!" ref_atom
+               | ref_atom ( "+" | "-" | "*" | "/" | "%" ) ref_atom ;
+
+(* === Statements === *)
+block          = "{" { statement } "}" ;
+statement      = let_stmt | assign_stmt | return_stmt | if_stmt
+               | match_stmt | for_stmt | while_stmt | expr_stmt ;
+let_stmt       = "let" [ "mut" ] pattern [ ":" type_expr ] "=" expr ";" ;
+assign_stmt    = lvalue "=" expr ";" ;
+return_stmt    = "return" [ expr ] ";" ;
+if_stmt        = "if" expr block [ "else" ( if_stmt | block ) ] ;
+match_stmt     = "match" expr "{" { match_arm } "}" ;
+match_arm      = pattern [ "where" refinement ] "=>" ( expr | block ) "," ;
+for_stmt       = "for" pattern "in" expr block ;
+while_stmt     = "while" expr block ;             (* only in partial functions *)
+expr_stmt      = expr ";" ;
+
+(* === Expressions === *)
+expr           = literal | IDENT | field_access | fn_call | method_call
+               | unary_expr | binary_expr | if_expr | match_expr
+               | lambda | block_expr | propagate | construct
+               | "move" expr | "consume" expr
+               | "declassify" "(" expr ")" | "sanitize" "(" expr ")" ;
+propagate      = expr "?" ;                       (* Result/Option propagation *)
+fn_call        = IDENT [ "<" type_list ">" ] "(" [ arg_list ] ")" ;
+method_call    = expr "." IDENT "(" [ arg_list ] ")" ;
+field_access   = expr "." IDENT ;
+arg_list       = expr { "," expr } ;
+lambda         = "|" [ param_list ] "|" [ "->" type_expr ] expr ;
+construct      = IDENT "{" { IDENT ":" expr "," } "}" ;
+if_expr        = "if" expr block "else" block ;
+match_expr     = "match" expr "{" { match_arm } "}" ;
+block_expr     = block ;
+
+(* === Patterns === *)
+pattern        = "_" | IDENT | literal
+               | IDENT "(" [ pattern_list ] ")"
+               | IDENT "{" { IDENT ":" pattern "," } "}"
+               | "(" pattern "," pattern_list ")"
+               | "Some" "(" pattern ")" | "None"
+               | "Ok" "(" pattern ")" | "Err" "(" pattern ")" ;
+pattern_list   = pattern { "," pattern } ;
+
+(* === Literals === *)
+literal        = INTEGER | FLOAT | STRING | CHAR | "true" | "false" | list_literal ;
+list_literal   = "[" [ expr { "," expr } ] "]" ;
+
+(* === Constants === *)
+const_decl     = "const" IDENT ":" type_expr "=" expr ";" ;
+
+(* === Lexical === *)
+IDENT          = ALPHA { ALPHA | DIGIT | "_" } ;
+INTEGER        = DIGIT { DIGIT } ;
+FLOAT          = DIGIT { DIGIT } "." DIGIT { DIGIT } ;
+STRING         = '"' { CHAR_ELEM } '"' ;
+CHAR           = "'" CHAR_ELEM "'" ;
+ALPHA          = "a"..."z" | "A"..."Z" | "_" ;
+DIGIT          = "0"..."9" ;
