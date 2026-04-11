@@ -22,6 +22,23 @@ Specifications, architectural decisions, and design documents for the Minimum Ve
 
 See [language.md](language.md) for the complete language reference including EBNF grammar, stdlib, and design decisions.
 
+## Bootstrap Sequence
+
+```
+Step 1:  MVL compiler written in Rust, transpiles to Rust        ← WE ARE HERE
+Step 2:  MVL compiler written in Rust, emits LLVM IR
+Step 3:  MVL compiler rewritten in MVL, compiled by Step 2       (self-hosting)
+Step 4:  MVL compiler compiled by itself                         (bootstrap complete)
+```
+
+**Step 1 exit:** corpus examples compile via Rust transpilation, all 11 requirements demonstrated.
+**Step 2 exit:** self-hosting — the MVL compiler compiles itself to LLVM IR.
+**Step 3 exit:** the MVL compiler, written in MVL, passes all tests.
+**Step 4 exit:** no Rust dependency remains. Pure MVL.
+
+Trigger for Step 2: EBNF frozen, checker passes all corpus examples.
+Trigger for Step 3: LLVM backend stable, stdlib complete.
+
 ## Research
 
 Full research: `my-brain/study/mvl_research.md`
