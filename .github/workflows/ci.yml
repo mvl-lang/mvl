@@ -42,3 +42,6 @@ jobs:
 
       - name: Test
         run: cargo test
+
+      - name: ISPE Assurance
+        run: python3 tools/assurance.py --verbose
