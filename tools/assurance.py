@@ -89,7 +89,7 @@ def report(requirements, verbose=False):
     total = len(requirements)
     if total == 0:
         print("No requirements found in .openspec/specs/")
-        return 0.0, 0.0
+        return 0.0, 0.0, 1.0
 
     impl_linked = sum(1 for r in requirements if r["impl_path"])
     impl_exists = sum(1 for r in requirements if r["impl_exists"])
@@ -103,20 +103,28 @@ def report(requirements, verbose=False):
     completeness = impl_exists / total if total else 0
     coverage = tests_linked / total if total else 0
 
+    # Assurance = of the implemented requirements, how many are also tested?
+    assured = sum(
+        1 for r in requirements if r["impl_exists"] and r["tests_linked"]
+    )
+    assurance = assured / impl_exists if impl_exists else 1.0  # no impl = nothing to assure = 100%
+
     print("=" * 60)
     print("MVL Assurance Dashboard")
     print("=" * 60)
     print(f"Requirements:     {total}")
     print(f"Scenarios:        {total_scenarios}")
     print()
-    print(f"Completeness (S→P):  {impl_exists}/{total} implemented  ({completeness:.0%})")
-    print(f"  - Linked:          {impl_linked}/{total}")
-    print(f"  - File exists:     {impl_exists}/{total}")
+    print(f"Completeness (S->P):  {impl_exists}/{total} implemented  ({completeness:.0%})")
+    print(f"  - Linked:           {impl_linked}/{total}")
+    print(f"  - File exists:      {impl_exists}/{total}")
     print()
-    print(f"Coverage (T→P):      {tests_linked}/{total} test-linked  ({coverage:.0%})")
+    print(f"Coverage (T->P):      {tests_linked}/{total} test-linked  ({coverage:.0%})")
+    print()
+    print(f"Assurance (T/P):      {assured}/{impl_exists} of implemented are tested  ({assurance:.0%})")
     print()
     if corpus_total:
-        print(f"Corpus:              {corpus_present}/{corpus_total} present")
+        print(f"Corpus:               {corpus_present}/{corpus_total} present")
     print("=" * 60)
 
     if verbose:
@@ -137,26 +145,27 @@ def report(requirements, verbose=False):
                 f"({r['scenarios']} scenarios)"
             )
 
-    return completeness, coverage
+    return completeness, coverage, assurance
 
 
 def main():
     parser = argparse.ArgumentParser(description="MVL Assurance Checker")
     parser.add_argument("-v", "--verbose", action="store_true", help="Show each requirement")
-    parser.add_argument("--min", type=float, default=0.0, help="Minimum score (0.0-1.0) for CI gate")
+    parser.add_argument("--min", type=float, default=0.0, help="Minimum assurance score (0.0-1.0) for CI gate")
     args = parser.parse_args()
 
     requirements = parse_specs()
-    completeness, coverage = report(requirements, verbose=args.verbose)
+    completeness, coverage, assurance = report(requirements, verbose=args.verbose)
 
     if args.min > 0:
-        if completeness < args.min or coverage < args.min:
-            print(f"\nFAIL: below threshold {args.min:.0%}")
+        if assurance < args.min:
+            print(f"\nFAIL: assurance {assurance:.0%} below threshold {args.min:.0%}")
             print(f"  completeness: {completeness:.0%}")
             print(f"  coverage:     {coverage:.0%}")
+            print(f"  assurance:    {assurance:.0%}")
             sys.exit(1)
         else:
-            print(f"\nPASS: above threshold {args.min:.0%}")
+            print(f"\nPASS: assurance {assurance:.0%} above threshold {args.min:.0%}")
 
 
 if __name__ == "__main__":
