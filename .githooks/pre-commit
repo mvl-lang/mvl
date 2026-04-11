@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# MVL pre-commit hook — format, lint, test
+set -e
+
+echo "pre-commit: cargo fmt"
+cargo fmt -- --check || { echo "Run 'cargo fmt' to fix formatting."; exit 1; }
+
+echo "pre-commit: cargo clippy"
+cargo clippy -- -D warnings || { echo "Fix clippy warnings before committing."; exit 1; }
+
+echo "pre-commit: cargo test"
+cargo test --quiet || { echo "Tests must pass before committing."; exit 1; }
+
+echo "pre-commit: all checks passed"

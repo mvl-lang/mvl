@@ -7,6 +7,14 @@ SHELL := /bin/bash
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
+# === Setup ===
+
+setup: ## Install git hooks and verify tooling
+	git config core.hooksPath .githooks
+	@echo "Git hooks installed from .githooks/"
+	@command -v cargo >/dev/null 2>&1 || { echo "cargo not found — install Rust: https://rustup.rs"; exit 1; }
+	@echo "Ready."
+
 # === Build ===
 
 build: ## Build the MVL compiler
