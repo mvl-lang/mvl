@@ -1,0 +1,62 @@
+site_name: MVL — Minimum Verification Language
+site_description: The smallest language where the compiler verifies the most
+site_author: Ilja Heitlager
+repo_url: https://github.com/LAB271/mvl_language
+repo_name: LAB271/mvl_language
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - content.code.annotate
+
+nav:
+  - Home: index.md
+  - Introduction: introduction.md
+  - Language:
+    - Reference: language.md
+    - Grammar (EBNF): grammar.md
+    - Standard Library: stdlib.md
+  - Design:
+    - ADR-0001 Eleven Requirements: adr/0001-eleven-requirements.md
+    - ADR-0002 Language Contraction: adr/0002-language-contraction.md
+    - ADR-0003 Compilation Strategy: adr/0003-compilation-strategy.md
+    - ADR-0004 Language Size: adr/0004-language-size.md
+    - ADR-0005 Recursive Descent Parser: adr/0005-recursive-descent-parser.md
+  - Specs:
+    - 001 Type System: specs/001-type-system.md
+    - 002 Effect System: specs/002-effect-system.md
+    - 003 Information Flow: specs/003-information-flow.md
+  - References: references.md
+
+markdown_extensions:
+  - tables
+  - fenced_code
+  - codehilite
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
