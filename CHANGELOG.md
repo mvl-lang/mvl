@@ -6,6 +6,24 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-04-11 (Epic 4: Information Flow Control type checking)
+
+### Added
+- Security label types: `Public<T>`, `Tainted<T>`, `Secret<T>`, `Clean<T>` as first-class `Ty::Labeled` variants (#24)
+- Security lattice: `lattice_rank()`, `can_flow()`, `join()`, `join_opt()` in `src/mvl/checker/ifc.rs` (#25)
+- Label propagation: arithmetic ops propagate label join; comparisons yield unlabeled `Bool` (#26)
+- Declassification chokepoints: `declassify()` (Secret→Public) and `sanitize()` (Tainted→Clean) with `InvalidDeclassify` and `InvalidSanitize` errors (#27)
+- `Ty::unlabeled()` for structural operations that look through label wrappers
+- `CheckError::InvalidDeclassify` and `CheckError::InvalidSanitize` variants
+- 4 IFC corpus files under `tests/corpus/05_ifc/`
+- 23 new integration tests covering all IFC scenarios (61 total)
+
+### Fixed
+- Silent downgrade via unlabeled sink: `Secret<T>` and other labeled types no longer silently pass to unlabeled parameters (any untyped parameter now treated as `Public` context)
+- Implicit flow through `if`-expressions: condition label is joined into branch result types, preventing information leakage via guard value
+- Pre-existing gap: implicit return type in `infer_block_type()` was not checked against the declared return type; `TypeMismatch` now emitted on mismatch
+- `resolve()` was silently stripping `TypeExpr::Labeled`; now preserved as `Ty::Labeled`
+
 ## [0.4.0] — 2026-04-11 (Epic 2: Effects, termination, and concurrency checking)
 
 ### Added
