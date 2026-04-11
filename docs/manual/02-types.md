@@ -41,7 +41,7 @@ type Shape = enum {
 }
 ```
 
-Every `match` on a sum type MUST be exhaustive — the compiler rejects incomplete matches (Req 3). Adding a variant forces all match expressions to be updated.
+Every `match` on a sum type MUST be exhaustive — the compiler rejects incomplete matches ([Req 3](../requirements.md#req-3)). Adding a variant forces all match expressions to be updated.
 
 ### Type aliases
 
@@ -52,7 +52,7 @@ type Coordinates = (Float64, Float64)
 
 ## 2.3 Built-in Parameterized Types
 
-### Option\<T\> — absence (Req 4)
+### Option\<T\> — absence ([Req 4](../requirements.md#req-4))
 
 ```mvl
 type Option<T> = enum {
@@ -63,7 +63,7 @@ type Option<T> = enum {
 
 Replaces `null`. Accessing the inner value requires pattern matching or `?` propagation. There is no `.unwrap()` — use `match` or combinators (`.map()`, `.unwrap_or()`, `.and_then()`).
 
-### Result\<T, E\> — fallibility (Req 5)
+### Result\<T, E\> — fallibility ([Req 5](../requirements.md#req-5))
 
 ```mvl
 type Result<T, E> = enum {
@@ -126,7 +126,7 @@ impl Display for Point {
 }
 ```
 
-## 2.6 Refinement Types (Req 10)
+## 2.6 Refinement Types ([Req 10](../requirements.md#req-10))
 
 Refinement types constrain values beyond their base type:
 
@@ -144,7 +144,7 @@ type NonEmpty<T> = Array<T> where len(self) > 0
 
 The compiler verifies refinement predicates at compile time using SMT solving. If the predicate cannot be statically verified, the compiler requires a runtime check at the call site.
 
-## 2.7 Security Labels (Req 11)
+## 2.7 Security Labels ([Req 11](../requirements.md#req-11))
 
 Every type can carry a security label:
 
@@ -162,7 +162,7 @@ Data flows up the lattice freely (`Public` → `Secret`). Flowing down requires 
 
 See [Chapter 10: Information Flow Control](10-ifc.md).
 
-## 2.8 Reference Types (Req 2, 6)
+## 2.8 Reference Types ([Req 2](../requirements.md#req-2), 6)
 
 ```mvl
 &T                  // shared (immutable) borrow
@@ -176,7 +176,7 @@ Ownership rules:
 - Exclusive borrows (`&mut T`) allow one writer and no readers
 - Borrows cannot outlive the owner
 
-## 2.9 Reference Capabilities (Req 9)
+## 2.9 Reference Capabilities ([Req 9](../requirements.md#req-9))
 
 For concurrency safety, values carry capabilities:
 

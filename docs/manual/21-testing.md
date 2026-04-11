@@ -17,17 +17,17 @@ The stronger the compiler, the less validation work remains. MVL's 11 requiremen
 
 | Eliminated by compiler | No longer needs testing |
 |----------------------|------------------------|
-| Req 1 (types) | Type confusion, invalid state construction |
-| Req 2 (memory) | Buffer overflows, use-after-free |
-| Req 3 (totality) | Missing cases, unhandled variants |
-| Req 4 (null) | Null pointer exceptions |
-| Req 5 (errors) | Unhandled errors, silent failures |
-| Req 6 (ownership) | Resource leaks, double-free |
-| Req 7 (effects) | Hidden side effects, unexpected I/O |
-| Req 8 (termination) | Infinite loops (in total functions) |
-| Req 9 (data races) | Race conditions |
-| Req 10 (refinements) | Out-of-range values, division by zero |
-| Req 11 (IFC) | Secret leakage, injection attacks |
+| [Req 1](../requirements.md#req-1) (types) | Type confusion, invalid state construction |
+| [Req 2](../requirements.md#req-2) (memory) | Buffer overflows, use-after-free |
+| [Req 3](../requirements.md#req-3) (totality) | Missing cases, unhandled variants |
+| [Req 4](../requirements.md#req-4) (null) | Null pointer exceptions |
+| [Req 5](../requirements.md#req-5) (errors) | Unhandled errors, silent failures |
+| [Req 6](../requirements.md#req-6) (ownership) | Resource leaks, double-free |
+| [Req 7](../requirements.md#req-7) (effects) | Hidden side effects, unexpected I/O |
+| [Req 8](../requirements.md#req-8) (termination) | Infinite loops (in total functions) |
+| [Req 9](../requirements.md#req-9) (data races) | Race conditions |
+| [Req 10](../requirements.md#req-10) (refinements) | Out-of-range values, division by zero |
+| [Req 11](../requirements.md#req-11) (IFC) | Secret leakage, injection attacks |
 
 What remains: **business logic correctness**. Does `sort()` actually sort? Does `calculate_tax()` return the right amount? Tests prove intent.
 
@@ -117,7 +117,7 @@ Integration tests declare their effects — the test runner knows which resource
 
 ## 21.4 Mocking and Stubbing
 
-MVL does not need a mock framework. Effects (Req 7) + no global state + traits make test doubles trivial.
+MVL does not need a mock framework. Effects ([Req 7](../requirements.md#req-7)) + no global state + traits make test doubles trivial.
 
 ### Why it works
 
@@ -180,14 +180,14 @@ impl FileSystem for StubFS {
 
 | Requirement | What it enables for testing |
 |------------|---------------------------|
-| Req 7 (effects) | You know exactly what to stub — it's in the type signature |
+| [Req 7](../requirements.md#req-7) (effects) | You know exactly what to stub — it's in the type signature |
 | No global state | Nothing to monkey-patch |
 | Traits | Swap implementations by passing a different value |
-| Req 6 (ownership) | Test owns its stubs — no shared mutable test state |
+| [Req 6](../requirements.md#req-6) (ownership) | Test owns its stubs — no shared mutable test state |
 
 ## 21.5 Property-Based Testing
 
-Property tests verify that a property holds for *all* valid inputs, not just specific examples. In MVL, refinement types (Req 10) make property testing a library — the type tells the framework what to generate.
+Property tests verify that a property holds for *all* valid inputs, not just specific examples. In MVL, refinement types ([Req 10](../requirements.md#req-10)) make property testing a library — the type tells the framework what to generate.
 
 ### Syntax
 

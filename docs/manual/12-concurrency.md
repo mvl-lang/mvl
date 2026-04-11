@@ -1,6 +1,6 @@
 # 12. Concurrency
 
-MVL provides safe concurrency through actors, reference capabilities, and structured concurrency (Req 9).
+MVL provides safe concurrency through actors, reference capabilities, and structured concurrency ([Req 9](../requirements.md#req-9)).
 
 ## 12.1 Actors
 

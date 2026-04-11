@@ -1,6 +1,6 @@
 # 6. Pattern Matching
 
-Pattern matching is the primary mechanism for working with sum types, Option, and Result. All matches MUST be exhaustive (Req 3).
+Pattern matching is the primary mechanism for working with sum types, Option, and Result. All matches MUST be exhaustive ([Req 3](../requirements.md#req-3)).
 
 ## 6.1 Pattern Forms
 

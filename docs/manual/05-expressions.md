@@ -89,12 +89,12 @@ The enclosing function's return type MUST be compatible.
 
 ```mvl
 move value                           // transfer ownership
-consume isolated_value               // transfer isolated capability (Req 9)
+consume isolated_value               // transfer isolated capability ([Req 9](../requirements.md#req-9))
 ```
 
 See [Chapter 7: Ownership and Borrowing](07-ownership.md).
 
-## 5.11 Security Expressions (Req 11)
+## 5.11 Security Expressions ([Req 11](../requirements.md#req-11))
 
 ```mvl
 declassify(secret_value)             // Secret → Public (auditable)

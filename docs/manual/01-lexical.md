@@ -11,29 +11,29 @@ The MVL has approximately 25 keywords. Each serves a specific verification purpo
 | Keyword | Purpose | Requirement |
 |---------|---------|-------------|
 | `fn` | Function declaration | — |
-| `let` | Immutable binding | Req 6 (default immutable) |
-| `mut` | Mutable qualifier | Req 6 (explicit mutability) |
-| `type` | Type declaration | Req 1 (ADTs) |
-| `struct` | Product type | Req 1 |
-| `enum` | Sum type | Req 1 |
-| `trait` | Interface/contract | Req 1 |
-| `impl` | Implementation block | Req 1 |
+| `let` | Immutable binding | [Req 6](../requirements.md#req-6) (default immutable) |
+| `mut` | Mutable qualifier | [Req 6](../requirements.md#req-6) (explicit mutability) |
+| `type` | Type declaration | [Req 1](../requirements.md#req-1) (ADTs) |
+| `struct` | Product type | [Req 1](../requirements.md#req-1) |
+| `enum` | Sum type | [Req 1](../requirements.md#req-1) |
+| `trait` | Interface/contract | [Req 1](../requirements.md#req-1) |
+| `impl` | Implementation block | [Req 1](../requirements.md#req-1) |
 | `if` / `else` | Conditional | — |
-| `match` | Pattern matching | Req 3 (exhaustive) |
-| `for` | Bounded iteration | Req 8 (termination) |
-| `while` | Unbounded iteration | Req 8 (partial only) |
+| `match` | Pattern matching | [Req 3](../requirements.md#req-3) (exhaustive) |
+| `for` | Bounded iteration | [Req 8](../requirements.md#req-8) (termination) |
+| `while` | Unbounded iteration | [Req 8](../requirements.md#req-8) (partial only) |
 | `return` | Early return | — |
 | `module` | Namespace | — |
 | `const` | Compile-time constant | — |
 | `extern` | Foreign function interface | — |
-| `total` | Provably terminating | Req 8 |
-| `partial` | May not terminate | Req 8 |
-| `move` | Transfer ownership | Req 6 |
-| `consume` | Transfer isolated cap | Req 9 |
-| `where` | Refinement predicate / constraint | Req 10 |
+| `total` | Provably terminating | [Req 8](../requirements.md#req-8) |
+| `partial` | May not terminate | [Req 8](../requirements.md#req-8) |
+| `move` | Transfer ownership | [Req 6](../requirements.md#req-6) |
+| `consume` | Transfer isolated cap | [Req 9](../requirements.md#req-9) |
+| `where` | Refinement predicate / constraint | [Req 10](../requirements.md#req-10) |
 | `true` / `false` | Boolean literals | — |
-| `Some` / `None` | Option constructors | Req 4 |
-| `Ok` / `Err` | Result constructors | Req 5 |
+| `Some` / `None` | Option constructors | [Req 4](../requirements.md#req-4) |
+| `Ok` / `Err` | Result constructors | [Req 5](../requirements.md#req-5) |
 
 Reserved for future use: `async`, `await`, `yield`, `macro`, `unsafe`.
 
@@ -81,7 +81,7 @@ Integer literals have type `Int` (arbitrary precision) by default. Assign to a f
 "line 1\nline 2"    // escape sequences: \n \t \r \\ \" \0
 ```
 
-No string interpolation. Use `format()` from stdlib. Rationale: string interpolation hides effects and IFC label mixing (Req 7, Req 11).
+No string interpolation. Use `format()` from stdlib. Rationale: string interpolation hides effects and IFC label mixing ([Req 7](../requirements.md#req-7), [Req 11](../requirements.md#req-11)).
 
 ### Character literals
 

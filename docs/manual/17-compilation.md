@@ -4,22 +4,19 @@ The MVL compiler verifies all eleven requirements and produces executable code t
 
 ## 17.1 Compiler Phases
 
-```
-Source (.mvl)
-    │
-    ├── Lexing → Tokens
-    ├── Parsing → AST (LL(1), recursive descent)
-    ├── Name resolution → Scoped AST
-    ├── Type checking → Typed AST (Req 1, 3, 4, 5)
-    ├── Ownership checking → Owned AST (Req 2, 6)
-    ├── Effect checking → Effect-annotated AST (Req 7)
-    ├── Totality checking → Termination-verified AST (Req 8)
-    ├── Capability checking → Race-free AST (Req 9)
-    ├── Refinement checking → Refined AST (Req 10, SMT)
-    ├── IFC checking → Flow-verified AST (Req 11)
-    │
-    └── Code generation (target-dependent)
-```
+| Phase | Output | Requirements |
+|-------|--------|-------------|
+| Lexing | Tokens | — |
+| Parsing | AST | LL(1), recursive descent |
+| Name resolution | Scoped AST | — |
+| Type checking | Typed AST | [Req 1](../requirements.md#req-1), [Req 3](../requirements.md#req-3), [Req 4](../requirements.md#req-4), [Req 5](../requirements.md#req-5) |
+| Ownership checking | Owned AST | [Req 2](../requirements.md#req-2), [Req 6](../requirements.md#req-6) |
+| Effect checking | Effect-annotated AST | [Req 7](../requirements.md#req-7) |
+| Totality checking | Termination-verified AST | [Req 8](../requirements.md#req-8) |
+| Capability checking | Race-free AST | [Req 9](../requirements.md#req-9) |
+| Refinement checking | Refined AST (SMT) | [Req 10](../requirements.md#req-10) |
+| IFC checking | Flow-verified AST | [Req 11](../requirements.md#req-11) |
+| Code generation | Target-dependent | — |
 
 Each checking phase adds a guarantee. Code that passes all phases is *well-formed* — structurally correct with respect to all eleven requirements.
 

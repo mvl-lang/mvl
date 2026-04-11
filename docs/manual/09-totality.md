@@ -1,6 +1,6 @@
 # 9. Totality and Termination
 
-Functions are total by default (Req 8). The compiler verifies that total functions always terminate and return a value.
+Functions are total by default ([Req 8](../requirements.md#req-8)). The compiler verifies that total functions always terminate and return a value.
 
 ## 9.1 Total Functions (Default)
 

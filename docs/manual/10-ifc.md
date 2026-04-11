@@ -1,6 +1,6 @@
 # 10. Information Flow Control
 
-Security labels track data provenance through the type system (Req 11). The compiler prevents secret leakage, injection attacks, and tainted data reaching trusted sinks.
+Security labels track data provenance through the type system ([Req 11](../requirements.md#req-11)). The compiler prevents secret leakage, injection attacks, and tainted data reaching trusted sinks.
 
 ## 10.1 The Security Lattice
 

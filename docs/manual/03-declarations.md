@@ -27,7 +27,7 @@ fn read_config(path: Path) -> Result<Config, IOError> ! FileRead {
 
 Effects are declared after `!`. Multiple effects: `! FileRead, Console, Net`.
 
-### Total functions (Req 8)
+### Total functions ([Req 8](../requirements.md#req-8))
 
 ```mvl
 total fn factorial(n: UInt where n <= 20) -> UInt {

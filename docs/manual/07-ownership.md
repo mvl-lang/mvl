@@ -1,6 +1,6 @@
 # 7. Ownership and Borrowing
 
-MVL uses ownership and borrowing to guarantee memory safety (Req 2) and resource linearity (Req 6) without a garbage collector.
+MVL uses ownership and borrowing to guarantee memory safety ([Req 2](../requirements.md#req-2)) and resource linearity ([Req 6](../requirements.md#req-6)) without a garbage collector.
 
 ## 7.1 Ownership Rules
 

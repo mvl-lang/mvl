@@ -1,6 +1,6 @@
 # 15. Error Handling
 
-MVL has one error handling mechanism: `Result<T, E>` (Req 5). No exceptions, no panics (except truly unrecoverable), no sentinel values.
+MVL has one error handling mechanism: `Result<T, E>` ([Req 5](../requirements.md#req-5)). No exceptions, no panics (except truly unrecoverable), no sentinel values.
 
 ## 15.1 Result\<T, E\>
 

@@ -1,6 +1,6 @@
 # 8. Effect System
 
-Every side effect MUST be declared in the function signature (Req 7). Pure is the default.
+Every side effect MUST be declared in the function signature ([Req 7](../requirements.md#req-7)). Pure is the default.
 
 ## 8.1 Effect Declaration
 

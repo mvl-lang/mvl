@@ -7,7 +7,7 @@ let x: Int = 42;                    // immutable (default)
 let mut count: Int = 0;             // mutable (explicit)
 ```
 
-All bindings are immutable by default (Req 6). The `mut` keyword opts into mutability.
+All bindings are immutable by default ([Req 6](../requirements.md#req-6)). The `mut` keyword opts into mutability.
 
 Type annotation is required. No type inference on bindings — the LLM generates the type, the compiler verifies it.
 
@@ -52,7 +52,7 @@ match shape {
 }
 ```
 
-Match MUST be exhaustive (Req 3). The compiler rejects if any variant is unhandled. See [Chapter 6: Pattern Matching](06-patterns.md).
+Match MUST be exhaustive ([Req 3](../requirements.md#req-3)). The compiler rejects if any variant is unhandled. See [Chapter 6: Pattern Matching](06-patterns.md).
 
 ## 4.5 For Loop
 
@@ -79,7 +79,7 @@ partial fn event_loop() -> Never ! Console {
 }
 ```
 
-`while` is only permitted in `partial` functions (Req 8). In `total` functions, use `for` with a finite iterator.
+`while` is only permitted in `partial` functions ([Req 8](../requirements.md#req-8)). In `total` functions, use `for` with a finite iterator.
 
 ## 4.7 Return
 

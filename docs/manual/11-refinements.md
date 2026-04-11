@@ -1,6 +1,6 @@
 # 11. Refinement Types
 
-Refinement types constrain values beyond their base type (Req 10). The compiler verifies predicates at compile time using SMT solving.
+Refinement types constrain values beyond their base type ([Req 10](../requirements.md#req-10)). The compiler verifies predicates at compile time using SMT solving.
 
 ## 11.1 Syntax
 
