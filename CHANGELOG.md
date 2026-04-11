@@ -6,6 +6,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-04-11 (Epic 2: Effects, termination, and concurrency checking)
+
+### Added
+- Effect propagation checking (Req 7): callee effects must be declared by caller; `UndeclaredEffect` and `MissingEffect` errors (#20)
+- Totality/termination checking (Req 8): `total` functions may not contain `while` loops or call `partial` functions (#21)
+- Reference capability checking (Req 9): `ref` and `tag` parameters rejected at actor-boundary `channel.send()` (#22)
+- `Literal::Unit` AST variant to represent `()` unit expressions
+- 4 corpus test files: `propagation.mvl`, `pure_vs_effectful.mvl`, `total_vs_partial.mvl`, `capabilities.mvl`
+- 16 new type-checker integration tests; 179 total tests
+
+### Fixed
+- Parser infinite loop on `Ok(())` and similar unit-literal expressions: eagerly detect `()` in `parse_atom` (#18)
+- Force-advance guard in `parse_block` and `parse_module_decl` prevents stall-loop in error recovery
+- `VarInfo` extended with optional `Capability` field for actor-boundary enforcement
+
 ## [0.3.1] — 2026-04-11
 
 ### Added
