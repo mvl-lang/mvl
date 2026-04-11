@@ -1243,6 +1243,11 @@ impl TypeChecker {
     ///
     /// Only `iso` and `val` may cross actor boundaries; `ref` and `tag` may not.
     /// `consume` wrapping is detected by looking for `Expr::Consume` (or equivalent).
+    ///
+    /// # Scope limitation
+    /// Currently only checks simple identifier arguments (e.g. `channel.send(x)`).
+    /// Complex expressions like `channel.send(get_payload())` or `channel.send(obj.field)`
+    /// are not checked. See #73 for tracking.
     fn check_send_capability(&mut self, arg: &Expr, span: Span) {
         if let Expr::Ident(name, _) = arg {
             if let Some(info) = self.env.lookup(name).cloned() {

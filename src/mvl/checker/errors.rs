@@ -267,7 +267,7 @@ impl CheckError {
                 "function `{caller}` calls `{callee}` which requires `! {effect}` but `{caller}` does not declare it"
             ),
             CheckError::UnboundedLoopInTotal { .. } => {
-                "unbounded loop in total function — use `partial` to allow non-termination"
+                "unbounded loop in total function — declare function as `partial` to allow non-termination"
                     .to_string()
             }
             CheckError::PartialCallInTotal { callee, .. } => {
