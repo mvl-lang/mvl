@@ -12,7 +12,7 @@ The MVL drops every feature that exists for writability over readability. One wa
 
 | Dropped | Origin of the decision | MVL alternative |
 |---------|----------------------|-----------------|
-| Anonymous lambdas | — | Named functions only |
+| Mutable closures | — | Lambdas with immutable captures only (`\|x\| expr`). Mutable captures violate Req 7 (hidden state). |
 | List comprehensions | — | `list.map(f).filter(g)` chains |
 | Decorators | — | Explicit wrapper functions |
 | Operator overloading | Go (2009) | Named methods: `matrix.add(other)` |
@@ -33,7 +33,7 @@ The MVL drops every feature that exists for writability over readability. One wa
 
 ~10 statement forms, ~5 expression forms, ~3 declaration forms:
 
-`fn`, `let`/`let mut`, `if`/`else`, `match`, `for`, `return`, `.method()`, `?`, `type` (struct/enum), `module`.
+`fn`, `let`/`let mut`, `if`/`else`, `match`, `for`, `return`, `.method()`, `?`, `|x| expr` (immutable-capture lambda), `type` (struct/enum), `module`.
 
 Compare: Python ~30 statement forms, Rust ~20, Go ~15.
 

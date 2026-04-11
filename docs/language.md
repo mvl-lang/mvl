@@ -76,9 +76,13 @@ if expr { a } else { b }             // conditional expression
 match expr { arms }                   // match expression
 move expr                             // transfer ownership
 consume expr                          // transfer isolated capability
-declassify(expr)                      // Secret → Public (auditable)
-sanitize(expr)                        // Tainted → Clean (auditable)
+declassify(expr)                      // Secret -> Public (auditable)
+sanitize(expr)                        // Tainted -> Clean (auditable)
+|x, y| x + y                         // lambda (immutable captures only)
+|x: Int| -> Bool { x > 0 }           // lambda with type annotations
 ```
+
+Lambdas have immutable captures only. Mutable closures are banned (violate Req 7). The lambda type includes effects: `fn(Int) -> Bool ! Console`. The compiler verifies lambdas identically to named functions.
 
 ### Types
 
@@ -195,7 +199,7 @@ This is a stdlib concern, not a language feature. Zero keywords added.
 
 | Area | Designed? | Specced? | Gaps | Ticket |
 |------|-----------|----------|------|--------|
-| Language syntax | Yes — EBNF, ~100 productions, LL(1) | Yes — grammar.ebnf | Lambda still in EBNF, needs cleanup | #51 |
+| Language syntax | Yes — EBNF, ~100 productions, LL(1) | Yes — grammar.ebnf | Lambda resolved: immutable captures kept (#61) | #51 |
 | 11 requirements | Yes — derivation, origins, code examples | Yes — ADR-0001 | Solid | — |
 | Type system | Yes — ADTs, Option, Result, ownership, refinements, IFC | Yes — spec 001 | Trait system needs detail | — |
 | Effect system | Yes — fine-grained effects, capabilities, totality | Yes — spec 002 | Effect handler syntax undefined | — |
