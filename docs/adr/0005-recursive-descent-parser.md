@@ -12,7 +12,21 @@ The MVL parser SHALL be a hand-written recursive descent (LL(1)) parser in Rust.
 
 ### The grammar is deliberately LL(1)
 
-The MVL grammar was designed for regularity (ADR-0002, ADR-0004). Every construct is unambiguous. No operator precedence puzzles (operators only on built-in numerics). No dangling else (braces required). No context-dependent parsing. The grammar is ~100 productions and fits the LL(1) class — one token of lookahead is sufficient.
+The MVL grammar was designed for regularity (ADR-0002, ADR-0004). Every construct is unambiguous. The grammar is ~100 productions and fits the LL(1) class — one token of lookahead is sufficient.
+
+Popular languages have constructs that break LL(1). The MVL avoids all of them by design:
+
+| Language | Construct that breaks LL(1) | Why | MVL avoidance |
+|----------|---------------------------|-----|---------------|
+| **C/C++** | `a * b` — multiplication or pointer declaration? | Needs type info to disambiguate (the "lexer hack") | No pointer syntax. Ownership, not pointers. |
+| **C++** | `a<b>c` — template or comparison? `>>` closes two templates or is right-shift? | Arbitrary lookahead needed | `<>` only in type position, never as comparison operator in expressions |
+| **Python** | Indentation-based blocks | Not context-free — lexer must track indent stack | Braces `{}` for all blocks |
+| **Rust** | Turbofish `foo::<T>()` — `<` could be comparison or type parameter | Needs context to resolve | Type inference or explicit `: Type` annotation. No turbofish. |
+| **Java/C#** | `List<List<Integer>>` — `>>` ambiguity | Same as C++ templates | Same: `<>` only in type position |
+| **JavaScript** | `(a) => b` vs `(a)` — arrow function or grouping? | Can't tell until `=>` | No arrow functions. Named functions only. |
+| **Go** | Semicolons inserted by lexer based on line endings | Lexer has context-dependent behavior | Explicit semicolons |
+
+The MVL's LL(1) property is not accidental — it's a consequence of the language contraction (ADR-0002). Every dropped feature also dropped a parsing ambiguity. The smallest language is also the easiest to parse.
 
 A parser generator is overkill for a grammar this small and regular.
 
