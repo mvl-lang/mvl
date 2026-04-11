@@ -1,0 +1,374 @@
+//! Emit Rust type declarations from MVL type declarations.
+//!
+//! Mappings:
+//! - `type Foo = struct { … }` → `pub struct Foo { … }`
+//! - `type Bar = enum { … }` → `pub enum Bar { … }`
+//! - `type Alias = T` → `pub type Alias = <rust_type>;`
+//! - `type Refined = T where pred` → newtype with constructor validation
+//! - Security labels (Public<T> etc.) → module-level preamble structs
+//! - Refinement field predicates → `debug_assert!` in constructors
+
+use crate::mvl::parser::ast::{
+    FieldDecl, RefExpr, SecurityLabel, TypeBody, TypeDecl, TypeExpr, Variant, VariantFields,
+};
+use crate::mvl::transpiler::codegen::Codegen;
+
+// ── Security label preamble ───────────────────────────────────────────────
+
+/// Emit the security-label newtype wrappers that every MVL program needs.
+///
+/// ```rust
+/// #[derive(Debug, Clone, PartialEq)]
+/// pub struct Public<T>(pub T);
+/// // … etc.
+/// ```
+///
+/// Phase 1: only `From`/`Into` for upward lattice flows are generated.
+/// The lattice is: Tainted → Clean → Public (least trusted to most trusted).
+/// Secret is a separate confidentiality label; only explicit declassify/sanitize
+/// can convert between them.
+pub fn emit_security_preamble(cg: &mut Codegen) {
+    cg.line("// ── Security label newtypes (MVL Req 11) ─────────────────────────────────");
+    cg.blank();
+
+    for label in ["Public", "Tainted", "Secret", "Clean"] {
+        emit_label_newtype(cg, label);
+        cg.blank();
+    }
+
+    // Lattice flows: Tainted → Clean (after sanitize)
+    // We express this as a From impl: Clean<T>: From<Tainted<T>> is NOT emitted
+    // because sanitize() is an explicit conversion; the Rust type system enforces
+    // that you must call sanitize() / declassify() explicitly.
+    //
+    // Phase 1: conversion functions emitted as standalone fns.
+    cg.line("/// Sanitize a tainted value — cleans external input.");
+    cg.line("/// MVL: `sanitize(x)` where x: Tainted<T>");
+    cg.line("pub fn sanitize<T>(v: Tainted<T>) -> Clean<T> { Clean(v.0) }");
+    cg.blank();
+    cg.line("/// Declassify a secret value — makes it public.");
+    cg.line("/// MVL: `declassify(x)` where x: Secret<T>");
+    cg.line("pub fn declassify<T>(v: Secret<T>) -> Public<T> { Public(v.0) }");
+}
+
+fn emit_label_newtype(cg: &mut Codegen, label: &str) {
+    cg.line("#[derive(Debug, Clone, PartialEq)]");
+    cg.line(&format!("pub struct {label}<T>(pub T);"));
+    cg.blank();
+    cg.line(&format!("impl<T> {label}<T> {{"));
+    cg.push_indent();
+    cg.line("pub fn new(v: T) -> Self { Self(v) }");
+    cg.line("pub fn into_inner(self) -> T { self.0 }");
+    cg.line("pub fn as_inner(&self) -> &T { &self.0 }");
+    cg.pop_indent();
+    cg.line("}");
+}
+
+// ── TypeDecl ─────────────────────────────────────────────────────────────
+
+pub fn emit_type_decl(cg: &mut Codegen, td: &TypeDecl) {
+    match &td.body {
+        TypeBody::Struct(fields) => emit_struct(cg, &td.name, &td.params, fields),
+        TypeBody::Enum(variants) => emit_enum(cg, &td.name, &td.params, variants),
+        TypeBody::Alias(ty) => emit_alias(cg, &td.name, &td.params, ty),
+    }
+}
+
+// ── Struct ────────────────────────────────────────────────────────────────
+
+fn emit_struct(cg: &mut Codegen, name: &str, params: &[String], fields: &[FieldDecl]) {
+    emit_derive(cg, &["Debug", "Clone", "PartialEq"]);
+    cg.line(&format!("pub struct {}{} {{", name, generic_params(params)));
+    cg.push_indent();
+    for field in fields {
+        let ty_str = emit_type_expr(&field.ty);
+        cg.line(&format!("pub {}: {},", field.name, ty_str));
+    }
+    cg.pop_indent();
+    cg.line("}");
+
+    // Emit a constructor if any field has a refinement predicate
+    let refined_fields: Vec<_> = fields.iter().filter(|f| f.refinement.is_some()).collect();
+    if !refined_fields.is_empty() {
+        cg.blank();
+        cg.line(&format!(
+            "impl{} {}{} {{",
+            generic_params(params),
+            name,
+            generic_params(params)
+        ));
+        cg.push_indent();
+        cg.line(&format!(
+            "/// Construct `{}`, validating all refinement predicates.",
+            name
+        ));
+        let param_list: Vec<String> = fields
+            .iter()
+            .map(|f| format!("{}: {}", f.name, emit_type_expr(&f.ty)))
+            .collect();
+        cg.line(&format!("pub fn new({}) -> Self {{", param_list.join(", ")));
+        cg.push_indent();
+        for field in &refined_fields {
+            if let Some(pred) = &field.refinement {
+                let pred_str = emit_ref_expr_for_assert(pred, &field.name);
+                cg.line(&format!(
+                    "debug_assert!({pred_str}, \"refinement violated: {} {{}}\", {});",
+                    field.name, field.name
+                ));
+            }
+        }
+        let field_inits: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
+        cg.line(&format!("Self {{ {} }}", field_inits.join(", ")));
+        cg.pop_indent();
+        cg.line("}");
+        cg.pop_indent();
+        cg.line("}");
+    }
+}
+
+// ── Enum ──────────────────────────────────────────────────────────────────
+
+fn emit_enum(cg: &mut Codegen, name: &str, params: &[String], variants: &[Variant]) {
+    emit_derive(cg, &["Debug", "Clone", "PartialEq"]);
+    cg.line(&format!("pub enum {}{} {{", name, generic_params(params)));
+    cg.push_indent();
+    for v in variants {
+        match &v.fields {
+            VariantFields::Unit => cg.line(&format!("{},", v.name)),
+            VariantFields::Tuple(tys) => {
+                let tys_str: Vec<String> = tys.iter().map(emit_type_expr).collect();
+                cg.line(&format!("{}({}),", v.name, tys_str.join(", ")));
+            }
+            VariantFields::Struct(fields) => {
+                cg.line(&format!("{} {{", v.name));
+                cg.push_indent();
+                for f in fields {
+                    let ty_str = emit_type_expr(&f.ty);
+                    cg.line(&format!("{}: {},", f.name, ty_str));
+                }
+                cg.pop_indent();
+                cg.line("},");
+            }
+        }
+    }
+    cg.pop_indent();
+    cg.line("}");
+}
+
+// ── Type alias / refined alias ────────────────────────────────────────────
+
+fn emit_alias(cg: &mut Codegen, name: &str, params: &[String], ty: &TypeExpr) {
+    match ty {
+        TypeExpr::Refined { inner, pred, .. } => {
+            // Refined alias becomes a newtype with constructor validation
+            let inner_str = emit_type_expr(inner);
+            emit_derive(cg, &["Debug", "Clone", "PartialEq", "PartialOrd"]);
+            cg.line(&format!("pub struct {}(pub {});", name, inner_str));
+            cg.blank();
+            cg.line(&format!("impl {} {{", name));
+            cg.push_indent();
+            cg.line(&format!(
+                "/// Construct `{name}` — panics in debug mode if the refinement is violated."
+            ));
+            cg.line(&format!("pub fn new(v: {inner_str}) -> Self {{"));
+            cg.push_indent();
+            let pred_str = emit_ref_expr_for_assert(pred, "v");
+            cg.line(&format!(
+                "debug_assert!({pred_str}, \"refinement violated: {name}({{}})\", v);"
+            ));
+            cg.line("Self(v)");
+            cg.pop_indent();
+            cg.line("}");
+            cg.pop_indent();
+            cg.line("}");
+        }
+        _ => {
+            // Plain alias
+            let ty_str = emit_type_expr(ty);
+            if params.is_empty() {
+                cg.line(&format!("pub type {name} = {ty_str};"));
+            } else {
+                cg.line(&format!(
+                    "pub type {}{} = {ty_str};",
+                    name,
+                    generic_params(params)
+                ));
+            }
+        }
+    }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+
+fn emit_derive(cg: &mut Codegen, traits: &[&str]) {
+    cg.line(&format!("#[derive({})]", traits.join(", ")));
+}
+
+fn generic_params(params: &[String]) -> String {
+    if params.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", params.join(", "))
+    }
+}
+
+// ── TypeExpr → Rust type string ───────────────────────────────────────────
+
+/// Convert an MVL [`TypeExpr`] to its Rust representation.
+pub fn emit_type_expr(ty: &TypeExpr) -> String {
+    match ty {
+        TypeExpr::Base { name, args, .. } => {
+            let rust_name = map_base_type(name);
+            if args.is_empty() {
+                rust_name.to_string()
+            } else {
+                let args_str: Vec<String> = args.iter().map(emit_type_expr).collect();
+                format!("{}<{}>", rust_name, args_str.join(", "))
+            }
+        }
+        TypeExpr::Option { inner, .. } => format!("Option<{}>", emit_type_expr(inner)),
+        TypeExpr::Result { ok, err, .. } => {
+            format!("Result<{}, {}>", emit_type_expr(ok), emit_type_expr(err))
+        }
+        TypeExpr::Ref { mutable, inner, .. } => {
+            if *mutable {
+                format!("&mut {}", emit_type_expr(inner))
+            } else {
+                format!("&{}", emit_type_expr(inner))
+            }
+        }
+        TypeExpr::Labeled { label, inner, .. } => {
+            let label_name = emit_label(*label);
+            format!("{}<{}>", label_name, emit_type_expr(inner))
+        }
+        TypeExpr::Refined { inner, .. } => {
+            // Erase refinement at the type level; the newtype constructor handles it
+            emit_type_expr(inner)
+        }
+        TypeExpr::Fn { params, ret, .. } => {
+            let params_str: Vec<String> = params.iter().map(emit_type_expr).collect();
+            format!("fn({}) -> {}", params_str.join(", "), emit_type_expr(ret))
+        }
+        TypeExpr::Tuple { elems, .. } => {
+            let elems_str: Vec<String> = elems.iter().map(emit_type_expr).collect();
+            format!("({})", elems_str.join(", "))
+        }
+    }
+}
+
+/// Map MVL primitive names to Rust equivalents.
+fn map_base_type(name: &str) -> &str {
+    match name {
+        "Int" => "i64",
+        "Float" => "f64",
+        "Bool" => "bool",
+        "String" => "String",
+        "Char" => "char",
+        "Byte" => "u8",
+        "Unit" => "()",
+        "Never" => "!",
+        "List" => "Vec",
+        // Phase 1: unknown types are passed through as-is (user-defined or external)
+        other => other,
+    }
+}
+
+pub fn emit_label(label: SecurityLabel) -> &'static str {
+    match label {
+        SecurityLabel::Public => "Public",
+        SecurityLabel::Tainted => "Tainted",
+        SecurityLabel::Secret => "Secret",
+        SecurityLabel::Clean => "Clean",
+    }
+}
+
+// ── Refinement predicate → Rust assert expression ─────────────────────────
+
+/// Emit a refinement predicate as a Rust boolean expression suitable for
+/// use inside `debug_assert!(…)`.  The binding name `self` is replaced with
+/// `binding`.
+pub fn emit_ref_expr_for_assert(pred: &RefExpr, binding: &str) -> String {
+    emit_ref_expr(pred, binding)
+}
+
+fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
+    match pred {
+        RefExpr::LogicOp {
+            op, left, right, ..
+        } => {
+            let op_str = match op {
+                crate::mvl::parser::ast::LogicOp::And => "&&",
+                crate::mvl::parser::ast::LogicOp::Or => "||",
+            };
+            format!(
+                "({} {op_str} {})",
+                emit_ref_expr(left, binding),
+                emit_ref_expr(right, binding)
+            )
+        }
+        RefExpr::Compare {
+            op, left, right, ..
+        } => {
+            let op_str = match op {
+                crate::mvl::parser::ast::CmpOp::Eq => "==",
+                crate::mvl::parser::ast::CmpOp::Ne => "!=",
+                crate::mvl::parser::ast::CmpOp::Lt => "<",
+                crate::mvl::parser::ast::CmpOp::Gt => ">",
+                crate::mvl::parser::ast::CmpOp::Le => "<=",
+                crate::mvl::parser::ast::CmpOp::Ge => ">=",
+            };
+            format!(
+                "({} {op_str} {})",
+                emit_ref_expr(left, binding),
+                emit_ref_expr(right, binding)
+            )
+        }
+        RefExpr::ArithOp {
+            op, left, right, ..
+        } => {
+            let op_str = match op {
+                crate::mvl::parser::ast::ArithOp::Add => "+",
+                crate::mvl::parser::ast::ArithOp::Sub => "-",
+                crate::mvl::parser::ast::ArithOp::Mul => "*",
+                crate::mvl::parser::ast::ArithOp::Div => "/",
+                crate::mvl::parser::ast::ArithOp::Rem => "%",
+            };
+            format!(
+                "({} {op_str} {})",
+                emit_ref_expr(left, binding),
+                emit_ref_expr(right, binding)
+            )
+        }
+        RefExpr::Not { inner, .. } => format!("!{}", emit_ref_expr(inner, binding)),
+        RefExpr::Ident { name, .. } => {
+            if name == "self" {
+                binding.to_string()
+            } else {
+                name.clone()
+            }
+        }
+        RefExpr::Integer { value, .. } => value.to_string(),
+        RefExpr::Float { value, .. } => {
+            let s = format!("{value}");
+            if s.contains('.') {
+                s
+            } else {
+                format!("{s}.0")
+            }
+        }
+        RefExpr::Len { ident, .. } => {
+            if ident == "self" {
+                format!("{binding}.len()")
+            } else {
+                format!("{ident}.len()")
+            }
+        }
+        RefExpr::Grouped { inner, .. } => format!("({})", emit_ref_expr(inner, binding)),
+    }
+}
+
+// ── Float literal in refinement ───────────────────────────────────────────
+// Note: RefExpr::Integer covers integer constants; float literals in
+// refinements (e.g. `self >= 0.0`) are not yet in the RefExpr grammar —
+// they would need to be added as RefExpr::Float. For now, integer literals
+// cover most practical predicates.

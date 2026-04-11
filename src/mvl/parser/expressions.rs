@@ -266,6 +266,19 @@ impl Parser {
             // ── Identifier, function call, or struct construction ────────────
             TokenKind::Ident(name) => {
                 self.advance();
+                // Handle path expressions: Name::Variant, Enum::Variant(args), etc.
+                let name = if matches!(self.peek_kind(), TokenKind::ColonColon) {
+                    self.advance(); // consume `::`
+                    match self.peek_kind().clone() {
+                        TokenKind::Ident(variant) => {
+                            self.advance();
+                            format!("{name}::{variant}")
+                        }
+                        _ => name, // malformed path — keep first ident
+                    }
+                } else {
+                    name
+                };
                 if matches!(self.peek_kind(), TokenKind::LParen) {
                     // Function call: name(args)
                     self.advance();

@@ -365,11 +365,24 @@ impl Parser {
         }
     }
 
-    /// Parse `<T>` for a security-labeled type.
+    /// Parse `<T>` or `<T where pred>` for a security-labeled type.
     fn parse_labeled_inner(&mut self, start: Span) -> Result<(Box<TypeExpr>, Span), ()> {
         let lt = self.expect(&TokenKind::Lt);
         self.require(lt)?;
+        let ty_start = self.peek_span();
         let inner = self.parse_type_expr()?;
+        // Allow inline refinement: `Public<Int where self > 0>`
+        let inner = if self.eat(&TokenKind::Where) {
+            let pred = self.parse_ref_expr()?;
+            let refined_span = self.span_from(ty_start);
+            TypeExpr::Refined {
+                inner: Box::new(inner),
+                pred,
+                span: refined_span,
+            }
+        } else {
+            inner
+        };
         let gt = self.expect(&TokenKind::Gt);
         self.require(gt)?;
         let span = self.span_from(start);
@@ -628,6 +641,11 @@ impl Parser {
                 self.advance();
                 let span = self.span_from(start);
                 Ok(RefExpr::Integer { value: n, span })
+            }
+            TokenKind::Float(f) => {
+                self.advance();
+                let span = self.span_from(start);
+                Ok(RefExpr::Float { value: f, span })
             }
             TokenKind::LParen => {
                 self.advance();

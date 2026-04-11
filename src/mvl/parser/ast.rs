@@ -252,6 +252,10 @@ pub enum RefExpr {
         value: i64,
         span: Span,
     },
+    Float {
+        value: f64,
+        span: Span,
+    },
     Len {
         ident: String,
         span: Span,
