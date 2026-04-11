@@ -1,0 +1,307 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "MVL",
+  "scopeName": "source.mvl",
+  "fileTypes": ["mvl"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#chars" },
+    { "include": "#numbers" },
+    { "include": "#special-forms" },
+    { "include": "#effects-annotation" },
+    { "include": "#security-labels" },
+    { "include": "#totality-modifiers" },
+    { "include": "#security-modifiers" },
+    { "include": "#capability-annotations" },
+    { "include": "#keywords-declaration" },
+    { "include": "#keywords-control" },
+    { "include": "#keywords-expression" },
+    { "include": "#constants" },
+    { "include": "#constructors" },
+    { "include": "#builtin-types" },
+    { "include": "#function-definition" },
+    { "include": "#type-definition" },
+    { "include": "#function-call" },
+    { "include": "#type-names" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+
+    "comments": {
+      "name": "comment.line.double-slash.mvl",
+      "match": "//.*$"
+    },
+
+    "strings": {
+      "name": "string.quoted.double.mvl",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        { "name": "constant.character.escape.mvl", "match": "\\\\." }
+      ]
+    },
+
+    "chars": {
+      "name": "string.quoted.single.mvl",
+      "begin": "'",
+      "end": "'",
+      "patterns": [
+        { "name": "constant.character.escape.mvl", "match": "\\\\." }
+      ]
+    },
+
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.mvl",
+          "match": "\\b[0-9]+\\.[0-9]+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.mvl",
+          "match": "\\b[0-9]+\\b"
+        }
+      ]
+    },
+
+    "special-forms": {
+      "comment": "sanitize() and declassify() are security-critical built-ins",
+      "patterns": [
+        {
+          "name": "keyword.other.special-form.mvl",
+          "match": "\\b(sanitize|declassify)\\b"
+        }
+      ]
+    },
+
+    "effects-annotation": {
+      "comment": "Effect list after ! — IO, Console, DB, etc.",
+      "patterns": [
+        {
+          "name": "keyword.other.effect.mvl",
+          "match": "\\b(IO|Console|FileRead|FileWrite|Net|DB)\\b"
+        }
+      ]
+    },
+
+    "security-labels": {
+      "comment": "Type-level security labels — Public<T>, Tainted<T>, Secret<T>, Clean<T>",
+      "patterns": [
+        {
+          "name": "storage.type.security-label.mvl",
+          "match": "\\b(Public|Tainted|Secret|Clean)(?=\\s*<)"
+        }
+      ]
+    },
+
+    "totality-modifiers": {
+      "comment": "total / partial — termination annotation on functions",
+      "patterns": [
+        {
+          "name": "storage.modifier.totality.mvl",
+          "match": "\\b(total|partial)\\b"
+        }
+      ]
+    },
+
+    "security-modifiers": {
+      "comment": "public / tainted / secret — security modifiers on function declarations",
+      "patterns": [
+        {
+          "name": "storage.modifier.security.mvl",
+          "match": "\\b(public|tainted|secret)\\b"
+        }
+      ]
+    },
+
+    "capability-annotations": {
+      "comment": "iso / val / ref / tag — ownership and capability annotations on parameters",
+      "patterns": [
+        {
+          "name": "storage.modifier.capability.mvl",
+          "match": "\\b(iso|val|ref|tag)\\b"
+        }
+      ]
+    },
+
+    "keywords-declaration": {
+      "patterns": [
+        {
+          "name": "keyword.other.declaration.mvl",
+          "match": "\\b(module|type|fn|const|struct|enum)\\b"
+        }
+      ]
+    },
+
+    "keywords-control": {
+      "patterns": [
+        {
+          "name": "keyword.control.mvl",
+          "match": "\\b(let|return|if|else|match|for|in|while|where|mut)\\b"
+        }
+      ]
+    },
+
+    "keywords-expression": {
+      "patterns": [
+        {
+          "name": "keyword.operator.expression.mvl",
+          "match": "\\b(move|consume)\\b"
+        }
+      ]
+    },
+
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.mvl",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.language.null.mvl",
+          "match": "\\bNone\\b"
+        }
+      ]
+    },
+
+    "constructors": {
+      "comment": "Result/Option constructors and enum variant constructors",
+      "patterns": [
+        {
+          "name": "entity.name.tag.constructor.mvl",
+          "match": "\\b(Some|Ok|Err)\\b"
+        }
+      ]
+    },
+
+    "builtin-types": {
+      "patterns": [
+        {
+          "name": "support.type.builtin.mvl",
+          "match": "\\b(Option|Result|Bool|Char|Byte|String|Int|Int8|Int16|Int32|Int64|UInt8|UInt16|UInt32|UInt64|Float|Float32|Float64|Array|Map|Set|Range|Unit)\\b"
+        }
+      ]
+    },
+
+    "function-definition": {
+      "comment": "Highlight the name in fn name(...)",
+      "match": "\\b(fn)\\s+([a-z_][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.other.declaration.mvl" },
+        "2": { "name": "entity.name.function.mvl" }
+      }
+    },
+
+    "type-definition": {
+      "comment": "Highlight the name in type Name = ...",
+      "match": "\\b(type)\\s+([A-Z][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.other.declaration.mvl" },
+        "2": { "name": "entity.name.type.mvl" }
+      }
+    },
+
+    "function-call": {
+      "comment": "identifier followed by ( — function or constructor call",
+      "match": "\\b([a-z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+      "captures": {
+        "1": { "name": "entity.name.function.call.mvl" }
+      }
+    },
+
+    "type-names": {
+      "comment": "Identifiers starting with uppercase — type names",
+      "match": "\\b[A-Z][a-zA-Z0-9_]*\\b",
+      "name": "entity.name.type.mvl"
+    },
+
+    "operators": {
+      "patterns": [
+        {
+          "comment": "Result/Option propagation",
+          "name": "keyword.operator.propagate.mvl",
+          "match": "\\?"
+        },
+        {
+          "comment": "Return type and match arm arrows",
+          "name": "keyword.operator.arrow.mvl",
+          "match": "->|=>"
+        },
+        {
+          "comment": "Effect marker",
+          "name": "keyword.operator.effect-marker.mvl",
+          "match": "(?<![!=<>])!(?!=)"
+        },
+        {
+          "comment": "Comparison operators",
+          "name": "keyword.operator.comparison.mvl",
+          "match": "==|!=|<=|>=|<|>"
+        },
+        {
+          "comment": "Logical operators",
+          "name": "keyword.operator.logical.mvl",
+          "match": "&&|\\|\\||!"
+        },
+        {
+          "comment": "Arithmetic operators",
+          "name": "keyword.operator.arithmetic.mvl",
+          "match": "[+\\-*/%]"
+        },
+        {
+          "comment": "Assignment",
+          "name": "keyword.operator.assignment.mvl",
+          "match": "(?<![=!<>])=(?!=)"
+        },
+        {
+          "comment": "Reference / borrow",
+          "name": "keyword.operator.reference.mvl",
+          "match": "&"
+        },
+        {
+          "comment": "Path separator",
+          "name": "keyword.operator.path.mvl",
+          "match": "::"
+        }
+      ]
+    },
+
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.definition.block.mvl",
+          "match": "[{}]"
+        },
+        {
+          "name": "punctuation.definition.parameters.mvl",
+          "match": "[()]"
+        },
+        {
+          "name": "punctuation.definition.list.mvl",
+          "match": "[\\[\\]]"
+        },
+        {
+          "name": "punctuation.separator.comma.mvl",
+          "match": ","
+        },
+        {
+          "name": "punctuation.terminator.semicolon.mvl",
+          "match": ";"
+        },
+        {
+          "name": "punctuation.separator.colon.mvl",
+          "match": ":"
+        },
+        {
+          "name": "punctuation.accessor.dot.mvl",
+          "match": "\\."
+        },
+        {
+          "name": "punctuation.definition.lambda.mvl",
+          "match": "\\|"
+        }
+      ]
+    }
+
+  }
+}

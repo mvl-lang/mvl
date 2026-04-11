@@ -1,0 +1,36 @@
+{
+  "name": "vscode-mvl",
+  "displayName": "MVL",
+  "description": "MVL (Minimum Verification Language) — syntax highlighting, bracket matching, and language configuration",
+  "version": "0.0.1",
+  "publisher": "LAB271",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LAB271/mvl_language"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "icon": "icon.png",
+  "contributes": {
+    "languages": [
+      {
+        "id": "mvl",
+        "aliases": ["MVL", "mvl", "Minimum Verification Language"],
+        "extensions": [".mvl"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "mvl",
+        "scopeName": "source.mvl",
+        "path": "./syntaxes/mvl.tmLanguage.json"
+      }
+    ]
+  }
+}

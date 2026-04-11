@@ -1,0 +1,39 @@
+{
+  "name": "tree-sitter-mvl",
+  "version": "0.1.0",
+  "description": "Tree-sitter grammar for MVL (Minimum Verification Language)",
+  "main": "bindings/node",
+  "scripts": {
+    "build": "tree-sitter generate && node-gyp build",
+    "test": "tree-sitter test",
+    "parse": "tree-sitter parse"
+  },
+  "keywords": [
+    "tree-sitter",
+    "mvl",
+    "parser",
+    "syntax-highlighting"
+  ],
+  "files": [
+    "grammar.js",
+    "src/",
+    "queries/",
+    "corpus/"
+  ],
+  "dependencies": {
+    "nan": "^2.17.0"
+  },
+  "devDependencies": {
+    "tree-sitter-cli": "^0.22.0"
+  },
+  "tree-sitter": [
+    {
+      "scope": "source.mvl",
+      "file-types": [
+        "mvl"
+      ],
+      "highlights": "queries/highlights.scm",
+      "folds": "queries/folds.scm"
+    }
+  ]
+}

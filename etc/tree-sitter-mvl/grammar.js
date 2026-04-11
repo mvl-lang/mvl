@@ -1,0 +1,518 @@
+// Tree-sitter grammar for MVL (Minimum Verification Language)
+// Derived from docs/grammar.ebnf — LL(1), no parsing ambiguities.
+//
+// Note on <> vs comparison: `<` only appears in type position in MVL.
+// To avoid the classic generic-vs-comparison ambiguity for the syntax
+// highlighter, explicit type args at call sites are parsed via separate
+// `_typed_call` forms rather than `identifier < type_list > ( args )`.
+//
+// Precedence levels (higher number = tighter binding):
+//   1  OR        ||
+//   2  AND       &&
+//   3  COMPARE   == != < > <= >=
+//   4  ADD       + -
+//   5  MUL       * / %
+//   6  UNARY     ! - move consume  (right-assoc)
+//   7  CALL      . ()              (left-assoc — method/field access)
+//   8  POSTFIX   ?                 (left-assoc — Result propagation)
+
+const PREC = {
+  OR: 1,
+  AND: 2,
+  COMPARE: 3,
+  ADD: 4,
+  MUL: 5,
+  UNARY: 6,
+  CALL: 7,
+  POSTFIX: 8,
+};
+
+module.exports = grammar({
+  name: "mvl",
+
+  extras: ($) => [/\s/, $.line_comment],
+
+  word: ($) => $.identifier,
+
+  // GLR conflicts: `where` after a type_expr is ambiguous between
+  // a refined_type and an outer `where constraints` clause.
+  // `construct_expr` (identifier '{') vs block after if/while is also ambiguous.
+  conflicts: ($) => [
+    // `where` after return type_expr: return-type refinement vs fn-level constraints
+    [$.return_type],
+    // `!` after fn_type's return type_expr: fn_type effects vs fn_decl effects
+    [$.fn_type],
+    // match/if as statement vs expression (syntactically identical;
+    // context determines which interpretation applies)
+    [$.match_stmt, $.match_expr],
+    [$.if_stmt, $.if_expr],
+    // effect_list: `effect ,` — continue list vs end list (outer comma)
+    [$.effect_list],
+    // `>` inside `Public<Int where self > 0>`: could be comparison or close generic.
+    // GLR explores both; only the one that closes the generic succeeds.
+    [$.ref_expr, $.labeled_type],
+    [$.ref_expr, $.base_type],
+    [$.ref_expr, $.result_type],
+    [$.ref_expr, $.option_type],
+  ],
+
+  rules: {
+    // === Top-level ===
+
+    program: ($) => repeat($.declaration),
+
+    declaration: ($) =>
+      choice($.type_decl, $.fn_decl, $.const_decl, $.module_decl),
+
+    // === Modules ===
+
+    module_decl: ($) =>
+      seq("module", $.identifier, "{", repeat($.declaration), "}"),
+
+    // === Type declarations ===
+
+    type_decl: ($) =>
+      seq("type", $.identifier, optional($.type_params), "=", $.type_body),
+
+    type_params: ($) =>
+      seq("<", $.identifier, repeat(seq(",", $.identifier)), ">"),
+
+    type_body: ($) => choice($.struct_body, $.enum_body, $.type_expr),
+
+    struct_body: ($) => seq("struct", "{", repeat($.field_decl), "}"),
+
+    enum_body: ($) =>
+      seq(
+        "enum",
+        "{",
+        $.variant,
+        repeat(seq(",", $.variant)),
+        optional(","),
+        "}"
+      ),
+
+    variant: ($) =>
+      seq(
+        $.identifier,
+        optional(
+          choice(
+            seq("(", $.type_list, ")"),
+            seq("{", $.field_list, "}")
+          )
+        )
+      ),
+
+    field_decl: ($) =>
+      seq(
+        optional("mut"),
+        $.identifier,
+        ":",
+        $.type_expr,
+        optional(seq("where", $.refinement)),
+        optional(",")
+      ),
+
+    field_list: ($) => seq($.field_decl, repeat($.field_decl)),
+
+    // === Function declarations ===
+
+    fn_decl: ($) =>
+      seq(
+        optional($.totality),
+        optional($.security_modifier),
+        "fn",
+        $.identifier,
+        optional($.type_params),
+        "(",
+        optional($.param_list),
+        ")",
+        "->",
+        $.return_type,
+        optional(seq("!", $.effect_list)),
+        optional(seq("where", $.constraints)),
+        $.block
+      ),
+
+    totality: ($) => choice("total", "partial"),
+
+    security_modifier: ($) => choice("public", "tainted", "secret"),
+
+    param_list: ($) =>
+      seq($.param, repeat(seq(",", $.param)), optional(",")),
+
+    param: ($) =>
+      seq(
+        optional($.capability),
+        optional("mut"),
+        $.identifier,
+        ":",
+        $.type_expr,
+        optional(seq("where", $.refinement))
+      ),
+
+    capability: ($) => choice("iso", "val", "ref", "tag"),
+
+    return_type: ($) =>
+      seq($.type_expr, optional(seq("where", $.refinement))),
+
+    effect_list: ($) => seq($.effect, repeat(seq(",", $.effect))),
+
+    effect: ($) =>
+      choice(
+        "IO",
+        "Console",
+        "FileRead",
+        "FileWrite",
+        "Net",
+        "DB",
+        $.identifier
+      ),
+
+    constraints: ($) => seq($.constraint, repeat(seq(",", $.constraint))),
+
+    constraint: ($) => seq($.identifier, ":", $.identifier),
+
+    // === Type expressions ===
+
+    type_expr: ($) =>
+      choice(
+        $.refined_type,
+        $.fn_type,
+        $.tuple_type,
+        $.option_type,
+        $.result_type,
+        $.ref_type,
+        $.labeled_type,
+        $.base_type
+      ),
+
+    base_type: ($) =>
+      seq($.identifier, optional(seq("<", $.type_list, ">"))),
+
+    option_type: ($) => seq("Option", "<", $.type_expr, ">"),
+
+    result_type: ($) =>
+      seq("Result", "<", $.type_expr, ",", $.type_expr, ">"),
+
+    ref_type: ($) => seq("&", optional("mut"), $.type_expr),
+
+    labeled_type: ($) => seq($.security_label, "<", $.type_expr, ">"),
+
+    security_label: ($) => choice("Public", "Tainted", "Secret", "Clean"),
+
+    refined_type: ($) => prec(1, seq($.base_type, "where", $.refinement)),
+
+    fn_type: ($) =>
+      seq(
+        "fn",
+        "(",
+        optional($.type_list),
+        ")",
+        "->",
+        $.type_expr,
+        optional(seq("!", $.effect_list))
+      ),
+
+    tuple_type: ($) => seq("(", $.type_expr, ",", $.type_list, ")"),
+
+    type_list: ($) => seq($.type_expr, repeat(seq(",", $.type_expr))),
+
+    // === Refinement predicates ===
+    // Structured with precedence to avoid left-recursion conflicts.
+
+    refinement: ($) => $.ref_expr,
+
+    ref_expr: ($) =>
+      choice(
+        prec.left(1, seq($.ref_expr, "||", $.ref_expr)),
+        prec.left(2, seq($.ref_expr, "&&", $.ref_expr)),
+        prec.left(
+          3,
+          seq(
+            $.ref_expr,
+            choice("==", "!=", "<", ">", "<=", ">="),
+            $.ref_expr
+          )
+        ),
+        prec.left(4, seq($.ref_expr, choice("+", "-"), $.ref_expr)),
+        prec.left(5, seq($.ref_expr, choice("*", "/", "%"), $.ref_expr)),
+        prec.right(6, seq("!", $.ref_expr)),
+        $.ref_atom
+      ),
+
+    ref_term: ($) => $.ref_expr,
+
+    ref_atom: ($) =>
+      choice(
+        seq("len", "(", $.identifier, ")"),
+        seq("(", $.ref_expr, ")"),
+        $.identifier,
+        $.integer_literal,
+        $.float_literal
+      ),
+
+    // === Statements ===
+
+    // Blocks may end with an implicit return expression (no semicolon),
+    // similar to Rust. This is the final expression value of the block.
+    block: ($) =>
+      seq("{", repeat($.statement), optional($.expr), "}"),
+
+    statement: ($) =>
+      choice(
+        $.let_stmt,
+        $.assign_stmt,
+        $.return_stmt,
+        $.if_stmt,
+        $.match_stmt,
+        $.for_stmt,
+        $.while_stmt,
+        $.expr_stmt
+      ),
+
+    let_stmt: ($) =>
+      seq(
+        "let",
+        optional("mut"),
+        $.pattern,
+        optional(seq(":", $.type_expr)),
+        "=",
+        $.expr,
+        ";"
+      ),
+
+    // Use expr as lvalue — `=` vs `==` are different tokens, no conflict.
+    assign_stmt: ($) => prec(1, seq($.expr, "=", $.expr, ";")),
+
+    return_stmt: ($) => seq("return", optional($.expr), ";"),
+
+    if_stmt: ($) =>
+      seq(
+        "if",
+        $.expr,
+        $.block,
+        optional(seq("else", choice($.if_stmt, $.block)))
+      ),
+
+    match_stmt: ($) =>
+      seq("match", $.expr, "{", repeat($.match_arm), "}"),
+
+    match_arm: ($) =>
+      seq(
+        $.pattern,
+        optional(seq("where", $.refinement)),
+        "=>",
+        $.expr,
+        optional(",")
+      ),
+
+    for_stmt: ($) => seq("for", $.pattern, "in", $.expr, $.block),
+
+    while_stmt: ($) => seq("while", $.expr, $.block),
+
+    expr_stmt: ($) => seq($.expr, ";"),
+
+    // === Expressions ===
+    // All left-recursive operations (field access, method calls, propagation)
+    // are inlined into `expr` with `prec.left` — the standard tree-sitter pattern.
+
+    expr: ($) =>
+      choice(
+        // Postfix — result/option propagation with `?`
+        prec.left(
+          PREC.POSTFIX,
+          seq(field("operand", $.expr), "?")
+        ),
+        // Member access: method call (must come before field access — more specific)
+        prec.left(
+          PREC.CALL,
+          seq(
+            field("object", $.expr),
+            ".",
+            field("method", $.identifier),
+            "(",
+            optional(field("arguments", $.arg_list)),
+            ")"
+          )
+        ),
+        // Member access: field read
+        prec.left(
+          PREC.CALL,
+          seq(
+            field("object", $.expr),
+            ".",
+            field("field", $.identifier)
+          )
+        ),
+        // Unary operators (right-associative)
+        prec.right(PREC.UNARY, seq("!", $.expr)),
+        prec.right(PREC.UNARY, seq("-", $.expr)),
+        prec.right(PREC.UNARY, seq("move", $.expr)),
+        prec.right(PREC.UNARY, seq("consume", $.expr)),
+        // Binary operators
+        prec.left(PREC.MUL, seq($.expr, choice("*", "/", "%"), $.expr)),
+        prec.left(PREC.ADD, seq($.expr, choice("+", "-"), $.expr)),
+        prec.left(
+          PREC.COMPARE,
+          seq($.expr, choice("==", "!=", "<", ">", "<=", ">="), $.expr)
+        ),
+        prec.left(PREC.AND, seq($.expr, "&&", $.expr)),
+        prec.left(PREC.OR, seq($.expr, "||", $.expr)),
+        // Atoms
+        $._atom_expr
+      ),
+
+    // Atomic (non-recursive) expression forms
+    _atom_expr: ($) =>
+      choice(
+        $.literal,
+        $.if_expr,
+        $.match_expr,
+        $.lambda_expr,
+        $.block_expr,
+        $.declassify_expr,
+        $.sanitize_expr,
+        $.construct_expr,
+        $.fn_call_expr,
+        $.grouped_expr,
+        $.path_expr,
+        $.identifier
+      ),
+
+    // Path expression: Enum::Variant or Module::function
+    // Used for enum variant access (e.g. AuthError::NotFound).
+    path_expr: ($) =>
+      prec.left(
+        PREC.CALL + 1,
+        seq($.identifier, "::", $.identifier)
+      ),
+
+    // Note: explicit type arguments at call sites (e.g. foo<T>(x)) are omitted
+    // to avoid the classic `<` ambiguity (generic vs comparison operator).
+    // MVL type arguments at call sites are always inferred in practice.
+    // prec(1): prefer fn_call_expr over bare identifier when `(` follows.
+    fn_call_expr: ($) =>
+      prec(1, seq(
+        field("function", $.identifier),
+        "(",
+        optional(field("arguments", $.arg_list)),
+        ")"
+      )),
+
+    arg_list: ($) =>
+      seq($.expr, repeat(seq(",", $.expr)), optional(",")),
+
+    lambda_expr: ($) =>
+      seq(
+        "|",
+        optional($.param_list),
+        "|",
+        optional(seq("->", $.type_expr)),
+        $.expr
+      ),
+
+    construct_expr: ($) =>
+      prec(
+        -1,
+        seq(
+          field("type", $.identifier),
+          "{",
+          repeat(seq(field("field", $.identifier), ":", $.expr, ",")),
+          "}"
+        )
+      ),
+
+    if_expr: ($) =>
+      seq("if", $.expr, $.block, "else", $.block),
+
+    match_expr: ($) =>
+      seq("match", $.expr, "{", repeat($.match_arm), "}"),
+
+    block_expr: ($) => $.block,
+
+    grouped_expr: ($) => seq("(", $.expr, ")"),
+
+    declassify_expr: ($) => seq("declassify", "(", $.expr, ")"),
+
+    sanitize_expr: ($) => seq("sanitize", "(", $.expr, ")"),
+
+    // === Patterns ===
+
+    pattern: ($) =>
+      choice(
+        "_",
+        $.literal,
+        $.tuple_pattern,
+        $.some_pattern,
+        $.none_pattern,
+        $.ok_pattern,
+        $.err_pattern,
+        $.constructor_pattern,
+        $.struct_pattern,
+        $.identifier
+      ),
+
+    constructor_pattern: ($) =>
+      seq($.identifier, "(", optional($.pattern_list), ")"),
+
+    struct_pattern: ($) =>
+      seq(
+        $.identifier,
+        "{",
+        repeat(seq($.identifier, ":", $.pattern, ",")),
+        "}"
+      ),
+
+    tuple_pattern: ($) =>
+      seq("(", $.pattern, ",", $.pattern_list, ")"),
+
+    some_pattern: ($) => seq("Some", "(", $.pattern, ")"),
+
+    none_pattern: ($) => "None",
+
+    ok_pattern: ($) => seq("Ok", "(", $.pattern, ")"),
+
+    err_pattern: ($) => seq("Err", "(", $.pattern, ")"),
+
+    pattern_list: ($) => seq($.pattern, repeat(seq(",", $.pattern))),
+
+    // === Literals ===
+
+    literal: ($) =>
+      choice(
+        $.integer_literal,
+        $.float_literal,
+        $.string_literal,
+        $.char_literal,
+        $.boolean_literal,
+        $.list_literal
+      ),
+
+    integer_literal: ($) => /[0-9]+/,
+
+    // Float must be tried before integer (both start with digits).
+    float_literal: ($) => /[0-9]+\.[0-9]+/,
+
+    string_literal: ($) =>
+      seq('"', repeat(choice(/[^"\\]/, /\\./)), '"'),
+
+    char_literal: ($) =>
+      seq("'", choice(/[^'\\]/, /\\./), "'"),
+
+    boolean_literal: ($) => choice("true", "false"),
+
+    list_literal: ($) =>
+      seq("[", optional(seq($.expr, repeat(seq(",", $.expr)))), "]"),
+
+    // === Constants ===
+
+    const_decl: ($) =>
+      seq("const", $.identifier, ":", $.type_expr, "=", $.expr, ";"),
+
+    // === Lexical ===
+
+    identifier: ($) => /[a-zA-Z_][a-zA-Z0-9_]*/,
+
+    line_comment: ($) => token(seq("//", /.*/)),
+  },
+});
