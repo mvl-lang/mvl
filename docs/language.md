@@ -120,6 +120,68 @@ fn(A) -> B ! Effect                   // effectful function type
 
 Code that compiles is well-formed. Code that passes tests is validated. Both are needed. Well-formedness reduces the validation surface.
 
+## Mocking and Stubbing
+
+MVL does not need a mock framework. Effects (Req 7) + no global state + traits make testability free.
+
+### Why it works
+
+In most languages, mocking is hard because dependencies are hidden — globals, singletons, ambient I/O. You need frameworks (Mockito, unittest.mock, mockall) to intercept calls at runtime. In MVL, every dependency is in the function signature as a parameter or effect declaration. There is nothing hidden to intercept.
+
+```
+// Production
+fn get_user(db: &DbConn, id: UserId) -> Result<User, DbError> ! DB {
+    db.query("SELECT ...", id)?
+}
+
+// Test — pass a different db. No framework needed.
+fn test_get_user() {
+    let db = in_memory_db([test_user]);
+    let result = get_user(db, test_user.id);
+    assert_eq(result, Ok(test_user));
+}
+```
+
+### Effect stubbing via traits
+
+Traits define contracts. Production and test implementations are swappable:
+
+```
+type FileSystem = trait {
+    fn read(self, path: Path) -> Result<String, IOError> ! FileRead
+}
+
+type RealFS = struct {}              // production
+impl FileSystem for RealFS { ... }
+
+type StubFS = struct {               // test — stdlib provides this
+    files: Map<Path, String>
+}
+impl FileSystem for StubFS { ... }
+```
+
+### Stdlib test helpers
+
+| Helper | Stubs |
+|--------|-------|
+| `StubFS { files }` | Filesystem (in-memory) |
+| `in_memory_db(rows)` | Database (no connection) |
+| `mock_channel()` | Channel (records sent messages) |
+| `fixed_clock(timestamp)` | Clock (deterministic) |
+| `seeded_random(seed)` | Random (reproducible) |
+| `capture_log()` | Logging (captures entries for assertion) |
+
+### Why no framework is needed
+
+| Requirement | What it enables for testing |
+|------------|---------------------------|
+| Req 7 (effects) | You know exactly what to stub — it's in the type signature |
+| No global state | Nothing to monkey-patch |
+| Traits (ADR-0002) | Swap implementations by passing a different value, not by subclassing |
+| Req 6 (ownership) | Test owns its stubs — no shared mutable test state |
+
+This is a stdlib concern, not a language feature. Zero keywords added.
+
 ## Design Completeness
 
 | Area | Designed? | Specced? | Gaps | Ticket |
