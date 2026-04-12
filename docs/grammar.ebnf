@@ -53,6 +53,8 @@ effect_list    = effect { "," effect } ;
 effect         = "IO" | "Console" | "FileRead" | "FileWrite" | "Net" | "DB" | IDENT ;
 constraints    = constraint { "," constraint } ;
 constraint     = IDENT ":" trait_bound ;
+(* Phase 1 trait bounds — one bound per constraint; "+" compound bounds deferred to Phase 2 *)
+trait_bound    = IDENT ;
 
 (* === Type expressions === *)
 type_expr      = base_type | option_type | result_type | ref_type
