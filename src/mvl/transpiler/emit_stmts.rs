@@ -104,7 +104,9 @@ pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
                         cg.push("{");
                         cg.nl();
                         cg.push_indent();
-                        emit_block_stmts(cg, &block.stmts);
+                        // Use emit_block_as_value so the final Stmt::Expr is a tail
+                        // expression (no semicolon) and becomes the arm's return value.
+                        emit_block_as_value(cg, &block.stmts);
                         cg.pop_indent();
                         cg.indent();
                         cg.push("}");

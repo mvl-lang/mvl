@@ -377,7 +377,7 @@ impl TypeChecker {
 
             Stmt::While { cond, body, span } => {
                 let cond_ty = self.infer_expr(cond);
-                if !matches!(cond_ty, Ty::Bool | Ty::Unknown) && !cond_ty.is_bool() {
+                if !matches!(cond_ty, Ty::Bool | Ty::Unknown) {
                     self.emit(CheckError::TypeMismatch {
                         expected: "Bool".to_string(),
                         found: cond_ty.display(),

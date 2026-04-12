@@ -124,16 +124,8 @@ fn emit_params(params: &[Param]) -> String {
 /// Emit an expression as the tail (implicit return) of a function body.
 /// No semicolon is appended.
 fn emit_expr_tail(cg: &mut Codegen, expr: &crate::mvl::parser::ast::Expr) {
-    use crate::mvl::parser::ast::Expr;
     use crate::mvl::transpiler::emit_exprs::emit_expr;
-
-    // For if/match/block as tail: emit without leading indent (already indented by caller)
-    match expr {
-        Expr::If { .. } | Expr::Match { .. } | Expr::Block(_) => {
-            emit_expr(cg, expr);
-        }
-        _ => {
-            emit_expr(cg, expr);
-        }
-    }
+    // Emit without leading indent — caller has already indented.
+    // No semicolon: this is the implicit return value of the function body.
+    emit_expr(cg, expr);
 }
