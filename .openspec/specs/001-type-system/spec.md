@@ -162,3 +162,110 @@ The language MUST NOT contain: null/nil/undefined values, throw/catch/try except
 
 - GIVEN `static mut COUNTER: Int = 0`
 - THEN the parser MUST reject: `static mut` is not valid MVL syntax
+
+### Requirement 9: Generics [MUST]
+
+The type system MUST support parametric polymorphism via type parameters (generics). Generics MUST be monomorphized at compile time (Rust-style), producing one concrete instantiation per unique type argument set. There MUST be no runtime type dispatch overhead. Higher-kinded types (HKT) are NOT supported in Phase 1.
+
+#### Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Strategy | Monomorphization | Aligns with ownership model; zero-cost abstraction; Rust transpilation is direct |
+| Constraint syntax | `where T: Trait` (Rust-style) | Separate clause keeps type signatures readable; consistent with effect annotations |
+| Inline syntax | NOT supported | `fn foo<T: Ord>` inline constraints are rejected in Phase 1 (deferred) |
+| Higher-kinded types | NOT supported in Phase 1 | Keep type inference tractable; add HKT in Phase 2 if needed for Effect handlers |
+| Type inference | Per-expression, not Hindley-Milner | Explicit type annotations at function boundaries; local inference inside bodies |
+| Variance | Invariant (default) | Safe default; covariant/contravariant annotations deferred to Phase 2 |
+
+#### Type parameter declarations
+
+Type parameters MUST be declared in angle brackets after the item name:
+
+```mvl
+// Generic type declaration
+type Container<T> = struct { value: T }
+
+// Generic function
+total fn identity<T>(x: T) -> T {
+    return x;
+}
+
+// Multiple type parameters
+type Pair<A, B> = struct { first: A, second: B }
+
+// Generic with constraint
+total fn sort<T>(items: List<T>) -> List<T>
+where T: Ord
+{
+    // …
+}
+```
+
+#### Constraint syntax
+
+Constraints MUST appear in a `where` clause after the function signature (before the body). Multiple constraints MUST be separated by commas:
+
+```mvl
+total fn merge<T, E>(a: Result<T, E>, b: Result<T, E>) -> Result<T, E>
+where T: Eq, E: Display
+{
+    // …
+}
+```
+
+**Supported trait bounds** (Phase 1):
+- `Eq` — structural equality (`==`, `!=`)
+- `Ord` — total ordering (`<`, `>`, `<=`, `>=`)
+- `Display` — human-readable formatting
+- `Clone` — explicit value duplication
+- `Default` — zero-value construction
+- User-defined traits (declared in the module system)
+
+**Implementation:** `src/mvl/parser/ast.rs::Constraint`, `src/mvl/checker/mod.rs`
+
+**Tests:** `tests/type_checker.rs::generic_identity_parses`, `tests/type_checker.rs::generic_with_constraint_parses`
+
+#### Scenario: Generic identity function
+
+- GIVEN `total fn identity<T>(x: T) -> T { return x; }`
+- WHEN the checker processes the declaration
+- THEN it MUST accept: the type parameter is consistent
+
+#### Scenario: Constraint bounds checked
+
+- GIVEN `total fn max<T>(a: T, b: T) -> T where T: Ord { … }`
+- WHEN called with `max(1, 2)` where `Int: Ord`
+- THEN the compiler MUST accept
+
+#### Scenario: Missing constraint rejected
+
+- GIVEN `total fn max<T>(a: T, b: T) -> T { if a > b { a } else { b } }`
+- WHEN the checker sees `a > b` with unconstrained `T`
+- THEN the compiler MUST reject: "type parameter `T` does not implement `Ord`"
+
+#### Scenario: No higher-kinded types
+
+- GIVEN `type Functor<F<_>> = …` (HKT notation)
+- WHEN the parser processes the declaration
+- THEN it MUST reject: "higher-kinded type parameters are not supported in Phase 1"
+
+#### Monomorphization and Rust emission
+
+MVL generics transpile to Rust generics with the same monomorphization semantics. Each instantiation is a concrete Rust function. The transpiler MUST emit:
+
+```rust
+// MVL: total fn identity<T>(x: T) -> T { return x; }
+fn identity<T>(x: T) -> T { x }
+
+// MVL: total fn sort<T>(items: Vec<T>) -> Vec<T> where T: Ord
+fn sort<T: Ord>(mut items: Vec<T>) -> Vec<T> {
+    items.sort();
+    items
+}
+```
+
+Constraints in `where` clauses MUST map to Rust trait bounds:
+- `where T: Ord` → `<T: std::cmp::Ord>`
+- `where T: Eq` → `<T: std::cmp::Eq>`
+- `where T: Display` → `<T: std::fmt::Display>`

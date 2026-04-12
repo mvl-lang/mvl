@@ -1104,3 +1104,45 @@ fn sanitize_before_validation_guard_accepted() {
         "sanitize after guard should be accepted, got: {errors:?}"
     );
 }
+
+// ── Requirement 9: Generics (Spec 001, Phase 1 parse/check) ───────────────
+
+fn parses_and_checks(src: &str) {
+    let (mut p, _) = Parser::new(src);
+    let prog = p.parse_program();
+    assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+    let result = check(&prog);
+    assert!(result.is_ok(), "type errors: {:?}", result.errors);
+}
+
+#[test]
+fn generic_identity_parses() {
+    // Req 9: generic function with type parameter parses and checks
+    parses_and_checks("total fn identity<T>(x: T) -> T { return x; }");
+}
+
+#[test]
+fn generic_type_decl_parses() {
+    // Req 9: generic type declaration parses and checks
+    parses_and_checks("type Container<T> = struct { value: T }");
+}
+
+#[test]
+fn generic_pair_type_parses() {
+    // Req 9: multiple type parameters parse and check
+    parses_and_checks("type Pair<A, B> = struct { first: A, second: B }");
+}
+
+#[test]
+fn generic_with_constraint_parses() {
+    // Req 9: where-clause constraint parses and checks
+    parses_and_checks("total fn max<T>(a: T, b: T) -> T where T: Ord { return a; }");
+}
+
+#[test]
+fn generic_multiple_constraints_parse() {
+    // Req 9: multiple constraints in where clause parse and check
+    parses_and_checks(
+        "total fn show_max<T>(a: T, b: T) -> T where T: Ord, T: Display { return a; }",
+    );
+}
