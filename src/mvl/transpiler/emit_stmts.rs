@@ -12,12 +12,12 @@
 //!
 //! See ADR-0003 for the overall compilation strategy.
 
-use crate::mvl::parser::ast::{ElseBranch, LValue, Stmt};
+use crate::mvl::parser::ast::{ElseBranch, LValue, MatchBody, Stmt};
 use crate::mvl::transpiler::codegen::Codegen;
 use crate::mvl::transpiler::emit_exprs::{
-    emit_block_as_value, emit_block_stmts, emit_expr, emit_pattern,
+    arms_have_str_pattern, emit_block_as_value, emit_block_stmts, emit_expr, emit_pattern,
 };
-use crate::mvl::transpiler::emit_types::emit_type_expr;
+use crate::mvl::transpiler::emit_types::{emit_ref_expr_for_assert, emit_type_expr};
 
 /// Emit a single statement (with indentation and trailing newline).
 pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
@@ -90,10 +90,7 @@ pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
         Stmt::Match {
             scrutinee, arms, ..
         } => {
-            use crate::mvl::parser::ast::{Literal as AstLiteral, Pattern as AstPattern};
-            let has_str_arm = arms.iter().any(|a| {
-                matches!(&a.pattern, AstPattern::Literal(AstLiteral::Str(_), _))
-            });
+            let has_str_arm = arms_have_str_pattern(arms);
             cg.indent();
             cg.push("match ");
             emit_expr(cg, scrutinee);
@@ -104,8 +101,6 @@ pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
             cg.nl();
             cg.push_indent();
             for arm in arms {
-                use crate::mvl::parser::ast::MatchBody;
-                use crate::mvl::transpiler::emit_types::emit_ref_expr_for_assert;
                 cg.indent();
                 emit_pattern(cg, &arm.pattern);
                 if let Some(guard) = &arm.guard {

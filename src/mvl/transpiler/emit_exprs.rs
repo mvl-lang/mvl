@@ -99,12 +99,7 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
         Expr::Match {
             scrutinee, arms, ..
         } => {
-            // If any arm uses a string literal pattern we must match on `&str`.
-            // Both `String` and IFC-labeled strings (Clean<String>, Tainted<String>, …)
-            // expose `.as_str()`, so appending `.as_str()` works for all of them.
-            let has_str_pattern = arms.iter().any(|a| {
-                matches!(&a.pattern, Pattern::Literal(crate::mvl::parser::ast::Literal::Str(_), _))
-            });
+            let has_str_pattern = arms_have_str_pattern(arms);
             cg.push("match ");
             emit_expr(cg, scrutinee);
             if has_str_pattern {
@@ -255,6 +250,16 @@ fn emit_literal(cg: &mut Codegen, lit: &Literal) {
         Literal::Bool(b) => cg.push(if *b { "true" } else { "false" }),
         Literal::Unit => cg.push("()"),
     }
+}
+
+/// Returns true if any match arm uses a string literal pattern.
+///
+/// When true, the scrutinee must be coerced to `&str` via `.as_str()` so that
+/// Rust's pattern matching works (both `String` and IFC-labeled strings expose
+/// `.as_str()`).  Called from both `Expr::Match` and `Stmt::Match` codegen.
+pub fn arms_have_str_pattern(arms: &[MatchArm]) -> bool {
+    arms.iter()
+        .any(|a| matches!(&a.pattern, Pattern::Literal(Literal::Str(_), _)))
 }
 
 /// Emit a literal in pattern position.  String literals must be bare `"s"`

@@ -287,7 +287,8 @@ fn cmd_test(path: &str) {
     combined_rs.push_str("// Do not edit; regenerate with `mvl test`.\n");
     // File-level allow — inner attributes must appear at the top of the file,
     // before any items.  We strip per-module copies below.
-    combined_rs.push_str("#![allow(dead_code, unused_variables, unused_imports, unused_parens)]\n\n");
+    combined_rs
+        .push_str("#![allow(dead_code, unused_variables, unused_imports, unused_parens)]\n\n");
 
     for test_file in &test_files {
         let file_str = test_file.display().to_string();
@@ -302,7 +303,8 @@ fn cmd_test(path: &str) {
             .lines()
             .filter(|l| !l.trim_start().starts_with("#![allow("))
             .collect::<Vec<_>>()
-            .join("\n");
+            .join("\n")
+            + "\n";
         combined_rs.push_str(&format!("// === {} ===\n", test_file.display()));
         combined_rs.push_str("#[cfg(test)]\n");
         combined_rs.push_str(&format!("mod {module_name} {{\n"));

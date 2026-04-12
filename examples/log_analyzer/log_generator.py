@@ -19,6 +19,7 @@ Feed to the analyzer:
 import argparse
 import json
 import random
+import sys
 import time
 from pathlib import Path
 
@@ -115,7 +116,6 @@ def main() -> None:
             f.write(json.dumps(entry) + "\n")
 
     # Print summary to stderr so it doesn't pollute piped output
-    import sys
     levels_seen = {}
     for e in entries:
         levels_seen[e["level"]] = levels_seen.get(e["level"], 0) + 1
