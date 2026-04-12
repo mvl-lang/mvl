@@ -1146,3 +1146,59 @@ fn generic_multiple_constraints_parse() {
         "total fn show_max<T>(a: T, b: T) -> T where T: Ord, T: Display { return a; }",
     );
 }
+
+// ── Requirement 9: Generics — rejection scenarios (Phase 2 enforcement) ───
+// These tests document the intended rejection semantics. They are marked
+// #[ignore] until constraint enforcement is implemented in the checker.
+// See: https://github.com/LAB271/mvl_language/issues/48
+
+#[test]
+#[ignore = "constraint enforcement not yet implemented (Phase 2)"]
+fn missing_constraint_on_comparison_rejected() {
+    // Req 9 Scenario: Missing constraint rejected
+    // GIVEN unconstrained T used with `>` operator
+    // THEN checker MUST reject with a missing-constraint error
+    let (mut p, _) = Parser::new(
+        "total fn max<T>(a: T, b: T) -> T { if a > b { return a; } else { return b; } }",
+    );
+    let prog = p.parse_program();
+    assert!(
+        p.errors().is_empty(),
+        "unexpected parse errors: {:?}",
+        p.errors()
+    );
+    let result = check(&prog);
+    assert!(
+        !result.is_ok(),
+        "unconstrained T used with > must be rejected, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+#[ignore = "HKT diagnostic not yet implemented (Phase 2)"]
+fn higher_kinded_type_param_rejected() {
+    // Req 9 Scenario: No higher-kinded types
+    // GIVEN F<_> nested angle-bracket type param
+    // THEN parser MUST reject
+    let (mut p, _) = Parser::new("type Functor<F<_>> = struct { val: Int }");
+    let _ = p.parse_program();
+    assert!(
+        !p.errors().is_empty(),
+        "HKT type parameter syntax must be rejected by the parser"
+    );
+}
+
+#[test]
+#[ignore = "inline constraint rejection not yet implemented (Phase 2)"]
+fn inline_constraint_syntax_rejected() {
+    // Req 9 Scenario: Inline constraint syntax rejected
+    // GIVEN <T: Ord> inline constraint syntax
+    // THEN parser MUST reject in Phase 1
+    let (mut p, _) = Parser::new("total fn max<T: Ord>(a: T, b: T) -> T { return a; }");
+    let _ = p.parse_program();
+    assert!(
+        !p.errors().is_empty(),
+        "inline constraint `<T: Ord>` must be rejected in Phase 1"
+    );
+}

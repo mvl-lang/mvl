@@ -7,7 +7,9 @@ date: 2026-04-11
 
 # 001 — Type System
 
-The MVL type system covers Requirements 1 (type safety), 3 (totality), 4 (null elimination), 5 (error visibility), 6 (ownership), and 10 (refinement types). It is the foundation — every other system builds on it.
+The MVL type system covers Requirements 1 (type safety), 3 (totality), 4 (null elimination), 5 (error visibility), 6 (ownership), 9 (generics), and 10 (refinement types). It is the foundation — every other system builds on it.
+
+> **Note:** Requirement numbers in this spec are local to this file and do not map 1:1 to the eleven requirements in ADR-0001.
 
 ## Philosophy
 
@@ -224,7 +226,9 @@ where T: Eq, E: Display
 
 **Implementation:** `src/mvl/parser/ast.rs::Constraint`, `src/mvl/checker/mod.rs`
 
-**Tests:** `tests/type_checker.rs::generic_identity_parses`, `tests/type_checker.rs::generic_with_constraint_parses`
+**Tests:** `tests/type_checker.rs::generic_identity_parses`, `tests/type_checker.rs::generic_type_decl_parses`, `tests/type_checker.rs::generic_pair_type_parses`, `tests/type_checker.rs::generic_with_constraint_parses`, `tests/type_checker.rs::generic_multiple_constraints_parse`
+
+> **Phase 1 scope note:** The parser accepts and stores generics AST nodes. Constraint *enforcement* (rejecting unconstrained `T` in operator expressions, rejecting HKT notation with a clear diagnostic, rejecting inline `<T: Ord>` syntax) is tracked for Phase 2 implementation. See rejection scenarios below for the intended semantics.
 
 #### Scenario: Generic identity function
 
@@ -247,8 +251,14 @@ where T: Eq, E: Display
 #### Scenario: No higher-kinded types
 
 - GIVEN `type Functor<F<_>> = …` (HKT notation)
+- WHEN the parser processes the declaration (Phase 1: grammar rejects nested angle brackets in type params)
+- THEN it MUST reject at the parser level with an error referencing the unexpected token
+
+#### Scenario: Inline constraint syntax rejected
+
+- GIVEN `total fn max<T: Ord>(a: T, b: T) -> T { return a; }`
 - WHEN the parser processes the declaration
-- THEN it MUST reject: "higher-kinded type parameters are not supported in Phase 1"
+- THEN it MUST reject: inline type constraints in `<T: Trait>` form are not valid in Phase 1; use a `where` clause
 
 #### Monomorphization and Rust emission
 
@@ -259,13 +269,17 @@ MVL generics transpile to Rust generics with the same monomorphization semantics
 fn identity<T>(x: T) -> T { x }
 
 // MVL: total fn sort<T>(items: Vec<T>) -> Vec<T> where T: Ord
-fn sort<T: Ord>(mut items: Vec<T>) -> Vec<T> {
+fn sort<T>(mut items: Vec<T>) -> Vec<T>
+where T: std::cmp::Ord
+{
     items.sort();
     items
 }
 ```
 
-Constraints in `where` clauses MUST map to Rust trait bounds:
-- `where T: Ord` → `<T: std::cmp::Ord>`
-- `where T: Eq` → `<T: std::cmp::Eq>`
-- `where T: Display` → `<T: std::fmt::Display>`
+Constraints in `where` clauses MUST map to Rust trait bounds (fully-qualified paths):
+- `where T: Ord` → `T: std::cmp::Ord`
+- `where T: Eq` → `T: std::cmp::Eq`
+- `where T: Display` → `T: std::fmt::Display`
+- `where T: Clone` → `T: std::clone::Clone`
+- `where T: Default` → `T: std::default::Default`
