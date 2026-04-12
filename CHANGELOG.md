@@ -6,6 +6,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.10.4] — 2026-04-12 (feat: log_analyzer Phase 2 example, transpiler fixes)
+
+### Added
+- `examples/log_analyzer/` — multi-file MVL program demonstrating all Phase 2 features: `extern "rust"` trust boundary (5 extern fns), IFC labels (`Tainted<String>` → `sanitize()` → `Clean<String>`), effect declarations (`! FileRead, Console`), generics with `where T: Ord` bounds (closes #48), module `use` imports (closes #47), internal test fn + standalone `_test.mvl` files (18 tests)
+- `examples/log_analyzer/log_generator.py` — Python 3 script (no dependencies) to generate sample JSONL log files for manual testing; supports `--count`, `--output`, `--seed`
+
+### Fixed
+- `assert_eq`/`assert_ne` now map to `assert_eq!`/`assert_ne!` macros in transpiler
+- String literal patterns in `match` now emit `.as_str()` on the scrutinee (fixes both `Expr::Match` and `Stmt::Match` codegen paths)
+- Test runner: strip per-module `#![allow]` and hoist to file level — avoids inner-attribute error in combined test crate
+- IFC label newtypes gain `.as_str()` method via `impl Label<String>` blocks
+- Extracted `arms_have_str_pattern` helper, eliminating duplicated string-pattern detection between expression and statement match codegen
+- Fixed trailing newline dropped by `join("\n")` in test runner module assembly
+
 ## [0.10.3] — 2026-04-12 (chore: release pipeline, Makefile improvements)
 
 ### Added
