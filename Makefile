@@ -69,9 +69,11 @@ assurance-gate: ## CI gate: fail if below 75% completeness/coverage
 # === Documentation ===
 
 docs: ## Build documentation site
+	bash tools/harvest-specs.sh
 	uvx --with mkdocs-material mkdocs build
 
 docs-serve: ## Serve documentation locally (http://localhost:8000)
+	bash tools/harvest-specs.sh
 	uvx --with mkdocs-material mkdocs serve
 
 # === Clean ===

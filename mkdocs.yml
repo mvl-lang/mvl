@@ -33,6 +33,7 @@ nav:
   - Home: index.md
   - Introduction: introduction.md
   - The Eleven Requirements: requirements.md
+  - Roadmap: roadmap.md
   - Language Manual:
     - Overview: manual/index.md
     - 1. Lexical Structure: manual/01-lexical.md

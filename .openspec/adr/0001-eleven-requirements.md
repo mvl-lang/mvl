@@ -49,6 +49,30 @@ Principle: add a requirement only if it catches bugs that no combination of the 
 
 Every requirement is a category of tests you never write. Well-formedness reduces the validation surface.
 
+## Implementation Status (v0.4.0)
+
+| # | Requirement | Parsed | Checked | Transpiled | Notes |
+|---|------------|--------|---------|------------|-------|
+| 1 | Type safety (ADTs) | ✓ | ✓ | — | Structs, enums, field validation, type inference |
+| 2 | Memory safety | ✓ | ✓ partial | — | Use-after-move detected. No borrow lifetime analysis yet. |
+| 3 | Totality (exhaustive match) | ✓ | ✓ | — | Non-exhaustive match rejected at compile time |
+| 4 | Null elimination (Option) | ✓ | ✓ | — | Direct field access on Option rejected |
+| 5 | Error visibility (Result) | ✓ | ✓ | — | Unused Result rejected, `?` propagation parsed |
+| 6 | Ownership (linearity) | ✓ | ✓ partial | — | Use-after-move. No linear resource consumption check yet. |
+| 7 | Effect tracking | ✓ | ✓ | — | Undeclared effects rejected, propagation enforced |
+| 8 | Termination | ✓ | ✓ partial | — | `while` in total rejected. No structural recursion proof yet. |
+| 9 | Data race freedom | ✓ | ✓ | — | ref/tag capabilities rejected at actor boundaries |
+| 10 | Refinement types | ✓ | ○ parse-only | — | Grammar complete. No SMT checking — planned for Phase 1 transpiler as runtime asserts. |
+| 11 | Information flow control | ✓ | ○ parse-only | — | Labels parsed. No flow analysis — planned for Phase 1 transpiler as Rust newtypes. |
+
+**Summary:** All 11 requirements are fully represented in the grammar. 9/11 have active enforcement in the type checker. Req 10 and 11 will gain enforcement through the transpiler (Rust runtime checks and newtypes respectively).
+
+### Readiness targets
+
+- **Phase 1 complete (transpiler):** All 11 enforced — 9 at compile time, 2 via transpiled Rust code (Req 10 as asserts, Req 11 as newtype wrappers)
+- **Phase 2 (LLVM):** All 11 enforced at compile time — Req 10 via SMT solver integration, Req 11 via compiler-native flow analysis
+- **Phase 3 (ecosystem):** All 11 enforced, with assurance reports documenting per-module satisfaction
+
 ## Consequences
 
 - The MVL scores 11/11 by construction. No existing language exceeds 9.5/11 (F*).

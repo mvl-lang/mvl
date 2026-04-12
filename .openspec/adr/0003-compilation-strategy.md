@@ -45,11 +45,49 @@ Rust scores 7/11 — highest of any mainstream language. The transpilation only 
 | MVL → JVM bytecode | JVM has GC | Violates Req 6 (ownership), no deterministic deallocation |
 | Direct machine code | — | Reimplements optimization. LLVM does this better. |
 
-## Milestones
+## Phase 1 Completion Criteria
 
-- **Phase 1:** Compile the two reference examples (auth handler, safe division). Demonstrate all 11 requirements via Rust transpilation.
-- **Phase 2:** Self-hosting — the MVL compiler compiles itself to LLVM IR.
-- **Phase 3:** A real project built end-to-end in MVL with AAE-4 evidence generated automatically.
+Phase 1 is **done** when:
+
+1. **`mvl build` produces a native binary** — transpile to Rust, generate `Cargo.toml`, invoke `cargo build`
+2. **Both reference examples compile and run** — `auth_handler.mvl` and `safe_division.mvl` produce working binaries
+3. **All 11 requirements are enforced** — 9 at MVL compile time, Req 10 as Rust runtime asserts, Req 11 as Rust newtypes
+4. **`mvl test` runs tests** — transpile `_test.mvl` files to Rust `#[test]`, invoke `cargo test`
+5. **Module system works** — multi-file programs with `module` and `use`
+6. **Generics emit correctly** — `Array<T>`, `Option<T>`, `Result<T,E>` map to Rust generics
+7. **Core stdlib bridge exists** — core types and operations map to Rust std equivalents
+
+### Phase 1 Critical Path
+
+```
+Step 1: Transpiler basics (#29, #30)     → types + functions emit Rust
+Step 2: Stdlib bridge (#42, #43)         → core types map to Rust std
+Step 3: End-to-end (#33)                 → corpus compiles to binary
+Step 4: Cargo integration (#34)          → `mvl build` = transpile + cargo
+Step 5: IFC as newtypes (#31)            → Req 11 enforcement via Rust
+Step 6: Refinements as asserts (#32)     → Req 10 enforcement via Rust
+Step 7: Module system (#47)              → multi-file programs
+Step 8: Generics (#48)                   → Array<T>, Option<T> emit correctly
+```
+
+Steps 1-4 achieve "hello world to binary." Steps 5-6 complete all 11 requirements. Steps 7-8 make it usable for real programs.
+
+## Phase 2 Scope
+
+- **LLVM IR backend** — one compiler, one proof chain
+- **SMT solver integration** — Req 10 moves from runtime asserts to compile-time proofs
+- **Native IFC analysis** — Req 11 moves from Rust newtypes to compiler-native flow checking
+- **Self-hosting** — the MVL compiler rewritten in MVL
+- **Model checker** (#37) — invariants, deadlock/livelock detection as compiler pass
+- **WASM target** — sandboxed execution for The Cog and edge deployment
+
+## Phase 3 Scope
+
+- **Package manager** (#56) — dependency resolution, SBOM generation, trust decay
+- **Extended stdlib** — networking, HTTP, crypto, database drivers
+- **Assurance reports** (#73) — compiler emits per-module requirement satisfaction
+- **Transpilation corpus** — seed for LLM training on MVL generation quality
+- **AAE-4/5 integration** — automated evidence for certification frameworks
 
 ## Consequences
 
