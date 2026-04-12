@@ -9,10 +9,12 @@ help: ## Show this help
 
 # === Setup ===
 
-setup: ## Install git hooks and verify tooling
+setup: ## Install git hooks, verify tooling, and install tree-sitter npm deps
 	git config core.hooksPath .githooks
 	@echo "Git hooks installed from .githooks/"
 	@command -v cargo >/dev/null 2>&1 || { echo "cargo not found — install Rust: https://rustup.rs"; exit 1; }
+	@command -v node >/dev/null 2>&1 || { echo "node not found — install Node.js: https://nodejs.org"; exit 1; }
+	cd etc/tree-sitter-mvl && npm install
 	@echo "Ready."
 
 # === Build ===
