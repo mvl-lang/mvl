@@ -283,3 +283,72 @@ Constraints in `where` clauses MUST map to Rust trait bounds (fully-qualified pa
 - `where T: Display` → `T: std::fmt::Display`
 - `where T: Clone` → `T: std::clone::Clone`
 - `where T: Default` → `T: std::default::Default`
+
+---
+
+### Requirement 10: Debug and Display Traits [MUST]
+
+Every struct and enum MUST automatically derive `Debug` (auto-derivable via Rust's `#[derive(Debug)]`).
+Users MAY implement `Display` for custom string representation using `impl Display for T`.
+
+#### Debug trait
+
+All struct and enum declarations MUST emit `#[derive(Debug, Clone, PartialEq)]` so any value can be debug-printed.
+
+**Implementation:** `src/mvl/transpiler/emit_types.rs::emit_struct`, `src/mvl/transpiler/emit_types.rs::emit_enum`
+
+**Tests:** `tests/transpiler.rs::struct_derives_debug`, `tests/transpiler.rs::enum_derives_debug`
+
+#### Display trait syntax
+
+```mvl
+impl Display for Point {
+    fn fmt(self: Point) -> String {
+        format("({}, {})", self.x, self.y)
+    }
+}
+```
+
+Transpiles to:
+
+```rust
+impl std::fmt::Display for Point {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", format!("({}, {})", self.x, self.y))
+    }
+}
+```
+
+**Implementation:** `src/mvl/transpiler/emit_impls.rs::emit_display_impl`
+
+**Tests:** `tests/transpiler.rs::impl_display_emits_display_trait`
+
+#### format() function
+
+The `format()` built-in accepts a Rust-style format string (using `{}`, `{:?}`, `{:08x}`, etc.) and variadic arguments, returning a `String`. The IFC label of the result SHOULD be the join of all argument labels (enforcement deferred to Phase 2 type checker).
+
+```mvl
+let msg: String = format("Hello, {}!", name)
+let hex: String = format("{:08x}", value)
+```
+
+**Implementation:** `src/mvl/transpiler/emit_exprs.rs` (mapped to Rust `format!` macro)
+
+**Tests:** `tests/transpiler.rs::format_call_emits_format_macro`
+
+#### Number literal formats
+
+Integer literals MUST support hex (`0xFF`), binary (`0b1010`), and octal (`0o77`) prefixes.
+Float literals MUST support scientific notation (`1.5e10`, `2.0e-3`).
+
+**Implementation:** `src/mvl/parser/lexer.rs::lex_number`, `src/mvl/parser/lexer.rs::lex_integer_base`
+
+**Tests:** `src/mvl/parser/lexer.rs::tokenize_hex_literal`, `tokenize_binary_literal`, `tokenize_octal_literal`, `tokenize_scientific_notation`
+
+#### Scenario: Display impl emits Rust fmt::Display
+
+- GIVEN `impl Display for Point { fn fmt(self: Point) -> String { format("({}, {})", self.x, self.y) } }`
+- WHEN the transpiler processes the declaration
+- THEN the output MUST contain `impl std::fmt::Display for Point`
+- AND the output MUST contain `fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result`
+- AND the output MUST contain `write!(f, "{}"` wrapping the body expression

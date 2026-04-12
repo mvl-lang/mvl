@@ -35,7 +35,7 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
         } => {
             // println!/print! are Rust macros: first arg must be a bare string
             // literal, not a `.to_string()` expression.
-            if matches!(name.as_str(), "println" | "print") {
+            if matches!(name.as_str(), "println" | "print" | "format") {
                 cg.push(&format!("{name}!"));
                 cg.push("(");
                 emit_args_for_macro(cg, args);
@@ -190,6 +190,22 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
 
 // ── Literal ───────────────────────────────────────────────────────────────
 
+/// Re-escape a decoded string value for insertion into a Rust string literal.
+fn escape_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 fn emit_literal(cg: &mut Codegen, lit: &Literal) {
     match lit {
         Literal::Integer(n) => cg.push(&n.to_string()),
@@ -202,7 +218,7 @@ fn emit_literal(cg: &mut Codegen, lit: &Literal) {
                 cg.push(&format!("{s}.0"));
             }
         }
-        Literal::Str(s) => cg.push(&format!("\"{s}\".to_string()")),
+        Literal::Str(s) => cg.push(&format!("\"{}\".to_string()", escape_str(s))),
         Literal::Char(c) => cg.push(&format!("'{c}'")),
         Literal::Bool(b) => cg.push(if *b { "true" } else { "false" }),
         Literal::Unit => cg.push("()"),
@@ -230,7 +246,7 @@ fn emit_args_for_macro(cg: &mut Codegen, args: &[Expr]) {
         if i == 0 {
             // First arg: emit string literal bare, without `.to_string()`
             match arg {
-                Expr::Literal(Literal::Str(s), _) => cg.push(&format!("\"{s}\"")),
+                Expr::Literal(Literal::Str(s), _) => cg.push(&format!("\"{}\"", escape_str(s))),
                 other => emit_expr(cg, other),
             }
         } else {

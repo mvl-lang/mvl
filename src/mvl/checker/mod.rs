@@ -130,6 +130,7 @@ impl TypeChecker {
                 Decl::Const(_) => {}
                 Decl::Extern(ed) => self.register_extern(ed),
                 Decl::Use(_) => {} // resolved by the module resolver, not the type checker
+                Decl::Impl(_) => {} // impl blocks are not yet type-checked (Phase 1)
             }
         }
     }
@@ -192,6 +193,7 @@ impl TypeChecker {
             Decl::Const(cd) => self.check_const_decl(cd),
             Decl::Extern(ed) => self.check_extern_decl(ed),
             Decl::Use(_) => {} // resolved by the module resolver, not the type checker
+            Decl::Impl(_) => {} // impl blocks are not yet type-checked (Phase 1)
         }
     }
 

@@ -25,6 +25,7 @@ pub mod cargo;
 pub mod codegen;
 pub mod emit_exprs;
 pub mod emit_functions;
+pub mod emit_impls;
 pub mod emit_stmts;
 pub mod emit_types;
 

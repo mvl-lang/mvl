@@ -75,6 +75,8 @@ pub enum TokenKind {
     Use,
     /// `test` — marks a function as a unit test (`test fn name() { … }`)
     Test,
+    /// `impl` — introduces a trait implementation block (`impl Trait for Type { … }`)
+    Impl,
 
     // ── Security labels ───────────────────────────────────────────────────
     Public,
@@ -169,6 +171,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Pub => write!(f, "pub"),
             TokenKind::Use => write!(f, "use"),
             TokenKind::Test => write!(f, "test"),
+            TokenKind::Impl => write!(f, "impl"),
             TokenKind::Public => write!(f, "Public"),
             TokenKind::Tainted => write!(f, "Tainted"),
             TokenKind::Secret => write!(f, "Secret"),
@@ -579,6 +582,25 @@ impl<'src> Lexer<'src> {
         start_col: u32,
         start_offset: usize,
     ) -> TokenKind {
+        // Handle base prefixes: 0x (hex), 0b (binary), 0o (octal)
+        if first == '0' {
+            match self.peek_char() {
+                Some('x') | Some('X') => {
+                    self.advance(); // consume 'x'
+                    return self.lex_integer_base(16, start_line, start_col, start_offset);
+                }
+                Some('b') | Some('B') => {
+                    self.advance(); // consume 'b'
+                    return self.lex_integer_base(2, start_line, start_col, start_offset);
+                }
+                Some('o') | Some('O') => {
+                    self.advance(); // consume 'o'
+                    return self.lex_integer_base(8, start_line, start_col, start_offset);
+                }
+                _ => {}
+            }
+        }
+
         let mut s = String::from(first);
         let mut is_float = false;
 
@@ -598,12 +620,38 @@ impl<'src> Lexer<'src> {
                         break;
                     }
                 }
+                // Scientific notation: 1.5e10, 2e-3, 1E+4
+                Some('e') | Some('E') => {
+                    is_float = true;
+                    s.push('e');
+                    self.advance(); // consume 'e'/'E'
+                                    // Optional sign
+                    if matches!(self.peek_char(), Some('+') | Some('-')) {
+                        s.push(self.peek_char().unwrap());
+                        self.advance();
+                    }
+                    // Exponent digits
+                    while self.peek_char().is_some_and(|c| c.is_ascii_digit()) {
+                        s.push(self.peek_char().unwrap());
+                        self.advance();
+                    }
+                    break;
+                }
                 _ => break,
             }
         }
 
         if is_float {
-            TokenKind::Float(s.parse().unwrap_or(0.0))
+            match s.parse::<f64>() {
+                Ok(f) => TokenKind::Float(f),
+                Err(_) => {
+                    self.errors.push(LexError {
+                        message: format!("invalid float literal `{s}`"),
+                        span: Span::new(start_line, start_col, start_offset as u32, s.len() as u32),
+                    });
+                    TokenKind::Float(0.0)
+                }
+            }
         } else {
             // Fix #3: report overflow instead of silently producing 0
             match s.parse::<i64>() {
@@ -618,6 +666,47 @@ impl<'src> Lexer<'src> {
                     });
                     TokenKind::Integer(0)
                 }
+            }
+        }
+    }
+
+    /// Scan digits for a non-decimal integer literal (hex/binary/octal).
+    fn lex_integer_base(
+        &mut self,
+        radix: u32,
+        start_line: u32,
+        start_col: u32,
+        start_offset: usize,
+    ) -> TokenKind {
+        let valid_digit = |c: char| c.is_digit(radix);
+        let mut s = String::new();
+        while self.peek_char().is_some_and(|c| valid_digit(c) || c == '_') {
+            let c = self.peek_char().unwrap();
+            self.advance();
+            if c != '_' {
+                s.push(c);
+            }
+        }
+        if s.is_empty() {
+            self.errors.push(LexError {
+                message: "empty integer literal (no digits after base prefix)".to_string(),
+                span: Span::new(start_line, start_col, start_offset as u32, 2),
+            });
+            return TokenKind::Integer(0);
+        }
+        match i64::from_str_radix(&s, radix) {
+            Ok(n) => TokenKind::Integer(n),
+            Err(_) => {
+                self.errors.push(LexError {
+                    message: "integer literal overflows i64".to_string(),
+                    span: Span::new(
+                        start_line,
+                        start_col,
+                        start_offset as u32,
+                        s.len() as u32 + 2,
+                    ),
+                });
+                TokenKind::Integer(0)
             }
         }
     }
@@ -653,6 +742,7 @@ fn keyword_or_ident(s: String) -> TokenKind {
         "pub" => TokenKind::Pub,
         "use" => TokenKind::Use,
         "test" => TokenKind::Test,
+        "impl" => TokenKind::Impl,
         // Boolean literals
         "true" => TokenKind::True,
         "false" => TokenKind::False,
@@ -971,5 +1061,49 @@ mod tests {
     fn string_escape_sequences() {
         let kinds = lex_kinds_no_eof(r#""\n\t\\\"" "#);
         assert_eq!(kinds, vec![TokenKind::Str("\n\t\\\"".into())]);
+    }
+
+    // ── Number literal formats (issue #65) ────────────────────────────────
+
+    #[test]
+    fn tokenize_hex_literal() {
+        assert_eq!(lex_kinds_no_eof("0xFF"), vec![TokenKind::Integer(255)]);
+        assert_eq!(lex_kinds_no_eof("0xDEAD"), vec![TokenKind::Integer(0xDEAD)]);
+        assert_eq!(lex_kinds_no_eof("0x0"), vec![TokenKind::Integer(0)]);
+    }
+
+    #[test]
+    fn tokenize_binary_literal() {
+        assert_eq!(lex_kinds_no_eof("0b1010"), vec![TokenKind::Integer(10)]);
+        assert_eq!(
+            lex_kinds_no_eof("0b11111111"),
+            vec![TokenKind::Integer(255)]
+        );
+        assert_eq!(lex_kinds_no_eof("0b0"), vec![TokenKind::Integer(0)]);
+    }
+
+    #[test]
+    fn tokenize_octal_literal() {
+        assert_eq!(lex_kinds_no_eof("0o77"), vec![TokenKind::Integer(63)]);
+        assert_eq!(lex_kinds_no_eof("0o755"), vec![TokenKind::Integer(0o755)]);
+        assert_eq!(lex_kinds_no_eof("0o0"), vec![TokenKind::Integer(0)]);
+    }
+
+    #[test]
+    fn tokenize_scientific_notation() {
+        let kinds = lex_kinds_no_eof("1.5e10");
+        assert_eq!(kinds, vec![TokenKind::Float(1.5e10)]);
+
+        let kinds = lex_kinds_no_eof("2e3");
+        assert_eq!(kinds, vec![TokenKind::Float(2e3)]);
+
+        let kinds = lex_kinds_no_eof("1.0E-2");
+        assert_eq!(kinds, vec![TokenKind::Float(1.0e-2)]);
+    }
+
+    #[test]
+    fn tokenize_impl_keyword() {
+        let kinds = lex_kinds_no_eof("impl");
+        assert_eq!(kinds, vec![TokenKind::Impl]);
     }
 }

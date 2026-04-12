@@ -7,6 +7,7 @@ use crate::mvl::parser::ast::{
     Decl, ExternDecl, FieldDecl, FnDecl, Param, Program, TypeDecl, TypeExpr, Variant, VariantFields,
 };
 use crate::mvl::transpiler::emit_functions::emit_fn_decl;
+use crate::mvl::transpiler::emit_impls::emit_impl_decl;
 use crate::mvl::transpiler::emit_types::emit_type_decl;
 use crate::mvl::transpiler::emit_types::{emit_security_preamble, emit_type_expr};
 
@@ -145,6 +146,7 @@ impl Codegen {
                     // Phase 1: `use` declarations are resolved by the module resolver;
                     // the transpiler emits Rust `use` statements in a later pass.
                 }
+                Decl::Impl(id) => emit_impl_decl(self, id),
             }
             self.blank();
         }
