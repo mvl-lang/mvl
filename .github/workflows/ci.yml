@@ -23,7 +23,7 @@ jobs:
       - name: Run assurance report
         id: assurance
         run: |
-          OUTPUT=$(python3 tools/assurance.py --verbose 2>&1) || true
+          OUTPUT=$(python3 tools/assurance.py 2>&1) || true
           CLEAN=$(echo "$OUTPUT" | sed 's/\x1b\[[0-9;]*m//g')
           echo "report<<EOF" >> "$GITHUB_OUTPUT"
           echo "$CLEAN" >> "$GITHUB_OUTPUT"

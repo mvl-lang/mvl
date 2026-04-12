@@ -57,11 +57,11 @@ format-check: ## Check formatting without changing files
 
 # === Assurance ===
 
-assurance: ## Check ISPE traceability: spec → implementation → tests
-	@python3 tools/assurance.py
-
-assurance-verbose: ## Assurance dashboard with per-requirement detail
+assurance: ## Check ISPE traceability: spec → implementation → tests (verbose with legend)
 	@python3 tools/assurance.py --verbose
+
+assurance-summary: ## Assurance dashboard summary only (used by CI)
+	@python3 tools/assurance.py
 
 assurance-gate: ## CI gate: fail if below 75% completeness/coverage
 	@python3 tools/assurance.py --min 0.75
