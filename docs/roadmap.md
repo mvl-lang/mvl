@@ -1,20 +1,20 @@
 # MVL Roadmap
 
-**Current version:** 0.5.3 (Phase 1 — Rust transpilation)
+**Current version:** 0.5.5 (Phase 1 — Rust transpilation)
 **Updated:** 2026-04-12
 
 ## Where we are
 
-The parser and type checker are complete. All 11 requirements are represented in the grammar and enforced by the type checker. The transpiler is next.
+The parser, type checker, and Phase 1 transpiler are complete. All 11 requirements are enforced by the type checker. The transpiler produces working Rust binaries from `.mvl` source.
 
 ```
 .mvl source
   → Lexer            ✓ complete
   → Parser (LL(1))   ✓ complete — full EBNF, error recovery, multi-error
   → Type Checker     ✓ 11/11 enforced
-  → Transpiler       ✗ not started — Epic 5 (#28)
-  → cargo build      ✗ blocked on transpiler
-  → native binary    ✗ blocked on cargo
+  → Transpiler       ✓ complete — .mvl → Rust source (v0.5.5, Epic 5)
+  → cargo build      ✓ complete — `mvl build` / `mvl run`
+  → native binary    ✓ complete — corpus programs run end-to-end
 ```
 
 ## Requirement enforcement status
@@ -43,13 +43,13 @@ The parser and type checker are complete. All 11 requirements are represented in
 
 | Step | What | Issues | Status |
 |------|------|--------|--------|
-| 1 | Transpile type declarations → Rust | [#29](https://github.com/LAB271/mvl_language/issues/29) | Not started |
-| 2 | Transpile functions → Rust | [#30](https://github.com/LAB271/mvl_language/issues/30) | Not started |
-| 3 | Core stdlib bridge (types map to Rust std) | [#42](https://github.com/LAB271/mvl_language/issues/42), [#43](https://github.com/LAB271/mvl_language/issues/43) | Not started |
-| 4 | End-to-end: corpus compiles via rustc | [#33](https://github.com/LAB271/mvl_language/issues/33) | Not started |
-| 5 | Cargo integration (`mvl build`) | [#34](https://github.com/LAB271/mvl_language/issues/34) | Not started |
-| 6 | IFC → Rust newtypes | [#31](https://github.com/LAB271/mvl_language/issues/31) | Not started |
-| 7 | Refinements → Rust runtime asserts | [#32](https://github.com/LAB271/mvl_language/issues/32) | Not started |
+| 1 | Transpile type declarations → Rust | [#29](https://github.com/LAB271/mvl_language/issues/29) | **Done** (v0.5.5) |
+| 2 | Transpile functions → Rust | [#30](https://github.com/LAB271/mvl_language/issues/30) | **Done** (v0.5.5) |
+| 3 | Core stdlib bridge (types map to Rust std) | [#42](https://github.com/LAB271/mvl_language/issues/42), [#43](https://github.com/LAB271/mvl_language/issues/43) | **Done** (v0.5.5, built-ins registered) |
+| 4 | End-to-end: corpus compiles via rustc | [#33](https://github.com/LAB271/mvl_language/issues/33) | **Done** (v0.5.5) |
+| 5 | Cargo integration (`mvl build`) | [#34](https://github.com/LAB271/mvl_language/issues/34) | **Done** (v0.5.5) |
+| 6 | IFC → Rust newtypes | [#31](https://github.com/LAB271/mvl_language/issues/31) | **Done** (v0.5.5, Public/Secret/Tainted/Clean newtypes) |
+| 7 | Refinements → Rust runtime asserts | [#32](https://github.com/LAB271/mvl_language/issues/32) | **Done** (v0.5.5, debug_assert! in constructors) |
 | 8 | Module system | [#47](https://github.com/LAB271/mvl_language/issues/47) | Not started |
 | 9 | Generics | [#48](https://github.com/LAB271/mvl_language/issues/48) | Not started |
 
