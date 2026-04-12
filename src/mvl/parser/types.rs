@@ -440,7 +440,7 @@ impl Parser {
 
     /// Parse a comma-separated list of type expressions.
     /// Does NOT consume the surrounding `<` or `>`.
-    fn parse_type_list(&mut self) -> Result<Vec<TypeExpr>, ()> {
+    pub(crate) fn parse_type_list(&mut self) -> Result<Vec<TypeExpr>, ()> {
         let mut types = Vec::new();
         loop {
             if matches!(

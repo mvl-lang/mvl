@@ -1202,3 +1202,67 @@ fn inline_constraint_syntax_rejected() {
         "inline constraint `<T: Ord>` must be rejected in Phase 1"
     );
 }
+
+// ── From/Into conversion (#62) ────────────────────────────────────────────
+
+/// `?` with identical error types requires no From impl.
+#[test]
+fn propagate_same_error_type_accepted() {
+    let src = r#"
+fn inner() -> Result<Int, String> { Ok(0) }
+fn outer() -> Result<Int, String> {
+    let x = inner()?;
+    Ok(x)
+}
+"#;
+    let errors = errors_for(src);
+    assert!(
+        errors.is_empty(),
+        "? with identical error types should have no errors, got: {errors:?}"
+    );
+}
+
+/// `?` with different error types is rejected unless From impl is registered.
+#[test]
+fn propagate_mismatched_error_type_rejected() {
+    let src = r#"
+fn inner() -> Result<Int, String> { Ok(0) }
+fn outer() -> Result<Int, Bool> {
+    let x = inner()?;
+    Ok(x)
+}
+"#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::PropagateIncompatibleError { .. })),
+        "? with incompatible error types should emit PropagateIncompatibleError, got: {errors:?}"
+    );
+}
+
+/// `?` with different error types is accepted when From impl exists.
+#[test]
+fn propagate_with_from_impl_accepted() {
+    let src = r#"
+type IoError = struct { msg: String }
+type AppError = enum { Io(IoError) }
+impl From<IoError> for AppError {
+    fn from(e: IoError) -> Self { AppError::Io(e) }
+}
+fn load() -> Result<String, IoError> { Ok("data") }
+fn run() -> Result<String, AppError> {
+    let s = load()?;
+    Ok(s)
+}
+"#;
+    let errors = errors_for(src);
+    let conversion_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, CheckError::PropagateIncompatibleError { .. }))
+        .collect();
+    assert!(
+        conversion_errors.is_empty(),
+        "? should be accepted when From impl exists, got: {conversion_errors:?}"
+    );
+}

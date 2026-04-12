@@ -1,5 +1,20 @@
 // Corpus: effect propagation (Req 7 / issue #20)
 // Callee effects must be declared by the caller.
+//
+// Error type conversions via From (#62): callers that aggregate multiple error
+// variants use a unified Error type with From impls for automatic `?` conversion.
+
+type IOError = struct { msg: String }
+type NetError = struct { msg: String }
+type Error = enum { Io(IOError), Net(NetError) }
+
+impl From<IOError> for Error {
+    fn from(e: IOError) -> Self { Error::Io(e) }
+}
+
+impl From<NetError> for Error {
+    fn from(e: NetError) -> Self { Error::Net(e) }
+}
 
 // Leaf: reads from FileRead
 fn read_config(path: Path) -> Result<String, IOError> ! FileRead {

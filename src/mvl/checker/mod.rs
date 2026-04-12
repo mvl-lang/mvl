@@ -25,9 +25,9 @@ use crate::mvl::checker::context::{
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
 use crate::mvl::parser::ast::{
-    BinaryOp, Block, Capability, ConstDecl, Decl, ElseBranch, Expr, ExternDecl, FnDecl, LValue,
-    Literal, MatchArm, MatchBody, Pattern, Program, SecurityLabel, Stmt, Totality, TypeBody,
-    TypeDecl, UnaryOp,
+    BinaryOp, Block, Capability, ConstDecl, Decl, ElseBranch, Expr, ExternDecl, FnDecl, ImplDecl,
+    LValue, Literal, MatchArm, MatchBody, Pattern, Program, SecurityLabel, Stmt, Totality,
+    TypeBody, TypeDecl, UnaryOp,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -130,7 +130,7 @@ impl TypeChecker {
                 Decl::Const(_) => {}
                 Decl::Extern(ed) => self.register_extern(ed),
                 Decl::Use(_) => {} // resolved by the module resolver, not the type checker
-                Decl::Impl(_) => {} // impl blocks are not yet type-checked (Phase 1)
+                Decl::Impl(id) => self.register_impl(id),
             }
         }
     }
@@ -181,6 +181,17 @@ impl TypeChecker {
                     totality: None, // extern fns may or may not terminate
                 },
             );
+        }
+    }
+
+    /// Register `impl From<A> for B` so that `?` propagation can use the conversion.
+    fn register_impl(&mut self, id: &ImplDecl) {
+        if id.trait_name == "From" {
+            if let Some(source_ty) = id.trait_type_args.first() {
+                // Resolve the source type to its display name for lookup.
+                let source = resolve(source_ty).display();
+                self.env.register_from_impl(id.type_name.clone(), source);
+            }
         }
     }
 
@@ -743,6 +754,26 @@ impl TypeChecker {
                         span: *span,
                     });
                     return Ty::Unknown;
+                }
+                // If both the expression and enclosing function return Result types,
+                // verify error types are compatible — either identical or convertible via From.
+                if let (Ty::Result(_, expr_err), Some(Ty::Result(_, ret_err))) = (
+                    ty.unlabeled(),
+                    self.current_return_ty.as_ref().map(|t| t.unlabeled()),
+                ) {
+                    let from_ty = expr_err.display();
+                    let into_ty = ret_err.display();
+                    if from_ty != into_ty
+                        && !matches!(**expr_err, Ty::Unknown)
+                        && !matches!(**ret_err, Ty::Unknown)
+                        && !self.env.has_from_impl(&into_ty, &from_ty)
+                    {
+                        self.emit(CheckError::PropagateIncompatibleError {
+                            from_ty,
+                            into_ty,
+                            span: *span,
+                        });
+                    }
                 }
                 ty.propagate_inner()
             }
