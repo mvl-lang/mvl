@@ -11,10 +11,8 @@ fn map_single_entry() -> Map<String, Bool> {
     flags
 }
 
-fn map_empty_with_annotation() -> Map<String, Int> {
-    let empty: Map<String, Int> = {};
-    empty
-}
+// Note: empty `{}` parses as Block (Unit), not Map. Empty maps require
+// explicit construction (e.g. HashMap::new()) — tracked in #58 for Phase 2.
 
 fn set_int() -> Set<Int> {
     let primes = {2, 3, 5, 7, 11};

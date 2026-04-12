@@ -551,7 +551,7 @@ module.exports = grammar({
 
     // `r"""…"""` — raw multiline string (no escape processing).
     raw_multiline_string_literal: ($) =>
-      seq('r"""', repeat(/[^"]|"(?!"")"/), '"""'),
+      seq('r"""', repeat(/[^"]|"(?!"")/), '"""'),
 
     char_literal: ($) =>
       seq("'", choice(/[^'\\]/, /\\./), "'"),
