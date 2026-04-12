@@ -66,7 +66,34 @@ for i in 0..10 {
 }
 ```
 
-`for` iterates over anything implementing the `Iterator` trait. It is bounded — the iterator must be finite. For unbounded iteration, use `while` in a `partial` function.
+`for` iterates over anything implementing the `Iterator<T>` trait. It is bounded — the iterator must be finite. For unbounded iteration, use `while` in a `partial` function.
+
+### Desugaring
+
+`for x in expr { body }` desugars to repeated `next()` calls:
+
+```mvl
+let mut iter: Iterator<T> = expr.iter();
+while let Some(x) = iter.next() {
+    body
+}
+```
+
+The compiler verifies that the expression after `in` implements `Iterator<T>` (or has an `.iter()` method returning one). Using a non-iterable type is a compile error.
+
+### Method chaining (lazy)
+
+`map`, `filter`, and `flat_map` return `Iterator<U>` — no intermediate allocation until `.collect()` or another terminal operation forces evaluation:
+
+```mvl
+let evens: Array<Int> = items
+    .iter()
+    .filter(|x| x % 2 == 0)
+    .map(|x| x * x)
+    .collect();
+```
+
+See [§2.6 Iterator Trait](02-types.md#26-iterator-trait) for the trait definition and custom implementations.
 
 ## 4.6 While Loop
 

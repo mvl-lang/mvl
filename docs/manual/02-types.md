@@ -1,6 +1,6 @@
 # 2. Types
 
-The type system is the foundation of MVL. It covers Requirements 1 (type safety), 3 (totality), 4 (null elimination), 5 (error visibility), 6 (ownership), 9 (data race freedom), 10 (refinement types), and 11 (information flow control).
+The type system is the foundation of MVL. It covers Requirements 1 (type safety), 3 (totality), 4 (null elimination), 5 (error visibility), 6 (ownership), 9 (data race freedom), 10 (refinement types), 11 (information flow control), and the Iterator protocol (lazy, sequential element access).
 
 **Principle:** Types are proofs. A program that compiles has proven structural properties about itself.
 
@@ -126,7 +126,39 @@ impl Display for Point {
 }
 ```
 
-## 2.6 Refinement Types ([Req 10](../requirements.md#req-10))
+## 2.6 Iterator Trait ([spec §001 Req 11](../../.openspec/specs/001-type-system/spec.md#requirement-11-iterator-trait-must))
+
+The `Iterator<T>` trait is the protocol for lazy, sequential element access:
+
+```mvl
+type Iterator<T> = trait {
+    fn next(mut self) -> Option<T>
+}
+```
+
+`next` advances the iterator and returns the next element, or `None` when exhausted. `Array<T>`, `Range`, `Map<K,V>`, and `Set<T>` all implement `Iterator` out of the box.
+
+Custom types implement it with `impl`:
+
+```mvl
+type Counter = struct { mut current: Int, limit: Int }
+
+impl Iterator<Int> for Counter {
+    fn next(mut self) -> Option<Int> {
+        if self.current >= self.limit {
+            None
+        } else {
+            let value = self.current;
+            self.current = self.current + 1;
+            Some(value)
+        }
+    }
+}
+```
+
+Any type implementing `Iterator<T>` can be used in a `for...in` loop. See [§4.5 For Loop](04-statements.md#45-for-loop).
+
+## 2.7 Refinement Types ([Req 10](../requirements.md#req-10))
 
 Refinement types constrain values beyond their base type:
 
@@ -144,7 +176,7 @@ type NonEmpty<T> = Array<T> where len(self) > 0
 
 The compiler verifies refinement predicates at compile time using SMT solving. If the predicate cannot be statically verified, the compiler requires a runtime check at the call site.
 
-## 2.7 Security Labels ([Req 11](../requirements.md#req-11))
+## 2.8 Security Labels ([Req 11](../requirements.md#req-11) — global IFC requirement)
 
 Every type can carry a security label:
 
@@ -162,7 +194,7 @@ Data flows up the lattice freely (`Public` → `Secret`). Flowing down requires 
 
 See [Chapter 10: Information Flow Control](10-ifc.md).
 
-## 2.8 Reference Types ([Req 2](../requirements.md#req-2), 6)
+## 2.9 Reference Types ([Req 2](../requirements.md#req-2), 6)
 
 ```mvl
 &T                  // shared (immutable) borrow
@@ -176,7 +208,7 @@ Ownership rules:
 - Exclusive borrows (`&mut T`) allow one writer and no readers
 - Borrows cannot outlive the owner
 
-## 2.9 Reference Capabilities ([Req 9](../requirements.md#req-9))
+## 2.10 Reference Capabilities ([Req 9](../requirements.md#req-9))
 
 For concurrency safety, values carry capabilities:
 
@@ -189,7 +221,7 @@ tag T               // opaque identity — can compare but not read
 
 See [Chapter 12: Concurrency](12-concurrency.md).
 
-## 2.10 Function Types
+## 2.11 Function Types
 
 ```mvl
 fn(Int, Int) -> Int                 // pure function
