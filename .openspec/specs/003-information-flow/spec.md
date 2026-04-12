@@ -36,7 +36,7 @@ Data flows DOWN only via explicit declassification: `Tainted` → `Clean` requir
 
 Every type MUST support security labels: `Public<T>`, `Tainted<T>`, `Secret<T>`, `Clean<T>`. Labels MUST be part of the type — `Public<String>` and `Secret<String>` are different types.
 
-**Implementation:** `src/mvl/checker/types.rs::Ty::Labeled`, `src/mvl/checker/ifc.rs`, `src/mvl/parser/ast.rs::SecurityLabel`
+**Implementation:** `src/mvl/checker/types.rs`, `src/mvl/checker/ifc.rs`, `src/mvl/parser/ast.rs`
 
 **Tests:** `tests/type_checker.rs::secret_flows_to_public_rejected`, `tests/type_checker.rs::public_flows_to_secret_accepted`, `tests/type_checker.rs::label_types_corpus_parses_and_checks`
 
@@ -78,7 +78,7 @@ Lowering a security label MUST require an explicit function call. The declassifi
 
 These functions MUST be auditable — `grep declassify` and `grep sanitize` finds every point where the security boundary is crossed.
 
-**Implementation:** `src/mvl/checker/mod.rs::Expr::Declassify`, `src/mvl/checker/mod.rs::Expr::Sanitize`
+**Implementation:** `src/mvl/checker/mod.rs`
 
 **Tests:** `tests/type_checker.rs::sanitize_tainted_returns_clean`, `tests/type_checker.rs::declassify_secret_returns_public`, `tests/type_checker.rs::sanitize_on_non_tainted_rejected`, `tests/type_checker.rs::declassify_on_non_secret_rejected`, `tests/type_checker.rs::direct_tainted_to_clean_without_sanitize_rejected`
 
@@ -98,7 +98,7 @@ These functions MUST be auditable — `grep declassify` and `grep sanitize` find
 
 Functions that process secrets MUST return secrets. The label MUST propagate through computation.
 
-**Implementation:** `src/mvl/checker/mod.rs::infer_binary` (arithmetic label join), `src/mvl/checker/ifc.rs::join_opt`
+**Implementation:** `src/mvl/checker/mod.rs`, `src/mvl/checker/ifc.rs`
 
 **Tests:** `tests/type_checker.rs::arithmetic_label_join_propagates`, `tests/type_checker.rs::arithmetic_label_join_downgrade_rejected`, `tests/type_checker.rs::propagation_ifc_corpus_parses_and_checks`
 
@@ -150,7 +150,9 @@ Logging functions MUST accept only `Public<T>` arguments. Logging a `Secret` or 
 
 The `format()` function MUST be IFC-aware. The result label MUST be the join (highest) of all argument labels.
 
-**Implementation:** `src/mvl/checker/ifc.rs::join_opt`, `src/mvl/checker/ifc.rs::apply_label` (applies to arithmetic; format() propagation deferred to Phase 2)
+**Implementation:** `src/mvl/checker/ifc.rs`
+
+**Tests:** `tests/type_checker.rs::arithmetic_label_join_propagates`, `tests/type_checker.rs::arithmetic_label_join_downgrade_rejected`
 
 #### Scenario: Tainted argument taints the result
 

@@ -44,7 +44,7 @@ The standard library follows the same philosophy. `Map.get()` returns `Option<T>
 
 ## The compilation strategy
 
-Phase 1 transpiles MVL to Rust. Rust already scores seven out of eleven on the requirements — the transpilation adds the remaining four (termination, race freedom, refinements, information flow control) as a verification layer on top. This gets MVL running fast with access to Rust's ecosystem.
+Phase 1 transpiles MVL to Rust. Rust already scores six out of eleven on the requirements (type safety, memory safety, totality, null elimination, error visibility, ownership) — the transpilation adds the remaining five (effect tracking, termination, race freedom, refinements, information flow control) as a verification layer on top. This gets MVL running fast with access to Rust's ecosystem.
 
 Phase 2 targets LLVM IR directly. One compiler, one trust boundary, one proof chain. The ISPE model (Intent → Specification → Program → Executable) requires the P→E step to be deterministic and proof-preserving. Two compilers in the chain — MVL then Rust — means two sets of opinions that might disagree. LLVM is the clean target: the MVL compiler proves the properties, LLVM generates the binary.
 

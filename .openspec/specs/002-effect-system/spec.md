@@ -21,7 +21,9 @@ A function signature should tell the full truth about what the function does. If
 
 Functions with side effects MUST declare them in the signature using `! Effect` syntax. Functions without effect declarations MUST be pure — the compiler MUST reject any side-effecting operation in a pure function.
 
-**Implementation:** `src/mvl/effects/checker.rs`
+**Implementation:** `src/mvl/checker/mod.rs`
+
+**Tests:** `tests/type_checker.rs::pure_function_calling_effectful_rejected`, `tests/type_checker.rs::effectful_function_with_correct_declaration_accepted`, `tests/type_checker.rs::caller_missing_callee_effect_rejected`
 
 #### Scenario: Pure function attempts I/O
 

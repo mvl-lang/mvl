@@ -6,6 +6,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.5.3] — 2026-04-12 (Spec link audit + doc accuracy)
+
+### Fixed
+- Corrected implementation links in 001-type-system (Reqs 1-7), 002-effect-system (Req 1),
+  and 003-information-flow (Reqs 1,3,4,7) — paths pointed to nonexistent src/mvl/types/
+  and src/mvl/effects/ directories; all logic lives in src/mvl/checker/
+- Added Tests links for all 20 newly-linked requirements; assurance ratio now 20/20 (100%)
+- Assurance completeness: 8/29 (28%) → 20/29 (69%)
+- introduction.md: corrected Rust requirement score from seven to six (no effect system in Rust)
+- roadmap.md: updated to v0.5.2, marked 11/11 enforced (Reqs 10+11 promoted from parse-only)
+- ADR-0001: updated implementation status table to v0.5.2 with accurate enforcement status
+
 ## [0.5.2] — 2026-04-12 (Assurance UX: verbose by default, summary in PR)
 
 ### Fixed
