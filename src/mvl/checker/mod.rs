@@ -31,6 +31,25 @@ use crate::mvl::parser::ast::{
 };
 use crate::mvl::parser::lexer::Span;
 
+// ── Valid effect names (002-effect-system Req 2) ──────────────────────────────
+
+/// The complete set of permitted effect names.  Any effect declared in a
+/// function signature must be one of these (case-sensitive).
+const VALID_EFFECTS: &[&str] = &[
+    "Console",
+    "FileRead",
+    "FileWrite",
+    "FileDelete",
+    "Net",
+    "DB",
+    "ProcessSpawn",
+    "Random",
+    "Clock",
+    "Env",
+    "Log",
+    "Async",
+];
+
 // ── Public API ───────────────────────────────────────────────────────────────
 
 /// Result of running the type checker over a [`Program`].
@@ -226,6 +245,16 @@ impl TypeChecker {
     }
 
     fn check_fn_decl(&mut self, fd: &FnDecl) {
+        // Validate declared effect names (002-effect-system Req 2).
+        for effect in &fd.effects {
+            if !VALID_EFFECTS.contains(&effect.as_str()) {
+                self.emit(CheckError::InvalidEffectName {
+                    name: effect.clone(),
+                    span: fd.span,
+                });
+            }
+        }
+
         let ret_ty = resolve(&fd.return_type);
         let prev_ret = self.current_return_ty.replace(ret_ty.clone());
 
@@ -855,6 +884,10 @@ impl TypeChecker {
                 body,
                 ..
             } => {
+                // Check for mutable captures before entering the lambda scope (ADR-0002).
+                let param_name_refs: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+                self.check_lambda_captures(body, &param_name_refs);
+
                 self.env.push_scope();
                 let param_tys: Vec<Ty> = params
                     .iter()
@@ -1489,6 +1522,25 @@ impl TypeChecker {
         }
     }
 
+    // ── Lambda capture immutability (ADR-0002) ────────────────────────────
+
+    /// Verify that the lambda body does not capture mutable outer bindings.
+    ///
+    /// ADR-0002 prescribes "Lambdas with immutable captures only".  This helper
+    /// walks `expr` collecting every `Expr::Ident` that is NOT one of the lambda
+    /// parameter names; if any such captured name is bound as `mutable` in the
+    /// current environment, we emit [`CheckError::CaptureMutabilityViolation`].
+    fn check_lambda_captures(&mut self, expr: &Expr, param_names: &[&str]) {
+        let captures = collect_free_var_refs(expr, param_names);
+        for (name, span) in captures {
+            if let Some(info) = self.env.lookup(&name) {
+                if info.mutable {
+                    self.emit(CheckError::CaptureMutabilityViolation { name, span });
+                }
+            }
+        }
+    }
+
     // ── Reference capability checking (#22) ───────────────────────────────
 
     /// Verify that an argument to `channel.send()` has a sendable capability.
@@ -1527,6 +1579,144 @@ impl TypeChecker {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Walk `expr` and return all `(name, span)` pairs for `Expr::Ident` references
+/// whose name is NOT in `param_names` (i.e. free variables / potential captures).
+///
+/// Nested lambdas are NOT recursed into — their params shadow outer names and
+/// their own captures will be checked when that lambda is visited by the checker.
+fn collect_free_var_refs(expr: &Expr, param_names: &[&str]) -> Vec<(String, Span)> {
+    let mut out = Vec::new();
+    collect_refs_expr(expr, param_names, &mut out);
+    out
+}
+
+fn collect_refs_expr(expr: &Expr, params: &[&str], out: &mut Vec<(String, Span)>) {
+    match expr {
+        Expr::Ident(name, span) => {
+            if !params.contains(&name.as_str()) {
+                out.push((name.clone(), *span));
+            }
+        }
+        Expr::Lambda { .. } => {
+            // Do NOT recurse: the nested lambda is checked independently.
+        }
+        Expr::Literal(..) => {}
+        Expr::FieldAccess { expr: e, .. } => collect_refs_expr(e, params, out),
+        Expr::MethodCall { receiver, args, .. } => {
+            collect_refs_expr(receiver, params, out);
+            for a in args {
+                collect_refs_expr(a, params, out);
+            }
+        }
+        Expr::FnCall { args, .. } => {
+            for a in args {
+                collect_refs_expr(a, params, out);
+            }
+        }
+        Expr::Unary { expr: e, .. }
+        | Expr::Propagate { expr: e, .. }
+        | Expr::Move { expr: e, .. }
+        | Expr::Consume { expr: e, .. }
+        | Expr::Declassify { expr: e, .. }
+        | Expr::Sanitize { expr: e, .. } => collect_refs_expr(e, params, out),
+        Expr::Binary { left, right, .. } => {
+            collect_refs_expr(left, params, out);
+            collect_refs_expr(right, params, out);
+        }
+        Expr::If {
+            cond, then, else_, ..
+        } => {
+            collect_refs_expr(cond, params, out);
+            collect_refs_block(then, params, out);
+            if let Some(e) = else_ {
+                collect_refs_expr(e, params, out);
+            }
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            collect_refs_expr(scrutinee, params, out);
+            for arm in arms {
+                match &arm.body {
+                    MatchBody::Expr(e) => collect_refs_expr(e, params, out),
+                    MatchBody::Block(b) => collect_refs_block(b, params, out),
+                }
+            }
+        }
+        Expr::Block(b) => collect_refs_block(b, params, out),
+        Expr::Construct { fields, .. } => {
+            for (_, e) in fields {
+                collect_refs_expr(e, params, out);
+            }
+        }
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+            for e in elems {
+                collect_refs_expr(e, params, out);
+            }
+        }
+        Expr::Map { pairs, .. } => {
+            for (k, v) in pairs {
+                collect_refs_expr(k, params, out);
+                collect_refs_expr(v, params, out);
+            }
+        }
+    }
+}
+
+fn collect_refs_block(block: &Block, params: &[&str], out: &mut Vec<(String, Span)>) {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Let { init, .. } => collect_refs_expr(init, params, out),
+            Stmt::Assign { value, .. } => collect_refs_expr(value, params, out),
+            Stmt::Return { value, .. } => {
+                if let Some(e) = value {
+                    collect_refs_expr(e, params, out);
+                }
+            }
+            Stmt::If {
+                cond, then, else_, ..
+            } => {
+                collect_refs_expr(cond, params, out);
+                collect_refs_block(then, params, out);
+                match else_ {
+                    Some(ElseBranch::Block(b)) => collect_refs_block(b, params, out),
+                    Some(ElseBranch::If(s)) => {
+                        collect_refs_block(
+                            &Block {
+                                stmts: vec![*s.clone()],
+                                span: s.span(),
+                            },
+                            params,
+                            out,
+                        );
+                    }
+                    None => {}
+                }
+            }
+            Stmt::Match {
+                scrutinee, arms, ..
+            } => {
+                collect_refs_expr(scrutinee, params, out);
+                for arm in arms {
+                    match &arm.body {
+                        MatchBody::Expr(e) => collect_refs_expr(e, params, out),
+                        MatchBody::Block(b) => collect_refs_block(b, params, out),
+                    }
+                }
+            }
+            Stmt::For { iter, body, .. } => {
+                collect_refs_expr(iter, params, out);
+                collect_refs_block(body, params, out);
+            }
+            Stmt::While { cond, body, .. } => {
+                collect_refs_expr(cond, params, out);
+                collect_refs_block(body, params, out);
+            }
+            Stmt::Expr { expr, .. } => collect_refs_expr(expr, params, out),
+        }
+    }
+}
 
 /// True if `pattern` acts as a catch-all / wildcard in the context of an enum
 /// whose variants are listed in `variant_names`.
@@ -1873,6 +2063,210 @@ mod tests {
     // check in infer_expr is exercised via direct AST construction in the
     // integration test suite when lambda parsing lands.  The check itself is
     // verified by ensuring the guard condition compiles and the path exists.
+
+    // ── Effect name validation (002-effect-system Req 2) ──────────────────
+
+    #[test]
+    fn invalid_effect_name_rejected() {
+        let src = r#"fn f() -> Unit ! Foo { println("hi"); }"#;
+        let errors = errors_for(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, CheckError::InvalidEffectName { name, .. } if name == "Foo")),
+            "expected InvalidEffectName for unknown effect 'Foo', got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn valid_effect_names_accepted() {
+        let src = r#"fn f() -> Unit ! Console, Net, DB { println("hi"); }"#;
+        let errors = errors_for(src);
+        assert!(
+            !errors
+                .iter()
+                .any(|e| matches!(e, CheckError::InvalidEffectName { .. })),
+            "expected no InvalidEffectName for valid effects, got: {errors:?}"
+        );
+    }
+
+    // ── Lambda capture immutability (ADR-0002) ────────────────────────────
+    //
+    // Lambda surface syntax is not yet parsed (parser does not handle `|p| expr`).
+    // The capture-check logic is exercised via direct AST construction below.
+
+    #[test]
+    fn lambda_mutable_capture_rejected_via_ast() {
+        use crate::mvl::parser::ast::{Block, Decl, Expr, FnDecl, Param, Program, TypeExpr};
+        use crate::mvl::parser::lexer::Span;
+
+        let dummy_span = Span {
+            line: 1,
+            col: 1,
+            offset: 0,
+            len: 0,
+        };
+        let unit_ty = TypeExpr::Base {
+            name: "Unit".into(),
+            args: vec![],
+            span: dummy_span,
+        };
+        let int_ty = TypeExpr::Base {
+            name: "Int".into(),
+            args: vec![],
+            span: dummy_span,
+        };
+
+        // Build: fn f() -> Unit {
+        //    let mut x = 1;
+        //    let g = |y: Int| -> Int { x };
+        // }
+        let lambda = Expr::Lambda {
+            params: vec![Param {
+                name: "y".into(),
+                ty: int_ty.clone(),
+                mutable: false,
+                capability: None,
+                refinement: None,
+                span: dummy_span,
+            }],
+            ret_type: Some(Box::new(int_ty.clone())),
+            body: Box::new(Expr::Ident("x".into(), dummy_span)),
+            span: dummy_span,
+        };
+
+        let prog = Program {
+            span: dummy_span,
+            declarations: vec![Decl::Fn(FnDecl {
+                visible: false,
+                is_test: false,
+                totality: None,
+                name: "f".into(),
+                type_params: vec![],
+                params: vec![],
+                return_type: Box::new(unit_ty),
+                return_refinement: None,
+                effects: vec![],
+                constraints: vec![],
+                body: Block {
+                    stmts: vec![
+                        Stmt::Let {
+                            mutable: true,
+                            pattern: Pattern::Ident("x".into(), dummy_span),
+                            ty: None,
+                            init: Expr::Literal(Literal::Integer(1), dummy_span),
+                            span: dummy_span,
+                        },
+                        Stmt::Let {
+                            mutable: false,
+                            pattern: Pattern::Ident("g".into(), dummy_span),
+                            ty: None,
+                            init: lambda,
+                            span: dummy_span,
+                        },
+                    ],
+                    span: dummy_span,
+                },
+                span: dummy_span,
+            })],
+        };
+
+        let result = check(&prog);
+        assert!(
+            result.errors.iter().any(|e| matches!(
+                e, CheckError::CaptureMutabilityViolation { name, .. } if name == "x"
+            )),
+            "expected CaptureMutabilityViolation for mutable capture of 'x', got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn lambda_immutable_capture_accepted_via_ast() {
+        use crate::mvl::parser::ast::{Block, Decl, Expr, FnDecl, Param, Program, TypeExpr};
+        use crate::mvl::parser::lexer::Span;
+
+        let dummy_span = Span {
+            line: 1,
+            col: 1,
+            offset: 0,
+            len: 0,
+        };
+        let unit_ty = TypeExpr::Base {
+            name: "Unit".into(),
+            args: vec![],
+            span: dummy_span,
+        };
+        let int_ty = TypeExpr::Base {
+            name: "Int".into(),
+            args: vec![],
+            span: dummy_span,
+        };
+
+        // Build: fn f() -> Unit {
+        //    let x = 1;          ← immutable
+        //    let g = |y: Int| -> Int { x };
+        // }
+        let lambda = Expr::Lambda {
+            params: vec![Param {
+                name: "y".into(),
+                ty: int_ty.clone(),
+                mutable: false,
+                capability: None,
+                refinement: None,
+                span: dummy_span,
+            }],
+            ret_type: Some(Box::new(int_ty)),
+            body: Box::new(Expr::Ident("x".into(), dummy_span)),
+            span: dummy_span,
+        };
+
+        let prog = Program {
+            span: dummy_span,
+            declarations: vec![Decl::Fn(FnDecl {
+                visible: false,
+                is_test: false,
+                totality: None,
+                name: "f".into(),
+                type_params: vec![],
+                params: vec![],
+                return_type: Box::new(unit_ty),
+                return_refinement: None,
+                effects: vec![],
+                constraints: vec![],
+                body: Block {
+                    stmts: vec![
+                        Stmt::Let {
+                            mutable: false, // immutable
+                            pattern: Pattern::Ident("x".into(), dummy_span),
+                            ty: None,
+                            init: Expr::Literal(Literal::Integer(1), dummy_span),
+                            span: dummy_span,
+                        },
+                        Stmt::Let {
+                            mutable: false,
+                            pattern: Pattern::Ident("g".into(), dummy_span),
+                            ty: None,
+                            init: lambda,
+                            span: dummy_span,
+                        },
+                    ],
+                    span: dummy_span,
+                },
+                span: dummy_span,
+            })],
+        };
+
+        let result = check(&prog);
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CheckError::CaptureMutabilityViolation { .. })),
+            "expected no CaptureMutabilityViolation for immutable capture, got: {:?}",
+            result.errors
+        );
+    }
 
     // ── Fix: if-expression branch type check ─────────────────────────────
 

@@ -1,4 +1,8 @@
 //! Generate Cargo project files for transpiled MVL programs.
+//!
+//! Implements the Rust-target transpilation path described in ADR-0003.
+//! Produces `Cargo.toml` and `src/main.rs` boilerplate for the generated crate.
+//! Spec link: 000-parser Req 1 (compiler pipeline output).
 
 /// Options for Cargo.toml generation.
 pub struct CargoOptions<'a> {

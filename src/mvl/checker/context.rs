@@ -1,4 +1,16 @@
 //! Type environment: symbol tables for variables, types, and functions.
+//!
+//! This module owns the [`TypeEnv`] used throughout type checking.  It also
+//! registers the built-in (no-import) standard library functions that every
+//! MVL program can call without a `use` declaration.
+//!
+//! # Spec links
+//!
+//! - Builtin `println` / `print` — 002-effect-system Req 1 (Console effect),
+//!   003-information-flow Req 6 (logging label constraint, Deferred Phase 2).
+//! - Builtin `assert_eq` — 004-testing Req 1 (test assertions).
+//! - Builtin math (`abs`, `max`, `min`) — 001-type-system Req 1 (numeric ops).
+//! - Builtin `parse_int` — 001-type-system Req 5 (error visibility via Result).
 
 use std::collections::{HashMap, HashSet};
 
@@ -129,9 +141,14 @@ impl TypeEnv {
     /// These correspond to the MVL standard library tier 1 (core) functions
     /// that every program has access to without an import.
     fn register_builtins(&mut self) {
-        // Console I/O — require ! Console effect
+        // Console I/O — require ! Console effect (002-effect-system Req 1).
         // params: Vec<Ty> is empty here because println/print are variadic;
         // the checker special-cases them to skip arity checking.
+        //
+        // IFC NOTE (003-information-flow Req 6, Deferred — Phase 2):
+        // Per spec, logging functions MUST accept only `Public<T>` arguments.
+        // Enforcing this label constraint requires stdlib `log` module integration
+        // and is deferred to Phase 2.  For now, println/print accept any argument.
         self.fns.insert(
             "println".into(),
             FnInfo {
