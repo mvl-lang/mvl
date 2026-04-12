@@ -453,7 +453,7 @@ impl Parser {
 
     /// Parse `impl TraitName for TypeName { fn … }`.
     /// Pre-condition: current token is `impl`.
-    pub fn parse_impl_decl(&mut self) -> Result<ImplDecl, ()> {
+    pub(crate) fn parse_impl_decl(&mut self) -> Result<ImplDecl, ()> {
         let start = self.peek_span();
         self.advance(); // consume `impl`
 
@@ -476,6 +476,7 @@ impl Parser {
         // Methods
         let mut methods = Vec::new();
         while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+            let pos_before = self.pos;
             match self.parse_fn_decl() {
                 Ok(f) => methods.push(f),
                 Err(()) => {
@@ -483,6 +484,12 @@ impl Parser {
                         break;
                     }
                 }
+            }
+            // Guarantee forward progress to prevent infinite loop on unrecoverable tokens.
+            if self.pos == pos_before
+                && !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof)
+            {
+                self.advance();
             }
         }
 

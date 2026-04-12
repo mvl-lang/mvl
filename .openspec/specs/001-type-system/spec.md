@@ -286,7 +286,7 @@ Constraints in `where` clauses MUST map to Rust trait bounds (fully-qualified pa
 
 ---
 
-### Requirement N+1: Debug and Display Traits [MUST]
+### Requirement 10: Debug and Display Traits [MUST]
 
 Every struct and enum MUST automatically derive `Debug` (auto-derivable via Rust's `#[derive(Debug)]`).
 Users MAY implement `Display` for custom string representation using `impl Display for T`.
@@ -325,7 +325,7 @@ impl std::fmt::Display for Point {
 
 #### format() function
 
-The `format()` built-in accepts a Rust-style format string (using `{}`, `{:?}`, `{:08x}`, etc.) and variadic arguments, returning a `String`. The IFC label of the result MUST be the join of all argument labels.
+The `format()` built-in accepts a Rust-style format string (using `{}`, `{:?}`, `{:08x}`, etc.) and variadic arguments, returning a `String`. The IFC label of the result SHOULD be the join of all argument labels (enforcement deferred to Phase 2 type checker).
 
 ```mvl
 let msg: String = format("Hello, {}!", name)

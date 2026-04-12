@@ -21,7 +21,7 @@
 //! }
 //! ```
 
-use crate::mvl::parser::ast::{ImplDecl, Stmt};
+use crate::mvl::parser::ast::{ImplDecl, Stmt}; // Stmt used in match below
 use crate::mvl::transpiler::codegen::Codegen;
 use crate::mvl::transpiler::emit_exprs::{emit_block_stmts, emit_expr};
 
@@ -65,12 +65,13 @@ fn emit_display_impl(cg: &mut Codegen, id: &ImplDecl) {
                 cg.push("write!(f, \"{}\", ");
                 match last {
                     Stmt::Expr { expr, .. } => emit_expr(cg, expr),
-                    other => {
-                        // Non-expression statement: emit it, then use unit
-                        cg.push("{\n");
-                        emit_block_stmts(cg, std::slice::from_ref(other));
-                        cg.indent();
-                        cg.push("}");
+                    _non_expr => {
+                        // A non-expression final statement (let, assign, etc.) cannot
+                        // produce a value for write!. Emit a todo!() so the Rust
+                        // compiler surfaces this as a runtime panic rather than a
+                        // silent type error. MVL's type checker should reject this
+                        // before transpilation in a future phase.
+                        cg.push("todo!(\"Display::fmt body must end with an expression\")");
                     }
                 }
                 cg.push(")");

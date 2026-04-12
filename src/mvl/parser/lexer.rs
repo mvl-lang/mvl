@@ -642,7 +642,16 @@ impl<'src> Lexer<'src> {
         }
 
         if is_float {
-            TokenKind::Float(s.parse().unwrap_or(0.0))
+            match s.parse::<f64>() {
+                Ok(f) => TokenKind::Float(f),
+                Err(_) => {
+                    self.errors.push(LexError {
+                        message: format!("invalid float literal `{s}`"),
+                        span: Span::new(start_line, start_col, start_offset as u32, s.len() as u32),
+                    });
+                    TokenKind::Float(0.0)
+                }
+            }
         } else {
             // Fix #3: report overflow instead of silently producing 0
             match s.parse::<i64>() {
