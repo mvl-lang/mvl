@@ -6,6 +6,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-04-12 (Assurance UX: verbose by default, summary in PR)
+
+### Fixed
+- `make assurance` now runs verbose by default — shows per-requirement list with legend
+- `make assurance-summary` added for compact dashboard (used by CI)
+- CI PR comment posts summary only — no wall of per-requirement lines
+- Legend added to verbose output: `[impl][tests][corpus]` symbols explained inline
+
 ## [0.5.1] — 2026-04-12 (CI: assurance report on PRs)
 
 ### Fixed
