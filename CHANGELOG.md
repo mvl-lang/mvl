@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+### Added
+- Requirement 11 (Iterator Trait) to Spec 001 (Type System): defines `Iterator<T>` protocol with `next()` method, fused contract, built-in impls for `Array<T>`/`Range`/`Map`/`Set`, for-loop desugaring, lazy (`map`/`filter`/`flat_map`/`enumerate`/`zip`) vs terminal (`fold`/`collect`/`any`/`all`/`find`/`sum`/`min`/`max`) operations, custom iterator pattern, transpilation to Rust `std::iter::Iterator`
+- Manual §2.6: Iterator Trait definition and examples (`Counter` custom iterator)
+- Manual §4.5: For-loop desugaring explanation and lazy method chaining semantics
+- Stdlib: `Iterator<T>` added to core types; lazy vs terminal operation signatures documented
+
 ## [0.10.0] — 2026-04-12 (feat: map/set literals, multiline/raw strings, assurance report, Debug/Display traits, number literal formats, From conversion trait)
 
 ### Added
