@@ -1,9 +1,17 @@
 (* === Top-level === *)
-program        = { declaration } ;
-declaration    = type_decl | fn_decl | const_decl | module_decl ;
+(* "pub" is factored out so each decl_body alternative starts with a     *)
+(* distinct keyword — this preserves the LL(1) property (ADR-0005).      *)
+(* Semantic constraint: "pub" is required before reexport_decl.           *)
+program        = { use_decl } { declaration } ;
+declaration    = [ "pub" ] decl_body ;
+decl_body      = type_decl | fn_decl | const_decl | reexport_decl ;
 
-(* === Modules === *)
-module_decl    = "module" IDENT "{" { declaration } "}" ;
+(* === Modules and imports === *)
+(* One file = one module. Module name = filename without extension. *)
+(* Directories are module groups; mod.mvl is the entry file.        *)
+use_decl       = "use" module_path ";" ;
+reexport_decl  = "use" module_path ";" ;  (* "pub" required — enforced by type checker *)
+module_path    = IDENT { "::" IDENT } ;
 
 (* === Type declarations === *)
 type_decl      = "type" IDENT [ type_params ] "=" type_body ;

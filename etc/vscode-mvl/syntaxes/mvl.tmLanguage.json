@@ -129,7 +129,11 @@
       "patterns": [
         {
           "name": "keyword.other.declaration.mvl",
-          "match": "\\b(module|type|fn|const|struct|enum)\\b"
+          "match": "\\b(type|fn|const|struct|enum)\\b"
+        },
+        {
+          "name": "keyword.other.module.mvl",
+          "match": "\\b(use|pub)\\b"
         }
       ]
     },
