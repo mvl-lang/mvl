@@ -2,7 +2,9 @@
 
 use crate::mvl::parser::ast::{ElseBranch, LValue, Stmt};
 use crate::mvl::transpiler::codegen::Codegen;
-use crate::mvl::transpiler::emit_exprs::{emit_block_stmts, emit_expr, emit_pattern};
+use crate::mvl::transpiler::emit_exprs::{
+    emit_block_as_value, emit_block_stmts, emit_expr, emit_pattern,
+};
 use crate::mvl::transpiler::emit_types::emit_type_expr;
 
 /// Emit a single statement (with indentation and trailing newline).
@@ -62,7 +64,7 @@ pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
             cg.push(" {");
             cg.nl();
             cg.push_indent();
-            emit_block_stmts(cg, &then.stmts);
+            emit_block_as_value(cg, &then.stmts);
             cg.pop_indent();
             cg.indent();
             cg.push("}");
@@ -181,7 +183,7 @@ fn emit_else_branch(cg: &mut Codegen, branch: &ElseBranch) {
             cg.push("{");
             cg.nl();
             cg.push_indent();
-            emit_block_stmts(cg, &block.stmts);
+            emit_block_as_value(cg, &block.stmts);
             cg.pop_indent();
             cg.indent();
             cg.push("}");

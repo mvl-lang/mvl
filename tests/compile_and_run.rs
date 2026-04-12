@@ -2,6 +2,12 @@
 //!
 //! These tests exercise the complete compilation chain and are the primary
 //! validation for Phase 1 correctness.
+//!
+//! Corpus programs (in order of complexity):
+//!   1. hello_world.mvl  — minimal: fn main + println
+//!   2. hello_mvl.mvl    — ADTs, total fns, enum match
+//!   3. calculator.mvl   — total fns, if/else expressions, arithmetic
+//!   4. shapes.mvl       — two enums, multiple match functions, composition
 
 use std::process::Command;
 
@@ -22,7 +28,7 @@ fn corpus(name: &str) -> String {
     )
 }
 
-// ── check ─────────────────────────────────────────────────────────────────
+// ── helpers ───────────────────────────────────────────────────────────────
 
 fn run_check(file: &str) -> std::process::Output {
     Command::new(mvl_bin())
@@ -31,8 +37,6 @@ fn run_check(file: &str) -> std::process::Output {
         .expect("failed to run mvl check")
 }
 
-// ── run ───────────────────────────────────────────────────────────────────
-
 fn run_mvl_run(file: &str) -> std::process::Output {
     Command::new(mvl_bin())
         .args(["run", file])
@@ -40,61 +44,134 @@ fn run_mvl_run(file: &str) -> std::process::Output {
         .expect("failed to run mvl run")
 }
 
-// ── simple_math.mvl ───────────────────────────────────────────────────────
+/// Assert check passes and return combined stdout.
+fn assert_check_ok(name: &str) -> String {
+    let out = run_check(&corpus(name));
+    assert!(
+        out.status.success(),
+        "{name}: mvl check failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// Run a corpus program and assert each expected line appears in stdout.
+fn assert_run_output(name: &str, expected_lines: &[&str]) {
+    let out = run_mvl_run(&corpus(name));
+    assert!(
+        out.status.success(),
+        "{name}: mvl run failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let combined = String::from_utf8_lossy(&out.stdout);
+    for line in expected_lines {
+        assert!(
+            combined.contains(line),
+            "{name}: expected '{line}' in output:\n{combined}"
+        );
+    }
+}
+
+// ── 1. hello_world.mvl ────────────────────────────────────────────────────
+
+#[test]
+fn hello_world_check_passes() {
+    let stdout = assert_check_ok("hello_world.mvl");
+    assert!(stdout.contains("OK"));
+}
+
+/// Simplest possible MVL program: fn main + println.
+///
+/// Expected stdout:
+///   Hello, world!
+#[test]
+fn hello_world_runs_and_produces_expected_output() {
+    assert_run_output("hello_world.mvl", &["Hello, world!"]);
+}
+
+// ── 2. hello_mvl.mvl ──────────────────────────────────────────────────────
+
+#[test]
+fn hello_mvl_check_passes() {
+    assert_check_ok("hello_mvl.mvl");
+}
+
+/// ADTs, total fns, enum match.
+///
+/// Expected stdout:
+///   double(21) = 42
+///   safe_add(10, 32) = 42
+///   MathError: DivisionByZero
+#[test]
+fn hello_mvl_runs_and_produces_expected_output() {
+    assert_run_output(
+        "hello_mvl.mvl",
+        &[
+            "double(21) = 42",
+            "safe_add(10, 32) = 42",
+            "MathError: DivisionByZero",
+        ],
+    );
+}
+
+// ── 3. calculator.mvl ─────────────────────────────────────────────────────
+
+#[test]
+fn calculator_check_passes() {
+    assert_check_ok("calculator.mvl");
+}
+
+/// Total functions and if/else expressions.
+///
+/// Expected stdout:
+///   10 + 5 = 15
+///   10 - 5 = 5
+///   4 * 7 = 28
+///   max(17, 42) = 42
+#[test]
+fn calculator_runs_and_produces_expected_output() {
+    assert_run_output(
+        "calculator.mvl",
+        &[
+            "10 + 5 = 15",
+            "10 - 5 = 5",
+            "4 * 7 = 28",
+            "max(17, 42) = 42",
+        ],
+    );
+}
+
+// ── 4. shapes.mvl ─────────────────────────────────────────────────────────
+
+#[test]
+fn shapes_check_passes() {
+    assert_check_ok("shapes.mvl");
+}
+
+/// Two enums, multiple match functions, function composition.
+///
+/// Expected stdout:
+///   circle has 0 sides and is curved
+///   rectangle has 4 sides and is flat
+///   triangle has 3 sides and is flat
+#[test]
+fn shapes_runs_and_produces_expected_output() {
+    assert_run_output(
+        "shapes.mvl",
+        &[
+            "circle has 0 sides and is curved",
+            "rectangle has 4 sides and is flat",
+            "triangle has 3 sides and is flat",
+        ],
+    );
+}
+
+// ── simple_math.mvl (library — no fn main) ────────────────────────────────
 
 /// simple_math.mvl has no fn main — `mvl check` must pass.
 #[test]
 fn simple_math_check_passes() {
-    let out = run_check(&corpus("simple_math.mvl"));
-    assert!(
-        out.status.success(),
-        "mvl check failed:\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("OK"), "expected OK, got: {stdout}");
-}
-
-// ── hello_mvl.mvl ─────────────────────────────────────────────────────────
-
-/// hello_mvl.mvl has fn main — `mvl check` must pass.
-#[test]
-fn hello_mvl_check_passes() {
-    let out = run_check(&corpus("hello_mvl.mvl"));
-    assert!(
-        out.status.success(),
-        "mvl check failed:\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
-
-/// hello_mvl.mvl runs and produces the expected output.
-///
-/// This is the primary end-to-end test:
-///   .mvl → mvl check → mvl run → binary → verify stdout
-#[test]
-fn hello_mvl_runs_and_produces_expected_output() {
-    let out = run_mvl_run(&corpus("hello_mvl.mvl"));
-    assert!(
-        out.status.success(),
-        "mvl run failed:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
-
-    // The combined output of `mvl run` includes cargo's output followed by the
-    // program's stdout (cargo run merges them on the same stream).
-    let combined = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        combined.contains("double(21) = 42"),
-        "expected 'double(21) = 42' in output:\n{combined}"
-    );
-    assert!(
-        combined.contains("safe_add(10, 32) = 42"),
-        "expected 'safe_add(10, 32) = 42' in output:\n{combined}"
-    );
-    assert!(
-        combined.contains("MathError: DivisionByZero"),
-        "expected 'MathError: DivisionByZero' in output:\n{combined}"
-    );
+    let stdout = assert_check_ok("simple_math.mvl");
+    assert!(stdout.contains("OK"));
 }
