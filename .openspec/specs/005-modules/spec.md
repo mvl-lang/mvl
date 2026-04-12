@@ -49,11 +49,11 @@ Each `.mvl` source file MUST correspond to exactly one module. The module name M
 
 ### Requirement 2: Visibility [MUST]
 
-All items (functions, types, constants) MUST be private by default. An item MUST be marked `pub` to be visible outside its module. Items without `pub` MUST NOT be accessible from other modules.
+All items (functions, types, constants) MUST be private by default. An item MUST be marked `pub` to be visible outside its module. Items without `pub` MUST NOT be accessible from other modules. For struct types, `pub` on the type makes the type name visible; struct fields are always accessible when the struct itself is in scope (no per-field visibility). This keeps the grammar simple and matches the principle that structs are transparent value containers.
 
 **Implementation:** `src/mvl/checker/visibility.rs`
 
-**Tests:** `tests/module_resolver.rs::private_item_rejected`, `tests/module_resolver.rs::pub_item_accessible`
+**Tests:** `tests/module_resolver.rs::private_item_rejected`, `tests/module_resolver.rs::pub_item_accessible`, `tests/module_resolver.rs::struct_fields_accessible`
 
 #### Scenario: Private by default
 
@@ -73,13 +73,20 @@ All items (functions, types, constants) MUST be private by default. An item MUST
 - WHEN another module imports `use geometry::Point;`
 - THEN `Point` MUST be usable as a type in the importing module
 
+#### Scenario: Struct fields are accessible once type is imported
+
+- GIVEN `pub type Point = struct { x: Float64, y: Float64 }` in module `geometry`
+- AND another module has `use geometry::Point;`
+- WHEN that module writes `let p = Point { x: 1.0, y: 2.0 }; let v = p.x;`
+- THEN both construction and field access MUST succeed — fields are not separately `pub`-gated
+
 ### Requirement 3: Import Syntax [MUST]
 
 Imports MUST use the `use` keyword with a fully-qualified path ending in a specific item name. Wildcard imports (`use module::*`) MUST NOT be permitted. All `use` declarations MUST appear at the top of the file, before any other declarations.
 
 **Implementation:** `src/mvl/parser/mod.rs`, `src/mvl/resolver/mod.rs`
 
-**Tests:** `tests/module_resolver.rs::use_at_top`, `tests/module_resolver.rs::wildcard_rejected`
+**Tests:** `tests/module_resolver.rs::use_at_top`, `tests/module_resolver.rs::wildcard_rejected`, `tests/module_resolver.rs::name_collision_rejected`, `tests/module_resolver.rs::missing_module_rejected`
 
 #### Scenario: Named import
 
@@ -104,6 +111,18 @@ Imports MUST use the `use` keyword with a fully-qualified path ending in a speci
 - GIVEN a `fn` declaration followed by a `use` statement
 - WHEN the compiler processes the file
 - THEN it MUST reject: "`use` declarations must appear before all other declarations"
+
+#### Scenario: Name collision between imports
+
+- GIVEN `use geometry::Point;` and `use graphics::Point;` in the same file
+- WHEN the compiler resolves names
+- THEN it MUST reject: "name collision: `Point` imported from both `geometry` and `graphics`"
+
+#### Scenario: Missing module
+
+- GIVEN `use nonexistent::Foo;`
+- WHEN the compiler resolves modules
+- THEN it MUST reject: "module `nonexistent` not found"
 
 ### Requirement 4: Re-exports [MUST]
 
