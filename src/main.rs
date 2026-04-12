@@ -1,5 +1,5 @@
 use mvl::mvl::checker;
-use mvl::mvl::parser::ast::{Decl, Program, Totality};
+use mvl::mvl::parser::ast::{Decl, Program, Totality, TypeBody};
 use mvl::mvl::parser::Parser;
 use mvl::mvl::transpiler;
 use std::fs;
@@ -39,7 +39,8 @@ fn main() {
         "assurance" => {
             let path = require_path_arg(&args, "assurance");
             let json = args.iter().any(|a| a == "--format=json" || a == "--json");
-            cmd_assurance(&path, json);
+            let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
+            cmd_assurance(&path, json, verbose);
         }
         other => {
             eprintln!("Unknown command: {other}");
@@ -58,6 +59,7 @@ fn print_usage() {
     eprintln!("  mvl test  <file|dir>               — find *_test.mvl files and run cargo test");
     eprintln!("  mvl assurance <file|dir>           — emit assurance report");
     eprintln!("  mvl assurance <file|dir> --json    — emit assurance report as JSON");
+    eprintln!("  mvl assurance <file|dir> --verbose — per-function requirement detail");
     eprintln!("  mvl transpile <file.mvl>           — print transpiled Rust to stdout");
 }
 
@@ -331,7 +333,7 @@ fn cmd_test(path: &str) {
 }
 
 /// Emit an assurance report for a file or directory.
-fn cmd_assurance(path: &str, json: bool) {
+fn cmd_assurance(path: &str, json: bool, verbose: bool) {
     let files = mvl_files(path, false);
     if files.is_empty() {
         eprintln!("No .mvl files found at: {path}");
@@ -346,11 +348,20 @@ fn cmd_assurance(path: &str, json: bool) {
     let mut total_test_fns: usize = 0; // `test fn` — internal unit tests
     let mut check_errors: usize = 0;
     let mut file_count = 0;
+    // Aggregate per-requirement error counts (index 1-11).
+    let mut req_errors = [0usize; 12];
+    // Aggregate per-file stats.
+    let mut total_struct_types: usize = 0;
+    let mut total_enum_types: usize = 0;
+    let mut total_effects_fns: usize = 0;
+    let mut total_capabilities_fns: usize = 0;
+    let mut total_refinements_fns: usize = 0;
+    let mut all_fn_details: Vec<FnDetail> = Vec::new();
 
     for file in &files {
         let file_str = file.display().to_string();
         let (prog, _src) = parse_or_exit(&file_str);
-        let stats = collect_assurance_stats(&prog);
+        let stats = collect_assurance_stats(&prog, verbose);
         let result = checker::check(&prog);
 
         total_fns += stats.fn_count;
@@ -360,6 +371,17 @@ fn cmd_assurance(path: &str, json: bool) {
         total_extern += stats.extern_fn_count; // fn signatures, not block count
         total_test_fns += stats.test_fn_count;
         check_errors += result.errors.len();
+        total_struct_types += stats.struct_type_count;
+        total_enum_types += stats.enum_type_count;
+        total_effects_fns += stats.effects_fn_count;
+        total_capabilities_fns += stats.capabilities_fn_count;
+        total_refinements_fns += stats.refinements_fn_count;
+        for (i, count) in result.req_errors.iter().enumerate().skip(1) {
+            req_errors[i] += count;
+        }
+        if verbose {
+            all_fn_details.extend(stats.fn_details);
+        }
         file_count += 1;
     }
 
@@ -375,8 +397,16 @@ fn cmd_assurance(path: &str, json: bool) {
         0
     };
 
+    if json && verbose {
+        eprintln!("warning: --verbose is ignored with --json; per-function detail is not included in JSON output");
+    }
+
     if json {
         // NOTE(#96): "pub" is always 0 until the module resolver is merged.
+        let req_json: String = (1..=11)
+            .map(|i| format!("    \"{i}\": {}", req_errors[i]))
+            .collect::<Vec<_>>()
+            .join(",\n");
         println!(
             r#"{{
   "files": {file_count},
@@ -388,9 +418,16 @@ fn cmd_assurance(path: &str, json: bool) {
     "implemented": {implemented},
     "test": {total_test_fns}
   }},
+  "types": {{
+    "structs": {total_struct_types},
+    "enums": {total_enum_types}
+  }},
   "percentages": {{
     "verified_pct": {verified_pct},
     "extern_pct": {extern_pct}
+  }},
+  "requirements": {{
+{req_json}
   }},
   "check_errors": {check_errors}
 }}"#
@@ -405,17 +442,161 @@ fn cmd_assurance(path: &str, json: bool) {
         println!("  extern fn:         {total_extern} ({extern_pct}% trust boundary)");
         println!("  implemented:       {implemented}");
         println!("  test fn:           {total_test_fns}");
+        println!();
+        println!("Requirements verified:");
+        print_req_row(
+            1,
+            "Type safety",
+            &req_errors,
+            &format!(
+                "{} types ({} struct, {} enum), {} errors",
+                total_struct_types + total_enum_types,
+                total_struct_types,
+                total_enum_types,
+                req_errors[1]
+            ),
+        );
+        print_req_row(
+            2,
+            "Memory safety",
+            &req_errors,
+            if req_errors[2] == 0 {
+                "no violations".to_string()
+            } else {
+                format!("{} use-after-move", req_errors[2])
+            }
+            .as_str(),
+        );
+        print_req_row(
+            3,
+            "Totality",
+            &req_errors,
+            &format!(
+                "{} total fn, {} non-exhaustive match",
+                total_verified, req_errors[3]
+            ),
+        );
+        print_req_row(
+            4,
+            "Null elimination",
+            &req_errors,
+            &format!("{} direct Option access", req_errors[4]),
+        );
+        print_req_row(
+            5,
+            "Error visibility",
+            &req_errors,
+            &format!("{} unhandled Result", req_errors[5]),
+        );
+        print_req_row(
+            6,
+            "Ownership",
+            &req_errors,
+            &format!("{} immutability violations", req_errors[6]),
+        );
+        print_req_row(
+            7,
+            "Effects",
+            &req_errors,
+            &format!(
+                "{} fns declare effects, {} undeclared",
+                total_effects_fns, req_errors[7]
+            ),
+        );
+        print_req_row(
+            8,
+            "Termination",
+            &req_errors,
+            &format!(
+                "{} total fn, {} partial fn, {} violations",
+                total_verified, total_partial, req_errors[8]
+            ),
+        );
+        print_req_row(
+            9,
+            "Data race freedom",
+            &req_errors,
+            &format!(
+                "{} fns use capabilities, {} violations",
+                total_capabilities_fns, req_errors[9]
+            ),
+        );
+        print_req_row(
+            10,
+            "Refinements",
+            &req_errors,
+            &format!(
+                "{} fns with refinements, {} violations",
+                total_refinements_fns, req_errors[10]
+            ),
+        );
+        print_req_row(
+            11,
+            "IFC",
+            &req_errors,
+            &format!(
+                "{} extern (trust boundary), {} flow violations",
+                total_extern, req_errors[11]
+            ),
+        );
+        println!();
         println!("Type errors:         {check_errors}");
         if check_errors == 0 {
             println!("Status:              PASS");
         } else {
             println!("Status:              FAIL ({check_errors} errors)");
         }
+
+        if verbose && !all_fn_details.is_empty() {
+            println!();
+            println!("Functions:");
+            println!(
+                "{:<30} {:<8} {:<8} {:<12} {:<12} Refinements",
+                "Name", "Kind", "Totality", "Effects", "Caps"
+            );
+            println!("{}", "-".repeat(80));
+            for fd in &all_fn_details {
+                let kind = if fd.is_extern {
+                    "extern"
+                } else if fd.is_test {
+                    "test"
+                } else {
+                    "fn"
+                };
+                let totality = match &fd.totality {
+                    Some(Totality::Total) => "total",
+                    Some(Totality::Partial) => "partial",
+                    None => "total*",
+                };
+                let effects = if fd.effects.is_empty() {
+                    "-".to_string()
+                } else {
+                    fd.effects.join(",")
+                };
+                let caps = if fd.has_capabilities { "yes" } else { "-" };
+                let refs = if fd.has_refinements { "yes" } else { "-" };
+                println!(
+                    "{:<30} {:<8} {:<8} {:<12} {:<12} {}",
+                    fd.name, kind, totality, effects, caps, refs
+                );
+            }
+            println!("  * implicit total (no explicit keyword)");
+        }
     }
 
     if check_errors > 0 {
         process::exit(1);
     }
+}
+
+fn print_req_row(req: u8, name: &str, req_errors: &[usize; 12], detail: &str) {
+    debug_assert!((1..=11).contains(&req), "req must be 1–11, got {req}");
+    let status = if req_errors[req as usize] == 0 {
+        "✓"
+    } else {
+        "✗"
+    };
+    println!("  Req {:>2}  {:<20} {}  {}", req, name, status, detail);
 }
 
 // ── Assurance stats ───────────────────────────────────────────────────────
@@ -428,9 +609,32 @@ struct AssuranceStats {
     pub_fn_count: usize,
     extern_fn_count: usize,
     test_fn_count: usize,
+    /// Number of `struct` type declarations (Req 1 evidence).
+    struct_type_count: usize,
+    /// Number of `enum` type declarations (Req 1 evidence).
+    enum_type_count: usize,
+    /// Number of functions that declare at least one effect (Req 7 evidence).
+    effects_fn_count: usize,
+    /// Number of functions that have at least one parameter with a capability (Req 9 evidence).
+    capabilities_fn_count: usize,
+    /// Number of functions with at least one refinement predicate (Req 10 evidence).
+    refinements_fn_count: usize,
+    /// Per-function details for `--verbose` output.
+    fn_details: Vec<FnDetail>,
 }
 
-fn collect_assurance_stats(prog: &Program) -> AssuranceStats {
+/// Per-function information for the verbose assurance report.
+struct FnDetail {
+    name: String,
+    totality: Option<Totality>,
+    effects: Vec<String>,
+    has_capabilities: bool,
+    has_refinements: bool,
+    is_test: bool,
+    is_extern: bool,
+}
+
+fn collect_assurance_stats(prog: &Program, collect_details: bool) -> AssuranceStats {
     let mut stats = AssuranceStats {
         fn_count: 0,
         total_fn_count: 0,
@@ -438,15 +642,24 @@ fn collect_assurance_stats(prog: &Program) -> AssuranceStats {
         pub_fn_count: 0,
         extern_fn_count: 0,
         test_fn_count: 0,
+        struct_type_count: 0,
+        enum_type_count: 0,
+        effects_fn_count: 0,
+        capabilities_fn_count: 0,
+        refinements_fn_count: 0,
+        fn_details: Vec::new(),
     };
-    collect_stats_from_decls(&prog.declarations, &mut stats);
+    collect_stats_from_decls(&prog.declarations, &mut stats, collect_details);
     stats
 }
 
-fn collect_stats_from_decls(decls: &[Decl], stats: &mut AssuranceStats) {
+fn collect_stats_from_decls(decls: &[Decl], stats: &mut AssuranceStats, collect_details: bool) {
     for decl in decls {
         match decl {
             Decl::Fn(fd) => {
+                let has_caps = fd.params.iter().any(|p| p.capability.is_some());
+                let has_refs = fd.return_refinement.is_some()
+                    || fd.params.iter().any(|p| p.refinement.is_some());
                 if fd.is_test {
                     stats.test_fn_count += 1;
                 } else {
@@ -456,13 +669,51 @@ fn collect_stats_from_decls(decls: &[Decl], stats: &mut AssuranceStats) {
                         Some(Totality::Partial) => stats.partial_fn_count += 1,
                         None => stats.total_fn_count += 1, // implicitly total
                     }
+                    if !fd.effects.is_empty() {
+                        stats.effects_fn_count += 1;
+                    }
+                    if has_caps {
+                        stats.capabilities_fn_count += 1;
+                    }
+                    if has_refs {
+                        stats.refinements_fn_count += 1;
+                    }
+                }
+                if collect_details {
+                    stats.fn_details.push(FnDetail {
+                        name: fd.name.clone(),
+                        totality: fd.totality.clone(),
+                        effects: fd.effects.clone(),
+                        has_capabilities: has_caps,
+                        has_refinements: has_refs,
+                        is_test: fd.is_test,
+                        is_extern: false,
+                    });
                 }
             }
             Decl::Extern(ed) => {
                 // Each signature inside an extern block is a trust-boundary function.
                 stats.extern_fn_count += ed.fns.len();
                 stats.fn_count += ed.fns.len();
+                if collect_details {
+                    for ef in &ed.fns {
+                        stats.fn_details.push(FnDetail {
+                            name: ef.name.clone(),
+                            totality: None,
+                            effects: ef.effects.clone(),
+                            has_capabilities: false,
+                            has_refinements: false,
+                            is_test: false,
+                            is_extern: true,
+                        });
+                    }
+                }
             }
+            Decl::Type(td) => match &td.body {
+                TypeBody::Struct(_) => stats.struct_type_count += 1,
+                TypeBody::Enum(_) => stats.enum_type_count += 1,
+                TypeBody::Alias(_) => {}
+            },
             _ => {}
         }
     }
@@ -598,7 +849,7 @@ mod assurance_tests {
     fn test_fn_count_is_separate_from_fn_count() {
         let src = "fn add(a: Int, b: Int) -> Int { a + b }\ntest fn check_add() -> Unit { }\ntest fn check_zero() -> Unit { }";
         let prog = parse_prog(src);
-        let stats = collect_assurance_stats(&prog);
+        let stats = collect_assurance_stats(&prog, false);
         assert_eq!(stats.test_fn_count, 2, "expected 2 test fns");
         assert_eq!(stats.fn_count, 1, "test fns must not inflate fn_count");
     }
@@ -607,8 +858,73 @@ mod assurance_tests {
     fn no_test_fns_means_zero_count() {
         let src = "fn add(a: Int, b: Int) -> Int { a + b }";
         let prog = parse_prog(src);
-        let stats = collect_assurance_stats(&prog);
+        let stats = collect_assurance_stats(&prog, false);
         assert_eq!(stats.test_fn_count, 0);
         assert_eq!(stats.fn_count, 1);
+    }
+
+    #[test]
+    fn struct_and_enum_types_counted() {
+        let src = "type Point = struct { x: Int, y: Int }\ntype Color = enum { Red, Green, Blue }\nfn id(p: Point) -> Point { p }";
+        let prog = parse_prog(src);
+        let stats = collect_assurance_stats(&prog, false);
+        assert_eq!(stats.struct_type_count, 1, "expected 1 struct");
+        assert_eq!(stats.enum_type_count, 1, "expected 1 enum");
+    }
+
+    #[test]
+    fn effects_fn_counted() {
+        let src = "fn pure(x: Int) -> Int { x }\nfn effectful(x: Int) -> Int ! DB { x }";
+        let prog = parse_prog(src);
+        let stats = collect_assurance_stats(&prog, false);
+        assert_eq!(stats.effects_fn_count, 1, "expected 1 fn with effects");
+        assert_eq!(stats.fn_count, 2);
+    }
+
+    #[test]
+    fn req_errors_populated_from_checker() {
+        // UseAfterMove → requirement 2
+        let src = "fn f() -> Int { let x = 1; let _y = move(x); x }";
+        let prog = parse_prog(src);
+        let result = checker::check(&prog);
+        assert!(
+            result.req_errors[2] >= 1,
+            "req 2 (memory safety) should have errors"
+        );
+        assert_eq!(
+            result.req_errors[1], 0,
+            "req 1 (type safety) should be clean"
+        );
+    }
+
+    #[test]
+    fn req_errors_zero_on_clean_program() {
+        let src = "fn add(a: Int, b: Int) -> Int { a + b }";
+        let prog = parse_prog(src);
+        let result = checker::check(&prog);
+        for i in 1..=11 {
+            assert_eq!(result.req_errors[i], 0, "req {i} should have 0 errors");
+        }
+    }
+
+    #[test]
+    fn fn_details_populated() {
+        let src = "fn effectful(x: Int) -> Int ! DB { x }\ntest fn check_it() -> Unit { }";
+        let prog = parse_prog(src);
+        let stats = collect_assurance_stats(&prog, true);
+        assert_eq!(stats.fn_details.len(), 2);
+        let eff = stats
+            .fn_details
+            .iter()
+            .find(|d| d.name == "effectful")
+            .unwrap();
+        assert_eq!(eff.effects, vec!["DB"]);
+        assert!(!eff.is_test);
+        let test = stats
+            .fn_details
+            .iter()
+            .find(|d| d.name == "check_it")
+            .unwrap();
+        assert!(test.is_test);
     }
 }

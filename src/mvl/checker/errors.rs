@@ -176,6 +176,50 @@ pub enum CheckError {
 }
 
 impl CheckError {
+    /// Returns the MVL requirement number (1–11) this error violates.
+    pub fn requirement_number(&self) -> u8 {
+        match self {
+            // Req 1: Type Safety
+            CheckError::TypeMismatch { .. }
+            | CheckError::UndefinedVariable { .. }
+            | CheckError::UndefinedType { .. }
+            | CheckError::NonNumericArithmetic { .. }
+            | CheckError::ArithmeticTypeMismatch { .. }
+            | CheckError::LogicTypeMismatch { .. }
+            | CheckError::UndefinedFunction { .. }
+            | CheckError::WrongArgCount { .. }
+            | CheckError::MissingField { .. }
+            | CheckError::UnknownField { .. }
+            | CheckError::FieldNotFound { .. }
+            | CheckError::FieldAccessOnEnum { .. }
+            | CheckError::UnknownVariant { .. }
+            | CheckError::NotAStruct { .. } => 1,
+            // Req 2: Memory Safety
+            CheckError::UseAfterMove { .. } => 2,
+            // Req 3: Totality (exhaustive match)
+            CheckError::NonExhaustiveMatch { .. } => 3,
+            // Req 4: Null Elimination
+            CheckError::OptionDirectAccess { .. } => 4,
+            // Req 5: Error Visibility
+            CheckError::ResultIgnored { .. } | CheckError::PropagateNotResult { .. } => 5,
+            // Req 6: Ownership (immutability / linearity)
+            CheckError::AssignToImmutable { .. } | CheckError::MutateImmutableField { .. } => 6,
+            // Req 7: Effect Tracking
+            CheckError::UndeclaredEffect { .. } | CheckError::MissingEffect { .. } => 7,
+            // Req 8: Termination
+            CheckError::UnboundedLoopInTotal { .. } | CheckError::PartialCallInTotal { .. } => 8,
+            // Req 9: Data Race Freedom
+            CheckError::CapabilityViolation { .. } => 9,
+            // Req 10: Refinement Types
+            CheckError::RefinementViolated { .. } => 10,
+            // Req 11: Information Flow Control
+            CheckError::InvalidDeclassify { .. } | CheckError::InvalidSanitize { .. } => 11,
+            // Req 1: Type Safety (declaration-level — malformed extern ABI is a type/decl error,
+            // not an IFC violation; grouping it under Req 11 would pollute IFC metrics).
+            CheckError::UnsupportedExternAbi { .. } => 1,
+        }
+    }
+
     pub fn span(&self) -> Span {
         match self {
             CheckError::TypeMismatch { span, .. }
