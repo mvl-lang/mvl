@@ -3,7 +3,7 @@ members = [".", "mvl_runtime"]
 
 [package]
 name = "mvl"
-version = "0.10.4"
+version = "0.11.1"
 edition = "2021"
 description = "MVL — Minimum Verification Language compiler"
 license = "MIT"

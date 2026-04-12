@@ -6,6 +6,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.11.1] — 2026-04-12 (feat: bridge.rs — extern "rust" link support; end-to-end run)
+
+### Added
+- `bridge.rs` convention for `mvl build`: a sibling `bridge.rs` file is detected automatically, copied into the generated crate, and linked via `mod bridge;` — enables `mvl build` and `mvl run` to fully link when `extern "rust"` functions are declared (closes #121)
+- `examples/log_analyzer/bridge.rs` — Rust implementations of the 3 trust-boundary fns (`clap_get_arg`, `fs_read_file`, `analyze_and_format`); `make run` now produces output end-to-end
+- `examples/log_analyzer/Makefile` — `make check`, `make test`, `make build`, `make generate`, `make run` targets
+
+### Fixed
+- `mvl build` with `extern "rust"` blocks but no `bridge.rs` now emits a clear warning instead of a silent linker failure
+- `mod bridge;` is injected after leading `#![allow(...)]` attributes so inner attributes remain valid at file top
+- `println!(expr)` with a non-literal first arg now emits `println!("{}", expr)`
+- String literals in argument position now emit `.to_string().into()` — coerces to `Clean<String>`, `Tainted<String>`, etc. via `From<T>` impls
+- `mvl_runtime`: label types (`Clean`, `Tainted`, `Public`, `Secret`) now implement `From<T>` so unlabeled values flow into labeled parameters
+
 ## [0.10.4] — 2026-04-12 (feat: log_analyzer Phase 2 example, transpiler fixes)
 
 ### Added

@@ -169,15 +169,56 @@ fn build_project(path: &str, run: bool) {
         process::exit(1);
     });
 
+    // Detect a sibling bridge.rs — Rust implementations of extern "rust" fns.
+    let bridge_path = Path::new(&file_path)
+        .parent()
+        .map(|p| p.join("bridge.rs"))
+        .filter(|p| p.exists());
+
+    if out.extern_count > 0 && bridge_path.is_none() {
+        eprintln!(
+            "warning: {} extern \"rust\" fn(s) declared but no bridge.rs found alongside {file_path}",
+            out.extern_count
+        );
+        eprintln!("  Create bridge.rs with `pub extern \"Rust\" fn` implementations to link.");
+    }
+
+    // Inject `mod bridge;` after any leading comments and `#![...]` inner
+    // attributes — Rust requires inner attributes to precede all items, so
+    // `mod bridge;` must come after them.
+    let main_source = if bridge_path.is_some() {
+        let mut header = String::new();
+        let mut rest = String::new();
+        let mut in_header = true;
+        for line in out.lib_rs.lines() {
+            if in_header {
+                let trimmed = line.trim_start();
+                if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with("#![") {
+                    header.push_str(line);
+                    header.push('\n');
+                    continue;
+                }
+                // First non-header line: inject mod bridge before it.
+                header.push_str("\nmod bridge;\n\n");
+                in_header = false;
+            }
+            rest.push_str(line);
+            rest.push('\n');
+        }
+        header + &rest
+    } else {
+        out.lib_rs.clone()
+    };
+
     if out.has_main {
         // Binary crate: the transpiled code IS src/main.rs
-        fs::write(src_dir.join("main.rs"), &out.lib_rs).unwrap_or_else(|e| {
+        fs::write(src_dir.join("main.rs"), &main_source).unwrap_or_else(|e| {
             eprintln!("Cannot write main.rs: {e}");
             process::exit(1);
         });
     } else {
         // Library crate: lib.rs + a stub main for cargo build to succeed
-        fs::write(src_dir.join("lib.rs"), &out.lib_rs).unwrap_or_else(|e| {
+        fs::write(src_dir.join("lib.rs"), &main_source).unwrap_or_else(|e| {
             eprintln!("Cannot write lib.rs: {e}");
             process::exit(1);
         });
@@ -187,6 +228,18 @@ fn build_project(path: &str, run: bool) {
         )
         .unwrap_or_else(|e| {
             eprintln!("Cannot write stub main.rs: {e}");
+            process::exit(1);
+        });
+    }
+
+    // Copy bridge.rs into src/ so `mod bridge;` resolves.
+    if let Some(ref bp) = bridge_path {
+        let bridge_content = fs::read_to_string(bp).unwrap_or_else(|e| {
+            eprintln!("Cannot read {}: {e}", bp.display());
+            process::exit(1);
+        });
+        fs::write(src_dir.join("bridge.rs"), &bridge_content).unwrap_or_else(|e| {
+            eprintln!("Cannot write bridge.rs: {e}");
             process::exit(1);
         });
     }
