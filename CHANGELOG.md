@@ -6,6 +6,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-04-12 (feat: specify generics — type params, constraints, monomorphization)
+
+### Added
+- Requirement 9 (Generics) to Spec 001 (Type System) with decisions table, constraint syntax, Rust emission rules, and rejection scenarios
+- Grammar production `trait_bound` for Phase 1 single-bound trait constraints
+- 5 new tests for generic functions, generic types, and where-clause constraints
+- 3 phase-2 placeholder tests for rejection scenarios (missing constraint, HKT, inline syntax)
+
+### Fixed
+- Grammar/spec divergence: `trait_bound` restricted to single IDENT (no `+` compound bounds) in Phase 1
+- Spec preamble now mentions Requirement 9; added local-numbering disclaimer vs ADR-0001
+- Rust emission table now includes Clone, Default; fixed code example to use `where` clause style consistently
+
 ## [0.8.1] — 2026-04-12 (fix: remove module_decl across all layers)
 
 ### Removed
