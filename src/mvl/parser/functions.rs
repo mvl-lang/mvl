@@ -5,7 +5,9 @@
 //! - Parameters with optional capability (`iso`/`val`/`ref`/`tag`), `mut`, type, and refinement
 //! - Totality annotations, effect lists, and where-clause constraints
 
-use crate::mvl::parser::ast::{Constraint, ExternDecl, ExternFnDecl, FnDecl, Param, Totality};
+use crate::mvl::parser::ast::{
+    Constraint, ExternDecl, ExternFnDecl, FnDecl, Param, Totality, UseDecl,
+};
 use crate::mvl::parser::lexer::TokenKind;
 use crate::mvl::parser::{ParseError, Parser};
 
@@ -65,6 +67,7 @@ impl Parser {
 
         let span = self.span_from(start);
         Ok(FnDecl {
+            visible: false, // set by parse_decl when `pub` prefix is present
             totality,
             name,
             type_params,
@@ -225,13 +228,32 @@ impl Parser {
     /// Parse a single top-level declaration.
     pub fn parse_decl(&mut self) -> Result<crate::mvl::parser::ast::Decl, ()> {
         use crate::mvl::parser::ast::Decl;
+
+        // Optional `pub` visibility modifier
+        let visible = self.eat(&TokenKind::Pub);
+
         match self.peek_kind() {
-            TokenKind::Type => Ok(Decl::Type(self.parse_type_decl()?)),
-            TokenKind::Fn | TokenKind::Total | TokenKind::Partial => {
-                Ok(Decl::Fn(self.parse_fn_decl()?))
+            TokenKind::Use => Ok(Decl::Use(self.parse_use_decl(visible)?)),
+            TokenKind::Type => {
+                let mut d = self.parse_type_decl()?;
+                d.visible = visible;
+                Ok(Decl::Type(d))
             }
-            TokenKind::Const => Ok(Decl::Const(self.parse_const_decl()?)),
-            TokenKind::Module => Ok(Decl::Module(self.parse_module_decl()?)),
+            TokenKind::Fn | TokenKind::Total | TokenKind::Partial => {
+                let mut d = self.parse_fn_decl()?;
+                d.visible = visible;
+                Ok(Decl::Fn(d))
+            }
+            TokenKind::Const => {
+                let mut d = self.parse_const_decl()?;
+                d.visible = visible;
+                Ok(Decl::Const(d))
+            }
+            TokenKind::Module => {
+                let mut d = self.parse_module_decl()?;
+                d.visible = visible;
+                Ok(Decl::Module(d))
+            }
             TokenKind::Extern => Ok(Decl::Extern(self.parse_extern_decl()?)),
             _ => {
                 let err = ParseError {
@@ -242,6 +264,34 @@ impl Parser {
                 Err(())
             }
         }
+    }
+
+    /// Parse `use path::to::Item;` (visibility already consumed as `reexport`).
+    pub fn parse_use_decl(&mut self, reexport: bool) -> Result<UseDecl, ()> {
+        let start = self.peek_span();
+        self.advance(); // consume `use`
+
+        // Parse module path: one or more `::` -separated identifiers
+        let mut path = Vec::new();
+        let ident_result = self.expect_ident();
+        let (first, _) = self.require(ident_result)?;
+        path.push(first);
+
+        while self.eat(&TokenKind::ColonColon) {
+            let ident_result = self.expect_ident();
+            let (seg, _) = self.require(ident_result)?;
+            path.push(seg);
+        }
+
+        let semi = self.expect(&TokenKind::Semicolon);
+        self.require(semi)?;
+
+        let span = self.span_from(start);
+        Ok(UseDecl {
+            reexport,
+            path,
+            span,
+        })
     }
 
     // ── Const and module stubs ─────────────────────────────────────────────
@@ -262,6 +312,7 @@ impl Parser {
         self.require(semi)?;
         let span = self.span_from(start);
         Ok(crate::mvl::parser::ast::ConstDecl {
+            visible: false, // set by parse_decl when `pub` prefix is present
             name,
             ty,
             value,
@@ -294,6 +345,7 @@ impl Parser {
         self.require(rbrace)?;
         let span = self.span_from(start);
         Ok(crate::mvl::parser::ast::ModuleDecl {
+            visible: false, // set by parse_decl when `pub` prefix is present
             name,
             declarations,
             span,

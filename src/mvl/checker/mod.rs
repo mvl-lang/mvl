@@ -113,6 +113,7 @@ impl TypeChecker {
                 Decl::Const(_) => {}
                 Decl::Module(md) => self.collect_declarations(&md.declarations),
                 Decl::Extern(ed) => self.register_extern(ed),
+                Decl::Use(_) => {} // resolved by the module resolver, not the type checker
             }
         }
     }
@@ -175,6 +176,7 @@ impl TypeChecker {
             Decl::Const(cd) => self.check_const_decl(cd),
             Decl::Module(md) => self.check_module_decl(md),
             Decl::Extern(ed) => self.check_extern_decl(ed),
+            Decl::Use(_) => {} // resolved by the module resolver, not the type checker
         }
     }
 

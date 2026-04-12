@@ -70,6 +70,10 @@ pub enum TokenKind {
     Struct,
     /// `enum` — keyword inside type declarations (`type Foo = enum { … }`)
     Enum,
+    /// `pub` — visibility modifier
+    Pub,
+    /// `use` — import declaration (`use path::to::Item;`)
+    Use,
 
     // ── Security labels ───────────────────────────────────────────────────
     Public,
@@ -162,6 +166,8 @@ impl fmt::Display for TokenKind {
             TokenKind::Extern => write!(f, "extern"),
             TokenKind::Struct => write!(f, "struct"),
             TokenKind::Enum => write!(f, "enum"),
+            TokenKind::Pub => write!(f, "pub"),
+            TokenKind::Use => write!(f, "use"),
             TokenKind::Public => write!(f, "Public"),
             TokenKind::Tainted => write!(f, "Tainted"),
             TokenKind::Secret => write!(f, "Secret"),
@@ -644,6 +650,8 @@ fn keyword_or_ident(s: String) -> TokenKind {
         "extern" => TokenKind::Extern,
         "struct" => TokenKind::Struct,
         "enum" => TokenKind::Enum,
+        "pub" => TokenKind::Pub,
+        "use" => TokenKind::Use,
         // Boolean literals
         "true" => TokenKind::True,
         "false" => TokenKind::False,

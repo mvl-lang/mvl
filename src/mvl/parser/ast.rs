@@ -25,6 +25,8 @@ pub enum Decl {
     Module(ModuleDecl),
     /// `extern "rust" { … }` — foreign-function trust boundary (Req 11).
     Extern(ExternDecl),
+    /// `use path::to::Item;` or `pub use path::to::Item;`
+    Use(UseDecl),
 }
 
 impl Decl {
@@ -35,14 +37,29 @@ impl Decl {
             Decl::Const(d) => d.span,
             Decl::Module(d) => d.span,
             Decl::Extern(d) => d.span,
+            Decl::Use(d) => d.span,
         }
     }
+}
+
+// ── Use declaration ────────────────────────────────────────────────────────
+
+/// `use path::to::Item;` or `pub use path::to::Item;`
+#[derive(Debug, Clone, PartialEq)]
+pub struct UseDecl {
+    /// Whether this is a re-export (`pub use …`)
+    pub reexport: bool,
+    /// Path segments, e.g. `["std", "io", "File"]`
+    pub path: Vec<String>,
+    pub span: Span,
 }
 
 // ── Type declaration ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeDecl {
+    /// Whether the item is exported from this module (`pub`).
+    pub visible: bool,
     pub name: String,
     /// Optional generic type parameters: `type Map<K, V> = …`
     pub params: Vec<String>,
@@ -86,6 +103,8 @@ pub enum VariantFields {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FnDecl {
+    /// Whether the item is exported from this module (`pub`).
+    pub visible: bool,
     pub totality: Option<Totality>,
     pub name: String,
     pub type_params: Vec<String>,
@@ -135,6 +154,8 @@ pub struct Constraint {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConstDecl {
+    /// Whether the item is exported from this module (`pub`).
+    pub visible: bool,
     pub name: String,
     pub ty: TypeExpr,
     pub value: Expr,
@@ -143,6 +164,8 @@ pub struct ConstDecl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModuleDecl {
+    /// Whether the item is exported from this module (`pub`).
+    pub visible: bool,
     pub name: String,
     pub declarations: Vec<Decl>,
     pub span: Span,
@@ -680,6 +703,7 @@ mod tests {
             span: dummy(),
         };
         let decl = FnDecl {
+            visible: false,
             totality: Some(Totality::Total),
             name: "add".into(),
             type_params: vec![],

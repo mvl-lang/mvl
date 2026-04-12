@@ -188,7 +188,9 @@ impl Parser {
                 | TokenKind::Const
                 | TokenKind::Module
                 | TokenKind::Total
-                | TokenKind::Partial => break,
+                | TokenKind::Partial
+                | TokenKind::Pub
+                | TokenKind::Use => break,
                 _ => {
                     self.advance();
                 }

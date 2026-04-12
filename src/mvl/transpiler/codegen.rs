@@ -143,6 +143,10 @@ impl Codegen {
                 Decl::Module(_) => {
                     // Phase 1: nested modules not yet supported
                 }
+                Decl::Use(_) => {
+                    // Phase 1: `use` declarations are resolved by the module resolver;
+                    // the transpiler emits Rust `use` statements in a later pass.
+                }
             }
             self.blank();
         }
