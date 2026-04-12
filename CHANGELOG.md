@@ -6,6 +6,24 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-04-12 (Unified CLI: check/build/test/assurance + grammar coverage)
+
+### Added
+- **`mvl check <dir>`** — type-check all `.mvl` files in a directory (closes #94)
+- **`mvl build <dir>`** — transpile directory-based projects (looks for `main.mvl`/`mod.mvl`/`lib.mvl` entry point)
+- **`mvl test <file|dir>`** — find `*_test.mvl` files, transpile to a combined Rust test crate, run `cargo test`
+- **`mvl assurance <file|dir> [--json]`** — report function totality, extern trust boundary, and type error counts in human or JSON format
+- **`tools/check_grammar_coverage.py`** — cross-validates `docs/grammar.ebnf` production names against `etc/tree-sitter-mvl/grammar.js` rules; exits 1 on unexpected gaps in either direction
+- Tree-sitter grammar: `module_decl`, `extern_decl`, `extern_fn_decl` rules; 26/26 corpus tests passing
+- `make test-grammar-coverage` and `make test-tree-sitter` targets; both hooked into `make test`
+
+### Fixed
+- `cmd_test` uses a per-PID temp directory to prevent concurrent invocation collisions
+- `cmd_assurance` correctly counts extern function *signatures* (not blocks) for trust-boundary percentage
+- `.expect()` on I/O operations replaced with clean user-facing error messages
+- `cargo`-not-in-PATH now prints actionable install message rather than panicking
+- `strip_suffix("_test")` replaces `trim_end_matches` (which stripped individual chars, not the literal suffix)
+
 ## [0.6.0] — 2026-04-12 (FFI: extern blocks, mvl_runtime, password_checker demo)
 
 ### Added
