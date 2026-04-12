@@ -66,8 +66,8 @@ pub fn safe_divide(numerator: Public<Amount>, denominator: Public<NonZero>) -> P
     …
 }
 
-// MVL: fn authenticate(…) -> Result<Session, AuthError> ! DB, Console
-/// # Effects: DB, Console
+// MVL: fn authenticate(…) -> Result<Session, AuthError> ! IO, Console
+/// # Effects: IO, Console
 /// MVL effect annotations — informational in Phase 1.
 pub fn authenticate(…) -> Result<Session, AuthError> {
     …
@@ -76,9 +76,9 @@ pub fn authenticate(…) -> Result<Session, AuthError> {
 
 | Req | MVL annotation | Rust emission |
 |-----|---------------|---------------|
-| 7 — Effect tracking | `! DB, Console` | `/// # Effects: DB, Console` |
+| 7 — Effect tracking | `! IO, Console` | `/// # Effects: IO, Console` |
 | 8 — Termination | `total fn` | `/// # Totality` |
-| 9 — Data race freedom | `iso db: &DbConn` | `/* iso */` comment on parameter |
+| 9 — Data race freedom | `iso store: &UserStore` | `/* iso */` comment on parameter |
 
 ### Requirements preserved as runtime assertions
 
@@ -116,7 +116,29 @@ pub fn sanitize<T>(v: Tainted<T>) -> Clean<T> { Clean(v.0) }
 |-----|--------------|---------------|
 | 10 — Refinement types | `type T = Base where pred` | newtype `struct T(Base)` with `debug_assert!(pred)` constructor |
 | 10 — Field refinements | `field: Int where self >= 0` | `debug_assert!` in struct `new()` |
-| 11 — IFC labels | `Public<T>`, `Tainted<T>`, `Secret<T>`, `Clean<T>` | generic newtypes; `sanitize()`/`declassify()` for allowed flows |
+| 11 — IFC labels | `Public<T>`, `Tainted<T>`, `Secret<T>`, `Clean<T>` | generic newtypes with `Copy`/`Display`/arithmetic impls; `sanitize()`/`declassify()` for allowed flows |
+
+### External type stubs (Phase 1)
+
+Types referenced in MVL function signatures but not defined in the current module
+(e.g. an opaque handle from an external library) are collected and emitted as
+placeholder structs.  Method calls on those types are also stubbed using return-type
+information inferred from the call-site let-binding:
+
+```rust
+// MVL: iso store: &UserStore  (UserStore not defined in this module)
+/// Placeholder for external type `UserStore` (not defined in this module).
+pub struct UserStore;
+
+impl UserStore {
+    // inferred from: let user: Option<User> = store.find_user(user_id)?
+    pub fn find_user(&self, _: Public<UserId>) -> Result<Option<User>, AuthError> { todo!() }
+}
+```
+
+This lets reference examples that depend on library types compile to Rust without
+manual scaffolding.  The `todo!()` body panics at runtime; a real library would
+replace the stub with an actual implementation.
 
 ### Summary table — Phase 1
 
