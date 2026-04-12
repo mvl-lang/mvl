@@ -7,3 +7,4 @@
 | [0003](0003-compilation-strategy.md) | Compilation strategy — prototype Rust, production LLVM | Accepted |
 | [0004](0004-language-size.md) | Language size — deliberately the smallest | Accepted |
 | [0005](0005-recursive-descent-parser.md) | Hand-written recursive descent parser | Accepted |
+| [0006](0006-ffi-extern-rust-bridge.md) | FFI via extern "rust" and the bridge.rs convention | Accepted |
