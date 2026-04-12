@@ -6,9 +6,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
-## [0.10.0] — 2026-04-12 (feat: compiler assurance report + Debug/Display traits + number literal formats + From conversion trait)
+## [0.10.0] — 2026-04-12 (feat: map/set literals, multiline/raw strings, assurance report, Debug/Display traits, number literal formats, From conversion trait)
 
 ### Added
+- `Expr::Map { pairs, span }` and `Expr::Set { elems, span }` AST variants for first-class map and set literals
+- `{"k": v, …}` map literal syntax — transpiles to `std::collections::HashMap::from([…])`
+- `{"a", "b", …}` set literal syntax — transpiles to `std::collections::HashSet::from([…])`
+- `classify_brace_start()` — speculative backtracking to disambiguate `{` as map, set, or block
+- `TokenKind::MultilineStr`, `RawStr`, `RawMultilineStr` lexer tokens
+- `"""…"""` multiline string literals with escape-sequence processing and preserved newlines
+- `r"…"` raw single-line string literals (no escape processing)
+- `r"""…"""` raw multiline string literals (no escape processing)
+- Checker: `Expr::Map` infers `Ty::Named("Map", [K, V])`, `Expr::Set` infers `Ty::Named("Set", [E])`
+- Corpus: `tests/corpus/02_types/map_set_literals.mvl` and extended `01_basics/literals.mvl`
 - `impl From<A> for B` syntax for error-type conversion; transpiles to `impl std::convert::From<A> for B`
 - `TypeEnv.from_impls` registry with `register_from_impl` / `has_from_impl` helpers
 - `CheckError::PropagateIncompatibleError` — emitted when `?` crosses incompatible error types without a `From` impl
@@ -32,6 +42,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 - `UnsupportedExternAbi` error reclassified from Req 11 (IFC) to Req 1 (Type Safety) — it is a declaration-level parse error, not an information flow violation
 
 ### Fixed
+- `escape_str`: NUL byte (`\0`) now emitted as `\\0` in generated Rust, preventing silent FFI truncation
+- `grammar.js`: corrected regex for `raw_multiline_string_literal` (stray trailing `"` caused incorrect matching)
 - Silent float parse failure: `unwrap_or(0.0)` replaced with explicit `LexError` for malformed scientific notation (e.g., `1.5e`)
 - Parser infinite-loop DoS in `parse_impl_decl` method recovery: added `pos_before` guard matching `parse_program` pattern
 - `TokenKind::Impl` added to error recovery sync set so `impl` blocks are not silently consumed during recovery

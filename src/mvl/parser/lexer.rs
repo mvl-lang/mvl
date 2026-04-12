@@ -101,6 +101,12 @@ pub enum TokenKind {
     Integer(i64),
     Float(f64),
     Str(String),
+    /// `"""…"""` — multiline string (escape sequences processed).
+    MultilineStr(String),
+    /// `r"…"` — raw single-line string (no escape processing).
+    RawStr(String),
+    /// `r"""…"""` — raw multiline string (no escape processing).
+    RawMultilineStr(String),
     Char(char),
 
     // ── Operators ─────────────────────────────────────────────────────────
@@ -186,6 +192,9 @@ impl fmt::Display for TokenKind {
             TokenKind::Integer(n) => write!(f, "{}", n),
             TokenKind::Float(v) => write!(f, "{}", v),
             TokenKind::Str(s) => write!(f, "\"{}\"", s),
+            TokenKind::MultilineStr(s) => write!(f, "\"\"\"{}\"\"\"", s),
+            TokenKind::RawStr(s) => write!(f, "r\"{}\"", s),
+            TokenKind::RawMultilineStr(s) => write!(f, "r\"\"\"{}\"\"\"", s),
             TokenKind::Char(c) => write!(f, "'{}'", c),
             TokenKind::Plus => write!(f, "+"),
             TokenKind::Minus => write!(f, "-"),
@@ -476,7 +485,21 @@ impl<'src> Lexer<'src> {
                 }
 
                 // ── String literal ────────────────────────────────────────
-                '"' => self.lex_string(start_line, start_col, start_offset),
+                '"' => {
+                    // Detect `"""` multiline string
+                    if self.peek_char() == Some('"') {
+                        self.advance(); // consume second `"`
+                        if self.peek_char() == Some('"') {
+                            self.advance(); // consume third `"`
+                            self.lex_multiline_string(start_line, start_col, start_offset)
+                        } else {
+                            // `""` — empty string (two quotes consumed)
+                            TokenKind::Str(String::new())
+                        }
+                    } else {
+                        self.lex_string(start_line, start_col, start_offset)
+                    }
+                }
 
                 // ── Char literal ──────────────────────────────────────────
                 '\'' => self.lex_char(start_line, start_col, start_offset),
@@ -496,6 +519,21 @@ impl<'src> Lexer<'src> {
                     // Single bare `_` is the wildcard pattern, not an ident
                     if s == "_" {
                         TokenKind::Underscore
+                    } else if s == "r" && self.peek_char() == Some('"') {
+                        // Raw string prefix: r"…" or r"""…"""
+                        self.advance(); // consume opening `"`
+                        if self.peek_char() == Some('"') {
+                            self.advance(); // consume second `"`
+                            if self.peek_char() == Some('"') {
+                                self.advance(); // consume third `"`
+                                self.lex_raw_multiline_string(start_line, start_col, start_offset)
+                            } else {
+                                // r"" — empty raw string
+                                TokenKind::RawStr(String::new())
+                            }
+                        } else {
+                            self.lex_raw_string(start_line, start_col, start_offset)
+                        }
                     } else {
                         keyword_or_ident(s)
                     }
@@ -547,6 +585,114 @@ impl<'src> Lexer<'src> {
             }
         }
         TokenKind::Str(s)
+    }
+
+    /// Lex `"""…"""` multiline string (escape sequences processed, literal newlines preserved).
+    fn lex_multiline_string(
+        &mut self,
+        start_line: u32,
+        start_col: u32,
+        start_offset: usize,
+    ) -> TokenKind {
+        let mut s = String::new();
+        loop {
+            match self.advance() {
+                None => {
+                    self.errors.push(LexError {
+                        message: "unterminated multiline string literal".into(),
+                        span: Span::new(start_line, start_col, start_offset as u32, 3),
+                    });
+                    break;
+                }
+                Some('"') => {
+                    if self.peek_char() == Some('"') {
+                        self.advance();
+                        if self.peek_char() == Some('"') {
+                            self.advance(); // consume closing third `"`
+                            break;
+                        } else {
+                            s.push('"');
+                            s.push('"');
+                        }
+                    } else {
+                        s.push('"');
+                    }
+                }
+                Some('\\') => match self.advance() {
+                    Some('n') => s.push('\n'),
+                    Some('t') => s.push('\t'),
+                    Some('r') => s.push('\r'),
+                    Some('\\') => s.push('\\'),
+                    Some('"') => s.push('"'),
+                    Some('0') => s.push('\0'),
+                    Some(c) => s.push(c),
+                    None => break,
+                },
+                Some(c) => s.push(c),
+            }
+        }
+        TokenKind::MultilineStr(s)
+    }
+
+    /// Lex `r"…"` raw single-line string (no escape processing).
+    fn lex_raw_string(
+        &mut self,
+        start_line: u32,
+        start_col: u32,
+        start_offset: usize,
+    ) -> TokenKind {
+        let mut s = String::new();
+        loop {
+            match self.advance() {
+                None => {
+                    self.errors.push(LexError {
+                        message: "unterminated raw string literal".into(),
+                        span: Span::new(start_line, start_col, start_offset as u32, 2),
+                    });
+                    break;
+                }
+                Some('"') => break,
+                Some(c) => s.push(c),
+            }
+        }
+        TokenKind::RawStr(s)
+    }
+
+    /// Lex `r"""…"""` raw multiline string (no escape processing).
+    fn lex_raw_multiline_string(
+        &mut self,
+        start_line: u32,
+        start_col: u32,
+        start_offset: usize,
+    ) -> TokenKind {
+        let mut s = String::new();
+        loop {
+            match self.advance() {
+                None => {
+                    self.errors.push(LexError {
+                        message: "unterminated raw multiline string literal".into(),
+                        span: Span::new(start_line, start_col, start_offset as u32, 4),
+                    });
+                    break;
+                }
+                Some('"') => {
+                    if self.peek_char() == Some('"') {
+                        self.advance();
+                        if self.peek_char() == Some('"') {
+                            self.advance(); // consume closing third `"`
+                            break;
+                        } else {
+                            s.push('"');
+                            s.push('"');
+                        }
+                    } else {
+                        s.push('"');
+                    }
+                }
+                Some(c) => s.push(c),
+            }
+        }
+        TokenKind::RawMultilineStr(s)
     }
 
     fn lex_char(&mut self, start_line: u32, start_col: u32, start_offset: usize) -> TokenKind {
@@ -1105,5 +1251,56 @@ mod tests {
     fn tokenize_impl_keyword() {
         let kinds = lex_kinds_no_eof("impl");
         assert_eq!(kinds, vec![TokenKind::Impl]);
+    }
+
+    // ── Multiline and raw strings ──────────────────────────────────────────
+
+    #[test]
+    fn tokenize_multiline_string() {
+        let kinds = lex_kinds_no_eof("\"\"\"hello\nworld\"\"\"");
+        assert_eq!(kinds, vec![TokenKind::MultilineStr("hello\nworld".into())]);
+    }
+
+    #[test]
+    fn tokenize_multiline_string_with_escapes() {
+        let kinds = lex_kinds_no_eof("\"\"\"tab:\\there\"\"\"");
+        assert_eq!(kinds, vec![TokenKind::MultilineStr("tab:\there".into())]);
+    }
+
+    #[test]
+    fn tokenize_empty_string_two_quotes() {
+        // `""` is an empty string (two adjacent double-quotes)
+        let kinds = lex_kinds_no_eof("\"\"");
+        assert_eq!(kinds, vec![TokenKind::Str(String::new())]);
+    }
+
+    #[test]
+    fn tokenize_raw_string() {
+        let kinds = lex_kinds_no_eof(r#"r"C:\path""#);
+        assert_eq!(kinds, vec![TokenKind::RawStr(r"C:\path".into())]);
+    }
+
+    #[test]
+    fn tokenize_raw_string_backslash_not_escape() {
+        // In raw strings `\n` is two chars, not a newline
+        let kinds = lex_kinds_no_eof(r#"r"\n""#);
+        assert_eq!(kinds, vec![TokenKind::RawStr(r"\n".into())]);
+    }
+
+    #[test]
+    fn tokenize_raw_string_empty() {
+        let kinds = lex_kinds_no_eof(r#"r"""#);
+        // r"" → empty raw string
+        assert_eq!(kinds, vec![TokenKind::RawStr(String::new())]);
+    }
+
+    #[test]
+    fn tokenize_raw_multiline_string() {
+        let src = "r\"\"\"line1\nline2\"\"\"";
+        let kinds = lex_kinds_no_eof(src);
+        assert_eq!(
+            kinds,
+            vec![TokenKind::RawMultilineStr("line1\nline2".into())]
+        );
     }
 }

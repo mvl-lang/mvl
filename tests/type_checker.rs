@@ -1266,3 +1266,45 @@ fn run() -> Result<String, AppError> {
         "? should be accepted when From impl exists, got: {conversion_errors:?}"
     );
 }
+
+// ── #58/#66: Map/Set literals and multiline/raw strings ──────────────────────
+
+#[test]
+fn map_set_literals_corpus_parses_and_checks() {
+    let src = include_str!("corpus/02_types/map_set_literals.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "map_set_literals corpus should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn literals_corpus_with_multiline_raw_strings_checks() {
+    let src = include_str!("corpus/01_basics/literals.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "literals corpus should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn map_literal_infers_named_map_type() {
+    let errors = errors_for(r#"fn f() -> Unit { let _m = {"a": 1, "b": 2}; }"#);
+    assert!(
+        errors.is_empty(),
+        "map literal should type-check cleanly, got: {errors:?}"
+    );
+}
+
+#[test]
+fn set_literal_infers_named_set_type() {
+    let errors = errors_for(r#"fn f() -> Unit { let _s = {1, 2, 3}; }"#);
+    assert!(
+        errors.is_empty(),
+        "set literal should type-check cleanly, got: {errors:?}"
+    );
+}

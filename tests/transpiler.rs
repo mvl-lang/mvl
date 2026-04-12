@@ -563,3 +563,38 @@ impl From<ParseError> for MyError {}
     assert_contains(&rust, "impl std::convert::From<ParseError> for MyError {");
     assert_contains(&rust, "todo!(\"From::from not implemented\")");
 }
+
+// ── #58/#66: Map/Set literals and multiline/raw strings ───────────────────────
+
+/// Map literal emits HashMap::from([…]).
+#[test]
+fn map_literal_transpiles_to_hashmap_from() {
+    let src = r#"fn f() -> Unit { let _m = {"a": 1}; }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "std::collections::HashMap::from([");
+    assert_contains(&rust, "\"a\".to_string()");
+}
+
+/// Set literal emits HashSet::from([…]).
+#[test]
+fn set_literal_transpiles_to_hashset_from() {
+    let src = r#"fn f() -> Unit { let _s = {1, 2, 3}; }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "std::collections::HashSet::from([");
+}
+
+/// Raw string backslashes are re-escaped in generated Rust output.
+#[test]
+fn raw_string_backslash_escaped_in_output() {
+    let src = r#"fn f() -> String { r"C:\path" }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "C:\\\\path");
+}
+
+/// Multiline string with literal newline emits escape sequence in Rust output.
+#[test]
+fn multiline_string_newline_escaped_in_output() {
+    let src = "fn f() -> String { \"\"\"hello\nworld\"\"\" }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "\\n");
+}

@@ -144,6 +144,28 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
             emit_args(cg, elems);
             cg.push("]");
         }
+        Expr::Map { pairs, .. } => {
+            cg.push("std::collections::HashMap::from([");
+            let pair_strs: Vec<String> = pairs
+                .iter()
+                .map(|(k, v)| {
+                    let mut tmp = Codegen::new();
+                    tmp.push("(");
+                    emit_expr(&mut tmp, k);
+                    tmp.push(", ");
+                    emit_expr(&mut tmp, v);
+                    tmp.push(")");
+                    tmp.finish()
+                })
+                .collect();
+            cg.push(&pair_strs.join(", "));
+            cg.push("])");
+        }
+        Expr::Set { elems, .. } => {
+            cg.push("std::collections::HashSet::from([");
+            emit_args(cg, elems);
+            cg.push("])");
+        }
         Expr::Move { expr, .. } => {
             // `move` in MVL means transfer ownership — Rust does this implicitly
             emit_expr(cg, expr);
@@ -200,6 +222,7 @@ fn escape_str(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\t' => out.push_str("\\t"),
             '\r' => out.push_str("\\r"),
+            '\0' => out.push_str("\\0"),
             other => out.push(other),
         }
     }
