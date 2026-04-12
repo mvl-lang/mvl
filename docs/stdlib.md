@@ -4,11 +4,32 @@ Derived from cross-language analysis of Rust std, Go std, Python stdlib, and C l
 
 #### Core (every program needs these)
 
-**Types:** `Bool`, `Int` (arbitrary precision), `Int8`..`Int64`, `UInt8`..`UInt64`, `Float32`, `Float64`, `Byte`, `Char` (Unicode scalar), `String` (UTF-8, immutable), `Array<T>`, `Map<K,V>`, `Set<T>`, `Option<T>`, `Result<T,E>`, `Tuple`, `Range`.
+**Types:** `Bool`, `Int` (arbitrary precision), `Int8`..`Int64`, `UInt8`..`UInt64`, `Float32`, `Float64`, `Byte`, `Char` (Unicode scalar), `String` (UTF-8, immutable), `Array<T>`, `Map<K,V>`, `Set<T>`, `Option<T>`, `Result<T,E>`, `Tuple`, `Range`, `Iterator<T>`.
 
 **String ops:** `len`, `is_empty`, `concat`, `join`, `split`, `trim`, `contains`, `starts_with`, `ends_with`, `find`, `replace`, `to_upper`, `to_lower`, `format`, `to_string`/`from_string`, `chars`, `bytes`.
 
-**Collection ops:** `new`, `push`, `pop`, `insert`, `remove`, `get` → `Option<T>` (never panic), `contains`, `len`, `is_empty`, `iter`, `map`, `filter`, `fold`, `flat_map`, `any`, `all`, `find`, `sort`, `sort_by`, `reverse`, `enumerate`, `zip`, `collect`, `min`, `max`, `sum`.
+**Collection ops:** `new`, `push`, `pop`, `insert`, `remove`, `get` → `Option<T>` (never panic), `contains`, `len`, `is_empty`, `iter` → `Iterator<T>`, `map`, `filter`, `fold`, `flat_map`, `any`, `all`, `find`, `sort`, `sort_by`, `reverse`, `enumerate`, `zip`, `collect`, `min`, `max`, `sum`.
+
+**Iterator protocol:** All collection types implement `Iterator<T>` via `.iter()`. Lazy operations (`map`, `filter`, `flat_map`) return `Iterator<U>` — no allocation until a terminal operation forces evaluation. Terminal operations: `fold`, `collect`, `any`, `all`, `find`, `sum`, `min`, `max`.
+
+```mvl
+// Lazy — returns Iterator<Int>, no allocation yet
+fn map<T, U>(self: Iterator<T>, f: fn(T) -> U) -> Iterator<U>
+fn filter<T>(self: Iterator<T>, pred: fn(&T) -> Bool) -> Iterator<T>
+fn flat_map<T, U>(self: Iterator<T>, f: fn(T) -> Iterator<U>) -> Iterator<U>
+fn enumerate<T>(self: Iterator<T>) -> Iterator<(UInt, T)>
+fn zip<T, U>(self: Iterator<T>, other: Iterator<U>) -> Iterator<(T, U)>
+
+// Terminal — forces evaluation
+fn fold<T, U>(self: Iterator<T>, init: U, f: fn(U, T) -> U) -> U
+fn collect<T>(self: Iterator<T>) -> Array<T>
+fn any<T>(self: Iterator<T>, pred: fn(&T) -> Bool) -> Bool
+fn all<T>(self: Iterator<T>, pred: fn(&T) -> Bool) -> Bool
+fn find<T>(self: Iterator<T>, pred: fn(&T) -> Bool) -> Option<T>
+fn sum<T>(self: Iterator<T>) -> T  where T: Add, T: Default
+fn min<T>(self: Iterator<T>) -> Option<T>  where T: Ord
+fn max<T>(self: Iterator<T>) -> Option<T>  where T: Ord
+```
 
 **Errors:** `Result<T,E>` + `Option<T>` with `?` propagation. `.map()`, `.and_then()`, `.unwrap_or()`. `Error` interface with `.message()` and `.source()`. `panic` for unrecoverable only.
 
