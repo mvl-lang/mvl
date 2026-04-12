@@ -6,6 +6,24 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-04-12 (bridge.rs convention: extern rust linking, Phase 2 complete)
+
+### Added
+- **bridge.rs convention** (#121): `mvl build` now discovers, validates, and links a sibling `bridge.rs` file when a program declares `extern "rust"` blocks. Enables MVL to call Rust ecosystem libraries (filesystem, argument parsing, cryptography, networking) without rewriting them in MVL.
+  - `has_extern_rust_decls()` helper in transpiler detects `extern "rust"` blocks
+  - `inject_mod_bridge()` inserts `mod bridge;` into generated Rust source
+  - Clear error message when `extern "rust"` is declared but `bridge.rs` is missing
+  - Sibling discovery: fixed name, co-located with `.mvl` source
+- **examples/log_analyzer** — Complete Phase 2 end-to-end demo: MVL program calls Rust implementations via `extern "rust"` trust boundary, demonstrates IFC flow (tainted file I/O → sanitize → clean analysis)
+- **Spec 006** (`.openspec/specs/006-trust-boundary-bridge/spec.md`) — Formalizes bridge.rs convention acceptance criteria into GIVEN/WHEN/THEN scenarios
+- **ADR-0006** (`.openspec/adr/0006-ffi-extern-rust-bridge.md`) — Documents FFI design decision with academic literature context: FFIChecker, McCormack 2025, SafeFFI, Miri; maps to Phase 3 roadmap (SMT-proven boundary contracts)
+
+### Changed
+- Removed CI `smoke` job (redundant with `cargo test`; reduced CI time)
+
+### Fixed
+- Build temp directory now uses PID suffix (`mvl_build_{name}_{pid}`) to avoid concurrent-run collisions (consistent with `mvl test` behavior)
+
 ## [0.10.3] — 2026-04-12 (chore: release pipeline, Makefile improvements)
 
 ### Added

@@ -1,0 +1,37 @@
+// log_analyzer/main.mvl — Phase 2 example: MVL calling Rust via extern "rust".
+//
+// Demonstrates:
+//   1. extern "rust" trust boundary — functions implemented in bridge.rs
+//   2. IFC flow: Tainted file contents → sanitize() → Clean → analysis
+//   3. File I/O stays in Rust; MVL side orchestrates the flow
+//
+// To run: mvl run main.mvl
+// Or:     make run   (creates sample.log automatically)
+//
+// Assurance: 1 extern trust boundary (2 functions).
+
+// ── Trust boundary: file I/O and output formatting live in Rust ──────────
+//
+// `extern "rust"` = explicit trust boundary — like Rust's `unsafe`.
+// The compiler trusts these signatures but does NOT verify the bodies.
+// Implementations are in bridge.rs.
+extern "rust" {
+    fn read_log_file(path: String) -> Tainted<String>;
+    fn count_and_format(content: Clean<String>) -> String;
+}
+
+// ── MVL-verified logic ────────────────────────────────────────────────────
+
+// Read and analyse a log file at `path`.
+// The taint boundary is explicit: raw file contents are tainted, sanitized
+// before analysis, so no untrusted data escapes as clean.
+fn analyze(path: String) -> String {
+    let raw: Tainted<String> = read_log_file(path);
+    let content: Clean<String> = sanitize(raw);
+    count_and_format(content)
+}
+
+fn main() -> Unit ! Console {
+    let report: String = analyze("sample.log");
+    println("{}", report);
+}

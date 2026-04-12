@@ -155,8 +155,8 @@ fn build_project(path: &str, run: bool) {
     let crate_name = stem(path);
     let out = transpiler::transpile(&prog, &crate_name);
 
-    // Write to a deterministic temp directory per crate name
-    let tmp_dir = std::env::temp_dir().join(format!("mvl_build_{crate_name}"));
+    // Use a per-invocation temp directory to avoid concurrent-run collisions.
+    let tmp_dir = std::env::temp_dir().join(format!("mvl_build_{}_{}", crate_name, process::id()));
     let src_dir = tmp_dir.join("src");
     fs::create_dir_all(&src_dir).unwrap_or_else(|e| {
         eprintln!("Cannot create temp dir {}: {e}", src_dir.display());
@@ -169,15 +169,36 @@ fn build_project(path: &str, run: bool) {
         process::exit(1);
     });
 
+    // Determine bridge.rs source path (sibling to the MVL input file).
+    let mvl_dir = Path::new(&file_path).parent().unwrap_or(Path::new("."));
+    let bridge_src = mvl_dir.join("bridge.rs");
+
+    // When extern "rust" blocks are present, bridge.rs must exist.
+    if out.has_extern_rust && !bridge_src.exists() {
+        eprintln!(
+            "error: extern \"rust\" block declared in {file_path} but bridge.rs not found\n       \
+             Place bridge.rs in {} to provide Rust implementations",
+            mvl_dir.display()
+        );
+        process::exit(1);
+    }
+
+    // Inject `mod bridge;` into the generated source when a bridge exists.
+    let lib_rs_content = if out.has_extern_rust {
+        inject_mod_bridge(&out.lib_rs)
+    } else {
+        out.lib_rs.clone()
+    };
+
     if out.has_main {
         // Binary crate: the transpiled code IS src/main.rs
-        fs::write(src_dir.join("main.rs"), &out.lib_rs).unwrap_or_else(|e| {
+        fs::write(src_dir.join("main.rs"), &lib_rs_content).unwrap_or_else(|e| {
             eprintln!("Cannot write main.rs: {e}");
             process::exit(1);
         });
     } else {
         // Library crate: lib.rs + a stub main for cargo build to succeed
-        fs::write(src_dir.join("lib.rs"), &out.lib_rs).unwrap_or_else(|e| {
+        fs::write(src_dir.join("lib.rs"), &lib_rs_content).unwrap_or_else(|e| {
             eprintln!("Cannot write lib.rs: {e}");
             process::exit(1);
         });
@@ -187,6 +208,14 @@ fn build_project(path: &str, run: bool) {
         )
         .unwrap_or_else(|e| {
             eprintln!("Cannot write stub main.rs: {e}");
+            process::exit(1);
+        });
+    }
+
+    // Copy bridge.rs into the crate's src/ directory.
+    if out.has_extern_rust {
+        fs::copy(&bridge_src, src_dir.join("bridge.rs")).unwrap_or_else(|e| {
+            eprintln!("Cannot copy bridge.rs: {e}");
             process::exit(1);
         });
     }
@@ -820,6 +849,22 @@ fn stem(path: &str) -> String {
             .and_then(|s| s.to_str())
             .unwrap_or("mvl_program")
             .to_string()
+    }
+}
+
+/// Insert `mod bridge;` into generated Rust source after the runtime import line.
+///
+/// The bridge module must be declared before any code that calls extern "rust" fns,
+/// so it is placed right after the `use mvl_runtime::prelude::*;` line.
+/// The marker is pure ASCII so byte-offset slicing is safe.
+fn inject_mod_bridge(source: &str) -> String {
+    let marker = "use mvl_runtime::prelude::*;";
+    if let Some(pos) = source.find(marker) {
+        let end = pos + marker.len();
+        format!("{}\nmod bridge;{}", &source[..end], &source[end..])
+    } else {
+        // Fallback: prepend at top if marker not found (should not happen with extern "rust").
+        format!("mod bridge;\n{source}")
     }
 }
 
