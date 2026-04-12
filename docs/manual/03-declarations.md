@@ -53,6 +53,21 @@ partial fn server_loop() -> Never ! Net, Console {
 
 `partial` functions may not terminate. `while` loops are only permitted in `partial` functions. Functions are `total` by default — `partial` is the opt-in escape hatch.
 
+### Program entry point
+
+A file with `fn main() -> ()` is a **binary** — it compiles to an executable. A file without `fn main` is a **library** — it compiles to a reusable module.
+
+```mvl
+// Binary: this file produces an executable
+fn main() -> () ! Console {
+    println("hello");
+}
+```
+
+There is no `#[binary]` attribute, no `package main`, no `__name__` guard. The presence of `fn main` is the only signal. The compiler infers binary vs library automatically.
+
+`fn main` is typically `partial` (servers loop forever) or effectful (most programs do I/O). A pure, total `fn main` is valid but unusual.
+
 ### Methods
 
 Methods are functions inside `impl` blocks:

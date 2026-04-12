@@ -16,6 +16,17 @@ src/
 
 A directory module needs a `mod.mvl` entry file that controls what the directory exposes.
 
+### Binary vs library
+
+The presence of `fn main() -> ()` determines the crate type:
+
+| File has `fn main`? | Compiles to | Rust equivalent |
+|---------------------|------------|-----------------|
+| Yes | Binary (executable) | `src/main.rs` |
+| No | Library (reusable module) | `src/lib.rs` |
+
+No attribute or annotation needed. The compiler infers this from the AST.
+
 ## 13.2 Visibility
 
 Everything is **private by default**. Use `pub` to export:
