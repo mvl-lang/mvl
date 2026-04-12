@@ -1,6 +1,6 @@
 # MVL Roadmap
 
-**Current version:** 0.5.2 (Phase 1 — Rust transpilation)
+**Current version:** 0.5.3 (Phase 1 — Rust transpilation)
 **Updated:** 2026-04-12
 
 ## Where we are
@@ -29,7 +29,7 @@ The parser and type checker are complete. All 11 requirements are represented in
 | 6 | [Ownership](requirements.md#req-6) | ✓ | ✓ partial (move tracking) | — | Phase 1 (linear resources: Phase 2) |
 | 7 | [Effect tracking](requirements.md#req-7) | ✓ | ✓ enforced | — | Phase 1 |
 | 8 | [Termination](requirements.md#req-8) | ✓ | ✓ partial (while rejected) | — | Phase 1 (structural recursion proof: Phase 2) |
-| 9 | [Data race freedom](requirements.md#req-9) | ✓ | ✓ enforced (capabilities) | — | Phase 1 |
+| 9 | [Data race freedom](requirements.md#req-9) | ✓ | ✓ partial (capabilities parsed, actor-boundary check: Phase 2) | — | Phase 2 |
 | 10 | [Refinement types](requirements.md#req-10) | ✓ | ✓ enforced (static, runtime assert on call-site) | — | Phase 2 (SMT solver) |
 | 11 | [IFC](requirements.md#req-11) | ✓ | ✓ enforced (lattice, declassify/sanitize) | — | Phase 2 (full flow analysis) |
 
@@ -59,8 +59,8 @@ The parser and type checker are complete. All 11 requirements are represented in
 |------|--------|----------|
 | Extern blocks / FFI | [#52](https://github.com/LAB271/mvl_language/issues/52) | High (stdlib bridge needs it) |
 | Unit test transpilation (`_test.mvl` → `#[test]`) | [#38](https://github.com/LAB271/mvl_language/issues/38) | High |
-| Assurance gate in CI | [#36](https://github.com/LAB271/mvl_language/issues/36) | Medium |
-| ISPE report on PRs | [#76](https://github.com/LAB271/mvl_language/issues/76) | Medium |
+| Assurance gate in CI (--min threshold) | [#36](https://github.com/LAB271/mvl_language/issues/36) | Medium |
+| ISPE report on PRs | [#76](https://github.com/LAB271/mvl_language/issues/76) | **Done** (v0.5.1) |
 | Compiler-emitted assurance report | [#73](https://github.com/LAB271/mvl_language/issues/73) | Phase 1 late / Phase 2 |
 
 ### Stdlib strategy for Phase 1

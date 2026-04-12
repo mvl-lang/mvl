@@ -6,6 +6,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.5.4] — 2026-04-12 (Roadmap accuracy)
+
+### Fixed
+- roadmap.md: version 0.5.2 → 0.5.3; Req 9 status corrected to partial (consistent with ADR-0001); ISPE PR report marked Done
+
 ## [0.5.3] — 2026-04-12 (Spec link audit + doc accuracy)
 
 ### Fixed
