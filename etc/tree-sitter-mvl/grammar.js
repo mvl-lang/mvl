@@ -67,7 +67,13 @@ module.exports = grammar({
     declaration: ($) =>
       seq(
         optional("pub"),
-        choice($.type_decl, $.fn_decl, $.const_decl)
+        choice(
+          $.type_decl,
+          $.fn_decl,
+          $.const_decl,
+          $.module_decl,
+          $.extern_decl
+        )
       ),
 
     // === Modules and imports ===
@@ -80,6 +86,28 @@ module.exports = grammar({
 
     module_path: ($) =>
       seq($.identifier, repeat(seq("::", $.identifier))),
+
+    // Nested module block: `module Foo { <declarations>* }`
+    module_decl: ($) =>
+      seq("module", $.identifier, "{", repeat($.declaration), "}"),
+
+    // Extern trust boundary: `extern "rust" { fn foo(...) -> T; }`
+    extern_decl: ($) =>
+      seq("extern", $.string_literal, "{", repeat($.extern_fn_decl), "}"),
+
+    // Function signature inside an extern block (no body — semicolon instead)
+    extern_fn_decl: ($) =>
+      seq(
+        "fn",
+        $.identifier,
+        "(",
+        optional($.param_list),
+        ")",
+        "->",
+        $.type_expr,
+        optional(seq("!", $.effect_list)),
+        ";"
+      ),
 
     // === Type declarations ===
 

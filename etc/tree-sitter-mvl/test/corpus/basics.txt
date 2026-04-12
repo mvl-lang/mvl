@@ -639,3 +639,57 @@ module Auth {
                     (ref_expr
                       (ref_atom
                         (integer_literal)))))))))))))
+===============================================================================
+Extern block — rust ABI
+===============================================================================
+
+extern "rust" {
+    fn hash(data: String) -> String;
+}
+
+-------------------------------------------------------------------------------
+
+(program
+  (declaration
+    (extern_decl
+      (string_literal)
+      (extern_fn_decl
+        (identifier)
+        (param_list
+          (param
+            (identifier)
+            (type_expr
+              (base_type
+                (identifier)))))
+        (type_expr
+          (base_type
+            (identifier)))))))
+
+===============================================================================
+Extern block — C ABI with effects
+===============================================================================
+
+extern "c" {
+    fn read_file(path: String) -> String ! IO, FileRead;
+}
+
+-------------------------------------------------------------------------------
+
+(program
+  (declaration
+    (extern_decl
+      (string_literal)
+      (extern_fn_decl
+        (identifier)
+        (param_list
+          (param
+            (identifier)
+            (type_expr
+              (base_type
+                (identifier)))))
+        (type_expr
+          (base_type
+            (identifier)))
+        (effect_list
+          (effect)
+          (effect))))))
