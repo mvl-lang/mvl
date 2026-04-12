@@ -80,7 +80,7 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
             cg.push(" {");
             cg.nl();
             cg.push_indent();
-            emit_block_stmts(cg, &then.stmts);
+            emit_block_as_value(cg, &then.stmts);
             cg.pop_indent();
             cg.indent();
             cg.push("}");
@@ -108,7 +108,7 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
             cg.push("{");
             cg.nl();
             cg.push_indent();
-            emit_block_stmts(cg, &block.stmts);
+            emit_block_as_value(cg, &block.stmts);
             cg.pop_indent();
             cg.indent();
             cg.push("}");
@@ -349,6 +349,28 @@ pub fn emit_block_stmts(cg: &mut Codegen, stmts: &[crate::mvl::parser::ast::Stmt
     use crate::mvl::transpiler::emit_stmts::emit_stmt;
     for stmt in stmts {
         emit_stmt(cg, stmt);
+    }
+}
+
+/// Emit block statements where the final `Stmt::Expr` is a tail expression
+/// (no semicolon), so it becomes the implicit return value of the block.
+pub fn emit_block_as_value(cg: &mut Codegen, stmts: &[crate::mvl::parser::ast::Stmt]) {
+    use crate::mvl::parser::ast::Stmt;
+    use crate::mvl::transpiler::emit_stmts::emit_stmt;
+    if stmts.is_empty() {
+        return;
+    }
+    let (head, tail) = stmts.split_at(stmts.len() - 1);
+    for stmt in head {
+        emit_stmt(cg, stmt);
+    }
+    match &tail[0] {
+        Stmt::Expr { expr, .. } => {
+            cg.indent();
+            emit_expr(cg, expr);
+            cg.nl();
+        }
+        other => emit_stmt(cg, other),
     }
 }
 
