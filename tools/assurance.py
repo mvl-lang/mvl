@@ -170,6 +170,11 @@ def report(requirements, verbose=False):
 
     if verbose:
         print()
+        print("  Legend: [impl][tests][corpus]")
+        print("    impl:   ✓=exists  ○=linked/missing  ✗=not linked")
+        print("    tests:  T=linked  -=none")
+        print("    corpus: C=present c=linked/missing  -=none")
+        print()
         for r in requirements:
             status = "✓" if r["impl_exists"] else "○" if r["impl_path"] else "✗"
             test_status = "T" if r["tests_linked"] else "-"
