@@ -130,11 +130,12 @@ impl Codegen {
             }
         }
 
-        // Top-level declarations
+        // Top-level declarations (non-test)
         for decl in &prog.declarations {
             match decl {
                 Decl::Type(td) => emit_type_decl(self, td),
-                Decl::Fn(fd) => emit_fn_decl(self, fd),
+                Decl::Fn(fd) if !fd.is_test => emit_fn_decl(self, fd),
+                Decl::Fn(_) => continue, // test fns emitted below
                 Decl::Extern(ed) => emit_extern_decl(self, ed),
                 Decl::Const(_) => {
                     // Phase 1: const decls emitted as-is in emit_types if needed
@@ -146,6 +147,27 @@ impl Codegen {
                 }
             }
             self.blank();
+        }
+
+        // Collect test functions and emit inside #[cfg(test)] mod
+        let test_fns: Vec<&FnDecl> = prog
+            .declarations
+            .iter()
+            .filter_map(|d| if let Decl::Fn(fd) = d { Some(fd) } else { None })
+            .filter(|fd| fd.is_test)
+            .collect();
+        if !test_fns.is_empty() {
+            self.line("#[cfg(test)]");
+            self.line("mod tests {");
+            self.push_indent();
+            self.line("use super::*;");
+            self.blank();
+            for fd in test_fns {
+                emit_fn_decl(self, fd);
+                self.blank();
+            }
+            self.pop_indent();
+            self.line("}");
         }
     }
 }

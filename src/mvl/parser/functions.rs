@@ -2,6 +2,7 @@
 //!
 //! Parses:
 //! - `[total|partial] fn Name [<TypeParams>] (params) -> ReturnType [! Effects] [where Constraints] { body }`
+//! - `test fn Name() -> Unit { body }` — unit test function
 //! - Parameters with optional capability (`iso`/`val`/`ref`/`tag`), `mut`, type, and refinement
 //! - Totality annotations, effect lists, and where-clause constraints
 
@@ -14,10 +15,18 @@ use crate::mvl::parser::{ParseError, Parser};
 impl Parser {
     // ── Function declarations ─────────────────────────────────────────────
 
-    /// Parse `[total|partial] fn Name …`.
-    /// Pre-condition: current token is `total`, `partial`, or `fn`.
+    /// Parse `[test] [total|partial] fn Name …`.
+    /// Pre-condition: current token is `test`, `total`, `partial`, or `fn`.
     pub fn parse_fn_decl(&mut self) -> Result<FnDecl, ()> {
         let start = self.peek_span();
+
+        // Optional `test` marker
+        let is_test = if *self.peek_kind() == TokenKind::Test {
+            self.advance();
+            true
+        } else {
+            false
+        };
 
         // Optional totality annotation
         let totality = match self.peek_kind() {
@@ -68,6 +77,7 @@ impl Parser {
         let span = self.span_from(start);
         Ok(FnDecl {
             visible: false, // set by parse_decl when `pub` prefix is present
+            is_test,
             totality,
             name,
             type_params,
@@ -239,7 +249,7 @@ impl Parser {
                 d.visible = visible;
                 Ok(Decl::Type(d))
             }
-            TokenKind::Fn | TokenKind::Total | TokenKind::Partial => {
+            TokenKind::Fn | TokenKind::Total | TokenKind::Partial | TokenKind::Test => {
                 let mut d = self.parse_fn_decl()?;
                 d.visible = visible;
                 Ok(Decl::Fn(d))
@@ -695,5 +705,38 @@ fn main() -> String { greet(String::new()) }"#;
         assert_eq!(prog.declarations.len(), 2);
         assert!(matches!(prog.declarations[0], Decl::Extern(_)));
         assert!(matches!(prog.declarations[1], Decl::Fn(_)));
+    }
+
+    // ── Requirement 4 / Scenario: Parse test function declaration ─────────
+
+    #[test]
+    fn parse_test_fn() {
+        // GIVEN: test fn check_add() -> Unit { }
+        // THEN: FnDecl with is_test=true, name="check_add"
+        let d = fn_decl("test fn check_add() -> Unit { }");
+        assert!(d.is_test);
+        assert_eq!(d.name, "check_add");
+        assert_eq!(d.totality, None);
+    }
+
+    #[test]
+    fn parse_test_fn_not_marked_for_normal_fn() {
+        let d = fn_decl("fn add(a: Int, b: Int) -> Int { }");
+        assert!(!d.is_test);
+    }
+
+    #[test]
+    fn parse_test_fn_as_top_level_decl() {
+        let src = "fn add(a: Int, b: Int) -> Int { }\ntest fn check_add() -> Unit { }";
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        assert!(p.errors.is_empty(), "parse errors: {:?}", p.errors);
+        assert_eq!(prog.declarations.len(), 2);
+        if let Decl::Fn(fd) = &prog.declarations[1] {
+            assert!(fd.is_test);
+            assert_eq!(fd.name, "check_add");
+        } else {
+            panic!("expected Fn decl");
+        }
     }
 }

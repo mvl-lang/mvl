@@ -103,6 +103,8 @@ pub enum VariantFields {
 pub struct FnDecl {
     /// Whether the item is exported from this module (`pub`).
     pub visible: bool,
+    /// Whether the function is a test (`test fn`).
+    pub is_test: bool,
     pub totality: Option<Totality>,
     pub name: String,
     pub type_params: Vec<String>,
@@ -693,6 +695,7 @@ mod tests {
         };
         let decl = FnDecl {
             visible: false,
+            is_test: false,
             totality: Some(Totality::Total),
             name: "add".into(),
             type_params: vec![],

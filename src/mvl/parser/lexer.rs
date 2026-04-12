@@ -73,6 +73,8 @@ pub enum TokenKind {
     Pub,
     /// `use` — import declaration (`use path::to::Item;`)
     Use,
+    /// `test` — marks a function as a unit test (`test fn name() { … }`)
+    Test,
 
     // ── Security labels ───────────────────────────────────────────────────
     Public,
@@ -166,6 +168,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Enum => write!(f, "enum"),
             TokenKind::Pub => write!(f, "pub"),
             TokenKind::Use => write!(f, "use"),
+            TokenKind::Test => write!(f, "test"),
             TokenKind::Public => write!(f, "Public"),
             TokenKind::Tainted => write!(f, "Tainted"),
             TokenKind::Secret => write!(f, "Secret"),
@@ -649,6 +652,7 @@ fn keyword_or_ident(s: String) -> TokenKind {
         "enum" => TokenKind::Enum,
         "pub" => TokenKind::Pub,
         "use" => TokenKind::Use,
+        "test" => TokenKind::Test,
         // Boolean literals
         "true" => TokenKind::True,
         "false" => TokenKind::False,
