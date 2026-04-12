@@ -13,7 +13,9 @@ For sixty years, programming languages have been designed for humans to write. T
 
 This is not a theoretical concern. At Schuberg Philis — a Dutch IT company running mission-critical infrastructure for clients including NS (Dutch Railways), Port of Rotterdam, and Tennet (national grid operator) — we deploy AI-assisted engineering daily. Our engineers use LLMs to generate code, specifications, and tests. The productivity gains are real. But so is the accountability: when an LLM-generated change breaks a train scheduling system or a power grid interface, the question from the regulator is not "which model generated this?" but "where is your evidence that this code satisfies its specification?"
 
-We developed **Assured Agentic Engineering (AAE)** as a maturity framework with five levels, from responsible AI usage (AAE-1) through full external certification (AAE-5). Our target: every engineer at AAE-3 (spec-centric, evidence-linked) by summer 2026. But AAE-3 is a process answer. It tells you *how* to work. It doesn't tell you *what* the compiler should prove.
+We developed **Assured Agentic Engineering (AAE)** as a maturity framework for trustworthy AI-assisted software development, with five levels from responsible AI usage (AAE-1) through full external certification (AAE-5). Our target: every engineer at AAE-3 (spec-centric, evidence-linked) by summer 2026. But AAE-3 is a process answer. It tells you *how* to work. It doesn't tell you *what* the compiler should prove.
+
+Our intent is to push the boundary — to see how far we can get if we truly let the LLM lead. Not as a tool that autocompletes human code, but as the primary author of software that must be trustworthy. What happens when we stop designing languages for humans to write and start designing them for machines to generate and compilers to verify? What level of assurance can we achieve when the annotation burden — termination proofs, security labels, refinement types — costs nothing because the machine writes it all?
 
 That is the research gap this program addresses.
 
