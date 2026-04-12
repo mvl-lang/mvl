@@ -233,7 +233,7 @@ impl CheckError {
             CheckError::AssignToImmutable { .. }
             | CheckError::MutateImmutableField { .. }
             | CheckError::CaptureMutabilityViolation { .. } => 6,
-            // Req 7: Effect Tracking
+            // Req 7: Effect Tracking (includes invalid names)
             CheckError::InvalidEffectName { .. }
             | CheckError::UndeclaredEffect { .. }
             | CheckError::MissingEffect { .. } => 7,

@@ -1106,7 +1106,8 @@ impl TypeChecker {
         let arg_tys: Vec<Ty> = args.iter().map(|a| self.infer_expr(a)).collect();
 
         // 003-information-flow/Req 6: logging functions MUST accept only Public<T>.
-        // Reject any argument labeled Secret or Tainted.
+        // Reject any argument labeled Secret, Tainted, or Clean (Clean is sanitized
+        // but not declassified — an explicit declassify() is required before logging).
         if matches!(name, "println" | "print") {
             for (arg, arg_ty) in args.iter().zip(arg_tys.iter()) {
                 if let Some(label) = ifc::label_of(arg_ty) {
@@ -1114,6 +1115,7 @@ impl TypeChecker {
                         label,
                         crate::mvl::parser::ast::SecurityLabel::Secret
                             | crate::mvl::parser::ast::SecurityLabel::Tainted
+                            | crate::mvl::parser::ast::SecurityLabel::Clean
                     ) {
                         self.emit(CheckError::LoggingLabelViolation {
                             label: ifc::label_name(label).to_string(),
