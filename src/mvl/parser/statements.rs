@@ -368,6 +368,19 @@ impl Parser {
             }
             TokenKind::Ident(name) => {
                 self.advance();
+                // Handle path patterns: Enum::Variant, Enum::Variant(fields), Enum::Variant { fields }
+                let name = if matches!(self.peek_kind(), TokenKind::ColonColon) {
+                    self.advance(); // consume `::`
+                    match self.peek_kind().clone() {
+                        TokenKind::Ident(variant) => {
+                            self.advance();
+                            format!("{name}::{variant}")
+                        }
+                        _ => name,
+                    }
+                } else {
+                    name
+                };
                 if matches!(self.peek_kind(), TokenKind::LParen) {
                     // TupleStruct: Name(p1, p2, ...)
                     self.advance();
