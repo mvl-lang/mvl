@@ -1,37 +1,123 @@
-// log_analyzer/main.mvl — Phase 2 example: MVL calling Rust via extern "rust".
+// main.mvl — Log analyzer entry point.
 //
 // Demonstrates:
-//   1. extern "rust" trust boundary — functions implemented in bridge.rs
-//   2. IFC flow: Tainted file contents → sanitize() → Clean → analysis
-//   3. File I/O stays in Rust; MVL side orchestrates the flow
+//   1. extern "rust" trust boundary — CLI + filesystem + full pipeline
+//   2. IFC labels: Tainted CLI input sanitized to Clean before use
+//   3. Effect declarations: FileRead + Console on I/O functions
+//   4. Multi-module design: use imports document cross-module dependencies
 //
-// To run: mvl run main.mvl
-// Or:     make run   (creates sample.log automatically)
+// NOTE (issue #96): use imports below are module-system declarations.
+// Cross-module type resolution is not yet wired into the per-file checker;
+// each file currently stands alone.  The use declarations document intent
+// and will be enforced once the module resolver is integrated.
 //
-// Assurance: 1 extern trust boundary (2 functions).
+// Usage:
+//   mvl run examples/log_analyzer/main.mvl -- --file logs.jsonl
+//   mvl run examples/log_analyzer/main.mvl -- --file logs.jsonl --level error
+//
+// Assurance note: 1 extern block (3 trust-boundary functions).
 
-// ── Trust boundary: file I/O and output formatting live in Rust ──────────
-//
-// `extern "rust"` = explicit trust boundary — like Rust's `unsafe`.
-// The compiler trusts these signatures but does NOT verify the bodies.
-// Implementations are in bridge.rs.
+use parser::parse_line;
+use parser::report_to_json;
+use parser::LogEntry;
+use parser::Report;
+use utils::clamp_display;
+use utils::is_positive;
+
+// ── Trust boundary: CLI + filesystem + analysis pipeline ───────────────────
+
 extern "rust" {
-    fn read_log_file(path: String) -> Tainted<String>;
-    fn count_and_format(content: Clean<String>) -> String;
+    fn clap_get_arg(name: Clean<String>) -> Option<Tainted<String>>;
+    fn fs_read_file(path: Clean<String>) -> Result<Tainted<String>, IOError>;
+    fn analyze_and_format(content: Tainted<String>, level: Option<Clean<String>>) -> Result<String, PipelineError>;
 }
 
-// ── MVL-verified logic ────────────────────────────────────────────────────
+// ── Domain types ───────────────────────────────────────────────────────────
 
-// Read and analyse a log file at `path`.
-// The taint boundary is explicit: raw file contents are tainted, sanitized
-// before analysis, so no untrusted data escapes as clean.
-fn analyze(path: String) -> String {
-    let raw: Tainted<String> = read_log_file(path);
-    let content: Clean<String> = sanitize(raw);
-    count_and_format(content)
+type IOError = enum {
+    FileNotFound,
+    PermissionDenied,
+    ReadError,
 }
 
-fn main() -> Unit ! Console {
-    let report: String = analyze("sample.log");
-    println("{}", report);
+type PipelineError = enum {
+    InvalidInput,
+    ParseFailed,
+}
+
+type RunError = enum {
+    MissingArg,
+    IOFailure,
+    PipelineFailed,
+}
+
+// ── Argument helpers (IFC: sanitize Tainted CLI input) ─────────────────────
+
+fn get_required_arg(name: Clean<String>) -> Result<Clean<String>, RunError> {
+    match clap_get_arg(name) {
+        None    => Err(RunError::MissingArg),
+        Some(v) => Ok(sanitize(v)),
+    }
+}
+
+fn get_optional_arg(name: Clean<String>) -> Option<Clean<String>> {
+    match clap_get_arg(name) {
+        None    => None,
+        Some(v) => Some(sanitize(v)),
+    }
+}
+
+// ── Main pipeline ───────────────────────────────────────────────────────────
+
+fn run() -> Result<Unit, RunError> ! FileRead, Console {
+    let arg_result = get_required_arg("file");
+    match arg_result {
+        Err(e) => Err(e),
+        Ok(file_path) => {
+            let level_opt = get_optional_arg("level");
+            let file_result = fs_read_file(file_path);
+            match file_result {
+                Err(_) => Err(RunError::IOFailure),
+                Ok(content) => {
+                    let pipeline_result = analyze_and_format(content, level_opt);
+                    match pipeline_result {
+                        Err(_) => Err(RunError::PipelineFailed),
+                        Ok(json_report) => {
+                            println(json_report);
+                            Ok(())
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn main() -> Unit ! FileRead, Console {
+    match run() {
+        Ok(_)  => (),
+        Err(_) => println("Error: analysis failed"),
+    }
+}
+
+// ── Internal unit tests ────────────────────────────────────────────────────
+
+test fn check_run_error_missing_arg_variant() -> Unit {
+    let err = RunError::MissingArg;
+    let is_missing = match err {
+        RunError::MissingArg  => 1,
+        RunError::IOFailure   => 0,
+        RunError::PipelineFailed => 0,
+    };
+    assert_eq(is_missing, 1);
+}
+
+test fn check_run_error_io_failure_variant() -> Unit {
+    let err = RunError::IOFailure;
+    let is_io = match err {
+        RunError::IOFailure      => 1,
+        RunError::MissingArg     => 0,
+        RunError::PipelineFailed => 0,
+    };
+    assert_eq(is_io, 1);
 }

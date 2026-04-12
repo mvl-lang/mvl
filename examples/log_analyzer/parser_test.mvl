@@ -1,0 +1,103 @@
+// parser_test.mvl — Standalone specification tests for parser domain logic.
+//
+// NOTE (issue #96): Cross-module function calls require the module resolver.
+// Until it is available, test files are self-contained: the functions under
+// test are re-declared locally so this file transpiles and runs independently.
+//
+// Run with:  mvl test examples/log_analyzer/
+
+// ── Local type definitions (mirrors parser.mvl) ───────────────────────────
+
+type LogLevel = enum {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+type ParseError = enum {
+    InvalidJson,
+    UnknownLevel,
+    MissingField,
+}
+
+// ── Local re-declaration of the function under test ───────────────────────
+//
+// NOTE: The live parser.mvl version takes Tainted<String> and sanitizes it.
+// Here we accept a plain String so that test call sites can pass string
+// literals directly.  The IFC-label flow is exercised in parser.mvl itself.
+
+total fn parse_level(raw: String) -> Result<LogLevel, ParseError> {
+    match raw {
+        "debug" => Ok(LogLevel::Debug),
+        "info"  => Ok(LogLevel::Info),
+        "warn"  => Ok(LogLevel::Warn),
+        "error" => Ok(LogLevel::Error),
+        _       => Err(ParseError::UnknownLevel),
+    }
+}
+
+// ── Test cases ─────────────────────────────────────────────────────────────
+
+test fn debug_level_parses_ok() -> Unit {
+    let result = parse_level("debug");
+    let ok = match result {
+        Ok(_)  => 1,
+        Err(_) => 0,
+    };
+    assert_eq(ok, 1);
+}
+
+test fn info_level_parses_ok() -> Unit {
+    let result = parse_level("info");
+    let ok = match result {
+        Ok(_)  => 1,
+        Err(_) => 0,
+    };
+    assert_eq(ok, 1);
+}
+
+test fn warn_level_parses_ok() -> Unit {
+    let result = parse_level("warn");
+    let ok = match result {
+        Ok(_)  => 1,
+        Err(_) => 0,
+    };
+    assert_eq(ok, 1);
+}
+
+test fn error_level_parses_ok() -> Unit {
+    let result = parse_level("error");
+    let ok = match result {
+        Ok(_)  => 1,
+        Err(_) => 0,
+    };
+    assert_eq(ok, 1);
+}
+
+test fn unknown_level_returns_err() -> Unit {
+    let result = parse_level("verbose");
+    let err = match result {
+        Ok(_)  => 0,
+        Err(_) => 1,
+    };
+    assert_eq(err, 1);
+}
+
+test fn empty_level_returns_err() -> Unit {
+    let result = parse_level("");
+    let err = match result {
+        Ok(_)  => 0,
+        Err(_) => 1,
+    };
+    assert_eq(err, 1);
+}
+
+test fn uppercase_level_returns_err() -> Unit {
+    let result = parse_level("ERROR");
+    let err = match result {
+        Ok(_)  => 0,
+        Err(_) => 1,
+    };
+    assert_eq(err, 1);
+}

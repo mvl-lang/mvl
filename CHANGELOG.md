@@ -6,24 +6,36 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
-## [0.11.0] — 2026-04-12 (bridge.rs convention: extern rust linking, Phase 2 complete)
+## [0.11.1] — 2026-04-12 (feat: bridge.rs — extern "rust" link support; end-to-end run)
 
 ### Added
-- **bridge.rs convention** (#121): `mvl build` now discovers, validates, and links a sibling `bridge.rs` file when a program declares `extern "rust"` blocks. Enables MVL to call Rust ecosystem libraries (filesystem, argument parsing, cryptography, networking) without rewriting them in MVL.
-  - `has_extern_rust_decls()` helper in transpiler detects `extern "rust"` blocks
-  - `inject_mod_bridge()` inserts `mod bridge;` into generated Rust source
-  - Clear error message when `extern "rust"` is declared but `bridge.rs` is missing
-  - Sibling discovery: fixed name, co-located with `.mvl` source
-- **examples/log_analyzer** — Complete Phase 2 end-to-end demo: MVL program calls Rust implementations via `extern "rust"` trust boundary, demonstrates IFC flow (tainted file I/O → sanitize → clean analysis)
+- `bridge.rs` convention for `mvl build`: a sibling `bridge.rs` file is detected automatically, copied into the generated crate, and linked via `mod bridge;` — enables `mvl build` and `mvl run` to fully link when `extern "rust"` functions are declared (closes #121)
+- `examples/log_analyzer/bridge.rs` — Rust implementations of the 3 trust-boundary fns (`clap_get_arg`, `fs_read_file`, `analyze_and_format`); `make run` now produces output end-to-end
+- `examples/log_analyzer/Makefile` — `make check`, `make test`, `make build`, `make generate`, `make run` targets
 - **Spec 006** (`.openspec/specs/006-trust-boundary-bridge/spec.md`) — Formalizes bridge.rs convention acceptance criteria into GIVEN/WHEN/THEN scenarios
 - **ADR-0006** (`.openspec/adr/0006-ffi-extern-rust-bridge.md`) — Documents FFI design decision with academic literature context: FFIChecker, McCormack 2025, SafeFFI, Miri; maps to Phase 3 roadmap (SMT-proven boundary contracts)
 
-### Changed
-- Removed CI `smoke` job (redundant with `cargo test`; reduced CI time)
-
 ### Fixed
+- `mvl build` with `extern "rust"` blocks but no `bridge.rs` now emits a clear warning instead of a silent linker failure
+- `mod bridge;` is injected after leading `#![allow(...)]` attributes so inner attributes remain valid at file top
+- `println!(expr)` with a non-literal first arg now emits `println!("{}", expr)`
+- String literals in argument position now emit `.to_string().into()` — coerces to `Clean<String>`, `Tainted<String>`, etc. via `From<T>` impls
+- `mvl_runtime`: label types (`Clean`, `Tainted`, `Public`, `Secret`) now implement `From<T>` so unlabeled values flow into labeled parameters
 - Build temp directory now uses PID suffix (`mvl_build_{name}_{pid}`) to avoid concurrent-run collisions (consistent with `mvl test` behavior)
 
+## [0.10.4] — 2026-04-12 (feat: log_analyzer Phase 2 example, transpiler fixes)
+
+### Added
+- `examples/log_analyzer/` — multi-file MVL program demonstrating all Phase 2 features: `extern "rust"` trust boundary (5 extern fns), IFC labels (`Tainted<String>` → `sanitize()` → `Clean<String>`), effect declarations (`! FileRead, Console`), generics with `where T: Ord` bounds (closes #48), module `use` imports (closes #47), internal test fn + standalone `_test.mvl` files (18 tests)
+- `examples/log_analyzer/log_generator.py` — Python 3 script (no dependencies) to generate sample JSONL log files for manual testing; supports `--count`, `--output`, `--seed`
+
+### Fixed
+- `assert_eq`/`assert_ne` now map to `assert_eq!`/`assert_ne!` macros in transpiler
+- String literal patterns in `match` now emit `.as_str()` on the scrutinee (fixes both `Expr::Match` and `Stmt::Match` codegen paths)
+- Test runner: strip per-module `#![allow]` and hoist to file level — avoids inner-attribute error in combined test crate
+- IFC label newtypes gain `.as_str()` method via `impl Label<String>` blocks
+- Extracted `arms_have_str_pattern` helper, eliminating duplicated string-pattern detection between expression and statement match codegen
+- Fixed trailing newline dropped by `join("\n")` in test runner module assembly
 ## [0.10.3] — 2026-04-12 (chore: release pipeline, Makefile improvements)
 
 ### Added

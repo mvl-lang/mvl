@@ -84,6 +84,16 @@ macro_rules! impl_label {
             }
         }
 
+        // From<T> — allows unlabeled (plain) values to flow into any label via
+        // `.into()` at call sites.  MVL's type checker enforces IFC rules
+        // statically; this impl just lets literal/unlabeled values coerce.
+        impl<T> From<T> for $Label<T> {
+            #[inline]
+            fn from(v: T) -> Self {
+                Self(v)
+            }
+        }
+
         // Deref — allows calling inner type methods directly (e.g. Tainted<String>.len())
         impl<T> std::ops::Deref for $Label<T> {
             type Target = T;

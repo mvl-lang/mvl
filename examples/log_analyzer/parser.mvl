@@ -1,0 +1,122 @@
+// parser.mvl — JSON log parsing module.
+//
+// Demonstrates:
+//   1. extern "rust" trust boundary — serde_json for JSON parsing
+//   2. IFC labels: Tainted input → sanitize → Clean<String>
+//   3. Total functions with exhaustive match (Req 8, Req 3)
+//   4. Result error propagation with ? (Req 5)
+//
+// Assurance note: 1 extern block (2 trust-boundary functions).
+
+// ── Trust boundary: serde_json crate ──────────────────────────────────────
+
+extern "rust" {
+    fn serde_json_parse_entry(raw: Tainted<String>) -> Result<RawEntry, ParseError>;
+    fn serde_json_to_json_string(report: Report) -> String;
+}
+
+// ── Domain types ───────────────────────────────────────────────────────────
+
+type ParseError = enum {
+    InvalidJson,
+    UnknownLevel,
+    MissingField,
+}
+
+pub type LogLevel = enum {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+// Raw deserialized entry — fields arrive as Tainted from serde.
+type RawEntry = struct {
+    level:     Tainted<String>,
+    message:   Tainted<String>,
+    timestamp: Int,
+}
+
+// Validated log entry with sanitized message text.
+pub type LogEntry = struct {
+    level:     LogLevel,
+    message:   Clean<String>,
+    timestamp: Int,
+}
+
+// Aggregated report — field 'count' (not 'total': reserved keyword).
+pub type Report = struct {
+    count:    Int,
+    errors:   Int,
+    warnings: Int,
+    infos:    Int,
+}
+
+// ── MVL-verified parsing logic ─────────────────────────────────────────────
+
+pub total fn parse_level(raw: Tainted<String>) -> Result<LogLevel, ParseError> {
+    let clean = sanitize(raw);
+    match clean {
+        "debug" => Ok(LogLevel::Debug),
+        "info"  => Ok(LogLevel::Info),
+        "warn"  => Ok(LogLevel::Warn),
+        "error" => Ok(LogLevel::Error),
+        _       => Err(ParseError::UnknownLevel),
+    }
+}
+
+// Parse a single JSON log line — external input stays Tainted until sanitized.
+pub total fn parse_line(raw: Tainted<String>) -> Result<LogEntry, ParseError> {
+    let entry: RawEntry = serde_json_parse_entry(raw)?;
+    let level: LogLevel = parse_level(entry.level)?;
+    Ok(LogEntry {
+        level:     level,
+        message:   sanitize(entry.message),
+        timestamp: entry.timestamp,
+    })
+}
+
+// Serialise a Report to a JSON string for output.
+pub fn report_to_json(report: Report) -> String {
+    serde_json_to_json_string(report)
+}
+
+// ── Internal unit tests ────────────────────────────────────────────────────
+// Plain String literals are compatible with Tainted<String> parameters:
+// unlabeled data flows freely into a Tainted context (Public ⊑ Tainted).
+
+test fn check_debug_level_is_ok() -> Unit {
+    let result = parse_level("debug");
+    let ok = match result {
+        Ok(_)  => 1,
+        Err(_) => 0,
+    };
+    assert_eq(ok, 1);
+}
+
+test fn check_error_level_is_ok() -> Unit {
+    let result = parse_level("error");
+    let ok = match result {
+        Ok(_)  => 1,
+        Err(_) => 0,
+    };
+    assert_eq(ok, 1);
+}
+
+test fn check_unknown_level_is_err() -> Unit {
+    let result = parse_level("verbose");
+    let err = match result {
+        Ok(_)  => 0,
+        Err(_) => 1,
+    };
+    assert_eq(err, 1);
+}
+
+test fn check_empty_level_is_err() -> Unit {
+    let result = parse_level("");
+    let err = match result {
+        Ok(_)  => 0,
+        Err(_) => 1,
+    };
+    assert_eq(err, 1);
+}

@@ -99,8 +99,12 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
         Expr::Match {
             scrutinee, arms, ..
         } => {
+            let has_str_pattern = arms_have_str_pattern(arms);
             cg.push("match ");
             emit_expr(cg, scrutinee);
+            if has_str_pattern {
+                cg.push(".as_str()");
+            }
             cg.push(" {");
             cg.nl();
             cg.push_indent();
@@ -248,6 +252,25 @@ fn emit_literal(cg: &mut Codegen, lit: &Literal) {
     }
 }
 
+/// Returns true if any match arm uses a string literal pattern.
+///
+/// When true, the scrutinee must be coerced to `&str` via `.as_str()` so that
+/// Rust's pattern matching works (both `String` and IFC-labeled strings expose
+/// `.as_str()`).  Called from both `Expr::Match` and `Stmt::Match` codegen.
+pub fn arms_have_str_pattern(arms: &[MatchArm]) -> bool {
+    arms.iter()
+        .any(|a| matches!(&a.pattern, Pattern::Literal(Literal::Str(_), _)))
+}
+
+/// Emit a literal in pattern position.  String literals must be bare `"s"`
+/// (not `"s".to_string()`) because Rust patterns cannot contain method calls.
+fn emit_literal_in_pattern(cg: &mut Codegen, lit: &Literal) {
+    match lit {
+        Literal::Str(s) => cg.push(&format!("\"{}\"", escape_str(s))),
+        other => emit_literal(cg, other),
+    }
+}
+
 // ── Arguments ─────────────────────────────────────────────────────────────
 
 fn emit_args(cg: &mut Codegen, args: &[Expr]) {
@@ -255,7 +278,21 @@ fn emit_args(cg: &mut Codegen, args: &[Expr]) {
         if i > 0 {
             cg.push(", ");
         }
-        emit_expr(cg, arg);
+        emit_expr_as_arg(cg, arg);
+    }
+}
+
+/// Emit an expression in function-argument position.
+///
+/// String literals get `.into()` appended so that Rust type inference can
+/// coerce them to whatever label type the callee expects (`String`,
+/// `Clean<String>`, `Tainted<String>`, etc.).  All other expressions are
+/// emitted unchanged.
+fn emit_expr_as_arg(cg: &mut Codegen, expr: &Expr) {
+    if let Expr::Literal(Literal::Str(s), _) = expr {
+        cg.push(&format!("\"{}\".to_string().into()", escape_str(s)));
+    } else {
+        emit_expr(cg, expr);
     }
 }
 
@@ -267,10 +304,14 @@ fn emit_args_for_macro(cg: &mut Codegen, args: &[Expr]) {
             cg.push(", ");
         }
         if i == 0 {
-            // First arg: emit string literal bare, without `.to_string()`
+            // First arg: emit string literal bare (no `.to_string()`).
+            // Non-literal: prepend "{}" format specifier so Rust accepts it.
             match arg {
                 Expr::Literal(Literal::Str(s), _) => cg.push(&format!("\"{}\"", escape_str(s))),
-                other => emit_expr(cg, other),
+                other => {
+                    cg.push("\"{}\", ");
+                    emit_expr(cg, other);
+                }
             }
         } else {
             emit_expr(cg, arg);
@@ -335,7 +376,7 @@ pub fn emit_pattern(cg: &mut Codegen, pat: &Pattern) {
     match pat {
         Pattern::Wildcard(_) => cg.push("_"),
         Pattern::Ident(name, _) => cg.push(&map_ident(name)),
-        Pattern::Literal(lit, _) => emit_literal(cg, lit),
+        Pattern::Literal(lit, _) => emit_literal_in_pattern(cg, lit),
         Pattern::Tuple { elems, .. } => {
             cg.push("(");
             for (i, e) in elems.iter().enumerate() {
@@ -433,6 +474,8 @@ fn map_fn_name(name: &str) -> String {
     match name {
         "println" => "println!".to_string(),
         "assert" => "assert!".to_string(),
+        "assert_eq" => "assert_eq!".to_string(),
+        "assert_ne" => "assert_ne!".to_string(),
         _ => name.to_string(),
     }
 }
