@@ -360,7 +360,7 @@ Float literals MUST support scientific notation (`1.5e10`, `2.0e-3`).
 
 The type system MUST define the `Iterator<T>` trait as the protocol for lazy, sequential element access. Every type used in a `for...in` loop MUST implement `Iterator<T>`. Collection operations that transform sequences (`map`, `filter`, `flat_map`) MUST return `Iterator<U>` rather than a concrete collection — evaluation is deferred until elements are consumed.
 
-**Implementation:** `src/mvl/checker/mod.rs`
+**Implementation:** `src/mvl/checker/mod.rs`, `src/mvl/transpiler/emit_impls.rs`, `src/mvl/transpiler/emit_stmts.rs`
 
 #### Iterator trait definition
 
@@ -370,7 +370,7 @@ type Iterator<T> = trait {
 }
 ```
 
-`next` takes `mut self` — it advances the iterator in place and returns the next element, or `None` when exhausted. Once `None` is returned, the iterator MUST NOT be called again (calling `next` after exhaustion is undefined behavior).
+`next` takes `mut self` — it advances the iterator in place and returns the next element, or `None` when exhausted. All iterators MUST be fused: once `None` is returned, every subsequent call to `next` MUST also return `None`.
 
 #### Built-in Iterator implementations
 
@@ -400,7 +400,7 @@ while let Some(item) = iter.next() {
 }
 ```
 
-The type checker MUST verify that the expression after `in` implements `Iterator<T>` or has an `.iter()` method that returns `Iterator<T>`. The for loop MUST only appear in `total` functions — see Requirement 7 (totality): bounded iteration is guaranteed by the finite iterator contract.
+The type checker MUST verify that the expression after `in` implements `Iterator<T>` or has an `.iter()` method that returns `Iterator<T>`. The for loop MUST only appear in `total` functions — bounded iteration is guaranteed by the fused, finite iterator contract. Infinite iterators (types whose `next` never returns `None`) are only permitted in `partial` functions using `while`.
 
 #### Lazy collection operations
 
@@ -410,6 +410,8 @@ The type checker MUST verify that the expression after `in` implements `Iterator
 fn map<T, U>(self: Iterator<T>, f: fn(T) -> U) -> Iterator<U>
 fn filter<T>(self: Iterator<T>, pred: fn(&T) -> Bool) -> Iterator<T>
 fn flat_map<T, U>(self: Iterator<T>, f: fn(T) -> Iterator<U>) -> Iterator<U>
+fn enumerate<T>(self: Iterator<T>) -> Iterator<(UInt, T)>
+fn zip<T, U>(self: Iterator<T>, other: Iterator<U>) -> Iterator<(T, U)>
 ```
 
 Terminal operations that force evaluation:
@@ -420,7 +422,7 @@ fn collect<T>(self: Iterator<T>) -> Array<T>
 fn any<T>(self: Iterator<T>, pred: fn(&T) -> Bool) -> Bool
 fn all<T>(self: Iterator<T>, pred: fn(&T) -> Bool) -> Bool
 fn find<T>(self: Iterator<T>, pred: fn(&T) -> Bool) -> Option<T>
-fn sum<T>(self: Iterator<T>) -> T  where T: Add
+fn sum<T>(self: Iterator<T>) -> T  where T: Add, T: Default
 fn min<T>(self: Iterator<T>) -> Option<T>  where T: Ord
 fn max<T>(self: Iterator<T>) -> Option<T>  where T: Ord
 ```
@@ -484,9 +486,7 @@ impl std::iter::Iterator for Counter {
 for item in collection.iter() { … }
 ```
 
-**Implementation:** `src/mvl/transpiler/emit_impls.rs`, `src/mvl/transpiler/emit_stmts.rs`
-
-**Tests:** `tests/type_checker.rs::iterator_trait_for_loop_accepted`, `tests/type_checker.rs::non_iterator_for_loop_rejected`, `tests/type_checker.rs::custom_iterator_impl_accepted`, `tests/transpiler.rs::iterator_impl_emits_rust_iterator`
+**Tests:** `tests/type_checker.rs::iterator_trait_for_loop_accepted`, `tests/type_checker.rs::non_iterator_for_loop_rejected`, `tests/type_checker.rs::custom_iterator_impl_accepted`, `tests/type_checker.rs::for_loop_rejected_in_partial_fn`, `tests/transpiler.rs::iterator_impl_emits_rust_iterator`
 
 #### Scenario: For loop over array accepted
 
@@ -509,6 +509,7 @@ for item in collection.iter() { … }
 #### Scenario: Lazy map does not allocate intermediate collection
 
 - GIVEN `let result = items.iter().map(|x| x + 1).filter(|x| x > 2).collect()`
+- WHEN the expression is type-checked
 - THEN the type of `.map(…)` MUST be `Iterator<Int>`, not `Array<Int>`
 - AND no intermediate array MUST be allocated between `.map()` and `.filter()`
 
@@ -517,3 +518,9 @@ for item in collection.iter() { … }
 - GIVEN `let sum = items.iter().map(|x| x * 2).fold(0, |acc, x| acc + x)`
 - THEN `fold` MUST consume the iterator and return `Int`
 - AND the result MUST equal the sum of doubled elements
+
+#### Scenario: For loop rejected inside partial function
+
+- GIVEN `partial fn f(items: Array<Int>) { for x in items { println(x.to_string()); } }`
+- WHEN the function is type-checked
+- THEN the type checker MUST reject with: "`for` is not permitted in `partial` functions; use `while` instead"
