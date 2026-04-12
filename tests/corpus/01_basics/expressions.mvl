@@ -77,7 +77,7 @@ fn precedence(a: Int, b: Int, c: Int) -> Int {
 }
 
 // ? propagation
-fn propagation(input: String) -> Result<Int, Error> ! IO {
+fn propagation(input: String) -> Result<Int, String> ! IO {
     let n = parse_int(input)?;
     Ok(n)
 }

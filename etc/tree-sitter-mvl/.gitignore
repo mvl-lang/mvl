@@ -1,1 +1,11 @@
 node_modules/
+build/
+bindings/
+package-lock.json
+Cargo.toml
+Makefile
+Package.swift
+pyproject.toml
+setup.py
+.editorconfig
+.gitattributes
