@@ -221,6 +221,6 @@ that proof to the binary as efficiently as the target allows.
 
 ## See also
 
-- [ADR-0003: Compilation Strategy](../.openspec/adr/0003-compilation-strategy.md) — architectural decision record
+- [ADR-0003: Compilation Strategy](adr/0003-compilation-strategy.md) — architectural decision record
 - [Introduction](introduction.md) — the eleven requirements
 - [Manual §17: Compilation Model](manual/17-compilation.md) — build commands and phase overview

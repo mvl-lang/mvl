@@ -61,7 +61,9 @@ nav:
     - Language Reference: language.md
     - Grammar (EBNF): grammar.md
     - Standard Library: stdlib.md
+    - How MVL Compiles: compilation-model.md
   - Design:
+    - Overview: adr/index.md
     - ADR-0001 Eleven Requirements: adr/0001-eleven-requirements.md
     - ADR-0002 Language Contraction: adr/0002-language-contraction.md
     - ADR-0003 Compilation Strategy: adr/0003-compilation-strategy.md
