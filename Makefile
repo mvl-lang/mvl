@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help build build-release test test-unit test-integration test-corpus test-transpiler lint format format-check assurance assurance-verbose assurance-gate docs docs-serve tree-sitter-build tree-sitter-test clean
+.PHONY: help build build-release test test-unit test-integration test-corpus test-transpiler test-tree-sitter lint format format-check assurance assurance-verbose assurance-gate docs docs-serve tree-sitter-build clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -26,7 +26,7 @@ build-release: ## Build release binary
 
 # === Test ===
 
-test: test-corpus ## Run all tests (unit + corpus validation)
+test: test-corpus test-tree-sitter ## Run all tests (unit + corpus + tree-sitter grammar)
 	@echo "Running unit tests..."
 	cargo test
 
@@ -90,11 +90,12 @@ docs-serve: ## Serve documentation locally (http://localhost:8000)
 # === Clean ===
 
 # === Tree-sitter (editor support) ===
+# Grammar is derived from docs/grammar.ebnf — keep in sync manually.
 
 tree-sitter-build: ## Build tree-sitter grammar for Zed/Neovim
 	cd etc/tree-sitter-mvl && npm install && npm run build
 
-tree-sitter-test: ## Run tree-sitter corpus tests
+test-tree-sitter: ## Run tree-sitter corpus tests (grammar derived from docs/grammar.ebnf)
 	cd etc/tree-sitter-mvl && npm test
 
 # === Clean ===
