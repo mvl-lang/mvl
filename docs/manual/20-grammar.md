@@ -19,7 +19,7 @@ The grammar is LL(1) — parseable by a single-lookahead recursive descent parse
 |----------|------------|---------|
 | Top-level | ~5 | program, declaration |
 | Types | ~15 | type_expr, refinement, security labels |
-| Declarations | ~10 | fn_decl, type_decl, module_decl |
+| Declarations | ~10 | fn_decl, type_decl, use_decl, reexport_decl |
 | Statements | ~10 | let, if, match, for, while |
 | Expressions | ~15 | binary, unary, call, lambda, propagation |
 | Patterns | ~5 | destructuring, guards |

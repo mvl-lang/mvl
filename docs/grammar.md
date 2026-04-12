@@ -16,7 +16,7 @@ See [ADR-0005](adr/0005-recursive-descent-parser.md) for the parser design decis
 | Category | Count | Key constructs |
 |----------|-------|----------------|
 | Top-level | ~5 | `program`, `declaration` |
-| Modules | ~1 | `module_decl` |
+| Modules | ~3 | `use_decl`, `reexport_decl`, `module_path` |
 | Type declarations | ~6 | `type_decl`, `struct_body`, `enum_body`, `variant` |
 | Function declarations | ~8 | `fn_decl`, `totality`, `param_list`, `effect_list` |
 | Type expressions | ~10 | `type_expr`, `option_type`, `result_type`, `ref_type`, `refined_type`, `fn_type` |

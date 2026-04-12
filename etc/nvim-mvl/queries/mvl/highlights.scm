@@ -12,13 +12,17 @@
 ; ============================================================
 
 [
-  "module"
   "type"
   "fn"
   "const"
   "struct"
   "enum"
 ] @keyword
+
+[
+  "use"
+  "pub"
+] @keyword.import
 
 ; ============================================================
 ; Keywords — totality (safety modifiers)
@@ -154,11 +158,11 @@
   (identifier) @constant)
 
 ; ============================================================
-; Module declarations
+; Module imports
 ; ============================================================
 
-(module_decl
-  (identifier) @module)
+(use_decl
+  (module_path) @namespace)
 
 ; ============================================================
 ; Type expressions
