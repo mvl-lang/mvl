@@ -57,32 +57,58 @@ The parser, type checker, and Phase 1 transpiler are complete. All 11 requiremen
 
 | What | Issues | Priority |
 |------|--------|----------|
-| Extern blocks / FFI | [#52](https://github.com/LAB271/mvl_language/issues/52) | High (stdlib bridge needs it) |
+| **Rust FFI as stdlib** | [#91](https://github.com/LAB271/mvl_language/issues/91) | **Critical** — this IS the stdlib strategy |
+| Extern blocks / FFI spec | [#52](https://github.com/LAB271/mvl_language/issues/52) | **Critical** — #91 depends on this |
 | Unit test transpilation (`_test.mvl` → `#[test]`) | [#38](https://github.com/LAB271/mvl_language/issues/38) | High |
 | Assurance gate in CI (--min threshold) | [#36](https://github.com/LAB271/mvl_language/issues/36) | Medium |
 | ISPE report on PRs | [#76](https://github.com/LAB271/mvl_language/issues/76) | **Done** (v0.5.1) |
 | Compiler-emitted assurance report | [#73](https://github.com/LAB271/mvl_language/issues/73) | Phase 1 late / Phase 2 |
 
-### Stdlib strategy for Phase 1
+### Stdlib strategy for Phase 1: Zero stdlib — Rust FFI is the standard library
 
-The transpiler maps MVL stdlib to Rust std. No custom Rust runtime library.
+Phase 1 ships with **no MVL stdlib**. The entire standard library is Rust's ecosystem, accessed through `extern "rust"` blocks. This makes the language immediately useful.
 
-| MVL | Maps to Rust |
-|-----|-------------|
-| `Int` | `i64` (or `num::BigInt` for arbitrary precision) |
+**How it works:**
+
+- MVL code above the `extern` boundary: **11 requirements verified**
+- Rust code below: **7/11** (Rust's native guarantees)
+- The boundary is typed, effect-tracked, IFC-labeled, greppable, and counted in assurance reports
+
+```mvl
+// MVL code — verified (11/11)
+fn handle_request(req: Tainted<Request>) -> Result<Response, AppError> ! Net, DB {
+    let user = authenticate(sanitize(req.token))?;
+    let data = pg_query(&db, "SELECT ...", [user.id])?;
+    Ok(Response { body: data })
+}
+
+// Trust boundary — explicit, auditable
+extern "rust" {
+    fn pg_query(conn: &DbConn, sql: String, params: Array<SqlParam>) -> Result<Rows, DbError> ! DB
+    fn authenticate(token: Clean<Token>) -> Result<User, AuthError> ! Net
+}
+```
+
+**Primitive type mapping** (built into the transpiler, not extern):
+
+| MVL | Rust |
+|-----|------|
+| `Int` | `i64` |
 | `String` | `String` |
 | `Array<T>` | `Vec<T>` |
-| `Map<K,V>` | `std::collections::HashMap<K,V>` |
-| `Set<T>` | `std::collections::HashSet<T>` |
+| `Map<K,V>` | `HashMap<K,V>` |
 | `Option<T>` | `Option<T>` |
 | `Result<T,E>` | `Result<T,E>` |
-| `println()` | `println!()` |
 | `Public<T>` | Newtype `pub struct Public<T>(T)` |
 | `Tainted<T>` | Newtype `pub struct Tainted<T>(T)` |
 | `Secret<T>` | Newtype `pub struct Secret<T>(T)` |
-| `Int where x > 0` | `assert!(x > 0)` at call site |
+| `Int where x > 0` | `debug_assert!(x > 0)` |
 
-This is intentionally simple. Phase 2 replaces it with native codegen.
+**Stdlib growth path:**
+
+1. **Phase 1:** `extern "rust"` only. Cargo.toml pulls Rust crates. Zero MVL stdlib.
+2. **Over time:** Verified MVL wrappers replace extern calls. Each wrapper moves code from "trusted" to "verified."
+3. **The assurance ratio** (verified / total) becomes the metric: start at 60% MVL + 40% extern, push toward 90%.
 
 ## Phase 2 — LLVM Backend
 
