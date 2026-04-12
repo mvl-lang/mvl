@@ -6,6 +6,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.5.6] — 2026-04-12 (Transpiler: end-to-end compile for reference examples)
+
+### Fixed
+- Transpiler: external types referenced in function signatures (e.g. `UserStore`)
+  now get auto-generated `pub struct Stub;` placeholders so the emitted Rust compiles
+- Transpiler: method calls on external-type parameters now produce `impl Stub { fn method() }`
+  stubs with return types inferred from let-binding annotations and `?`-propagation
+- Transpiler: security label newtypes (`Public`, `Tainted`, `Secret`, `Clean`) now
+  emit `Copy` (when inner type is `Copy`), `Display`, and arithmetic operator impls
+  (`Add`, `Sub`, `Mul`, `Div`, `Rem`, `Neg`) — enabling labeled arithmetic and `println!`
+- Transpiler: `Public<i64>` gains a `to_float()` helper for integer→float conversions
+- Transpiler: refined newtypes over primitive MVL types (`Int`, `Float`, `Bool`, `Char`,
+  `Byte`) now derive `Copy`, eliminating spurious "value moved" errors
+- Transpiler: tail expressions of labeled return type (`Secret<String>`, `Public<Float>`)
+  are automatically wrapped — e.g. `{ "token" }` → `Secret("token".to_string())`;
+  `Ok(f)` where f is an unlabeled param → `Ok(Public(f))`
+- Corpus: `auth_handler.mvl` — renamed `DbConn` → `UserStore`, effect `! DB` → `! IO`
+
+All 7 corpus full programs now build end-to-end with `mvl build` (#90).
+
 ## [0.5.5] — 2026-04-12 (Corpus validation + Phase 1 transpiler)
 
 ### Added

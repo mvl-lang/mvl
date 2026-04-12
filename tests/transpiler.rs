@@ -265,5 +265,5 @@ fn full_program_auth_handler_transpiles() {
     assert_contains(&rust, "pub struct Session");
     assert_contains(&rust, "pub fn authenticate");
     assert_contains(&rust, "/// # Totality");
-    assert_contains(&rust, "/// # Effects: DB, Console");
+    assert_contains(&rust, "/// # Effects: IO, Console");
 }

@@ -49,17 +49,66 @@ pub fn emit_security_preamble(cg: &mut Codegen) {
     cg.line("/// Declassify a secret value — makes it public.");
     cg.line("/// MVL: `declassify(x)` where x: Secret<T>");
     cg.line("pub fn declassify<T>(v: Secret<T>) -> Public<T> { Public(v.0) }");
+    cg.blank();
+    // Numeric conversion helpers for labeled integer/float types
+    cg.line("impl Public<i64> {");
+    cg.push_indent();
+    cg.line("/// Convert labeled integer to raw f64 (for use with Float-typed functions).");
+    cg.line("pub fn to_float(&self) -> f64 { self.0 as f64 }");
+    cg.pop_indent();
+    cg.line("}");
 }
 
 fn emit_label_newtype(cg: &mut Codegen, label: &str) {
     cg.line("#[derive(Debug, Clone, PartialEq)]");
     cg.line(&format!("pub struct {label}<T>(pub T);"));
     cg.blank();
+    // Copy impl: labels over Copy types are themselves Copy (e.g. Public<i64>)
+    cg.line(&format!("impl<T: Copy> Copy for {label}<T> {{}}"));
+    cg.blank();
     cg.line(&format!("impl<T> {label}<T> {{"));
     cg.push_indent();
     cg.line("pub fn new(v: T) -> Self { Self(v) }");
     cg.line("pub fn into_inner(self) -> T { self.0 }");
     cg.line("pub fn as_inner(&self) -> &T { &self.0 }");
+    cg.pop_indent();
+    cg.line("}");
+    cg.blank();
+    // Display: label<T> displays as T when T: Display
+    cg.line(&format!(
+        "impl<T: std::fmt::Display> std::fmt::Display for {label}<T> {{"
+    ));
+    cg.push_indent();
+    cg.line("fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { self.0.fmt(f) }");
+    cg.pop_indent();
+    cg.line("}");
+    cg.blank();
+    // Arithmetic: delegate ops to the inner value, preserving the label
+    for (trait_name, method, op) in [
+        ("std::ops::Add", "add", "+"),
+        ("std::ops::Sub", "sub", "-"),
+        ("std::ops::Mul", "mul", "*"),
+        ("std::ops::Div", "div", "/"),
+        ("std::ops::Rem", "rem", "%"),
+    ] {
+        cg.line(&format!(
+            "impl<T: {trait_name}<Output=T>> {trait_name} for {label}<T> {{"
+        ));
+        cg.push_indent();
+        cg.line(&format!("type Output = {label}<T>;"));
+        cg.line(&format!(
+            "fn {method}(self, rhs: Self) -> Self {{ {label}(self.0 {op} rhs.0) }}"
+        ));
+        cg.pop_indent();
+        cg.line("}");
+        cg.blank();
+    }
+    cg.line(&format!(
+        "impl<T: std::ops::Neg<Output=T>> std::ops::Neg for {label}<T> {{"
+    ));
+    cg.push_indent();
+    cg.line(&format!("type Output = {label}<T>;"));
+    cg.line(&format!("fn neg(self) -> Self {{ {label}(-self.0) }}"));
     cg.pop_indent();
     cg.line("}");
 }
@@ -162,7 +211,12 @@ fn emit_alias(cg: &mut Codegen, name: &str, params: &[String], ty: &TypeExpr) {
         TypeExpr::Refined { inner, pred, .. } => {
             // Refined alias becomes a newtype with constructor validation
             let inner_str = emit_type_expr(inner);
-            emit_derive(cg, &["Debug", "Clone", "PartialEq", "PartialOrd"]);
+            // Add Copy when the inner type is a primitive (i64, f64, bool, char, u8)
+            if is_copy_primitive(inner) {
+                emit_derive(cg, &["Debug", "Clone", "Copy", "PartialEq", "PartialOrd"]);
+            } else {
+                emit_derive(cg, &["Debug", "Clone", "PartialEq", "PartialOrd"]);
+            }
             cg.line(&format!("pub struct {}(pub {});", name, inner_str));
             cg.blank();
             cg.line(&format!("impl {} {{", name));
@@ -199,6 +253,16 @@ fn emit_alias(cg: &mut Codegen, name: &str, params: &[String], ty: &TypeExpr) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
+
+/// Returns true when the MVL type maps to a Rust `Copy` primitive.
+fn is_copy_primitive(ty: &TypeExpr) -> bool {
+    match ty {
+        TypeExpr::Base { name, args, .. } if args.is_empty() => {
+            matches!(name.as_str(), "Int" | "Float" | "Bool" | "Char" | "Byte")
+        }
+        _ => false,
+    }
+}
 
 fn emit_derive(cg: &mut Codegen, traits: &[&str]) {
     cg.line(&format!("#[derive({})]", traits.join(", ")));

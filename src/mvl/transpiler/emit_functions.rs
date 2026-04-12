@@ -7,10 +7,10 @@
 //! - Type params with constraints → Rust generic bounds
 //! - Return refinement → `debug_assert!` at end of body
 
-use crate::mvl::parser::ast::{Capability, Constraint, FnDecl, Param, Totality};
+use crate::mvl::parser::ast::{Capability, Constraint, Expr, FnDecl, Param, Totality, TypeExpr};
 use crate::mvl::transpiler::codegen::Codegen;
-use crate::mvl::transpiler::emit_exprs::emit_block_stmts;
-use crate::mvl::transpiler::emit_types::{emit_ref_expr_for_assert, emit_type_expr};
+use crate::mvl::transpiler::emit_exprs::{emit_block_stmts, emit_expr};
+use crate::mvl::transpiler::emit_types::{emit_label, emit_ref_expr_for_assert, emit_type_expr};
 
 pub fn emit_fn_decl(cg: &mut Codegen, fd: &FnDecl) {
     // Doc comments for MVL-specific annotations that Rust cannot express directly
@@ -52,7 +52,7 @@ pub fn emit_fn_decl(cg: &mut Codegen, fd: &FnDecl) {
                 // Check if it's a return-like expression (if, match, block)
                 // — emit as tail expression (no semicolon)
                 cg.indent();
-                emit_expr_tail(cg, expr);
+                emit_expr_tail_with_return_type(cg, expr, &fd.return_type, &fd.params);
                 cg.nl();
             }
             other => emit_block_stmts(cg, std::slice::from_ref(other)),
@@ -122,10 +122,74 @@ fn emit_params(params: &[Param]) -> String {
 // ── Tail expression emitter ───────────────────────────────────────────────
 
 /// Emit an expression as the tail (implicit return) of a function body.
-/// No semicolon is appended.
-fn emit_expr_tail(cg: &mut Codegen, expr: &crate::mvl::parser::ast::Expr) {
-    use crate::mvl::transpiler::emit_exprs::emit_expr;
-    // Emit without leading indent — caller has already indented.
-    // No semicolon: this is the implicit return value of the function body.
+/// When the declared return type is a security label wrapper (e.g. `Secret<String>`),
+/// literal expressions are wrapped with the appropriate constructor so that the
+/// generated Rust code type-checks without manual coercions.
+///
+/// This handles common stub patterns like:
+/// ```mvl
+/// fn generate_token(id: UserId) -> Secret<String> { "token" }
+/// ```
+/// → `Secret("token".to_string())`
+fn emit_expr_tail_with_return_type(
+    cg: &mut Codegen,
+    expr: &Expr,
+    return_type: &TypeExpr,
+    params: &[Param],
+) {
+    match return_type {
+        TypeExpr::Labeled { label, .. } => {
+            // Wrap only when the expression is a raw (unlabeled) value:
+            // - literal → always raw
+            // - ident that is a non-labeled parameter → raw
+            if is_raw_value(expr, params) {
+                let label_name = emit_label(*label);
+                cg.push(&format!("{label_name}("));
+                emit_expr(cg, expr);
+                cg.push(")");
+                return;
+            }
+        }
+        TypeExpr::Result { ok, .. } => {
+            // Ok(x) where x should be Labeled and x is a raw value: emit Ok(Label(x))
+            if let TypeExpr::Labeled { label, .. } = ok.as_ref() {
+                if let Expr::FnCall { name, args, .. } = expr {
+                    if name == "Ok" && args.len() == 1 && is_raw_value(&args[0], params) {
+                        let label_name = emit_label(*label);
+                        cg.push("Ok(");
+                        cg.push(&format!("{label_name}("));
+                        emit_expr(cg, &args[0]);
+                        cg.push("))");
+                        return;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
     emit_expr(cg, expr);
+}
+
+/// Returns true when an expression produces a raw (non-labeled) value that needs
+/// to be wrapped in a security label constructor.
+///
+/// - Literals are always raw.
+/// - An identifier is raw when it refers to a function parameter whose declared
+///   type has no security label (e.g. `f: Float` is raw; `v: Public<Float>` is not).
+fn is_raw_value(expr: &Expr, params: &[Param]) -> bool {
+    match expr {
+        Expr::Literal(_, _) => true,
+        Expr::Ident(name, _) => {
+            // Check if this name is a function parameter with a non-labeled type
+            params
+                .iter()
+                .any(|p| &p.name == name && !is_labeled_type(&p.ty))
+        }
+        _ => false,
+    }
+}
+
+/// Returns true when the type is a direct security label wrapper (no wrapping needed).
+fn is_labeled_type(ty: &TypeExpr) -> bool {
+    matches!(ty, TypeExpr::Labeled { .. })
 }

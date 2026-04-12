@@ -3,8 +3,9 @@
 //! [`Codegen`] is the single writer passed through every emit function.
 //! All other `emit_*` modules take `&mut Codegen` and append to it.
 
-use crate::mvl::parser::ast::Decl;
-use crate::mvl::parser::ast::Program;
+use crate::mvl::parser::ast::{
+    Decl, FieldDecl, FnDecl, Param, Program, TypeDecl, TypeExpr, Variant, VariantFields,
+};
 use crate::mvl::transpiler::emit_functions::emit_fn_decl;
 use crate::mvl::transpiler::emit_types::emit_security_preamble;
 use crate::mvl::transpiler::emit_types::emit_type_decl;
@@ -83,6 +84,40 @@ impl Codegen {
         emit_security_preamble(self);
         self.blank();
 
+        // Emit placeholder structs for external types referenced but not defined
+        // in this module (e.g. `DbConn` from library code), along with any
+        // method stubs inferred from call sites.
+        let stubs = collect_undefined_types(prog);
+        if !stubs.is_empty() {
+            self.line(
+                "// ── External type stubs (Phase 1 placeholders) ──────────────────────────",
+            );
+            for name in &stubs {
+                self.line(&format!(
+                    "/// Placeholder for external type `{name}` (not defined in this module)."
+                ));
+                self.line("#[allow(dead_code)]");
+                self.line(&format!("pub struct {name};"));
+                self.blank();
+
+                // Emit impl block with any method stubs collected from call sites
+                let methods = collect_method_stubs_for_type(prog, name, &stubs);
+                if !methods.is_empty() {
+                    self.line(&format!("impl {name} {{"));
+                    for m in &methods {
+                        self.push_indent();
+                        self.line(&format!(
+                            "pub fn {}(&self, {}) -> {} {{ todo!() }}",
+                            m.name, m.args_str, m.return_type
+                        ));
+                        self.pop_indent();
+                    }
+                    self.line("}");
+                    self.blank();
+                }
+            }
+        }
+
         // Top-level declarations
         for decl in &prog.declarations {
             match decl {
@@ -98,5 +133,257 @@ impl Codegen {
             }
             self.blank();
         }
+    }
+}
+
+// ── Undefined type collection ─────────────────────────────────────────────
+
+/// Collect the names of all base types referenced in the program that are
+/// not defined by a `TypeDecl` in this program and are not MVL built-ins.
+/// Returns a sorted, deduplicated list suitable for emitting stub structs.
+fn collect_undefined_types(prog: &Program) -> Vec<String> {
+    // Collect defined type names
+    let mut defined: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for decl in &prog.declarations {
+        if let Decl::Type(td) = decl {
+            defined.insert(td.name.clone());
+        }
+    }
+
+    // MVL built-in primitive types (already mapped in emit_type_expr)
+    let builtins: std::collections::HashSet<&str> = [
+        "Int", "Float", "Bool", "String", "Char", "Byte", "Unit", "Never", "List",
+        // Security labels (handled by preamble)
+        "Public", "Tainted", "Secret", "Clean", // Common Rust types that may appear
+        "Option", "Result", "Vec",
+    ]
+    .iter()
+    .copied()
+    .collect();
+
+    // Walk all type expressions in the program to collect referenced base types
+    let mut referenced: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for decl in &prog.declarations {
+        match decl {
+            Decl::Type(td) => collect_types_in_type_decl(td, &mut referenced),
+            Decl::Fn(fd) => collect_types_in_fn_decl(fd, &mut referenced),
+            _ => {}
+        }
+    }
+
+    // Undefined = referenced but not defined and not a built-in
+    let mut stubs: Vec<String> = referenced
+        .into_iter()
+        .filter(|name| !defined.contains(name) && !builtins.contains(name.as_str()))
+        .collect();
+    stubs.sort();
+    stubs
+}
+
+fn collect_types_in_type_expr(ty: &TypeExpr, out: &mut std::collections::HashSet<String>) {
+    match ty {
+        TypeExpr::Base { name, args, .. } => {
+            out.insert(name.clone());
+            for a in args {
+                collect_types_in_type_expr(a, out);
+            }
+        }
+        TypeExpr::Option { inner, .. } | TypeExpr::Ref { inner, .. } => {
+            collect_types_in_type_expr(inner, out);
+        }
+        TypeExpr::Result { ok, err, .. } => {
+            collect_types_in_type_expr(ok, out);
+            collect_types_in_type_expr(err, out);
+        }
+        TypeExpr::Labeled { inner, .. } | TypeExpr::Refined { inner, .. } => {
+            collect_types_in_type_expr(inner, out);
+        }
+        TypeExpr::Fn { params, ret, .. } => {
+            for p in params {
+                collect_types_in_type_expr(p, out);
+            }
+            collect_types_in_type_expr(ret, out);
+        }
+        TypeExpr::Tuple { elems, .. } => {
+            for e in elems {
+                collect_types_in_type_expr(e, out);
+            }
+        }
+    }
+}
+
+fn collect_types_in_field(f: &FieldDecl, out: &mut std::collections::HashSet<String>) {
+    collect_types_in_type_expr(&f.ty, out);
+}
+
+fn collect_types_in_variant(v: &Variant, out: &mut std::collections::HashSet<String>) {
+    match &v.fields {
+        VariantFields::Unit => {}
+        VariantFields::Tuple(tys) => {
+            for ty in tys {
+                collect_types_in_type_expr(ty, out);
+            }
+        }
+        VariantFields::Struct(fields) => {
+            for f in fields {
+                collect_types_in_field(f, out);
+            }
+        }
+    }
+}
+
+fn collect_types_in_type_decl(td: &TypeDecl, out: &mut std::collections::HashSet<String>) {
+    use crate::mvl::parser::ast::TypeBody;
+    match &td.body {
+        TypeBody::Struct(fields) => {
+            for f in fields {
+                collect_types_in_field(f, out);
+            }
+        }
+        TypeBody::Enum(variants) => {
+            for v in variants {
+                collect_types_in_variant(v, out);
+            }
+        }
+        TypeBody::Alias(ty) => collect_types_in_type_expr(ty, out),
+    }
+}
+
+fn collect_types_in_param(p: &Param, out: &mut std::collections::HashSet<String>) {
+    collect_types_in_type_expr(&p.ty, out);
+}
+
+fn collect_types_in_fn_decl(fd: &FnDecl, out: &mut std::collections::HashSet<String>) {
+    for p in &fd.params {
+        collect_types_in_param(p, out);
+    }
+    collect_types_in_type_expr(&fd.return_type, out);
+}
+
+// ── Method stub collection ─────────────────────────────────────────────────
+
+struct MethodStub {
+    name: String,
+    args_str: String,
+    return_type: String,
+}
+
+/// For a given external stub type name, scan all function bodies in the program
+/// for method calls on parameters of that type. Returns inferred method stubs.
+fn collect_method_stubs_for_type(
+    prog: &Program,
+    stub_type: &str,
+    all_stubs: &[String],
+) -> Vec<MethodStub> {
+    use crate::mvl::parser::ast::{Expr, Stmt, TypeExpr};
+    use crate::mvl::transpiler::emit_types::emit_type_expr;
+
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut result: Vec<MethodStub> = Vec::new();
+
+    for decl in &prog.declarations {
+        let Decl::Fn(fd) = decl else { continue };
+
+        // Build a map from param name → base type name (for stub-typed params)
+        let mut param_to_type: std::collections::HashMap<&str, &str> =
+            std::collections::HashMap::new();
+        for p in &fd.params {
+            let base = base_type_name(&p.ty);
+            if all_stubs.iter().any(|s| s == base) && base == stub_type {
+                param_to_type.insert(&p.name, base);
+            }
+        }
+        if param_to_type.is_empty() {
+            continue;
+        }
+
+        // Build param name → type string for arg type resolution
+        let param_types: std::collections::HashMap<&str, String> = fd
+            .params
+            .iter()
+            .map(|p| (p.name.as_str(), emit_type_expr(&p.ty)))
+            .collect();
+
+        // Infer the function's error type (for Result-returning fns with `?`)
+        let fn_err_type = match fd.return_type.as_ref() {
+            TypeExpr::Result { err, .. } => emit_type_expr(err),
+            _ => String::from("()"),
+        };
+
+        for stmt in &fd.body.stmts {
+            if let Stmt::Let {
+                ty: Some(let_ty),
+                init,
+                ..
+            } = stmt
+            {
+                let (method_call, has_prop) = match init {
+                    Expr::Propagate { expr, .. } => (expr.as_ref(), true),
+                    other => (other, false),
+                };
+                if let Expr::MethodCall {
+                    receiver,
+                    method,
+                    args,
+                    ..
+                } = method_call
+                {
+                    let recv_name = match receiver.as_ref() {
+                        Expr::Ident(n, _) => n.as_str(),
+                        _ => continue,
+                    };
+                    if !param_to_type.contains_key(recv_name) {
+                        continue;
+                    }
+                    if seen.contains(method) {
+                        continue;
+                    }
+                    seen.insert(method.clone());
+
+                    // Build args string: resolve each arg's type from param list.
+                    let args_str: String = args
+                        .iter()
+                        .enumerate()
+                        .map(|(i, arg)| {
+                            let ty = match arg {
+                                Expr::Ident(n, _) => param_types
+                                    .get(n.as_str())
+                                    .cloned()
+                                    .unwrap_or_else(|| format!("_T{i}")),
+                                _ => format!("_T{i}"),
+                            };
+                            format!("_: {ty}")
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+
+                    // Return type: wrap in Result if propagated
+                    let let_ty_str = emit_type_expr(let_ty);
+                    let return_type = if has_prop {
+                        format!("Result<{let_ty_str}, {fn_err_type}>")
+                    } else {
+                        let_ty_str
+                    };
+
+                    result.push(MethodStub {
+                        name: method.clone(),
+                        args_str,
+                        return_type,
+                    });
+                }
+            }
+        }
+    }
+    result
+}
+
+/// Extract the outermost base type name from a TypeExpr, stripping ref/label wrappers.
+fn base_type_name(ty: &TypeExpr) -> &str {
+    match ty {
+        TypeExpr::Base { name, .. } => name,
+        TypeExpr::Ref { inner, .. } => base_type_name(inner),
+        TypeExpr::Labeled { inner, .. } => base_type_name(inner),
+        TypeExpr::Refined { inner, .. } => base_type_name(inner),
+        _ => "",
     }
 }
