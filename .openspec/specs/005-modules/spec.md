@@ -196,21 +196,25 @@ The following productions extend the grammar in `docs/grammar.ebnf`:
 
 ```ebnf
 (* === Top-level with module imports === *)
+(* "pub" is factored out so each decl_body alternative starts with a   *)
+(* distinct keyword — preserves LL(1) property (ADR-0005).             *)
+(* Semantic constraint: "pub" is required before reexport_decl.        *)
 program        = { use_decl } { declaration } ;
+declaration    = [ "pub" ] decl_body ;
+decl_body      = type_decl | fn_decl | const_decl | reexport_decl ;
+
+(* === Modules and imports === *)
 use_decl       = "use" module_path ";" ;
+reexport_decl  = "use" module_path ";" ;  (* "pub" required — enforced by type checker *)
 module_path    = IDENT { "::" IDENT } ;
 
-(* === Module declarations === *)
-declaration    = type_decl | fn_decl | const_decl | reexport_decl ;
-reexport_decl  = "pub" "use" module_path ";" ;
-
-(* === Visibility modifier on declarations === *)
-type_decl      = [ "pub" ] "type" IDENT [ type_params ] "=" type_body ;
-fn_decl        = [ "pub" ] [ totality ] "fn" IDENT [ type_params ]
+(* === Declarations (no leading "pub" — hoisted to declaration) === *)
+type_decl      = "type" IDENT [ type_params ] "=" type_body ;
+fn_decl        = [ totality ] [ security ] "fn" IDENT [ type_params ]
                  "(" [ param_list ] ")" "->" return_type
                  [ "!" effect_list ] [ "where" constraints ]
                  block ;
-const_decl     = [ "pub" ] "const" IDENT ":" type_expr "=" expr ";" ;
+const_decl     = "const" IDENT ":" type_expr "=" expr ";" ;
 ```
 
 Note: The `module_decl` production (`module Name { ... }`) is removed. File = module eliminates the need for inline module blocks, which would create two competing namespacing mechanisms.

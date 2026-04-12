@@ -9,13 +9,13 @@ See [ADR-0005](adr/0005-recursive-descent-parser.md) for the parser design decis
 - **LL(1):** Every token determines the next production. No backtracking.
 - **~100 productions:** Organized into top-level, types, declarations, statements, expressions, patterns, literals, and lexical rules.
 - **~25 keywords:** Each justified by a verification requirement.
-- **No ambiguity:** Seven common LL(1)-breaking constructs in popular languages are avoided by design.
+- **No ambiguity:** Eight common LL(1)-breaking constructs in popular languages are avoided by design (see Chapter 20).
 
 ## Production Categories
 
 | Category | Count | Key constructs |
 |----------|-------|----------------|
-| Top-level | ~5 | `program`, `declaration` |
+| Top-level | ~5 | `program`, `declaration`, `decl_body` |
 | Modules | ~3 | `use_decl`, `reexport_decl`, `module_path` |
 | Type declarations | ~6 | `type_decl`, `struct_body`, `enum_body`, `variant` |
 | Function declarations | ~8 | `fn_decl`, `totality`, `param_list`, `effect_list` |

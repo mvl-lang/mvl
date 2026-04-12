@@ -58,16 +58,27 @@ module.exports = grammar({
 
   rules: {
     // === Top-level ===
+    // "pub" is factored out of declaration so each decl_body alternative
+    // starts with a distinct keyword — preserves LL(1) (mirrors grammar.ebnf).
+    // Semantic constraint: "pub" is required before reexport_decl.
 
-    program: ($) => repeat($.declaration),
+    program: ($) =>
+      seq(repeat($.use_decl), repeat($.declaration)),
 
     declaration: ($) =>
-      choice($.type_decl, $.fn_decl, $.const_decl, $.module_decl),
+      seq(
+        optional("pub"),
+        choice($.type_decl, $.fn_decl, $.const_decl, $.reexport_decl)
+      ),
 
-    // === Modules ===
+    // === Modules and imports ===
 
-    module_decl: ($) =>
-      seq("module", $.identifier, "{", repeat($.declaration), "}"),
+    use_decl: ($) => seq("use", $.module_path, ";"),
+
+    reexport_decl: ($) => seq("use", $.module_path, ";"),
+
+    module_path: ($) =>
+      seq($.identifier, repeat(seq("::", $.identifier))),
 
     // === Type declarations ===
 
