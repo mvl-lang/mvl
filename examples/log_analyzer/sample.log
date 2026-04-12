@@ -1,0 +1,4 @@
+INFO  starting up
+WARN  disk at 80%
+ERROR disk full
+INFO  shutdown
