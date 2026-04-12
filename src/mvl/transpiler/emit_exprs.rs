@@ -278,7 +278,21 @@ fn emit_args(cg: &mut Codegen, args: &[Expr]) {
         if i > 0 {
             cg.push(", ");
         }
-        emit_expr(cg, arg);
+        emit_expr_as_arg(cg, arg);
+    }
+}
+
+/// Emit an expression in function-argument position.
+///
+/// String literals get `.into()` appended so that Rust type inference can
+/// coerce them to whatever label type the callee expects (`String`,
+/// `Clean<String>`, `Tainted<String>`, etc.).  All other expressions are
+/// emitted unchanged.
+fn emit_expr_as_arg(cg: &mut Codegen, expr: &Expr) {
+    if let Expr::Literal(Literal::Str(s), _) = expr {
+        cg.push(&format!("\"{}\".to_string().into()", escape_str(s)));
+    } else {
+        emit_expr(cg, expr);
     }
 }
 
@@ -290,10 +304,14 @@ fn emit_args_for_macro(cg: &mut Codegen, args: &[Expr]) {
             cg.push(", ");
         }
         if i == 0 {
-            // First arg: emit string literal bare, without `.to_string()`
+            // First arg: emit string literal bare (no `.to_string()`).
+            // Non-literal: prepend "{}" format specifier so Rust accepts it.
             match arg {
                 Expr::Literal(Literal::Str(s), _) => cg.push(&format!("\"{}\"", escape_str(s))),
-                other => emit_expr(cg, other),
+                other => {
+                    cg.push("\"{}\", ");
+                    emit_expr(cg, other);
+                }
             }
         } else {
             emit_expr(cg, arg);
