@@ -36,15 +36,28 @@ FFI design splits into two fundamentally different philosophies.
 The academic literature has largely moved past "is FFI safe?" (answer: no) toward quantifying and bounding the damage:
 
 - **FFIChecker** (Song/Li 2022, ESORICS) — scanned 987 crates, found 34 memory bugs at FFI boundaries
-- **McCormack 2025** (ICSE, CMU) — characterised undefined behaviour patterns specifically at language boundaries: lifetime violations, aliasing rule breaks, misaligned access — bugs the Rust type checker cannot catch because they originate from C's side
-- **SafeFFI** (Braunsdorf 2025) — closes the gap at runtime with boundary-hoisted sanitizer checks, achieving low overhead by bundling checks at entry/exit rather than per-operation
+- **McCormack 2025** (ICSE, CMU, doi:10.48550/arXiv.2404.11671) — characterised undefined behaviour patterns specifically at language boundaries: lifetime violations, aliasing rule breaks, misaligned access — bugs the Rust type checker cannot catch because they originate from C's side
+- **SafeFFI** (Braunsdorf 2025, doi:10.48550/arXiv.2510.20688) — closes the gap at runtime with boundary-hoisted sanitizer checks, achieving low overhead by bundling checks at entry/exit rather than per-operation
 - **Sandcrust 2017 / Gülmez 2023** — the isolation thread: sandboxes unsafe components so a memory bug in an FFI call cannot corrupt safe Rust's heap (defence-in-depth: you can't make C safe, but you can contain it)
 - **Miri** (Jung 2026, POPL) — de facto UB detector for Rust including FFI calls; uses a virtual machine interpreting MIR that detects undefined behaviour before it reaches hardware
 - **Cai 2026** (TOSEM) — examined 320 bugs across bindgen, cbindgen, and cxx; the main obstacle is not tool crashes but incorrect code generation, primarily around opaque types, lifetimes, and struct layout mismatches
 
 **MVL's position in this landscape:**
 
-The `extern "rust"` design is architecturally ahead of the dominant practice. The literature converges on exactly what this architecture already provides — typed boundaries, effect tracking, IFC labels — as the right structural answer. The open research question (McCormack 2025, SafeFFI 2025) is runtime enforcement at the boundary, which maps directly to MVL's Phase 3 goal of moving from runtime asserts (`debug_assert!`) to compile-time proofs.
+The `extern "rust"` design is architecturally ahead of the dominant practice. The literature converges on exactly what this architecture already provides — typed boundaries, effect tracking, IFC labels — as the right structural answer.
+
+**The gap McCormack + SafeFFI define is precisely MVL's Phase 3 target:**
+
+McCormack 2025 identifies the UB patterns that escape the type system at language boundaries (lifetime violations, aliasing, misaligned access). SafeFFI 2025 shows runtime boundary checks can close this gap, but at a cost. MVL's path is more direct: the IFC labels and effect types on `extern "rust"` function signatures provide enough structure to discharge boundary conditions as SMT lemmas — **compile-time proofs rather than runtime checks**.
+
+```
+Phase 2 (done):  runtime IFC/effect enforcement — labels enforced via Rust newtypes,
+                 debug_assert! guards at trust boundaries
+Phase 3 (target): SMT-proven boundary contracts — extern "rust" fn signatures become
+                 formal proof obligations discharged by an SMT solver at compile time
+```
+
+This path is validated by the research: McCormack defines the problem, SafeFFI proves runtime enforcement works but has overhead, and MVL's type-theoretic approach is the compile-time solution the field hasn't yet built.
 
 Because MVL uses Rust-to-Rust FFI (not Rust-to-C), the entire class of C ABI bugs (layout mismatches, lifetime violations across C, unaligned access) is eliminated. The bridge code is still unverified Rust, but it operates entirely within Rust's memory model — Miri can check it, the borrow checker can partially check it, and the IFC type system labels every value that crosses the boundary.
 
