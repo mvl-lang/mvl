@@ -106,41 +106,66 @@ extern "rust" {
 
 **Stdlib growth path:**
 
-1. **Phase 1:** `extern "rust"` only. Cargo.toml pulls Rust crates. Zero MVL stdlib.
-2. **Over time:** Verified MVL wrappers replace extern calls. Each wrapper moves code from "trusted" to "verified."
+1. **Phase 2:** `extern "rust"` only. Cargo.toml pulls Rust crates. Zero MVL stdlib.
+2. **Phase 4:** Verified MVL wrappers replace extern calls. Each wrapper moves code from "trusted" to "verified."
 3. **The assurance ratio** (verified / total) becomes the metric: start at 60% MVL + 40% extern, push toward 90%.
 
-## Phase 2 — LLVM Backend
+## Phase 2 — It's useful
 
-**Goal:** One compiler, one proof chain. MVL → LLVM IR → native binary.
+**Goal:** Real programs in MVL, calling Rust ecosystem via FFI.
 
-**Done when:** The MVL compiler compiles itself (self-hosting).
+**Done when:** A non-trivial program (e.g., a CLI tool or web handler) runs in production using MVL + Rust crates.
+
+| Component | Issues | Description |
+|-----------|--------|-------------|
+| Rust FFI | [#91](https://github.com/LAB271/mvl_language/issues/91), [#52](https://github.com/LAB271/mvl_language/issues/52) | `extern "rust"` blocks — typed, effect-tracked, IFC-labeled trust boundary |
+| Module system | [#47](https://github.com/LAB271/mvl_language/issues/47) | Multi-file programs with `module` and `use` |
+| Generics | [#48](https://github.com/LAB271/mvl_language/issues/48) | `Array<T>`, `Option<T>`, `Result<T,E>` emit correctly |
+| Test transpilation | [#38](https://github.com/LAB271/mvl_language/issues/38) | `_test.mvl` → Rust `#[test]` |
+| Assurance reports | [#73](https://github.com/LAB271/mvl_language/issues/73) | Compiler tracks verified vs trusted (extern) ratio |
+| Property testing | [#40](https://github.com/LAB271/mvl_language/issues/40) | Refinement types as generators |
+| BDD framework | [#39](https://github.com/LAB271/mvl_language/issues/39) | Scenario tests linked to specs |
+
+## Phase 3 — It's trustworthy
+
+**Goal:** All 11 requirements proven at compile time. One compiler, one trust chain.
+
+**Done when:** All 11 enforced without Rust as intermediary. WASM target works.
 
 | Component | Description |
 |-----------|-------------|
-| LLVM IR codegen | Replace Rust transpiler with LLVM IR emitter |
-| SMT integration | Req 10 moves from runtime asserts to compile-time proofs (Z3) |
-| Native IFC | Req 11 flow analysis in the compiler, not via Rust newtypes |
-| Borrow lifetimes | Full Req 2 enforcement (beyond use-after-move) |
-| Linear resources | Full Req 6 enforcement (must-consume semantics) |
-| Structural recursion | Full Req 8 proof (not just while-rejection) |
+| LLVM IR codegen | Replace Rust transpiler with direct LLVM codegen |
+| SMT integration | [Req 10](requirements.md#req-10) moves from runtime asserts to compile-time proofs (Z3) |
+| Native IFC | [Req 11](requirements.md#req-11) flow analysis in the compiler, not via Rust newtypes |
+| Borrow lifetimes | Full [Req 2](requirements.md#req-2) enforcement (beyond use-after-move) |
+| Linear resources | Full [Req 6](requirements.md#req-6) enforcement (must-consume semantics) |
+| Structural recursion | Full [Req 8](requirements.md#req-8) proof (not just while-rejection) |
 | Model checker | [#37](https://github.com/LAB271/mvl_language/issues/37) — invariants, pre/post, deadlock detection |
 | WASM target | Sandboxed execution for The Cog and edge |
-| Self-hosting | MVL compiler rewritten in MVL, compiled by itself |
 
-## Phase 3 — Ecosystem
+## Phase 4 — It's self-sufficient
 
-**Goal:** MVL is usable for real projects with full tooling.
+**Goal:** MVL compiler compiles itself. Full ecosystem. Certification-ready.
+
+**Done when:** Self-hosting complete. Package ecosystem functional. AAE-5 evidence generated.
 
 | Component | Description |
 |-----------|-------------|
+| Self-hosting | MVL compiler rewritten in MVL, compiled by Phase 3 compiler |
 | Package manager | [#56](https://github.com/LAB271/mvl_language/issues/56) — dependency resolution, SBOM, trust scoring |
-| Extended stdlib | Networking, HTTP, TLS, crypto, database drivers |
-| Property testing | [#40](https://github.com/LAB271/mvl_language/issues/40) — refinement types as generators |
-| BDD framework | [#39](https://github.com/LAB271/mvl_language/issues/39) — scenario tests linked to specs |
-| Assurance reports | [#73](https://github.com/LAB271/mvl_language/issues/73) — per-module requirement satisfaction |
-| Transpilation corpus | Seed for LLM training on MVL code generation |
-| AAE integration | Automated evidence for ISO 42001 / DO-178C certification |
+| Verified MVL stdlib | Replaces extern wrappers — pushes assurance ratio toward 90%+ |
+| Concurrency model | Actors, reference capabilities, WCET refinements |
+| Transpilation corpus | Seed for LLM training on MVL generation quality |
+| AAE-5 pipeline | Automated evidence for IEC 61508, DO-178C certification |
+
+## The four phases
+
+```
+Phase 1: It compiles          parse → check → transpile → cargo → binary
+Phase 2: It's useful          FFI, modules, generics, tests, real programs
+Phase 3: It's trustworthy     LLVM, SMT, all 11 proven, WASM
+Phase 4: It's self-sufficient  self-hosting, packages, stdlib, certification
+```
 
 ## Architecture decisions
 
@@ -148,7 +173,7 @@ extern "rust" {
 |-----|----------|--------|
 | [ADR-0001](adr/0001-eleven-requirements.md) | Eleven compiler-verified requirements | Accepted |
 | [ADR-0002](adr/0002-language-contraction.md) | Language contraction — what to drop and why | Accepted |
-| [ADR-0003](adr/0003-compilation-strategy.md) | Compilation: Rust (Phase 1) → LLVM (Phase 2) | Accepted |
+| [ADR-0003](adr/0003-compilation-strategy.md) | Four phases: Rust → FFI → LLVM → Self-hosting | Accepted |
 | [ADR-0004](adr/0004-language-size.md) | Language size — deliberately the smallest | Accepted |
 | [ADR-0005](adr/0005-recursive-descent-parser.md) | Hand-written recursive descent parser (LL(1)) | Accepted |
 

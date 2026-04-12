@@ -6,10 +6,11 @@
 
 ## Decision
 
-Three-phase approach:
-1. **Phase 1 (prototype):** MVL → Rust transpilation
-2. **Phase 2 (production):** MVL → LLVM IR
-3. **Phase 3 (ecosystem):** Package manager, transpilation corpus, tooling
+Four-phase approach:
+1. **Phase 1 — It compiles:** MVL → Rust transpilation
+2. **Phase 2 — It's useful:** Rust FFI ecosystem, real programs
+3. **Phase 3 — It's trustworthy:** LLVM backend, all 11 proven at compile time
+4. **Phase 4 — It's self-sufficient:** Self-hosting, package ecosystem, certification
 
 ## Rationale
 
@@ -27,7 +28,7 @@ CompCert (Leroy, INRIA, 2006) proved this: the compiler IS the theorem prover, t
 
 Rust scores 7/11 — highest of any mainstream language. The transpilation only adds 4 requirements (termination, races, refinements, IFC). Go would require adding 10.5. Zig 6.5. Rust is the closest starting point.
 
-### Why LLVM for Phase 2
+### Why LLVM for Phase 3
 
 - One compiler, one proof chain
 - All targets: ARM, x86, WASM, RISC-V
@@ -72,26 +73,45 @@ Step 8: Generics (#48)                   → Array<T>, Option<T> emit correctly
 
 Steps 1-4 achieve "hello world to binary." Steps 5-6 complete all 11 requirements. Steps 7-8 make it usable for real programs.
 
-## Phase 2 Scope
+## Phase 2 — It's useful
 
-- **LLVM IR backend** — one compiler, one proof chain
+**Done when:** Real programs written in MVL, calling Rust ecosystem via FFI.
+
+- **`extern "rust"` blocks** (#52, #91) — call any Rust crate through typed, effect-tracked, IFC-labeled boundaries
+- **Module system** (#47) — multi-file programs with `module` and `use`
+- **Generics** (#48) — `Array<T>`, `Option<T>`, `Result<T,E>` emit correctly
+- **Test transpilation** (#38) — `_test.mvl` → Rust `#[test]`
+- **Assurance reports** (#73) — compiler tracks verified vs trusted (extern) ratio
+- **Zero MVL stdlib** — Rust is the stdlib, accessed through extern. Stdlib grows later as verified MVL wrappers.
+
+## Phase 3 — It's trustworthy
+
+**Done when:** All 11 requirements proven at compile time. One compiler, one trust chain.
+
+- **LLVM IR backend** — replace Rust transpilation with direct LLVM codegen
 - **SMT solver integration** — Req 10 moves from runtime asserts to compile-time proofs
 - **Native IFC analysis** — Req 11 moves from Rust newtypes to compiler-native flow checking
-- **Self-hosting** — the MVL compiler rewritten in MVL
+- **Borrow lifetimes** — full Req 2 enforcement (beyond use-after-move)
+- **Linear resources** — full Req 6 enforcement (must-consume semantics)
+- **Structural recursion proofs** — full Req 8 enforcement
 - **Model checker** (#37) — invariants, deadlock/livelock detection as compiler pass
 - **WASM target** — sandboxed execution for The Cog and edge deployment
 
-## Phase 3 Scope
+## Phase 4 — It's self-sufficient
 
-- **Package manager** (#56) — dependency resolution, SBOM generation, trust decay
-- **Extended stdlib** — networking, HTTP, crypto, database drivers
-- **Assurance reports** (#73) — compiler emits per-module requirement satisfaction
+**Done when:** MVL compiler compiles itself. Full ecosystem.
+
+- **Self-hosting** — MVL compiler rewritten in MVL, compiled by Phase 3 compiler
+- **Package manager** (#56) — dependency resolution, SBOM generation, trust scoring
+- **Verified MVL stdlib** — replaces extern wrappers, pushes assurance ratio toward 90%+
+- **Concurrency model** — actors, reference capabilities, WCET refinements
 - **Transpilation corpus** — seed for LLM training on MVL generation quality
-- **AAE-4/5 integration** — automated evidence for certification frameworks
+- **AAE-5 certification pipeline** — automated evidence for IEC 61508, DO-178C
 
 ## Consequences
 
 - Phase 1 accepts two-compiler friction as temporary cost
-- Phase 2 requires building LLVM codegen — significant investment
-- WASM target unlocks sandboxed execution for The Cog and edge deployment
-- The transpilation corpus from Phase 1 seeds LLM training for Phase 3
+- Phase 2 makes the language immediately useful without building a stdlib
+- Phase 3 requires building LLVM codegen — significant investment
+- Phase 4 is the long game — self-hosting proves the language is general-purpose
+- WASM target (Phase 3) unlocks sandboxed execution for The Cog and edge deployment
