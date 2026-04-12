@@ -1,12 +1,16 @@
 (* === Top-level === *)
-program        = { declaration } ;
-declaration    = type_decl | fn_decl | const_decl | module_decl ;
+program        = { use_decl } { declaration } ;
+declaration    = type_decl | fn_decl | const_decl | reexport_decl ;
 
-(* === Modules === *)
-module_decl    = "module" IDENT "{" { declaration } "}" ;
+(* === Modules and imports === *)
+(* One file = one module. Module name = filename without extension. *)
+(* Directories are module groups; mod.mvl is the entry file.        *)
+use_decl       = "use" module_path ";" ;
+reexport_decl  = "pub" "use" module_path ";" ;
+module_path    = IDENT { "::" IDENT } ;
 
 (* === Type declarations === *)
-type_decl      = "type" IDENT [ type_params ] "=" type_body ;
+type_decl      = [ "pub" ] "type" IDENT [ type_params ] "=" type_body ;
 type_params    = "<" IDENT { "," IDENT } ">" ;
 type_body      = struct_body | enum_body | alias_type ;
 struct_body    = "struct" "{" { field_decl } "}" ;
@@ -17,7 +21,7 @@ field_list     = field_decl { "," field_decl } ;
 alias_type     = type_expr ;
 
 (* === Function declarations === *)
-fn_decl        = [ totality ] [ security ] "fn" IDENT [ type_params ]
+fn_decl        = [ "pub" ] [ totality ] [ security ] "fn" IDENT [ type_params ]
                  "(" [ param_list ] ")" "->" return_type
                  [ "!" effect_list ] [ "where" constraints ]
                  block ;
@@ -103,7 +107,7 @@ set_literal    = "{" expr { "," expr } "}" ;
 (* Note: empty "{}" is ambiguous — requires type annotation: let m: Map<K,V> = {} *)
 
 (* === Constants === *)
-const_decl     = "const" IDENT ":" type_expr "=" expr ";" ;
+const_decl     = [ "pub" ] "const" IDENT ":" type_expr "=" expr ";" ;
 
 (* === Comments === *)
 COMMENT        = "//" { ANY_CHAR } NEWLINE ;     (* line comment only, no block comments *)
