@@ -88,16 +88,25 @@ Then in Neovim:
 
 ## Verify Installation
 
+Run the built-in health check:
+
 ```
-:checkhealth nvim-treesitter
+:checkhealth mvl
 ```
 
-Look for `mvl` in the "Installed parsers" section.
+This checks:
+1. Neovim ≥ 0.9
+2. nvim-treesitter is installed
+3. MVL parser is compiled (`:TSInstall mvl` if missing)
+4. `.mvl` filetype detection is working
+5. `highlights.scm` is on the runtimepath
+6. A C compiler is available (needed for `:TSInstall`)
+7. Tree-sitter highlight is active on the current buffer
 
-Open any `.mvl` file and run:
+For deeper inspection, open any `.mvl` file and run:
 ```
-:InspectTree     -- view the parse tree
-:TSHighlightCapturesUnderCursor  -- see highlight groups at cursor
+:InspectTree                       -- view the parse tree
+:TSHighlightCapturesUnderCursor    -- see highlight groups at cursor
 ```
 
 ## What Gets Highlighted

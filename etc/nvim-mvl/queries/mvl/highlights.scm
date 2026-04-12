@@ -167,8 +167,6 @@
 (reexport_decl
   (module_path (identifier) @namespace))
 
-(module_decl
-  (identifier) @namespace)
 
 ; ============================================================
 ; Type expressions
