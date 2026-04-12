@@ -2,10 +2,13 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help build build-release test test-unit test-integration test-corpus test-transpiler test-tree-sitter test-grammar-coverage lint format format-check assurance assurance-verbose assurance-gate docs docs-serve tree-sitter-build install-nvim clean
+.PHONY: help version build build-release test test-unit test-integration test-corpus test-transpiler test-tree-sitter test-grammar-coverage lint format format-check assurance assurance-verbose assurance-gate docs docs-serve tree-sitter-build install install-nvim doctor clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+
+version: ## Show current project version
+	@grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'
 
 # === Setup ===
 
@@ -16,6 +19,22 @@ setup: ## Install git hooks, verify tooling, and install tree-sitter npm deps
 	@command -v node >/dev/null 2>&1 || { echo "node not found — install Node.js: https://nodejs.org"; exit 1; }
 	cd etc/tree-sitter-mvl && npm install
 	@echo "Ready."
+
+doctor: ## Check that all dev tools are available
+	@echo "Checking dev tools..."; echo; \
+	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
+	check() { command -v "$$1" >/dev/null 2>&1 && printf "  $$OK $$1\n" || printf "  $$FAIL $$1  ($$2)\n"; }; \
+	check cargo         "https://rustup.rs"; \
+	check rustfmt       "rustup component add rustfmt"; \
+	check clippy-driver "rustup component add clippy"; \
+	check node          "https://nodejs.org"; \
+	check python3       "required for make assurance"; \
+	echo
+
+install: build-release ## Install mvl binary to ~/.local/bin
+	@mkdir -p ~/.local/bin
+	cp target/release/mvl ~/.local/bin/mvl
+	@echo "Installed: ~/.local/bin/mvl"
 
 # === Build ===
 

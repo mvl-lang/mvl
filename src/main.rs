@@ -16,6 +16,12 @@ fn main() {
 
     let cmd = &args[1];
     match cmd.as_str() {
+        "--version" | "-V" | "version" => {
+            println!("mvl {}", env!("CARGO_PKG_VERSION"));
+        }
+        "--help" | "-h" | "help" => {
+            print_usage();
+        }
         "check" => {
             let path = require_path_arg(&args, "check");
             cmd_check(&path);
@@ -53,6 +59,8 @@ fn main() {
 fn print_usage() {
     eprintln!("mvl compiler v{}", env!("CARGO_PKG_VERSION"));
     eprintln!("Usage:");
+    eprintln!("  mvl --version, -V                  — show version");
+    eprintln!("  mvl --help, -h                     — show this help");
     eprintln!("  mvl check <file|dir>               — parse and type-check");
     eprintln!("  mvl build <file|dir>               — transpile to Rust and run cargo build");
     eprintln!("  mvl run   <file.mvl>               — transpile, build, and execute");

@@ -6,6 +6,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.10.3] — 2026-04-12 (chore: release pipeline, Makefile improvements)
+
+### Added
+- `.github/workflows/release.yml` — multiplatform build and release workflow triggered on `v*.*.*` tags; builds x86_64/aarch64 Linux musl and macOS binaries, packages as `.tar.gz`, creates GitHub Release with auto-generated notes
+- CI `smoke` job: builds release binary and validates `mvl --version` and a corpus file on every PR
+- `Makefile`: `version` target — prints current version from Cargo.toml
+- `Makefile`: `doctor` target — checks availability of cargo, rustfmt, clippy, node, python3
+- `Makefile`: `install` target — builds release binary and copies to `~/.local/bin/mvl`
+
+### Changed
+- CI `check` and `smoke` jobs now use `Swatinem/rust-cache` instead of manual `actions/cache` (simpler, better hit rates)
+- CI global env: added `RUST_BACKTRACE=1` for better failure diagnostics
+
 ## [0.10.2] — 2026-04-12 (fix: IFC logging enforcement, effect validation, lambda capture, runtime tests)
 
 ### Added
