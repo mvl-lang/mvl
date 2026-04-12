@@ -249,11 +249,6 @@ impl Parser {
                 d.visible = visible;
                 Ok(Decl::Const(d))
             }
-            TokenKind::Module => {
-                let mut d = self.parse_module_decl()?;
-                d.visible = visible;
-                Ok(Decl::Module(d))
-            }
             TokenKind::Extern => Ok(Decl::Extern(self.parse_extern_decl()?)),
             _ => {
                 let err = ParseError {
@@ -316,38 +311,6 @@ impl Parser {
             name,
             ty,
             value,
-            span,
-        })
-    }
-
-    pub fn parse_module_decl(&mut self) -> Result<crate::mvl::parser::ast::ModuleDecl, ()> {
-        let start = self.peek_span();
-        self.advance(); // consume `module`
-        let ident_result = self.expect_ident();
-        let (name, _) = self.require(ident_result)?;
-        let brace = self.expect(&TokenKind::LBrace);
-        self.require(brace)?;
-
-        let mut declarations = Vec::new();
-        while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
-            let pos_before = self.pos;
-            if let Ok(d) = self.parse_decl() {
-                declarations.push(d);
-            }
-            // Fix: if recovery stalled without consuming tokens, force-advance.
-            if !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof)
-                && self.pos == pos_before
-            {
-                self.advance();
-            }
-        }
-        let rbrace = self.expect(&TokenKind::RBrace);
-        self.require(rbrace)?;
-        let span = self.span_from(start);
-        Ok(crate::mvl::parser::ast::ModuleDecl {
-            visible: false, // set by parse_decl when `pub` prefix is present
-            name,
-            declarations,
             span,
         })
     }

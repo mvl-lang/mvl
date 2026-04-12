@@ -294,9 +294,6 @@ fn collect_exports(prog: &Program) -> HashSet<String> {
             Decl::Const(cd) if cd.visible => {
                 exports.insert(cd.name.clone());
             }
-            Decl::Module(md) if md.visible => {
-                exports.insert(md.name.clone());
-            }
             Decl::Use(ud) if ud.reexport => {
                 // `pub use` re-exports the last path segment
                 if let Some(item) = ud.path.last() {
