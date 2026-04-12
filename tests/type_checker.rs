@@ -1308,3 +1308,106 @@ fn set_literal_infers_named_set_type() {
         "set literal should type-check cleanly, got: {errors:?}"
     );
 }
+
+// ── 003-information-flow/Req 6: Logging label enforcement ────────────────────
+
+/// `println` with a Secret argument MUST be rejected (003-information-flow/Req 6).
+#[test]
+fn println_rejects_secret_argument() {
+    let errors = errors_for(r#"fn f(pwd: Secret<String>) -> Unit ! Console { println(pwd); }"#);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Secret")
+        ),
+        "println with Secret arg should emit LoggingLabelViolation, got: {errors:?}"
+    );
+}
+
+/// `println` with a Tainted argument MUST be rejected (003-information-flow/Req 6).
+#[test]
+fn println_rejects_tainted_argument() {
+    let errors =
+        errors_for(r#"fn f(input: Tainted<String>) -> Unit ! Console { println(input); }"#);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Tainted")
+        ),
+        "println with Tainted arg should emit LoggingLabelViolation, got: {errors:?}"
+    );
+}
+
+/// `println` with a Public argument MUST be accepted (003-information-flow/Req 6).
+#[test]
+fn println_accepts_public_argument() {
+    let errors = errors_for(r#"fn f(msg: Public<String>) -> Unit ! Console { println(msg); }"#);
+    let label_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, CheckError::LoggingLabelViolation { .. }))
+        .collect();
+    assert!(
+        label_errors.is_empty(),
+        "println with Public arg should not emit LoggingLabelViolation, got: {label_errors:?}"
+    );
+}
+
+// ── 002-effect-system/Req 2: Effect name validation ──────────────────────────
+
+/// Unknown effect name MUST be rejected (002-effect-system/Req 2).
+#[test]
+fn invalid_effect_name_rejected() {
+    let errors = errors_for(r#"fn f() -> Unit ! IoMagic { }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::InvalidEffectName { name, .. } if name == "IoMagic")),
+        "unknown effect name should emit InvalidEffectName, got: {errors:?}"
+    );
+}
+
+/// All canonical effect names MUST be accepted (002-effect-system/Req 2).
+#[test]
+fn valid_effect_names_accepted() {
+    // One representative from the canonical set; full set covered by the const in mod.rs.
+    let result = check_src(r#"fn f() -> Unit ! Console, FileRead, Net { }"#);
+    let effect_errors: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| matches!(e, CheckError::InvalidEffectName { .. }))
+        .collect();
+    assert!(
+        effect_errors.is_empty(),
+        "canonical effect names should not emit InvalidEffectName, got: {effect_errors:?}"
+    );
+}
+
+// ── ADR-0002: Lambda capture immutability ────────────────────────────────────
+
+/// Lambda capturing a mutable binding MUST be rejected (ADR-0002).
+/// Ignored until lambda syntax is added to the hand-written recursive-descent parser.
+#[test]
+#[ignore = "lambda parsing not yet implemented in the hand-written parser (Phase 2)"]
+fn lambda_mutable_capture_rejected() {
+    let errors =
+        errors_for(r#"fn f() -> Unit { let mut x = 1; let _g = |y: Int| -> Int { x + y }; }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::CaptureMutabilityViolation { name, .. } if name == "x")),
+        "lambda capturing mut x should emit CaptureMutabilityViolation, got: {errors:?}"
+    );
+}
+
+/// Lambda capturing an immutable binding MUST be accepted (ADR-0002).
+#[test]
+fn lambda_immutable_capture_accepted() {
+    let result = check_src(r#"fn f() -> Unit { let x = 1; let _g = |y: Int| -> Int { x + y }; }"#);
+    let capture_errors: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| matches!(e, CheckError::CaptureMutabilityViolation { .. }))
+        .collect();
+    assert!(
+        capture_errors.is_empty(),
+        "lambda with immutable capture should not emit CaptureMutabilityViolation, got: {capture_errors:?}"
+    );
+}

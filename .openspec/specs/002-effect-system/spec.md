@@ -50,9 +50,9 @@ Functions with side effects MUST declare them in the signature using `! Effect` 
 
 Effects MUST be fine-grained, not a single `IO` bucket. The minimum set of effect categories:
 
-**Implementation:** `src/mvl/checker/mod.rs`
+**Implementation:** `src/mvl/checker/mod.rs` (constant `VALID_EFFECT_NAMES`; validated in `check_fn_decl`)
 
-**Tests:** `src/mvl/checker/mod.rs::tests::invalid_effect_name_rejected`, `src/mvl/checker/mod.rs::tests::valid_effect_names_accepted`
+**Tests:** `tests/type_checker.rs::invalid_effect_name_rejected`, `tests/type_checker.rs::valid_effect_names_accepted`, `tests/type_checker.rs::caller_missing_callee_effect_rejected`, `tests/type_checker.rs::caller_declaring_effect_union_accepted`
 
 | Effect | What it permits |
 |--------|----------------|
@@ -102,6 +102,10 @@ Effects SHOULD support parameterization for fine-grained access control:
 
 Effects MUST compose. A function calling two effectful functions MUST declare the union of their effects.
 
+**Implementation:** `src/mvl/checker/mod.rs`
+
+**Tests:** `tests/type_checker.rs::caller_declaring_effect_union_accepted`, `tests/type_checker.rs::caller_missing_callee_effect_rejected`
+
 #### Scenario: Effect union
 
 - GIVEN `fn a() -> X ! FileRead` and `fn b() -> Y ! Net`
@@ -121,6 +125,10 @@ Effects MUST compose. A function calling two effectful functions MUST declare th
 ### Requirement 5: Totality as Effect [MUST]
 
 Non-terminating functions MUST be marked `partial`. Total functions (the default) MUST provably terminate. `partial` is semantically an effect — it declares that the function may not return.
+
+**Implementation:** `src/mvl/checker/mod.rs`, `src/mvl/parser/ast.rs::Totality`
+
+**Tests:** `tests/type_checker.rs::for_loop_in_total_function_accepted`, `tests/type_checker.rs::while_loop_in_total_function_rejected`, `tests/type_checker.rs::while_loop_in_implicit_total_function_rejected`, `tests/type_checker.rs::while_loop_in_partial_function_accepted`, `tests/type_checker.rs::partial_call_in_total_function_rejected`
 
 #### Scenario: Total function with bounded loop
 
@@ -146,6 +154,10 @@ Non-terminating functions MUST be marked `partial`. Total functions (the default
 ### Requirement 6: Concurrency Effects [MUST]
 
 Spawning tasks and sending/receiving on channels MUST be effects. The effect system MUST prevent data races by requiring appropriate reference capabilities on values crossing actor boundaries.
+
+**Implementation:** `src/mvl/checker/mod.rs`, `src/mvl/parser/ast.rs::Capability`
+
+**Tests:** `tests/type_checker.rs::sending_ref_param_rejected`, `tests/type_checker.rs::sending_iso_param_accepted`, `tests/type_checker.rs::sending_val_param_accepted`, `tests/type_checker.rs::capabilities_corpus_parses_and_checks`
 
 #### Scenario: Sending non-sendable type
 

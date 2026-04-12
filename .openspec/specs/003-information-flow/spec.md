@@ -130,11 +130,15 @@ Error types containing `Secret` fields MUST NOT be sendable to `Public` channels
 - WHEN `http_respond(Err(AuthError::InvalidPassword))`
 - THEN the compiler MUST accept: error type is fully `Public`
 
-### Requirement 6: Logging Respects Labels [MUST] *(Deferred — Phase 2)*
+### Requirement 6: Logging Respects Labels [MUST]
 
-> **Status:** Not yet implemented. Requires stdlib `log` module type integration. Tracked in #30.
+> **Status:** `println`/`print` builtins now enforce IFC label check at call site. Full `log` stdlib module integration remains Phase 2 (tracked in #30).
 
 Logging functions MUST accept only `Public<T>` arguments. Logging a `Secret` or `Tainted` value MUST be a compile error.
+
+**Implementation:** `src/mvl/checker/mod.rs` (`infer_fn_call` — IFC label check for `println`/`print`)
+
+**Tests:** `tests/type_checker.rs::println_rejects_secret_argument`, `tests/type_checker.rs::println_rejects_tainted_argument`, `tests/type_checker.rs::println_accepts_public_argument`
 
 #### Scenario: Logging a secret
 

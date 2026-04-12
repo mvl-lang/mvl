@@ -77,7 +77,7 @@ fn precedence(a: Int, b: Int, c: Int) -> Int {
 }
 
 // ? propagation
-fn propagation(input: String) -> Result<Int, String> ! IO {
+fn propagation(input: String) -> Result<Int, String> {
     let n = parse_int(input)?;
     Ok(n)
 }
@@ -112,7 +112,7 @@ fn struct_construction() -> Point {
 }
 
 // Security-flow operations
-fn security_ops(raw: Tainted<String>) -> Clean<String> ! IO {
+fn security_ops(raw: Tainted<String>) -> Clean<String> {
     let clean = sanitize(raw);
     clean
 }

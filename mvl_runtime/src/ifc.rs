@@ -250,6 +250,9 @@ mod tests {
 
         let c = Clean::new(42i64);
         assert_eq!(*c, 42i64);
+
+        let p = Public::new(vec![1i64, 2, 3]);
+        assert_eq!(p.len(), 3); // Deref to Vec<i64>
     }
 
     #[test]
@@ -298,5 +301,12 @@ mod tests {
         let s = Secret::new(3i64);
         let _s2 = s;
         let _ = s;
+    }
+
+    #[test]
+    fn into_inner_and_as_inner() {
+        let s = Secret::new(99i64);
+        assert_eq!(*s.as_inner(), 99);
+        assert_eq!(s.into_inner(), 99);
     }
 }
