@@ -207,7 +207,10 @@ module.exports = grammar({
 
     constraints: ($) => seq($.constraint, repeat(seq(",", $.constraint))),
 
-    constraint: ($) => seq($.identifier, ":", $.identifier),
+    constraint: ($) => seq($.identifier, ":", $.trait_bound),
+
+    // Phase 1: single trait bound only; "+" compound bounds deferred to Phase 2
+    trait_bound: ($) => $.identifier,
 
     // === Type expressions ===
 

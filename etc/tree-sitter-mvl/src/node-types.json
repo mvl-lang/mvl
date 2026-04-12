@@ -131,6 +131,10 @@
         {
           "type": "identifier",
           "named": true
+        },
+        {
+          "type": "trait_bound",
+          "named": true
         }
       ]
     }
@@ -223,10 +227,6 @@
         },
         {
           "type": "fn_decl",
-          "named": true
-        },
-        {
-          "type": "module_decl",
           "named": true
         },
         {
@@ -877,25 +877,6 @@
     }
   },
   {
-    "type": "module_decl",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": true,
-      "types": [
-        {
-          "type": "declaration",
-          "named": true
-        },
-        {
-          "type": "identifier",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
     "type": "module_path",
     "named": true,
     "fields": {},
@@ -1062,7 +1043,6 @@
   {
     "type": "program",
     "named": true,
-    "root": true,
     "fields": {},
     "children": {
       "multiple": true,
@@ -1368,6 +1348,21 @@
     "type": "totality",
     "named": true,
     "fields": {}
+  },
+  {
+    "type": "trait_bound",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "identifier",
+          "named": true
+        }
+      ]
+    }
   },
   {
     "type": "tuple_pattern",
@@ -1833,15 +1828,10 @@
   },
   {
     "type": "line_comment",
-    "named": true,
-    "extra": true
+    "named": true
   },
   {
     "type": "match",
-    "named": false
-  },
-  {
-    "type": "module",
     "named": false
   },
   {
