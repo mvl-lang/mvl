@@ -418,3 +418,35 @@ fn no_top_level_main_means_library() {
     );
     assert!(!out.has_main, "no top-level fn main means library");
 }
+
+// ── #38: Test function transpilation ─────────────────────────────────────
+
+/// Requirement: `test fn` is wrapped in `#[cfg(test)] mod tests { #[test] fn … }`
+#[test]
+fn test_fn_emits_cfg_test_block() {
+    let src = "fn add(a: Int, b: Int) -> Int { a + b }\ntest fn check_add() -> Unit { }";
+    let out = transpile_src(src);
+    assert_contains(&out, "#[cfg(test)]");
+    assert_contains(&out, "mod tests {");
+    assert_contains(&out, "#[test]");
+    assert_contains(&out, "fn check_add()");
+    assert_contains(&out, "use super::*;");
+}
+
+#[test]
+fn test_fn_not_pub() {
+    // test functions must NOT be `pub` — Rust `#[test]` fns are private by convention
+    let src = "test fn my_test() -> Unit { }";
+    let out = transpile_src(src);
+    assert_contains(&out, "fn my_test()");
+    assert!(!out.contains("pub fn my_test"), "test fn should not be pub");
+}
+
+#[test]
+fn no_test_fns_no_cfg_test_block() {
+    let out = transpile_src("fn add(a: Int, b: Int) -> Int { a + b }");
+    assert!(
+        !out.contains("#[cfg(test)]"),
+        "no test fns → no #[cfg(test)] block"
+    );
+}

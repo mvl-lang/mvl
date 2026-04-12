@@ -13,6 +13,25 @@ use crate::mvl::transpiler::emit_exprs::{emit_block_stmts, emit_expr};
 use crate::mvl::transpiler::emit_types::{emit_label, emit_ref_expr_for_assert, emit_type_expr};
 
 pub fn emit_fn_decl(cg: &mut Codegen, fd: &FnDecl) {
+    // Test functions are emitted inside a #[cfg(test)] mod tests block.
+    // The caller (codegen) is responsible for grouping them; here we just
+    // emit the #[test] attribute and a non-pub signature.
+    if fd.is_test {
+        cg.line("#[test]");
+        let generics = emit_generics(&fd.type_params, &fd.constraints);
+        let params_str = emit_params(&fd.params);
+        let ret_str = emit_type_expr(&fd.return_type);
+        cg.line(&format!(
+            "fn {}{generics}({params_str}) -> {ret_str} {{",
+            fd.name
+        ));
+        cg.push_indent();
+        emit_fn_body(cg, fd);
+        cg.pop_indent();
+        cg.line("}");
+        return;
+    }
+
     // Doc comments for MVL-specific annotations that Rust cannot express directly
     if let Some(Totality::Total) = &fd.totality {
         cg.line("/// # Totality");
@@ -33,11 +52,22 @@ pub fn emit_fn_decl(cg: &mut Codegen, fd: &FnDecl) {
         fd.name
     ));
     cg.push_indent();
+    emit_fn_body(cg, fd);
+    cg.pop_indent();
+    cg.line("}");
+}
 
-    // Emit body statements (all but last)
+/// Emit the statements and return-refinement check for a function body.
+fn emit_fn_body(cg: &mut Codegen, fd: &FnDecl) {
     let stmts = &fd.body.stmts;
     if stmts.is_empty() {
-        cg.line("todo!(\"empty body\")");
+        // Unit-returning functions with an empty body are valid in Rust (implicit `()`).
+        // Non-Unit empty bodies get a `todo!` placeholder so the generated code compiles.
+        let is_unit =
+            matches!(fd.return_type.as_ref(), TypeExpr::Base { name, .. } if name == "Unit");
+        if !is_unit {
+            cg.line("todo!(\"empty body\")");
+        }
     } else {
         // Emit all but the last statement normally
         let (head, tail) = stmts.split_at(stmts.len() - 1);
@@ -49,8 +79,6 @@ pub fn emit_fn_decl(cg: &mut Codegen, fd: &FnDecl) {
         use crate::mvl::parser::ast::Stmt;
         match last {
             Stmt::Expr { expr, .. } => {
-                // Check if it's a return-like expression (if, match, block)
-                // — emit as tail expression (no semicolon)
                 cg.indent();
                 emit_expr_tail_with_return_type(cg, expr, &fd.return_type, &fd.params);
                 cg.nl();
@@ -66,9 +94,6 @@ pub fn emit_fn_decl(cg: &mut Codegen, fd: &FnDecl) {
             "// return refinement: debug_assert!({pred_str}) — checked by MVL type checker"
         ));
     }
-
-    cg.pop_indent();
-    cg.line("}");
 }
 
 // ── Generics ─────────────────────────────────────────────────────────────

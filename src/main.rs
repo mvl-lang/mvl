@@ -343,6 +343,7 @@ fn cmd_assurance(path: &str, json: bool) {
     let mut total_partial: usize = 0; // `partial fn` (MVL-defined)
     let mut _total_pub: usize = 0; // `pub fn` — always 0 until module resolver (#96) is merged
     let mut total_extern: usize = 0; // extern fn signatures (trust boundaries)
+    let mut total_test_fns: usize = 0; // `test fn` — internal unit tests
     let mut check_errors: usize = 0;
     let mut file_count = 0;
 
@@ -357,6 +358,7 @@ fn cmd_assurance(path: &str, json: bool) {
         total_partial += stats.partial_fn_count;
         _total_pub += stats.pub_fn_count;
         total_extern += stats.extern_fn_count; // fn signatures, not block count
+        total_test_fns += stats.test_fn_count;
         check_errors += result.errors.len();
         file_count += 1;
     }
@@ -383,7 +385,8 @@ fn cmd_assurance(path: &str, json: bool) {
     "verified_total": {total_verified},
     "partial": {total_partial},
     "extern": {total_extern},
-    "implemented": {implemented}
+    "implemented": {implemented},
+    "test": {total_test_fns}
   }},
   "percentages": {{
     "verified_pct": {verified_pct},
@@ -401,6 +404,7 @@ fn cmd_assurance(path: &str, json: bool) {
         println!("  partial fn:        {total_partial}");
         println!("  extern fn:         {total_extern} ({extern_pct}% trust boundary)");
         println!("  implemented:       {implemented}");
+        println!("  test fn:           {total_test_fns}");
         println!("Type errors:         {check_errors}");
         if check_errors == 0 {
             println!("Status:              PASS");
@@ -423,6 +427,7 @@ struct AssuranceStats {
     // NOTE(#96): pub_fn_count populated once module resolver is merged; always 0 for now.
     pub_fn_count: usize,
     extern_fn_count: usize,
+    test_fn_count: usize,
 }
 
 fn collect_assurance_stats(prog: &Program) -> AssuranceStats {
@@ -432,6 +437,7 @@ fn collect_assurance_stats(prog: &Program) -> AssuranceStats {
         partial_fn_count: 0,
         pub_fn_count: 0,
         extern_fn_count: 0,
+        test_fn_count: 0,
     };
     collect_stats_from_decls(&prog.declarations, &mut stats);
     stats
@@ -441,11 +447,15 @@ fn collect_stats_from_decls(decls: &[Decl], stats: &mut AssuranceStats) {
     for decl in decls {
         match decl {
             Decl::Fn(fd) => {
-                stats.fn_count += 1;
-                match fd.totality {
-                    Some(Totality::Total) => stats.total_fn_count += 1,
-                    Some(Totality::Partial) => stats.partial_fn_count += 1,
-                    None => stats.total_fn_count += 1, // implicitly total
+                if fd.is_test {
+                    stats.test_fn_count += 1;
+                } else {
+                    stats.fn_count += 1;
+                    match fd.totality {
+                        Some(Totality::Total) => stats.total_fn_count += 1,
+                        Some(Totality::Partial) => stats.partial_fn_count += 1,
+                        None => stats.total_fn_count += 1, // implicitly total
+                    }
                 }
             }
             Decl::Extern(ed) => {
@@ -568,4 +578,37 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+// ── Assurance stats tests ─────────────────────────────────────────────────
+
+#[cfg(test)]
+mod assurance_tests {
+    use super::*;
+
+    fn parse_prog(src: &str) -> Program {
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+        prog
+    }
+
+    /// Spec 004 Req 3: assurance report counts test fns separately from impl fns.
+    #[test]
+    fn test_fn_count_is_separate_from_fn_count() {
+        let src = "fn add(a: Int, b: Int) -> Int { a + b }\ntest fn check_add() -> Unit { }\ntest fn check_zero() -> Unit { }";
+        let prog = parse_prog(src);
+        let stats = collect_assurance_stats(&prog);
+        assert_eq!(stats.test_fn_count, 2, "expected 2 test fns");
+        assert_eq!(stats.fn_count, 1, "test fns must not inflate fn_count");
+    }
+
+    #[test]
+    fn no_test_fns_means_zero_count() {
+        let src = "fn add(a: Int, b: Int) -> Int { a + b }";
+        let prog = parse_prog(src);
+        let stats = collect_assurance_stats(&prog);
+        assert_eq!(stats.test_fn_count, 0);
+        assert_eq!(stats.fn_count, 1);
+    }
 }
