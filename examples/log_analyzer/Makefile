@@ -9,7 +9,7 @@ check:
 	mvl check main.mvl
 
 run: $(SAMPLE)
-	mvl run main.mvl -- --file $(SAMPLE)
+	mvl run main.mvl
 
 $(SAMPLE):
 	@printf 'INFO  starting up\nWARN  disk at 80%%\nERROR disk full\nINFO  shutdown\n' > $@

@@ -68,13 +68,9 @@ pub fn count_extern_decls(prog: &Program) -> usize {
 
 /// Returns true if the program declares at least one `extern "rust"` block.
 pub fn has_extern_rust_decls(prog: &Program) -> bool {
-    prog.declarations.iter().any(|d| {
-        if let Decl::Extern(ed) = d {
-            ed.abi == "rust"
-        } else {
-            false
-        }
-    })
+    prog.declarations
+        .iter()
+        .any(|d| matches!(d, Decl::Extern(ed) if ed.abi == "rust"))
 }
 
 /// Transpile a parsed [`Program`] to Rust source.

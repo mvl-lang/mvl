@@ -155,8 +155,8 @@ fn build_project(path: &str, run: bool) {
     let crate_name = stem(path);
     let out = transpiler::transpile(&prog, &crate_name);
 
-    // Write to a deterministic temp directory per crate name
-    let tmp_dir = std::env::temp_dir().join(format!("mvl_build_{crate_name}"));
+    // Use a per-invocation temp directory to avoid concurrent-run collisions.
+    let tmp_dir = std::env::temp_dir().join(format!("mvl_build_{}_{}", crate_name, process::id()));
     let src_dir = tmp_dir.join("src");
     fs::create_dir_all(&src_dir).unwrap_or_else(|e| {
         eprintln!("Cannot create temp dir {}: {e}", src_dir.display());
@@ -852,11 +852,11 @@ fn stem(path: &str) -> String {
     }
 }
 
-/// Recursively copy a directory tree.
 /// Insert `mod bridge;` into generated Rust source after the runtime import line.
 ///
 /// The bridge module must be declared before any code that calls extern "rust" fns,
 /// so it is placed right after the `use mvl_runtime::prelude::*;` line.
+/// The marker is pure ASCII so byte-offset slicing is safe.
 fn inject_mod_bridge(source: &str) -> String {
     let marker = "use mvl_runtime::prelude::*;";
     if let Some(pos) = source.find(marker) {
@@ -868,6 +868,7 @@ fn inject_mod_bridge(source: &str) -> String {
     }
 }
 
+/// Recursively copy a directory tree.
 fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
