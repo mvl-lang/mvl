@@ -6,14 +6,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
-## [0.10.0] — 2026-04-12 (feat: compiler assurance report with per-requirement verification table)
+## [0.10.0] — 2026-04-12 (feat: compiler assurance report + Debug/Display traits + number literal formats)
 
 ### Added
+- `impl Display for T` syntax for user-defined string representations; transpiles to `impl std::fmt::Display for T`
+- `format()` built-in function: Rust-style format strings (`{}`, `{:?}`, `{:08x}`, etc.) mapped to Rust `format!()` macro
+- Number literal formats: hex (`0xFF`/`0XFF`), binary (`0b1010`/`0B1010`), octal (`0o77`/`0O77`), and scientific notation (`1.5e10`, `2e-3`)
+- Requirement 10 (Debug and Display Traits) to Spec 001 (Type System) with syntax, transpilation rules, and test coverage
+- Lexer support for `impl` keyword and base-prefixed integer parsing via `lex_integer_base()`
+- Parser: `impl TraitName for TypeName { fn ... }` declarations via `parse_impl_decl()`
+- Transpiler module `emit_impls.rs` for Display impl code generation
 - `mvl assurance --verbose` / `-v` flag for per-function detail table (name, kind, totality, effects, capabilities, refinements)
 - `--json` output extended with `types` (struct/enum counts) and `requirements` (per-req error counts 1–11) keys for CI/dashboard consumption
 - `CheckError::requirement_number()` method mapping all 23 error variants to their corresponding MVL requirement (1–11)
 - `CheckResult::req_errors: [usize; 12]` per-requirement error counts populated by the type checker
-- 5 new unit tests: `struct_and_enum_types_counted`, `effects_fn_counted`, `req_errors_populated_from_checker`, `req_errors_zero_on_clean_program`, `fn_details_populated`
+- 18 new tests: lexer (hex/binary/octal/scientific/impl keyword), transpiler (Display impl, format macro, number literals, Debug derive), assurance (struct/enum count, effects, req_errors)
 
 ### Changed
 - `mvl assurance` now emits a requirement matrix (Req 1–11) with pass/fail status (✓/✗) and evidence metrics
@@ -21,6 +28,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 - `UnsupportedExternAbi` error reclassified from Req 11 (IFC) to Req 1 (Type Safety) — it is a declaration-level parse error, not an information flow violation
 
 ### Fixed
+- Silent float parse failure: `unwrap_or(0.0)` replaced with explicit `LexError` for malformed scientific notation (e.g., `1.5e`)
+- Parser infinite-loop DoS in `parse_impl_decl` method recovery: added `pos_before` guard matching `parse_program` pattern
+- `TokenKind::Impl` added to error recovery sync set so `impl` blocks are not silently consumed during recovery
+- String literal escaping: added `escape_str()` helper to all `Literal::Str` emission paths, preventing malformed Rust for strings with `"`, `\`, or control characters
+- Non-expression last statement in `fmt` body now emits `todo!()` instead of syntactically broken `write!(f, "{}", {...})`
+- Spec requirement `N+1` renumbered to `10`; `format()` IFC label enforcement downgraded from MUST to SHOULD (Phase 2 deferred)
 - `fn_details` collection now gated on `--verbose` flag; avoids unnecessary allocation on non-verbose runs
 - Warning emitted when `--verbose` is combined with `--json` (flag is silently ignored in JSON mode)
 - Added debug assertions to catch out-of-range `requirement_number()` returns and verify error count consistency
