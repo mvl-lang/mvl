@@ -13,6 +13,7 @@ fn main() {
         eprintln!("Usage:");
         eprintln!("  mvl check <file.mvl>      — parse and type-check");
         eprintln!("  mvl build <file.mvl>      — transpile to Rust and run cargo build");
+        eprintln!("  mvl run   <file.mvl>      — transpile, build, and execute");
         eprintln!("  mvl transpile <file.mvl>  — print transpiled Rust to stdout");
         process::exit(1);
     }
@@ -25,7 +26,11 @@ fn main() {
         }
         "build" => {
             let path = require_file_arg(&args, "build");
-            cmd_build(&path);
+            build_project(&path, false);
+        }
+        "run" => {
+            let path = require_file_arg(&args, "run");
+            build_project(&path, true);
         }
         "transpile" => {
             let path = require_file_arg(&args, "transpile");
@@ -69,45 +74,64 @@ fn cmd_transpile(path: &str) {
     let out = transpiler::transpile(&prog, &crate_name);
     println!("// === Cargo.toml ===");
     println!("{}", out.cargo_toml);
-    println!("// === src/lib.rs ===");
+    let file_label = if out.has_main {
+        "src/main.rs"
+    } else {
+        "src/lib.rs"
+    };
+    println!("// === {file_label} ===");
     println!("{}", out.lib_rs);
 }
 
-/// Transpile a .mvl file to a Cargo project in a temp directory and run `cargo build`.
-fn cmd_build(path: &str) {
+/// Transpile a .mvl file to a Cargo project, build it, and optionally run it.
+fn build_project(path: &str, run: bool) {
     let (prog, _src) = parse_or_exit(path);
     let crate_name = stem(path);
     let out = transpiler::transpile(&prog, &crate_name);
 
-    // Write to a temporary Cargo project
+    // Write to a deterministic temp directory per crate name
     let tmp_dir = std::env::temp_dir().join(format!("mvl_build_{crate_name}"));
     let src_dir = tmp_dir.join("src");
     fs::create_dir_all(&src_dir).expect("create src dir");
 
     let cargo_toml_path = tmp_dir.join("Cargo.toml");
-    let lib_rs_path = src_dir.join("lib.rs");
-    let main_rs_path = src_dir.join("main.rs");
-
     fs::write(&cargo_toml_path, &out.cargo_toml).expect("write Cargo.toml");
-    fs::write(&lib_rs_path, &out.lib_rs).expect("write lib.rs");
 
-    let main_content = transpiler::cargo::emit_main_rs(None);
-    fs::write(&main_rs_path, main_content).expect("write main.rs");
+    if out.has_main {
+        // Binary crate: the transpiled code IS src/main.rs
+        fs::write(src_dir.join("main.rs"), &out.lib_rs).expect("write main.rs");
+    } else {
+        // Library crate: lib.rs + a stub main for cargo build to succeed
+        fs::write(src_dir.join("lib.rs"), &out.lib_rs).expect("write lib.rs");
+        fs::write(
+            src_dir.join("main.rs"),
+            transpiler::cargo::emit_main_rs_stub(&crate_name),
+        )
+        .expect("write stub main.rs");
+    }
 
     println!("Transpiled to: {}", tmp_dir.display());
-    println!("Running: cargo build");
+
+    let cargo_cmd = if run && out.has_main { "run" } else { "build" };
+    println!("Running: cargo {cargo_cmd}");
 
     let status = process::Command::new("cargo")
-        .arg("build")
+        .arg(cargo_cmd)
         .current_dir(&tmp_dir)
         .status()
         .expect("failed to run cargo");
 
     if !status.success() {
-        eprintln!("cargo build failed");
+        eprintln!("cargo {cargo_cmd} failed");
         process::exit(1);
     }
-    println!("Build successful.");
+
+    if !run || !out.has_main {
+        println!("Build successful.");
+        if run && !out.has_main {
+            eprintln!("Note: no `fn main` in MVL source — nothing to run.");
+        }
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────

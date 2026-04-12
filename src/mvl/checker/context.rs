@@ -99,11 +99,51 @@ impl Default for TypeEnv {
 
 impl TypeEnv {
     pub fn new() -> Self {
-        TypeEnv {
+        let mut env = TypeEnv {
             scopes: vec![HashMap::new()],
             types: HashMap::new(),
             fns: HashMap::new(),
-        }
+        };
+        env.register_builtins();
+        env
+    }
+
+    /// Register built-in stdlib functions so the checker accepts them.
+    ///
+    /// These correspond to the MVL standard library tier 1 (core) functions
+    /// that every program has access to without an import.
+    fn register_builtins(&mut self) {
+        // Console I/O — require ! Console effect
+        // params: Vec<Ty> is empty here because println/print are variadic;
+        // the checker special-cases them to skip arity checking.
+        self.fns.insert(
+            "println".into(),
+            FnInfo {
+                params: vec![],
+                ret: Ty::Unit,
+                effects: vec!["Console".into()],
+                totality: None,
+            },
+        );
+        self.fns.insert(
+            "print".into(),
+            FnInfo {
+                params: vec![],
+                ret: Ty::Unit,
+                effects: vec!["Console".into()],
+                totality: None,
+            },
+        );
+        // assert_eq — pure, for testing
+        self.fns.insert(
+            "assert_eq".into(),
+            FnInfo {
+                params: vec![],
+                ret: Ty::Unit,
+                effects: vec![],
+                totality: None,
+            },
+        );
     }
 
     // ── Scope management ─────────────────────────────────────────────────

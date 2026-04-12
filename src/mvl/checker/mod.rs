@@ -492,7 +492,13 @@ impl TypeChecker {
                     if name == "None" {
                         return Ty::Option(Box::new(Ty::Unknown));
                     }
-                    if let Some(enum_ty) = self.lookup_enum_for_variant(name) {
+                    // Bare variant: `DivisionByZero` or path: `MathError::DivisionByZero`
+                    let variant_name = if let Some((_, v)) = name.split_once("::") {
+                        v
+                    } else {
+                        name.as_str()
+                    };
+                    if let Some(enum_ty) = self.lookup_enum_for_variant(variant_name) {
                         return enum_ty;
                     }
                     self.emit(CheckError::UndefinedVariable {
@@ -882,7 +888,10 @@ impl TypeChecker {
         let arg_tys: Vec<Ty> = args.iter().map(|a| self.infer_expr(a)).collect();
 
         if let Some(fn_info) = self.env.lookup_fn(name).cloned() {
-            if fn_info.params.len() != arg_tys.len() {
+            // Variadic built-ins (println, print, assert_eq) have an empty params
+            // vec as a sentinel — skip arity and type checking for them.
+            let is_variadic_builtin = matches!(name, "println" | "print" | "assert_eq");
+            if !is_variadic_builtin && fn_info.params.len() != arg_tys.len() {
                 self.emit(CheckError::WrongArgCount {
                     name: name.to_string(),
                     expected: fn_info.params.len(),
@@ -891,13 +900,16 @@ impl TypeChecker {
                 });
                 return fn_info.ret.clone();
             }
-            for (i, (expected, found)) in fn_info.params.iter().zip(arg_tys.iter()).enumerate() {
-                if !types_compatible(expected, found) {
-                    self.emit(CheckError::TypeMismatch {
-                        expected: expected.display(),
-                        found: found.display(),
-                        span: args[i].span(),
-                    });
+            if !is_variadic_builtin {
+                for (i, (expected, found)) in fn_info.params.iter().zip(arg_tys.iter()).enumerate()
+                {
+                    if !types_compatible(expected, found) {
+                        self.emit(CheckError::TypeMismatch {
+                            expected: expected.display(),
+                            found: found.display(),
+                            span: args[i].span(),
+                        });
+                    }
                 }
             }
 
@@ -944,8 +956,13 @@ impl TypeChecker {
                 "Err" => return Ty::Result(Box::new(Ty::Unknown), Box::new(first_arg)),
                 _ => {}
             }
-            // User-defined enum tuple-variant constructor
-            if let Some(enum_ty) = self.lookup_enum_for_variant(name) {
+            // User-defined enum tuple-variant constructor (bare or path form)
+            let variant_name = if let Some((_, v)) = name.split_once("::") {
+                v
+            } else {
+                name
+            };
+            if let Some(enum_ty) = self.lookup_enum_for_variant(variant_name) {
                 return enum_ty;
             }
             // Not in function table — could be builtin or foreign; emit Unknown

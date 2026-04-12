@@ -33,16 +33,25 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
             args,
             ..
         } => {
-            cg.push(&map_fn_name(name));
-            if !type_args.is_empty() {
-                cg.push("::<");
-                let strs: Vec<String> = type_args.iter().map(emit_type_expr).collect();
-                cg.push(&strs.join(", "));
-                cg.push(">");
+            // println!/print! are Rust macros: first arg must be a bare string
+            // literal, not a `.to_string()` expression.
+            if matches!(name.as_str(), "println" | "print") {
+                cg.push(&format!("{name}!"));
+                cg.push("(");
+                emit_args_for_macro(cg, args);
+                cg.push(")");
+            } else {
+                cg.push(&map_fn_name(name));
+                if !type_args.is_empty() {
+                    cg.push("::<");
+                    let strs: Vec<String> = type_args.iter().map(emit_type_expr).collect();
+                    cg.push(&strs.join(", "));
+                    cg.push(">");
+                }
+                cg.push("(");
+                emit_args(cg, args);
+                cg.push(")");
             }
-            cg.push("(");
-            emit_args(cg, args);
-            cg.push(")");
         }
         Expr::Unary { op, expr, .. } => {
             let op_str = match op {
@@ -201,6 +210,25 @@ fn emit_args(cg: &mut Codegen, args: &[Expr]) {
             cg.push(", ");
         }
         emit_expr(cg, arg);
+    }
+}
+
+/// Emit arguments for Rust macros like `println!` where the first argument
+/// must be a bare string literal (not a `.to_string()` expression).
+fn emit_args_for_macro(cg: &mut Codegen, args: &[Expr]) {
+    for (i, arg) in args.iter().enumerate() {
+        if i > 0 {
+            cg.push(", ");
+        }
+        if i == 0 {
+            // First arg: emit string literal bare, without `.to_string()`
+            match arg {
+                Expr::Literal(Literal::Str(s), _) => cg.push(&format!("\"{s}\"")),
+                other => emit_expr(cg, other),
+            }
+        } else {
+            emit_expr(cg, arg);
+        }
     }
 }
 
