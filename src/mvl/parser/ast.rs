@@ -22,7 +22,6 @@ pub enum Decl {
     Type(TypeDecl),
     Fn(FnDecl),
     Const(ConstDecl),
-    Module(ModuleDecl),
     /// `extern "rust" { … }` — foreign-function trust boundary (Req 11).
     Extern(ExternDecl),
     /// `use path::to::Item;` or `pub use path::to::Item;`
@@ -35,7 +34,6 @@ impl Decl {
             Decl::Type(d) => d.span,
             Decl::Fn(d) => d.span,
             Decl::Const(d) => d.span,
-            Decl::Module(d) => d.span,
             Decl::Extern(d) => d.span,
             Decl::Use(d) => d.span,
         }
@@ -159,15 +157,6 @@ pub struct ConstDecl {
     pub name: String,
     pub ty: TypeExpr,
     pub value: Expr,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ModuleDecl {
-    /// Whether the item is exported from this module (`pub`).
-    pub visible: bool,
-    pub name: String,
-    pub declarations: Vec<Decl>,
     pub span: Span,
 }
 

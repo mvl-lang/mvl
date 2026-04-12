@@ -26,8 +26,8 @@ use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
 use crate::mvl::parser::ast::{
     BinaryOp, Block, Capability, ConstDecl, Decl, ElseBranch, Expr, ExternDecl, FnDecl, LValue,
-    Literal, MatchArm, MatchBody, ModuleDecl, Pattern, Program, SecurityLabel, Stmt, Totality,
-    TypeBody, TypeDecl, UnaryOp,
+    Literal, MatchArm, MatchBody, Pattern, Program, SecurityLabel, Stmt, Totality, TypeBody,
+    TypeDecl, UnaryOp,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -111,7 +111,6 @@ impl TypeChecker {
                 Decl::Type(td) => self.register_type(td),
                 Decl::Fn(fd) => self.register_fn(fd),
                 Decl::Const(_) => {}
-                Decl::Module(md) => self.collect_declarations(&md.declarations),
                 Decl::Extern(ed) => self.register_extern(ed),
                 Decl::Use(_) => {} // resolved by the module resolver, not the type checker
             }
@@ -174,7 +173,6 @@ impl TypeChecker {
             Decl::Type(_) => {} // type declarations are structurally valid if parsed
             Decl::Fn(fd) => self.check_fn_decl(fd),
             Decl::Const(cd) => self.check_const_decl(cd),
-            Decl::Module(md) => self.check_module_decl(md),
             Decl::Extern(ed) => self.check_extern_decl(ed),
             Decl::Use(_) => {} // resolved by the module resolver, not the type checker
         }
@@ -237,15 +235,6 @@ impl TypeChecker {
                 found: found.display(),
                 span: cd.value.span(),
             });
-        }
-    }
-
-    fn check_module_decl(&mut self, md: &ModuleDecl) {
-        // Note: declarations were already registered in pass 1 (collect_declarations).
-        // Do NOT call collect_declarations again here — it would double-register all
-        // types and functions in this module.
-        for decl in &md.declarations {
-            self.check_decl(decl);
         }
     }
 

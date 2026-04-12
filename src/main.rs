@@ -453,9 +453,6 @@ fn collect_stats_from_decls(decls: &[Decl], stats: &mut AssuranceStats) {
                 stats.extern_fn_count += ed.fns.len();
                 stats.fn_count += ed.fns.len();
             }
-            Decl::Module(md) => {
-                collect_stats_from_decls(&md.declarations, stats);
-            }
             _ => {}
         }
     }

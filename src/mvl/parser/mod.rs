@@ -186,7 +186,6 @@ impl Parser {
                 TokenKind::Fn
                 | TokenKind::Type
                 | TokenKind::Const
-                | TokenKind::Module
                 | TokenKind::Total
                 | TokenKind::Partial
                 | TokenKind::Pub

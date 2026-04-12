@@ -53,7 +53,6 @@ pub enum TokenKind {
     For,
     While,
     Type,
-    Module,
     Total,
     Partial,
     Return,
@@ -152,7 +151,6 @@ impl fmt::Display for TokenKind {
             TokenKind::For => write!(f, "for"),
             TokenKind::While => write!(f, "while"),
             TokenKind::Type => write!(f, "type"),
-            TokenKind::Module => write!(f, "module"),
             TokenKind::Total => write!(f, "total"),
             TokenKind::Partial => write!(f, "partial"),
             TokenKind::Return => write!(f, "return"),
@@ -636,7 +634,6 @@ fn keyword_or_ident(s: String) -> TokenKind {
         "for" => TokenKind::For,
         "while" => TokenKind::While,
         "type" => TokenKind::Type,
-        "module" => TokenKind::Module,
         "total" => TokenKind::Total,
         "partial" => TokenKind::Partial,
         "return" => TokenKind::Return,
@@ -693,7 +690,7 @@ mod tests {
 
     #[test]
     fn tokenize_declaration_keywords() {
-        let src = "fn let mut match if else for type module total partial return";
+        let src = "fn let mut match if else for type total partial return";
         let kinds = lex_kinds_no_eof(src);
         assert_eq!(
             kinds,
@@ -706,7 +703,6 @@ mod tests {
                 TokenKind::Else,
                 TokenKind::For,
                 TokenKind::Type,
-                TokenKind::Module,
                 TokenKind::Total,
                 TokenKind::Partial,
                 TokenKind::Return,
