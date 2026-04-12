@@ -55,11 +55,11 @@ partial fn server_loop() -> Never ! Net, Console {
 
 ### Program entry point
 
-A file with `fn main() -> ()` is a **binary** — it compiles to an executable. A file without `fn main` is a **library** — it compiles to a reusable module.
+A file with `fn main() -> Unit` is a **binary** — it compiles to an executable. A file without `fn main` is a **library** — it compiles to a reusable module.
 
 ```mvl
 // Binary: this file produces an executable
-fn main() -> () ! Console {
+fn main() -> Unit ! Console {
     println("hello");
 }
 ```

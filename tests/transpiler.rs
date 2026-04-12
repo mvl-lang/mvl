@@ -10,7 +10,13 @@ use mvl::mvl::transpiler::transpile;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
+use mvl::mvl::transpiler::TranspileOutput;
+
 fn transpile_src(src: &str) -> String {
+    transpile_full(src).lib_rs
+}
+
+fn transpile_full(src: &str) -> TranspileOutput {
     let (mut parser, lex_errors) = Parser::new(src);
     assert!(lex_errors.is_empty(), "lex errors: {lex_errors:?}");
     let prog = parser.parse_program();
@@ -19,8 +25,7 @@ fn transpile_src(src: &str) -> String {
         "parse errors: {:?}",
         parser.errors()
     );
-    let out = transpile(&prog, "test_crate");
-    out.lib_rs
+    transpile(&prog, "test_crate")
 }
 
 fn assert_contains(src: &str, snippet: &str) {
@@ -368,4 +373,48 @@ fn full_program_password_checker_transpiles() {
         "Cargo.toml must reference mvl_runtime:\n{}",
         out.cargo_toml
     );
+}
+
+// ── Entry point: binary vs library inference ─────────────────────────────
+
+#[test]
+fn fn_main_produces_binary_crate() {
+    let out = transpile_full("fn main() -> Unit { }");
+    assert!(out.has_main, "fn main should produce a binary crate");
+    // Binary Cargo.toml should NOT have [lib] section
+    assert!(
+        !out.cargo_toml.contains("[lib]"),
+        "binary crate should not have [lib] in Cargo.toml:\n{}",
+        out.cargo_toml
+    );
+}
+
+#[test]
+fn no_fn_main_produces_library_crate() {
+    let out = transpile_full("fn add(a: Int, b: Int) -> Int { a + b }");
+    assert!(!out.has_main, "no fn main should produce a library crate");
+    // Library Cargo.toml should have [lib] section
+    assert!(
+        out.cargo_toml.contains("[lib]"),
+        "library crate should have [lib] in Cargo.toml:\n{}",
+        out.cargo_toml
+    );
+}
+
+#[test]
+fn fn_main_with_effects_produces_binary() {
+    let out = transpile_full("fn main() -> Unit ! Console { println(\"hello\"); }");
+    assert!(
+        out.has_main,
+        "effectful fn main should still produce a binary"
+    );
+}
+
+#[test]
+fn no_top_level_main_means_library() {
+    let out = transpile_full(
+        "type App = struct { }
+         fn run() -> Int { 42 }",
+    );
+    assert!(!out.has_main, "no top-level fn main means library");
 }
