@@ -104,17 +104,55 @@ This is the validation paper — it takes the theoretical claims of Papers 1-4 a
 
 ---
 
+### Paper 6: Model Checking as a Compiler Pass
+
+**Working title:** *Verification Beyond Types: Model Checking as a Natural Extension of the MVL Compiler*
+
+We present model checking — invariants, pre/post conditions, deadlock and livelock detection, temporal properties — as a compiler pass operating on the same AST as the type checker. No separate modeling language. When the compiler already enforces algebraic effects (Req 7), ownership (Req 6), and refinement types (Req 10), state space exploration becomes a natural extension of the type system rather than a separate tool.
+
+This is the AAE-5 paper: the compiler generates not just type-safety evidence but temporal safety evidence — the kind external certification (IEC 61508, DO-178C) requires.
+
+**Venue:** TACAS (Tools and Algorithms for the Construction and Analysis of Systems) or CAV
+**Status:** Design documented, issue #37 open
+
+---
+
+### Paper 7: Safe Concurrency by Construction
+
+**Working title:** *Actors, Capabilities, and WCET: A Concurrency Model Where Data Races Are Compile Errors*
+
+We present the MVL concurrency model: actors with reference capabilities (iso/val/ref/tag) for data race freedom at compile time, structured concurrency (no orphan tasks), and WCET refinements for real-time systems. The model combines Pony's deny capabilities with Rust's ownership and adds compile-time worst-case execution time bounds via refinement types.
+
+No mainstream language combines all three. This paper formalizes the semantics and demonstrates that the combination eliminates data races, deadlocks, and timing violations as categories — not through runtime detection but through the type system.
+
+**Venue:** OOPSLA, ECOOP, or CC (Compiler Construction)
+**Status:** Concurrency model designed, not yet formalized
+
+---
+
+### Paper 8: Software Restoration — ISPE in Reverse
+
+**Working title:** *Recovering Intent: Applying the ISPE Trust Chain in Reverse for Legacy System Understanding*
+
+We apply the ISPE model backwards (E→P→S→I) for legacy system restoration — recovering intent from existing executables and source code using LLM-assisted decompilation and pattern recognition. We demonstrate on real cases: 6502 assembly (8-bit multiplication, C64 plasma demo), mainframe COBOL, and undocumented industrial control systems. The argument: if ISPE works forward for building trustworthy software, the reverse chain works for recovering intent from systems where the original developers are gone.
+
+This is the empirical companion to Paper 5, validating the reverse direction. Where Paper 5 measures "can we build trust forward?", Paper 8 measures "can we recover trust backward?"
+
+**Venue:** ICSME (International Conference on Software Maintenance and Evolution) or MSR
+**Status:** Decompilation experiments completed, case study data available
+
+---
+
 ## The arc
 
-```
-Paper 1:  What is trust?           → ISPE model, trust product       (theory)
-Paper 2:  What must P look like?   → 11 requirements, scorecard      (requirements)
-Paper 3:  How to build P?          → Language contraction, MVL        (design)
-Paper 4:  How to architect for it? → 10 principles, trust boundaries  (architecture)
-Paper 5:  Does it work?            → Benchmarks, empirical evidence   (validation)
-```
+| Core (theory + design) | Extensions (language) | Validation (empirical) |
+|------------------------|-----------------------|------------------------|
+| Paper 1: Trust model | Paper 6: Model checking | Paper 5: Forward (generate) |
+| Paper 2: 11 requirements | Paper 7: Concurrency | Paper 8: Reverse (restore) |
+| Paper 3: Language design | | |
+| Paper 4: Architecture | | |
 
-Papers 1-3 form a self-contained trilogy. Papers 4-5 extend and validate.
+Papers 1-4 form the theoretical core: trust model → requirements → language → architecture. Papers 6-7 extend the language with verification methodology and concurrency semantics. Papers 5 and 8 validate empirically — forward (can we build trust?) and reverse (can we recover it?).
 
 ## Why this matters for the collaboration
 
@@ -122,10 +160,10 @@ This research program sits at the intersection of software engineering, programm
 
 For a collaborating research group, this offers:
 
-- **Student projects** — the MVL compiler has 40+ open issues ranging from type system extensions to LLVM backends
+- **Student projects** — the MVL compiler has 40+ open issues ranging from type system extensions to LLVM backends to model checking
 - **Empirical research** — real industrial data from AAE adoption at a company with 300+ engineers
-- **Publication pipeline** — five papers with clear scopes, working titles, and target venues
-- **A running system** — not a proposal, but a compiler (v0.5.1, 215 tests, CI, specifications)
-- **Cross-domain reach** — connects to software architecture (Lago), program analysis (Zaidman), and formal methods
+- **Publication pipeline** — eight papers with clear scopes, working titles, and target venues
+- **A running system** — not a proposal, but a compiler with parser, type checker, 215 tests, CI, and specifications
+- **Cross-domain reach** — connects to software architecture (Lago), program analysis (Zaidman), formal verification, and software evolution
 
 The question we are asking is simple: if machines write all the code, what should the programming language look like? The answer turns out to be smaller, not larger — and provably so.
