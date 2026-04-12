@@ -104,20 +104,7 @@ This is the validation paper — it takes the theoretical claims of Papers 1-4 a
 
 ---
 
-### Paper 6: Model Checking as a Compiler Pass
-
-**Working title:** *Verification Beyond Types: Model Checking as a Natural Extension of the MVL Compiler*
-
-We present model checking — invariants, pre/post conditions, deadlock and livelock detection, temporal properties — as a compiler pass operating on the same AST as the type checker. No separate modeling language. When the compiler already enforces algebraic effects (Req 7), ownership (Req 6), and refinement types (Req 10), state space exploration becomes a natural extension of the type system rather than a separate tool.
-
-This is the AAE-5 paper: the compiler generates not just type-safety evidence but temporal safety evidence — the kind external certification (IEC 61508, DO-178C) requires.
-
-**Venue:** TACAS (Tools and Algorithms for the Construction and Analysis of Systems) or CAV
-**Status:** Design documented, issue #37 open
-
----
-
-### Paper 7: Safe Concurrency by Construction
+### Paper 6: Safe Concurrency by Construction
 
 **Working title:** *Actors, Capabilities, and WCET: A Concurrency Model Where Data Races Are Compile Errors*
 
@@ -127,6 +114,19 @@ No mainstream language combines all three. This paper formalizes the semantics a
 
 **Venue:** OOPSLA, ECOOP, or CC (Compiler Construction)
 **Status:** Concurrency model designed, not yet formalized
+
+---
+
+### Paper 7: Model Checking as a Compiler Pass
+
+**Working title:** *Verification Beyond Types: Model Checking on Actor Systems as a Natural Extension of the MVL Compiler*
+
+We present model checking — invariants, pre/post conditions, deadlock and livelock detection, temporal properties — as a compiler pass operating on the same AST as the type checker. Building on the concurrency model from Paper 6, we show that actors with reference capabilities provide a bounded state space amenable to exhaustive verification: `iso` guarantees isolation, `val` guarantees immutability, and the actor mailbox serializes access. The model checker exploits these guarantees to prune the state space — verifying properties that would be intractable on shared-memory concurrency.
+
+This is the AAE-5 paper: the compiler generates not just type-safety evidence but temporal safety evidence — the kind external certification (IEC 61508, DO-178C) requires.
+
+**Venue:** TACAS (Tools and Algorithms for the Construction and Analysis of Systems) or CAV
+**Status:** Design documented, issue #37 open
 
 ---
 
@@ -147,8 +147,8 @@ This is the empirical companion to Paper 5, validating the reverse direction. Wh
 
 | Core (theory + design) | Extensions (language) | Validation (empirical) |
 |------------------------|-----------------------|------------------------|
-| Paper 1: Trust model | Paper 6: Model checking | Paper 5: Forward (generate) |
-| Paper 2: 11 requirements | Paper 7: Concurrency | Paper 8: Reverse (restore) |
+| Paper 1: Trust model | Paper 6: Concurrency | Paper 5: Forward (generate) |
+| Paper 2: 11 requirements | Paper 7: Model checking | Paper 8: Reverse (restore) |
 | Paper 3: Language design | | |
 | Paper 4: Architecture | | |
 
