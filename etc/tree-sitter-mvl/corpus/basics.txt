@@ -396,24 +396,30 @@ total fn process(raw: Tainted<String>) -> Clean<String> {
       (return_stmt (identifier)))))
 
 ===============================================================================
-Module declaration
+Use import declaration
 ===============================================================================
 
-module Auth {
-  type UserId = Int where self > 0
-}
+use std::io::File;
 
 -------------------------------------------------------------------------------
 
 (program
-  (module_decl
-    (identifier)
-    (type_decl
+  (use_decl
+    (module_path
       (identifier)
-      (refined_type
-        (base_type (identifier))
-        (refinement
-          (ref_expr
-            (ref_term
-              (ref_atom (identifier))
-              (ref_atom (integer_literal)))))))))
+      (identifier)
+      (identifier))))
+
+===============================================================================
+Re-export declaration
+===============================================================================
+
+pub use geometry::Point;
+
+-------------------------------------------------------------------------------
+
+(program
+  (reexport_decl
+    (module_path
+      (identifier)
+      (identifier))))

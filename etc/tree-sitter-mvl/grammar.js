@@ -71,25 +71,22 @@ module.exports = grammar({
           $.type_decl,
           $.fn_decl,
           $.const_decl,
-          $.module_decl,
           $.extern_decl
         )
       ),
 
     // === Modules and imports ===
+    // One file = one module (file=module, no inline module blocks).
+    // Module name = filename without extension.
 
-    // `use path::to::Item;` — private import
+    // `use path::to::Item;` — private import (top of file only)
     use_decl: ($) => seq("use", $.module_path, ";"),
 
-    // `pub use path::to::Item;` — re-export (distinct from use_decl by leading "pub")
+    // `pub use path::to::Item;` — re-export
     reexport_decl: ($) => seq("pub", "use", $.module_path, ";"),
 
     module_path: ($) =>
       seq($.identifier, repeat(seq("::", $.identifier))),
-
-    // Nested module block: `module Foo { <declarations>* }`
-    module_decl: ($) =>
-      seq("module", $.identifier, "{", repeat($.declaration), "}"),
 
     // Extern trust boundary: `extern "rust" { fn foo(...) -> T; }`
     extern_decl: ($) =>

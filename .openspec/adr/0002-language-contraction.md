@@ -33,7 +33,7 @@ The MVL drops every feature that exists for writability over readability. One wa
 
 ~10 statement forms, ~5 expression forms, ~3 declaration forms:
 
-`fn`, `let`/`let mut`, `if`/`else`, `match`, `for`, `return`, `.method()`, `?`, `|x| expr` (immutable-capture lambda), `type` (struct/enum), `module`.
+`fn`, `let`/`let mut`, `if`/`else`, `match`, `for`, `return`, `.method()`, `?`, `|x| expr` (immutable-capture lambda), `type` (struct/enum), `use` / `pub use` (imports and re-exports). Note: there are no inline `module Foo { }` blocks — one file equals one module (see ADR-0002 context and Spec 005).
 
 Compare: Python ~30 statement forms, Rust ~20, Go ~15.
 

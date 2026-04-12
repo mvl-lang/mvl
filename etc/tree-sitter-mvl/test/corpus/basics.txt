@@ -610,35 +610,34 @@ total fn process(raw: Tainted<String>) -> Clean<String> {
               (identifier))))))))
 
 ===============================================================================
-Module declaration
+Use import declaration
 ===============================================================================
 
-module Auth {
-  type UserId = Int where self > 0
-}
+use std::io::File;
 
 -------------------------------------------------------------------------------
 
 (program
-  (declaration
-    (module_decl
+  (use_decl
+    (module_path
       (identifier)
-      (declaration
-        (type_decl
-          (identifier)
-          (type_body
-            (type_expr
-              (refined_type
-                (base_type
-                  (identifier))
-                (refinement
-                  (ref_expr
-                    (ref_expr
-                      (ref_atom
-                        (identifier)))
-                    (ref_expr
-                      (ref_atom
-                        (integer_literal)))))))))))))
+      (identifier)
+      (identifier))))
+
+===============================================================================
+Re-export declaration
+===============================================================================
+
+pub use geometry::Point;
+
+-------------------------------------------------------------------------------
+
+(program
+  (reexport_decl
+    (module_path
+      (identifier)
+      (identifier))))
+
 ===============================================================================
 Extern block — rust ABI
 ===============================================================================
