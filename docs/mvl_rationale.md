@@ -37,7 +37,7 @@ This research grows directly from industrial practice. The models, requirements,
 
 ## The research program
 
-Five papers, each building on the previous. Together they form a complete argument: from trust model to language design to architectural principles.
+Eight papers in three tracks. A theoretical core (Papers 1-4) establishes the trust model, language requirements, language design, and architectural principles. Two extensions (Papers 6-7) push the language into concurrency and formal verification. Two empirical papers (Papers 5, 8) validate the approach in both directions — forward (generating trustworthy code) and reverse (recovering intent from legacy systems).
 
 ---
 
