@@ -10,8 +10,9 @@ rule names from the tree-sitter grammar, then reports:
   - Tree-sitter rules not in EBNF (deliberate extensions or renames)
 
 Exit codes:
-  0 — no unexpected gaps
+  0 — no unexpected gaps or unknown extensions
   1 — unexpected gaps found (rules in EBNF with no ts counterpart)
+      OR unknown tree-sitter extensions (ts rules not in EBNF or TS_KNOWN_EXTENSIONS)
 """
 
 import re
@@ -50,7 +51,7 @@ EBNF_KNOWN_ABSENT = {
     "set_literal": "not yet implemented in tree-sitter grammar",
     # Uppercase EBNF terminals map to regex patterns, not named rules
     "COMMENT": "terminal — mapped to line_comment regex",
-    "DOC_COMMENT": "terminal — mapped to line_comment regex (prefix ///)  ",
+    "DOC_COMMENT": "terminal — mapped to line_comment regex (prefix ///)",
     "IDENT": "terminal — mapped to identifier regex",
     "INTEGER": "terminal — mapped to integer_literal regex",
     "FLOAT": "terminal — mapped to float_literal regex",
@@ -175,7 +176,7 @@ def main() -> int:
         print()
 
     if unknown_extensions:
-        print("ℹ️   Tree-sitter rules not yet in EBNF (consider documenting):")
+        print("❌  Tree-sitter rules not in EBNF and not in TS_KNOWN_EXTENSIONS:")
         for name in sorted(unknown_extensions):
             print(f"     {name}")
         print()
@@ -185,9 +186,13 @@ def main() -> int:
               f" (see TS_KNOWN_EXTENSIONS in this script)")
         print()
 
-    if unexpected_gaps:
-        print("RESULT: FAIL — add the missing rules to grammar.js or document them"
-              " in EBNF_KNOWN_ABSENT.")
+    if unexpected_gaps or unknown_extensions:
+        if unexpected_gaps:
+            print("RESULT: FAIL — add the missing rules to grammar.js or document them"
+                  " in EBNF_KNOWN_ABSENT.")
+        if unknown_extensions:
+            print("RESULT: FAIL — add the new tree-sitter rules to the EBNF or document"
+                  " them in TS_KNOWN_EXTENSIONS.")
         return 1
 
     print("RESULT: PASS")
