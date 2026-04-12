@@ -6,6 +6,31 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.10.2] — 2026-04-12 (fix: IFC logging enforcement, effect validation, lambda capture, runtime tests)
+
+### Added
+- Runtime enforcement for IFC logging rule (003-information-flow/Req 6): `println` and `print` reject `Secret<T>`, `Tainted<T>`, and `Clean<T>` arguments
+- Effect name validation (002-effect-system/Req 2): checker validates declared effects against canonical set of 12 effect names (Console, FileRead, FileWrite, FileDelete, Net, DB, ProcessSpawn, Random, Clock, Env, Log, Async)
+- Lambda capture immutability checking (ADR-0002): `CaptureMutabilityViolation` error emitted when lambda captures a mutable binding from outer scope
+- `VALID_EFFECT_NAMES` constant in checker/mod.rs with full canonical effect list
+- `TypeEnv::lookup_with_scope_index` and `TypeEnv::scope_depth` helpers for lambda scope boundary detection
+- `lambda_scope_starts` stack tracking in TypeChecker for mutable capture detection
+- 9 new runtime IFC unit tests: arithmetic for Tainted/Secret (all 6 ops), Display/Debug behavior, deref access, into_inner/as_inner
+- 8 new type checker integration tests: println/print label checks (Secret/Tainted/Clean/Public), all 12 canonical effect names, IO bucket rejection, lambda capture (2 tests marked #[ignore] until parser supports lambda syntax)
+
+### Changed
+- 003-information-flow/spec.md: Req 6 status updated — `println`/`print` now enforce label constraint at call site; full `log` stdlib integration remains Phase 2
+- 002-effect-system/spec.md: added `Implementation:` and `Tests:` citations for effect-related requirements
+- 005-modules/spec.md: corrected broken path (visibility.rs) and deferred stdlib module implementation with issue reference
+- checker/context.rs: expanded module doc with spec links table for all builtins; added `assert_eq` IFC gap documentation
+- checker/mod.rs: added TODO comments for method-call IFC bypass (Phase 2) and per-effect span limitation
+- transpiler doc comments enriched with spec/ADR cross-references
+
+### Fixed
+- Corpus expressions.mvl: removed spurious `! IO` effect from pure functions (propagation, security_ops)
+- Corpus auth_handler.mvl: corrected effect annotation from IO to no-effect
+- Transpiler test: updated effect string assertion to match corpus corrections
+
 ## [0.10.1] — 2026-04-12 (fix: validate findings — traceability, drift, coverage)
 
 ### Added
