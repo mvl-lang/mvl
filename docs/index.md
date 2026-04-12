@@ -14,6 +14,7 @@ The MVL is designed for LLMs to generate, compilers to verify, and humans to rev
 - [Language Reference](language.md) — grammar summary, types, effects, expressions
 - [EBNF Grammar](grammar.md) — formal grammar (~100 productions)
 - [Standard Library](stdlib.md) — three tiers: core, standard, extended
+- [How MVL Compiles](compilation-model.md) — requirement preservation across Rust and LLVM targets
 
 ## The eleven requirements
 

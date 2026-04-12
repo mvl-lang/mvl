@@ -1,5 +1,11 @@
 // Corpus: MVL expression forms
 
+// Supporting type used by field_access and struct_construction examples below.
+type Point = struct {
+    x: Int,
+    y: Int,
+}
+
 // Literals
 fn literals() -> Unit {
     let a: Int = 42;
@@ -11,7 +17,7 @@ fn literals() -> Unit {
 }
 
 // Identifiers and field access
-fn field_access(point: Point) -> Float {
+fn field_access(point: Point) -> Int {
     point.x
 }
 

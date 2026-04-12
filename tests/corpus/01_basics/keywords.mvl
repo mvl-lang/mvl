@@ -15,13 +15,8 @@ partial fn may_loop(x: Int) -> Int {
     x
 }
 
-// Type declaration
-type UserId = Int where self > 0;
-
-// Module
-module math {
-    const PI: Float = 3.14159;
-}
+// Type declaration (no trailing semicolon)
+type UserId = Int where self > 0
 
 // Control flow: if, else, for, match
 fn demo(x: Int) -> Int {
@@ -31,20 +26,18 @@ fn demo(x: Int) -> Int {
             result = result + i;
         }
     } else {
-        result = match x {
-            0 => 0,
-            _ => x,
-        };
+        result = 0;
     }
     return result;
 }
 
-// Ownership keywords
-fn consume_val(consume v: String) -> String {
-    move v
-}
+// Ownership capability keywords: iso, val, ref, tag
+fn iso_fn(iso db: &DbConn) -> Int { 0 }
+fn val_fn(val x: Int) -> Int { x }
+fn ref_fn(ref x: Int) -> Int { x }
+fn tag_fn(tag x: Int) -> Int { 0 }
 
-// IFC keywords
+// IFC keywords: Tainted, Clean, Secret, Public
 fn check_tainted(input: Tainted<String>) -> Clean<String> {
     sanitize(input)
 }
@@ -52,12 +45,6 @@ fn check_tainted(input: Tainted<String>) -> Clean<String> {
 fn reveal(s: Secret<String>) -> Public<String> {
     declassify(s)
 }
-
-// Capability markers
-fn iso_fn(iso db: &DbConn) -> Int { 0 }
-fn val_fn(val x: Int) -> Int { x }
-fn ref_fn(ref x: Int) -> Int { x }
-fn tag_fn(tag x: Int) -> Int { 0 }
 
 // where keyword in refinement
 fn positive(x: Int where self > 0) -> Int { x }

@@ -58,7 +58,17 @@ mvl test                            # run tests
 mvl assurance                       # generate assurance report
 ```
 
-## 17.6 Assurance Report
+## 17.6 Requirement Preservation
+
+Each of the eleven requirements travels through the backend in one of three ways:
+native enforcement by the target compiler, documentation (the MVL compiler proved it;
+a doc comment is the witness), or runtime assertion (the MVL checker verified it
+statically; the backend enforces it in debug builds).
+
+See [How MVL Compiles](../compilation-model.md) for the full breakdown across
+Phase 1 (Rust) and Phase 2 (LLVM), including the SMT-verified refinements story.
+
+## 17.7 Assurance Report
 
 `mvl assurance` generates a report showing:
 - Requirements verified per module

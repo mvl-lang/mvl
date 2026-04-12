@@ -228,12 +228,15 @@ impl TypeChecker {
                     last_ty = self.infer_expr(expr);
 
                     // Check implicit return type against declared return type.
+                    // Resolve named alias types (e.g. PositiveInt = Int) before comparing
+                    // so that `Int` is accepted where a refined alias is declared.
                     // For Result types, ResultIgnored below is the more specific error.
                     if let Some(ret) = return_ty {
+                        let resolved_ret = self.resolve_alias(ret.clone());
                         if !matches!(last_ty, Ty::Unknown)
-                            && !matches!(ret, Ty::Unknown)
+                            && !matches!(resolved_ret, Ty::Unknown)
                             && !last_ty.is_result()
-                            && !types_compatible(ret, &last_ty)
+                            && !types_compatible(&resolved_ret, &last_ty)
                         {
                             self.emit(CheckError::TypeMismatch {
                                 expected: ret.display(),
@@ -332,10 +335,14 @@ impl TypeChecker {
                         span: cond.span(),
                     });
                 }
-                self.check_block(then, return_ty);
+                // Use infer_block_type so the last Stmt::Expr in each branch is
+                // treated as the branch's value (not a discarded result).
+                self.infer_block_type(then, return_ty);
                 if let Some(else_branch) = else_ {
                     match else_branch {
-                        ElseBranch::Block(b) => self.check_block(b, return_ty),
+                        ElseBranch::Block(b) => {
+                            self.infer_block_type(b, return_ty);
+                        }
                         ElseBranch::If(s) => self.check_stmt(s, return_ty),
                     }
                 }
@@ -378,6 +385,7 @@ impl TypeChecker {
                     });
                 }
                 // Req 8: reject `while` in total functions (only `for` is bounded).
+                // Unannotated `fn` is implicitly total and also rejects while loops.
                 if !matches!(self.current_fn_totality, Some(Totality::Partial)) {
                     self.emit(CheckError::UnboundedLoopInTotal { span: *span });
                 }
@@ -426,11 +434,46 @@ impl TypeChecker {
                 field,
                 span: field_span,
             } => {
-                // Check that the base is accessible
                 let base_ty = self.infer_lvalue(base);
+                // Check that the specific field is mutable.
                 self.check_field_mutation(&base_ty, field, *field_span);
-                self.check_assignment(base, val_ty, span);
+                // Check the assigned value against the FIELD type (not the base struct type).
+                // Recursing with val_ty into check_assignment on the base would incorrectly
+                // compare the base struct type against the field value type.
+                let field_ty = self.field_type(&base_ty, field).unwrap_or(Ty::Unknown);
+                if !matches!(field_ty, Ty::Unknown) && !types_compatible(&field_ty, val_ty) {
+                    self.emit(CheckError::TypeMismatch {
+                        expected: field_ty.display(),
+                        found: val_ty.display(),
+                        span,
+                    });
+                }
             }
+        }
+    }
+
+    /// Resolve a named type through the type environment if it is a type alias.
+    /// Returns the alias base type (with Refined stripped), or the original type if not an alias.
+    /// Used for return-type and arithmetic checks where named aliases should be transparent.
+    fn resolve_alias(&self, ty: Ty) -> Ty {
+        use crate::mvl::checker::context::TypeBodyInfo;
+        if let Ty::Named(ref name, _) = ty {
+            if let Some(type_info) = self.env.lookup_type(name) {
+                if let TypeBodyInfo::Alias(inner) = &type_info.body {
+                    return inner.base().clone();
+                }
+            }
+        }
+        ty
+    }
+
+    /// Resolve named aliases inside a Labeled wrapper.
+    /// E.g. `Public<Amount>` where `Amount = Float where ...` → `Public<Float>`.
+    fn resolve_alias_in_labeled(&self, ty: Ty) -> Ty {
+        if let Ty::Labeled(label, inner) = ty {
+            Ty::Labeled(label, Box::new(self.resolve_alias(*inner)))
+        } else {
+            self.resolve_alias(ty)
         }
     }
 
@@ -492,7 +535,13 @@ impl TypeChecker {
                     if name == "None" {
                         return Ty::Option(Box::new(Ty::Unknown));
                     }
-                    if let Some(enum_ty) = self.lookup_enum_for_variant(name) {
+                    // Bare variant: `DivisionByZero` or path: `MathError::DivisionByZero`
+                    let variant_name = if let Some((_, v)) = name.split_once("::") {
+                        v
+                    } else {
+                        name.as_str()
+                    };
+                    if let Some(enum_ty) = self.lookup_enum_for_variant(variant_name) {
                         return enum_ty;
                     }
                     self.emit(CheckError::UndefinedVariable {
@@ -747,7 +796,11 @@ impl TypeChecker {
         match op {
             // Arithmetic: both operands must be numeric and the same type.
             // Labels propagate via join: Secret<Int> + Public<Int> → Secret<Int>.
+            // Named alias types (e.g. Amount = Float where ...) are resolved before checking.
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
+                // Resolve named aliases so that Labeled<NamedAlias> is treated as Labeled<baseType>.
+                let lt = self.resolve_alias_in_labeled(lt);
+                let rt = self.resolve_alias_in_labeled(rt);
                 if !matches!(lt, Ty::Unknown) && !lt.is_numeric() {
                     self.emit(CheckError::NonNumericArithmetic {
                         ty: lt.display(),
@@ -882,7 +935,11 @@ impl TypeChecker {
         let arg_tys: Vec<Ty> = args.iter().map(|a| self.infer_expr(a)).collect();
 
         if let Some(fn_info) = self.env.lookup_fn(name).cloned() {
-            if fn_info.params.len() != arg_tys.len() {
+            // Variadic built-ins (println, print, assert_eq) have an empty params
+            // vec as a sentinel — skip arity and type checking for them.
+            let is_variadic_builtin =
+                matches!(name, "println" | "print" | "assert_eq" | "parse_int");
+            if !is_variadic_builtin && fn_info.params.len() != arg_tys.len() {
                 self.emit(CheckError::WrongArgCount {
                     name: name.to_string(),
                     expected: fn_info.params.len(),
@@ -891,13 +948,16 @@ impl TypeChecker {
                 });
                 return fn_info.ret.clone();
             }
-            for (i, (expected, found)) in fn_info.params.iter().zip(arg_tys.iter()).enumerate() {
-                if !types_compatible(expected, found) {
-                    self.emit(CheckError::TypeMismatch {
-                        expected: expected.display(),
-                        found: found.display(),
-                        span: args[i].span(),
-                    });
+            if !is_variadic_builtin {
+                for (i, (expected, found)) in fn_info.params.iter().zip(arg_tys.iter()).enumerate()
+                {
+                    if !types_compatible(expected, found) {
+                        self.emit(CheckError::TypeMismatch {
+                            expected: expected.display(),
+                            found: found.display(),
+                            span: args[i].span(),
+                        });
+                    }
                 }
             }
 
@@ -944,8 +1004,13 @@ impl TypeChecker {
                 "Err" => return Ty::Result(Box::new(Ty::Unknown), Box::new(first_arg)),
                 _ => {}
             }
-            // User-defined enum tuple-variant constructor
-            if let Some(enum_ty) = self.lookup_enum_for_variant(name) {
+            // User-defined enum tuple-variant constructor (bare or path form)
+            let variant_name = if let Some((_, v)) = name.split_once("::") {
+                v
+            } else {
+                name
+            };
+            if let Some(enum_ty) = self.lookup_enum_for_variant(variant_name) {
                 return enum_ty;
             }
             // Not in function table — could be builtin or foreign; emit Unknown
@@ -1102,10 +1167,11 @@ impl TypeChecker {
             self.bind_match_pattern(&arm.pattern, scrutinee_ty);
             let body_ty = match &arm.body {
                 MatchBody::Expr(e) => self.infer_expr(e),
-                MatchBody::Block(b) => {
-                    self.check_block(b, return_ty);
-                    Ty::Unit
-                }
+                // Use infer_block_type so the last Stmt::Expr is treated as
+                // the arm's return value rather than a discarded statement.
+                // This prevents false ResultIgnored errors on Ok(...)/Err(...)
+                // that appear at the end of match arm blocks.
+                MatchBody::Block(b) => self.infer_block_type(b, return_ty),
             };
             self.env.pop_scope();
             arm_tys.push(body_ty);

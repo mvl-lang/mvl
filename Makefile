@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help build test lint docs docs-serve tree-sitter-build tree-sitter-test clean
+.PHONY: help build build-release test test-unit test-integration test-corpus test-transpiler lint format format-check assurance assurance-verbose assurance-gate docs docs-serve tree-sitter-build tree-sitter-test clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -26,8 +26,8 @@ build-release: ## Build release binary
 
 # === Test ===
 
-test: ## Run all tests
-	@echo "Running all tests..."
+test: test-corpus ## Run all tests (unit + corpus validation)
+	@echo "Running unit tests..."
 	cargo test
 
 test-unit: ## Run unit tests only
@@ -43,6 +43,17 @@ test-corpus: ## Validate corpus examples parse and type-check
 		cargo run -- check "$$f" || exit 1; \
 	done
 	@echo "All corpus examples valid."
+
+test-transpiler: build ## Run full build-chain tests: .mvl → parse → check → transpile → cargo → binary → verify output
+	@echo "Running end-to-end transpiler tests..."
+	cargo test --test compile_and_run -- --nocapture
+	@echo ""
+	@echo "Manual compilation session:"
+	@for f in hello_world hello_mvl calculator shapes; do \
+		echo ""; \
+		echo "  --- $$f ---"; \
+		cargo run --quiet -- run tests/corpus/09_full_programs/$${f}.mvl; \
+	done
 
 # === Quality ===
 

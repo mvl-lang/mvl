@@ -6,6 +6,35 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.5.5] — 2026-04-12 (Corpus validation + Phase 1 transpiler)
+
+### Added
+- Phase 1 transpiler: MVL → Rust source (closes #29–#34)
+  - `src/mvl/transpiler/` — codegen, emit_exprs, emit_functions, emit_stmts, emit_types, cargo modules
+  - `mvl build <file.mvl>` — transpile + `cargo build`
+  - `mvl run <file.mvl>` — transpile + build + execute
+  - `mvl transpile <file.mvl>` — print generated Rust to stdout
+  - Security label preamble (`Public<T>`, `Secret<T>`, `Tainted<T>`, `Clean<T>`) in every generated crate
+  - Refinement type constructors with `debug_assert!` guards
+  - Effect and totality annotations preserved as doc comments
+- New corpus programs: `hello_world`, `hello_mvl`, `calculator`, `shapes`, `simple_math`
+- `make test-transpiler` — end-to-end build chain tests
+- `docs/compilation-model.md` — requirement preservation across Phase 1 (Rust) and Phase 2 (LLVM)
+- Parser: path expressions (`Enum::Variant`) in expressions and patterns
+- Parser: inline refinements in labeled types (`Public<Int where self > 0>`)
+- Parser: float literals in refinement predicates
+
+### Fixed
+- Checker: field assignment now checks field type vs assigned value (not base struct type)
+- Checker: match arm blocks use `infer_block_type` so tail `Ok(…)` / `Err(…)` expressions
+  are treated as the arm's return value instead of being discarded as `ResultIgnored`
+- Checker: named type aliases (e.g. `Amount = Float where …`) resolved transparently in
+  return-type checks and arithmetic operand checks
+- Checker: `abs`, `max`, `min`, `parse_int` registered as built-in functions
+- Corpus: 10 files fixed across `01_basics`, `04_effects`, `05_ifc`, `09_full_programs`
+- Transpiler: match block arms emit tail expression correctly (no spurious semicolon)
+- `make test` now depends on `test-corpus` so corpus failures are caught by default
+
 ## [0.5.4] — 2026-04-12 (Roadmap accuracy)
 
 ### Fixed
