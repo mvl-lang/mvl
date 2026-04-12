@@ -9,7 +9,7 @@
 // Req 6:  Ownership — token moved, not copied
 // Req 7:  Effects declared: ! DB, Console
 // Req 8:  total — must terminate
-// Req 9:  iso db — isolated, no concurrent access
+// Req 9:  iso store — isolated, no concurrent access
 // Req 10: UserId refinement (> 0)
 // Req 11: Tainted input, Secret password, Public output
 
@@ -34,12 +34,12 @@ type Session = struct {
 }
 
 total fn authenticate(
-    iso db: &DbConn,
+    iso store: &UserStore,
     input_password: Tainted<String>,
     user_id: Public<UserId>,
-) -> Result<Session, AuthError> ! DB, Console {
+) -> Result<Session, AuthError> ! IO, Console {
 
-    let user: Option<User> = db.find_user(user_id)?;
+    let user: Option<User> = store.find_user(user_id)?;
 
     match user {
         None => Err(AuthError::NotFound),
