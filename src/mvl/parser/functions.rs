@@ -252,6 +252,14 @@ impl Parser {
             TokenKind::Fn | TokenKind::Total | TokenKind::Partial | TokenKind::Test => {
                 let mut d = self.parse_fn_decl()?;
                 d.visible = visible;
+                if d.is_test && d.visible {
+                    let err = ParseError {
+                        message: "`pub` is not allowed on `test fn` declarations".into(),
+                        span: d.span,
+                    };
+                    self.push_error(err);
+                    d.visible = false;
+                }
                 Ok(Decl::Fn(d))
             }
             TokenKind::Const => {
@@ -737,6 +745,19 @@ fn main() -> String { greet(String::new()) }"#;
             assert_eq!(fd.name, "check_add");
         } else {
             panic!("expected Fn decl");
+        }
+    }
+
+    #[test]
+    fn pub_test_fn_is_rejected() {
+        // Spec 004 Req 1: test fns MUST NOT be pub
+        let src = "pub test fn my_test() -> Unit { }";
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        assert!(!p.errors.is_empty(), "expected parse error for pub test fn");
+        // The decl is still produced with visible=false (error recovery)
+        if let Decl::Fn(fd) = &prog.declarations[0] {
+            assert!(!fd.visible, "pub should be cleared after error");
         }
     }
 }

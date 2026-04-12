@@ -31,12 +31,12 @@ jobs:
           OUTPUT=$(python3 tools/assurance.py --min 0.50 2>&1)
           EXIT_CODE=$?
           CLEAN=$(echo "$OUTPUT" | sed 's/\x1b\[[0-9;]*m//g')
-          echo "report<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$CLEAN" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          DELIM=$(openssl rand -hex 16)
+          printf '%s\n' "report<<${DELIM}" "$CLEAN" "${DELIM}" >> "$GITHUB_OUTPUT"
           exit $EXIT_CODE
 
       - name: Comment on PR
+        if: always()
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # v8.0.0
         env:
           ASSURANCE_REPORT: ${{ steps.assurance.outputs.report }}

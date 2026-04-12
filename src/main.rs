@@ -579,3 +579,36 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     }
     Ok(())
 }
+
+// ── Assurance stats tests ─────────────────────────────────────────────────
+
+#[cfg(test)]
+mod assurance_tests {
+    use super::*;
+
+    fn parse_prog(src: &str) -> Program {
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+        prog
+    }
+
+    /// Spec 004 Req 3: assurance report counts test fns separately from impl fns.
+    #[test]
+    fn test_fn_count_is_separate_from_fn_count() {
+        let src = "fn add(a: Int, b: Int) -> Int { a + b }\ntest fn check_add() -> Unit { }\ntest fn check_zero() -> Unit { }";
+        let prog = parse_prog(src);
+        let stats = collect_assurance_stats(&prog);
+        assert_eq!(stats.test_fn_count, 2, "expected 2 test fns");
+        assert_eq!(stats.fn_count, 1, "test fns must not inflate fn_count");
+    }
+
+    #[test]
+    fn no_test_fns_means_zero_count() {
+        let src = "fn add(a: Int, b: Int) -> Int { a + b }";
+        let prog = parse_prog(src);
+        let stats = collect_assurance_stats(&prog);
+        assert_eq!(stats.test_fn_count, 0);
+        assert_eq!(stats.fn_count, 1);
+    }
+}

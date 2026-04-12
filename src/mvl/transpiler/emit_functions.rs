@@ -61,7 +61,13 @@ pub fn emit_fn_decl(cg: &mut Codegen, fd: &FnDecl) {
 fn emit_fn_body(cg: &mut Codegen, fd: &FnDecl) {
     let stmts = &fd.body.stmts;
     if stmts.is_empty() {
-        cg.line("todo!(\"empty body\")");
+        // Unit-returning functions with an empty body are valid in Rust (implicit `()`).
+        // Non-Unit empty bodies get a `todo!` placeholder so the generated code compiles.
+        let is_unit =
+            matches!(fd.return_type.as_ref(), TypeExpr::Base { name, .. } if name == "Unit");
+        if !is_unit {
+            cg.line("todo!(\"empty body\")");
+        }
     } else {
         // Emit all but the last statement normally
         let (head, tail) = stmts.split_at(stmts.len() - 1);

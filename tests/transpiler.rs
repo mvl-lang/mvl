@@ -430,6 +430,7 @@ fn test_fn_emits_cfg_test_block() {
     assert_contains(&out, "mod tests {");
     assert_contains(&out, "#[test]");
     assert_contains(&out, "fn check_add()");
+    assert_contains(&out, "use super::*;");
 }
 
 #[test]
