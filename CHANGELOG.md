@@ -12,6 +12,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 - `bridge.rs` convention for `mvl build`: a sibling `bridge.rs` file is detected automatically, copied into the generated crate, and linked via `mod bridge;` — enables `mvl build` and `mvl run` to fully link when `extern "rust"` functions are declared (closes #121)
 - `examples/log_analyzer/bridge.rs` — Rust implementations of the 3 trust-boundary fns (`clap_get_arg`, `fs_read_file`, `analyze_and_format`); `make run` now produces output end-to-end
 - `examples/log_analyzer/Makefile` — `make check`, `make test`, `make build`, `make generate`, `make run` targets
+- **Spec 006** (`.openspec/specs/006-trust-boundary-bridge/spec.md`) — Formalizes bridge.rs convention acceptance criteria into GIVEN/WHEN/THEN scenarios
+- **ADR-0006** (`.openspec/adr/0006-ffi-extern-rust-bridge.md`) — Documents FFI design decision with academic literature context: FFIChecker, McCormack 2025, SafeFFI, Miri; maps to Phase 3 roadmap (SMT-proven boundary contracts)
 
 ### Fixed
 - `mvl build` with `extern "rust"` blocks but no `bridge.rs` now emits a clear warning instead of a silent linker failure
@@ -19,6 +21,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 - `println!(expr)` with a non-literal first arg now emits `println!("{}", expr)`
 - String literals in argument position now emit `.to_string().into()` — coerces to `Clean<String>`, `Tainted<String>`, etc. via `From<T>` impls
 - `mvl_runtime`: label types (`Clean`, `Tainted`, `Public`, `Secret`) now implement `From<T>` so unlabeled values flow into labeled parameters
+- Build temp directory now uses PID suffix (`mvl_build_{name}_{pid}`) to avoid concurrent-run collisions (consistent with `mvl test` behavior)
 
 ## [0.10.4] — 2026-04-12 (feat: log_analyzer Phase 2 example, transpiler fixes)
 
@@ -33,7 +36,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 - IFC label newtypes gain `.as_str()` method via `impl Label<String>` blocks
 - Extracted `arms_have_str_pattern` helper, eliminating duplicated string-pattern detection between expression and statement match codegen
 - Fixed trailing newline dropped by `join("\n")` in test runner module assembly
-
 ## [0.10.3] — 2026-04-12 (chore: release pipeline, Makefile improvements)
 
 ### Added

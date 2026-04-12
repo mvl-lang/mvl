@@ -43,6 +43,8 @@ pub struct TranspileOutput {
     pub has_main: bool,
     /// Number of extern trust boundaries (for assurance reporting).
     pub extern_count: usize,
+    /// True when the program declares at least one `extern "rust"` block.
+    pub has_extern_rust: bool,
 }
 
 /// Returns true if the program declares a top-level `fn main`.
@@ -64,12 +66,20 @@ pub fn count_extern_decls(prog: &Program) -> usize {
         .count()
 }
 
+/// Returns true if the program declares at least one `extern "rust"` block.
+pub fn has_extern_rust_decls(prog: &Program) -> bool {
+    prog.declarations
+        .iter()
+        .any(|d| matches!(d, Decl::Extern(ed) if ed.abi == "rust"))
+}
+
 /// Transpile a parsed [`Program`] to Rust source.
 ///
 /// Always succeeds in Phase 1 — unknown constructs fall back to `todo!()`.
 pub fn transpile(prog: &Program, crate_name: &str) -> TranspileOutput {
     let has_main = has_main_fn(prog);
     let extern_count = count_extern_decls(prog);
+    let has_extern_rust = has_extern_rust_decls(prog);
     let use_runtime = extern_count > 0;
 
     let mut cg = Codegen::new();
@@ -91,5 +101,6 @@ pub fn transpile(prog: &Program, crate_name: &str) -> TranspileOutput {
         cargo_toml,
         has_main,
         extern_count,
+        has_extern_rust,
     }
 }
