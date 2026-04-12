@@ -35,6 +35,7 @@ impl Parser {
 
         let span = self.span_from(start);
         Ok(TypeDecl {
+            visible: false, // set by parse_decl when `pub` prefix is present
             name,
             params,
             body,

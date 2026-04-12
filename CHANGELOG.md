@@ -6,6 +6,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-04-12 (feat: module resolver — pub visibility, use imports, cycle detection)
+
+### Added
+- Module resolver (`src/mvl/resolver/`) implementing Spec 005: file=module correspondence, `pub` visibility, `use path::to::Item;` imports, `pub use` re-exports, circular import detection
+- 15 integration tests in `tests/module_resolver.rs` covering all 6 spec requirements
+- `docs/specs/005-modules.md` — module system specification
+
+### Changed
+- Lexer: added `pub` and `use` keywords
+- AST: `UseDecl` node; `visible: bool` field on `TypeDecl`, `FnDecl`, `ConstDecl`, `ModuleDecl`
+- Parser: `parse_decl` handles `pub` prefix and `use` declarations
+
 ## [0.7.1] — 2026-04-12 (fix: nvim-mvl syntax highlighting)
 
 ### Fixed
