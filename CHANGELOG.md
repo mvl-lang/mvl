@@ -6,6 +6,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-04-12 (fix: remove module_decl across all layers)
+
+### Removed
+- `module_decl` rule from tree-sitter grammar, Rust parser/AST/checker/resolver/transpiler — inline module blocks are not part of MVL (file = module per Spec 005)
+- Stale `corpus/` directory from tree-sitter package; `test/corpus/` is now the single source of truth
+
+### Changed
+- `package.json` ships `test/corpus/` instead of the now-deleted stale `corpus/`
+- ADR-0002: surviving forms updated to reflect `use` / `pub use` replacing `module`
+
 ## [0.8.0] — 2026-04-12 (feat: module resolver — pub visibility, use imports, cycle detection)
 
 ### Added
