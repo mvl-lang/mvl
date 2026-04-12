@@ -1,17 +1,17 @@
 # MVL Roadmap
 
-**Current version:** 0.4.0 (Phase 1 — Rust transpilation)
+**Current version:** 0.5.2 (Phase 1 — Rust transpilation)
 **Updated:** 2026-04-12
 
 ## Where we are
 
-The parser and type checker are complete. All 11 requirements are represented in the grammar. 9/11 have active enforcement in the type checker. The transpiler is next.
+The parser and type checker are complete. All 11 requirements are represented in the grammar and enforced by the type checker. The transpiler is next.
 
 ```
 .mvl source
   → Lexer            ✓ complete
   → Parser (LL(1))   ✓ complete — full EBNF, error recovery, multi-error
-  → Type Checker     ✓ 9/11 enforced — Req 10+11 parse-only
+  → Type Checker     ✓ 11/11 enforced
   → Transpiler       ✗ not started — Epic 5 (#28)
   → cargo build      ✗ blocked on transpiler
   → native binary    ✗ blocked on cargo
@@ -30,8 +30,8 @@ The parser and type checker are complete. All 11 requirements are represented in
 | 7 | [Effect tracking](requirements.md#req-7) | ✓ | ✓ enforced | — | Phase 1 |
 | 8 | [Termination](requirements.md#req-8) | ✓ | ✓ partial (while rejected) | — | Phase 1 (structural recursion proof: Phase 2) |
 | 9 | [Data race freedom](requirements.md#req-9) | ✓ | ✓ enforced (capabilities) | — | Phase 1 |
-| 10 | [Refinement types](requirements.md#req-10) | ✓ | ○ parse-only | — | Phase 1 as runtime asserts (#32) |
-| 11 | [IFC](requirements.md#req-11) | ✓ | ○ parse-only | — | Phase 1 as Rust newtypes (#31) |
+| 10 | [Refinement types](requirements.md#req-10) | ✓ | ✓ enforced (static, runtime assert on call-site) | — | Phase 2 (SMT solver) |
+| 11 | [IFC](requirements.md#req-11) | ✓ | ✓ enforced (lattice, declassify/sanitize) | — | Phase 2 (full flow analysis) |
 
 ## Phase 1 — Rust Transpilation
 
