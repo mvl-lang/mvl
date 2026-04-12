@@ -6,6 +6,25 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-04-12 (feat: compiler assurance report with per-requirement verification table)
+
+### Added
+- `mvl assurance --verbose` / `-v` flag for per-function detail table (name, kind, totality, effects, capabilities, refinements)
+- `--json` output extended with `types` (struct/enum counts) and `requirements` (per-req error counts 1–11) keys for CI/dashboard consumption
+- `CheckError::requirement_number()` method mapping all 23 error variants to their corresponding MVL requirement (1–11)
+- `CheckResult::req_errors: [usize; 12]` per-requirement error counts populated by the type checker
+- 5 new unit tests: `struct_and_enum_types_counted`, `effects_fn_counted`, `req_errors_populated_from_checker`, `req_errors_zero_on_clean_program`, `fn_details_populated`
+
+### Changed
+- `mvl assurance` now emits a requirement matrix (Req 1–11) with pass/fail status (✓/✗) and evidence metrics
+- Req 2 detail string improved: shows "no violations" on clean codebases instead of "0 use-after-move"
+- `UnsupportedExternAbi` error reclassified from Req 11 (IFC) to Req 1 (Type Safety) — it is a declaration-level parse error, not an information flow violation
+
+### Fixed
+- `fn_details` collection now gated on `--verbose` flag; avoids unnecessary allocation on non-verbose runs
+- Warning emitted when `--verbose` is combined with `--json` (flag is silently ignored in JSON mode)
+- Added debug assertions to catch out-of-range `requirement_number()` returns and verify error count consistency
+
 ## [0.9.1] — 2026-04-12 (fix: tree-sitter binding and grammar coverage)
 
 ### Fixed
