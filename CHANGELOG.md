@@ -6,6 +6,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-04-12 (fix: validate findings — traceability, drift, coverage)
+
+### Added
+- `InvalidEffectName` checker error — validates declared effect names against the 12-effect permitted set (002-effect-system Req 2)
+- `CaptureMutabilityViolation` checker error — enforces ADR-0002 "lambdas with immutable captures only"; uses new `collect_free_var_refs` AST walker
+- Unit tests for effect name validation and lambda capture immutability (via direct AST construction)
+- Extended `mvl_runtime/src/ifc.rs` tests: Div/Rem/Sub/Neg operators, Deref, Secret debug redaction, Display for Tainted/Clean, `to_float`, copy for all labels
+
+### Fixed
+- 005-modules Req 2: spec path `checker/visibility.rs` corrected to `resolver/visibility.rs`
+- 005-modules Req 6: `stdlib/mod.rs` implementation reference marked `(Deferred — Phase 2)`
+- 003-information-flow Req 6: added deferral note in `context.rs` for `println`/`print` IFC constraint
+- `checker/context.rs`: expanded module-level doc comment with spec requirement links
+- `transpiler/cargo.rs`, `transpiler/emit_stmts.rs`: added ADR-0003/spec links in module doc comments
+- 002-effect-system: added `Tests:` citations to all 9 scenarios (Req 1–6)
+
 ### Added
 - Requirement 11 (Iterator Trait) to Spec 001 (Type System): defines `Iterator<T>` protocol with `next()` method, fused contract, built-in impls for `Array<T>`/`Range`/`Map`/`Set`, for-loop desugaring, lazy (`map`/`filter`/`flat_map`/`enumerate`/`zip`) vs terminal (`fold`/`collect`/`any`/`all`/`find`/`sum`/`min`/`max`) operations, custom iterator pattern, transpilation to Rust `std::iter::Iterator`
 - Manual §2.6: Iterator Trait definition and examples (`Counter` custom iterator)

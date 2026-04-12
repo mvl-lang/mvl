@@ -51,7 +51,7 @@ Each `.mvl` source file MUST correspond to exactly one module. The module name M
 
 All items (functions, types, constants) MUST be private by default. An item MUST be marked `pub` to be visible outside its module. Items without `pub` MUST NOT be accessible from other modules. For struct types, `pub` on the type makes the type name visible; struct fields are always accessible when the struct itself is in scope (no per-field visibility). This keeps the grammar simple and matches the principle that structs are transparent value containers.
 
-**Implementation:** `src/mvl/checker/visibility.rs`
+**Implementation:** `src/mvl/resolver/visibility.rs`
 
 **Tests:** `tests/module_resolver.rs::private_item_rejected`, `tests/module_resolver.rs::pub_item_accessible`, `tests/module_resolver.rs::struct_fields_accessible`
 
@@ -174,9 +174,9 @@ The compiler MUST detect and reject circular module dependencies at compile time
 
 The MVL standard library MUST be organized as a module tree rooted at `std`. All standard library items MUST be imported explicitly using `use std::...`. There MUST be no implicit imports (no Haskell-style Prelude auto-import).
 
-**Implementation:** `src/mvl/stdlib/mod.rs`
+**Implementation:** `src/mvl/stdlib/mod.rs` *(Deferred — Phase 2; stdlib module tree not yet created)*
 
-**Tests:** `tests/module_resolver.rs::stdlib_explicit_import`
+**Tests:** `tests/module_resolver.rs::stdlib_explicit_import` *(Deferred — Phase 2)*
 
 #### Scenario: No implicit imports
 

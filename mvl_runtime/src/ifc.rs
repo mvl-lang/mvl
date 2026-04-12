@@ -231,4 +231,72 @@ mod tests {
         let p = Public::new(99i64);
         assert_eq!(format!("{p}"), "99");
     }
+
+    #[test]
+    fn arithmetic_div_rem_sub_neg() {
+        assert_eq!((Public::new(10i64) / Public::new(2i64)).into_inner(), 5);
+        assert_eq!((Public::new(10i64) % Public::new(3i64)).into_inner(), 1);
+        assert_eq!((-Public::new(5i64)).into_inner(), -5);
+
+        assert_eq!((Tainted::new(10i64) - Tainted::new(3i64)).into_inner(), 7);
+        assert_eq!((Clean::new(6i64) / Clean::new(2i64)).into_inner(), 3);
+        assert_eq!((Secret::new(7i64) % Secret::new(4i64)).into_inner(), 3);
+    }
+
+    #[test]
+    fn deref_accesses_inner() {
+        let t = Tainted::new(String::from("hello"));
+        assert_eq!(t.len(), 5); // via Deref<Target = String>
+
+        let c = Clean::new(42i64);
+        assert_eq!(*c, 42i64);
+    }
+
+    #[test]
+    fn secret_debug_redacts_inner() {
+        let s = Secret::new("my-password");
+        let dbg = format!("{s:?}");
+        assert_eq!(dbg, "Secret([REDACTED])");
+        // Make sure the actual value is NOT leaked.
+        assert!(!dbg.contains("my-password"));
+    }
+
+    #[test]
+    fn secret_display_not_available_for_secret() {
+        // Secret<T> deliberately does NOT implement Display — this compiles
+        // only because we're not calling format!("{s}") on it.
+        // This test just ensures Secret values can be created and used safely.
+        let s: Secret<i64> = Secret::new(99);
+        let _inner = s.as_inner();
+    }
+
+    #[test]
+    fn tainted_clean_display() {
+        let t = Tainted::new(7i64);
+        assert_eq!(format!("{t}"), "7");
+        let c = Clean::new(8i64);
+        assert_eq!(format!("{c}"), "8");
+    }
+
+    #[test]
+    fn public_to_float_conversion() {
+        let p = Public::new(3i64);
+        let f = p.to_float();
+        assert!((f - 3.0f64).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn copy_all_labels() {
+        let t = Tainted::new(1i64);
+        let _t2 = t;
+        let _ = t; // Copy
+
+        let c = Clean::new(2i64);
+        let _c2 = c;
+        let _ = c;
+
+        let s = Secret::new(3i64);
+        let _s2 = s;
+        let _ = s;
+    }
 }

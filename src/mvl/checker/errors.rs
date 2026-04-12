@@ -118,6 +118,13 @@ pub enum CheckError {
         span: Span,
     },
 
+    // ── Lambda capture immutability (ADR-0002) ───────────────────────────
+    /// Lambda captures a `mut` binding from an outer scope (ADR-0002).
+    CaptureMutabilityViolation {
+        name: String,
+        span: Span,
+    },
+
     // ── Refinement types (#16) ───────────────────────────────────────────
     RefinementViolated {
         pred: String,
@@ -125,6 +132,11 @@ pub enum CheckError {
     },
 
     // ── Effect checking (#19) ────────────────────────────────────────────
+    /// Function declares an effect name not in the permitted set (Req 2).
+    InvalidEffectName {
+        name: String,
+        span: Span,
+    },
     /// Pure function body calls an effectful function.
     UndeclaredEffect {
         /// The effectful callee.
@@ -210,9 +222,13 @@ impl CheckError {
             | CheckError::PropagateNotResult { .. }
             | CheckError::PropagateIncompatibleError { .. } => 5,
             // Req 6: Ownership (immutability / linearity)
-            CheckError::AssignToImmutable { .. } | CheckError::MutateImmutableField { .. } => 6,
+            CheckError::AssignToImmutable { .. }
+            | CheckError::MutateImmutableField { .. }
+            | CheckError::CaptureMutabilityViolation { .. } => 6,
             // Req 7: Effect Tracking
-            CheckError::UndeclaredEffect { .. } | CheckError::MissingEffect { .. } => 7,
+            CheckError::InvalidEffectName { .. }
+            | CheckError::UndeclaredEffect { .. }
+            | CheckError::MissingEffect { .. } => 7,
             // Req 8: Termination
             CheckError::UnboundedLoopInTotal { .. } | CheckError::PartialCallInTotal { .. } => 8,
             // Req 9: Data Race Freedom
@@ -249,8 +265,10 @@ impl CheckError {
             | CheckError::PropagateNotResult { span, .. }
             | CheckError::AssignToImmutable { span, .. }
             | CheckError::MutateImmutableField { span, .. }
+            | CheckError::CaptureMutabilityViolation { span, .. }
             | CheckError::UseAfterMove { span, .. }
             | CheckError::RefinementViolated { span, .. }
+            | CheckError::InvalidEffectName { span, .. }
             | CheckError::UndeclaredEffect { span, .. }
             | CheckError::MissingEffect { span, .. }
             | CheckError::UnboundedLoopInTotal { span }
@@ -320,6 +338,9 @@ impl CheckError {
                     "`?` cannot convert error `{from_ty}` into `{into_ty}` — implement `From<{from_ty}> for {into_ty}`"
                 )
             }
+            CheckError::CaptureMutabilityViolation { name, .. } => format!(
+                "lambda captures mutable binding `{name}` — lambdas must have immutable captures only (ADR-0002)"
+            ),
             CheckError::AssignToImmutable { name, .. } => {
                 format!("cannot assign to immutable binding `{name}`")
             }
@@ -330,6 +351,9 @@ impl CheckError {
             CheckError::RefinementViolated { pred, .. } => {
                 format!("refinement predicate violated: `{pred}`")
             }
+            CheckError::InvalidEffectName { name, .. } => format!(
+                "unknown effect `{name}` — valid effects are: Console, FileRead, FileWrite, FileDelete, Net, DB, ProcessSpawn, Random, Clock, Env, Log, Async"
+            ),
             CheckError::UndeclaredEffect { callee, effect, .. } => {
                 format!(
                     "function has no effect declaration but calls `{callee}` which requires `! {effect}`"

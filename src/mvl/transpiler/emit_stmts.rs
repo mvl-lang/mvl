@@ -1,4 +1,8 @@
 //! Emit Rust statements from MVL [`Stmt`] nodes.
+//!
+//! Covers `let`/`let mut` bindings, assignments, return, `if`/`else`, `for`,
+//! `while`, and bare expression statements.  Part of the ADR-0003 transpilation
+//! pipeline.  Spec link: 000-parser Req 1 (statement grammar).
 
 use crate::mvl::parser::ast::{ElseBranch, LValue, Stmt};
 use crate::mvl::transpiler::codegen::Codegen;
