@@ -6,6 +6,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-04-12 (fix: tree-sitter binding and grammar coverage)
+
+### Fixed
+- `binding.gyp`: replace legacy `nan` include with `node-addon-api`; add `NAPI_DISABLE_CPP_EXCEPTIONS` — fixes `make tree-sitter-build`
+- `grammar.js`: add named `trait_bound` rule matching EBNF — fixes `make test-grammar-coverage`
+- `Makefile setup`: add `node` check and `npm install` for tree-sitter deps on fresh checkouts
+
 ## [0.9.0] — 2026-04-12 (feat: specify generics — type params, constraints, monomorphization)
 
 ### Added
