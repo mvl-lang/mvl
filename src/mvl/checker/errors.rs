@@ -213,9 +213,10 @@ impl CheckError {
             // Req 10: Refinement Types
             CheckError::RefinementViolated { .. } => 10,
             // Req 11: Information Flow Control
-            CheckError::InvalidDeclassify { .. }
-            | CheckError::InvalidSanitize { .. }
-            | CheckError::UnsupportedExternAbi { .. } => 11,
+            CheckError::InvalidDeclassify { .. } | CheckError::InvalidSanitize { .. } => 11,
+            // Req 1: Type Safety (declaration-level — malformed extern ABI is a type/decl error,
+            // not an IFC violation; grouping it under Req 11 would pollute IFC metrics).
+            CheckError::UnsupportedExternAbi { .. } => 1,
         }
     }
 

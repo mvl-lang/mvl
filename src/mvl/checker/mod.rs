@@ -60,8 +60,17 @@ pub fn check(prog: &Program) -> CheckResult {
     let mut req_errors = [0usize; 12];
     for e in &checker.errors {
         let req = e.requirement_number() as usize;
+        debug_assert!(
+            (1..=11).contains(&req),
+            "requirement_number() returned {req}, must be 1–11"
+        );
         req_errors[req] += 1;
     }
+    debug_assert_eq!(
+        req_errors[1..].iter().sum::<usize>(),
+        checker.errors.len(),
+        "req_errors sum must equal total error count"
+    );
     CheckResult {
         errors: checker.errors,
         extern_count: checker.extern_count,
