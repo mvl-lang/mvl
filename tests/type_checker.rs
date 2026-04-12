@@ -1013,3 +1013,94 @@ fn if_with_unlabeled_bool_condition_unchanged() {
         "unlabeled if-condition should not affect result type, got: {errors:?}"
     );
 }
+
+// ── extern block checking (#52, #91) ─────────────────────────────────────
+
+#[test]
+fn extern_rust_block_counts_as_trust_boundary() {
+    // GIVEN: a program with one extern "rust" block
+    // THEN: check_result.extern_count == 1
+    use mvl::mvl::checker::check;
+    use mvl::mvl::parser::Parser;
+    let src = r#"extern "rust" {
+    fn hash(data: String) -> String;
+}"#;
+    let (mut p, _) = Parser::new(src);
+    let prog = p.parse_program();
+    assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+    let result = check(&prog);
+    assert!(result.is_ok(), "check errors: {:?}", result.errors);
+    assert_eq!(result.extern_count, 1, "extern block must be counted");
+}
+
+#[test]
+fn multiple_extern_blocks_counted_separately() {
+    use mvl::mvl::checker::check;
+    use mvl::mvl::parser::Parser;
+    let src = r#"extern "rust" {
+    fn sha256(data: String) -> String;
+}
+extern "c" {
+    fn strlen(s: String) -> Int;
+}"#;
+    let (mut p, _) = Parser::new(src);
+    let prog = p.parse_program();
+    assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+    let result = check(&prog);
+    assert!(result.is_ok(), "check errors: {:?}", result.errors);
+    assert_eq!(result.extern_count, 2, "two extern blocks must count as 2");
+}
+
+#[test]
+fn extern_unsupported_abi_is_an_error() {
+    use mvl::mvl::checker::check;
+    use mvl::mvl::checker::errors::CheckError;
+    use mvl::mvl::parser::Parser;
+    let src = r#"extern "java" { fn call() -> Int; }"#;
+    let (mut p, _) = Parser::new(src);
+    let prog = p.parse_program();
+    let result = check(&prog);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnsupportedExternAbi { .. })),
+        "unsupported ABI must produce UnsupportedExternAbi error, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn extern_fn_callable_from_mvl_code() {
+    // extern-declared functions must be resolvable in MVL call expressions.
+    let errors = errors_for(
+        r#"extern "rust" {
+    fn add_numbers(a: Int, b: Int) -> Int;
+}
+fn use_extern(x: Int) -> Int {
+    add_numbers(x, x)
+}"#,
+    );
+    assert!(
+        errors.is_empty(),
+        "extern fn should be callable from MVL code, got: {errors:?}"
+    );
+}
+
+#[test]
+fn sanitize_before_validation_guard_accepted() {
+    // GIVEN: sanitize() called after an explicit guard check (correct ordering)
+    // THEN: no type error — sanitize(Tainted<String>) → Clean<String> is valid
+    let errors = errors_for(
+        r#"fn validate(raw: Tainted<String>) -> Result<Clean<String>, String> {
+    if raw.len() < 8 {
+        return Err("too short".to_string());
+    }
+    Ok(sanitize(raw))
+}"#,
+    );
+    assert!(
+        errors.is_empty(),
+        "sanitize after guard should be accepted, got: {errors:?}"
+    );
+}

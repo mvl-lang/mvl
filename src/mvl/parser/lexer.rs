@@ -64,6 +64,8 @@ pub enum TokenKind {
     Const,
     Where,
     In,
+    /// `extern` — introduces a foreign-function trust boundary.
+    Extern,
     /// `struct` — keyword inside type declarations (`type Foo = struct { … }`)
     Struct,
     /// `enum` — keyword inside type declarations (`type Foo = enum { … }`)
@@ -157,6 +159,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Const => write!(f, "const"),
             TokenKind::Where => write!(f, "where"),
             TokenKind::In => write!(f, "in"),
+            TokenKind::Extern => write!(f, "extern"),
             TokenKind::Struct => write!(f, "struct"),
             TokenKind::Enum => write!(f, "enum"),
             TokenKind::Public => write!(f, "Public"),
@@ -638,6 +641,7 @@ fn keyword_or_ident(s: String) -> TokenKind {
         "const" => TokenKind::Const,
         "where" => TokenKind::Where,
         "in" => TokenKind::In,
+        "extern" => TokenKind::Extern,
         "struct" => TokenKind::Struct,
         "enum" => TokenKind::Enum,
         // Boolean literals

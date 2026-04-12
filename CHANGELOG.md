@@ -6,6 +6,24 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-04-12 (FFI: extern blocks, mvl_runtime, password_checker demo)
+
+### Added
+- **FFI infrastructure** — `extern "rust"` and `extern "c"` blocks for explicit trust boundaries (closes #52)
+- **`mvl_runtime` crate** — zero-dependency Rust crate providing:
+  - IFC newtypes: `Public<T>`, `Tainted<T>`, `Secret<T>`, `Clean<T>` with `#[repr(transparent)]`
+  - Effect markers: `Console`, `Net`, `Db`, `FileRead`, `FileWrite`, `Concurrent`, `Alloc`, `Panic`
+  - Refinement macro: `mvl_refine!(pred)` for debug assertions
+  - Prelude: single `use mvl_runtime::prelude::*` for generated files (closes #91)
+- **`password_checker.mvl` demo** — non-trivial FFI example showing full stack: extern Rust trust boundary, IFC label flow (Tainted → Clean → Secret), refinement types, effects (closes #93)
+
+### Fixed
+- Checker: `extern_count` now reflects only validated (non-rejected) extern blocks toward assurance surface
+- Transpiler: extern block codegen skips unknown ABIs instead of passing through; no `pub` in extern block fn decls (invalid Rust)
+- IFC security: `Secret<T>` no longer implements `Display` (prevents accidental confidential data leaks); `Debug` prints `"Secret([REDACTED])"`
+- Demo: `sanitize()` called after guard check (correct IFC contract ordering); `stored_hash` typed as `Secret<String>` in extern signature (no manual IFC bypass)
+- Cargo.toml generation: replaced wildcard `"*"` version with `"0.1"` placeholder + pin-before-publish comment
+
 ## [0.5.6+modules] — 2026-04-12 (Module system spec)
 
 ### Added

@@ -23,6 +23,8 @@ pub enum Decl {
     Fn(FnDecl),
     Const(ConstDecl),
     Module(ModuleDecl),
+    /// `extern "rust" { … }` — foreign-function trust boundary (Req 11).
+    Extern(ExternDecl),
 }
 
 impl Decl {
@@ -32,6 +34,7 @@ impl Decl {
             Decl::Fn(d) => d.span,
             Decl::Const(d) => d.span,
             Decl::Module(d) => d.span,
+            Decl::Extern(d) => d.span,
         }
     }
 }
@@ -142,6 +145,34 @@ pub struct ConstDecl {
 pub struct ModuleDecl {
     pub name: String,
     pub declarations: Vec<Decl>,
+    pub span: Span,
+}
+
+// ── Extern block ──────────────────────────────────────────────────────────
+
+/// `extern "rust" { fn foo(…) -> T ! Effects; … }`
+///
+/// An explicit trust boundary: the compiler trusts the declared signatures
+/// but does NOT verify the foreign implementation.  Each extern block is
+/// counted by the assurance checker — minimising the extern surface
+/// maximises the verifiable fraction of the program.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternDecl {
+    /// The ABI string, e.g. `"rust"` or `"c"`.
+    pub abi: String,
+    /// The function declarations inside the block.
+    pub fns: Vec<ExternFnDecl>,
+    pub span: Span,
+}
+
+/// A single function signature inside an `extern` block.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternFnDecl {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub return_type: Box<TypeExpr>,
+    /// Declared effects — enforced on the MVL caller side.
+    pub effects: Vec<String>,
     pub span: Span,
 }
 
