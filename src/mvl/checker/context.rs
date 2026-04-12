@@ -144,6 +144,44 @@ impl TypeEnv {
                 totality: None,
             },
         );
+        // Standard math functions — pure, variadic (arity checked by special-case)
+        self.fns.insert(
+            "abs".into(),
+            FnInfo {
+                params: vec![Ty::Int],
+                ret: Ty::Int,
+                effects: vec![],
+                totality: None,
+            },
+        );
+        self.fns.insert(
+            "max".into(),
+            FnInfo {
+                params: vec![Ty::Int, Ty::Int],
+                ret: Ty::Int,
+                effects: vec![],
+                totality: None,
+            },
+        );
+        self.fns.insert(
+            "min".into(),
+            FnInfo {
+                params: vec![Ty::Int, Ty::Int],
+                ret: Ty::Int,
+                effects: vec![],
+                totality: None,
+            },
+        );
+        // parse_int — converts String to Result<Int, String>; variadic-flagged to skip arity check
+        self.fns.insert(
+            "parse_int".into(),
+            FnInfo {
+                params: vec![],
+                ret: Ty::Result(Box::new(Ty::Int), Box::new(Ty::String)),
+                effects: vec![],
+                totality: None,
+            },
+        );
     }
 
     // ── Scope management ─────────────────────────────────────────────────

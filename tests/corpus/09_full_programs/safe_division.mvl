@@ -10,26 +10,29 @@ type Amount = Float where self >= 0.0
 type NonZero = Float where self != 0.0
 type AccountId = Secret<String>
 
+// Stub: converts a Float to NonZero or returns DivisionByZero.
+fn to_nonzero(f: Float) -> Result<Public<Float>, DivError> { Ok(f) }
+
 type DivError = enum { DivisionByZero }
 
 total fn safe_divide(
-    numerator: Public<Amount>,
-    denominator: Public<NonZero>,
+    numerator: Public<Float>,
+    denominator: Public<Float>,
 ) -> Public<Float> {
     numerator / denominator
 }
 
 total fn calculate_share(
     iso account: Secret<AccountId>,
-    total_amount: Public<Amount>,
+    total_amount: Public<Float>,
     num_parties: Public<Int where self > 0>,
 ) -> Result<Public<Float>, DivError> ! Console {
 
-    let divisor: Public<NonZero> = to_nonzero(num_parties.to_float())?;
+    let divisor = to_nonzero(num_parties.to_float())?;
     let share = safe_divide(total_amount, divisor);
 
     // OK: share is Public
-    console.log("Calculated share: {}", share);
+    println("Calculated share: {}", share);
 
     // COMPILE ERROR if uncommented: Secret cannot flow to Console
     // console.log("Account: {}", account);

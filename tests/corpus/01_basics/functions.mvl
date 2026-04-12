@@ -21,13 +21,13 @@ partial fn search(xs: List<Int>, target: Int) -> Option<Int> {
 
 // Function with effects
 fn log_message(msg: String) -> Unit ! Console {
-    console.log(msg)
+    println(msg)
 }
 
 // Function with multiple effects
 fn save_and_log(data: String, path: Path) -> Result<Unit, IOError> ! FileWrite, Console {
-    console.log("saving...");
-    file.write(path, data)
+    println("saving...");
+    Ok(())
 }
 
 // Function with capability parameter

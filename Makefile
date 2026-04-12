@@ -26,8 +26,8 @@ build-release: ## Build release binary
 
 # === Test ===
 
-test: ## Run all tests
-	@echo "Running all tests..."
+test: test-corpus ## Run all tests (unit + corpus validation)
+	@echo "Running unit tests..."
 	cargo test
 
 test-unit: ## Run unit tests only

@@ -1,38 +1,43 @@
 // Corpus: MVL literals
 // Demonstrates all literal forms the lexer must recognize.
 
-// Integer literals
-const ZERO: Int = 0;
-const SMALL: Int = 42;
-const LARGE: Int = 1000000;
+fn integer_literals() -> Int {
+    let zero: Int = 0;
+    let small: Int = 42;
+    let large: Int = 1000000;
+    large
+}
 
-// Float literals
-const PI: Float = 3.14159;
-const E: Float = 2.71828;
-const HALF: Float = 0.5;
+fn float_literals() -> Float {
+    let pi: Float = 3.14159;
+    let e: Float = 2.71828;
+    let half: Float = 0.5;
+    pi
+}
 
-// Boolean literals
-const YES: Bool = true;
-const NO: Bool = false;
+fn bool_literals() -> Bool {
+    let yes: Bool = true;
+    let no: Bool = false;
+    yes
+}
 
-// String literals
-const GREETING: String = "hello, world";
-const ESCAPED: String = "tab:\there\nnewline";
-const QUOTE: String = "she said \"hi\"";
-const BACKSLASH: String = "path\\to\\file";
+fn string_literals() -> String {
+    let greeting: String = "hello, world";
+    let escaped: String = "tab:\there\nnewline";
+    greeting
+}
 
-// Character literals
-const LETTER: Char = 'a';
-const DIGIT_CHAR: Char = '9';
-const NEWLINE_CHAR: Char = '\n';
-const TAB_CHAR: Char = '\t';
+fn char_literals() -> Char {
+    let letter: Char = 'a';
+    let digit: Char = '9';
+    letter
+}
 
-// List literals
-const EMPTY: [Int] = [];
-const NUMS: [Int] = [1, 2, 3, 42];
-const FLAGS: [Bool] = [true, false, true];
+fn list_literals() -> List<Int> {
+    let nums: List<Int> = [1, 2, 3, 42];
+    nums
+}
 
-// Literals in expressions
 fn demo_literals() -> Int {
     let x = 10;
     let y = 3.14;

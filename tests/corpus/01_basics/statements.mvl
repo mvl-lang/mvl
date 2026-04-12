@@ -60,7 +60,7 @@ fn example_for(items: List<Int>) -> Int {
     return sum;
 }
 
-fn example_while(mut n: Int) -> Int {
+partial fn example_while(mut n: Int) -> Int {
     while n > 0 {
         n = n - 1;
     }
@@ -71,6 +71,6 @@ fn example_return_unit() -> Unit {
     return;
 }
 
-fn example_expr_stmt(n: Int) -> Unit {
-    console.log(n);
+fn example_expr_stmt(n: Int) -> Unit ! Console {
+    println(n);
 }
