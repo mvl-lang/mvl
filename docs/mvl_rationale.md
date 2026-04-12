@@ -48,8 +48,7 @@ We introduce Intent-Specification-Program-Evidence as a formal framework for rea
 This paper provides the theoretical foundation. It is what makes AAE-3 (assured agentic engineering) formally definable: completeness, coverage, and assurance become measurable KPIs rather than checklists.
 
 **Venue:** IEEE Transactions on Software Engineering (TSE) or Journal of Systems and Software (JSS)
-**Repo:** `~/papers/ispe_model/` — draft advanced, sections written
-**Co-author:** Patricia Lago (VU Amsterdam) — proposed
+**Status:** Draft advanced, sections written
 
 ---
 
@@ -62,7 +61,7 @@ We derive eleven requirements that a target language must enforce for generated 
 This paper answers the question Paper 1 leaves open: if P (Program) is inevitable in the trust chain, what properties must P have? The scorecard is falsifiable and immediately applicable to any code generation pipeline.
 
 **Venue:** ICSE, ESEC/FSE, or IEEE TSE
-**Repo:** `~/papers/language_requirements/` — scaffolded, all sections TODO
+**Status:** Scaffolded, ready to write
 
 ---
 
@@ -75,8 +74,7 @@ We present a language contraction — sixteen features systematically removed ra
 This is the engineering paper: not just what requirements exist, but how to build a language that satisfies all of them. It demonstrates the path from AAE-3 (process assurance) toward AAE-4/5 (compiler-based assurance) where the compiler itself generates the evidence that certification requires.
 
 **Venue:** OOPSLA, PLDI, or ICFP
-**Repo:** `~/papers/language_design/` — scaffolded, all sections TODO
-**Implementation:** `github.com/LAB271/mvl_language` — v0.5.1, parser + type checker, 215 tests
+**Status:** Scaffolded, ready to write. Working compiler prototype (parser + type checker, 215 tests)
 
 ---
 
@@ -89,7 +87,7 @@ We derive ten architecture principles from the observation that LLMs make code g
 This paper extends the ISPE model to architectural decisions. It provides the theoretical backing for why agentic engineering requires different architectural patterns than traditional development — and what those patterns are.
 
 **Venue:** ICSA (International Conference on Software Architecture) or JSS
-**Research material:** exists in knowledge base, no repo yet
+**Status:** Research material collected, not yet drafted
 
 ---
 
@@ -102,7 +100,7 @@ We present empirical results from the MVL compiler: generation quality benchmark
 This is the validation paper — it takes the theoretical claims of Papers 1-4 and tests them against reality. Depends on the MVL compiler reaching Phase 1 completion (`.mvl` to native binary with all 11 requirements enforced).
 
 **Venue:** ICSE (empirical track), ASE, or ESEC/FSE
-**Depends on:** MVL compiler Phase 1 completion
+**Status:** Depends on compiler reaching Phase 1 completion
 
 ---
 
