@@ -6,6 +6,24 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.5.6+modules] — 2026-04-12 (Module system spec)
+
+### Added
+- Spec 005: module system — file=module, `pub` visibility, `use` imports, re-exports,
+  circular import rejection, explicit stdlib (closes #47)
+- Grammar: `use_decl`, `reexport_decl`, `module_path`, `decl_body` productions;
+  `pub` modifier factored out to preserve LL(1); `module_decl` block removed
+- tree-sitter `grammar.js`: `use_decl`, `reexport_decl`, `module_path` nodes;
+  fixes broken highlight queries in nvim/zed/tree-sitter backends
+- Syntax highlighters (nvim, zed, vscode, tree-sitter): `use` and `pub` keywords;
+  module path namespace highlighting
+- Docs: manual chapter 13 rewritten for file=module model
+
+### Fixed
+- LL(1) property restored: `pub` factored into `declaration = ["pub"] decl_body`
+  so each alternative starts with a distinct token
+- Spec EBNF aligned with canonical `grammar.ebnf` (added `[security]` to `fn_decl`)
+
 ## [0.5.6] — 2026-04-12 (Transpiler: end-to-end compile for reference examples)
 
 ### Fixed
