@@ -7,7 +7,7 @@
 //! - Totality annotations, effect lists, and where-clause constraints
 
 use crate::mvl::parser::ast::{
-    Constraint, ExternDecl, ExternFnDecl, FnDecl, Param, Totality, UseDecl,
+    Constraint, ExternDecl, ExternFnDecl, FnDecl, ImplDecl, Param, Totality, UseDecl,
 };
 use crate::mvl::parser::lexer::TokenKind;
 use crate::mvl::parser::{ParseError, Parser};
@@ -268,6 +268,7 @@ impl Parser {
                 Ok(Decl::Const(d))
             }
             TokenKind::Extern => Ok(Decl::Extern(self.parse_extern_decl()?)),
+            TokenKind::Impl => Ok(Decl::Impl(self.parse_impl_decl()?)),
             _ => {
                 let err = ParseError {
                     message: format!("expected declaration, found `{}`", self.peek_kind()),
@@ -444,6 +445,56 @@ impl Parser {
             params,
             return_type,
             effects,
+            span,
+        })
+    }
+
+    // ── Impl declaration ──────────────────────────────────────────────────
+
+    /// Parse `impl TraitName for TypeName { fn … }`.
+    /// Pre-condition: current token is `impl`.
+    pub fn parse_impl_decl(&mut self) -> Result<ImplDecl, ()> {
+        let start = self.peek_span();
+        self.advance(); // consume `impl`
+
+        // Trait name (e.g. `Display`)
+        let ident_result = self.expect_ident();
+        let (trait_name, _) = self.require(ident_result)?;
+
+        // `for`
+        let for_kw = self.expect(&TokenKind::For);
+        self.require(for_kw)?;
+
+        // Type name (e.g. `Point`)
+        let ident_result = self.expect_ident();
+        let (type_name, _) = self.require(ident_result)?;
+
+        // `{`
+        let lbrace = self.expect(&TokenKind::LBrace);
+        self.require(lbrace)?;
+
+        // Methods
+        let mut methods = Vec::new();
+        while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+            match self.parse_fn_decl() {
+                Ok(f) => methods.push(f),
+                Err(()) => {
+                    if matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // `}`
+        let rbrace = self.expect(&TokenKind::RBrace);
+        self.require(rbrace)?;
+
+        let span = self.span_from(start);
+        Ok(ImplDecl {
+            trait_name,
+            type_name,
+            methods,
             span,
         })
     }

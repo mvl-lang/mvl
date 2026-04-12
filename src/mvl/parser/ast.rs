@@ -26,6 +26,8 @@ pub enum Decl {
     Extern(ExternDecl),
     /// `use path::to::Item;` or `pub use path::to::Item;`
     Use(UseDecl),
+    /// `impl Trait for Type { … }` — trait implementation.
+    Impl(ImplDecl),
 }
 
 impl Decl {
@@ -36,6 +38,7 @@ impl Decl {
             Decl::Const(d) => d.span,
             Decl::Extern(d) => d.span,
             Decl::Use(d) => d.span,
+            Decl::Impl(d) => d.span,
         }
     }
 }
@@ -187,6 +190,22 @@ pub struct ExternFnDecl {
     pub return_type: Box<TypeExpr>,
     /// Declared effects — enforced on the MVL caller side.
     pub effects: Vec<String>,
+    pub span: Span,
+}
+
+// ── Impl block ────────────────────────────────────────────────────────────
+
+/// `impl TraitName for TypeName { fn … }` — a trait implementation block.
+///
+/// Phase 1 supports `Display` for user-defined string formatting.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImplDecl {
+    /// The trait being implemented, e.g. `"Display"`.
+    pub trait_name: String,
+    /// The type implementing the trait, e.g. `"Point"`.
+    pub type_name: String,
+    /// Methods in the impl block.
+    pub methods: Vec<FnDecl>,
     pub span: Span,
 }
 

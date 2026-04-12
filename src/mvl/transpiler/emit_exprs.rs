@@ -35,7 +35,7 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
         } => {
             // println!/print! are Rust macros: first arg must be a bare string
             // literal, not a `.to_string()` expression.
-            if matches!(name.as_str(), "println" | "print") {
+            if matches!(name.as_str(), "println" | "print" | "format") {
                 cg.push(&format!("{name}!"));
                 cg.push("(");
                 emit_args_for_macro(cg, args);

@@ -450,3 +450,83 @@ fn no_test_fns_no_cfg_test_block() {
         "no test fns → no #[cfg(test)] block"
     );
 }
+
+// ── #65: Debug/Display traits + format() ──────────────────────────────────
+
+/// format() maps to Rust's format!() macro.
+#[test]
+fn format_call_emits_format_macro() {
+    let src = r#"fn greeting(name: String) -> String { format("{} world", name) }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "format!(");
+    assert_contains(&rust, "\"{} world\"");
+}
+
+/// All structs automatically derive Debug.
+#[test]
+fn struct_derives_debug() {
+    let src = "type Point = struct { x: Float, y: Float }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "#[derive(Debug,");
+}
+
+/// All enums automatically derive Debug.
+#[test]
+fn enum_derives_debug() {
+    let src = "type Color = enum { Red, Green, Blue }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "#[derive(Debug,");
+}
+
+/// impl Display for T emits std::fmt::Display implementation.
+#[test]
+fn impl_display_emits_display_trait() {
+    let src = r#"
+type Point = struct { x: Float, y: Float }
+impl Display for Point {
+    fn fmt(self: Point) -> String {
+        format("({}, {})", self.x, self.y)
+    }
+}
+"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "impl std::fmt::Display for Point {");
+    assert_contains(
+        &rust,
+        "fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {",
+    );
+    assert_contains(&rust, "write!(f, \"{}\",");
+    assert_contains(&rust, "format!(");
+}
+
+/// Hex literals lex and transpile to their integer value.
+#[test]
+fn hex_literal_transpiles_to_integer() {
+    let src = "fn mask() -> Int { 0xFF }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "255");
+}
+
+/// Binary literals lex and transpile to their integer value.
+#[test]
+fn binary_literal_transpiles_to_integer() {
+    let src = "fn flags() -> Int { 0b1010 }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "10");
+}
+
+/// Octal literals lex and transpile to their integer value.
+#[test]
+fn octal_literal_transpiles_to_integer() {
+    let src = "fn perms() -> Int { 0o755 }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "493");
+}
+
+/// Scientific notation transpiles to float literal.
+#[test]
+fn scientific_notation_transpiles_to_float() {
+    let src = "fn big() -> Float { 1.5e10 }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "15000000000");
+}
