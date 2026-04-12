@@ -120,11 +120,11 @@ This is intentionally simple. Phase 2 replaces it with native codegen.
 
 | ADR | Decision | Status |
 |-----|----------|--------|
-| [ADR-0001](../adr/0001-eleven-requirements.md) | Eleven compiler-verified requirements | Accepted |
-| [ADR-0002](../adr/0002-language-contraction.md) | Language contraction — what to drop and why | Accepted |
-| [ADR-0003](../adr/0003-compilation-strategy.md) | Compilation: Rust (Phase 1) → LLVM (Phase 2) | Accepted |
-| [ADR-0004](../adr/0004-language-size.md) | Language size — deliberately the smallest | Accepted |
-| [ADR-0005](../adr/0005-recursive-descent-parser.md) | Hand-written recursive descent parser (LL(1)) | Accepted |
+| [ADR-0001](adr/0001-eleven-requirements.md) | Eleven compiler-verified requirements | Accepted |
+| [ADR-0002](adr/0002-language-contraction.md) | Language contraction — what to drop and why | Accepted |
+| [ADR-0003](adr/0003-compilation-strategy.md) | Compilation: Rust (Phase 1) → LLVM (Phase 2) | Accepted |
+| [ADR-0004](adr/0004-language-size.md) | Language size — deliberately the smallest | Accepted |
+| [ADR-0005](adr/0005-recursive-descent-parser.md) | Hand-written recursive descent parser (LL(1)) | Accepted |
 
 ## Design principles
 
