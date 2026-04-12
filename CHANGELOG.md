@@ -6,6 +6,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-04-12 (fix: nvim-mvl syntax highlighting)
+
+### Fixed
+- Remove invalid `module_decl` node from `highlights.scm` — caused tree-sitter highlighter to crash silently
+- Register `FileType` autocmd in `plugin/mvl.lua` to call `vim.treesitter.start()` reliably under lazy.nvim
+
+### Added
+- `etc/nvim-mvl/install.sh` + `make install-nvim` — automates plugin setup and parser compilation
+- `:checkhealth mvl` via `lua/mvl/health.lua`
+
 ## [0.7.0] — 2026-04-12 (Unified CLI: check/build/test/assurance + grammar coverage)
 
 ### Added

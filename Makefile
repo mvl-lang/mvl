@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help build build-release test test-unit test-integration test-corpus test-transpiler test-tree-sitter test-grammar-coverage lint format format-check assurance assurance-verbose assurance-gate docs docs-serve tree-sitter-build clean
+.PHONY: help build build-release test test-unit test-integration test-corpus test-transpiler test-tree-sitter test-grammar-coverage lint format format-check assurance assurance-verbose assurance-gate docs docs-serve tree-sitter-build install-nvim clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -100,6 +100,10 @@ test-tree-sitter: ## Run tree-sitter corpus tests (grammar derived from docs/gra
 
 test-grammar-coverage: ## Cross-validate docs/grammar.ebnf against tree-sitter grammar.js
 	@python3 tools/check_grammar_coverage.py
+
+install-nvim: ## Install nvim-mvl plugin + compile tree-sitter parser
+	etc/nvim-mvl/install.sh
+
 
 # === Clean ===
 
