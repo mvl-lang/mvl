@@ -9,8 +9,17 @@
         {
           "type": "REPEAT",
           "content": {
-            "type": "SYMBOL",
-            "name": "use_decl"
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "use_decl"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "reexport_decl"
+              }
+            ]
           }
         },
         {
@@ -51,10 +60,6 @@
             {
               "type": "SYMBOL",
               "name": "const_decl"
-            },
-            {
-              "type": "SYMBOL",
-              "name": "reexport_decl"
             }
           ]
         }
@@ -80,6 +85,10 @@
     "reexport_decl": {
       "type": "SEQ",
       "members": [
+        {
+          "type": "STRING",
+          "value": "pub"
+        },
         {
           "type": "STRING",
           "value": "use"
