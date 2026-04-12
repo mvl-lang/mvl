@@ -204,7 +204,7 @@ impl TypeChecker {
             Decl::Const(cd) => self.check_const_decl(cd),
             Decl::Extern(ed) => self.check_extern_decl(ed),
             Decl::Use(_) => {} // resolved by the module resolver, not the type checker
-            Decl::Impl(_) => {} // impl blocks are not yet type-checked (Phase 1)
+            Decl::Impl(_) => {} // bodies not yet type-checked; registration done in collect_declarations
         }
     }
 

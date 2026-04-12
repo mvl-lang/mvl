@@ -547,7 +547,7 @@ impl From<IoError> for AppError {
 "#;
     let rust = transpile_src(src);
     assert_contains(&rust, "impl std::convert::From<IoError> for AppError {");
-    assert_contains(&rust, "fn from(value: IoError) -> Self {");
+    assert_contains(&rust, "fn from(e: IoError) -> Self {");
     assert_contains(&rust, "AppError::Io(e)");
 }
 

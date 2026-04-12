@@ -124,15 +124,16 @@ fn emit_from_impl(cg: &mut Codegen, id: &ImplDecl) {
     // Find the `from` method
     let from_method = id.methods.iter().find(|m| m.name == "from");
 
-    cg.line(&format!("fn from(value: {source_ty}) -> Self {{"));
+    // Use the actual MVL parameter name so the emitted body can reference it.
+    let param_name = from_method
+        .and_then(|fd| fd.params.first())
+        .map(|p| p.name.as_str())
+        .unwrap_or("value");
+    cg.line(&format!("fn from({param_name}: {source_ty}) -> Self {{"));
     cg.push_indent();
 
     match from_method {
         Some(fd) => {
-            // Rename the first parameter to `value` in the emitted body so it
-            // matches the Rust From signature, then emit the body statements.
-            // For simplicity we emit the raw body; the user's param name is used
-            // as written in the MVL source.
             let stmts = &fd.body.stmts;
             if stmts.is_empty() {
                 cg.line("todo!(\"From::from not implemented\")");
