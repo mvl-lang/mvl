@@ -1,8 +1,21 @@
 //! Generate Cargo project files for transpiled MVL programs.
 //!
+//! This module is part of the Phase 1 compilation pipeline described in ADR-0003
+//! ("Compilation Strategy"): `mvl build` invokes `cargo build` on the generated
+//! project, which requires a valid `Cargo.toml`.
+//!
+//! # Cargo.toml structure
+//!
+//! - Edition: 2021 (Rust stable baseline)
+//! - Crate type: `[[bin]]` — MVL programs compile to native executables
+//! - `mvl_runtime` dep: added when the program uses security labels or IFC types
+//! - External crate deps: added for each `extern "rust"` block in the source
+//!
 //! Implements the Rust-target transpilation path described in ADR-0003.
 //! Produces `Cargo.toml` and `src/main.rs` boilerplate for the generated crate.
 //! Spec link: 000-parser Req 1 (compiler pipeline output).
+//!
+//! Satisfies ADR-0003 Phase 1 criterion 1: "`mvl build` produces a native binary".
 
 /// Options for Cargo.toml generation.
 pub struct CargoOptions<'a> {

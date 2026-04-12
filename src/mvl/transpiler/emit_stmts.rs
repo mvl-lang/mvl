@@ -1,8 +1,16 @@
 //! Emit Rust statements from MVL [`Stmt`] nodes.
 //!
-//! Covers `let`/`let mut` bindings, assignments, return, `if`/`else`, `for`,
-//! `while`, and bare expression statements.  Part of the ADR-0003 transpilation
-//! pipeline.  Spec link: 000-parser Req 1 (statement grammar).
+//! Covers statement forms defined in 000-parser/Req 5 ("Parse Statements"):
+//! `let`/`let mut`, assignment, `if`/`else`, `match`, `for`, `while`, `return`, `?`.
+//!
+//! The emitted Rust preserves MVL's semantic guarantees:
+//! - `while` only appears in `partial fn` bodies (enforced by the type checker per Req 8)
+//! - `for` iterates over labeled collections, preserving security labels per Req 11
+//! - Assignments carry the label of the source expression (IFC is static, no runtime cost)
+//!
+//! Part of the ADR-0003 transpilation pipeline.  Spec link: 000-parser Req 1 (statement grammar).
+//!
+//! See ADR-0003 for the overall compilation strategy.
 
 use crate::mvl::parser::ast::{ElseBranch, LValue, Stmt};
 use crate::mvl::transpiler::codegen::Codegen;

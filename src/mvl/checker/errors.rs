@@ -185,6 +185,13 @@ pub enum CheckError {
         found: String,
         span: Span,
     },
+    /// `println`/`print` called with a `Secret` or `Tainted` argument.
+    ///
+    /// Logging functions MUST accept only `Public<T>` per 003-information-flow/Req 6.
+    LoggingLabelViolation {
+        label: String,
+        span: Span,
+    },
     /// `extern` block declares an unsupported ABI.
     UnsupportedExternAbi {
         abi: String,
@@ -225,7 +232,7 @@ impl CheckError {
             CheckError::AssignToImmutable { .. }
             | CheckError::MutateImmutableField { .. }
             | CheckError::CaptureMutabilityViolation { .. } => 6,
-            // Req 7: Effect Tracking
+            // Req 7: Effect Tracking (includes invalid names)
             CheckError::InvalidEffectName { .. }
             | CheckError::UndeclaredEffect { .. }
             | CheckError::MissingEffect { .. } => 7,
@@ -236,7 +243,9 @@ impl CheckError {
             // Req 10: Refinement Types
             CheckError::RefinementViolated { .. } => 10,
             // Req 11: Information Flow Control
-            CheckError::InvalidDeclassify { .. } | CheckError::InvalidSanitize { .. } => 11,
+            CheckError::InvalidDeclassify { .. }
+            | CheckError::InvalidSanitize { .. }
+            | CheckError::LoggingLabelViolation { .. } => 11,
             // Req 1: Type Safety (declaration-level — malformed extern ABI is a type/decl error,
             // not an IFC violation; grouping it under Req 11 would pollute IFC metrics).
             CheckError::UnsupportedExternAbi { .. } => 1,
@@ -276,6 +285,7 @@ impl CheckError {
             | CheckError::CapabilityViolation { span, .. }
             | CheckError::InvalidDeclassify { span, .. }
             | CheckError::InvalidSanitize { span, .. }
+            | CheckError::LoggingLabelViolation { span, .. }
             | CheckError::UnsupportedExternAbi { span, .. }
             | CheckError::PropagateIncompatibleError { span, .. } => *span,
         }
@@ -386,6 +396,9 @@ impl CheckError {
             ),
             CheckError::InvalidSanitize { found, .. } => format!(
                 "`sanitize()` requires `Tainted<T>`, found `{found}` — only Tainted data can be sanitized (for Secret data use `declassify()` instead)"
+            ),
+            CheckError::LoggingLabelViolation { label, .. } => format!(
+                "logging functions accept only `Public<T>` but argument has label `{label}` — declassify or sanitize before logging"
             ),
             CheckError::UnsupportedExternAbi { abi, .. } => format!(
                 "unsupported extern ABI `\"{abi}\"` — only \"rust\" and \"c\" are allowed"

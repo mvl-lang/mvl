@@ -31,25 +31,6 @@ use crate::mvl::parser::ast::{
 };
 use crate::mvl::parser::lexer::Span;
 
-// ── Valid effect names (002-effect-system Req 2) ──────────────────────────────
-
-/// The complete set of permitted effect names.  Any effect declared in a
-/// function signature must be one of these (case-sensitive).
-const VALID_EFFECTS: &[&str] = &[
-    "Console",
-    "FileRead",
-    "FileWrite",
-    "FileDelete",
-    "Net",
-    "DB",
-    "ProcessSpawn",
-    "Random",
-    "Clock",
-    "Env",
-    "Log",
-    "Async",
-];
-
 // ── Public API ───────────────────────────────────────────────────────────────
 
 /// Result of running the type checker over a [`Program`].
@@ -97,6 +78,28 @@ pub fn check(prog: &Program) -> CheckResult {
     }
 }
 
+// ── Valid effect names (002-effect-system/Req 2) ──────────────────────────────
+
+/// The canonical set of effect names permitted in `! Effect` declarations.
+///
+/// Per 002-effect-system/Req 2: "Effects MUST be fine-grained, not a single `IO` bucket.
+/// The minimum set: Console, FileRead, FileWrite, FileDelete, Net, DB, ProcessSpawn,
+/// Random, Clock, Env, Log, Async."
+const VALID_EFFECT_NAMES: &[&str] = &[
+    "Console",
+    "FileRead",
+    "FileWrite",
+    "FileDelete",
+    "Net",
+    "DB",
+    "ProcessSpawn",
+    "Random",
+    "Clock",
+    "Env",
+    "Log",
+    "Async",
+];
+
 // ── TypeChecker ──────────────────────────────────────────────────────────────
 
 struct TypeChecker {
@@ -112,6 +115,12 @@ struct TypeChecker {
     current_fn_totality: Option<Totality>,
     /// Count of extern declarations for assurance reporting.
     extern_count: usize,
+    /// Stack of scope depths at each lambda entry point.
+    ///
+    /// Used by capture-immutability checking (ADR-0002): when a variable is looked
+    /// up and its scope index is strictly less than the boundary recorded here, it
+    /// was captured from an outer scope and must be immutable.
+    lambda_scope_starts: Vec<usize>,
 }
 
 impl TypeChecker {
@@ -124,6 +133,7 @@ impl TypeChecker {
             current_fn_effects: Vec::new(),
             current_fn_totality: None,
             extern_count: 0,
+            lambda_scope_starts: Vec::new(),
         }
     }
 
@@ -245,18 +255,20 @@ impl TypeChecker {
     }
 
     fn check_fn_decl(&mut self, fd: &FnDecl) {
-        // Validate declared effect names (002-effect-system Req 2).
+        let ret_ty = resolve(&fd.return_type);
+        let prev_ret = self.current_return_ty.replace(ret_ty.clone());
+
+        // Validate effect names against the canonical set (002-effect-system/Req 2).
         for effect in &fd.effects {
-            if !VALID_EFFECTS.contains(&effect.as_str()) {
+            if !VALID_EFFECT_NAMES.contains(&effect.as_str()) {
+                // TODO: per-effect span requires AST change to Vec<(String, Span)>;
+                // currently the whole function declaration span is used.
                 self.emit(CheckError::InvalidEffectName {
                     name: effect.clone(),
                     span: fd.span,
                 });
             }
         }
-
-        let ret_ty = resolve(&fd.return_type);
-        let prev_ret = self.current_return_ty.replace(ret_ty.clone());
 
         // Save and set effect/totality context (Req 7, 8, 9).
         let prev_fn_name = std::mem::replace(&mut self.current_fn_name, fd.name.clone());
@@ -615,16 +627,32 @@ impl TypeChecker {
 
             // #11/#15: Variable reference
             Expr::Ident(name, span) => {
-                if let Some(info) = self.env.lookup(name).cloned() {
+                if let Some((scope_idx, info)) = self.env.lookup_with_scope_index(name) {
+                    // Clone early to release the borrow on `self.env` before calling self.emit.
+                    let is_mutable = info.mutable;
+                    let is_moved = info.moved;
+                    let ty = info.ty.clone();
+
+                    // ADR-0002: Lambdas may only capture immutable bindings.
+                    // If we are inside a lambda and the variable was found in a scope
+                    // that predates the lambda's own scope, it is a captured binding.
+                    if let Some(&boundary) = self.lambda_scope_starts.last() {
+                        if scope_idx < boundary && is_mutable {
+                            self.emit(CheckError::CaptureMutabilityViolation {
+                                name: name.clone(),
+                                span: *span,
+                            });
+                        }
+                    }
                     // #15: ownership — reject use after move
-                    if info.moved {
+                    if is_moved {
                         self.emit(CheckError::UseAfterMove {
                             name: name.clone(),
                             span: *span,
                         });
                         return Ty::Unknown;
                     }
-                    info.ty.clone()
+                    ty
                 } else {
                     // Before emitting UndefinedVariable, check whether the ident
                     // is a known enum unit-variant or the built-in `None`.
@@ -691,7 +719,10 @@ impl TypeChecker {
                         self.check_send_capability(first_arg, *span);
                     }
                 }
-                Ty::Unknown // method resolution not yet implemented
+                // TODO: method-call results inherit Unknown type; IFC label propagation
+                // requires method resolution (Phase 2). Code like `println(secret.to_string())`
+                // bypasses the logging label check today — see 003-information-flow/Req 6.
+                Ty::Unknown
             }
 
             // #13: Match expressions
@@ -884,9 +915,10 @@ impl TypeChecker {
                 body,
                 ..
             } => {
-                // Check for mutable captures before entering the lambda scope (ADR-0002).
-                let param_name_refs: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
-                self.check_lambda_captures(body, &param_name_refs);
+                // Record the current scope depth as the lambda boundary so that
+                // Expr::Ident can detect mutable captures (ADR-0002).
+                let boundary = self.env.scope_depth();
+                self.lambda_scope_starts.push(boundary);
 
                 self.env.push_scope();
                 let param_tys: Vec<Ty> = params
@@ -912,6 +944,7 @@ impl TypeChecker {
                     });
                 }
                 self.env.pop_scope();
+                self.lambda_scope_starts.pop();
                 Ty::Fn(param_tys, Box::new(ret_ty))
             }
         }
@@ -1076,6 +1109,27 @@ impl TypeChecker {
     fn infer_fn_call(&mut self, name: &str, args: &[Expr], span: Span) -> Ty {
         // Infer all argument types (for side-effect error collection)
         let arg_tys: Vec<Ty> = args.iter().map(|a| self.infer_expr(a)).collect();
+
+        // 003-information-flow/Req 6: logging functions MUST accept only Public<T>.
+        // Reject any argument labeled Secret, Tainted, or Clean (Clean is sanitized
+        // but not declassified — an explicit declassify() is required before logging).
+        if matches!(name, "println" | "print") {
+            for (arg, arg_ty) in args.iter().zip(arg_tys.iter()) {
+                if let Some(label) = ifc::label_of(arg_ty) {
+                    if matches!(
+                        label,
+                        crate::mvl::parser::ast::SecurityLabel::Secret
+                            | crate::mvl::parser::ast::SecurityLabel::Tainted
+                            | crate::mvl::parser::ast::SecurityLabel::Clean
+                    ) {
+                        self.emit(CheckError::LoggingLabelViolation {
+                            label: ifc::label_name(label).to_string(),
+                            span: arg.span(),
+                        });
+                    }
+                }
+            }
+        }
 
         if let Some(fn_info) = self.env.lookup_fn(name).cloned() {
             // Variadic built-ins (println, print, assert_eq) have an empty params
@@ -1530,6 +1584,10 @@ impl TypeChecker {
     /// walks `expr` collecting every `Expr::Ident` that is NOT one of the lambda
     /// parameter names; if any such captured name is bound as `mutable` in the
     /// current environment, we emit [`CheckError::CaptureMutabilityViolation`].
+    ///
+    /// Note: superseded by the scope-index check in `Expr::Ident` (via `lambda_scope_starts`).
+    /// Retained for reference; callers should prefer the scope-based approach.
+    #[allow(dead_code)]
     fn check_lambda_captures(&mut self, expr: &Expr, param_names: &[&str]) {
         let captures = collect_free_var_refs(expr, param_names);
         for (name, span) in captures {
@@ -1585,12 +1643,16 @@ impl TypeChecker {
 ///
 /// Nested lambdas are NOT recursed into — their params shadow outer names and
 /// their own captures will be checked when that lambda is visited by the checker.
+///
+/// Used by `check_lambda_captures` (superseded approach — see `lambda_scope_starts`).
+#[allow(dead_code)]
 fn collect_free_var_refs(expr: &Expr, param_names: &[&str]) -> Vec<(String, Span)> {
     let mut out = Vec::new();
     collect_refs_expr(expr, param_names, &mut out);
     out
 }
 
+#[allow(dead_code)]
 fn collect_refs_expr(expr: &Expr, params: &[&str], out: &mut Vec<(String, Span)>) {
     match expr {
         Expr::Ident(name, span) => {
@@ -1664,6 +1726,7 @@ fn collect_refs_expr(expr: &Expr, params: &[&str], out: &mut Vec<(String, Span)>
     }
 }
 
+#[allow(dead_code)]
 fn collect_refs_block(block: &Block, params: &[&str], out: &mut Vec<(String, Span)>) {
     for stmt in &block.stmts {
         match stmt {

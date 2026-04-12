@@ -4,6 +4,15 @@
 //! - `impl Display for T` → `impl std::fmt::Display for T`
 //! - `impl From<A> for B` → `impl std::convert::From<A> for B`
 //!
+//! # Spec coverage
+//!
+//! - **001-type-system/Req 10** (Debug and Display Traits): `Display` impls are emitted
+//!   here; `Debug` is handled via `#[derive(Debug)]` in `emit_types.rs`.
+//! - **001-type-system/Req 5** (Error Visibility / `From` conversions): `impl From<A> for B`
+//!   enables the `?` propagation that the type checker validates per Req 5.
+//!
+//! See ADR-0003 for the overall compilation strategy.
+//!
 //! ## Display
 //! ```text
 //! impl Display for Point {

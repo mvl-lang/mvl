@@ -4,6 +4,33 @@
 //! registers the built-in (no-import) standard library functions that every
 //! MVL program can call without a `use` declaration.
 //!
+//! # Responsibility
+//!
+//! [`TypeEnv`] holds the three lookup tables needed by the type checker:
+//! - Variable bindings (lexically scoped) — checked against Reqs 1, 2, 6 (type safety, ownership, immutability)
+//! - Type declarations (global) — checked against Reqs 1, 3, 4 (ADTs, null elimination)
+//! - Function signatures (global) — checked against Reqs 1, 7, 8, 11 (types, effects, totality, IFC)
+//!
+//! # Built-in functions
+//!
+//! [`TypeEnv::register_builtins`] populates the function table with the MVL tier-1 stdlib
+//! functions that are available without any `use` import.  Each builtin's declared effects
+//! and parameter types must satisfy the corresponding spec requirement:
+//!
+//! | Function    | Effects     | IFC constraint     | Spec ref                    |
+//! |-------------|-------------|--------------------|-----------------------------|
+//! | `println`   | `Console`   | args must be Public| 003-information-flow/Req 6  |
+//! | `print`     | `Console`   | args must be Public| 003-information-flow/Req 6  |
+//! | `assert_eq` | (none)      | —                  | 004-testing/Req 4           |
+//! | `abs`       | (none)      | —                  | stdlib math                 |
+//! | `max`       | (none)      | —                  | stdlib math                 |
+//! | `min`       | (none)      | —                  | stdlib math                 |
+//! | `parse_int` | (none)      | —                  | stdlib conversion           |
+//!
+//! Note: `println`/`print` are variadic (empty `params` vec as sentinel).  Arity checking
+//! is skipped for them in the checker; IFC label checking is applied per-argument instead.
+//! See also: ADR-0002 (language contraction — no variadic user functions), ADR-0003 (compilation).
+//!
 //! # Spec links
 //!
 //! - Builtin `println` / `print` — 002-effect-system Req 1 (Console effect),
@@ -167,7 +194,10 @@ impl TypeEnv {
                 totality: None,
             },
         );
-        // assert_eq — pure, for testing
+        // assert_eq — pure, for testing.
+        // TODO: assert_eq accepts Secret/Tainted arguments without an IFC label check.
+        // Assertion failures may expose secret values via panic messages (observable covert
+        // channel). Tracked as a known gap; full enforcement requires Phase 2 IFC propagation.
         self.fns.insert(
             "assert_eq".into(),
             FnInfo {
@@ -242,6 +272,24 @@ impl TypeEnv {
             }
         }
         None
+    }
+
+    /// Like [`lookup`], but also returns the scope index (0 = outermost) where the
+    /// variable was found.  Used by lambda-capture checking to distinguish captured
+    /// outer variables from locally-defined ones.
+    pub fn lookup_with_scope_index(&self, name: &str) -> Option<(usize, &VarInfo)> {
+        for (i, scope) in self.scopes.iter().enumerate().rev() {
+            if let Some(info) = scope.get(name) {
+                return Some((i, info));
+            }
+        }
+        None
+    }
+
+    /// Returns the current scope stack depth.  Used by lambda-capture checking to
+    /// record the depth at which a lambda was entered.
+    pub fn scope_depth(&self) -> usize {
+        self.scopes.len()
     }
 
     pub fn lookup_mut_var(&mut self, name: &str) -> Option<&mut VarInfo> {

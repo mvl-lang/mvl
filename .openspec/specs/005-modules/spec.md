@@ -174,7 +174,7 @@ The compiler MUST detect and reject circular module dependencies at compile time
 
 The MVL standard library MUST be organized as a module tree rooted at `std`. All standard library items MUST be imported explicitly using `use std::...`. There MUST be no implicit imports (no Haskell-style Prelude auto-import).
 
-**Implementation:** `src/mvl/stdlib/mod.rs` *(Deferred — Phase 2; stdlib module tree not yet created)*
+**Implementation:** `src/mvl/stdlib/mod.rs` *(Deferred — Phase 2)* Phase 1 uses `extern "rust"` wrappers via the transpiler; the verified MVL `std` module tree is a Phase 2 goal. Tracked in #67.
 
 **Tests:** `tests/module_resolver.rs::stdlib_explicit_import` *(Deferred — Phase 2)*
 

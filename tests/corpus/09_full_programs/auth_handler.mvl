@@ -37,7 +37,7 @@ total fn authenticate(
     iso store: &UserStore,
     input_password: Tainted<String>,
     user_id: Public<UserId>,
-) -> Result<Session, AuthError> ! IO, Console {
+) -> Result<Session, AuthError> ! Console {
 
     let user: Option<User> = store.find_user(user_id)?;
 
