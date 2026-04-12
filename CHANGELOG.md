@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-04-12 (CI: assurance report on PRs)
+
+### Fixed
+- Post ISPE assurance dashboard as a PR comment on every pull request — no longer buried in CI logs
+- Removed duplicate assurance step from check job; assurance now runs once in its own job
+
 ## [0.5.0] — 2026-04-11 (Epic 4: Information Flow Control type checking)
 
 ### Added
