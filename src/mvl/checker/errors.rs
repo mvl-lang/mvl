@@ -168,6 +168,11 @@ pub enum CheckError {
         found: String,
         span: Span,
     },
+    /// `extern` block declares an unsupported ABI.
+    UnsupportedExternAbi {
+        abi: String,
+        span: Span,
+    },
 }
 
 impl CheckError {
@@ -201,7 +206,8 @@ impl CheckError {
             | CheckError::PartialCallInTotal { span, .. }
             | CheckError::CapabilityViolation { span, .. }
             | CheckError::InvalidDeclassify { span, .. }
-            | CheckError::InvalidSanitize { span, .. } => *span,
+            | CheckError::InvalidSanitize { span, .. }
+            | CheckError::UnsupportedExternAbi { span, .. } => *span,
         }
     }
 
@@ -299,6 +305,9 @@ impl CheckError {
             ),
             CheckError::InvalidSanitize { found, .. } => format!(
                 "`sanitize()` requires `Tainted<T>`, found `{found}` — only Tainted data can be sanitized (for Secret data use `declassify()` instead)"
+            ),
+            CheckError::UnsupportedExternAbi { abi, .. } => format!(
+                "unsupported extern ABI `\"{abi}\"` — only \"rust\" and \"c\" are allowed"
             ),
         }
     }

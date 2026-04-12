@@ -25,9 +25,9 @@ use crate::mvl::checker::context::{
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
 use crate::mvl::parser::ast::{
-    BinaryOp, Block, Capability, ConstDecl, Decl, ElseBranch, Expr, FnDecl, LValue, Literal,
-    MatchArm, MatchBody, ModuleDecl, Pattern, Program, SecurityLabel, Stmt, Totality, TypeBody,
-    TypeDecl, UnaryOp,
+    BinaryOp, Block, Capability, ConstDecl, Decl, ElseBranch, Expr, ExternDecl, FnDecl, LValue,
+    Literal, MatchArm, MatchBody, ModuleDecl, Pattern, Program, SecurityLabel, Stmt, Totality,
+    TypeBody, TypeDecl, UnaryOp,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -37,6 +37,9 @@ use crate::mvl::parser::lexer::Span;
 #[derive(Debug, Default)]
 pub struct CheckResult {
     pub errors: Vec<CheckError>,
+    /// Number of `extern` blocks found — each is a trust boundary.
+    /// Reported in the assurance summary: "N extern declarations".
+    pub extern_count: usize,
 }
 
 impl CheckResult {
@@ -54,6 +57,7 @@ pub fn check(prog: &Program) -> CheckResult {
     checker.check_program(prog);
     CheckResult {
         errors: checker.errors,
+        extern_count: checker.extern_count,
     }
 }
 
@@ -70,6 +74,8 @@ struct TypeChecker {
     current_fn_effects: Vec<String>,
     /// Totality of the current function (Req 8); None = implicitly total.
     current_fn_totality: Option<Totality>,
+    /// Count of extern declarations for assurance reporting.
+    extern_count: usize,
 }
 
 impl TypeChecker {
@@ -81,6 +87,7 @@ impl TypeChecker {
             current_fn_name: String::new(),
             current_fn_effects: Vec::new(),
             current_fn_totality: None,
+            extern_count: 0,
         }
     }
 
@@ -105,6 +112,7 @@ impl TypeChecker {
                 Decl::Fn(fd) => self.register_fn(fd),
                 Decl::Const(_) => {}
                 Decl::Module(md) => self.collect_declarations(&md.declarations),
+                Decl::Extern(ed) => self.register_extern(ed),
             }
         }
     }
@@ -138,6 +146,25 @@ impl TypeChecker {
         );
     }
 
+    /// Register all functions declared inside an `extern` block so that MVL
+    /// callers can resolve them as regular function calls.
+    fn register_extern(&mut self, ed: &ExternDecl) {
+        self.extern_count += 1;
+        for f in &ed.fns {
+            let params: Vec<Ty> = f.params.iter().map(|p| resolve(&p.ty)).collect();
+            let ret = resolve(&f.return_type);
+            self.env.define_fn(
+                f.name.clone(),
+                FnInfo {
+                    params,
+                    ret,
+                    effects: f.effects.clone(),
+                    totality: None, // extern fns may or may not terminate
+                },
+            );
+        }
+    }
+
     // ── Declarations ─────────────────────────────────────────────────────
 
     fn check_decl(&mut self, decl: &Decl) {
@@ -146,7 +173,21 @@ impl TypeChecker {
             Decl::Fn(fd) => self.check_fn_decl(fd),
             Decl::Const(cd) => self.check_const_decl(cd),
             Decl::Module(md) => self.check_module_decl(md),
+            Decl::Extern(ed) => self.check_extern_decl(ed),
         }
+    }
+
+    fn check_extern_decl(&mut self, ed: &ExternDecl) {
+        // Validate ABI string: only "rust" and "c" are supported.
+        if ed.abi != "rust" && ed.abi != "c" {
+            self.emit(CheckError::UnsupportedExternAbi {
+                abi: ed.abi.clone(),
+                span: ed.span,
+            });
+        }
+        // Each extern fn must have a valid return type (basic check).
+        // Future: verify no MVL-specific types (security labels) cross the boundary
+        // without explicit wrapping — for now we accept all types.
     }
 
     fn check_fn_decl(&mut self, fd: &FnDecl) {

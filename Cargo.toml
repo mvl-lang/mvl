@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "mvl_runtime"]
+
 [package]
 name = "mvl"
 version = "0.5.6"

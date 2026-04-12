@@ -5,7 +5,7 @@
 //! - Parameters with optional capability (`iso`/`val`/`ref`/`tag`), `mut`, type, and refinement
 //! - Totality annotations, effect lists, and where-clause constraints
 
-use crate::mvl::parser::ast::{Constraint, FnDecl, Param, Totality};
+use crate::mvl::parser::ast::{Constraint, ExternDecl, ExternFnDecl, FnDecl, Param, Totality};
 use crate::mvl::parser::lexer::TokenKind;
 use crate::mvl::parser::{ParseError, Parser};
 
@@ -232,6 +232,7 @@ impl Parser {
             }
             TokenKind::Const => Ok(Decl::Const(self.parse_const_decl()?)),
             TokenKind::Module => Ok(Decl::Module(self.parse_module_decl()?)),
+            TokenKind::Extern => Ok(Decl::Extern(self.parse_extern_decl()?)),
             _ => {
                 let err = ParseError {
                     message: format!("expected declaration, found `{}`", self.peek_kind()),
@@ -295,6 +296,121 @@ impl Parser {
         Ok(crate::mvl::parser::ast::ModuleDecl {
             name,
             declarations,
+            span,
+        })
+    }
+
+    // ── Extern block ──────────────────────────────────────────────────────
+
+    /// Parse `extern "abi" { fn foo(…) -> T [! Effects]; … }`.
+    /// Pre-condition: current token is `extern`.
+    pub fn parse_extern_decl(&mut self) -> Result<ExternDecl, ()> {
+        let start = self.peek_span();
+        self.advance(); // consume `extern`
+
+        // ABI string: e.g. `"rust"` or `"c"`
+        let abi = match self.peek_kind() {
+            TokenKind::Str(_) => {
+                let tok = self.advance();
+                match tok.kind {
+                    TokenKind::Str(s) => s,
+                    _ => unreachable!(),
+                }
+            }
+            _ => {
+                let err = ParseError {
+                    message: format!(
+                        "expected ABI string after `extern`, found `{}`",
+                        self.peek_kind()
+                    ),
+                    span: self.peek_span(),
+                };
+                self.push_recover(err);
+                return Err(());
+            }
+        };
+
+        let lbrace = self.expect(&TokenKind::LBrace);
+        self.require(lbrace)?;
+
+        let mut fns = Vec::new();
+        while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+            match self.peek_kind() {
+                TokenKind::Fn => {
+                    if let Ok(f) = self.parse_extern_fn_decl() {
+                        fns.push(f);
+                    }
+                }
+                _ => {
+                    let err = ParseError {
+                        message: format!(
+                            "expected `fn` inside extern block, found `{}`",
+                            self.peek_kind()
+                        ),
+                        span: self.peek_span(),
+                    };
+                    self.push_recover(err);
+                    self.advance(); // skip unknown token
+                }
+            }
+        }
+
+        let rbrace = self.expect(&TokenKind::RBrace);
+        self.require(rbrace)?;
+        let span = self.span_from(start);
+        Ok(ExternDecl { abi, fns, span })
+    }
+
+    /// Parse a single `fn foo(params) -> RetType [! Effects]` inside an extern block.
+    /// Note: no body (terminated by `;` or end of signature before next `fn`/`}`).
+    fn parse_extern_fn_decl(&mut self) -> Result<ExternFnDecl, ()> {
+        let start = self.peek_span();
+        self.advance(); // consume `fn`
+
+        let ident_result = self.expect_ident();
+        let (name, _) = self.require(ident_result)?;
+
+        // Parameter list
+        let lparen = self.expect(&TokenKind::LParen);
+        self.require(lparen)?;
+        let mut params = Vec::new();
+        while !matches!(self.peek_kind(), TokenKind::RParen | TokenKind::Eof) {
+            if !params.is_empty() {
+                let comma = self.expect(&TokenKind::Comma);
+                if self.require(comma).is_err() {
+                    break;
+                }
+            }
+            if matches!(self.peek_kind(), TokenKind::RParen) {
+                break;
+            }
+            match self.parse_param() {
+                Ok(p) => params.push(p),
+                Err(()) => break,
+            }
+        }
+        let rparen = self.expect(&TokenKind::RParen);
+        self.require(rparen)?;
+
+        // Return type: `-> T`
+        let arrow = self.expect(&TokenKind::Arrow);
+        self.require(arrow)?;
+        let return_type = Box::new(self.parse_type_expr()?);
+
+        // Optional effects: `! Console, Net`
+        let effects = self.parse_optional_effects();
+
+        // Optional trailing semicolon
+        if matches!(self.peek_kind(), TokenKind::Semicolon) {
+            self.advance();
+        }
+
+        let span = self.span_from(start);
+        Ok(ExternFnDecl {
+            name,
+            params,
+            return_type,
+            effects,
             span,
         })
     }
@@ -488,5 +604,81 @@ mod tests {
         ));
         assert!(matches!(*d.return_type, TypeExpr::Result { .. }));
         assert_eq!(d.effects, vec!["DB", "Console"]);
+    }
+
+    // ── Extern block parsing ──────────────────────────────────────────────
+
+    fn extern_decl(src: &str) -> ExternDecl {
+        let (mut p, lex_errs) = Parser::new(src);
+        assert!(lex_errs.is_empty(), "lex errors: {:?}", lex_errs);
+        let result = p.parse_extern_decl();
+        assert!(p.errors.is_empty(), "parse errors: {:?}", p.errors);
+        result.expect("expected Ok(ExternDecl)")
+    }
+
+    #[test]
+    fn parse_extern_rust_empty_block() {
+        let ed = extern_decl(r#"extern "rust" {}"#);
+        assert_eq!(ed.abi, "rust");
+        assert!(ed.fns.is_empty());
+    }
+
+    #[test]
+    fn parse_extern_rust_single_fn() {
+        let ed = extern_decl(
+            r#"extern "rust" {
+    fn sha256(data: &String) -> String;
+}"#,
+        );
+        assert_eq!(ed.abi, "rust");
+        assert_eq!(ed.fns.len(), 1);
+        assert_eq!(ed.fns[0].name, "sha256");
+        assert_eq!(ed.fns[0].params.len(), 1);
+        assert_eq!(ed.fns[0].params[0].name, "data");
+        assert!(ed.fns[0].effects.is_empty());
+    }
+
+    #[test]
+    fn parse_extern_rust_with_effects() {
+        let ed = extern_decl(
+            r#"extern "rust" {
+    fn http_get(url: String) -> Result<String, String> ! Net;
+}"#,
+        );
+        assert_eq!(ed.fns.len(), 1);
+        assert_eq!(ed.fns[0].name, "http_get");
+        assert_eq!(ed.fns[0].effects, vec!["Net"]);
+        assert!(matches!(*ed.fns[0].return_type, TypeExpr::Result { .. }));
+    }
+
+    #[test]
+    fn parse_extern_rust_multiple_fns() {
+        let ed = extern_decl(
+            r#"extern "rust" {
+    fn connect(url: String) -> String;
+    fn query(conn: String, sql: String) -> String ! DB;
+    fn disconnect(conn: String) -> String;
+}"#,
+        );
+        assert_eq!(ed.abi, "rust");
+        assert_eq!(ed.fns.len(), 3);
+        assert_eq!(ed.fns[0].name, "connect");
+        assert_eq!(ed.fns[1].name, "query");
+        assert_eq!(ed.fns[1].effects, vec!["DB"]);
+        assert_eq!(ed.fns[2].name, "disconnect");
+    }
+
+    #[test]
+    fn parse_extern_as_top_level_decl() {
+        let src = r#"extern "rust" {
+    fn greet(name: String) -> String;
+}
+fn main() -> String { greet(String::new()) }"#;
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        assert!(p.errors.is_empty(), "parse errors: {:?}", p.errors);
+        assert_eq!(prog.declarations.len(), 2);
+        assert!(matches!(prog.declarations[0], Decl::Extern(_)));
+        assert!(matches!(prog.declarations[1], Decl::Fn(_)));
     }
 }

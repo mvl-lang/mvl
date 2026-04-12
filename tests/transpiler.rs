@@ -267,3 +267,102 @@ fn full_program_auth_handler_transpiles() {
     assert_contains(&rust, "/// # Totality");
     assert_contains(&rust, "/// # Effects: IO, Console");
 }
+
+// ── Extern "rust" blocks (#52, #91, #93) ──────────────────────────────────
+
+/// extern "rust" block parses and transpiles to a Rust extern "Rust" block.
+#[test]
+fn extern_rust_block_transpiles() {
+    let src = r#"extern "rust" {
+    fn hash_password(password: String) -> String;
+    fn verify_password(password: String, hash: String) -> Bool;
+}"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "extern \"Rust\"");
+    assert_contains(&rust, "pub fn hash_password");
+    assert_contains(&rust, "pub fn verify_password");
+    // Security preamble replaced by mvl_runtime prelude
+    assert_contains(&rust, "use mvl_runtime::prelude::*");
+}
+
+/// extern "rust" with declared effects emits the effect as a comment.
+#[test]
+fn extern_rust_fn_effects_emitted_as_comment() {
+    let src = r#"extern "rust" {
+    fn fetch_url(url: String) -> Result<String, String> ! Net;
+}"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "// ! Net");
+    assert_contains(&rust, "pub fn fetch_url");
+}
+
+/// Programs without extern blocks keep the inlined security preamble.
+#[test]
+fn no_extern_uses_inline_preamble() {
+    let src = "fn add(a: Int, b: Int) -> Int { a + b }";
+    let rust = transpile_src(src);
+    // No extern blocks → inline preamble, not runtime import
+    assert!(
+        !rust.contains("use mvl_runtime::prelude::*"),
+        "no extern → should not use mvl_runtime: {rust}"
+    );
+    assert_contains(&rust, "pub struct Public");
+}
+
+/// Cargo.toml includes mvl_runtime dependency when extern blocks are present.
+#[test]
+fn extern_rust_adds_mvl_runtime_to_cargo_toml() {
+    use mvl::mvl::transpiler::transpile;
+    let src = r#"extern "rust" {
+    fn greet(name: String) -> String;
+}"#;
+    let (mut p, _) = mvl::mvl::parser::Parser::new(src);
+    let prog = p.parse_program();
+    let out = transpile(&prog, "my_crate");
+    assert!(
+        out.cargo_toml.contains("mvl_runtime"),
+        "Cargo.toml must reference mvl_runtime: {}",
+        out.cargo_toml
+    );
+    assert_eq!(out.extern_count, 1);
+}
+
+/// Full password_checker.mvl parses, checks, and transpiles cleanly.
+#[test]
+fn full_program_password_checker_transpiles() {
+    use mvl::mvl::checker::check;
+    use mvl::mvl::transpiler::transpile;
+    let src = include_str!("corpus/09_full_programs/password_checker.mvl");
+    let (mut p, lex_errs) = mvl::mvl::parser::Parser::new(src);
+    assert!(lex_errs.is_empty(), "lex errors: {lex_errs:?}");
+    let prog = p.parse_program();
+    assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+
+    let check_result = check(&prog);
+    assert!(
+        check_result.is_ok(),
+        "check errors: {:?}",
+        check_result.errors
+    );
+    assert_eq!(
+        check_result.extern_count, 1,
+        "should have 1 extern trust boundary"
+    );
+
+    let out = transpile(&prog, "password_checker");
+    assert_contains(&out.lib_rs, "use mvl_runtime::prelude::*");
+    assert_contains(&out.lib_rs, "extern \"Rust\"");
+    assert_contains(&out.lib_rs, "pub fn hash_password");
+    assert_contains(&out.lib_rs, "pub fn verify_password");
+    assert_contains(&out.lib_rs, "pub fn validate_password");
+    assert_contains(&out.lib_rs, "pub fn hash_clean");
+    assert_contains(&out.lib_rs, "pub fn verify_candidate");
+    assert_contains(&out.lib_rs, "pub fn authenticate");
+    assert_eq!(out.extern_count, 1);
+    // Cargo.toml includes mvl_runtime
+    assert!(
+        out.cargo_toml.contains("mvl_runtime"),
+        "Cargo.toml must reference mvl_runtime:\n{}",
+        out.cargo_toml
+    );
+}
