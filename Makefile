@@ -31,8 +31,10 @@ doctor: ## Check that all dev tools are available
 	check python3       "required for make assurance"; \
 	echo
 
-install: ## Install mvl binary to ~/.cargo/bin
-	cargo install --path .
+install: build-release ## Install mvl binary to ~/.local/bin
+	@mkdir -p ~/.local/bin
+	cp target/release/mvl ~/.local/bin/mvl
+	@echo "Installed: ~/.local/bin/mvl"
 
 # === Build ===
 
