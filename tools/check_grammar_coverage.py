@@ -91,7 +91,10 @@ TS_KNOWN_EXTENSIONS = {
     # Literal sub-rules (EBNF uses uppercase terminals)
     "integer_literal",
     "float_literal",
-    "string_literal",
+    "string_literal",          # ← STRING (single-line)
+    "multiline_string_literal",  # ← STRING (multiline form)
+    "raw_string_literal",        # ← STRING (raw single-line form)
+    "raw_multiline_string_literal",  # ← STRING (raw multiline form)
     "char_literal",
     "boolean_literal",
     # Renamed from uppercase EBNF terminals
