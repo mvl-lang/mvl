@@ -95,6 +95,11 @@ pub enum CheckError {
         ty: String,
         span: Span,
     },
+    PropagateIncompatibleError {
+        from_ty: String,
+        into_ty: String,
+        span: Span,
+    },
 
     // ── Immutability enforcement (#17) ───────────────────────────────────
     AssignToImmutable {
@@ -201,7 +206,9 @@ impl CheckError {
             // Req 4: Null Elimination
             CheckError::OptionDirectAccess { .. } => 4,
             // Req 5: Error Visibility
-            CheckError::ResultIgnored { .. } | CheckError::PropagateNotResult { .. } => 5,
+            CheckError::ResultIgnored { .. }
+            | CheckError::PropagateNotResult { .. }
+            | CheckError::PropagateIncompatibleError { .. } => 5,
             // Req 6: Ownership (immutability / linearity)
             CheckError::AssignToImmutable { .. } | CheckError::MutateImmutableField { .. } => 6,
             // Req 7: Effect Tracking
@@ -251,7 +258,8 @@ impl CheckError {
             | CheckError::CapabilityViolation { span, .. }
             | CheckError::InvalidDeclassify { span, .. }
             | CheckError::InvalidSanitize { span, .. }
-            | CheckError::UnsupportedExternAbi { span, .. } => *span,
+            | CheckError::UnsupportedExternAbi { span, .. }
+            | CheckError::PropagateIncompatibleError { span, .. } => *span,
         }
     }
 
@@ -306,6 +314,11 @@ impl CheckError {
             }
             CheckError::PropagateNotResult { ty, .. } => {
                 format!("`?` applied to `{ty}`, which is neither `Result` nor `Option`")
+            }
+            CheckError::PropagateIncompatibleError { from_ty, into_ty, .. } => {
+                format!(
+                    "`?` cannot convert error `{from_ty}` into `{into_ty}` — implement `From<{from_ty}> for {into_ty}`"
+                )
             }
             CheckError::AssignToImmutable { name, .. } => {
                 format!("cannot assign to immutable binding `{name}`")

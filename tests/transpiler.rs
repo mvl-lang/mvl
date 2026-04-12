@@ -530,3 +530,36 @@ fn scientific_notation_transpiles_to_float() {
     let rust = transpile_src(src);
     assert_contains(&rust, "15000000000");
 }
+
+// ── From/Into conversion (#62) ────────────────────────────────────────────
+
+/// `impl From<A> for B` emits a `std::convert::From` implementation.
+#[test]
+fn impl_from_emits_from_trait() {
+    let src = r#"
+type IoError = struct { msg: String }
+type AppError = enum { Io(IoError), Other }
+impl From<IoError> for AppError {
+    fn from(e: IoError) -> Self {
+        AppError::Io(e)
+    }
+}
+"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "impl std::convert::From<IoError> for AppError {");
+    assert_contains(&rust, "fn from(e: IoError) -> Self {");
+    assert_contains(&rust, "AppError::Io(e)");
+}
+
+/// `impl From<A> for B` with no `from` method emits a todo!().
+#[test]
+fn impl_from_without_method_emits_todo() {
+    let src = r#"
+type ParseError = struct { msg: String }
+type MyError = enum { Parse(ParseError) }
+impl From<ParseError> for MyError {}
+"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "impl std::convert::From<ParseError> for MyError {");
+    assert_contains(&rust, "todo!(\"From::from not implemented\")");
+}

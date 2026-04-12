@@ -1,6 +1,6 @@
 //! Type environment: symbol tables for variables, types, and functions.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{Capability, FieldDecl, Totality, Variant};
@@ -89,6 +89,9 @@ pub struct TypeEnv {
     pub types: HashMap<String, TypeInfo>,
     /// Known function signatures.
     pub fns: HashMap<String, FnInfo>,
+    /// Registered `From` implementations: maps target type name → set of source type names.
+    /// Populated from `impl From<A> for B` declarations.
+    pub from_impls: HashMap<String, HashSet<String>>,
 }
 
 impl Default for TypeEnv {
@@ -103,9 +106,22 @@ impl TypeEnv {
             scopes: vec![HashMap::new()],
             types: HashMap::new(),
             fns: HashMap::new(),
+            from_impls: HashMap::new(),
         };
         env.register_builtins();
         env
+    }
+
+    /// Register a `From<source>` impl for `target`.
+    pub fn register_from_impl(&mut self, target: String, source: String) {
+        self.from_impls.entry(target).or_default().insert(source);
+    }
+
+    /// Returns true if `From<source> for target` has been registered.
+    pub fn has_from_impl(&self, target: &str, source: &str) -> bool {
+        self.from_impls
+            .get(target)
+            .is_some_and(|sources| sources.contains(source))
     }
 
     /// Register built-in stdlib functions so the checker accepts them.

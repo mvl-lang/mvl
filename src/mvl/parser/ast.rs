@@ -198,10 +198,13 @@ pub struct ExternFnDecl {
 /// `impl TraitName for TypeName { fn … }` — a trait implementation block.
 ///
 /// Phase 1 supports `Display` for user-defined string formatting.
+/// Phase 2 adds `From<A>` for error-type conversion and user-defined coercions.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplDecl {
-    /// The trait being implemented, e.g. `"Display"`.
+    /// The trait being implemented, e.g. `"Display"` or `"From"`.
     pub trait_name: String,
+    /// Generic type arguments on the trait, e.g. `[IoError]` for `From<IoError>`.
+    pub trait_type_args: Vec<TypeExpr>,
     /// The type implementing the trait, e.g. `"Point"`.
     pub type_name: String,
     /// Methods in the impl block.

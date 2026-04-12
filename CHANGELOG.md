@@ -6,9 +6,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
-## [0.10.0] — 2026-04-12 (feat: compiler assurance report + Debug/Display traits + number literal formats)
+## [0.10.0] — 2026-04-12 (feat: compiler assurance report + Debug/Display traits + number literal formats + From conversion trait)
 
 ### Added
+- `impl From<A> for B` syntax for error-type conversion; transpiles to `impl std::convert::From<A> for B`
+- `TypeEnv.from_impls` registry with `register_from_impl` / `has_from_impl` helpers
+- `CheckError::PropagateIncompatibleError` — emitted when `?` crosses incompatible error types without a `From` impl
+- `ImplDecl.trait_type_args` AST field for generic args on trait names (e.g. `From<IoError>`)
 - `impl Display for T` syntax for user-defined string representations; transpiles to `impl std::fmt::Display for T`
 - `format()` built-in function: Rust-style format strings (`{}`, `{:?}`, `{:08x}`, etc.) mapped to Rust `format!()` macro
 - Number literal formats: hex (`0xFF`/`0XFF`), binary (`0b1010`/`0B1010`), octal (`0o77`/`0O77`), and scientific notation (`1.5e10`, `2e-3`)

@@ -457,9 +457,19 @@ impl Parser {
         let start = self.peek_span();
         self.advance(); // consume `impl`
 
-        // Trait name (e.g. `Display`)
+        // Trait name (e.g. `Display` or `From`)
         let ident_result = self.expect_ident();
         let (trait_name, _) = self.require(ident_result)?;
+
+        // Optional generic type args on the trait, e.g. `<IoError>` in `From<IoError>`
+        let trait_type_args = if self.eat(&TokenKind::Lt) {
+            let args = self.parse_type_list()?;
+            let gt = self.expect(&TokenKind::Gt);
+            self.require(gt)?;
+            args
+        } else {
+            Vec::new()
+        };
 
         // `for`
         let for_kw = self.expect(&TokenKind::For);
@@ -500,6 +510,7 @@ impl Parser {
         let span = self.span_from(start);
         Ok(ImplDecl {
             trait_name,
+            trait_type_args,
             type_name,
             methods,
             span,
