@@ -261,6 +261,8 @@ impl TypeChecker {
         // Validate effect names against the canonical set (002-effect-system/Req 2).
         for effect in &fd.effects {
             if !VALID_EFFECT_NAMES.contains(&effect.as_str()) {
+                // TODO: per-effect span requires AST change to Vec<(String, Span)>;
+                // currently the whole function declaration span is used.
                 self.emit(CheckError::InvalidEffectName {
                     name: effect.clone(),
                     span: fd.span,
@@ -717,7 +719,10 @@ impl TypeChecker {
                         self.check_send_capability(first_arg, *span);
                     }
                 }
-                Ty::Unknown // method resolution not yet implemented
+                // TODO: method-call results inherit Unknown type; IFC label propagation
+                // requires method resolution (Phase 2). Code like `println(secret.to_string())`
+                // bypasses the logging label check today — see 003-information-flow/Req 6.
+                Ty::Unknown
             }
 
             // #13: Match expressions
