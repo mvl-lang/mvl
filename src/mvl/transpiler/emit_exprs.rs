@@ -41,6 +41,10 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                 emit_args_for_macro(cg, args);
                 cg.push(")");
             } else {
+                let is_extern = cg.extern_fns.contains(name.as_str());
+                if is_extern {
+                    cg.push("unsafe { ");
+                }
                 cg.push(&map_fn_name(name));
                 if !type_args.is_empty() {
                     cg.push("::<");
@@ -51,6 +55,9 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                 cg.push("(");
                 emit_args(cg, args);
                 cg.push(")");
+                if is_extern {
+                    cg.push(" }");
+                }
             }
         }
         Expr::Unary { op, expr, .. } => {

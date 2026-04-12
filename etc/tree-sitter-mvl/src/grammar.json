@@ -4,47 +4,14 @@
   "word": "identifier",
   "rules": {
     "program": {
-      "type": "REPEAT",
-      "content": {
-        "type": "SYMBOL",
-        "name": "declaration"
-      }
-    },
-    "declaration": {
-      "type": "CHOICE",
-      "members": [
-        {
-          "type": "SYMBOL",
-          "name": "type_decl"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "fn_decl"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "const_decl"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "module_decl"
-        }
-      ]
-    },
-    "module_decl": {
       "type": "SEQ",
       "members": [
         {
-          "type": "STRING",
-          "value": "module"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "identifier"
-        },
-        {
-          "type": "STRING",
-          "value": "{"
+          "type": "REPEAT",
+          "content": {
+            "type": "SYMBOL",
+            "name": "use_decl"
+          }
         },
         {
           "type": "REPEAT",
@@ -52,10 +19,103 @@
             "type": "SYMBOL",
             "name": "declaration"
           }
+        }
+      ]
+    },
+    "declaration": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "pub"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "type_decl"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "fn_decl"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "const_decl"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "reexport_decl"
+            }
+          ]
+        }
+      ]
+    },
+    "use_decl": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "use"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "module_path"
         },
         {
           "type": "STRING",
-          "value": "}"
+          "value": ";"
+        }
+      ]
+    },
+    "reexport_decl": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "use"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "module_path"
+        },
+        {
+          "type": "STRING",
+          "value": ";"
+        }
+      ]
+    },
+    "module_path": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "identifier"
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "STRING",
+                "value": "::"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "identifier"
+              }
+            ]
+          }
         }
       ]
     },

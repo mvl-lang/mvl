@@ -110,6 +110,16 @@ fn build_project(path: &str, run: bool) {
         .expect("write stub main.rs");
     }
 
+    // If the program uses mvl_runtime, copy it as a sibling directory
+    // so the relative path `../mvl_runtime` in Cargo.toml resolves.
+    if out.extern_count > 0 {
+        let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mvl_runtime");
+        let runtime_dst = tmp_dir.parent().unwrap().join("mvl_runtime");
+        if runtime_src.exists() && !runtime_dst.exists() {
+            copy_dir_recursive(&runtime_src, &runtime_dst).expect("copy mvl_runtime");
+        }
+    }
+
     println!("Transpiled to: {}", tmp_dir.display());
 
     let cargo_cmd = if run && out.has_main { "run" } else { "build" };
@@ -167,4 +177,20 @@ fn stem(path: &str) -> String {
         .and_then(|s| s.to_str())
         .unwrap_or("mvl_program")
         .to_string()
+}
+
+/// Recursively copy a directory tree.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let dest_path = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&entry.path(), &dest_path)?;
+        } else {
+            fs::copy(entry.path(), dest_path)?;
+        }
+    }
+    Ok(())
 }

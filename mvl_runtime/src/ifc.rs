@@ -84,6 +84,15 @@ macro_rules! impl_label {
             }
         }
 
+        // Deref — allows calling inner type methods directly (e.g. Tainted<String>.len())
+        impl<T> std::ops::Deref for $Label<T> {
+            type Target = T;
+            #[inline]
+            fn deref(&self) -> &T {
+                &self.0
+            }
+        }
+
         // Arithmetic — delegates to inner value, preserves the label.
         impl<T: std::ops::Add<Output = T>> std::ops::Add for $Label<T> {
             type Output = Self;

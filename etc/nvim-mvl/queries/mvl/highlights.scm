@@ -19,9 +19,10 @@
   "enum"
 ] @keyword
 
+; NOTE: "use"/"pub" not in compiled parser (grammar conflict prevents regen).
+; Parser uses "public" for visibility. Restore once grammar is fixed.
 [
-  "use"
-  "pub"
+  "public"
 ] @keyword.import
 
 ; ============================================================
@@ -161,8 +162,9 @@
 ; Module imports
 ; ============================================================
 
-(use_decl
-  (module_path) @namespace)
+; use_decl not in compiled parser — module_decl is the current equivalent
+(module_decl
+  (identifier) @namespace)
 
 ; ============================================================
 ; Type expressions

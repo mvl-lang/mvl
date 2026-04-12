@@ -10,11 +10,13 @@ use crate::mvl::transpiler::emit_functions::emit_fn_decl;
 use crate::mvl::transpiler::emit_types::emit_type_decl;
 use crate::mvl::transpiler::emit_types::{emit_security_preamble, emit_type_expr};
 
-/// Code-generation context: accumulates Rust source text.
+///// Code-generation context: accumulates Rust source text.
 #[derive(Default)]
 pub struct Codegen {
     buf: String,
     indent: usize,
+    /// Names of functions declared in `extern` blocks — calls must be wrapped in `unsafe`.
+    pub extern_fns: std::collections::HashSet<String>,
 }
 
 impl Codegen {
@@ -174,6 +176,10 @@ fn emit_extern_decl(cg: &mut Codegen, ed: &ExternDecl) {
     };
     cg.line(&format!("extern \"{rust_abi}\" {{"));
     cg.push_indent();
+    // Register extern function names so calls can be wrapped in unsafe
+    for f in &ed.fns {
+        cg.extern_fns.insert(f.name.clone());
+    }
     for f in &ed.fns {
         // Emit effects as a doc comment (not enforced by Rust's type system yet)
         if !f.effects.is_empty() {

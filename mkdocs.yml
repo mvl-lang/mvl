@@ -75,6 +75,7 @@ nav:
     - 001 Type System: specs/001-type-system.md
     - 002 Effect System: specs/002-effect-system.md
     - 003 Information Flow: specs/003-information-flow.md
+    - 005 Modules: specs/005-modules.md
   - References: references.md
 
 markdown_extensions:
