@@ -19,7 +19,9 @@ Types are proofs. A program that compiles has proven structural properties about
 
 The type system MUST support sum types (enums) and product types (structs) as first-class constructs. All domain states MUST be representable. Impossible states MUST be unrepresentable.
 
-**Implementation:** `src/mvl/types/adt.rs`
+**Implementation:** `src/mvl/checker/mod.rs`
+
+**Tests:** `tests/type_checker.rs::adt_corpus_parses_and_checks`, `tests/type_checker.rs::struct_extra_field_rejected`, `tests/type_checker.rs::field_access_on_struct_valid`
 
 #### Scenario: Sum type with exhaustive matching
 
@@ -37,7 +39,9 @@ The type system MUST support sum types (enums) and product types (structs) as fi
 
 The type system MUST NOT have a null, nil, or undefined value. Absence MUST be represented by `Option<T>` (either `Some(value)` or `None`). Accessing the value inside an `Option` MUST require pattern matching or explicit unwrapping.
 
-**Implementation:** `src/mvl/types/option.rs`
+**Implementation:** `src/mvl/checker/mod.rs`
+
+**Tests:** `tests/type_checker.rs::option_field_access_rejected`, `tests/type_checker.rs::option_result_corpus_parses_and_checks`
 
 #### Scenario: Option forces handling
 
@@ -55,7 +59,9 @@ The type system MUST NOT have a null, nil, or undefined value. Absence MUST be r
 
 Functions that can fail MUST return `Result<T, E>`. Error types MUST be visible in the function signature. The caller MUST handle the error (via `match`, `?` propagation, or combinators).
 
-**Implementation:** `src/mvl/types/result.rs`
+**Implementation:** `src/mvl/checker/mod.rs`
+
+**Tests:** `tests/type_checker.rs::result_in_stmt_without_use_rejected`, `tests/type_checker.rs::result_match_missing_ok_rejected`
 
 #### Scenario: Result forces error handling
 
@@ -73,7 +79,9 @@ Functions that can fail MUST return `Result<T, E>`. Error types MUST be visible 
 
 Every value MUST have exactly one owner. Transfer of ownership MUST be explicit (`move` semantics). Borrowing MUST be either shared-immutable (`&T`) or exclusive-mutable (`&mut T`), never both simultaneously.
 
-**Implementation:** `src/mvl/types/ownership.rs`
+**Implementation:** `src/mvl/checker/mod.rs`
+
+**Tests:** `tests/type_checker.rs::use_after_explicit_move_rejected`, `tests/type_checker.rs::ownership_corpus_parses`
 
 #### Scenario: Use after move
 
@@ -91,7 +99,9 @@ Every value MUST have exactly one owner. Transfer of ownership MUST be explicit 
 
 The type system MUST support refinement predicates on types: `T where predicate`. The compiler MUST verify refinements statically where possible and insert runtime checks where necessary.
 
-**Implementation:** `src/mvl/types/refinement.rs`
+**Implementation:** `src/mvl/checker/mod.rs`
+
+**Tests:** `tests/type_checker.rs::refinements_corpus_parses`
 
 #### Scenario: Division by zero prevention
 
@@ -115,6 +125,10 @@ The type system MUST support refinement predicates on types: `T where predicate`
 
 All bindings and struct fields MUST be immutable unless explicitly marked `mut`. Mutation MUST be visible at the declaration site.
 
+**Implementation:** `src/mvl/checker/mod.rs`
+
+**Tests:** `tests/type_checker.rs::immutable_binding_assignment_rejected`, `tests/type_checker.rs::immutable_field_mutation_rejected`, `tests/type_checker.rs::immutability_corpus_parses_and_checks`
+
 #### Scenario: Immutable binding
 
 - GIVEN `let x = 5`
@@ -130,6 +144,10 @@ All bindings and struct fields MUST be immutable unless explicitly marked `mut`.
 ### Requirement 7: Totality — Exhaustive Matching [MUST]
 
 Every `match` expression MUST cover all variants of the matched type. The compiler MUST reject non-exhaustive matches.
+
+**Implementation:** `src/mvl/checker/mod.rs`
+
+**Tests:** `tests/type_checker.rs::enum_match_missing_variant_rejected`, `tests/type_checker.rs::exhaustive_match_corpus_parses_and_checks`
 
 #### Scenario: Missing variant
 
