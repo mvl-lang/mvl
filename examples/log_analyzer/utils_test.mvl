@@ -1,0 +1,66 @@
+// utils_test.mvl — Standalone tests for utility functions.
+//
+// NOTE (issue #96): Functions are re-declared locally until the module
+// resolver enables cross-file imports in the test runner.
+//
+// Run with:  mvl test examples/log_analyzer/
+
+// ── Local re-declarations (mirrors utils.mvl) ─────────────────────────────
+
+total fn is_positive(n: Int) -> Bool {
+    n > 0
+}
+
+total fn is_in_range_int(n: Int, lo: Int, hi: Int) -> Bool {
+    n >= lo && n <= hi
+}
+
+total fn clamp_display(n: Int) -> Int {
+    if n < 0 { 0 } else if n > 99999 { 99999 } else { n }
+}
+
+// ── Test cases ─────────────────────────────────────────────────────────────
+
+test fn positive_number_is_positive() -> Unit {
+    assert_eq(is_positive(1), true);
+}
+
+test fn zero_is_not_positive() -> Unit {
+    assert_eq(is_positive(0), false);
+}
+
+test fn negative_is_not_positive() -> Unit {
+    assert_eq(is_positive(-100), false);
+}
+
+test fn value_inside_range() -> Unit {
+    assert_eq(is_in_range_int(5, 1, 10), true);
+}
+
+test fn value_at_low_boundary() -> Unit {
+    assert_eq(is_in_range_int(1, 1, 10), true);
+}
+
+test fn value_at_high_boundary() -> Unit {
+    assert_eq(is_in_range_int(10, 1, 10), true);
+}
+
+test fn value_below_range() -> Unit {
+    assert_eq(is_in_range_int(0, 1, 10), false);
+}
+
+test fn value_above_range() -> Unit {
+    assert_eq(is_in_range_int(11, 1, 10), false);
+}
+
+test fn clamp_preserves_normal_value() -> Unit {
+    assert_eq(clamp_display(500), 500);
+}
+
+test fn clamp_floors_negative() -> Unit {
+    assert_eq(clamp_display(-1), 0);
+}
+
+test fn clamp_caps_overflow() -> Unit {
+    assert_eq(clamp_display(999999), 99999);
+}

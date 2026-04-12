@@ -99,8 +99,17 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
         Expr::Match {
             scrutinee, arms, ..
         } => {
+            // If any arm uses a string literal pattern we must match on `&str`.
+            // Both `String` and IFC-labeled strings (Clean<String>, Tainted<String>, …)
+            // expose `.as_str()`, so appending `.as_str()` works for all of them.
+            let has_str_pattern = arms.iter().any(|a| {
+                matches!(&a.pattern, Pattern::Literal(crate::mvl::parser::ast::Literal::Str(_), _))
+            });
             cg.push("match ");
             emit_expr(cg, scrutinee);
+            if has_str_pattern {
+                cg.push(".as_str()");
+            }
             cg.push(" {");
             cg.nl();
             cg.push_indent();
@@ -248,6 +257,15 @@ fn emit_literal(cg: &mut Codegen, lit: &Literal) {
     }
 }
 
+/// Emit a literal in pattern position.  String literals must be bare `"s"`
+/// (not `"s".to_string()`) because Rust patterns cannot contain method calls.
+fn emit_literal_in_pattern(cg: &mut Codegen, lit: &Literal) {
+    match lit {
+        Literal::Str(s) => cg.push(&format!("\"{}\"", escape_str(s))),
+        other => emit_literal(cg, other),
+    }
+}
+
 // ── Arguments ─────────────────────────────────────────────────────────────
 
 fn emit_args(cg: &mut Codegen, args: &[Expr]) {
@@ -335,7 +353,7 @@ pub fn emit_pattern(cg: &mut Codegen, pat: &Pattern) {
     match pat {
         Pattern::Wildcard(_) => cg.push("_"),
         Pattern::Ident(name, _) => cg.push(&map_ident(name)),
-        Pattern::Literal(lit, _) => emit_literal(cg, lit),
+        Pattern::Literal(lit, _) => emit_literal_in_pattern(cg, lit),
         Pattern::Tuple { elems, .. } => {
             cg.push("(");
             for (i, e) in elems.iter().enumerate() {
@@ -433,6 +451,8 @@ fn map_fn_name(name: &str) -> String {
     match name {
         "println" => "println!".to_string(),
         "assert" => "assert!".to_string(),
+        "assert_eq" => "assert_eq!".to_string(),
+        "assert_ne" => "assert_ne!".to_string(),
         _ => name.to_string(),
     }
 }

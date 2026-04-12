@@ -74,6 +74,11 @@ fn emit_label_newtype(cg: &mut Codegen, label: &str) {
     cg.pop_indent();
     cg.line("}");
     cg.blank();
+    // as_str(): enables `match labeled_string.as_str() { "foo" => ... }` in generated code
+    cg.line(&format!(
+        "impl {label}<String> {{ pub fn as_str(&self) -> &str {{ self.0.as_str() }} }}"
+    ));
+    cg.blank();
     // Display: label<T> displays as T when T: Display
     cg.line(&format!(
         "impl<T: std::fmt::Display> std::fmt::Display for {label}<T> {{"

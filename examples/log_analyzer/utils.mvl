@@ -1,0 +1,90 @@
+// utils.mvl — Generic and concrete utility functions.
+//
+// Demonstrates:
+//   1. Generic function declarations with where-clause constraints (Req 9)
+//   2. Pure total functions (no effects, no extern)
+//   3. Where-clause bounds: T: Ord
+//
+// NOTE: Generic function calls (e.g. clamp(5, 0, 10)) require the checker's
+// type-variable unification pass, which is scheduled for Phase 2.  The
+// declarations below are valid MVL and are counted in the assurance report;
+// the built-in min/max functions (concrete Int versions) are available today.
+
+// ── Generic declarations (demonstrate Req 9 / issue #48) ──────────────────
+
+// Return the smaller of two comparable values.
+pub total fn generic_min<T>(a: T, b: T) -> T where T: Ord {
+    if a < b { a } else { b }
+}
+
+// Return the larger of two comparable values.
+pub total fn generic_max<T>(a: T, b: T) -> T where T: Ord {
+    if a > b { a } else { b }
+}
+
+// Clamp a value to [low, high].
+pub total fn clamp<T>(x: T, low: T, high: T) -> T where T: Ord {
+    if x < low { low } else if x > high { high } else { x }
+}
+
+// True iff x lies within the inclusive range [low, high].
+pub total fn in_range<T>(x: T, low: T, high: T) -> Bool where T: Ord {
+    x >= low && x <= high
+}
+
+// ── Concrete Int utilities (called in tests and main) ─────────────────────
+
+pub total fn is_positive(n: Int) -> Bool {
+    n > 0
+}
+
+pub total fn is_in_range_int(n: Int, low: Int, high: Int) -> Bool {
+    n >= low && n <= high
+}
+
+// Map an Int to a clamped display value (safe for output).
+pub total fn clamp_display(n: Int) -> Int {
+    if n < 0 { 0 } else if n > 99999 { 99999 } else { n }
+}
+
+// ── Internal unit tests ────────────────────────────────────────────────────
+
+test fn check_is_positive_positive() -> Unit {
+    assert_eq(is_positive(5), true);
+}
+
+test fn check_is_positive_zero() -> Unit {
+    assert_eq(is_positive(0), false);
+}
+
+test fn check_is_positive_negative() -> Unit {
+    assert_eq(is_positive(-3), false);
+}
+
+test fn check_is_in_range_int_inside() -> Unit {
+    assert_eq(is_in_range_int(5, 1, 10), true);
+}
+
+test fn check_is_in_range_int_low_boundary() -> Unit {
+    assert_eq(is_in_range_int(1, 1, 10), true);
+}
+
+test fn check_is_in_range_int_high_boundary() -> Unit {
+    assert_eq(is_in_range_int(10, 1, 10), true);
+}
+
+test fn check_is_in_range_int_outside() -> Unit {
+    assert_eq(is_in_range_int(11, 1, 10), false);
+}
+
+test fn check_clamp_display_normal() -> Unit {
+    assert_eq(clamp_display(42), 42);
+}
+
+test fn check_clamp_display_negative() -> Unit {
+    assert_eq(clamp_display(-5), 0);
+}
+
+test fn check_clamp_display_overflow() -> Unit {
+    assert_eq(clamp_display(100000), 99999);
+}

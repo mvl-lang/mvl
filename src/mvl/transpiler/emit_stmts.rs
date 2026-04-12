@@ -90,9 +90,16 @@ pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
         Stmt::Match {
             scrutinee, arms, ..
         } => {
+            use crate::mvl::parser::ast::{Literal as AstLiteral, Pattern as AstPattern};
+            let has_str_arm = arms.iter().any(|a| {
+                matches!(&a.pattern, AstPattern::Literal(AstLiteral::Str(_), _))
+            });
             cg.indent();
             cg.push("match ");
             emit_expr(cg, scrutinee);
+            if has_str_arm {
+                cg.push(".as_str()");
+            }
             cg.push(" {");
             cg.nl();
             cg.push_indent();
