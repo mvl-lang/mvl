@@ -745,6 +745,29 @@ impl TypeChecker {
                 Ty::List(Box::new(elem_ty))
             }
 
+            Expr::Map { pairs, .. } => {
+                let (key_ty, val_ty) = pairs
+                    .first()
+                    .map(|(k, v)| (self.infer_expr(k), self.infer_expr(v)))
+                    .unwrap_or((Ty::Unknown, Ty::Unknown));
+                for (k, v) in pairs.iter().skip(1) {
+                    self.infer_expr(k);
+                    self.infer_expr(v);
+                }
+                Ty::Named("Map".into(), vec![key_ty, val_ty])
+            }
+
+            Expr::Set { elems, .. } => {
+                let elem_ty = elems
+                    .first()
+                    .map(|e| self.infer_expr(e))
+                    .unwrap_or(Ty::Unknown);
+                for e in elems.iter().skip(1) {
+                    self.infer_expr(e);
+                }
+                Ty::Named("Set".into(), vec![elem_ty])
+            }
+
             // #14: `?` propagation
             Expr::Propagate { expr, span } => {
                 let ty = self.infer_expr(expr);

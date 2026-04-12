@@ -523,9 +523,14 @@ module.exports = grammar({
         $.integer_literal,
         $.float_literal,
         $.string_literal,
+        $.multiline_string_literal,
+        $.raw_string_literal,
+        $.raw_multiline_string_literal,
         $.char_literal,
         $.boolean_literal,
-        $.list_literal
+        $.list_literal,
+        $.map_literal,
+        $.set_literal
       ),
 
     integer_literal: ($) => /[0-9]+/,
@@ -536,6 +541,18 @@ module.exports = grammar({
     string_literal: ($) =>
       seq('"', repeat(choice(/[^"\\]/, /\\./)), '"'),
 
+    // `"""…"""` — multiline string (escape sequences processed).
+    multiline_string_literal: ($) =>
+      seq('"""', repeat(choice(/[^"\\]|"(?!"")/, /\\./)), '"""'),
+
+    // `r"…"` — raw single-line string (no escape processing).
+    raw_string_literal: ($) =>
+      seq('r"', repeat(/[^"]/), '"'),
+
+    // `r"""…"""` — raw multiline string (no escape processing).
+    raw_multiline_string_literal: ($) =>
+      seq('r"""', repeat(/[^"]|"(?!"")"/), '"""'),
+
     char_literal: ($) =>
       seq("'", choice(/[^'\\]/, /\\./), "'"),
 
@@ -543,6 +560,26 @@ module.exports = grammar({
 
     list_literal: ($) =>
       seq("[", optional(seq($.expr, repeat(seq(",", $.expr)))), "]"),
+
+    // `{"k": v, …}` — map literal. Disambiguation: colon after first expression.
+    map_literal: ($) =>
+      seq(
+        "{",
+        $.expr, ":", $.expr,
+        repeat(seq(",", $.expr, ":", $.expr)),
+        optional(","),
+        "}"
+      ),
+
+    // `{"a", "b", …}` — set literal. Two+ elements or trailing comma required
+    // to disambiguate from block expressions.
+    set_literal: ($) =>
+      choice(
+        // Two or more elements
+        seq("{", $.expr, ",", $.expr, repeat(seq(",", $.expr)), optional(","), "}"),
+        // Single element with trailing comma
+        seq("{", $.expr, ",", "}")
+      ),
 
     // === Constants ===
 

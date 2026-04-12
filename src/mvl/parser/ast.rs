@@ -426,6 +426,16 @@ pub enum Expr {
         elems: Vec<Expr>,
         span: Span,
     },
+    /// `{"k": v, …}` — map literal
+    Map {
+        pairs: Vec<(Expr, Expr)>,
+        span: Span,
+    },
+    /// `{"a", "b", …}` — set literal (two or more elements, or trailing comma)
+    Set {
+        elems: Vec<Expr>,
+        span: Span,
+    },
     Move {
         expr: Box<Expr>,
         span: Span,
@@ -460,6 +470,8 @@ impl Expr {
             | Expr::Propagate { span, .. }
             | Expr::Construct { span, .. }
             | Expr::List { span, .. }
+            | Expr::Map { span, .. }
+            | Expr::Set { span, .. }
             | Expr::Move { span, .. }
             | Expr::Consume { span, .. }
             | Expr::Declassify { span, .. }

@@ -8,11 +8,21 @@
 //! - Postfix `?` propagation
 //! - `if`/`match` expressions
 //! - List literals `[e1, e2, …]`
+//! - Map literals `{"k": v, …}`, Set literals `{"a", "b", …}`
 //! - Struct construction `Name { field: expr, … }`
 //! - Block expressions `{ stmts }`
+//! - Multiline strings `"""…"""`, raw strings `r"…"`, raw multiline `r"""…"""`
 //! - Security-flow: `move(e)`, `consume(e)`, `declassify(e)`, `sanitize(e)`
 
 use crate::mvl::parser::ast::{BinaryOp, Expr, Literal, UnaryOp};
+
+/// Result of peeking inside `{` to decide whether it opens a map literal,
+/// set literal, or a plain block expression.
+enum BraceKind {
+    Map,
+    Set,
+    Block,
+}
 use crate::mvl::parser::lexer::TokenKind;
 use crate::mvl::parser::{ParseError, Parser};
 
@@ -157,6 +167,18 @@ impl Parser {
                 let span = self.advance().span;
                 Ok(Expr::Literal(Literal::Str(s), span))
             }
+            TokenKind::MultilineStr(s) => {
+                let span = self.advance().span;
+                Ok(Expr::Literal(Literal::Str(s), span))
+            }
+            TokenKind::RawStr(s) => {
+                let span = self.advance().span;
+                Ok(Expr::Literal(Literal::Str(s), span))
+            }
+            TokenKind::RawMultilineStr(s) => {
+                let span = self.advance().span;
+                Ok(Expr::Literal(Literal::Str(s), span))
+            }
             TokenKind::Char(c) => {
                 let span = self.advance().span;
                 Ok(Expr::Literal(Literal::Char(c), span))
@@ -227,10 +249,14 @@ impl Parser {
             // ── Composite expressions ────────────────────────────────────────
             TokenKind::If => self.parse_if_expr(),
             TokenKind::Match => self.parse_match_expr(),
-            TokenKind::LBrace => {
-                let block = self.parse_block()?;
-                Ok(Expr::Block(block))
-            }
+            TokenKind::LBrace => match self.classify_brace_start() {
+                BraceKind::Map => self.parse_map_literal(),
+                BraceKind::Set => self.parse_set_literal(),
+                BraceKind::Block => {
+                    let block = self.parse_block()?;
+                    Ok(Expr::Block(block))
+                }
+            },
 
             // ── Parenthesised expression or unit `()` ────────────────────────
             TokenKind::LParen => {
@@ -410,6 +436,84 @@ impl Parser {
         let next2 = (self.pos + 2).min(self.tokens.len().saturating_sub(1));
         matches!(&self.tokens[next].kind, TokenKind::Ident(_))
             && matches!(&self.tokens[next2].kind, TokenKind::Colon)
+    }
+
+    /// Speculatively peek inside `{` to decide whether it opens a map
+    /// literal, set literal, or a plain block.
+    ///
+    /// - `{expr : …}` → Map
+    /// - `{expr , …}` → Set  (requires at least one comma; single-element `{x}` is a block)
+    /// - anything else → Block
+    ///
+    /// Uses backtracking: saves and restores `pos`, `last_span`, and `errors`.
+    fn classify_brace_start(&mut self) -> BraceKind {
+        let saved_pos = self.pos;
+        let saved_last_span = self.last_span;
+        let saved_errors_len = self.errors.len();
+
+        // Consume `{`
+        self.advance();
+
+        // Empty `{}` → block
+        if matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+            self.pos = saved_pos;
+            self.last_span = saved_last_span;
+            self.errors.truncate(saved_errors_len);
+            return BraceKind::Block;
+        }
+
+        let kind = match self.parse_expr() {
+            Ok(_) => match self.peek_kind() {
+                TokenKind::Colon => BraceKind::Map,
+                TokenKind::Comma => BraceKind::Set,
+                _ => BraceKind::Block,
+            },
+            Err(()) => BraceKind::Block,
+        };
+
+        // Restore parser state
+        self.pos = saved_pos;
+        self.last_span = saved_last_span;
+        self.errors.truncate(saved_errors_len);
+        kind
+    }
+
+    /// Parse `{ expr: expr, … }` — already determined to be a map literal.
+    fn parse_map_literal(&mut self) -> Result<Expr, ()> {
+        let start = self.peek_span();
+        self.advance(); // consume `{`
+        let mut pairs = Vec::new();
+        while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+            let key = self.parse_expr()?;
+            let colon = self.expect(&TokenKind::Colon);
+            self.require(colon)?;
+            let val = self.parse_expr()?;
+            pairs.push((key, val));
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        let rb = self.expect(&TokenKind::RBrace);
+        self.require(rb)?;
+        let span = self.span_from(start);
+        Ok(Expr::Map { pairs, span })
+    }
+
+    /// Parse `{ expr, expr, … }` — already determined to be a set literal.
+    fn parse_set_literal(&mut self) -> Result<Expr, ()> {
+        let start = self.peek_span();
+        self.advance(); // consume `{`
+        let mut elems = Vec::new();
+        while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+            elems.push(self.parse_expr()?);
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        let rb = self.expect(&TokenKind::RBrace);
+        self.require(rb)?;
+        let span = self.span_from(start);
+        Ok(Expr::Set { elems, span })
     }
 }
 
@@ -649,6 +753,111 @@ mod tests {
                 assert_eq!(fields.len(), 2);
             }
             _ => panic!("got: {:?}", e),
+        }
+    }
+
+    // ── Map literals ──────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_map_literal() {
+        let e = parse_expr("{\"a\": 1, \"b\": 2}");
+        match &e {
+            Expr::Map { pairs, .. } => assert_eq!(pairs.len(), 2),
+            _ => panic!("expected Map, got: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn parse_map_literal_single_pair() {
+        let e = parse_expr("{\"k\": 42}");
+        match &e {
+            Expr::Map { pairs, .. } => assert_eq!(pairs.len(), 1),
+            _ => panic!("expected Map, got: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn parse_map_literal_trailing_comma() {
+        let e = parse_expr("{\"x\": 1,}");
+        match &e {
+            Expr::Map { pairs, .. } => assert_eq!(pairs.len(), 1),
+            _ => panic!("expected Map, got: {:?}", e),
+        }
+    }
+
+    // ── Set literals ──────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_set_literal() {
+        let e = parse_expr("{1, 2, 3}");
+        match &e {
+            Expr::Set { elems, .. } => assert_eq!(elems.len(), 3),
+            _ => panic!("expected Set, got: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn parse_set_literal_two_elements() {
+        let e = parse_expr("{\"rust\", \"mvl\"}");
+        match &e {
+            Expr::Set { elems, .. } => assert_eq!(elems.len(), 2),
+            _ => panic!("expected Set, got: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn parse_set_literal_trailing_comma() {
+        let e = parse_expr("{42,}");
+        match &e {
+            Expr::Set { elems, .. } => assert_eq!(elems.len(), 1),
+            _ => panic!("expected Set, got: {:?}", e),
+        }
+    }
+
+    // ── Block vs map/set disambiguation ──────────────────────────────────
+
+    #[test]
+    fn parse_empty_brace_is_block() {
+        let e = parse_expr("{}");
+        assert!(matches!(&e, Expr::Block(_)), "got: {:?}", e);
+    }
+
+    #[test]
+    fn parse_single_elem_brace_is_block() {
+        // `{x}` is a block expression (expression statement)
+        let e = parse_expr("{x}");
+        assert!(matches!(&e, Expr::Block(_)), "got: {:?}", e);
+    }
+
+    // ── Multiline and raw strings ─────────────────────────────────────────
+
+    #[test]
+    fn parse_multiline_string() {
+        let e = parse_expr("\"\"\"hello\nworld\"\"\"");
+        match &e {
+            Expr::Literal(Literal::Str(s), _) => assert!(s.contains('\n')),
+            _ => panic!("expected Str literal, got: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn parse_raw_string() {
+        let e = parse_expr(r#"r"C:\path\to\file""#);
+        match &e {
+            Expr::Literal(Literal::Str(s), _) => {
+                // Raw string: backslashes are literal, not escape sequences
+                assert!(s.contains('\\'));
+            }
+            _ => panic!("expected Str literal, got: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn parse_raw_multiline_string() {
+        let e = parse_expr("r\"\"\"line1\nline2\"\"\"");
+        match &e {
+            Expr::Literal(Literal::Str(s), _) => assert!(s.contains('\n')),
+            _ => panic!("expected Str literal, got: {:?}", e),
         }
     }
 }

@@ -137,7 +137,10 @@ DOC_COMMENT    = "///" { ANY_CHAR } NEWLINE ;    (* doc comment — convention, 
 IDENT          = ALPHA { ALPHA | DIGIT | "_" } ;
 INTEGER        = DIGIT { DIGIT } ;
 FLOAT          = DIGIT { DIGIT } "." DIGIT { DIGIT } ;
-STRING         = '"' { CHAR_ELEM } '"' ;
+STRING         = '"' { CHAR_ELEM } '"'              (* single-line with escape sequences *)
+               | '"""' { CHAR_ELEM | NEWLINE } '"""' (* multiline — literal newlines preserved *)
+               | 'r"' { ANY_CHAR_EXCEPT_DQUOTE } '"' (* raw — no escape processing *)
+               | 'r"""' { ANY_CHAR } '"""' ;          (* raw multiline *)
 CHAR           = "'" CHAR_ELEM "'" ;
 ALPHA          = "a"..."z" | "A"..."Z" | "_" ;
 DIGIT          = "0"..."9" ;
