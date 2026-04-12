@@ -1457,9 +1457,9 @@ fn lambda_mutable_capture_rejected() {
     let errors =
         errors_for(r#"fn f() -> Unit { let mut x = 1; let _g = |y: Int| -> Int { x + y }; }"#);
     assert!(
-        errors
-            .iter()
-            .any(|e| matches!(e, CheckError::CaptureMutabilityViolation { name, .. } if name == "x")),
+        errors.iter().any(
+            |e| matches!(e, CheckError::CaptureMutabilityViolation { name, .. } if name == "x")
+        ),
         "lambda capturing mut x should emit CaptureMutabilityViolation, got: {errors:?}"
     );
 }

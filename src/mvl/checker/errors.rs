@@ -197,7 +197,6 @@ pub enum CheckError {
         abi: String,
         span: Span,
     },
-
 }
 
 impl CheckError {
