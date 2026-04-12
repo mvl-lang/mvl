@@ -37,8 +37,11 @@ pub struct Net;
 pub struct Db;
 
 /// Marks a function that may spawn threads or use async runtimes.
+///
+/// Named `Concurrent` rather than `Async` to avoid confusion with Rust's
+/// `async`/`await` keyword — this is a capability marker, not a syntax concept.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct Async;
+pub struct Concurrent;
 
 /// Marks a function that may allocate heap memory (for bounded-heap analysis).
 #[derive(Debug, Clone, Copy, Default)]
@@ -56,7 +59,11 @@ mod tests {
     fn effect_markers_are_zero_sized() {
         assert_eq!(std::mem::size_of::<Console>(), 0);
         assert_eq!(std::mem::size_of::<FileRead>(), 0);
+        assert_eq!(std::mem::size_of::<FileWrite>(), 0);
         assert_eq!(std::mem::size_of::<Net>(), 0);
         assert_eq!(std::mem::size_of::<Db>(), 0);
+        assert_eq!(std::mem::size_of::<Concurrent>(), 0);
+        assert_eq!(std::mem::size_of::<Alloc>(), 0);
+        assert_eq!(std::mem::size_of::<Panic>(), 0);
     }
 }

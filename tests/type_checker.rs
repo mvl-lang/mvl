@@ -1086,3 +1086,21 @@ fn use_extern(x: Int) -> Int {
         "extern fn should be callable from MVL code, got: {errors:?}"
     );
 }
+
+#[test]
+fn sanitize_before_validation_guard_accepted() {
+    // GIVEN: sanitize() called after an explicit guard check (correct ordering)
+    // THEN: no type error — sanitize(Tainted<String>) → Clean<String> is valid
+    let errors = errors_for(
+        r#"fn validate(raw: Tainted<String>) -> Result<Clean<String>, String> {
+    if raw.len() < 8 {
+        return Err("too short".to_string());
+    }
+    Ok(sanitize(raw))
+}"#,
+    );
+    assert!(
+        errors.is_empty(),
+        "sanitize after guard should be accepted, got: {errors:?}"
+    );
+}

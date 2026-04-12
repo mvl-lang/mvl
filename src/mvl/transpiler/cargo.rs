@@ -34,8 +34,9 @@ fn deps_section(opts: &CargoOptions<'_>) -> String {
         );
     }
     for krate in &opts.extern_crates {
+        // TODO: pin to a specific version before publishing.
         lines.push(format!(
-            "{krate} = \"*\"  # declared in extern \"rust\" block"
+            "{krate} = \"0.1\"  # declared in extern \"rust\" block — pin version before publishing"
         ));
     }
     if lines.is_empty() {

@@ -39,9 +39,19 @@ pub struct Clean<T>(pub T);
 pub struct Public<T>(pub T);
 
 /// Marks a confidential value that must be explicitly declassified before use.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+///
+/// Intentionally does **not** implement `Display` or `Debug` for the inner
+/// value — printing a `Secret` would leak confidential data.  Use
+/// `declassify(s)` to obtain a `Public<T>` before formatting.
+#[derive(Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct Secret<T>(pub T);
+
+impl<T> std::fmt::Debug for Secret<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Secret([REDACTED])")
+    }
+}
 
 // ── Copy for copy inner types ─────────────────────────────────────────────
 
@@ -71,12 +81,6 @@ macro_rules! impl_label {
             #[inline]
             pub fn as_inner(&self) -> &T {
                 &self.0
-            }
-        }
-
-        impl<T: std::fmt::Display> std::fmt::Display for $Label<T> {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                self.0.fmt(f)
             }
         }
 
@@ -124,6 +128,21 @@ impl_label!(Tainted);
 impl_label!(Clean);
 impl_label!(Public);
 impl_label!(Secret);
+
+// Display — intentionally omitted for Secret<T> to prevent accidental leaks.
+macro_rules! impl_display {
+    ($Label:ident) => {
+        impl<T: std::fmt::Display> std::fmt::Display for $Label<T> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.0.fmt(f)
+            }
+        }
+    };
+}
+
+impl_display!(Tainted);
+impl_display!(Clean);
+impl_display!(Public);
 
 // Extra helper on Public<i64> for float conversion (used in generated code)
 impl Public<i64> {

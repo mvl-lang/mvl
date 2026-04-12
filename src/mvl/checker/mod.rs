@@ -149,7 +149,8 @@ impl TypeChecker {
     /// Register all functions declared inside an `extern` block so that MVL
     /// callers can resolve them as regular function calls.
     fn register_extern(&mut self, ed: &ExternDecl) {
-        self.extern_count += 1;
+        // Note: extern_count is incremented in check_extern_decl (pass 2) after
+        // ABI validation, not here, so rejected blocks don't inflate the count.
         for f in &ed.fns {
             let params: Vec<Ty> = f.params.iter().map(|p| resolve(&p.ty)).collect();
             let ret = resolve(&f.return_type);
@@ -179,12 +180,16 @@ impl TypeChecker {
 
     fn check_extern_decl(&mut self, ed: &ExternDecl) {
         // Validate ABI string: only "rust" and "c" are supported.
+        // Unsupported ABIs are rejected and do NOT count toward the assurance surface.
         if ed.abi != "rust" && ed.abi != "c" {
             self.emit(CheckError::UnsupportedExternAbi {
                 abi: ed.abi.clone(),
                 span: ed.span,
             });
+            return;
         }
+        // Count only validated extern blocks in the assurance metric.
+        self.extern_count += 1;
         // Each extern fn must have a valid return type (basic check).
         // Future: verify no MVL-specific types (security labels) cross the boundary
         // without explicit wrapping — for now we accept all types.

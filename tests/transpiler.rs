@@ -279,8 +279,9 @@ fn extern_rust_block_transpiles() {
 }"#;
     let rust = transpile_src(src);
     assert_contains(&rust, "extern \"Rust\"");
-    assert_contains(&rust, "pub fn hash_password");
-    assert_contains(&rust, "pub fn verify_password");
+    // `pub` is not valid inside Rust extern blocks
+    assert_contains(&rust, "fn hash_password");
+    assert_contains(&rust, "fn verify_password");
     // Security preamble replaced by mvl_runtime prelude
     assert_contains(&rust, "use mvl_runtime::prelude::*");
 }
@@ -293,7 +294,8 @@ fn extern_rust_fn_effects_emitted_as_comment() {
 }"#;
     let rust = transpile_src(src);
     assert_contains(&rust, "// ! Net");
-    assert_contains(&rust, "pub fn fetch_url");
+    // `pub` is not valid inside Rust extern blocks
+    assert_contains(&rust, "fn fetch_url");
 }
 
 /// Programs without extern blocks keep the inlined security preamble.
@@ -352,8 +354,9 @@ fn full_program_password_checker_transpiles() {
     let out = transpile(&prog, "password_checker");
     assert_contains(&out.lib_rs, "use mvl_runtime::prelude::*");
     assert_contains(&out.lib_rs, "extern \"Rust\"");
-    assert_contains(&out.lib_rs, "pub fn hash_password");
-    assert_contains(&out.lib_rs, "pub fn verify_password");
+    // `pub` is not valid inside Rust extern blocks
+    assert_contains(&out.lib_rs, "fn hash_password");
+    assert_contains(&out.lib_rs, "fn verify_password");
     assert_contains(&out.lib_rs, "pub fn validate_password");
     assert_contains(&out.lib_rs, "pub fn hash_clean");
     assert_contains(&out.lib_rs, "pub fn verify_candidate");

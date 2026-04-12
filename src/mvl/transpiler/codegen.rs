@@ -161,10 +161,16 @@ fn emit_extern_decl(cg: &mut Codegen, ed: &ExternDecl) {
         ed.fns.len(),
         if ed.fns.len() == 1 { "" } else { "s" }
     ));
+    // Unknown ABIs are rejected by the checker; skip codegen for them.
     let rust_abi = match ed.abi.as_str() {
         "rust" => "Rust",
         "c" => "C",
-        other => other, // pass through unknown ABIs
+        other => {
+            cg.line(&format!(
+                "// extern \"{other}\" block skipped — unsupported ABI (checker error)"
+            ));
+            return;
+        }
     };
     cg.line(&format!("extern \"{rust_abi}\" {{"));
     cg.push_indent();
@@ -179,8 +185,9 @@ fn emit_extern_decl(cg: &mut Codegen, ed: &ExternDecl) {
             .map(|p| format!("{}: {}", p.name, emit_type_expr(&p.ty)))
             .collect();
         let ret_str = emit_type_expr(&f.return_type);
+        // Note: `pub` is not valid inside extern blocks in Rust.
         cg.line(&format!(
-            "pub fn {}({}) -> {};",
+            "fn {}({}) -> {};",
             f.name,
             params_str.join(", "),
             ret_str
@@ -189,9 +196,6 @@ fn emit_extern_decl(cg: &mut Codegen, ed: &ExternDecl) {
     cg.pop_indent();
     cg.line("}");
 }
-
-// Re-open the Codegen impl for the rest of the file.
-impl Codegen {}
 
 // ── Undefined type collection ─────────────────────────────────────────────
 
