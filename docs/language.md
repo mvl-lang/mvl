@@ -1,9 +1,9 @@
 # MVL Language Reference
 
-**Version:** 0.1.0 (draft)
-**Date:** 2026-04-11
+**Version:** 0.5.6
+**Date:** 2026-04-12
 
-This is the complete language reference for the Minimum Verification Language. For design rationale and research, see `my-brain/study/mvl_research.md`.
+This is the complete language reference for the Minimum Verification Language. For design rationale and research, see [mvl_rationale.md](mvl_rationale.md).
 
 ## Overview
 
