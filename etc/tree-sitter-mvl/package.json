@@ -5,7 +5,7 @@
   "main": "bindings/node",
   "scripts": {
     "build": "tree-sitter generate && node-gyp build",
-    "test": "tree-sitter test",
+    "test": "npx tree-sitter test",
     "parse": "tree-sitter parse"
   },
   "keywords": [
