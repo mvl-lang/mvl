@@ -1,0 +1,124 @@
+// audit.mvl — Audit logging with IFC enforcement.
+//
+// Demonstrates:
+//   1. Req 7 (Effects): ! Log, Console declares I/O impurity.
+//      Pure policy functions (rbac.mvl) cannot secretly write to logs —
+//      any function that writes must declare ! Log.
+//   2. Req 11 (IFC): only Clean<String> and plain values reach println.
+//      Secret<T> values are structurally excluded from audit output.
+//      There is no runtime check; the type system prevents leakage.
+//
+// No extern — audit output uses println (Console + Log effects).
+// Assurance note: 0 extern blocks (effect-declared I/O only).
+
+use model::Resource;
+use model::Action;
+use model::Permission;
+
+// ── Local type declarations (mirrors model.mvl) ────────────────────────────
+
+type Resource = enum {
+    UserProfile,
+    AdminPanel,
+    Post,
+    AuditLog,
+}
+
+type Action = enum {
+    Read,
+    Write,
+    Delete,
+}
+
+type Permission = enum {
+    Allow,
+    Deny,
+}
+
+// ── Audit helpers — pure, no effects ──────────────────────────────────────
+
+total fn resource_name(resource: Resource) -> String {
+    match resource {
+        Resource::UserProfile => "UserProfile",
+        Resource::AdminPanel  => "AdminPanel",
+        Resource::Post        => "Post",
+        Resource::AuditLog    => "AuditLog",
+    }
+}
+
+total fn action_name(action: Action) -> String {
+    match action {
+        Action::Read   => "Read",
+        Action::Write  => "Write",
+        Action::Delete => "Delete",
+    }
+}
+
+total fn permission_name(decision: Permission) -> String {
+    match decision {
+        Permission::Allow => "ALLOW",
+        Permission::Deny  => "DENY",
+    }
+}
+
+// ── Audit logging — impure, ! Log, Console ────────────────────────────────
+
+// Log an access decision to the audit trail.
+// Only Clean<String> username and plain strings reach println.
+// Secret<T> cannot appear here — enforced by the IFC type system.
+fn log_access(
+    username: Clean<String>,
+    resource: Resource,
+    action: Action,
+    decision: Permission,
+) -> Unit ! Log, Console {
+    let decision_str = permission_name(decision);
+    println(decision_str)
+}
+
+// ── Internal unit tests ────────────────────────────────────────────────────
+
+test fn resource_name_returns_user_profile() -> Unit {
+    let name = resource_name(Resource::UserProfile);
+    let ok = match name {
+        "UserProfile" => 1,
+        _             => 0,
+    };
+    assert_eq(ok, 1);
+}
+
+test fn resource_name_returns_admin_panel() -> Unit {
+    let name = resource_name(Resource::AdminPanel);
+    let ok = match name {
+        "AdminPanel" => 1,
+        _            => 0,
+    };
+    assert_eq(ok, 1);
+}
+
+test fn permission_allow_maps_to_allow_string() -> Unit {
+    let name = permission_name(Permission::Allow);
+    let ok = match name {
+        "ALLOW" => 1,
+        _       => 0,
+    };
+    assert_eq(ok, 1);
+}
+
+test fn permission_deny_maps_to_deny_string() -> Unit {
+    let name = permission_name(Permission::Deny);
+    let ok = match name {
+        "DENY" => 1,
+        _      => 0,
+    };
+    assert_eq(ok, 1);
+}
+
+test fn action_name_returns_delete() -> Unit {
+    let name = action_name(Action::Delete);
+    let ok = match name {
+        "Delete" => 1,
+        _        => 0,
+    };
+    assert_eq(ok, 1);
+}
