@@ -6,6 +6,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-04-13 (fix: mvl build/run reliability + arg forwarding)
+
+### Added
+- `mvl run <file.mvl> -- <args>` now forwards CLI args to the compiled binary (enables passing `--file`, `--verbose`, etc.)
+
+### Fixed
+- `mvl build` now always refreshes `mvl_runtime` in temp directory — was reusing stale cached copy if directory existed, hiding changes to runtime source
+- `mvl run` now executes binary from source file's directory, not temp build dir — relative file paths in args (e.g. `--file logs.jsonl`) now resolve correctly against user's invocation directory
+- Log-analyzer example (`examples/log_analyzer/`) now runs end-to-end: `make run` produces JSON report `{"count":200,"errors":21,"warnings":27,"infos":86}`
+
 ## [0.11.1] — 2026-04-12 (feat: bridge.rs — extern "rust" link support; end-to-end run)
 
 ### Added

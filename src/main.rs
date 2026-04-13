@@ -28,11 +28,17 @@ fn main() {
         }
         "build" => {
             let path = require_path_arg(&args, "build");
-            build_project(&path, false);
+            build_project(&path, false, &[]);
         }
         "run" => {
             let path = require_path_arg(&args, "run");
-            build_project(&path, true);
+            let run_args: Vec<String> = args
+                .iter()
+                .skip_while(|a| a.as_str() != "--")
+                .skip(1)
+                .cloned()
+                .collect();
+            build_project(&path, true, &run_args);
         }
         "transpile" => {
             let path = require_path_arg(&args, "transpile");
@@ -126,7 +132,12 @@ fn cmd_transpile(path: &str) {
 }
 
 /// Transpile a .mvl file to a Cargo project, build it, and optionally run it.
-fn build_project(path: &str, run: bool) {
+///
+/// `run_args` are forwarded to the compiled binary when `run` is true; the
+/// binary is executed with its working directory set to the source file's
+/// parent directory so that relative paths in args (e.g. `--file logs.jsonl`)
+/// resolve correctly.
+fn build_project(path: &str, run: bool, run_args: &[String]) {
     // For directory inputs, use the directory stem as the crate name and
     // concatenate all .mvl files (simple Phase 1 approach: single-crate multi-file).
     let file_path = if Path::new(path).is_dir() {
@@ -246,21 +257,23 @@ fn build_project(path: &str, run: bool) {
 
     // If the program uses mvl_runtime, copy it as a sibling directory
     // so the relative path `../mvl_runtime` in Cargo.toml resolves.
+    // Always overwrite so stale cached copies don't hide runtime changes.
     if out.extern_count > 0 {
         let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mvl_runtime");
         let runtime_dst = tmp_dir.parent().unwrap().join("mvl_runtime");
-        if runtime_src.exists() && !runtime_dst.exists() {
+        if runtime_src.exists() {
+            if runtime_dst.exists() {
+                fs::remove_dir_all(&runtime_dst).expect("remove stale mvl_runtime");
+            }
             copy_dir_recursive(&runtime_src, &runtime_dst).expect("copy mvl_runtime");
         }
     }
 
     println!("Transpiled to: {}", tmp_dir.display());
+    println!("Running: cargo build");
 
-    let cargo_cmd = if run && out.has_main { "run" } else { "build" };
-    println!("Running: cargo {cargo_cmd}");
-
-    let status = process::Command::new("cargo")
-        .arg(cargo_cmd)
+    let build_status = process::Command::new("cargo")
+        .arg("build")
         .current_dir(&tmp_dir)
         .status()
         .unwrap_or_else(|e| {
@@ -274,12 +287,32 @@ fn build_project(path: &str, run: bool) {
             process::exit(1);
         });
 
-    if !status.success() {
-        eprintln!("cargo {cargo_cmd} failed");
+    if !build_status.success() {
+        eprintln!("cargo build failed");
         process::exit(1);
     }
 
-    if !run || !out.has_main {
+    if run && out.has_main {
+        // Run the binary with the source file's parent as working dir so that
+        // relative file paths in run_args (e.g. --file logs.jsonl) resolve
+        // against where the user invoked `mvl run`, not the tmp build dir.
+        let binary = tmp_dir.join("target").join("debug").join(&crate_name);
+        let source_dir = Path::new(&file_path)
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let run_status = process::Command::new(&binary)
+            .args(run_args)
+            .current_dir(&source_dir)
+            .status()
+            .unwrap_or_else(|e| {
+                eprintln!("error: failed to run {}: {e}", binary.display());
+                process::exit(1);
+            });
+        if !run_status.success() {
+            process::exit(run_status.code().unwrap_or(1));
+        }
+    } else {
         println!("Build successful.");
         if run && !out.has_main {
             eprintln!("Note: no `fn main` in MVL source — nothing to run.");
