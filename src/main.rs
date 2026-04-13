@@ -246,10 +246,14 @@ fn build_project(path: &str, run: bool) {
 
     // If the program uses mvl_runtime, copy it as a sibling directory
     // so the relative path `../mvl_runtime` in Cargo.toml resolves.
+    // Always overwrite so stale cached copies don't hide runtime changes.
     if out.extern_count > 0 {
         let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mvl_runtime");
         let runtime_dst = tmp_dir.parent().unwrap().join("mvl_runtime");
-        if runtime_src.exists() && !runtime_dst.exists() {
+        if runtime_src.exists() {
+            if runtime_dst.exists() {
+                fs::remove_dir_all(&runtime_dst).expect("remove stale mvl_runtime");
+            }
             copy_dir_recursive(&runtime_src, &runtime_dst).expect("copy mvl_runtime");
         }
     }
