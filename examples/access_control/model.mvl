@@ -1,0 +1,53 @@
+// model.mvl — Domain types for the access_control example.
+//
+// Demonstrates:
+//   1. Req 1 (ADTs): enum types eliminate null, unrepresentable states
+//   2. Req 5 (Errors): named error variants for every failure mode
+//
+// No extern, no effects — pure type declarations.
+// Assurance note: 0 extern blocks (domain model only).
+
+// ── Principals ─────────────────────────────────────────────────────────────
+
+type Role = enum {
+    Admin,
+    Moderator,
+    User,
+    Guest,
+}
+
+// ── Resources and actions ──────────────────────────────────────────────────
+
+type Resource = enum {
+    UserProfile,
+    AdminPanel,
+    Post,
+    AuditLog,
+}
+
+type Action = enum {
+    Read,
+    Write,
+    Delete,
+}
+
+// ── Policy outcome ─────────────────────────────────────────────────────────
+
+type Permission = enum {
+    Allow,
+    Deny,
+}
+
+// ── Error catalogue ────────────────────────────────────────────────────────
+
+type AuthError = enum {
+    InvalidCredentials,
+    SessionExpired,
+    InvalidToken,
+}
+
+type AppError = enum {
+    AuthFailed,
+    UserNotFound,
+    MissingArg,
+}

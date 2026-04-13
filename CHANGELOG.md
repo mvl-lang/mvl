@@ -6,6 +6,27 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-04-13 (feat: access_control — Phase 2 security reference example)
+
+### Added
+- `examples/access_control/` — multi-file MVL program demonstrating compile-time security guarantees: SQL injection impossible via `Secret<String>` consumed at extern boundary (IFC), credential leakage is a type error, missing permission checks fail to compile (totality), side effects separated from pure policy (effect declarations)
+- `main.mvl` — entry point with 3 extern trust-boundary fns (`hash_verify`, `generate_token`, `get_demo_hash`), `total fn check_permission` exhaustive over Role × Resource × Action, IFC demonstration pipeline
+- `model.mvl` — domain types: `Role`, `Resource`, `Action`, `Permission`, `AuthError`, `AppError`
+- `auth.mvl` — credential verification with IFC: `Secret<String>` password hash passed to `hash_verify` — CANNOT flow to `println` (compile error); `Tainted<String>` → `sanitize()` → `Clean<String>` conversion
+- `rbac.mvl` — `total fn check_permission` — exhaustive `match` on all Role × Resource × Action combinations; missing arm = compile error
+- `audit.mvl` — audit logging with `! Log, Console` effect declarations; IFC enforces `Secret<T>` never reaches output
+- `bridge.rs` — Rust stubs: `hash_verify`, `generate_token`, `get_demo_hash` (trust boundary implementations)
+- `Makefile` — `build/check/test/run` targets (mirrors `log_analyzer` pattern)
+- `rbac_test.mvl` — 17 standalone tests covering Role × Resource × Action combinations
+- `auth_test.mvl` — 6 standalone tests for `AuthError`/`AppError` ADT variants
+- `access_generator.py` — JSONL scenario generator for manual/CI testing
+
+### Security Assurance
+- 5 files checked, 2 extern blocks (main.mvl, auth.mvl), 2 `total fn` declarations, 29 test functions (5 internal, 24 standalone)
+- IFC: `Secret<String>` consumed at extern boundary only, cannot leak to output
+- Totality: `check_permission` exhaustive over all role-resource-action combinations
+- Effects: pure policy fns have no effects, audit/logging fns declare `! Log, Console`
+
 ## [0.12.0] — 2026-04-13 (fix: mvl build/run reliability + arg forwarding)
 
 ### Added
