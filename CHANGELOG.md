@@ -6,6 +6,38 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-04-14 (feat: checker phase 3 — implicit flow analysis and Proven verdict)
+
+### Added
+
+- **Implicit Flow Control (IFC Phase 3)** — Requirement 11: Information Flow Control now detects
+  implicit information flows via control flow (Program Counter label analysis). A `println` or `print`
+  call that appears inside a branch controlled by a `Secret` or `Tainted` condition is now a compile error,
+  even if the printed arguments are `Public`. The rationale: whether a print fires reveals the value
+  of the controlling condition, creating a covert channel.
+
+  - **`ImplicitFlowViolation`** — new error type for control-flow leaks.
+  - **`IFCPass`** — new verification pass that combines Phase 1 direct-flow violations with Phase 3
+    implicit-flow analysis to produce verdicts: `Failed` (violations), `Proven` (no violations + labeled types),
+    or `Unchecked` (no violations but no labeled types).
+  - **`check_implicit_flows`** — new analyzer that performs Program Counter label inference:
+    - Tracks PC label through `if`, `else`, `while`, `for`, and `match` statements.
+    - Flags implicit flows to `println`/`print` sinks.
+    - Supports `declassify()` as an escape hatch for lowering the PC label.
+    - Includes known limitations: cross-function flows, label inference through unannotated bindings,
+      and nested-loop PC reset deferred to Phase 6.
+  - **Assurance evidence** — `Proven` verdicts include audit counts of declassification and
+    sanitization points so that auditors can verify every downgrade point.
+
+### Fixed
+
+- **Spec numbering** — Requirement 11 (Implicit Flows) in `specs/003-information-flow/spec.md` was locally
+  numbered as "Requirement 8"; renamed to "Requirement 11" for correct system-level traceability.
+- **Missing `Proven` test** — added integration tests for Req 11: `req11_proven_for_labeled_types_with_no_violations`
+  and `req11_proven_evidence_contains_audit_counts` exercise the `Proven` verdict path.
+- **`Stmt::While` with Secret condition** — added `implicit_flow_while_secret_condition_rejected` test
+  to verify while-loops with secret-controlled conditions are flagged.
+
 ## [0.18.0] — 2026-04-14 (feat: linter phase 3 — LLM corpus quality rules)
 
 ### Added

@@ -1880,3 +1880,187 @@ fn lambda_immutable_capture_accepted() {
         "lambda with immutable capture should not emit CaptureMutabilityViolation, got: {capture_errors:?}"
     );
 }
+
+// ── IFC Phase 3: implicit flow detection (003-information-flow/Req 11) ────────
+
+/// `println` inside a branch controlled by a `Secret` condition MUST be rejected.
+///
+/// Even though the argument to `println` is a literal (Public), the fact that
+/// the print fires at all reveals whether `flag` was truthy — an implicit flow.
+///
+/// - GIVEN `fn f(flag: Secret<Bool>) -> Unit`
+/// - WHEN `if flag { println("branch taken") }`
+/// - THEN `ImplicitFlowViolation` with pc_label="Secret" is emitted
+#[test]
+fn implicit_flow_secret_if_condition_rejected() {
+    let errors = errors_for(
+        r#"fn f(flag: Secret<Bool>) -> Unit ! Console { if flag { println("branch taken"); } }"#,
+    );
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::ImplicitFlowViolation { pc_label, sink, .. }
+                if pc_label == "Secret" && sink == "println")
+        ),
+        "println inside Secret branch should emit ImplicitFlowViolation, got: {errors:?}"
+    );
+}
+
+/// `println` inside a branch controlled by a `Tainted` condition MUST be rejected.
+///
+/// - GIVEN `fn f(cond: Tainted<Bool>) -> Unit`
+/// - WHEN `if cond { println("ok") }`
+/// - THEN `ImplicitFlowViolation` with pc_label="Tainted" is emitted
+#[test]
+fn implicit_flow_tainted_if_condition_rejected() {
+    let errors =
+        errors_for(r#"fn f(cond: Tainted<Bool>) -> Unit ! Console { if cond { println("ok"); } }"#);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::ImplicitFlowViolation { pc_label, sink, .. }
+                if pc_label == "Tainted" && sink == "println")
+        ),
+        "println inside Tainted branch should emit ImplicitFlowViolation, got: {errors:?}"
+    );
+}
+
+/// `println` inside a branch controlled by a `Public` condition MUST be accepted.
+///
+/// No implicit flow: the condition has no security label, so the branch is safe.
+///
+/// - GIVEN `fn f(x: Public<Bool>) -> Unit`
+/// - WHEN `if x { println("ok") }`
+/// - THEN no `ImplicitFlowViolation`
+#[test]
+fn implicit_flow_public_condition_accepted() {
+    let errors =
+        errors_for(r#"fn f(x: Public<Bool>) -> Unit ! Console { if x { println("ok"); } }"#);
+    let implicit: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, CheckError::ImplicitFlowViolation { .. }))
+        .collect();
+    assert!(
+        implicit.is_empty(),
+        "println inside Public branch should not emit ImplicitFlowViolation, got: {implicit:?}"
+    );
+}
+
+/// `print` inside a `Secret`-controlled branch MUST also be rejected.
+///
+/// - GIVEN `fn g(s: Secret<Bool>) -> Unit`
+/// - WHEN `if s { print("x"); }`
+/// - THEN `ImplicitFlowViolation` with sink="print" is emitted
+#[test]
+fn implicit_flow_print_sink_rejected() {
+    let errors = errors_for(r#"fn g(s: Secret<Bool>) -> Unit ! Console { if s { print("x"); } }"#);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::ImplicitFlowViolation { pc_label, sink, .. }
+                if pc_label == "Secret" && sink == "print")
+        ),
+        "print inside Secret branch should emit ImplicitFlowViolation, got: {errors:?}"
+    );
+}
+
+/// `println` in the else-branch of a `Secret`-controlled if MUST also be rejected.
+///
+/// Both branches are controlled by the condition; the else branch also leaks
+/// information (its firing reveals the condition was false).
+///
+/// - GIVEN `fn h(flag: Secret<Bool>) -> Unit`
+/// - WHEN `if flag { 0; } else { println("not taken"); }`
+/// - THEN `ImplicitFlowViolation` is emitted for the else-branch println
+#[test]
+fn implicit_flow_else_branch_rejected() {
+    let errors = errors_for(
+        r#"fn h(flag: Secret<Bool>) -> Unit ! Console { if flag { 0; } else { println("not taken"); } }"#,
+    );
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::ImplicitFlowViolation { pc_label, .. }
+                if pc_label == "Secret")
+        ),
+        "println in else of Secret branch should emit ImplicitFlowViolation, got: {errors:?}"
+    );
+}
+
+/// Let-bound variable with `Secret` type annotation propagates its label into
+/// nested branch conditions.
+///
+/// - GIVEN `fn f(raw: Secret<Int>) -> Unit`
+/// - WHEN `let x: Secret<Int> = raw; if x { println("y"); }`
+/// - THEN `ImplicitFlowViolation` is emitted (label propagated through let binding)
+#[test]
+fn implicit_flow_label_propagated_through_let() {
+    let errors = errors_for(
+        r#"fn f(raw: Secret<Int>) -> Unit ! Console { let x: Secret<Int> = raw; if x { println("y"); } }"#,
+    );
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::ImplicitFlowViolation { pc_label, .. }
+                if pc_label == "Secret")
+        ),
+        "label should propagate through let binding to branch condition, got: {errors:?}"
+    );
+}
+
+/// `println` inside a `while` loop controlled by a `Secret` condition MUST be rejected.
+///
+/// A while-loop fires zero or more times depending on the condition — its
+/// execution reveals information about the Secret value, creating an implicit flow.
+///
+/// - GIVEN `fn poll(flag: Secret<Bool>) -> Unit ! Console`
+/// - WHEN `while flag { println("still waiting"); }`
+/// - THEN `ImplicitFlowViolation` with pc_label="Secret" and sink="println" is emitted
+#[test]
+fn implicit_flow_while_secret_condition_rejected() {
+    let errors = errors_for(
+        r#"fn poll(flag: Secret<Bool>) -> Unit ! Console { while flag { println("still waiting"); } }"#,
+    );
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::ImplicitFlowViolation { pc_label, sink, .. }
+                if pc_label == "Secret" && sink == "println")
+        ),
+        "println inside Secret while-loop should emit ImplicitFlowViolation, got: {errors:?}"
+    );
+}
+
+/// `implicit_flow_else_branch_rejected` additionally verifies the sink field.
+///
+/// The else-branch println leaks information about the Secret condition
+/// (its firing proves the condition was false).
+///
+/// - GIVEN `fn h(flag: Secret<Bool>) -> Unit ! Console`
+/// - WHEN `if flag { 0; } else { println("not taken"); }`
+/// - THEN `ImplicitFlowViolation` with pc_label="Secret" and sink="println"
+#[test]
+fn implicit_flow_else_branch_sink_verified() {
+    let errors = errors_for(
+        r#"fn h(flag: Secret<Bool>) -> Unit ! Console { if flag { 0; } else { println("not taken"); } }"#,
+    );
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::ImplicitFlowViolation { pc_label, sink, .. }
+                if pc_label == "Secret" && sink == "println")
+        ),
+        "println in else of Secret branch should emit ImplicitFlowViolation with sink=println, got: {errors:?}"
+    );
+}
+
+/// Implicit flow corpus: load and verify the implicit_flow.mvl corpus file.
+///
+/// The corpus contains only INVALID programs that should each produce
+/// `ImplicitFlowViolation` errors. This test validates the corpus itself.
+#[test]
+fn implicit_flow_corpus_has_violations() {
+    let src = include_str!("corpus/05_ifc/implicit_flow.mvl");
+    let result = check_src(src);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::ImplicitFlowViolation { .. })),
+        "implicit_flow corpus should contain at least one ImplicitFlowViolation, got: {:?}",
+        result.errors
+    );
+}

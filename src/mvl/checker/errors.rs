@@ -203,6 +203,20 @@ pub enum CheckError {
         label: String,
         span: Span,
     },
+    /// A `println`/`print` call appears inside a branch controlled by a
+    /// `Secret` or `Tainted` condition, creating an implicit information flow.
+    ///
+    /// Even if the arguments are `Public`, whether the print fires reveals the
+    /// secret condition value — a classic implicit (or covert-channel) flow.
+    /// Per 003-information-flow: the PC label MUST NOT exceed the label of any
+    /// output sink. (Req 11, Phase 3)
+    ImplicitFlowViolation {
+        /// The label of the controlling condition (e.g. "Secret" or "Tainted").
+        pc_label: String,
+        /// The name of the public sink (`println` or `print`).
+        sink: String,
+        span: Span,
+    },
     /// `extern` block declares an unsupported ABI.
     UnsupportedExternAbi {
         abi: String,
@@ -258,7 +272,8 @@ impl CheckError {
             // Req 11: Information Flow Control
             CheckError::InvalidDeclassify { .. }
             | CheckError::InvalidSanitize { .. }
-            | CheckError::LoggingLabelViolation { .. } => 11,
+            | CheckError::LoggingLabelViolation { .. }
+            | CheckError::ImplicitFlowViolation { .. } => 11,
             // Req 1: Type Safety (declaration-level — malformed extern ABI is a type/decl error,
             // not an IFC violation; grouping it under Req 11 would pollute IFC metrics).
             CheckError::UnsupportedExternAbi { .. } => 1,
@@ -301,6 +316,7 @@ impl CheckError {
             | CheckError::InvalidDeclassify { span, .. }
             | CheckError::InvalidSanitize { span, .. }
             | CheckError::LoggingLabelViolation { span, .. }
+            | CheckError::ImplicitFlowViolation { span, .. }
             | CheckError::UnsupportedExternAbi { span, .. }
             | CheckError::PropagateIncompatibleError { span, .. } => *span,
         }
@@ -420,6 +436,9 @@ impl CheckError {
             ),
             CheckError::LoggingLabelViolation { label, .. } => format!(
                 "logging functions accept only `Public<T>` but argument has label `{label}` — declassify or sanitize before logging"
+            ),
+            CheckError::ImplicitFlowViolation { pc_label, sink, .. } => format!(
+                "implicit information flow: `{sink}` call inside a branch controlled by a `{pc_label}` condition leaks information via control flow — move the call outside the branch or declassify the condition"
             ),
             CheckError::UnsupportedExternAbi { abi, .. } => format!(
                 "unsupported extern ABI `\"{abi}\"` — only \"rust\" and \"c\" are allowed"
