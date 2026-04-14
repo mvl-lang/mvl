@@ -263,7 +263,7 @@ impl PassRegistry {
             Box::new(BasicCheckPass {
                 req: 8,
                 pass_name: "Termination",
-                ok_evidence: "no unbounded loops in total functions",
+                ok_evidence: "no unbounded loops or unproven recursive calls in total functions",
             }),
             // ── Phase 3 pending ─────────────────────────────────────────────
             Box::new(Phase3StubPass {

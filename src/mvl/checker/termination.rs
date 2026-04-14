@@ -1,24 +1,32 @@
 //! Structural recursion checker for Req 8 (Termination).
 //!
+//! **Spec:** `docs/specs/007-termination.md`
+//!
 //! For every `total fn` (explicit or implicit), this pass verifies that all
 //! self-recursive calls operate on provably smaller arguments.  Two decrease
 //! measures are currently recognized:
 //!
 //! - **Integer decrement** — the recursive argument is `param - N` where `N`
-//!   is a positive integer literal.
+//!   is a positive integer literal and `param` is any function parameter.
+//!   (spec 007 §Req 2)
 //! - **Structural subterm** — the recursive argument is a variable that was
 //!   pattern-bound from a *sub-pattern* of a function parameter (e.g. the
-//!   `tail` in `match list { Cons(_, tail) => … }`).
+//!   `tail` in `match list { Cons(_, tail) => … }`), where the match
+//!   scrutinee is a *bare parameter identifier*.  (spec 007 §Req 3)
 //!
 //! Mutual recursion and `while`-loop decreasing-measure annotations are not
-//! yet analysed (tracked in #142).
+//! yet analysed (tracked in #142; spec 007 §Known Limitations L1/L2).
+//!
+//! **Precondition:** `TypeChecker::check_program` MUST have run before this
+//! pass so that `while` loops in total functions are already flagged as
+//! `UnboundedLoopInTotal`.  (spec 007 §Req 5)
 
 use std::collections::HashSet;
 
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::parser::ast::{
-    BinaryOp, Block, Decl, ElseBranch, Expr, FnDecl, Literal, MatchBody, Pattern, Program, Stmt,
-    Totality,
+    BinaryOp, Block, Decl, ElseBranch, Expr, FnDecl, Literal, MatchArm, MatchBody, Pattern,
+    Program, Stmt, Totality,
 };
 
 // ── Public entry point ────────────────────────────────────────────────────────
@@ -26,9 +34,13 @@ use crate::mvl::parser::ast::{
 /// Walk every total (or implicitly total) function in `prog` and emit
 /// [`CheckError::UnprovenRecursion`] for any recursive call that cannot be
 /// proven terminating.  Errors are appended to `errors`.
+///
+/// Functions with `Totality::None` are implicitly total — checked by default.
+/// Only `Some(Totality::Partial)` is exempt.  (spec 007 §Scope and Defaults)
 pub fn check_structural_recursion(prog: &Program, errors: &mut Vec<CheckError>) {
     for decl in &prog.declarations {
         if let Decl::Fn(fd) = decl {
+            // Totality::None == implicitly total (default); only Partial is exempt.
             if !matches!(fd.totality, Some(Totality::Partial)) {
                 check_fn(fd, errors);
             }
@@ -55,6 +67,7 @@ fn check_fn(fd: &FnDecl, errors: &mut Vec<CheckError>) {
 /// `smaller` is the set of local variable names that are known to be
 /// structurally smaller than at least one function parameter because they
 /// were bound from a sub-pattern of that parameter in a surrounding `match`.
+/// (spec 007 §Req 3)
 #[derive(Clone)]
 struct TermCtx<'a> {
     fn_name: &'a str,
@@ -97,29 +110,16 @@ fn check_stmt(stmt: &Stmt, ctx: &TermCtx<'_>, errors: &mut Vec<CheckError>) {
         }
         Stmt::Match {
             scrutinee, arms, ..
-        } => {
-            check_expr(scrutinee, ctx, errors);
-            let param_matched = as_param(scrutinee, ctx.params);
-            for arm in arms {
-                let arm_ctx = if param_matched.is_some() {
-                    ctx.with_smaller(subterm_vars(&arm.pattern))
-                } else {
-                    ctx.clone()
-                };
-                match &arm.body {
-                    MatchBody::Expr(e) => check_expr(e, &arm_ctx, errors),
-                    MatchBody::Block(b) => check_block(b, &arm_ctx, errors),
-                }
-            }
-        }
+        } => check_match_arms(scrutinee, arms, ctx, errors),
         Stmt::For { iter, body, .. } => {
             // `for` loops over finite iterators are trivially terminating.
+            // Recursive calls inside the body are still checked. (spec 007 §Req 5)
             check_expr(iter, ctx, errors);
             check_block(body, ctx, errors);
         }
         Stmt::While { .. } => {
-            // `while` in total functions is already rejected by the type
-            // checker as UnboundedLoopInTotal — nothing to do here.
+            // `while` in total functions is already rejected by the type checker
+            // as UnboundedLoopInTotal — nothing to do here. (spec 007 §Req 5)
         }
     }
 }
@@ -188,21 +188,7 @@ fn check_expr(expr: &Expr, ctx: &TermCtx<'_>, errors: &mut Vec<CheckError>) {
 
         Expr::Match {
             scrutinee, arms, ..
-        } => {
-            check_expr(scrutinee, ctx, errors);
-            let param_matched = as_param(scrutinee, ctx.params);
-            for arm in arms {
-                let arm_ctx = if param_matched.is_some() {
-                    ctx.with_smaller(subterm_vars(&arm.pattern))
-                } else {
-                    ctx.clone()
-                };
-                match &arm.body {
-                    MatchBody::Expr(e) => check_expr(e, &arm_ctx, errors),
-                    MatchBody::Block(b) => check_block(b, &arm_ctx, errors),
-                }
-            }
-        }
+        } => check_match_arms(scrutinee, arms, ctx, errors),
 
         Expr::Block(b) => check_block(b, ctx, errors),
 
@@ -225,6 +211,7 @@ fn check_expr(expr: &Expr, ctx: &TermCtx<'_>, errors: &mut Vec<CheckError>) {
         Expr::Lambda { .. } => {
             // Don't recurse into lambdas: they have their own scope and are
             // not self-recursive with respect to the enclosing function.
+            // (spec 007 §Req 4)
         }
 
         // Leaves — nothing to recurse into.
@@ -232,28 +219,65 @@ fn check_expr(expr: &Expr, ctx: &TermCtx<'_>, errors: &mut Vec<CheckError>) {
     }
 }
 
+// ── Match-arm walker (shared by Stmt::Match and Expr::Match) ─────────────────
+
+/// Walk `scrutinee` and each arm body, extending the subterm context for arms
+/// whose pattern binds sub-components of a direct function parameter.
+/// (spec 007 §Req 3)
+fn check_match_arms(
+    scrutinee: &Expr,
+    arms: &[MatchArm],
+    ctx: &TermCtx<'_>,
+    errors: &mut Vec<CheckError>,
+) {
+    check_expr(scrutinee, ctx, errors);
+    let on_param = as_param(scrutinee, ctx.params).is_some();
+    for arm in arms {
+        // Only extend `smaller` when the scrutinee is a bare parameter;
+        // matching on a local or expression does not establish the subterm
+        // relation. (spec 007 §Req 3, Scenario: Match on non-parameter)
+        let arm_ctx;
+        let effective_ctx: &TermCtx<'_> = if on_param {
+            arm_ctx = ctx.with_smaller(subterm_vars(&arm.pattern));
+            &arm_ctx
+        } else {
+            ctx
+        };
+        check_match_body(&arm.body, effective_ctx, errors);
+    }
+}
+
+fn check_match_body(body: &MatchBody, ctx: &TermCtx<'_>, errors: &mut Vec<CheckError>) {
+    match body {
+        MatchBody::Expr(e) => check_expr(e, ctx, errors),
+        MatchBody::Block(b) => check_block(b, ctx, errors),
+    }
+}
+
 // ── Decrease analysis ─────────────────────────────────────────────────────────
 
 /// Return `true` if at least one argument at the recursive call site is
-/// provably smaller than the corresponding (or any) parameter.
+/// provably smaller than some function parameter.
 fn is_decreasing(args: &[Expr], ctx: &TermCtx<'_>) -> bool {
-    for (i, arg) in args.iter().enumerate() {
-        let param = ctx.params.get(i).copied();
-        if arg_decreases(arg, param, &ctx.smaller) {
-            return true;
-        }
-    }
-    false
+    args.iter()
+        .any(|arg| arg_decreases(arg, ctx.params, &ctx.smaller))
 }
 
-/// Return `true` if `arg` is provably smaller than `param` (by name) or any
-/// known-smaller variable.
-fn arg_decreases(arg: &Expr, param: Option<&str>, smaller: &HashSet<String>) -> bool {
+/// Return `true` if `arg` is provably smaller than any parameter or is a
+/// known structural subterm.
+///
+/// Two measures are recognised (spec 007 §Req 2 and §Req 3):
+/// - Structural subterm: `arg` is a variable in `smaller`.
+/// - Integer decrement: `arg` is `param - N` where `param` names any
+///   function parameter and `N > 0`.
+fn arg_decreases(arg: &Expr, params: &[&str], smaller: &HashSet<String>) -> bool {
     match arg {
-        // A variable known to be a structural subterm.
+        // A variable known to be a structural subterm. (spec 007 §Req 3)
         Expr::Ident(name, _) if smaller.contains(name.as_str()) => true,
 
-        // `param - N` where N is a positive integer literal.
+        // `param - N` where N is a positive integer literal and `param` is
+        // any function parameter (not restricted to positional match).
+        // (spec 007 §Req 2)
         Expr::Binary {
             op: BinaryOp::Sub,
             left,
@@ -263,7 +287,7 @@ fn arg_decreases(arg: &Expr, param: Option<&str>, smaller: &HashSet<String>) -> 
             if let (Expr::Ident(lname, _), Expr::Literal(Literal::Integer(n), _)) =
                 (left.as_ref(), right.as_ref())
             {
-                param == Some(lname.as_str()) && *n > 0
+                *n > 0 && params.contains(&lname.as_str())
             } else {
                 false
             }
@@ -287,7 +311,7 @@ fn as_param<'a>(expr: &Expr, params: &[&'a str]) -> Option<&'a str> {
 
 /// Collect all variable names introduced by `pattern` at the *immediate*
 /// sub-level (one level down from the matched value).  These are structurally
-/// smaller than whatever was matched.
+/// smaller than whatever was matched.  (spec 007 §Req 3)
 fn subterm_vars(pattern: &Pattern) -> Vec<String> {
     match pattern {
         // Binding the whole value is not smaller — skip.
@@ -305,12 +329,12 @@ fn subterm_vars(pattern: &Pattern) -> Vec<String> {
     }
 }
 
-/// Yield the identifier names at the *leaf* of a pattern (not recursive —
-/// one level only, to avoid over-approximation).
+/// Yield the identifier name at the leaf of a pattern, if it is a bare
+/// `Pattern::Ident`.  One level only — avoids over-approximation.
 fn leaf_idents(pattern: &Pattern) -> impl Iterator<Item = String> + '_ {
-    let mut out = Vec::new();
-    if let Pattern::Ident(name, _) = pattern {
-        out.push(name.clone());
+    match pattern {
+        Pattern::Ident(name, _) => Some(name.clone()),
+        _ => None,
     }
-    out.into_iter()
+    .into_iter()
 }
