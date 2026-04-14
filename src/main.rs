@@ -317,6 +317,35 @@ fn cmd_transpile(path: &str) {
     println!("{}", out.lib_rs);
 }
 
+/// Inject `mod bridge;` into generated Rust source on the line immediately
+/// following the `use mvl_runtime::prelude::*;` import.
+///
+/// Fallback: prepends `mod bridge;\n` when the marker line is absent (should
+/// not occur in normal codegen, but is exercised by the compiler path).
+///
+/// Pure function — no I/O.
+fn inject_mod_bridge(source: &str) -> String {
+    const MARKER: &str = "use mvl_runtime::prelude::*;";
+    let mut result = String::with_capacity(source.len() + 20);
+    let mut injected = false;
+    for line in source.lines() {
+        result.push_str(line);
+        result.push('\n');
+        if !injected && line.trim() == MARKER {
+            result.push_str("mod bridge;\n");
+            injected = true;
+        }
+    }
+    if !injected {
+        // Fallback: marker absent — prepend mod bridge;
+        let mut fallback = String::with_capacity(result.len() + 20);
+        fallback.push_str("mod bridge;\n");
+        fallback.push_str(&result);
+        return fallback;
+    }
+    result
+}
+
 /// Transpile a .mvl file to a Cargo project, build it, and optionally run it.
 ///
 /// `run_args` are forwarded to the compiled binary when `run` is true; the
@@ -367,44 +396,49 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
     });
 
     // Detect a sibling bridge.rs — Rust implementations of extern "rust" fns.
-    let bridge_path = Path::new(&file_path)
+    // Use canonicalize directly (no exists() pre-check) to eliminate the TOCTOU
+    // race window. NotFound → no bridge. Any other error → hard fail.
+    // Validate that the resolved path stays inside the source directory (symlink-escape guard).
+    let mvl_dir = Path::new(&file_path)
         .parent()
-        .map(|p| p.join("bridge.rs"))
-        .filter(|p| p.exists());
+        .unwrap_or_else(|| Path::new("."));
+    let bridge_candidate = mvl_dir.join("bridge.rs");
+    let bridge_path: Option<PathBuf> = match fs::canonicalize(&bridge_candidate) {
+        Ok(canon_bridge) => {
+            let canon_dir = fs::canonicalize(mvl_dir).unwrap_or_else(|e| {
+                eprintln!("error: cannot canonicalize {}: {e}", mvl_dir.display());
+                process::exit(1);
+            });
+            if !canon_bridge.starts_with(&canon_dir) {
+                eprintln!("error: bridge.rs is outside source directory — refusing to copy",);
+                process::exit(1);
+            }
+            Some(canon_bridge)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            eprintln!(
+                "error: cannot resolve bridge.rs at {}: {e}",
+                bridge_candidate.display()
+            );
+            process::exit(1);
+        }
+    };
 
-    if out.extern_count > 0 && bridge_path.is_none() {
+    if out.has_extern_rust && bridge_path.is_none() {
         eprintln!(
-            "warning: {} extern \"rust\" fn(s) declared but no bridge.rs found alongside {file_path}",
-            out.extern_count
+            "error: bridge.rs not found — {file_path} declares extern \"rust\" blocks but no bridge.rs exists at {}",
+            bridge_candidate.display()
         );
         eprintln!("  Create bridge.rs with `pub extern \"Rust\" fn` implementations to link.");
+        process::exit(1);
     }
 
-    // Inject `mod bridge;` after any leading comments and `#![...]` inner
-    // attributes — Rust requires inner attributes to precede all items, so
-    // `mod bridge;` must come after them.
+    // Inject `mod bridge;` after `use mvl_runtime::prelude::*;`.
     let main_source = if bridge_path.is_some() {
-        let mut header = String::new();
-        let mut rest = String::new();
-        let mut in_header = true;
-        for line in out.lib_rs.lines() {
-            if in_header {
-                let trimmed = line.trim_start();
-                if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with("#![") {
-                    header.push_str(line);
-                    header.push('\n');
-                    continue;
-                }
-                // First non-header line: inject mod bridge before it.
-                header.push_str("\nmod bridge;\n\n");
-                in_header = false;
-            }
-            rest.push_str(line);
-            rest.push('\n');
-        }
-        header + &rest
+        inject_mod_bridge(&out.lib_rs)
     } else {
-        out.lib_rs.clone()
+        out.lib_rs
     };
 
     if out.has_main {
@@ -430,13 +464,10 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
     }
 
     // Copy bridge.rs into src/ so `mod bridge;` resolves.
+    // Use fs::copy (single syscall) to avoid the read→write TOCTOU window.
     if let Some(ref bp) = bridge_path {
-        let bridge_content = fs::read_to_string(bp).unwrap_or_else(|e| {
-            eprintln!("Cannot read {}: {e}", bp.display());
-            process::exit(1);
-        });
-        fs::write(src_dir.join("bridge.rs"), &bridge_content).unwrap_or_else(|e| {
-            eprintln!("Cannot write bridge.rs: {e}");
+        fs::copy(bp, src_dir.join("bridge.rs")).unwrap_or_else(|e| {
+            eprintln!("Cannot copy bridge.rs: {e}");
             process::exit(1);
         });
     }
@@ -444,7 +475,7 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
     // If the program uses mvl_runtime, copy it as a sibling directory
     // so the relative path `../mvl_runtime` in Cargo.toml resolves.
     // Always overwrite so stale cached copies don't hide runtime changes.
-    if out.extern_count > 0 {
+    if out.has_extern_rust {
         let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mvl_runtime");
         let runtime_dst = tmp_dir.parent().unwrap().join("mvl_runtime");
         if runtime_src.exists() {
@@ -1271,5 +1302,62 @@ mod assurance_tests {
             .find(|d| d.name == "check_it")
             .unwrap();
         assert!(test.is_test);
+    }
+}
+
+// ── inject_mod_bridge unit tests ──────────────────────────────────────────
+
+#[cfg(test)]
+mod bridge_inject_tests {
+    use super::inject_mod_bridge;
+
+    const PRELUDE: &str = "use mvl_runtime::prelude::*;";
+
+    /// Inserts `mod bridge;` on the line immediately after `use mvl_runtime::prelude::*;`.
+    #[test]
+    fn inserts_after_prelude_marker() {
+        let source = format!("{PRELUDE}\n\nfn main() {{}}\n");
+        let out = inject_mod_bridge(&source);
+        let lines: Vec<&str> = out.lines().collect();
+        let marker_pos = lines
+            .iter()
+            .position(|l| l.trim() == PRELUDE)
+            .expect("prelude line not found");
+        assert_eq!(
+            lines[marker_pos + 1],
+            "mod bridge;",
+            "mod bridge; must follow immediately after prelude"
+        );
+    }
+
+    /// Fallback: prepends `mod bridge;` when the prelude marker is absent.
+    #[test]
+    fn prepends_when_marker_absent() {
+        let source = "fn main() {}\n";
+        let out = inject_mod_bridge(source);
+        assert!(
+            out.starts_with("mod bridge;\n"),
+            "expected mod bridge; at start when marker absent, got:\n{out}"
+        );
+        assert!(
+            out.contains("fn main()"),
+            "original content must be preserved"
+        );
+    }
+
+    /// Content after the insertion point is not truncated or duplicated.
+    #[test]
+    fn content_not_truncated_or_duplicated() {
+        let source = format!("{PRELUDE}\n\nfn foo() -> i64 {{ 1 }}\nfn bar() -> i64 {{ 2 }}\n");
+        let out = inject_mod_bridge(&source);
+        assert!(out.contains("mod bridge;"), "mod bridge; must be present");
+        assert_eq!(out.matches(PRELUDE).count(), 1, "prelude duplicated");
+        assert_eq!(out.matches("fn foo()").count(), 1, "fn foo() duplicated");
+        assert_eq!(out.matches("fn bar()").count(), 1, "fn bar() duplicated");
+        assert_eq!(
+            out.matches("mod bridge;").count(),
+            1,
+            "mod bridge; duplicated"
+        );
     }
 }

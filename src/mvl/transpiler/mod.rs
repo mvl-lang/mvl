@@ -104,3 +104,57 @@ pub fn transpile(prog: &Program, crate_name: &str) -> TranspileOutput {
         has_extern_rust,
     }
 }
+
+// ── has_extern_rust unit tests ─────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mvl::parser::Parser;
+
+    fn parse(src: &str) -> Program {
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+        prog
+    }
+
+    /// `has_extern_rust` is `true` when program contains `extern "rust"` block.
+    #[test]
+    fn has_extern_rust_true_for_rust_abi() {
+        let prog = parse(r#"extern "rust" { fn foo() -> Int; }"#);
+        assert!(has_extern_rust_decls(&prog));
+        assert!(transpile(&prog, "crate").has_extern_rust);
+    }
+
+    /// `has_extern_rust` is `false` when program has no extern blocks at all.
+    #[test]
+    fn has_extern_rust_false_on_plain_program() {
+        let prog = parse("fn add(a: Int, b: Int) -> Int { a + b }");
+        assert!(!has_extern_rust_decls(&prog));
+        let out = transpile(&prog, "crate");
+        assert!(!out.has_extern_rust);
+        // Regression guard: `mod bridge;` must NOT appear in output for non-extern programs.
+        assert!(
+            !out.lib_rs.contains("mod bridge;"),
+            "mod bridge; must not appear for non-extern programs"
+        );
+    }
+
+    /// `extern "c"` block does NOT set `has_extern_rust` (ABI discrimination).
+    #[test]
+    fn has_extern_rust_false_for_c_abi() {
+        let prog = parse(r#"extern "c" { fn bar() -> Int; }"#);
+        assert!(!has_extern_rust_decls(&prog));
+        assert!(!transpile(&prog, "crate").has_extern_rust);
+    }
+
+    /// `has_extern_rust` is `false` when only `extern "c"` is present; `extern_count` is non-zero.
+    #[test]
+    fn extern_count_nonzero_but_has_extern_rust_false() {
+        let prog = parse(r#"extern "c" { fn baz() -> Int; }"#);
+        let out = transpile(&prog, "crate");
+        assert_eq!(out.extern_count, 1);
+        assert!(!out.has_extern_rust);
+    }
+}
