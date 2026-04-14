@@ -444,20 +444,54 @@ impl TypeChecker {
                 span,
             } => {
                 let cond_ty = self.infer_expr(cond);
-                if !matches!(cond_ty, Ty::Bool | Ty::Unknown) {
+                if !cond_ty.is_bool() && !matches!(cond_ty, Ty::Unknown) {
                     self.emit(CheckError::TypeMismatch {
                         expected: "Bool".to_string(),
                         found: cond_ty.display(),
                         span: cond.span(),
                     });
                 }
-                // Use infer_block_type so the last Stmt::Expr in each branch is
-                // treated as the branch's value (not a discarded result).
-                self.infer_block_type(then, return_ty);
+                // Extract the condition's security label for implicit return-type promotion.
+                // Branching on Secret<Bool> or Tainted<Bool> means the choice of branch
+                // reveals the condition's value; non-Unit results must be promoted.
+                let cond_label = ifc::label_of(&cond_ty);
+
+                let then_ty = self.infer_block_type(then, return_ty);
+                // After the normal branch check, apply label promotion for non-Unit results:
+                // the implicit return of an if-statement branch inherits at least the
+                // condition's label. Skip Unit (carries no information).
+                if let (Some(lbl), Some(ret)) = (cond_label, return_ty) {
+                    if !matches!(then_ty.unlabeled(), Ty::Unit | Ty::Unknown) {
+                        let promoted = ifc::apply_label(Some(lbl), then_ty.unlabeled().clone());
+                        if !matches!(promoted, Ty::Unknown) && !types_compatible(ret, &promoted) {
+                            self.emit(CheckError::TypeMismatch {
+                                expected: ret.display(),
+                                found: promoted.display(),
+                                span: *span,
+                            });
+                        }
+                    }
+                }
+
                 if let Some(else_branch) = else_ {
                     match else_branch {
                         ElseBranch::Block(b) => {
-                            self.infer_block_type(b, return_ty);
+                            let else_ty = self.infer_block_type(b, return_ty);
+                            if let (Some(lbl), Some(ret)) = (cond_label, return_ty) {
+                                if !matches!(else_ty.unlabeled(), Ty::Unit | Ty::Unknown) {
+                                    let promoted =
+                                        ifc::apply_label(Some(lbl), else_ty.unlabeled().clone());
+                                    if !matches!(promoted, Ty::Unknown)
+                                        && !types_compatible(ret, &promoted)
+                                    {
+                                        self.emit(CheckError::TypeMismatch {
+                                            expected: ret.display(),
+                                            found: promoted.display(),
+                                            span: *span,
+                                        });
+                                    }
+                                }
+                            }
                         }
                         ElseBranch::If(s) => self.check_stmt(s, return_ty),
                     }
@@ -493,7 +527,7 @@ impl TypeChecker {
 
             Stmt::While { cond, body, span } => {
                 let cond_ty = self.infer_expr(cond);
-                if !matches!(cond_ty, Ty::Bool | Ty::Unknown) {
+                if !cond_ty.is_bool() && !matches!(cond_ty, Ty::Unknown) {
                     self.emit(CheckError::TypeMismatch {
                         expected: "Bool".to_string(),
                         found: cond_ty.display(),

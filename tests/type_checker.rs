@@ -1972,7 +1972,7 @@ fn implicit_flow_print_sink_rejected() {
 #[test]
 fn implicit_flow_else_branch_rejected() {
     let errors = errors_for(
-        r#"fn h(flag: Secret<Bool>) -> Unit ! Console { if flag { 0; } else { println("not taken"); } }"#,
+        r#"fn h(flag: Secret<Bool>) -> Unit ! Console { if flag { } else { println("not taken"); } }"#,
     );
     assert!(
         errors.iter().any(
@@ -2036,7 +2036,7 @@ fn implicit_flow_while_secret_condition_rejected() {
 #[test]
 fn implicit_flow_else_branch_sink_verified() {
     let errors = errors_for(
-        r#"fn h(flag: Secret<Bool>) -> Unit ! Console { if flag { 0; } else { println("not taken"); } }"#,
+        r#"fn h(flag: Secret<Bool>) -> Unit ! Console { if flag { } else { println("not taken"); } }"#,
     );
     assert!(
         errors.iter().any(
