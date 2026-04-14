@@ -1,4 +1,7 @@
 use mvl::mvl::checker;
+use mvl::mvl::checker::passes::{
+    aggregate_verdicts, source_hash, PassRegistry, Verdict, VerdictCache,
+};
 use mvl::mvl::linter::{self, config::LintConfig};
 use mvl::mvl::parser::ast::{Decl, Program, Totality, TypeBody};
 use mvl::mvl::parser::Parser;
@@ -25,7 +28,8 @@ fn main() {
         }
         "check" => {
             let path = require_path_arg(&args, "check");
-            cmd_check(&path);
+            let req_filter = parse_req_filter(&args);
+            cmd_check(&path, req_filter);
         }
         "build" => {
             let path = require_path_arg(&args, "build");
@@ -74,6 +78,7 @@ fn print_usage() {
     eprintln!("  mvl --version, -V                  — show version");
     eprintln!("  mvl --help, -h                     — show this help");
     eprintln!("  mvl check <file|dir>               — parse and type-check");
+    eprintln!("  mvl check <file|dir> --req <N>     — run only the Req N verification pass");
     eprintln!("  mvl build <file|dir>               — transpile to Rust and run cargo build");
     eprintln!("  mvl run   <file.mvl>               — transpile, build, and execute");
     eprintln!("  mvl test  <file|dir>               — find *_test.mvl files and run cargo test");
@@ -83,6 +88,47 @@ fn print_usage() {
     eprintln!("  mvl assurance <file|dir> --json    — emit assurance report as JSON");
     eprintln!("  mvl assurance <file|dir> --verbose — per-function requirement detail");
     eprintln!("  mvl transpile <file.mvl>           — print transpiled Rust to stdout");
+}
+
+/// Escape a string for embedding in a JSON string literal.
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Parse an optional `--req N` or `--req=N` flag from the argument list.
+/// Exits with an error message if the value is present but not in 1–11.
+fn parse_req_filter(args: &[String]) -> Option<u8> {
+    let raw: Option<&str> = if let Some(v) = args.windows(2).find(|w| w[0] == "--req") {
+        Some(v[1].as_str())
+    } else {
+        args.iter().find_map(|a| a.strip_prefix("--req="))
+    };
+
+    raw.map(|s| {
+        let n: u8 = s.parse().unwrap_or_else(|_| {
+            eprintln!("error: --req expects a number 1–11, got {s:?}");
+            process::exit(1);
+        });
+        if !(1..=11).contains(&n) {
+            eprintln!("error: --req {n} out of range (valid: 1–11)");
+            process::exit(1);
+        }
+        n
+    })
 }
 
 fn require_path_arg(args: &[String], cmd: &str) -> String {
@@ -96,24 +142,68 @@ fn require_path_arg(args: &[String], cmd: &str) -> String {
 // ── Commands ─────────────────────────────────────────────────────────────
 
 /// Parse and type-check a .mvl file or all .mvl files in a directory.
-fn cmd_check(path: &str) {
+///
+/// When `req_filter` is `Some(N)`, only the verification pass for Req N is run
+/// and its verdict is printed; errors for other requirements are suppressed.
+fn cmd_check(path: &str, req_filter: Option<u8>) {
     let files = mvl_files(path, false);
     if files.is_empty() {
         eprintln!("No .mvl files found at: {path}");
         process::exit(1);
     }
 
+    let registry = PassRegistry::default_registry();
     let mut had_errors = false;
+
     for file in &files {
         let file_str = file.display().to_string();
         let (prog, _src) = parse_or_exit(&file_str);
         let result = checker::check(&prog);
-        if result.is_ok() {
-            println!("{file_str}: OK");
+
+        if let Some(req) = req_filter {
+            // Single-requirement mode: run only the requested pass.
+            let verdict = registry.run_req(req, &prog, &result);
+            let name = registry.pass_name(req).unwrap_or("unknown");
+            if let Some(loc) = verdict.location() {
+                println!(
+                    "{file_str}:{loc}: Req {req} ({name}) — {} — {}",
+                    verdict.label(),
+                    verdict.detail()
+                );
+            } else {
+                println!(
+                    "{file_str}: Req {req} ({name}) — {} — {}",
+                    verdict.label(),
+                    verdict.detail()
+                );
+            }
+            if verdict.is_failed() {
+                had_errors = true;
+            }
         } else {
-            had_errors = true;
-            for err in &result.errors {
-                eprintln!("error in {file_str}: {err:?}");
+            // Full check mode: report type errors then show verdict summary.
+            let verdicts = registry.run_all(&prog, &result);
+            let proven = (1u8..=11)
+                .filter(|&i| verdicts[i as usize].is_proven())
+                .count();
+            if result.is_ok() {
+                println!("{file_str}: OK  ({proven}/11 requirements proven)");
+            } else {
+                had_errors = true;
+                for err in &result.errors {
+                    eprintln!(
+                        "{}:{}:{}: error[req{}]: {}",
+                        file_str,
+                        err.span().line,
+                        err.span().col,
+                        err.requirement_number(),
+                        err.message()
+                    );
+                }
+                let failed = (1u8..=11)
+                    .filter(|&i| verdicts[i as usize].is_failed())
+                    .count();
+                eprintln!("{file_str}: FAIL  ({proven}/11 proven, {failed} failed)");
             }
         }
     }
@@ -550,10 +640,14 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
     let mut total_capabilities_fns: usize = 0;
     let mut total_refinements_fns: usize = 0;
     let mut all_fn_details: Vec<FnDetail> = Vec::new();
+    // Verification pass infrastructure.
+    let registry = PassRegistry::default_registry();
+    let mut verdict_cache = VerdictCache::default();
+    let mut per_file_verdicts: Vec<[Verdict; 12]> = Vec::new();
 
     for file in &files {
         let file_str = file.display().to_string();
-        let (prog, _src) = parse_or_exit(&file_str);
+        let (prog, src) = parse_or_exit(&file_str);
         let stats = collect_assurance_stats(&prog, verbose);
         let result = checker::check(&prog);
 
@@ -575,8 +669,26 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
         if verbose {
             all_fn_details.extend(stats.fn_details);
         }
+
+        // Run verification passes (with incremental cache).
+        let hash = source_hash(&src);
+        let verdicts = if let Some(cached) = verdict_cache.get(file, hash) {
+            cached.to_owned()
+        } else {
+            let v = registry.run_all(&prog, &result);
+            verdict_cache.insert(file.clone(), hash, v.clone());
+            v
+        };
+        per_file_verdicts.push(verdicts);
+
         file_count += 1;
     }
+
+    // Aggregate verdicts across all files.
+    let project_verdicts = aggregate_verdicts(&per_file_verdicts);
+    let proven_count = (1u8..=11)
+        .filter(|&i| project_verdicts[i as usize].is_proven())
+        .count();
 
     let implemented = total_fns.saturating_sub(total_extern);
     let verified_pct = if implemented > 0 {
@@ -598,6 +710,17 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
         // NOTE(#96): "pub" is always 0 until the module resolver is merged.
         let req_json: String = (1..=11)
             .map(|i| format!("    \"{i}\": {}", req_errors[i]))
+            .collect::<Vec<_>>()
+            .join(",\n");
+        let verdicts_json: String = (1u8..=11)
+            .map(|i| {
+                let v = &project_verdicts[i as usize];
+                format!(
+                    "    \"{i}\": {{ \"status\": \"{}\", \"detail\": \"{}\" }}",
+                    v.label(),
+                    json_escape(v.detail())
+                )
+            })
             .collect::<Vec<_>>()
             .join(",\n");
         println!(
@@ -622,6 +745,10 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
   "requirements": {{
 {req_json}
   }},
+  "verdicts": {{
+{verdicts_json}
+  }},
+  "proven": {proven_count},
   "check_errors": {check_errors}
 }}"#
         );
@@ -636,7 +763,7 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
         println!("  implemented:       {implemented}");
         println!("  test fn:           {total_test_fns}");
         println!();
-        println!("Requirements verified:");
+        println!("Requirements verified:  {proven_count}/11 proven");
         print_req_row(
             1,
             "Type safety",
@@ -732,6 +859,21 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
                 total_extern, req_errors[11]
             ),
         );
+        println!();
+        println!("Prover verdicts:");
+        for req in 1u8..=11 {
+            let v = &project_verdicts[req as usize];
+            let name = registry.pass_name(req).unwrap_or("unknown");
+            println!(
+                "  Req {:>2}  {:<20} {}  {}",
+                req,
+                name,
+                v.status_char(),
+                v.detail()
+            );
+        }
+        println!();
+        println!("  ✓ proven  ✗ failed  ~ unchecked (Phase 3 prover pending)");
         println!();
         println!("Type errors:         {check_errors}");
         if check_errors == 0 {
