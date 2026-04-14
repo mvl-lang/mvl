@@ -8,5 +8,6 @@ extern "rust" {
 }
 
 fn main() -> Unit ! Console {
+    let result = bridge_add(41);
     println("bridge ok");
 }

@@ -396,35 +396,33 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
     });
 
     // Detect a sibling bridge.rs — Rust implementations of extern "rust" fns.
-    // Canonicalize immediately to resolve symlinks, then validate that the
-    // resolved path stays inside the source directory (scope check).
+    // Use canonicalize directly (no exists() pre-check) to eliminate the TOCTOU
+    // race window. NotFound → no bridge. Any other error → hard fail.
+    // Validate that the resolved path stays inside the source directory (symlink-escape guard).
     let mvl_dir = Path::new(&file_path)
         .parent()
         .unwrap_or_else(|| Path::new("."));
     let bridge_candidate = mvl_dir.join("bridge.rs");
-    let bridge_path: Option<std::path::PathBuf> = if bridge_candidate.exists() {
-        let canon_bridge = fs::canonicalize(&bridge_candidate).unwrap_or_else(|e| {
+    let bridge_path: Option<PathBuf> = match fs::canonicalize(&bridge_candidate) {
+        Ok(canon_bridge) => {
+            let canon_dir = fs::canonicalize(mvl_dir).unwrap_or_else(|e| {
+                eprintln!("error: cannot canonicalize {}: {e}", mvl_dir.display());
+                process::exit(1);
+            });
+            if !canon_bridge.starts_with(&canon_dir) {
+                eprintln!("error: bridge.rs is outside source directory — refusing to copy",);
+                process::exit(1);
+            }
+            Some(canon_bridge)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
             eprintln!(
-                "error: cannot canonicalize {}: {e}",
+                "error: cannot resolve bridge.rs at {}: {e}",
                 bridge_candidate.display()
             );
             process::exit(1);
-        });
-        let canon_dir = fs::canonicalize(mvl_dir).unwrap_or_else(|e| {
-            eprintln!("error: cannot canonicalize {}: {e}", mvl_dir.display());
-            process::exit(1);
-        });
-        if !canon_bridge.starts_with(&canon_dir) {
-            eprintln!(
-                "error: bridge.rs ({}) is outside source directory ({}) — refusing to copy",
-                canon_bridge.display(),
-                canon_dir.display()
-            );
-            process::exit(1);
         }
-        Some(canon_bridge)
-    } else {
-        None
     };
 
     if out.has_extern_rust && bridge_path.is_none() {
@@ -440,7 +438,7 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
     let main_source = if bridge_path.is_some() {
         inject_mod_bridge(&out.lib_rs)
     } else {
-        out.lib_rs.clone()
+        out.lib_rs
     };
 
     if out.has_main {
@@ -466,13 +464,10 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
     }
 
     // Copy bridge.rs into src/ so `mod bridge;` resolves.
+    // Use fs::copy (single syscall) to avoid the read→write TOCTOU window.
     if let Some(ref bp) = bridge_path {
-        let bridge_content = fs::read_to_string(bp).unwrap_or_else(|e| {
-            eprintln!("Cannot read {}: {e}", bp.display());
-            process::exit(1);
-        });
-        fs::write(src_dir.join("bridge.rs"), &bridge_content).unwrap_or_else(|e| {
-            eprintln!("Cannot write bridge.rs: {e}");
+        fs::copy(bp, src_dir.join("bridge.rs")).unwrap_or_else(|e| {
+            eprintln!("Cannot copy bridge.rs: {e}");
             process::exit(1);
         });
     }
@@ -480,7 +475,7 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
     // If the program uses mvl_runtime, copy it as a sibling directory
     // so the relative path `../mvl_runtime` in Cargo.toml resolves.
     // Always overwrite so stale cached copies don't hide runtime changes.
-    if out.extern_count > 0 {
+    if out.has_extern_rust {
         let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mvl_runtime");
         let runtime_dst = tmp_dir.parent().unwrap().join("mvl_runtime");
         if runtime_src.exists() {

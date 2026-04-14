@@ -226,3 +226,50 @@ fn build_succeeds_with_valid_bridge() {
         String::from_utf8_lossy(&out.stderr),
     );
 }
+
+/// bridge.rs that is a symlink pointing outside the source directory MUST be
+/// rejected with a non-zero exit and an actionable error message.
+///
+/// Spec 006 path-hardening: symlink-escape guard (canonicalize + starts_with).
+#[cfg(unix)]
+#[test]
+fn bridge_symlink_outside_source_dir_rejected() {
+    use std::os::unix::fs::symlink;
+    use tempfile::tempdir;
+
+    let outer = tempdir().expect("outer tempdir");
+    let project = tempdir().expect("project tempdir");
+
+    // Real bridge.rs lives outside the project directory.
+    let real_bridge = outer.path().join("real_bridge.rs");
+    std::fs::write(
+        &real_bridge,
+        "#[no_mangle] pub extern \"Rust\" fn foo() -> i64 { 1 }\n",
+    )
+    .expect("write real_bridge.rs");
+
+    // Symlink bridge.rs inside the project pointing outside.
+    let bridge_link = project.path().join("bridge.rs");
+    symlink(&real_bridge, &bridge_link).expect("create symlink");
+
+    // Minimal MVL program with extern "rust".
+    let mvl_src = project.path().join("main.mvl");
+    std::fs::write(
+        &mvl_src,
+        "extern \"rust\" { fn foo() -> Int; }\nfn main() -> Unit ! Console { println(\"x\"); }\n",
+    )
+    .expect("write main.mvl");
+
+    let out = run_mvl_build(&mvl_src.display().to_string());
+    assert!(
+        !out.status.success(),
+        "mvl build must exit non-zero when bridge.rs is a symlink outside the source dir; \
+         stderr: {}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("outside source directory"),
+        "error must mention 'outside source directory', got:\n{stderr}"
+    );
+}
