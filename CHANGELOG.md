@@ -6,7 +6,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
-## [0.15.0] — 2026-04-14 (feat: termination checker — Req 8 structural recursion)
+## [0.16.0] — 2026-04-14 (feat: termination checker — Req 8 structural recursion)
 
 ### Added
 - `src/mvl/checker/termination.rs` — structural recursion checker for Req 8 (Termination)
