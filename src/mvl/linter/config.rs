@@ -9,6 +9,8 @@
 //!
 //! ## Supported keys
 //!
+//! ### Phase 1 — style rules
+//!
 //! | Key               | Default | Description                                     |
 //! |-------------------|---------|-------------------------------------------------|
 //! | `line_length`     | `120`   | Maximum line length (characters)                |
@@ -17,7 +19,17 @@
 //! | `max_fn_length`   | `50`    | Maximum lines in a function body (0 = disabled) |
 //! | `naming`          | `true`  | Enforce `snake_case` / `PascalCase` conventions |
 //! | `trailing_ws`     | `true`  | Flag trailing whitespace                        |
-//! | `unused_bindings` | `true`  | Flag unused `let` bindings                      |
+//! | `unused_bindings` | `true`  | Flag unused `let` bindings (future)             |
+//!
+//! ### Phase 2 — semantic rules
+//!
+//! | Key                    | Default | Description                                          |
+//! |------------------------|---------|------------------------------------------------------|
+//! | `unreachable_code`     | `true`  | Flag statements after `return` in a block            |
+//! | `redundant_match`      | `true`  | Flag `match` with a single irrefutable arm           |
+//! | `unnecessary_annotations` | `true` | Flag literal `let` bindings with obvious types    |
+//! | `redundant_effects`    | `true`  | Flag effect declarations on call-free functions      |
+//! | `redundant_ifc_labels` | `true`  | Flag `Public<T>` annotations (redundant base label)  |
 
 use std::path::{Path, PathBuf};
 use std::{env, fs};
@@ -39,6 +51,18 @@ pub struct LintConfig {
     pub trailing_ws: bool,
     /// Whether unused-binding rule is active.
     pub unused_bindings: bool,
+
+    // ── Phase 2: semantic rules ───────────────────────────────────────────
+    /// Flag statements that follow a `return` in the same block.
+    pub unreachable_code: bool,
+    /// Flag `match` expressions/statements with a single irrefutable arm.
+    pub redundant_match: bool,
+    /// Flag `let` bindings that annotate a literal with its obvious type.
+    pub unnecessary_annotations: bool,
+    /// Flag functions that declare effects but contain no function calls.
+    pub redundant_effects: bool,
+    /// Flag `Public<T>` type annotations (the base IFC label, always redundant).
+    pub redundant_ifc_labels: bool,
 }
 
 impl Default for LintConfig {
@@ -51,6 +75,11 @@ impl Default for LintConfig {
             naming: true,
             trailing_ws: true,
             unused_bindings: true,
+            unreachable_code: true,
+            redundant_match: true,
+            unnecessary_annotations: true,
+            redundant_effects: true,
+            redundant_ifc_labels: true,
         }
     }
 }
@@ -147,6 +176,11 @@ fn load_from(path: &Path) -> Option<LintConfig> {
             "naming" => cfg.naming = parse_bool(val),
             "trailing_ws" => cfg.trailing_ws = parse_bool(val),
             "unused_bindings" => cfg.unused_bindings = parse_bool(val),
+            "unreachable_code" => cfg.unreachable_code = parse_bool(val),
+            "redundant_match" => cfg.redundant_match = parse_bool(val),
+            "unnecessary_annotations" => cfg.unnecessary_annotations = parse_bool(val),
+            "redundant_effects" => cfg.redundant_effects = parse_bool(val),
+            "redundant_ifc_labels" => cfg.redundant_ifc_labels = parse_bool(val),
             _ => {} // unknown keys are silently ignored (forward-compat)
         }
     }

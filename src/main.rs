@@ -235,16 +235,26 @@ fn cmd_lint(path: &str, show_config: bool) {
         } else {
             eprintln!("config: <defaults — no .mvllintrc or XDG config found>");
         }
-        eprintln!("  line_length    = {}", cfg.line_length);
-        eprintln!("  indent_size    = {}", cfg.indent_size);
+        eprintln!("  [phase-1: style]");
+        eprintln!("  line_length          = {}", cfg.line_length);
+        eprintln!("  indent_size          = {}", cfg.indent_size);
         eprintln!(
-            "  indent_style   = {}",
+            "  indent_style         = {}",
             if cfg.indent_spaces { "spaces" } else { "tabs" }
         );
-        eprintln!("  max_fn_length  = {}", cfg.max_fn_length);
-        eprintln!("  naming         = {}", cfg.naming);
-        eprintln!("  trailing_ws    = {}", cfg.trailing_ws);
-        eprintln!("  unused_bindings = {}", cfg.unused_bindings);
+        eprintln!("  max_fn_length        = {}", cfg.max_fn_length);
+        eprintln!("  naming               = {}", cfg.naming);
+        eprintln!("  trailing_ws          = {}", cfg.trailing_ws);
+        eprintln!("  unused_bindings      = {}", cfg.unused_bindings);
+        eprintln!("  [phase-2: semantic]");
+        eprintln!("  unreachable_code     = {}", cfg.unreachable_code);
+        eprintln!("  redundant_match      = {}", cfg.redundant_match);
+        eprintln!(
+            "  unnecessary_annotations = {}",
+            cfg.unnecessary_annotations
+        );
+        eprintln!("  redundant_effects    = {}", cfg.redundant_effects);
+        eprintln!("  redundant_ifc_labels = {}", cfg.redundant_ifc_labels);
         return;
     }
 

@@ -50,19 +50,32 @@ impl LintResult {
     }
 }
 
-/// Run all enabled Phase-1 lint rules against a parsed program and its source.
+/// Run all enabled lint rules against a parsed program and its source.
+///
+/// Phase 1 — style rules: trailing whitespace, line length, indentation,
+/// final newline, naming conventions, function body length.
+///
+/// Phase 2 — semantic rules: unreachable code, redundant match, unnecessary
+/// type annotations, redundant effect declarations, redundant IFC labels.
 pub fn lint(prog: &Program, src: &str, cfg: &LintConfig) -> LintResult {
     let mut diags: Vec<LintDiag> = Vec::new();
 
-    // Source rules
+    // Phase 1: source rules
     rules::trailing_whitespace(src, cfg, &mut diags);
     rules::line_length(src, cfg, &mut diags);
     rules::indentation(src, cfg, &mut diags);
     rules::final_newline(src, cfg, &mut diags);
 
-    // AST rules
+    // Phase 1: AST rules
     rules::naming(prog, cfg, &mut diags);
     rules::fn_length(prog, src, cfg, &mut diags);
+
+    // Phase 2: semantic rules
+    rules::unreachable_code(prog, cfg, &mut diags);
+    rules::redundant_match(prog, cfg, &mut diags);
+    rules::unnecessary_annotations(prog, cfg, &mut diags);
+    rules::redundant_effects(prog, cfg, &mut diags);
+    rules::redundant_ifc_labels(prog, cfg, &mut diags);
 
     // Sort by line then col for consistent output
     diags.sort_by_key(|d| (d.span.line, d.span.col));
