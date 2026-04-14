@@ -26,8 +26,8 @@ use std::collections::HashMap;
 
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::parser::ast::{
-    ArithOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, Literal, LogicOp, MatchBody, Pattern,
-    Program, RefExpr, Stmt, TypeBody, TypeExpr, UnaryOp,
+    ArithOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, LValue, Literal, LogicOp, MatchBody,
+    Pattern, Program, RefExpr, Stmt, TypeBody, TypeExpr, UnaryOp,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -333,8 +333,13 @@ fn analyze_stmt(
                 var_refs.insert(name.clone(), pred);
             }
         }
-        Stmt::Assign { value, .. } => {
+        Stmt::Assign { target, value, .. } => {
             analyze_expr(value, var_refs, fn_params, type_refs, errors, counts);
+            // Reassignment invalidates any refinement the variable carried from its binding.
+            // Field assignments don't affect the variable's top-level refinement.
+            if let LValue::Ident(name, _) = target {
+                var_refs.insert(name.clone(), None);
+            }
         }
         Stmt::Return { value, .. } => {
             if let Some(e) = value {
@@ -451,10 +456,12 @@ fn analyze_expr(
             }
         }
         Expr::Lambda { params, body, .. } => {
-            // Lambda params may have refinements; add them to a child scope.
+            // Lambda params may have refinements; normalise them (param name → "self")
+            // before inserting so that preds_equivalent works correctly.
             let mut child_refs = var_refs.clone();
             for p in params {
-                child_refs.insert(p.name.clone(), p.refinement.clone());
+                let pred = p.refinement.as_ref().map(|r| normalize_pred(r, &p.name));
+                child_refs.insert(p.name.clone(), pred);
             }
             analyze_expr(body, &mut child_refs, fn_params, type_refs, errors, counts);
         }
@@ -521,9 +528,10 @@ fn check_arg_against_pred(
     var_refs: &HashMap<String, Option<RefExpr>>,
 ) -> RefResult {
     match arg {
-        // Integer / float literals: evaluate the predicate with `self = value`.
-        Expr::Literal(Literal::Integer(n), _) => eval_pred_numeric(*n as f64, pred),
-        Expr::Literal(Literal::Float(f), _) => eval_pred_numeric(*f, pred),
+        // Integer literals: evaluate in the integer domain for exact semantics.
+        Expr::Literal(Literal::Integer(n), _) => eval_pred_int(*n, pred),
+        // Float literals: evaluate in the float domain.
+        Expr::Literal(Literal::Float(f), _) => eval_pred_float(*f, pred),
 
         // Unary negation of a literal: evaluate with the negated value.
         Expr::Unary {
@@ -531,8 +539,11 @@ fn check_arg_against_pred(
             expr: inner,
             ..
         } => match inner.as_ref() {
-            Expr::Literal(Literal::Integer(n), _) => eval_pred_numeric(-(*n as f64), pred),
-            Expr::Literal(Literal::Float(f), _) => eval_pred_numeric(-f, pred),
+            Expr::Literal(Literal::Integer(n), _) => match n.checked_neg() {
+                Some(neg) => eval_pred_int(neg, pred),
+                None => RefResult::RuntimeCheck,
+            },
+            Expr::Literal(Literal::Float(f), _) => eval_pred_float(-f, pred),
             _ => RefResult::RuntimeCheck,
         },
 
@@ -549,24 +560,43 @@ fn check_arg_against_pred(
 
 // ── Predicate evaluation for literal values ───────────────────────────────────
 
-fn eval_pred_numeric(self_val: f64, pred: &RefExpr) -> RefResult {
-    match eval_bool(self_val, pred) {
+/// Evaluate a predicate against an integer literal in the integer domain.
+///
+/// Uses `i64` arithmetic throughout to preserve exact integer semantics.
+/// Integer division is truncating (matching MVL/Rust semantics), not floating-point.
+fn eval_pred_int(self_val: i64, pred: &RefExpr) -> RefResult {
+    match eval_bool_int(self_val, pred) {
         Some(true) => RefResult::Proven,
         Some(false) => RefResult::Failed,
         None => RefResult::RuntimeCheck,
     }
 }
 
-fn eval_bool(self_val: f64, pred: &RefExpr) -> Option<bool> {
+/// Evaluate a predicate against a float literal in the float domain.
+fn eval_pred_float(self_val: f64, pred: &RefExpr) -> RefResult {
+    match eval_bool_float(self_val, pred) {
+        Some(true) => RefResult::Proven,
+        Some(false) => RefResult::Failed,
+        None => RefResult::RuntimeCheck,
+    }
+}
+
+/// Evaluate a boolean predicate with `self = self_val` in the integer domain.
+///
+/// Returns `None` when the predicate contains a sub-expression that cannot be
+/// evaluated (e.g. a `Len` node), which conservatively falls back to `RuntimeCheck`.
+///
+/// Short-circuits `And`/`Or` when one branch is definitively `false`/`true`.
+fn eval_bool_int(self_val: i64, pred: &RefExpr) -> Option<bool> {
     match pred {
         RefExpr::Compare {
             op, left, right, ..
         } => {
-            let l = eval_num(self_val, left)?;
-            let r = eval_num(self_val, right)?;
+            let l = eval_num_int(self_val, left)?;
+            let r = eval_num_int(self_val, right)?;
             Some(match op {
-                CmpOp::Eq => (l - r).abs() < f64::EPSILON,
-                CmpOp::Ne => (l - r).abs() >= f64::EPSILON,
+                CmpOp::Eq => l == r,
+                CmpOp::Ne => l != r,
                 CmpOp::Lt => l < r,
                 CmpOp::Gt => l > r,
                 CmpOp::Le => l <= r,
@@ -577,45 +607,60 @@ fn eval_bool(self_val: f64, pred: &RefExpr) -> Option<bool> {
             op, left, right, ..
         } => match op {
             LogicOp::And => {
-                let l = eval_bool(self_val, left)?;
-                let r = eval_bool(self_val, right)?;
-                Some(l && r)
+                let l = eval_bool_int(self_val, left);
+                if l == Some(false) {
+                    return Some(false);
+                }
+                let r = eval_bool_int(self_val, right);
+                match (l, r) {
+                    (Some(a), Some(b)) => Some(a && b),
+                    _ => None,
+                }
             }
             LogicOp::Or => {
-                let l = eval_bool(self_val, left)?;
-                let r = eval_bool(self_val, right)?;
-                Some(l || r)
+                let l = eval_bool_int(self_val, left);
+                if l == Some(true) {
+                    return Some(true);
+                }
+                let r = eval_bool_int(self_val, right);
+                match (l, r) {
+                    (Some(a), Some(b)) => Some(a || b),
+                    _ => None,
+                }
             }
         },
-        RefExpr::Not { inner, .. } => Some(!eval_bool(self_val, inner)?),
-        RefExpr::Grouped { inner, .. } => eval_bool(self_val, inner),
+        RefExpr::Not { inner, .. } => Some(!eval_bool_int(self_val, inner)?),
+        RefExpr::Grouped { inner, .. } => eval_bool_int(self_val, inner),
         _ => None,
     }
 }
 
-fn eval_num(self_val: f64, expr: &RefExpr) -> Option<f64> {
+/// Evaluate a numeric sub-expression with `self = self_val` in the integer domain.
+///
+/// Returns `None` for nodes that are not representable as `i64`
+/// (e.g. `Float`, `Len`), causing the caller to fall back to `RuntimeCheck`.
+fn eval_num_int(self_val: i64, expr: &RefExpr) -> Option<i64> {
     match expr {
         RefExpr::Ident { name, .. } if name == "self" => Some(self_val),
-        RefExpr::Integer { value, .. } => Some(*value as f64),
-        RefExpr::Float { value, .. } => Some(*value),
+        RefExpr::Integer { value, .. } => Some(*value),
         RefExpr::ArithOp {
             op, left, right, ..
         } => {
-            let l = eval_num(self_val, left)?;
-            let r = eval_num(self_val, right)?;
+            let l = eval_num_int(self_val, left)?;
+            let r = eval_num_int(self_val, right)?;
             match op {
-                ArithOp::Add => Some(l + r),
-                ArithOp::Sub => Some(l - r),
-                ArithOp::Mul => Some(l * r),
+                ArithOp::Add => l.checked_add(r),
+                ArithOp::Sub => l.checked_sub(r),
+                ArithOp::Mul => l.checked_mul(r),
                 ArithOp::Div => {
-                    if r.abs() < f64::EPSILON {
+                    if r == 0 {
                         None
                     } else {
                         Some(l / r)
                     }
                 }
                 ArithOp::Rem => {
-                    if r.abs() < f64::EPSILON {
+                    if r == 0 {
                         None
                     } else {
                         Some(l % r)
@@ -623,7 +668,94 @@ fn eval_num(self_val: f64, expr: &RefExpr) -> Option<f64> {
                 }
             }
         }
-        RefExpr::Grouped { inner, .. } => eval_num(self_val, inner),
+        RefExpr::Grouped { inner, .. } => eval_num_int(self_val, inner),
+        // Float literals and Len are not in the integer domain.
+        _ => None,
+    }
+}
+
+/// Evaluate a boolean predicate with `self = self_val` in the float domain.
+///
+/// Short-circuits `And`/`Or` when one branch is definitively `false`/`true`.
+fn eval_bool_float(self_val: f64, pred: &RefExpr) -> Option<bool> {
+    match pred {
+        RefExpr::Compare {
+            op, left, right, ..
+        } => {
+            let l = eval_num_float(self_val, left)?;
+            let r = eval_num_float(self_val, right)?;
+            Some(match op {
+                CmpOp::Eq => l == r,
+                CmpOp::Ne => l != r,
+                CmpOp::Lt => l < r,
+                CmpOp::Gt => l > r,
+                CmpOp::Le => l <= r,
+                CmpOp::Ge => l >= r,
+            })
+        }
+        RefExpr::LogicOp {
+            op, left, right, ..
+        } => match op {
+            LogicOp::And => {
+                let l = eval_bool_float(self_val, left);
+                if l == Some(false) {
+                    return Some(false);
+                }
+                let r = eval_bool_float(self_val, right);
+                match (l, r) {
+                    (Some(a), Some(b)) => Some(a && b),
+                    _ => None,
+                }
+            }
+            LogicOp::Or => {
+                let l = eval_bool_float(self_val, left);
+                if l == Some(true) {
+                    return Some(true);
+                }
+                let r = eval_bool_float(self_val, right);
+                match (l, r) {
+                    (Some(a), Some(b)) => Some(a || b),
+                    _ => None,
+                }
+            }
+        },
+        RefExpr::Not { inner, .. } => Some(!eval_bool_float(self_val, inner)?),
+        RefExpr::Grouped { inner, .. } => eval_bool_float(self_val, inner),
+        _ => None,
+    }
+}
+
+fn eval_num_float(self_val: f64, expr: &RefExpr) -> Option<f64> {
+    match expr {
+        RefExpr::Ident { name, .. } if name == "self" => Some(self_val),
+        RefExpr::Integer { value, .. } => Some(*value as f64),
+        RefExpr::Float { value, .. } => Some(*value),
+        RefExpr::ArithOp {
+            op, left, right, ..
+        } => {
+            let l = eval_num_float(self_val, left)?;
+            let r = eval_num_float(self_val, right)?;
+            match op {
+                ArithOp::Add => Some(l + r),
+                ArithOp::Sub => Some(l - r),
+                ArithOp::Mul => Some(l * r),
+                ArithOp::Div => {
+                    if r == 0.0 {
+                        None
+                    } else {
+                        Some(l / r)
+                    }
+                }
+                ArithOp::Rem => {
+                    if r == 0.0 {
+                        None
+                    } else {
+                        Some(l % r)
+                    }
+                }
+            }
+        }
+        RefExpr::Grouped { inner, .. } => eval_num_float(self_val, inner),
         _ => None,
     }
 }
@@ -646,7 +778,7 @@ fn preds_equivalent(a: &RefExpr, b: &RefExpr) -> bool {
         }
         (RefExpr::Integer { value: va, .. }, RefExpr::Integer { value: vb, .. }) => va == vb,
         (RefExpr::Float { value: va, .. }, RefExpr::Float { value: vb, .. }) => {
-            (va - vb).abs() < f64::EPSILON
+            va.to_bits() == vb.to_bits()
         }
         (
             RefExpr::Compare {
@@ -706,14 +838,12 @@ fn preds_equivalent(a: &RefExpr, b: &RefExpr) -> bool {
     }
 }
 
-/// Returns `true` for `"self"` or for any single-character parameter name
-/// used as a stand-in for the refined value (e.g. `x` in `fn f(x: Int where x > 0)`).
+/// Returns `true` for `"self"` — the canonical name used after predicate normalisation.
 ///
-/// During structural comparison we treat any non-`self` identifier that is the
-/// sole "value" variable in the predicate as equivalent to `self`, because MVL
-/// allows `fn f(x: Int where x > 0)` as sugar for `fn f(x: Int where self > 0)`.
-/// We conservatively say two idents are "self-like" only if both appear to be
-/// the refined value (i.e. not a constant or field name).
+/// All parameter names in stored predicates are rewritten to `"self"` by
+/// `normalize_pred` before being inserted into lookup tables.  Structural
+/// equivalence comparison via `preds_equivalent` therefore only needs to match
+/// on this single canonical identifier.
 fn is_self_like(name: &str) -> bool {
     name == "self"
 }
