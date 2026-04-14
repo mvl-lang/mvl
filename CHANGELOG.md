@@ -6,6 +6,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.19.1] — 2026-04-14 (fix: bridge.rs hardening and test coverage)
+
+### Added
+
+- **Bridge discovery and injection tests** — Spec 006 compliance: unit tests for `inject_mod_bridge` (inserts after marker, fallback prepend, no truncation), unit tests for `has_extern_rust_decls` (ABI discrimination: rust vs c), integration tests for missing-bridge error and valid-bridge build success, and integration test for symlink-escape hardening.
+- **Symlink-escape test** — `bridge_symlink_outside_source_dir_rejected` verifies that `mvl build` rejects bridge.rs files that symlink outside the source directory.
+
+### Changed
+
+- **Bridge path security** — Replaced `exists()` + `canonicalize()` pattern (TOCTOU race window) with direct `canonicalize()` call handling `NotFound` as the no-bridge case.
+- **Bridge copy atomic operation** — Replaced `read_to_string()` + `write()` with `fs::copy()` (single syscall) to eliminate the race window between scope validation and file read.
+- **Runtime copy guard** — Changed condition from `extern_count > 0` to `has_extern_rust` (Spec 006 Req 6), so only `extern "rust"` programs trigger MVL runtime copy, not `extern "c"`.
+- **Error message disclosure** — Symlink-escape error no longer prints canonical internal paths.
+
 ## [0.19.0] — 2026-04-14 (feat: checker phase 3 — implicit flow analysis and Proven verdict)
 
 ### Added
