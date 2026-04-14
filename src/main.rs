@@ -1,4 +1,5 @@
 use mvl::mvl::checker;
+use mvl::mvl::linter::{self, config::LintConfig};
 use mvl::mvl::parser::ast::{Decl, Program, Totality, TypeBody};
 use mvl::mvl::parser::Parser;
 use mvl::mvl::transpiler;
@@ -48,6 +49,11 @@ fn main() {
             let path = require_path_arg(&args, "test");
             cmd_test(&path);
         }
+        "lint" => {
+            let path = require_path_arg(&args, "lint");
+            let show_config = args.iter().any(|a| a == "--show-config");
+            cmd_lint(&path, show_config);
+        }
         "assurance" => {
             let path = require_path_arg(&args, "assurance");
             let json = args.iter().any(|a| a == "--format=json" || a == "--json");
@@ -71,6 +77,8 @@ fn print_usage() {
     eprintln!("  mvl build <file|dir>               — transpile to Rust and run cargo build");
     eprintln!("  mvl run   <file.mvl>               — transpile, build, and execute");
     eprintln!("  mvl test  <file|dir>               — find *_test.mvl files and run cargo test");
+    eprintln!("  mvl lint  <file|dir>               — check style rules");
+    eprintln!("  mvl lint  <file|dir> --show-config — show active linter configuration");
     eprintln!("  mvl assurance <file|dir>           — emit assurance report");
     eprintln!("  mvl assurance <file|dir> --json    — emit assurance report as JSON");
     eprintln!("  mvl assurance <file|dir> --verbose — per-function requirement detail");
@@ -108,6 +116,84 @@ fn cmd_check(path: &str) {
                 eprintln!("error in {file_str}: {err:?}");
             }
         }
+    }
+
+    if had_errors {
+        process::exit(1);
+    }
+}
+
+/// Lint a .mvl file or all .mvl files in a directory for style violations.
+fn cmd_lint(path: &str, show_config: bool) {
+    // Resolve project root: directory of the path arg, or cwd for dirs.
+    let project_root = {
+        let p = Path::new(path);
+        if p.is_file() {
+            p.parent()
+                .map(|d| d.to_path_buf())
+                .unwrap_or_else(|| PathBuf::from("."))
+        } else {
+            p.to_path_buf()
+        }
+    };
+
+    let cfg = LintConfig::load(&project_root);
+
+    if show_config {
+        if let Some(f) = LintConfig::config_file(&project_root) {
+            eprintln!("config: {}", f.display());
+        } else {
+            eprintln!("config: <defaults — no .mvllintrc or XDG config found>");
+        }
+        eprintln!("  line_length    = {}", cfg.line_length);
+        eprintln!("  indent_size    = {}", cfg.indent_size);
+        eprintln!(
+            "  indent_style   = {}",
+            if cfg.indent_spaces { "spaces" } else { "tabs" }
+        );
+        eprintln!("  max_fn_length  = {}", cfg.max_fn_length);
+        eprintln!("  naming         = {}", cfg.naming);
+        eprintln!("  trailing_ws    = {}", cfg.trailing_ws);
+        eprintln!("  unused_bindings = {}", cfg.unused_bindings);
+        return;
+    }
+
+    let files = mvl_files(path, false);
+    if files.is_empty() {
+        eprintln!("No .mvl files found at: {path}");
+        process::exit(1);
+    }
+
+    let mut total_warnings = 0usize;
+    let mut total_errors = 0usize;
+    let mut had_errors = false;
+
+    for file in &files {
+        let file_str = file.display().to_string();
+        let (prog, src) = parse_or_exit(&file_str);
+        let result = linter::lint(&prog, &src, &cfg);
+
+        for diag in &result.diags {
+            eprintln!("{}", diag.render(&file_str));
+        }
+
+        total_warnings += result.warning_count();
+        total_errors += result.error_count();
+
+        if !result.is_ok() {
+            had_errors = true;
+        } else if result.diags.is_empty() {
+            println!("{file_str}: OK");
+        }
+    }
+
+    if files.len() > 1 {
+        eprintln!(
+            "\n{} warning(s), {} error(s) across {} file(s)",
+            total_warnings,
+            total_errors,
+            files.len()
+        );
     }
 
     if had_errors {
