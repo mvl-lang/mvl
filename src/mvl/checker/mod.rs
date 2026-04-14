@@ -717,6 +717,11 @@ impl TypeChecker {
                     if let Some(enum_ty) = self.lookup_enum_for_variant(variant_name) {
                         return enum_ty;
                     }
+                    // Function reference: `xs.map(double)` — ident is a known function name.
+                    // Return Ty::Fn so callers like map/filter can infer the output type.
+                    if let Some(fn_info) = self.env.lookup_fn(name).cloned() {
+                        return Ty::Fn(fn_info.params.clone(), Box::new(fn_info.ret.clone()));
+                    }
                     self.emit(CheckError::UndefinedVariable {
                         name: name.clone(),
                         span: *span,
@@ -757,10 +762,8 @@ impl TypeChecker {
                 args,
                 span,
             } => {
-                let _recv_ty = self.infer_expr(receiver);
-                for arg in args {
-                    self.infer_expr(arg);
-                }
+                let recv_ty = self.infer_expr(receiver);
+                let arg_tys: Vec<Ty> = args.iter().map(|a| self.infer_expr(a)).collect();
                 // Req 9: capability check for actor-boundary crossings.
                 // `channel.send(val)` — first argument must be `iso` or `val`.
                 if method == "send" {
@@ -768,10 +771,9 @@ impl TypeChecker {
                         self.check_send_capability(first_arg, *span);
                     }
                 }
-                // TODO: method-call results inherit Unknown type; IFC label propagation
-                // requires method resolution (Phase 2). Code like `println(secret.to_string())`
-                // bypasses the logging label check today — see 003-information-flow/Req 6.
-                Ty::Unknown
+                // Stdlib method resolution (#43): dispatch on receiver type.
+                // IFC labels propagate through method results via the receiver label.
+                self.infer_method_call(&recv_ty, method, &arg_tys, *span)
             }
 
             // #13: Match expressions
@@ -1183,8 +1185,10 @@ impl TypeChecker {
         if let Some(fn_info) = self.env.lookup_fn(name).cloned() {
             // Variadic built-ins (println, print, assert_eq) have an empty params
             // vec as a sentinel — skip arity and type checking for them.
-            let is_variadic_builtin =
-                matches!(name, "println" | "print" | "assert_eq" | "parse_int");
+            let is_variadic_builtin = matches!(
+                name,
+                "println" | "print" | "assert_eq" | "parse_int" | "format"
+            );
             if !is_variadic_builtin && fn_info.params.len() != arg_tys.len() {
                 self.emit(CheckError::WrongArgCount {
                     name: name.to_string(),
@@ -1239,6 +1243,14 @@ impl TypeChecker {
                 });
             }
 
+            // Req 7: for `format()`, join argument labels into the result so that
+            // `format("x={}", secret_val)` correctly returns `Secret<String>`.
+            if name == "format" {
+                let arg_label = arg_tys
+                    .iter()
+                    .fold(None, |acc, ty| ifc::join_opt(acc, ifc::label_of(ty)));
+                return ifc::apply_label(arg_label, fn_info.ret.clone());
+            }
             fn_info.ret.clone()
         } else {
             // ── Built-in enum constructors ────────────────────────────────
@@ -1265,6 +1277,170 @@ impl TypeChecker {
                 span,
             });
             Ty::Unknown
+        }
+    }
+
+    // ── Method resolution (#43: string + collection ops) ─────────────────
+
+    /// Resolve the return type of a method call based on the receiver type.
+    ///
+    /// All collection methods return `Option<T>` where there is any possibility
+    /// of absence (e.g. `.get`, `.first`) — never panic on valid input.
+    /// IFC labels on the receiver propagate to the result via `apply_label`.
+    fn infer_method_call(
+        &mut self,
+        recv_ty: &Ty,
+        method: &str,
+        arg_tys: &[Ty],
+        _span: crate::mvl::parser::lexer::Span,
+    ) -> Ty {
+        // Join receiver label with all argument labels (Req 7: result sensitivity is
+        // the join of all inputs, e.g. `public_str.replace("x", secret_arg)` → Secret<String>).
+        let recv_label = ifc::label_of(recv_ty);
+        let arg_label = arg_tys
+            .iter()
+            .fold(None, |acc, ty| ifc::join_opt(acc, ifc::label_of(ty)));
+        let label = ifc::join_opt(recv_label, arg_label);
+        let base = recv_ty.unlabeled();
+        let result = match base {
+            Ty::String => Self::string_method_ty(method),
+            Ty::List(elem_ty) => Self::list_method_ty(elem_ty.as_ref(), method, arg_tys),
+            Ty::Named(name, type_args) => match name.as_str() {
+                "Map" => Self::map_method_ty(type_args, method),
+                "Set" => Self::set_method_ty(type_args, method),
+                _ => Ty::Unknown,
+            },
+            _ => Ty::Unknown,
+        };
+        ifc::apply_label(label, result)
+    }
+
+    /// Return type for methods on `String`.
+    fn string_method_ty(method: &str) -> Ty {
+        match method {
+            // Splitting: String → List<String> (never panics, always valid)
+            "split" | "chars" | "lines" => Ty::List(Box::new(Ty::String)),
+            // Transformations returning String
+            "trim" | "trim_start" | "trim_end" | "to_upper" | "to_lower" | "replace"
+            | "replace_all" | "format" => Ty::String,
+            // Searching: Option<Int> — returns None when not found
+            "find" | "rfind" => Ty::Option(Box::new(Ty::Int)),
+            // Predicates
+            "contains" | "starts_with" | "ends_with" | "is_empty" => Ty::Bool,
+            // Numeric
+            "len" => Ty::Int,
+            // Parsing
+            "parse_int" => Ty::Result(Box::new(Ty::Int), Box::new(Ty::String)),
+            "parse_float" => Ty::Result(Box::new(Ty::Float), Box::new(Ty::String)),
+            _ => Ty::Unknown,
+        }
+    }
+
+    /// Return type for methods on `List<T>`.
+    fn list_method_ty(elem_ty: &Ty, method: &str, arg_tys: &[Ty]) -> Ty {
+        match method {
+            // map(f: fn(T) -> U) -> List<U>  — infer U from lambda return type
+            "map" => {
+                let u_ty = if let Some(Ty::Fn(_, ret)) = arg_tys.first() {
+                    *ret.clone()
+                } else {
+                    Ty::Unknown
+                };
+                Ty::List(Box::new(u_ty))
+            }
+            // filter(f: fn(T) -> Bool) -> List<T>
+            "filter" | "sort" | "sort_by" | "collect" | "rev" | "dedup" => {
+                Ty::List(Box::new(elem_ty.clone()))
+            }
+            // fold(init: U, f: fn(U, T) -> U) -> U  — U inferred from init type
+            "fold" => {
+                if let Some(init_ty) = arg_tys.first() {
+                    init_ty.clone()
+                } else {
+                    Ty::Unknown
+                }
+            }
+            // reduce(f: fn(T, T) -> T) -> Option<T>  — returns None for empty list
+            "reduce" => Ty::Option(Box::new(elem_ty.clone())),
+            // enumerate() -> List<(Int, T)>
+            "enumerate" => Ty::List(Box::new(Ty::Tuple(vec![Ty::Int, elem_ty.clone()]))),
+            // zip(other: List<U>) -> List<(T, U)>
+            "zip" => {
+                let u_ty = if let Some(Ty::List(u)) = arg_tys.first() {
+                    *u.clone()
+                } else {
+                    Ty::Unknown
+                };
+                Ty::List(Box::new(Ty::Tuple(vec![elem_ty.clone(), u_ty])))
+            }
+            // join(sep: String) -> String  — only meaningful for List<String>
+            "join" => Ty::String,
+            // Numeric
+            "len" => Ty::Int,
+            // Predicates
+            "contains" | "is_empty" | "any" | "all" => Ty::Bool,
+            // Safe indexed access — Option, never panic
+            "first" | "last" => Ty::Option(Box::new(elem_ty.clone())),
+            "get" => Ty::Option(Box::new(elem_ty.clone())),
+            // Mutations
+            "push" | "extend" | "append" => Ty::Unit,
+            // Flat-map
+            "flat_map" => {
+                let u_ty = if let Some(Ty::Fn(_, ret)) = arg_tys.first() {
+                    if let Ty::List(inner) = ret.as_ref() {
+                        *inner.clone()
+                    } else {
+                        *ret.clone()
+                    }
+                } else {
+                    Ty::Unknown
+                };
+                Ty::List(Box::new(u_ty))
+            }
+            // find returns the element wrapped in Option
+            "find" => Ty::Option(Box::new(elem_ty.clone())),
+            // min/max — Option<T>
+            "min" | "max" => Ty::Option(Box::new(elem_ty.clone())),
+            _ => Ty::Unknown,
+        }
+    }
+
+    /// Return type for methods on `Map<K, V>`.
+    fn map_method_ty(type_args: &[Ty], method: &str) -> Ty {
+        let (k_ty, v_ty) = match type_args {
+            [k, v] => (k.clone(), v.clone()),
+            [k] => (k.clone(), Ty::Unknown),
+            _ => (Ty::Unknown, Ty::Unknown),
+        };
+        match method {
+            // Safe access — Option<V>, never panic
+            "get" => Ty::Option(Box::new(v_ty)),
+            // Predicates
+            "contains_key" | "is_empty" => Ty::Bool,
+            // Numeric
+            "len" => Ty::Int,
+            // Mutation
+            "insert" | "remove_entry" => Ty::Unit,
+            // remove returns old value if present
+            "remove" => Ty::Option(Box::new(v_ty)),
+            // Iteration views
+            "keys" => Ty::List(Box::new(k_ty)),
+            "values" => Ty::List(Box::new(v_ty.clone())),
+            "entries" => Ty::List(Box::new(Ty::Tuple(vec![k_ty, v_ty]))),
+            _ => Ty::Unknown,
+        }
+    }
+
+    /// Return type for methods on `Set<T>`.
+    fn set_method_ty(type_args: &[Ty], method: &str) -> Ty {
+        let t_ty = type_args.first().cloned().unwrap_or(Ty::Unknown);
+        match method {
+            "contains" | "is_empty" | "is_subset" | "is_superset" => Ty::Bool,
+            "len" => Ty::Int,
+            "insert" | "remove" => Ty::Unit,
+            "iter" | "to_list" => Ty::List(Box::new(t_ty.clone())),
+            "union" | "intersection" | "difference" => Ty::Named("Set".to_string(), vec![t_ty]),
+            _ => Ty::Unknown,
         }
     }
 

@@ -245,6 +245,16 @@ impl TypeEnv {
                 totality: None,
             },
         );
+        // format — string interpolation, variadic (template + args), pure
+        self.fns.insert(
+            "format".into(),
+            FnInfo {
+                params: vec![],
+                ret: Ty::String,
+                effects: vec![],
+                totality: None,
+            },
+        );
     }
 
     // ── Scope management ─────────────────────────────────────────────────

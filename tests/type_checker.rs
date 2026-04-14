@@ -315,6 +315,19 @@ fn immutability_corpus_parses_and_checks() {
 }
 
 #[test]
+fn collections_corpus_parses_and_checks() {
+    // GIVEN: the string + collection operations corpus (#43)
+    // THEN: no type errors (method calls resolve to correct types)
+    let src = include_str!("corpus/02_types/collections.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "collections corpus should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
 fn immutable_binding_assignment_rejected() {
     // GIVEN: assignment to `let x` (no `mut`)
     // THEN: AssignToImmutable reported

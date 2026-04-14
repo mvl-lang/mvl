@@ -6,6 +6,28 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-04-14 (feat: stdlib method resolution for string + collection ops)
+
+### Added
+
+- **Stdlib method dispatch** — Method calls on String, List, Map, Set now resolve to concrete types instead of `Unknown`. Supports 40+ methods across all collection types with correct return types (Option<T> for safe access, proper type inference for map/filter/fold).
+  - **String methods**: split, trim, find, replace, to_upper/lower, len, contains, starts_with, ends_with, chars, lines, parse_int, parse_float, format
+  - **List methods**: map (infers element type from function return), filter, fold, reduce, sort, enumerate, zip, join, min/max, find, any/all, flat_map, push/extend, first/last/get, dedup
+  - **Map methods**: get, contains_key, keys, values, entries, len, insert, remove
+  - **Set methods**: contains, len, to_list, insert, remove, union/intersection/difference
+
+### Fixed
+
+- **IFC label propagation for method calls** — Receiver and argument labels now propagate to method results. Previously, `secret_str.contains("x")` lost the Secret label.
+- **Implicit flow analysis for MethodCall** — Added MethodCall arm to `infer_label` so that method results used in control flow are tracked for implicit-flow violations.
+- **For-loop PC elevation** — Iterator security label now elevates the Program Counter in the loop body, consistent with While/If handlers.
+- **format() IFC compliance** — Argument labels are joined into the result per spec 003/Req 7. `format("x={}", secret_val)` correctly returns `Secret<String>`.
+- **reduce return type** — Separated from fold; reduce now returns `Option<T>` (empty list case) instead of the first argument type.
+
+### Tests
+
+- **Corpus: collections.mvl** — 30+ functions demonstrating all string and collection methods, all return types verified.
+
 ## [0.19.2] — 2026-04-14 (fix: checker label-promotion refactoring and regression tests)
 
 ### Fixed

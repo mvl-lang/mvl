@@ -183,6 +183,15 @@ fn infer_label(expr: &Expr, env: &HashMap<String, SecurityLabel>) -> Option<Secu
             .iter()
             .map(|a| infer_label(a, env))
             .fold(None, join_opt),
+        // Method calls: join receiver label with argument labels.
+        Expr::MethodCall { receiver, args, .. } => {
+            let recv_label = infer_label(receiver, env);
+            let arg_label = args
+                .iter()
+                .map(|a| infer_label(a, env))
+                .fold(None, join_opt);
+            join_opt(recv_label, arg_label)
+        }
         _ => None,
     }
 }
@@ -287,10 +296,11 @@ fn check_stmt_flows(
             check_block_flows(body, body_pc, &mut body_env, errors);
         }
         Stmt::For { iter, body, .. } => {
-            // Cannot infer iter label without full type inference; use current pc.
+            let iter_label = infer_label(iter, env);
+            let body_pc = join_opt(pc, iter_label);
             check_expr_flows(iter, pc, env, errors);
             let mut body_env = env.clone();
-            check_block_flows(body, pc, &mut body_env, errors);
+            check_block_flows(body, body_pc, &mut body_env, errors);
         }
     }
 }
