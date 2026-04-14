@@ -1312,7 +1312,14 @@ impl TypeChecker {
             },
             _ => Ty::Unknown,
         };
-        ifc::apply_label(label, result)
+        // Only apply label when we resolved a concrete type.
+        // Leaving Ty::Unknown unwrapped preserves the "Unknown = unresolved" sentinel;
+        // wrapping it (e.g. Tainted<Unknown>) confuses downstream operators like `?`.
+        if matches!(result, Ty::Unknown) {
+            result
+        } else {
+            ifc::apply_label(label, result)
+        }
     }
 
     /// Return type for methods on `String`.
