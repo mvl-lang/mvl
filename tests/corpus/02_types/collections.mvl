@@ -68,7 +68,7 @@ fn format_greeting() -> String {
 // ── List operations ────────────────────────────────────────────────────────
 
 fn double(x: Int) -> Int { x * 2 }
-fn is_even(x: Int) -> Bool { x > 0 }
+fn is_even(x: Int) -> Bool { x % 2 == 0 }
 
 fn list_map() -> List<Int> {
     let xs = [1, 2, 3, 4, 5];

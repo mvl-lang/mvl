@@ -1243,6 +1243,14 @@ impl TypeChecker {
                 });
             }
 
+            // Req 7: for `format()`, join argument labels into the result so that
+            // `format("x={}", secret_val)` correctly returns `Secret<String>`.
+            if name == "format" {
+                let arg_label = arg_tys
+                    .iter()
+                    .fold(None, |acc, ty| ifc::join_opt(acc, ifc::label_of(ty)));
+                return ifc::apply_label(arg_label, fn_info.ret.clone());
+            }
             fn_info.ret.clone()
         } else {
             // ── Built-in enum constructors ────────────────────────────────
@@ -1286,7 +1294,13 @@ impl TypeChecker {
         arg_tys: &[Ty],
         _span: crate::mvl::parser::lexer::Span,
     ) -> Ty {
-        let label = ifc::label_of(recv_ty);
+        // Join receiver label with all argument labels (Req 7: result sensitivity is
+        // the join of all inputs, e.g. `public_str.replace("x", secret_arg)` → Secret<String>).
+        let recv_label = ifc::label_of(recv_ty);
+        let arg_label = arg_tys
+            .iter()
+            .fold(None, |acc, ty| ifc::join_opt(acc, ifc::label_of(ty)));
+        let label = ifc::join_opt(recv_label, arg_label);
         let base = recv_ty.unlabeled();
         let result = match base {
             Ty::String => Self::string_method_ty(method),
@@ -1339,13 +1353,15 @@ impl TypeChecker {
                 Ty::List(Box::new(elem_ty.clone()))
             }
             // fold(init: U, f: fn(U, T) -> U) -> U  — U inferred from init type
-            "fold" | "reduce" => {
+            "fold" => {
                 if let Some(init_ty) = arg_tys.first() {
                     init_ty.clone()
                 } else {
                     Ty::Unknown
                 }
             }
+            // reduce(f: fn(T, T) -> T) -> Option<T>  — returns None for empty list
+            "reduce" => Ty::Option(Box::new(elem_ty.clone())),
             // enumerate() -> List<(Int, T)>
             "enumerate" => Ty::List(Box::new(Ty::Tuple(vec![Ty::Int, elem_ty.clone()]))),
             // zip(other: List<U>) -> List<(T, U)>
