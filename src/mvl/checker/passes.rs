@@ -310,12 +310,12 @@ impl VerificationPass for RefinementsPass {
                 reason: "no refined call sites found; full SMT analysis pending (Phase 6)"
                     .to_string(),
             }
-        } else if counts.proven > 0 {
+        } else if counts.proven > 0 && counts.failed == 0 {
             Verdict::Proven {
                 evidence: format!(
-                    "{} proven, {} runtime-checked, {} failed out of {total} refined call site(s); \
+                    "{} proven, {} runtime-checked out of {total} refined call site(s); \
                      full SMT analysis pending (Phase 6)",
-                    counts.proven, counts.runtime_checked, counts.failed,
+                    counts.proven, counts.runtime_checked,
                 ),
             }
         } else {
