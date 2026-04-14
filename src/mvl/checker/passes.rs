@@ -13,14 +13,16 @@
 //! | Phase 3 pending  | `Unchecked` | SMT / flow / borrow analysis needed   |
 //!
 //! Requirements proven by Phase 1: 1, 3, 4, 5, 6, 7, 8  (7/11)
-//! Target after Phase 3 provers:   1–10                   (10/11)
-//! Remaining (IFC full analysis):  11                     (1 pending)
+//! Phase 3 IFC (Req 11):          `Proven` when no violations + labeled types
+//! Phase 3 pending:               2, 9 (partial), 10     (SMT / borrow analysis)
+//! Target after Phase 6:          1–11
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
 use crate::mvl::checker::data_race;
+use crate::mvl::checker::ifc;
 use crate::mvl::checker::CheckResult;
 use crate::mvl::parser::ast::Program;
 use crate::mvl::parser::lexer::Span;
@@ -260,6 +262,82 @@ impl VerificationPass for DataRaceFreedomPass {
     }
 }
 
+// ── IFC pass (Req 11 — Phase 3 partial proof) ────────────────────────────────
+
+/// Phase 3 information flow control pass for Req 11.
+///
+/// Combines Phase 1 direct-flow violations (from the type checker) with the
+/// Phase 3 implicit-flow analysis ([`ifc::check_implicit_flows`]) to produce
+/// a verdict:
+///
+/// - **Failed** — any violation (direct or implicit flow) was found.
+/// - **Proven** — no violations and the program has IFC-annotated types;
+///   evidence includes the declassification and sanitization counts so that
+///   auditors can verify every downgrade point.
+/// - **Unchecked** — no violations but no labeled types either; there is
+///   nothing to prove because the program has no security lattice.
+///
+/// Cross-function implicit flows and label inference through untannotated
+/// intermediaries remain deferred to a future phase (see spec §Known Limitations).
+struct IFCPass;
+
+impl VerificationPass for IFCPass {
+    fn name(&self) -> &'static str {
+        "IFC"
+    }
+    fn requirement(&self) -> u8 {
+        11
+    }
+    fn run(&self, prog: &Program, result: &CheckResult) -> Verdict {
+        let req = usize::from(self.requirement());
+        let violations = result.req_errors[req];
+        if violations > 0 {
+            return Verdict::Failed {
+                reason: format!("{violations} information flow violation(s)"),
+                span: result
+                    .errors
+                    .iter()
+                    .find(|e| e.requirement_number() == self.requirement())
+                    .map(|e| e.span()),
+            };
+        }
+
+        // Count auditable declassification/sanitization points.
+        let (dc, sc) = ifc::count_declassifications(prog);
+
+        // Determine whether the program has any labeled types — if not, there
+        // is nothing to prove and the pass is vacuously clean.
+        let has_labeled = prog.declarations.iter().any(|d| {
+            if let crate::mvl::parser::ast::Decl::Fn(fd) = d {
+                fd.params
+                    .iter()
+                    .any(|p| ifc::label_of(&crate::mvl::checker::types::resolve(&p.ty)).is_some())
+                    || ifc::label_of(&crate::mvl::checker::types::resolve(&fd.return_type))
+                        .is_some()
+            } else {
+                false
+            }
+        });
+
+        if has_labeled {
+            Verdict::Proven {
+                evidence: format!(
+                    "no direct or implicit information flow violations; \
+                     {dc} declassif{} point(s), {sc} sanitiz{} point(s) auditable; \
+                     cross-function flow analysis pending (Phase 6)",
+                    if dc == 1 { "ication" } else { "ications" },
+                    if sc == 1 { "ation" } else { "ations" },
+                ),
+            }
+        } else {
+            Verdict::Unchecked {
+                reason: "program has no security-labeled types — IFC lattice not exercised"
+                    .to_string(),
+            }
+        }
+    }
+}
+
 // ── Pass execution order ──────────────────────────────────────────────────────
 
 /// Canonical pass execution order (dependency-aware).
@@ -339,11 +417,7 @@ impl PassRegistry {
                 pass_name: "Refinements",
                 stub_reason: "SMT verification pending (Phase 3)",
             }),
-            Box::new(Phase3StubPass {
-                req: 11,
-                pass_name: "IFC",
-                stub_reason: "full information flow analysis pending (Phase 3)",
-            }),
+            Box::new(IFCPass),
         ];
         PassRegistry { passes }
     }

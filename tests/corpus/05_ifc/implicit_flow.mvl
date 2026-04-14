@@ -1,0 +1,43 @@
+// Corpus: implicit information-flow control violations (003-information-flow, Req 11)
+//
+// This file contains programs that MUST produce ImplicitFlowViolation errors.
+// Even though the arguments to println/print may be Public, the fact that a
+// print fires inside a high-security branch reveals the value of the controlling
+// condition via control flow — a classic implicit (covert-channel) flow.
+//
+// The security lattice:
+//   Secret (highest) > Tainted > Clean > Public (lowest)
+//
+// Implicit flow rule:
+//   if PC_label is Secret or Tainted → no public sink (println/print) allowed
+
+// ── Secret condition → implicit flow through println ─────────────────────────
+
+fn check_secret_flag(flag: Secret<Bool>) -> Unit ! Console {
+    // VIOLATION: println inside a Secret-controlled branch leaks whether
+    // flag was truthy. The PC label is Secret, println is a Public sink.
+    if flag {
+        println("access granted");
+    }
+}
+
+// ── Tainted condition → implicit flow through print ───────────────────────────
+
+fn check_tainted_input(input: Tainted<Bool>) -> Unit ! Console {
+    // VIOLATION: print inside a Tainted-controlled branch.
+    if input {
+        print("ok");
+    }
+}
+
+// ── Else-branch implicit flow ─────────────────────────────────────────────────
+
+fn check_else_leak(secret: Secret<Bool>) -> Unit ! Console {
+    // VIOLATION: the else-branch is also controlled by the Secret condition.
+    // Whether "denied" is printed reveals that secret was false.
+    if secret {
+        0;
+    } else {
+        println("access denied");
+    }
+}

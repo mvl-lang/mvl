@@ -167,3 +167,39 @@ The `format()` function MUST be IFC-aware. The result label MUST be the join (hi
 
 - GIVEN `let msg = format("Count: {}", count)` where `count: Public<Int>`
 - THEN `msg` MUST be `Public<String>`
+
+### Requirement 8: Implicit Flows Are Rejected [MUST]
+
+The compiler MUST detect implicit information flows via control flow (Program Counter label analysis). A `println` or `print` call that appears inside a branch controlled by a `Secret` or `Tainted` condition MUST be a compile error, even if the printed arguments are `Public`.
+
+> **Rationale:** Whether a print fires reveals the value of the controlling condition. This is a covert channel — information leaks through control flow rather than data flow.
+
+**Implementation:** `src/mvl/checker/ifc.rs` (`check_implicit_flows`), `src/mvl/checker/mod.rs`
+
+**Tests:** `tests/type_checker.rs::implicit_flow_secret_if_condition_rejected`, `tests/type_checker.rs::implicit_flow_tainted_if_condition_rejected`, `tests/type_checker.rs::implicit_flow_public_condition_accepted`, `tests/type_checker.rs::implicit_flow_print_sink_rejected`, `tests/type_checker.rs::implicit_flow_else_branch_rejected`, `tests/type_checker.rs::implicit_flow_label_propagated_through_let`
+
+**Corpus:** `tests/corpus/05_ifc/implicit_flow.mvl`
+
+#### Scenario: Secret condition controls println
+
+- GIVEN `fn f(flag: Secret<Bool>) -> Unit`
+- WHEN `if flag { println("access granted") }`
+- THEN the compiler MUST reject: implicit flow from `Secret` condition to `println` sink
+
+#### Scenario: Public condition is safe
+
+- GIVEN `fn f(x: Public<Bool>) -> Unit`
+- WHEN `if x { println("ok") }`
+- THEN the compiler MUST accept: no high-security condition
+
+#### Scenario: Else-branch also controlled
+
+- GIVEN `fn h(flag: Secret<Bool>) -> Unit`
+- WHEN `if flag { 0 } else { println("denied") }`
+- THEN the compiler MUST reject: the else-branch is also controlled by the Secret condition
+
+### Known Limitations (Phase 3)
+
+- Cross-function implicit flows (a secret returned from a function that controls a branch in the caller) are not yet detected. Deferred to Phase 6.
+- Label inference through unannotated intermediate bindings (without explicit type annotations) is conservative: the label may not be propagated. Users should annotate intermediate variables explicitly.
+- `match` scrutinee implicit flows are detected when the scrutinee is a directly labeled variable.
