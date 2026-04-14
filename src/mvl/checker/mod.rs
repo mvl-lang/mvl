@@ -17,6 +17,7 @@
 pub mod context;
 pub mod errors;
 pub mod ifc;
+pub mod passes;
 pub mod types;
 
 use crate::mvl::checker::context::{
