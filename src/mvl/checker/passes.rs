@@ -321,9 +321,9 @@ impl VerificationPass for RefinementsPass {
         } else {
             Verdict::Unchecked {
                 reason: format!(
-                    "0 proven, {} runtime-checked out of {total} refined call site(s); \
+                    "0 proven, {} runtime-checked, {} failed out of {total} refined call site(s); \
                      full SMT analysis pending (Phase 6)",
-                    counts.runtime_checked,
+                    counts.runtime_checked, counts.failed,
                 ),
             }
         }

@@ -728,31 +728,48 @@ fn eval_bool_float(self_val: f64, pred: &RefExpr) -> Option<bool> {
 fn eval_num_float(self_val: f64, expr: &RefExpr) -> Option<f64> {
     match expr {
         RefExpr::Ident { name, .. } if name == "self" => Some(self_val),
-        RefExpr::Integer { value, .. } => Some(*value as f64),
-        RefExpr::Float { value, .. } => Some(*value),
+        RefExpr::Integer { value, .. } => {
+            // i64 values above 2^53 cannot be exactly represented in f64;
+            // fall back to RuntimeCheck rather than silently losing precision.
+            if value.unsigned_abs() > (1u64 << 53) {
+                return None;
+            }
+            Some(*value as f64)
+        }
+        RefExpr::Float { value, .. } => {
+            // NaN literals have no useful ordering; fall back to RuntimeCheck.
+            if value.is_nan() {
+                return None;
+            }
+            Some(*value)
+        }
         RefExpr::ArithOp {
             op, left, right, ..
         } => {
             let l = eval_num_float(self_val, left)?;
             let r = eval_num_float(self_val, right)?;
-            match op {
-                ArithOp::Add => Some(l + r),
-                ArithOp::Sub => Some(l - r),
-                ArithOp::Mul => Some(l * r),
+            let result = match op {
+                ArithOp::Add => l + r,
+                ArithOp::Sub => l - r,
+                ArithOp::Mul => l * r,
                 ArithOp::Div => {
                     if r == 0.0 {
-                        None
-                    } else {
-                        Some(l / r)
+                        return None;
                     }
+                    l / r
                 }
                 ArithOp::Rem => {
                     if r == 0.0 {
-                        None
-                    } else {
-                        Some(l % r)
+                        return None;
                     }
+                    l % r
                 }
+            };
+            // Guard against overflow to infinity or NaN (e.g. inf/inf).
+            if result.is_finite() {
+                Some(result)
+            } else {
+                None
             }
         }
         RefExpr::Grouped { inner, .. } => eval_num_float(self_val, inner),
@@ -778,6 +795,11 @@ fn preds_equivalent(a: &RefExpr, b: &RefExpr) -> bool {
         }
         (RefExpr::Integer { value: va, .. }, RefExpr::Integer { value: vb, .. }) => va == vb,
         (RefExpr::Float { value: va, .. }, RefExpr::Float { value: vb, .. }) => {
+            // NaN is never structurally equivalent even to itself: a predicate
+            // containing NaN has no useful semantic, so conservatively reject it.
+            if va.is_nan() || vb.is_nan() {
+                return false;
+            }
             va.to_bits() == vb.to_bits()
         }
         (
