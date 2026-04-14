@@ -6,6 +6,44 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-04-14 (feat: termination checker — Req 8 structural recursion)
+
+### Added
+- `src/mvl/checker/termination.rs` — structural recursion checker for Req 8 (Termination)
+  - Two decrease measures: integer decrement (`param - N`, N > 0) and structural subterm (sub-pattern bindings from direct parameter matches)
+  - New error `CheckError::UnprovenRecursion` emitted for non-terminating `total fn` recursion
+  - Integrates automatically with `BasicCheckPass` verdict framework (Req 8 verdict)
+  - Pre-type-check architectural pattern (Req 8 verdict proves: no unbounded loops or unproven recursive calls)
+- `docs/specs/007-termination.md` — formal specification of the termination checker
+  - 5 requirements covering both decrease measures, scope/defaults, lambdas, for/while loops
+  - Known limitations (mutual recursion, while-loop measures, signed-int soundness, subterm shadowing) with deferred tracking (#142)
+  - Comprehensive test coverage map
+
+### Fixed
+- **Termination checker: multi-parameter function decrease detection** — now correctly accepts decreasing arguments by identifier against all parameters, not just positional match. `f(a, b - 1)` and `f(b - 1, a)` both correctly accepted when `a` and `b` are parameters.
+- **Termination checker: refactoring and optimizations**
+  - Extracted `check_match_arms` + `check_match_body` helpers to eliminate Stmt::Match/Expr::Match duplication
+  - Eliminated unnecessary HashSet clone in match-arm iteration
+  - Optimized `leaf_idents` to use `Option::into_iter()` (no Vec allocation)
+  - Updated `ok_evidence` string in `passes.rs` to reflect recursive call checking
+  - Added precondition comment for while-loop pass ordering dependency
+
+### Tests
+- 6 new termination-checker tests (all spec-linked to 007-termination.md):
+  - `decrement_by_zero_in_total_fn_rejected` — boundary case: N==0 not a decrease
+  - `decrement_on_second_param_accepted` — confirms any-parameter matching, not positional
+  - `explicit_total_fn_keyword_unbounded_rejected` — explicit `total fn` checked like implicit
+  - `structural_recursion_on_adt_single_field_accepted` — single-field TupleStruct subterm
+  - `structural_recursion_via_non_param_match_rejected` — non-param scrutinee doesn't grant subterm
+  - `recursion_inside_lambda_not_flagged` — lambda scope exclusion confirmed
+- Tightened `increasing_recursion_in_total_fn_rejected` to assert `fn_name == "bad"`
+
+### Part of
+- Issue #135 (closes)
+- Epic Phase 3 (#129)
+
+---
+
 ## [0.14.0] — 2026-04-14 (feat: mvl linter — Phase 1 style rules)
 
 ### Added
