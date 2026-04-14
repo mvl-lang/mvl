@@ -608,6 +608,32 @@ pub fn aggregate_verdicts(per_file: &[[Verdict; 12]]) -> [Verdict; 12] {
     })
 }
 
+// ── CLI argument parsing ──────────────────────────────────────────────────────
+
+/// Parse an optional `--req N` or `--req=N` flag from the argument list.
+///
+/// Returns `Ok(Some(n))` when a valid 1–11 value is found, `Ok(None)` when the
+/// flag is absent, and `Err(msg)` when the flag is present but invalid. Callers
+/// in the binary crate are responsible for printing the message and exiting.
+pub fn parse_req_filter(args: &[String]) -> Result<Option<u8>, String> {
+    let raw: Option<&str> = if let Some(v) = args.windows(2).find(|w| w[0] == "--req") {
+        Some(v[1].as_str())
+    } else {
+        args.iter().find_map(|a| a.strip_prefix("--req="))
+    };
+
+    raw.map(|s| {
+        let n: u8 = s
+            .parse()
+            .map_err(|_| format!("--req expects a number 1–11, got {s:?}"))?;
+        if !(1..=11).contains(&n) {
+            return Err(format!("--req {n} out of range (valid: 1–11)"));
+        }
+        Ok(n)
+    })
+    .transpose()
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -860,5 +886,315 @@ fn alias_iso(channel: Channel, iso x: Payload) -> Unit {
         let v = reg.run_all(&prog, &result);
         let agg = aggregate_verdicts(&[v]);
         assert!(agg[1].is_proven());
+    }
+
+    // ── Verdict helper method coverage ────────────────────────────────────────
+
+    #[test]
+    fn verdict_status_char_all_variants() {
+        assert_eq!(
+            Verdict::Proven {
+                evidence: String::new()
+            }
+            .status_char(),
+            "✓"
+        );
+        assert_eq!(
+            Verdict::Failed {
+                reason: String::new(),
+                span: None
+            }
+            .status_char(),
+            "✗"
+        );
+        assert_eq!(
+            Verdict::Unchecked {
+                reason: String::new()
+            }
+            .status_char(),
+            "~"
+        );
+        assert_eq!(Verdict::Timeout.status_char(), "T");
+    }
+
+    #[test]
+    fn verdict_label_all_variants() {
+        assert_eq!(
+            Verdict::Proven {
+                evidence: String::new()
+            }
+            .label(),
+            "proven"
+        );
+        assert_eq!(
+            Verdict::Failed {
+                reason: String::new(),
+                span: None
+            }
+            .label(),
+            "failed"
+        );
+        assert_eq!(
+            Verdict::Unchecked {
+                reason: String::new()
+            }
+            .label(),
+            "unchecked"
+        );
+        assert_eq!(Verdict::Timeout.label(), "timeout");
+    }
+
+    #[test]
+    fn verdict_detail_all_variants() {
+        assert_eq!(
+            Verdict::Proven {
+                evidence: "ok".to_string()
+            }
+            .detail(),
+            "ok"
+        );
+        assert_eq!(
+            Verdict::Failed {
+                reason: "bad".to_string(),
+                span: None
+            }
+            .detail(),
+            "bad"
+        );
+        assert_eq!(
+            Verdict::Unchecked {
+                reason: "why".to_string()
+            }
+            .detail(),
+            "why"
+        );
+        assert_eq!(Verdict::Timeout.detail(), "timed out");
+    }
+
+    // ── Failed verdict path coverage ──────────────────────────────────────────
+
+    #[test]
+    fn basic_check_pass_failed_for_type_error() {
+        // GIVEN: program with undefined variable → Req 1 type error
+        // THEN: BasicCheckPass for Req 1 returns Verdict::Failed
+        let src = r#"fn bad() -> Int { undefined_var }"#;
+        let (prog, result) = check_src(src);
+        assert!(result.req_errors[1] > 0, "expected type errors for req 1");
+        let reg = PassRegistry::default_registry();
+        let v = reg.run_req(1, &prog, &result);
+        assert!(v.is_failed(), "expected Failed for type error, got: {v:?}");
+        if let Verdict::Failed { reason, .. } = &v {
+            assert!(
+                reason.contains("violation"),
+                "reason should mention violations, got: {reason:?}"
+            );
+            // location() span-present arm: type errors carry a source location
+            assert!(
+                v.location().is_some(),
+                "expected a source span on the Failed verdict"
+            );
+        }
+        // location() span-absent arm: no span → None
+        let no_span = Verdict::Failed {
+            reason: "x".into(),
+            span: None,
+        };
+        assert!(no_span.location().is_none());
+    }
+
+    #[test]
+    fn phase3_stub_pass_failed_for_use_after_move() {
+        // GIVEN: program with use-after-move → Req 2 error
+        // THEN: Phase3StubPass for Req 2 returns Verdict::Failed
+        let src = r#"fn f() -> Int { let x = 1; let _y = move(x); x }"#;
+        let (prog, result) = check_src(src);
+        assert!(
+            result.req_errors[2] > 0,
+            "expected req 2 errors for use-after-move"
+        );
+        let reg = PassRegistry::default_registry();
+        let v = reg.run_req(2, &prog, &result);
+        assert!(
+            v.is_failed(),
+            "expected Failed for use-after-move, got: {v:?}"
+        );
+    }
+
+    // ── pass_name boundary values ─────────────────────────────────────────────
+
+    #[test]
+    fn pass_name_boundary_values() {
+        let reg = PassRegistry::default_registry();
+        assert!(reg.pass_name(0).is_none(), "req 0 should have no pass");
+        assert!(reg.pass_name(12).is_none(), "req 12 should have no pass");
+    }
+
+    // ── VerdictCache miss path ────────────────────────────────────────────────
+
+    #[test]
+    fn verdict_cache_miss_returns_none() {
+        let src = r#"fn f() -> Int { 1 }"#;
+        let (prog, result) = check_src(src);
+        let reg = PassRegistry::default_registry();
+        let verdicts = reg.run_all(&prog, &result);
+
+        let path = std::path::PathBuf::from("test.mvl");
+        let hash = source_hash(src);
+        let mut cache = VerdictCache::default();
+        cache.insert(path.clone(), hash, verdicts);
+
+        // Miss: same path, different hash
+        assert!(
+            cache.get(&path, hash.wrapping_add(1)).is_none(),
+            "expected cache miss for wrong hash"
+        );
+        // Miss: different path, same hash
+        let other = std::path::PathBuf::from("other.mvl");
+        assert!(
+            cache.get(&other, hash).is_none(),
+            "expected cache miss for wrong path"
+        );
+    }
+
+    // ── aggregate_verdicts multi-file coverage ────────────────────────────────
+
+    #[test]
+    fn aggregate_verdicts_empty_input() {
+        let agg = aggregate_verdicts(&[]);
+        for req in 1usize..=11 {
+            assert!(
+                matches!(agg[req], Verdict::Unchecked { .. }),
+                "req {req} should be Unchecked for empty input, got: {:?}",
+                agg[req]
+            );
+        }
+    }
+
+    #[test]
+    fn aggregate_verdicts_any_failed_dominates() {
+        // GIVEN: one clean file (req 1 proven) + one file with a type error (req 1 failed)
+        // THEN: aggregate for req 1 is Failed
+        let (prog1, res1) = check_src(r#"fn f() -> Int { 1 }"#);
+        let (prog2, res2) = check_src(r#"fn bad() -> Int { undefined_var }"#);
+        let reg = PassRegistry::default_registry();
+        let v1 = reg.run_all(&prog1, &res1);
+        let v2 = reg.run_all(&prog2, &res2);
+        let agg = aggregate_verdicts(&[v1, v2]);
+        assert!(
+            agg[1].is_failed(),
+            "Failed should dominate in multi-file aggregate for req 1, got: {:?}",
+            agg[1]
+        );
+    }
+
+    #[test]
+    fn aggregate_verdicts_mixed_proven_unchecked_yields_unchecked() {
+        // GIVEN: two files where req 9 is Proven in one and Unchecked in the other
+        // (clean fn → Proven; fn with ref param → Unchecked)
+        // THEN: aggregate for req 9 is Unchecked
+        let (prog1, res1) = check_src(r#"fn f() -> Int { 1 }"#);
+        let (prog2, res2) = check_src(r#"fn g(ref x: Buffer) -> Int { 42 }"#);
+        let reg = PassRegistry::default_registry();
+        let v1 = reg.run_all(&prog1, &res1);
+        let v2 = reg.run_all(&prog2, &res2);
+        assert!(v1[9].is_proven(), "req 9 should be Proven for clean fn");
+        assert!(
+            matches!(v2[9], Verdict::Unchecked { .. }),
+            "req 9 should be Unchecked for ref-param fn, got: {:?}",
+            v2[9]
+        );
+        let agg = aggregate_verdicts(&[v1, v2]);
+        assert!(
+            matches!(agg[9], Verdict::Unchecked { .. }),
+            "mixed Proven+Unchecked should aggregate to Unchecked, got: {:?}",
+            agg[9]
+        );
+    }
+
+    // ── parse_req_filter coverage ─────────────────────────────────────────────
+
+    #[test]
+    fn parse_req_filter_absent_returns_none() {
+        let args: Vec<String> = ["mvl", "check", "file.mvl"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(super::parse_req_filter(&args), Ok(None));
+    }
+
+    #[test]
+    fn parse_req_filter_two_token_form() {
+        let args: Vec<String> = ["mvl", "check", "file.mvl", "--req", "5"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(super::parse_req_filter(&args), Ok(Some(5)));
+    }
+
+    #[test]
+    fn parse_req_filter_equals_form() {
+        let args: Vec<String> = ["mvl", "check", "file.mvl", "--req=7"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(super::parse_req_filter(&args), Ok(Some(7)));
+    }
+
+    #[test]
+    fn parse_req_filter_invalid_value_returns_err() {
+        let args: Vec<String> = ["mvl", "check", "file.mvl", "--req=abc"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(
+            super::parse_req_filter(&args).is_err(),
+            "non-numeric --req value should return Err"
+        );
+    }
+
+    #[test]
+    fn parse_req_filter_zero_returns_err() {
+        let args: Vec<String> = ["mvl", "check", "file.mvl", "--req=0"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(
+            super::parse_req_filter(&args).is_err(),
+            "--req=0 should return Err"
+        );
+    }
+
+    #[test]
+    fn parse_req_filter_above_max_returns_err() {
+        let args: Vec<String> = ["mvl", "check", "file.mvl", "--req=12"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(
+            super::parse_req_filter(&args).is_err(),
+            "--req=12 should return Err"
+        );
+    }
+
+    // ── aggregate_verdicts Timeout arm ────────────────────────────────────────
+
+    #[test]
+    fn aggregate_verdicts_all_timeout_yields_timeout() {
+        // GIVEN: two files where req 1 is Timeout in both
+        // THEN: aggregate for req 1 is Timeout
+        let mut file_a: [Verdict; 12] = core::array::from_fn(|_| Verdict::Unchecked {
+            reason: String::new(),
+        });
+        let mut file_b: [Verdict; 12] = core::array::from_fn(|_| Verdict::Unchecked {
+            reason: String::new(),
+        });
+        file_a[1] = Verdict::Timeout;
+        file_b[1] = Verdict::Timeout;
+        let agg = aggregate_verdicts(&[file_a, file_b]);
+        assert!(
+            matches!(agg[1], Verdict::Timeout),
+            "all-Timeout per-file should aggregate to Timeout, got: {:?}",
+            agg[1]
+        );
     }
 }
