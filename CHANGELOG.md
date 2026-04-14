@@ -6,6 +6,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.19.2] — 2026-04-14 (fix: checker label-promotion refactoring and regression tests)
+
+### Fixed
+
+- **Label promotion in if-statements** — Type checker now correctly promotes branch result types when the condition is labeled (`Secret<Bool>`, `Tainted<Bool>`, etc.). The implicit return of a branch inherits the condition's security label if it carries information (non-Unit, non-Unknown).
+- **Labeled Bool condition acceptance** — Conditions of type `Secret<Bool>` and `Tainted<Bool>` are now accepted (previously rejected with spurious TypeMismatch). The `is_bool()` method correctly strips security labels before checking for Bool base type.
+
+### Changed
+
+- **Refactored branch label promotion** — Extracted duplicated promotion logic from then-branch and else-branch into `check_branch_label_promotion()` helper method, improving code maintainability.
+
+### Tests
+
+- **Added regression tests** — `secret_bool_if_condition_accepted`, `tainted_bool_while_condition_accepted`, `secret_int_if_condition_rejected` verify that labeled Bool conditions work correctly and unlabeled non-Bool types are still rejected.
+
 ## [0.19.1] — 2026-04-14 (fix: bridge.rs hardening and test coverage)
 
 ### Added
