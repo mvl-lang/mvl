@@ -6,6 +6,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-04-14 (feat: mvl linter — Phase 1 style rules)
+
+### Added
+- `mvl lint <file|dir>` command with 6 Phase-1 style rules:
+  - trailing-whitespace, line-length (configurable, default 120)
+  - indentation (space/tab consistency, width validation)
+  - final-newline, naming conventions (snake_case/PascalCase/SCREAMING_SNAKE_CASE)
+  - function body length (LLM-relevant decomposition signal, default 50 lines)
+- Configuration system: `.mvllintrc` (project-local) and `~/.config/mvl/lintrc` (XDG global)
+  - Settings: `line_length`, `indent_size`, `indent_style`, `max_fn_length`, `naming`, `trailing_ws`, `unused_bindings`
+  - Supports simple `key = value` format; all optional with sensible defaults
+- `mvl lint --show-config` to display active configuration
+- `make mvl-lint` Makefile target to run linter across corpus and examples
+- Full unit test suite for all Phase-1 rules
+
+### Design Notes
+- Phase 1 scope: style rules only. Phase 2 (semantic lint) and Phase 3 (LLM-specific rules) are follow-up work.
+- No external dependencies; config parser and rule engine written in pure Rust.
+- LLM-relevant: consistent formatting + function length limits improve model output quality.
+
 ## [0.13.0] — 2026-04-13 (feat: access_control — Phase 2 security reference example)
 
 ### Added
