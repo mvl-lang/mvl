@@ -874,6 +874,170 @@ fn type_expr_name(ty: &TypeExpr) -> String {
     }
 }
 
+// ── Phase 3: LLM corpus quality rules ──────────────────────────────────────
+
+/// Flag block-comment syntax (`/*`).
+///
+/// Rule id: `consistent-comment-style`
+///
+/// MVL allows only `//` line comments (and `///` doc comments). Block comments
+/// from other languages are not part of the grammar; this rule catches them in
+/// raw source so the lexer does not need to be extended.
+pub fn consistent_comment_style(src: &str, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if !cfg.consistent_comment_style {
+        return;
+    }
+    for (i, line) in src.lines().enumerate() {
+        let line_no = (i + 1) as u32;
+        // Scan for `/*` not inside a string literal (best-effort: flag position
+        // of first occurrence; the parser will reject the file anyway).
+        if let Some(pos) = line.find("/*") {
+            out.push(LintDiag::warning(
+                "consistent-comment-style",
+                "block comment `/*` not allowed; use `//` line comments",
+                line_no,
+                (pos + 1) as u32,
+            ));
+        }
+    }
+}
+
+/// Require `///` doc comments on every public function and type declaration.
+///
+/// Rule id: `missing-doc-comment`
+///
+/// Because the lexer discards comments, this rule correlates AST span line
+/// numbers with raw source text: a declaration is considered documented if one
+/// or more `///` lines appear immediately above it (blank lines between the
+/// comment and the declaration are allowed; a non-comment, non-blank line
+/// breaks the block).
+pub fn doc_comments_required(prog: &Program, src: &str, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if !cfg.require_doc_comments {
+        return;
+    }
+    let src_lines: Vec<&str> = src.lines().collect();
+    for decl in &prog.declarations {
+        match decl {
+            Decl::Fn(f) if f.visible => {
+                if !has_doc_comment_before(f.span.line as usize, &src_lines) {
+                    out.push(LintDiag::warning(
+                        "missing-doc-comment",
+                        format!(
+                            "public function `{}` is missing a doc comment (`///`)",
+                            f.name
+                        ),
+                        f.span.line,
+                        f.span.col,
+                    ));
+                }
+            }
+            Decl::Type(t) if t.visible => {
+                if !has_doc_comment_before(t.span.line as usize, &src_lines) {
+                    out.push(LintDiag::warning(
+                        "missing-doc-comment",
+                        format!("public type `{}` is missing a doc comment (`///`)", t.name),
+                        t.span.line,
+                        t.span.col,
+                    ));
+                }
+            }
+            Decl::Const(c) if c.visible => {
+                if !has_doc_comment_before(c.span.line as usize, &src_lines) {
+                    out.push(LintDiag::warning(
+                        "missing-doc-comment",
+                        format!("public const `{}` is missing a doc comment (`///`)", c.name),
+                        c.span.line,
+                        c.span.col,
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Recommend an `Example:` section inside doc-comment blocks on public items.
+///
+/// Rule id: `doc-comment-example`
+///
+/// This rule is opt-in (`doc_comment_examples = false` by default). When
+/// enabled it emits a warning for every public function or type whose doc
+/// comment block does not contain an `Example:` or `# Example` line.
+pub fn doc_comment_examples(prog: &Program, src: &str, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if !cfg.doc_comment_examples {
+        return;
+    }
+    let src_lines: Vec<&str> = src.lines().collect();
+    for decl in &prog.declarations {
+        let (visible, span, kind, name) = match decl {
+            Decl::Fn(f) if f.visible => (true, f.span, "function", f.name.as_str()),
+            Decl::Type(t) if t.visible => (true, t.span, "type", t.name.as_str()),
+            _ => (false, Default::default(), "", ""),
+        };
+        if !visible {
+            continue;
+        }
+        let doc_lines = collect_doc_lines_before(span.line as usize, &src_lines);
+        if doc_lines.is_empty() {
+            // missing-doc-comment will fire; skip duplicate noise here
+            continue;
+        }
+        let has_example = doc_lines.iter().any(|l| {
+            let t = l.trim_start_matches('/').trim();
+            t.to_ascii_lowercase().starts_with("example")
+                || t.to_ascii_lowercase().starts_with("# example")
+        });
+        if !has_example {
+            out.push(LintDiag::warning(
+                "doc-comment-example",
+                format!(
+                    "public {kind} `{name}` doc comment has no `Example:` section (recommended)"
+                ),
+                span.line,
+                span.col,
+            ));
+        }
+    }
+}
+
+// ── Phase 3 helpers ─────────────────────────────────────────────────────────
+
+/// Returns `true` if the source line immediately preceding `decl_line`
+/// (1-based) belongs to a `///` doc-comment block.
+///
+/// Blank lines between the comment block and the declaration are skipped.
+/// A regular `//` comment (not `///`) does **not** count as documentation.
+fn has_doc_comment_before(decl_line: usize, src_lines: &[&str]) -> bool {
+    !collect_doc_lines_before(decl_line, src_lines).is_empty()
+}
+
+/// Collect all `///` lines from the comment block immediately above
+/// `decl_line` (1-based). Returns an empty vec if none are found.
+fn collect_doc_lines_before<'a>(decl_line: usize, src_lines: &[&'a str]) -> Vec<&'a str> {
+    if decl_line == 0 || decl_line > src_lines.len() {
+        return vec![];
+    }
+    // Walk backwards from the line before the declaration.
+    let mut result: Vec<&'a str> = vec![];
+    let mut i = decl_line.saturating_sub(1); // 0-based index of line before decl
+    loop {
+        if i == 0 {
+            break;
+        }
+        i -= 1;
+        let line = src_lines[i].trim();
+        if line.starts_with("///") {
+            result.push(src_lines[i]);
+        } else if line.is_empty() {
+            // blank lines between doc block and decl are allowed
+            continue;
+        } else {
+            break;
+        }
+    }
+    result
+}
+
 // ── Unit tests ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1282,6 +1446,178 @@ mod tests {
         let mut c = cfg();
         c.redundant_effects = false;
         redundant_effects(&prog, &c, &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    // ── Phase 3: consistent_comment_style ──────────────────────────────
+
+    #[test]
+    fn block_comment_detected() {
+        let src = "/* this is illegal */\nfn f() -> Int { 42 }\n";
+        let mut diags = vec![];
+        consistent_comment_style(src, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "consistent-comment-style");
+        assert_eq!(diags[0].span.line, 1);
+    }
+
+    #[test]
+    fn block_comment_mid_line_detected() {
+        let src = "fn f() -> Int { 42 } /* whoops */\n";
+        let mut diags = vec![];
+        consistent_comment_style(src, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "consistent-comment-style");
+        assert_eq!(diags[0].span.col, 22);
+    }
+
+    #[test]
+    fn line_comment_clean() {
+        let src = "// ok\n/// doc\nfn f() -> Int { 42 }\n";
+        let mut diags = vec![];
+        consistent_comment_style(src, &cfg(), &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn consistent_comment_style_disabled() {
+        let src = "/* block */\nfn f() -> Int { 42 }\n";
+        let mut diags = vec![];
+        let mut c = cfg();
+        c.consistent_comment_style = false;
+        consistent_comment_style(src, &c, &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    // ── Phase 3: doc_comments_required ─────────────────────────────────
+
+    #[test]
+    fn pub_fn_missing_doc_comment_detected() {
+        let src = "pub fn foo() -> Int { 42 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        doc_comments_required(&prog, src, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "missing-doc-comment");
+        assert!(diags[0].message.contains("foo"));
+    }
+
+    #[test]
+    fn pub_fn_with_doc_comment_ok() {
+        let src = "/// Does something.\npub fn foo() -> Int { 42 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        doc_comments_required(&prog, src, &cfg(), &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn private_fn_no_doc_comment_ok() {
+        let src = "fn foo() -> Int { 42 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        doc_comments_required(&prog, src, &cfg(), &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn pub_type_missing_doc_comment_detected() {
+        let src = "pub type Foo = struct { x: Int }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        doc_comments_required(&prog, src, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "missing-doc-comment");
+        assert!(diags[0].message.contains("Foo"));
+    }
+
+    #[test]
+    fn pub_type_with_doc_comment_ok() {
+        let src = "/// A wrapper type.\npub type Foo = struct { x: Int }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        doc_comments_required(&prog, src, &cfg(), &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn doc_comment_blank_line_between_ok() {
+        // A blank line between doc comment and declaration is allowed.
+        let src = "/// Docs here.\n\npub fn foo() -> Int { 42 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        doc_comments_required(&prog, src, &cfg(), &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn regular_comment_not_doc_comment() {
+        // `//` is not `///`; should still flag.
+        let src = "// not a doc comment\npub fn foo() -> Int { 42 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        doc_comments_required(&prog, src, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "missing-doc-comment");
+    }
+
+    #[test]
+    fn require_doc_comments_disabled() {
+        let src = "pub fn foo() -> Int { 42 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        let mut c = cfg();
+        c.require_doc_comments = false;
+        doc_comments_required(&prog, src, &c, &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    // ── Phase 3: doc_comment_examples ──────────────────────────────────
+
+    #[test]
+    fn pub_fn_doc_without_example_flagged() {
+        let src = "/// Does something.\npub fn foo() -> Int { 42 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        let mut c = cfg();
+        c.doc_comment_examples = true;
+        doc_comment_examples(&prog, src, &c, &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "doc-comment-example");
+        assert!(diags[0].message.contains("foo"));
+    }
+
+    #[test]
+    fn pub_fn_doc_with_example_ok() {
+        let src = "/// Does something.\n/// Example: foo() == 42\npub fn foo() -> Int { 42 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        let mut c = cfg();
+        c.doc_comment_examples = true;
+        doc_comment_examples(&prog, src, &c, &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn doc_comment_examples_disabled_by_default() {
+        // default config has doc_comment_examples = false
+        let src = "/// No example.\npub fn foo() -> Int { 42 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        doc_comment_examples(&prog, src, &cfg(), &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn pub_fn_no_doc_skipped_for_examples() {
+        // If there's no doc comment at all, missing-doc-comment fires but
+        // doc-comment-example should stay silent to avoid duplicate noise.
+        let src = "pub fn foo() -> Int { 42 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        let mut c = cfg();
+        c.doc_comment_examples = true;
+        doc_comment_examples(&prog, src, &c, &mut diags);
         assert!(diags.is_empty());
     }
 }

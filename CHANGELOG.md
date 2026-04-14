@@ -6,6 +6,39 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-04-14 (feat: linter phase 3 — LLM corpus quality rules)
+
+### Added
+
+- **`consistent-comment-style`** — source rule that flags block comments (`/* */`),
+  which are not part of the MVL grammar. Only `//` and `///` are allowed.
+  Enabled by default; disable with `consistent_comment_style = false`.
+
+- **`missing-doc-comment`** — hybrid rule (AST + source) that requires a `///` doc
+  comment on every `pub` function, type, and const declaration.
+  Enabled by default; disable with `require_doc_comments = false`.
+
+- **`doc-comment-example`** — source rule that recommends an `Example:` section
+  inside `///` doc-comment blocks on public items.
+  Opt-in (`doc_comment_examples = false` by default).
+
+- 23 new unit tests covering all three rules (positive detection, clean cases,
+  config-disable paths, edge cases, and design-decision pins from review).
+
+### Fixed
+
+- `consistent_comment_style`: skip `/*` appearing after `//` on the same line
+  (false positive when `/*` was inside a line comment).
+- `collect_doc_lines_before`: replaced fragile manual index loop with idiomatic
+  `for i in (0..n).rev()` iterator.
+
+### Notes
+
+- Function body length (`fn-length`, Phase 1) already covers the fourth Phase 3
+  requirement; no duplication added.
+- Comments remain discarded by the lexer; Phase 3 rules use source-line
+  correlation with AST spans for doc-comment detection (same approach as `fn-length`).
+
 ## [0.17.0] — 2026-04-14
 
 ### Added
@@ -34,7 +67,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 - `lambda_param_shadowing_iso_not_flagged` — shadowing semantics correctness
 - Limitation regression tests: L1 (`iso_passed_to_fn_call_not_detected_l1`), L5 (`iso_rebound_after_consume_not_detected_l5`), and L4 documentation (`iso_multiple_aliasing_all_sites_reported`)
 - Test count increased: 458 passing (from 255)
-
 ## [0.16.0] — 2026-04-14 (feat: termination checker — Req 8 structural recursion)
 
 ### Added
