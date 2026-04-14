@@ -30,6 +30,14 @@
 //! | `unnecessary_annotations` | `true` | Flag literal `let` bindings with obvious types    |
 //! | `redundant_effects`    | `true`  | Flag effect declarations on call-free functions      |
 //! | `redundant_ifc_labels` | `true`  | Flag `Public<T>` annotations (redundant base label)  |
+//!
+//! ### Phase 3 — LLM corpus quality rules
+//!
+//! | Key                         | Default | Description                                              |
+//! |-----------------------------|---------|----------------------------------------------------------|
+//! | `consistent_comment_style`  | `true`  | Flag block comments `/* */` (only `//` allowed)          |
+//! | `require_doc_comments`      | `true`  | Require `///` doc comments on public functions and types |
+//! | `doc_comment_examples`      | `false` | Recommend `Example:` blocks in doc comments (warning)   |
 
 use std::path::{Path, PathBuf};
 use std::{env, fs};
@@ -63,6 +71,14 @@ pub struct LintConfig {
     pub redundant_effects: bool,
     /// Flag `Public<T>` type annotations (the base IFC label, always redundant).
     pub redundant_ifc_labels: bool,
+
+    // ── Phase 3: LLM corpus quality rules ────────────────────────────────
+    /// Flag block comments `/* */`; only `//` line comments are allowed.
+    pub consistent_comment_style: bool,
+    /// Require `///` doc comments on public functions and types.
+    pub require_doc_comments: bool,
+    /// Recommend an `Example:` block inside doc comments (warning, opt-in).
+    pub doc_comment_examples: bool,
 }
 
 impl Default for LintConfig {
@@ -80,6 +96,9 @@ impl Default for LintConfig {
             unnecessary_annotations: true,
             redundant_effects: true,
             redundant_ifc_labels: true,
+            consistent_comment_style: true,
+            require_doc_comments: true,
+            doc_comment_examples: false,
         }
     }
 }
@@ -181,6 +200,9 @@ fn load_from(path: &Path) -> Option<LintConfig> {
             "unnecessary_annotations" => cfg.unnecessary_annotations = parse_bool(val),
             "redundant_effects" => cfg.redundant_effects = parse_bool(val),
             "redundant_ifc_labels" => cfg.redundant_ifc_labels = parse_bool(val),
+            "consistent_comment_style" => cfg.consistent_comment_style = parse_bool(val),
+            "require_doc_comments" => cfg.require_doc_comments = parse_bool(val),
+            "doc_comment_examples" => cfg.doc_comment_examples = parse_bool(val),
             _ => {} // unknown keys are silently ignored (forward-compat)
         }
     }
