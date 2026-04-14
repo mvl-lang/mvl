@@ -1,6 +1,6 @@
 use mvl::mvl::checker;
 use mvl::mvl::checker::passes::{
-    aggregate_verdicts, source_hash, PassRegistry, Verdict, VerdictCache,
+    aggregate_verdicts, parse_req_filter, source_hash, PassRegistry, Verdict, VerdictCache,
 };
 use mvl::mvl::linter::{self, config::LintConfig};
 use mvl::mvl::parser::ast::{Decl, Program, Totality, TypeBody};
@@ -28,7 +28,7 @@ fn main() {
         }
         "check" => {
             let path = require_path_arg(&args, "check");
-            let req_filter = parse_req_filter(&args);
+            let req_filter = parse_req_filter_or_exit(&args);
             cmd_check(&path, req_filter);
         }
         "build" => {
@@ -109,25 +109,11 @@ fn json_escape(s: &str) -> String {
     out
 }
 
-/// Parse an optional `--req N` or `--req=N` flag from the argument list.
-/// Exits with an error message if the value is present but not in 1–11.
-fn parse_req_filter(args: &[String]) -> Option<u8> {
-    let raw: Option<&str> = if let Some(v) = args.windows(2).find(|w| w[0] == "--req") {
-        Some(v[1].as_str())
-    } else {
-        args.iter().find_map(|a| a.strip_prefix("--req="))
-    };
-
-    raw.map(|s| {
-        let n: u8 = s.parse().unwrap_or_else(|_| {
-            eprintln!("error: --req expects a number 1–11, got {s:?}");
-            process::exit(1);
-        });
-        if !(1..=11).contains(&n) {
-            eprintln!("error: --req {n} out of range (valid: 1–11)");
-            process::exit(1);
-        }
-        n
+/// Parse an optional `--req N` or `--req=N` flag; exits on invalid input.
+fn parse_req_filter_or_exit(args: &[String]) -> Option<u8> {
+    parse_req_filter(args).unwrap_or_else(|e| {
+        eprintln!("error: {e}");
+        process::exit(1);
     })
 }
 
