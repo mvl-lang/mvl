@@ -602,6 +602,105 @@ fn partial_call_in_total_function_rejected() {
     );
 }
 
+// ── #135: Structural recursion (Req 8) ───────────────────────────────────────
+
+#[test]
+fn integer_decrement_recursion_accepted() {
+    // GIVEN: total fn recurses with `n - 1` (provably decreasing)
+    // THEN: no UnprovenRecursion error
+    let src = r#"
+        fn fact(n: Int) -> Int {
+            if n == 0 { 1 } else { n * fact(n - 1) }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { .. })),
+        "expected no UnprovenRecursion, got: {errors:?}"
+    );
+}
+
+#[test]
+fn unbounded_recursion_in_total_fn_rejected() {
+    // GIVEN: total fn calls itself with the same argument (no decrease)
+    // THEN: UnprovenRecursion reported
+    let src = r#"fn spin(n: Int) -> Int { spin(n) }"#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::UnprovenRecursion { fn_name, .. }
+            if fn_name == "spin")
+        ),
+        "expected UnprovenRecursion(spin), got: {errors:?}"
+    );
+}
+
+#[test]
+fn increasing_recursion_in_total_fn_rejected() {
+    // GIVEN: total fn recurses with `n + 1` (increasing)
+    // THEN: UnprovenRecursion reported
+    let src = r#"fn bad(n: Int) -> Int { bad(n + 1) }"#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { .. })),
+        "expected UnprovenRecursion for increasing argument, got: {errors:?}"
+    );
+}
+
+#[test]
+fn structural_recursion_on_adt_subterm_accepted() {
+    // GIVEN: total fn matches on list param, recurses with the tail subterm
+    // THEN: no UnprovenRecursion error
+    let src = r#"
+        enum List { Nil, Cons(Int, List) }
+        fn len(list: List) -> Int {
+            match list {
+                List::Nil => 0
+                List::Cons(_, tail) => 1 + len(tail)
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { .. })),
+        "expected no UnprovenRecursion for structural recursion, got: {errors:?}"
+    );
+}
+
+#[test]
+fn recursion_in_partial_fn_not_checked() {
+    // GIVEN: partial fn recurses with no decrease
+    // THEN: no UnprovenRecursion (partial fns are exempt)
+    let src = r#"partial fn loop_forever(n: Int) -> Int { loop_forever(n) }"#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { .. })),
+        "expected no UnprovenRecursion for partial fn, got: {errors:?}"
+    );
+}
+
+#[test]
+fn non_recursive_total_fn_accepted() {
+    // GIVEN: total fn with no recursive calls
+    // THEN: trivially terminating, no error
+    let src = r#"fn add(a: Int, b: Int) -> Int { a + b }"#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { .. })),
+        "expected no UnprovenRecursion for non-recursive fn, got: {errors:?}"
+    );
+}
+
 // ── #22: Reference capability checking — iso/val/ref/tag on actor boundaries ──
 
 #[test]

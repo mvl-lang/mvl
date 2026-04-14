@@ -18,6 +18,7 @@ pub mod context;
 pub mod errors;
 pub mod ifc;
 pub mod passes;
+pub mod termination;
 pub mod types;
 
 use crate::mvl::checker::context::{
@@ -58,6 +59,7 @@ impl CheckResult {
 pub fn check(prog: &Program) -> CheckResult {
     let mut checker = TypeChecker::new();
     checker.check_program(prog);
+    termination::check_structural_recursion(prog, &mut checker.errors);
     let mut req_errors = [0usize; 12];
     for e in &checker.errors {
         let req = e.requirement_number() as usize;

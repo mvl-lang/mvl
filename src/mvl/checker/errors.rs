@@ -165,6 +165,11 @@ pub enum CheckError {
         callee: String,
         span: Span,
     },
+    /// Total function is recursive but no argument provably decreases.
+    UnprovenRecursion {
+        fn_name: String,
+        span: Span,
+    },
 
     // ── Reference capability checking (#22) ──────────────────────────────
     /// Value with `ref` (or non-sendable) capability sent across actor boundary.
@@ -237,7 +242,9 @@ impl CheckError {
             | CheckError::UndeclaredEffect { .. }
             | CheckError::MissingEffect { .. } => 7,
             // Req 8: Termination
-            CheckError::UnboundedLoopInTotal { .. } | CheckError::PartialCallInTotal { .. } => 8,
+            CheckError::UnboundedLoopInTotal { .. }
+            | CheckError::PartialCallInTotal { .. }
+            | CheckError::UnprovenRecursion { .. } => 8,
             // Req 9: Data Race Freedom
             CheckError::CapabilityViolation { .. } => 9,
             // Req 10: Refinement Types
@@ -282,6 +289,7 @@ impl CheckError {
             | CheckError::MissingEffect { span, .. }
             | CheckError::UnboundedLoopInTotal { span }
             | CheckError::PartialCallInTotal { span, .. }
+            | CheckError::UnprovenRecursion { span, .. }
             | CheckError::CapabilityViolation { span, .. }
             | CheckError::InvalidDeclassify { span, .. }
             | CheckError::InvalidSanitize { span, .. }
@@ -386,6 +394,9 @@ impl CheckError {
                     "total function calls `partial` function `{callee}` — total functions cannot call partial ones"
                 )
             }
+            CheckError::UnprovenRecursion { fn_name, .. } => format!(
+                "recursive call in total function `{fn_name}` cannot be proven terminating — argument does not structurally decrease"
+            ),
             CheckError::CapabilityViolation {
                 param, capability, ..
             } => format!(
