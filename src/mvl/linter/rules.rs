@@ -10,8 +10,8 @@
 
 use crate::mvl::linter::{config::LintConfig, errors::LintDiag};
 use crate::mvl::parser::ast::{
-    Block, Decl, Expr, Literal, Pattern, Program, SecurityLabel, Stmt, TypeBody, TypeExpr,
-    VariantFields,
+    Block, Decl, ElseBranch, Expr, Literal, MatchArm, MatchBody, Pattern, Program, SecurityLabel,
+    Stmt, TypeBody, TypeExpr, VariantFields,
 };
 
 // ── Source rules ───────────────────────────────────────────────────────────
@@ -50,7 +50,7 @@ pub fn line_length(src: &str, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
                 "line-length",
                 format!("line is {len} characters (max {})", cfg.line_length),
                 line_no,
-                (cfg.line_length + 1) as u32,
+                (cfg.line_length + 1).min(u32::MAX as usize) as u32,
             ));
         }
     }
@@ -374,7 +374,7 @@ fn check_block_unreachable(block: &Block, out: &mut Vec<LintDiag>) {
             }
             Stmt::If {
                 then,
-                else_: Some(crate::mvl::parser::ast::ElseBranch::Block(eb)),
+                else_: Some(ElseBranch::Block(eb)),
                 ..
             } => {
                 check_block_unreachable(then, out);
@@ -382,7 +382,7 @@ fn check_block_unreachable(block: &Block, out: &mut Vec<LintDiag>) {
             }
             Stmt::If {
                 then,
-                else_: Some(crate::mvl::parser::ast::ElseBranch::If(inner)),
+                else_: Some(ElseBranch::If(inner)),
                 ..
             } => {
                 check_block_unreachable(then, out);
@@ -398,7 +398,7 @@ fn check_block_unreachable(block: &Block, out: &mut Vec<LintDiag>) {
             }
             Stmt::Match { arms, .. } => {
                 for arm in arms {
-                    if let crate::mvl::parser::ast::MatchBody::Block(b) = &arm.body {
+                    if let MatchBody::Block(b) = &arm.body {
                         check_block_unreachable(b, out);
                     }
                 }
@@ -444,30 +444,37 @@ fn check_block_redundant_match(block: &Block, out: &mut Vec<LintDiag>) {
                 arms,
                 span,
             } => {
-                if arms.len() == 1 && is_irrefutable(&arms[0].pattern) {
-                    out.push(LintDiag::warning(
-                        "redundant-match",
-                        format!(
-                            "single-arm `match` with irrefutable pattern — use `let` instead: \
-                             `let {} = {}`",
-                            pattern_display(&arms[0].pattern),
-                            expr_display(scrutinee),
-                        ),
-                        span.line,
-                        span.col,
-                    ));
-                }
+                emit_if_redundant_match(scrutinee, arms, span.line, span.col, out);
                 // Recurse into arm bodies
                 for arm in arms {
-                    if let crate::mvl::parser::ast::MatchBody::Block(b) = &arm.body {
+                    if let MatchBody::Block(b) = &arm.body {
                         check_block_redundant_match(b, out);
                     }
                 }
             }
+            Stmt::Expr {
+                expr:
+                    Expr::Match {
+                        scrutinee,
+                        arms,
+                        span,
+                    },
+                ..
+            } => {
+                emit_if_redundant_match(scrutinee, arms, span.line, span.col, out);
+            }
             Stmt::If { then, else_, .. } => {
                 check_block_redundant_match(then, out);
-                if let Some(crate::mvl::parser::ast::ElseBranch::Block(eb)) = else_ {
-                    check_block_redundant_match(eb, out);
+                match else_ {
+                    Some(ElseBranch::Block(eb)) => check_block_redundant_match(eb, out),
+                    Some(ElseBranch::If(inner)) => check_block_redundant_match(
+                        &Block {
+                            stmts: vec![*inner.clone()],
+                            span: inner.span(),
+                        },
+                        out,
+                    ),
+                    None => {}
                 }
             }
             Stmt::For { body, .. } | Stmt::While { body, .. } => {
@@ -475,31 +482,29 @@ fn check_block_redundant_match(block: &Block, out: &mut Vec<LintDiag>) {
             }
             _ => {}
         }
-        // Also check match expressions in statement position
-        if let Stmt::Expr {
-            expr:
-                Expr::Match {
-                    scrutinee,
-                    arms,
-                    span,
-                },
-            ..
-        } = stmt
-        {
-            if arms.len() == 1 && is_irrefutable(&arms[0].pattern) {
-                out.push(LintDiag::warning(
-                    "redundant-match",
-                    format!(
-                        "single-arm `match` with irrefutable pattern — use `let` instead: \
-                         `let {} = {}`",
-                        pattern_display(&arms[0].pattern),
-                        expr_display(scrutinee),
-                    ),
-                    span.line,
-                    span.col,
-                ));
-            }
-        }
+    }
+}
+
+/// Emit a `redundant-match` diagnostic if `arms` has a single irrefutable arm.
+fn emit_if_redundant_match(
+    scrutinee: &Expr,
+    arms: &[MatchArm],
+    line: u32,
+    col: u32,
+    out: &mut Vec<LintDiag>,
+) {
+    if arms.len() == 1 && is_irrefutable(&arms[0].pattern) {
+        out.push(LintDiag::warning(
+            "redundant-match",
+            format!(
+                "single-arm `match` with irrefutable pattern — use `let` instead: \
+                 `let {} = {}`",
+                pattern_display(&arms[0].pattern),
+                expr_display(scrutinee),
+            ),
+            line,
+            col,
+        ));
     }
 }
 
@@ -551,7 +556,7 @@ fn check_block_annotations(block: &Block, out: &mut Vec<LintDiag>) {
         if let Stmt::Let {
             ty: Some(ty_expr),
             init,
-            span,
+            span: _,
             ..
         } = stmt
         {
@@ -567,7 +572,6 @@ fn check_block_annotations(block: &Block, out: &mut Vec<LintDiag>) {
                         ty_span.line,
                         ty_span.col,
                     ));
-                    let _ = span;
                 }
             }
         }
@@ -575,8 +579,16 @@ fn check_block_annotations(block: &Block, out: &mut Vec<LintDiag>) {
         match stmt {
             Stmt::If { then, else_, .. } => {
                 check_block_annotations(then, out);
-                if let Some(crate::mvl::parser::ast::ElseBranch::Block(eb)) = else_ {
-                    check_block_annotations(eb, out);
+                match else_ {
+                    Some(ElseBranch::Block(eb)) => check_block_annotations(eb, out),
+                    Some(ElseBranch::If(inner)) => check_block_annotations(
+                        &Block {
+                            stmts: vec![*inner.clone()],
+                            span: inner.span(),
+                        },
+                        out,
+                    ),
+                    None => {}
                 }
             }
             Stmt::For { body, .. } | Stmt::While { body, .. } => {
@@ -584,10 +596,16 @@ fn check_block_annotations(block: &Block, out: &mut Vec<LintDiag>) {
             }
             Stmt::Match { arms, .. } => {
                 for arm in arms {
-                    if let crate::mvl::parser::ast::MatchBody::Block(b) = &arm.body {
+                    if let MatchBody::Block(b) = &arm.body {
                         check_block_annotations(b, out);
                     }
                 }
+            }
+            Stmt::Expr {
+                expr: Expr::Block(b),
+                ..
+            } => {
+                check_block_annotations(b, out);
             }
             _ => {}
         }
@@ -682,8 +700,8 @@ fn stmt_has_calls(stmt: &Stmt) -> bool {
         } => {
             expr_has_calls(scrutinee)
                 || arms.iter().any(|arm| match &arm.body {
-                    crate::mvl::parser::ast::MatchBody::Expr(e) => expr_has_calls(e),
-                    crate::mvl::parser::ast::MatchBody::Block(b) => block_has_calls(b),
+                    MatchBody::Expr(e) => expr_has_calls(e),
+                    MatchBody::Block(b) => block_has_calls(b),
                 })
         }
         Stmt::For { iter, body, .. } => expr_has_calls(iter) || block_has_calls(body),
@@ -710,8 +728,8 @@ fn expr_has_calls(expr: &Expr) -> bool {
         } => {
             expr_has_calls(scrutinee)
                 || arms.iter().any(|arm| match &arm.body {
-                    crate::mvl::parser::ast::MatchBody::Expr(e) => expr_has_calls(e),
-                    crate::mvl::parser::ast::MatchBody::Block(b) => block_has_calls(b),
+                    MatchBody::Expr(e) => expr_has_calls(e),
+                    MatchBody::Block(b) => block_has_calls(b),
                 })
         }
         Expr::Block(b) => block_has_calls(b),
@@ -757,10 +775,18 @@ pub fn redundant_ifc_labels(prog: &Program, cfg: &LintConfig, out: &mut Vec<Lint
                 }
                 TypeBody::Enum(variants) => {
                     for variant in variants {
-                        if let VariantFields::Struct(fields) = &variant.fields {
-                            for field in fields {
-                                check_type_expr_ifc(&field.ty, out);
+                        match &variant.fields {
+                            VariantFields::Struct(fields) => {
+                                for field in fields {
+                                    check_type_expr_ifc(&field.ty, out);
+                                }
                             }
+                            VariantFields::Tuple(types) => {
+                                for ty in types {
+                                    check_type_expr_ifc(ty, out);
+                                }
+                            }
+                            VariantFields::Unit => {}
                         }
                     }
                 }
@@ -1175,6 +1201,87 @@ mod tests {
         let mut c = cfg();
         c.redundant_ifc_labels = false;
         redundant_ifc_labels(&prog, &c, &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn public_label_on_struct_field_detected() {
+        let src = "type Wrapper = struct { data: Public<Int> }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        redundant_ifc_labels(&prog, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "redundant-ifc-label");
+    }
+
+    #[test]
+    fn public_label_in_type_alias_detected() {
+        let src = "type MyInt = Public<Int>\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        redundant_ifc_labels(&prog, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "redundant-ifc-label");
+    }
+
+    // -- redundant_match: missing config-disable test --
+
+    #[test]
+    fn redundant_match_disabled() {
+        let src = "fn f(x: Int) -> Int { match x { _ => x } }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        let mut c = cfg();
+        c.redundant_match = false;
+        redundant_match(&prog, &c, &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    // -- unnecessary_annotations: missing literal types and config-disable --
+
+    #[test]
+    fn string_annotation_on_str_literal_detected() {
+        let src = "fn f() -> Unit { let s: String = \"hello\"; s }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        unnecessary_annotations(&prog, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "unnecessary-annotation");
+        assert!(diags[0].message.contains("String"));
+    }
+
+    #[test]
+    fn float_annotation_on_float_literal_detected() {
+        let src = "fn f() -> Unit { let x: Float = 3.14; x }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        unnecessary_annotations(&prog, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "unnecessary-annotation");
+        assert!(diags[0].message.contains("Float"));
+    }
+
+    #[test]
+    fn unnecessary_annotations_disabled() {
+        let src = "fn f() -> Unit { let x: Int = 42; x }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        let mut c = cfg();
+        c.unnecessary_annotations = false;
+        unnecessary_annotations(&prog, &c, &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    // -- redundant_effects: missing config-disable test --
+
+    #[test]
+    fn redundant_effects_disabled() {
+        let src = "fn f() -> Int ! Console { 42 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        let mut c = cfg();
+        c.redundant_effects = false;
+        redundant_effects(&prog, &c, &mut diags);
         assert!(diags.is_empty());
     }
 }
