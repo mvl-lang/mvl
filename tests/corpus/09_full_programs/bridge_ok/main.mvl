@@ -1,0 +1,12 @@
+// bridge_ok/main.mvl — minimal extern "rust" program for bridge convention tests.
+//
+// Tests Spec 006 Requirements 1 (bridge discovery) and 2 (mod bridge; injection).
+// A sibling bridge.rs is present; `mvl build` must succeed and copy it into src/.
+
+extern "rust" {
+    fn bridge_add(n: Int) -> Int;
+}
+
+fn main() -> Unit ! Console {
+    println("bridge ok");
+}
