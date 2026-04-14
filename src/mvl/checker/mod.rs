@@ -319,6 +319,35 @@ impl TypeChecker {
 
     // ── Blocks and statements ─────────────────────────────────────────────
 
+    /// Check whether `branch_ty` (the implicit return of one branch of an if-statement)
+    /// needs to be promoted due to the condition's security label, and emit a TypeMismatch
+    /// if the promoted type is incompatible with `return_ty`.
+    ///
+    /// Only fires when:
+    /// - the condition carries a security label (`cond_label` is `Some`),
+    /// - the function declares a concrete return type (`return_ty` is `Some`),
+    /// - and the branch yields a non-Unit, non-Unknown result.
+    fn check_branch_label_promotion(
+        &mut self,
+        cond_label: Option<SecurityLabel>,
+        branch_ty: &Ty,
+        return_ty: Option<&Ty>,
+        span: Span,
+    ) {
+        if let (Some(lbl), Some(ret)) = (cond_label, return_ty) {
+            if !matches!(branch_ty.unlabeled(), Ty::Unit | Ty::Unknown) {
+                let promoted = ifc::apply_label(Some(lbl), branch_ty.unlabeled().clone());
+                if !matches!(promoted, Ty::Unknown) && !types_compatible(ret, &promoted) {
+                    self.emit(CheckError::TypeMismatch {
+                        expected: ret.display(),
+                        found: promoted.display(),
+                        span,
+                    });
+                }
+            }
+        }
+    }
+
     fn check_block(&mut self, block: &Block, expected_ty: Option<&Ty>) {
         self.env.push_scope();
         for stmt in &block.stmts {
@@ -460,43 +489,21 @@ impl TypeChecker {
                 // After the normal branch check, apply label promotion for non-Unit results:
                 // the implicit return of an if-statement branch inherits at least the
                 // condition's label. Skip Unit (carries no information).
-                if let (Some(lbl), Some(ret)) = (cond_label, return_ty) {
-                    if !matches!(then_ty.unlabeled(), Ty::Unit | Ty::Unknown) {
-                        let promoted = ifc::apply_label(Some(lbl), then_ty.unlabeled().clone());
-                        if !matches!(promoted, Ty::Unknown) && !types_compatible(ret, &promoted) {
-                            self.emit(CheckError::TypeMismatch {
-                                expected: ret.display(),
-                                found: promoted.display(),
-                                span: *span,
-                            });
-                        }
-                    }
-                }
+                self.check_branch_label_promotion(cond_label, &then_ty, return_ty, *span);
 
                 if let Some(else_branch) = else_ {
                     match else_branch {
                         ElseBranch::Block(b) => {
                             let else_ty = self.infer_block_type(b, return_ty);
-                            if let (Some(lbl), Some(ret)) = (cond_label, return_ty) {
-                                if !matches!(else_ty.unlabeled(), Ty::Unit | Ty::Unknown) {
-                                    let promoted =
-                                        ifc::apply_label(Some(lbl), else_ty.unlabeled().clone());
-                                    if !matches!(promoted, Ty::Unknown)
-                                        && !types_compatible(ret, &promoted)
-                                    {
-                                        self.emit(CheckError::TypeMismatch {
-                                            expected: ret.display(),
-                                            found: promoted.display(),
-                                            span: *span,
-                                        });
-                                    }
-                                }
-                            }
+                            self.check_branch_label_promotion(
+                                cond_label, &else_ty, return_ty, *span,
+                            );
                         }
+                        // `else if` chains: recurse so each nested if also gets
+                        // promotion applied to its own branches.
                         ElseBranch::If(s) => self.check_stmt(s, return_ty),
                     }
                 }
-                let _ = span;
             }
 
             Stmt::Match {
