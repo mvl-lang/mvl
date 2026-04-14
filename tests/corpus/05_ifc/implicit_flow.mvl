@@ -1,4 +1,5 @@
 // Corpus: implicit information-flow control violations (003-information-flow, Req 11)
+// corpus:expect-fail — this file intentionally contains violations and MUST produce errors.
 //
 // This file contains programs that MUST produce ImplicitFlowViolation errors.
 // Even though the arguments to println/print may be Public, the fact that a
