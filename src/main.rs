@@ -90,18 +90,45 @@ fn print_usage() {
     eprintln!("  mvl transpile <file.mvl>           — print transpiled Rust to stdout");
 }
 
-/// Parse an optional `--req N` or `--req=N` flag from the argument list.
-fn parse_req_filter(args: &[String]) -> Option<u8> {
-    // --req N  (two separate tokens)
-    if let Some(v) = args.windows(2).find(|w| w[0] == "--req") {
-        if let Ok(n) = v[1].parse::<u8>() {
-            return Some(n);
+/// Escape a string for embedding in a JSON string literal.
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
         }
     }
-    // --req=N  (single token)
-    args.iter()
-        .find_map(|a| a.strip_prefix("--req="))
-        .and_then(|s| s.parse::<u8>().ok())
+    out
+}
+
+/// Parse an optional `--req N` or `--req=N` flag from the argument list.
+/// Exits with an error message if the value is present but not in 1–11.
+fn parse_req_filter(args: &[String]) -> Option<u8> {
+    let raw: Option<&str> = if let Some(v) = args.windows(2).find(|w| w[0] == "--req") {
+        Some(v[1].as_str())
+    } else {
+        args.iter().find_map(|a| a.strip_prefix("--req="))
+    };
+
+    raw.map(|s| {
+        let n: u8 = s.parse().unwrap_or_else(|_| {
+            eprintln!("error: --req expects a number 1–11, got {s:?}");
+            process::exit(1);
+        });
+        if !(1..=11).contains(&n) {
+            eprintln!("error: --req {n} out of range (valid: 1–11)");
+            process::exit(1);
+        }
+        n
+    })
 }
 
 fn require_path_arg(args: &[String], cmd: &str) -> String {
@@ -137,21 +164,29 @@ fn cmd_check(path: &str, req_filter: Option<u8>) {
             // Single-requirement mode: run only the requested pass.
             let verdict = registry.run_req(req, &prog, &result);
             let name = registry.pass_name(req).unwrap_or("unknown");
-            println!(
-                "{file_str}: Req {req} ({name}) — {} — {}",
-                verdict.label(),
-                verdict.detail()
-            );
+            if let Some(loc) = verdict.location() {
+                println!(
+                    "{file_str}:{loc}: Req {req} ({name}) — {} — {}",
+                    verdict.label(),
+                    verdict.detail()
+                );
+            } else {
+                println!(
+                    "{file_str}: Req {req} ({name}) — {} — {}",
+                    verdict.label(),
+                    verdict.detail()
+                );
+            }
             if verdict.is_failed() {
                 had_errors = true;
             }
         } else {
             // Full check mode: report type errors then show verdict summary.
+            let verdicts = registry.run_all(&prog, &result);
+            let proven = (1u8..=11)
+                .filter(|&i| verdicts[i as usize].is_proven())
+                .count();
             if result.is_ok() {
-                let verdicts = registry.run_all(&prog, &result);
-                let proven = (1u8..=11)
-                    .filter(|&i| verdicts[i as usize].is_proven())
-                    .count();
                 println!("{file_str}: OK  ({proven}/11 requirements proven)");
             } else {
                 had_errors = true;
@@ -165,10 +200,6 @@ fn cmd_check(path: &str, req_filter: Option<u8>) {
                         err.message()
                     );
                 }
-                let verdicts = registry.run_all(&prog, &result);
-                let proven = (1u8..=11)
-                    .filter(|&i| verdicts[i as usize].is_proven())
-                    .count();
                 let failed = (1u8..=11)
                     .filter(|&i| verdicts[i as usize].is_failed())
                     .count();
@@ -687,7 +718,7 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
                 format!(
                     "    \"{i}\": {{ \"status\": \"{}\", \"detail\": \"{}\" }}",
                     v.label(),
-                    v.detail().replace('"', "\\\"")
+                    json_escape(v.detail())
                 )
             })
             .collect::<Vec<_>>()

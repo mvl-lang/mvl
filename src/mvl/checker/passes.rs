@@ -87,6 +87,16 @@ impl Verdict {
             Verdict::Timeout => "timed out",
         }
     }
+
+    /// Formatted source location for a `Failed` verdict, if available.
+    /// Returns `Some("line:col")` when a span was recorded, `None` otherwise.
+    pub fn location(&self) -> Option<String> {
+        if let Verdict::Failed { span: Some(s), .. } = self {
+            Some(format!("{}:{}", s.line, s.col))
+        } else {
+            None
+        }
+    }
 }
 
 impl Default for Verdict {
@@ -187,14 +197,6 @@ impl VerificationPass for Phase3StubPass {
         }
     }
 }
-
-// ── Pass execution order ──────────────────────────────────────────────────────
-
-/// Canonical pass execution order (dependency-aware).
-///
-/// Type safety (1) must run before all others.  Totality (3) before
-/// termination (8).  The rest are independent at the Phase 1 level.
-pub const PASS_ORDER: &[u8] = &[1, 4, 5, 3, 6, 7, 2, 8, 9, 10, 11];
 
 // ── PassRegistry ──────────────────────────────────────────────────────────────
 
@@ -344,6 +346,10 @@ impl VerdictCache {
 }
 
 /// Compute a fast hash of source content for use as a cache key.
+///
+/// **Stability note:** Uses [`std::collections::hash_map::DefaultHasher`],
+/// which is only stable within a single process invocation.  Do not persist
+/// or compare this value across processes or Rust versions.
 pub fn source_hash(src: &str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     src.hash(&mut hasher);
@@ -388,7 +394,8 @@ pub fn aggregate_verdicts(per_file: &[[Verdict; 12]]) -> [Verdict; 12] {
             }
         }
 
-        Verdict::default()
+        // Remaining case: all non-Proven verdicts are Timeout
+        Verdict::Timeout
     })
 }
 
