@@ -36,7 +36,6 @@ fn check_else_leak(secret: Secret<Bool>) -> Unit ! Console {
     // VIOLATION: the else-branch is also controlled by the Secret condition.
     // Whether "denied" is printed reveals that secret was false.
     if secret {
-        0;
     } else {
         println("access denied");
     }
