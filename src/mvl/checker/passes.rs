@@ -198,6 +198,18 @@ impl VerificationPass for Phase3StubPass {
     }
 }
 
+// ── Pass execution order ──────────────────────────────────────────────────────
+
+/// Canonical pass execution order (dependency-aware).
+///
+/// Type safety (1) must run before all others.  Totality (3) before
+/// termination (8).  The rest are independent at the Phase 1 level.
+/// Phase 3 provers (2, 9, 10, 11) run last as they depend on Phase 1 results.
+///
+/// `PassRegistry::run_all` uses this order; Phase 3 provers added to the
+/// registry must extend this list.
+pub const PASS_ORDER: &[u8] = &[1, 4, 5, 3, 6, 7, 8, 2, 9, 10, 11];
+
 // ── PassRegistry ──────────────────────────────────────────────────────────────
 
 /// Registry of all verification passes in execution order.
@@ -278,13 +290,14 @@ impl PassRegistry {
         PassRegistry { passes }
     }
 
-    /// Run all passes in order and return verdicts indexed by requirement.
+    /// Run all passes in [`PASS_ORDER`] and return verdicts indexed by requirement.
     /// Index 0 is unused; indices 1–11 hold per-requirement verdicts.
     pub fn run_all(&self, prog: &Program, result: &CheckResult) -> [Verdict; 12] {
         let mut verdicts = std::array::from_fn(|_| Verdict::default());
-        for pass in &self.passes {
-            let req = pass.requirement() as usize;
-            verdicts[req] = pass.run(prog, result);
+        for &req in PASS_ORDER {
+            if let Some(pass) = self.passes.iter().find(|p| p.requirement() == req) {
+                verdicts[req as usize] = pass.run(prog, result);
+            }
         }
         verdicts
     }
