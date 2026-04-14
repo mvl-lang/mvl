@@ -889,15 +889,20 @@ pub fn consistent_comment_style(src: &str, cfg: &LintConfig, out: &mut Vec<LintD
     }
     for (i, line) in src.lines().enumerate() {
         let line_no = (i + 1) as u32;
-        // Scan for `/*` not inside a string literal (best-effort: flag position
-        // of first occurrence; the parser will reject the file anyway).
+        // Scan for `/*` not inside a line comment. If `//` appears before `/*`
+        // on the same line, the `/*` is inside a comment and must be ignored.
+        // Known limitation: `/*` inside string literals is still flagged; the
+        // parser rejects such source anyway, so false positives are rare.
         if let Some(pos) = line.find("/*") {
-            out.push(LintDiag::warning(
-                "consistent-comment-style",
-                "block comment `/*` not allowed; use `//` line comments",
-                line_no,
-                (pos + 1) as u32,
-            ));
+            let in_line_comment = line.find("//").is_some_and(|cc| cc < pos);
+            if !in_line_comment {
+                out.push(LintDiag::warning(
+                    "consistent-comment-style",
+                    "block comment `/*` not allowed; use `//` line comments",
+                    line_no,
+                    (pos + 1) as u32,
+                ));
+            }
         }
     }
 }
@@ -969,23 +974,23 @@ pub fn doc_comment_examples(prog: &Program, src: &str, cfg: &LintConfig, out: &m
     }
     let src_lines: Vec<&str> = src.lines().collect();
     for decl in &prog.declarations {
-        let (visible, span, kind, name) = match decl {
-            Decl::Fn(f) if f.visible => (true, f.span, "function", f.name.as_str()),
-            Decl::Type(t) if t.visible => (true, t.span, "type", t.name.as_str()),
-            _ => (false, Default::default(), "", ""),
-        };
-        if !visible {
+        // Only pub fn and pub type are checked; pub const is intentionally
+        // excluded (example sections are less meaningful for constants).
+        let Some((span, kind, name)) = (match decl {
+            Decl::Fn(f) if f.visible => Some((f.span, "function", f.name.as_str())),
+            Decl::Type(t) if t.visible => Some((t.span, "type", t.name.as_str())),
+            _ => None,
+        }) else {
             continue;
-        }
+        };
         let doc_lines = collect_doc_lines_before(span.line as usize, &src_lines);
         if doc_lines.is_empty() {
             // missing-doc-comment will fire; skip duplicate noise here
             continue;
         }
         let has_example = doc_lines.iter().any(|l| {
-            let t = l.trim_start_matches('/').trim();
-            t.to_ascii_lowercase().starts_with("example")
-                || t.to_ascii_lowercase().starts_with("# example")
+            let lower = l.trim_start_matches('/').trim().to_ascii_lowercase();
+            lower.starts_with("example") || lower.starts_with("# example")
         });
         if !has_example {
             out.push(LintDiag::warning(
@@ -1017,19 +1022,16 @@ fn collect_doc_lines_before<'a>(decl_line: usize, src_lines: &[&'a str]) -> Vec<
     if decl_line == 0 || decl_line > src_lines.len() {
         return vec![];
     }
-    // Walk backwards from the line before the declaration.
+    // Walk backwards from the line immediately above the declaration.
+    // decl_line is 1-based, so the line above is at 0-based index decl_line - 2,
+    // meaning we iterate over 0..decl_line-1 in reverse.
     let mut result: Vec<&'a str> = vec![];
-    let mut i = decl_line.saturating_sub(1); // 0-based index of line before decl
-    loop {
-        if i == 0 {
-            break;
-        }
-        i -= 1;
+    for i in (0..decl_line.saturating_sub(1)).rev() {
         let line = src_lines[i].trim();
         if line.starts_with("///") {
             result.push(src_lines[i]);
         } else if line.is_empty() {
-            // blank lines between doc block and decl are allowed
+            // blank lines between doc block and declaration are allowed
             continue;
         } else {
             break;
@@ -1489,6 +1491,25 @@ mod tests {
         assert!(diags.is_empty());
     }
 
+    #[test]
+    fn block_comment_after_line_comment_not_flagged() {
+        // `/*` appearing after `//` on the same line is inside a line comment.
+        let src = "// this is fine /* not a block comment */\nfn f() -> Int { 42 }\n";
+        let mut diags = vec![];
+        consistent_comment_style(src, &cfg(), &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn block_comment_multiple_on_same_line_single_diag() {
+        // find() stops at the first match; only one diag per line is emitted.
+        let src = "/* a */ /* b */\nfn f() -> Int { 42 }\n";
+        let mut diags = vec![];
+        consistent_comment_style(src, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].span.col, 1); // only first occurrence reported
+    }
+
     // ── Phase 3: doc_comments_required ─────────────────────────────────
 
     #[test]
@@ -1572,6 +1593,35 @@ mod tests {
         assert!(diags.is_empty());
     }
 
+    #[test]
+    fn pub_const_missing_doc_comment_detected() {
+        let src = "pub const MAX: Int = 100;\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        doc_comments_required(&prog, src, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "missing-doc-comment");
+        assert!(diags[0].message.contains("MAX"));
+    }
+
+    #[test]
+    fn pub_const_with_doc_comment_ok() {
+        let src = "/// The maximum value.\npub const MAX: Int = 100;\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        doc_comments_required(&prog, src, &cfg(), &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn private_const_no_doc_comment_ok() {
+        let src = "const MAX: Int = 100;\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        doc_comments_required(&prog, src, &cfg(), &mut diags);
+        assert!(diags.is_empty());
+    }
+
     // ── Phase 3: doc_comment_examples ──────────────────────────────────
 
     #[test]
@@ -1613,6 +1663,56 @@ mod tests {
         // If there's no doc comment at all, missing-doc-comment fires but
         // doc-comment-example should stay silent to avoid duplicate noise.
         let src = "pub fn foo() -> Int { 42 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        let mut c = cfg();
+        c.doc_comment_examples = true;
+        doc_comment_examples(&prog, src, &c, &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn pub_type_doc_without_example_flagged() {
+        let src = "/// A wrapper type.\npub type Foo = struct { x: Int }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        let mut c = cfg();
+        c.doc_comment_examples = true;
+        doc_comment_examples(&prog, src, &c, &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "doc-comment-example");
+        assert!(diags[0].message.contains("Foo"));
+        assert!(diags[0].message.contains("type"));
+    }
+
+    #[test]
+    fn doc_comment_example_case_insensitive_ok() {
+        // "# Example" (capital E) and "Examples:" (plural) both accepted.
+        let src =
+            "/// Does something.\n/// # Example\n/// foo() == 42\npub fn foo() -> Int { 42 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        let mut c = cfg();
+        c.doc_comment_examples = true;
+        doc_comment_examples(&prog, src, &c, &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn doc_comment_examples_plural_ok() {
+        let src = "/// Does something.\n/// Examples: foo() == 42\npub fn foo() -> Int { 42 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        let mut c = cfg();
+        c.doc_comment_examples = true;
+        doc_comment_examples(&prog, src, &c, &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn pub_const_no_example_not_flagged() {
+        // doc_comment_examples intentionally excludes pub const; pin this design decision.
+        let src = "/// The maximum value.\npub const MAX: Int = 100;\n";
         let prog = parse(src);
         let mut diags = vec![];
         let mut c = cfg();
