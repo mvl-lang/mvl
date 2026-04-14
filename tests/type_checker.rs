@@ -883,6 +883,195 @@ fn sending_val_param_accepted() {
     );
 }
 
+// ── #138: Data race freedom — iso aliasing (Requirement 9, Phase 3) ──────────
+
+#[test]
+fn iso_aliasing_without_consume_rejected() {
+    // GIVEN: fn binds an `iso` param to a new let without consume()
+    // THEN: IsoAliasingViolation reported (two live references to isolated object)
+    let src = r#"
+        fn alias_iso(channel: Channel, iso x: Payload) -> Unit {
+            let y = x;
+            channel.send(consume(y))
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::IsoAliasingViolation { name, .. } if name == "x")),
+        "expected IsoAliasingViolation for x, got: {errors:?}"
+    );
+}
+
+#[test]
+fn iso_with_consume_accepted() {
+    // GIVEN: fn sends an `iso` param via consume() — proper ownership transfer
+    // THEN: no IsoAliasingViolation (consume() is not an alias)
+    let src = r#"
+        fn transfer(channel: Channel, iso item: Payload) -> Unit {
+            channel.send(consume(item))
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::IsoAliasingViolation { .. })),
+        "consume() should not be flagged as aliasing, got: {errors:?}"
+    );
+}
+
+#[test]
+fn iso_direct_send_accepted() {
+    // GIVEN: fn sends an `iso` param directly via channel.send (existing behavior)
+    // THEN: no IsoAliasingViolation (send is a capability-boundary operation)
+    let src = r#"
+        fn send_owned(channel: Channel, iso data: Payload) -> Unit {
+            channel.send(data)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::IsoAliasingViolation { .. })),
+        "direct iso send should not be flagged as aliasing, got: {errors:?}"
+    );
+}
+
+#[test]
+fn val_param_aliasing_not_checked() {
+    // GIVEN: fn binds a `val` param to a new let (val is immutable — aliasing is fine)
+    // THEN: no IsoAliasingViolation (only iso is subject to aliasing checks)
+    let src = r#"
+        fn copy_val(val config: Config) -> Unit {
+            let copy = config;
+            consume(copy)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::IsoAliasingViolation { .. })),
+        "val aliasing should not be flagged, got: {errors:?}"
+    );
+}
+
+// ── #138 continued: control flow, assignment, lambda, and limitation tests ───
+
+#[test]
+fn iso_aliasing_via_assignment_rejected() {
+    // GIVEN: fn has two iso params and assigns one to a mutable binding without consume()
+    // THEN: IsoAliasingViolation reported for the assigned iso var
+    let src = r#"
+        fn assign_iso(iso x: Payload, iso z: Payload) -> Unit {
+            let mut y = consume(x);
+            y = z;
+            consume(y)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::IsoAliasingViolation { name, .. } if name == "z")),
+        "expected IsoAliasingViolation for z assigned without consume(), got: {errors:?}"
+    );
+}
+
+#[test]
+fn iso_aliasing_inside_if_branch_rejected() {
+    // GIVEN: iso param aliased inside a then-branch
+    // THEN: IsoAliasingViolation reported
+    let src = r#"
+        fn conditional_alias(channel: Channel, iso x: Payload, flag: Bool) -> Unit {
+            if flag {
+                let y = x;
+                channel.send(consume(y))
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::IsoAliasingViolation { name, .. } if name == "x")),
+        "iso aliasing in if-branch should be rejected, got: {errors:?}"
+    );
+}
+
+// Lambda surface syntax is not yet parsed by the MVL parser.
+// Lambda aliasing checks are covered by AST-based unit tests in data_race.rs.
+
+// ── Known limitations (L1–L5) — regression tests documenting non-detection ───
+
+#[test]
+fn iso_passed_to_fn_call_not_detected_l1() {
+    // L1: Passing an iso var to a non-send function without consume() is NOT
+    // detected.  This test documents the current behavior so that future
+    // implementations of L1 detection will intentionally break it.
+    let src = r#"
+        fn use_payload(x: Payload) -> Unit { consume(x) }
+        fn caller(iso x: Payload) -> Unit {
+            use_payload(x)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::IsoAliasingViolation { .. })),
+        "L1: iso passed to fn without consume() is not yet detected, got: {errors:?}"
+    );
+}
+
+#[test]
+fn iso_rebound_after_consume_not_detected_l5() {
+    // L5: After `let y = consume(x)`, `y` becomes the new iso owner but is NOT
+    // added to iso_vars.  Subsequent aliasing of `y` is therefore undetected.
+    // This is a known Phase 3 limitation — full tracking requires mutable scope
+    // analysis (Phase 6).
+    let src = r#"
+        fn rebound_alias(iso x: Payload) -> Unit {
+            let a = consume(x);
+            let b = a;
+            consume(b)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::IsoAliasingViolation { name, .. } if name == "a")),
+        "L5: aliasing of rebound iso (after consume) is not yet detected, got: {errors:?}"
+    );
+}
+
+#[test]
+fn iso_multiple_aliasing_all_sites_reported() {
+    // Each individual let-binding of an iso param is flagged independently.
+    // Both `let a = x` and `let b = x` generate separate violations.
+    let src = r#"
+        fn double_alias(iso x: Payload) -> Unit {
+            let a = x;
+            let b = x;
+            consume(b)
+        }
+    "#;
+    let errors = errors_for(src);
+    let violations: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, CheckError::IsoAliasingViolation { name, .. } if name == "x"))
+        .collect();
+    assert_eq!(
+        violations.len(),
+        2,
+        "expected 2 IsoAliasingViolation (one per alias site), got: {violations:?}"
+    );
+}
+
 // ── #24: Security label checking (Requirement 11) ────────────────────────────
 
 #[test]

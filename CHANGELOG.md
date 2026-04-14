@@ -6,6 +6,35 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-04-14
+
+### Added
+- **Data Race Freedom Checker (Req 9, Phase 3 partial)** — `src/mvl/checker/data_race.rs`
+  - `check_iso_aliasing()` — detects `iso` variable aliasing via bare let-bindings, assignments, and lambda captures
+  - `count_race_free_fns()` — classifies functions as provably race-free when they have no `ref` parameters
+  - `DataRaceFreedomPass` — verification pass that returns `Proven` when all functions are race-free, `Unchecked` when `ref` parameters require actor-model analysis (Phase 6)
+  - `docs/specs/008-data-race-freedom.md` — formal specification of the reference capability model (iso/val/ref/tag), sendability rule (Req 1), isolation rule (Req 2), function classification (Req 3), and known limitations (L1–L5)
+  - 16 new tests covering aliasing detection, control flow integration, limitation regression, and lambda captures (AST-level)
+
+### Fixed
+- **Data race freedom aliasing detection improvements:**
+  - `Stmt::Assign` now applies the same aliasing guard as `Stmt::Let` — `y = iso_x` is flagged as a violation
+  - Lambda body recursion — `check_expr_iso` now recurses into `Expr::Lambda` bodies with correct parameter shadowing
+  - `DataRaceFreedomPass` now uses `self.requirement()` instead of hardcoded `[9]` index (maintenance safety)
+  - Corrected spec limitation L4 — both alias sites are reported independently, not just the first
+  - Added L5 limitation — iso rebinding after `consume()` is not tracked (Phase 6 work)
+
+### Tests
+- `req9_failed_for_iso_aliasing_violation` — exercises `Verdict::Failed` branch (was completely untested)
+- `req9_unchecked_for_empty_program` — covers zero-function edge case
+- `req9_proven_evidence_references_phase6` — verifies evidence string requirement
+- `iso_aliasing_via_assignment_rejected` — integration test for Stmt::Assign fix
+- `iso_aliasing_inside_if_branch_rejected` — control flow coverage
+- `iso_aliasing_inside_lambda_body_rejected` — AST-level unit test (lambda syntax not yet parsed)
+- `lambda_param_shadowing_iso_not_flagged` — shadowing semantics correctness
+- Limitation regression tests: L1 (`iso_passed_to_fn_call_not_detected_l1`), L5 (`iso_rebound_after_consume_not_detected_l5`), and L4 documentation (`iso_multiple_aliasing_all_sites_reported`)
+- Test count increased: 458 passing (from 255)
+
 ## [0.16.0] — 2026-04-14 (feat: termination checker — Req 8 structural recursion)
 
 ### Added
