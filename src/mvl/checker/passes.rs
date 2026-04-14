@@ -23,6 +23,7 @@ use std::path::PathBuf;
 
 use crate::mvl::checker::data_race;
 use crate::mvl::checker::ifc;
+use crate::mvl::checker::refinements;
 use crate::mvl::checker::CheckResult;
 use crate::mvl::parser::ast::Program;
 use crate::mvl::parser::lexer::Span;
@@ -262,6 +263,73 @@ impl VerificationPass for DataRaceFreedomPass {
     }
 }
 
+// ── Refinements pass (Req 10 — Phase 3 symbolic proof) ───────────────────────
+
+/// Phase 3 refinement type checker for Req 10.
+///
+/// Uses a symbolic evaluator to classify each call-site argument against its
+/// parameter refinement predicate:
+///
+/// - **Failed** — any argument is definitively proven to violate its predicate
+///   (e.g. literal `0` passed to a `where self != 0` parameter).
+/// - **Proven** — no violations and at least one call site was statically proven;
+///   evidence includes counts per outcome so auditors can assess coverage.
+/// - **Unchecked** — no violations but no refined call sites either; the program
+///   has no refinements to verify, or all were deferred to runtime.
+///
+/// Full SMT integration (Z3/CVC5) for non-literal constraints is deferred to
+/// a later phase.  All unprovable call sites fall back to runtime checks.
+struct RefinementsPass;
+
+impl VerificationPass for RefinementsPass {
+    fn name(&self) -> &'static str {
+        "Refinements"
+    }
+    fn requirement(&self) -> u8 {
+        10
+    }
+    fn run(&self, prog: &Program, result: &CheckResult) -> Verdict {
+        let req = usize::from(self.requirement());
+        let violations = result.req_errors[req];
+        if violations > 0 {
+            return Verdict::Failed {
+                reason: format!("{violations} refinement violation(s)"),
+                span: result
+                    .errors
+                    .iter()
+                    .find(|e| e.requirement_number() == self.requirement())
+                    .map(|e| e.span()),
+            };
+        }
+
+        let counts = refinements::count_refinements(prog);
+        let total = counts.proven + counts.runtime_checked + counts.failed;
+
+        if total == 0 {
+            Verdict::Unchecked {
+                reason: "no refined call sites found; full SMT analysis pending (Phase 6)"
+                    .to_string(),
+            }
+        } else if counts.proven > 0 && counts.failed == 0 {
+            Verdict::Proven {
+                evidence: format!(
+                    "{} proven, {} runtime-checked out of {total} refined call site(s); \
+                     full SMT analysis pending (Phase 6)",
+                    counts.proven, counts.runtime_checked,
+                ),
+            }
+        } else {
+            Verdict::Unchecked {
+                reason: format!(
+                    "0 proven, {} runtime-checked, {} failed out of {total} refined call site(s); \
+                     full SMT analysis pending (Phase 6)",
+                    counts.runtime_checked, counts.failed,
+                ),
+            }
+        }
+    }
+}
+
 // ── IFC pass (Req 11 — Phase 3 partial proof) ────────────────────────────────
 
 /// Phase 3 information flow control pass for Req 11.
@@ -412,11 +480,7 @@ impl PassRegistry {
                 stub_reason: "borrow lifetime analysis pending (Phase 3)",
             }),
             Box::new(DataRaceFreedomPass),
-            Box::new(Phase3StubPass {
-                req: 10,
-                pass_name: "Refinements",
-                stub_reason: "SMT verification pending (Phase 3)",
-            }),
+            Box::new(RefinementsPass),
             Box::new(IFCPass),
         ];
         PassRegistry { passes }

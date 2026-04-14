@@ -2064,3 +2064,318 @@ fn implicit_flow_corpus_has_violations() {
         result.errors
     );
 }
+
+// ── #136: Refinement type solver — Req 10 (Phase 3) ──────────────────────────
+
+/// Literal zero violates `b != 0` refinement — should report RefinementViolated.
+#[test]
+fn refinement_literal_zero_to_nonzero_param_rejected() {
+    // GIVEN: function requires b != 0
+    // WHEN: literal 0 is passed
+    // THEN: RefinementViolated emitted
+    let src = r#"
+        total fn safe_divide(a: Int, b: Int where b != 0) -> Int { a / b }
+        total fn caller() -> Int { safe_divide(10, 0) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "passing literal 0 to `where b != 0` parameter must emit RefinementViolated, got: {errors:?}"
+    );
+}
+
+/// Positive literal satisfies `b > 0` — should NOT report an error.
+#[test]
+fn refinement_positive_literal_proven_accepted() {
+    // GIVEN: function requires b > 0
+    // WHEN: literal 5 (positive) is passed
+    // THEN: no RefinementViolated
+    let src = r#"
+        total fn positive_only(b: Int where b > 0) -> Int { b }
+        total fn caller() -> Int { positive_only(5) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "passing literal 5 to `where b > 0` parameter must NOT emit RefinementViolated, got: {errors:?}"
+    );
+}
+
+/// Negative literal violates `b > 0` — should report RefinementViolated.
+#[test]
+fn refinement_negative_literal_to_positive_param_rejected() {
+    // GIVEN: function requires b > 0
+    // WHEN: literal -3 is passed
+    // THEN: RefinementViolated emitted
+    let src = r#"
+        total fn positive_only(b: Int where b > 0) -> Int { b }
+        total fn caller() -> Int { positive_only(-3) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "passing literal -3 to `where b > 0` must emit RefinementViolated, got: {errors:?}"
+    );
+}
+
+/// Unrestricted variable passed to refined param — no hard error (runtime check).
+#[test]
+fn refinement_unrestricted_var_to_refined_param_no_error() {
+    // GIVEN: function requires b != 0, caller has unrestricted y
+    // WHEN: y is passed
+    // THEN: no RefinementViolated (runtime check is inserted instead)
+    let src = r#"
+        total fn safe_divide(a: Int, b: Int where b != 0) -> Int { a / b }
+        total fn caller(x: Int, y: Int) -> Int { safe_divide(x, y) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "unrestricted var to refined param should NOT emit RefinementViolated (runtime check), got: {errors:?}"
+    );
+}
+
+/// Variable with matching refinement — proven, no error.
+#[test]
+fn refinement_same_pred_var_proven() {
+    // GIVEN: function requires b != 0, caller has y: Int where y != 0
+    // WHEN: y is passed
+    // THEN: proven — no RefinementViolated
+    let src = r#"
+        total fn safe_divide(a: Int, b: Int where b != 0) -> Int { a / b }
+        total fn caller(x: Int, y: Int where y != 0) -> Int { safe_divide(x, y) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "var with matching refinement should be proven with no error, got: {errors:?}"
+    );
+}
+
+/// Valid corpus with refinements — no violations after Phase 3 check.
+#[test]
+fn refinements_valid_corpus_no_violations() {
+    // GIVEN: valid refinement type corpus
+    // THEN: no RefinementViolated errors
+    let src = include_str!("corpus/06_refinements/refinements_valid.mvl");
+    let result = check_src(src);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "valid refinements corpus should produce no RefinementViolated errors, got: {:?}",
+        result.errors
+    );
+}
+
+/// Refinement pass produces a useful verdict for programs with refined call sites.
+#[test]
+fn refinement_pass_produces_counts_in_verdict() {
+    use mvl::mvl::checker::passes::PassRegistry;
+    use mvl::mvl::parser::Parser;
+
+    let src = r#"
+        total fn safe_divide(a: Int, b: Int where b != 0) -> Int { a / b }
+        total fn caller(x: Int, y: Int where y != 0) -> Int { safe_divide(x, y) }
+    "#;
+    let (mut p, _) = Parser::new(src);
+    let prog = p.parse_program();
+    let result = check(&prog);
+    let registry = PassRegistry::default_registry();
+    let verdict = registry.run_req(10, &prog, &result);
+    assert!(
+        verdict.is_proven(),
+        "program with a proven call site should yield Proven verdict for Req 10, got: {verdict:?}"
+    );
+}
+
+/// Violations corpus loads without static violations (only runtime checks).
+#[test]
+fn refinements_violations_corpus_no_static_violations() {
+    // GIVEN: violations corpus (unproven call sites — runtime-checked, not statically failed)
+    // THEN: no RefinementViolated errors emitted
+    let src = include_str!("corpus/06_refinements/refinements_violations.mvl");
+    let result = check_src(src);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "violations corpus should produce no RefinementViolated errors (only runtime checks), got: {:?}",
+        result.errors
+    );
+}
+
+/// Program with a definite refinement violation yields Verdict::Failed for Req 10.
+#[test]
+fn refinement_pass_yields_failed_verdict_on_violation() {
+    use mvl::mvl::checker::passes::PassRegistry;
+    use mvl::mvl::parser::Parser;
+
+    // GIVEN: literal 0 passed to b != 0 — definite violation
+    let src = r#"
+        total fn safe_divide(a: Int, b: Int where b != 0) -> Int { a / b }
+        total fn caller() -> Int { safe_divide(10, 0) }
+    "#;
+    let (mut p, _) = Parser::new(src);
+    let prog = p.parse_program();
+    let result = check(&prog);
+    let registry = PassRegistry::default_registry();
+    let verdict = registry.run_req(10, &prog, &result);
+    assert!(
+        verdict.is_failed(),
+        "program with a definite refinement violation must yield Failed verdict, got: {verdict:?}"
+    );
+}
+
+/// Reassigning a refined variable invalidates its refinement — subsequent call is runtime-checked.
+#[test]
+fn refinement_stale_after_reassignment_is_not_proven() {
+    use mvl::mvl::checker::passes::PassRegistry;
+    use mvl::mvl::parser::Parser;
+
+    // GIVEN: mut param y with refinement y > 0; reassigned to 0 before use
+    // WHEN: y is passed to positive_only
+    // THEN: verdict is NOT Proven (refinement was invalidated by assignment)
+    let src = r#"
+        total fn positive_only(b: Int where b > 0) -> Int { b }
+        total fn caller(mut y: Int where y > 0) -> Int {
+            y = 0;
+            positive_only(y)
+        }
+    "#;
+    let (mut p, _) = Parser::new(src);
+    let prog = p.parse_program();
+    let result = check(&prog);
+    let registry = PassRegistry::default_registry();
+    let verdict = registry.run_req(10, &prog, &result);
+    assert!(
+        !verdict.is_proven(),
+        "reassigned refined variable must not yield Proven verdict (stale refinement), got: {verdict:?}"
+    );
+}
+
+/// Compound And predicate: literal failing the left branch is caught (short-circuit).
+#[test]
+fn refinement_and_predicate_short_circuits_on_false_left() {
+    // GIVEN: function requires b > 0 && b < 100
+    // WHEN: literal 0 is passed (fails left branch)
+    // THEN: RefinementViolated emitted
+    let src = r#"
+        total fn bounded(b: Int where b > 0 && b < 100) -> Int { b }
+        total fn caller() -> Int { bounded(0) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "literal 0 violates `b > 0 && b < 100`; must emit RefinementViolated, got: {errors:?}"
+    );
+}
+
+/// Compound And predicate: literal satisfying both branches is proven.
+#[test]
+fn refinement_and_predicate_both_branches_proven() {
+    // GIVEN: function requires b > 0 && b < 100
+    // WHEN: literal 50 is passed
+    // THEN: no RefinementViolated
+    let src = r#"
+        total fn bounded(b: Int where b > 0 && b < 100) -> Int { b }
+        total fn caller() -> Int { bounded(50) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "literal 50 satisfies `b > 0 && b < 100`; must NOT emit RefinementViolated, got: {errors:?}"
+    );
+}
+
+/// Compound Or predicate: literal satisfying the right branch is proven.
+#[test]
+fn refinement_or_predicate_right_branch_proven() {
+    // GIVEN: function requires b < 0 || b > 5
+    // WHEN: literal 7 is passed (satisfies right branch)
+    // THEN: no RefinementViolated
+    let src = r#"
+        total fn nonzero_range(b: Int where b < 0 || b > 5) -> Int { b }
+        total fn caller() -> Int { nonzero_range(7) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "literal 7 satisfies `b < 0 || b > 5`; must NOT emit RefinementViolated, got: {errors:?}"
+    );
+}
+
+/// Compound Or predicate: literal satisfying neither branch is rejected.
+#[test]
+fn refinement_or_predicate_neither_branch_fails() {
+    // GIVEN: function requires b < 0 || b > 5
+    // WHEN: literal 3 is passed (satisfies neither)
+    // THEN: RefinementViolated emitted
+    let src = r#"
+        total fn nonzero_range(b: Int where b < 0 || b > 5) -> Int { b }
+        total fn caller() -> Int { nonzero_range(3) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "literal 3 violates `b < 0 || b > 5`; must emit RefinementViolated, got: {errors:?}"
+    );
+}
+
+/// Comparison operators Lt, Le, Ge, Eq are correctly evaluated for integer literals.
+#[test]
+fn refinement_operators_lt_le_ge_eq() {
+    // GIVEN/WHEN/THEN: each operator proven on a matching literal
+    let cases: &[(&str, i64, bool)] = &[
+        // (predicate, literal, should_pass)
+        ("b < 10", 9, true),
+        ("b < 10", 10, false),
+        ("b <= 10", 10, true),
+        ("b <= 10", 11, false),
+        ("b >= 5", 5, true),
+        ("b >= 5", 4, false),
+        ("b == 7", 7, true),
+        ("b == 7", 8, false),
+    ];
+    for (pred, lit, should_pass) in cases {
+        let src = format!(
+            r#"total fn f(b: Int where {pred}) -> Int {{ b }}
+               total fn caller() -> Int {{ f({lit}) }}"#
+        );
+        let errors = errors_for(&src);
+        let violated = errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. }));
+        if *should_pass {
+            assert!(
+                !violated,
+                "literal {lit} should satisfy `{pred}` but got RefinementViolated"
+            );
+        } else {
+            assert!(
+                violated,
+                "literal {lit} should violate `{pred}` but no RefinementViolated emitted"
+            );
+        }
+    }
+}
