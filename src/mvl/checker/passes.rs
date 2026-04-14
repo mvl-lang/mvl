@@ -277,7 +277,7 @@ impl VerificationPass for DataRaceFreedomPass {
 /// - **Unchecked** — no violations but no labeled types either; there is
 ///   nothing to prove because the program has no security lattice.
 ///
-/// Cross-function implicit flows and label inference through untannotated
+/// Cross-function implicit flows and label inference through unannotated
 /// intermediaries remain deferred to a future phase (see spec §Known Limitations).
 struct IFCPass;
 
@@ -611,7 +611,8 @@ fn add(x: Int, y: Int) -> Int {
         let (prog, result) = check_src(src);
         let reg = PassRegistry::default_registry();
         let verdicts = reg.run_all(&prog, &result);
-        // Req 2, 10, 11 are Phase 3 stubs — still Unchecked on clean code.
+        // Req 2 and 10 are Phase 3 stubs — still Unchecked on clean code.
+        // Req 11 (IFCPass) returns Unchecked because the test function has no labeled types.
         for req in [2u8, 10, 11] {
             assert!(
                 matches!(verdicts[req as usize], Verdict::Unchecked { .. }),
@@ -703,6 +704,38 @@ fn alias_iso(channel: Channel, iso x: Payload) -> Unit {
             );
         } else {
             panic!("expected Proven for Req 9, got: {:?}", verdicts[9]);
+        }
+    }
+
+    #[test]
+    fn req11_proven_for_labeled_types_with_no_violations() {
+        // GIVEN: a function with Secret-labeled parameter that never reaches a sink
+        // WHEN: IFCPass is run
+        // THEN: Verdict::Proven (no violations, has labeled types)
+        let src = r#"fn secure(x: Secret<Bool>) -> Unit { }"#;
+        let (prog, result) = check_src(src);
+        let reg = PassRegistry::default_registry();
+        let v = reg.run_req(11, &prog, &result);
+        assert!(
+            matches!(v, Verdict::Proven { .. }),
+            "Req 11 should be Proven for labeled program with no violations, got: {v:?}"
+        );
+    }
+
+    #[test]
+    fn req11_proven_evidence_contains_audit_counts() {
+        // GIVEN: a function with labeled types and no violations
+        // THEN: evidence string references declassification/sanitization counts
+        let src = r#"fn secure(x: Secret<Bool>) -> Unit { }"#;
+        let (prog, result) = check_src(src);
+        let reg = PassRegistry::default_registry();
+        if let Verdict::Proven { evidence } = reg.run_req(11, &prog, &result) {
+            assert!(
+                evidence.contains("declassif"),
+                "evidence should mention declassification count, got: {evidence:?}"
+            );
+        } else {
+            panic!("expected Proven for labeled program with no violations");
         }
     }
 

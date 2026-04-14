@@ -2003,6 +2003,50 @@ fn implicit_flow_label_propagated_through_let() {
     );
 }
 
+/// `println` inside a `while` loop controlled by a `Secret` condition MUST be rejected.
+///
+/// A while-loop fires zero or more times depending on the condition — its
+/// execution reveals information about the Secret value, creating an implicit flow.
+///
+/// - GIVEN `fn poll(flag: Secret<Bool>) -> Unit ! Console`
+/// - WHEN `while flag { println("still waiting"); }`
+/// - THEN `ImplicitFlowViolation` with pc_label="Secret" and sink="println" is emitted
+#[test]
+fn implicit_flow_while_secret_condition_rejected() {
+    let errors = errors_for(
+        r#"fn poll(flag: Secret<Bool>) -> Unit ! Console { while flag { println("still waiting"); } }"#,
+    );
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::ImplicitFlowViolation { pc_label, sink, .. }
+                if pc_label == "Secret" && sink == "println")
+        ),
+        "println inside Secret while-loop should emit ImplicitFlowViolation, got: {errors:?}"
+    );
+}
+
+/// `implicit_flow_else_branch_rejected` additionally verifies the sink field.
+///
+/// The else-branch println leaks information about the Secret condition
+/// (its firing proves the condition was false).
+///
+/// - GIVEN `fn h(flag: Secret<Bool>) -> Unit ! Console`
+/// - WHEN `if flag { 0; } else { println("not taken"); }`
+/// - THEN `ImplicitFlowViolation` with pc_label="Secret" and sink="println"
+#[test]
+fn implicit_flow_else_branch_sink_verified() {
+    let errors = errors_for(
+        r#"fn h(flag: Secret<Bool>) -> Unit ! Console { if flag { 0; } else { println("not taken"); } }"#,
+    );
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::ImplicitFlowViolation { pc_label, sink, .. }
+                if pc_label == "Secret" && sink == "println")
+        ),
+        "println in else of Secret branch should emit ImplicitFlowViolation with sink=println, got: {errors:?}"
+    );
+}
+
 /// Implicit flow corpus: load and verify the implicit_flow.mvl corpus file.
 ///
 /// The corpus contains only INVALID programs that should each produce

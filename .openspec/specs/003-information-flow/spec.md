@@ -168,7 +168,7 @@ The `format()` function MUST be IFC-aware. The result label MUST be the join (hi
 - GIVEN `let msg = format("Count: {}", count)` where `count: Public<Int>`
 - THEN `msg` MUST be `Public<String>`
 
-### Requirement 8: Implicit Flows Are Rejected [MUST]
+### Requirement 11: Implicit Flows Are Rejected [MUST]
 
 The compiler MUST detect implicit information flows via control flow (Program Counter label analysis). A `println` or `print` call that appears inside a branch controlled by a `Secret` or `Tainted` condition MUST be a compile error, even if the printed arguments are `Public`.
 
@@ -176,7 +176,7 @@ The compiler MUST detect implicit information flows via control flow (Program Co
 
 **Implementation:** `src/mvl/checker/ifc.rs` (`check_implicit_flows`), `src/mvl/checker/mod.rs`
 
-**Tests:** `tests/type_checker.rs::implicit_flow_secret_if_condition_rejected`, `tests/type_checker.rs::implicit_flow_tainted_if_condition_rejected`, `tests/type_checker.rs::implicit_flow_public_condition_accepted`, `tests/type_checker.rs::implicit_flow_print_sink_rejected`, `tests/type_checker.rs::implicit_flow_else_branch_rejected`, `tests/type_checker.rs::implicit_flow_label_propagated_through_let`
+**Tests:** `tests/type_checker.rs::implicit_flow_secret_if_condition_rejected`, `tests/type_checker.rs::implicit_flow_tainted_if_condition_rejected`, `tests/type_checker.rs::implicit_flow_public_condition_accepted`, `tests/type_checker.rs::implicit_flow_print_sink_rejected`, `tests/type_checker.rs::implicit_flow_else_branch_rejected`, `tests/type_checker.rs::implicit_flow_label_propagated_through_let`, `tests/type_checker.rs::implicit_flow_while_secret_condition_rejected`, `src/mvl/checker/passes.rs::req11_proven_for_labeled_types_with_no_violations`
 
 **Corpus:** `tests/corpus/05_ifc/implicit_flow.mvl`
 
