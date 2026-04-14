@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-release test test-unit test-integration test-corpus test-transpiler test-tree-sitter test-grammar-coverage lint format format-check assurance assurance-verbose assurance-gate docs docs-serve tree-sitter-build install install-nvim doctor clean
+.PHONY: help version build build-release test test-unit test-integration test-corpus test-transpiler test-tree-sitter test-grammar-coverage lint mvl-lint format format-check assurance assurance-verbose assurance-gate docs docs-serve tree-sitter-build install install-nvim doctor clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -78,8 +78,20 @@ test-transpiler: build ## Run full build-chain tests: .mvl → parse → check �
 
 # === Quality ===
 
-lint: ## Lint with clippy
+lint: ## Lint Rust source with clippy
 	cargo clippy -- -D warnings
+
+mvl-lint: build ## Run MVL linter on corpus and examples
+	@echo "Running MVL linter on corpus..."
+	@failed=0; \
+	for f in tests/corpus/**/*.mvl examples/**/*.mvl; do \
+		[ -f "$$f" ] || continue; \
+		out=$$(cargo run --quiet -- lint "$$f" 2>&1); \
+		if [ -n "$$out" ] && echo "$$out" | grep -q "warning\|error"; then \
+			echo "$$out"; failed=1; \
+		fi; \
+	done; \
+	if [ $$failed -eq 0 ]; then echo "MVL lint: all clean."; fi
 
 format: ## Format code
 	cargo fmt
