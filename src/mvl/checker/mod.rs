@@ -319,6 +319,35 @@ impl TypeChecker {
 
     // ── Blocks and statements ─────────────────────────────────────────────
 
+    /// Check whether `branch_ty` (the implicit return of one branch of an if-statement)
+    /// needs to be promoted due to the condition's security label, and emit a TypeMismatch
+    /// if the promoted type is incompatible with `return_ty`.
+    ///
+    /// Only fires when:
+    /// - the condition carries a security label (`cond_label` is `Some`),
+    /// - the function declares a concrete return type (`return_ty` is `Some`),
+    /// - and the branch yields a non-Unit, non-Unknown result.
+    fn check_branch_label_promotion(
+        &mut self,
+        cond_label: Option<SecurityLabel>,
+        branch_ty: &Ty,
+        return_ty: Option<&Ty>,
+        span: Span,
+    ) {
+        if let (Some(lbl), Some(ret)) = (cond_label, return_ty) {
+            if !matches!(branch_ty.unlabeled(), Ty::Unit | Ty::Unknown) {
+                let promoted = ifc::apply_label(Some(lbl), branch_ty.unlabeled().clone());
+                if !matches!(promoted, Ty::Unknown) && !types_compatible(ret, &promoted) {
+                    self.emit(CheckError::TypeMismatch {
+                        expected: ret.display(),
+                        found: promoted.display(),
+                        span,
+                    });
+                }
+            }
+        }
+    }
+
     fn check_block(&mut self, block: &Block, expected_ty: Option<&Ty>) {
         self.env.push_scope();
         for stmt in &block.stmts {
@@ -444,25 +473,37 @@ impl TypeChecker {
                 span,
             } => {
                 let cond_ty = self.infer_expr(cond);
-                if !matches!(cond_ty, Ty::Bool | Ty::Unknown) {
+                if !cond_ty.is_bool() && !matches!(cond_ty, Ty::Unknown) {
                     self.emit(CheckError::TypeMismatch {
                         expected: "Bool".to_string(),
                         found: cond_ty.display(),
                         span: cond.span(),
                     });
                 }
-                // Use infer_block_type so the last Stmt::Expr in each branch is
-                // treated as the branch's value (not a discarded result).
-                self.infer_block_type(then, return_ty);
+                // Extract the condition's security label for implicit return-type promotion.
+                // Branching on Secret<Bool> or Tainted<Bool> means the choice of branch
+                // reveals the condition's value; non-Unit results must be promoted.
+                let cond_label = ifc::label_of(&cond_ty);
+
+                let then_ty = self.infer_block_type(then, return_ty);
+                // After the normal branch check, apply label promotion for non-Unit results:
+                // the implicit return of an if-statement branch inherits at least the
+                // condition's label. Skip Unit (carries no information).
+                self.check_branch_label_promotion(cond_label, &then_ty, return_ty, *span);
+
                 if let Some(else_branch) = else_ {
                     match else_branch {
                         ElseBranch::Block(b) => {
-                            self.infer_block_type(b, return_ty);
+                            let else_ty = self.infer_block_type(b, return_ty);
+                            self.check_branch_label_promotion(
+                                cond_label, &else_ty, return_ty, *span,
+                            );
                         }
+                        // `else if` chains: recurse so each nested if also gets
+                        // promotion applied to its own branches.
                         ElseBranch::If(s) => self.check_stmt(s, return_ty),
                     }
                 }
-                let _ = span;
             }
 
             Stmt::Match {
@@ -493,7 +534,7 @@ impl TypeChecker {
 
             Stmt::While { cond, body, span } => {
                 let cond_ty = self.infer_expr(cond);
-                if !matches!(cond_ty, Ty::Bool | Ty::Unknown) {
+                if !cond_ty.is_bool() && !matches!(cond_ty, Ty::Unknown) {
                     self.emit(CheckError::TypeMismatch {
                         expected: "Bool".to_string(),
                         found: cond_ty.display(),

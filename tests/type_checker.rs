@@ -1414,6 +1414,61 @@ fn if_with_unlabeled_bool_condition_unchanged() {
     );
 }
 
+/// Regression: `Secret<Bool>` as if-condition must NOT produce a TypeMismatch on the condition
+/// check itself — `is_bool()` must strip the label before testing for Bool.
+///
+/// - GIVEN `fn f(flag: Secret<Bool>) -> Unit`
+/// - WHEN the condition is `Secret<Bool>` (labeled Bool)
+/// - THEN no TypeMismatch is emitted for the condition expression
+#[test]
+fn secret_bool_if_condition_accepted() {
+    let errors =
+        errors_for(r#"fn f(flag: Secret<Bool>) -> Unit ! Console { if flag { println("x"); } }"#);
+    let cond_mismatch = errors
+        .iter()
+        .any(|e| matches!(e, CheckError::TypeMismatch { found, .. } if found.contains("Secret")));
+    assert!(
+        !cond_mismatch,
+        "Secret<Bool> must be accepted as if-condition (is_bool strips label), got: {errors:?}"
+    );
+}
+
+/// Regression: `Tainted<Bool>` as while-condition must NOT produce a TypeMismatch on the
+/// condition check itself.
+///
+/// - GIVEN `partial fn poll(cond: Tainted<Bool>) -> Unit`
+/// - WHEN the while-condition is `Tainted<Bool>`
+/// - THEN no TypeMismatch is emitted for the condition expression
+#[test]
+fn tainted_bool_while_condition_accepted() {
+    let errors = errors_for(
+        r#"partial fn poll(cond: Tainted<Bool>) -> Unit ! Console { while cond { println("x"); } }"#,
+    );
+    let cond_mismatch = errors
+        .iter()
+        .any(|e| matches!(e, CheckError::TypeMismatch { found, .. } if found.contains("Tainted")));
+    assert!(
+        !cond_mismatch,
+        "Tainted<Bool> must be accepted as while-condition (is_bool strips label), got: {errors:?}"
+    );
+}
+
+/// `Secret<Int>` must still be rejected as an if-condition — only labeled Bools are valid.
+///
+/// - GIVEN `fn f(n: Secret<Int>) -> Unit`
+/// - WHEN the if-condition is `Secret<Int>`
+/// - THEN TypeMismatch is emitted (expected Bool, found Secret<Int>)
+#[test]
+fn secret_int_if_condition_rejected() {
+    let errors = errors_for(r#"fn f(n: Secret<Int>) -> Unit ! Console { if n { println("x"); } }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "Secret<Int> must be rejected as if-condition (not a Bool), got: {errors:?}"
+    );
+}
+
 // ── extern block checking (#52, #91) ─────────────────────────────────────
 
 #[test]
@@ -1972,7 +2027,7 @@ fn implicit_flow_print_sink_rejected() {
 #[test]
 fn implicit_flow_else_branch_rejected() {
     let errors = errors_for(
-        r#"fn h(flag: Secret<Bool>) -> Unit ! Console { if flag { 0; } else { println("not taken"); } }"#,
+        r#"fn h(flag: Secret<Bool>) -> Unit ! Console { if flag { } else { println("not taken"); } }"#,
     );
     assert!(
         errors.iter().any(
@@ -2036,7 +2091,7 @@ fn implicit_flow_while_secret_condition_rejected() {
 #[test]
 fn implicit_flow_else_branch_sink_verified() {
     let errors = errors_for(
-        r#"fn h(flag: Secret<Bool>) -> Unit ! Console { if flag { 0; } else { println("not taken"); } }"#,
+        r#"fn h(flag: Secret<Bool>) -> Unit ! Console { if flag { } else { println("not taken"); } }"#,
     );
     assert!(
         errors.iter().any(
