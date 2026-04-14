@@ -6,6 +6,29 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-04-14 (feat: mvl linter — Phase 2 semantic lint rules)
+
+### Added
+- `mvl lint` Phase-2 semantic rules — 5 new rules catch logical issues in otherwise well-typed code:
+  - `unreachable-code` — flags statements after `return` in a block
+  - `redundant-match` — flags single-arm `match` with irrefutable pattern (suggests `let` instead)
+  - `unnecessary-annotations` — flags `let x: Int = 42` where type is unambiguous from literal
+  - `redundant-effects` — flags effect declarations on functions containing no calls
+  - `redundant-ifc-labels` — flags `Public<T>` annotations (redundant base IFC label)
+- All Phase-2 rules integrated with config system; individually disableable via `.mvllintrc`
+- `--show-config` now displays Phase-1 and Phase-2 sections separately
+- 35 new unit tests covering all Phase-2 rule edge cases
+
+### Testing
+- All 253 unit tests pass; no regressions in Phase-1 rules
+- Phase-2 rules tested for config disable, nested control flow, literal type detection, and IFC label traversal
+
+### Bug Fixes
+- Deduped redundant-match detection (was split across two code paths)
+- Added `else if` chain recursion to redundant-match and unnecessary-annotations rules
+- Added tuple variant handling to redundant-ifc-labels for enum variants
+- Fixed integer overflow in line_length column cast on pathological config values
+
 ## [0.14.0] — 2026-04-14 (feat: mvl linter — Phase 1 style rules)
 
 ### Added
