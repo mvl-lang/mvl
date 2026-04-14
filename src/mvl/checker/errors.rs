@@ -178,6 +178,12 @@ pub enum CheckError {
         capability: String,
         span: Span,
     },
+    /// `iso` variable bound to a new `let` without `consume()` — would create
+    /// two live references to the same isolated object (Req 9, spec 008 §Req 2).
+    IsoAliasingViolation {
+        name: String,
+        span: Span,
+    },
 
     // ── Information flow control (#23) ───────────────────────────────────
     /// `declassify()` applied to a non-`Secret<T>` type.
@@ -246,7 +252,7 @@ impl CheckError {
             | CheckError::PartialCallInTotal { .. }
             | CheckError::UnprovenRecursion { .. } => 8,
             // Req 9: Data Race Freedom
-            CheckError::CapabilityViolation { .. } => 9,
+            CheckError::CapabilityViolation { .. } | CheckError::IsoAliasingViolation { .. } => 9,
             // Req 10: Refinement Types
             CheckError::RefinementViolated { .. } => 10,
             // Req 11: Information Flow Control
@@ -291,6 +297,7 @@ impl CheckError {
             | CheckError::PartialCallInTotal { span, .. }
             | CheckError::UnprovenRecursion { span, .. }
             | CheckError::CapabilityViolation { span, .. }
+            | CheckError::IsoAliasingViolation { span, .. }
             | CheckError::InvalidDeclassify { span, .. }
             | CheckError::InvalidSanitize { span, .. }
             | CheckError::LoggingLabelViolation { span, .. }
@@ -401,6 +408,9 @@ impl CheckError {
                 param, capability, ..
             } => format!(
                 "`{capability}` capability of `{param}` cannot be sent across actor boundary; use `iso` or `val`"
+            ),
+            CheckError::IsoAliasingViolation { name, .. } => format!(
+                "`iso` value `{name}` aliased without `consume()` — use `consume({name})` to transfer ownership and preserve isolation"
             ),
             CheckError::InvalidDeclassify { found, .. } => format!(
                 "`declassify()` requires `Secret<T>`, found `{found}` — only Secret data can be declassified (for Tainted data use `sanitize()` instead)"

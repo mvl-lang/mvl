@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
+use crate::mvl::checker::data_race;
 use crate::mvl::checker::CheckResult;
 use crate::mvl::parser::ast::Program;
 use crate::mvl::parser::lexer::Span;
@@ -198,6 +199,66 @@ impl VerificationPass for Phase3StubPass {
     }
 }
 
+// ── Data race freedom pass (Req 9 — Phase 3 partial proof) ───────────────────
+
+/// Phase 3 data race freedom pass for Req 9.
+///
+/// Upgrades from the generic `Phase3StubPass` by:
+/// - Reporting Phase 1 capability violations (from the type checker) as `Failed`.
+/// - Reporting Phase 3 iso aliasing violations (from `data_race::check_iso_aliasing`)
+///   as `Failed`.
+/// - When no violations are found, classifying functions by capability and
+///   returning `Proven` if ALL top-level functions are provably race-free
+///   (no `ref` parameters).
+/// - Returning `Unchecked` when some functions carry `ref` parameters that
+///   require actor-model analysis for a full proof (Phase 6).
+struct DataRaceFreedomPass;
+
+impl VerificationPass for DataRaceFreedomPass {
+    fn name(&self) -> &'static str {
+        "Data Race Freedom"
+    }
+    fn requirement(&self) -> u8 {
+        9
+    }
+    fn run(&self, prog: &Program, result: &CheckResult) -> Verdict {
+        let violations = result.req_errors[9];
+        if violations > 0 {
+            return Verdict::Failed {
+                reason: format!("{violations} capability violation(s)"),
+                span: result
+                    .errors
+                    .iter()
+                    .find(|e| e.requirement_number() == 9)
+                    .map(|e| e.span()),
+            };
+        }
+
+        let (race_free, total) = data_race::count_race_free_fns(prog);
+
+        if total == 0 {
+            Verdict::Unchecked {
+                reason: "no functions to analyze; actor model analysis pending (Phase 6)"
+                    .to_string(),
+            }
+        } else if race_free == total {
+            Verdict::Proven {
+                evidence: format!(
+                    "{race_free} function(s) proven race-free via capability analysis; \
+                     full actor model proof pending (Phase 6)"
+                ),
+            }
+        } else {
+            Verdict::Unchecked {
+                reason: format!(
+                    "{race_free}/{total} function(s) proven race-free; \
+                     remaining require actor model analysis (Phase 6)"
+                ),
+            }
+        }
+    }
+}
+
 // ── Pass execution order ──────────────────────────────────────────────────────
 
 /// Canonical pass execution order (dependency-aware).
@@ -271,11 +332,7 @@ impl PassRegistry {
                 pass_name: "Memory Safety",
                 stub_reason: "borrow lifetime analysis pending (Phase 3)",
             }),
-            Box::new(Phase3StubPass {
-                req: 9,
-                pass_name: "Data Race Freedom",
-                stub_reason: "full actor model analysis pending (Phase 3)",
-            }),
+            Box::new(DataRaceFreedomPass),
             Box::new(Phase3StubPass {
                 req: 10,
                 pass_name: "Refinements",
@@ -445,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn clean_program_yields_seven_proven() {
+    fn clean_program_yields_eight_proven() {
         let src = r#"
 fn add(x: Int, y: Int) -> Int {
     x + y
@@ -458,7 +515,8 @@ fn add(x: Int, y: Int) -> Int {
             .filter(|&i| verdicts[i as usize].is_proven())
             .collect();
         // Phase 1 complete: Req 1, 3, 4, 5, 6, 7, 8
-        assert_eq!(proven.len(), 7, "expected 7 proven, got {proven:?}");
+        // Phase 3 capability pass: Req 9 (proven when no ref params)
+        assert_eq!(proven.len(), 8, "expected 8 proven, got {proven:?}");
         assert!(verdicts[1].is_proven(), "Req 1 should be Proven");
         assert!(verdicts[3].is_proven(), "Req 3 should be Proven");
         assert!(verdicts[4].is_proven(), "Req 4 should be Proven");
@@ -466,21 +524,58 @@ fn add(x: Int, y: Int) -> Int {
         assert!(verdicts[6].is_proven(), "Req 6 should be Proven");
         assert!(verdicts[7].is_proven(), "Req 7 should be Proven");
         assert!(verdicts[8].is_proven(), "Req 8 should be Proven");
+        assert!(
+            verdicts[9].is_proven(),
+            "Req 9 should be Proven when no ref params"
+        );
     }
 
     #[test]
-    fn phase3_requirements_are_unchecked_on_clean_code() {
+    fn phase3_requirements_are_unchecked_or_proven_on_clean_code() {
         let src = r#"fn noop() -> Int { 42 }"#;
         let (prog, result) = check_src(src);
         let reg = PassRegistry::default_registry();
         let verdicts = reg.run_all(&prog, &result);
-        // Req 2, 9, 10, 11 are Phase 3 stubs
-        for req in [2u8, 9, 10, 11] {
+        // Req 2, 10, 11 are Phase 3 stubs — still Unchecked on clean code.
+        for req in [2u8, 10, 11] {
             assert!(
                 matches!(verdicts[req as usize], Verdict::Unchecked { .. }),
                 "Req {req} should be Unchecked on clean code"
             );
         }
+        // Req 9 (Data Race Freedom) uses the Phase 3 capability pass:
+        // a single function with no `ref` params is provably race-free.
+        assert!(
+            !verdicts[9].is_failed(),
+            "Req 9 should not be Failed on clean code, got: {:?}",
+            verdicts[9]
+        );
+    }
+
+    #[test]
+    fn req9_proven_for_no_ref_params() {
+        let src = r#"fn safe(iso x: Payload, val y: Config) -> Int { 42 }"#;
+        let (prog, result) = check_src(src);
+        let reg = PassRegistry::default_registry();
+        let verdicts = reg.run_all(&prog, &result);
+        assert!(
+            verdicts[9].is_proven(),
+            "Req 9 should be Proven when all params are iso/val, got: {:?}",
+            verdicts[9]
+        );
+    }
+
+    #[test]
+    fn req9_unchecked_for_ref_params() {
+        let src = r#"fn local(ref x: Buffer) -> Int { 42 }"#;
+        let (prog, result) = check_src(src);
+        let reg = PassRegistry::default_registry();
+        let verdicts = reg.run_all(&prog, &result);
+        assert!(
+            matches!(verdicts[9], Verdict::Unchecked { .. }),
+            "Req 9 should be Unchecked when ref params exist, got: {:?}",
+            verdicts[9]
+        );
     }
 
     #[test]

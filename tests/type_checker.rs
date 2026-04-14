@@ -883,6 +883,82 @@ fn sending_val_param_accepted() {
     );
 }
 
+// ── #138: Data race freedom — iso aliasing (Requirement 9, Phase 3) ──────────
+
+#[test]
+fn iso_aliasing_without_consume_rejected() {
+    // GIVEN: fn binds an `iso` param to a new let without consume()
+    // THEN: IsoAliasingViolation reported (two live references to isolated object)
+    let src = r#"
+        fn alias_iso(channel: Channel, iso x: Payload) -> Unit {
+            let y = x;
+            channel.send(consume(y))
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::IsoAliasingViolation { name, .. } if name == "x")),
+        "expected IsoAliasingViolation for x, got: {errors:?}"
+    );
+}
+
+#[test]
+fn iso_with_consume_accepted() {
+    // GIVEN: fn sends an `iso` param via consume() — proper ownership transfer
+    // THEN: no IsoAliasingViolation (consume() is not an alias)
+    let src = r#"
+        fn transfer(channel: Channel, iso item: Payload) -> Unit {
+            channel.send(consume(item))
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::IsoAliasingViolation { .. })),
+        "consume() should not be flagged as aliasing, got: {errors:?}"
+    );
+}
+
+#[test]
+fn iso_direct_send_accepted() {
+    // GIVEN: fn sends an `iso` param directly via channel.send (existing behavior)
+    // THEN: no IsoAliasingViolation (send is a capability-boundary operation)
+    let src = r#"
+        fn send_owned(channel: Channel, iso data: Payload) -> Unit {
+            channel.send(data)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::IsoAliasingViolation { .. })),
+        "direct iso send should not be flagged as aliasing, got: {errors:?}"
+    );
+}
+
+#[test]
+fn val_param_aliasing_not_checked() {
+    // GIVEN: fn binds a `val` param to a new let (val is immutable — aliasing is fine)
+    // THEN: no IsoAliasingViolation (only iso is subject to aliasing checks)
+    let src = r#"
+        fn copy_val(val config: Config) -> Unit {
+            let copy = config;
+            consume(copy)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::IsoAliasingViolation { .. })),
+        "val aliasing should not be flagged, got: {errors:?}"
+    );
+}
+
 // ── #24: Security label checking (Requirement 11) ────────────────────────────
 
 #[test]
