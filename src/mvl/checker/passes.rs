@@ -608,9 +608,7 @@ pub fn aggregate_verdicts(per_file: &[[Verdict; 12]]) -> [Verdict; 12] {
     })
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
-// ── CLI argument parsing (exposed for unit tests) ─────────────────────────────
+// ── CLI argument parsing ──────────────────────────────────────────────────────
 
 /// Parse an optional `--req N` or `--req=N` flag from the argument list.
 ///
@@ -635,6 +633,8 @@ pub fn parse_req_filter(args: &[String]) -> Result<Option<u8>, String> {
     })
     .transpose()
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -988,7 +988,18 @@ fn alias_iso(channel: Channel, iso x: Payload) -> Unit {
                 reason.contains("violation"),
                 "reason should mention violations, got: {reason:?}"
             );
+            // location() span-present arm: type errors carry a source location
+            assert!(
+                v.location().is_some(),
+                "expected a source span on the Failed verdict"
+            );
         }
+        // location() span-absent arm: no span → None
+        let no_span = Verdict::Failed {
+            reason: "x".into(),
+            span: None,
+        };
+        assert!(no_span.location().is_none());
     }
 
     #[test]
@@ -1142,22 +1153,48 @@ fn alias_iso(channel: Channel, iso x: Payload) -> Unit {
     }
 
     #[test]
-    fn parse_req_filter_out_of_range_returns_err() {
-        let args_zero: Vec<String> = ["mvl", "check", "file.mvl", "--req=0"]
+    fn parse_req_filter_zero_returns_err() {
+        let args: Vec<String> = ["mvl", "check", "file.mvl", "--req=0"]
             .iter()
             .map(|s| s.to_string())
             .collect();
         assert!(
-            super::parse_req_filter(&args_zero).is_err(),
+            super::parse_req_filter(&args).is_err(),
             "--req=0 should return Err"
         );
-        let args_high: Vec<String> = ["mvl", "check", "file.mvl", "--req=12"]
+    }
+
+    #[test]
+    fn parse_req_filter_above_max_returns_err() {
+        let args: Vec<String> = ["mvl", "check", "file.mvl", "--req=12"]
             .iter()
             .map(|s| s.to_string())
             .collect();
         assert!(
-            super::parse_req_filter(&args_high).is_err(),
+            super::parse_req_filter(&args).is_err(),
             "--req=12 should return Err"
+        );
+    }
+
+    // ── aggregate_verdicts Timeout arm ────────────────────────────────────────
+
+    #[test]
+    fn aggregate_verdicts_all_timeout_yields_timeout() {
+        // GIVEN: two files where req 1 is Timeout in both
+        // THEN: aggregate for req 1 is Timeout
+        let mut file_a: [Verdict; 12] = core::array::from_fn(|_| Verdict::Unchecked {
+            reason: String::new(),
+        });
+        let mut file_b: [Verdict; 12] = core::array::from_fn(|_| Verdict::Unchecked {
+            reason: String::new(),
+        });
+        file_a[1] = Verdict::Timeout;
+        file_b[1] = Verdict::Timeout;
+        let agg = aggregate_verdicts(&[file_a, file_b]);
+        assert!(
+            matches!(agg[1], Verdict::Timeout),
+            "all-Timeout per-file should aggregate to Timeout, got: {:?}",
+            agg[1]
         );
     }
 }
