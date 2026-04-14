@@ -1,15 +1,18 @@
-//! Phase-1 lint rules.
+//! Phase-1 and Phase-2 lint rules.
 //!
 //! Two families:
 //!
 //! * **Source rules** — operate on the raw source string line-by-line.
 //!   They have no access to the AST.
 //!
-//! * **AST rules** — traverse the parsed [`Program`] to find naming and
-//!   structural violations.
+//! * **AST rules** — traverse the parsed [`Program`] to find naming,
+//!   structural, and semantic violations.
 
 use crate::mvl::linter::{config::LintConfig, errors::LintDiag};
-use crate::mvl::parser::ast::{Decl, Program, TypeBody};
+use crate::mvl::parser::ast::{
+    Block, Decl, ElseBranch, Expr, Literal, MatchArm, MatchBody, Pattern, Program, SecurityLabel,
+    Stmt, TypeBody, TypeExpr, VariantFields,
+};
 
 // ── Source rules ───────────────────────────────────────────────────────────
 
@@ -47,7 +50,7 @@ pub fn line_length(src: &str, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
                 "line-length",
                 format!("line is {len} characters (max {})", cfg.line_length),
                 line_no,
-                (cfg.line_length + 1) as u32,
+                (cfg.line_length + 1).min(u32::MAX as usize) as u32,
             ));
         }
     }
@@ -326,15 +329,568 @@ fn is_screaming_snake_case(s: &str) -> bool {
         .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
+// ── Phase 2: Semantic rules ────────────────────────────────────────────────
+
+/// Flag statements that are unreachable because they follow a `return` in the
+/// same block.
+///
+/// Rule id: `unreachable-code`
+///
+/// Only the **first** unreachable statement in each block is flagged to avoid
+/// noise from cascading violations.
+pub fn unreachable_code(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if !cfg.unreachable_code {
+        return;
+    }
+    for decl in &prog.declarations {
+        if let Decl::Fn(f) = decl {
+            check_block_unreachable(&f.body, out);
+        }
+    }
+}
+
+fn check_block_unreachable(block: &Block, out: &mut Vec<LintDiag>) {
+    let mut returned = false;
+    for stmt in &block.stmts {
+        if returned {
+            let s = stmt.span();
+            out.push(LintDiag::warning(
+                "unreachable-code",
+                "unreachable statement after `return`",
+                s.line,
+                s.col,
+            ));
+            // Only flag the first unreachable statement per block.
+            break;
+        }
+        match stmt {
+            Stmt::Return { .. } => {
+                returned = true;
+            }
+            Stmt::If {
+                then, else_: None, ..
+            } => {
+                check_block_unreachable(then, out);
+            }
+            Stmt::If {
+                then,
+                else_: Some(ElseBranch::Block(eb)),
+                ..
+            } => {
+                check_block_unreachable(then, out);
+                check_block_unreachable(eb, out);
+            }
+            Stmt::If {
+                then,
+                else_: Some(ElseBranch::If(inner)),
+                ..
+            } => {
+                check_block_unreachable(then, out);
+                check_block_unreachable(
+                    // The inner `if` is a Stmt — wrap it in a synthetic block
+                    // by recursing into its then-branch directly.
+                    &Block {
+                        stmts: vec![*inner.clone()],
+                        span: inner.span(),
+                    },
+                    out,
+                );
+            }
+            Stmt::Match { arms, .. } => {
+                for arm in arms {
+                    if let MatchBody::Block(b) = &arm.body {
+                        check_block_unreachable(b, out);
+                    }
+                }
+            }
+            Stmt::For { body, .. } | Stmt::While { body, .. } => {
+                check_block_unreachable(body, out);
+            }
+            Stmt::Expr {
+                expr: Expr::Block(b),
+                ..
+            } => {
+                check_block_unreachable(b, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Flag `match` expressions/statements with exactly one irrefutable arm.
+///
+/// Rule id: `redundant-match`
+///
+/// A single-arm `match` where the pattern is a wildcard (`_`) or a plain
+/// binding (`x`) will always match — the `match` is then equivalent to a
+/// `let` binding or a bare expression.  This is a common code-smell when
+/// developers use `match` for destructuring a non-enum type.
+pub fn redundant_match(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if !cfg.redundant_match {
+        return;
+    }
+    for decl in &prog.declarations {
+        if let Decl::Fn(f) = decl {
+            check_block_redundant_match(&f.body, out);
+        }
+    }
+}
+
+fn check_block_redundant_match(block: &Block, out: &mut Vec<LintDiag>) {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Match {
+                scrutinee,
+                arms,
+                span,
+            } => {
+                emit_if_redundant_match(scrutinee, arms, span.line, span.col, out);
+                // Recurse into arm bodies
+                for arm in arms {
+                    if let MatchBody::Block(b) = &arm.body {
+                        check_block_redundant_match(b, out);
+                    }
+                }
+            }
+            Stmt::Expr {
+                expr:
+                    Expr::Match {
+                        scrutinee,
+                        arms,
+                        span,
+                    },
+                ..
+            } => {
+                emit_if_redundant_match(scrutinee, arms, span.line, span.col, out);
+            }
+            Stmt::If { then, else_, .. } => {
+                check_block_redundant_match(then, out);
+                match else_ {
+                    Some(ElseBranch::Block(eb)) => check_block_redundant_match(eb, out),
+                    Some(ElseBranch::If(inner)) => check_block_redundant_match(
+                        &Block {
+                            stmts: vec![*inner.clone()],
+                            span: inner.span(),
+                        },
+                        out,
+                    ),
+                    None => {}
+                }
+            }
+            Stmt::For { body, .. } | Stmt::While { body, .. } => {
+                check_block_redundant_match(body, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Emit a `redundant-match` diagnostic if `arms` has a single irrefutable arm.
+fn emit_if_redundant_match(
+    scrutinee: &Expr,
+    arms: &[MatchArm],
+    line: u32,
+    col: u32,
+    out: &mut Vec<LintDiag>,
+) {
+    if arms.len() == 1 && is_irrefutable(&arms[0].pattern) {
+        out.push(LintDiag::warning(
+            "redundant-match",
+            format!(
+                "single-arm `match` with irrefutable pattern — use `let` instead: \
+                 `let {} = {}`",
+                pattern_display(&arms[0].pattern),
+                expr_display(scrutinee),
+            ),
+            line,
+            col,
+        ));
+    }
+}
+
+/// A pattern is irrefutable if it always matches: wildcard (`_`) or plain binding.
+fn is_irrefutable(pat: &Pattern) -> bool {
+    matches!(pat, Pattern::Wildcard(_) | Pattern::Ident(..))
+}
+
+fn pattern_display(pat: &Pattern) -> &str {
+    match pat {
+        Pattern::Wildcard(_) => "_",
+        Pattern::Ident(name, _) => name.as_str(),
+        _ => "_",
+    }
+}
+
+fn expr_display(expr: &Expr) -> &str {
+    match expr {
+        Expr::Ident(name, _) => name.as_str(),
+        _ => "<expr>",
+    }
+}
+
+/// Flag `let` bindings that carry an explicit type annotation when the type
+/// is obvious from the literal initialiser.
+///
+/// Rule id: `unnecessary-annotation`
+///
+/// Examples that are flagged:
+/// ```text
+/// let x: Int    = 42       -- inferred as Int
+/// let s: String = "hello"  -- inferred as String
+/// let b: Bool   = true     -- inferred as Bool
+/// let f: Float  = 3.14     -- inferred as Float
+/// ```
+pub fn unnecessary_annotations(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if !cfg.unnecessary_annotations {
+        return;
+    }
+    for decl in &prog.declarations {
+        if let Decl::Fn(f) = decl {
+            check_block_annotations(&f.body, out);
+        }
+    }
+}
+
+fn check_block_annotations(block: &Block, out: &mut Vec<LintDiag>) {
+    for stmt in &block.stmts {
+        if let Stmt::Let {
+            ty: Some(ty_expr),
+            init,
+            span: _,
+            ..
+        } = stmt
+        {
+            if let Some(obvious_ty) = obvious_literal_type(init) {
+                if type_expr_matches_name(ty_expr, obvious_ty) {
+                    let ty_span = ty_expr.span();
+                    out.push(LintDiag::warning(
+                        "unnecessary-annotation",
+                        format!(
+                            "type annotation `{obvious_ty}` is redundant — \
+                             the initialiser type is unambiguous"
+                        ),
+                        ty_span.line,
+                        ty_span.col,
+                    ));
+                }
+            }
+        }
+        // Recurse
+        match stmt {
+            Stmt::If { then, else_, .. } => {
+                check_block_annotations(then, out);
+                match else_ {
+                    Some(ElseBranch::Block(eb)) => check_block_annotations(eb, out),
+                    Some(ElseBranch::If(inner)) => check_block_annotations(
+                        &Block {
+                            stmts: vec![*inner.clone()],
+                            span: inner.span(),
+                        },
+                        out,
+                    ),
+                    None => {}
+                }
+            }
+            Stmt::For { body, .. } | Stmt::While { body, .. } => {
+                check_block_annotations(body, out);
+            }
+            Stmt::Match { arms, .. } => {
+                for arm in arms {
+                    if let MatchBody::Block(b) = &arm.body {
+                        check_block_annotations(b, out);
+                    }
+                }
+            }
+            Stmt::Expr {
+                expr: Expr::Block(b),
+                ..
+            } => {
+                check_block_annotations(b, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// If `expr` is a literal whose type is always unambiguous, return the
+/// canonical MVL type name; otherwise `None`.
+fn obvious_literal_type(expr: &Expr) -> Option<&'static str> {
+    match expr {
+        Expr::Literal(lit, _) => match lit {
+            Literal::Integer(_) => Some("Int"),
+            Literal::Float(_) => Some("Float"),
+            Literal::Str(_) => Some("String"),
+            Literal::Bool(_) => Some("Bool"),
+            Literal::Unit => Some("Unit"),
+            Literal::Char(_) => None, // Char type exists but uncommon — skip
+        },
+        _ => None,
+    }
+}
+
+/// Return `true` if `ty_expr` is a bare base type with the given name.
+fn type_expr_matches_name(ty_expr: &TypeExpr, name: &str) -> bool {
+    matches!(ty_expr, TypeExpr::Base { name: n, args, .. } if n == name && args.is_empty())
+}
+
+/// Flag functions that declare effects but whose body contains no function
+/// or method calls at all.
+///
+/// Rule id: `redundant-effects`
+///
+/// If a function body is entirely free of calls, no effect can ever be
+/// triggered — any declared effects are therefore dead annotations.
+///
+/// Note: this is a conservative check.  A function that only calls local
+/// pure helpers is not flagged even if those helpers are call-free.
+pub fn redundant_effects(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if !cfg.redundant_effects {
+        return;
+    }
+    for decl in &prog.declarations {
+        if let Decl::Fn(f) = decl {
+            if f.effects.is_empty() {
+                continue;
+            }
+            if !block_has_calls(&f.body) {
+                out.push(LintDiag::warning(
+                    "redundant-effects",
+                    format!(
+                        "function `{}` declares effect(s) [{}] but contains no calls — \
+                         remove the effect declaration",
+                        f.name,
+                        f.effects.join(", "),
+                    ),
+                    f.span.line,
+                    f.span.col,
+                ));
+            }
+        }
+    }
+}
+
+/// Return `true` if `block` (or any nested block/expression) contains at
+/// least one function or method call.
+fn block_has_calls(block: &Block) -> bool {
+    block.stmts.iter().any(stmt_has_calls)
+}
+
+fn stmt_has_calls(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Let { init, .. } => expr_has_calls(init),
+        Stmt::Assign { value, .. } => expr_has_calls(value),
+        Stmt::Return { value: Some(e), .. } => expr_has_calls(e),
+        Stmt::Return { value: None, .. } => false,
+        Stmt::Expr { expr, .. } => expr_has_calls(expr),
+        Stmt::If {
+            cond, then, else_, ..
+        } => {
+            expr_has_calls(cond)
+                || block_has_calls(then)
+                || else_
+                    .as_ref()
+                    .map(|e| match e {
+                        crate::mvl::parser::ast::ElseBranch::Block(b) => block_has_calls(b),
+                        crate::mvl::parser::ast::ElseBranch::If(s) => stmt_has_calls(s),
+                    })
+                    .unwrap_or(false)
+        }
+        Stmt::Match {
+            scrutinee, arms, ..
+        } => {
+            expr_has_calls(scrutinee)
+                || arms.iter().any(|arm| match &arm.body {
+                    MatchBody::Expr(e) => expr_has_calls(e),
+                    MatchBody::Block(b) => block_has_calls(b),
+                })
+        }
+        Stmt::For { iter, body, .. } => expr_has_calls(iter) || block_has_calls(body),
+        Stmt::While { cond, body, .. } => expr_has_calls(cond) || block_has_calls(body),
+    }
+}
+
+fn expr_has_calls(expr: &Expr) -> bool {
+    match expr {
+        Expr::FnCall { .. } | Expr::MethodCall { .. } => true,
+        Expr::Literal(..) | Expr::Ident(..) => false,
+        Expr::FieldAccess { expr: e, .. } => expr_has_calls(e),
+        Expr::Unary { expr: e, .. } => expr_has_calls(e),
+        Expr::Binary { left, right, .. } => expr_has_calls(left) || expr_has_calls(right),
+        Expr::If {
+            cond, then, else_, ..
+        } => {
+            expr_has_calls(cond)
+                || block_has_calls(then)
+                || else_.as_ref().map(|e| expr_has_calls(e)).unwrap_or(false)
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            expr_has_calls(scrutinee)
+                || arms.iter().any(|arm| match &arm.body {
+                    MatchBody::Expr(e) => expr_has_calls(e),
+                    MatchBody::Block(b) => block_has_calls(b),
+                })
+        }
+        Expr::Block(b) => block_has_calls(b),
+        Expr::Lambda { body, .. } => expr_has_calls(body),
+        Expr::Propagate { expr: e, .. }
+        | Expr::Move { expr: e, .. }
+        | Expr::Consume { expr: e, .. }
+        | Expr::Declassify { expr: e, .. }
+        | Expr::Sanitize { expr: e, .. } => expr_has_calls(e),
+        Expr::Construct { fields, .. } => fields.iter().any(|(_, e)| expr_has_calls(e)),
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => elems.iter().any(expr_has_calls),
+        Expr::Map { pairs, .. } => pairs
+            .iter()
+            .any(|(k, v)| expr_has_calls(k) || expr_has_calls(v)),
+    }
+}
+
+/// Flag `Public<T>` type annotations.
+///
+/// Rule id: `redundant-ifc-label`
+///
+/// `Public` is the base level of the MVL IFC lattice — all un-annotated types
+/// are implicitly public.  Writing `Public<T>` is therefore always redundant
+/// and should be simplified to `T`.
+pub fn redundant_ifc_labels(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if !cfg.redundant_ifc_labels {
+        return;
+    }
+    for decl in &prog.declarations {
+        match decl {
+            Decl::Fn(f) => {
+                for param in &f.params {
+                    check_type_expr_ifc(&param.ty, out);
+                }
+                check_type_expr_ifc(&f.return_type, out);
+            }
+            Decl::Const(c) => check_type_expr_ifc(&c.ty, out),
+            Decl::Type(t) => match &t.body {
+                TypeBody::Struct(fields) => {
+                    for field in fields {
+                        check_type_expr_ifc(&field.ty, out);
+                    }
+                }
+                TypeBody::Enum(variants) => {
+                    for variant in variants {
+                        match &variant.fields {
+                            VariantFields::Struct(fields) => {
+                                for field in fields {
+                                    check_type_expr_ifc(&field.ty, out);
+                                }
+                            }
+                            VariantFields::Tuple(types) => {
+                                for ty in types {
+                                    check_type_expr_ifc(ty, out);
+                                }
+                            }
+                            VariantFields::Unit => {}
+                        }
+                    }
+                }
+                TypeBody::Alias(ty) => check_type_expr_ifc(ty, out),
+            },
+            _ => {}
+        }
+    }
+}
+
+fn check_type_expr_ifc(ty: &TypeExpr, out: &mut Vec<LintDiag>) {
+    match ty {
+        TypeExpr::Labeled {
+            label: SecurityLabel::Public,
+            inner,
+            span,
+        } => {
+            out.push(LintDiag::warning(
+                "redundant-ifc-label",
+                format!(
+                    "`Public<{}>` is redundant — unannotated types are implicitly public; \
+                     use `{}` instead",
+                    type_expr_name(inner),
+                    type_expr_name(inner),
+                ),
+                span.line,
+                span.col,
+            ));
+            check_type_expr_ifc(inner, out);
+        }
+        TypeExpr::Labeled { inner, .. } => check_type_expr_ifc(inner, out),
+        TypeExpr::Option { inner, .. }
+        | TypeExpr::Ref { inner, .. }
+        | TypeExpr::Refined { inner, .. } => check_type_expr_ifc(inner, out),
+        TypeExpr::Result { ok, err, .. } => {
+            check_type_expr_ifc(ok, out);
+            check_type_expr_ifc(err, out);
+        }
+        TypeExpr::Base { args, .. } => {
+            for arg in args {
+                check_type_expr_ifc(arg, out);
+            }
+        }
+        TypeExpr::Fn { params, ret, .. } => {
+            for p in params {
+                check_type_expr_ifc(p, out);
+            }
+            check_type_expr_ifc(ret, out);
+        }
+        TypeExpr::Tuple { elems, .. } => {
+            for e in elems {
+                check_type_expr_ifc(e, out);
+            }
+        }
+    }
+}
+
+fn type_expr_name(ty: &TypeExpr) -> String {
+    match ty {
+        TypeExpr::Base { name, args, .. } if args.is_empty() => name.clone(),
+        TypeExpr::Base { name, args, .. } => {
+            format!(
+                "{}<{}>",
+                name,
+                args.iter()
+                    .map(type_expr_name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+        TypeExpr::Option { inner, .. } => format!("Option<{}>", type_expr_name(inner)),
+        TypeExpr::Result { ok, err, .. } => {
+            format!("Result<{}, {}>", type_expr_name(ok), type_expr_name(err))
+        }
+        TypeExpr::Labeled { label, inner, .. } => {
+            let l = match label {
+                SecurityLabel::Public => "Public",
+                SecurityLabel::Tainted => "Tainted",
+                SecurityLabel::Secret => "Secret",
+                SecurityLabel::Clean => "Clean",
+            };
+            format!("{}<{}>", l, type_expr_name(inner))
+        }
+        _ => "<type>".to_string(),
+    }
+}
+
 // ── Unit tests ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::mvl::linter::config::LintConfig;
+    use crate::mvl::parser::Parser;
 
     fn cfg() -> LintConfig {
         LintConfig::default()
+    }
+
+    fn parse(src: &str) -> crate::mvl::parser::ast::Program {
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+        prog
     }
 
     // -- trailing_whitespace --
@@ -463,5 +1019,269 @@ mod tests {
     fn naming_screaming_snake_bad() {
         assert!(!is_screaming_snake_case("foo_bar"));
         assert!(!is_screaming_snake_case("FooBar"));
+    }
+
+    // ── Phase 2 tests ─────────────────────────────────────────────────────
+
+    // -- unreachable_code --
+
+    #[test]
+    fn unreachable_after_return_detected() {
+        let src = "fn f() -> Int { return 1; let x = 2; x }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        unreachable_code(&prog, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1, "expected 1 unreachable diagnostic");
+        assert_eq!(diags[0].rule, "unreachable-code");
+    }
+
+    #[test]
+    fn unreachable_code_disabled() {
+        let src = "fn f() -> Int { return 1; let x = 2; x }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        let mut c = cfg();
+        c.unreachable_code = false;
+        unreachable_code(&prog, &c, &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn reachable_code_clean() {
+        let src = "fn f() -> Int { let x = 1; return x }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        unreachable_code(&prog, &cfg(), &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    // -- redundant_match --
+
+    #[test]
+    fn single_arm_wildcard_detected() {
+        let src = "fn f(x: Int) -> Int { match x { _ => x } }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        redundant_match(&prog, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "redundant-match");
+    }
+
+    #[test]
+    fn single_arm_binding_detected() {
+        let src = "fn f(x: Int) -> Int { match x { v => v } }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        redundant_match(&prog, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "redundant-match");
+    }
+
+    #[test]
+    fn multi_arm_match_clean() {
+        let src = "type Color = enum { Red, Green, Blue }\nfn f(c: Color) -> Int { match c { Color::Red => 1 Color::Green => 2 Color::Blue => 3 } }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        redundant_match(&prog, &cfg(), &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    // -- unnecessary_annotations --
+
+    #[test]
+    fn int_annotation_on_int_literal_detected() {
+        let src = "fn f() -> Unit { let x: Int = 42; x }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        unnecessary_annotations(&prog, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "unnecessary-annotation");
+        assert!(diags[0].message.contains("Int"));
+    }
+
+    #[test]
+    fn bool_annotation_on_bool_literal_detected() {
+        let src = "fn f() -> Unit { let b: Bool = true; b }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        unnecessary_annotations(&prog, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "unnecessary-annotation");
+    }
+
+    #[test]
+    fn annotation_on_non_literal_clean() {
+        let src = "fn f(x: Int) -> Unit { let y: Int = x; y }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        unnecessary_annotations(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.is_empty(),
+            "binding to variable, not literal — should be clean"
+        );
+    }
+
+    #[test]
+    fn no_annotation_clean() {
+        let src = "fn f() -> Unit { let x = 42; x }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        unnecessary_annotations(&prog, &cfg(), &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    // -- redundant_effects --
+
+    #[test]
+    fn effects_on_call_free_fn_detected() {
+        let src = "fn f() -> Int ! Console { 42 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        redundant_effects(&prog, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "redundant-effects");
+        assert!(diags[0].message.contains("Console"));
+    }
+
+    #[test]
+    fn effects_on_fn_with_call_clean() {
+        let src = "fn f() -> Unit ! Console {\n    println(\"hi\")\n}\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        redundant_effects(&prog, &cfg(), &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn no_effects_declared_clean() {
+        let src = "fn f() -> Int { 42 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        redundant_effects(&prog, &cfg(), &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    // -- redundant_ifc_labels --
+
+    #[test]
+    fn public_label_on_param_detected() {
+        let src = "fn f(x: Public<Int>) -> Int { x }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        redundant_ifc_labels(&prog, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "redundant-ifc-label");
+        assert!(diags[0].message.contains("Public"));
+    }
+
+    #[test]
+    fn secret_label_on_param_clean() {
+        let src = "fn f(x: Secret<Int>) -> Int { x }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        redundant_ifc_labels(&prog, &cfg(), &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn public_label_on_return_type_detected() {
+        let src = "fn f() -> Public<String> { \"hi\" }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        redundant_ifc_labels(&prog, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "redundant-ifc-label");
+    }
+
+    #[test]
+    fn redundant_ifc_disabled() {
+        let src = "fn f(x: Public<Int>) -> Int { x }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        let mut c = cfg();
+        c.redundant_ifc_labels = false;
+        redundant_ifc_labels(&prog, &c, &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn public_label_on_struct_field_detected() {
+        let src = "type Wrapper = struct { data: Public<Int> }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        redundant_ifc_labels(&prog, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "redundant-ifc-label");
+    }
+
+    #[test]
+    fn public_label_in_type_alias_detected() {
+        let src = "type MyInt = Public<Int>\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        redundant_ifc_labels(&prog, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "redundant-ifc-label");
+    }
+
+    // -- redundant_match: missing config-disable test --
+
+    #[test]
+    fn redundant_match_disabled() {
+        let src = "fn f(x: Int) -> Int { match x { _ => x } }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        let mut c = cfg();
+        c.redundant_match = false;
+        redundant_match(&prog, &c, &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    // -- unnecessary_annotations: missing literal types and config-disable --
+
+    #[test]
+    fn string_annotation_on_str_literal_detected() {
+        let src = "fn f() -> Unit { let s: String = \"hello\"; s }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        unnecessary_annotations(&prog, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "unnecessary-annotation");
+        assert!(diags[0].message.contains("String"));
+    }
+
+    #[test]
+    fn float_annotation_on_float_literal_detected() {
+        let src = "fn f() -> Unit { let x: Float = 3.14; x }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        unnecessary_annotations(&prog, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "unnecessary-annotation");
+        assert!(diags[0].message.contains("Float"));
+    }
+
+    #[test]
+    fn unnecessary_annotations_disabled() {
+        let src = "fn f() -> Unit { let x: Int = 42; x }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        let mut c = cfg();
+        c.unnecessary_annotations = false;
+        unnecessary_annotations(&prog, &c, &mut diags);
+        assert!(diags.is_empty());
+    }
+
+    // -- redundant_effects: missing config-disable test --
+
+    #[test]
+    fn redundant_effects_disabled() {
+        let src = "fn f() -> Int ! Console { 42 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        let mut c = cfg();
+        c.redundant_effects = false;
+        redundant_effects(&prog, &c, &mut diags);
+        assert!(diags.is_empty());
     }
 }
