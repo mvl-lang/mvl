@@ -159,19 +159,28 @@ as aliasing.  This requires interprocedural capability analysis (Phase 6).
 
 ### L2: Closure iso Capture
 
-Closures that capture an `iso` variable from the enclosing scope are not yet checked for aliasing.
-Phase 6 will add actor-boundary closure capture analysis.
+The MVL parser does not yet support lambda surface syntax.  The aliasing checker
+recurses into `Expr::Lambda` bodies (verified via AST-level unit tests), so the
+logic is correct, but it cannot be exercised from source strings until lambda
+parsing is implemented (Phase 6 / future sprint).
 
 ### L3: Struct Field iso Tracking
 
 An `iso` value stored in a struct field and later accessed via field access is not tracked.
 Full field-capability propagation requires a dependent type system extension (Phase 6).
 
-### L4: Mutual iso Aliasing
+### L4: Multiple Alias Sites
 
-Two `iso` parameters aliasing each other (e.g., `let a = x; let b = x`) is detected for the
-first alias site only.  Subsequent aliases after the first error are not re-reported in the
-current pass.
+Each `let y = iso_x` statement generates a separate `IsoAliasingViolation`.
+Multiple alias sites in the same block are each reported independently — this is
+the intended behaviour.
+
+### L5: iso Rebinding After consume()
+
+After `let y = consume(x)`, the variable `y` becomes the new iso owner but is
+**not** added to the tracked iso-vars set.  Subsequent aliasing of `y`
+(e.g., `let z = y`) is therefore undetected in Phase 3.  Full ownership-transfer
+tracking requires mutable scope-aware analysis (Phase 6).
 
 ---
 

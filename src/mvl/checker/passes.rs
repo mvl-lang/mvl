@@ -222,14 +222,15 @@ impl VerificationPass for DataRaceFreedomPass {
         9
     }
     fn run(&self, prog: &Program, result: &CheckResult) -> Verdict {
-        let violations = result.req_errors[9];
+        let req = usize::from(self.requirement());
+        let violations = result.req_errors[req];
         if violations > 0 {
             return Verdict::Failed {
                 reason: format!("{violations} capability violation(s)"),
                 span: result
                     .errors
                     .iter()
-                    .find(|e| e.requirement_number() == 9)
+                    .find(|e| e.requirement_number() == self.requirement())
                     .map(|e| e.span()),
             };
         }
@@ -576,6 +577,59 @@ fn add(x: Int, y: Int) -> Int {
             "Req 9 should be Unchecked when ref params exist, got: {:?}",
             verdicts[9]
         );
+    }
+
+    #[test]
+    fn req9_failed_for_iso_aliasing_violation() {
+        // GIVEN: a function that aliases an iso param without consume()
+        // THEN: DataRaceFreedomPass returns Verdict::Failed
+        let src = r#"
+fn alias_iso(channel: Channel, iso x: Payload) -> Unit {
+    let y = x;
+    channel.send(consume(y))
+}
+"#;
+        let (prog, result) = check_src(src);
+        let reg = PassRegistry::default_registry();
+        let verdicts = reg.run_all(&prog, &result);
+        assert!(
+            verdicts[9].is_failed(),
+            "Req 9 should be Failed when iso aliasing violation present, got: {:?}",
+            verdicts[9]
+        );
+    }
+
+    #[test]
+    fn req9_unchecked_for_empty_program() {
+        // GIVEN: a program with no function declarations
+        // THEN: Req 9 is Unchecked with "no functions" reason
+        let src = r#""#;
+        let (prog, result) = check_src(src);
+        let reg = PassRegistry::default_registry();
+        let verdicts = reg.run_all(&prog, &result);
+        assert!(
+            matches!(&verdicts[9], Verdict::Unchecked { reason } if reason.contains("no functions")),
+            "empty program should yield Unchecked with 'no functions' reason, got: {:?}",
+            verdicts[9]
+        );
+    }
+
+    #[test]
+    fn req9_proven_evidence_references_phase6() {
+        // GIVEN: a clean program with no ref params
+        // THEN: Proven evidence string references Phase 6
+        let src = r#"fn f() -> Int { 1 }"#;
+        let (prog, result) = check_src(src);
+        let reg = PassRegistry::default_registry();
+        let verdicts = reg.run_all(&prog, &result);
+        if let Verdict::Proven { evidence } = &verdicts[9] {
+            assert!(
+                evidence.contains("Phase 6"),
+                "Proven evidence should reference Phase 6, got: {evidence:?}"
+            );
+        } else {
+            panic!("expected Proven for Req 9, got: {:?}", verdicts[9]);
+        }
     }
 
     #[test]

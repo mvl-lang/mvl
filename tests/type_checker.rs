@@ -959,6 +959,119 @@ fn val_param_aliasing_not_checked() {
     );
 }
 
+// ── #138 continued: control flow, assignment, lambda, and limitation tests ───
+
+#[test]
+fn iso_aliasing_via_assignment_rejected() {
+    // GIVEN: fn has two iso params and assigns one to a mutable binding without consume()
+    // THEN: IsoAliasingViolation reported for the assigned iso var
+    let src = r#"
+        fn assign_iso(iso x: Payload, iso z: Payload) -> Unit {
+            let mut y = consume(x);
+            y = z;
+            consume(y)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::IsoAliasingViolation { name, .. } if name == "z")),
+        "expected IsoAliasingViolation for z assigned without consume(), got: {errors:?}"
+    );
+}
+
+#[test]
+fn iso_aliasing_inside_if_branch_rejected() {
+    // GIVEN: iso param aliased inside a then-branch
+    // THEN: IsoAliasingViolation reported
+    let src = r#"
+        fn conditional_alias(channel: Channel, iso x: Payload, flag: Bool) -> Unit {
+            if flag {
+                let y = x;
+                channel.send(consume(y))
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::IsoAliasingViolation { name, .. } if name == "x")),
+        "iso aliasing in if-branch should be rejected, got: {errors:?}"
+    );
+}
+
+// Lambda surface syntax is not yet parsed by the MVL parser.
+// Lambda aliasing checks are covered by AST-based unit tests in data_race.rs.
+
+// ── Known limitations (L1–L5) — regression tests documenting non-detection ───
+
+#[test]
+fn iso_passed_to_fn_call_not_detected_l1() {
+    // L1: Passing an iso var to a non-send function without consume() is NOT
+    // detected.  This test documents the current behavior so that future
+    // implementations of L1 detection will intentionally break it.
+    let src = r#"
+        fn use_payload(x: Payload) -> Unit { consume(x) }
+        fn caller(iso x: Payload) -> Unit {
+            use_payload(x)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::IsoAliasingViolation { .. })),
+        "L1: iso passed to fn without consume() is not yet detected, got: {errors:?}"
+    );
+}
+
+#[test]
+fn iso_rebound_after_consume_not_detected_l5() {
+    // L5: After `let y = consume(x)`, `y` becomes the new iso owner but is NOT
+    // added to iso_vars.  Subsequent aliasing of `y` is therefore undetected.
+    // This is a known Phase 3 limitation — full tracking requires mutable scope
+    // analysis (Phase 6).
+    let src = r#"
+        fn rebound_alias(iso x: Payload) -> Unit {
+            let a = consume(x);
+            let b = a;
+            consume(b)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::IsoAliasingViolation { name, .. } if name == "a")),
+        "L5: aliasing of rebound iso (after consume) is not yet detected, got: {errors:?}"
+    );
+}
+
+#[test]
+fn iso_multiple_aliasing_all_sites_reported() {
+    // Each individual let-binding of an iso param is flagged independently.
+    // Both `let a = x` and `let b = x` generate separate violations.
+    let src = r#"
+        fn double_alias(iso x: Payload) -> Unit {
+            let a = x;
+            let b = x;
+            consume(b)
+        }
+    "#;
+    let errors = errors_for(src);
+    let violations: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, CheckError::IsoAliasingViolation { name, .. } if name == "x"))
+        .collect();
+    assert_eq!(
+        violations.len(),
+        2,
+        "expected 2 IsoAliasingViolation (one per alias site), got: {violations:?}"
+    );
+}
+
 // ── #24: Security label checking (Requirement 11) ────────────────────────────
 
 #[test]

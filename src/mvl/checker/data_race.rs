@@ -4,8 +4,10 @@
 //!
 //! Phase 3 checks:
 //! 1. **Isolation verification** — `iso` values must not be aliased without
-//!    `consume()`.  Binding `let y = iso_x` creates two live references to the
-//!    same isolated object, violating the single-reference invariant.
+//!    `consume()`.  Binding `let y = iso_x` (or assigning `y = iso_x`) creates
+//!    two live references to the same isolated object, violating the
+//!    single-reference invariant.  Closures that capture and re-bind iso vars
+//!    are also checked.
 //! 2. **Function race-freedom classification** — functions whose parameters
 //!    carry only `iso`, `val`, or no capability annotation cannot participate
 //!    in data races at the capability level and are proven race-free.
@@ -118,7 +120,20 @@ fn check_stmt_iso(stmt: &Stmt, iso_vars: &HashSet<&str>, errors: &mut Vec<CheckE
             }
             check_expr_iso(init, iso_vars, errors);
         }
-        Stmt::Assign { value, .. } => check_expr_iso(value, iso_vars, errors),
+        Stmt::Assign { value, span, .. } => {
+            // `y = iso_x` — assigning an iso var to an existing binding is the same
+            // aliasing hazard as `let y = iso_x`.
+            if let Expr::Ident(src, _) = value {
+                if iso_vars.contains(src.as_str()) {
+                    errors.push(CheckError::IsoAliasingViolation {
+                        name: src.clone(),
+                        span: *span,
+                    });
+                    return;
+                }
+            }
+            check_expr_iso(value, iso_vars, errors);
+        }
         Stmt::Expr { expr, .. } => check_expr_iso(expr, iso_vars, errors),
         Stmt::Return { value: Some(e), .. } => check_expr_iso(e, iso_vars, errors),
         Stmt::Return { value: None, .. } => {}
@@ -247,11 +262,182 @@ fn check_expr_iso(expr: &Expr, iso_vars: &HashSet<&str>, errors: &mut Vec<CheckE
             }
         }
 
-        // Lambdas capture by value — they don't alias the outer iso param.
-        // Phase 6 will track closure captures that cross actor boundaries.
-        Expr::Lambda { .. } => {}
+        // Recurse into the lambda body with the enclosing iso_vars, excluding any
+        // lambda parameters that shadow outer names.  A lambda that captures an
+        // outer iso variable and re-binds it inside the body creates an alias.
+        Expr::Lambda { params, body, .. } => {
+            let inner_iso_vars: HashSet<&str> = iso_vars
+                .iter()
+                .copied()
+                .filter(|name| !params.iter().any(|p| p.name.as_str() == *name))
+                .collect();
+            if !inner_iso_vars.is_empty() {
+                check_expr_iso(body, &inner_iso_vars, errors);
+            }
+        }
 
         // Leaves — no aliasing possible.
         Expr::Literal(..) | Expr::Ident(..) => {}
+    }
+}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mvl::parser::ast::{Block, Capability, Decl, Expr, FnDecl, Pattern, Program, Stmt};
+    use crate::mvl::parser::ast::{Param, TypeExpr};
+    use crate::mvl::parser::lexer::Span;
+
+    const S: Span = Span {
+        line: 1,
+        col: 1,
+        offset: 0,
+        len: 0,
+    };
+
+    fn int_ty() -> TypeExpr {
+        TypeExpr::Base {
+            name: "Int".into(),
+            args: vec![],
+            span: S,
+        }
+    }
+
+    fn iso_param(name: &str) -> Param {
+        Param {
+            capability: Some(Capability::Iso),
+            mutable: false,
+            name: name.into(),
+            ty: int_ty(),
+            refinement: None,
+            span: S,
+        }
+    }
+
+    fn plain_param(name: &str) -> Param {
+        Param {
+            capability: None,
+            mutable: false,
+            name: name.into(),
+            ty: int_ty(),
+            refinement: None,
+            span: S,
+        }
+    }
+
+    fn fn_with_body(name: &str, params: Vec<Param>, stmts: Vec<Stmt>) -> Decl {
+        Decl::Fn(FnDecl {
+            visible: false,
+            is_test: false,
+            totality: None,
+            name: name.into(),
+            type_params: vec![],
+            params,
+            return_type: Box::new(int_ty()),
+            return_refinement: None,
+            effects: vec![],
+            constraints: vec![],
+            body: Block { stmts, span: S },
+            span: S,
+        })
+    }
+
+    fn prog(decls: Vec<Decl>) -> Program {
+        Program {
+            span: S,
+            declarations: decls,
+        }
+    }
+
+    // ── Lambda aliasing tests (not testable via surface syntax) ───────────────
+
+    #[test]
+    fn iso_aliasing_inside_lambda_body_rejected() {
+        // fn f(iso x: Int) -> Int {
+        //     let g = || { let y = x; y };  <- aliasing x inside lambda
+        // }
+        let let_y_eq_x = Stmt::Let {
+            mutable: false,
+            pattern: Pattern::Ident("y".into(), S),
+            ty: None,
+            init: Expr::Ident("x".into(), S),
+            span: S,
+        };
+        let lambda_body = Expr::Block(Block {
+            stmts: vec![let_y_eq_x],
+            span: S,
+        });
+        let lambda = Expr::Lambda {
+            params: vec![],
+            ret_type: None,
+            body: Box::new(lambda_body),
+            span: S,
+        };
+        let outer_let = Stmt::Let {
+            mutable: false,
+            pattern: Pattern::Ident("g".into(), S),
+            ty: None,
+            init: lambda,
+            span: S,
+        };
+        let p = prog(vec![fn_with_body(
+            "f",
+            vec![iso_param("x")],
+            vec![outer_let],
+        )]);
+        let mut errors = Vec::new();
+        check_iso_aliasing(&p, &mut errors);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, CheckError::IsoAliasingViolation { name, .. } if name == "x")),
+            "iso aliasing inside lambda body should be rejected, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn lambda_param_shadowing_iso_not_flagged() {
+        // fn f(iso x: Int) -> Int {
+        //     let g = |x: Int| { let y = x; y };  <- lambda's own x shadows outer iso x
+        // }
+        let let_y_eq_x = Stmt::Let {
+            mutable: false,
+            pattern: Pattern::Ident("y".into(), S),
+            ty: None,
+            init: Expr::Ident("x".into(), S),
+            span: S,
+        };
+        let lambda_body = Expr::Block(Block {
+            stmts: vec![let_y_eq_x],
+            span: S,
+        });
+        let lambda = Expr::Lambda {
+            params: vec![plain_param("x")], // lambda param "x" shadows outer iso "x"
+            ret_type: None,
+            body: Box::new(lambda_body),
+            span: S,
+        };
+        let outer_let = Stmt::Let {
+            mutable: false,
+            pattern: Pattern::Ident("g".into(), S),
+            ty: None,
+            init: lambda,
+            span: S,
+        };
+        let p = prog(vec![fn_with_body(
+            "f",
+            vec![iso_param("x")],
+            vec![outer_let],
+        )]);
+        let mut errors = Vec::new();
+        check_iso_aliasing(&p, &mut errors);
+        assert!(
+            !errors
+                .iter()
+                .any(|e| matches!(e, CheckError::IsoAliasingViolation { .. })),
+            "lambda param shadowing outer iso should not be flagged, got: {errors:?}"
+        );
     }
 }
