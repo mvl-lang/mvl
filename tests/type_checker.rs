@@ -602,6 +602,217 @@ fn partial_call_in_total_function_rejected() {
     );
 }
 
+// ── #135: Structural recursion (Req 8) ───────────────────────────────────────
+
+#[test]
+fn integer_decrement_recursion_accepted() {
+    // GIVEN: total fn recurses with `n - 1` (provably decreasing)
+    // THEN: no UnprovenRecursion error
+    let src = r#"
+        fn fact(n: Int) -> Int {
+            if n == 0 { 1 } else { n * fact(n - 1) }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { .. })),
+        "expected no UnprovenRecursion, got: {errors:?}"
+    );
+}
+
+#[test]
+fn unbounded_recursion_in_total_fn_rejected() {
+    // GIVEN: total fn calls itself with the same argument (no decrease)
+    // THEN: UnprovenRecursion reported
+    let src = r#"fn spin(n: Int) -> Int { spin(n) }"#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::UnprovenRecursion { fn_name, .. }
+            if fn_name == "spin")
+        ),
+        "expected UnprovenRecursion(spin), got: {errors:?}"
+    );
+}
+
+#[test]
+fn increasing_recursion_in_total_fn_rejected() {
+    // GIVEN: total fn recurses with `n + 1` (increasing)
+    // THEN: UnprovenRecursion reported
+    // spec 007 §Req 2
+    let src = r#"fn bad(n: Int) -> Int { bad(n + 1) }"#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::UnprovenRecursion { fn_name, .. } if fn_name == "bad")
+        ),
+        "expected UnprovenRecursion(bad) for increasing argument, got: {errors:?}"
+    );
+}
+
+#[test]
+fn decrement_by_zero_in_total_fn_rejected() {
+    // GIVEN: total fn recurses with `n - 0` (N == 0 is not a decrease)
+    // THEN: UnprovenRecursion reported
+    // spec 007 §Req 2, Scenario: Decrement by zero rejected
+    let src = r#"fn f(n: Int) -> Int { f(n - 0) }"#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { fn_name, .. } if fn_name == "f")),
+        "expected UnprovenRecursion for n - 0, got: {errors:?}"
+    );
+}
+
+#[test]
+fn decrement_on_second_param_accepted() {
+    // GIVEN: total fn with two params where only the second decreases
+    // THEN: no UnprovenRecursion — any parameter decrement is accepted
+    // spec 007 §Req 2 (param checked against all parameters, not positionally)
+    let src = r#"fn f(a: Int, b: Int) -> Int { if b == 0 { a } else { f(a, b - 1) } }"#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { .. })),
+        "expected no UnprovenRecursion when second param decreases, got: {errors:?}"
+    );
+}
+
+#[test]
+fn explicit_total_fn_keyword_unbounded_rejected() {
+    // GIVEN: fn with explicit `total` keyword and no decrease measure
+    // THEN: UnprovenRecursion reported (explicit total is checked like implicit)
+    // spec 007 §Scope and Defaults
+    let src = r#"total fn spin(n: Int) -> Int { spin(n) }"#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::UnprovenRecursion { fn_name, .. } if fn_name == "spin")
+        ),
+        "expected UnprovenRecursion for explicit total fn, got: {errors:?}"
+    );
+}
+
+#[test]
+fn structural_recursion_on_adt_subterm_accepted() {
+    // GIVEN: total fn matches on list param, recurses with the tail subterm
+    // THEN: no UnprovenRecursion error
+    let src = r#"
+        enum List { Nil, Cons(Int, List) }
+        fn len(list: List) -> Int {
+            match list {
+                List::Nil => 0
+                List::Cons(_, tail) => 1 + len(tail)
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { .. })),
+        "expected no UnprovenRecursion for structural recursion, got: {errors:?}"
+    );
+}
+
+#[test]
+fn recursion_in_partial_fn_not_checked() {
+    // GIVEN: partial fn recurses with no decrease
+    // THEN: no UnprovenRecursion (partial fns are exempt)
+    let src = r#"partial fn loop_forever(n: Int) -> Int { loop_forever(n) }"#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { .. })),
+        "expected no UnprovenRecursion for partial fn, got: {errors:?}"
+    );
+}
+
+#[test]
+fn non_recursive_total_fn_accepted() {
+    // GIVEN: total fn with no recursive calls
+    // THEN: trivially terminating, no error
+    let src = r#"fn add(a: Int, b: Int) -> Int { a + b }"#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { .. })),
+        "expected no UnprovenRecursion for non-recursive fn, got: {errors:?}"
+    );
+}
+
+#[test]
+fn structural_recursion_on_adt_single_field_accepted() {
+    // GIVEN: total fn matches on single-field ADT param, recurses with the inner subterm
+    // THEN: no UnprovenRecursion — inner is a structural subterm via TupleStruct(inner)
+    // spec 007 §Req 3 (single-field TupleStruct variant, complements the Cons test)
+    let src = r#"
+        enum Nat { Zero, Succ(Nat) }
+        fn count(n: Nat) -> Int {
+            match n {
+                Nat::Zero => 0
+                Nat::Succ(inner) => 1 + count(inner)
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { .. })),
+        "expected no UnprovenRecursion for single-field ADT subterm, got: {errors:?}"
+    );
+}
+
+#[test]
+fn structural_recursion_via_non_param_match_rejected() {
+    // GIVEN: total fn matches on a local variable (not the parameter directly)
+    // THEN: UnprovenRecursion — local bindings do not establish subterm relation
+    // spec 007 §Req 3, Scenario: Match on non-parameter does not grant subterm status
+    let src = r#"
+        enum List { Nil, Cons(Int, List) }
+        fn f(list: List) -> Int {
+            let local = list;
+            match local {
+                List::Nil => 0
+                List::Cons(_, tail) => f(tail)
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { fn_name, .. } if fn_name == "f")),
+        "expected UnprovenRecursion when match is not on a bare param, got: {errors:?}"
+    );
+}
+
+#[test]
+fn recursion_inside_lambda_not_flagged() {
+    // GIVEN: total fn creates a lambda that references the outer fn by name
+    // THEN: no UnprovenRecursion — lambdas have their own scope (spec 007 §Req 4)
+    let src = r#"
+        fn outer(n: Int) -> Int {
+            let f = |x| outer(x);
+            n + 1
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { .. })),
+        "expected no UnprovenRecursion inside lambda, got: {errors:?}"
+    );
+}
+
 // ── #22: Reference capability checking — iso/val/ref/tag on actor boundaries ──
 
 #[test]
