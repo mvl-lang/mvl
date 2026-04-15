@@ -679,7 +679,7 @@ mod tests {
 
     #[test]
     fn parse_authenticate_from_corpus() {
-        // From tests/corpus/09_full_programs/auth_handler.mvl
+        // From tests/corpus/11_programs/auth_handler.mvl
         let src = r#"total fn authenticate(
     iso db: &DbConn,
     input_password: Tainted<String>,

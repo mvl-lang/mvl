@@ -9,5 +9,7 @@
 | [0005](0005-recursive-descent-parser.md) | Hand-written recursive descent parser | Accepted |
 | [0006](0006-ffi-extern-rust-bridge.md) | FFI via extern "rust" and the bridge.rs convention | Accepted |
 | [0007](0007-stdlib-import-model.md) | Standard library import model — prelude, explicit, and trust boundaries | Accepted |
-| [0008](0008-compilation-units-and-linking.md) | Compilation units and linking — source-first, verified binary later | Accepted |
-| [0009](0009-xdg-paths-and-source-resolution.md) | XDG paths and multi-location source resolution | Accepted |
+| ~~0008~~ | ~~Compilation units and linking~~ | Merged into 0009 |
+| [0009](0009-toolchain-layout.md) | Toolchain layout — XDG, versioning, linking, caches | Accepted |
+| [0010](0010-corpus-test-structure.md) | Corpus test structure — progressive complexity ramp | Accepted |
+| ~~0011~~ | ~~Generational toolchain~~ | Merged into 0009 |

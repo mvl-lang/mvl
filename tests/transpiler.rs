@@ -232,14 +232,14 @@ fn corpus_option_result_transpiles() {
 
 #[test]
 fn corpus_ifc_label_types_transpiles() {
-    let src = include_str!("corpus/05_ifc/label_types.mvl");
+    let src = include_str!("corpus/06_ifc/label_types.mvl");
     let rust = transpile_src(src);
     assert_contains(&rust, "pub struct Public<T>");
 }
 
 #[test]
 fn corpus_total_vs_partial_transpiles() {
-    let src = include_str!("corpus/07_termination/total_vs_partial.mvl");
+    let src = include_str!("corpus/08_termination/total_vs_partial.mvl");
     let rust = transpile_src(src);
     assert_contains(&rust, "/// # Totality");
 }
@@ -249,7 +249,7 @@ fn corpus_total_vs_partial_transpiles() {
 /// The safe_division.mvl reference example transpiles without panicking.
 #[test]
 fn full_program_safe_division_transpiles() {
-    let src = include_str!("corpus/09_full_programs/safe_division.mvl");
+    let src = include_str!("corpus/11_programs/safe_division.mvl");
     let rust = transpile_src(src);
     assert_contains(&rust, "pub struct Amount");
     assert_contains(&rust, "pub struct NonZero");
@@ -263,7 +263,7 @@ fn full_program_safe_division_transpiles() {
 /// The auth_handler.mvl reference example transpiles without panicking.
 #[test]
 fn full_program_auth_handler_transpiles() {
-    let src = include_str!("corpus/09_full_programs/auth_handler.mvl");
+    let src = include_str!("corpus/11_programs/auth_handler.mvl");
     let rust = transpile_src(src);
     assert_contains(&rust, "pub struct UserId");
     assert_contains(&rust, "pub enum AuthError");
@@ -339,7 +339,7 @@ fn extern_rust_adds_mvl_runtime_to_cargo_toml() {
 fn full_program_password_checker_transpiles() {
     use mvl::mvl::checker::check;
     use mvl::mvl::transpiler::transpile;
-    let src = include_str!("corpus/09_full_programs/password_checker.mvl");
+    let src = include_str!("corpus/11_programs/password_checker.mvl");
     let (mut p, lex_errs) = mvl::mvl::parser::Parser::new(src);
     assert!(lex_errs.is_empty(), "lex errors: {lex_errs:?}");
     let prog = p.parse_program();
