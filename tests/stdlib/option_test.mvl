@@ -1,0 +1,81 @@
+// tests/stdlib/option_test.mvl — Option<T> method correctness
+//
+// Verifies runtime behavior of Option methods: unwrap_or, is_some, is_none.
+// Run with:  mvl test tests/stdlib/
+//
+// Known transpiler limitations: map, and_then — not yet implemented for Option.
+
+// ── unwrap_or ─────────────────────────────────────────────────────────────
+
+test fn option_some_unwrap_or_returns_value() -> Unit {
+    let v: Option<Int> = Some(5);
+    assert_eq(v.unwrap_or(0), 5);
+}
+
+test fn option_none_unwrap_or_returns_default() -> Unit {
+    let v: Option<Int> = None;
+    assert_eq(v.unwrap_or(0), 0);
+}
+
+test fn option_some_unwrap_or_ignores_default() -> Unit {
+    let v: Option<Int> = Some(42);
+    assert_eq(v.unwrap_or(99), 42);
+}
+
+test fn option_none_unwrap_or_negative_default() -> Unit {
+    let v: Option<Int> = None;
+    assert_eq(v.unwrap_or(-1), -1);
+}
+
+// ── is_some ───────────────────────────────────────────────────────────────
+
+test fn option_some_is_some_true() -> Unit {
+    let v: Option<Int> = Some(1);
+    assert_eq(v.is_some(), true);
+}
+
+test fn option_none_is_some_false() -> Unit {
+    let v: Option<Int> = None;
+    assert_eq(v.is_some(), false);
+}
+
+// ── is_none ───────────────────────────────────────────────────────────────
+
+test fn option_none_is_none_true() -> Unit {
+    let v: Option<Int> = None;
+    assert_eq(v.is_none(), true);
+}
+
+test fn option_some_is_none_false() -> Unit {
+    let v: Option<Int> = Some(7);
+    assert_eq(v.is_none(), false);
+}
+
+// ── Option<Bool> ──────────────────────────────────────────────────────────
+
+test fn option_some_bool_unwrap_or() -> Unit {
+    let v: Option<Bool> = Some(true);
+    assert_eq(v.unwrap_or(false), true);
+}
+
+test fn option_none_bool_unwrap_or() -> Unit {
+    let v: Option<Bool> = None;
+    assert_eq(v.unwrap_or(false), false);
+}
+
+// ── Some(0) edge cases — zero must not be treated as None ──────────────────
+
+test fn option_some_zero_unwrap_or() -> Unit {
+    let v: Option<Int> = Some(0);
+    assert_eq(v.unwrap_or(99), 0);
+}
+
+test fn option_some_zero_is_some_true() -> Unit {
+    let v: Option<Int> = Some(0);
+    assert_eq(v.is_some(), true);
+}
+
+test fn option_some_zero_is_none_false() -> Unit {
+    let v: Option<Int> = Some(0);
+    assert_eq(v.is_none(), false);
+}

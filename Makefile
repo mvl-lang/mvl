@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-release test test-unit test-integration test-corpus test-transpiler test-tree-sitter test-grammar-coverage lint mvl-lint format format-check assurance assurance-verbose assurance-gate docs docs-serve tree-sitter-build install install-nvim doctor clean
+.PHONY: help version build build-release test test-unit test-integration test-corpus test-stdlib test-transpiler test-tree-sitter test-grammar-coverage lint mvl-lint format format-check assurance assurance-verbose assurance-gate docs docs-serve tree-sitter-build install install-nvim doctor clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -47,7 +47,9 @@ build-release: ## Build release binary
 
 # === Test ===
 
-test: test-corpus test-tree-sitter test-grammar-coverage ## Run all tests (unit + corpus + tree-sitter grammar + grammar coverage)
+MVL ?= ./target/debug/mvl
+
+test: test-corpus test-stdlib test-tree-sitter test-grammar-coverage ## Run all tests (unit + corpus + stdlib + tree-sitter grammar + grammar coverage)
 	@echo "Running unit tests..."
 	cargo test
 
@@ -73,6 +75,10 @@ test-corpus: ## Validate corpus examples parse and type-check
 		fi; \
 	done
 	@echo "All corpus examples valid."
+
+test-stdlib: build ## Verify stdlib runtime correctness: transpile tests/stdlib/ → cargo test
+	@echo "Running stdlib correctness tests..."
+	$(MVL) test tests/stdlib/
 
 test-transpiler: build ## Run full build-chain tests: .mvl → parse → check → transpile → cargo → binary → verify output
 	@echo "Running end-to-end transpiler tests..."
