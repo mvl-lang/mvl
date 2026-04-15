@@ -93,6 +93,9 @@ pub fn check(prog: &Program) -> CheckResult {
 /// Per 002-effect-system/Req 2: "Effects MUST be fine-grained, not a single `IO` bucket.
 /// The minimum set: Console, FileRead, FileWrite, FileDelete, Net, DB, ProcessSpawn,
 /// Random, CryptoRandom, Clock, Env, Log, Async."
+///
+/// `Terminal` is an extended effect for raw terminal control (cursor, colors, raw key input)
+/// distinct from `Console` (line-oriented stdin/stdout). See pkg.tui / std.tui (#174).
 const VALID_EFFECT_NAMES: &[&str] = &[
     "Console",
     "FileRead",
@@ -107,6 +110,7 @@ const VALID_EFFECT_NAMES: &[&str] = &[
     "Env",
     "Log",
     "Async",
+    "Terminal",
 ];
 
 // ── TypeChecker ──────────────────────────────────────────────────────────────
@@ -2468,6 +2472,20 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, CheckError::InvalidEffectName { .. })),
             "expected no InvalidEffectName for valid effects, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn terminal_effect_name_accepted() {
+        // Terminal is a distinct effect from Console — raw terminal control (cursor,
+        // colors, single keypress) vs line-oriented I/O. See std.tui / #174.
+        let src = r#"fn f() -> Unit ! Terminal { }"#;
+        let errors = errors_for(src);
+        assert!(
+            !errors
+                .iter()
+                .any(|e| matches!(e, CheckError::InvalidEffectName { .. })),
+            "expected Terminal to be a valid effect name, got: {errors:?}"
         );
     }
 
