@@ -633,3 +633,37 @@ fn fn_with_const_generic_emits_rust_const_generic() {
     let rust = transpile_src(src);
     assert_contains(&rust, "const N: usize");
 }
+
+// ── Spec 009 Req 7: For-loop iterable clone ───────────────────────────────
+
+/// For-loop iterates over a cloned copy of the collection.
+/// Spec 009 Req 7: iterable MUST be wrapped as `(expr).clone()`.
+#[test]
+fn for_loop_clone_expression() {
+    let src = r#"
+fn process(items: List<Int>) -> Unit ! Console {
+    for x in items {
+        println(x);
+    }
+}
+"#;
+    let rust = transpile_src(src);
+    // The iterable must be cloned so `items` remains usable after the loop.
+    assert_contains(&rust, "(items).clone()");
+}
+
+/// For-loop over a function call expression clones the returned collection.
+/// Spec 009 Req 7: clone wraps any expression, not just identifiers.
+#[test]
+fn for_loop_clone_fn_call_expression() {
+    let src = r#"
+fn get_items() -> List<Int> { [1, 2, 3] }
+fn process() -> Unit ! Console {
+    for x in get_items() {
+        println(x);
+    }
+}
+"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "(get_items()).clone()");
+}
