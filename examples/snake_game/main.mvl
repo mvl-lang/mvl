@@ -1,0 +1,334 @@
+// main.mvl — Snake game entry point.
+//
+// This is the ONLY file in the example that touches effects.
+// game.mvl, render.mvl, and input.mvl are all pure — you can test them
+// without a terminal. Effects are confined here by the type system.
+//
+// Effect budget:
+//   ! Terminal — raw terminal control (cursor, keypress, screen clear)
+//   ! Clock    — tick-rate sleep
+//   ! Random   — food position generation
+//   ! Console  — final score printed after terminal is restored
+//
+// Extern trust boundary:
+//   All terminal I/O is implemented in bridge.rs (crossterm).
+//   std.tui types are declared locally here for Phase 2; when std.tui
+//   types are registered as checker builtins (Phase 3), the local
+//   declarations will be replaced by:
+//     use std::tui::Terminal;  use std::tui::Key;
+//
+// NOTE (issue #96): use imports below document intent.
+// Cross-module type resolution in the checker is Phase 3 (see #177/#184).
+// Types are re-declared locally so this file type-checks standalone.
+//
+// Usage:
+//   mvl run examples/snake_game/main.mvl
+//   make run   (from examples/snake_game/)
+
+use game::new_game;
+use game::tick;
+use game::pos_eq;
+use input::key_to_direction;
+use input::is_quit;
+use render::render_frame;
+use render::game_over_frame;
+
+// ── Local type re-declarations ─────────────────────────────────────────────
+// (See NOTE above — mirrors game.mvl, input.mvl, and std.tui.)
+
+type Direction = enum { Up, Down, Left, Right }
+
+type Pos = struct {
+    x: Int where self >= 0,
+    y: Int where self >= 0,
+}
+
+type Board = struct {
+    width:  Int where self > 0 && self <= 200,
+    height: Int where self > 0 && self <= 60,
+}
+
+type Game = struct {
+    snake:     List<Pos>,
+    direction: Direction,
+    food:      Pos,
+    score:     Int where self >= 0,
+    alive:     Bool,
+    board:     Board,
+}
+
+type Key = enum {
+    Arrow(Direction),
+    Enter,
+    Escape,
+    Backspace,
+    Delete,
+    Tab,
+    F(Int),
+    Char(Int),
+}
+
+/// Opaque terminal handle. Phase 2: zero-sized placeholder.
+type Terminal = struct {}
+
+type TermError = enum {
+    OpenFailed,
+    IOError,
+}
+
+// ── Re-declared functions (checker is per-file in Phase 2) ─────────────────
+
+total fn new_game(board: Board, first_food: Pos) -> Game {
+    let cx = board.width  / 2;
+    let cy = board.height / 2;
+    Game {
+        snake:     [Pos { x: cx, y: cy }],
+        direction: Direction::Right,
+        food:      first_food,
+        score:     0,
+        alive:     true,
+        board:     board,
+    }
+}
+
+total fn pos_eq(a: Pos, b: Pos) -> Bool {
+    a.x == b.x && a.y == b.y
+}
+
+total fn snake_head(snake: List<Pos>) -> Pos {
+    match snake.first() {
+        Some(h) => h,
+        None    => Pos { x: 0, y: 0 },
+    }
+}
+
+total fn snake_contains(snake: List<Pos>, pos: Pos) -> Bool {
+    let px = pos.x;
+    let py = pos.y;
+    let mut found = false;
+    for p in snake {
+        let eq = p.x == px && p.y == py;
+        found = found || eq
+    }
+    found
+}
+
+total fn next_head(pos: Pos, dir: Direction, board: Board) -> Option<Pos> {
+    match dir {
+        Direction::Up    =>
+            if pos.y == 0 { None }
+            else { Some(Pos { x: pos.x, y: pos.y - 1 }) },
+        Direction::Down  =>
+            if pos.y + 1 >= board.height { None }
+            else { Some(Pos { x: pos.x, y: pos.y + 1 }) },
+        Direction::Left  =>
+            if pos.x == 0 { None }
+            else { Some(Pos { x: pos.x - 1, y: pos.y }) },
+        Direction::Right =>
+            if pos.x + 1 >= board.width { None }
+            else { Some(Pos { x: pos.x + 1, y: pos.y }) },
+    }
+}
+
+total fn make_dead(game: Game, dir: Direction) -> Game {
+    Game {
+        snake: game.snake, direction: dir, food: game.food,
+        score: game.score, alive: false, board: game.board,
+    }
+}
+
+total fn advance(game: Game, head: Pos, dir: Direction, next_food: Option<Pos>) -> Game {
+    let ate = pos_eq(head, game.food);
+    let new_snake = if ate {
+        [[head], game.snake].flatten()
+    } else {
+        [[head], game.snake.take(game.snake.len() - 1)].flatten()
+    };
+    let candidate = match next_food {
+        None    => game.food,
+        Some(f) => f,
+    };
+    let new_food  = if ate { candidate } else { game.food };
+    let new_score = if ate { game.score + 1 } else { game.score };
+    Game {
+        snake: new_snake, direction: dir, food: new_food,
+        score: new_score, alive: true, board: game.board,
+    }
+}
+
+total fn tick(game: Game, input: Option<Direction>, next_food: Option<Pos>) -> Game {
+    if !game.alive {
+        game
+    } else {
+        let dir = match input {
+            None    => game.direction,
+            Some(d) => d,
+        };
+        match next_head(snake_head(game.snake), dir, game.board) {
+            None       => make_dead(game, dir),
+            Some(head) => if snake_contains(game.snake, head) {
+                make_dead(game, dir)
+            } else {
+                advance(game, head, dir, next_food)
+            },
+        }
+    }
+}
+
+total fn key_to_direction(key: Key) -> Option<Direction> {
+    match key {
+        Key::Arrow(dir) => Some(dir),
+        _               => None,
+    }
+}
+
+total fn is_quit(key: Key) -> Bool {
+    match key {
+        Key::Escape => true,
+        _           => false,
+    }
+}
+
+total fn border(width: Int) -> String {
+    let mut dashes = "";
+    for _ in range(0, width) {
+        dashes = format("{}-", dashes)
+    }
+    format("+{}+", dashes)
+}
+
+total fn cell_char(game: Game, x: Int, y: Int) -> String {
+    let pos = Pos { x: x, y: y };
+    if pos_eq(pos, game.food) {
+        "*"
+    } else if pos_eq(pos, snake_head(game.snake)) {
+        "@"
+    } else if snake_contains(game.snake, pos) {
+        "#"
+    } else {
+        " "
+    }
+}
+
+total fn render_row(game: Game, y: Int) -> String {
+    let mut row = "|";
+    for x in range(0, game.board.width) {
+        row = format("{}{}", row, cell_char(game, x, y))
+    }
+    format("{}|", row)
+}
+
+total fn render_frame(game: Game) -> String {
+    let b = border(game.board.width);
+    let mut rows = "";
+    for y in range(0, game.board.height) {
+        rows = format("{}{}\n", rows, render_row(game, y))
+    }
+    format("{}\n{}{}\nScore: {}", b, rows, b, game.score.to_string())
+}
+
+total fn game_over_frame(game: Game) -> String {
+    format("{}\n\nGAME OVER — press any key to exit", render_frame(game))
+}
+
+// ── Trust boundary — terminal I/O (bridge.rs + crossterm) ─────────────────
+//
+// Assurance note: 1 extern block (8 trust-boundary functions).
+
+extern "rust" {
+    fn term_open() -> Result<Terminal, TermError>;
+    fn term_close(term: Terminal) -> Unit;
+    fn term_clear(term: Terminal) -> Result<Unit, TermError>;
+    fn term_set_cursor(term: Terminal, row: Int, col: Int) -> Result<Unit, TermError>;
+    fn term_print(term: Terminal, text: String) -> Result<Unit, TermError>;
+    fn term_hide_cursor(term: Terminal) -> Unit;
+    fn term_show_cursor(term: Terminal) -> Unit;
+    fn term_read_key(timeout_ms: Int) -> Option<Key>;
+}
+
+// ── Configuration ─────────────────────────────────────────────────────────
+
+fn default_board() -> Board {
+    Board { width: 40, height: 20 }
+}
+
+fn tick_ms() -> Int { 100 }
+
+// ── Random food placement ─────────────────────────────────────────────────
+
+fn random_food(board: Board) -> Pos ! Random {
+    Pos {
+        x: int(0, board.width  - 1),
+        y: int(0, board.height - 1),
+    }
+}
+
+// ── Game loop ─────────────────────────────────────────────────────────────
+
+/// partial fn: the while loop is intentionally unbounded — the game runs
+/// until game.alive becomes false. Termination is data-driven.
+partial fn game_loop(mut game: Game, term: Terminal) -> Result<Int, TermError> ! Terminal, Clock, Random {
+    while game.alive {
+        let candidate_food = random_food(game.board);
+        let key_opt = term_read_key(tick_ms());
+
+        let quit = match key_opt {
+            None    => false,
+            Some(k) => is_quit(k),
+        };
+
+        if quit {
+            game = Game {
+                snake:     game.snake,
+                direction: game.direction,
+                food:      game.food,
+                score:     game.score,
+                alive:     false,
+                board:     game.board,
+            }
+        } else {
+            let dir = match key_opt {
+                None    => None,
+                Some(k) => key_to_direction(k),
+            };
+            game = tick(game, dir, Some(candidate_food));
+
+            let _ = term_clear(term);
+            let _ = term_set_cursor(term, 0, 0);
+            let render_result = term_print(term, render_frame(game));
+            match render_result {
+                Err(e) => { return Err(e) },
+                Ok(_)  => (),
+            }
+            let _ = sleep(millis(tick_ms()));
+        }
+    }
+
+    let _ = term_clear(term);
+    let _ = term_set_cursor(term, 0, 0);
+    let _ = term_print(term, game_over_frame(game));
+    let _ = term_read_key(5000);
+    Ok(game.score)
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────
+
+partial fn main() -> Unit ! Terminal, Clock, Random, Console {
+    let board = default_board();
+    let first_food = Pos { x: board.width / 4, y: board.height / 4 };
+    let game = new_game(board, first_food);
+
+    match term_open() {
+        Err(_) => println("error: could not open terminal in raw mode"),
+        Ok(term) => {
+            let _ = term_hide_cursor(term);
+            let loop_result = game_loop(game, term);
+            let _ = term_show_cursor(term);
+            let _ = term_close(term);
+            match loop_result {
+                Ok(score) => println(format("Game over! Score: {}", score.to_string())),
+                Err(_)    => println("error: terminal I/O failure"),
+            }
+        },
+    }
+}

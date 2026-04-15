@@ -1,0 +1,211 @@
+// game_test.mvl — Unit tests for pure game logic.
+//
+// Standalone: runs with `mvl test examples/snake_game/` — no terminal.
+// Re-declares all types and functions for standalone checking (Phase 2).
+
+// ── Local type declarations ───────────────────────────────────────────────
+
+type Direction = enum { Up, Down, Left, Right }
+
+type Pos = struct {
+    x: Int where self >= 0,
+    y: Int where self >= 0,
+}
+
+type Board = struct {
+    width:  Int where self > 0 && self <= 200,
+    height: Int where self > 0 && self <= 60,
+}
+
+type Game = struct {
+    snake:     List<Pos>,
+    direction: Direction,
+    food:      Pos,
+    score:     Int where self >= 0,
+    alive:     Bool,
+    board:     Board,
+}
+
+// ── Functions under test ──────────────────────────────────────────────────
+
+total fn pos_eq(a: Pos, b: Pos) -> Bool {
+    a.x == b.x && a.y == b.y
+}
+
+total fn snake_head(snake: List<Pos>) -> Pos {
+    match snake.first() {
+        Some(h) => h,
+        None    => Pos { x: 0, y: 0 },
+    }
+}
+
+total fn snake_contains(snake: List<Pos>, pos: Pos) -> Bool {
+    let px = pos.x;
+    let py = pos.y;
+    let mut found = false;
+    for p in snake {
+        let eq = p.x == px && p.y == py;
+        found = found || eq
+    }
+    found
+}
+
+total fn next_head(pos: Pos, dir: Direction, board: Board) -> Option<Pos> {
+    match dir {
+        Direction::Up    =>
+            if pos.y == 0 { None }
+            else { Some(Pos { x: pos.x, y: pos.y - 1 }) },
+        Direction::Down  =>
+            if pos.y + 1 >= board.height { None }
+            else { Some(Pos { x: pos.x, y: pos.y + 1 }) },
+        Direction::Left  =>
+            if pos.x == 0 { None }
+            else { Some(Pos { x: pos.x - 1, y: pos.y }) },
+        Direction::Right =>
+            if pos.x + 1 >= board.width { None }
+            else { Some(Pos { x: pos.x + 1, y: pos.y }) },
+    }
+}
+
+total fn new_game(board: Board, first_food: Pos) -> Game {
+    let cx = board.width  / 2;
+    let cy = board.height / 2;
+    Game {
+        snake:     [Pos { x: cx, y: cy }],
+        direction: Direction::Right,
+        food:      first_food,
+        score:     0,
+        alive:     true,
+        board:     board,
+    }
+}
+
+total fn make_dead(game: Game, dir: Direction) -> Game {
+    Game {
+        snake: game.snake, direction: dir, food: game.food,
+        score: game.score, alive: false, board: game.board,
+    }
+}
+
+total fn advance(game: Game, head: Pos, dir: Direction, next_food: Option<Pos>) -> Game {
+    let ate = pos_eq(head, game.food);
+    let new_snake = if ate {
+        [[head], game.snake].flatten()
+    } else {
+        [[head], game.snake.take(game.snake.len() - 1)].flatten()
+    };
+    let candidate = match next_food {
+        None    => game.food,
+        Some(f) => f,
+    };
+    let new_food  = if ate { candidate } else { game.food };
+    let new_score = if ate { game.score + 1 } else { game.score };
+    Game {
+        snake: new_snake, direction: dir, food: new_food,
+        score: new_score, alive: true, board: game.board,
+    }
+}
+
+total fn tick(game: Game, input: Option<Direction>, next_food: Option<Pos>) -> Game {
+    if !game.alive {
+        game
+    } else {
+        let dir = match input {
+            None    => game.direction,
+            Some(d) => d,
+        };
+        match next_head(snake_head(game.snake), dir, game.board) {
+            None       => make_dead(game, dir),
+            Some(head) => if snake_contains(game.snake, head) {
+                make_dead(game, dir)
+            } else {
+                advance(game, head, dir, next_food)
+            },
+        }
+    }
+}
+
+// ── Test helpers ──────────────────────────────────────────────────────────
+
+total fn test_board() -> Board {
+    Board { width: 10, height: 10 }
+}
+
+total fn far_food() -> Pos {
+    Pos { x: 1, y: 1 }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────
+
+test fn new_game_snake_at_centre() -> Unit {
+    let g = new_game(test_board(), far_food());
+    let head = snake_head(g.snake);
+    assert_eq(head.x, 5)
+}
+
+test fn new_game_score_zero() -> Unit {
+    let g = new_game(test_board(), far_food());
+    assert_eq(g.score, 0)
+}
+
+test fn next_head_right() -> Unit {
+    let h = match next_head(Pos { x: 5, y: 5 }, Direction::Right, test_board()) {
+        None    => Pos { x: 0, y: 0 },
+        Some(p) => p,
+    };
+    assert_eq(h.x, 6)
+}
+
+test fn next_head_wall_top_none() -> Unit {
+    let got_none = match next_head(Pos { x: 5, y: 0 }, Direction::Up, test_board()) {
+        None    => 1,
+        Some(_) => 0,
+    };
+    assert_eq(got_none, 1)
+}
+
+test fn next_head_wall_right_none() -> Unit {
+    let got_none = match next_head(Pos { x: 9, y: 5 }, Direction::Right, test_board()) {
+        None    => 1,
+        Some(_) => 0,
+    };
+    assert_eq(got_none, 1)
+}
+
+test fn tick_moves_right() -> Unit {
+    let g    = new_game(test_board(), far_food());
+    let next = tick(g, None, None);
+    let head = snake_head(next.snake);
+    assert_eq(head.x, 6)
+}
+
+test fn tick_wall_kills() -> Unit {
+    let board = test_board();
+    let g = Game {
+        snake: [Pos { x: 9, y: 5 }], direction: Direction::Right,
+        food: Pos { x: 1, y: 1 }, score: 0, alive: true, board: board,
+    };
+    let next = tick(g, None, None);
+    let is_dead = match next.alive { true => 0, false => 1 };
+    assert_eq(is_dead, 1)
+}
+
+test fn tick_eat_increments_score() -> Unit {
+    let board = test_board();
+    let g = Game {
+        snake: [Pos { x: 5, y: 5 }], direction: Direction::Right,
+        food: Pos { x: 6, y: 5 }, score: 0, alive: true, board: board,
+    };
+    let next = tick(g, None, Some(Pos { x: 2, y: 2 }));
+    assert_eq(next.score, 1)
+}
+
+test fn tick_dead_unchanged() -> Unit {
+    let board = test_board();
+    let g = Game {
+        snake: [Pos { x: 5, y: 5 }], direction: Direction::Right,
+        food: Pos { x: 1, y: 1 }, score: 7, alive: false, board: board,
+    };
+    let next = tick(g, Some(Direction::Down), None);
+    assert_eq(next.score, 7)
+}

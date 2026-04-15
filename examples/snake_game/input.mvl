@@ -1,0 +1,47 @@
+// input.mvl — Pure key-to-direction mapping.
+//
+// PURE: zero effects, no state.
+//
+// NOTE: Direction and Key are declared locally for standalone type-checking.
+// When std.tui types are registered as checker builtins (Phase 3), these
+// will be replaced by:  use std::tui::Direction;  use std::tui::Key;
+//
+// Demonstrates:
+//   R1 (ADTs)     : exhaustive match over Key variants
+//   R3 (totality) : every Key case is handled
+
+// ── Local type declarations (mirrors std.tui) ─────────────────────────────
+
+pub type Direction = enum { Up, Down, Left, Right }
+
+pub type Key = enum {
+    Arrow(Direction),
+    Enter,
+    Escape,
+    Backspace,
+    Delete,
+    Tab,
+    F(Int),
+    Char(Int),
+}
+
+// ── Key mapping ───────────────────────────────────────────────────────────
+
+/// Map a key event to a movement direction.
+/// Returns None for non-directional keys (the game loop keeps the current direction).
+/// WASD mapping is handled in bridge.rs so this function stays simple.
+pub total fn key_to_direction(key: Key) -> Option<Direction> {
+    match key {
+        Key::Arrow(dir) => Some(dir),
+        _               => None,
+    }
+}
+
+/// Return true if the key is a quit signal (Escape).
+/// The 'q' key is mapped to Escape in bridge.rs.
+pub total fn is_quit(key: Key) -> Bool {
+    match key {
+        Key::Escape => true,
+        _           => false,
+    }
+}

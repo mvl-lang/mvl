@@ -1,0 +1,112 @@
+// render.mvl — Pure ASCII frame builder.
+//
+// PURE: zero effects. Takes a Game snapshot, returns a String.
+// The caller (main.mvl) writes the string to the terminal.
+//
+// Frame layout (board width W):
+//
+//   +------W------+
+//   |  @###   *   |   @ = head, # = body, * = food, space = empty
+//   |             |
+//   +-------------+
+//   Score: 3
+//
+// NOTE (issue #96): types re-declared locally for standalone type-checking.
+// When cross-module checker integration lands (Phase 3), these will be
+// replaced by:  use game::Game;  use game::Pos;  etc.
+
+// ── Local re-declarations (from game.mvl) ─────────────────────────────────
+
+type Direction = enum { Up, Down, Left, Right }
+
+type Pos = struct {
+    x: Int where self >= 0,
+    y: Int where self >= 0,
+}
+
+type Board = struct {
+    width:  Int where self > 0 && self <= 200,
+    height: Int where self > 0 && self <= 60,
+}
+
+type Game = struct {
+    snake:     List<Pos>,
+    direction: Direction,
+    food:      Pos,
+    score:     Int where self >= 0,
+    alive:     Bool,
+    board:     Board,
+}
+
+total fn pos_eq(a: Pos, b: Pos) -> Bool {
+    a.x == b.x && a.y == b.y
+}
+
+total fn snake_head(snake: List<Pos>) -> Pos {
+    match snake.first() {
+        Some(h) => h,
+        None    => Pos { x: 0, y: 0 },
+    }
+}
+
+total fn snake_contains(snake: List<Pos>, pos: Pos) -> Bool {
+    let px = pos.x;
+    let py = pos.y;
+    let mut found = false;
+    for p in snake {
+        let eq = p.x == px && p.y == py;
+        found = found || eq
+    }
+    found
+}
+
+// ── Render helpers ────────────────────────────────────────────────────────
+
+/// Build a horizontal border of width W: "+---...---+"
+total fn border(width: Int) -> String {
+    let mut dashes = "";
+    for _ in range(0, width) {
+        dashes = format("{}-", dashes)
+    }
+    format("+{}+", dashes)
+}
+
+/// Return the display character for cell (x, y).
+total fn cell_char(game: Game, x: Int, y: Int) -> String {
+    let pos = Pos { x: x, y: y };
+    if pos_eq(pos, game.food) {
+        "*"
+    } else if pos_eq(pos, snake_head(game.snake)) {
+        "@"
+    } else if snake_contains(game.snake, pos) {
+        "#"
+    } else {
+        " "
+    }
+}
+
+/// Render a single row: "|" + cells + "|"
+total fn render_row(game: Game, y: Int) -> String {
+    let mut row = "|";
+    for x in range(0, game.board.width) {
+        row = format("{}{}", row, cell_char(game, x, y))
+    }
+    format("{}|", row)
+}
+
+// ── Public API ────────────────────────────────────────────────────────────
+
+/// Build the complete ASCII frame for the current game state.
+pub total fn render_frame(game: Game) -> String {
+    let b = border(game.board.width);
+    let mut rows = "";
+    for y in range(0, game.board.height) {
+        rows = format("{}{}\n", rows, render_row(game, y))
+    }
+    format("{}\n{}{}\nScore: {}", b, rows, b, game.score.to_string())
+}
+
+/// Render the game-over overlay.
+pub total fn game_over_frame(game: Game) -> String {
+    format("{}\n\nGAME OVER — press any key to exit", render_frame(game))
+}

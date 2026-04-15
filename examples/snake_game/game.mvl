@@ -1,0 +1,162 @@
+// game.mvl — Pure game state and update logic.
+//
+// PURE: zero effects. Every function is total and deterministic.
+// This means the entire game logic can be tested without a terminal.
+//
+// The core insight: (State, Input) → State is a pure function.
+// All effects (terminal I/O, randomness, timing) live only in main.mvl.
+//
+// NOTE: Direction is defined locally. When std.tui types are registered
+// as checker builtins (Phase 3), this becomes: use std::tui::Direction;
+//
+// Demonstrates:
+//   R1  (ADTs)        : Game, Pos, Board as algebraic data types
+//   R3  (totality)    : tick() is total — terminates on every call
+//   R4  (null)        : Option<Direction> for "no input this tick"
+//   R10 (refinements) : Board bounds, score ≥ 0, Pos coordinates ≥ 0
+
+// ── Domain types ──────────────────────────────────────────────────────────
+
+pub type Direction = enum { Up, Down, Left, Right }
+
+pub type Pos = struct {
+    x: Int where self >= 0,
+    y: Int where self >= 0,
+}
+
+pub type Board = struct {
+    width:  Int where self > 0 && self <= 200,
+    height: Int where self > 0 && self <= 60,
+}
+
+pub type Game = struct {
+    snake:     List<Pos>,
+    direction: Direction,
+    food:      Pos,
+    score:     Int where self >= 0,
+    alive:     Bool,
+    board:     Board,
+}
+
+// ── Constructor ───────────────────────────────────────────────────────────
+
+pub total fn new_game(board: Board, first_food: Pos) -> Game {
+    let cx = board.width  / 2;
+    let cy = board.height / 2;
+    Game {
+        snake:     [Pos { x: cx, y: cy }],
+        direction: Direction::Right,
+        food:      first_food,
+        score:     0,
+        alive:     true,
+        board:     board,
+    }
+}
+
+// ── Pure helpers ──────────────────────────────────────────────────────────
+
+pub total fn pos_eq(a: Pos, b: Pos) -> Bool {
+    a.x == b.x && a.y == b.y
+}
+
+pub total fn snake_head(snake: List<Pos>) -> Pos {
+    match snake.first() {
+        Some(h) => h,
+        None    => Pos { x: 0, y: 0 },
+    }
+}
+
+/// True if `snake` contains `pos`. Extracts coordinates before the loop
+/// to avoid re-consuming `pos` on each iteration (Rust ownership).
+pub total fn snake_contains(snake: List<Pos>, pos: Pos) -> Bool {
+    let px = pos.x;
+    let py = pos.y;
+    let mut found = false;
+    for p in snake {
+        let eq = p.x == px && p.y == py;
+        found = found || eq
+    }
+    found
+}
+
+pub total fn next_head(pos: Pos, dir: Direction, board: Board) -> Option<Pos> {
+    match dir {
+        Direction::Up    =>
+            if pos.y == 0 { None }
+            else { Some(Pos { x: pos.x, y: pos.y - 1 }) },
+        Direction::Down  =>
+            if pos.y + 1 >= board.height { None }
+            else { Some(Pos { x: pos.x, y: pos.y + 1 }) },
+        Direction::Left  =>
+            if pos.x == 0 { None }
+            else { Some(Pos { x: pos.x - 1, y: pos.y }) },
+        Direction::Right =>
+            if pos.x + 1 >= board.width { None }
+            else { Some(Pos { x: pos.x + 1, y: pos.y }) },
+    }
+}
+
+// ── Tick helpers (avoid nested match/if in blocks — transpiler workaround) ─
+
+/// Build a dead-game state (wall or self-collision).
+total fn make_dead(game: Game, dir: Direction) -> Game {
+    Game {
+        snake:     game.snake,
+        direction: dir,
+        food:      game.food,
+        score:     game.score,
+        alive:     false,
+        board:     game.board,
+    }
+}
+
+/// Advance the snake by one step: eat food or shift forward.
+total fn advance(game: Game, head: Pos, dir: Direction, next_food: Option<Pos>) -> Game {
+    let ate = pos_eq(head, game.food);
+    let new_snake = if ate {
+        [[head], game.snake].flatten()
+    } else {
+        [[head], game.snake.take(game.snake.len() - 1)].flatten()
+    };
+    let candidate = match next_food {
+        None    => game.food,
+        Some(f) => f,
+    };
+    let new_food  = if ate { candidate } else { game.food };
+    let new_score = if ate { game.score + 1 } else { game.score };
+    Game {
+        snake:     new_snake,
+        direction: dir,
+        food:      new_food,
+        score:     new_score,
+        alive:     true,
+        board:     game.board,
+    }
+}
+
+// ── Game tick ─────────────────────────────────────────────────────────────
+
+/// Advance the game by one frame.
+///
+/// - `input`:     player key this tick; None means no key was pressed.
+/// - `next_food`: pre-generated Pos consumed only if food is eaten.
+///
+/// Passing `next_food` as a parameter keeps tick() pure (no ! Random).
+pub total fn tick(game: Game, input: Option<Direction>, next_food: Option<Pos>) -> Game {
+    if !game.alive {
+        game
+    } else {
+        let dir = match input {
+            None    => game.direction,
+            Some(d) => d,
+        };
+        match next_head(snake_head(game.snake), dir, game.board) {
+            None       => make_dead(game, dir),
+            Some(head) => if snake_contains(game.snake, head) {
+                make_dead(game, dir)
+            } else {
+                advance(game, head, dir, next_food)
+            },
+        }
+    }
+}
