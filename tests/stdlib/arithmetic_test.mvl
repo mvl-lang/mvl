@@ -1,0 +1,153 @@
+// tests/stdlib/arithmetic_test.mvl — Int and Float method correctness
+//
+// Verifies runtime behavior of numeric stdlib methods.
+// Run with:  mvl test tests/stdlib/
+
+// ── Int methods ────────────────────────────────────────────────────────────
+
+test fn int_abs_of_negative() -> Unit {
+    let n: Int = -5;
+    assert_eq(n.abs(), 5);
+}
+
+test fn int_abs_of_positive() -> Unit {
+    let n: Int = 7;
+    assert_eq(n.abs(), 7);
+}
+
+test fn int_abs_of_zero() -> Unit {
+    let n: Int = 0;
+    assert_eq(n.abs(), 0);
+}
+
+test fn int_max_returns_larger() -> Unit {
+    let a: Int = 3;
+    assert_eq(a.max(7), 7);
+}
+
+test fn int_max_when_equal() -> Unit {
+    let a: Int = 5;
+    assert_eq(a.max(5), 5);
+}
+
+test fn int_min_returns_smaller() -> Unit {
+    let a: Int = 7;
+    assert_eq(a.min(3), 3);
+}
+
+test fn int_min_when_equal() -> Unit {
+    let a: Int = 4;
+    assert_eq(a.min(4), 4);
+}
+
+test fn int_clamp_within_range() -> Unit {
+    let n: Int = 5;
+    assert_eq(n.clamp(0, 10), 5);
+}
+
+test fn int_clamp_below_min() -> Unit {
+    let n: Int = -3;
+    assert_eq(n.clamp(0, 10), 0);
+}
+
+test fn int_clamp_above_max() -> Unit {
+    let n: Int = 15;
+    assert_eq(n.clamp(0, 10), 10);
+}
+
+test fn int_is_positive_true() -> Unit {
+    let n: Int = 1;
+    assert_eq(n.is_positive(), true);
+}
+
+test fn int_is_positive_false_for_zero() -> Unit {
+    let n: Int = 0;
+    assert_eq(n.is_positive(), false);
+}
+
+test fn int_is_positive_false_for_negative() -> Unit {
+    let n: Int = -1;
+    assert_eq(n.is_positive(), false);
+}
+
+test fn int_is_negative_true() -> Unit {
+    let n: Int = -3;
+    assert_eq(n.is_negative(), true);
+}
+
+test fn int_is_negative_false_for_zero() -> Unit {
+    let n: Int = 0;
+    assert_eq(n.is_negative(), false);
+}
+
+test fn int_is_negative_false_for_positive() -> Unit {
+    let n: Int = 2;
+    assert_eq(n.is_negative(), false);
+}
+
+test fn int_pow_basic() -> Unit {
+    let n: Int = 2;
+    assert_eq(n.pow(10), 1024);
+}
+
+test fn int_pow_zero_exponent() -> Unit {
+    let n: Int = 5;
+    assert_eq(n.pow(0), 1);
+}
+
+test fn int_pow_one_exponent() -> Unit {
+    let n: Int = 7;
+    assert_eq(n.pow(1), 7);
+}
+
+// ── Float methods ──────────────────────────────────────────────────────────
+
+test fn float_abs_of_negative() -> Unit {
+    let f: Float = -3.5;
+    assert_eq(f.abs(), 3.5);
+}
+
+test fn float_abs_of_positive() -> Unit {
+    let f: Float = 2.7;
+    assert_eq(f.abs(), 2.7);
+}
+
+test fn float_ceil_rounds_up() -> Unit {
+    let f: Float = 3.2;
+    assert_eq(f.ceil(), 4.0);
+}
+
+test fn float_ceil_of_whole() -> Unit {
+    let f: Float = 3.0;
+    assert_eq(f.ceil(), 3.0);
+}
+
+test fn float_floor_rounds_down() -> Unit {
+    let f: Float = 3.7;
+    assert_eq(f.floor(), 3.0);
+}
+
+test fn float_floor_of_whole() -> Unit {
+    let f: Float = 4.0;
+    assert_eq(f.floor(), 4.0);
+}
+
+test fn float_round_up_at_half() -> Unit {
+    let f: Float = 3.5;
+    assert_eq(f.round(), 4.0);
+}
+
+test fn float_round_down_below_half() -> Unit {
+    let f: Float = 3.4;
+    assert_eq(f.round(), 3.0);
+}
+
+test fn float_sqrt_of_perfect_square() -> Unit {
+    let f: Float = 9.0;
+    assert_eq(f.sqrt(), 3.0);
+}
+
+test fn float_sqrt_of_one() -> Unit {
+    let f: Float = 1.0;
+    assert_eq(f.sqrt(), 1.0);
+}

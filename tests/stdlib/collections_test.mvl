@@ -1,0 +1,35 @@
+// tests/stdlib/collections_test.mvl — List<T> method correctness
+//
+// Verifies runtime behavior of List/collection stdlib methods.
+// Run with:  mvl test tests/stdlib/
+//
+// Note: Higher-order collection methods (map, filter, fold, reverse, sort)
+// have known transpiler limitations — see GitHub issues for status.
+// This file covers what is currently verified at runtime.
+
+// ── len ───────────────────────────────────────────────────────────────────
+
+test fn list_len_empty() -> Unit {
+    let xs: List<Int> = [];
+    assert_eq(xs.len(), 0);
+}
+
+test fn list_len_single() -> Unit {
+    let xs: List<Int> = [42];
+    assert_eq(xs.len(), 1);
+}
+
+test fn list_len_multiple() -> Unit {
+    let xs: List<Int> = [1, 2, 3, 4, 5];
+    assert_eq(xs.len(), 5);
+}
+
+test fn list_string_len() -> Unit {
+    let xs: List<String> = ["a", "b", "c"];
+    assert_eq(xs.len(), 3);
+}
+
+test fn list_bool_len() -> Unit {
+    let xs: List<Bool> = [true, false, true];
+    assert_eq(xs.len(), 3);
+}

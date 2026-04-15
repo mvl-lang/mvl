@@ -1,0 +1,70 @@
+// tests/stdlib/result_test.mvl — Result<T, E> method correctness
+//
+// Verifies runtime behavior of Result methods: is_ok, is_err, unwrap_or.
+// Run with:  mvl test tests/stdlib/
+
+// ── Helper functions ───────────────────────────────────────────────────────
+
+fn divide(a: Int, b: Int) -> Result<Int, String> {
+    if b == 0 { Err("division by zero") } else { Ok(a / b) }
+}
+
+fn parse_positive(n: Int) -> Result<Int, String> {
+    if n > 0 { Ok(n) } else { Err("not positive") }
+}
+
+// ── is_ok ─────────────────────────────────────────────────────────────────
+
+test fn result_ok_is_ok_true() -> Unit {
+    assert_eq(divide(10, 2).is_ok(), true);
+}
+
+test fn result_err_is_ok_false() -> Unit {
+    assert_eq(divide(10, 0).is_ok(), false);
+}
+
+// ── is_err ────────────────────────────────────────────────────────────────
+
+test fn result_err_is_err_true() -> Unit {
+    assert_eq(divide(10, 0).is_err(), true);
+}
+
+test fn result_ok_is_err_false() -> Unit {
+    assert_eq(divide(10, 2).is_err(), false);
+}
+
+// ── unwrap_or ─────────────────────────────────────────────────────────────
+
+test fn result_ok_unwrap_or_returns_value() -> Unit {
+    assert_eq(divide(10, 2).unwrap_or(0), 5);
+}
+
+test fn result_err_unwrap_or_returns_default() -> Unit {
+    assert_eq(divide(10, 0).unwrap_or(-1), -1);
+}
+
+test fn result_ok_unwrap_or_ignores_default() -> Unit {
+    assert_eq(divide(20, 4).unwrap_or(99), 5);
+}
+
+// ── Result<Int, String> via parse_positive ─────────────────────────────────
+
+test fn parse_positive_ok() -> Unit {
+    assert_eq(parse_positive(5).is_ok(), true);
+}
+
+test fn parse_positive_err_on_zero() -> Unit {
+    assert_eq(parse_positive(0).is_err(), true);
+}
+
+test fn parse_positive_err_on_negative() -> Unit {
+    assert_eq(parse_positive(-3).is_err(), true);
+}
+
+test fn parse_positive_unwrap_value() -> Unit {
+    assert_eq(parse_positive(42).unwrap_or(0), 42);
+}
+
+test fn parse_positive_err_unwrap_default() -> Unit {
+    assert_eq(parse_positive(-1).unwrap_or(0), 0);
+}

@@ -1,0 +1,30 @@
+// tests/stdlib/string_test.mvl — String method correctness
+//
+// Verifies runtime behavior of String stdlib methods.
+// Run with:  mvl test tests/stdlib/
+//
+// Note: Some String methods have known transpiler limitations.
+// See GitHub issues for status on: trim, to_upper, to_lower,
+// contains, starts_with, ends_with, find, replace, split.
+
+// ── len ───────────────────────────────────────────────────────────────────
+
+test fn string_len_ascii() -> Unit {
+    let s: String = "hello";
+    assert_eq(s.len(), 5);
+}
+
+test fn string_len_empty() -> Unit {
+    let s: String = "";
+    assert_eq(s.len(), 0);
+}
+
+test fn string_len_with_spaces() -> Unit {
+    let s: String = "hello world";
+    assert_eq(s.len(), 11);
+}
+
+test fn string_len_single_char() -> Unit {
+    let s: String = "x";
+    assert_eq(s.len(), 1);
+}
