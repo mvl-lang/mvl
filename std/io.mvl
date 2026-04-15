@@ -1,0 +1,226 @@
+// MVL standard library — io module
+//
+// File I/O, path utilities, filesystem operations, and standard input.
+// Import with: use std.io.{File, Path, BufReader, BufWriter, DirEntry, Metadata, Stdin,
+//                          path, join, to_string, exists, is_file, is_dir,
+//                          open, close, read_to_string, write, append,
+//                          buf_reader, buf_writer, read_line, write_line,
+//                          create_dir_all, remove, read_dir, metadata, chmod,
+//                          create_symlink, read_link,
+//                          stdin, stdin_read_line, stdin_read_to_string}
+//
+// Phase 2: function stubs with correct signatures and effects.
+// Types are opaque structs until Phase 3 compiles stdlib from source.
+//
+// Design: Four effect levels for I/O operations:
+//   - ! FileRead   — reading from files, directories, or metadata
+//   - ! FileWrite  — writing, creating, or modifying files and directories
+//   - ! FileDelete — removing files or directories
+//   - ! Console    — line-oriented stdin/stdout (print, read_line)
+//
+// IFC: File contents and stdin input are Tainted<String> when IFC is active.
+// A Tainted value must be sanitized (validated, parsed) before use in queries,
+// file paths, or other security-sensitive contexts.
+//
+// Raw/no-echo terminal input (single keypress) is out of scope here — see pkg.tui.
+//
+// Implementation: wraps `extern "rust" { std::fs, std::io, std::path }` (Phase 3).
+// See #44, ADR-0006.
+
+// ── Types ─────────────────────────────────────────────────────────────────
+
+/// A handle to an open file.
+///
+/// Returned by `open`. Pass to `buf_reader` or `buf_writer` for buffered I/O.
+/// Phase 3 will add RAII-style Drop to close on drop; in Phase 2 callers MUST
+/// call `close` explicitly to flush and release the file descriptor.
+pub type File = struct {}
+
+/// A filesystem path (absolute or relative).
+///
+/// Construct with `path("...")`. Combine segments with `join`.
+pub type Path = struct {
+    inner: String,
+}
+
+/// A buffered reader wrapping a File handle.
+///
+/// Use `read_line` for incremental line-by-line reading.
+pub type BufReader = struct {}
+
+/// A buffered writer wrapping a File handle.
+///
+/// Use `write_line` for line-oriented output.
+pub type BufWriter = struct {}
+
+/// A single entry returned by `read_dir`.
+pub type DirEntry = struct {
+    path: Path,
+    is_file: Bool,
+    is_dir: Bool,
+    is_symlink: Bool,
+}
+
+/// Metadata for a file, directory, or symlink.
+///
+/// Returned by `metadata`. Does not follow symlinks.
+pub type Metadata = struct {
+    len: Int,
+    is_file: Bool,
+    is_dir: Bool,
+    is_symlink: Bool,
+    /// Unix permission bits (e.g. 0o644). Zero on non-Unix platforms.
+    permissions: Int,
+}
+
+/// A handle to standard input.
+///
+/// Obtained via `stdin()`. Use `stdin_read_line` and `stdin_read_to_string`
+/// to read user input. Input is always Tainted<String>.
+pub type Stdin = struct {}
+
+// ── Path construction (pure) ──────────────────────────────────────────────
+
+/// Construct a Path from a string.
+/// Pure — no filesystem access.
+pub fn path(s: String) -> Path { Path { inner: s } }
+
+/// Append a path segment to a base path.
+///
+/// Inserts the platform separator between segments.
+/// Pure — no filesystem access.
+pub fn join(base: Path, segment: String) -> Path { Path { inner: "" } }
+
+/// Return the string representation of a path.
+/// Pure — no filesystem access.
+pub fn to_string(p: Path) -> String { "" }
+
+// ── Path queries ───────────────────────────────────────────────────────────
+
+/// Return true if the path exists on the filesystem.
+pub fn exists(p: Path) -> Bool ! FileRead { false }
+
+/// Return true if the path refers to a regular file.
+pub fn is_file(p: Path) -> Bool ! FileRead { false }
+
+/// Return true if the path refers to a directory.
+pub fn is_dir(p: Path) -> Bool ! FileRead { false }
+
+// ── File I/O ───────────────────────────────────────────────────────────────
+
+/// Open a file for reading and return a File handle.
+///
+/// Note: `open` itself does not require `! FileRead` — it is the capability
+/// entry point that grants the File handle. Callers that read from the handle
+/// declare `! FileRead`.
+///
+/// Phase 2 limitation: `open` has no mode parameter, so write-mode opens are
+/// also effect-free at the call site; `! FileWrite` becomes visible only when
+/// `write_line` or `write` is called. Phase 3 will introduce an `OpenMode`
+/// enum (Read | Write | Append) and annotate write-mode `open` with `! FileWrite`.
+pub fn open(p: Path) -> Result<File, String> { Err("") }
+
+/// Close a file handle and flush any pending writes.
+///
+/// Takes File by value to prevent use-after-close.
+/// No effect annotation — closing a file descriptor is a resource release,
+/// not an observable I/O side-effect in the capability sense. Callers that
+/// opened for writing will have already declared `! FileWrite` via `write_line`
+/// or `write`; callers that only read do not need to pollute their signature.
+pub fn close(f: File) -> Unit { }
+
+/// Read the entire contents of a file into a string.
+///
+/// Returns Tainted<String> because file contents are external (untrusted) data.
+/// When IFC is inactive Tainted<String> is treated as String.
+pub fn read_to_string(p: Path) -> Result<Tainted<String>, String> ! FileRead { Err("") }
+
+/// Write a string to a file, creating it if it does not exist.
+///
+/// Truncates the file if it already exists.
+pub fn write(p: Path, content: String) -> Result<Unit, String> ! FileWrite { Err("") }
+
+/// Append a string to a file, creating it if it does not exist.
+pub fn append(p: Path, content: String) -> Result<Unit, String> ! FileWrite { Err("") }
+
+/// Wrap a File handle in a BufReader for incremental line reading.
+pub fn buf_reader(f: File) -> BufReader { BufReader {} }
+
+/// Wrap a File handle in a BufWriter for buffered line writing.
+pub fn buf_writer(f: File) -> BufWriter { BufWriter {} }
+
+/// Read the next line from a BufReader (up to and including `\n`).
+///
+/// Returns Tainted<String> because lines come from an external file.
+/// Returns Ok("") at end-of-file.
+pub fn read_line(r: &BufReader) -> Result<Tainted<String>, String> ! FileRead { Err("") }
+
+/// Write a line (followed by `\n`) to a BufWriter.
+pub fn write_line(w: &BufWriter, line: String) -> Result<Unit, String> ! FileWrite { Err("") }
+
+// ── Filesystem operations ─────────────────────────────────────────────────
+
+/// Create a directory and all its missing parents.
+///
+/// No-op if the directory already exists.
+pub fn create_dir_all(p: Path) -> Result<Unit, String> ! FileWrite { Err("") }
+
+/// Remove a file or empty directory.
+///
+/// Returns an error if the path is a non-empty directory or does not exist.
+pub fn remove(p: Path) -> Result<Unit, String> ! FileDelete { Err("") }
+
+/// List the entries in a directory.
+///
+/// Returns an error if `p` is not a directory or is not readable.
+pub fn read_dir(p: Path) -> Result<List<DirEntry>, String> ! FileRead { Err("") }
+
+/// Return metadata for a file, directory, or symlink without following symlinks.
+pub fn metadata(p: Path) -> Result<Metadata, String> ! FileRead { Err("") }
+
+/// Set the Unix permission bits of a file or directory.
+///
+/// `mode` is an integer (e.g. 0o755). No-op on non-Unix platforms.
+///
+/// Warning: setuid (0o4000) and setgid (0o2000) bits are accepted by this API.
+/// Callers are responsible for rejecting privilege-escalating modes; this API
+/// provides no compile-time guard against `chmod(p, 0o4755)`.
+pub fn chmod(p: Path, mode: Int) -> Result<Unit, String> ! FileWrite { Err("") }
+
+/// Create a symbolic link: `link` will point to `target`.
+///
+/// Security: `target` MUST NOT be derived from untrusted (Tainted) input without
+/// sanitization. An attacker-controlled target can redirect subsequent read/write/
+/// delete operations to arbitrary filesystem locations outside any intended scope.
+pub fn create_symlink(target: Path, link: Path) -> Result<Unit, String> ! FileWrite { Err("") }
+
+/// Read the target path of a symbolic link.
+///
+/// Returns Tainted<String> — the symlink target is data stored on disk by an
+/// external process and is therefore untrusted. Callers MUST sanitize the
+/// result before constructing a Path and passing it to any filesystem function,
+/// to prevent path traversal via attacker-controlled symlink targets.
+pub fn read_link(p: Path) -> Result<Tainted<String>, String> ! FileRead { Err("") }
+
+// ── Standard input ─────────────────────────────────────────────────────────
+
+/// Return the standard input handle.
+///
+/// Note: `stdin()` itself does not require `! Console` — it is the capability
+/// entry point. Callers that read from the returned handle declare `! Console`.
+pub fn stdin() -> Stdin { Stdin {} }
+
+/// Read one line from stdin (up to and including `\n`).
+///
+/// Returns Tainted<String> because stdin is user-controlled (untrusted) input.
+/// The line includes the trailing `\n`. Returns Ok("") at end-of-file.
+///
+/// Example (method-call syntax): `stdin.read_line()`
+pub fn stdin_read_line(s: &Stdin) -> Result<Tainted<String>, String> ! Console { Err("") }
+
+/// Read all of stdin into a string.
+///
+/// Returns Tainted<String> because stdin is user-controlled (untrusted) input.
+///
+/// Example (method-call syntax): `stdin.read_to_string()`
+pub fn stdin_read_to_string(s: &Stdin) -> Result<Tainted<String>, String> ! Console { Err("") }
