@@ -6,6 +6,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-04-15 (feat: stdlib correctness test suite with 76 tests)
+
+### Added
+
+- **Stdlib correctness test suite** — 76 runtime tests across 5 modules (arithmetic, option, result, string, collections) validating stdlib method behavior. Separate from corpus tests which validate parser/type-checker. Includes tests for edge cases (zero values, negative rounds, ? propagation) and known transpiler limitations documented in file headers.
+- **`make test-stdlib` target** — Integrates with CI to catch stdlib regressions. Wired into `make test` gate.
+- **MVL variable in Makefile** — `MVL ?= ./target/debug/mvl` allows CI override without modifying Makefile.
+
+### Fixed
+
+- **int_max/int_min false-positive coverage gap** — Added `int_max_when_self_is_larger` and `int_min_when_self_is_smaller` tests to prevent trivial implementations from passing the suite.
+
 ## [0.23.0] — 2026-04-15 (feat: -- path separator support; fix: test-transpiler corpus resilience)
 
 ### Added
