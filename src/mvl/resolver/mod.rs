@@ -187,7 +187,14 @@ pub fn resolve_project(
 /// the in-memory stub).
 fn load_stdlib_module(stdlib_dir: &Path) -> Option<ResolvedModule> {
     let core_path = stdlib_dir.join("core.mvl");
-    let src = std::fs::read_to_string(&core_path).ok()?;
+    let src = std::fs::read_to_string(&core_path)
+        .map_err(|e| {
+            eprintln!(
+                "mvl: warning: could not read {} — falling back to built-in stdlib stub: {e}",
+                core_path.display()
+            );
+        })
+        .ok()?;
     let (mut parser, _) = Parser::new(&src);
     let prog = parser.parse_program();
     if !parser.errors().is_empty() {
@@ -393,9 +400,8 @@ fn build_import_graph(modules: &HashMap<String, ResolvedModule>) -> HashMap<Stri
 /// as actual `.mvl` source files in a future milestone.
 pub fn stdlib_module() -> ResolvedModule {
     let mut exports = HashSet::new();
-    // Minimal Phase 1 stdlib surface
+    // Minimal Phase 1 stdlib surface — must stay in sync with std/core.mvl
     for name in &[
-        "print",
         "println",
         "eprintln",
         "format",

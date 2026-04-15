@@ -6,15 +6,24 @@ use std::sync::{LazyLock, Mutex};
 // process-global and test threads run concurrently by default.
 static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+/// RAII guard that removes MVL_HOME on drop, even if the test panics.
+struct MvlHomeGuard;
+impl Drop for MvlHomeGuard {
+    fn drop(&mut self) {
+        std::env::remove_var("MVL_HOME");
+    }
+}
+
 /// Set MVL_HOME to a temp dir, run the closure, then clear the env var.
 /// Acquires ENV_LOCK to prevent concurrent mutation of MVL_HOME.
+/// MVL_HOME is removed via a Drop guard so it is cleaned up even on panic.
 fn with_mvl_home<F: FnOnce(&std::path::Path)>(f: F) {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = tempfile::tempdir().expect("tempdir");
     // MVL_HOME points at the data root; ensure_stdlib() appends "std"
     std::env::set_var("MVL_HOME", tmp.path());
+    let _cleanup = MvlHomeGuard;
     f(tmp.path());
-    std::env::remove_var("MVL_HOME");
 }
 
 #[test]
@@ -70,23 +79,21 @@ fn fresh_extraction_matches_embedded_content() {
 fn second_call_is_idempotent() {
     with_mvl_home(|_home| {
         let stdlib_dir = ensure_stdlib();
-
-        let mtime_before = fs::metadata(stdlib_dir.join("core.mvl"))
-            .expect("core.mvl must exist")
-            .modified()
-            .expect("mtime");
-
         let stdlib_dir2 = ensure_stdlib();
         assert_eq!(stdlib_dir, stdlib_dir2, "path must be stable");
 
-        let mtime_after = fs::metadata(stdlib_dir.join("core.mvl"))
-            .expect("core.mvl must exist")
-            .modified()
-            .expect("mtime");
-
+        // Compare file contents rather than mtime (mtime resolution is filesystem-dependent).
+        for (name, embedded) in STDLIB_FILES {
+            let on_disk = fs::read_to_string(stdlib_dir.join(name)).unwrap_or_else(|_| {
+                panic!("stdlib file {name} must be readable after second call")
+            });
+            assert_eq!(on_disk, *embedded, "second call must not corrupt {name}");
+        }
+        let stamp = fs::read_to_string(stdlib_dir.join(".version")).expect(".version must exist");
         assert_eq!(
-            mtime_before, mtime_after,
-            "second call must not overwrite files when version matches"
+            stamp.trim(),
+            STDLIB_VERSION,
+            "stamp must be unchanged after second call"
         );
     });
 }
@@ -106,9 +113,15 @@ fn stale_stamp_triggers_reextraction() {
             STDLIB_VERSION,
             "stamp must be updated to current version after re-extraction"
         );
-        assert!(
-            std_dir.join("core.mvl").exists(),
-            "core.mvl must be present"
-        );
+        // Verify file contents were actually refreshed, not just that the file exists.
+        for (name, embedded) in STDLIB_FILES {
+            let on_disk = fs::read_to_string(std_dir.join(name)).unwrap_or_else(|_| {
+                panic!("stdlib file {name} must be readable after re-extraction")
+            });
+            assert_eq!(
+                on_disk, *embedded,
+                "re-extracted {name} must match embedded content"
+            );
+        }
     });
 }

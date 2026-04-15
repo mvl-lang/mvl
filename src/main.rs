@@ -67,6 +67,8 @@ fn main() {
             cmd_assurance(&path, json, verbose);
         }
         "init" => {
+            // Accept optional --stdlib flag (as documented in ADR-0009); it is the
+            // only init target for now so the flag is accepted but not required.
             cmd_init();
         }
         other => {
@@ -93,7 +95,7 @@ fn print_usage() {
     eprintln!("  mvl assurance <file|dir> --json    — emit assurance report as JSON");
     eprintln!("  mvl assurance <file|dir> --verbose — per-function requirement detail");
     eprintln!("  mvl transpile <file.mvl>           — print transpiled Rust to stdout");
-    eprintln!("  mvl init                           — extract stdlib to XDG_DATA_HOME/mvl/std/");
+    eprintln!("  mvl init [--stdlib]                — extract stdlib to XDG_DATA_HOME/mvl/std/");
 }
 
 fn cmd_init() {
@@ -147,12 +149,12 @@ fn require_path_arg(args: &[String], cmd: &str) -> String {
 /// When `req_filter` is `Some(N)`, only the verification pass for Req N is run
 /// and its verdict is printed; errors for other requirements are suppressed.
 fn cmd_check(path: &str, req_filter: Option<u8>) {
-    let stdlib_dir = stdlib::ensure_stdlib();
     let files = mvl_files(path, false);
     if files.is_empty() {
         eprintln!("No .mvl files found at: {path}");
         process::exit(1);
     }
+    let stdlib_dir = stdlib::ensure_stdlib();
 
     // Parse all files once so we can pass them to both the resolver and the checker.
     let parsed: Vec<(String, Program, String)> = files
@@ -690,10 +692,25 @@ fn cmd_test(path: &str) {
 
 /// Emit an assurance report for a file or directory.
 fn cmd_assurance(path: &str, json: bool, verbose: bool) {
+    let stdlib_dir = stdlib::ensure_stdlib();
     let files = mvl_files(path, false);
     if files.is_empty() {
         eprintln!("No .mvl files found at: {path}");
         process::exit(1);
+    }
+
+    // Run the module resolver to surface `use` errors before reporting.
+    let modules: Vec<(String, Program)> = files
+        .iter()
+        .map(|f| {
+            let file_str = f.display().to_string();
+            let (prog, _) = parse_or_exit(&file_str);
+            (stem(&file_str), prog)
+        })
+        .collect();
+    let resolve_result = resolver::resolve_project(modules, Some(&stdlib_dir));
+    for err in &resolve_result.errors {
+        eprintln!("error[resolver]: {err}");
     }
 
     let mut total_fns: usize = 0;
