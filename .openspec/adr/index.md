@@ -10,3 +10,4 @@
 | [0006](0006-ffi-extern-rust-bridge.md) | FFI via extern "rust" and the bridge.rs convention | Accepted |
 | [0007](0007-stdlib-import-model.md) | Standard library import model — prelude, explicit, and trust boundaries | Accepted |
 | [0008](0008-compilation-units-and-linking.md) | Compilation units and linking — source-first, verified binary later | Accepted |
+| [0009](0009-xdg-paths-and-source-resolution.md) | XDG paths and multi-location source resolution | Accepted |
