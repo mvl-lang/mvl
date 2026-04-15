@@ -2,7 +2,7 @@
 # Run from this directory or from the repo root.
 .PHONY: help build check test run
 
-MVL  := mvl
+MVL  := $(shell test -x ../../target/debug/mvl && echo ../../target/debug/mvl || echo mvl)
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 help: ## Show this help

@@ -2,7 +2,7 @@
 # Run from this directory: make build, make test, etc.
 .PHONY: help build check test generate run
 
-MVL  := mvl
+MVL  := $(shell test -x ../../target/debug/mvl && echo ../../target/debug/mvl || echo mvl)
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 help: ## Show this help
