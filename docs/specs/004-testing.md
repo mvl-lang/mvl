@@ -1,0 +1,1 @@
+../../.openspec/specs/004-testing/spec.md

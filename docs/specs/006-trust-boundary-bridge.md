@@ -1,0 +1,1 @@
+../../.openspec/specs/006-trust-boundary-bridge/spec.md

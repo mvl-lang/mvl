@@ -1,4 +1,11 @@
-# Spec 004: Testing
+---
+domain: language
+version: 0.1.0
+status: draft
+date: 2026-04-15
+---
+
+# 004 — Testing
 
 MVL testing approach — language-level unit tests that survive regeneration and
 integrate with the ISPE assurance model.
