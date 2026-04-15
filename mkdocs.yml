@@ -70,12 +70,21 @@ nav:
     - ADR-0003 Compilation Strategy: adr/0003-compilation-strategy.md
     - ADR-0004 Language Size: adr/0004-language-size.md
     - ADR-0005 Recursive Descent Parser: adr/0005-recursive-descent-parser.md
+    - ADR-0006 FFI via extern rust: adr/0006-ffi-extern-rust-bridge.md
+    - ADR-0007 Standard Library Import Model: adr/0007-stdlib-import-model.md
+    - ADR-0009 Toolchain Layout: adr/0009-toolchain-layout.md
+    - ADR-0010 Corpus Test Structure: adr/0010-corpus-test-structure.md
   - Specs:
     - 000 Parser: specs/000-parser.md
     - 001 Type System: specs/001-type-system.md
     - 002 Effect System: specs/002-effect-system.md
     - 003 Information Flow: specs/003-information-flow.md
+    - 004 Testing: specs/004-testing.md
     - 005 Modules: specs/005-modules.md
+    - 006 Trust Boundary Bridge: specs/006-trust-boundary-bridge.md
+    - 007 Termination: specs/007-termination.md
+    - 007 Toolchain: specs/007-toolchain.md
+    - 008 Data Race Freedom: specs/008-data-race-freedom.md
   - References: references.md
 
 markdown_extensions:

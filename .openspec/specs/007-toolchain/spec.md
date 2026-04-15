@@ -1,6 +1,6 @@
 # Spec 007: Toolchain Layout and Version Management
 
-**ADR:** [0009 — Toolchain Layout](../../adr/0009-toolchain-layout.md)
+**ADR:** [0009 — Toolchain Layout](../adr/0009-toolchain-layout.md)
 
 ---
 
