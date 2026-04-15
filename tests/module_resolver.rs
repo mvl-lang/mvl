@@ -307,3 +307,38 @@ fn stdlib_explicit_import() {
     );
     assert!(stdlib.exports.contains("panic"), "stdlib must export panic");
 }
+
+#[test]
+fn stdlib_from_filesystem_resolves_use_std() {
+    // resolve_project with Some(stdlib_dir) should load core.mvl from disk
+    // and resolve `use std::println` successfully.
+    use std::fs;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let core_src =
+        "pub fn println(value: String) -> Unit { }\npub fn panic(message: String) -> Unit { }";
+    fs::write(tmp.path().join("core.mvl"), core_src).expect("write core.mvl");
+
+    let prog = parse("use std::println;");
+    let result = resolve_project(vec![("main".to_string(), prog)], Some(tmp.path()));
+    assert!(
+        result.is_ok(),
+        "use std::println should resolve against filesystem stdlib: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn stdlib_from_filesystem_missing_file_falls_back_to_stub() {
+    // When core.mvl is absent, resolve_project falls back to the in-memory stub.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    // No core.mvl written — empty dir
+
+    // The stub exports println, so this should still resolve.
+    let prog = parse("use std::println;");
+    let result = resolve_project(vec![("main".to_string(), prog)], Some(tmp.path()));
+    assert!(
+        result.is_ok(),
+        "missing core.mvl should fall back to stub: {:?}",
+        result.errors
+    );
+}

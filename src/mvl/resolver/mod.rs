@@ -191,6 +191,10 @@ fn load_stdlib_module(stdlib_dir: &Path) -> Option<ResolvedModule> {
     let (mut parser, _) = Parser::new(&src);
     let prog = parser.parse_program();
     if !parser.errors().is_empty() {
+        eprintln!(
+            "mvl: warning: parse errors in {} — falling back to built-in stdlib stub",
+            core_path.display()
+        );
         return None;
     }
     let exports = collect_exports(&prog);

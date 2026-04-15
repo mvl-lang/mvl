@@ -5,6 +5,7 @@ use mvl::mvl::checker::passes::{
 use mvl::mvl::linter::{self, config::LintConfig};
 use mvl::mvl::parser::ast::{Decl, Program, Totality, TypeBody};
 use mvl::mvl::parser::Parser;
+use mvl::mvl::resolver;
 use mvl::mvl::stdlib;
 use mvl::mvl::transpiler;
 use std::fs;
@@ -146,24 +147,42 @@ fn require_path_arg(args: &[String], cmd: &str) -> String {
 /// When `req_filter` is `Some(N)`, only the verification pass for Req N is run
 /// and its verdict is printed; errors for other requirements are suppressed.
 fn cmd_check(path: &str, req_filter: Option<u8>) {
-    stdlib::ensure_stdlib();
+    let stdlib_dir = stdlib::ensure_stdlib();
     let files = mvl_files(path, false);
     if files.is_empty() {
         eprintln!("No .mvl files found at: {path}");
         process::exit(1);
     }
 
-    let registry = PassRegistry::default_registry();
-    let mut had_errors = false;
+    // Parse all files once so we can pass them to both the resolver and the checker.
+    let parsed: Vec<(String, Program, String)> = files
+        .iter()
+        .map(|f| {
+            let file_str = f.display().to_string();
+            let (prog, src) = parse_or_exit(&file_str);
+            (file_str, prog, src)
+        })
+        .collect();
 
-    for file in &files {
-        let file_str = file.display().to_string();
-        let (prog, _src) = parse_or_exit(&file_str);
-        let result = checker::check(&prog);
+    // Run the module resolver across all files, wiring in the extracted stdlib.
+    let modules: Vec<(String, Program)> = parsed
+        .iter()
+        .map(|(file_str, prog, _)| (stem(file_str), prog.clone()))
+        .collect();
+    let resolve_result = resolver::resolve_project(modules, Some(&stdlib_dir));
+    let mut had_errors = !resolve_result.is_ok();
+    for err in &resolve_result.errors {
+        eprintln!("error[resolver]: {err}");
+    }
+
+    let registry = PassRegistry::default_registry();
+
+    for (file_str, prog, _src) in &parsed {
+        let result = checker::check(prog);
 
         if let Some(req) = req_filter {
             // Single-requirement mode: run only the requested pass.
-            let verdict = registry.run_req(req, &prog, &result);
+            let verdict = registry.run_req(req, prog, &result);
             let name = registry.pass_name(req).unwrap_or("unknown");
             if let Some(loc) = verdict.location() {
                 println!(
@@ -183,7 +202,7 @@ fn cmd_check(path: &str, req_filter: Option<u8>) {
             }
         } else {
             // Full check mode: report type errors then show verdict summary.
-            let verdicts = registry.run_all(&prog, &result);
+            let verdicts = registry.run_all(prog, &result);
             let proven = (1u8..=11)
                 .filter(|&i| verdicts[i as usize].is_proven())
                 .count();
@@ -354,7 +373,7 @@ fn inject_mod_bridge(source: &str) -> String {
 /// parent directory so that relative paths in args (e.g. `--file logs.jsonl`)
 /// resolve correctly.
 fn build_project(path: &str, run: bool, run_args: &[String]) {
-    stdlib::ensure_stdlib();
+    let stdlib_dir = stdlib::ensure_stdlib();
     // For directory inputs, use the directory stem as the crate name and
     // concatenate all .mvl files (simple Phase 1 approach: single-crate multi-file).
     let file_path = if Path::new(path).is_dir() {
@@ -381,6 +400,17 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
 
     let (prog, _src) = parse_or_exit(&file_path);
     let crate_name = stem(path);
+
+    // Run module resolver to surface `use` errors before transpiling.
+    let resolve_result =
+        resolver::resolve_project(vec![(crate_name.clone(), prog.clone())], Some(&stdlib_dir));
+    if !resolve_result.is_ok() {
+        for err in &resolve_result.errors {
+            eprintln!("error[resolver]: {err}");
+        }
+        process::exit(1);
+    }
+
     let out = transpiler::transpile(&prog, &crate_name);
 
     // Write to a deterministic temp directory per crate name

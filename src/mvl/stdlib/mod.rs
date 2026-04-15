@@ -48,6 +48,7 @@ pub fn stdlib_path() -> PathBuf {
 /// Extracts if the directory is missing or the `.version` stamp doesn't match
 /// the current compiler version. Prints a one-line notice to stderr on
 /// (re-)installation.
+#[must_use]
 pub fn ensure_stdlib() -> PathBuf {
     let target = stdlib_path();
     if needs_extraction(&target) {
