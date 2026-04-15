@@ -51,6 +51,15 @@ pub struct Alloc;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Panic;
 
+/// Marks a function that performs raw terminal control (cursor positioning, colors,
+/// single-keypress input, screen clear).
+///
+/// Distinct from `Console` (line-oriented stdin/stdout) — a function with `! Terminal`
+/// controls the screen; a function with `! Console` prints lines.
+/// Used by `std.tui` / future `pkg.tui` (#174).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Terminal;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,5 +74,6 @@ mod tests {
         assert_eq!(std::mem::size_of::<Concurrent>(), 0);
         assert_eq!(std::mem::size_of::<Alloc>(), 0);
         assert_eq!(std::mem::size_of::<Panic>(), 0);
+        assert_eq!(std::mem::size_of::<Terminal>(), 0);
     }
 }

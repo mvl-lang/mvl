@@ -6,6 +6,27 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.29.0] — 2026-04-15 (feat: Terminal effect and tui module — raw terminal control)
+
+### Added
+
+- **Terminal effect** — `! Terminal` fine-grained effect for raw terminal control (cursor positioning, colors, single-keypress input, screen clear), distinct from `! Console` (line-oriented I/O). Used by the upcoming `std.tui` / `pkg.tui` modules (#174).
+- `std/tui.mvl` — Phase 2 API stubs covering `Terminal`, `Key`, `Direction`, `Style`, and `Color` types; core functions `open`, `close`, `clear`, `set_cursor`, `hide_cursor`, `show_cursor`, `size`, `print`, `print_styled`, `read_key`; style builders `plain`, `bold`, `italic`, `fg`, `bg`.
+- `Terminal` zero-sized marker struct in `mvl_runtime/src/effects.rs` with doc comment explaining the Console/Terminal distinction.
+
+### Fixed
+
+- **Type checker** — `open()` no longer requires `! Terminal` (it is the capability entry point, not a consumer). Moved to `! Terminal` enforcement for functions that use the handle.
+- **Error messages** — `InvalidEffectName` diagnostic now includes `Terminal` in the suggested valid-effects list.
+- **Prelude** — `Terminal` added to `mvl_runtime::prelude` re-export so generated code compiles.
+- **IFC analysis** — `tui.print_styled` added to `PUBLIC_SINKS` so secret-gated output is flagged as implicit-flow violation.
+- **Silent failures** — `clear`, `set_cursor`, `hide_cursor`, `show_cursor`, `print` now return `Result<Unit, String>` instead of `Unit` so I/O failures are not discarded.
+
+### Changed
+
+- `Key::Char` — changed from `Char(String)` to `Char(Char)` — a single keypress is a single scalar, not a string.
+- `open()` function signature — removed `! Terminal` effect annotation; now only functions that use the returned handle require `! Terminal`.
+
 ## [0.28.0] — 2026-04-15 (feat: multi-file module builds — resolver wired into codegen)
 
 ### Added

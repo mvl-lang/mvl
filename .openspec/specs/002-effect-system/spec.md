@@ -69,6 +69,7 @@ Effects MUST be fine-grained, not a single `IO` bucket. The minimum set of effec
 | `Env` | Read/write environment variables |
 | `Log` | Write to log system |
 | `Async` | Asynchronous operations |
+| `Terminal` | Raw terminal control (cursor, colors, single-keypress input, screen clear) — distinct from `Console` (line-oriented I/O). Used by `std.tui` / future `pkg.tui` (#174) |
 
 #### Scenario: File read without network
 
