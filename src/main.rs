@@ -415,9 +415,29 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
     let (prog, _src) = parse_or_exit(&file_path);
     let crate_name = stem(path);
 
-    // Run module resolver to surface `use` errors before transpiling.
-    let resolve_result =
-        resolver::resolve_project(vec![(crate_name.clone(), prog.clone())], Some(&stdlib_dir));
+    // Collect sibling modules referenced via `use module::item` declarations.
+    // Only load files that are actually imported — not all .mvl files in the directory.
+    let entry_dir = Path::new(&file_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let imported_mod_names = collect_imported_module_names(&prog);
+    let mut sibling_modules: Vec<(String, mvl::mvl::parser::ast::Program)> = imported_mod_names
+        .into_iter()
+        .filter_map(|mod_name| {
+            let sib_path = entry_dir.join(format!("{mod_name}.mvl"));
+            if !sib_path.exists() {
+                return None;
+            }
+            let (sib_prog, _) = parse_or_exit(&sib_path.display().to_string());
+            Some((mod_name, sib_prog))
+        })
+        .collect();
+    sibling_modules.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    // Run module resolver to validate `use` imports across all modules.
+    let mut all_modules = vec![(crate_name.clone(), prog.clone())];
+    all_modules.extend(sibling_modules.iter().cloned());
+    let resolve_result = resolver::resolve_project(all_modules, Some(&stdlib_dir));
     if !resolve_result.is_ok() {
         for err in &resolve_result.errors {
             eprintln!("error[resolver]: {err}");
@@ -425,7 +445,7 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
         process::exit(1);
     }
 
-    let out = transpiler::transpile(&prog, &crate_name);
+    let out = transpiler::transpile_project(&crate_name, &prog, &sibling_modules);
 
     // Write to a deterministic temp directory per crate name
     let tmp_dir = std::env::temp_dir().join(format!("mvl_build_{crate_name}"));
@@ -482,9 +502,9 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
 
     // Inject `mod bridge;` after `use mvl_runtime::prelude::*;`.
     let main_source = if bridge_path.is_some() {
-        inject_mod_bridge(&out.lib_rs)
+        inject_mod_bridge(&out.main_rs)
     } else {
-        out.lib_rs
+        out.main_rs
     };
 
     if out.has_main {
@@ -505,6 +525,14 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
         )
         .unwrap_or_else(|e| {
             eprintln!("Cannot write stub main.rs: {e}");
+            process::exit(1);
+        });
+    }
+
+    // Write each sibling module as src/{name}.rs so `pub mod name;` resolves.
+    for (mod_name, mod_source) in &out.module_files {
+        fs::write(src_dir.join(format!("{mod_name}.rs")), mod_source).unwrap_or_else(|e| {
+            eprintln!("Cannot write {mod_name}.rs: {e}");
             process::exit(1);
         });
     }
@@ -1234,6 +1262,28 @@ fn parse_or_exit(path: &str) -> (mvl::mvl::parser::ast::Program, String) {
         process::exit(1);
     }
     (prog, src)
+}
+
+/// Collect unique top-level module names referenced by `use` declarations in `prog`.
+///
+/// For `use utils::clamp_display;` this returns `"utils"`.
+/// The `std` namespace is excluded — it is provided by the runtime, not a sibling file.
+fn collect_imported_module_names(prog: &mvl::mvl::parser::ast::Program) -> Vec<String> {
+    use mvl::mvl::parser::ast::Decl;
+    use std::collections::HashSet;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut names: Vec<String> = Vec::new();
+    for decl in &prog.declarations {
+        if let Decl::Use(ud) = decl {
+            if ud.path.len() >= 2 {
+                let mod_name = &ud.path[0];
+                if mod_name != "std" && seen.insert(mod_name.clone()) {
+                    names.push(mod_name.clone());
+                }
+            }
+        }
+    }
+    names
 }
 
 /// Extract the file or directory stem from a path.

@@ -73,6 +73,83 @@ pub fn has_extern_rust_decls(prog: &Program) -> bool {
         .any(|d| matches!(d, Decl::Extern(ed) if ed.abi == "rust"))
 }
 
+/// Output of a successful multi-file project transpilation.
+pub struct ProjectOutput {
+    /// Contents of `src/main.rs` or `src/lib.rs` for the entry-point module.
+    pub main_rs: String,
+    /// Transpiled Rust source for each sibling module: `(module_name, source)`.
+    /// Each entry should be written to `src/{module_name}.rs`.
+    pub module_files: Vec<(String, String)>,
+    /// Contents of `Cargo.toml`.
+    pub cargo_toml: String,
+    /// True when the entry program declares `fn main` — the crate is a binary.
+    pub has_main: bool,
+    /// Number of extern trust boundaries (for assurance reporting).
+    pub extern_count: usize,
+    /// True when the entry program declares at least one `extern "rust"` block.
+    pub has_extern_rust: bool,
+}
+
+/// Transpile a multi-file project to Rust source.
+///
+/// `entry_name` is the crate/module name for the entry program.
+/// `siblings` is a list of `(module_name, Program)` pairs for all other modules
+/// reachable from the entry point (e.g. sibling `.mvl` files).
+///
+/// The entry module's output includes `pub mod name;` declarations for each sibling,
+/// so the Rust compiler can resolve cross-module items.
+pub fn transpile_project(
+    entry_name: &str,
+    entry_prog: &Program,
+    siblings: &[(String, Program)],
+) -> ProjectOutput {
+    let has_main = has_main_fn(entry_prog);
+    let extern_count = count_extern_decls(entry_prog);
+    let has_extern_rust = has_extern_rust_decls(entry_prog);
+    let use_runtime = extern_count > 0;
+
+    let sibling_names: Vec<&str> = siblings.iter().map(|(n, _)| n.as_str()).collect();
+    let mut cg = Codegen::new();
+    cg.emit_program_with_mods(entry_prog, &sibling_names);
+    let main_rs = cg.finish();
+
+    // Sibling modules share the runtime prelude with the entry point so type
+    // definitions don't conflict (e.g. `Tainted` from mvl_runtime vs inline).
+    let entry_uses_runtime = extern_count > 0;
+    let module_files: Vec<(String, String)> = siblings
+        .iter()
+        .map(|(name, prog)| {
+            let mut cg = Codegen::new();
+            if entry_uses_runtime {
+                cg.emit_sibling_module(prog);
+            } else {
+                cg.emit_program(prog);
+            }
+            (name.clone(), cg.finish())
+        })
+        .collect();
+
+    let opts = CargoOptions {
+        crate_name: entry_name,
+        use_mvl_runtime: use_runtime,
+        extern_crates: Vec::new(),
+    };
+    let cargo_toml = if has_main {
+        cargo::emit_cargo_toml_binary_opts(&opts)
+    } else {
+        cargo::emit_cargo_toml_library_opts(&opts)
+    };
+
+    ProjectOutput {
+        main_rs,
+        module_files,
+        cargo_toml,
+        has_main,
+        extern_count,
+        has_extern_rust,
+    }
+}
+
 /// Transpile a parsed [`Program`] to Rust source.
 ///
 /// Always succeeds in Phase 1 — unknown constructs fall back to `todo!()`.

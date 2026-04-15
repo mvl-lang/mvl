@@ -36,7 +36,7 @@ extern "rust" {
 //   raw_password : Tainted<String>  — untrusted input, consumed by hash_verify
 //   stored_hash  : Secret<String>   — confidential, cannot reach println
 //   return value : Clean<String>    — session token produced after successful auth
-fn authenticate(
+pub fn authenticate(
     raw_username: Tainted<String>,
     raw_password: Tainted<String>,
     stored_hash: Secret<String>,

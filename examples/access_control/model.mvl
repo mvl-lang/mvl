@@ -9,7 +9,7 @@
 
 // ── Principals ─────────────────────────────────────────────────────────────
 
-type Role = enum {
+pub type Role = enum {
     Admin,
     Moderator,
     User,
@@ -18,14 +18,14 @@ type Role = enum {
 
 // ── Resources and actions ──────────────────────────────────────────────────
 
-type Resource = enum {
+pub type Resource = enum {
     UserProfile,
     AdminPanel,
     Post,
     AuditLog,
 }
 
-type Action = enum {
+pub type Action = enum {
     Read,
     Write,
     Delete,
@@ -33,20 +33,20 @@ type Action = enum {
 
 // ── Policy outcome ─────────────────────────────────────────────────────────
 
-type Permission = enum {
+pub type Permission = enum {
     Allow,
     Deny,
 }
 
 // ── Error catalogue ────────────────────────────────────────────────────────
 
-type AuthError = enum {
+pub type AuthError = enum {
     InvalidCredentials,
     SessionExpired,
     InvalidToken,
 }
 
-type AppError = enum {
+pub type AppError = enum {
     AuthFailed,
     UserNotFound,
     MissingArg,
