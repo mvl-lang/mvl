@@ -49,7 +49,7 @@ build-release: ## Build release binary
 
 MVL ?= ./target/debug/mvl
 
-test: test-corpus test-stdlib test-tree-sitter test-grammar-coverage ## Run all tests (unit + corpus + stdlib + tree-sitter grammar + grammar coverage)
+test: test-corpus test-stdlib test-transpiler test-tree-sitter test-grammar-coverage ## Run all tests (unit + corpus + stdlib + transpiler + tree-sitter grammar + grammar coverage)
 	@echo "Running unit tests..."
 	cargo test
 
