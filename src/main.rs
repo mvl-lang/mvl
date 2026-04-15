@@ -39,7 +39,8 @@ fn main() {
         }
         "run" => {
             let path = require_path_arg(&args, "run");
-            let run_args: Vec<String> = args
+            let path_idx = path_arg_index(&args);
+            let run_args: Vec<String> = args[path_idx + 1..]
                 .iter()
                 .skip_while(|a| a.as_str() != "--")
                 .skip(1)
@@ -87,7 +88,8 @@ fn print_usage() {
     eprintln!("  mvl check <file|dir>               — parse and type-check");
     eprintln!("  mvl check <file|dir> --req <N>     — run only the Req N verification pass");
     eprintln!("  mvl build <file|dir>               — transpile to Rust and run cargo build");
-    eprintln!("  mvl run   <file.mvl>               — transpile, build, and execute");
+    eprintln!("  mvl run   [--] <file.mvl>          — transpile, build, and execute");
+    eprintln!("  mvl run   [--] <file.mvl> -- ...   — pass args to the compiled binary");
     eprintln!("  mvl test  <file|dir>               — find *_test.mvl files and run cargo test");
     eprintln!("  mvl lint  <file|dir>               — check style rules");
     eprintln!("  mvl lint  <file|dir> --show-config — show active linter configuration");
@@ -134,12 +136,22 @@ fn parse_req_filter_or_exit(args: &[String]) -> Option<u8> {
     })
 }
 
+/// Returns the index of the path argument, skipping an optional `--` separator.
+fn path_arg_index(args: &[String]) -> usize {
+    if args.get(2).map(|s| s.as_str()) == Some("--") {
+        3
+    } else {
+        2
+    }
+}
+
 fn require_path_arg(args: &[String], cmd: &str) -> String {
-    if args.len() < 3 {
-        eprintln!("Usage: mvl {cmd} <file.mvl|directory>");
+    let idx = path_arg_index(args);
+    if args.len() <= idx {
+        eprintln!("Usage: mvl {cmd} [--] <file.mvl|directory>");
         process::exit(1);
     }
-    args[2].clone()
+    args[idx].clone()
 }
 
 // ── Commands ─────────────────────────────────────────────────────────────

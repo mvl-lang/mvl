@@ -6,6 +6,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-04-15 (feat: -- path separator support; fix: test-transpiler corpus resilience)
+
+### Added
+
+- **`--` path separator for all subcommands** — All commands (`run`, `check`, `build`, `transpile`, `test`, `lint`, `assurance`) now accept an optional `--` before the file/directory argument, following standard POSIX/Cargo convention. This allows unambiguous handling of paths that start with a dash. For `run`, args after a second `--` continue to be forwarded to the compiled binary: `mvl run [--] <file.mvl> [-- <binary-args>]`.
+
+### Fixed
+
+- **test-transpiler corpus resilience** — Programs were relocated from `corpus/09_full_programs` to `corpus/11_programs` during corpus restructure (PR #160). Manual session now uses `find` to dynamically locate files, skipping gracefully if not found instead of failing hard.
+- **Binary versioning in test-transpiler** — Use `./target/debug/mvl` built by the `build` prerequisite instead of repeated `cargo run`, eliminating risk of stale system binary and removing per-file cargo overhead.
+- **Manual session error handling** — Lowercase `mvl` variable to avoid shadowing environment vars; strip trailing newlines from `find` output; fail fast on any non-zero exit from the compiled binary.
+
 ## [0.22.1] — 2026-04-15 (fix: corpus test output suppression)
 
 ### Fixed
