@@ -1,24 +1,18 @@
 // main.mvl — Access control demo entry point.
 //
 // Demonstrates all Phase 2 security requirements as compile-time guarantees:
-//   1. extern "rust" trust boundary — crypto (hash_verify), token generation,
-//      and demo fixture data (get_demo_hash) live in Rust.
-//   2. IFC labels: Secret<String> password hash consumed at extern boundary;
-//      Tainted<String> raw input sanitized to Clean<String> via sanitize().
-//   3. Req 3 (Totality): total fn check_permission — exhaustive match on
-//      Role × Resource × Action; a missing arm is a compile error.
+//   1. extern "rust" trust boundary — demo fixture data (get_demo_hash) lives in Rust.
+//   2. IFC labels: Secret<String> password hash consumed at auth boundary.
+//   3. Req 3 (Totality): check_permission from rbac module — exhaustive match.
 //   4. Effect declarations: ! Console on I/O functions; pure functions have none.
 //   5. Req 5 (Errors): all failure modes are named in AppError, AuthError.
-//
-// NOTE (issue #96): use imports below are module-system declarations.
-// Cross-module type resolution is not yet wired into the per-file checker;
-// each file currently stands alone. The use declarations document intent.
+//   6. Multi-module: use imports connect this file to model, auth, rbac modules.
 //
 // Usage:
 //   mvl run examples/access_control/main.mvl
 //   make run   (from examples/access_control/)
 //
-// Assurance note: 1 extern block (3 trust-boundary functions).
+// Assurance note: 1 extern block (1 trust-boundary function).
 
 use auth::authenticate;
 use rbac::check_permission;
@@ -29,143 +23,11 @@ use model::Permission;
 use model::AuthError;
 use model::AppError;
 
-// ── Trust boundary: crypto and fixture data live in Rust ──────────────────
+// ── Trust boundary: demo fixture data lives in Rust ───────────────────────
 
 extern "rust" {
-    // hash_verify: Secret<String> is consumed here — cannot leak to MVL output.
-    fn hash_verify(input: Tainted<String>, stored_hash: Secret<String>) -> Result<Unit, AuthError>;
-    // generate_token: only called with a validated username.
-    fn generate_token(username: Clean<String>) -> Clean<String>;
     // Demo fixture: returns hardcoded hash for known usernames.
     fn get_demo_hash(username: Clean<String>) -> Option<Secret<String>>;
-}
-
-// ── Domain types ──────────────────────────────────────────────────────────
-
-type Role = enum {
-    Admin,
-    Moderator,
-    User,
-    Guest,
-}
-
-type Resource = enum {
-    UserProfile,
-    AdminPanel,
-    Post,
-    AuditLog,
-}
-
-type Action = enum {
-    Read,
-    Write,
-    Delete,
-}
-
-type Permission = enum {
-    Allow,
-    Deny,
-}
-
-type AuthError = enum {
-    InvalidCredentials,
-    SessionExpired,
-    InvalidToken,
-}
-
-type AppError = enum {
-    AuthFailed,
-    UserNotFound,
-    MissingArg,
-}
-
-// ── RBAC policy (total fn) ────────────────────────────────────────────────
-
-// total fn: every Role × Resource × Action combination must be handled.
-// A missing arm is a compile error — no implicit "deny by default" that
-// masks forgotten cases.
-total fn check_permission(role: Role, resource: Resource, action: Action) -> Permission {
-    match role {
-        Role::Admin => Permission::Allow,
-        Role::Moderator => {
-            match resource {
-                Resource::AdminPanel => Permission::Deny,
-                Resource::AuditLog   => Permission::Allow,
-                Resource::UserProfile => {
-                    match action {
-                        Action::Read   => Permission::Allow,
-                        Action::Write  => Permission::Allow,
-                        Action::Delete => Permission::Deny,
-                    }
-                },
-                Resource::Post => Permission::Allow,
-            }
-        },
-        Role::User => {
-            match resource {
-                Resource::AdminPanel  => Permission::Deny,
-                Resource::AuditLog    => Permission::Deny,
-                Resource::UserProfile => {
-                    match action {
-                        Action::Read   => Permission::Allow,
-                        Action::Write  => Permission::Allow,
-                        Action::Delete => Permission::Deny,
-                    }
-                },
-                Resource::Post => {
-                    match action {
-                        Action::Read   => Permission::Allow,
-                        Action::Write  => Permission::Allow,
-                        Action::Delete => Permission::Deny,
-                    }
-                },
-            }
-        },
-        Role::Guest => {
-            match resource {
-                Resource::AdminPanel  => Permission::Deny,
-                Resource::AuditLog    => Permission::Deny,
-                Resource::UserProfile => {
-                    match action {
-                        Action::Read   => Permission::Allow,
-                        Action::Write  => Permission::Deny,
-                        Action::Delete => Permission::Deny,
-                    }
-                },
-                Resource::Post => {
-                    match action {
-                        Action::Read   => Permission::Allow,
-                        Action::Write  => Permission::Deny,
-                        Action::Delete => Permission::Deny,
-                    }
-                },
-            }
-        },
-    }
-}
-
-// ── Authentication (IFC trust boundary) ───────────────────────────────────
-
-// IFC invariants enforced by the type system:
-//   raw_username : Tainted<String>  — untrusted input, sanitized before use
-//   raw_password : Tainted<String>  — untrusted input, consumed by hash_verify
-//   stored_hash  : Secret<String>   — confidential, CANNOT flow to println
-//
-// The Secret never leaves the extern boundary.
-fn authenticate(
-    raw_username: Tainted<String>,
-    raw_password: Tainted<String>,
-    stored_hash: Secret<String>,
-) -> Result<Clean<String>, AuthError> {
-    let verify_result = hash_verify(raw_password, stored_hash);
-    match verify_result {
-        Err(e) => Err(e),
-        Ok(_) => {
-            let clean_user = sanitize(raw_username);
-            let token = generate_token(clean_user);
-            Ok(token)
-        }
-    }
 }
 
 // ── Print helper ──────────────────────────────────────────────────────────
@@ -182,7 +44,6 @@ fn show_decision(role: Role, resource: Resource, action: Action) -> Unit ! Conso
 // ── Demo scenarios ────────────────────────────────────────────────────────
 
 // Uses let bindings for Unit-returning calls to sequence multiple effects.
-// MVL blocks support `let x = expr;` statements; the final expression is unbound.
 fn demo_rbac() -> Unit ! Console {
     let s1 = show_decision(Role::Admin,     Resource::AdminPanel,  Action::Read);
     let s2 = show_decision(Role::Moderator, Resource::AdminPanel,  Action::Write);
@@ -192,7 +53,7 @@ fn demo_rbac() -> Unit ! Console {
 }
 
 // IFC demo: alice's hash is Secret<String> — cannot be printed or leaked.
-// It flows directly into hash_verify at the extern boundary.
+// It flows directly into hash_verify at the extern boundary inside auth module.
 fn demo_auth() -> Unit ! Console {
     let hash_opt = get_demo_hash("alice");
     match hash_opt {

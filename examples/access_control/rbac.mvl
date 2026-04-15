@@ -15,41 +15,13 @@ use model::Resource;
 use model::Action;
 use model::Permission;
 
-// ── Local type declarations (mirrors model.mvl) ────────────────────────────
-// NOTE: cross-module resolution is Phase 2 (issue #96); each file is standalone.
-
-type Role = enum {
-    Admin,
-    Moderator,
-    User,
-    Guest,
-}
-
-type Resource = enum {
-    UserProfile,
-    AdminPanel,
-    Post,
-    AuditLog,
-}
-
-type Action = enum {
-    Read,
-    Write,
-    Delete,
-}
-
-type Permission = enum {
-    Allow,
-    Deny,
-}
-
 // ── Policy ──────────────────────────────────────────────────────────────────
 
 // total fn: the compiler rejects any non-exhaustive match.
 // Every Role × Resource × Action triple has an explicit allow/deny decision.
 // No combination can fall through to an implicit default — absence of a case
 // is a compile error, not a silent security bypass.
-total fn check_permission(role: Role, resource: Resource, action: Action) -> Permission {
+pub total fn check_permission(role: Role, resource: Resource, action: Action) -> Permission {
     match role {
         Role::Admin => Permission::Allow,
         Role::Moderator => {

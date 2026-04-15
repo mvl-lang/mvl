@@ -6,6 +6,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.28.0] — 2026-04-15 (feat: multi-file module builds — resolver wired into codegen)
+
+### Added
+
+- **Multi-file project builds** — `mvl build` / `mvl run` now transpiles all modules reachable via `use` imports, not just the entry-point file. Each imported sibling `.mvl` file is compiled to a Rust module (`src/module.rs`) and declared with `pub mod` in the crate root (#177).
+- `transpile_project` in the transpiler produces a `ProjectOutput` containing the entry-point source plus a `module_files` list — one Rust source per sibling module.
+- `emit_program_with_mods` / `emit_sibling_module` in codegen: emits `pub mod name;` declarations and `use crate::module::item;` statements; sibling modules share `use mvl_runtime::prelude::*;` with the crate root to avoid duplicate type definitions.
+
+### Fixed
+
+- **`mvl check <file>`** — now loads imported sibling modules into the resolver so cross-module `use` imports are validated correctly when checking a single file (#177).
+- `collect_undefined_types` no longer generates stub structs for types that are imported via `use` declarations, preventing duplicate-definition errors in multi-module projects.
+
+### Changed
+
+- `examples/access_control` — updated to proper multi-module patterns: exported items marked `pub`, local re-declarations that mirrored sibling module definitions removed.
+- `examples/log_analyzer/utils.mvl` — removed unused generic stubs (`generic_min`, `generic_max`, `clamp<T>`, `in_range<T>`, `is_in_range_int`); added comment explaining `99999` magic constant; added zero-boundary test.
+- Example Makefiles now prefer `../../target/debug/mvl` when present, falling back to the system `mvl`.
+- Added `make clean` target to both example Makefiles.
+
 ## [0.27.0] — 2026-04-15 (feat: extended package model specification)
 
 ### Added

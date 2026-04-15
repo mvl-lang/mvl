@@ -1,8 +1,8 @@
 # log_analyzer example — MVL Phase 2 demonstration
 # Run from this directory: make build, make test, etc.
-.PHONY: help build check test generate run
+.PHONY: help build check test generate run clean
 
-MVL  := mvl
+MVL  := $(shell test -x ../../target/debug/mvl && echo ../../target/debug/mvl || echo mvl)
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 help: ## Show this help
@@ -27,3 +27,7 @@ run: logs.jsonl ## Analyze logs.jsonl (requires: make generate)
 
 logs.jsonl:
 	$(MAKE) generate
+
+clean: ## Remove generated log data and build artifacts
+	rm -f logs.jsonl
+	rm -rf $(TMPDIR)mvl_build_log_analyzer
