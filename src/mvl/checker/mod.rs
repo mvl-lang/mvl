@@ -1305,7 +1305,7 @@ impl TypeChecker {
         let result = match base {
             Ty::Int => Self::int_method_ty(method),
             Ty::Float => Self::float_method_ty(method),
-            Ty::String => Self::string_method_ty(method),
+            Ty::String => Self::string_method_ty(method, arg_tys),
             Ty::List(elem_ty) => Self::list_method_ty(elem_ty.as_ref(), method, arg_tys),
             Ty::Named(name, type_args) => match name.as_str() {
                 "Map" => Self::map_method_ty(type_args, method),
@@ -1353,7 +1353,7 @@ impl TypeChecker {
     }
 
     /// Return type for methods on `String`.
-    fn string_method_ty(method: &str) -> Ty {
+    fn string_method_ty(method: &str, arg_tys: &[Ty]) -> Ty {
         match method {
             // Splitting: String → List<String> (never panics, always valid)
             "split" | "chars" | "lines" => Ty::List(Box::new(Ty::String)),
@@ -1369,8 +1369,14 @@ impl TypeChecker {
             // Parsing
             "parse_int" => Ty::Result(Box::new(Ty::Int), Box::new(Ty::String)),
             "parse_float" => Ty::Result(Box::new(Ty::Float), Box::new(Ty::String)),
-            // Slicing: substring(start, end) — exclusive range → String
-            "substring" => Ty::String,
+            // Slicing: substring(start, end) — exclusive range → String; requires 2 Int args
+            "substring"
+                if arg_tys.len() == 2
+                    && matches!((&arg_tys[0], &arg_tys[1]), (Ty::Int, Ty::Int)) =>
+            {
+                Ty::String
+            }
+            "substring" => Ty::Unknown,
             _ => Ty::Unknown,
         }
     }
@@ -1440,8 +1446,14 @@ impl TypeChecker {
             "find" => Ty::Option(Box::new(elem_ty.clone())),
             // min/max — Option<T>
             "min" | "max" => Ty::Option(Box::new(elem_ty.clone())),
-            // slice(start, end) — exclusive range → List<T>
-            "slice" => Ty::List(Box::new(elem_ty.clone())),
+            // slice(start, end) — exclusive range → List<T>; requires exactly 2 Int args
+            "slice"
+                if arg_tys.len() == 2
+                    && matches!((&arg_tys[0], &arg_tys[1]), (Ty::Int, Ty::Int)) =>
+            {
+                Ty::List(Box::new(elem_ty.clone()))
+            }
+            "slice" => Ty::Unknown,
             _ => Ty::Unknown,
         }
     }

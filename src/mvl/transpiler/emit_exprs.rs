@@ -22,23 +22,15 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
         } => {
             // Methods that don't map directly to a Rust method of the same name.
             match method.as_str() {
-                // xs.slice(start, end) → xs[start as usize..end as usize].to_vec()
+                // xs.slice(start, end) — clamps negative indices to 0, OOB end to len,
+                // inverted range (start > end) returns empty. Never panics.
                 "slice" if args.len() == 2 => {
-                    emit_expr(cg, receiver);
-                    cg.push("[");
-                    emit_expr(cg, &args[0]);
-                    cg.push(" as usize..");
-                    emit_expr(cg, &args[1]);
-                    cg.push(" as usize].to_vec()");
+                    emit_safe_list_slice(cg, receiver, &args[0], &args[1]);
                 }
-                // s.substring(start, end) → s[start as usize..end as usize].to_string()
+                // s.substring(start, end) — char-based (UTF-8 safe), clamps negatives,
+                // inverted range returns empty string. Never panics.
                 "substring" if args.len() == 2 => {
-                    emit_expr(cg, receiver);
-                    cg.push("[");
-                    emit_expr(cg, &args[0]);
-                    cg.push(" as usize..");
-                    emit_expr(cg, &args[1]);
-                    cg.push(" as usize].to_string()");
+                    emit_safe_substring(cg, receiver, &args[0], &args[1]);
                 }
                 _ => {
                     emit_expr(cg, receiver);
@@ -503,6 +495,51 @@ fn map_fn_name(name: &str) -> String {
         "assert_ne" => "assert_ne!".to_string(),
         _ => name.to_string(),
     }
+}
+
+/// Emit `xs.slice(start, end)` as a safe Rust block expression.
+///
+/// Semantics:
+/// - Negative indices are clamped to 0.
+/// - Out-of-bounds `start` or `end` are clamped to `xs.len()`.
+/// - Inverted range (`start > end` after clamping) returns an empty slice.
+/// - Never panics.
+///
+/// Emits: `{let _mvl_r=&(xs);
+///          let _mvl_s=((start).max(0)as usize).min(_mvl_r.len());
+///          let _mvl_e=((end).max(0)as usize).min(_mvl_r.len()).max(_mvl_s);
+///          _mvl_r[_mvl_s.._mvl_e].to_vec()}`
+fn emit_safe_list_slice(cg: &mut Codegen, receiver: &Expr, start: &Expr, end: &Expr) {
+    cg.push("{let _mvl_r=&(");
+    emit_expr(cg, receiver);
+    cg.push(");let _mvl_s=((");
+    emit_expr(cg, start);
+    cg.push(").max(0)as usize).min(_mvl_r.len());let _mvl_e=((");
+    emit_expr(cg, end);
+    cg.push(").max(0)as usize).min(_mvl_r.len()).max(_mvl_s);_mvl_r[_mvl_s.._mvl_e].to_vec()}");
+}
+
+/// Emit `s.substring(start, end)` as a safe Rust block expression.
+///
+/// Semantics:
+/// - Character-based (not byte-based) — safe for multi-byte UTF-8 strings.
+/// - Negative indices are clamped to 0.
+/// - Out-of-bounds `end` is handled naturally by `.take()` (iterator exhaustion).
+/// - Inverted range (`end < start` after clamping) returns an empty string via
+///   `saturating_sub`.
+/// - Never panics.
+///
+/// Emits: `{let _mvl_s=&*(s);let _mvl_a=(start).max(0)as usize;
+///          let _mvl_b=(end).max(0)as usize;
+///          _mvl_s.chars().skip(_mvl_a).take(_mvl_b.saturating_sub(_mvl_a)).collect::<String>()}`
+fn emit_safe_substring(cg: &mut Codegen, receiver: &Expr, start: &Expr, end: &Expr) {
+    cg.push("{let _mvl_s=&*(");
+    emit_expr(cg, receiver);
+    cg.push(");let _mvl_a=(");
+    emit_expr(cg, start);
+    cg.push(").max(0)as usize;let _mvl_b=(");
+    emit_expr(cg, end);
+    cg.push(").max(0)as usize;_mvl_s.chars().skip(_mvl_a).take(_mvl_b.saturating_sub(_mvl_a)).collect::<String>()}");
 }
 
 /// Emit a free function call, handling special built-ins that require custom Rust output.
