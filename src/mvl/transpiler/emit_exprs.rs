@@ -226,7 +226,10 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                 .map(|(fname, fexpr)| {
                     let mut tmp = Codegen::new();
                     tmp.push(&format!("{fname}: "));
-                    emit_expr(&mut tmp, fexpr);
+                    // Clone field values: placing a value into a struct field is a move
+                    // in Rust. MVL value semantics require the source binding to remain
+                    // valid. Spec 009 Req 2: clone ALL non-Copy arguments.
+                    emit_expr_as_arg(&mut tmp, fexpr);
                     tmp.finish()
                 })
                 .collect();
@@ -323,6 +326,19 @@ fn escape_str(s: &str) -> String {
     out
 }
 
+/// Re-escape a decoded char value for insertion into a Rust char literal.
+fn escape_char(c: char) -> String {
+    match c {
+        '\\' => "\\\\".to_string(),
+        '\'' => "\\'".to_string(),
+        '\n' => "\\n".to_string(),
+        '\t' => "\\t".to_string(),
+        '\r' => "\\r".to_string(),
+        '\0' => "\\0".to_string(),
+        other => other.to_string(),
+    }
+}
+
 fn emit_literal(cg: &mut Codegen, lit: &Literal) {
     match lit {
         Literal::Integer(n) => cg.push(&n.to_string()),
@@ -336,7 +352,7 @@ fn emit_literal(cg: &mut Codegen, lit: &Literal) {
             }
         }
         Literal::Str(s) => cg.push(&format!("\"{}\".to_string()", escape_str(s))),
-        Literal::Char(c) => cg.push(&format!("'{c}'")),
+        Literal::Char(c) => cg.push(&format!("'{}'", escape_char(*c))),
         Literal::Bool(b) => cg.push(if *b { "true" } else { "false" }),
         Literal::Unit => cg.push("()"),
     }
@@ -374,15 +390,33 @@ fn emit_args(cg: &mut Codegen, args: &[Expr]) {
 
 /// Emit an expression in function-argument position.
 ///
-/// String literals get `.into()` appended so that Rust type inference can
-/// coerce them to whatever label type the callee expects (`String`,
-/// `Clean<String>`, `Tainted<String>`, etc.).  All other expressions are
-/// emitted unchanged.
+/// MVL has value semantics: passing a value to a function is a copy, not a
+/// move.  In Rust, non-Copy types (structs, enums, Vec, String) are moved by
+/// default.  We insert `.clone()` for identifiers and field accesses so the
+/// caller retains ownership after the call, matching MVL semantics.
+/// `.clone()` on Copy types (i64, bool, char) is a no-op and is optimised
+/// away by the compiler.
+///
+/// String literals get `.to_string().into()` for label type coercion.
 fn emit_expr_as_arg(cg: &mut Codegen, expr: &Expr) {
-    if let Expr::Literal(Literal::Str(s), _) = expr {
-        cg.push(&format!("\"{}\".to_string().into()", escape_str(s)));
-    } else {
-        emit_expr(cg, expr);
+    match expr {
+        Expr::Literal(Literal::Str(s), _) => {
+            cg.push(&format!("\"{}\".to_string().into()", escape_str(s)));
+        }
+        // Identifiers and field accesses may be non-Copy user types.
+        // Clone so the caller retains ownership (MVL value semantics).
+        Expr::Ident(_, _) | Expr::FieldAccess { .. } => {
+            emit_expr(cg, expr);
+            cg.push(".clone()");
+        }
+        _ => {
+            // Temporaries (function call results, struct literals, block expressions)
+            // are rvalues that Rust moves into the callee, so `.clone()` is technically
+            // redundant here. However, we clone unconditionally per Spec 009 Req 2
+            // "Phase 1: clone ALL non-Copy arguments" — LLVM removes redundant clones.
+            emit_expr(cg, expr);
+            cg.push(".clone()");
+        }
     }
 }
 
@@ -404,7 +438,8 @@ fn emit_args_for_macro(cg: &mut Codegen, args: &[Expr]) {
                 }
             }
         } else {
-            emit_expr(cg, arg);
+            // Non-first args are values passed to the macro — clone per Spec 009 Req 2.
+            emit_expr_as_arg(cg, arg);
         }
     }
 }

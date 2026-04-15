@@ -143,9 +143,13 @@ pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
             cg.indent();
             cg.push("for ");
             emit_pattern(cg, pattern);
-            cg.push(" in ");
+            // MVL value semantics: the iterable is conceptually copied, not consumed.
+            // Wrap the entire expression in parens before `.clone()` so the pattern
+            // works for all expression forms (ident, field access, function call, etc.).
+            // Spec 009 Req 7.
+            cg.push(" in (");
             emit_expr(cg, iter);
-            cg.push(" {");
+            cg.push(").clone() {");
             cg.nl();
             cg.push_indent();
             emit_block_stmts(cg, &body.stmts);
