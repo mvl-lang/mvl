@@ -2,6 +2,9 @@
 //
 // Verifies runtime behavior of numeric stdlib methods.
 // Run with:  mvl test tests/stdlib/
+//
+// Known transpiler limitations: Float.pow (no f64.pow in Rust, use powf),
+//   Int.is_zero, Int.to_string, Float.to_string — not yet implemented.
 
 // ── Int methods ────────────────────────────────────────────────────────────
 
@@ -30,6 +33,11 @@ test fn int_max_when_equal() -> Unit {
     assert_eq(a.max(5), 5);
 }
 
+test fn int_max_when_self_is_larger() -> Unit {
+    let a: Int = 9;
+    assert_eq(a.max(3), 9);
+}
+
 test fn int_min_returns_smaller() -> Unit {
     let a: Int = 7;
     assert_eq(a.min(3), 3);
@@ -38,6 +46,11 @@ test fn int_min_returns_smaller() -> Unit {
 test fn int_min_when_equal() -> Unit {
     let a: Int = 4;
     assert_eq(a.min(4), 4);
+}
+
+test fn int_min_when_self_is_smaller() -> Unit {
+    let a: Int = 2;
+    assert_eq(a.min(8), 2);
 }
 
 test fn int_clamp_within_range() -> Unit {
@@ -112,6 +125,11 @@ test fn float_abs_of_positive() -> Unit {
     assert_eq(f.abs(), 2.7);
 }
 
+test fn float_abs_of_zero() -> Unit {
+    let f: Float = 0.0;
+    assert_eq(f.abs(), 0.0);
+}
+
 test fn float_ceil_rounds_up() -> Unit {
     let f: Float = 3.2;
     assert_eq(f.ceil(), 4.0);
@@ -140,6 +158,16 @@ test fn float_round_up_at_half() -> Unit {
 test fn float_round_down_below_half() -> Unit {
     let f: Float = 3.4;
     assert_eq(f.round(), 3.0);
+}
+
+test fn float_round_negative_half() -> Unit {
+    let f: Float = -3.5;
+    assert_eq(f.round(), -4.0);
+}
+
+test fn float_round_negative_below_half() -> Unit {
+    let f: Float = -3.4;
+    assert_eq(f.round(), -3.0);
 }
 
 test fn float_sqrt_of_perfect_square() -> Unit {

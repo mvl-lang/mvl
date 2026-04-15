@@ -1,7 +1,10 @@
 // tests/stdlib/result_test.mvl — Result<T, E> method correctness
 //
-// Verifies runtime behavior of Result methods: is_ok, is_err, unwrap_or.
+// Verifies runtime behavior of Result methods: is_ok, is_err, unwrap_or,
+// and ? propagation.
 // Run with:  mvl test tests/stdlib/
+//
+// Known transpiler limitations: map, and_then — not yet implemented for Result.
 
 // ── Helper functions ───────────────────────────────────────────────────────
 
@@ -67,4 +70,19 @@ test fn parse_positive_unwrap_value() -> Unit {
 
 test fn parse_positive_err_unwrap_default() -> Unit {
     assert_eq(parse_positive(-1).unwrap_or(0), 0);
+}
+
+// ── ? propagation ──────────────────────────────────────────────────────────
+
+fn double_positive(n: Int) -> Result<Int, String> {
+    let v: Int = parse_positive(n)?;
+    Ok(v * 2)
+}
+
+test fn result_propagate_ok_path() -> Unit {
+    assert_eq(double_positive(5).unwrap_or(0), 10);
+}
+
+test fn result_propagate_err_short_circuits() -> Unit {
+    assert_eq(double_positive(-1).is_err(), true);
 }

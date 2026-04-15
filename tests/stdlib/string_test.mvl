@@ -28,3 +28,20 @@ test fn string_len_single_char() -> Unit {
     let s: String = "x";
     assert_eq(s.len(), 1);
 }
+
+// ── is_empty ───────────────────────────────────────────────────────────────
+
+test fn string_is_empty_true() -> Unit {
+    let s: String = "";
+    assert_eq(s.is_empty(), true);
+}
+
+test fn string_is_empty_false() -> Unit {
+    let s: String = "hello";
+    assert_eq(s.is_empty(), false);
+}
+
+test fn string_is_empty_whitespace_not_empty() -> Unit {
+    let s: String = " ";
+    assert_eq(s.is_empty(), false);
+}

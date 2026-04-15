@@ -2,6 +2,8 @@
 //
 // Verifies runtime behavior of Option methods: unwrap_or, is_some, is_none.
 // Run with:  mvl test tests/stdlib/
+//
+// Known transpiler limitations: map, and_then — not yet implemented for Option.
 
 // ── unwrap_or ─────────────────────────────────────────────────────────────
 
@@ -59,4 +61,21 @@ test fn option_some_bool_unwrap_or() -> Unit {
 test fn option_none_bool_unwrap_or() -> Unit {
     let v: Option<Bool> = None;
     assert_eq(v.unwrap_or(false), false);
+}
+
+// ── Some(0) edge cases — zero must not be treated as None ──────────────────
+
+test fn option_some_zero_unwrap_or() -> Unit {
+    let v: Option<Int> = Some(0);
+    assert_eq(v.unwrap_or(99), 0);
+}
+
+test fn option_some_zero_is_some_true() -> Unit {
+    let v: Option<Int> = Some(0);
+    assert_eq(v.is_some(), true);
+}
+
+test fn option_some_zero_is_none_false() -> Unit {
+    let v: Option<Int> = Some(0);
+    assert_eq(v.is_none(), false);
 }

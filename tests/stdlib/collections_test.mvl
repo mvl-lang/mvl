@@ -33,3 +33,20 @@ test fn list_bool_len() -> Unit {
     let xs: List<Bool> = [true, false, true];
     assert_eq(xs.len(), 3);
 }
+
+// ── is_empty ───────────────────────────────────────────────────────────────
+
+test fn list_is_empty_true() -> Unit {
+    let xs: List<Int> = [];
+    assert_eq(xs.is_empty(), true);
+}
+
+test fn list_is_empty_false() -> Unit {
+    let xs: List<Int> = [1, 2, 3];
+    assert_eq(xs.is_empty(), false);
+}
+
+test fn list_string_is_empty_false() -> Unit {
+    let xs: List<String> = ["a"];
+    assert_eq(xs.is_empty(), false);
+}

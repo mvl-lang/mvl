@@ -47,7 +47,9 @@ build-release: ## Build release binary
 
 # === Test ===
 
-test: test-corpus test-tree-sitter test-grammar-coverage ## Run all tests (unit + corpus + tree-sitter grammar + grammar coverage)
+MVL ?= ./target/debug/mvl
+
+test: test-corpus test-stdlib test-tree-sitter test-grammar-coverage ## Run all tests (unit + corpus + stdlib + tree-sitter grammar + grammar coverage)
 	@echo "Running unit tests..."
 	cargo test
 
@@ -76,7 +78,7 @@ test-corpus: ## Validate corpus examples parse and type-check
 
 test-stdlib: build ## Verify stdlib runtime correctness: transpile tests/stdlib/ → cargo test
 	@echo "Running stdlib correctness tests..."
-	./target/debug/mvl test tests/stdlib/
+	$(MVL) test tests/stdlib/
 
 test-transpiler: build ## Run full build-chain tests: .mvl → parse → check → transpile → cargo → binary → verify output
 	@echo "Running end-to-end transpiler tests..."
