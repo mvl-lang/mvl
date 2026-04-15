@@ -84,6 +84,33 @@ test fn list_slice_returns_new() -> Unit {
     assert_eq(ys.len(), 3);
 }
 
+// ── slice safety contracts ─────────────────────────────────────────────────
+
+test fn list_slice_end_beyond_len() -> Unit {
+    let xs: List<Int> = [1, 2, 3];
+    let ys: List<Int> = xs.slice(0, 99);
+    assert_eq(ys.len(), 3);
+}
+
+test fn list_slice_start_beyond_len() -> Unit {
+    let xs: List<Int> = [1, 2, 3];
+    let ys: List<Int> = xs.slice(10, 20);
+    assert_eq(ys.len(), 0);
+}
+
+test fn list_slice_inverted_is_empty() -> Unit {
+    let xs: List<Int> = [1, 2, 3, 4, 5];
+    let ys: List<Int> = xs.slice(3, 1);
+    assert_eq(ys.len(), 0);
+}
+
+test fn list_slice_basic_content() -> Unit {
+    let xs: List<Int> = [10, 20, 30, 40, 50];
+    let ys: List<Int> = xs.slice(1, 4);
+    assert_eq(ys.len(), 3);
+    assert_eq(ys.is_empty(), false);
+}
+
 // ── range ──────────────────────────────────────────────────────────────────
 
 test fn range_basic() -> Unit {
@@ -104,4 +131,15 @@ test fn range_single() -> Unit {
 test fn range_exclusive_upper() -> Unit {
     let xs: List<Int> = range(0, 3);
     assert_eq(xs.len(), 3);
+}
+
+test fn range_inverted_is_empty() -> Unit {
+    let xs: List<Int> = range(5, 2);
+    assert_eq(xs.len(), 0);
+}
+
+test fn range_non_zero_start() -> Unit {
+    let xs: List<Int> = range(3, 7);
+    assert_eq(xs.len(), 4);
+    assert_eq(xs.is_empty(), false);
 }
