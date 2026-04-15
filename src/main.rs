@@ -169,7 +169,7 @@ fn cmd_check(path: &str, req_filter: Option<u8>) {
     let stdlib_dir = stdlib::ensure_stdlib();
 
     // Parse all files once so we can pass them to both the resolver and the checker.
-    let parsed: Vec<(String, Program, String)> = files
+    let mut parsed: Vec<(String, Program, String)> = files
         .iter()
         .map(|f| {
             let file_str = f.display().to_string();
@@ -177,6 +177,30 @@ fn cmd_check(path: &str, req_filter: Option<u8>) {
             (file_str, prog, src)
         })
         .collect();
+
+    // When checking a single file, also load imported sibling modules so the
+    // resolver can validate cross-module imports (mirrors build_project behaviour).
+    // Track how many entries are "requested" vs "resolver-only" siblings.
+    let check_count = parsed.len();
+    if Path::new(path).is_file() {
+        let already_loaded: std::collections::HashSet<String> =
+            parsed.iter().map(|(f, _, _)| stem(f)).collect();
+        let entry_dir = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
+        if let Some((_, entry_prog, _)) = parsed.first() {
+            let extra_mods = collect_imported_module_names(entry_prog);
+            for mod_name in extra_mods {
+                if already_loaded.contains(&mod_name) {
+                    continue;
+                }
+                let sib_path = entry_dir.join(format!("{mod_name}.mvl"));
+                if sib_path.exists() {
+                    let sib_str = sib_path.display().to_string();
+                    let (sib_prog, sib_src) = parse_or_exit(&sib_str);
+                    parsed.push((sib_str, sib_prog, sib_src));
+                }
+            }
+        }
+    }
 
     // Run the module resolver across all files, wiring in the extracted stdlib.
     let modules: Vec<(String, Program)> = parsed
@@ -191,7 +215,8 @@ fn cmd_check(path: &str, req_filter: Option<u8>) {
 
     let registry = PassRegistry::default_registry();
 
-    for (file_str, prog, _src) in &parsed {
+    // Only run the checker on explicitly requested files (not resolver-only siblings).
+    for (file_str, prog, _src) in parsed.iter().take(check_count) {
         let result = checker::check(prog);
 
         if let Some(req) = req_filter {
