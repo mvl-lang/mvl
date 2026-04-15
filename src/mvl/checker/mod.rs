@@ -478,7 +478,14 @@ impl TypeChecker {
                     }
 
                     _ => {
-                        // Not a tail-expression form; check normally and exit.
+                        // A tail `return` statement means the block always diverges
+                        // and never falls through.  Use Unknown (the "skip" sentinel)
+                        // so callers don't see a spurious `Unit` type — the return
+                        // value's compatibility with `return_ty` is already checked
+                        // inside `check_stmt` for `Stmt::Return`.
+                        if matches!(stmt, Stmt::Return { .. }) {
+                            last_ty = Ty::Unknown;
+                        }
                         self.check_stmt(stmt, return_ty);
                         break;
                     }
