@@ -215,9 +215,16 @@ fn cmd_check(path: &str, req_filter: Option<u8>) {
 
     let registry = PassRegistry::default_registry();
 
+    // Pre-parse stdlib files imported by user programs so the checker knows
+    // about their types and functions.  This covers `use std.io.{...}` etc.
+    let prelude = load_stdlib_prelude(
+        parsed.iter().take(check_count).map(|(_, p, _)| p),
+        &stdlib_dir,
+    );
+
     // Only run the checker on explicitly requested files (not resolver-only siblings).
     for (file_str, prog, _src) in parsed.iter().take(check_count) {
-        let result = checker::check(prog);
+        let result = checker::check_with_prelude(&prelude, prog);
 
         if let Some(req) = req_filter {
             // Single-requirement mode: run only the requested pass.
@@ -800,11 +807,21 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
     let mut verdict_cache = VerdictCache::default();
     let mut per_file_verdicts: Vec<[Verdict; 12]> = Vec::new();
 
-    for file in &files {
-        let file_str = file.display().to_string();
-        let (prog, src) = parse_or_exit(&file_str);
-        let stats = collect_assurance_stats(&prog, verbose);
-        let result = checker::check(&prog);
+    let parsed_assurance: Vec<(String, Program, String)> = files
+        .iter()
+        .map(|f| {
+            let file_str = f.display().to_string();
+            let (prog, src) = parse_or_exit(&file_str);
+            (file_str, prog, src)
+        })
+        .collect();
+    let assurance_prelude =
+        load_stdlib_prelude(parsed_assurance.iter().map(|(_, p, _)| p), &stdlib_dir);
+
+    for (file_str, prog, src) in &parsed_assurance {
+        let file_str = file_str.as_str();
+        let stats = collect_assurance_stats(prog, verbose);
+        let result = checker::check_with_prelude(&assurance_prelude, prog);
 
         total_fns += stats.fn_count;
         total_verified += stats.total_fn_count;
@@ -826,12 +843,13 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
         }
 
         // Run verification passes (with incremental cache).
-        let hash = source_hash(&src);
-        let verdicts = if let Some(cached) = verdict_cache.get(file, hash) {
+        let hash = source_hash(src);
+        let file_path = Path::new(file_str);
+        let verdicts = if let Some(cached) = verdict_cache.get(file_path, hash) {
             cached.to_owned()
         } else {
-            let v = registry.run_all(&prog, &result);
-            verdict_cache.insert(file.clone(), hash, v.clone());
+            let v = registry.run_all(prog, &result);
+            verdict_cache.insert(file_path.to_path_buf(), hash, v.clone());
             v
         };
         per_file_verdicts.push(verdicts);
@@ -1293,6 +1311,50 @@ fn parse_or_exit(path: &str) -> (mvl::mvl::parser::ast::Program, String) {
 ///
 /// For `use utils::clamp_display;` this returns `"utils"`.
 /// The `std` namespace is excluded — it is provided by the runtime, not a sibling file.
+/// Parse the stdlib files imported by the given programs and return them as
+/// prelude programs for the checker.  For `use std.io.{...}` the path stored
+/// is `["std", "io"]`, so we look for `<stdlib_dir>/io.mvl`.
+/// Errors (missing file, parse failure) are silently ignored — the checker
+/// will surface "undefined function" errors for any symbol that wasn't loaded.
+fn load_stdlib_prelude<'a>(
+    progs: impl Iterator<Item = &'a mvl::mvl::parser::ast::Program>,
+    stdlib_dir: &Path,
+) -> Vec<mvl::mvl::parser::ast::Program> {
+    use mvl::mvl::parser::ast::Decl;
+    use std::collections::HashSet;
+    let mut loaded: HashSet<String> = HashSet::new();
+    let mut prelude = Vec::new();
+    for prog in progs {
+        for decl in &prog.declarations {
+            if let Decl::Use(ud) = decl {
+                // `use std.X.{...}` stores path = ["std", "X", ...]
+                if ud.path.first().map(|s| s == "std").unwrap_or(false) {
+                    if let Some(module) = ud.path.get(1) {
+                        if loaded.insert(module.clone()) {
+                            let filename = format!("{module}.mvl");
+                            let stdlib_file = stdlib_dir.join(&filename);
+                            // Prefer the on-disk file; fall back to the embedded copy so
+                            // the prelude is populated even when the stdlib has not been
+                            // extracted (read-only CI, missing MVL_HOME, etc.).
+                            let src_opt = fs::read_to_string(&stdlib_file).ok().or_else(|| {
+                                mvl::mvl::stdlib::STDLIB_FILES
+                                    .iter()
+                                    .find(|(name, _)| *name == filename)
+                                    .map(|(_, content)| content.to_string())
+                            });
+                            if let Some(src) = src_opt {
+                                let (mut p, _) = Parser::new(&src);
+                                prelude.push(p.parse_program());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    prelude
+}
+
 fn collect_imported_module_names(prog: &mvl::mvl::parser::ast::Program) -> Vec<String> {
     use mvl::mvl::parser::ast::Decl;
     use std::collections::HashSet;

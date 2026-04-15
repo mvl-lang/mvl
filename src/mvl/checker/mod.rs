@@ -58,8 +58,15 @@ impl CheckResult {
 }
 
 /// Entry point: type-check a parsed [`Program`].
-pub fn check(prog: &Program) -> CheckResult {
+/// Check a program with additional prelude programs whose declarations are
+/// registered (but not checked) before the user program is type-checked.
+/// Use this when stdlib files have been parsed and should be visible to the
+/// checker (e.g. `use std.io.{...}` imports in corpus / CLI check mode).
+pub fn check_with_prelude(prelude: &[Program], prog: &Program) -> CheckResult {
     let mut checker = TypeChecker::new();
+    for p in prelude {
+        checker.collect_declarations(&p.declarations);
+    }
     checker.check_program(prog);
     termination::check_structural_recursion(prog, &mut checker.errors);
     data_race::check_iso_aliasing(prog, &mut checker.errors);
@@ -84,6 +91,10 @@ pub fn check(prog: &Program) -> CheckResult {
         extern_count: checker.extern_count,
         req_errors,
     }
+}
+
+pub fn check(prog: &Program) -> CheckResult {
+    check_with_prelude(&[], prog)
 }
 
 // ── Valid effect names (002-effect-system/Req 2) ──────────────────────────────
@@ -478,7 +489,14 @@ impl TypeChecker {
                     }
 
                     _ => {
-                        // Not a tail-expression form; check normally and exit.
+                        // A tail `return` statement means the block always diverges
+                        // and never falls through.  Use Unknown (the "skip" sentinel)
+                        // so callers don't see a spurious `Unit` type — the return
+                        // value's compatibility with `return_ty` is already checked
+                        // inside `check_stmt` for `Stmt::Return`.
+                        if matches!(stmt, Stmt::Return { .. }) {
+                            last_ty = Ty::Unknown;
+                        }
                         self.check_stmt(stmt, return_ty);
                         break;
                     }

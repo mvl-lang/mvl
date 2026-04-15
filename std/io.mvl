@@ -138,10 +138,13 @@ pub fn read_to_string(p: Path) -> Result<Tainted<String>, String> ! FileRead { E
 /// Write a string to a file, creating it if it does not exist.
 ///
 /// Truncates the file if it already exists.
-pub fn write(p: Path, content: String) -> Result<Unit, String> ! FileWrite { Err("") }
+/// Accepts both `String` and `Tainted<String>` — writing to a trusted path
+/// with external-origin content is valid; the caller is responsible for
+/// ensuring the target path is not itself tainted (path sanitization, #44).
+pub fn write(p: Path, content: Tainted<String>) -> Result<Unit, String> ! FileWrite { Err("") }
 
 /// Append a string to a file, creating it if it does not exist.
-pub fn append(p: Path, content: String) -> Result<Unit, String> ! FileWrite { Err("") }
+pub fn append(p: Path, content: Tainted<String>) -> Result<Unit, String> ! FileWrite { Err("") }
 
 /// Wrap a File handle in a BufReader for incremental line reading.
 pub fn buf_reader(f: File) -> BufReader { BufReader {} }
@@ -153,10 +156,10 @@ pub fn buf_writer(f: File) -> BufWriter { BufWriter {} }
 ///
 /// Returns Tainted<String> because lines come from an external file.
 /// Returns Ok("") at end-of-file.
-pub fn read_line(r: &BufReader) -> Result<Tainted<String>, String> ! FileRead { Err("") }
+pub fn read_line(r: BufReader) -> Result<Tainted<String>, String> ! FileRead { Err("") }
 
 /// Write a line (followed by `\n`) to a BufWriter.
-pub fn write_line(w: &BufWriter, line: String) -> Result<Unit, String> ! FileWrite { Err("") }
+pub fn write_line(w: BufWriter, line: String) -> Result<Unit, String> ! FileWrite { Err("") }
 
 // ── Filesystem operations ─────────────────────────────────────────────────
 
@@ -216,11 +219,11 @@ pub fn stdin() -> Stdin { Stdin {} }
 /// The line includes the trailing `\n`. Returns Ok("") at end-of-file.
 ///
 /// Example (method-call syntax): `stdin.read_line()`
-pub fn stdin_read_line(s: &Stdin) -> Result<Tainted<String>, String> ! Console { Err("") }
+pub fn stdin_read_line(s: Stdin) -> Result<Tainted<String>, String> ! Console { Err("") }
 
 /// Read all of stdin into a string.
 ///
 /// Returns Tainted<String> because stdin is user-controlled (untrusted) input.
 ///
 /// Example (method-call syntax): `stdin.read_to_string()`
-pub fn stdin_read_to_string(s: &Stdin) -> Result<Tainted<String>, String> ! Console { Err("") }
+pub fn stdin_read_to_string(s: Stdin) -> Result<Tainted<String>, String> ! Console { Err("") }

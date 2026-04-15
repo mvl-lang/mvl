@@ -285,20 +285,42 @@ impl Parser {
         let start = self.peek_span();
         self.advance(); // consume `use`
 
-        // Parse module path: one or more `::` -separated identifiers
+        // Parse module path: segments separated by `.` or `::`
         let mut path = Vec::new();
         let ident_result = self.expect_ident();
         let (first, _) = self.require(ident_result)?;
         path.push(first);
 
-        while self.eat(&TokenKind::ColonColon) {
+        let mut brace_group = false;
+        loop {
+            // Accept both `.` and `::` as path separators.
+            if !self.eat(&TokenKind::Dot) && !self.eat(&TokenKind::ColonColon) {
+                break;
+            }
+            // Brace import: `use std.io.{ A, B, C }` — consume items, store module path.
+            // The type-checker resolves stdlib items via hardcoded tables and ignores
+            // UseDecl contents, so the individual items are discarded here.
+            if matches!(self.peek_kind(), TokenKind::LBrace) {
+                self.advance(); // consume `{`
+                while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+                    self.advance();
+                }
+                let rbrace = self.expect(&TokenKind::RBrace);
+                self.require(rbrace)?;
+                brace_group = true;
+                break;
+            }
             let ident_result = self.expect_ident();
             let (seg, _) = self.require(ident_result)?;
             path.push(seg);
         }
 
-        let semi = self.expect(&TokenKind::Semicolon);
-        self.require(semi)?;
+        // Semicolon is required for plain imports (`use std::io;`) but not after
+        // a brace group (`use std.io.{ A, B }`).
+        if !brace_group {
+            let semi = self.expect(&TokenKind::Semicolon);
+            self.require(semi)?;
+        }
 
         let span = self.span_from(start);
         Ok(UseDecl {

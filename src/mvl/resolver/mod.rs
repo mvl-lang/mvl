@@ -204,7 +204,21 @@ fn load_stdlib_module(stdlib_dir: &Path) -> Option<ResolvedModule> {
         );
         return None;
     }
-    let exports = collect_exports(&prog);
+    let mut exports = collect_exports(&prog);
+    // Each `<name>.mvl` file alongside `core.mvl` is a submodule that `std`
+    // re-exports as a name (e.g. `use std.io.{…}` resolves `io` from `std`).
+    if let Ok(entries) = std::fs::read_dir(stdlib_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map(|e| e == "mvl").unwrap_or(false) {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    if stem != "core" {
+                        exports.insert(stem.to_string());
+                    }
+                }
+            }
+        }
+    }
     Some(ResolvedModule {
         name: vec!["std".to_string()],
         exports,
@@ -410,6 +424,16 @@ pub fn stdlib_module() -> ResolvedModule {
         "panic",
     ] {
         exports.insert((*name).to_string());
+    }
+    // Stdlib submodule names derived from the embedded file list — so `use std.io.{…}`
+    // resolves `io` from `std` even in the fallback stub. Stays in sync with STDLIB_FILES
+    // automatically; no manual list to maintain.
+    for (filename, _) in crate::mvl::stdlib::STDLIB_FILES {
+        if let Some(stem) = filename.strip_suffix(".mvl") {
+            if stem != "core" {
+                exports.insert(stem.to_string());
+            }
+        }
     }
     ResolvedModule {
         name: vec!["std".to_string()],
