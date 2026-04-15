@@ -16,7 +16,7 @@ total fn is_in_range_int(n: Int, lo: Int, hi: Int) -> Bool {
 }
 
 total fn clamp_display(n: Int) -> Int {
-    if n < 0 { 0 } else if n > 99999 { 99999 } else { n }
+    n.clamp(0, 99999)
 }
 
 // ── Test cases ─────────────────────────────────────────────────────────────
