@@ -6,6 +6,28 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.31.2] — 2026-04-16 (fix: corpus test failures and code review improvements)
+
+### Fixed
+
+- **Corpus test failures** — resolved `statements.mvl` and `file_io.mvl` regressions that surfaced after PR #201.
+  - Functions using explicit `return` in `if/else` branches were incorrectly flagged with `TypeMismatch` (e.g., `Unit` vs `Int`). Fixed by marking tail-return blocks as diverging (`Unknown` type).
+  - Parser now accepts `.` as path separator in `use` declarations (e.g., `use std.io.{...}` instead of only `std::io`).
+  - Parser now accepts `{…}` brace groups for selective imports in `use` declarations.
+  - `std/io.mvl` now embedded and loaded in stdlib; `io` module is now visible to the type checker.
+  - Pre-register stdlib declarations before checking user code via `check_with_prelude`.
+  - Auto-derive stdlib submodule exports from `STDLIB_FILES` to prevent list drift.
+
+### Changed
+
+- **Type checker public API** — simplified `check()` to delegate to `check_with_prelude(&[], prog)`, eliminating code duplication.
+- **CLI assurance mode** — now wires stdlib prelude to avoid false "undefined function" errors for stdlib imports.
+- **Stdlib prelude loading** — falls back to embedded `STDLIB_FILES` when on-disk file is absent (read-only CI, unextracted `MVL_HOME`).
+
+### Tests
+
+- All 329 unit tests pass; corpus tests clean.
+
 ## [0.31.1] — 2026-04-15 (fix: tail-position match/if type checking)
 
 ### Fixed
