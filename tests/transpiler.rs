@@ -462,20 +462,20 @@ fn format_call_emits_format_macro() {
     assert_contains(&rust, "\"{} world\"");
 }
 
-/// All structs automatically derive Debug.
+/// All structs automatically derive Debug, Clone, and PartialEq (Spec 009 Req 1).
 #[test]
 fn struct_derives_debug() {
     let src = "type Point = struct { x: Float, y: Float }";
     let rust = transpile_src(src);
-    assert_contains(&rust, "#[derive(Debug,");
+    assert_contains(&rust, "#[derive(Debug, Clone, PartialEq)]");
 }
 
-/// All enums automatically derive Debug.
+/// All enums automatically derive Debug, Clone, and PartialEq (Spec 009 Req 1).
 #[test]
 fn enum_derives_debug() {
     let src = "type Color = enum { Red, Green, Blue }";
     let rust = transpile_src(src);
-    assert_contains(&rust, "#[derive(Debug,");
+    assert_contains(&rust, "#[derive(Debug, Clone, PartialEq)]");
 }
 
 /// impl Display for T emits std::fmt::Display implementation.
@@ -666,4 +666,50 @@ fn process() -> Unit ! Console {
 "#;
     let rust = transpile_src(src);
     assert_contains(&rust, "(get_items()).clone()");
+}
+
+/// For-loop over a field access iterable clones it — Spec 009 Req 7.
+/// The most common real-world case: iterating a struct field collection.
+#[test]
+fn for_loop_clone_field_access_expression() {
+    let src = r#"
+type Container = struct { items: List<Int> }
+fn process(c: Container) -> Unit ! Console {
+    for x in c.items {
+        println(x);
+    }
+}
+"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "(c.items).clone()");
+}
+
+// ── Spec 009 Req 2: Clone-on-pass ─────────────────────────────────────────
+
+/// Struct ident passed to a function gets `.clone()` appended.
+/// Spec 009 Req 2, Scenario "Struct passed to two functions".
+#[test]
+fn struct_ident_as_arg_gets_clone() {
+    let src = r#"
+type Point = struct { x: Int, y: Int }
+fn show(p: Point) -> Int { p.x }
+fn f(p: Point) -> Int { show(p) }
+"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "show(p.clone())");
+}
+
+/// Phase 1: Int idents are also cloned at call sites. Redundant for Copy types
+/// but harmless — LLVM removes it. The transpiler has no type info at emit time.
+/// Spec 009 Req 2 "Copy types not cloned" is a Phase 3 goal; this documents
+/// current Phase 1 behaviour.
+#[test]
+fn copy_type_ident_clone_is_emitted_but_harmless() {
+    let src = r#"
+fn add(a: Int, b: Int) -> Int { a + b }
+fn f(x: Int) -> Int { add(x, x) }
+"#;
+    let rust = transpile_src(src);
+    // Phase 1: clones are emitted; redundant for Copy types but correct.
+    assert_contains(&rust, "x.clone()");
 }

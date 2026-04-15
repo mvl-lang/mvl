@@ -80,11 +80,19 @@ Phase 1 simplification: clone ALL non-Copy arguments unconditionally. Last-use a
 - THEN the emitted Rust contains `show(p.clone())` for at least the first call
 - AND the emitted Rust compiles without move errors
 
-#### Scenario: Copy types not cloned
+#### Scenario: Copy types not cloned (Phase 3 target)
+
+> **Phase 1 note:** The current transpiler has no type information at emit time. All
+> `Expr::Ident` and `Expr::FieldAccess` arguments are cloned unconditionally, including
+> Copy types (`Int`, `Bool`, `Char`). The emitted Rust is `add(x.clone(), x.clone())`.
+> This is correct — `.clone()` on a Copy type is a no-op optimised away by the compiler.
+> Last-use analysis and Copy inference are Phase 3 optimisations.
+>
+> **Tests:** `tests/transpiler.rs::copy_type_ident_clone_is_emitted_but_harmless`
 
 - GIVEN `fn add(a: Int, b: Int) -> Int { a + b }`
 - AND `let x = 1; add(x, x);`
-- WHEN transpiled
+- WHEN transpiled (Phase 3)
 - THEN the emitted Rust contains `add(x, x)` without `.clone()`
 
 #### Scenario: Collection iterable cloned before for-in

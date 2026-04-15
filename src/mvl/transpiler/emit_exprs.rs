@@ -226,7 +226,10 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                 .map(|(fname, fexpr)| {
                     let mut tmp = Codegen::new();
                     tmp.push(&format!("{fname}: "));
-                    emit_expr(&mut tmp, fexpr);
+                    // Clone field values: placing a value into a struct field is a move
+                    // in Rust. MVL value semantics require the source binding to remain
+                    // valid. Spec 009 Req 2: clone ALL non-Copy arguments.
+                    emit_expr_as_arg(&mut tmp, fexpr);
                     tmp.finish()
                 })
                 .collect();
@@ -323,6 +326,19 @@ fn escape_str(s: &str) -> String {
     out
 }
 
+/// Re-escape a decoded char value for insertion into a Rust char literal.
+fn escape_char(c: char) -> String {
+    match c {
+        '\\' => "\\\\".to_string(),
+        '\'' => "\\'".to_string(),
+        '\n' => "\\n".to_string(),
+        '\t' => "\\t".to_string(),
+        '\r' => "\\r".to_string(),
+        '\0' => "\\0".to_string(),
+        other => other.to_string(),
+    }
+}
+
 fn emit_literal(cg: &mut Codegen, lit: &Literal) {
     match lit {
         Literal::Integer(n) => cg.push(&n.to_string()),
@@ -336,7 +352,7 @@ fn emit_literal(cg: &mut Codegen, lit: &Literal) {
             }
         }
         Literal::Str(s) => cg.push(&format!("\"{}\".to_string()", escape_str(s))),
-        Literal::Char(c) => cg.push(&format!("'{c}'")),
+        Literal::Char(c) => cg.push(&format!("'{}'", escape_char(*c))),
         Literal::Bool(b) => cg.push(if *b { "true" } else { "false" }),
         Literal::Unit => cg.push("()"),
     }
@@ -394,7 +410,12 @@ fn emit_expr_as_arg(cg: &mut Codegen, expr: &Expr) {
             cg.push(".clone()");
         }
         _ => {
+            // Temporaries (function call results, struct literals, block expressions)
+            // are rvalues that Rust moves into the callee, so `.clone()` is technically
+            // redundant here. However, we clone unconditionally per Spec 009 Req 2
+            // "Phase 1: clone ALL non-Copy arguments" — LLVM removes redundant clones.
             emit_expr(cg, expr);
+            cg.push(".clone()");
         }
     }
 }
@@ -417,7 +438,8 @@ fn emit_args_for_macro(cg: &mut Codegen, args: &[Expr]) {
                 }
             }
         } else {
-            emit_expr(cg, arg);
+            // Non-first args are values passed to the macro — clone per Spec 009 Req 2.
+            emit_expr_as_arg(cg, arg);
         }
     }
 }
