@@ -20,13 +20,14 @@
 ///
 /// Entering raw mode disables line-buffering and echoing so the application
 /// can read individual keypresses and control cursor position directly.
-/// Dropping a Terminal value restores the previous terminal state (RAII).
+/// Phase 3 will implement RAII cleanup via Drop; in Phase 2 the caller MUST
+/// call `close` explicitly to restore the previous terminal state.
 pub type Terminal = struct {}
 
 /// A key event from the terminal.
 pub type Key = enum {
     /// A printable character key.
-    Char(String),
+    Char(Char),
     /// The Enter / Return key.
     Enter,
     /// The Escape key.
@@ -39,7 +40,7 @@ pub type Key = enum {
     Delete,
     /// Tab key.
     Tab,
-    /// Function key Fn where n is 1–12.
+    /// Function key F(n) where n MUST be 1–12.
     F(Int),
 }
 
@@ -79,9 +80,9 @@ pub type Color = enum {
     BrightMagenta,
     BrightCyan,
     BrightWhite,
-    /// True-color 24-bit RGB (r, g, b each 0–255).
+    /// True-color 24-bit RGB. Each component MUST be in 0–255 (unchecked in Phase 2).
     Rgb(Int, Int, Int),
-    /// ANSI 256-color palette index (0–255).
+    /// ANSI 256-color palette index. Value MUST be in 0–255 (unchecked in Phase 2).
     Ansi(Int),
 }
 
@@ -90,22 +91,32 @@ pub type Color = enum {
 /// Enter raw mode and return a Terminal handle.
 ///
 /// Raw mode disables line-buffering and echo. All input is available
-/// keypress-by-keypress. Call `close` or let the value drop to restore.
-pub fn open() -> Result<Terminal, String> ! Terminal { Err("") }
+/// keypress-by-keypress. Call `close` to restore the previous terminal state.
+/// Note: open() does not require `! Terminal` — it is the capability entry point
+/// that grants the handle; callers annotate `! Terminal` because they use it.
+pub fn open() -> Result<Terminal, String> { Err("") }
+
+/// Release raw mode and restore the previous terminal state.
+///
+/// Takes Terminal by value to prevent use-after-close.
+pub fn close(term: Terminal) -> Unit ! Terminal { }
 
 // ── Screen control ─────────────────────────────────────────────────────────
 
 /// Clear the entire screen and move cursor to (0, 0).
-pub fn clear(term: &Terminal) -> Unit ! Terminal { }
+pub fn clear(term: &Terminal) -> Result<Unit, String> ! Terminal { Err("") }
 
 /// Move the cursor to the given (row, col) position (0-indexed).
-pub fn set_cursor(term: &Terminal, row: Int, col: Int) -> Unit ! Terminal { }
+///
+/// Note: crossterm's MoveTo uses (col, row) order — the Phase 2 implementation
+/// transposes these internally. row is vertical, col is horizontal.
+pub fn set_cursor(term: &Terminal, row: Int, col: Int) -> Result<Unit, String> ! Terminal { Err("") }
 
 /// Hide the terminal cursor.
-pub fn hide_cursor(term: &Terminal) -> Unit ! Terminal { }
+pub fn hide_cursor(term: &Terminal) -> Result<Unit, String> ! Terminal { Err("") }
 
 /// Show the terminal cursor.
-pub fn show_cursor(term: &Terminal) -> Unit ! Terminal { }
+pub fn show_cursor(term: &Terminal) -> Result<Unit, String> ! Terminal { Err("") }
 
 /// Return the current terminal size as (rows, cols).
 pub fn size(term: &Terminal) -> Result<(Int, Int), String> ! Terminal { Err("") }
@@ -113,10 +124,10 @@ pub fn size(term: &Terminal) -> Result<(Int, Int), String> ! Terminal { Err("") 
 // ── Output ─────────────────────────────────────────────────────────────────
 
 /// Print text at the current cursor position with no styling.
-pub fn print(term: &Terminal, text: String) -> Unit ! Terminal { }
+pub fn print(term: &Terminal, text: String) -> Result<Unit, String> ! Terminal { Err("") }
 
 /// Print text with the given style (bold, italic, fg/bg color).
-pub fn print_styled(term: &Terminal, text: String, style: Style) -> Unit ! Terminal { }
+pub fn print_styled(term: &Terminal, text: String, style: Style) -> Result<Unit, String> ! Terminal { Err("") }
 
 // ── Input ──────────────────────────────────────────────────────────────────
 
@@ -134,6 +145,11 @@ pub fn plain() -> Style {
 /// Return a copy of the style with bold enabled.
 pub fn bold(s: Style) -> Style {
     Style { bold: true, italic: s.italic, underline: s.underline, fg: s.fg, bg: s.bg }
+}
+
+/// Return a copy of the style with italic enabled.
+pub fn italic(s: Style) -> Style {
+    Style { bold: s.bold, italic: true, underline: s.underline, fg: s.fg, bg: s.bg }
 }
 
 /// Return a copy of the style with the given foreground color.

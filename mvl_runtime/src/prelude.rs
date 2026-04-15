@@ -5,6 +5,8 @@
 //! use mvl_runtime::prelude::*;
 //! ```
 
-pub use crate::effects::{Alloc, Concurrent, Console, Db, FileRead, FileWrite, Net, Panic};
+pub use crate::effects::{
+    Alloc, Concurrent, Console, Db, FileRead, FileWrite, Net, Panic, Terminal,
+};
 pub use crate::ifc::{declassify, sanitize, Clean, Public, Secret, Tainted};
 pub use crate::mvl_refine;

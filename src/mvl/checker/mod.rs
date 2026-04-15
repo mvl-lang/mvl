@@ -2465,7 +2465,7 @@ mod tests {
 
     #[test]
     fn valid_effect_names_accepted() {
-        let src = r#"fn f() -> Unit ! Console, Net, DB { println("hi"); }"#;
+        let src = r#"fn f() -> Unit ! Console, Net, DB, Terminal { println("hi"); }"#;
         let errors = errors_for(src);
         assert!(
             !errors

@@ -307,7 +307,7 @@ fn check_stmt_flows(
 }
 
 /// Check the public-sink names that must not appear inside high-PC contexts.
-const PUBLIC_SINKS: &[&str] = &["println", "print"];
+const PUBLIC_SINKS: &[&str] = &["println", "print", "print_styled"];
 
 fn check_expr_flows(
     expr: &Expr,
