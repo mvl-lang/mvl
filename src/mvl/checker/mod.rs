@@ -374,47 +374,192 @@ impl TypeChecker {
         let mut last_ty = Ty::Unit;
         for (i, stmt) in stmts.iter().enumerate() {
             if i + 1 == n {
-                if let Stmt::Expr { expr, .. } = stmt {
-                    last_ty = self.infer_expr(expr);
+                // Tail-position statement: infer its type so the block propagates the
+                // correct return value.  `match` and `if/else` in tail position produce
+                // their arm/branch values, not Unit.
+                match stmt {
+                    Stmt::Expr { expr, .. } => {
+                        last_ty = self.infer_expr(expr);
 
-                    // Check implicit return type against declared return type.
-                    // Resolve named alias types (e.g. PositiveInt = Int) before comparing
-                    // so that `Int` is accepted where a refined alias is declared.
-                    // For Result types, ResultIgnored below is the more specific error.
-                    if let Some(ret) = return_ty {
-                        let resolved_ret = self.resolve_alias(ret.clone());
-                        if !matches!(last_ty, Ty::Unknown)
-                            && !matches!(resolved_ret, Ty::Unknown)
-                            && !last_ty.is_result()
-                            && !types_compatible(&resolved_ret, &last_ty)
-                        {
-                            self.emit(CheckError::TypeMismatch {
-                                expected: ret.display(),
-                                found: last_ty.display(),
-                                span: expr.span(),
-                            });
+                        // Check implicit return type against declared return type.
+                        // Resolve named alias types (e.g. PositiveInt = Int) before comparing
+                        // so that `Int` is accepted where a refined alias is declared.
+                        // For Result types, ResultIgnored below is the more specific error.
+                        if let Some(ret) = return_ty {
+                            let resolved_ret = self.resolve_alias(ret.clone());
+                            if !matches!(last_ty, Ty::Unknown)
+                                && !matches!(resolved_ret, Ty::Unknown)
+                                && !last_ty.is_result()
+                                && !types_compatible(&resolved_ret, &last_ty)
+                            {
+                                self.emit(CheckError::TypeMismatch {
+                                    expected: ret.display(),
+                                    found: last_ty.display(),
+                                    span: expr.span(),
+                                });
+                            }
                         }
+
+                        // Suppress ResultIgnored only when the block's expected return
+                        // type is itself compatible with Result (the value is used).
+                        // If the expected return type is Unit or incompatible, the
+                        // caller is discarding the Result — emit ResultIgnored as usual.
+                        if last_ty.is_result() {
+                            let consumed_by_caller = return_ty
+                                .map(|rt| types_compatible(rt, &last_ty))
+                                .unwrap_or(false);
+                            if !consumed_by_caller {
+                                self.emit(CheckError::ResultIgnored { span: expr.span() });
+                            }
+                        }
+                        break;
                     }
 
-                    // Suppress ResultIgnored only when the block's expected return
-                    // type is itself compatible with Result (the value is used).
-                    // If the expected return type is Unit or incompatible, the
-                    // caller is discarding the Result — emit ResultIgnored as usual.
-                    if last_ty.is_result() {
-                        let consumed_by_caller = return_ty
-                            .map(|rt| types_compatible(rt, &last_ty))
-                            .unwrap_or(false);
-                        if !consumed_by_caller {
-                            self.emit(CheckError::ResultIgnored { span: expr.span() });
+                    Stmt::Match {
+                        scrutinee,
+                        arms,
+                        span,
+                    } => {
+                        // `match` in tail position: check arms and infer the block's type.
+                        let scrutinee_ty = self.infer_expr(scrutinee);
+                        last_ty = self.check_match_arms(arms, &scrutinee_ty, *span, return_ty);
+                        if let Some(ret) = return_ty {
+                            let resolved_ret = self.resolve_alias(ret.clone());
+                            if !matches!(last_ty, Ty::Unknown)
+                                && !matches!(resolved_ret, Ty::Unknown)
+                                && !last_ty.is_result()
+                                && !types_compatible(&resolved_ret, &last_ty)
+                            {
+                                self.emit(CheckError::TypeMismatch {
+                                    expected: ret.display(),
+                                    found: last_ty.display(),
+                                    span: *span,
+                                });
+                            }
                         }
+                        // Mirror the ResultIgnored check from Stmt::Expr: a tail match
+                        // that produces an unhandled Result must still be flagged.
+                        if last_ty.is_result() {
+                            let consumed_by_caller = return_ty
+                                .map(|rt| types_compatible(rt, &last_ty))
+                                .unwrap_or(false);
+                            if !consumed_by_caller {
+                                self.emit(CheckError::ResultIgnored { span: *span });
+                            }
+                        }
+                        break;
                     }
-                    break;
+
+                    Stmt::If {
+                        cond,
+                        then,
+                        else_,
+                        span,
+                    } => {
+                        // `if/else` in tail position: delegate to helper so that
+                        // `else if` chains are also inferred recursively.
+                        last_ty = self.infer_tail_if(cond, then, else_, *span, return_ty);
+                        // Check the overall result against the declared return type.
+                        if let Some(ret) = return_ty {
+                            let resolved_ret = self.resolve_alias(ret.clone());
+                            if !matches!(last_ty, Ty::Unknown)
+                                && !matches!(resolved_ret, Ty::Unknown)
+                                && !last_ty.is_result()
+                                && !types_compatible(&resolved_ret, &last_ty)
+                            {
+                                self.emit(CheckError::TypeMismatch {
+                                    expected: ret.display(),
+                                    found: last_ty.display(),
+                                    span: *span,
+                                });
+                            }
+                        }
+                        break;
+                    }
+
+                    _ => {
+                        // Not a tail-expression form; check normally and exit.
+                        self.check_stmt(stmt, return_ty);
+                        break;
+                    }
                 }
             }
             self.check_stmt(stmt, return_ty);
         }
         self.env.pop_scope();
         last_ty
+    }
+
+    /// Infer the type of an `if/else` in tail position, handling `else if` chains
+    /// recursively so that every branch contributes to the block's return type.
+    /// Returns the inferred type (the then-branch type when branches are compatible).
+    fn infer_tail_if(
+        &mut self,
+        cond: &Expr,
+        then: &Block,
+        else_: &Option<ElseBranch>,
+        span: Span,
+        return_ty: Option<&Ty>,
+    ) -> Ty {
+        let cond_ty = self.infer_expr(cond);
+        if !cond_ty.is_bool() && !matches!(cond_ty, Ty::Unknown) {
+            self.emit(CheckError::TypeMismatch {
+                expected: "Bool".to_string(),
+                found: cond_ty.display(),
+                span: cond.span(),
+            });
+        }
+        let cond_label = ifc::label_of(&cond_ty);
+        let then_ty = self.infer_block_type(then, return_ty);
+        self.check_branch_label_promotion(cond_label, &then_ty, return_ty, span);
+        let result_ty = then_ty;
+        if let Some(else_branch) = else_ {
+            match else_branch {
+                ElseBranch::Block(b) => {
+                    let else_ty = self.infer_block_type(b, return_ty);
+                    self.check_branch_label_promotion(cond_label, &else_ty, return_ty, span);
+                    if !matches!(result_ty, Ty::Unknown)
+                        && !matches!(else_ty, Ty::Unknown)
+                        && !types_compatible(&result_ty, &else_ty)
+                    {
+                        self.emit(CheckError::TypeMismatch {
+                            expected: result_ty.display(),
+                            found: else_ty.display(),
+                            span,
+                        });
+                    }
+                }
+                ElseBranch::If(nested_if) => {
+                    // `else if` chain: recurse so the nested if's type is also
+                    // inferred and checked for compatibility with the then-branch.
+                    if let Stmt::If {
+                        cond: c,
+                        then: t,
+                        else_: e,
+                        span: s,
+                    } = nested_if.as_ref()
+                    {
+                        let nested_ty = self.infer_tail_if(c, t, e, *s, return_ty);
+                        self.check_branch_label_promotion(cond_label, &nested_ty, return_ty, span);
+                        if !matches!(result_ty, Ty::Unknown)
+                            && !matches!(nested_ty, Ty::Unknown)
+                            && !types_compatible(&result_ty, &nested_ty)
+                        {
+                            self.emit(CheckError::TypeMismatch {
+                                expected: result_ty.display(),
+                                found: nested_ty.display(),
+                                span,
+                            });
+                        }
+                    } else {
+                        // Shouldn't happen by construction (ElseBranch::If always wraps
+                        // Stmt::If), but fall back gracefully.
+                        self.check_stmt(nested_if, return_ty);
+                    }
+                }
+            }
+        }
+        result_ty
     }
 
     fn check_stmt(&mut self, stmt: &Stmt, return_ty: Option<&Ty>) {
@@ -2702,6 +2847,185 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
             "expected TypeMismatch for mismatched if-expression branches, got: {errors:?}"
+        );
+    }
+
+    // ── Fix #189: match/if in tail position returns arm values, not Unit ──
+
+    #[test]
+    fn match_in_tail_position_accepted() {
+        // GIVEN: a function whose only statement is a match in tail position
+        // THEN: no type errors — the match's arm type satisfies the return type
+        let src = r#"
+            fn classify(x: Int) -> Int {
+                match x {
+                    0 => 1,
+                    _ => 2,
+                }
+            }
+        "#;
+        let result = check_src(src);
+        assert!(
+            result.is_ok(),
+            "expected no errors for match in tail position, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn match_in_tail_position_wrong_type_rejected() {
+        // GIVEN: a function whose tail match arms return Bool but the fn declares Int
+        // THEN: TypeMismatch error is emitted (was silently accepted before fix)
+        let src = r#"
+            fn wrong(x: Int) -> Int {
+                match x {
+                    0 => true,
+                    _ => false,
+                }
+            }
+        "#;
+        let errors = errors_for(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            "expected TypeMismatch for tail match returning Bool in Int function, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn if_else_in_tail_position_accepted() {
+        // GIVEN: a function whose only statement is an if/else in tail position
+        // THEN: no type errors
+        let src = r#"
+            fn abs(x: Int) -> Int {
+                if x >= 0 {
+                    x
+                } else {
+                    0 - x
+                }
+            }
+        "#;
+        let result = check_src(src);
+        assert!(
+            result.is_ok(),
+            "expected no errors for if/else in tail position, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn if_else_in_tail_position_branch_mismatch_rejected() {
+        // GIVEN: if/else in tail position where branches return different types
+        // THEN: TypeMismatch error
+        let src = r#"
+            fn bad(b: Bool) -> Int {
+                if b {
+                    1
+                } else {
+                    true
+                }
+            }
+        "#;
+        let errors = errors_for(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            "expected TypeMismatch for mismatched if/else tail branches, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn else_if_chain_in_tail_position_accepted() {
+        // GIVEN: if/else-if/else chain in tail position, all branches return Int
+        // THEN: no type errors — the nested else-if types are inferred recursively
+        let src = r#"
+            fn classify(x: Int) -> Int {
+                if x > 0 {
+                    1
+                } else if x < 0 {
+                    0 - 1
+                } else {
+                    0
+                }
+            }
+        "#;
+        let result = check_src(src);
+        assert!(
+            result.is_ok(),
+            "expected no errors for else-if chain in tail position, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn else_if_branch_type_mismatch_rejected() {
+        // GIVEN: else-if branch returns a different type than the then branch
+        // THEN: TypeMismatch should be emitted (was silently accepted before fix)
+        let src = r#"
+            fn bad(x: Int) -> Int {
+                if x > 0 {
+                    1
+                } else if x < 0 {
+                    true
+                } else {
+                    0
+                }
+            }
+        "#;
+        let errors = errors_for(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            "expected TypeMismatch for else-if branch type mismatch, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn match_in_tail_position_result_ignored_rejected() {
+        // GIVEN: a Unit function whose tail match returns a Result
+        // THEN: ResultIgnored is emitted — same behaviour as a bare tail expression
+        let src = r#"
+            fn produce() -> Result<Int, String> { Ok(1) }
+            fn f(x: Int) -> Unit {
+                match x {
+                    0 => produce(),
+                    _ => produce(),
+                }
+            }
+        "#;
+        let errors = errors_for(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, CheckError::ResultIgnored { .. })),
+            "expected ResultIgnored for match-in-tail-position discarding Result, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn match_inside_if_else_tail_position_accepted() {
+        // GIVEN: if/else in tail position where the else branch contains a match
+        // THEN: no type errors — nested combinations resolve correctly
+        let src = r#"
+            fn f(flag: Bool, x: Int) -> Int {
+                if flag {
+                    0
+                } else {
+                    match x {
+                        0 => 1,
+                        _ => 2,
+                    }
+                }
+            }
+        "#;
+        let result = check_src(src);
+        assert!(
+            result.is_ok(),
+            "expected no errors for match inside if-else tail position, got: {:?}",
+            result.errors
         );
     }
 }

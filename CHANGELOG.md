@@ -6,6 +6,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.31.1] — 2026-04-15 (fix: tail-position match/if type checking)
+
+### Fixed
+
+- **`match` and `if/else` in tail position** — now correctly inferred as value-producing expressions with proper return-type checking (#189). Previous behavior silently treated them as statements returning `Unit`, masking type errors in tail-position patterns.
+  - `else if` chains now recursively infer types for each branch; was only checking the then-branch type
+  - IFC label promotion now correctly applied to all branches in `else if` chains
+  - `ResultIgnored` check now fires for `match` in tail position, matching `Stmt::Expr` behavior
+  - Overall return-type compatibility now checked for `if/else` in tail position
+- **Tail-statement type checking** — fixed fallthrough logic to prevent double-execution of statement checks
+
+### Tests
+
+- Added 4 regression tests covering `else if` chains, `ResultIgnored` in tail `match`, and nested combinations
+
 ## [0.31.0] — 2026-04-15 (feat: stdlib structured logging — std.log with IFC enforcement)
 
 ### Added
