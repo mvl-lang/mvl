@@ -102,6 +102,8 @@ fn xdg_data_home() -> Path {
 
 `mvl` ships as a single binary. On first run (or `mvl init --stdlib`), it copies stdlib source to `$XDG_DATA_HOME/mvl/std/`. Version-matched to the compiler.
 
+Stdlib source files are embedded in the binary at compile time using Rust's `include_str!` macro — no archive or compression. Each `.mvl` file becomes a `&'static str`. On first run they are written to disk verbatim. **No compression is used.** Stdlib source is plain text and small (a few KB per file); the overhead of a compression/decompression step is not justified until stdlib grows to hundreds of files or megabytes of source. If that threshold is reached, switch to `include_bytes!` + a compressed blob decoded at runtime.
+
 ```bash
 # Install
 brew install mvl   # or cargo install mvl

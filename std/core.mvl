@@ -1,0 +1,25 @@
+// MVL standard library — core prelude
+//
+// This file is the implicit prelude: loaded by the compiler before any user
+// source. Everything declared here is available without an explicit `use`.
+//
+// Phase 2: function stubs only. Type declarations (Int, String, Option, etc.)
+// are resolved by the type checker until Phase 3 compiles stdlib from source.
+
+/// Print a value followed by a newline.
+pub fn println(value: String) -> Unit { }
+
+/// Print a value to stderr followed by a newline.
+pub fn eprintln(value: String) -> Unit { }
+
+/// Format a value as a string.
+pub fn format(value: String) -> String { "" }
+
+/// Assert a condition; panic if false.
+pub fn assert(condition: Bool) -> Unit { }
+
+/// Assert two values are equal; panic if not.
+pub fn assert_eq(left: String, right: String) -> Unit { }
+
+/// Unconditionally terminate with a message.
+pub fn panic(message: String) -> Unit { }

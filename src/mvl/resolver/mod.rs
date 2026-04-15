@@ -15,8 +15,10 @@ pub mod cycle_check;
 pub mod visibility;
 
 use crate::mvl::parser::ast::{Decl, Program, UseDecl};
+use crate::mvl::parser::Parser;
 use cycle_check::detect_cycles;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -158,15 +160,56 @@ impl ResolveResult {
 /// `module_name` should be a dot-separated module path derived from the file
 /// path, e.g. `"mylib"` for `mylib.mvl`, or `"mylib.io"` for `mylib/io.mvl`.
 ///
+/// If `stdlib_dir` is provided, `core.mvl` is loaded from that directory and
+/// injected as the `"std"` module so that `use std.*` declarations resolve.
+/// When `None`, the legacy in-memory stub (`stdlib_module()`) is used.
+///
 /// # Example
 /// ```ignore
 /// use mvl::mvl::resolver::resolve_project;
 /// // Parse each .mvl file into a Program, then resolve:
-/// // let result = resolve_project(vec![("mylib".to_string(), prog)]);
+/// // let result = resolve_project(vec![("mylib".to_string(), prog)], None);
 /// ```
-pub fn resolve_project(modules: Vec<(String, Program)>) -> ResolveResult {
-    let mut resolver = Resolver::new(modules);
+pub fn resolve_project(
+    modules: Vec<(String, Program)>,
+    stdlib_dir: Option<&Path>,
+) -> ResolveResult {
+    let stdlib = stdlib_dir
+        .and_then(load_stdlib_module)
+        .unwrap_or_else(stdlib_module);
+    let mut resolver = Resolver::new(modules, stdlib);
     resolver.resolve()
+}
+
+/// Load the `std` module by parsing `core.mvl` from `stdlib_dir`.
+///
+/// Returns `None` if the file is missing or unparseable (caller falls back to
+/// the in-memory stub).
+fn load_stdlib_module(stdlib_dir: &Path) -> Option<ResolvedModule> {
+    let core_path = stdlib_dir.join("core.mvl");
+    let src = std::fs::read_to_string(&core_path)
+        .map_err(|e| {
+            eprintln!(
+                "mvl: warning: could not read {} — falling back to built-in stdlib stub: {e}",
+                core_path.display()
+            );
+        })
+        .ok()?;
+    let (mut parser, _) = Parser::new(&src);
+    let prog = parser.parse_program();
+    if !parser.errors().is_empty() {
+        eprintln!(
+            "mvl: warning: parse errors in {} — falling back to built-in stdlib stub",
+            core_path.display()
+        );
+        return None;
+    }
+    let exports = collect_exports(&prog);
+    Some(ResolvedModule {
+        name: vec!["std".to_string()],
+        exports,
+        imports: Vec::new(),
+    })
 }
 
 // ── Internal resolver ──────────────────────────────────────────────────────
@@ -174,16 +217,21 @@ pub fn resolve_project(modules: Vec<(String, Program)>) -> ResolveResult {
 struct Resolver {
     /// The parsed programs keyed by module name.
     programs: Vec<(String, Program)>,
+    /// The stdlib module injected under the `"std"` key.
+    stdlib: ResolvedModule,
 }
 
 impl Resolver {
-    fn new(programs: Vec<(String, Program)>) -> Self {
-        Resolver { programs }
+    fn new(programs: Vec<(String, Program)>, stdlib: ResolvedModule) -> Self {
+        Resolver { programs, stdlib }
     }
 
     fn resolve(&mut self) -> ResolveResult {
         let mut errors = Vec::new();
         let mut modules: HashMap<String, ResolvedModule> = HashMap::new();
+
+        // Inject stdlib under the "std" key so `use std.*` imports resolve.
+        modules.insert("std".to_string(), self.stdlib.clone());
 
         // Pass 1: collect exported names for each module.
         for (name, prog) in &self.programs {
@@ -352,9 +400,8 @@ fn build_import_graph(modules: &HashMap<String, ResolvedModule>) -> HashMap<Stri
 /// as actual `.mvl` source files in a future milestone.
 pub fn stdlib_module() -> ResolvedModule {
     let mut exports = HashSet::new();
-    // Minimal Phase 1 stdlib surface
+    // Minimal Phase 1 stdlib surface — must stay in sync with std/core.mvl
     for name in &[
-        "print",
         "println",
         "eprintln",
         "format",
@@ -426,7 +473,10 @@ mod tests {
     fn name_collision_rejected() {
         let a = parse("pub type Foo = struct { x: Int }");
         let b = parse("use mod_a::Foo;\nuse mod_a::Foo;"); // duplicate import
-        let result = resolve_project(vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)]);
+        let result = resolve_project(
+            vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+            None,
+        );
         let has_collision = result
             .errors
             .iter()
@@ -442,7 +492,7 @@ mod tests {
     #[test]
     fn missing_module_rejected() {
         let a = parse("use does_not_exist::Foo;");
-        let result = resolve_project(vec![("mod_a".to_string(), a)]);
+        let result = resolve_project(vec![("mod_a".to_string(), a)], None);
         let has_missing = result
             .errors
             .iter()
@@ -459,7 +509,10 @@ mod tests {
     fn private_item_rejected() {
         let a = parse("fn secret() -> Int { 0 }"); // private
         let b = parse("use mod_a::secret;"); // tries to import private item
-        let result = resolve_project(vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)]);
+        let result = resolve_project(
+            vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+            None,
+        );
         let has_not_exported = result
             .errors
             .iter()
@@ -476,7 +529,10 @@ mod tests {
     fn reexport_public() {
         let a = parse("pub type Foo = struct { x: Int }");
         let b = parse("pub fn bar() -> Int { 0 }");
-        let result = resolve_project(vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)]);
+        let result = resolve_project(
+            vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+            None,
+        );
         assert!(
             result.is_ok(),
             "valid project must resolve without errors: {:?}",
@@ -490,7 +546,10 @@ mod tests {
         // a imports from b, b imports from a
         let a = parse("use mod_b::Bar;\npub type Foo = struct { x: Int }");
         let b = parse("use mod_a::Foo;\npub type Bar = struct { y: Int }");
-        let result = resolve_project(vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)]);
+        let result = resolve_project(
+            vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+            None,
+        );
         let has_cycle = result
             .errors
             .iter()
@@ -506,7 +565,7 @@ mod tests {
     #[test]
     fn file_module_correspondence() {
         let prog = parse("pub fn greet() -> Int { 0 }");
-        let result = resolve_project(vec![("greet_module".to_string(), prog)]);
+        let result = resolve_project(vec![("greet_module".to_string(), prog)], None);
         assert!(result.modules.contains_key("greet_module"));
     }
 
