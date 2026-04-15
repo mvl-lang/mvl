@@ -92,7 +92,7 @@ pub fn check(prog: &Program) -> CheckResult {
 ///
 /// Per 002-effect-system/Req 2: "Effects MUST be fine-grained, not a single `IO` bucket.
 /// The minimum set: Console, FileRead, FileWrite, FileDelete, Net, DB, ProcessSpawn,
-/// Random, Clock, Env, Log, Async."
+/// Random, CryptoRandom, Clock, Env, Log, Async."
 const VALID_EFFECT_NAMES: &[&str] = &[
     "Console",
     "FileRead",
@@ -102,6 +102,7 @@ const VALID_EFFECT_NAMES: &[&str] = &[
     "DB",
     "ProcessSpawn",
     "Random",
+    "CryptoRandom",
     "Clock",
     "Env",
     "Log",

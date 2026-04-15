@@ -1,0 +1,22 @@
+// MVL standard library — random module
+//
+// Non-deterministic pseudo-random generation. Requires `! Random`.
+// NOT cryptographically secure — use std.crypto.crypto_random_bytes for that.
+// Import with: use std.random.{int, float, bytes, choice, shuffle}
+//
+// Phase 2: function stubs with correct signatures and effects.
+
+/// Returns a random integer in [min, max] (inclusive). Requires `! Random`.
+pub fn int(min: Int, max: Int) -> Int ! Random { 0 }
+
+/// Returns a random float in [0.0, 1.0). Requires `! Random`.
+pub fn float() -> Float ! Random { 0.0 }
+
+/// Returns n pseudo-random bytes. Requires `! Random`.
+pub fn bytes(n: Int) -> List<Int> ! Random { [] }
+
+/// Returns a random element from the list, or None if empty. Requires `! Random`.
+pub fn choice<T>(list: List<T>) -> Option<T> ! Random { None }
+
+/// Shuffles the list in place using Fisher-Yates. Requires `! Random`.
+pub fn shuffle<T>(list: List<T>) -> List<T> ! Random { [] }

@@ -12,7 +12,14 @@ use std::path::{Path, PathBuf};
 // ── Embedded files ──────────────────────────────────────────────────────────
 
 /// All stdlib `.mvl` source files embedded at compile time.
-pub const STDLIB_FILES: &[(&str, &str)] = &[("core.mvl", include_str!("../../../std/core.mvl"))];
+pub const STDLIB_FILES: &[(&str, &str)] = &[
+    ("core.mvl", include_str!("../../../std/core.mvl")),
+    ("time.mvl", include_str!("../../../std/time.mvl")),
+    ("json.mvl", include_str!("../../../std/json.mvl")),
+    ("regex.mvl", include_str!("../../../std/regex.mvl")),
+    ("random.mvl", include_str!("../../../std/random.mvl")),
+    ("crypto.mvl", include_str!("../../../std/crypto.mvl")),
+];
 
 /// The stdlib version — tied to the compiler version so they stay in sync.
 pub const STDLIB_VERSION: &str = env!("CARGO_PKG_VERSION");

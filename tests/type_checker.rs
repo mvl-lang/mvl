@@ -1886,7 +1886,7 @@ fn invalid_effect_name_rejected() {
 /// All canonical effect names MUST be accepted (002-effect-system/Req 2).
 #[test]
 fn valid_effect_names_accepted() {
-    // Test all 12 canonical effect names from VALID_EFFECT_NAMES in checker/mod.rs.
+    // Test all 13 canonical effect names from VALID_EFFECT_NAMES in checker/mod.rs.
     let canonical = [
         "Console",
         "FileRead",
@@ -1896,6 +1896,7 @@ fn valid_effect_names_accepted() {
         "DB",
         "ProcessSpawn",
         "Random",
+        "CryptoRandom",
         "Clock",
         "Env",
         "Log",
@@ -2459,4 +2460,116 @@ fn refinement_operators_lt_le_ge_eq() {
             );
         }
     }
+}
+
+// ── Stdlib corpus tests (#46) ────────────────────────────────────────────────
+
+#[test]
+fn stdlib_time_corpus_parses_and_checks() {
+    // GIVEN: the time stdlib corpus (valid programs using std.time)
+    // THEN: no type errors (UndefinedFunction for stdlib symbols is OK without stdlib loaded)
+    let src = include_str!("corpus/03_stdlib/time_operations.mvl");
+    let result = check_src(src);
+    let serious: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            !matches!(
+                e,
+                CheckError::UndefinedFunction { .. } | CheckError::UndefinedVariable { .. }
+            )
+        })
+        .collect();
+    assert!(
+        serious.is_empty(),
+        "time_operations corpus should have no serious errors, got: {serious:?}"
+    );
+}
+
+#[test]
+fn stdlib_json_corpus_parses_and_checks() {
+    // GIVEN: the json stdlib corpus (valid programs using std.json)
+    // THEN: no type errors (UndefinedFunction for stdlib symbols is OK without stdlib loaded)
+    let src = include_str!("corpus/03_stdlib/json_operations.mvl");
+    let result = check_src(src);
+    let serious: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            !matches!(
+                e,
+                CheckError::UndefinedFunction { .. } | CheckError::UndefinedVariable { .. }
+            )
+        })
+        .collect();
+    assert!(
+        serious.is_empty(),
+        "json_operations corpus should have no serious errors, got: {serious:?}"
+    );
+}
+
+#[test]
+fn stdlib_regex_corpus_parses_and_checks() {
+    // GIVEN: the regex stdlib corpus (valid programs using std.regex)
+    // THEN: no type errors (UndefinedFunction for stdlib symbols is OK without stdlib loaded)
+    let src = include_str!("corpus/03_stdlib/regex_operations.mvl");
+    let result = check_src(src);
+    let serious: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            !matches!(
+                e,
+                CheckError::UndefinedFunction { .. } | CheckError::UndefinedVariable { .. }
+            )
+        })
+        .collect();
+    assert!(
+        serious.is_empty(),
+        "regex_operations corpus should have no serious errors, got: {serious:?}"
+    );
+}
+
+#[test]
+fn stdlib_random_corpus_parses_and_checks() {
+    // GIVEN: the random stdlib corpus (valid programs using std.random)
+    // THEN: no type errors (UndefinedFunction for stdlib symbols is OK without stdlib loaded)
+    let src = include_str!("corpus/03_stdlib/random_operations.mvl");
+    let result = check_src(src);
+    let serious: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            !matches!(
+                e,
+                CheckError::UndefinedFunction { .. } | CheckError::UndefinedVariable { .. }
+            )
+        })
+        .collect();
+    assert!(
+        serious.is_empty(),
+        "random_operations corpus should have no serious errors, got: {serious:?}"
+    );
+}
+
+#[test]
+fn stdlib_crypto_corpus_parses_and_checks() {
+    // GIVEN: the crypto stdlib corpus (valid programs using std.crypto)
+    // THEN: no type errors (UndefinedFunction for stdlib symbols is OK without stdlib loaded)
+    let src = include_str!("corpus/03_stdlib/crypto_operations.mvl");
+    let result = check_src(src);
+    let serious: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            !matches!(
+                e,
+                CheckError::UndefinedFunction { .. } | CheckError::UndefinedVariable { .. }
+            )
+        })
+        .collect();
+    assert!(
+        serious.is_empty(),
+        "crypto_operations corpus should have no serious errors, got: {serious:?}"
+    );
 }

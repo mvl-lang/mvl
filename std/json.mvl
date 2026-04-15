@@ -1,0 +1,29 @@
+// MVL standard library — json module
+//
+// Pure JSON encode/decode. No I/O effects — JSON is a data transformation.
+// Import with: use std.json.{Value, encode, decode}
+//
+// Phase 2: function stubs with correct signatures.
+
+/// A dynamically-typed JSON value.
+pub type Value = enum {
+    Null,
+    Bool(Bool),
+    Number(Float),
+    String(String),
+    Array(List<Value>),
+    Object(Map<String, Value>),
+}
+
+/// Serialises a Value to a JSON string.
+/// Pure — encoding is a deterministic transformation.
+pub fn encode(v: Value) -> String { "" }
+
+/// Parses a JSON string into a Value.
+/// Returns Err if the input is not valid JSON.
+/// Pure — parsing is a deterministic transformation.
+///
+/// IFC note: ideally `decode<L>(s: L<String>) -> Result<L<Value>, String>` so that
+/// taint from network input propagates to the result. Deferred pending label-polymorphic
+/// generics (#179).
+pub fn decode(s: String) -> Result<Value, String> { Err("") }
