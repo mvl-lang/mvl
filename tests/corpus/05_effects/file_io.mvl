@@ -1,0 +1,147 @@
+// Corpus: File I/O with effects and IFC (Requirement 7 / issue #44)
+// Exercises: FileRead, FileWrite, FileDelete effects; Tainted labels on external
+//            input; Result wrapping; stdin as ! Console; pure path construction.
+//
+// All declarations are valid: effect annotations match actual usage.
+// Note: reference arguments (&T) use pass-by-value syntax in corpus tests;
+// the stdlib stubs declare &T parameters but callers omit & as is conventional
+// in MVL corpus tests (see ADR-0010).
+
+use std.io.{
+    File, Path, BufReader, BufWriter, DirEntry, Metadata, Stdin,
+    path, join, exists, is_file, is_dir,
+    open, close, read_to_string, write, append,
+    buf_reader, buf_writer, read_line, write_line,
+    create_dir_all, remove, read_dir, metadata, chmod,
+    create_symlink, read_link,
+    stdin, stdin_read_line, stdin_read_to_string,
+}
+
+// ── Pure path construction (no effects) ───────────────────────────────────
+
+total fn config_path() -> Path {
+    join(path("/etc/app"), "config.toml")
+}
+
+total fn log_dir() -> Path {
+    path("/var/log/app")
+}
+
+// ── File read (! FileRead) ─────────────────────────────────────────────────
+
+fn load_config() -> Result<Tainted<String>, String> ! FileRead {
+    read_to_string(config_path())
+}
+
+fn first_line_of(p: Path) -> Result<Tainted<String>, String> ! FileRead {
+    let f = open(p)?;
+    let r = buf_reader(f);
+    read_line(r)
+}
+
+// ── File write (! FileWrite) ───────────────────────────────────────────────
+
+fn save_report(p: Path, content: String) -> Result<Unit, String> ! FileWrite {
+    write(p, content)
+}
+
+fn append_log_line(p: Path, line: String) -> Result<Unit, String> ! FileWrite {
+    append(p, line)
+}
+
+fn write_lines(p: Path) -> Result<Unit, String> ! FileWrite {
+    let f = open(p)?;
+    let w = buf_writer(f);
+    write_line(w, "header")
+}
+
+// ── Filesystem operations ─────────────────────────────────────────────────
+
+fn ensure_log_dir() -> Result<Unit, String> ! FileWrite {
+    create_dir_all(log_dir())
+}
+
+fn cleanup(p: Path) -> Result<Unit, String> ! FileDelete {
+    remove(p)
+}
+
+fn list_configs(dir: Path) -> Result<List<DirEntry>, String> ! FileRead {
+    read_dir(dir)
+}
+
+fn file_size(p: Path) -> Result<Int, String> ! FileRead {
+    let m = metadata(p)?;
+    Ok(m.len)
+}
+
+fn make_executable(p: Path) -> Result<Unit, String> ! FileWrite {
+    chmod(p, 0o755)
+}
+
+fn link_config(target: Path, link: Path) -> Result<Unit, String> ! FileWrite {
+    create_symlink(target, link)
+}
+
+fn resolve_link(p: Path) -> Result<Path, String> ! FileRead {
+    read_link(p)
+}
+
+// ── Mixed effects (callers declare superset) ──────────────────────────────
+
+fn rotate_log(src: Path, dst: Path, new_content: String) -> Result<Unit, String> ! FileRead, FileWrite, FileDelete {
+    let old = read_to_string(src)?;
+    write(dst, old)?;
+    remove(src)?;
+    write(src, new_content)
+}
+
+// ── Path queries (! FileRead) ─────────────────────────────────────────────
+
+fn check_exists(p: Path) -> Result<Bool, String> ! FileRead {
+    Ok(exists(p))
+}
+
+fn check_regular_file(p: Path) -> Result<Bool, String> ! FileRead {
+    Ok(is_file(p))
+}
+
+// ── IFC: Tainted data must not flow into sensitive operations ─────────────
+
+fn sanitize_path(raw: Tainted<String>) -> Result<Path, String> {
+    // Caller is responsible for validating raw input before constructing a Path.
+    // This is a placeholder; real sanitization would check for traversal, etc.
+    Ok(path(""))
+}
+
+fn process_file_contents(data: Tainted<String>) -> Bool {
+    // Tainted<String> can be inspected but must not be used as a path or query
+    // without sanitization. Returning a Bool is safe (no tainted data escapes).
+    true
+}
+
+fn read_and_process(p: Path) -> Result<Bool, String> ! FileRead {
+    let contents = read_to_string(p)?;
+    Ok(process_file_contents(contents))
+}
+
+// ── Standard input (! Console) ────────────────────────────────────────────
+
+fn prompt(msg: String) -> Result<Tainted<String>, String> ! Console {
+    println(msg);
+    let s = stdin();
+    stdin_read_line(s)
+}
+
+fn read_all_stdin() -> Result<Tainted<String>, String> ! Console {
+    let s = stdin();
+    stdin_read_to_string(s)
+}
+
+// ── Combined I/O and Console ──────────────────────────────────────────────
+
+fn interactive_save(output_path: Path) -> Result<Unit, String> ! Console, FileWrite {
+    let s = stdin();
+    let _ = stdin_read_to_string(s)?;
+    // Write user input to a known, trusted output_path (not derived from stdin input).
+    write(output_path, "received input")
+}

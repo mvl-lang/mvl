@@ -2573,3 +2573,26 @@ fn stdlib_crypto_corpus_parses_and_checks() {
         "crypto_operations corpus should have no serious errors, got: {serious:?}"
     );
 }
+
+#[test]
+fn file_io_corpus_parses_and_checks() {
+    // GIVEN: the file I/O effects corpus (valid programs using std.io, #44)
+    // THEN: no serious type errors (UndefinedFunction/UndefinedVariable for
+    //       stdlib symbols is OK without stdlib loaded)
+    let src = include_str!("corpus/05_effects/file_io.mvl");
+    let result = check_src(src);
+    let serious: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            !matches!(
+                e,
+                CheckError::UndefinedFunction { .. } | CheckError::UndefinedVariable { .. }
+            )
+        })
+        .collect();
+    assert!(
+        serious.is_empty(),
+        "file_io corpus should have no serious errors, got: {serious:?}"
+    );
+}
