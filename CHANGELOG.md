@@ -6,6 +6,25 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.31.0] — 2026-04-15 (feat: stdlib structured logging — std.log with IFC enforcement)
+
+### Added
+
+- **std.log module** — structured logging with compile-time IFC enforcement, zero-cost effects (#54).
+  - Four severity levels: `log_debug()`, `log_info()`, `log_warn()`, `log_error()`
+  - Structured key-value fields (Map<String, String>) prevent accidental secret inclusion via string interpolation
+  - `! Log` effect marker — functions without this effect provably never log
+  - IFC enforcement: `Secret<T>`, `Tainted<T>`, and `Clean<T>` arguments rejected at compile time (OWASP A07 by construction)
+- **IFC label propagation in map literals** — Map values' labels now join into the enclosing map type, catching secrets embedded in structured fields
+- **Implicit flow analysis** — log functions added to `PUBLIC_SINKS` so calls inside high-PC branches are flagged (Phase 3)
+- **Test coverage** — corpus test `tests/corpus/05_effects/logging.mvl` and 9 type checker tests including secret-in-fields-map validation
+
+### Fixed
+
+- **Map literal label propagation** — `{"key": secret_val}` now correctly types as `Secret<Map<String,String>>` so the log-sink IFC check catches embedded secrets
+- **IFC spec cross-reference** — updated from wrong Req 11 to correct Req 6
+- **Spec stale note** — removed "remains Phase 2" deferral from 003-information-flow/spec.md Req 6
+
 ## [0.30.0] — 2026-04-15 (feat: stdlib file I/O — std.io with effects and IFC)
 
 ### Added

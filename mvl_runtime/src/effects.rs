@@ -60,6 +60,14 @@ pub struct Panic;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Terminal;
 
+/// Marks a function that may emit structured log records.
+///
+/// A function without `! Log` provably never logs — the compiler guarantees silence.
+/// IFC invariant: `Secret<T>` arguments are rejected at compile time (OWASP A07).
+/// See `std.log` and issue #54.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Log;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,5 +83,6 @@ mod tests {
         assert_eq!(std::mem::size_of::<Alloc>(), 0);
         assert_eq!(std::mem::size_of::<Panic>(), 0);
         assert_eq!(std::mem::size_of::<Terminal>(), 0);
+        assert_eq!(std::mem::size_of::<Log>(), 0);
     }
 }

@@ -174,10 +174,10 @@ impl TypeEnv {
         // params: Vec<Ty> is empty here because println/print are variadic;
         // the checker special-cases them to skip arity checking.
         //
-        // IFC NOTE (003-information-flow Req 6, Deferred — Phase 2):
+        // IFC NOTE (003-information-flow Req 6):
         // Per spec, logging functions MUST accept only `Public<T>` arguments.
-        // Enforcing this label constraint requires stdlib `log` module integration
-        // and is deferred to Phase 2.  For now, println/print accept any argument.
+        // println/print enforce this via LoggingLabelViolation in infer_fn_call.
+        // std.log (log_debug/info/warn/error) enforces the same constraint (#54).
         self.fns.insert(
             "println".into(),
             FnInfo {
@@ -535,6 +535,23 @@ impl TypeEnv {
                 totality: None,
             },
         );
+        // std.log — structured logging with ! Log effect (#54, 003-information-flow Req 6).
+        // IFC: log_* functions accept only Public<T> arguments.
+        // Secret<T> / Tainted<T> / Clean<T> arguments are rejected by the IFC check in
+        // `infer_fn_call` (see LoggingLabelViolation).  The `fields` map uses variadic
+        // treatment (empty params sentinel) so callers may pass any Map<String,String>
+        // literal; the IFC label check validates each argument individually.
+        for log_fn in &["log_debug", "log_info", "log_warn", "log_error"] {
+            self.fns.insert(
+                (*log_fn).into(),
+                FnInfo {
+                    params: vec![],
+                    ret: Ty::Unit,
+                    effects: vec!["Log".into()],
+                    totality: None,
+                },
+            );
+        }
     }
 
     // ── Scope management ─────────────────────────────────────────────────

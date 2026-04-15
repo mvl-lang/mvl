@@ -19,6 +19,7 @@ pub const STDLIB_FILES: &[(&str, &str)] = &[
     ("regex.mvl", include_str!("../../../std/regex.mvl")),
     ("random.mvl", include_str!("../../../std/random.mvl")),
     ("crypto.mvl", include_str!("../../../std/crypto.mvl")),
+    ("log.mvl", include_str!("../../../std/log.mvl")),
 ];
 
 /// The stdlib version — tied to the compiler version so they stay in sync.
