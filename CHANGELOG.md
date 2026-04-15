@@ -6,6 +6,23 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.25.0] — 2026-04-15 (feat: extended collection operations — take, skip, windows, chunks, flatten, partition, group_by)
+
+### Added
+
+- **Extended collection operations** — Nine new methods for List<T> providing advanced collection manipulation (#64):
+  - **Slicing operations**: `take(n)`, `skip(n)` — take/drop first N elements
+  - **Predicate-based slicing**: `take_while(f)`, `skip_while(f)` — take/skip while predicate holds
+  - **Windowing**: `windows(n)` — sliding window over elements, `chunks(n)` — fixed-size chunking
+  - **Merging**: `flatten()` — flatten List<List<T>> to List<T>
+  - **Partitioning**: `partition(f)` — split list by predicate, `group_by(f)` — group by key function returning Map<K, List<T>>
+- **Full runtime coverage** — 26 new tests for collection operations validating element preservation, edge cases (empty lists, boundaries), and correct value assertions. Brings stdlib test suite from 76 to 114 tests.
+- **Transpiler support** — Special-case Rust emission for 11 methods that don't map 1:1 to stdlib methods (iterator adapters, map/collect patterns, HashMap fold for group_by, Option<&T> to Option<T> conversion for first/last, reference borrowing for contains).
+
+### Fixed
+
+- **Review findings from PR #166** — Added missing type inference rules and transpiler handlers for all 9 new collection methods, ensured complete test coverage for behavior validation.
+
 ## [0.24.1] — 2026-04-15 (fix: prevent runtime panics in slice/substring operations)
 
 ### Fixed
@@ -13,7 +30,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 - **Slice/substring safety** — Emit safe Rust block expressions for `slice` and `substring` that prevent panics on negative or out-of-bounds indices. Both operations now clamp indices to valid ranges, handle inverted ranges gracefully, and never panic. `substring` uses char-based iteration for UTF-8 safety.
 - **Checker validation for slice/substring** — Add argument count and type validation in the type checker. Wrong argument counts or non-`Int` arguments now return `Ty::Unknown` instead of silently accepting the call, allowing the checker to catch misuse before transpilation.
 - **Safety contract test coverage** — Add comprehensive tests for documented safety contracts: out-of-bounds indices, inverted ranges, and boundary conditions for both `slice` and `substring`.
-
 ## [0.24.0] — 2026-04-15 (feat: stdlib correctness test suite with 76 tests)
 
 ### Added
