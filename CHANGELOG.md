@@ -6,6 +6,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-04-15 (feat: stdlib method resolution for Int + Float types)
+
+### Added
+
+- **Stdlib method dispatch for Int and Float** — Method calls on Int and Float now resolve to concrete types instead of `Unknown`. Completes prelude type method coverage alongside String, List, Map, Set.
+  - **Int methods**: to_float, to_string, abs, pow, min, max, clamp, is_positive, is_negative, is_zero
+  - **Float methods**: to_int, to_string, abs, ceil, floor, round, sqrt, min, max, clamp, is_nan, is_finite, is_infinite, is_positive, is_negative
+- **Corpus: core_types.mvl** — Demonstrates all eight prelude types (Int, Float, Bool, String, Array, Map, Set, Option, Result) with basic operations. Validates type checking and method dispatch across the full stdlib surface.
+
+### Fixed
+
+- **Corpus test harness** — New core_types.mvl corpus is now wired into tests/type_checker.rs via test function, ensuring all method types are actively validated.
+
 ## [0.20.0] — 2026-04-14 (feat: stdlib method resolution for string + collection ops)
 
 ### Added

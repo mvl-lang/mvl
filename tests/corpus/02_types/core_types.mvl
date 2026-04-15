@@ -1,0 +1,239 @@
+// Corpus: core prelude types — Int, Float, Bool, String, Array, Map, Set, Option, Result (#42)
+// Demonstrates basic operations and methods for all eight prelude types.
+// All examples must parse and type-check without errors.
+
+// ── Int ───────────────────────────────────────────────────────────────────────
+
+fn int_to_float(n: Int) -> Float {
+    n.to_float()
+}
+
+fn int_abs(n: Int) -> Int {
+    n.abs()
+}
+
+fn int_min(a: Int, b: Int) -> Int {
+    a.min(b)
+}
+
+fn int_max(a: Int, b: Int) -> Int {
+    a.max(b)
+}
+
+fn int_pow(base: Int, exp: Int) -> Int {
+    base.pow(exp)
+}
+
+fn int_clamp(n: Int, lo: Int, hi: Int) -> Int {
+    n.clamp(lo, hi)
+}
+
+fn int_to_string(n: Int) -> String {
+    n.to_string()
+}
+
+fn int_is_positive(n: Int) -> Bool {
+    n.is_positive()
+}
+
+fn int_is_negative(n: Int) -> Bool {
+    n.is_negative()
+}
+
+fn int_is_zero(n: Int) -> Bool {
+    n.is_zero()
+}
+
+// ── Float ─────────────────────────────────────────────────────────────────────
+
+fn float_to_int(x: Float) -> Int {
+    x.to_int()
+}
+
+fn float_abs(x: Float) -> Float {
+    x.abs()
+}
+
+fn float_ceil(x: Float) -> Float {
+    x.ceil()
+}
+
+fn float_floor(x: Float) -> Float {
+    x.floor()
+}
+
+fn float_round(x: Float) -> Float {
+    x.round()
+}
+
+fn float_sqrt(x: Float) -> Float {
+    x.sqrt()
+}
+
+fn float_min(a: Float, b: Float) -> Float {
+    a.min(b)
+}
+
+fn float_max(a: Float, b: Float) -> Float {
+    a.max(b)
+}
+
+fn float_clamp(x: Float, lo: Float, hi: Float) -> Float {
+    x.clamp(lo, hi)
+}
+
+fn float_to_string(x: Float) -> String {
+    x.to_string()
+}
+
+fn float_is_nan(x: Float) -> Bool {
+    x.is_nan()
+}
+
+fn float_is_finite(x: Float) -> Bool {
+    x.is_finite()
+}
+
+fn float_is_infinite(x: Float) -> Bool {
+    x.is_infinite()
+}
+
+fn float_is_positive(x: Float) -> Bool {
+    x.is_positive()
+}
+
+fn float_is_negative(x: Float) -> Bool {
+    x.is_negative()
+}
+
+// ── Bool ─────────────────────────────────────────────────────────────────────
+
+fn bool_and(a: Bool, b: Bool) -> Bool {
+    a && b
+}
+
+fn bool_or(a: Bool, b: Bool) -> Bool {
+    a || b
+}
+
+fn bool_not(b: Bool) -> Bool {
+    !b
+}
+
+fn bool_eq(a: Bool, b: Bool) -> Bool {
+    a == b
+}
+
+// ── String ───────────────────────────────────────────────────────────────────
+
+fn string_parse_int(s: String) -> Result<Int, String> {
+    s.parse_int()
+}
+
+fn string_parse_float(s: String) -> Result<Float, String> {
+    s.parse_float()
+}
+
+fn string_len(s: String) -> Int {
+    s.len()
+}
+
+fn string_is_empty(s: String) -> Bool {
+    s.is_empty()
+}
+
+// ── Array / List ─────────────────────────────────────────────────────────────
+
+fn array_len(xs: List<Int>) -> Int {
+    xs.len()
+}
+
+fn array_first(xs: List<Int>) -> Option<Int> {
+    xs.first()
+}
+
+fn array_last(xs: List<Int>) -> Option<Int> {
+    xs.last()
+}
+
+fn array_is_empty(xs: List<Int>) -> Bool {
+    xs.is_empty()
+}
+
+fn array_contains(xs: List<Int>, x: Int) -> Bool {
+    xs.contains(x)
+}
+
+// ── Map ───────────────────────────────────────────────────────────────────────
+
+fn map_get(m: Map<String, Int>, k: String) -> Option<Int> {
+    m.get(k)
+}
+
+fn map_len(m: Map<String, Int>) -> Int {
+    m.len()
+}
+
+fn map_contains_key(m: Map<String, Int>, k: String) -> Bool {
+    m.contains_key(k)
+}
+
+fn map_keys(m: Map<String, Int>) -> List<String> {
+    m.keys()
+}
+
+fn map_values(m: Map<String, Int>) -> List<Int> {
+    m.values()
+}
+
+// ── Set ───────────────────────────────────────────────────────────────────────
+
+fn set_len(s: Set<Int>) -> Int {
+    s.len()
+}
+
+fn set_contains(s: Set<Int>, x: Int) -> Bool {
+    s.contains(x)
+}
+
+fn set_is_empty(s: Set<Int>) -> Bool {
+    s.is_empty()
+}
+
+fn set_to_list(s: Set<Int>) -> List<Int> {
+    s.to_list()
+}
+
+fn set_union(a: Set<Int>, b: Set<Int>) -> Set<Int> {
+    a.union(b)
+}
+
+// ── Option ────────────────────────────────────────────────────────────────────
+
+fn option_unwrap_or(x: Option<Int>, default: Int) -> Int {
+    match x {
+        Some(v) => v,
+        None    => default,
+    }
+}
+
+fn option_map(x: Option<Int>) -> Option<Float> {
+    match x {
+        Some(v) => Some(v.to_float()),
+        None    => None,
+    }
+}
+
+// ── Result ────────────────────────────────────────────────────────────────────
+
+fn result_propagate(s: String) -> Result<Int, String> {
+    let n = s.parse_int()?;
+    Ok(n * 2)
+}
+
+fn result_handle(r: Result<Int, String>) -> Int {
+    match r {
+        Ok(v)  => v,
+        Err(_) => 0,
+    }
+}

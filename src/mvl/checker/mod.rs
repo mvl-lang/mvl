@@ -1303,6 +1303,8 @@ impl TypeChecker {
         let label = ifc::join_opt(recv_label, arg_label);
         let base = recv_ty.unlabeled();
         let result = match base {
+            Ty::Int => Self::int_method_ty(method),
+            Ty::Float => Self::float_method_ty(method),
             Ty::String => Self::string_method_ty(method),
             Ty::List(elem_ty) => Self::list_method_ty(elem_ty.as_ref(), method, arg_tys),
             Ty::Named(name, type_args) => match name.as_str() {
@@ -1319,6 +1321,34 @@ impl TypeChecker {
             result
         } else {
             ifc::apply_label(label, result)
+        }
+    }
+
+    /// Return type for methods on `Int`.
+    fn int_method_ty(method: &str) -> Ty {
+        match method {
+            // Conversion
+            "to_float" => Ty::Float,
+            "to_string" => Ty::String,
+            // Arithmetic
+            "abs" | "pow" | "min" | "max" | "clamp" => Ty::Int,
+            // Predicates
+            "is_positive" | "is_negative" | "is_zero" => Ty::Bool,
+            _ => Ty::Unknown,
+        }
+    }
+
+    /// Return type for methods on `Float`.
+    fn float_method_ty(method: &str) -> Ty {
+        match method {
+            // Conversion
+            "to_int" => Ty::Int,
+            "to_string" => Ty::String,
+            // Arithmetic
+            "abs" | "ceil" | "floor" | "round" | "sqrt" | "min" | "max" | "clamp" => Ty::Float,
+            // Predicates
+            "is_nan" | "is_infinite" | "is_finite" | "is_positive" | "is_negative" => Ty::Bool,
+            _ => Ty::Unknown,
         }
     }
 
