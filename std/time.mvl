@@ -44,4 +44,4 @@ pub fn parse(s: String, pattern: String) -> Option<DateTime> { None }
 pub fn seconds(n: Int) -> Duration { Duration { secs: n, nanos: 0 } }
 
 /// Constructs a Duration from whole milliseconds.
-pub fn millis(n: Int) -> Duration { Duration { secs: 0, nanos: 0 } }
+pub fn millis(n: Int) -> Duration { Duration { secs: 0, nanos: n * 1_000_000 } }

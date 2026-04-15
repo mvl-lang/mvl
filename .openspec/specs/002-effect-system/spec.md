@@ -63,7 +63,8 @@ Effects MUST be fine-grained, not a single `IO` bucket. The minimum set of effec
 | `Net` | Network access (TCP, UDP, HTTP) |
 | `DB` | Database operations |
 | `ProcessSpawn` | Spawn external processes |
-| `Random` | Non-deterministic random generation |
+| `Random` | Non-deterministic random generation (PRNG) |
+| `CryptoRandom` | Cryptographically secure random generation (OS CSPRNG) |
 | `Clock` | Read system clock |
 | `Env` | Read/write environment variables |
 | `Log` | Write to log system |

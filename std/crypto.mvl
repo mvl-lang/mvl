@@ -15,4 +15,4 @@ pub fn sha512(data: String) -> String { "" }
 
 /// Returns n cryptographically secure random bytes. Requires `! CryptoRandom`.
 /// Distinct from std.random.bytes — uses the OS CSPRNG, not a PRNG.
-pub fn crypto_random_bytes(n: Int) -> List<Int> ! CryptoRandom { [] }
+pub fn crypto_random_bytes(n: Int) -> Secret<List<Int>> ! CryptoRandom { [] }
