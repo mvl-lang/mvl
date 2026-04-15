@@ -1,8 +1,10 @@
 # ADR-0009: XDG Paths and Multi-Location Source Resolution
 
-**Status:** Accepted
+**Status:** Accepted (extended by ADR-0011)
 **Date:** 2026-04-15
 **Context:** MVL needs a standard location for the stdlib, package cache, config, and build artifacts. `mvl run` currently resolves source from a single location. It needs to resolve from project root + stdlib + packages. All paths follow the XDG Base Directory Specification.
+
+**Note:** ADR-0011 extends this ADR with multi-version toolchain support (generational model). The XDG compliance and three-location resolution defined here remain the foundation. ADR-0011 adds versioned toolchain directories, symlinked binaries, shared Cargo cache, and project-local `.mvl/` cache.
 
 ## Decision
 
