@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.22.1] — 2026-04-15 (fix: corpus test output suppression)
+
+### Fixed
+
+- **Corpus test output** — Suppress checker error output for `corpus:expect-fail` files and show clean confirmation (`OK (violations detected as expected)`) instead of raw error lines. Restores per-file progress output for normal files.
+
 ## [0.22.0] — 2026-04-15 (feat: embed stdlib source in binary, extract to XDG on first run)
 
 ### Added
