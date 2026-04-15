@@ -145,10 +145,17 @@ pub fn resolve(expr: &TypeExpr) -> Ty {
                 let elem = resolve(&args[0]);
                 let size = match &args[1] {
                     TypeExpr::IntConst { value, .. } if *value >= 0 => *value as u64,
-                    _ => 0, // fallback for non-literal size (type variable or invalid)
+                    // Negative literal is invalid — propagate Unknown so the caller gets an error.
+                    TypeExpr::IntConst { .. } => return Ty::Unknown,
+                    // Type variable (e.g. `Array<T, N>` in a generic function): size not yet
+                    // known at resolve-time. Phase-1 limitation: treat as unresolved.
+                    // TODO(phase-2): track const-generic variables in the checker environment.
+                    _ => 0,
                 };
                 Ty::Array(Box::new(elem), size)
             }
+            // Array with wrong argument count — always an error.
+            "Array" => Ty::Unknown,
             _ => Ty::Named(name.clone(), args.iter().map(resolve).collect()),
         },
         TypeExpr::Option { inner, .. } => Ty::Option(Box::new(resolve(inner))),
@@ -423,5 +430,56 @@ mod tests {
         let a = Ty::Array(Box::new(Ty::Int), 16);
         let b = Ty::Array(Box::new(Ty::Bool), 16);
         assert!(!types_compatible(&a, &b));
+    }
+
+    #[test]
+    fn resolve_array_negative_size_is_unknown() {
+        let span = s();
+        let expr = TypeExpr::Base {
+            name: "Array".to_string(),
+            args: vec![
+                TypeExpr::Base {
+                    name: "Int".to_string(),
+                    args: vec![],
+                    span,
+                },
+                TypeExpr::IntConst { value: -1, span },
+            ],
+            span,
+        };
+        assert_eq!(resolve(&expr), Ty::Unknown);
+    }
+
+    #[test]
+    fn resolve_array_wrong_arg_count_is_unknown() {
+        let span = s();
+        let one_arg = TypeExpr::Base {
+            name: "Array".to_string(),
+            args: vec![TypeExpr::Base {
+                name: "Int".to_string(),
+                args: vec![],
+                span,
+            }],
+            span,
+        };
+        assert_eq!(resolve(&one_arg), Ty::Unknown);
+    }
+
+    #[test]
+    fn resolve_array_zero_size() {
+        let span = s();
+        let expr = TypeExpr::Base {
+            name: "Array".to_string(),
+            args: vec![
+                TypeExpr::Base {
+                    name: "Int".to_string(),
+                    args: vec![],
+                    span,
+                },
+                TypeExpr::IntConst { value: 0, span },
+            ],
+            span,
+        };
+        assert_eq!(resolve(&expr), Ty::Array(Box::new(Ty::Int), 0));
     }
 }

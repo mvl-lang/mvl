@@ -6,6 +6,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.26.0] — 2026-04-15 (feat: const generics and Array<T, N> fixed-size array type)
+
+### Added
+
+- **Const generic parameters** — New syntax for declaring const generic parameters: `type Buf<T, const N: Int> = ...` and `fn fill<T, const N: Int>(...) { }`. Const parameters are forwarded to Rust as `const N: usize` in the generated code (#68).
+- **Fixed-size array type** — New built-in `Array<T, N>` type mapping to Rust's `[T; N]` syntax. Arrays with different sizes are treated as distinct types: `Array<Int, 16> ≠ Array<Int, 32>`. Size-aware type compatibility enforced in the checker.
+- **Parser support** — Integer literals in type argument position (`Array<T, 16>`) and `const N: Type` syntax in generic parameter lists.
+- **Checker support** — `Ty::Array(elem, size)` type variant with size-aware compatibility checking. Negative and invalid size arguments resolve to `Ty::Unknown` with proper error propagation.
+- **Transpiler support** — Array<T, N> emits to Rust fixed-size array syntax `[T; N]`. Const generic parameters emit as `const N: usize` in struct, enum, and function signatures.
+- **Phase 1 limitation handling** — Type-variable array sizes in generic functions (`Array<T, N>` where N is a const param) defer size verification to Rust (compile-time), with validation of literal sizes in the MVL checker.
+
+### Changed
+
+- `TypeDecl.params` and `FnDecl.type_params` now use `Vec<GenericParam>` enum instead of `Vec<String>`, allowing mixed type and const parameters.
+- All type and function declaration emission (emit_struct, emit_enum, emit_alias, emit_generics) updated to handle const generic parameters.
+
+### Fixed
+
+- **Review findings** — Negative array size literals and wrong argument counts now properly return `Ty::Unknown` and propagate as type errors instead of silently resolving to zero-size arrays. Refined type aliases with const generics now include the generic parameters in the emitted struct definition.
+
 ## [0.25.0] — 2026-04-15 (feat: extended collection operations — take, skip, windows, chunks, flatten, partition, group_by)
 
 ### Added

@@ -223,7 +223,12 @@ fn emit_alias(cg: &mut Codegen, name: &str, params: &[GenericParam], ty: &TypeEx
             } else {
                 emit_derive(cg, &["Debug", "Clone", "PartialEq", "PartialOrd"]);
             }
-            cg.line(&format!("pub struct {}(pub {});", name, inner_str));
+            cg.line(&format!(
+                "pub struct {}{}(pub {});",
+                name,
+                generic_params(params),
+                inner_str
+            ));
             cg.blank();
             cg.line(&format!("impl {} {{", name));
             cg.push_indent();
@@ -293,7 +298,15 @@ fn generic_params(params: &[GenericParam]) -> String {
 /// Convert an MVL [`TypeExpr`] to its Rust representation.
 pub fn emit_type_expr(ty: &TypeExpr) -> String {
     match ty {
-        TypeExpr::IntConst { value, .. } => value.to_string(),
+        TypeExpr::IntConst { value, .. } => {
+            if *value < 0 {
+                // Negative array sizes are invalid — emit a sentinel that will produce a clear
+                // Rust compile error rather than silently emitting a negative literal.
+                "__mvl_invalid_negative_array_size__".to_string()
+            } else {
+                value.to_string()
+            }
+        }
         TypeExpr::Base { name, args, .. } => {
             // Array<T, N> → [T; N]
             if name == "Array" && args.len() == 2 {

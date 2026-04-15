@@ -665,9 +665,14 @@ mod tests {
 
     #[test]
     fn parse_fn_with_const_generic() {
-        let (mut p, _) = Parser::new("fn fill<T, const N: Int>(item: T) -> Int { 0 }");
-        let _ = p.parse_program();
-        assert!(p.errors.is_empty(), "parse errors: {:?}", p.errors);
+        let d = fn_decl("fn fill<T, const N: Int>(item: T) -> Int { 0 }");
+        assert_eq!(
+            d.type_params,
+            vec![
+                GenericParam::Type("T".to_string()),
+                GenericParam::Const("N".to_string(), "Int".to_string()),
+            ]
+        );
     }
 
     #[test]

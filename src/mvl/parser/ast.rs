@@ -61,7 +61,7 @@ pub struct UseDecl {
 ///
 /// - `Type("T")` — a regular type variable: `<T>`
 /// - `Const("N", "Int")` — a const generic: `<const N: Int>`
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GenericParam {
     Type(String),
     Const(String, String),
