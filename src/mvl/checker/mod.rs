@@ -1369,6 +1369,8 @@ impl TypeChecker {
             // Parsing
             "parse_int" => Ty::Result(Box::new(Ty::Int), Box::new(Ty::String)),
             "parse_float" => Ty::Result(Box::new(Ty::Float), Box::new(Ty::String)),
+            // Slicing: substring(start, end) — exclusive range → String
+            "substring" => Ty::String,
             _ => Ty::Unknown,
         }
     }
@@ -1438,6 +1440,8 @@ impl TypeChecker {
             "find" => Ty::Option(Box::new(elem_ty.clone())),
             // min/max — Option<T>
             "min" | "max" => Ty::Option(Box::new(elem_ty.clone())),
+            // slice(start, end) — exclusive range → List<T>
+            "slice" => Ty::List(Box::new(elem_ty.clone())),
             _ => Ty::Unknown,
         }
     }

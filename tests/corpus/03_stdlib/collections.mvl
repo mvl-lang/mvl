@@ -199,3 +199,19 @@ fn set_to_list() -> List<Int> {
     let s = {3, 1, 2};
     s.to_list()
 }
+
+// ── slice / substring / range (#67) ────────────────────────────────────────
+
+fn list_slice() -> List<Int> {
+    let xs: List<Int> = [1, 2, 3, 4, 5];
+    xs.slice(1, 4)
+}
+
+fn string_substring() -> String {
+    let s = "hello world";
+    s.substring(0, 5)
+}
+
+fn range_to_list() -> List<Int> {
+    range(0, 10)
+}

@@ -50,3 +50,58 @@ test fn list_string_is_empty_false() -> Unit {
     let xs: List<String> = ["a"];
     assert_eq(xs.is_empty(), false);
 }
+
+// ── slice ──────────────────────────────────────────────────────────────────
+
+test fn list_slice_basic() -> Unit {
+    let xs: List<Int> = [1, 2, 3, 4, 5];
+    let ys: List<Int> = xs.slice(1, 4);
+    assert_eq(ys.len(), 3);
+}
+
+test fn list_slice_from_start() -> Unit {
+    let xs: List<Int> = [10, 20, 30, 40];
+    let ys: List<Int> = xs.slice(0, 2);
+    assert_eq(ys.len(), 2);
+}
+
+test fn list_slice_full() -> Unit {
+    let xs: List<Int> = [1, 2, 3];
+    let ys: List<Int> = xs.slice(0, 3);
+    assert_eq(ys.len(), 3);
+}
+
+test fn list_slice_empty_range() -> Unit {
+    let xs: List<Int> = [1, 2, 3];
+    let ys: List<Int> = xs.slice(1, 1);
+    assert_eq(ys.len(), 0);
+}
+
+test fn list_slice_returns_new() -> Unit {
+    let xs: List<Int> = [1, 2, 3, 4, 5];
+    let ys: List<Int> = xs.slice(0, 3);
+    assert_eq(xs.len(), 5);
+    assert_eq(ys.len(), 3);
+}
+
+// ── range ──────────────────────────────────────────────────────────────────
+
+test fn range_basic() -> Unit {
+    let xs: List<Int> = range(0, 5);
+    assert_eq(xs.len(), 5);
+}
+
+test fn range_empty() -> Unit {
+    let xs: List<Int> = range(3, 3);
+    assert_eq(xs.len(), 0);
+}
+
+test fn range_single() -> Unit {
+    let xs: List<Int> = range(7, 8);
+    assert_eq(xs.len(), 1);
+}
+
+test fn range_exclusive_upper() -> Unit {
+    let xs: List<Int> = range(0, 3);
+    assert_eq(xs.len(), 3);
+}

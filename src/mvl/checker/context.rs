@@ -255,6 +255,16 @@ impl TypeEnv {
                 totality: None,
             },
         );
+        // range(start, end) — generates [start, start+1, …, end-1] (exclusive upper bound)
+        self.fns.insert(
+            "range".into(),
+            FnInfo {
+                params: vec![Ty::Int, Ty::Int],
+                ret: Ty::List(Box::new(Ty::Int)),
+                effects: vec![],
+                totality: None,
+            },
+        );
     }
 
     // ── Scope management ─────────────────────────────────────────────────
