@@ -862,15 +862,28 @@ impl TypeChecker {
             }
 
             Expr::Map { pairs, .. } => {
+                // Join the labels of all value expressions so the resulting Map
+                // type reflects any sensitivity present in the values (#54, Req 6).
+                // This ensures `{"k": secret_val}` is typed as
+                // `Secret<Map<String,String>>` rather than `Map<String,Secret<String>>`,
+                // making the standard `label_of` check work for log-sink enforcement.
+                let mut joined_label: Option<crate::mvl::parser::ast::SecurityLabel> = None;
                 let (key_ty, val_ty) = pairs
                     .first()
-                    .map(|(k, v)| (self.infer_expr(k), self.infer_expr(v)))
+                    .map(|(k, v)| {
+                        let kt = self.infer_expr(k);
+                        let vt = self.infer_expr(v);
+                        joined_label = ifc::join_opt(joined_label, ifc::label_of(&vt));
+                        (kt, vt.unlabeled().clone())
+                    })
                     .unwrap_or((Ty::Unknown, Ty::Unknown));
                 for (k, v) in pairs.iter().skip(1) {
                     self.infer_expr(k);
-                    self.infer_expr(v);
+                    let vt = self.infer_expr(v);
+                    joined_label = ifc::join_opt(joined_label, ifc::label_of(&vt));
                 }
-                Ty::Named("Map".into(), vec![key_ty, val_ty])
+                let map_ty = Ty::Named("Map".into(), vec![key_ty, val_ty]);
+                ifc::apply_label(joined_label, map_ty)
             }
 
             Expr::Set { elems, .. } => {

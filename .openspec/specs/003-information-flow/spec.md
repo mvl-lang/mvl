@@ -132,13 +132,13 @@ Error types containing `Secret` fields MUST NOT be sendable to `Public` channels
 
 ### Requirement 6: Logging Respects Labels [MUST]
 
-> **Status:** `println`/`print` builtins now enforce IFC label check at call site. Full `log` stdlib module integration remains Phase 2 (tracked in #30).
+> **Status:** Implemented. `println`/`print` and `std.log` (`log_debug`/`log_info`/`log_warn`/`log_error`) enforce IFC label check at call site. Map literal values propagate labels to the enclosing map type so embedded secrets in structured fields are also caught (#54).
 
 Logging functions MUST accept only `Public<T>` arguments. Logging a `Secret` or `Tainted` value MUST be a compile error.
 
-**Implementation:** `src/mvl/checker/mod.rs` (`infer_fn_call` — IFC label check for `println`/`print`)
+**Implementation:** `src/mvl/checker/mod.rs` (`infer_fn_call` — IFC label check for `println`/`print`/`log_*`), `std/log.mvl`, `src/mvl/checker/ifc.rs` (`PUBLIC_SINKS`)
 
-**Tests:** `tests/type_checker.rs::println_rejects_secret_argument`, `tests/type_checker.rs::println_rejects_tainted_argument`, `tests/type_checker.rs::println_accepts_public_argument`
+**Tests:** `tests/type_checker.rs::println_rejects_secret_argument`, `tests/type_checker.rs::println_rejects_tainted_argument`, `tests/type_checker.rs::println_accepts_public_argument`, `tests/type_checker.rs::log_debug_rejects_secret_argument`, `tests/type_checker.rs::log_info_rejects_secret_argument`, `tests/type_checker.rs::log_error_rejects_tainted_argument`, `tests/type_checker.rs::log_warn_rejects_clean_argument`, `tests/type_checker.rs::log_info_rejects_secret_value_in_fields_map`, `tests/type_checker.rs::log_info_accepts_public_argument`, `tests/type_checker.rs::caller_missing_log_effect_rejected`, `tests/type_checker.rs::caller_missing_log_effect_with_other_effects_rejected`
 
 #### Scenario: Logging a secret
 

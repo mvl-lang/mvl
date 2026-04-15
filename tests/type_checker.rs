@@ -2723,3 +2723,67 @@ fn caller_missing_log_effect_rejected() {
         "expected UndeclaredEffect(do_log, Log), got: {errors:?}"
     );
 }
+
+/// A caller with some effects but not `! Log` MUST produce MissingEffect (#54).
+#[test]
+fn caller_missing_log_effect_with_other_effects_rejected() {
+    // GIVEN: fn do_log ! Log; fn caller ! Net calls do_log (has effects, but not Log)
+    // THEN: MissingEffect(do_log, Log) reported — not UndeclaredEffect
+    let src = r#"
+        fn do_log() -> Unit ! Log { log_info("msg", {}) }
+        fn caller() -> Unit ! Net { do_log() }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            CheckError::MissingEffect { callee, effect, .. }
+            if callee == "do_log" && effect == "Log"
+        )),
+        "expected MissingEffect(do_log, Log), got: {errors:?}"
+    );
+}
+
+/// `log_debug` with a Secret argument MUST be rejected (#54, 003-information-flow/Req 6).
+#[test]
+fn log_debug_rejects_secret_argument() {
+    let errors = errors_for(r#"fn f(pwd: Secret<String>) -> Unit ! Log { log_debug(pwd, {}); }"#);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Secret")
+        ),
+        "log_debug with Secret arg should emit LoggingLabelViolation, got: {errors:?}"
+    );
+}
+
+/// `log_info` with a plain String argument MUST be accepted (#54).
+/// Guards against over-rejection — the checker must not reject all log calls.
+#[test]
+fn log_info_accepts_public_argument() {
+    let errors = errors_for(
+        r#"fn f(name: String) -> Unit ! Log { log_info("user logged in", {"user": name}); }"#,
+    );
+    let ifc_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, CheckError::LoggingLabelViolation { .. }))
+        .collect();
+    assert!(
+        ifc_errors.is_empty(),
+        "log_info with plain String arg should not emit LoggingLabelViolation, got: {ifc_errors:?}"
+    );
+}
+
+/// A `Secret<String>` value embedded as a map field value MUST be rejected (#54).
+/// "Don't log secrets" applies to structured fields too — not just the msg argument.
+#[test]
+fn log_info_rejects_secret_value_in_fields_map() {
+    let errors = errors_for(
+        r#"fn f(pwd: Secret<String>) -> Unit ! Log { log_info("login", {"password": pwd}); }"#,
+    );
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Secret")
+        ),
+        "log_info with Secret value in fields map should emit LoggingLabelViolation, got: {errors:?}"
+    );
+}

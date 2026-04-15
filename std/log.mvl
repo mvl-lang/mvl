@@ -11,7 +11,7 @@
 // A function without `! Log` in its signature provably never logs.
 // The compiler enforces this statically — no runtime check needed.
 //
-// IFC: Secret<T> arguments are rejected at compile time (Req 11, #54).
+// IFC: Secret<T> arguments are rejected at compile time (Req 6, #54).
 // "Don't log secrets" is not a code review rule in MVL — it's a type error.
 // This covers OWASP A07 (information leakage in errors) by construction.
 //
