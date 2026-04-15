@@ -26,7 +26,7 @@ fn parse(src: &str) -> Program {
 fn file_module_correspondence() {
     // Each file maps to a module by name
     let prog = parse("pub fn greet() -> Int { 0 }");
-    let result = resolve_project(vec![("greet".to_string(), prog)]);
+    let result = resolve_project(vec![("greet".to_string(), prog)], None);
     assert!(
         result.is_ok(),
         "single module should resolve: {:?}",
@@ -45,7 +45,10 @@ fn private_item_rejected() {
     // Private items are NOT accessible from other modules
     let a = parse("fn secret() -> Int { 0 }"); // private
     let b = parse("use mod_a::secret;"); // imports private item
-    let result = resolve_project(vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)]);
+    let result = resolve_project(
+        vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+        None,
+    );
     assert!(
         result
             .errors
@@ -61,7 +64,10 @@ fn pub_item_accessible() {
     // `pub` items are exported and accessible from other modules
     let a = parse("pub fn greet() -> Int { 42 }");
     let b = parse("use mod_a::greet;");
-    let result = resolve_project(vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)]);
+    let result = resolve_project(
+        vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+        None,
+    );
     assert!(
         result.is_ok(),
         "importing pub item must succeed: {:?}",
@@ -75,7 +81,10 @@ fn struct_fields_accessible() {
     // once the type is imported, its fields are accessible.
     let a = parse("pub type Point = struct { x: Int, y: Int }");
     let b = parse("use mod_a::Point;");
-    let result = resolve_project(vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)]);
+    let result = resolve_project(
+        vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+        None,
+    );
     assert!(
         result.is_ok(),
         "struct fields must be accessible after type import: {:?}",
@@ -90,7 +99,10 @@ fn use_at_top() {
     // `use` declarations at the top of the file are valid
     let a = parse("pub fn foo() -> Int { 0 }");
     let b = parse("use mod_a::foo;\nfn bar() -> Int { 0 }");
-    let result = resolve_project(vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)]);
+    let result = resolve_project(
+        vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+        None,
+    );
     assert!(
         result.is_ok(),
         "use at top should be valid: {:?}",
@@ -103,7 +115,10 @@ fn use_after_declaration_rejected() {
     // `use` after a non-use declaration must be rejected
     let a = parse("pub fn foo() -> Int { 0 }");
     let b = parse("fn bar() -> Int { 0 }\nuse mod_a::foo;"); // use after fn
-    let result = resolve_project(vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)]);
+    let result = resolve_project(
+        vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+        None,
+    );
     assert!(
         result
             .errors
@@ -133,7 +148,10 @@ fn name_collision_rejected() {
     // Two imports with the same local name must be rejected
     let a = parse("pub type Foo = struct { x: Int }");
     let b = parse("use mod_a::Foo;\nuse mod_a::Foo;"); // same name twice
-    let result = resolve_project(vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)]);
+    let result = resolve_project(
+        vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+        None,
+    );
     assert!(
         result
             .errors
@@ -148,7 +166,7 @@ fn name_collision_rejected() {
 fn missing_module_rejected() {
     // Importing from a non-existent module must be rejected
     let a = parse("use does_not_exist::Foo;");
-    let result = resolve_project(vec![("mod_a".to_string(), a)]);
+    let result = resolve_project(vec![("mod_a".to_string(), a)], None);
     assert!(
         result
             .errors
@@ -166,7 +184,10 @@ fn reexport_public() {
     // `pub use` re-exporting a pub item is allowed
     let a = parse("pub type Foo = struct { x: Int }");
     let b = parse("pub fn bar() -> Int { 0 }"); // no use, just a clean module
-    let result = resolve_project(vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)]);
+    let result = resolve_project(
+        vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+        None,
+    );
     assert!(
         result.is_ok(),
         "valid project should resolve: {:?}",
@@ -192,10 +213,10 @@ fn reexport_private_rejected() {
     };
 
     let a = parse("fn secret() -> Int { 0 }"); // private
-    let result = resolve_project(vec![
-        ("mod_a".to_string(), a),
-        ("mod_b".to_string(), prog_b),
-    ]);
+    let result = resolve_project(
+        vec![("mod_a".to_string(), a), ("mod_b".to_string(), prog_b)],
+        None,
+    );
     assert!(
         result
             .errors
@@ -213,7 +234,10 @@ fn circular_import_rejected() {
     // Direct cycle: a → b → a
     let a = parse("use mod_b::Bar;\npub type Foo = struct { x: Int }");
     let b = parse("use mod_a::Foo;\npub type Bar = struct { y: Int }");
-    let result = resolve_project(vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)]);
+    let result = resolve_project(
+        vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+        None,
+    );
     assert!(
         result
             .errors
@@ -230,11 +254,14 @@ fn transitive_cycle_rejected() {
     let a = parse("use mod_c::C;\npub type A = struct { x: Int }");
     let b = parse("use mod_a::A;\npub type B = struct { x: Int }");
     let c = parse("use mod_b::B;\npub type C = struct { x: Int }");
-    let result = resolve_project(vec![
-        ("mod_a".to_string(), a),
-        ("mod_b".to_string(), b),
-        ("mod_c".to_string(), c),
-    ]);
+    let result = resolve_project(
+        vec![
+            ("mod_a".to_string(), a),
+            ("mod_b".to_string(), b),
+            ("mod_c".to_string(), c),
+        ],
+        None,
+    );
     assert!(
         result
             .errors
@@ -252,12 +279,15 @@ fn diamond_dependency_ok() {
     let b = parse("use mod_d::D;\npub type B = struct { x: Int }");
     let c = parse("use mod_d::D;\npub type C = struct { x: Int }");
     let a = parse("use mod_b::B;\nuse mod_c::C;\npub type A = struct { x: Int }");
-    let result = resolve_project(vec![
-        ("mod_d".to_string(), d),
-        ("mod_b".to_string(), b),
-        ("mod_c".to_string(), c),
-        ("mod_a".to_string(), a),
-    ]);
+    let result = resolve_project(
+        vec![
+            ("mod_d".to_string(), d),
+            ("mod_b".to_string(), b),
+            ("mod_c".to_string(), c),
+            ("mod_a".to_string(), a),
+        ],
+        None,
+    );
     assert!(
         result.is_ok(),
         "diamond dependency must succeed: {:?}",

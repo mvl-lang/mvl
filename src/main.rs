@@ -5,6 +5,7 @@ use mvl::mvl::checker::passes::{
 use mvl::mvl::linter::{self, config::LintConfig};
 use mvl::mvl::parser::ast::{Decl, Program, Totality, TypeBody};
 use mvl::mvl::parser::Parser;
+use mvl::mvl::stdlib;
 use mvl::mvl::transpiler;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -64,6 +65,9 @@ fn main() {
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
             cmd_assurance(&path, json, verbose);
         }
+        "init" => {
+            cmd_init();
+        }
         other => {
             eprintln!("Unknown command: {other}");
             print_usage();
@@ -88,6 +92,16 @@ fn print_usage() {
     eprintln!("  mvl assurance <file|dir> --json    — emit assurance report as JSON");
     eprintln!("  mvl assurance <file|dir> --verbose — per-function requirement detail");
     eprintln!("  mvl transpile <file.mvl>           — print transpiled Rust to stdout");
+    eprintln!("  mvl init                           — extract stdlib to XDG_DATA_HOME/mvl/std/");
+}
+
+fn cmd_init() {
+    let path = stdlib::ensure_stdlib();
+    println!(
+        "mvl stdlib v{} ready at {}",
+        stdlib::STDLIB_VERSION,
+        path.display()
+    );
 }
 
 /// Escape a string for embedding in a JSON string literal.
@@ -132,6 +146,7 @@ fn require_path_arg(args: &[String], cmd: &str) -> String {
 /// When `req_filter` is `Some(N)`, only the verification pass for Req N is run
 /// and its verdict is printed; errors for other requirements are suppressed.
 fn cmd_check(path: &str, req_filter: Option<u8>) {
+    stdlib::ensure_stdlib();
     let files = mvl_files(path, false);
     if files.is_empty() {
         eprintln!("No .mvl files found at: {path}");
@@ -339,6 +354,7 @@ fn inject_mod_bridge(source: &str) -> String {
 /// parent directory so that relative paths in args (e.g. `--file logs.jsonl`)
 /// resolve correctly.
 fn build_project(path: &str, run: bool, run_args: &[String]) {
+    stdlib::ensure_stdlib();
     // For directory inputs, use the directory stem as the crate name and
     // concatenate all .mvl files (simple Phase 1 approach: single-crate multi-file).
     let file_path = if Path::new(path).is_dir() {
