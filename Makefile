@@ -61,13 +61,14 @@ test-corpus: ## Validate corpus examples parse and type-check
 	@echo "Validating corpus examples..."
 	@for f in tests/corpus/**/*.mvl; do \
 		if grep -q "corpus:expect-fail" "$$f" 2>/dev/null; then \
-			out=$$(cargo run -- check "$$f" 2>&1); rc=$$?; \
+			cargo run -- check "$$f" >/dev/null 2>&1; rc=$$?; \
 			if [ $$rc -ne 0 ]; then \
 				echo "  $$f: OK (violations detected as expected)"; \
 			else \
 				echo "  ERROR: $$f expected violations but checker reported none"; exit 1; \
 			fi; \
 		else \
+			echo "  $$f"; \
 			cargo run -- check "$$f" || exit 1; \
 		fi; \
 	done
