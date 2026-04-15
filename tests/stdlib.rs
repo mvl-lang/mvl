@@ -98,7 +98,7 @@ fn stale_stamp_triggers_reextraction() {
         fs::create_dir_all(&std_dir).expect("mkdir");
         fs::write(std_dir.join(".version"), "0.0.0-stale").expect("write stale stamp");
 
-        ensure_stdlib();
+        let _ = ensure_stdlib();
 
         let stamp = fs::read_to_string(std_dir.join(".version")).expect("read stamp");
         assert_eq!(
