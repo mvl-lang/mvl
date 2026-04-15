@@ -8,8 +8,8 @@
 //! - All type expressions including security labels (Requirement 7)
 
 use crate::mvl::parser::ast::{
-    ArithOp, Capability, CmpOp, FieldDecl, LogicOp, RefExpr, SecurityLabel, TypeBody, TypeDecl,
-    TypeExpr, Variant, VariantFields,
+    ArithOp, Capability, CmpOp, FieldDecl, GenericParam, LogicOp, RefExpr, SecurityLabel, TypeBody,
+    TypeDecl, TypeExpr, Variant, VariantFields,
 };
 use crate::mvl::parser::lexer::{Span, TokenKind};
 use crate::mvl::parser::{ParseError, Parser};
@@ -211,9 +211,9 @@ impl Parser {
 
     // ── Generic type-parameter declarations ───────────────────────────────
 
-    /// Parse optional `<A, B, C>` on a type declaration.  Returns empty vec
-    /// if the next token is not `<`.
-    pub fn parse_type_params_decl(&mut self) -> Vec<String> {
+    /// Parse optional `<A, B, const N: Int>` on a type or function declaration.
+    /// Returns empty vec if the next token is not `<`.
+    pub fn parse_type_params_decl(&mut self) -> Vec<GenericParam> {
         if !self.eat(&TokenKind::Lt) {
             return Vec::new();
         }
@@ -222,11 +222,34 @@ impl Parser {
             if matches!(self.peek_kind(), TokenKind::Gt | TokenKind::Eof) {
                 break;
             }
-            match self.expect_ident() {
-                Ok((name, _)) => params.push(name),
-                Err(e) => {
-                    self.push_error(e);
-                    break;
+            // Const generic: `const N: Int`
+            if self.eat(&TokenKind::Const) {
+                match self.expect_ident() {
+                    Ok((name, _)) => {
+                        if let Err(e) = self.expect(&TokenKind::Colon) {
+                            self.push_error(e);
+                            break;
+                        }
+                        match self.expect_ident() {
+                            Ok((ty, _)) => params.push(GenericParam::Const(name, ty)),
+                            Err(e) => {
+                                self.push_error(e);
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.push_error(e);
+                        break;
+                    }
+                }
+            } else {
+                match self.expect_ident() {
+                    Ok((name, _)) => params.push(GenericParam::Type(name)),
+                    Err(e) => {
+                        self.push_error(e);
+                        break;
+                    }
                 }
             }
             if !self.eat(&TokenKind::Comma) {
@@ -353,6 +376,13 @@ impl Parser {
             TokenKind::Ident(name) => {
                 self.advance();
                 self.parse_named_type(name, start)
+            }
+
+            // Integer const generic argument: `Array<T, 16>`
+            TokenKind::Integer(n) => {
+                self.advance();
+                let span = self.span_from(start);
+                Ok(TypeExpr::IntConst { value: n, span })
             }
 
             _ => {
@@ -775,7 +805,13 @@ mod tests {
         // GIVEN: type Result<T, E> = enum { Ok(T), Err(E) }
         let d = type_decl("type Result<T, E> = enum { Ok(T), Err(E) }");
         assert_eq!(d.name, "Result");
-        assert_eq!(d.params, vec!["T", "E"]);
+        assert_eq!(
+            d.params,
+            vec![
+                GenericParam::Type("T".to_string()),
+                GenericParam::Type("E".to_string()),
+            ]
+        );
         let TypeBody::Enum(variants) = d.body else {
             panic!()
         };
@@ -991,5 +1027,44 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    // ── Const generics / Array<T, N> (Issue #68) ──────────────────────────
+
+    #[test]
+    fn parse_array_type_expr() {
+        // Array<Int, 16> should parse as Base { name: "Array", args: [Int, IntConst(16)] }
+        let ty = type_expr("Array<Int, 16>");
+        let TypeExpr::Base { name, args, .. } = ty else {
+            panic!("expected Base, got {ty:?}");
+        };
+        assert_eq!(name, "Array");
+        assert_eq!(args.len(), 2);
+        assert!(matches!(args[0], TypeExpr::Base { ref name, .. } if name == "Int"));
+        assert!(matches!(args[1], TypeExpr::IntConst { value: 16, .. }));
+    }
+
+    #[test]
+    fn parse_const_generic_param_in_type_decl() {
+        // type FixedBuf<T, const N: Int> = struct { … }
+        let d = type_decl("type FixedBuf<T, const N: Int> = struct { len: Int }");
+        assert_eq!(
+            d.params,
+            vec![
+                GenericParam::Type("T".to_string()),
+                GenericParam::Const("N".to_string(), "Int".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_array_type_as_function_param() {
+        // fn f(buf: Array<Byte, 32>) -> Int
+        let ty = type_expr("Array<Byte, 32>");
+        let TypeExpr::Base { name, args, .. } = ty else {
+            panic!("expected Base");
+        };
+        assert_eq!(name, "Array");
+        assert!(matches!(args[1], TypeExpr::IntConst { value: 32, .. }));
     }
 }

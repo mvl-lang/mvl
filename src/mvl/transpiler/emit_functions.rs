@@ -7,7 +7,9 @@
 //! - Type params with constraints → Rust generic bounds
 //! - Return refinement → `debug_assert!` at end of body
 
-use crate::mvl::parser::ast::{Capability, Constraint, Expr, FnDecl, Param, Totality, TypeExpr};
+use crate::mvl::parser::ast::{
+    Capability, Constraint, Expr, FnDecl, GenericParam, Param, Totality, TypeExpr,
+};
 use crate::mvl::transpiler::codegen::Codegen;
 use crate::mvl::transpiler::emit_exprs::{emit_block_stmts, emit_expr};
 use crate::mvl::transpiler::emit_types::{emit_label, emit_ref_expr_for_assert, emit_type_expr};
@@ -98,11 +100,11 @@ fn emit_fn_body(cg: &mut Codegen, fd: &FnDecl) {
 
 // ── Generics ─────────────────────────────────────────────────────────────
 
-fn emit_generics(type_params: &[String], constraints: &[Constraint]) -> String {
+fn emit_generics(type_params: &[GenericParam], constraints: &[Constraint]) -> String {
     if type_params.is_empty() {
         return String::new();
     }
-    // Build bounds map from constraints
+    // Build bounds map from constraints (applies to type params only)
     let mut bounds: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
     for c in constraints {
         bounds.entry(&c.name).or_default().push(&c.bound);
@@ -110,12 +112,15 @@ fn emit_generics(type_params: &[String], constraints: &[Constraint]) -> String {
 
     let params: Vec<String> = type_params
         .iter()
-        .map(|p| {
-            let bs = bounds.get(p.as_str()).cloned().unwrap_or_default();
-            if bs.is_empty() {
-                p.clone()
-            } else {
-                format!("{p}: {}", bs.join(" + "))
+        .map(|p| match p {
+            GenericParam::Const(name, _ty) => format!("const {name}: usize"),
+            GenericParam::Type(name) => {
+                let bs = bounds.get(name.as_str()).cloned().unwrap_or_default();
+                if bs.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{name}: {}", bs.join(" + "))
+                }
             }
         })
         .collect();

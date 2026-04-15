@@ -301,6 +301,7 @@ fn collect_types_in_type_expr(ty: &TypeExpr, out: &mut std::collections::HashSet
                 collect_types_in_type_expr(e, out);
             }
         }
+        TypeExpr::IntConst { .. } => {}
     }
 }
 

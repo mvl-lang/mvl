@@ -26,6 +26,8 @@ pub enum Ty {
     Fn(Vec<Ty>, Box<Ty>),
     Tuple(Vec<Ty>),
     List(Box<Ty>),
+    /// Fixed-size array: element type + compile-time size constant.
+    Array(Box<Ty>, u64),
     // Refined type wrapper: underlying type + predicate source text
     Refined(Box<Ty>, String),
     // Security label wrapper: label + inner type (Requirement 11)
@@ -67,6 +69,7 @@ impl Ty {
                 format!("({elems_str})")
             }
             Ty::List(inner) => format!("List<{}>", inner.display()),
+            Ty::Array(inner, size) => format!("Array<{}, {}>", inner.display(), size),
             Ty::Refined(inner, _pred) => inner.display(),
             Ty::Labeled(label, inner) => {
                 format!("{}<{}>", ifc::label_name(*label), inner.display())
@@ -138,6 +141,21 @@ pub fn resolve(expr: &TypeExpr) -> Ty {
             "Unit" => Ty::Unit,
             "Never" => Ty::Never,
             "List" if args.len() == 1 => Ty::List(Box::new(resolve(&args[0]))),
+            "Array" if args.len() == 2 => {
+                let elem = resolve(&args[0]);
+                let size = match &args[1] {
+                    TypeExpr::IntConst { value, .. } if *value >= 0 => *value as u64,
+                    // Negative literal is invalid — propagate Unknown so the caller gets an error.
+                    TypeExpr::IntConst { .. } => return Ty::Unknown,
+                    // Type variable (e.g. `Array<T, N>` in a generic function): size not yet
+                    // known at resolve-time. Phase-1 limitation: treat as unresolved.
+                    // TODO(phase-2): track const-generic variables in the checker environment.
+                    _ => 0,
+                };
+                Ty::Array(Box::new(elem), size)
+            }
+            // Array with wrong argument count — always an error.
+            "Array" => Ty::Unknown,
             _ => Ty::Named(name.clone(), args.iter().map(resolve).collect()),
         },
         TypeExpr::Option { inner, .. } => Ty::Option(Box::new(resolve(inner))),
@@ -154,6 +172,8 @@ pub fn resolve(expr: &TypeExpr) -> Ty {
             Ty::Fn(params.iter().map(resolve).collect(), Box::new(resolve(ret)))
         }
         TypeExpr::Tuple { elems, .. } => Ty::Tuple(elems.iter().map(resolve).collect()),
+        // Integer const generics are not standalone types — they only appear inside Array<T, N>
+        TypeExpr::IntConst { .. } => Ty::Unknown,
     }
 }
 
@@ -196,6 +216,7 @@ pub fn types_compatible(a: &Ty, b: &Ty) -> bool {
             types_compatible(ao, bo) && types_compatible(ae, be)
         }
         (Ty::List(ai), Ty::List(bi)) => types_compatible(ai, bi),
+        (Ty::Array(ae, an), Ty::Array(be, bn)) => an == bn && types_compatible(ae, be),
         (Ty::Ref(am, ai), Ty::Ref(bm, bi)) => am == bm && types_compatible(ai, bi),
         (Ty::Tuple(aes), Ty::Tuple(bes)) => {
             aes.len() == bes.len()
@@ -362,5 +383,103 @@ mod tests {
     fn is_bool_through_label() {
         let labeled = Ty::Labeled(SecurityLabel::Tainted, Box::new(Ty::Bool));
         assert!(labeled.is_bool());
+    }
+
+    // ── Const generics / Array<T, N> (Issue #68) ──────────────────────────
+
+    #[test]
+    fn resolve_array_with_int_const() {
+        let span = s();
+        let expr = TypeExpr::Base {
+            name: "Array".to_string(),
+            args: vec![
+                TypeExpr::Base {
+                    name: "Int".to_string(),
+                    args: vec![],
+                    span,
+                },
+                TypeExpr::IntConst { value: 16, span },
+            ],
+            span,
+        };
+        assert_eq!(resolve(&expr), Ty::Array(Box::new(Ty::Int), 16));
+    }
+
+    #[test]
+    fn array_display() {
+        let ty = Ty::Array(Box::new(Ty::Int), 8);
+        assert_eq!(ty.display(), "Array<Int, 8>");
+    }
+
+    #[test]
+    fn array_same_size_compatible() {
+        let a = Ty::Array(Box::new(Ty::Int), 16);
+        let b = Ty::Array(Box::new(Ty::Int), 16);
+        assert!(types_compatible(&a, &b));
+    }
+
+    #[test]
+    fn array_different_size_incompatible() {
+        let a = Ty::Array(Box::new(Ty::Int), 16);
+        let b = Ty::Array(Box::new(Ty::Int), 32);
+        assert!(!types_compatible(&a, &b));
+    }
+
+    #[test]
+    fn array_different_elem_incompatible() {
+        let a = Ty::Array(Box::new(Ty::Int), 16);
+        let b = Ty::Array(Box::new(Ty::Bool), 16);
+        assert!(!types_compatible(&a, &b));
+    }
+
+    #[test]
+    fn resolve_array_negative_size_is_unknown() {
+        let span = s();
+        let expr = TypeExpr::Base {
+            name: "Array".to_string(),
+            args: vec![
+                TypeExpr::Base {
+                    name: "Int".to_string(),
+                    args: vec![],
+                    span,
+                },
+                TypeExpr::IntConst { value: -1, span },
+            ],
+            span,
+        };
+        assert_eq!(resolve(&expr), Ty::Unknown);
+    }
+
+    #[test]
+    fn resolve_array_wrong_arg_count_is_unknown() {
+        let span = s();
+        let one_arg = TypeExpr::Base {
+            name: "Array".to_string(),
+            args: vec![TypeExpr::Base {
+                name: "Int".to_string(),
+                args: vec![],
+                span,
+            }],
+            span,
+        };
+        assert_eq!(resolve(&one_arg), Ty::Unknown);
+    }
+
+    #[test]
+    fn resolve_array_zero_size() {
+        let span = s();
+        let expr = TypeExpr::Base {
+            name: "Array".to_string(),
+            args: vec![
+                TypeExpr::Base {
+                    name: "Int".to_string(),
+                    args: vec![],
+                    span,
+                },
+                TypeExpr::IntConst { value: 0, span },
+            ],
+            span,
+        };
+        assert_eq!(resolve(&expr), Ty::Array(Box::new(Ty::Int), 0));
     }
 }
