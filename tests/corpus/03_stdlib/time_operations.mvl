@@ -1,5 +1,6 @@
 // Corpus: time module operations (#46)
-// Demonstrates std.time: Instant, DateTime, Duration, now(), sleep(), format(), parse().
+// Demonstrates std.time: Instant, DateTime, Duration, now(), sleep(),
+// format_instant(), format_datetime(), parse().
 // now() and sleep() require ! Clock — shown in function signatures below.
 
 fn time_now() -> Instant ! Clock {
@@ -11,7 +12,11 @@ fn time_sleep_one_second() -> Unit ! Clock {
 }
 
 fn time_format_instant(t: Instant) -> String {
-    format(t, "%Y-%m-%d %H:%M:%S")
+    format_instant(t, "%Y-%m-%d %H:%M:%S")
+}
+
+fn time_format_datetime(t: DateTime) -> String {
+    format_datetime(t, "%Y-%m-%d %H:%M:%S")
 }
 
 fn time_parse_date(s: String) -> Option<DateTime> {
