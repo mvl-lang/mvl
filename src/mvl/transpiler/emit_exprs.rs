@@ -374,15 +374,28 @@ fn emit_args(cg: &mut Codegen, args: &[Expr]) {
 
 /// Emit an expression in function-argument position.
 ///
-/// String literals get `.into()` appended so that Rust type inference can
-/// coerce them to whatever label type the callee expects (`String`,
-/// `Clean<String>`, `Tainted<String>`, etc.).  All other expressions are
-/// emitted unchanged.
+/// MVL has value semantics: passing a value to a function is a copy, not a
+/// move.  In Rust, non-Copy types (structs, enums, Vec, String) are moved by
+/// default.  We insert `.clone()` for identifiers and field accesses so the
+/// caller retains ownership after the call, matching MVL semantics.
+/// `.clone()` on Copy types (i64, bool, char) is a no-op and is optimised
+/// away by the compiler.
+///
+/// String literals get `.to_string().into()` for label type coercion.
 fn emit_expr_as_arg(cg: &mut Codegen, expr: &Expr) {
-    if let Expr::Literal(Literal::Str(s), _) = expr {
-        cg.push(&format!("\"{}\".to_string().into()", escape_str(s)));
-    } else {
-        emit_expr(cg, expr);
+    match expr {
+        Expr::Literal(Literal::Str(s), _) => {
+            cg.push(&format!("\"{}\".to_string().into()", escape_str(s)));
+        }
+        // Identifiers and field accesses may be non-Copy user types.
+        // Clone so the caller retains ownership (MVL value semantics).
+        Expr::Ident(_, _) | Expr::FieldAccess { .. } => {
+            emit_expr(cg, expr);
+            cg.push(".clone()");
+        }
+        _ => {
+            emit_expr(cg, expr);
+        }
     }
 }
 

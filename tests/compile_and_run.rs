@@ -174,6 +174,23 @@ fn shapes_runs_and_produces_expected_output() {
     );
 }
 
+// ── 5. struct_value_semantics.mvl ─────────────────────────────────────────
+
+#[test]
+fn struct_value_semantics_check_passes() {
+    assert_check_ok("struct_value_semantics.mvl");
+}
+
+/// Struct passed to multiple functions — value semantics via Clone.
+///
+/// Expected stdout:
+///   1, 2
+///   4, 6
+#[test]
+fn struct_value_semantics_runs_and_produces_expected_output() {
+    assert_run_output("struct_value_semantics.mvl", &["1, 2", "4, 6"]);
+}
+
 // ── simple_math.mvl (library — no fn main) ────────────────────────────────
 
 /// simple_math.mvl has no fn main — `mvl check` must pass.

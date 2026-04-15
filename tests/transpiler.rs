@@ -548,7 +548,8 @@ impl From<IoError> for AppError {
     let rust = transpile_src(src);
     assert_contains(&rust, "impl std::convert::From<IoError> for AppError {");
     assert_contains(&rust, "fn from(e: IoError) -> Self {");
-    assert_contains(&rust, "AppError::Io(e)");
+    // MVL value semantics: ident args are cloned on pass so the caller retains ownership.
+    assert_contains(&rust, "AppError::Io(e.clone())");
 }
 
 /// `impl From<A> for B` with no `from` method emits a todo!().
