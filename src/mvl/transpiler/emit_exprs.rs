@@ -32,6 +32,79 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                 "substring" if args.len() == 2 => {
                     emit_safe_substring(cg, receiver, &args[0], &args[1]);
                 }
+                // take(n)/skip(n) — List<T> slice methods that need iterator adapter in Rust
+                "take" | "skip" => {
+                    emit_expr(cg, receiver);
+                    cg.push(".into_iter().");
+                    cg.push(method);
+                    cg.push("(");
+                    emit_args(cg, args);
+                    cg.push(").collect::<Vec<_>>()");
+                }
+                // take_while(f)/skip_while(f) — Rust iterator expects &T, MVL predicate takes T
+                "take_while" | "skip_while" => {
+                    emit_expr(cg, receiver);
+                    cg.push(".into_iter().");
+                    cg.push(method);
+                    cg.push("(|__x| ");
+                    if let Some(arg) = args.first() {
+                        emit_expr(cg, arg);
+                    }
+                    cg.push("(__x.clone())).collect::<Vec<_>>()");
+                }
+                // windows(n)/chunks(n) — Rust returns &[T] slices, collect into Vec<Vec<T>>
+                "windows" | "chunks" => {
+                    emit_expr(cg, receiver);
+                    cg.push(".");
+                    cg.push(method);
+                    cg.push("(");
+                    emit_args(cg, args);
+                    cg.push(").map(|w| w.to_vec()).collect::<Vec<_>>()");
+                }
+                // flatten() — List<List<T>> → List<T>
+                "flatten" => {
+                    emit_expr(cg, receiver);
+                    cg.push(".into_iter().flatten().collect::<Vec<_>>()");
+                }
+                // partition(f) — Rust iterator expects &T predicate, MVL takes T
+                // Use turbofish ::<Vec<_>, _> so Rust can infer the element type
+                "partition" => {
+                    emit_expr(cg, receiver);
+                    cg.push(".into_iter().partition::<Vec<_>, _>(|__x| ");
+                    if let Some(arg) = args.first() {
+                        emit_expr(cg, arg);
+                    }
+                    cg.push("(__x.clone()))");
+                }
+                // group_by(f: fn(T) -> K) — no native Rust equivalent; fold into HashMap
+                "group_by" => {
+                    cg.push("{ let mut __m = std::collections::HashMap::new(); for __v in ");
+                    emit_expr(cg, receiver);
+                    cg.push(".into_iter() { __m.entry(");
+                    if let Some(arg) = args.first() {
+                        emit_expr(cg, arg);
+                    }
+                    cg.push("(__v.clone())).or_insert_with(Vec::new).push(__v); } __m }");
+                }
+                // chars() — String::chars() returns Chars<'a> in Rust, not Vec<String>
+                "chars" => {
+                    emit_expr(cg, receiver);
+                    cg.push(".chars().map(|__c| __c.to_string()).collect::<Vec<_>>()");
+                }
+                // first()/last() — Vec::first/last return Option<&T>; MVL expects Option<T>
+                "first" | "last" => {
+                    emit_expr(cg, receiver);
+                    cg.push(".");
+                    cg.push(method);
+                    cg.push("().cloned()");
+                }
+                // contains(x) — slice::contains takes &T, so borrow the argument
+                "contains" => {
+                    emit_expr(cg, receiver);
+                    cg.push(".contains(&(");
+                    emit_args(cg, args);
+                    cg.push("))");
+                }
                 _ => {
                     emit_expr(cg, receiver);
                     cg.push(".");

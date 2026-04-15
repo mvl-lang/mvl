@@ -337,6 +337,8 @@ fn map_base_type(name: &str) -> &str {
         "Unit" => "()",
         "Never" => "!",
         "List" => "Vec",
+        "Map" => "std::collections::HashMap",
+        "Set" => "std::collections::HashSet",
         // Phase 1: unknown types are passed through as-is (user-defined or external)
         other => other,
     }

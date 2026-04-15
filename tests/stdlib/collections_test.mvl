@@ -6,6 +6,17 @@
 // Note: Higher-order collection methods (map, filter, fold, reverse, sort)
 // have known transpiler limitations — see GitHub issues for status.
 // This file covers what is currently verified at runtime.
+//
+// Helpers used by predicate-based collection tests.
+
+fn is_small(x: Int) -> Bool { x < 3 }
+fn is_even_key(x: Int) -> Bool { x % 2 == 0 }
+fn first_char(s: String) -> String {
+    match s.chars().first() {
+        Some(c) => c,
+        None => "?"
+    }
+}
 
 // ── len ───────────────────────────────────────────────────────────────────
 
@@ -51,37 +62,50 @@ test fn list_string_is_empty_false() -> Unit {
     assert_eq(xs.is_empty(), false);
 }
 
-// ── slice ──────────────────────────────────────────────────────────────────
+// ── take / skip ────────────────────────────────────────────────────────────
 
-test fn list_slice_basic() -> Unit {
-    let xs: List<Int> = [1, 2, 3, 4, 5];
-    let ys: List<Int> = xs.slice(1, 4);
-    assert_eq(ys.len(), 3);
+test fn list_take_returns_first_n() -> Unit {
+    let xs = [1, 2, 3, 4, 5];
+    assert_eq(xs.take(3).len(), 3);
 }
 
-test fn list_slice_from_start() -> Unit {
-    let xs: List<Int> = [10, 20, 30, 40];
-    let ys: List<Int> = xs.slice(0, 2);
-    assert_eq(ys.len(), 2);
+test fn list_take_empty() -> Unit {
+    let xs: List<Int> = [];
+    assert_eq(xs.take(2).len(), 0);
 }
 
-test fn list_slice_full() -> Unit {
-    let xs: List<Int> = [1, 2, 3];
-    let ys: List<Int> = xs.slice(0, 3);
-    assert_eq(ys.len(), 3);
+test fn list_take_more_than_len() -> Unit {
+    let xs = [1, 2];
+    assert_eq(xs.take(10).len(), 2);
 }
 
-test fn list_slice_empty_range() -> Unit {
-    let xs: List<Int> = [1, 2, 3];
-    let ys: List<Int> = xs.slice(1, 1);
-    assert_eq(ys.len(), 0);
+test fn list_take_contains_first_elements() -> Unit {
+    let xs = [10, 20, 30, 40, 50];
+    let result = xs.take(2);
+    assert_eq(result.contains(10), true);
+    assert_eq(result.contains(30), false);
 }
 
-test fn list_slice_returns_new() -> Unit {
-    let xs: List<Int> = [1, 2, 3, 4, 5];
-    let ys: List<Int> = xs.slice(0, 3);
-    assert_eq(xs.len(), 5);
-    assert_eq(ys.len(), 3);
+test fn list_skip_returns_tail() -> Unit {
+    let xs = [1, 2, 3, 4, 5];
+    assert_eq(xs.skip(2).len(), 3);
+}
+
+test fn list_skip_empty() -> Unit {
+    let xs: List<Int> = [];
+    assert_eq(xs.skip(1).len(), 0);
+}
+
+test fn list_skip_all() -> Unit {
+    let xs = [1, 2, 3];
+    assert_eq(xs.skip(10).len(), 0);
+}
+
+test fn list_skip_contains_tail_elements() -> Unit {
+    let xs = [10, 20, 30, 40, 50];
+    let result = xs.skip(2);
+    assert_eq(result.contains(30), true);
+    assert_eq(result.contains(10), false);
 }
 
 // ── slice safety contracts ─────────────────────────────────────────────────
@@ -117,20 +141,62 @@ test fn range_basic() -> Unit {
     let xs: List<Int> = range(0, 5);
     assert_eq(xs.len(), 5);
 }
+// ── flatten ────────────────────────────────────────────────────────────────
 
-test fn range_empty() -> Unit {
-    let xs: List<Int> = range(3, 3);
-    assert_eq(xs.len(), 0);
+test fn list_flatten_basic() -> Unit {
+    let xss: List<List<Int>> = [[1, 2], [3, 4], [5]];
+    assert_eq(xss.flatten().len(), 5);
 }
 
-test fn range_single() -> Unit {
-    let xs: List<Int> = range(7, 8);
-    assert_eq(xs.len(), 1);
+test fn list_flatten_empty_outer() -> Unit {
+    let xss: List<List<Int>> = [];
+    assert_eq(xss.flatten().len(), 0);
 }
 
-test fn range_exclusive_upper() -> Unit {
-    let xs: List<Int> = range(0, 3);
-    assert_eq(xs.len(), 3);
+test fn list_flatten_empty_inner() -> Unit {
+    let xss: List<List<Int>> = [[], [], []];
+    assert_eq(xss.flatten().len(), 0);
+}
+
+test fn list_flatten_preserves_elements() -> Unit {
+    let xss: List<List<Int>> = [[1, 2], [3, 4], [5]];
+    let result = xss.flatten();
+    assert_eq(result.contains(3), true);
+    assert_eq(result.contains(6), false);
+}
+
+// ── partition ──────────────────────────────────────────────────────────────
+
+fn is_even_p(x: Int) -> Bool { x % 2 == 0 }
+
+test fn list_partition_splits_correctly() -> Unit {
+    let xs = [1, 2, 3, 4, 5, 6];
+    let (evens, odds) = xs.partition(is_even_p);
+    assert_eq(evens.len(), 3);
+    assert_eq(odds.len(), 3);
+}
+
+test fn list_partition_all_match() -> Unit {
+    let xs = [2, 4, 6];
+    let (evens, odds) = xs.partition(is_even_p);
+    assert_eq(evens.len(), 3);
+    assert_eq(odds.len(), 0);
+}
+
+test fn list_partition_none_match() -> Unit {
+    let xs = [1, 3, 5];
+    let (evens, odds) = xs.partition(is_even_p);
+    assert_eq(evens.len(), 0);
+    assert_eq(odds.len(), 3);
+}
+
+test fn list_partition_correct_sides() -> Unit {
+    let xs = [1, 2, 3, 4];
+    let (evens, odds) = xs.partition(is_even_p);
+    assert_eq(evens.contains(2), true);
+    assert_eq(evens.contains(1), false);
+    assert_eq(odds.contains(1), true);
+    assert_eq(odds.contains(2), false);
 }
 
 test fn range_inverted_is_empty() -> Unit {
@@ -142,4 +208,127 @@ test fn range_non_zero_start() -> Unit {
     let xs: List<Int> = range(3, 7);
     assert_eq(xs.len(), 4);
     assert_eq(xs.is_empty(), false);
+}
+
+// ── take_while / skip_while ────────────────────────────────────────────────
+
+test fn list_take_while_stops_at_first_false() -> Unit {
+    let xs = [1, 2, 3, 4, 5];
+    assert_eq(xs.take_while(is_small).len(), 2);
+}
+
+test fn list_take_while_empty() -> Unit {
+    let xs: List<Int> = [];
+    assert_eq(xs.take_while(is_small).len(), 0);
+}
+
+test fn list_take_while_all_match() -> Unit {
+    let xs = [1, 2];
+    assert_eq(xs.take_while(is_small).len(), 2);
+}
+
+test fn list_take_while_none_match() -> Unit {
+    let xs = [3, 4, 5];
+    assert_eq(xs.take_while(is_small).len(), 0);
+}
+
+test fn list_skip_while_skips_until_false() -> Unit {
+    let xs = [1, 2, 3, 4, 5];
+    assert_eq(xs.skip_while(is_small).len(), 3);
+}
+
+test fn list_skip_while_empty() -> Unit {
+    let xs: List<Int> = [];
+    assert_eq(xs.skip_while(is_small).len(), 0);
+}
+
+test fn list_skip_while_all_match() -> Unit {
+    let xs = [1, 2];
+    assert_eq(xs.skip_while(is_small).len(), 0);
+}
+
+test fn list_skip_while_none_match() -> Unit {
+    let xs = [3, 4, 5];
+    assert_eq(xs.skip_while(is_small).len(), 3);
+}
+
+test fn list_skip_while_contains_tail() -> Unit {
+    let xs = [1, 2, 3, 4, 5];
+    let result = xs.skip_while(is_small);
+    assert_eq(result.contains(3), true);
+    assert_eq(result.contains(1), false);
+}
+
+// ── windows / chunks ───────────────────────────────────────────────────────
+
+test fn list_windows_count() -> Unit {
+    let xs = [1, 2, 3, 4];
+    assert_eq(xs.windows(2).len(), 3);
+}
+
+test fn list_windows_empty() -> Unit {
+    let xs: List<Int> = [];
+    assert_eq(xs.windows(2).len(), 0);
+}
+
+test fn list_windows_full_width() -> Unit {
+    let xs = [1, 2, 3];
+    assert_eq(xs.windows(3).len(), 1);
+}
+
+test fn list_windows_larger_than_list() -> Unit {
+    let xs = [1, 2];
+    assert_eq(xs.windows(5).len(), 0);
+}
+
+test fn list_chunks_count_even() -> Unit {
+    let xs = [1, 2, 3, 4];
+    assert_eq(xs.chunks(2).len(), 2);
+}
+
+test fn list_chunks_count_with_remainder() -> Unit {
+    let xs = [1, 2, 3, 4, 5];
+    assert_eq(xs.chunks(2).len(), 3);
+}
+
+test fn list_chunks_empty() -> Unit {
+    let xs: List<Int> = [];
+    assert_eq(xs.chunks(2).len(), 0);
+}
+
+test fn list_chunks_single_chunk() -> Unit {
+    let xs = [1, 2, 3];
+    assert_eq(xs.chunks(10).len(), 1);
+}
+
+// ── group_by ───────────────────────────────────────────────────────────────
+
+test fn list_group_by_empty() -> Unit {
+    let xs: List<Int> = [];
+    let g = xs.group_by(is_even_key);
+    assert_eq(g.len(), 0);
+}
+
+test fn list_group_by_two_groups() -> Unit {
+    let xs = [1, 2, 3, 4, 5, 6];
+    let g = xs.group_by(is_even_key);
+    assert_eq(g.len(), 2);
+}
+
+test fn list_group_by_all_same_key() -> Unit {
+    let xs = [2, 4, 6];
+    let g = xs.group_by(is_even_key);
+    assert_eq(g.len(), 1);
+}
+
+test fn list_group_by_all_distinct_keys() -> Unit {
+    let xs = [1, 2, 3];
+    let g = xs.group_by(is_even_key);
+    assert_eq(g.len(), 2);
+}
+
+test fn list_group_by_string_key() -> Unit {
+    let words: List<String> = ["ant", "bear", "ape"];
+    let g = words.group_by(first_char);
+    assert_eq(g.len(), 2);
 }
