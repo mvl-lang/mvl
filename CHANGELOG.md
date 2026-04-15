@@ -6,6 +6,34 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.30.0] — 2026-04-15 (feat: stdlib file I/O — std.io with effects and IFC)
+
+### Added
+
+- **std.io module** — comprehensive file I/O, path, and filesystem operations with effect tracking and information flow control (#44).
+  - Types: `File`, `Path`, `BufReader`, `BufWriter`, `DirEntry`, `Metadata`, `Stdin`
+  - Path construction (pure): `path()`, `join()`, `to_string()`
+  - Path queries: `exists()`, `is_file()`, `is_dir()`
+  - File I/O: `open()`, `close()`, `read_to_string()`, `write()`, `append()`, `buf_reader()`, `buf_writer()`, `read_line()`, `write_line()`
+  - Filesystem operations: `create_dir_all()`, `remove()`, `read_dir()`, `metadata()`, `chmod()`, `create_symlink()`, `read_link()`
+  - Standard input: `stdin()`, `stdin_read_line()`, `stdin_read_to_string()`
+- **Effect system extension** — three new effects: `! FileRead`, `! FileWrite`, `! FileDelete` (distinct from `! Console` for line-oriented stdio).
+- **IFC labeling** — all file-read and stdin operations return `Tainted<String>` for untrusted external data; symlink targets return `Tainted<String>` to prevent path-traversal attacks.
+- Corpus test `tests/corpus/05_effects/file_io.mvl` covering effects, IFC, pure vs. effectful paths, and mixed-effect propagation.
+
+### Fixed
+
+- **Effect annotations** — `close()` is now effect-free (resource release, not I/O side-effect); read-only callers no longer forced to declare `! FileWrite`.
+- **Security docstrings** — `create_symlink()` warns that targets must not derive from untrusted input; `chmod()` documents that setuid/setgid bits are unguarded.
+- **IFC design** — `read_link()` returns `Tainted<String>` instead of bare `Path` to prevent silent path-traversal via disk data; `sanitize_path()` corpus placeholder updated with Phase 3 roadmap.
+- **Test filter** — `file_io_corpus_parses_and_checks` now correctly handles opaque stdlib types (`UndefinedType` filtered) while catching real effect/IFC errors.
+- **Negative tests** — added `caller_missing_file_write_effect_rejected` and `caller_missing_file_delete_effect_rejected`.
+
+### Changed
+
+- Phase 2 limitation: `open()` lacks `OpenMode` parameter, so write-mode effect visibility deferred to Phase 3 with `! FileWrite` enforcement.
+- Corpus examples: removed unnecessary `Result<Bool>` wrappers on path queries; added `path_as_string()` exercising pure path conversion.
+
 ## [0.29.0] — 2026-04-15 (feat: Terminal effect and tui module — raw terminal control)
 
 ### Added
