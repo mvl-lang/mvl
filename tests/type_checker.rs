@@ -328,6 +328,19 @@ fn collections_corpus_parses_and_checks() {
 }
 
 #[test]
+fn core_types_corpus_parses_and_checks() {
+    // GIVEN: the core prelude types corpus (#42)
+    // THEN: no type errors (Int/Float methods resolve to correct types)
+    let src = include_str!("corpus/02_types/core_types.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "core_types corpus should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
 fn immutable_binding_assignment_rejected() {
     // GIVEN: assignment to `let x` (no `mut`)
     // THEN: AssignToImmutable reported

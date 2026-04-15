@@ -94,6 +94,18 @@ fn float_is_finite(x: Float) -> Bool {
     x.is_finite()
 }
 
+fn float_is_infinite(x: Float) -> Bool {
+    x.is_infinite()
+}
+
+fn float_is_positive(x: Float) -> Bool {
+    x.is_positive()
+}
+
+fn float_is_negative(x: Float) -> Bool {
+    x.is_negative()
+}
+
 // ── Bool ─────────────────────────────────────────────────────────────────────
 
 fn bool_and(a: Bool, b: Bool) -> Bool {
