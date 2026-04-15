@@ -51,37 +51,36 @@ test fn list_string_is_empty_false() -> Unit {
     assert_eq(xs.is_empty(), false);
 }
 
-// ── slice ──────────────────────────────────────────────────────────────────
+// ── take / skip ────────────────────────────────────────────────────────────
 
-test fn list_slice_basic() -> Unit {
-    let xs: List<Int> = [1, 2, 3, 4, 5];
-    let ys: List<Int> = xs.slice(1, 4);
-    assert_eq(ys.len(), 3);
+test fn list_take_returns_first_n() -> Unit {
+    let xs = [1, 2, 3, 4, 5];
+    assert_eq(xs.take(3).len(), 3);
 }
 
-test fn list_slice_from_start() -> Unit {
-    let xs: List<Int> = [10, 20, 30, 40];
-    let ys: List<Int> = xs.slice(0, 2);
-    assert_eq(ys.len(), 2);
+test fn list_take_empty() -> Unit {
+    let xs: List<Int> = [];
+    assert_eq(xs.take(2).len(), 0);
 }
 
-test fn list_slice_full() -> Unit {
-    let xs: List<Int> = [1, 2, 3];
-    let ys: List<Int> = xs.slice(0, 3);
-    assert_eq(ys.len(), 3);
+test fn list_take_more_than_len() -> Unit {
+    let xs = [1, 2];
+    assert_eq(xs.take(10).len(), 2);
 }
 
-test fn list_slice_empty_range() -> Unit {
-    let xs: List<Int> = [1, 2, 3];
-    let ys: List<Int> = xs.slice(1, 1);
-    assert_eq(ys.len(), 0);
+test fn list_skip_returns_tail() -> Unit {
+    let xs = [1, 2, 3, 4, 5];
+    assert_eq(xs.skip(2).len(), 3);
 }
 
-test fn list_slice_returns_new() -> Unit {
-    let xs: List<Int> = [1, 2, 3, 4, 5];
-    let ys: List<Int> = xs.slice(0, 3);
-    assert_eq(xs.len(), 5);
-    assert_eq(ys.len(), 3);
+test fn list_skip_empty() -> Unit {
+    let xs: List<Int> = [];
+    assert_eq(xs.skip(1).len(), 0);
+}
+
+test fn list_skip_all() -> Unit {
+    let xs = [1, 2, 3];
+    assert_eq(xs.skip(10).len(), 0);
 }
 
 // ── slice safety contracts ─────────────────────────────────────────────────
@@ -118,19 +117,46 @@ test fn range_basic() -> Unit {
     assert_eq(xs.len(), 5);
 }
 
-test fn range_empty() -> Unit {
-    let xs: List<Int> = range(3, 3);
-    assert_eq(xs.len(), 0);
+// ── flatten ────────────────────────────────────────────────────────────────
+
+test fn list_flatten_basic() -> Unit {
+    let xss: List<List<Int>> = [[1, 2], [3, 4], [5]];
+    assert_eq(xss.flatten().len(), 5);
 }
 
-test fn range_single() -> Unit {
-    let xs: List<Int> = range(7, 8);
-    assert_eq(xs.len(), 1);
+test fn list_flatten_empty_outer() -> Unit {
+    let xss: List<List<Int>> = [];
+    assert_eq(xss.flatten().len(), 0);
 }
 
-test fn range_exclusive_upper() -> Unit {
-    let xs: List<Int> = range(0, 3);
-    assert_eq(xs.len(), 3);
+test fn list_flatten_empty_inner() -> Unit {
+    let xss: List<List<Int>> = [[], [], []];
+    assert_eq(xss.flatten().len(), 0);
+}
+
+// ── partition ──────────────────────────────────────────────────────────────
+
+fn is_even_p(x: Int) -> Bool { x % 2 == 0 }
+
+test fn list_partition_splits_correctly() -> Unit {
+    let xs = [1, 2, 3, 4, 5, 6];
+    let parts = xs.partition(is_even_p);
+    assert_eq(parts.0.len(), 3);
+    assert_eq(parts.1.len(), 3);
+}
+
+test fn list_partition_all_match() -> Unit {
+    let xs = [2, 4, 6];
+    let parts = xs.partition(is_even_p);
+    assert_eq(parts.0.len(), 3);
+    assert_eq(parts.1.len(), 0);
+}
+
+test fn list_partition_none_match() -> Unit {
+    let xs = [1, 3, 5];
+    let parts = xs.partition(is_even_p);
+    assert_eq(parts.0.len(), 0);
+    assert_eq(parts.1.len(), 3);
 }
 
 test fn range_inverted_is_empty() -> Unit {

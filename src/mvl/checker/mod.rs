@@ -1454,6 +1454,38 @@ impl TypeChecker {
                 Ty::List(Box::new(elem_ty.clone()))
             }
             "slice" => Ty::Unknown,
+            // take(n)/skip(n) — first/last N elements → List<T>
+            "take" | "skip" => Ty::List(Box::new(elem_ty.clone())),
+            // take_while(f)/skip_while(f) — List<T>
+            "take_while" | "skip_while" => Ty::List(Box::new(elem_ty.clone())),
+            // windows(n)/chunks(n) — List<List<T>>
+            "windows" | "chunks" => Ty::List(Box::new(Ty::List(Box::new(elem_ty.clone())))),
+            // flatten() — List<List<U>> → List<U>; infer U from elem_ty
+            "flatten" => {
+                let inner = if let Ty::List(u) = elem_ty {
+                    *u.clone()
+                } else {
+                    Ty::Unknown
+                };
+                Ty::List(Box::new(inner))
+            }
+            // partition(f) — (List<T>, List<T>)
+            "partition" => Ty::Tuple(vec![
+                Ty::List(Box::new(elem_ty.clone())),
+                Ty::List(Box::new(elem_ty.clone())),
+            ]),
+            // group_by(f: fn(T) -> K) — Map<K, List<T>>
+            "group_by" => {
+                let k_ty = if let Some(Ty::Fn(_, ret)) = arg_tys.first() {
+                    *ret.clone()
+                } else {
+                    Ty::Unknown
+                };
+                Ty::Named(
+                    "Map".into(),
+                    vec![k_ty, Ty::List(Box::new(elem_ty.clone()))],
+                )
+            }
             _ => Ty::Unknown,
         }
     }

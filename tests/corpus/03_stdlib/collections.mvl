@@ -215,3 +215,57 @@ fn string_substring() -> String {
 fn range_to_list() -> List<Int> {
     range(0, 10)
 }
+
+// ── Extended collection ops (#64) ──────────────────────────────────────────
+
+fn list_take() -> List<Int> {
+    let xs = [1, 2, 3, 4, 5];
+    xs.take(3)
+}
+
+fn list_skip() -> List<Int> {
+    let xs = [1, 2, 3, 4, 5];
+    xs.skip(2)
+}
+
+fn list_take_while() -> List<Int> {
+    let xs = [1, 2, 3, 4, 5];
+    xs.take_while(is_even)
+}
+
+fn list_skip_while() -> List<Int> {
+    let xs = [1, 2, 3, 4, 5];
+    xs.skip_while(is_even)
+}
+
+fn list_windows() -> List<List<Int>> {
+    let xs = [1, 2, 3, 4];
+    xs.windows(2)
+}
+
+fn list_chunks() -> List<List<Int>> {
+    let xs = [1, 2, 3, 4, 5, 6];
+    xs.chunks(2)
+}
+
+fn list_flatten() -> List<Int> {
+    let xss: List<List<Int>> = [[1, 2], [3, 4], [5]];
+    xss.flatten()
+}
+
+fn list_partition() -> (List<Int>, List<Int>) {
+    let xs = [1, 2, 3, 4, 5, 6];
+    xs.partition(is_even)
+}
+
+fn get_first_char(s: String) -> String {
+    match s.chars().first() {
+        Some(c) => c,
+        None => "?"
+    }
+}
+
+fn list_group_by() -> Map<String, List<String>> {
+    let words = ["ant", "bear", "ape"];
+    words.group_by(get_first_char)
+}
