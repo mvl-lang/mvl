@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 /// All stdlib `.mvl` source files embedded at compile time.
 pub const STDLIB_FILES: &[(&str, &str)] = &[
     ("core.mvl", include_str!("../../../std/core.mvl")),
+    ("io.mvl", include_str!("../../../std/io.mvl")),
     ("time.mvl", include_str!("../../../std/time.mvl")),
     ("json.mvl", include_str!("../../../std/json.mvl")),
     ("regex.mvl", include_str!("../../../std/regex.mvl")),
