@@ -2577,8 +2577,8 @@ fn stdlib_crypto_corpus_parses_and_checks() {
 #[test]
 fn file_io_corpus_parses_and_checks() {
     // GIVEN: the file I/O effects corpus (valid programs using std.io, #44)
-    // THEN: no serious type errors (UndefinedFunction/UndefinedVariable for
-    //       stdlib symbols is OK without stdlib loaded)
+    // THEN: no serious type errors; UndefinedFunction/UndefinedVariable/UndefinedType
+    //       for stdlib symbols are expected without stdlib loaded
     let src = include_str!("corpus/05_effects/file_io.mvl");
     let result = check_src(src);
     let serious: Vec<_> = result
@@ -2587,12 +2587,53 @@ fn file_io_corpus_parses_and_checks() {
         .filter(|e| {
             !matches!(
                 e,
-                CheckError::UndefinedFunction { .. } | CheckError::UndefinedVariable { .. }
+                // stdlib symbols and opaque types (File, Path, BufReader, etc.) not loaded in Phase 2
+                CheckError::UndefinedFunction { .. }
+                    | CheckError::UndefinedVariable { .. }
+                    | CheckError::UndefinedType { .. }
             )
         })
         .collect();
     assert!(
         serious.is_empty(),
         "file_io corpus should have no serious errors, got: {serious:?}"
+    );
+}
+
+#[test]
+fn caller_missing_file_write_effect_rejected() {
+    // GIVEN: fn writes ! FileWrite; fn caller ! FileRead calls writes
+    // THEN: MissingEffect(writes, FileWrite) reported
+    let src = r#"
+        fn writes() -> Result<Unit, String> ! FileWrite { Err("") }
+        fn caller() -> Result<Unit, String> ! FileRead { writes() }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            CheckError::MissingEffect { callee, effect, .. }
+            if callee == "writes" && effect == "FileWrite"
+        )),
+        "expected MissingEffect(writes, FileWrite), got: {errors:?}"
+    );
+}
+
+#[test]
+fn caller_missing_file_delete_effect_rejected() {
+    // GIVEN: fn deletes ! FileDelete; fn caller ! FileWrite calls deletes
+    // THEN: MissingEffect(deletes, FileDelete) reported
+    let src = r#"
+        fn deletes() -> Result<Unit, String> ! FileDelete { Err("") }
+        fn caller() -> Result<Unit, String> ! FileWrite { deletes() }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            CheckError::MissingEffect { callee, effect, .. }
+            if callee == "deletes" && effect == "FileDelete"
+        )),
+        "expected MissingEffect(deletes, FileDelete), got: {errors:?}"
     );
 }

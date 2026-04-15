@@ -2,7 +2,7 @@
 //
 // File I/O, path utilities, filesystem operations, and standard input.
 // Import with: use std.io.{File, Path, BufReader, BufWriter, DirEntry, Metadata, Stdin,
-//                          path, join, exists, is_file, is_dir,
+//                          path, join, to_string, exists, is_file, is_dir,
 //                          open, close, read_to_string, write, append,
 //                          buf_reader, buf_writer, read_line, write_line,
 //                          create_dir_all, remove, read_dir, metadata, chmod,
@@ -113,12 +113,21 @@ pub fn is_dir(p: Path) -> Bool ! FileRead { false }
 /// Note: `open` itself does not require `! FileRead` — it is the capability
 /// entry point that grants the File handle. Callers that read from the handle
 /// declare `! FileRead`.
+///
+/// Phase 2 limitation: `open` has no mode parameter, so write-mode opens are
+/// also effect-free at the call site; `! FileWrite` becomes visible only when
+/// `write_line` or `write` is called. Phase 3 will introduce an `OpenMode`
+/// enum (Read | Write | Append) and annotate write-mode `open` with `! FileWrite`.
 pub fn open(p: Path) -> Result<File, String> { Err("") }
 
 /// Close a file handle and flush any pending writes.
 ///
 /// Takes File by value to prevent use-after-close.
-pub fn close(f: File) -> Unit ! FileWrite { }
+/// No effect annotation — closing a file descriptor is a resource release,
+/// not an observable I/O side-effect in the capability sense. Callers that
+/// opened for writing will have already declared `! FileWrite` via `write_line`
+/// or `write`; callers that only read do not need to pollute their signature.
+pub fn close(f: File) -> Unit { }
 
 /// Read the entire contents of a file into a string.
 ///
@@ -172,13 +181,26 @@ pub fn metadata(p: Path) -> Result<Metadata, String> ! FileRead { Err("") }
 /// Set the Unix permission bits of a file or directory.
 ///
 /// `mode` is an integer (e.g. 0o755). No-op on non-Unix platforms.
+///
+/// Warning: setuid (0o4000) and setgid (0o2000) bits are accepted by this API.
+/// Callers are responsible for rejecting privilege-escalating modes; this API
+/// provides no compile-time guard against `chmod(p, 0o4755)`.
 pub fn chmod(p: Path, mode: Int) -> Result<Unit, String> ! FileWrite { Err("") }
 
 /// Create a symbolic link: `link` will point to `target`.
+///
+/// Security: `target` MUST NOT be derived from untrusted (Tainted) input without
+/// sanitization. An attacker-controlled target can redirect subsequent read/write/
+/// delete operations to arbitrary filesystem locations outside any intended scope.
 pub fn create_symlink(target: Path, link: Path) -> Result<Unit, String> ! FileWrite { Err("") }
 
 /// Read the target path of a symbolic link.
-pub fn read_link(p: Path) -> Result<Path, String> ! FileRead { Err("") }
+///
+/// Returns Tainted<String> — the symlink target is data stored on disk by an
+/// external process and is therefore untrusted. Callers MUST sanitize the
+/// result before constructing a Path and passing it to any filesystem function,
+/// to prevent path traversal via attacker-controlled symlink targets.
+pub fn read_link(p: Path) -> Result<Tainted<String>, String> ! FileRead { Err("") }
 
 // ── Standard input ─────────────────────────────────────────────────────────
 
