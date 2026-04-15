@@ -1,6 +1,6 @@
 # access_control example — MVL Phase 2 security demonstration
 # Run from this directory or from the repo root.
-.PHONY: help build check test run
+.PHONY: help build check test run clean
 
 MVL  := $(shell test -x ../../target/debug/mvl && echo ../../target/debug/mvl || echo mvl)
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
@@ -23,3 +23,6 @@ test: ## Run all standalone _test.mvl files
 
 run: ## Execute the demo scenario (RBAC decisions + auth flow)
 	$(MVL) run $(DIR)main.mvl
+
+clean: ## Remove build artifacts
+	rm -rf $(TMPDIR)mvl_build_access_control
