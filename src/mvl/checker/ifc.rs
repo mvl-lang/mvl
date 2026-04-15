@@ -307,7 +307,17 @@ fn check_stmt_flows(
 }
 
 /// Check the public-sink names that must not appear inside high-PC contexts.
-const PUBLIC_SINKS: &[&str] = &["println", "print", "print_styled"];
+/// Includes std.log functions (#54): a log call inside a Secret branch leaks
+/// whether the branch was taken (implicit flow via the log record's presence).
+const PUBLIC_SINKS: &[&str] = &[
+    "println",
+    "print",
+    "print_styled",
+    "log_debug",
+    "log_info",
+    "log_warn",
+    "log_error",
+];
 
 fn check_expr_flows(
     expr: &Expr,

@@ -1169,7 +1169,11 @@ impl TypeChecker {
         // 003-information-flow/Req 6: logging functions MUST accept only Public<T>.
         // Reject any argument labeled Secret, Tainted, or Clean (Clean is sanitized
         // but not declassified — an explicit declassify() is required before logging).
-        if matches!(name, "println" | "print") {
+        // Covers println/print (Console) and log_debug/info/warn/error (! Log, #54).
+        if matches!(
+            name,
+            "println" | "print" | "log_debug" | "log_info" | "log_warn" | "log_error"
+        ) {
             for (arg, arg_ty) in args.iter().zip(arg_tys.iter()) {
                 if let Some(label) = ifc::label_of(arg_ty) {
                     if matches!(
@@ -1190,6 +1194,8 @@ impl TypeChecker {
         if let Some(fn_info) = self.env.lookup_fn(name).cloned() {
             // Variadic built-ins (println, print, assert_eq) have an empty params
             // vec as a sentinel — skip arity and type checking for them.
+            // log_* (#54) are also treated as variadic so that the IFC label check
+            // (above) validates each argument individually without a fixed-arity guard.
             let is_variadic_builtin = matches!(
                 name,
                 "println"
@@ -1200,6 +1206,10 @@ impl TypeChecker {
                     | "choice"
                     | "shuffle"
                     | "float"
+                    | "log_debug"
+                    | "log_info"
+                    | "log_warn"
+                    | "log_error"
             );
             if !is_variadic_builtin && fn_info.params.len() != arg_tys.len() {
                 self.emit(CheckError::WrongArgCount {

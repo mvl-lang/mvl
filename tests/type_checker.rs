@@ -2637,3 +2637,89 @@ fn caller_missing_file_delete_effect_rejected() {
         "expected MissingEffect(deletes, FileDelete), got: {errors:?}"
     );
 }
+
+// ── std.log / ! Log effect (#54) ─────────────────────────────────────────────
+
+/// The logging corpus (valid programs) MUST parse and check without serious errors.
+#[test]
+fn logging_corpus_parses_and_checks() {
+    // GIVEN: the logging effects corpus (valid programs using std.log, #54)
+    // THEN: no serious type errors; UndefinedFunction for log_* is expected
+    //       when stdlib is not loaded (Phase 2)
+    let src = include_str!("corpus/05_effects/logging.mvl");
+    let result = check_src(src);
+    let serious: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            !matches!(
+                e,
+                // log_* functions are stdlib symbols; not loaded in Phase 2 unit tests
+                CheckError::UndefinedFunction { .. }
+                    | CheckError::UndefinedVariable { .. }
+                    | CheckError::UndefinedType { .. }
+            )
+        })
+        .collect();
+    assert!(
+        serious.is_empty(),
+        "logging corpus should have no serious errors, got: {serious:?}"
+    );
+}
+
+/// `log_info` with a Secret argument MUST be rejected (#54, 003-information-flow/Req 6).
+/// "Don't log secrets" is a type error in MVL, not a code review rule.
+#[test]
+fn log_info_rejects_secret_argument() {
+    let errors = errors_for(r#"fn f(pwd: Secret<String>) -> Unit ! Log { log_info(pwd, {}); }"#);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Secret")
+        ),
+        "log_info with Secret arg should emit LoggingLabelViolation, got: {errors:?}"
+    );
+}
+
+/// `log_error` with a Tainted argument MUST be rejected (#54, 003-information-flow/Req 6).
+#[test]
+fn log_error_rejects_tainted_argument() {
+    let errors =
+        errors_for(r#"fn f(input: Tainted<String>) -> Unit ! Log { log_error(input, {}); }"#);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Tainted")
+        ),
+        "log_error with Tainted arg should emit LoggingLabelViolation, got: {errors:?}"
+    );
+}
+
+/// `log_warn` with a Clean argument MUST be rejected — Clean is sanitized but
+/// not declassified; an explicit `declassify()` is required before logging (#54).
+#[test]
+fn log_warn_rejects_clean_argument() {
+    let errors = errors_for(r#"fn f(s: Clean<String>) -> Unit ! Log { log_warn(s, {}); }"#);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Clean")
+        ),
+        "log_warn with Clean arg should emit LoggingLabelViolation, got: {errors:?}"
+    );
+}
+
+/// A caller of `log_info` MUST declare `! Log`; without it UndeclaredEffect is reported.
+#[test]
+fn caller_missing_log_effect_rejected() {
+    let src = r#"
+        fn do_log() -> Unit ! Log { log_info("msg", {}) }
+        fn caller() -> Unit { do_log() }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            CheckError::UndeclaredEffect { callee, effect, .. }
+            if callee == "do_log" && effect == "Log"
+        )),
+        "expected UndeclaredEffect(do_log, Log), got: {errors:?}"
+    );
+}
