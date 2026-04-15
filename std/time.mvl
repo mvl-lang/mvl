@@ -1,0 +1,47 @@
+// MVL standard library — time module
+//
+// Provides wall-clock time (! Clock) and sleep (! Clock).
+// Import with: use std.time.{Instant, DateTime, Duration, now, sleep}
+//
+// Phase 2: function stubs with correct signatures and effects.
+// Types are opaque structs until Phase 3 compiles stdlib from source.
+
+/// An opaque point in time (monotonic or wall-clock, implementation-defined).
+pub type Instant = struct {}
+
+/// A human-readable calendar date and time.
+pub type DateTime = struct {
+    year: Int,
+    month: Int,
+    day: Int,
+    hour: Int,
+    minute: Int,
+    second: Int,
+}
+
+/// A span of time with nanosecond precision.
+pub type Duration = struct {
+    secs: Int,
+    nanos: Int,
+}
+
+/// Returns the current wall-clock time. Requires `! Clock`.
+pub fn now() -> Instant ! Clock { }
+
+/// Suspends execution for the given duration. Requires `! Clock`.
+pub fn sleep(d: Duration) -> Unit ! Clock { }
+
+/// Formats an Instant or DateTime as a string using the given format pattern.
+/// Pure — formatting is a pure transformation.
+pub fn format(t: Instant, pattern: String) -> String { "" }
+
+/// Parses a datetime string using the given format pattern.
+/// Returns None if the string does not match the pattern.
+/// Pure — parsing is a pure transformation.
+pub fn parse(s: String, pattern: String) -> Option<DateTime> { None }
+
+/// Constructs a Duration from whole seconds.
+pub fn seconds(n: Int) -> Duration { Duration { secs: n, nanos: 0 } }
+
+/// Constructs a Duration from whole milliseconds.
+pub fn millis(n: Int) -> Duration { Duration { secs: 0, nanos: 0 } }

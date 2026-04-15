@@ -102,6 +102,7 @@ const VALID_EFFECT_NAMES: &[&str] = &[
     "DB",
     "ProcessSpawn",
     "Random",
+    "CryptoRandom",
     "Clock",
     "Env",
     "Log",

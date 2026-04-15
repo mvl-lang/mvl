@@ -1886,7 +1886,7 @@ fn invalid_effect_name_rejected() {
 /// All canonical effect names MUST be accepted (002-effect-system/Req 2).
 #[test]
 fn valid_effect_names_accepted() {
-    // Test all 12 canonical effect names from VALID_EFFECT_NAMES in checker/mod.rs.
+    // Test all 13 canonical effect names from VALID_EFFECT_NAMES in checker/mod.rs.
     let canonical = [
         "Console",
         "FileRead",
@@ -1896,6 +1896,7 @@ fn valid_effect_names_accepted() {
         "DB",
         "ProcessSpawn",
         "Random",
+        "CryptoRandom",
         "Clock",
         "Env",
         "Log",

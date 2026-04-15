@@ -393,7 +393,7 @@ impl CheckError {
                 format!("refinement predicate violated: `{pred}`")
             }
             CheckError::InvalidEffectName { name, .. } => format!(
-                "unknown effect `{name}` — valid effects are: Console, FileRead, FileWrite, FileDelete, Net, DB, ProcessSpawn, Random, Clock, Env, Log, Async"
+                "unknown effect `{name}` — valid effects are: Console, FileRead, FileWrite, FileDelete, Net, DB, ProcessSpawn, Random, CryptoRandom, Clock, Env, Log, Async"
             ),
             CheckError::UndeclaredEffect { callee, effect, .. } => {
                 format!(
