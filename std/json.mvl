@@ -22,4 +22,8 @@ pub fn encode(v: Value) -> String { "" }
 /// Parses a JSON string into a Value.
 /// Returns Err if the input is not valid JSON.
 /// Pure — parsing is a deterministic transformation.
+///
+/// IFC note: ideally `decode<L>(s: L<String>) -> Result<L<Value>, String>` so that
+/// taint from network input propagates to the result. Deferred pending label-polymorphic
+/// generics (#28).
 pub fn decode(s: String) -> Result<Value, String> { Err("") }
