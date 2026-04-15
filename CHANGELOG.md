@@ -6,6 +6,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.27.0] — 2026-04-15 (feat: extended package model specification)
+
+### Added
+
+- **Extended package model specification** — Comprehensive design for the MVL package ecosystem (ADR-0012 and Spec 008)
+  - Package manifest format using `mvl.toml` with `[dependencies]` and `[native]` tables
+  - Visibility rules: `internal/` directory boundaries enforced by resolver, complementary to `pub`/private item-level visibility
+  - Registry strategy: git-only for Phase 3, central registry `registry.mvl-lang.org` for Phase 4
+  - Versioning: semver enforced, breaking changes detectable via type signature analysis
+  - Build integration: `mvl build` handles dependency fetching and resolution (no separate install step)
+  - Supply chain assurance: trust score per package visible in `mvl audit` (MVL verified lines / total lines), `extern-rationale` required for packages using `extern` blocks
+  - SBOM generation in CycloneDX JSON format (Phase 4)
+- **Trust boundary enforcement** — Formalises the pattern already established by ADR-0006 (FFI via extern "rust" + bridge.rs): extern code at the bottom, fully-verified MVL API at the top
+
 ## [0.26.0] — 2026-04-15 (feat: const generics and Array<T, N> fixed-size array type)
 
 ### Added

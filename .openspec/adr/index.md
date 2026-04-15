@@ -13,3 +13,4 @@
 | [0009](0009-toolchain-layout.md) | Toolchain layout — XDG, versioning, linking, caches | Accepted |
 | [0010](0010-corpus-test-structure.md) | Corpus test structure — progressive complexity ramp | Accepted |
 | ~~0011~~ | ~~Generational toolchain~~ | Merged into 0009 |
+| [0012](0012-extended-package-model.md) | Extended package model — extern inside, verified API outside | Accepted |
