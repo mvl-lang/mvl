@@ -318,7 +318,7 @@ fn immutability_corpus_parses_and_checks() {
 fn collections_corpus_parses_and_checks() {
     // GIVEN: the string + collection operations corpus (#43)
     // THEN: no type errors (method calls resolve to correct types)
-    let src = include_str!("corpus/02_types/collections.mvl");
+    let src = include_str!("corpus/03_stdlib/collections.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -374,7 +374,7 @@ fn ownership_corpus_parses() {
     // GIVEN: the ownership corpus
     // WHEN: parsed and checked
     // THEN: no use-after-move errors (all moves are valid single uses)
-    let src = include_str!("corpus/03_ownership/ownership.mvl");
+    let src = include_str!("corpus/04_ownership/ownership.mvl");
     let result = check_src(src);
     let ownership_errors: Vec<_> = result
         .errors
@@ -407,7 +407,7 @@ fn refinements_corpus_parses() {
     // GIVEN: the refinement types corpus
     // WHEN: parsed (refinement checking is lightweight in Phase 1)
     // THEN: no parse errors, no crashes
-    let src = include_str!("corpus/06_refinements/refinements_valid.mvl");
+    let src = include_str!("corpus/07_refinements/refinements_valid.mvl");
     let (mut p, lex_errors) = Parser::new(src);
     let prog = p.parse_program();
     assert!(
@@ -429,7 +429,7 @@ fn refinements_corpus_parses() {
 fn pure_vs_effectful_corpus_parses_and_checks() {
     // GIVEN: valid corpus of pure/effectful declarations with correct annotations
     // THEN: no type errors
-    let src = include_str!("corpus/04_effects/pure_vs_effectful.mvl");
+    let src = include_str!("corpus/05_effects/pure_vs_effectful.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -486,7 +486,7 @@ fn effectful_function_with_correct_declaration_accepted() {
 fn propagation_corpus_parses_and_checks() {
     // GIVEN: valid corpus of effect propagation patterns
     // THEN: no type errors
-    let src = include_str!("corpus/04_effects/propagation.mvl");
+    let src = include_str!("corpus/05_effects/propagation.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -545,7 +545,7 @@ fn caller_declaring_effect_union_accepted() {
 fn totality_corpus_parses_and_checks() {
     // GIVEN: valid corpus of total/partial function declarations
     // THEN: no type errors
-    let src = include_str!("corpus/07_termination/total_vs_partial.mvl");
+    let src = include_str!("corpus/08_termination/total_vs_partial.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -845,7 +845,7 @@ fn recursion_inside_lambda_not_flagged() {
 fn capabilities_corpus_parses_and_checks() {
     // GIVEN: valid corpus of capability-annotated functions
     // THEN: no type errors
-    let src = include_str!("corpus/08_concurrency/capabilities.mvl");
+    let src = include_str!("corpus/09_concurrency/capabilities.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -1104,7 +1104,7 @@ fn iso_multiple_aliasing_all_sites_reported() {
 fn labels_corpus_parses_and_checks() {
     // GIVEN: the existing labels corpus (valid labeled programs)
     // THEN: no IFC violations (UndefinedFunction for stdlib is OK)
-    let src = include_str!("corpus/05_ifc/labels.mvl");
+    let src = include_str!("corpus/06_ifc/labels.mvl");
     let result = check_src(src);
     let serious_errors: Vec<_> = result
         .errors
@@ -1121,7 +1121,7 @@ fn labels_corpus_parses_and_checks() {
 fn label_types_corpus_parses_and_checks() {
     // GIVEN: the label_types corpus (labeled parameters and upward flows)
     // THEN: no type errors
-    let src = include_str!("corpus/05_ifc/label_types.mvl");
+    let src = include_str!("corpus/06_ifc/label_types.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -1175,7 +1175,7 @@ fn tainted_flows_to_clean_rejected() {
 fn lattice_corpus_parses_and_checks() {
     // GIVEN: lattice corpus (valid upward flows)
     // THEN: no type errors
-    let src = include_str!("corpus/05_ifc/lattice.mvl");
+    let src = include_str!("corpus/06_ifc/lattice.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -1216,7 +1216,7 @@ fn clean_to_public_rejected() {
 fn propagation_ifc_corpus_parses_and_checks() {
     // GIVEN: propagation corpus (arithmetic label join)
     // THEN: no type errors
-    let src = include_str!("corpus/05_ifc/propagation.mvl");
+    let src = include_str!("corpus/06_ifc/propagation.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -1257,7 +1257,7 @@ fn arithmetic_label_join_downgrade_rejected() {
 fn declassification_corpus_parses_and_checks() {
     // GIVEN: declassification corpus (valid declassify/sanitize usage)
     // THEN: no type errors (UndefinedFunction for User types is OK)
-    let src = include_str!("corpus/05_ifc/declassification.mvl");
+    let src = include_str!("corpus/06_ifc/declassification.mvl");
     let result = check_src(src);
     let serious_errors: Vec<_> = result
         .errors
@@ -1752,7 +1752,7 @@ fn run() -> Result<String, AppError> {
 
 #[test]
 fn map_set_literals_corpus_parses_and_checks() {
-    let src = include_str!("corpus/02_types/map_set_literals.mvl");
+    let src = include_str!("corpus/03_stdlib/map_set_literals.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -2134,7 +2134,7 @@ fn implicit_flow_else_branch_sink_verified() {
 /// `ImplicitFlowViolation` errors. This test validates the corpus itself.
 #[test]
 fn implicit_flow_corpus_has_violations() {
-    let src = include_str!("corpus/05_ifc/implicit_flow.mvl");
+    let src = include_str!("corpus/06_ifc/implicit_flow.mvl");
     let result = check_src(src);
     assert!(
         result
@@ -2248,7 +2248,7 @@ fn refinement_same_pred_var_proven() {
 fn refinements_valid_corpus_no_violations() {
     // GIVEN: valid refinement type corpus
     // THEN: no RefinementViolated errors
-    let src = include_str!("corpus/06_refinements/refinements_valid.mvl");
+    let src = include_str!("corpus/07_refinements/refinements_valid.mvl");
     let result = check_src(src);
     assert!(
         !result
@@ -2286,7 +2286,7 @@ fn refinement_pass_produces_counts_in_verdict() {
 fn refinements_violations_corpus_no_static_violations() {
     // GIVEN: violations corpus (unproven call sites — runtime-checked, not statically failed)
     // THEN: no RefinementViolated errors emitted
-    let src = include_str!("corpus/06_refinements/refinements_violations.mvl");
+    let src = include_str!("corpus/07_refinements/refinements_violations.mvl");
     let result = check_src(src);
     assert!(
         !result

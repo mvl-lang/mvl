@@ -23,7 +23,7 @@ fn mvl_bin() -> std::path::PathBuf {
 
 fn corpus(name: &str) -> String {
     format!(
-        "{}/tests/corpus/09_full_programs/{name}",
+        "{}/tests/corpus/11_programs/{name}",
         env!("CARGO_MANIFEST_DIR")
     )
 }

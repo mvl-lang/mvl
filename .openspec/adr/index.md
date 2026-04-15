@@ -11,3 +11,4 @@
 | [0007](0007-stdlib-import-model.md) | Standard library import model — prelude, explicit, and trust boundaries | Accepted |
 | [0008](0008-compilation-units-and-linking.md) | Compilation units and linking — source-first, verified binary later | Accepted |
 | [0009](0009-xdg-paths-and-source-resolution.md) | XDG paths and multi-location source resolution | Accepted |
+| [0010](0010-corpus-test-structure.md) | Corpus test structure — progressive complexity ramp | Accepted |
