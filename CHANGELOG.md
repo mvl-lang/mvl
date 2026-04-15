@@ -6,6 +6,24 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-04-15 (feat: embed stdlib source in binary, extract to XDG on first run)
+
+### Added
+
+- **Stdlib embedding and XDG extraction** — MVL stdlib source files are now embedded in the binary at compile time using Rust's `include_str!` macro. On first run, they are extracted to `$XDG_DATA_HOME/mvl/std/` (or `$MVL_HOME/std/` if set). Provides verifiable, portable stdlib distribution.
+  - `.version` stamp tracks compiler↔stdlib version match; auto-re-extracts on version mismatch.
+  - Three-location resolver: project modules → extracted stdlib → stdlib packages (future).
+  - `mvl init [--stdlib]` command for explicit extraction (called automatically by check/build/run).
+
+- **Specification registration** — Added Specs 004 (Testing) and 006 (Trust Boundary Bridge) with YAML frontmatter and symlinks from `docs/specs/`. Integrated ADR-0009 (XDG paths and source resolution) with rationale for no-compression approach.
+
+### Fixed
+
+- **Stdlib module surface consistency** — Removed `"print"` from the Phase 1 stub so it matches `std/core.mvl`. Code now resolves identically against filesystem-backed and fallback stubs.
+- **Resolver integration in assurance** — `cmd_assurance` now calls `ensure_stdlib()` and `resolve_project()` to surface import errors before reporting. Previously only `cmd_check` and `build_project` had stdlib wiring.
+- **Silent I/O error in stdlib loading** — `load_stdlib_module()` now emits a warning when `core.mvl` cannot be read (permissions, missing file). Previously all read errors were silent.
+- **Test harness robustness** — `with_mvl_home()` test helper now uses RAII guard (`MvlHomeGuard` Drop impl) to clean up `MVL_HOME` even if the test panics. Replaced mtime-based idempotency checks with content comparison (fixes false positives on fast filesystems).
+
 ## [0.21.0] — 2026-04-15 (feat: stdlib method resolution for Int + Float types)
 
 ### Added
