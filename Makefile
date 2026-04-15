@@ -79,13 +79,13 @@ test-transpiler: build ## Run full build-chain tests: .mvl → parse → check �
 	cargo test --test compile_and_run -- --nocapture
 	@echo ""
 	@echo "Manual compilation session (using target/debug/mvl):"
-	@MVL=./target/debug/mvl; \
+	@mvl=./target/debug/mvl; \
 	for f in hello_world hello_mvl calculator shapes; do \
-		src=$$(find tests/corpus -name "$${f}.mvl" 2>/dev/null | head -1); \
+		src=$$(find tests/corpus -name "$${f}.mvl" 2>/dev/null | head -1 | tr -d '\n'); \
 		echo ""; \
 		echo "  --- $$f ---"; \
 		if [ -z "$$src" ]; then echo "  SKIP: $${f}.mvl not found in corpus"; continue; fi; \
-		$$MVL run "$$src"; \
+		$$mvl run "$$src" || exit 1; \
 	done
 
 # === Quality ===
