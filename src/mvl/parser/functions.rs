@@ -659,8 +659,15 @@ mod tests {
     #[test]
     fn parse_fn_with_type_params() {
         let d = fn_decl("fn identity<T>(x: T) -> T { }");
-        assert_eq!(d.type_params, vec!["T"]);
+        assert_eq!(d.type_params, vec![GenericParam::Type("T".to_string())]);
         assert_eq!(d.params[0].name, "x");
+    }
+
+    #[test]
+    fn parse_fn_with_const_generic() {
+        let (mut p, _) = Parser::new("fn fill<T, const N: Int>(item: T) -> Int { 0 }");
+        let _ = p.parse_program();
+        assert!(p.errors.is_empty(), "parse errors: {:?}", p.errors);
     }
 
     #[test]

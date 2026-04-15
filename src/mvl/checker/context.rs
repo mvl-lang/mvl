@@ -42,7 +42,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::mvl::checker::types::Ty;
-use crate::mvl::parser::ast::{Capability, FieldDecl, Totality, Variant};
+use crate::mvl::parser::ast::{Capability, FieldDecl, GenericParam, Totality, Variant};
 
 // ── Variable binding ─────────────────────────────────────────────────────────
 
@@ -75,7 +75,7 @@ impl VarInfo {
 
 #[derive(Debug, Clone)]
 pub struct TypeInfo {
-    pub params: Vec<String>,
+    pub params: Vec<GenericParam>,
     pub body: TypeBodyInfo,
 }
 

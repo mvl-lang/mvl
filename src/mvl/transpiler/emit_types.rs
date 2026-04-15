@@ -9,7 +9,8 @@
 //! - Refinement field predicates → `debug_assert!` in constructors
 
 use crate::mvl::parser::ast::{
-    FieldDecl, RefExpr, SecurityLabel, TypeBody, TypeDecl, TypeExpr, Variant, VariantFields,
+    FieldDecl, GenericParam, RefExpr, SecurityLabel, TypeBody, TypeDecl, TypeExpr, Variant,
+    VariantFields,
 };
 use crate::mvl::transpiler::codegen::Codegen;
 
@@ -130,7 +131,7 @@ pub fn emit_type_decl(cg: &mut Codegen, td: &TypeDecl) {
 
 // ── Struct ────────────────────────────────────────────────────────────────
 
-fn emit_struct(cg: &mut Codegen, name: &str, params: &[String], fields: &[FieldDecl]) {
+fn emit_struct(cg: &mut Codegen, name: &str, params: &[GenericParam], fields: &[FieldDecl]) {
     emit_derive(cg, &["Debug", "Clone", "PartialEq"]);
     cg.line(&format!("pub struct {}{} {{", name, generic_params(params)));
     cg.push_indent();
@@ -182,7 +183,7 @@ fn emit_struct(cg: &mut Codegen, name: &str, params: &[String], fields: &[FieldD
 
 // ── Enum ──────────────────────────────────────────────────────────────────
 
-fn emit_enum(cg: &mut Codegen, name: &str, params: &[String], variants: &[Variant]) {
+fn emit_enum(cg: &mut Codegen, name: &str, params: &[GenericParam], variants: &[Variant]) {
     emit_derive(cg, &["Debug", "Clone", "PartialEq"]);
     cg.line(&format!("pub enum {}{} {{", name, generic_params(params)));
     cg.push_indent();
@@ -211,7 +212,7 @@ fn emit_enum(cg: &mut Codegen, name: &str, params: &[String], variants: &[Varian
 
 // ── Type alias / refined alias ────────────────────────────────────────────
 
-fn emit_alias(cg: &mut Codegen, name: &str, params: &[String], ty: &TypeExpr) {
+fn emit_alias(cg: &mut Codegen, name: &str, params: &[GenericParam], ty: &TypeExpr) {
     match ty {
         TypeExpr::Refined { inner, pred, .. } => {
             // Refined alias becomes a newtype with constructor validation
@@ -273,12 +274,18 @@ fn emit_derive(cg: &mut Codegen, traits: &[&str]) {
     cg.line(&format!("#[derive({})]", traits.join(", ")));
 }
 
-fn generic_params(params: &[String]) -> String {
+fn generic_params(params: &[GenericParam]) -> String {
     if params.is_empty() {
-        String::new()
-    } else {
-        format!("<{}>", params.join(", "))
+        return String::new();
     }
+    let parts: Vec<String> = params
+        .iter()
+        .map(|p| match p {
+            GenericParam::Type(name) => name.clone(),
+            GenericParam::Const(name, _ty) => format!("const {name}: usize"),
+        })
+        .collect();
+    format!("<{}>", parts.join(", "))
 }
 
 // ── TypeExpr → Rust type string ───────────────────────────────────────────
@@ -286,7 +293,14 @@ fn generic_params(params: &[String]) -> String {
 /// Convert an MVL [`TypeExpr`] to its Rust representation.
 pub fn emit_type_expr(ty: &TypeExpr) -> String {
     match ty {
+        TypeExpr::IntConst { value, .. } => value.to_string(),
         TypeExpr::Base { name, args, .. } => {
+            // Array<T, N> → [T; N]
+            if name == "Array" && args.len() == 2 {
+                let elem = emit_type_expr(&args[0]);
+                let size = emit_type_expr(&args[1]);
+                return format!("[{elem}; {size}]");
+            }
             let rust_name = map_base_type(name);
             if args.is_empty() {
                 rust_name.to_string()

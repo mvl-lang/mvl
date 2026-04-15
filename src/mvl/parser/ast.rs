@@ -55,6 +55,27 @@ pub struct UseDecl {
     pub span: Span,
 }
 
+// ── Generic parameters ─────────────────────────────────────────────────────
+
+/// A generic parameter in a type or function declaration.
+///
+/// - `Type("T")` — a regular type variable: `<T>`
+/// - `Const("N", "Int")` — a const generic: `<const N: Int>`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GenericParam {
+    Type(String),
+    Const(String, String),
+}
+
+impl GenericParam {
+    /// The parameter name (type variable or const name).
+    pub fn name(&self) -> &str {
+        match self {
+            GenericParam::Type(n) | GenericParam::Const(n, _) => n,
+        }
+    }
+}
+
 // ── Type declaration ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
@@ -62,8 +83,8 @@ pub struct TypeDecl {
     /// Whether the item is exported from this module (`pub`).
     pub visible: bool,
     pub name: String,
-    /// Optional generic type parameters: `type Map<K, V> = …`
-    pub params: Vec<String>,
+    /// Optional generic parameters: `type Map<K, V> = …` or `type Buf<T, const N: Int> = …`
+    pub params: Vec<GenericParam>,
     pub body: TypeBody,
     pub span: Span,
 }
@@ -110,7 +131,7 @@ pub struct FnDecl {
     pub is_test: bool,
     pub totality: Option<Totality>,
     pub name: String,
-    pub type_params: Vec<String>,
+    pub type_params: Vec<GenericParam>,
     pub params: Vec<Param>,
     pub return_type: Box<TypeExpr>,
     /// Refinement on the return type: `-> Int where self > 0`
@@ -257,6 +278,8 @@ pub enum TypeExpr {
     },
     /// `(A, B, C)`
     Tuple { elems: Vec<TypeExpr>, span: Span },
+    /// Integer literal used as a const generic argument: `Array<T, 16>`
+    IntConst { value: i64, span: Span },
 }
 
 impl TypeExpr {
@@ -269,7 +292,8 @@ impl TypeExpr {
             | TypeExpr::Labeled { span, .. }
             | TypeExpr::Refined { span, .. }
             | TypeExpr::Fn { span, .. }
-            | TypeExpr::Tuple { span, .. } => *span,
+            | TypeExpr::Tuple { span, .. }
+            | TypeExpr::IntConst { span, .. } => *span,
         }
     }
 }

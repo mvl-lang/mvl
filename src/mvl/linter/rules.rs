@@ -841,6 +841,7 @@ fn check_type_expr_ifc(ty: &TypeExpr, out: &mut Vec<LintDiag>) {
                 check_type_expr_ifc(e, out);
             }
         }
+        TypeExpr::IntConst { .. } => {}
     }
 }
 

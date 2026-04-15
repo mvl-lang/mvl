@@ -598,3 +598,37 @@ fn multiline_string_newline_escaped_in_output() {
     let rust = transpile_src(src);
     assert_contains(&rust, "\\n");
 }
+
+// ── #68: Const generics — Array<T, N> ─────────────────────────────────────
+
+/// Array<T, N> in a parameter type emits Rust fixed-size array syntax [T; N].
+#[test]
+fn array_type_emits_fixed_size_rust_array() {
+    let src = "fn process(buf: Array<Byte, 16>) -> Int { 0 }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "[u8; 16]");
+}
+
+/// Array<T, N> as a return type emits [T; N].
+#[test]
+fn array_return_type_emits_fixed_size_rust_array() {
+    let src = "fn zeros() -> Array<Int, 4> { [0, 0, 0, 0] }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "[i64; 4]");
+}
+
+/// A type alias with const generic param emits Rust const generic syntax.
+#[test]
+fn type_alias_with_const_generic_emits_rust_const_generic() {
+    let src = "type FixedBuf<T, const N: Int> = struct { len: Int }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "const N: usize");
+}
+
+/// A function with a const generic param emits Rust const generic syntax.
+#[test]
+fn fn_with_const_generic_emits_rust_const_generic() {
+    let src = "fn fill<T, const N: Int>(item: T) -> Int { 0 }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "const N: usize");
+}
