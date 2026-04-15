@@ -1188,7 +1188,14 @@ impl TypeChecker {
             // vec as a sentinel — skip arity and type checking for them.
             let is_variadic_builtin = matches!(
                 name,
-                "println" | "print" | "assert_eq" | "parse_int" | "format"
+                "println"
+                    | "print"
+                    | "assert_eq"
+                    | "parse_int"
+                    | "format"
+                    | "choice"
+                    | "shuffle"
+                    | "float"
             );
             if !is_variadic_builtin && fn_info.params.len() != arg_tys.len() {
                 self.emit(CheckError::WrongArgCount {

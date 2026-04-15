@@ -42,7 +42,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::mvl::checker::types::Ty;
-use crate::mvl::parser::ast::{Capability, FieldDecl, GenericParam, Totality, Variant};
+use crate::mvl::parser::ast::{
+    Capability, FieldDecl, GenericParam, SecurityLabel, Totality, Variant,
+};
 
 // ── Variable binding ─────────────────────────────────────────────────────────
 
@@ -262,6 +264,274 @@ impl TypeEnv {
                 params: vec![Ty::Int, Ty::Int],
                 ret: Ty::List(Box::new(Ty::Int)),
                 effects: vec![],
+                totality: None,
+            },
+        );
+        // Time — std.time: Instant, DateTime, Duration types + functions (#46)
+        for name in &["Instant", "DateTime", "Duration"] {
+            self.types.insert(
+                (*name).into(),
+                TypeInfo {
+                    params: vec![],
+                    body: TypeBodyInfo::Struct(vec![]),
+                },
+            );
+        }
+        // now() -> Instant ! Clock
+        self.fns.insert(
+            "now".into(),
+            FnInfo {
+                params: vec![],
+                ret: Ty::Named("Instant".into(), vec![]),
+                effects: vec!["Clock".into()],
+                totality: None,
+            },
+        );
+        // sleep(d: Duration) -> Unit ! Clock
+        self.fns.insert(
+            "sleep".into(),
+            FnInfo {
+                params: vec![Ty::Named("Duration".into(), vec![])],
+                ret: Ty::Unit,
+                effects: vec!["Clock".into()],
+                totality: None,
+            },
+        );
+        // format_instant(t: Instant, fmt: String) -> String — pure
+        self.fns.insert(
+            "format_instant".into(),
+            FnInfo {
+                params: vec![Ty::Named("Instant".into(), vec![]), Ty::String],
+                ret: Ty::String,
+                effects: vec![],
+                totality: None,
+            },
+        );
+        // format_datetime(t: DateTime, fmt: String) -> String — pure
+        self.fns.insert(
+            "format_datetime".into(),
+            FnInfo {
+                params: vec![Ty::Named("DateTime".into(), vec![]), Ty::String],
+                ret: Ty::String,
+                effects: vec![],
+                totality: None,
+            },
+        );
+        // parse(s: String, fmt: String) -> Option<DateTime> — pure
+        self.fns.insert(
+            "parse".into(),
+            FnInfo {
+                params: vec![Ty::String, Ty::String],
+                ret: Ty::Option(Box::new(Ty::Named("DateTime".into(), vec![]))),
+                effects: vec![],
+                totality: None,
+            },
+        );
+        // seconds(n: Int) -> Duration — pure
+        self.fns.insert(
+            "seconds".into(),
+            FnInfo {
+                params: vec![Ty::Int],
+                ret: Ty::Named("Duration".into(), vec![]),
+                effects: vec![],
+                totality: None,
+            },
+        );
+        // millis(n: Int) -> Duration — pure
+        self.fns.insert(
+            "millis".into(),
+            FnInfo {
+                params: vec![Ty::Int],
+                ret: Ty::Named("Duration".into(), vec![]),
+                effects: vec![],
+                totality: None,
+            },
+        );
+        // Regex — std.regex: Regex, Match, Captures types + functions (#46)
+        // `match` renamed to `find` to avoid keyword collision
+        for name in &["Regex", "Match", "Captures"] {
+            self.types.insert(
+                (*name).into(),
+                TypeInfo {
+                    params: vec![],
+                    body: TypeBodyInfo::Struct(vec![]),
+                },
+            );
+        }
+        // compile(pattern: String) -> Result<Regex, String> — pure
+        self.fns.insert(
+            "compile".into(),
+            FnInfo {
+                params: vec![Ty::String],
+                ret: Ty::Result(
+                    Box::new(Ty::Named("Regex".into(), vec![])),
+                    Box::new(Ty::String),
+                ),
+                effects: vec![],
+                totality: None,
+            },
+        );
+        // find(re: Regex, s: String) -> Option<Match> — pure
+        self.fns.insert(
+            "find".into(),
+            FnInfo {
+                params: vec![Ty::Named("Regex".into(), vec![]), Ty::String],
+                ret: Ty::Option(Box::new(Ty::Named("Match".into(), vec![]))),
+                effects: vec![],
+                totality: None,
+            },
+        );
+        // find_all(re: Regex, s: String) -> List<Match> — pure
+        self.fns.insert(
+            "find_all".into(),
+            FnInfo {
+                params: vec![Ty::Named("Regex".into(), vec![]), Ty::String],
+                ret: Ty::List(Box::new(Ty::Named("Match".into(), vec![]))),
+                effects: vec![],
+                totality: None,
+            },
+        );
+        // replace(re: Regex, s: String, replacement: String) -> String — pure
+        self.fns.insert(
+            "replace".into(),
+            FnInfo {
+                params: vec![Ty::Named("Regex".into(), vec![]), Ty::String, Ty::String],
+                ret: Ty::String,
+                effects: vec![],
+                totality: None,
+            },
+        );
+        // captures(re: Regex, s: String) -> Option<Captures> — pure
+        self.fns.insert(
+            "captures".into(),
+            FnInfo {
+                params: vec![Ty::Named("Regex".into(), vec![]), Ty::String],
+                ret: Ty::Option(Box::new(Ty::Named("Captures".into(), vec![]))),
+                effects: vec![],
+                totality: None,
+            },
+        );
+        // JSON — std.json: Value enum, encode(), decode() (#46)
+        self.types.insert(
+            "Value".into(),
+            TypeInfo {
+                params: vec![],
+                body: TypeBodyInfo::Enum(vec![
+                    VariantInfo {
+                        name: "String".into(),
+                        fields: VariantFieldsInfo::Tuple(vec![Ty::String]),
+                    },
+                    VariantInfo {
+                        name: "Number".into(),
+                        fields: VariantFieldsInfo::Tuple(vec![Ty::Float]),
+                    },
+                    VariantInfo {
+                        name: "Null".into(),
+                        fields: VariantFieldsInfo::Unit,
+                    },
+                ]),
+            },
+        );
+        // encode(v: Value) -> String — pure
+        self.fns.insert(
+            "encode".into(),
+            FnInfo {
+                params: vec![Ty::Named("Value".into(), vec![])],
+                ret: Ty::String,
+                effects: vec![],
+                totality: None,
+            },
+        );
+        // decode(s: String) -> Result<Value, String> — pure
+        // IFC deferral: decode bypasses label tracking on the input string (#179)
+        self.fns.insert(
+            "decode".into(),
+            FnInfo {
+                params: vec![Ty::String],
+                ret: Ty::Result(
+                    Box::new(Ty::Named("Value".into(), vec![])),
+                    Box::new(Ty::String),
+                ),
+                effects: vec![],
+                totality: None,
+            },
+        );
+        // Random — std.random: int(), float(), bytes(), choice(), shuffle() (#46)
+        // All require ! Random effect.
+        self.fns.insert(
+            "int".into(),
+            FnInfo {
+                params: vec![Ty::Int, Ty::Int],
+                ret: Ty::Int,
+                effects: vec!["Random".into()],
+                totality: None,
+            },
+        );
+        self.fns.insert(
+            "float".into(),
+            FnInfo {
+                params: vec![],
+                ret: Ty::Float,
+                effects: vec!["Random".into()],
+                totality: None,
+            },
+        );
+        self.fns.insert(
+            "bytes".into(),
+            FnInfo {
+                params: vec![Ty::Int],
+                ret: Ty::List(Box::new(Ty::Int)),
+                effects: vec!["Random".into()],
+                totality: None,
+            },
+        );
+        // choice(items: List<T>) -> Option<T> — variadic-flagged to skip arity/type check
+        self.fns.insert(
+            "choice".into(),
+            FnInfo {
+                params: vec![],
+                ret: Ty::Option(Box::new(Ty::Unknown)),
+                effects: vec!["Random".into()],
+                totality: None,
+            },
+        );
+        // shuffle(items: List<T>) -> List<T> — variadic-flagged to skip arity/type check
+        self.fns.insert(
+            "shuffle".into(),
+            FnInfo {
+                params: vec![],
+                ret: Ty::List(Box::new(Ty::Unknown)),
+                effects: vec!["Random".into()],
+                totality: None,
+            },
+        );
+        // Crypto — std.crypto (no import required at tier-1)
+        // sha256/sha512 are pure hash functions (#46)
+        self.fns.insert(
+            "sha256".into(),
+            FnInfo {
+                params: vec![Ty::String],
+                ret: Ty::String,
+                effects: vec![],
+                totality: None,
+            },
+        );
+        self.fns.insert(
+            "sha512".into(),
+            FnInfo {
+                params: vec![Ty::String],
+                ret: Ty::String,
+                effects: vec![],
+                totality: None,
+            },
+        );
+        // crypto_random_bytes requires ! CryptoRandom; returns Secret<List<Int>>
+        self.fns.insert(
+            "crypto_random_bytes".into(),
+            FnInfo {
+                params: vec![Ty::Int],
+                ret: Ty::Labeled(SecurityLabel::Secret, Box::new(Ty::List(Box::new(Ty::Int)))),
+                effects: vec!["CryptoRandom".into()],
                 totality: None,
             },
         );

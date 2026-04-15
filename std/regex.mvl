@@ -1,7 +1,8 @@
 // MVL standard library — regex module
 //
 // Pure regular expression matching. No I/O effects.
-// Import with: use std.regex.{Regex, Match, Captures, compile, match, find_all, replace, captures}
+// Import with: use std.regex.{Regex, Match, Captures, compile, find, find_all, replace, captures}
+// Note: the match function is named `find` to avoid collision with the `match` keyword.
 //
 // Phase 2: function stubs with correct signatures.
 
@@ -23,8 +24,8 @@ pub type Captures = struct {}
 pub fn compile(pattern: String) -> Result<Regex, String> { Err("") }
 
 /// Returns the first match of re in s, or None.
-/// Pure.
-pub fn match(re: Regex, s: String) -> Option<Match> { None }
+/// Pure. Named `find` (not `match`) to avoid collision with the `match` keyword.
+pub fn find(re: Regex, s: String) -> Option<Match> { None }
 
 /// Returns all non-overlapping matches of re in s.
 /// Pure.
