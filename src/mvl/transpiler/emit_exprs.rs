@@ -20,12 +20,35 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
             args,
             ..
         } => {
-            emit_expr(cg, receiver);
-            cg.push(".");
-            cg.push(method);
-            cg.push("(");
-            emit_args(cg, args);
-            cg.push(")");
+            // Methods that don't map directly to a Rust method of the same name.
+            match method.as_str() {
+                // xs.slice(start, end) → xs[start as usize..end as usize].to_vec()
+                "slice" if args.len() == 2 => {
+                    emit_expr(cg, receiver);
+                    cg.push("[");
+                    emit_expr(cg, &args[0]);
+                    cg.push(" as usize..");
+                    emit_expr(cg, &args[1]);
+                    cg.push(" as usize].to_vec()");
+                }
+                // s.substring(start, end) → s[start as usize..end as usize].to_string()
+                "substring" if args.len() == 2 => {
+                    emit_expr(cg, receiver);
+                    cg.push("[");
+                    emit_expr(cg, &args[0]);
+                    cg.push(" as usize..");
+                    emit_expr(cg, &args[1]);
+                    cg.push(" as usize].to_string()");
+                }
+                _ => {
+                    emit_expr(cg, receiver);
+                    cg.push(".");
+                    cg.push(method);
+                    cg.push("(");
+                    emit_args(cg, args);
+                    cg.push(")");
+                }
+            }
         }
         Expr::FnCall {
             name,
@@ -40,6 +63,8 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                 cg.push("(");
                 emit_args_for_macro(cg, args);
                 cg.push(")");
+            } else if try_emit_special_fn(cg, name, args) {
+                // Handled by special-case emitter (e.g. range)
             } else {
                 let is_extern = cg.extern_fns.contains(name.as_str());
                 if is_extern {
@@ -477,5 +502,22 @@ fn map_fn_name(name: &str) -> String {
         "assert_eq" => "assert_eq!".to_string(),
         "assert_ne" => "assert_ne!".to_string(),
         _ => name.to_string(),
+    }
+}
+
+/// Emit a free function call, handling special built-ins that require custom Rust output.
+/// Returns true if the call was handled specially (caller should not emit further).
+fn try_emit_special_fn(cg: &mut Codegen, name: &str, args: &[Expr]) -> bool {
+    match name {
+        // range(start, end) → (start..end).collect::<Vec<i64>>()
+        "range" if args.len() == 2 => {
+            cg.push("(");
+            emit_expr(cg, &args[0]);
+            cg.push("..");
+            emit_expr(cg, &args[1]);
+            cg.push(").collect::<Vec<i64>>()");
+            true
+        }
+        _ => false,
     }
 }

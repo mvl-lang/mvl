@@ -45,3 +45,36 @@ test fn string_is_empty_whitespace_not_empty() -> Unit {
     let s: String = " ";
     assert_eq(s.is_empty(), false);
 }
+
+// ── substring ─────────────────────────────────────────────────────────────
+
+test fn string_substring_basic() -> Unit {
+    let s: String = "hello";
+    let t: String = s.substring(1, 4);
+    assert_eq(t.len(), 3);
+}
+
+test fn string_substring_from_start() -> Unit {
+    let s: String = "hello";
+    let t: String = s.substring(0, 3);
+    assert_eq(t.len(), 3);
+}
+
+test fn string_substring_full() -> Unit {
+    let s: String = "hello";
+    let t: String = s.substring(0, 5);
+    assert_eq(t.len(), 5);
+}
+
+test fn string_substring_empty_range() -> Unit {
+    let s: String = "hello";
+    let t: String = s.substring(2, 2);
+    assert_eq(t.len(), 0);
+}
+
+test fn string_substring_returns_new() -> Unit {
+    let s: String = "hello world";
+    let t: String = s.substring(0, 5);
+    assert_eq(s.len(), 11);
+    assert_eq(t.len(), 5);
+}
