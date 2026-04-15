@@ -126,7 +126,7 @@ impl Display for Point {
 }
 ```
 
-## 2.6 Iterator Trait ([spec §001 Req 11](../../.openspec/specs/001-type-system/spec.md#requirement-11-iterator-trait-must))
+## 2.6 Iterator Trait
 
 The `Iterator<T>` trait is the protocol for lazy, sequential element access:
 
