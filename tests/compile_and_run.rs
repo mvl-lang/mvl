@@ -449,3 +449,30 @@ fn tui_hello_build_succeeds() {
 fn tui_hello_runs() {
     assert_run_output("tui_hello", &[]);
 }
+
+// ── else_if_chain.mvl (regression #197) ───────────────────────────────────
+
+/// Regression for #197: `else if` must emit `} else if cond {` on one line.
+#[test]
+fn else_if_chain_check_passes() {
+    let stdout = assert_check_ok("else_if_chain.mvl");
+    assert!(stdout.contains("OK"));
+}
+
+/// else-if chain: classify positive, negative, zero.
+///
+/// Expected stdout:
+///   classify(5) = positive
+///   classify(-3) = negative
+///   classify(0) = zero
+#[test]
+fn else_if_chain_runs_and_produces_expected_output() {
+    assert_run_output(
+        "else_if_chain.mvl",
+        &[
+            "classify(5) = positive",
+            "classify(-3) = negative",
+            "classify(0) = zero",
+        ],
+    );
+}

@@ -9,6 +9,6 @@ echo "pre-commit: cargo clippy"
 cargo clippy -- -D warnings || { echo "Fix clippy warnings before committing."; exit 1; }
 
 echo "pre-commit: cargo test"
-cargo test --quiet || { echo "Tests must pass before committing."; exit 1; }
+cargo test --quiet -- --test-threads=1 || { echo "Tests must pass before committing."; exit 1; }
 
 echo "pre-commit: all checks passed"

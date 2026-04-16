@@ -209,7 +209,28 @@ fn emit_else_branch(cg: &mut Codegen, branch: &ElseBranch) {
             cg.push("}");
         }
         ElseBranch::If(stmt) => {
-            emit_stmt(cg, stmt);
+            // Emit the `if` inline (no leading indent, no trailing newline) so
+            // the caller's `} else ` and this `if` land on the same line.
+            match stmt.as_ref() {
+                Stmt::If {
+                    cond, then, else_, ..
+                } => {
+                    cg.push("if ");
+                    emit_expr(cg, cond);
+                    cg.push(" {");
+                    cg.nl();
+                    cg.push_indent();
+                    emit_block_as_value(cg, &then.stmts);
+                    cg.pop_indent();
+                    cg.indent();
+                    cg.push("}");
+                    if let Some(inner_else) = else_ {
+                        cg.push(" else ");
+                        emit_else_branch(cg, inner_else);
+                    }
+                }
+                other => unreachable!("ElseBranch::If must always wrap Stmt::If; got {:?}", other),
+            }
         }
     }
 }
