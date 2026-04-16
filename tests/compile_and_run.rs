@@ -256,6 +256,23 @@ fn simple_math_check_passes() {
     assert!(stdout.contains("OK"));
 }
 
+// ── auth_handler.mvl (library — no fn main) ───────────────────────────────
+
+/// auth_handler.mvl demonstrates all 11 requirements (ADTs, IFC labels,
+/// effect annotations, refinement types, Result/Option, ownership).
+/// It has no fn main — `mvl check` validates the full type-checking pipeline
+/// including Tainted/Secret/Public label flow and `! Console` effect.
+///
+/// Closes #192. Part of the incremental path to #175.
+#[test]
+fn auth_handler_check_passes() {
+    let stdout = assert_check_ok("auth_handler.mvl");
+    assert!(
+        stdout.contains("OK"),
+        "expected 'OK' in check output:\n{stdout}"
+    );
+}
+
 // ── 8. examples/log_analyzer (multi-file, bridge.rs) ─────────────────────
 
 /// Multi-file example: log_analyzer uses main.mvl + parser.mvl + utils.mvl
