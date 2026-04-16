@@ -4,10 +4,11 @@
 //! validation for Phase 1 correctness.
 //!
 //! Corpus programs (in order of complexity):
-//!   1. hello_world.mvl  — minimal: fn main + println
-//!   2. hello_mvl.mvl    — ADTs, total fns, enum match
-//!   3. calculator.mvl   — total fns, if/else expressions, arithmetic
-//!   4. shapes.mvl       — two enums, multiple match functions, composition
+//!   1. hello_world.mvl    — minimal: fn main + println
+//!   2. hello_mvl.mvl      — ADTs, total fns, enum match
+//!   3. calculator.mvl     — total fns, if/else expressions, arithmetic
+//!   4. shapes.mvl         — two enums, multiple match functions, composition
+//!   5. safe_division.mvl  — Result<T,E>, match on Result, IFC labels (Req 5)
 
 use std::process::Command;
 
@@ -189,6 +190,22 @@ fn struct_value_semantics_check_passes() {
 #[test]
 fn struct_value_semantics_runs_and_produces_expected_output() {
     assert_run_output("struct_value_semantics.mvl", &["1, 2", "4, 6"]);
+}
+
+// ── 6. safe_division.mvl ──────────────────────────────────────────────────
+
+#[test]
+fn safe_division_check_passes() {
+    assert_check_ok("safe_division.mvl");
+}
+
+/// Result<T,E>, match on Result, division-by-zero handling (Req 5 end-to-end).
+///
+/// Expected stdout:
+///   100 / 4 = 25
+#[test]
+fn safe_division_runs_and_produces_expected_output() {
+    assert_run_output("safe_division.mvl", &["100 / 4 = 25"]);
 }
 
 // ── simple_math.mvl (library — no fn main) ────────────────────────────────
