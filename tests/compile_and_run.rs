@@ -11,6 +11,7 @@
 //!   5. struct_value_semantics.mvl — struct value semantics, Clone-on-pass
 //!   6. safe_division.mvl  — Result<T,E>, match on Result, IFC labels (Req 5)
 //!   7. linked_list.mvl    — recursive enum (Box<T>), deref, total fn recursion
+//!   8. examples/log_analyzer — multi-file, bridge.rs, IFC labels end-to-end
 
 use std::process::Command;
 
@@ -242,6 +243,53 @@ fn linked_list_runs_and_produces_expected_output() {
 fn simple_math_check_passes() {
     let stdout = assert_check_ok("simple_math.mvl");
     assert!(stdout.contains("OK"));
+}
+
+// ── 8. examples/log_analyzer (multi-file, bridge.rs) ─────────────────────
+
+/// Multi-file example: log_analyzer uses main.mvl + parser.mvl + utils.mvl
+/// with a Rust bridge (bridge.rs). `mvl build` must succeed end-to-end.
+///
+/// Issue #195: multi-file builds need CI coverage.
+#[test]
+fn log_analyzer_build_succeeds() {
+    let path = format!(
+        "{}/examples/log_analyzer/main.mvl",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let out = run_mvl_build(&path);
+    assert!(
+        out.status.success(),
+        "mvl build must succeed for examples/log_analyzer;\n\
+         stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+/// Multi-file example: log_analyzer run produces a JSON summary.
+///
+/// Expected stdout contains: `"count":200`
+/// (logs.jsonl is committed at examples/log_analyzer/logs.jsonl — 200 entries)
+#[test]
+fn log_analyzer_run_produces_json_summary() {
+    let main_mvl = format!(
+        "{}/examples/log_analyzer/main.mvl",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let logs_jsonl = format!(
+        "{}/examples/log_analyzer/logs.jsonl",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let out = Command::new(mvl_bin())
+        .args(["run", &main_mvl, "--", "--file", &logs_jsonl])
+        .output()
+        .expect("failed to run mvl run for log_analyzer");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"count\":200"),
+        "expected JSON summary with \"count\":200, got:\n{stdout}"
+    );
 }
 
 // ── bridge.rs convention (Spec 006) ───────────────────────────────────────
