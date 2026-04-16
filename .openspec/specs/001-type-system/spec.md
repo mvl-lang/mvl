@@ -23,7 +23,7 @@ The type system MUST support sum types (enums) and product types (structs) as fi
 
 **Implementation:** `src/mvl/checker/mod.rs`
 
-**Tests:** `tests/type_checker.rs::adt_corpus_parses_and_checks`, `tests/type_checker.rs::struct_extra_field_rejected`, `tests/type_checker.rs::field_access_on_struct_valid`
+**Tests:** `tests/type_checker.rs::adt_corpus_parses_and_checks`, `tests/type_checker.rs::struct_extra_field_rejected`, `tests/type_checker.rs::field_access_on_struct_valid`, `tests/compile_and_run.rs::linked_list_compiles_and_runs` (#194)
 
 #### Scenario: Sum type with exhaustive matching
 
@@ -63,7 +63,7 @@ Functions that can fail MUST return `Result<T, E>`. Error types MUST be visible 
 
 **Implementation:** `src/mvl/checker/mod.rs`
 
-**Tests:** `tests/type_checker.rs::result_in_stmt_without_use_rejected`, `tests/type_checker.rs::result_match_missing_ok_rejected`
+**Tests:** `tests/type_checker.rs::result_in_stmt_without_use_rejected`, `tests/type_checker.rs::result_match_missing_ok_rejected`, `tests/compile_and_run.rs::safe_division_compiles_and_runs` (#191)
 
 #### Scenario: Result forces error handling
 
@@ -103,7 +103,7 @@ The type system MUST support refinement predicates on types: `T where predicate`
 
 **Implementation:** `src/mvl/checker/mod.rs`
 
-**Tests:** `tests/type_checker.rs::refinements_corpus_parses`
+**Tests:** `tests/type_checker.rs::refinements_corpus_parses`, `tests/compile_and_run.rs::safe_division_compiles_and_runs` (#191)
 
 #### Scenario: Division by zero prevention
 
@@ -227,7 +227,7 @@ where T: Eq, E: Display
 
 **Implementation:** `src/mvl/parser/ast.rs::Constraint`, `src/mvl/checker/mod.rs`
 
-**Tests:** `tests/type_checker.rs::generic_identity_parses`, `tests/type_checker.rs::generic_type_decl_parses`, `tests/type_checker.rs::generic_pair_type_parses`, `tests/type_checker.rs::generic_with_constraint_parses`, `tests/type_checker.rs::generic_multiple_constraints_parse`
+**Tests:** `tests/type_checker.rs::generic_identity_parses`, `tests/type_checker.rs::generic_type_decl_parses`, `tests/type_checker.rs::generic_pair_type_parses`, `tests/type_checker.rs::generic_with_constraint_parses`, `tests/type_checker.rs::generic_multiple_constraints_parse`, `tests/compile_and_run.rs::linked_list_compiles_and_runs` (#194)
 
 > **Phase 1 scope note:** The parser accepts and stores generics AST nodes. Constraint *enforcement* (rejecting unconstrained `T` in operator expressions, rejecting HKT notation with a clear diagnostic, rejecting inline `<T: Ord>` syntax) is tracked for Phase 2 implementation. See rejection scenarios below for the intended semantics.
 

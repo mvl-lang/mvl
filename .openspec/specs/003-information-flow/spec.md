@@ -100,7 +100,7 @@ Functions that process secrets MUST return secrets. The label MUST propagate thr
 
 **Implementation:** `src/mvl/checker/mod.rs`, `src/mvl/checker/ifc.rs`
 
-**Tests:** `tests/type_checker.rs::arithmetic_label_join_propagates`, `tests/type_checker.rs::arithmetic_label_join_downgrade_rejected`, `tests/type_checker.rs::propagation_ifc_corpus_parses_and_checks`
+**Tests:** `tests/type_checker.rs::arithmetic_label_join_propagates`, `tests/type_checker.rs::arithmetic_label_join_downgrade_rejected`, `tests/type_checker.rs::propagation_ifc_corpus_parses_and_checks`, `tests/compile_and_run.rs::safe_division_compiles_and_runs` (#191)
 
 #### Scenario: Hashing preserves secrecy
 
@@ -138,7 +138,7 @@ Logging functions MUST accept only `Public<T>` arguments. Logging a `Secret` or 
 
 **Implementation:** `src/mvl/checker/mod.rs` (`infer_fn_call` — IFC label check for `println`/`print`/`log_*`), `std/log.mvl`, `src/mvl/checker/ifc.rs` (`PUBLIC_SINKS`)
 
-**Tests:** `tests/type_checker.rs::println_rejects_secret_argument`, `tests/type_checker.rs::println_rejects_tainted_argument`, `tests/type_checker.rs::println_accepts_public_argument`, `tests/type_checker.rs::log_debug_rejects_secret_argument`, `tests/type_checker.rs::log_info_rejects_secret_argument`, `tests/type_checker.rs::log_error_rejects_tainted_argument`, `tests/type_checker.rs::log_warn_rejects_clean_argument`, `tests/type_checker.rs::log_info_rejects_secret_value_in_fields_map`, `tests/type_checker.rs::log_info_accepts_public_argument`, `tests/type_checker.rs::caller_missing_log_effect_rejected`, `tests/type_checker.rs::caller_missing_log_effect_with_other_effects_rejected`
+**Tests:** `tests/type_checker.rs::println_rejects_secret_argument`, `tests/type_checker.rs::println_rejects_tainted_argument`, `tests/type_checker.rs::println_accepts_public_argument`, `tests/type_checker.rs::log_debug_rejects_secret_argument`, `tests/type_checker.rs::log_info_rejects_secret_argument`, `tests/type_checker.rs::log_error_rejects_tainted_argument`, `tests/type_checker.rs::log_warn_rejects_clean_argument`, `tests/type_checker.rs::log_info_rejects_secret_value_in_fields_map`, `tests/type_checker.rs::log_info_accepts_public_argument`, `tests/type_checker.rs::caller_missing_log_effect_rejected`, `tests/type_checker.rs::caller_missing_log_effect_with_other_effects_rejected`, `tests/compile_and_run.rs::safe_division_compiles_and_runs` (#191)
 
 #### Scenario: Logging a secret
 

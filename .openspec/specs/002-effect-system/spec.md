@@ -23,7 +23,7 @@ Functions with side effects MUST declare them in the signature using `! Effect` 
 
 **Implementation:** `src/mvl/checker/mod.rs`
 
-**Tests:** `tests/type_checker.rs::pure_function_calling_effectful_rejected`, `tests/type_checker.rs::effectful_function_with_correct_declaration_accepted`, `tests/type_checker.rs::caller_missing_callee_effect_rejected`
+**Tests:** `tests/type_checker.rs::pure_function_calling_effectful_rejected`, `tests/type_checker.rs::effectful_function_with_correct_declaration_accepted`, `tests/type_checker.rs::caller_missing_callee_effect_rejected`, `tests/compile_and_run.rs::safe_division_compiles_and_runs` (#191)
 
 #### Scenario: Pure function attempts I/O
 
@@ -130,7 +130,7 @@ Non-terminating functions MUST be marked `partial`. Total functions (the default
 
 **Implementation:** `src/mvl/checker/mod.rs`, `src/mvl/parser/ast.rs::Totality`
 
-**Tests:** `tests/type_checker.rs::for_loop_in_total_function_accepted`, `tests/type_checker.rs::while_loop_in_total_function_rejected`, `tests/type_checker.rs::while_loop_in_implicit_total_function_rejected`, `tests/type_checker.rs::while_loop_in_partial_function_accepted`, `tests/type_checker.rs::partial_call_in_total_function_rejected`
+**Tests:** `tests/type_checker.rs::for_loop_in_total_function_accepted`, `tests/type_checker.rs::while_loop_in_total_function_rejected`, `tests/type_checker.rs::while_loop_in_implicit_total_function_rejected`, `tests/type_checker.rs::while_loop_in_partial_function_accepted`, `tests/type_checker.rs::partial_call_in_total_function_rejected`, `tests/compile_and_run.rs::safe_division_compiles_and_runs` (#191), `tests/compile_and_run.rs::linked_list_compiles_and_runs` (#194)
 
 #### Scenario: Total function with bounded loop
 
