@@ -60,21 +60,24 @@ test-integration: ## Run integration tests
 	cargo test --test '*'
 
 test-corpus: ## Validate corpus examples parse and type-check
-	@echo "Validating corpus examples..."
+	@printf "Validating corpus examples..."
 	@for f in tests/corpus/**/*.mvl; do \
 		if grep -q "corpus:expect-fail" "$$f" 2>/dev/null; then \
-			cargo run -- check "$$f" >/dev/null 2>&1; rc=$$?; \
+			cargo run --quiet -- check "$$f" >/dev/null 2>&1; rc=$$?; \
 			if [ $$rc -ne 0 ]; then \
-				echo "  $$f: OK (violations detected as expected)"; \
+				printf "."; \
 			else \
-				echo "  ERROR: $$f expected violations but checker reported none"; exit 1; \
+				echo ""; echo "  ERROR: $$f expected violations but checker reported none"; exit 1; \
 			fi; \
 		else \
-			echo "  $$f"; \
-			cargo run -- check "$$f" || exit 1; \
+			out=$$(cargo run --quiet -- check "$$f" 2>&1); rc=$$?; \
+			if [ $$rc -ne 0 ]; then \
+				echo ""; echo "  FAIL: $$f"; echo "$$out"; exit 1; \
+			fi; \
+			printf "."; \
 		fi; \
 	done
-	@echo "All corpus examples valid."
+	@echo " ok"
 
 test-stdlib: build ## Verify stdlib runtime correctness: transpile tests/stdlib/ → cargo test
 	@echo "Running stdlib correctness tests..."
