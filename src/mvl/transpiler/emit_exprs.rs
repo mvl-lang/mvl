@@ -150,14 +150,21 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                 }
             }
         }
-        Expr::Unary { op, expr, .. } => {
-            let op_str = match op {
-                UnaryOp::Neg => "-",
-                UnaryOp::Not => "!",
-            };
-            cg.push(op_str);
-            emit_expr(cg, expr);
-        }
+        Expr::Unary { op, expr, .. } => match op {
+            UnaryOp::Neg => {
+                cg.push("-");
+                emit_expr(cg, expr);
+            }
+            UnaryOp::Not => {
+                cg.push("!");
+                emit_expr(cg, expr);
+            }
+            UnaryOp::Deref => {
+                cg.push("*(");
+                emit_expr(cg, expr);
+                cg.push(")");
+            }
+        },
         Expr::Binary {
             op, left, right, ..
         } => {

@@ -285,6 +285,8 @@ fn collect_undefined_types(prog: &Program) -> Vec<String> {
         // Security labels (handled by preamble)
         "Public", "Tainted", "Secret", "Clean", // Common Rust types that may appear
         "Option", "Result", "Vec",
+        // Rust built-ins used directly in MVL (Box<T> for recursive ADTs)
+        "Box",
     ]
     .iter()
     .copied()

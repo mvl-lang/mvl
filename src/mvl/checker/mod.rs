@@ -1314,6 +1314,23 @@ impl TypeChecker {
                 }
                 Ty::Bool
             }
+            UnaryOp::Deref => {
+                // Deref `*expr`: if expr has type Box<T>, return T.
+                match ty {
+                    Ty::Named(ref name, ref args) if name == "Box" && args.len() == 1 => {
+                        args[0].clone()
+                    }
+                    Ty::Unknown => Ty::Unknown,
+                    _ => {
+                        self.emit(CheckError::TypeMismatch {
+                            expected: "Box<T>".to_string(),
+                            found: ty.display(),
+                            span,
+                        });
+                        Ty::Unknown
+                    }
+                }
+            }
         }
     }
 
@@ -1453,11 +1470,24 @@ impl TypeChecker {
         } else {
             // ── Built-in enum constructors ────────────────────────────────
             // These are not in the function table but are valid expressions.
+            let arg_count = arg_tys.len();
             let first_arg = arg_tys.into_iter().next().unwrap_or(Ty::Unknown);
             match name {
                 "Some" => return Ty::Option(Box::new(first_arg)),
                 "Ok" => return Ty::Result(Box::new(first_arg), Box::new(Ty::Unknown)),
                 "Err" => return Ty::Result(Box::new(Ty::Unknown), Box::new(first_arg)),
+                // Box::new(x) wraps x in a heap-allocated Box<T> (for recursive ADTs)
+                "Box::new" => {
+                    if arg_count != 1 {
+                        self.emit(CheckError::WrongArgCount {
+                            name: "Box::new".to_string(),
+                            expected: 1,
+                            found: arg_count,
+                            span,
+                        });
+                    }
+                    return Ty::Named("Box".to_string(), vec![first_arg]);
+                }
                 _ => {}
             }
             // User-defined enum tuple-variant constructor (bare or path form)
