@@ -161,15 +161,13 @@ pub fn naming(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
     }
     for decl in &prog.declarations {
         match decl {
-            Decl::Fn(f) => {
-                if !is_snake_case(&f.name) {
-                    out.push(LintDiag::warning(
-                        "naming-fn",
-                        format!("function `{}` should be snake_case", f.name),
-                        f.span.line,
-                        f.span.col,
-                    ));
-                }
+            Decl::Fn(f) if !is_snake_case(&f.name) => {
+                out.push(LintDiag::warning(
+                    "naming-fn",
+                    format!("function `{}` should be snake_case", f.name),
+                    f.span.line,
+                    f.span.col,
+                ));
             }
             Decl::Type(t) => {
                 if !is_pascal_case(&t.name) {
@@ -224,15 +222,13 @@ pub fn naming(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
                     TypeBody::Alias(_) => {}
                 }
             }
-            Decl::Const(c) => {
-                if !is_screaming_snake_case(&c.name) {
-                    out.push(LintDiag::warning(
-                        "naming-const",
-                        format!("constant `{}` should be SCREAMING_SNAKE_CASE", c.name),
-                        c.span.line,
-                        c.span.col,
-                    ));
-                }
+            Decl::Const(c) if !is_screaming_snake_case(&c.name) => {
+                out.push(LintDiag::warning(
+                    "naming-const",
+                    format!("constant `{}` should be SCREAMING_SNAKE_CASE", c.name),
+                    c.span.line,
+                    c.span.col,
+                ));
             }
             _ => {}
         }
