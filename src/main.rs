@@ -604,18 +604,25 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
         });
     }
 
-    // If the program uses mvl_runtime, copy it as a sibling directory
-    // so the relative path `../mvl_runtime` in Cargo.toml resolves.
-    // Always overwrite so stale cached copies don't hide runtime changes.
+    // If the program uses mvl_runtime, copy it inside the build dir so the
+    // relative path `./mvl_runtime` in Cargo.toml resolves.  Each build gets
+    // its own copy, which eliminates races when multiple bridge programs are
+    // built concurrently (e.g. parallel integration tests).
+    //
+    // Idempotent for concurrent invocations with identical source: create_dir_all
+    // + fs::copy both tolerate pre-existing targets.  Stale artefacts from a
+    // prior build of a different version are handled by cargo's incremental cache.
     if out.has_extern_rust {
         let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mvl_runtime");
-        let runtime_dst = tmp_dir.parent().unwrap().join("mvl_runtime");
-        if runtime_src.exists() {
-            if runtime_dst.exists() {
-                fs::remove_dir_all(&runtime_dst).expect("remove stale mvl_runtime");
-            }
-            copy_dir_recursive(&runtime_src, &runtime_dst).expect("copy mvl_runtime");
+        let runtime_dst = tmp_dir.join("mvl_runtime");
+        if !runtime_src.exists() {
+            eprintln!(
+                "error: mvl_runtime not found at {} — cannot build extern bridge",
+                runtime_src.display()
+            );
+            process::exit(1);
         }
+        copy_dir_recursive(&runtime_src, &runtime_dst).expect("copy mvl_runtime");
     }
 
     println!("Transpiled to: {}", tmp_dir.display());

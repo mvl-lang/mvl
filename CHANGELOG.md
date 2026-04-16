@@ -6,12 +6,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.35.0] — 2026-04-16
+
 ### Added
 
+- **FFI bridge smoke tests** — two minimal bridge corpus programs validate extern "rust" pipeline for `! Random` and `! Terminal` effect annotations: `random_dice` rolls a dice via bridge (std::time seeding, no ext crates), `tui_hello` clears screen and prints via ANSI escape codes (build-only in CI due to terminal dependency). Both include integration tests in `compile_and_run.rs` (#196).
 - **log_analyzer CI test** — `examples/log_analyzer` (multi-file MVL with Rust bridge) now runs in CI: `log_analyzer_build_succeeds` and `log_analyzer_run_produces_json_summary` in `tests/compile_and_run.rs` (#195).
 
 ### Fixed
 
+- **Concurrent bridge builds race** — changed `mvl_runtime` dependency path from shared `../mvl_runtime` to per-build `./mvl_runtime` inside `tmp_dir`; removed `remove_dir_all` guard to make copy idempotent, eliminating ENOENT races when multiple bridge tests run in parallel.
+- **FFI bridge test helpers** — added `assert_build_ok` helper to eliminate repeated boilerplate, simplified `random_dice_runs_and_prints_dice_roll` to use `assert_run_output`.
 - **Spec test links** — corrected 8 broken test identifiers in specs 001/002/003 (`*_compiles_and_runs` → split `*_check_passes` / `*_runs_and_produces_expected_output`).
 - **Clippy `collapsible_match`** — collapsed nested `if` into match guards in `linter/rules.rs` and `transpiler/emit_functions.rs`.
 
