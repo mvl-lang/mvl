@@ -261,9 +261,8 @@ fn simple_math_check_passes() {
 /// auth_handler.mvl demonstrates all 11 requirements (ADTs, IFC labels,
 /// effect annotations, refinement types, Result/Option, ownership).
 /// It has no fn main — `mvl check` validates the full type-checking pipeline
-/// including Tainted/Secret/Public label flow and `! Console` effect.
-///
-/// Closes #192. Part of the incremental path to #175.
+/// including Tainted/Secret/Public label flow and the `! Console` effect annotation.
+/// Part of the incremental path to #175.
 #[test]
 fn auth_handler_check_passes() {
     let stdout = assert_check_ok("auth_handler.mvl");
