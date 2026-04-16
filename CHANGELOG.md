@@ -6,6 +6,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.33.0] — 2026-04-16 (feat: recursive enum Box<T> support end-to-end)
+
+### Added
+
+- **Box<T> support for recursive ADTs** — enables recursive enums like `enum List { Nil, Cons(T, Box<List>) }`.
+  - `Box::new(x)` constructor recognized in type checker, returns `Box<T>`.
+  - `*expr` (dereference) unary operator in parser, checker, and Rust emitter.
+  - Termination checker accepts `*subterm` as structurally decreasing for total function recursion.
+  - `linked_list.mvl` corpus program — validates full transpilation pipeline end-to-end.
+
+### Fixed
+
+- **Type error diagnostics** — `*non_box_expr` now emits `TypeMismatch` instead of silently returning `Ty::Unknown` (prevents IFC label loss).
+- **Box::new arity checking** — `Box::new(…)` with ≠ 1 argument now emits `WrongArgCount` error.
+
 ## [0.32.0] — 2026-04-16 (feature: end-to-end Result<T,E> validation)
 
 ### Added
@@ -14,7 +29,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
   - `safe_division_check_passes()` — confirms type checker accepts the program.
   - `safe_division_runs_and_produces_expected_output()` — validates runtime output and error handling via nested match patterns.
   - Demonstrates error visibility requirement (Req 5) in corpus, resolving #191.
-
 ## [0.31.2] — 2026-04-16 (fix: corpus test failures and code review improvements)
 
 ### Fixed

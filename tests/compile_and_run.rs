@@ -194,7 +194,6 @@ fn struct_value_semantics_runs_and_produces_expected_output() {
     assert_run_output("struct_value_semantics.mvl", &["1, 2", "4, 6"]);
 }
 
-<<<<<<< HEAD
 // ── 6. safe_division.mvl ──────────────────────────────────────────────────
 
 #[test]
@@ -220,9 +219,7 @@ fn safe_division_runs_and_produces_expected_output() {
     assert_run_output("safe_division.mvl", &["100 / 4 = 25"]);
 }
 
-||||||| parent of d2945ff (feat: recursive enum (Box<T>) end-to-end compile and run (#194))
-=======
-// ── 6. linked_list.mvl ────────────────────────────────────────────────────
+// ── 7. linked_list.mvl ────────────────────────────────────────────────────
 
 #[test]
 fn linked_list_check_passes() {
@@ -238,7 +235,6 @@ fn linked_list_runs_and_produces_expected_output() {
     assert_run_output("linked_list.mvl", &["length: 3"]);
 }
 
->>>>>>> d2945ff (feat: recursive enum (Box<T>) end-to-end compile and run (#194))
 // ── simple_math.mvl (library — no fn main) ────────────────────────────────
 
 /// simple_math.mvl has no fn main — `mvl check` must pass.
