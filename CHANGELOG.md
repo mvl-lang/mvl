@@ -6,6 +6,23 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.34.0] — 2026-04-16 (feat: phase-4 complexity analysis rules)
+
+### Added
+
+- **Phase 4: Complexity analysis rules** — static complexity metrics measuring code regenerability.
+  - `complexity-cyclomatic` — cyclomatic complexity per function (default max 10); counts if/else-if/match arms/while/for/&&/||.
+  - `complexity-match-depth` — max nested match depth per function (default max 3).
+  - `complexity-effect-width` — declared effects per function (default max 3); applies to both free functions and impl methods.
+  - `complexity-trait-impl-count` — trait impl blocks per type (default max 5); replaces inheritance depth metric.
+  - `complexity-module-fanout` — distinct root modules imported (default max 15).
+  - `complexity-extern-ratio` — extern fns / total fns ratio (default max 20%); measures trust boundary width.
+  - All thresholds configurable via `.mvllintrc`; `mvl lint --show-config` displays phase-4 settings.
+
+### Fixed
+
+- **Config parsing for `max_extern_ratio`** — now validates range [0.0, 1.0]; NaN or out-of-range values are silently ignored (forward-compat), preventing unintended rule disablement.
+
 ## [0.33.0] — 2026-04-16 (feat: recursive enum Box<T> support end-to-end)
 
 ### Added
