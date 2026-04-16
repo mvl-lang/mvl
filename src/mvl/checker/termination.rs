@@ -26,7 +26,7 @@ use std::collections::HashSet;
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::parser::ast::{
     BinaryOp, Block, Decl, ElseBranch, Expr, FnDecl, Literal, MatchArm, MatchBody, Pattern,
-    Program, Stmt, Totality,
+    Program, Stmt, Totality, UnaryOp,
 };
 
 // ── Public entry point ────────────────────────────────────────────────────────
@@ -280,7 +280,7 @@ fn arg_decreases(arg: &Expr, params: &[&str], smaller: &HashSet<String>) -> bool
         // Required for recursive enums where a match arm binds `tail: Box<T>`
         // and the recursive call passes `*tail`. (spec 007 §Req 3)
         Expr::Unary {
-            op: crate::mvl::parser::ast::UnaryOp::Deref,
+            op: UnaryOp::Deref,
             expr: inner,
             ..
         } => arg_decreases(inner, params, smaller),
