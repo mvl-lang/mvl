@@ -14,7 +14,8 @@ type Amount = Float where self >= 0.0
 type NonZero = Float where self != 0.0
 type AccountId = Secret<String>
 
-// Stub: converts a Float to NonZero or returns DivisionByZero.
+// Stub: always returns Ok. The Err branches in main verify match exhaustiveness,
+// not runtime error path — a real implementation would return Err for zero input.
 fn to_nonzero(f: Float) -> Result<Public<Float>, DivError> { Ok(f) }
 
 type DivError = enum { DivisionByZero }
