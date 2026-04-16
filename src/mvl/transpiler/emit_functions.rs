@@ -168,17 +168,15 @@ fn emit_expr_tail_with_return_type(
     params: &[Param],
 ) {
     match return_type {
-        TypeExpr::Labeled { label, .. } => {
+        TypeExpr::Labeled { label, .. } if is_raw_value(expr, params) => {
             // Wrap only when the expression is a raw (unlabeled) value:
             // - literal → always raw
             // - ident that is a non-labeled parameter → raw
-            if is_raw_value(expr, params) {
-                let label_name = emit_label(*label);
-                cg.push(&format!("{label_name}("));
-                emit_expr(cg, expr);
-                cg.push(")");
-                return;
-            }
+            let label_name = emit_label(*label);
+            cg.push(&format!("{label_name}("));
+            emit_expr(cg, expr);
+            cg.push(")");
+            return;
         }
         TypeExpr::Result { ok, .. } => {
             // Ok(x) where x should be Labeled and x is a raw value: emit Ok(Label(x))
