@@ -250,13 +250,13 @@ fn simple_math_check_passes() {
 /// Multi-file example: log_analyzer uses main.mvl + parser.mvl + utils.mvl
 /// with a Rust bridge (bridge.rs). `mvl build` must succeed end-to-end.
 ///
+/// We pass the *directory* (not main.mvl) so the crate name is "log_analyzer",
+/// avoiding the `/tmp/mvl_build_main` collision with bridge tests.
+///
 /// Issue #195: multi-file builds need CI coverage.
 #[test]
 fn log_analyzer_build_succeeds() {
-    let path = format!(
-        "{}/examples/log_analyzer/main.mvl",
-        env!("CARGO_MANIFEST_DIR")
-    );
+    let path = format!("{}/examples/log_analyzer", env!("CARGO_MANIFEST_DIR"));
     let out = run_mvl_build(&path);
     assert!(
         out.status.success(),
@@ -269,26 +269,44 @@ fn log_analyzer_build_succeeds() {
 
 /// Multi-file example: log_analyzer run produces a JSON summary.
 ///
-/// Expected stdout contains: `"count":200`
-/// (logs.jsonl is committed at examples/log_analyzer/logs.jsonl — 200 entries)
+/// logs.jsonl is gitignored (*.jsonl), so we generate a small inline fixture.
+/// 4 entries: 1 error, 1 warn, 2 info → expected: {"count":4,"errors":1,"warnings":1,"infos":2}
 #[test]
 fn log_analyzer_run_produces_json_summary() {
-    let main_mvl = format!(
-        "{}/examples/log_analyzer/main.mvl",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    let logs_jsonl = format!(
-        "{}/examples/log_analyzer/logs.jsonl",
-        env!("CARGO_MANIFEST_DIR")
-    );
+    use std::io::Write;
+    // Pass the directory so crate_name = "log_analyzer" (not "main").
+    let log_analyzer_dir = format!("{}/examples/log_analyzer", env!("CARGO_MANIFEST_DIR"));
+    // Write a small JSONL fixture to a temp file.
+    let mut tmp = tempfile::NamedTempFile::new().expect("create temp file");
+    writeln!(
+        tmp,
+        r#"{{"level":"error","message":"disk full","timestamp":1000}}"#
+    )
+    .unwrap();
+    writeln!(
+        tmp,
+        r#"{{"level":"warn","message":"retrying","timestamp":1001}}"#
+    )
+    .unwrap();
+    writeln!(
+        tmp,
+        r#"{{"level":"info","message":"started","timestamp":1002}}"#
+    )
+    .unwrap();
+    writeln!(
+        tmp,
+        r#"{{"level":"info","message":"ready","timestamp":1003}}"#
+    )
+    .unwrap();
+    let logs_path = tmp.path().to_string_lossy().to_string();
     let out = Command::new(mvl_bin())
-        .args(["run", &main_mvl, "--", "--file", &logs_jsonl])
+        .args(["run", &log_analyzer_dir, "--", "--file", &logs_path])
         .output()
         .expect("failed to run mvl run for log_analyzer");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("\"count\":200"),
-        "expected JSON summary with \"count\":200, got:\n{stdout}"
+        stdout.contains("\"count\":4"),
+        "expected JSON summary with \"count\":4, got:\n{stdout}"
     );
 }
 
