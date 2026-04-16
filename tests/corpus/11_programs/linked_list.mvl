@@ -1,0 +1,27 @@
+// linked_list.mvl — recursive enum (linked list) end-to-end test
+//
+// Exercises:
+//   - Recursive enum definition with Box<T> payload
+//   - Pattern matching on recursive ADTs
+//   - Box::new() constructor and * dereference
+//   - total fn with recursive call
+//
+// Expected output:
+//   length: 3
+
+type LinkedList = enum {
+    Nil,
+    Cons(Int, Box<LinkedList>),
+}
+
+total fn length(list: LinkedList) -> Int {
+    match list {
+        LinkedList::Nil => 0,
+        LinkedList::Cons(_, tail) => 1 + length(*tail),
+    }
+}
+
+fn main() -> Unit ! Console {
+    let list = LinkedList::Cons(1, Box::new(LinkedList::Cons(2, Box::new(LinkedList::Cons(3, Box::new(LinkedList::Nil))))));
+    println(format("length: {}", length(list)));
+}

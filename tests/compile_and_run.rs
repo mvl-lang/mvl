@@ -7,9 +7,10 @@
 //!   1. hello_world.mvl    — minimal: fn main + println
 //!   2. hello_mvl.mvl      — ADTs, total fns, enum match
 //!   3. calculator.mvl     — total fns, if/else expressions, arithmetic
-//!   4. shapes.mvl               — two enums, multiple match functions, composition
-//!   5. struct_value_semantics.mvl — struct value semantics, Clone
-//!   6. safe_division.mvl          — Result<T,E>, match on Result, IFC labels (Req 5)
+//!   4. shapes.mvl         — two enums, multiple match functions, composition
+//!   5. struct_value_semantics.mvl — struct value semantics, Clone-on-pass
+//!   6. safe_division.mvl  — Result<T,E>, match on Result, IFC labels (Req 5)
+//!   7. linked_list.mvl    — recursive enum (Box<T>), deref, total fn recursion
 
 use std::process::Command;
 
@@ -193,6 +194,7 @@ fn struct_value_semantics_runs_and_produces_expected_output() {
     assert_run_output("struct_value_semantics.mvl", &["1, 2", "4, 6"]);
 }
 
+<<<<<<< HEAD
 // ── 6. safe_division.mvl ──────────────────────────────────────────────────
 
 #[test]
@@ -218,6 +220,25 @@ fn safe_division_runs_and_produces_expected_output() {
     assert_run_output("safe_division.mvl", &["100 / 4 = 25"]);
 }
 
+||||||| parent of d2945ff (feat: recursive enum (Box<T>) end-to-end compile and run (#194))
+=======
+// ── 6. linked_list.mvl ────────────────────────────────────────────────────
+
+#[test]
+fn linked_list_check_passes() {
+    assert_check_ok("linked_list.mvl");
+}
+
+/// Recursive enum (linked list) — Box<T> payload, pattern-match deref, total fn.
+///
+/// Expected stdout:
+///   length: 3
+#[test]
+fn linked_list_runs_and_produces_expected_output() {
+    assert_run_output("linked_list.mvl", &["length: 3"]);
+}
+
+>>>>>>> d2945ff (feat: recursive enum (Box<T>) end-to-end compile and run (#194))
 // ── simple_math.mvl (library — no fn main) ────────────────────────────────
 
 /// simple_math.mvl has no fn main — `mvl check` must pass.

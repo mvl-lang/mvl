@@ -1314,6 +1314,17 @@ impl TypeChecker {
                 }
                 Ty::Bool
             }
+            UnaryOp::Deref => {
+                // Deref `*expr`: if expr has type Box<T>, return T.
+                // Phase 1: treat as Unknown for other types (Box<T> is opaque to checker).
+                match ty {
+                    Ty::Named(ref name, ref args) if name == "Box" && args.len() == 1 => {
+                        args[0].clone()
+                    }
+                    Ty::Unknown => Ty::Unknown,
+                    _ => Ty::Unknown,
+                }
+            }
         }
     }
 
@@ -1458,6 +1469,10 @@ impl TypeChecker {
                 "Some" => return Ty::Option(Box::new(first_arg)),
                 "Ok" => return Ty::Result(Box::new(first_arg), Box::new(Ty::Unknown)),
                 "Err" => return Ty::Result(Box::new(Ty::Unknown), Box::new(first_arg)),
+                // Box::new(x) wraps x in a heap-allocated Box<T> (for recursive ADTs)
+                "Box::new" => {
+                    return Ty::Named("Box".to_string(), vec![first_arg]);
+                }
                 _ => {}
             }
             // User-defined enum tuple-variant constructor (bare or path form)

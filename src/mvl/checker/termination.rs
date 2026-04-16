@@ -275,6 +275,16 @@ fn arg_decreases(arg: &Expr, params: &[&str], smaller: &HashSet<String>) -> bool
         // A variable known to be a structural subterm. (spec 007 §Req 3)
         Expr::Ident(name, _) if smaller.contains(name.as_str()) => true,
 
+        // `*subterm` — dereferencing a Box<T> subterm yields T, which is also
+        // structurally smaller (Box is a thin indirection layer for recursive ADTs).
+        // Required for recursive enums where a match arm binds `tail: Box<T>`
+        // and the recursive call passes `*tail`. (spec 007 §Req 3)
+        Expr::Unary {
+            op: crate::mvl::parser::ast::UnaryOp::Deref,
+            expr: inner,
+            ..
+        } => arg_decreases(inner, params, smaller),
+
         // `param - N` where N is a positive integer literal and `param` is
         // any function parameter (not restricted to positional match).
         // (spec 007 §Req 2)

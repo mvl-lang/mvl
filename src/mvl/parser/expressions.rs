@@ -100,6 +100,16 @@ impl Parser {
                     span,
                 })
             }
+            TokenKind::Star => {
+                self.advance();
+                let expr = self.parse_unary()?;
+                let span = self.span_from(start);
+                Ok(Expr::Unary {
+                    op: UnaryOp::Deref,
+                    expr: Box::new(expr),
+                    span,
+                })
+            }
             _ => self.parse_postfix(),
         }
     }

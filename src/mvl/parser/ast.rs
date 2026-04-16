@@ -522,6 +522,7 @@ pub enum Literal {
 pub enum UnaryOp {
     Neg,
     Not,
+    Deref,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
