@@ -1403,28 +1403,61 @@ fn max_match_depth_expr(expr: &Expr, depth: usize) -> usize {
 ///
 /// A wide effect signature is harder for an LLM to regenerate faithfully and
 /// indicates a function with broad side-effect footprint.
+///
+/// Both free functions (`fn`) and trait impl methods are checked, since
+/// `FnDecl` carries an `effects` field in both positions.
 pub fn complexity_effect_width(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
     if cfg.max_effect_signature_width == 0 {
         return;
     }
     for decl in &prog.declarations {
-        let (name, effects, span) = match decl {
-            Decl::Fn(f) => (f.name.as_str(), &f.effects, f.span),
-            _ => continue,
-        };
-        if effects.len() > cfg.max_effect_signature_width {
-            out.push(LintDiag::warning(
-                "complexity-effect-width",
-                format!(
-                    "function `{name}` declares {} effects [{}] (max {})",
-                    effects.len(),
-                    effects.join(", "),
-                    cfg.max_effect_signature_width
-                ),
-                span.line,
-                span.col,
-            ));
+        match decl {
+            Decl::Fn(f) => {
+                check_effect_width(&f.name, None, &f.effects, f.span, cfg, out);
+            }
+            Decl::Impl(impl_decl) => {
+                for method in &impl_decl.methods {
+                    check_effect_width(
+                        &method.name,
+                        Some((impl_decl.trait_name.as_str(), impl_decl.type_name.as_str())),
+                        &method.effects,
+                        method.span,
+                        cfg,
+                        out,
+                    );
+                }
+            }
+            _ => {}
         }
+    }
+}
+
+fn check_effect_width(
+    name: &str,
+    impl_ctx: Option<(&str, &str)>,
+    effects: &[String],
+    span: crate::mvl::parser::lexer::Span,
+    cfg: &LintConfig,
+    out: &mut Vec<LintDiag>,
+) {
+    if effects.len() > cfg.max_effect_signature_width {
+        let label = match impl_ctx {
+            Some((trait_name, type_name)) => {
+                format!("method `{name}` (impl {trait_name} for {type_name})")
+            }
+            None => format!("function `{name}`"),
+        };
+        out.push(LintDiag::warning(
+            "complexity-effect-width",
+            format!(
+                "{label} declares {} effects [{}] (max {})",
+                effects.len(),
+                effects.join(", "),
+                cfg.max_effect_signature_width
+            ),
+            span.line,
+            span.col,
+        ));
     }
 }
 
@@ -2526,5 +2559,113 @@ mod tests {
         c.max_extern_ratio = 0.0;
         complexity_extern_ratio(&prog, &c, &mut diags);
         assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn extern_ratio_no_fns_at_all_clean() {
+        // A program with zero functions must not panic (division-by-zero guard).
+        let src = "type Foo = struct { x: Int }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        complexity_extern_ratio(&prog, &cfg(), &mut diags);
+        assert!(diags.is_empty(), "no fns → ratio undefined → no diagnostic");
+    }
+
+    // -- complexity_cyclomatic: &&/|| and impl methods --
+
+    #[test]
+    fn cyclomatic_and_or_contribute() {
+        // CC = 1 (base) + 1 (if) + 1 (&&) + 1 (||) = 4; threshold=3 → must fire
+        let src =
+            "fn f(a: Int, b: Int, c: Int) -> Int { if a > 0 && b > 0 || c > 0 { 1 } else { 0 } }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        let mut c = cfg();
+        c.max_cyclomatic_complexity = 3;
+        complexity_cyclomatic(&prog, &c, &mut diags);
+        assert!(
+            diags.iter().any(|d| d.rule == "complexity-cyclomatic"),
+            "&&/|| must each contribute +1 to CC; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn cyclomatic_impl_method_exceeds_threshold() {
+        // impl method with CC > 10 must be flagged with trait/type context
+        let src = concat!(
+            "type Foo = struct { x: Int }\n",
+            "impl Bar for Foo {\n",
+            "    fn m(f: Foo) -> Int {\n",
+            "        if f.x > 1 { if f.x > 2 { if f.x > 3 { if f.x > 4 {\n",
+            "            if f.x > 5 { if f.x > 6 { if f.x > 7 { if f.x > 8 {\n",
+            "                if f.x > 9 { if f.x > 10 { f.x } else { 0 } }\n",
+            "                else { 0 } } else { 0 } } else { 0 } } else { 0 }\n",
+            "        } else { 0 } } else { 0 } } else { 0 } } else { 0 }\n",
+            "    }\n",
+            "}\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        complexity_cyclomatic(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().any(
+                |d| d.rule == "complexity-cyclomatic" && d.message.contains("impl Bar for Foo")
+            ),
+            "impl method CC must be flagged with trait/type context; got: {diags:?}"
+        );
+    }
+
+    // -- complexity_match_depth: impl methods --
+
+    #[test]
+    fn match_depth_impl_method_exceeds_threshold() {
+        let src = concat!(
+            "type C = enum { X, Y }\n",
+            "type Foo = struct { c: C }\n",
+            "impl Bar for Foo {\n",
+            "    fn m(f: Foo) -> Int {\n",
+            "        match f.c {\n",
+            "            C::X => match f.c { C::X => match f.c {\n",
+            "                C::X => match f.c { C::X => 1 C::Y => 2 } C::Y => 3\n",
+            "            } C::Y => 4 }\n",
+            "            C::Y => 0\n",
+            "        }\n",
+            "    }\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        complexity_match_depth(&prog, &cfg(), &mut diags);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.rule == "complexity-match-depth"
+                    && d.message.contains("impl Bar for Foo")),
+            "impl method match depth must be flagged with trait/type context; got: {diags:?}"
+        );
+    }
+
+    // -- complexity_effect_width: impl methods --
+
+    #[test]
+    fn effect_width_impl_method_exceeds_threshold() {
+        // impl method with 4 effects (> default max 3) must fire
+        let src = concat!(
+            "type Foo = struct { x: Int }\n",
+            "impl Bar for Foo {\n",
+            "    fn m(f: Foo) -> Unit ! Console, DB, Network, FileSystem { f.x }\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        complexity_effect_width(&prog, &cfg(), &mut diags);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.rule == "complexity-effect-width"
+                    && d.message.contains("impl Bar for Foo")),
+            "impl method effect width must be flagged; got: {diags:?}"
+        );
     }
 }

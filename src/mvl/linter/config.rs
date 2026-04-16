@@ -261,7 +261,11 @@ fn load_from(path: &Path) -> Option<LintConfig> {
             }
             "max_extern_ratio" => {
                 if let Ok(f) = val.parse::<f64>() {
-                    cfg.max_extern_ratio = f;
+                    // Accept only finite values in [0.0, 1.0]; NaN or out-of-range
+                    // would silently disable the rule without the user setting 0.0.
+                    if f.is_finite() && (0.0..=1.0).contains(&f) {
+                        cfg.max_extern_ratio = f;
+                    }
                 }
             }
             _ => {} // unknown keys are silently ignored (forward-compat)
