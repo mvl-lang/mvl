@@ -400,3 +400,55 @@ fn bridge_symlink_outside_source_dir_rejected() {
         "error must mention 'outside source directory', got:\n{stderr}"
     );
 }
+
+// ── random_dice (! Random effect + extern bridge) ─────────────────────────
+
+/// random_dice/ declares `extern "rust" { fn roll_dice() -> Int; }` and
+/// annotates `main` with `! Random, Console`. Validates the ! Random effect
+/// annotation + extern bridge end-to-end: build, link, and run all pass.
+///
+/// The bridge uses std::time for seeding — no external crates.
+/// Output value is non-deterministic; only the prefix "rolled: " is asserted.
+///
+/// Acceptance: `mvl run` exits 0 and stdout contains "rolled: ".
+#[test]
+fn random_dice_runs_and_prints_dice_roll() {
+    let out = Command::new(mvl_bin())
+        .args(["run", &corpus("random_dice")])
+        .output()
+        .expect("failed to run mvl run for random_dice");
+    assert!(
+        out.status.success(),
+        "random_dice: mvl run must succeed; \
+         stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("rolled: "),
+        "random_dice: expected 'rolled: ' in output, got:\n{stdout}"
+    );
+}
+
+// ── tui_hello (! Terminal effect + extern bridge) ─────────────────────────
+
+/// tui_hello/ declares `extern "rust"` for tui_clear / tui_print_at /
+/// tui_sleep_ms and annotates `main` with `! Terminal`. Validates the
+/// ! Terminal effect annotation + bridge build pipeline.
+///
+/// Automated `mvl run` is skipped in CI (raw terminal dependency); build
+/// validation is sufficient for the Phase 2 smoke test.
+///
+/// Acceptance: `mvl build` exits 0 (Spec 006 Req 1 + 2).
+#[test]
+fn tui_hello_build_succeeds() {
+    let out = run_mvl_build(&corpus("tui_hello"));
+    assert!(
+        out.status.success(),
+        "tui_hello: mvl build must succeed; \
+         stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}

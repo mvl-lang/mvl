@@ -45,8 +45,10 @@ fn deps_section(opts: &CargoOptions<'_>) -> String {
     let mut lines = Vec::new();
     if opts.use_mvl_runtime {
         // Use path dep for local development; published crate once released.
+        // Path is `./mvl_runtime` (inside the build dir) so each concurrent
+        // build has its own copy — eliminates races on shared `/tmp/mvl_runtime`.
         lines.push(
-            "mvl_runtime = { path = \"../mvl_runtime\" }  # MVL security labels and prelude"
+            "mvl_runtime = { path = \"./mvl_runtime\" }  # MVL security labels and prelude"
                 .to_string(),
         );
     }

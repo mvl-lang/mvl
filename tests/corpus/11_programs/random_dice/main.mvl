@@ -1,0 +1,15 @@
+// random_dice.mvl — smoke test for ! Random effect + extern "rust" bridge.
+// Rolls a dice using an extern bridge, prints the result.
+// Validates: ! Random effect annotation, bridge discovery, bridge injection.
+//
+// Expected stdout:
+//   rolled: N   (where N is 1–6)
+
+extern "rust" {
+    fn roll_dice() -> Int;
+}
+
+fn main() -> Unit ! Random, Console {
+    let n = roll_dice();
+    println("rolled: {}", n);
+}
