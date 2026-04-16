@@ -6,6 +6,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+### Added
+
+- **log_analyzer CI test** — `examples/log_analyzer` (multi-file MVL with Rust bridge) now runs in CI: `log_analyzer_build_succeeds` and `log_analyzer_run_produces_json_summary` in `tests/compile_and_run.rs` (#195).
+
+### Fixed
+
+- **Spec test links** — corrected 8 broken test identifiers in specs 001/002/003 (`*_compiles_and_runs` → split `*_check_passes` / `*_runs_and_produces_expected_output`).
+- **Clippy `collapsible_match`** — collapsed nested `if` into match guards in `linter/rules.rs` and `transpiler/emit_functions.rs`.
+
 ## [0.34.0] — 2026-04-16 (feat: phase-4 complexity analysis rules)
 
 ### Added
