@@ -11,6 +11,7 @@
 //!   5. struct_value_semantics.mvl — struct value semantics, Clone-on-pass
 //!   6. safe_division.mvl  — Result<T,E>, match on Result, IFC labels (Req 5)
 //!   7. linked_list.mvl    — recursive enum (Box<T>), deref, total fn recursion
+//!   8. examples/log_analyzer — multi-file, bridge.rs, IFC labels end-to-end
 
 use std::process::Command;
 
@@ -242,6 +243,71 @@ fn linked_list_runs_and_produces_expected_output() {
 fn simple_math_check_passes() {
     let stdout = assert_check_ok("simple_math.mvl");
     assert!(stdout.contains("OK"));
+}
+
+// ── 8. examples/log_analyzer (multi-file, bridge.rs) ─────────────────────
+
+/// Multi-file example: log_analyzer uses main.mvl + parser.mvl + utils.mvl
+/// with a Rust bridge (bridge.rs). `mvl build` must succeed end-to-end.
+///
+/// We pass the *directory* (not main.mvl) so the crate name is "log_analyzer",
+/// avoiding the `/tmp/mvl_build_main` collision with bridge tests.
+///
+/// Issue #195: multi-file builds need CI coverage.
+#[test]
+fn log_analyzer_build_succeeds() {
+    let path = format!("{}/examples/log_analyzer", env!("CARGO_MANIFEST_DIR"));
+    let out = run_mvl_build(&path);
+    assert!(
+        out.status.success(),
+        "mvl build must succeed for examples/log_analyzer;\n\
+         stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+/// Multi-file example: log_analyzer run produces a JSON summary.
+///
+/// logs.jsonl is gitignored (*.jsonl), so we generate a small inline fixture.
+/// 4 entries: 1 error, 1 warn, 2 info → expected: {"count":4,"errors":1,"warnings":1,"infos":2}
+#[test]
+fn log_analyzer_run_produces_json_summary() {
+    use std::io::Write;
+    // Pass the directory so crate_name = "log_analyzer" (not "main").
+    let log_analyzer_dir = format!("{}/examples/log_analyzer", env!("CARGO_MANIFEST_DIR"));
+    // Write a small JSONL fixture to a temp file.
+    let mut tmp = tempfile::NamedTempFile::new().expect("create temp file");
+    writeln!(
+        tmp,
+        r#"{{"level":"error","message":"disk full","timestamp":1000}}"#
+    )
+    .unwrap();
+    writeln!(
+        tmp,
+        r#"{{"level":"warn","message":"retrying","timestamp":1001}}"#
+    )
+    .unwrap();
+    writeln!(
+        tmp,
+        r#"{{"level":"info","message":"started","timestamp":1002}}"#
+    )
+    .unwrap();
+    writeln!(
+        tmp,
+        r#"{{"level":"info","message":"ready","timestamp":1003}}"#
+    )
+    .unwrap();
+    let logs_path = tmp.path().to_string_lossy().to_string();
+    let out = Command::new(mvl_bin())
+        .args(["run", &log_analyzer_dir, "--", "--file", &logs_path])
+        .output()
+        .expect("failed to run mvl run for log_analyzer");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"count\":4"),
+        "expected JSON summary with \"count\":4, got:\n{stdout}"
+    );
 }
 
 // ── bridge.rs convention (Spec 006) ───────────────────────────────────────

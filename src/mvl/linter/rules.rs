@@ -161,15 +161,13 @@ pub fn naming(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
     }
     for decl in &prog.declarations {
         match decl {
-            Decl::Fn(f) => {
-                if !is_snake_case(&f.name) {
-                    out.push(LintDiag::warning(
-                        "naming-fn",
-                        format!("function `{}` should be snake_case", f.name),
-                        f.span.line,
-                        f.span.col,
-                    ));
-                }
+            Decl::Fn(f) if !is_snake_case(&f.name) => {
+                out.push(LintDiag::warning(
+                    "naming-fn",
+                    format!("function `{}` should be snake_case", f.name),
+                    f.span.line,
+                    f.span.col,
+                ));
             }
             Decl::Type(t) => {
                 if !is_pascal_case(&t.name) {
@@ -224,15 +222,13 @@ pub fn naming(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
                     TypeBody::Alias(_) => {}
                 }
             }
-            Decl::Const(c) => {
-                if !is_screaming_snake_case(&c.name) {
-                    out.push(LintDiag::warning(
-                        "naming-const",
-                        format!("constant `{}` should be SCREAMING_SNAKE_CASE", c.name),
-                        c.span.line,
-                        c.span.col,
-                    ));
-                }
+            Decl::Const(c) if !is_screaming_snake_case(&c.name) => {
+                out.push(LintDiag::warning(
+                    "naming-const",
+                    format!("constant `{}` should be SCREAMING_SNAKE_CASE", c.name),
+                    c.span.line,
+                    c.span.col,
+                ));
             }
             _ => {}
         }
@@ -925,38 +921,38 @@ pub fn doc_comments_required(prog: &Program, src: &str, cfg: &LintConfig, out: &
     let src_lines: Vec<&str> = src.lines().collect();
     for decl in &prog.declarations {
         match decl {
-            Decl::Fn(f) if f.visible => {
-                if !has_doc_comment_before(f.span.line as usize, &src_lines) {
-                    out.push(LintDiag::warning(
-                        "missing-doc-comment",
-                        format!(
-                            "public function `{}` is missing a doc comment (`///`)",
-                            f.name
-                        ),
-                        f.span.line,
-                        f.span.col,
-                    ));
-                }
+            Decl::Fn(f)
+                if f.visible && !has_doc_comment_before(f.span.line as usize, &src_lines) =>
+            {
+                out.push(LintDiag::warning(
+                    "missing-doc-comment",
+                    format!(
+                        "public function `{}` is missing a doc comment (`///`)",
+                        f.name
+                    ),
+                    f.span.line,
+                    f.span.col,
+                ));
             }
-            Decl::Type(t) if t.visible => {
-                if !has_doc_comment_before(t.span.line as usize, &src_lines) {
-                    out.push(LintDiag::warning(
-                        "missing-doc-comment",
-                        format!("public type `{}` is missing a doc comment (`///`)", t.name),
-                        t.span.line,
-                        t.span.col,
-                    ));
-                }
+            Decl::Type(t)
+                if t.visible && !has_doc_comment_before(t.span.line as usize, &src_lines) =>
+            {
+                out.push(LintDiag::warning(
+                    "missing-doc-comment",
+                    format!("public type `{}` is missing a doc comment (`///`)", t.name),
+                    t.span.line,
+                    t.span.col,
+                ));
             }
-            Decl::Const(c) if c.visible => {
-                if !has_doc_comment_before(c.span.line as usize, &src_lines) {
-                    out.push(LintDiag::warning(
-                        "missing-doc-comment",
-                        format!("public const `{}` is missing a doc comment (`///`)", c.name),
-                        c.span.line,
-                        c.span.col,
-                    ));
-                }
+            Decl::Const(c)
+                if c.visible && !has_doc_comment_before(c.span.line as usize, &src_lines) =>
+            {
+                out.push(LintDiag::warning(
+                    "missing-doc-comment",
+                    format!("public const `{}` is missing a doc comment (`///`)", c.name),
+                    c.span.line,
+                    c.span.col,
+                ));
             }
             _ => {}
         }
