@@ -609,15 +609,20 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
     // its own copy, which eliminates races when multiple bridge programs are
     // built concurrently (e.g. parallel integration tests).
     //
-    // Idempotent: copy_dir_recursive uses create_dir_all + fs::copy which both
-    // tolerate pre-existing targets, so concurrent invocations with the same
-    // source are safe (no remove_dir_all guard needed).
+    // Idempotent for concurrent invocations with identical source: create_dir_all
+    // + fs::copy both tolerate pre-existing targets.  Stale artefacts from a
+    // prior build of a different version are handled by cargo's incremental cache.
     if out.has_extern_rust {
         let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mvl_runtime");
         let runtime_dst = tmp_dir.join("mvl_runtime");
-        if runtime_src.exists() {
-            copy_dir_recursive(&runtime_src, &runtime_dst).expect("copy mvl_runtime");
+        if !runtime_src.exists() {
+            eprintln!(
+                "error: mvl_runtime not found at {} — cannot build extern bridge",
+                runtime_src.display()
+            );
+            process::exit(1);
         }
+        copy_dir_recursive(&runtime_src, &runtime_dst).expect("copy mvl_runtime");
     }
 
     println!("Transpiled to: {}", tmp_dir.display());

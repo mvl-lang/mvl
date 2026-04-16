@@ -2,6 +2,14 @@
 //
 // Uses std::time for pseudo-random seeding — no external crate dependencies.
 // Returns a pseudo-random integer in [1, 6].
+//
+// Note: `#[no_mangle]` is required even for `extern "Rust"` bridges because
+// the bridge.rs is linked as a separate compilation unit — the transpiler-
+// generated code references the function by its C symbol name (`roll_dice`),
+// so Rust's default name mangling must be suppressed.
+//
+// Distribution note: `mixed % 6` is slightly biased (2³² is not divisible by 6).
+// This is demonstration-quality code only — not a uniform random source.
 
 #[no_mangle]
 pub extern "Rust" fn roll_dice() -> i64 {

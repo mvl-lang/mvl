@@ -66,6 +66,17 @@ fn assert_check_ok(name: &str) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
+/// Build a corpus program and assert the build succeeds.
+fn assert_build_ok(name: &str) {
+    let out = run_mvl_build(&corpus(name));
+    assert!(
+        out.status.success(),
+        "{name}: mvl build must succeed;\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
 /// Run a corpus program and assert each expected line appears in stdout.
 fn assert_run_output(name: &str, expected_lines: &[&str]) {
     let out = run_mvl_run(&corpus(name));
@@ -413,22 +424,7 @@ fn bridge_symlink_outside_source_dir_rejected() {
 /// Acceptance: `mvl run` exits 0 and stdout contains "rolled: ".
 #[test]
 fn random_dice_runs_and_prints_dice_roll() {
-    let out = Command::new(mvl_bin())
-        .args(["run", &corpus("random_dice")])
-        .output()
-        .expect("failed to run mvl run for random_dice");
-    assert!(
-        out.status.success(),
-        "random_dice: mvl run must succeed; \
-         stdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        stdout.contains("rolled: "),
-        "random_dice: expected 'rolled: ' in output, got:\n{stdout}"
-    );
+    assert_run_output("random_dice", &["rolled: "]);
 }
 
 // ── tui_hello (! Terminal effect + extern bridge) ─────────────────────────
@@ -443,12 +439,13 @@ fn random_dice_runs_and_prints_dice_roll() {
 /// Acceptance: `mvl build` exits 0 (Spec 006 Req 1 + 2).
 #[test]
 fn tui_hello_build_succeeds() {
-    let out = run_mvl_build(&corpus("tui_hello"));
-    assert!(
-        out.status.success(),
-        "tui_hello: mvl build must succeed; \
-         stdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
+    assert_build_ok("tui_hello");
+}
+
+/// Companion run test for tui_hello — requires an interactive terminal.
+/// Run locally with: cargo test -- tui_hello_runs --include-ignored
+#[test]
+#[ignore = "requires interactive terminal; not suitable for CI"]
+fn tui_hello_runs() {
+    assert_run_output("tui_hello", &[]);
 }
