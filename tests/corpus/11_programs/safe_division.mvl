@@ -1,16 +1,21 @@
 // Reference Example 2: Safe Division with Audit Trail
 // Demonstrates: refinement types, IFC, effects, totality
 //
+// Req 5:  Result<T,E> and match on Result (error visibility)
 // Req 7:  Effects (Console, DB)
 // Req 8:  total — pure math provably terminates
 // Req 10: NonZero refinement, Amount non-negative, positive parties
 // Req 11: Secret account ID, Public amounts, no secret leakage to log
+//
+// Expected stdout:
+//   100 / 4 = 25
 
 type Amount = Float where self >= 0.0
 type NonZero = Float where self != 0.0
 type AccountId = Secret<String>
 
-// Stub: converts a Float to NonZero or returns DivisionByZero.
+// Stub: always returns Ok. The Err branches in main verify match exhaustiveness,
+// not runtime error path — a real implementation would return Err for zero input.
 fn to_nonzero(f: Float) -> Result<Public<Float>, DivError> { Ok(f) }
 
 type DivError = enum { DivisionByZero }
@@ -38,4 +43,16 @@ total fn calculate_share(
     // console.log("Account: {}", account);
 
     Ok(share)
+}
+
+fn main() -> Unit ! Console {
+    match to_nonzero(4.0) {
+        Ok(d) => {
+            match to_nonzero(100.0) {
+                Ok(n) => println("100 / 4 = {}", safe_divide(n, d)),
+                Err(DivError::DivisionByZero) => println("Error: DivisionByZero"),
+            }
+        },
+        Err(DivError::DivisionByZero) => println("Error: DivisionByZero"),
+    }
 }
