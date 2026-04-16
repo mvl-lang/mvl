@@ -505,8 +505,11 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
 
     let out = transpiler::transpile_project(&crate_name, &prog, &sibling_modules);
 
-    // Write to a deterministic temp directory per crate name
-    let tmp_dir = std::env::temp_dir().join(format!("mvl_build_{crate_name}"));
+    // Write to a per-crate workspace so each build gets its own mvl_runtime copy.
+    // Layout: temp/mvl_build_{name}/{name}/  (crate), temp/mvl_build_{name}/mvl_runtime/ (runtime)
+    // The Cargo.toml path dep `../mvl_runtime` resolves correctly from within the crate dir.
+    let tmp_workspace = std::env::temp_dir().join(format!("mvl_build_{crate_name}"));
+    let tmp_dir = tmp_workspace.join(&crate_name);
     let src_dir = tmp_dir.join("src");
     fs::create_dir_all(&src_dir).unwrap_or_else(|e| {
         eprintln!("Cannot create temp dir {}: {e}", src_dir.display());
