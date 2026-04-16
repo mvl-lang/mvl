@@ -60,6 +60,9 @@ impl LintResult {
 ///
 /// Phase 3 — LLM corpus quality: consistent comment style, doc-comment
 /// coverage, doc-comment example sections.
+///
+/// Phase 4 — Complexity (regenerability): cyclomatic complexity, nested match
+/// depth, effect signature width, trait impl count, module fan-out, extern ratio.
 pub fn lint(prog: &Program, src: &str, cfg: &LintConfig) -> LintResult {
     let mut diags: Vec<LintDiag> = Vec::new();
 
@@ -84,6 +87,14 @@ pub fn lint(prog: &Program, src: &str, cfg: &LintConfig) -> LintResult {
     rules::consistent_comment_style(src, cfg, &mut diags);
     rules::doc_comments_required(prog, src, cfg, &mut diags);
     rules::doc_comment_examples(prog, src, cfg, &mut diags);
+
+    // Phase 4: Complexity rules (regenerability metrics)
+    rules::complexity_cyclomatic(prog, cfg, &mut diags);
+    rules::complexity_match_depth(prog, cfg, &mut diags);
+    rules::complexity_effect_width(prog, cfg, &mut diags);
+    rules::complexity_trait_impl_count(prog, cfg, &mut diags);
+    rules::complexity_module_fanout(prog, cfg, &mut diags);
+    rules::complexity_extern_ratio(prog, cfg, &mut diags);
 
     // Sort by line then col for consistent output
     diags.sort_by_key(|d| (d.span.line, d.span.col));

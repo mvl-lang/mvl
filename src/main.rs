@@ -321,6 +321,32 @@ fn cmd_lint(path: &str, show_config: bool) {
         );
         eprintln!("  redundant_effects    = {}", cfg.redundant_effects);
         eprintln!("  redundant_ifc_labels = {}", cfg.redundant_ifc_labels);
+        eprintln!("  [phase-3: llm corpus quality]");
+        eprintln!(
+            "  consistent_comment_style = {}",
+            cfg.consistent_comment_style
+        );
+        eprintln!("  require_doc_comments = {}", cfg.require_doc_comments);
+        eprintln!("  doc_comment_examples = {}", cfg.doc_comment_examples);
+        eprintln!("  [phase-4: complexity]");
+        eprintln!(
+            "  max_cyclomatic_complexity  = {}",
+            cfg.max_cyclomatic_complexity
+        );
+        eprintln!(
+            "  max_nested_match_depth     = {}",
+            cfg.max_nested_match_depth
+        );
+        eprintln!(
+            "  max_effect_signature_width = {}",
+            cfg.max_effect_signature_width
+        );
+        eprintln!(
+            "  max_trait_impl_count       = {}",
+            cfg.max_trait_impl_count
+        );
+        eprintln!("  max_module_fanout          = {}", cfg.max_module_fanout);
+        eprintln!("  max_extern_ratio           = {:.2}", cfg.max_extern_ratio);
         return;
     }
 

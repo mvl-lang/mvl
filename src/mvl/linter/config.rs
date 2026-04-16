@@ -38,6 +38,17 @@
 //! | `consistent_comment_style`  | `true`  | Flag block comments `/* */` (only `//` allowed)          |
 //! | `require_doc_comments`      | `true`  | Require `///` doc comments on public functions and types |
 //! | `doc_comment_examples`      | `false` | Recommend `Example:` blocks in doc comments (warning)   |
+//!
+//! ### Phase 4 — Complexity rules (regenerability metrics)
+//!
+//! | Key                          | Default | Description                                                        |
+//! |------------------------------|---------|--------------------------------------------------------------------|
+//! | `max_cyclomatic_complexity`  | `10`    | Max cyclomatic complexity per function (0 = disabled)              |
+//! | `max_nested_match_depth`     | `3`     | Max nesting depth of `match` expressions (0 = disabled)            |
+//! | `max_effect_signature_width` | `3`     | Max number of declared effects per function (0 = disabled)         |
+//! | `max_trait_impl_count`       | `5`     | Max number of trait impls per type (0 = disabled)                  |
+//! | `max_module_fanout`          | `15`    | Max number of distinct modules imported (0 = disabled)             |
+//! | `max_extern_ratio`           | `0.2`   | Max ratio of extern fns to total fns (0.0 = disabled)              |
 
 use std::path::{Path, PathBuf};
 use std::{env, fs};
@@ -79,6 +90,20 @@ pub struct LintConfig {
     pub require_doc_comments: bool,
     /// Recommend an `Example:` block inside doc comments (warning, opt-in).
     pub doc_comment_examples: bool,
+
+    // ── Phase 4: Complexity rules (regenerability metrics) ───────────────
+    /// Maximum cyclomatic complexity per function. `0` disables the check.
+    pub max_cyclomatic_complexity: usize,
+    /// Maximum nested `match` depth per function. `0` disables the check.
+    pub max_nested_match_depth: usize,
+    /// Maximum number of declared effects per function. `0` disables the check.
+    pub max_effect_signature_width: usize,
+    /// Maximum number of trait `impl` blocks per type. `0` disables the check.
+    pub max_trait_impl_count: usize,
+    /// Maximum number of distinct modules imported per file. `0` disables the check.
+    pub max_module_fanout: usize,
+    /// Maximum ratio of extern fns to total fns (0.0..=1.0). `0.0` disables the check.
+    pub max_extern_ratio: f64,
 }
 
 impl Default for LintConfig {
@@ -99,6 +124,12 @@ impl Default for LintConfig {
             consistent_comment_style: true,
             require_doc_comments: true,
             doc_comment_examples: false,
+            max_cyclomatic_complexity: 10,
+            max_nested_match_depth: 3,
+            max_effect_signature_width: 3,
+            max_trait_impl_count: 5,
+            max_module_fanout: 15,
+            max_extern_ratio: 0.2,
         }
     }
 }
@@ -203,6 +234,40 @@ fn load_from(path: &Path) -> Option<LintConfig> {
             "consistent_comment_style" => cfg.consistent_comment_style = parse_bool(val),
             "require_doc_comments" => cfg.require_doc_comments = parse_bool(val),
             "doc_comment_examples" => cfg.doc_comment_examples = parse_bool(val),
+            "max_cyclomatic_complexity" => {
+                if let Ok(n) = val.parse::<usize>() {
+                    cfg.max_cyclomatic_complexity = n;
+                }
+            }
+            "max_nested_match_depth" => {
+                if let Ok(n) = val.parse::<usize>() {
+                    cfg.max_nested_match_depth = n;
+                }
+            }
+            "max_effect_signature_width" => {
+                if let Ok(n) = val.parse::<usize>() {
+                    cfg.max_effect_signature_width = n;
+                }
+            }
+            "max_trait_impl_count" => {
+                if let Ok(n) = val.parse::<usize>() {
+                    cfg.max_trait_impl_count = n;
+                }
+            }
+            "max_module_fanout" => {
+                if let Ok(n) = val.parse::<usize>() {
+                    cfg.max_module_fanout = n;
+                }
+            }
+            "max_extern_ratio" => {
+                if let Ok(f) = val.parse::<f64>() {
+                    // Accept only finite values in [0.0, 1.0]; NaN or out-of-range
+                    // would silently disable the rule without the user setting 0.0.
+                    if f.is_finite() && (0.0..=1.0).contains(&f) {
+                        cfg.max_extern_ratio = f;
+                    }
+                }
+            }
             _ => {} // unknown keys are silently ignored (forward-compat)
         }
     }
