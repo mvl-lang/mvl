@@ -1,0 +1,129 @@
+// complexity_demo.mvl — intentionally complex example for mvl lint.
+//
+// Purpose: demonstrate all six phase-4 complexity rules on realistic-looking
+// code that smells of architectural debt.  Each section is labelled with the
+// rule it is meant to trigger.
+//
+// Run:   mvl lint examples/complexity_demo.mvl
+//
+// Expected warnings:
+//   complexity-trait-impl-count  — Request has 6 trait impls (max 5)
+//   complexity-effect-width      — process_request declares 4 effects (max 3)
+//   complexity-match-depth       — classify reaches depth 4 (max 3)
+//   complexity-cyclomatic        — authorize has CC > 10
+
+// ── Types ─────────────────────────────────────────────────────────────────
+
+type Method   = enum { Get, Post, Put, Delete, Patch }
+type Role     = enum { Guest, User, Moderator, Admin }
+type Resource = enum { Posts, Users, Comments, AdminPanel, AuditLog }
+
+type Status = enum {
+    Ok,
+    Created,
+    BadRequest,
+    Unauthorized,
+    Forbidden,
+    NotFound,
+    InternalError,
+}
+
+// ── complexity-trait-impl-count ───────────────────────────────────────────
+// Request accumulates 6 trait impl blocks — one more than the default max of 5.
+// Signals that this type has grown into too many abstraction boundaries.
+
+type Request = struct {
+    method: Method,
+    role:   Role,
+    path:   Resource,
+    body:   String,
+}
+
+impl Display for Request {
+    fn fmt(r: Request) -> String { "request" }
+}
+impl Validate for Request {
+    fn is_valid(r: Request) -> Bool { true }
+}
+impl Audit for Request {
+    fn log_entry(r: Request) -> String { "audit" }
+}
+impl Serialize for Request {
+    fn to_json(r: Request) -> String { "{}" }
+}
+impl Hash for Request {
+    fn hash_code(r: Request) -> Int { 0 }
+}
+impl Eq for Request {
+    fn equal(a: Request, b: Request) -> Bool { false }
+}
+
+// ── complexity-effect-width ───────────────────────────────────────────────
+// 4 declared effects exceeds the default max of 3.
+// A function this wide is doing too many things at once.
+
+fn process_request(req: Request) -> Status ! Console, DB, Network, Audit {
+    authorize(req.method, req.role, req.path)
+}
+
+// ── complexity-match-depth ────────────────────────────────────────────────
+// Reaches depth 4 via method → role → resource → resource again.
+// Each nested match is a separate decision axis that should be flattened
+// into a lookup table or extracted into helper functions.
+
+fn classify(req: Request) -> Status {
+    match req.method {
+        Method::Get => match req.role {
+            Role::Admin => match req.path {
+                Resource::AuditLog => match req.path {
+                    Resource::AuditLog    => Status::Ok,
+                    _                     => Status::Forbidden,
+                },
+                _ => Status::Ok,
+            },
+            Role::Guest => Status::Forbidden,
+            _           => Status::Ok,
+        },
+        Method::Delete => match req.role {
+            Role::Admin     => Status::Ok,
+            Role::Moderator => Status::Ok,
+            _               => Status::Forbidden,
+        },
+        _ => Status::BadRequest,
+    }
+}
+
+// ── complexity-cyclomatic ─────────────────────────────────────────────────
+// CC > 10 via nested if/else-if chains and &&/|| short-circuit operators.
+// A function this branchy cannot be reasoned about holistically; the LLM
+// cannot regenerate it without introducing subtle path errors.
+
+fn authorize(method: Method, role: Role, path: Resource) -> Status {
+    match role {
+        Role::Guest => match method {
+            Method::Get => Status::Ok,
+            _           => Status::Forbidden,
+        },
+        Role::User => match path {
+            Resource::AdminPanel => Status::Forbidden,
+            Resource::AuditLog   => Status::Forbidden,
+            _ => match method {
+                Method::Delete => Status::Forbidden,
+                _              => Status::Ok,
+            },
+        },
+        Role::Moderator => match path {
+            Resource::AdminPanel => match method {
+                Method::Get    => Status::Ok,
+                Method::Post   => Status::Forbidden,
+                _              => Status::Forbidden,
+            },
+            Resource::AuditLog => match method {
+                Method::Get => Status::Ok,
+                _           => Status::Forbidden,
+            },
+            _ => Status::Ok,
+        },
+        Role::Admin => Status::Ok,
+    }
+}
