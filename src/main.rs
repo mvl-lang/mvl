@@ -54,7 +54,9 @@ fn main() {
         }
         "test" => {
             let path = require_path_arg(&args, "test");
-            cmd_test(&path);
+            let quiet = args.iter().any(|a| a == "--quiet" || a == "-q");
+            let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
+            cmd_test(&path, quiet, verbose);
         }
         "lint" => {
             let path = require_path_arg(&args, "lint");
@@ -91,6 +93,8 @@ fn print_usage() {
     eprintln!("  mvl run   [--] <file.mvl>          — transpile, build, and execute");
     eprintln!("  mvl run   [--] <file.mvl> -- ...   — pass args to the compiled binary");
     eprintln!("  mvl test  <file|dir>               — find *_test.mvl files and run cargo test");
+    eprintln!("  mvl test  <file|dir> -q            — suppress MVL output, pass -q to cargo test (dot progress)");
+    eprintln!("  mvl test  <file|dir> --verbose     — show transpile path and all test names with captured stdout");
     eprintln!("  mvl lint  <file|dir>               — check style rules");
     eprintln!("  mvl lint  <file|dir> --show-config — show active linter configuration");
     eprintln!("  mvl assurance <file|dir>           — emit assurance report");
@@ -695,16 +699,25 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
 }
 
 /// Find all `*_test.mvl` files, transpile to Rust test crates, and run `cargo test`.
-fn cmd_test(path: &str) {
+fn cmd_test(path: &str, quiet: bool, verbose: bool) {
+    if quiet && verbose {
+        eprintln!(
+            "warning: --quiet and --verbose are mutually exclusive; --verbose takes precedence"
+        );
+    }
+    let quiet = quiet && !verbose;
+
     let test_files = mvl_files(path, true); // test_only=true
     if test_files.is_empty() {
         eprintln!("No *_test.mvl files found at: {path}");
         process::exit(1);
     }
 
-    println!("Found {} test file(s):", test_files.len());
-    for f in &test_files {
-        println!("  {}", f.display());
+    if !quiet {
+        println!("Found {} test file(s):", test_files.len());
+        for f in &test_files {
+            println!("  {}", f.display());
+        }
     }
 
     // Check for duplicate module names before generating output.
@@ -787,30 +800,40 @@ fn cmd_test(path: &str) {
         process::exit(1);
     });
 
-    println!("Transpiled tests to: {}", tmp_dir.display());
-    println!("Running: cargo test");
+    if verbose {
+        println!("Transpiled tests to: {}", tmp_dir.display());
+    }
+    if !quiet {
+        println!("Running: cargo test");
+    }
 
-    let status = process::Command::new("cargo")
-        .arg("test")
-        .current_dir(&tmp_dir)
-        .status()
-        .unwrap_or_else(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                eprintln!(
-                    "error: `cargo` not found in PATH — install Rust from https://rustup.rs/"
-                );
-            } else {
-                eprintln!("error: failed to run cargo: {e}");
-            }
-            process::exit(1);
-        });
+    let mut cmd = process::Command::new("cargo");
+    cmd.arg("test").current_dir(&tmp_dir);
+    if quiet {
+        cmd.arg("-q");
+    }
+    if verbose {
+        // Show all test output including captured stdout.
+        cmd.arg("--").arg("--nocapture");
+    }
+
+    let status = cmd.status().unwrap_or_else(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            eprintln!("error: `cargo` not found in PATH — install Rust from https://rustup.rs/");
+        } else {
+            eprintln!("error: failed to run cargo: {e}");
+        }
+        process::exit(1);
+    });
 
     if !status.success() {
         eprintln!("cargo test failed");
         process::exit(1);
     }
 
-    println!("All tests passed.");
+    if !quiet {
+        println!("All tests passed.");
+    }
 }
 
 /// Emit an assurance report for a file or directory.
