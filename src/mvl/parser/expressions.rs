@@ -256,6 +256,9 @@ impl Parser {
                 })
             }
 
+            // ── Lambda expression ────────────────────────────────────────────
+            TokenKind::Pipe => self.parse_lambda_expr(),
+
             // ── Composite expressions ────────────────────────────────────────
             TokenKind::If => self.parse_if_expr(),
             TokenKind::Match => self.parse_match_expr(),
@@ -361,6 +364,54 @@ impl Parser {
                 Err(())
             }
         }
+    }
+
+    // ── Lambda expression ──────────────────────────────────────────────────
+
+    fn parse_lambda_expr(&mut self) -> Result<Expr, ()> {
+        use crate::mvl::parser::ast::Param;
+        let start = self.peek_span();
+        self.advance(); // consume opening `|`
+
+        let mut params = Vec::new();
+        while !matches!(self.peek_kind(), TokenKind::Pipe | TokenKind::Eof) {
+            let param_start = self.peek_span();
+            let ir = self.expect_ident();
+            let (name, _) = self.require(ir)?;
+            let colon = self.expect(&TokenKind::Colon);
+            self.require(colon)?;
+            let ty = self.parse_type_expr()?;
+            let param_span = self.span_from(param_start);
+            params.push(Param {
+                capability: None,
+                mutable: false,
+                name,
+                ty,
+                refinement: None,
+                span: param_span,
+            });
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+
+        let pipe = self.expect(&TokenKind::Pipe);
+        self.require(pipe)?; // consume closing `|`
+
+        let ret_type = if self.eat(&TokenKind::Arrow) {
+            Some(Box::new(self.parse_type_expr()?))
+        } else {
+            None
+        };
+
+        let body = self.parse_expr()?;
+        let span = self.span_from(start);
+        Ok(Expr::Lambda {
+            params,
+            ret_type,
+            body: Box::new(body),
+            span,
+        })
     }
 
     // ── If expression ──────────────────────────────────────────────────────
