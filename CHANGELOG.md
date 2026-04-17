@@ -6,8 +6,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.39.0] — 2026-04-17
+
 ### Added
 
+- **Generics constraint enforcement** — Parser rejects higher-kinded type syntax (`F<_>`) and inline constraint syntax (`<T: Ord>`). Type checker enforces trait bounds on type parameters used in comparison operators: `Ord` for ordering operators (`<`, `>`, `<=`, `>=`) and `Eq` for equality operators (`==`, `!=`). When a bound is missing, diagnostics point users to the required `where` clause syntax (#225).
 - **Phase 4 gate test** — `range()` now has a real MVL body (partial fn with while loop and list mutation) instead of a stub. The transpiler emits non-stub prelude functions before user code, enabling MVL stdlib bodies to be transpiled from source rather than relying on hardcoded Rust mappings. Validates end-to-end: real stdlib function → use → transpile → compile → run (#229).
 - **Comprehensive stdlib demo** — new `core_types_demo.mvl` exercises all 9 core types (Int, Float, Bool, String, List, Map, Set, Option, Result) with representative method calls and pattern matching, proving the foundation is complete.
 - **stdlib_content() lookup helper** — centralised API for accessing embedded stdlib files by name; used in main.rs to eliminate hardcoded "core.mvl" string.
