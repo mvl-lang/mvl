@@ -6,6 +6,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.35.1] — 2026-04-17
+
+### Fixed
+
+- **println with non-string first arg** — transpiler now generates valid Rust format strings with one `{}` placeholder per argument when the first arg to `println`, `print`, or `format` is not a string literal. Addresses issue #198.
+- **Test coverage** — added regression tests covering single non-string arg, multiple non-string args, and mixed-type args to prevent future regressions.
+
 ## [0.35.0] — 2026-04-16
 
 ### Added
