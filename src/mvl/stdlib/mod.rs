@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 pub const STDLIB_FILES: &[(&str, &str)] = &[
     ("core.mvl", include_str!("../../../std/core.mvl")),
     ("io.mvl", include_str!("../../../std/io.mvl")),
+    ("args.mvl", include_str!("../../../std/args.mvl")),
     ("time.mvl", include_str!("../../../std/time.mvl")),
     ("json.mvl", include_str!("../../../std/json.mvl")),
     ("regex.mvl", include_str!("../../../std/regex.mvl")),
@@ -69,7 +70,17 @@ pub fn ensure_stdlib() -> PathBuf {
 fn needs_extraction(target: &Path) -> bool {
     let stamp = target.join(".version");
     match fs::read_to_string(&stamp) {
-        Ok(v) => v.trim() != STDLIB_VERSION,
+        Ok(v) => {
+            if v.trim() != STDLIB_VERSION {
+                return true;
+            }
+            // Version matches but verify all expected files are present.
+            // This handles the case where new stdlib files are added in a
+            // patch that doesn't bump the version.
+            STDLIB_FILES
+                .iter()
+                .any(|(name, _)| !target.join(name).exists())
+        }
         Err(_) => true,
     }
 }

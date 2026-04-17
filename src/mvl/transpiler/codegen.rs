@@ -10,6 +10,7 @@ use crate::mvl::transpiler::emit_functions::emit_fn_decl;
 use crate::mvl::transpiler::emit_impls::emit_impl_decl;
 use crate::mvl::transpiler::emit_types::emit_type_decl;
 use crate::mvl::transpiler::emit_types::{emit_security_preamble, emit_type_expr};
+use crate::mvl::transpiler::has_std_imports;
 
 ///// Code-generation context: accumulates Rust source text.
 #[derive(Default)]
@@ -101,7 +102,8 @@ impl Codegen {
         self.line("#![allow(dead_code, unused_variables, unused_imports, unused_parens)]");
         self.blank();
 
-        // MVL runtime prelude: security labels, effect markers, refinement macro.
+        // MVL runtime prelude: security labels, effect markers, refinement macro,
+        // and stdlib function implementations (read_file, get_arg, etc.).
         // When mvl_runtime is available as a dependency we use it directly;
         // otherwise fall back to the inlined preamble for standalone files.
         // `force_runtime` is set for sibling modules in a project that uses mvl_runtime,
@@ -110,7 +112,8 @@ impl Codegen {
             || prog
                 .declarations
                 .iter()
-                .any(|d| matches!(d, Decl::Extern(_)));
+                .any(|d| matches!(d, Decl::Extern(_)))
+            || has_std_imports(prog);
         if has_runtime {
             self.line("use mvl_runtime::prelude::*;");
         } else {

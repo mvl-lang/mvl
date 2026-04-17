@@ -73,6 +73,21 @@ pub fn has_extern_rust_decls(prog: &Program) -> bool {
         .any(|d| matches!(d, Decl::Extern(ed) if ed.abi == "rust"))
 }
 
+/// Returns true if the program imports any `use std.*` stdlib modules.
+///
+/// When a program uses stdlib functions (e.g. `use std.io.{read_file}`), the
+/// generated code calls implementations from `mvl_runtime::prelude::*`, so
+/// `mvl_runtime` must be linked even when no `extern "rust"` block is present.
+pub fn has_std_imports(prog: &Program) -> bool {
+    prog.declarations.iter().any(|d| {
+        if let Decl::Use(ud) = d {
+            ud.path.first().map(|s| s == "std").unwrap_or(false)
+        } else {
+            false
+        }
+    })
+}
+
 /// Output of a successful multi-file project transpilation.
 pub struct ProjectOutput {
     /// Contents of `src/main.rs` or `src/lib.rs` for the entry-point module.
@@ -106,7 +121,12 @@ pub fn transpile_project(
     let has_main = has_main_fn(entry_prog);
     let extern_count = count_extern_decls(entry_prog);
     let has_extern_rust = has_extern_rust_decls(entry_prog);
-    let use_runtime = extern_count > 0;
+    // Link mvl_runtime when extern "rust" is used OR when stdlib is imported.
+    // Stdlib functions (e.g. read_file, get_arg) are re-exported from
+    // mvl_runtime::prelude::* and require the runtime crate to be present.
+    let use_runtime = extern_count > 0
+        || has_std_imports(entry_prog)
+        || siblings.iter().any(|(_, p)| has_std_imports(p));
 
     let sibling_names: Vec<&str> = siblings.iter().map(|(n, _)| n.as_str()).collect();
     let mut cg = Codegen::new();
@@ -115,7 +135,7 @@ pub fn transpile_project(
 
     // Sibling modules share the runtime prelude with the entry point so type
     // definitions don't conflict (e.g. `Tainted` from mvl_runtime vs inline).
-    let entry_uses_runtime = extern_count > 0;
+    let entry_uses_runtime = use_runtime;
     let module_files: Vec<(String, String)> = siblings
         .iter()
         .map(|(name, prog)| {
@@ -157,7 +177,8 @@ pub fn transpile(prog: &Program, crate_name: &str) -> TranspileOutput {
     let has_main = has_main_fn(prog);
     let extern_count = count_extern_decls(prog);
     let has_extern_rust = has_extern_rust_decls(prog);
-    let use_runtime = extern_count > 0;
+    // Link mvl_runtime when extern "rust" is used OR when stdlib is imported.
+    let use_runtime = extern_count > 0 || has_std_imports(prog);
 
     let mut cg = Codegen::new();
     cg.emit_program(prog);

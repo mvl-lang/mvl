@@ -1,10 +1,12 @@
-//! bridge.rs — Rust implementations of the `extern "rust"` trust boundary
+//! bridge.rs — Rust implementation of the `extern "rust"` trust boundary
 //! declared in main.mvl.
 //!
-//! These three functions cross the trust boundary between verified MVL code
-//! and the outside world (CLI args, filesystem, JSON pipeline).  They are
-//! responsible for tainting incoming data with `Tainted<T>` and only
-//! producing `Clean<T>` values after explicit validation.
+//! This bridge contains only the domain-specific pipeline logic that cannot
+//! yet be expressed in MVL (blocked by lambda/iterator support; no tracking issue yet).
+//!
+//! Generic infrastructure (file I/O, CLI argument parsing) has been moved to
+//! the MVL standard library (`std.io`, `std.args`) and no longer requires a
+//! per-program bridge.
 //!
 //! Compile with: `mvl build examples/log_analyzer/main.mvl`
 //! (bridge.rs is detected automatically and linked in)
@@ -12,35 +14,9 @@
 use mvl_runtime::prelude::*;
 
 // Types generated from main.mvl — accessible as `crate::*` in a binary crate.
-use crate::{IOError, PipelineError};
+use crate::PipelineError;
 
-// ── Trust boundary implementations ────────────────────────────────────────
-
-/// Scan command-line args for `--<name> <value>` and return the value as
-/// Tainted (it has not been validated yet).
-#[no_mangle]
-pub extern "Rust" fn clap_get_arg(name: Clean<String>) -> Option<Tainted<String>> {
-    let flag = format!("--{}", *name);
-    let args: Vec<String> = std::env::args().collect();
-    for i in 0..args.len().saturating_sub(1) {
-        if args[i] == flag {
-            return Some(Tainted(args[i + 1].clone()));
-        }
-    }
-    None
-}
-
-/// Read a file from disk, returning the raw bytes as Tainted (external input).
-#[no_mangle]
-pub extern "Rust" fn fs_read_file(path: Clean<String>) -> Result<Tainted<String>, IOError> {
-    std::fs::read_to_string(&*path)
-        .map(Tainted)
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => IOError::FileNotFound,
-            std::io::ErrorKind::PermissionDenied => IOError::PermissionDenied,
-            _ => IOError::ReadError,
-        })
-}
+// ── Trust boundary implementation ─────────────────────────────────────────
 
 /// Parse JSONL content line-by-line, optionally filter by log level, and
 /// return a compact JSON report string.

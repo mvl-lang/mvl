@@ -98,6 +98,45 @@ fn second_call_is_idempotent() {
     });
 }
 
+/// Verify that `args.mvl` is present in the embedded STDLIB_FILES.
+/// This guards against accidentally omitting it from the registry.
+#[test]
+fn args_mvl_is_in_stdlib_files() {
+    assert!(
+        STDLIB_FILES.iter().any(|(name, _)| *name == "args.mvl"),
+        "args.mvl must be registered in STDLIB_FILES"
+    );
+}
+
+/// A missing file with a valid version stamp triggers re-extraction.
+///
+/// This handles the case where a new stdlib module is added without bumping
+/// the version number (e.g. a patch that adds `args.mvl` to an existing
+/// `0.36.0` stdlib installation).
+#[test]
+fn missing_file_triggers_reextraction_despite_valid_stamp() {
+    with_mvl_home(|_home| {
+        // First extraction — all files present, stamp written.
+        let stdlib_dir = ensure_stdlib();
+
+        // Delete one stdlib file to simulate a partial / stale installation.
+        let (first_file, first_content) = &STDLIB_FILES[0];
+        let target = stdlib_dir.join(first_file);
+        fs::remove_file(&target).expect("remove file");
+        assert!(!target.exists(), "file must be gone before second call");
+
+        // Second call — stamp is current but a file is missing → must re-extract.
+        let _ = ensure_stdlib();
+
+        let on_disk = fs::read_to_string(&target)
+            .unwrap_or_else(|_| panic!("{first_file} must be re-extracted"));
+        assert_eq!(
+            on_disk, *first_content,
+            "re-extracted {first_file} must match embedded content"
+        );
+    });
+}
+
 #[test]
 fn stale_stamp_triggers_reextraction() {
     with_mvl_home(|home| {
