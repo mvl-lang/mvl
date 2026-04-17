@@ -1,6 +1,6 @@
 # MVL Language Features
 
-21 features across 6 categories. The language is deliberately small (ADR-0004) — every feature exists to increase verification density per token.
+22 features across 7 categories. The language is deliberately small (ADR-0004) — every feature exists to increase verification density per token.
 
 ---
 
@@ -96,16 +96,25 @@ Phase 1: style rules. Phase 2: semantic rules. Phase 3: LLM corpus quality + com
 
 ---
 
+## Verification Philosophy
+
+### 19. No Proof Language — The Compiler Proves or You Mark `partial`
+
+The programmer never writes proofs, tactics, or verification annotations beyond types and refinements. The compiler runs 11 verification passes automatically on every function. If a pass can't prove a property, it reports the gap — not a compile error demanding a proof. For termination (Req 8), the escape hatch is `partial fn`. For refinements (Req 10), unprovable predicates fall back to runtime checks. This is the opposite of Lean/Coq/Dafny where the programmer assists the prover. In MVL, the prover is on its own.
+
+---
+
 ## Design Principles
 
-### 19. Language Contraction (ADR-0002)
+### 20. Language Contraction (ADR-0002)
+
 
 No macros, no exceptions, no inheritance, no null, no while (in total functions), no operator overloading, no implicit conversions. The language shrinks by policy. Every removed feature is a verification obstacle eliminated.
 
-### 20. Transpiler-Mediated Codegen (ADR-0013)
+### 21. Transpiler-Mediated Codegen (ADR-0013)
 
 No macros, no reflection. When a feature requires compile-time struct iteration (derives, `parse<T>()`, serialization), the transpiler generates it from type definitions. The type IS the spec; the transpiler IS the generator; the checker IS the verifier. Third path between macros and reflection.
 
-### 21. One Way (ADR-0004)
+### 22. One Way (ADR-0004)
 
 One error type (`Result`), one absence type (`Option`), one loop form (`for`), one branching form (`match`/`if`). Stdlib provides vocabulary, not syntax. The smallest language that enforces all 11 requirements.
