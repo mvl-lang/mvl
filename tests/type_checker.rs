@@ -1634,7 +1634,6 @@ fn generic_multiple_constraints_parse() {
 // See: https://github.com/LAB271/mvl_language/issues/48
 
 #[test]
-#[ignore = "constraint enforcement not yet implemented (Phase 2)"]
 fn missing_constraint_on_comparison_rejected() {
     // Req 9 Scenario: Missing constraint rejected
     // GIVEN unconstrained T used with `>` operator
@@ -1657,7 +1656,6 @@ fn missing_constraint_on_comparison_rejected() {
 }
 
 #[test]
-#[ignore = "HKT diagnostic not yet implemented (Phase 2)"]
 fn higher_kinded_type_param_rejected() {
     // Req 9 Scenario: No higher-kinded types
     // GIVEN F<_> nested angle-bracket type param
@@ -1671,7 +1669,6 @@ fn higher_kinded_type_param_rejected() {
 }
 
 #[test]
-#[ignore = "inline constraint rejection not yet implemented (Phase 2)"]
 fn inline_constraint_syntax_rejected() {
     // Req 9 Scenario: Inline constraint syntax rejected
     // GIVEN <T: Ord> inline constraint syntax
