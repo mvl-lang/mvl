@@ -713,3 +713,38 @@ fn f(x: Int) -> Int { add(x, x) }
     // Phase 1: clones are emitted; redundant for Copy types but correct.
     assert_contains(&rust, "x.clone()");
 }
+
+// ── #219: Iterator trait transpilation (001-type-system Req 11) ───────────────
+
+/// Spec 001 Req 11 / Scenario: `impl Iterator<T> for X` emits Rust iterator impl.
+///
+/// GIVEN `impl Iterator<Int> for Counter { fn next(…) -> Option<Int> { … } }`
+/// THEN  transpiler emits `impl std::iter::Iterator for Counter { type Item = i64; … }`
+#[test]
+fn iterator_impl_emits_rust_iterator() {
+    let src = r#"
+type Counter = struct { mut current: Int, limit: Int }
+
+impl Iterator<Int> for Counter {
+    fn next(mut self: Counter) -> Option<Int> {
+        None
+    }
+}
+"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "impl std::iter::Iterator for Counter {");
+    assert_contains(&rust, "type Item = i64;");
+    assert_contains(&rust, "fn next(&mut self) -> Option<i64> {");
+}
+
+/// `impl Iterator<T> for X` with no `next` method emits a todo!().
+#[test]
+fn iterator_impl_without_next_emits_todo() {
+    let src = r#"
+type Counter = struct { current: Int }
+impl Iterator<Int> for Counter {}
+"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "impl std::iter::Iterator for Counter {");
+    assert_contains(&rust, "todo!(\"Iterator::next not implemented\")");
+}

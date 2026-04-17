@@ -3,6 +3,7 @@
 //! Supported traits:
 //! - `impl Display for T` → `impl std::fmt::Display for T`
 //! - `impl From<A> for B` → `impl std::convert::From<A> for B`
+//! - `impl Iterator<T> for X` → `impl std::iter::Iterator for X`
 //!
 //! # Spec coverage
 //!
@@ -51,6 +52,7 @@ pub fn emit_impl_decl(cg: &mut Codegen, id: &ImplDecl) {
     match id.trait_name.as_str() {
         "Display" => emit_display_impl(cg, id),
         "From" => emit_from_impl(cg, id),
+        "Iterator" => emit_iterator_impl(cg, id),
         other => {
             cg.line(&format!(
                 "// impl {other} for {} — unsupported trait (skipped)",
@@ -103,6 +105,65 @@ fn emit_display_impl(cg: &mut Codegen, id: &ImplDecl) {
         None => {
             cg.line("todo!(\"Display::fmt not implemented\")");
         }
+    }
+
+    cg.pop_indent();
+    cg.line("}");
+    cg.pop_indent();
+    cg.line("}");
+}
+
+/// Emit `impl std::iter::Iterator for TypeName` (001-type-system Req 11).
+///
+/// ```text
+/// impl Iterator<Int> for Counter {
+///     fn next(mut self) -> Option<Int> { … }
+/// }
+/// ```
+/// transpiles to:
+/// ```text
+/// impl std::iter::Iterator for Counter {
+///     type Item = i64;
+///     fn next(&mut self) -> Option<i64> { … }
+/// }
+/// ```
+fn emit_iterator_impl(cg: &mut Codegen, id: &ImplDecl) {
+    let item_ty = match id.trait_type_args.first() {
+        Some(ty) => emit_type_expr(ty),
+        None => {
+            cg.line(&format!(
+                "// impl Iterator for {} — missing element type argument (skipped)",
+                id.type_name
+            ));
+            return;
+        }
+    };
+
+    cg.line(&format!("impl std::iter::Iterator for {} {{", id.type_name));
+    cg.push_indent();
+    cg.line(&format!("type Item = {item_ty};"));
+
+    let next_method = id.methods.iter().find(|m| m.name == "next");
+
+    cg.line(&format!("fn next(&mut self) -> Option<{item_ty}> {{"));
+    cg.push_indent();
+
+    match next_method {
+        Some(fd) => match fd.body.stmts.split_last() {
+            None => cg.line("todo!(\"Iterator::next not implemented\")"),
+            Some((last, head)) => {
+                emit_block_stmts(cg, head);
+                match last {
+                    Stmt::Expr { expr, .. } => {
+                        cg.indent();
+                        emit_expr(cg, expr);
+                        cg.nl();
+                    }
+                    other => emit_block_stmts(cg, std::slice::from_ref(other)),
+                }
+            }
+        },
+        None => cg.line("todo!(\"Iterator::next not implemented\")"),
     }
 
     cg.pop_indent();

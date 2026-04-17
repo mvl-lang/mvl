@@ -185,6 +185,17 @@ pub enum CheckError {
         span: Span,
     },
 
+    // ── Iterator trait (001-type-system/Req 11) ──────────────────────────
+    /// Expression after `in` does not implement the `Iterator` trait.
+    NotIterator {
+        ty: String,
+        span: Span,
+    },
+    /// `for` loop used inside a `partial` function — only `while` is allowed there.
+    ForLoopInPartialFn {
+        span: Span,
+    },
+
     // ── Information flow control (#23) ───────────────────────────────────
     /// `declassify()` applied to a non-`Secret<T>` type.
     InvalidDeclassify {
@@ -264,7 +275,8 @@ impl CheckError {
             // Req 8: Termination
             CheckError::UnboundedLoopInTotal { .. }
             | CheckError::PartialCallInTotal { .. }
-            | CheckError::UnprovenRecursion { .. } => 8,
+            | CheckError::UnprovenRecursion { .. }
+            | CheckError::ForLoopInPartialFn { .. } => 8,
             // Req 9: Data Race Freedom
             CheckError::CapabilityViolation { .. } | CheckError::IsoAliasingViolation { .. } => 9,
             // Req 10: Refinement Types
@@ -277,6 +289,8 @@ impl CheckError {
             // Req 1: Type Safety (declaration-level — malformed extern ABI is a type/decl error,
             // not an IFC violation; grouping it under Req 11 would pollute IFC metrics).
             CheckError::UnsupportedExternAbi { .. } => 1,
+            // Req 1: Type Safety — Iterator trait constraint
+            CheckError::NotIterator { .. } => 1,
         }
     }
 
@@ -318,7 +332,9 @@ impl CheckError {
             | CheckError::LoggingLabelViolation { span, .. }
             | CheckError::ImplicitFlowViolation { span, .. }
             | CheckError::UnsupportedExternAbi { span, .. }
-            | CheckError::PropagateIncompatibleError { span, .. } => *span,
+            | CheckError::PropagateIncompatibleError { span, .. }
+            | CheckError::NotIterator { span, .. }
+            | CheckError::ForLoopInPartialFn { span } => *span,
         }
     }
 
@@ -443,6 +459,12 @@ impl CheckError {
             CheckError::UnsupportedExternAbi { abi, .. } => format!(
                 "unsupported extern ABI `\"{abi}\"` — only \"rust\" and \"c\" are allowed"
             ),
+            CheckError::NotIterator { ty, .. } => format!(
+                "`{ty}` does not implement `Iterator` — only types with `impl Iterator<T>` can be used in `for...in`"
+            ),
+            CheckError::ForLoopInPartialFn { .. } => {
+                "`for` is not permitted in `partial` functions; use `while` instead".to_string()
+            }
         }
     }
 }

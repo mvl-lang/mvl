@@ -2783,3 +2783,128 @@ fn log_info_rejects_secret_value_in_fields_map() {
         "log_info with Secret value in fields map should emit LoggingLabelViolation, got: {errors:?}"
     );
 }
+
+// ── #219: Iterator trait (001-type-system Req 11) ─────────────────────────────
+
+/// Spec 001 Req 11 / Scenario: For loop over array accepted.
+///
+/// GIVEN `let items: Array<Int, 3> = [1, 2, 3]`
+/// WHEN  `for x in items { }`
+/// THEN  type checker MUST accept (Array<T> implements Iterator<T>)
+#[test]
+fn iterator_trait_for_loop_accepted() {
+    let src = r#"
+        fn f() -> Unit {
+            let items: Array<Int, 3> = [1, 2, 3];
+            for x in items {
+                let _: Int = x;
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::NotIterator { .. })),
+        "Array<Int, 3> implements Iterator — for loop should be accepted, got: {errors:?}"
+    );
+}
+
+/// Spec 001 Req 11 / Scenario: For loop over non-iterator rejected.
+///
+/// GIVEN `let n: Int = 42`
+/// WHEN  `for x in n { }`
+/// THEN  type checker MUST reject: `Int` does not implement `Iterator`
+#[test]
+fn non_iterator_for_loop_rejected() {
+    let src = r#"
+        fn f() -> Unit {
+            let n: Int = 42;
+            for x in n { }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::NotIterator { ty, .. } if ty == "Int")),
+        "Int does not implement Iterator — for loop must be rejected, got: {errors:?}"
+    );
+}
+
+/// Spec 001 Req 11 / Scenario: Custom type implements Iterator.
+///
+/// GIVEN `type Counter = struct { … }` with `impl Iterator<Int> for Counter`
+/// WHEN  `for n in Counter { current: 0, limit: 3 } { }`
+/// THEN  type checker MUST accept
+#[test]
+fn custom_iterator_impl_accepted() {
+    let src = r#"
+        type Counter = struct { mut current: Int, limit: Int }
+
+        impl Iterator<Int> for Counter {
+            fn next(mut self: Counter) -> Option<Int> { None }
+        }
+
+        fn f() -> Unit {
+            for n in Counter { current: 0, limit: 3 } {
+                let _: Int = n;
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::NotIterator { .. })),
+        "Counter implements Iterator — for loop should be accepted, got: {errors:?}"
+    );
+}
+
+/// Spec 001 Req 11 / Scenario: For loop rejected inside partial function.
+///
+/// GIVEN `partial fn f(items: Array<Int, 3>) { for x in items { … } }`
+/// WHEN  the function is type-checked
+/// THEN  type checker MUST reject: `for` is not permitted in `partial` functions
+#[test]
+fn for_loop_rejected_in_partial_fn() {
+    let src = r#"
+        partial fn f(items: Array<Int, 3>) -> Unit {
+            for x in items { }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::ForLoopInPartialFn { .. })),
+        "`for` in partial fn must be rejected with ForLoopInPartialFn, got: {errors:?}"
+    );
+}
+
+/// Spec 001 Req 11 + Req 8 / Scenario: For loop over non-iterator inside partial function.
+///
+/// GIVEN `partial fn f(n: Int) { for x in n { } }`
+/// WHEN  the function is type-checked
+/// THEN  type checker MUST emit BOTH ForLoopInPartialFn AND NotIterator
+#[test]
+fn for_loop_non_iterator_in_partial_fn_emits_both_errors() {
+    let src = r#"
+        partial fn f(n: Int) -> Unit {
+            for x in n { }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::ForLoopInPartialFn { .. })),
+        "must emit ForLoopInPartialFn, got: {errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::NotIterator { ty, .. } if ty == "Int")),
+        "must also emit NotIterator for Int, got: {errors:?}"
+    );
+}
