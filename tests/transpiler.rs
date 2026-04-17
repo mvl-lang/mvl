@@ -841,8 +841,11 @@ type Cfg = struct { port: Int where self > 0 && self <= 65535 }
 "#;
     let rust = transpile_src(src);
     assert_contains(&rust, ".parse::<i64>()");
-    // Runtime refinement check — returns Err, not debug_assert
-    assert_contains(&rust, "return Err(format!(\"--port: refinement violated:");
+    // Runtime refinement check — returns Err, not debug_assert; includes field value
+    assert_contains(
+        &rust,
+        "return Err(format!(\"--port: refinement violated: {}\", port));",
+    );
 }
 
 /// Struct with generic params does NOT get a `ParseFromArgs` impl.
@@ -885,4 +888,84 @@ fn struct_without_stdlib_import_omits_parse_from_args() {
         !rust.contains("ParseFromArgs"),
         "no ParseFromArgs without mvl_runtime"
     );
+}
+
+/// `Float` field emits float parsing with `parse::<f64>()`.
+#[test]
+fn float_field_emits_float_parsing() {
+    let src = r#"
+use std.args.{parse}
+type Cfg = struct { scale: Float }
+"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "get_arg(Clean(\"scale\".to_string()))");
+    assert_contains(&rust, ".parse::<f64>()");
+    assert_contains(&rust, "missing required argument: --scale");
+}
+
+/// `Option<Float>` field emits optional float parsing.
+#[test]
+fn option_float_field_emits_optional_float_parse() {
+    let src = r#"
+use std.args.{parse}
+type Cfg = struct { ratio: Option<Float> }
+"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "get_arg(Clean(\"ratio\".to_string()))");
+    assert_contains(&rust, "parse::<f64>()");
+}
+
+/// Struct with `Option<Bool>` field does NOT get a `ParseFromArgs` impl.
+///
+/// `Option<Bool>` is excluded because a bare `Bool` already encodes presence;
+/// `Option<Bool>` has no meaningful CLI representation.
+#[test]
+fn struct_with_option_bool_field_omits_parse_from_args() {
+    let src = r#"
+use std.args.{parse}
+type Cfg = struct { verbose: Option<Bool> }
+"#;
+    let rust = transpile_src(src);
+    assert!(
+        !rust.contains("impl ParseFromArgs for Cfg"),
+        "Option<Bool> is not parseable; ParseFromArgs impl must be omitted"
+    );
+}
+
+/// Multi-field struct emits `Ok(Self { ... })` with all field names.
+#[test]
+fn multi_field_struct_emits_ok_self_construction() {
+    let src = r#"
+use std.args.{parse}
+type Cfg = struct { host: String, port: Int, verbose: Bool }
+"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "Ok(Self { host, port, verbose })");
+}
+
+/// Bool field with underscore emits the exact flag name (no kebab-case conversion).
+#[test]
+fn bool_field_with_underscore_emits_exact_flag_name() {
+    let src = r#"
+use std.args.{parse}
+type Cfg = struct { dry_run: Bool }
+"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "std::env::args().any(|__a| __a == \"--dry_run\")");
+}
+
+/// Corpus: `tests/corpus/01_basics/args.mvl` transpiles without errors and
+/// emits `ParseFromArgs` impls for all four structs in the file.
+#[test]
+fn corpus_args_transpiles() {
+    let src = include_str!("corpus/01_basics/args.mvl");
+    let rust = transpile_src(src);
+    assert_contains(&rust, "impl ParseFromArgs for AppArgs {");
+    assert_contains(&rust, "impl ParseFromArgs for ServerConfig {");
+    assert_contains(&rust, "impl ParseFromArgs for Flags {");
+    assert_contains(&rust, "impl ParseFromArgs for OptArgs {");
+    // Bool fields → presence flags
+    assert_contains(&rust, "std::env::args().any(|__a| __a == \"--verbose\")");
+    // Option<Float> → f64 parse
+    assert_contains(&rust, "parse::<f64>()");
 }

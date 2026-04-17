@@ -202,7 +202,7 @@ fn emit_struct(cg: &mut Codegen, name: &str, params: &[GenericParam], fields: &[
 /// Skipped when any field has an unsupported type (e.g. nested structs,
 /// generic params, security labels) — callers receive a Rust type-error if
 /// they attempt `parse::<T>()` on such a struct.
-pub fn emit_parse_from_args_impl(cg: &mut Codegen, name: &str, fields: &[FieldDecl]) {
+pub(crate) fn emit_parse_from_args_impl(cg: &mut Codegen, name: &str, fields: &[FieldDecl]) {
     // Only emit for structs where every field is parseable
     if !fields.iter().all(|f| is_parseable_field_type(&f.ty)) {
         return;
@@ -226,9 +226,13 @@ pub fn emit_parse_from_args_impl(cg: &mut Codegen, name: &str, fields: &[FieldDe
 }
 
 /// Emit the parsing code for a single struct field.
+///
+/// Field names must be valid Rust identifiers — asserted by
+/// `assert_safe_identifier` before any interpolation into generated code.
 fn emit_field_parse(cg: &mut Codegen, field: &FieldDecl) {
     let name = &field.name;
-    let flag = name; // MVL uses field name directly as flag name
+    // The CLI flag name is the field name directly: `port` → `--port`.
+    assert_safe_identifier(name);
 
     // Unwrap any refinement wrapper to get the base type for parsing
     let base_ty = unwrap_refined_ty(&field.ty);
@@ -241,39 +245,25 @@ fn emit_field_parse(cg: &mut Codegen, field: &FieldDecl) {
             ..
         } if ty_name == "Bool" && args.is_empty() => {
             cg.line(&format!(
-                "let {name} = std::env::args().any(|__a| __a == \"--{flag}\");"
+                "let {name} = std::env::args().any(|__a| __a == \"--{name}\");"
             ));
         }
         // Option<String> → optional string flag
         TypeExpr::Option { inner, .. } if matches!(unwrap_refined_ty(inner), TypeExpr::Base { name: n, args, .. } if n == "String" && args.is_empty()) =>
         {
             cg.line(&format!(
-                "let {name} = get_arg(Clean(\"{flag}\".to_string())).map(|__v| __v.0);"
+                "let {name} = get_arg(Clean(\"{name}\".to_string())).map(|__v| __v.0);"
             ));
         }
         // Option<Int> → optional integer flag
         TypeExpr::Option { inner, .. } if matches!(unwrap_refined_ty(inner), TypeExpr::Base { name: n, args, .. } if n == "Int" && args.is_empty()) =>
         {
-            cg.line(&format!(
-                "let {name} = match get_arg(Clean(\"{flag}\".to_string())) {{"
-            ));
-            cg.push_indent();
-            cg.line("None => None,");
-            cg.line(&format!("Some(__v) => Some(__v.0.parse::<i64>().map_err(|_| format!(\"--{flag}: expected integer, got {{:?}}\", __v.0))?),"));
-            cg.pop_indent();
-            cg.line("};");
+            emit_optional_numeric_parse(cg, name, "i64", "integer");
         }
         // Option<Float> → optional float flag
         TypeExpr::Option { inner, .. } if matches!(unwrap_refined_ty(inner), TypeExpr::Base { name: n, args, .. } if n == "Float" && args.is_empty()) =>
         {
-            cg.line(&format!(
-                "let {name} = match get_arg(Clean(\"{flag}\".to_string())) {{"
-            ));
-            cg.push_indent();
-            cg.line("None => None,");
-            cg.line(&format!("Some(__v) => Some(__v.0.parse::<f64>().map_err(|_| format!(\"--{flag}: expected float, got {{:?}}\", __v.0))?),"));
-            cg.pop_indent();
-            cg.line("};");
+            emit_optional_numeric_parse(cg, name, "f64", "float");
         }
         // String → required string flag
         TypeExpr::Base {
@@ -282,7 +272,7 @@ fn emit_field_parse(cg: &mut Codegen, field: &FieldDecl) {
             ..
         } if ty_name == "String" && args.is_empty() => {
             cg.line(&format!(
-                "let {name} = get_arg(Clean(\"{flag}\".to_string())).ok_or_else(|| \"missing required argument: --{flag}\".to_string())?.0;"
+                "let {name} = get_arg(Clean(\"{name}\".to_string())).ok_or_else(|| \"missing required argument: --{name}\".to_string())?.0;"
             ));
         }
         // Int → required integer flag
@@ -291,10 +281,7 @@ fn emit_field_parse(cg: &mut Codegen, field: &FieldDecl) {
             args,
             ..
         } if ty_name == "Int" && args.is_empty() => {
-            cg.line(&format!("let __raw_{name} = get_arg(Clean(\"{flag}\".to_string())).ok_or_else(|| \"missing required argument: --{flag}\".to_string())?;"));
-            cg.line(&format!(
-                "let {name} = __raw_{name}.0.parse::<i64>().map_err(|_| format!(\"--{flag}: expected integer, got {{:?}}\", __raw_{name}.0))?;"
-            ));
+            emit_required_numeric_parse(cg, name, "i64", "integer");
         }
         // Float → required float flag
         TypeExpr::Base {
@@ -302,13 +289,14 @@ fn emit_field_parse(cg: &mut Codegen, field: &FieldDecl) {
             args,
             ..
         } if ty_name == "Float" && args.is_empty() => {
-            cg.line(&format!("let __raw_{name} = get_arg(Clean(\"{flag}\".to_string())).ok_or_else(|| \"missing required argument: --{flag}\".to_string())?;"));
-            cg.line(&format!(
-                "let {name} = __raw_{name}.0.parse::<f64>().map_err(|_| format!(\"--{flag}: expected float, got {{:?}}\", __raw_{name}.0))?;"
-            ));
+            emit_required_numeric_parse(cg, name, "f64", "float");
         }
         _ => {
-            // Should not reach here — is_parseable_field_type filters unsupported types
+            // is_parseable_field_type must be kept in sync with this match.
+            unreachable!(
+                "emit_field_parse: unhandled parseable type for field `{name}`; \
+                 update is_parseable_field_type and add a match arm here"
+            );
         }
     }
 
@@ -316,9 +304,53 @@ fn emit_field_parse(cg: &mut Codegen, field: &FieldDecl) {
     if let Some(pred) = &field.refinement {
         let pred_str = emit_ref_expr_for_assert(pred, name);
         cg.line(&format!(
-            "if !({pred_str}) {{ return Err(format!(\"--{flag}: refinement violated: {{}}\", {name})); }}"
+            "if !({pred_str}) {{ return Err(format!(\"--{name}: refinement violated: {{}}\", {name})); }}"
         ));
     }
+}
+
+/// Emit optional numeric parsing for `Option<Int>` / `Option<Float>` fields.
+///
+/// `rust_type` is `"i64"` or `"f64"`; `type_label` is `"integer"` or `"float"`.
+fn emit_optional_numeric_parse(cg: &mut Codegen, name: &str, rust_type: &str, type_label: &str) {
+    cg.line(&format!(
+        "let {name} = match get_arg(Clean(\"{name}\".to_string())) {{"
+    ));
+    cg.push_indent();
+    cg.line("None => None,");
+    cg.line(&format!(
+        "Some(__v) => Some(__v.0.parse::<{rust_type}>().map_err(|_| \"--{name}: expected {type_label}\".to_string())?),"
+    ));
+    cg.pop_indent();
+    cg.line("};");
+}
+
+/// Emit required numeric parsing for `Int` / `Float` fields.
+///
+/// `rust_type` is `"i64"` or `"f64"`; `type_label` is `"integer"` or `"float"`.
+fn emit_required_numeric_parse(cg: &mut Codegen, name: &str, rust_type: &str, type_label: &str) {
+    cg.line(&format!(
+        "let __raw_{name} = get_arg(Clean(\"{name}\".to_string())).ok_or_else(|| \"missing required argument: --{name}\".to_string())?;"
+    ));
+    cg.line(&format!(
+        "let {name} = __raw_{name}.0.parse::<{rust_type}>().map_err(|_| \"--{name}: expected {type_label}\".to_string())?;"
+    ));
+}
+
+/// Assert that `name` is a safe Rust identifier before interpolating it into
+/// generated source code.  Panics at transpile time (not user runtime) if
+/// violated, turning a potential codegen-injection into a loud compiler error.
+///
+/// Valid: `[a-zA-Z_][a-zA-Z0-9_]*`.  The MVL lexer enforces this for all
+/// identifiers produced by parsing, but this assertion also guards AST nodes
+/// produced by test helpers, fuzzing harnesses, or future parser extensions.
+fn assert_safe_identifier(name: &str) {
+    assert!(
+        !name.is_empty()
+            && name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+        "unsafe identifier in codegen: {name:?}"
+    );
 }
 
 /// Returns `true` when the MVL type can be parsed from a CLI flag string.

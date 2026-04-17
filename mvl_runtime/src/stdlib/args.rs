@@ -43,19 +43,30 @@ pub fn parse<T: ParseFromArgs>() -> Result<T, String> {
     T::parse_from_args()
 }
 
-/// Scan command-line arguments for `--<name> <value>` and return the value.
+/// Scan command-line arguments for `--<name> <value>` or `--<name>=<value>`
+/// and return the value.
 ///
-/// Searches `std::env::args()` for the flag `--<name>` and returns the
-/// following argument as `Tainted<String>` (untrusted external input).
-/// Returns `None` if the flag is absent or has no following argument.
+/// Searches `std::env::args()` for the flag `--<name>` in two forms:
+/// - Two-token: `--flag value` — returns the next argument.
+/// - Single-token: `--flag=value` — returns the value after `=`.
+///
+/// Returns the matched value as `Tainted<String>` (untrusted external input),
+/// or `None` if the flag is absent.
 ///
 /// Implements the Rust backing for `std/args.mvl::get_arg`.
 pub fn get_arg(name: Clean<String>) -> Option<Tainted<String>> {
     let flag = format!("--{}", *name);
+    let prefix = format!("--{}=", *name);
     let args: Vec<String> = std::env::args().collect();
-    for i in 0..args.len().saturating_sub(1) {
+    for i in 0..args.len() {
         if args[i] == flag {
-            return Some(Tainted(args[i + 1].clone()));
+            // Two-token form: --flag value
+            if i + 1 < args.len() {
+                return Some(Tainted(args[i + 1].clone()));
+            }
+        } else if let Some(val) = args[i].strip_prefix(&prefix) {
+            // Single-token form: --flag=value
+            return Some(Tainted(val.to_string()));
         }
     }
     None
