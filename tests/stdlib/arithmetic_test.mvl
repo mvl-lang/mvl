@@ -68,6 +68,11 @@ test fn int_clamp_above_max() -> Unit {
     assert_eq(n.clamp(0, 10), 10);
 }
 
+test fn int_clamp_inverted_bounds() -> Unit {
+    let n: Int = 5;
+    assert_eq(n.clamp(10, 0), 5);
+}
+
 test fn int_is_positive_true() -> Unit {
     let n: Int = 1;
     assert_eq(n.is_positive(), true);
@@ -178,4 +183,24 @@ test fn float_sqrt_of_perfect_square() -> Unit {
 test fn float_sqrt_of_one() -> Unit {
     let f: Float = 1.0;
     assert_eq(f.sqrt(), 1.0);
+}
+
+test fn float_clamp_within_range() -> Unit {
+    let x: Float = 3.5;
+    assert_eq(x.clamp(0.0, 5.0), 3.5);
+}
+
+test fn float_clamp_below_min() -> Unit {
+    let x: Float = -1.0;
+    assert_eq(x.clamp(0.0, 5.0), 0.0);
+}
+
+test fn float_clamp_above_max() -> Unit {
+    let x: Float = 7.0;
+    assert_eq(x.clamp(0.0, 5.0), 5.0);
+}
+
+test fn float_clamp_inverted_bounds() -> Unit {
+    let x: Float = 3.5;
+    assert_eq(x.clamp(5.0, 1.0), 3.5);
 }

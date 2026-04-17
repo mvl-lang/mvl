@@ -105,6 +105,11 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                     emit_args(cg, args);
                     cg.push("))");
                 }
+                // clamp(low, high) — Rust's clamp panics when low > high; emit a safe wrapper
+                // that returns the value unchanged when bounds are inverted.
+                "clamp" if args.len() == 2 => {
+                    emit_safe_clamp(cg, receiver, &args[0], &args[1]);
+                }
                 _ => {
                     emit_expr(cg, receiver);
                     cg.push(".");
@@ -657,4 +662,23 @@ fn emit_safe_substring(cg: &mut Codegen, receiver: &Expr, start: &Expr, end: &Ex
     cg.push(").max(0)as usize;let _mvl_b=(");
     emit_expr(cg, end);
     cg.push(").max(0)as usize;_mvl_s.chars().skip(_mvl_a).take(_mvl_b.saturating_sub(_mvl_a)).collect::<String>()}");
+}
+
+/// Emit `n.clamp(low, high)` as a safe Rust block expression.
+///
+/// Semantics:
+/// - If `low > high`, the value is returned unchanged (graceful degradation).
+/// - Otherwise, clamps the value to `[low, high]`.
+/// - Never panics (unlike Rust's `i64::clamp`/`f64::clamp` which panic on inverted bounds).
+///
+/// Emits: `{let _mvl_n=(n);let _mvl_lo=(low);let _mvl_hi=(high);
+///          if _mvl_lo>_mvl_hi{_mvl_n}else{_mvl_n.clamp(_mvl_lo,_mvl_hi)}}`
+fn emit_safe_clamp(cg: &mut Codegen, receiver: &Expr, low: &Expr, high: &Expr) {
+    cg.push("{let _mvl_n=(");
+    emit_expr(cg, receiver);
+    cg.push(");let _mvl_lo=(");
+    emit_expr(cg, low);
+    cg.push(");let _mvl_hi=(");
+    emit_expr(cg, high);
+    cg.push(");if _mvl_lo>_mvl_hi{_mvl_n}else{_mvl_n.clamp(_mvl_lo,_mvl_hi)}}");
 }
