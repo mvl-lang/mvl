@@ -268,29 +268,24 @@ impl TypeChecker {
     /// - `Array<T, N>` — built-in `Iterator<T>` implementation
     /// - Any named type registered via `impl Iterator<T> for X`
     fn check_iterator_type(&mut self, ty: &Ty, span: Span) -> Ty {
-        match ty.unlabeled() {
-            Ty::List(inner) => *inner.clone(),
-            Ty::Array(inner, _) => *inner.clone(),
-            Ty::Named(name, _) => {
-                if let Some(elem) = self.iterator_impls.get(name).cloned() {
-                    elem
-                } else {
-                    self.emit(CheckError::NotIterator {
-                        ty: ty.display(),
-                        span,
-                    });
-                    Ty::Unknown
-                }
-            }
-            Ty::Unknown => Ty::Unknown, // propagate without double-reporting
-            _ => {
-                self.emit(CheckError::NotIterator {
-                    ty: ty.display(),
-                    span,
-                });
-                Ty::Unknown
+        let unlabeled = ty.unlabeled();
+        // Built-in iterable types.
+        match unlabeled {
+            Ty::List(inner) | Ty::Array(inner, _) => return *inner.clone(),
+            Ty::Unknown => return Ty::Unknown, // propagate without double-reporting
+            _ => {}
+        }
+        // User-declared iterator implementations.
+        if let Ty::Named(name, _) = unlabeled {
+            if let Some(elem) = self.iterator_impls.get(name).cloned() {
+                return elem;
             }
         }
+        self.emit(CheckError::NotIterator {
+            ty: ty.display(),
+            span,
+        });
+        Ty::Unknown
     }
 
     // ── Declarations ─────────────────────────────────────────────────────
@@ -734,7 +729,7 @@ impl TypeChecker {
                 body,
                 span,
             } => {
-                // Req 11: `for` is bounded (total) — reject in `partial` functions.
+                // Req 8: `for` loops are bounded (total) — reject in `partial` functions.
                 if matches!(self.current_fn_totality, Some(Totality::Partial)) {
                     self.emit(CheckError::ForLoopInPartialFn { span: *span });
                 }

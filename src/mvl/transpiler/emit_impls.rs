@@ -149,14 +149,10 @@ fn emit_iterator_impl(cg: &mut Codegen, id: &ImplDecl) {
     cg.push_indent();
 
     match next_method {
-        Some(fd) => {
-            let stmts = &fd.body.stmts;
-            if stmts.is_empty() {
-                cg.line("todo!(\"Iterator::next not implemented\")");
-            } else {
-                let (head, tail) = stmts.split_at(stmts.len() - 1);
+        Some(fd) => match fd.body.stmts.split_last() {
+            None => cg.line("todo!(\"Iterator::next not implemented\")"),
+            Some((last, head)) => {
                 emit_block_stmts(cg, head);
-                let last = &tail[0];
                 match last {
                     Stmt::Expr { expr, .. } => {
                         cg.indent();
@@ -166,10 +162,8 @@ fn emit_iterator_impl(cg: &mut Codegen, id: &ImplDecl) {
                     other => emit_block_stmts(cg, std::slice::from_ref(other)),
                 }
             }
-        }
-        None => {
-            cg.line("todo!(\"Iterator::next not implemented\")");
-        }
+        },
+        None => cg.line("todo!(\"Iterator::next not implemented\")"),
     }
 
     cg.pop_indent();

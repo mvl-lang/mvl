@@ -2796,7 +2796,9 @@ fn iterator_trait_for_loop_accepted() {
     let src = r#"
         fn f() -> Unit {
             let items: Array<Int, 3> = [1, 2, 3];
-            for x in items { }
+            for x in items {
+                let _: Int = x;
+            }
         }
     "#;
     let errors = errors_for(src);
@@ -2845,7 +2847,9 @@ fn custom_iterator_impl_accepted() {
         }
 
         fn f() -> Unit {
-            for n in Counter { current: 0, limit: 3 } { }
+            for n in Counter { current: 0, limit: 3 } {
+                let _: Int = n;
+            }
         }
     "#;
     let errors = errors_for(src);
@@ -2875,5 +2879,32 @@ fn for_loop_rejected_in_partial_fn() {
             .iter()
             .any(|e| matches!(e, CheckError::ForLoopInPartialFn { .. })),
         "`for` in partial fn must be rejected with ForLoopInPartialFn, got: {errors:?}"
+    );
+}
+
+/// Spec 001 Req 11 + Req 8 / Scenario: For loop over non-iterator inside partial function.
+///
+/// GIVEN `partial fn f(n: Int) { for x in n { } }`
+/// WHEN  the function is type-checked
+/// THEN  type checker MUST emit BOTH ForLoopInPartialFn AND NotIterator
+#[test]
+fn for_loop_non_iterator_in_partial_fn_emits_both_errors() {
+    let src = r#"
+        partial fn f(n: Int) -> Unit {
+            for x in n { }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::ForLoopInPartialFn { .. })),
+        "must emit ForLoopInPartialFn, got: {errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::NotIterator { ty, .. } if ty == "Int")),
+        "must also emit NotIterator for Int, got: {errors:?}"
     );
 }
