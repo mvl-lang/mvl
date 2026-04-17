@@ -126,45 +126,100 @@ extern "rust" {
 | Property testing | [#40](https://github.com/LAB271/mvl_language/issues/40) | Refinement types as generators |
 | BDD framework | [#39](https://github.com/LAB271/mvl_language/issues/39) | Scenario tests linked to specs |
 
-## Phase 3 — It's trustworthy
+## Phase 3 — It's trustworthy ✅
 
-**Goal:** All 11 requirements proven at compile time. One compiler, one trust chain.
+**Goal:** 10/11 requirements proven at compile time via verification passes on the AST.
 
-**Done when:** All 11 enforced without Rust as intermediary. WASM target works.
+**Done when:** All provers run, linter complete. Epic [#129](https://github.com/LAB271/mvl_language/issues/129) closed.
+
+| Component | Issues | Status |
+|-----------|--------|--------|
+| Prover infrastructure | [#139](https://github.com/LAB271/mvl_language/issues/139) | ✅ Done |
+| Termination checker (Req 8) | [#135](https://github.com/LAB271/mvl_language/issues/135) | ✅ Done |
+| Data race freedom (Req 9 partial) | [#138](https://github.com/LAB271/mvl_language/issues/138) | ✅ Done |
+| IFC verifier (Req 11) | [#137](https://github.com/LAB271/mvl_language/issues/137) | ✅ Done |
+| Refinement type solver (Req 10) | [#136](https://github.com/LAB271/mvl_language/issues/136) | ✅ Done |
+| Linter (style + semantic + LLM) | [#127](https://github.com/LAB271/mvl_language/issues/127), [#132](https://github.com/LAB271/mvl_language/issues/132), [#133](https://github.com/LAB271/mvl_language/issues/133) | ✅ Done |
+| Complexity analysis | [#208](https://github.com/LAB271/mvl_language/issues/208) | ✅ Done |
+
+## Phase 4 — It's practical 🔴
+
+**Goal:** Verified standard library. Real programs without FFI. Toolchain maturity.
+
+**Done when:** Stdlib modules have real bodies (generated from specs, verified by compiler). Trust Triangle KPIs measured. Epic [#130](https://github.com/LAB271/mvl_language/issues/130).
+
+| Component | Issues | Status |
+|-----------|--------|--------|
+| Iterator trait + lazy ops | [#219](https://github.com/LAB271/mvl_language/issues/219) | Open |
+| Stdlib extraction from bridge | [#217](https://github.com/LAB271/mvl_language/issues/217) | Open |
+| Generics constraint enforcement | [#225](https://github.com/LAB271/mvl_language/issues/225) | Open |
+| Toolchain versioning (A–D) | [#220](https://github.com/LAB271/mvl_language/issues/220)–[#223](https://github.com/LAB271/mvl_language/issues/223) | Open |
+| File I/O stdlib | [#44](https://github.com/LAB271/mvl_language/issues/44) | Open |
+| Process lifecycle stdlib | [#45](https://github.com/LAB271/mvl_language/issues/45) | Open |
+| Arg parsing stdlib | [#55](https://github.com/LAB271/mvl_language/issues/55) | Open |
+| BDD testing | [#39](https://github.com/LAB271/mvl_language/issues/39) | Open |
+| Property-based testing | [#40](https://github.com/LAB271/mvl_language/issues/40) | Open |
+| Package model + SBOM | [#56](https://github.com/LAB271/mvl_language/issues/56), [#57](https://github.com/LAB271/mvl_language/issues/57) | Open |
+| CVE-aware auditing | [#151](https://github.com/LAB271/mvl_language/issues/151) | Open |
+| Behavioral coverage | [#209](https://github.com/LAB271/mvl_language/issues/209) | Open |
+| Mutation testing | [#210](https://github.com/LAB271/mvl_language/issues/210) | Open |
+
+## Phase 5 — It's independent
+
+**Goal:** LLVM backend. One compiler, one trust boundary. No Rust dependency.
+
+**Done when:** MVL → LLVM IR → native binary. WASM target works. Epic [#131](https://github.com/LAB271/mvl_language/issues/131).
 
 | Component | Description |
 |-----------|-------------|
 | LLVM IR codegen | Replace Rust transpiler with direct LLVM codegen |
-| SMT integration | [Req 10](requirements.md#req-10) moves from runtime asserts to compile-time proofs (Z3) |
-| Native IFC | [Req 11](requirements.md#req-11) flow analysis in the compiler, not via Rust newtypes |
-| Borrow lifetimes | Full [Req 2](requirements.md#req-2) enforcement (beyond use-after-move) |
-| Linear resources | Full [Req 6](requirements.md#req-6) enforcement (must-consume semantics) |
-| Structural recursion | Full [Req 8](requirements.md#req-8) proof (not just while-rejection) |
-| Model checker | [#37](https://github.com/LAB271/mvl_language/issues/37) — invariants, pre/post, deadlock detection |
+| Native IFC | Flow analysis in the compiler, not via Rust newtypes |
+| Borrow lifetimes | Full Req 2 enforcement (beyond use-after-move) |
+| Linear resources | Full Req 6 enforcement (must-consume semantics) |
 | WASM target | Sandboxed execution for The Cog and edge |
 
-## Phase 4 — It's self-sufficient
+## Phase 6 — It's complete
 
-**Goal:** MVL compiler compiles itself. Full ecosystem. Certification-ready.
+**Goal:** Full 11/11 at compile time. Self-hosting. Certification-ready. Epic [#134](https://github.com/LAB271/mvl_language/issues/134).
 
-**Done when:** Self-hosting complete. Package ecosystem functional. AAE-5 evidence generated.
+**Done when:** Self-hosting complete. Actors work. AAE-5 evidence generated.
 
-| Component | Description |
-|-----------|-------------|
-| Self-hosting | MVL compiler rewritten in MVL, compiled by Phase 3 compiler |
-| Package manager | [#56](https://github.com/LAB271/mvl_language/issues/56) — dependency resolution, SBOM, trust scoring |
-| Verified MVL stdlib | Replaces extern wrappers — pushes assurance ratio toward 90%+ |
-| Concurrency model | Actors, reference capabilities, WCET refinements |
-| Transpilation corpus | Seed for LLM training on MVL generation quality |
-| AAE-5 pipeline | Automated evidence for IEC 61508, DO-178C certification |
+| Component | Issues | Description |
+|-----------|--------|-------------|
+| Actor syntax | [#63](https://github.com/LAB271/mvl_language/issues/63) | Behaviors, messages, lifecycle |
+| Structured concurrency | [#69](https://github.com/LAB271/mvl_language/issues/69) | Select, timeout, cancellation |
+| Model checker | [#37](https://github.com/LAB271/mvl_language/issues/37) | Pre/post conditions, invariants, WCET |
+| Self-hosting | [#187](https://github.com/LAB271/mvl_language/issues/187) | MVL compiler in MVL |
+| AAE-5 pipeline | — | IEC 61508, DO-178C certification evidence |
 
-## The four phases
+## The six phases
 
 ```
-Phase 1: It compiles          parse → check → transpile → cargo → binary
-Phase 2: It's useful          FFI, modules, generics, tests, real programs
-Phase 3: It's trustworthy     LLVM, SMT, all 11 proven, WASM
-Phase 4: It's self-sufficient  self-hosting, packages, stdlib, certification
+Phase 1: It compiles        MVL → Rust transpilation                          ✅ Done
+                             Parse, check, transpile, cargo build, binary.
+                             9/11 at compile time, 2 via Rust runtime.
+
+Phase 2: It's useful         Rust FFI ecosystem, zero stdlib                  ✅ Done
+                             extern "rust" blocks. Modules, generics, tests.
+                             Rust's crates.io IS the standard library.
+
+Phase 3: It's trustworthy    Core provers (10/11 at compile time)             ✅ Done
+                             Termination, data race, IFC, refinement provers.
+                             Linter (style + semantic + LLM corpus quality).
+
+Phase 4: It's practical      Verified stdlib (10/11)                          🔴 Active
+                             Real stdlib bodies replacing stubs. Iterators,
+                             lambdas, toolchain versioning. Package model.
+                             Generate the stdlib, don't write it.
+
+Phase 5: It's independent    LLVM backend (10/11)                             Future
+                             One compiler, one trust boundary.
+                             Native codegen. WASM target. No Rust dependency.
+
+Phase 6: It's complete       Actors, concurrency, model checker (11/11)       Future
+                             Actor syntax. Structured concurrency.
+                             Pre/post conditions. Full Req 9 proof.
+                             Self-hosting. AAE-5 certification pipeline.
 ```
 
 ## Architecture decisions
@@ -173,7 +228,7 @@ Phase 4: It's self-sufficient  self-hosting, packages, stdlib, certification
 |-----|----------|--------|
 | [ADR-0001](adr/0001-eleven-requirements.md) | Eleven compiler-verified requirements | Accepted |
 | [ADR-0002](adr/0002-language-contraction.md) | Language contraction — what to drop and why | Accepted |
-| [ADR-0003](adr/0003-compilation-strategy.md) | Four phases: Rust → FFI → LLVM → Self-hosting | Accepted |
+| [ADR-0003](adr/0003-compilation-strategy.md) | Six phases: compile → useful → trustworthy → practical → independent → complete | Accepted |
 | [ADR-0004](adr/0004-language-size.md) | Language size — deliberately the smallest | Accepted |
 | [ADR-0005](adr/0005-recursive-descent-parser.md) | Hand-written recursive descent parser (LL(1)) | Accepted |
 
