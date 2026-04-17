@@ -826,7 +826,7 @@ fn recursion_inside_lambda_not_flagged() {
     // THEN: no UnprovenRecursion — lambdas have their own scope (spec 007 §Req 4)
     let src = r#"
         fn outer(n: Int) -> Int {
-            let f = |x| outer(x);
+            let f = |x: Int| outer(x);
             n + 1
         }
     "#;
