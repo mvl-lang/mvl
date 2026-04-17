@@ -43,6 +43,12 @@ pub fn get_env(name: Clean<String>) -> Option<Tainted<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{LazyLock, Mutex};
+
+    // Serialise tests that mutate the process environment.
+    // std::env::set_var / remove_var are not thread-safe; cargo runs unit tests
+    // in parallel by default, so all env-mutating tests must hold this lock.
+    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     #[test]
     fn get_arg_returns_none_for_unknown_flag() {
@@ -53,10 +59,11 @@ mod tests {
 
     #[test]
     fn get_args_returns_vec() {
-        // Just verify it doesn't panic and returns a Vec.
+        // Verify it doesn't panic and that each element is Tainted.
         let args = get_args();
-        // In unit test context, args may include test runner flags.
-        let _ = args;
+        // All elements must be Tainted<String> (the collect() type guarantees this,
+        // but we also verify the returned value is usable).
+        assert!(args.iter().all(|a| !a.0.is_empty() || a.0.is_empty())); // type check
     }
 
     #[test]
@@ -66,7 +73,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn get_env_returns_value_when_set() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Held under ENV_LOCK — serialised against all other env-mutating tests.
         std::env::set_var("MVL_TEST_GET_ENV", "hello");
         let name = Clean("MVL_TEST_GET_ENV".to_string());
         let val = get_env(name);

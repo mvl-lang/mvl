@@ -2,7 +2,7 @@
 //! declared in main.mvl.
 //!
 //! This bridge contains only the domain-specific pipeline logic that cannot
-//! yet be expressed in MVL (blocked by lambda/iterator support — see #TBD).
+//! yet be expressed in MVL (blocked by lambda/iterator support; no tracking issue yet).
 //!
 //! Generic infrastructure (file I/O, CLI argument parsing) has been moved to
 //! the MVL standard library (`std.io`, `std.args`) and no longer requires a

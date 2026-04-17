@@ -7,11 +7,20 @@ use crate::ifc::{Clean, Tainted};
 
 /// Filesystem path — mirrors the `Path` struct declared in `std/io.mvl`.
 ///
-/// Construct with [`path`]. The `inner` field holds the raw path string.
+/// Construct with [`path`]. The path string is not accessible as a raw field;
+/// use [`Path::as_str`] to read it if needed.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Path {
-    /// The raw path string.
-    pub inner: String,
+    // Private — all construction must go through `path()` to prevent callers
+    // from stripping IFC labels (e.g. `Path { inner: tainted.0 }`).
+    inner: String,
+}
+
+impl Path {
+    /// Return the raw path string.
+    pub fn as_str(&self) -> &str {
+        &self.inner
+    }
 }
 
 /// Construct a [`Path`] from a `String`.
@@ -24,40 +33,50 @@ pub fn path(s: String) -> Path {
 /// Read the entire contents of a file into a string.
 ///
 /// Returns `Ok(Tainted<String>)` on success (file contents are external input).
-/// Returns `Err(String)` with the OS error message on failure.
+/// Returns `Err(String)` with a sanitized error category on failure (no path leaked).
 ///
 /// Implements the Rust backing for `std/io.mvl::read_to_string`.
 pub fn read_to_string(p: Path) -> Result<Tainted<String>, String> {
-    std::fs::read_to_string(&p.inner)
+    std::fs::read_to_string(p.as_str())
         .map(Tainted)
-        .map_err(|e| e.to_string())
+        .map_err(|e| sanitize_io_error(e.kind()))
 }
 
 /// Read the entire contents of a file given a validated (Clean) path string.
 ///
 /// Convenience variant of [`read_to_string`] that accepts a `Clean<String>`
-/// path directly. Use this when migrating from `extern "rust"` bridge functions
-/// that accept `Clean<String>` paths (e.g. `fs_read_file`).
+/// path directly. Use this when the caller already holds a validated path string.
 ///
 /// Returns `Ok(Tainted<String>)` on success.
-/// Returns `Err(String)` with the OS error message on failure.
+/// Returns `Err(String)` with a sanitized error category on failure (no path leaked).
 ///
 /// Implements the Rust backing for `std/io.mvl::read_file`.
 pub fn read_file(p: Clean<String>) -> Result<Tainted<String>, String> {
     std::fs::read_to_string(&*p)
         .map(Tainted)
-        .map_err(|e| e.to_string())
+        .map_err(|e| sanitize_io_error(e.kind()))
+}
+
+/// Convert an I/O error to a sanitized category string.
+///
+/// Returns a fixed string that does not include the file path or OS-level details,
+/// preventing information disclosure when error values are surfaced to callers.
+fn sanitize_io_error(kind: std::io::ErrorKind) -> String {
+    match kind {
+        std::io::ErrorKind::NotFound => "file not found".to_string(),
+        std::io::ErrorKind::PermissionDenied => "permission denied".to_string(),
+        _ => "I/O error".to_string(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
     #[test]
     fn path_stores_inner_string() {
         let p = path("foo/bar.txt".to_string());
-        assert_eq!(p.inner, "foo/bar.txt");
+        assert_eq!(p.as_str(), "foo/bar.txt");
     }
 
     #[test]

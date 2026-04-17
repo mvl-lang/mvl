@@ -31,4 +31,9 @@ pub fn get_args() -> List<Tainted<String>> ! Console { [] }
 ///
 /// Returns `None` if the variable is not set.
 /// Returns `Tainted<String>` because environment variables are externally controlled.
+///
+/// NOTE: The `! Console` effect is a Phase 2 placeholder. Environment variable
+/// access is process-environment I/O, which is semantically distinct from
+/// console (stdin/stdout) access. A dedicated `Env` effect will be introduced
+/// in a future phase. See ADR-0007.
 pub fn get_env(name: Clean<String>) -> Option<Tainted<String>> ! Console { None }

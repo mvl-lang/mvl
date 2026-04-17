@@ -10,6 +10,7 @@ use crate::mvl::transpiler::emit_functions::emit_fn_decl;
 use crate::mvl::transpiler::emit_impls::emit_impl_decl;
 use crate::mvl::transpiler::emit_types::emit_type_decl;
 use crate::mvl::transpiler::emit_types::{emit_security_preamble, emit_type_expr};
+use crate::mvl::transpiler::has_std_imports;
 
 ///// Code-generation context: accumulates Rust source text.
 #[derive(Default)]
@@ -112,13 +113,7 @@ impl Codegen {
                 .declarations
                 .iter()
                 .any(|d| matches!(d, Decl::Extern(_)))
-            || prog.declarations.iter().any(|d| {
-                if let Decl::Use(ud) = d {
-                    ud.path.first().map(|s| s == "std").unwrap_or(false)
-                } else {
-                    false
-                }
-            });
+            || has_std_imports(prog);
         if has_runtime {
             self.line("use mvl_runtime::prelude::*;");
         } else {
