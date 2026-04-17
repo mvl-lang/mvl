@@ -503,7 +503,21 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
         process::exit(1);
     }
 
-    let out = transpiler::transpile_project(&crate_name, &prog, &sibling_modules);
+    // Load the implicit stdlib prelude (std/core.mvl) so non-stub functions
+    // (e.g. range()) are transpiled from MVL source rather than relying on
+    // hardcoded Rust mappings in the transpiler.
+    // Use the embedded STDLIB_FILES directly (compiled-in, always current).
+    let core_prelude = stdlib::STDLIB_FILES
+        .iter()
+        .find(|(name, _)| *name == "core.mvl")
+        .map(|(_, content)| {
+            let (mut p, _) = Parser::new(content);
+            p.parse_program()
+        });
+    let core_prelude_vec: Vec<_> = core_prelude.into_iter().collect();
+
+    let out =
+        transpiler::transpile_project(&crate_name, &prog, &sibling_modules, &core_prelude_vec);
 
     // Write to a per-crate workspace so each build gets its own mvl_runtime copy.
     // Layout: temp/mvl_build_{name}/{name}/  (crate), temp/mvl_build_{name}/mvl_runtime/ (runtime)

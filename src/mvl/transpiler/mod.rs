@@ -117,6 +117,7 @@ pub fn transpile_project(
     entry_name: &str,
     entry_prog: &Program,
     siblings: &[(String, Program)],
+    prelude_progs: &[Program],
 ) -> ProjectOutput {
     let has_main = has_main_fn(entry_prog);
     let extern_count = count_extern_decls(entry_prog);
@@ -130,7 +131,7 @@ pub fn transpile_project(
 
     let sibling_names: Vec<&str> = siblings.iter().map(|(n, _)| n.as_str()).collect();
     let mut cg = Codegen::new();
-    cg.emit_program_with_mods(entry_prog, &sibling_names);
+    cg.emit_program_with_mods(entry_prog, &sibling_names, prelude_progs);
     let main_rs = cg.finish();
 
     // Sibling modules share the runtime prelude with the entry point so type

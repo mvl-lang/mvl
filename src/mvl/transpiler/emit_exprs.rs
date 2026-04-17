@@ -663,17 +663,6 @@ fn emit_safe_substring(cg: &mut Codegen, receiver: &Expr, start: &Expr, end: &Ex
 
 /// Emit a free function call, handling special built-ins that require custom Rust output.
 /// Returns true if the call was handled specially (caller should not emit further).
-fn try_emit_special_fn(cg: &mut Codegen, name: &str, args: &[Expr]) -> bool {
-    match name {
-        // range(start, end) → (start..end).collect::<Vec<i64>>()
-        "range" if args.len() == 2 => {
-            cg.push("(");
-            emit_expr(cg, &args[0]);
-            cg.push("..");
-            emit_expr(cg, &args[1]);
-            cg.push(").collect::<Vec<i64>>()");
-            true
-        }
-        _ => false,
-    }
+fn try_emit_special_fn(_cg: &mut Codegen, _name: &str, _args: &[Expr]) -> bool {
+    false
 }
