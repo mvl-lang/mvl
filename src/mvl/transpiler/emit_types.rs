@@ -7,6 +7,7 @@
 //! - `type Refined = T where pred` → newtype with constructor validation
 //! - Security labels (Public<T> etc.) → module-level preamble structs
 //! - Refinement field predicates → `debug_assert!` in constructors
+//! - Concrete structs with parseable fields → `impl ParseFromArgs`
 
 use crate::mvl::parser::ast::{
     FieldDecl, GenericParam, RefExpr, SecurityLabel, TypeBody, TypeDecl, TypeExpr, Variant,
@@ -123,7 +124,16 @@ fn emit_label_newtype(cg: &mut Codegen, label: &str) {
 
 pub fn emit_type_decl(cg: &mut Codegen, td: &TypeDecl) {
     match &td.body {
-        TypeBody::Struct(fields) => emit_struct(cg, &td.name, &td.params, fields),
+        TypeBody::Struct(fields) => {
+            emit_struct(cg, &td.name, &td.params, fields);
+            // Emit ParseFromArgs impl for concrete (non-generic) structs, but
+            // only when the program uses mvl_runtime (ParseFromArgs, get_arg
+            // are defined there). Programs without stdlib imports use an inline
+            // preamble that does not include these symbols.
+            if td.params.is_empty() && cg.use_mvl_runtime {
+                emit_parse_from_args_impl(cg, &td.name, fields);
+            }
+        }
         TypeBody::Enum(variants) => emit_enum(cg, &td.name, &td.params, variants),
         TypeBody::Alias(ty) => emit_alias(cg, &td.name, &td.params, ty),
     }
@@ -178,6 +188,166 @@ fn emit_struct(cg: &mut Codegen, name: &str, params: &[GenericParam], fields: &[
         cg.line("}");
         cg.pop_indent();
         cg.line("}");
+    }
+}
+
+// ── ParseFromArgs impl ────────────────────────────────────────────────────
+
+/// Emit `impl ParseFromArgs for StructName` for concrete structs whose fields
+/// all have parseable types.
+///
+/// Parseable field types: `Int`, `Float`, `String`, `Bool`, `Option<Int>`,
+/// `Option<Float>`, `Option<String>`, and refined variants of the above.
+///
+/// Skipped when any field has an unsupported type (e.g. nested structs,
+/// generic params, security labels) — callers receive a Rust type-error if
+/// they attempt `parse::<T>()` on such a struct.
+pub fn emit_parse_from_args_impl(cg: &mut Codegen, name: &str, fields: &[FieldDecl]) {
+    // Only emit for structs where every field is parseable
+    if !fields.iter().all(|f| is_parseable_field_type(&f.ty)) {
+        return;
+    }
+    cg.blank();
+    cg.line(&format!("impl ParseFromArgs for {} {{", name));
+    cg.push_indent();
+    cg.line("fn parse_from_args() -> Result<Self, String> {");
+    cg.push_indent();
+
+    for field in fields {
+        emit_field_parse(cg, field);
+    }
+
+    let field_names: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
+    cg.line(&format!("Ok(Self {{ {} }})", field_names.join(", ")));
+    cg.pop_indent();
+    cg.line("}");
+    cg.pop_indent();
+    cg.line("}");
+}
+
+/// Emit the parsing code for a single struct field.
+fn emit_field_parse(cg: &mut Codegen, field: &FieldDecl) {
+    let name = &field.name;
+    let flag = name; // MVL uses field name directly as flag name
+
+    // Unwrap any refinement wrapper to get the base type for parsing
+    let base_ty = unwrap_refined_ty(&field.ty);
+
+    match base_ty {
+        // Bool → flag presence (no value argument)
+        TypeExpr::Base {
+            name: ty_name,
+            args,
+            ..
+        } if ty_name == "Bool" && args.is_empty() => {
+            cg.line(&format!(
+                "let {name} = std::env::args().any(|__a| __a == \"--{flag}\");"
+            ));
+        }
+        // Option<String> → optional string flag
+        TypeExpr::Option { inner, .. } if matches!(unwrap_refined_ty(inner), TypeExpr::Base { name: n, args, .. } if n == "String" && args.is_empty()) =>
+        {
+            cg.line(&format!(
+                "let {name} = get_arg(Clean(\"{flag}\".to_string())).map(|__v| __v.0);"
+            ));
+        }
+        // Option<Int> → optional integer flag
+        TypeExpr::Option { inner, .. } if matches!(unwrap_refined_ty(inner), TypeExpr::Base { name: n, args, .. } if n == "Int" && args.is_empty()) =>
+        {
+            cg.line(&format!(
+                "let {name} = match get_arg(Clean(\"{flag}\".to_string())) {{"
+            ));
+            cg.push_indent();
+            cg.line("None => None,");
+            cg.line(&format!("Some(__v) => Some(__v.0.parse::<i64>().map_err(|_| format!(\"--{flag}: expected integer, got {{:?}}\", __v.0))?),"));
+            cg.pop_indent();
+            cg.line("};");
+        }
+        // Option<Float> → optional float flag
+        TypeExpr::Option { inner, .. } if matches!(unwrap_refined_ty(inner), TypeExpr::Base { name: n, args, .. } if n == "Float" && args.is_empty()) =>
+        {
+            cg.line(&format!(
+                "let {name} = match get_arg(Clean(\"{flag}\".to_string())) {{"
+            ));
+            cg.push_indent();
+            cg.line("None => None,");
+            cg.line(&format!("Some(__v) => Some(__v.0.parse::<f64>().map_err(|_| format!(\"--{flag}: expected float, got {{:?}}\", __v.0))?),"));
+            cg.pop_indent();
+            cg.line("};");
+        }
+        // String → required string flag
+        TypeExpr::Base {
+            name: ty_name,
+            args,
+            ..
+        } if ty_name == "String" && args.is_empty() => {
+            cg.line(&format!(
+                "let {name} = get_arg(Clean(\"{flag}\".to_string())).ok_or_else(|| \"missing required argument: --{flag}\".to_string())?.0;"
+            ));
+        }
+        // Int → required integer flag
+        TypeExpr::Base {
+            name: ty_name,
+            args,
+            ..
+        } if ty_name == "Int" && args.is_empty() => {
+            cg.line(&format!("let __raw_{name} = get_arg(Clean(\"{flag}\".to_string())).ok_or_else(|| \"missing required argument: --{flag}\".to_string())?;"));
+            cg.line(&format!(
+                "let {name} = __raw_{name}.0.parse::<i64>().map_err(|_| format!(\"--{flag}: expected integer, got {{:?}}\", __raw_{name}.0))?;"
+            ));
+        }
+        // Float → required float flag
+        TypeExpr::Base {
+            name: ty_name,
+            args,
+            ..
+        } if ty_name == "Float" && args.is_empty() => {
+            cg.line(&format!("let __raw_{name} = get_arg(Clean(\"{flag}\".to_string())).ok_or_else(|| \"missing required argument: --{flag}\".to_string())?;"));
+            cg.line(&format!(
+                "let {name} = __raw_{name}.0.parse::<f64>().map_err(|_| format!(\"--{flag}: expected float, got {{:?}}\", __raw_{name}.0))?;"
+            ));
+        }
+        _ => {
+            // Should not reach here — is_parseable_field_type filters unsupported types
+        }
+    }
+
+    // Emit runtime refinement check (returns Err, not debug_assert)
+    if let Some(pred) = &field.refinement {
+        let pred_str = emit_ref_expr_for_assert(pred, name);
+        cg.line(&format!(
+            "if !({pred_str}) {{ return Err(format!(\"--{flag}: refinement violated: {{}}\", {name})); }}"
+        ));
+    }
+}
+
+/// Returns `true` when the MVL type can be parsed from a CLI flag string.
+///
+/// Parseable: Int, Float, String, Bool, Option<Int>, Option<Float>,
+/// Option<String>, and refined wrappers of the above.
+fn is_parseable_field_type(ty: &TypeExpr) -> bool {
+    match unwrap_refined_ty(ty) {
+        TypeExpr::Base { name, args, .. } => {
+            args.is_empty() && matches!(name.as_str(), "Int" | "Float" | "String" | "Bool")
+        }
+        TypeExpr::Option { inner, .. } => {
+            matches!(
+                unwrap_refined_ty(inner),
+                TypeExpr::Base { name, args, .. }
+                    if args.is_empty()
+                    && matches!(name.as_str(), "Int" | "Float" | "String")
+            )
+        }
+        _ => false,
+    }
+}
+
+/// Strip a `Refined { inner, .. }` wrapper, returning the inner type.
+/// Returns the type unchanged for all other variants.
+fn unwrap_refined_ty(ty: &TypeExpr) -> &TypeExpr {
+    match ty {
+        TypeExpr::Refined { inner, .. } => unwrap_refined_ty(inner),
+        other => other,
     }
 }
 

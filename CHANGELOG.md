@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+- **`args.parse<T>()` — struct-derived CLI argument parsing** — The struct IS the arg spec. Field names become flag names (`--field`), `Bool` fields are presence flags, `Option<T>` fields are optional, refinement predicates validate at parse time. The transpiler generates `impl ParseFromArgs` for each concrete struct with parseable fields; no derive macro or DSL required (#55).
+
 ## [0.37.0] — 2026-04-17
 
 ### Added

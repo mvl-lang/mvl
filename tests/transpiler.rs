@@ -748,3 +748,141 @@ impl Iterator<Int> for Counter {}
     assert_contains(&rust, "impl std::iter::Iterator for Counter {");
     assert_contains(&rust, "todo!(\"Iterator::next not implemented\")");
 }
+
+// ── #55: args.parse<T>() — struct-derived CLI parsing ─────────────────────
+
+/// Concrete struct with stdlib import emits `impl ParseFromArgs`.
+#[test]
+fn struct_with_args_import_emits_parse_from_args_impl() {
+    let src = r#"
+use std.args.{parse}
+type AppArgs = struct {
+    host: String,
+    port: Int,
+    verbose: Bool,
+}
+"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "impl ParseFromArgs for AppArgs {");
+    assert_contains(&rust, "fn parse_from_args() -> Result<Self, String> {");
+}
+
+/// `String` field emits required-flag parsing with `get_arg`.
+#[test]
+fn string_field_emits_required_get_arg() {
+    let src = r#"
+use std.args.{parse}
+type Cfg = struct { host: String }
+"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "impl ParseFromArgs for Cfg {");
+    assert_contains(&rust, "get_arg(Clean(\"host\".to_string()))");
+    assert_contains(
+        &rust,
+        ".ok_or_else(|| \"missing required argument: --host\"",
+    );
+}
+
+/// `Int` field emits integer parsing with `parse::<i64>()`.
+#[test]
+fn int_field_emits_integer_parsing() {
+    let src = r#"
+use std.args.{parse}
+type Cfg = struct { port: Int }
+"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "get_arg(Clean(\"port\".to_string()))");
+    assert_contains(&rust, ".parse::<i64>()");
+}
+
+/// `Bool` field emits flag-presence check via `std::env::args().any(…)`.
+#[test]
+fn bool_field_emits_flag_presence_check() {
+    let src = r#"
+use std.args.{parse}
+type Cfg = struct { verbose: Bool }
+"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "std::env::args().any(|__a| __a == \"--verbose\")");
+}
+
+/// `Option<String>` field emits optional `get_arg` with `.map(…)`.
+#[test]
+fn option_string_field_emits_optional_parse() {
+    let src = r#"
+use std.args.{parse}
+type Cfg = struct { config: Option<String> }
+"#;
+    let rust = transpile_src(src);
+    assert_contains(
+        &rust,
+        "get_arg(Clean(\"config\".to_string())).map(|__v| __v.0)",
+    );
+}
+
+/// `Option<Int>` field emits optional integer parsing with error propagation.
+#[test]
+fn option_int_field_emits_optional_int_parse() {
+    let src = r#"
+use std.args.{parse}
+type Cfg = struct { count: Option<Int> }
+"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "get_arg(Clean(\"count\".to_string()))");
+    assert_contains(&rust, "parse::<i64>()");
+}
+
+/// Refined `Int` field emits integer parsing + runtime refinement check.
+#[test]
+fn refined_int_field_emits_parse_and_refinement_check() {
+    let src = r#"
+use std.args.{parse}
+type Cfg = struct { port: Int where self > 0 && self <= 65535 }
+"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".parse::<i64>()");
+    // Runtime refinement check — returns Err, not debug_assert
+    assert_contains(&rust, "return Err(format!(\"--port: refinement violated:");
+}
+
+/// Struct with generic params does NOT get a `ParseFromArgs` impl.
+#[test]
+fn generic_struct_does_not_emit_parse_from_args() {
+    let src = r#"
+use std.args.{parse}
+type Pair<A, B> = struct { first: A, second: B }
+"#;
+    let rust = transpile_src(src);
+    assert!(
+        !rust.contains("impl ParseFromArgs for Pair"),
+        "generic structs must not get ParseFromArgs"
+    );
+}
+
+/// Struct with unsupported field type does NOT get a `ParseFromArgs` impl.
+#[test]
+fn struct_with_unsupported_field_type_omits_parse_from_args() {
+    let src = r#"
+use std.args.{parse}
+type Nested = struct { inner: Point }
+type Point = struct { x: Int, y: Int }
+"#;
+    let rust = transpile_src(src);
+    // Point gets the impl (Int fields), Nested does not (Point field is unsupported)
+    assert_contains(&rust, "impl ParseFromArgs for Point {");
+    assert!(
+        !rust.contains("impl ParseFromArgs for Nested"),
+        "struct with unsupported field must not get ParseFromArgs"
+    );
+}
+
+/// Without stdlib imports, structs do NOT get `ParseFromArgs` impls.
+#[test]
+fn struct_without_stdlib_import_omits_parse_from_args() {
+    let src = "type Point = struct { x: Int, y: Int }";
+    let rust = transpile_src(src);
+    assert!(
+        !rust.contains("ParseFromArgs"),
+        "no ParseFromArgs without mvl_runtime"
+    );
+}
