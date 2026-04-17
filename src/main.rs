@@ -758,6 +758,14 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool) {
         process::exit(1);
     });
 
+    // Load stdlib prelude so non-stub functions (e.g. range()) are available
+    // in each test module without requiring a hardcoded Rust mapping.
+    let prelude_content = stdlib::stdlib_content("core.mvl")
+        .expect("core.mvl is embedded at compile time and must be present");
+    let (mut prelude_parser, _prelude_lex_errs) = Parser::new(prelude_content);
+    let prelude_prog = prelude_parser.parse_program();
+    let stdlib_prelude_progs = vec![prelude_prog];
+
     // Build a combined Rust test file from all test modules.
     // Each entry: (module_name, display_label, content)
     let mut modules: Vec<(String, String, String)> = Vec::new();
@@ -772,9 +780,18 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool) {
         let s = stem(&file_str);
         let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
         let (out, branches) = if coverage {
-            transpiler::transpile_covered(&prog, &module_name, &module_name, next_branch_id)
+            transpiler::transpile_covered_with_prelude(
+                &prog,
+                &module_name,
+                &module_name,
+                next_branch_id,
+                &stdlib_prelude_progs,
+            )
         } else {
-            (transpiler::transpile(&prog, &module_name), Vec::new())
+            (
+                transpiler::transpile_with_prelude(&prog, &module_name, &stdlib_prelude_progs),
+                Vec::new(),
+            )
         };
         if out.has_extern_rust || transpiler::has_std_imports(&prog) {
             need_mvl_runtime = true;
@@ -822,9 +839,18 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool) {
             println!("  (inline tests) {file_str}");
         }
         let (out, branches) = if coverage {
-            transpiler::transpile_covered_source(&prog, &module_name, &module_name, next_branch_id)
+            transpiler::transpile_covered_source_with_prelude(
+                &prog,
+                &module_name,
+                &module_name,
+                next_branch_id,
+                &stdlib_prelude_progs,
+            )
         } else {
-            (transpiler::transpile(&prog, &module_name), Vec::new())
+            (
+                transpiler::transpile_with_prelude(&prog, &module_name, &stdlib_prelude_progs),
+                Vec::new(),
+            )
         };
         if out.has_extern_rust || transpiler::has_std_imports(&prog) {
             need_mvl_runtime = true;
