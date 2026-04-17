@@ -6,6 +6,7 @@
 use crate::mvl::parser::ast::{
     Decl, ExternDecl, FieldDecl, FnDecl, Param, Program, TypeDecl, TypeExpr, Variant, VariantFields,
 };
+use crate::mvl::transpiler::coverage::{BranchKind, CoverageMap};
 use crate::mvl::transpiler::emit_functions::emit_fn_decl;
 use crate::mvl::transpiler::emit_impls::emit_impl_decl;
 use crate::mvl::transpiler::emit_types::emit_type_decl;
@@ -24,6 +25,18 @@ pub struct Codegen {
     /// When `true`, `ParseFromArgs`, `get_arg`, and other runtime symbols are
     /// in scope; the transpiler may emit impls that reference them.
     pub use_mvl_runtime: bool,
+    /// Active coverage map — `Some` when transpiling with `--coverage`.
+    pub coverage: Option<CoverageMap>,
+    /// Name of the function currently being transpiled (for coverage metadata).
+    pub current_fn: String,
+    /// Stem of the source file being transpiled (for coverage metadata).
+    pub current_file: String,
+    /// True when the current function is a `test fn` (excluded from coverage report).
+    pub current_fn_is_test: bool,
+    /// When true, `extern "rust"` blocks are emitted as stub functions (using
+    /// `todo!`) instead of real extern declarations.  Used when compiling source
+    /// files into the test crate so the crate can link without the external dep.
+    pub test_extern_stubs: bool,
 }
 
 impl Codegen {
@@ -68,6 +81,26 @@ impl Codegen {
     /// Emit a blank line (just a newline).
     pub fn blank(&mut self) {
         self.buf.push('\n');
+    }
+
+    // ── Coverage helpers ──────────────────────────────────────────────────
+
+    /// Allocate a coverage counter for a decision branch.
+    ///
+    /// Returns `Some(id)` when coverage is active, `None` otherwise.
+    /// Separating allocation from emission avoids simultaneous borrow conflicts.
+    pub fn alloc_branch(&mut self, line: u32, kind: BranchKind) -> Option<usize> {
+        let fn_name = self.current_fn.clone();
+        let file = self.current_file.clone();
+        let is_test_fn = self.current_fn_is_test;
+        self.coverage
+            .as_mut()
+            .map(|c| c.alloc(fn_name, file, line, kind, is_test_fn))
+    }
+
+    /// Emit a `#[cfg(test)] crate::__mvl_cov::hit(id);` statement at current indent.
+    pub fn emit_cov_hit(&mut self, id: usize) {
+        self.line(&format!("#[cfg(test)] crate::__mvl_cov::hit({id});"));
     }
 
     /// Increase indent level.
@@ -236,7 +269,12 @@ impl Codegen {
                     if ud.path.len() > 1 {
                         let source_mod = ud.path[..ud.path.len() - 1].join("::");
                         if source_mod != "std" {
-                            self.line(&format!("use crate::{};", ud.path.join("::")));
+                            // In test-stub mode (source file included in test crate) skip
+                            // cross-module imports — the sibling modules in the test crate may
+                            // not export the same items as the real modules.
+                            if !self.test_extern_stubs {
+                                self.line(&format!("use crate::{};", ud.path.join("::")));
+                            }
                         }
                     }
                     continue; // use decls don't get a trailing blank line
@@ -277,6 +315,35 @@ impl Codegen {
 /// Rust items — the linker resolves them from the crate in `Cargo.toml`.
 /// For `extern "c"`: standard C ABI extern block.
 fn emit_extern_decl(cg: &mut Codegen, ed: &ExternDecl) {
+    // Register extern function names so calls can be wrapped in unsafe
+    for f in &ed.fns {
+        cg.extern_fns.insert(f.name.clone());
+    }
+
+    if cg.test_extern_stubs {
+        // In test mode, emit stub functions instead of real extern declarations
+        // so the test crate links without the external dependency.
+        cg.line(&format!(
+            "// ── extern \"{}\" stubs (test mode) ──────────────────────────────────────────",
+            ed.abi
+        ));
+        for f in &ed.fns {
+            let params_str: Vec<String> = f
+                .params
+                .iter()
+                .map(|p| format!("{}: {}", p.name, emit_type_expr(&p.ty)))
+                .collect();
+            let ret_str = emit_type_expr(&f.return_type);
+            cg.line(&format!(
+                "#[allow(dead_code)] pub fn {}({}) -> {} {{ todo!(\"extern stub\") }}",
+                f.name,
+                params_str.join(", "),
+                ret_str
+            ));
+        }
+        return;
+    }
+
     cg.line(&format!(
         "// ── extern \"{}\" trust boundary ({} fn{}) ──────────────────────────────────",
         ed.abi,
@@ -296,10 +363,6 @@ fn emit_extern_decl(cg: &mut Codegen, ed: &ExternDecl) {
     };
     cg.line(&format!("extern \"{rust_abi}\" {{"));
     cg.push_indent();
-    // Register extern function names so calls can be wrapped in unsafe
-    for f in &ed.fns {
-        cg.extern_fns.insert(f.name.clone());
-    }
     for f in &ed.fns {
         // Emit effects as a doc comment (not enforced by Rust's type system yet)
         if !f.effects.is_empty() {

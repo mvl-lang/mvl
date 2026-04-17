@@ -2,6 +2,7 @@
 
 use crate::mvl::parser::ast::{BinaryOp, Expr, Literal, MatchArm, MatchBody, Pattern, UnaryOp};
 use crate::mvl::transpiler::codegen::Codegen;
+use crate::mvl::transpiler::coverage::BranchKind;
 use crate::mvl::transpiler::emit_types::emit_type_expr;
 
 /// Emit an expression into the code buffer (no trailing newline).
@@ -197,8 +198,15 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
             }
         }
         Expr::Match {
-            scrutinee, arms, ..
+            scrutinee,
+            arms,
+            span,
+            ..
         } => {
+            // Allocate coverage IDs for each arm up-front.
+            let arm_ids: Vec<Option<usize>> = (0..arms.len())
+                .map(|i| cg.alloc_branch(span.line, BranchKind::MatchArm(i)))
+                .collect();
             let has_str_pattern = arms_have_str_pattern(arms);
             cg.push("match ");
             emit_expr(cg, scrutinee);
@@ -208,8 +216,8 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
             cg.push(" {");
             cg.nl();
             cg.push_indent();
-            for arm in arms {
-                emit_match_arm(cg, arm);
+            for (arm, cov_id) in arms.iter().zip(arm_ids.iter()) {
+                emit_match_arm(cg, arm, *cov_id);
             }
             cg.pop_indent();
             cg.indent();
@@ -480,7 +488,7 @@ fn emit_binary_op(op: BinaryOp) -> &'static str {
 
 // ── Match arms ────────────────────────────────────────────────────────────
 
-fn emit_match_arm(cg: &mut Codegen, arm: &MatchArm) {
+fn emit_match_arm(cg: &mut Codegen, arm: &MatchArm, cov_id: Option<usize>) {
     cg.indent();
     emit_pattern(cg, &arm.pattern);
     if let Some(guard) = &arm.guard {
@@ -492,7 +500,15 @@ fn emit_match_arm(cg: &mut Codegen, arm: &MatchArm) {
     cg.push(" => ");
     match &arm.body {
         MatchBody::Expr(e) => {
-            emit_expr(cg, e);
+            if let Some(id) = cov_id {
+                // Wrap expression arm in a block so we can inject the hit statement.
+                cg.push("{ ");
+                cg.push(&format!("#[cfg(test)] crate::__mvl_cov::hit({id}); "));
+                emit_expr(cg, e);
+                cg.push(" }");
+            } else {
+                emit_expr(cg, e);
+            }
             cg.push(",");
             cg.nl();
         }
@@ -500,6 +516,9 @@ fn emit_match_arm(cg: &mut Codegen, arm: &MatchArm) {
             cg.push("{");
             cg.nl();
             cg.push_indent();
+            if let Some(id) = cov_id {
+                cg.emit_cov_hit(id);
+            }
             emit_block_stmts(cg, &block.stmts);
             cg.pop_indent();
             cg.indent();
