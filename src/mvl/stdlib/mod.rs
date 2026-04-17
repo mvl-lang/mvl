@@ -27,6 +27,14 @@ pub const STDLIB_FILES: &[(&str, &str)] = &[
 /// The stdlib version — tied to the compiler version so they stay in sync.
 pub const STDLIB_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Return the embedded source content for a stdlib file by name.
+pub fn stdlib_content(filename: &str) -> Option<&'static str> {
+    STDLIB_FILES
+        .iter()
+        .find(|(name, _)| *name == filename)
+        .map(|(_, content)| *content)
+}
+
 // ── Path resolution ─────────────────────────────────────────────────────────
 
 /// Returns `$MVL_HOME`, `$XDG_DATA_HOME/mvl`, or `~/.local/share/mvl`.

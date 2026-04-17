@@ -1,0 +1,79 @@
+// core_types_demo.mvl — Phase 4 gate test (issue #229)
+// Exercises all 9 core types: Int, Float, Bool, String, List, Map, Set, Option, Result
+// Validates: transpile → compile → run with representative method calls per type
+//
+// Expected stdout:
+//   Int: abs=5 min=3 max=7
+//   Float: ceil=4 floor=3 sqrt=2
+//   Bool: and=false or=true not=false
+//   String: len=5
+//   List: len=5 first=1
+//   Map: len=2
+//   Set: has_two=true len=3
+//   Option: got 42
+//   Result: value=42
+
+fn demo_option(x: Option<Int>) -> String {
+    match x {
+        Some(v) => format("got {}", v),
+        None    => "nothing",
+    }
+}
+
+type AppError = enum { ParseFail }
+
+fn safe_value(x: Int) -> Result<Int, AppError> {
+    Ok(x)
+}
+
+fn main() -> Unit ! Console {
+    // ── Int ──────────────────────────────────────────────────────────────────
+    let n: Int = -5;
+    let na = n.abs();
+    let a: Int = 3;
+    let b: Int = 7;
+    let nm = a.min(b);
+    let mx = a.max(b);
+    println("Int: abs={} min={} max={}", na, nm, mx);
+
+    // ── Float ────────────────────────────────────────────────────────────────
+    let f: Float = 3.7;
+    let fc = f.ceil();
+    let ff = f.floor();
+    let g: Float = 4.0;
+    let fs = g.sqrt();
+    println("Float: ceil={} floor={} sqrt={}", fc, ff, fs);
+
+    // ── Bool ─────────────────────────────────────────────────────────────────
+    let b1: Bool = true;
+    let b2: Bool = false;
+    println("Bool: and={} or={} not={}", b1 && b2, b1 || b2, !b1);
+
+    // ── String ───────────────────────────────────────────────────────────────
+    let s: String = "hello";
+    println("String: len={}", s.len());
+
+    // ── List<T> ──────────────────────────────────────────────────────────────
+    let xs: List<Int> = [1, 2, 3, 4, 5];
+    let xfirst = match xs.first() { Some(v) => v, None => 0 };
+    println("List: len={} first={}", xs.len(), xfirst);
+
+    // ── Map<K,V> ─────────────────────────────────────────────────────────────
+    let m: Map<String, Int> = {"alice": 95, "bob": 87};
+    println("Map: len={}", m.len());
+
+    // ── Set<T> ───────────────────────────────────────────────────────────────
+    let ss: Set<Int> = {1, 2, 3};
+    let has_two = ss.contains(2);
+    println("Set: has_two={} len={}", has_two, ss.len());
+
+    // ── Option<T> ────────────────────────────────────────────────────────────
+    let opt: Option<Int> = Some(42);
+    println("Option: {}", demo_option(opt));
+
+    // ── Result<T,E> ──────────────────────────────────────────────────────────
+    match safe_value(42) {
+        Ok(v)  => println("Result: value={}", v),
+        Err(_) => println("Result: error"),
+    }
+}
