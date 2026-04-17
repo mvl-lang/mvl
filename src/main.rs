@@ -93,6 +93,8 @@ fn print_usage() {
     eprintln!("  mvl run   [--] <file.mvl>          — transpile, build, and execute");
     eprintln!("  mvl run   [--] <file.mvl> -- ...   — pass args to the compiled binary");
     eprintln!("  mvl test  <file|dir>               — find *_test.mvl files and run cargo test");
+    eprintln!("  mvl test  <file|dir> -q            — suppress MVL output, pass -q to cargo test (dot progress)");
+    eprintln!("  mvl test  <file|dir> --verbose     — show transpile path and all test names with captured stdout");
     eprintln!("  mvl lint  <file|dir>               — check style rules");
     eprintln!("  mvl lint  <file|dir> --show-config — show active linter configuration");
     eprintln!("  mvl assurance <file|dir>           — emit assurance report");
@@ -698,6 +700,13 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
 
 /// Find all `*_test.mvl` files, transpile to Rust test crates, and run `cargo test`.
 fn cmd_test(path: &str, quiet: bool, verbose: bool) {
+    if quiet && verbose {
+        eprintln!(
+            "warning: --quiet and --verbose are mutually exclusive; --verbose takes precedence"
+        );
+    }
+    let quiet = quiet && !verbose;
+
     let test_files = mvl_files(path, true); // test_only=true
     if test_files.is_empty() {
         eprintln!("No *_test.mvl files found at: {path}");
