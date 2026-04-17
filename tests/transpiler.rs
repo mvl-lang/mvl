@@ -1085,15 +1085,25 @@ fn main() -> Unit { }
     );
 }
 
-/// range() call is NOT expanded inline — it emits as a plain function call.
-/// Regression: before #229 the transpiler emitted (start..end).collect::<Vec<i64>>()
+/// range(start, end) is expanded inline as a Rust range collect.
+///
+/// `cmd_test` uses `transpiler::transpile()` (not `transpile_project`), so the
+/// `core.mvl` prelude that contains the MVL-defined `range` body is not included
+/// in stdlib test runs. The transpiler therefore must emit an inline equivalent
+/// so `mvl test` works without requiring the full project pipeline.
+///
+/// Emitted form: `((start)..(end)).collect::<Vec<_>>()`
+/// — Rust ranges with `start > end` yield an empty iterator (no panic).
 #[test]
-fn range_call_emits_as_plain_fn_call_not_inline_rust_range() {
+fn range_call_emits_inline_rust_range_collect() {
     let src = "fn f() -> Unit { let xs = range(0, 5); }";
     let rust = transpile_src(src);
     assert!(
-        !rust.contains("collect::<Vec<i64>>()"),
-        "range must not be expanded inline as a Rust iterator:\n{rust}"
+        rust.contains("collect::<Vec<_>>()"),
+        "range must be expanded inline as a Rust iterator collect:\n{rust}"
     );
-    assert_contains(&rust, "range(");
+    assert!(
+        !rust.contains("range(0"),
+        "range must not be emitted as a bare function call:\n{rust}"
+    );
 }

@@ -133,6 +133,14 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                 cg.push("(");
                 emit_args_for_macro(cg, args);
                 cg.push(")");
+            } else if name == "range" && args.len() == 2 {
+                // range(start, end) — exclusive upper bound, maps to Rust's .. range operator.
+                // Rust ranges with start > end produce an empty iterator (no panic).
+                cg.push("((");
+                emit_expr(cg, &args[0]);
+                cg.push(")..(");
+                emit_expr(cg, &args[1]);
+                cg.push(")).collect::<Vec<_>>()");
             } else {
                 let is_extern = cg.extern_fns.contains(name.as_str());
                 if is_extern {
