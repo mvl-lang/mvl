@@ -6,6 +6,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.37.0] — 2026-04-17
+
+### Added
+
+- **Iterator trait protocol** — full support for `impl Iterator<T> for X` declarations in the type checker and transpiler, enabling iteration over user-defined types via `for...in` loops (Spec 001 Req 11, #219).
+- **Array iterator support** — `Array<T, N>` now recognized as implementing `Iterator<T>`, accepted in `for...in` loops alongside `List<T>` and user-declared iterators.
+- **Iterator errors** — new `NotIterator` error for non-iterable types in `for...in` expressions, and `ForLoopInPartialFn` to enforce that `for` loops (which are bounded) cannot appear in `partial` functions.
+
+### Fixed
+
+- **Iterator type checking** — refactored `check_iterator_type` to eliminate duplicate error reporting; `List<T>`, `Array<T, N>`, and named types all flow through a single validation path.
+- **Iterator transpilation** — replaced inefficient `split_at(len-1)` + `tail[0]` pattern with `split_last()` for cleaner method body emission in `impl Iterator`.
+- **Iterator tests** — strengthened loop body assertions to verify element-type binding; added tests for error interaction (`ForLoopInPartialFn` + `NotIterator`) and fallback paths (missing `next` method).
+
 ## [0.36.0] — 2026-04-17
 
 ### Added
