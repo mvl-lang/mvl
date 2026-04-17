@@ -135,6 +135,16 @@ pub fn close(f: File) -> Unit { }
 /// When IFC is inactive Tainted<String> is treated as String.
 pub fn read_to_string(p: Path) -> Result<Tainted<String>, String> ! FileRead { Err("") }
 
+/// Read the entire contents of a file given a validated (Clean) path string.
+///
+/// Convenience variant of `read_to_string` that accepts a `Clean<String>` path
+/// directly, without requiring the caller to construct a `Path` value first.
+/// Use this when migrating from `extern "rust"` bridge functions that accept
+/// `Clean<String>` paths (e.g. `fs_read_file`).
+///
+/// Returns Tainted<String> because file contents are external (untrusted) data.
+pub fn read_file(p: Clean<String>) -> Result<Tainted<String>, String> ! FileRead { Err("") }
+
 /// Write a string to a file, creating it if it does not exist.
 ///
 /// Truncates the file if it already exists.

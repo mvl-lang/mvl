@@ -1,10 +1,11 @@
 // main.mvl — Log analyzer entry point.
 //
 // Demonstrates:
-//   1. extern "rust" trust boundary — CLI + filesystem + full pipeline
+//   1. extern "rust" trust boundary — domain-specific pipeline logic in Rust
 //   2. IFC labels: Tainted CLI input sanitized to Clean before use
 //   3. Effect declarations: FileRead + Console on I/O functions
 //   4. Multi-module design: use imports document cross-module dependencies
+//   5. stdlib usage: std.io and std.args replace generic bridge functions
 //
 // NOTE (issue #96): use imports below are module-system declarations.
 // Cross-module type resolution is not yet wired into the per-file checker;
@@ -15,7 +16,7 @@
 //   mvl run examples/log_analyzer/main.mvl -- --file logs.jsonl
 //   mvl run examples/log_analyzer/main.mvl -- --file logs.jsonl --level error
 //
-// Assurance note: 1 extern block (3 trust-boundary functions).
+// Assurance note: 1 extern block (1 trust-boundary function — domain pipeline only).
 
 use parser::parse_line;
 use parser::report_to_json;
@@ -24,21 +25,18 @@ use parser::Report;
 use utils::clamp_display;
 use utils::is_positive;
 
-// ── Trust boundary: CLI + filesystem + analysis pipeline ───────────────────
+// ── Standard library imports ────────────────────────────────────────────────
+
+use std.args.{get_arg}
+use std.io.{read_file}
+
+// ── Trust boundary: domain-specific pipeline logic ──────────────────────────
 
 extern "rust" {
-    fn clap_get_arg(name: Clean<String>) -> Option<Tainted<String>>;
-    fn fs_read_file(path: Clean<String>) -> Result<Tainted<String>, IOError>;
     fn analyze_and_format(content: Tainted<String>, level: Option<Clean<String>>) -> Result<String, PipelineError>;
 }
 
 // ── Domain types ───────────────────────────────────────────────────────────
-
-type IOError = enum {
-    FileNotFound,
-    PermissionDenied,
-    ReadError,
-}
 
 type PipelineError = enum {
     InvalidInput,
@@ -54,14 +52,14 @@ type RunError = enum {
 // ── Argument helpers (IFC: sanitize Tainted CLI input) ─────────────────────
 
 fn get_required_arg(name: Clean<String>) -> Result<Clean<String>, RunError> {
-    match clap_get_arg(name) {
+    match get_arg(name) {
         None    => Err(RunError::MissingArg),
         Some(v) => Ok(sanitize(v)),
     }
 }
 
 fn get_optional_arg(name: Clean<String>) -> Option<Clean<String>> {
-    match clap_get_arg(name) {
+    match get_arg(name) {
         None    => None,
         Some(v) => Some(sanitize(v)),
     }
@@ -75,7 +73,7 @@ fn run() -> Result<Unit, RunError> ! FileRead, Console {
         Err(e) => Err(e),
         Ok(file_path) => {
             let level_opt = get_optional_arg("level");
-            let file_result = fs_read_file(file_path);
+            let file_result = read_file(file_path);
             match file_result {
                 Err(_) => Err(RunError::IOFailure),
                 Ok(content) => {

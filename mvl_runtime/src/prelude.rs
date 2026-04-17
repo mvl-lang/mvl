@@ -10,3 +10,15 @@ pub use crate::effects::{
 };
 pub use crate::ifc::{declassify, sanitize, Clean, Public, Secret, Tainted};
 pub use crate::mvl_refine;
+
+// ── Standard library implementations ──────────────────────────────────────
+//
+// These re-exports provide the Rust backing for stdlib functions declared as
+// stubs in `std/*.mvl`. Programs that import `use std.io.*` or `use std.args.*`
+// call these directly — no per-program `bridge.rs` is needed for generic I/O.
+
+/// `std.io` — file I/O operations.
+pub use crate::stdlib::io::{path, read_file, read_to_string, Path};
+
+/// `std.args` — CLI argument and environment access.
+pub use crate::stdlib::args::{get_arg, get_args, get_env};

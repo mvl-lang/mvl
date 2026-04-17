@@ -1,0 +1,34 @@
+// MVL standard library — args module
+//
+// Command-line argument and environment variable access.
+// Import with: use std.args.{get_arg, get_args, get_env}
+//
+// Phase 2: function stubs with correct signatures and effects.
+//
+// Design: CLI argument access is a Console effect — it reads from the
+// process environment, which is externally controlled (untrusted) input.
+// Values returned are Tainted<String> until validated by the caller.
+//
+// IFC: CLI and environment values are Tainted<String>. Callers must
+// sanitize (validate) before use in security-sensitive contexts.
+//
+// Implementation: wraps `extern "rust" { std::env::args, std::env::var }` (Phase 3).
+// See ADR-0006.
+
+/// Scan command-line arguments for `--<name> <value>` and return the value.
+///
+/// Looks for the flag `--<name>` followed by a value argument.
+/// Returns `None` if the flag is absent or has no value.
+/// Returns `Tainted<String>` because CLI arguments are untrusted external input.
+pub fn get_arg(name: Clean<String>) -> Option<Tainted<String>> ! Console { None }
+
+/// Return all command-line arguments (excluding the program name).
+///
+/// Returns `Tainted<String>` values — callers must validate each argument.
+pub fn get_args() -> List<Tainted<String>> ! Console { [] }
+
+/// Read an environment variable by name.
+///
+/// Returns `None` if the variable is not set.
+/// Returns `Tainted<String>` because environment variables are externally controlled.
+pub fn get_env(name: Clean<String>) -> Option<Tainted<String>> ! Console { None }

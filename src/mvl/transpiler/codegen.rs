@@ -101,7 +101,8 @@ impl Codegen {
         self.line("#![allow(dead_code, unused_variables, unused_imports, unused_parens)]");
         self.blank();
 
-        // MVL runtime prelude: security labels, effect markers, refinement macro.
+        // MVL runtime prelude: security labels, effect markers, refinement macro,
+        // and stdlib function implementations (read_file, get_arg, etc.).
         // When mvl_runtime is available as a dependency we use it directly;
         // otherwise fall back to the inlined preamble for standalone files.
         // `force_runtime` is set for sibling modules in a project that uses mvl_runtime,
@@ -110,7 +111,14 @@ impl Codegen {
             || prog
                 .declarations
                 .iter()
-                .any(|d| matches!(d, Decl::Extern(_)));
+                .any(|d| matches!(d, Decl::Extern(_)))
+            || prog.declarations.iter().any(|d| {
+                if let Decl::Use(ud) = d {
+                    ud.path.first().map(|s| s == "std").unwrap_or(false)
+                } else {
+                    false
+                }
+            });
         if has_runtime {
             self.line("use mvl_runtime::prelude::*;");
         } else {
