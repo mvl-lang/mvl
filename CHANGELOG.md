@@ -6,6 +6,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.39.1] — 2026-04-17
+
+### Fixed
+
+- **`.clamp()` safe wrapper** — `Int.clamp(low, high)` and `Float.clamp(low, high)` previously fell through to catch-all transpiler arm, emitting `n.clamp(low, high)` directly without bounds checking. Now routes to explicit `emit_safe_clamp()` helper which guards against inverted bounds (`low > high`) — returns value unchanged instead of panicking. Follows same safe-wrapper pattern as `slice` and `substring` (#176).
+- **`range()` inline expansion** — restored inline Rust expansion `((start)..(end)).collect::<Vec<_>>()` for non-prelude transpilation paths. PR #229 added transpiler regression test assuming `transpile_project` is always used (which injects prelude), but `cmd_test` calls raw `transpile()` without prelude injection. Rust ranges with inverted bounds safely yield empty iterators.
+
 ## [0.39.0] — 2026-04-17
 
 ### Added
