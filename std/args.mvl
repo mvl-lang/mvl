@@ -37,3 +37,18 @@ pub fn get_args() -> List<Tainted<String>> ! Console { [] }
 /// console (stdin/stdout) access. A dedicated `Env` effect will be introduced
 /// in a future phase. See ADR-0007.
 pub fn get_env(name: Clean<String>) -> Option<Tainted<String>> ! Console { None }
+
+/// Parse command-line arguments into a struct `T`.
+///
+/// The struct IS the argument specification:
+/// - Field names become flag names (`--<field>`)
+/// - `Bool` fields are presence flags (no value needed: `--verbose`)
+/// - `Option<T>` fields are optional (absent flag → `None`)
+/// - All other fields are required (absent flag → `Err`)
+/// - Refinement predicates are validated at parse time
+///
+/// The compiler derives the parser from the struct shape at monomorphization time.
+/// No DSL, no builder, no macros — the type is the spec.
+///
+/// Requires `! Console` effect (reads process arguments).
+pub fn parse<T>() -> Result<T, String> ! Console { Err("") }

@@ -19,6 +19,11 @@ pub struct Codegen {
     indent: usize,
     /// Names of functions declared in `extern` blocks — calls must be wrapped in `unsafe`.
     pub extern_fns: std::collections::HashSet<String>,
+    /// True when the generated file uses `mvl_runtime::prelude::*`.
+    ///
+    /// When `true`, `ParseFromArgs`, `get_arg`, and other runtime symbols are
+    /// in scope; the transpiler may emit impls that reference them.
+    pub use_mvl_runtime: bool,
 }
 
 impl Codegen {
@@ -115,6 +120,7 @@ impl Codegen {
                 .any(|d| matches!(d, Decl::Extern(_)))
             || has_std_imports(prog);
         if has_runtime {
+            self.use_mvl_runtime = true;
             self.line("use mvl_runtime::prelude::*;");
         } else {
             emit_security_preamble(self);

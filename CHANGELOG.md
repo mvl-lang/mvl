@@ -6,6 +6,23 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.38.0] — 2026-04-17
+
+### Added
+
+- **`args.parse<T>()` — struct-derived CLI argument parsing** — The struct IS the arg spec. Field names become flag names (`--field`), `Bool` fields are presence flags, `Option<T>` fields are optional, refinement predicates validate at parse time. The transpiler generates `impl ParseFromArgs` for each concrete struct with parseable fields; no derive macro or DSL required (#55).
+
+### Fixed
+
+- **CLI argument parsing** — `get_arg()` now supports both `--flag value` (two-token) and `--flag=value` (single-token) syntax; previously only the two-token form was recognized.
+- **Codegen safety** — Added `assert_safe_identifier()` validation in struct field parsing to prevent codegen injection if field names bypass lexer restrictions.
+- **Error messages** — Removed tainted CLI values from parse error strings to avoid information-flow violations.
+
+### Changed
+
+- **ParseFromArgs visibility** — `emit_parse_from_args_impl` changed from `pub` to `pub(crate)` (internal use only).
+- **Codegen robustness** — Silent catch-all in `emit_field_parse` replaced with `unreachable!()` to enforce sync between `is_parseable_field_type` and code emission.
+
 ## [0.37.0] — 2026-04-17
 
 ### Added

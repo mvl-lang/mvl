@@ -21,4 +21,4 @@ pub use crate::mvl_refine;
 pub use crate::stdlib::io::{path, read_file, read_to_string, Path};
 
 /// `std.args` — CLI argument and environment access.
-pub use crate::stdlib::args::{get_arg, get_args, get_env};
+pub use crate::stdlib::args::{get_arg, get_args, get_env, parse, ParseFromArgs};
