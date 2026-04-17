@@ -493,6 +493,69 @@ fn else_if_chain_runs_and_produces_expected_output() {
     );
 }
 
+// ── Phase 4 gate tests (issue #229) ───────────────────────────────────────
+
+fn corpus_stdlib(name: &str) -> String {
+    format!(
+        "{}/tests/corpus/03_stdlib/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+/// Phase 4 gate: stdlib range() is transpiled from MVL source, not hardcoded.
+///
+/// Expected stdout:
+///   5
+#[test]
+fn range_pipeline_runs_and_produces_expected_output() {
+    let out = Command::new(mvl_bin())
+        .args(["run", &corpus_stdlib("range_pipeline.mvl")])
+        .output()
+        .expect("failed to run mvl run");
+    assert!(
+        out.status.success(),
+        "range_pipeline: mvl run failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.lines().any(|l| l.trim() == "5"),
+        "range_pipeline: expected a line containing '5', got:\n{stdout}"
+    );
+}
+
+/// Phase 4 gate: all 9 core types compile and run.
+#[test]
+fn core_types_demo_check_passes() {
+    let out = Command::new(mvl_bin())
+        .args(["check", &corpus("core_types_demo.mvl")])
+        .output()
+        .expect("failed to run mvl check");
+    assert!(
+        out.status.success(),
+        "core_types_demo: mvl check failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn core_types_demo_runs_and_produces_expected_output() {
+    assert_run_output(
+        "core_types_demo.mvl",
+        &[
+            "Int: abs=5 min=3 max=7",
+            "Float: ceil=4 floor=3 sqrt=2",
+            "String: len=5",
+            "List: len=5 first=1",
+            "Map: len=2",
+            "Set: has_two=true len=3",
+            "Option: got 42",
+            "Result: value=42",
+        ],
+    );
+}
+
 // ── println_non_string_first_arg.mvl (regression #198) ────────────────────
 
 /// Regression for #198: println with a non-string first arg must generate

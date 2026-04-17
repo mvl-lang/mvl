@@ -506,18 +506,19 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
     // Load the implicit stdlib prelude (std/core.mvl) so non-stub functions
     // (e.g. range()) are transpiled from MVL source rather than relying on
     // hardcoded Rust mappings in the transpiler.
-    // Use the embedded STDLIB_FILES directly (compiled-in, always current).
-    let core_prelude = stdlib::STDLIB_FILES
-        .iter()
-        .find(|(name, _)| *name == "core.mvl")
-        .map(|(_, content)| {
-            let (mut p, _) = Parser::new(content);
-            p.parse_program()
-        });
-    let core_prelude_vec: Vec<_> = core_prelude.into_iter().collect();
+    // Use the embedded binary directly (compiled-in, always current).
+    let prelude_content = stdlib::stdlib_content("core.mvl")
+        .expect("core.mvl is embedded at compile time and must be present");
+    let (mut prelude_parser, prelude_lex_errs) = Parser::new(prelude_content);
+    let prelude_prog = prelude_parser.parse_program();
+    if !prelude_lex_errs.is_empty() || !prelude_parser.errors().is_empty() {
+        eprintln!("internal error: embedded core.mvl failed to parse — this is a compiler bug");
+        process::exit(1);
+    }
+    let stdlib_prelude_progs = vec![prelude_prog];
 
     let out =
-        transpiler::transpile_project(&crate_name, &prog, &sibling_modules, &core_prelude_vec);
+        transpiler::transpile_project(&crate_name, &prog, &sibling_modules, &stdlib_prelude_progs);
 
     // Write to a per-crate workspace so each build gets its own mvl_runtime copy.
     // Layout: temp/mvl_build_{name}/{name}/  (crate), temp/mvl_build_{name}/mvl_runtime/ (runtime)

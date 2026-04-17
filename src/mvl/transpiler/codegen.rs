@@ -149,9 +149,22 @@ impl Codegen {
         }
 
         // Emit stdlib prelude functions that have real bodies (non-stubs).
-        // Stubs (empty body or trivial tail-only body with no statements) are skipped;
-        // built-in names handled as Rust macros (println, eprintln, format) are skipped.
+        // Stubs (empty body) are skipped; built-in names handled as Rust macros
+        // (println, print, eprintln, format) are skipped; test functions are skipped.
+        // Functions already declared in the user program are skipped to prevent
+        // duplicate Rust definitions when the user shadows a prelude function.
         const MACRO_HANDLED: &[&str] = &["println", "print", "eprintln", "format"];
+        let user_fn_names: std::collections::HashSet<&str> = prog
+            .declarations
+            .iter()
+            .filter_map(|d| {
+                if let Decl::Fn(fd) = d {
+                    Some(fd.name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
         let prelude_fns: Vec<&FnDecl> = prelude_progs
             .iter()
             .flat_map(|p| p.declarations.iter())
@@ -159,6 +172,7 @@ impl Codegen {
             .filter(|fd| !fd.body.stmts.is_empty())
             .filter(|fd| !MACRO_HANDLED.contains(&fd.name.as_str()))
             .filter(|fd| !fd.is_test)
+            .filter(|fd| !user_fn_names.contains(fd.name.as_str()))
             .collect();
         if !prelude_fns.is_empty() {
             self.line(

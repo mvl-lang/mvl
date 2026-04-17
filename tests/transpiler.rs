@@ -969,3 +969,131 @@ fn corpus_args_transpiles() {
     // Option<Float> → f64 parse
     assert_contains(&rust, "parse::<f64>()");
 }
+
+// ── Prelude emission (issue #229, Phase 4) ────────────────────────────────
+
+use mvl::mvl::transpiler::transpile_project;
+
+fn parse_prog(src: &str) -> mvl::mvl::parser::ast::Program {
+    let (mut p, lex_errs) = Parser::new(src);
+    assert!(lex_errs.is_empty(), "lex errors: {lex_errs:?}");
+    let prog = p.parse_program();
+    assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+    prog
+}
+
+/// A prelude function with a real body is emitted before user declarations.
+#[test]
+fn prelude_fn_with_body_is_emitted() {
+    let prelude_src = r#"
+pub partial fn greet(n: Int) -> String {
+    let x = n;
+    x.to_string()
+}
+"#;
+    let user_src = "fn main() -> Unit { }";
+    let prelude = vec![parse_prog(prelude_src)];
+    let user_prog = parse_prog(user_src);
+
+    let out = transpile_project("crate", &user_prog, &[], &prelude);
+    assert!(
+        out.main_rs.contains("// ── stdlib prelude"),
+        "prelude section header must appear:\n{}",
+        out.main_rs
+    );
+    assert!(
+        out.main_rs.contains("fn greet("),
+        "greet fn must be emitted from prelude:\n{}",
+        out.main_rs
+    );
+}
+
+/// A prelude stub (empty body) is NOT emitted.
+#[test]
+fn prelude_stub_with_empty_body_is_skipped() {
+    let prelude_src = "pub fn stub_fn(x: Int) -> Int { }";
+    let user_src = "fn f() -> Unit { }";
+    let prelude = vec![parse_prog(prelude_src)];
+    let user_prog = parse_prog(user_src);
+
+    let out = transpile_project("crate", &user_prog, &[], &prelude);
+    assert!(
+        !out.main_rs.contains("// ── stdlib prelude"),
+        "stub-only prelude must not emit section header:\n{}",
+        out.main_rs
+    );
+    assert!(
+        !out.main_rs.contains("fn stub_fn("),
+        "stub fn must not appear in output:\n{}",
+        out.main_rs
+    );
+}
+
+/// MACRO_HANDLED names (println, print, eprintln, format) are excluded even
+/// when they have non-empty bodies.
+#[test]
+fn macro_handled_names_are_excluded_from_prelude() {
+    let prelude_src = r#"pub fn println(value: String) -> Unit { let _x = value; }"#;
+    let user_src = "fn f() -> Unit { }";
+    let prelude = vec![parse_prog(prelude_src)];
+    let user_prog = parse_prog(user_src);
+
+    let out = transpile_project("crate", &user_prog, &[], &prelude);
+    assert!(
+        !out.main_rs.contains("fn println("),
+        "macro-handled fn must not appear as a regular function:\n{}",
+        out.main_rs
+    );
+}
+
+/// Empty prelude_progs slice produces no prelude section.
+#[test]
+fn empty_prelude_progs_emits_no_prelude_section() {
+    let user_src = "fn f() -> Unit { }";
+    let user_prog = parse_prog(user_src);
+
+    let out = transpile_project("crate", &user_prog, &[], &[]);
+    assert!(
+        !out.main_rs.contains("// ── stdlib prelude"),
+        "no prelude section must appear when prelude_progs is empty:\n{}",
+        out.main_rs
+    );
+}
+
+/// User-defined function shadows the prelude — no duplicate definitions.
+#[test]
+fn user_fn_shadows_prelude_fn_no_duplicate() {
+    let prelude_src = r#"
+pub partial fn my_fn(x: Int) -> Int {
+    let a = x;
+    a
+}
+"#;
+    let user_src = r#"
+pub fn my_fn(x: Int) -> Int { x }
+fn main() -> Unit { }
+"#;
+    let prelude = vec![parse_prog(prelude_src)];
+    let user_prog = parse_prog(user_src);
+
+    let out = transpile_project("crate", &user_prog, &[], &prelude);
+    let count = out.main_rs.matches("fn my_fn(").count();
+    assert_eq!(
+        count, 1,
+        "exactly one my_fn definition must appear (user shadows prelude):\n{}",
+        out.main_rs
+    );
+}
+
+/// range() call is NOT expanded inline — it emits as a plain function call.
+/// Regression: before #229 the transpiler emitted (start..end).collect::<Vec<i64>>()
+#[test]
+fn range_call_emits_as_plain_fn_call_not_inline_rust_range() {
+    let src = "fn f() -> Unit { let xs = range(0, 5); }";
+    let rust = transpile_src(src);
+    assert!(
+        !rust.contains("collect::<Vec<i64>>()"),
+        "range must not be expanded inline as a Rust iterator:\n{rust}"
+    );
+    assert_contains(&rust, "range(");
+}

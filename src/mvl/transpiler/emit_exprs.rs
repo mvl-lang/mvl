@@ -121,15 +121,13 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
             args,
             ..
         } => {
-            // println!/print! are Rust macros: first arg must be a bare string
+            // println!/print!/eprintln!/format! are Rust macros: first arg must be a bare string
             // literal, not a `.to_string()` expression.
-            if matches!(name.as_str(), "println" | "print" | "format") {
+            if matches!(name.as_str(), "println" | "print" | "eprintln" | "format") {
                 cg.push(&format!("{name}!"));
                 cg.push("(");
                 emit_args_for_macro(cg, args);
                 cg.push(")");
-            } else if try_emit_special_fn(cg, name, args) {
-                // Handled by special-case emitter (e.g. range)
             } else {
                 let is_extern = cg.extern_fns.contains(name.as_str());
                 if is_extern {
@@ -659,10 +657,4 @@ fn emit_safe_substring(cg: &mut Codegen, receiver: &Expr, start: &Expr, end: &Ex
     cg.push(").max(0)as usize;let _mvl_b=(");
     emit_expr(cg, end);
     cg.push(").max(0)as usize;_mvl_s.chars().skip(_mvl_a).take(_mvl_b.saturating_sub(_mvl_a)).collect::<String>()}");
-}
-
-/// Emit a free function call, handling special built-ins that require custom Rust output.
-/// Returns true if the call was handled specially (caller should not emit further).
-fn try_emit_special_fn(_cg: &mut Codegen, _name: &str, _args: &[Expr]) -> bool {
-    false
 }
