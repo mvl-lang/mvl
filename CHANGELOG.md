@@ -6,6 +6,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.36.0] — 2026-04-17
+
+### Added
+
+- **Lambda expression parsing** — full support for `|params: Type| expr` and `|params: Type| { block }` syntax in the recursive-descent parser, enabling iterator trait implementation (map, filter, fold) and unblocking Spec 001 Req 11 (#218).
+- **Zero-parameter lambda syntax** — `|| expr` now parses correctly (handled as single `PipePipe` token dispatched in `parse_atom`).
+- **Capability and mutable modifiers on lambda params** — lambda parameters now support `iso`, `val`, `ref`, `tag` capabilities and `mut` flag, matching function parameter syntax.
+- **Recursion depth guard** — added configurable limit (`MAX_PARSE_DEPTH = 200`) on expression nesting depth to prevent stack overflow from adversarially nested lambdas or other deeply nested expressions.
+
+### Fixed
+
+- **Lambda parameter parsing** — corrected `recursion_inside_lambda_not_flagged` test to use typed parameter syntax `|x: Int|` instead of bare `|x|`.
+- **Import organization** — moved `Param` import from function scope to module-level imports in expressions.rs for consistency with other AST types.
+
 ## [0.35.1] — 2026-04-17
 
 ### Fixed
