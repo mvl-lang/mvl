@@ -14,7 +14,7 @@
 //! - Multiline strings `"""…"""`, raw strings `r"…"`, raw multiline `r"""…"""`
 //! - Security-flow: `move(e)`, `consume(e)`, `declassify(e)`, `sanitize(e)`
 
-use crate::mvl::parser::ast::{BinaryOp, Expr, Literal, UnaryOp};
+use crate::mvl::parser::ast::{BinaryOp, Expr, Literal, Param, UnaryOp};
 
 /// Result of peeking inside `{` to decide whether it opens a map literal,
 /// set literal, or a plain block expression.
@@ -30,7 +30,21 @@ impl Parser {
     // ── Entry point ────────────────────────────────────────────────────────
 
     pub fn parse_expr(&mut self) -> Result<Expr, ()> {
-        self.parse_expr_prec(0)
+        if self.depth >= crate::mvl::parser::MAX_PARSE_DEPTH {
+            let err = crate::mvl::parser::ParseError {
+                message: format!(
+                    "expression nesting exceeds maximum depth ({})",
+                    crate::mvl::parser::MAX_PARSE_DEPTH
+                ),
+                span: self.peek_span(),
+            };
+            self.push_recover(err);
+            return Err(());
+        }
+        self.depth += 1;
+        let result = self.parse_expr_prec(0);
+        self.depth -= 1;
+        result
     }
 
     // ── Pratt precedence climbing ──────────────────────────────────────────
@@ -256,6 +270,12 @@ impl Parser {
                 })
             }
 
+            // ── Lambda expression ────────────────────────────────────────────
+            // `|params| body` — non-empty param list
+            TokenKind::Pipe => self.parse_lambda_expr(false),
+            // `|| body` — zero-parameter lambda (`||` is a single PipePipe token)
+            TokenKind::PipePipe => self.parse_lambda_expr(true),
+
             // ── Composite expressions ────────────────────────────────────────
             TokenKind::If => self.parse_if_expr(),
             TokenKind::Match => self.parse_match_expr(),
@@ -361,6 +381,67 @@ impl Parser {
                 Err(())
             }
         }
+    }
+
+    // ── Lambda expression ──────────────────────────────────────────────────
+
+    /// Parse a lambda expression.
+    ///
+    /// `zero_params` is `true` when the caller consumed `||` (a single `PipePipe`
+    /// token) and no parameter list follows.  When `false` the caller consumed
+    /// the opening `|` and we parse params until the closing `|`.
+    fn parse_lambda_expr(&mut self, zero_params: bool) -> Result<Expr, ()> {
+        let start = self.peek_span();
+        self.advance(); // consume opening `|` or `||`
+
+        let mut params = Vec::new();
+        if !zero_params {
+            while !matches!(self.peek_kind(), TokenKind::Pipe | TokenKind::Eof) {
+                let param_start = self.peek_span();
+
+                // Optional capability annotation: iso / val / ref / tag
+                let capability = self.try_parse_capability();
+
+                // Optional `mut`
+                let mutable = self.eat(&TokenKind::Mut);
+
+                let ir = self.expect_ident();
+                let (name, _) = self.require(ir)?;
+                let colon = self.expect(&TokenKind::Colon);
+                self.require(colon)?;
+                let ty = self.parse_type_expr()?;
+                let param_span = self.span_from(param_start);
+                params.push(Param {
+                    capability,
+                    mutable,
+                    name,
+                    ty,
+                    refinement: None,
+                    span: param_span,
+                });
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+
+            let pipe = self.expect(&TokenKind::Pipe);
+            self.require(pipe)?; // consume closing `|`
+        }
+
+        let ret_type = if self.eat(&TokenKind::Arrow) {
+            Some(Box::new(self.parse_type_expr()?))
+        } else {
+            None
+        };
+
+        let body = self.parse_expr()?;
+        let span = self.span_from(start);
+        Ok(Expr::Lambda {
+            params,
+            ret_type,
+            body: Box::new(body),
+            span,
+        })
     }
 
     // ── If expression ──────────────────────────────────────────────────────

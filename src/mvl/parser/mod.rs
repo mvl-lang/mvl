@@ -30,6 +30,10 @@ impl fmt::Display for ParseError {
 /// One function per grammar production. Each function returns `Ok(node)` or
 /// pushes a [`ParseError`] and returns `Err(())` after recovering to the next
 /// synchronization point.
+/// Maximum expression nesting depth.  Prevents stack overflows from deeply
+/// nested or adversarially crafted inputs (e.g., `|x: T| |x: T| … 10000 levels`).
+pub(crate) const MAX_PARSE_DEPTH: usize = 200;
+
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
@@ -38,6 +42,8 @@ pub struct Parser {
     /// Fix #15: pub(crate) so external callers use the `errors()` accessor
     /// method rather than being able to mutate the error list directly.
     pub(crate) errors: Vec<ParseError>,
+    /// Current expression nesting depth — guards against stack overflow.
+    depth: usize,
 }
 
 impl Parser {
@@ -53,6 +59,7 @@ impl Parser {
                 pos: 0,
                 last_span: first_span,
                 errors: Vec::new(),
+                depth: 0,
             },
             lex_errors,
         )

@@ -826,7 +826,7 @@ fn recursion_inside_lambda_not_flagged() {
     // THEN: no UnprovenRecursion — lambdas have their own scope (spec 007 §Req 4)
     let src = r#"
         fn outer(n: Int) -> Int {
-            let f = |x| outer(x);
+            let f = |x: Int| outer(x);
             n + 1
         }
     "#;
@@ -1932,9 +1932,7 @@ fn io_effect_bucket_rejected() {
 // ── ADR-0002: Lambda capture immutability ────────────────────────────────────
 
 /// Lambda capturing a mutable binding MUST be rejected (ADR-0002).
-/// Ignored until lambda syntax is added to the hand-written recursive-descent parser.
 #[test]
-#[ignore = "lambda parsing not yet implemented in the hand-written parser (Phase 2)"]
 fn lambda_mutable_capture_rejected() {
     let errors =
         errors_for(r#"fn f() -> Unit { let mut x = 1; let _g = |y: Int| -> Int { x + y }; }"#);
@@ -1947,9 +1945,7 @@ fn lambda_mutable_capture_rejected() {
 }
 
 /// Lambda capturing an immutable binding MUST be accepted (ADR-0002).
-/// Ignored until lambda syntax is added to the hand-written recursive-descent parser.
 #[test]
-#[ignore = "lambda parsing not yet implemented in the hand-written parser (Phase 2)"]
 fn lambda_immutable_capture_accepted() {
     let result = check_src(r#"fn f() -> Unit { let x = 1; let _g = |y: Int| -> Int { x + y }; }"#);
     let capture_errors: Vec<_> = result
