@@ -492,3 +492,27 @@ fn else_if_chain_runs_and_produces_expected_output() {
         ],
     );
 }
+
+// ── println_non_string_first_arg.mvl (regression #198) ────────────────────
+
+/// Regression for #198: println with a non-string first arg must generate
+/// valid Rust with one `{}` placeholder per argument.
+///
+/// Covers: two-arg (String+Int), single Int, two Ints, three args (Int+Int+Str).
+#[test]
+fn println_non_string_first_arg_check_passes() {
+    assert_check_ok("println_non_string_first_arg.mvl");
+}
+
+#[test]
+fn println_non_string_first_arg_runs() {
+    assert_run_output(
+        "println_non_string_first_arg.mvl",
+        &[
+            "hello 42",     // println(msg, x)        — String var + Int
+            "42",           // println(x)             — single Int arg
+            "42 100",       // println(x, y)          — two Int args
+            "42 100 hello", // println(x, y, msg)   — three args
+        ],
+    );
+}
