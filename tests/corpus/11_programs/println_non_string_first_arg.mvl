@@ -1,0 +1,5 @@
+fn main() -> Unit ! Console {
+    let x = 42;
+    let msg = "hello";
+    println(msg, x);
+}

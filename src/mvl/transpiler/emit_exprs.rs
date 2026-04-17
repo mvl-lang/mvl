@@ -430,23 +430,27 @@ fn emit_expr_as_arg(cg: &mut Codegen, expr: &Expr) {
 /// Emit arguments for Rust macros like `println!` where the first argument
 /// must be a bare string literal (not a `.to_string()` expression).
 fn emit_args_for_macro(cg: &mut Codegen, args: &[Expr]) {
-    for (i, arg) in args.iter().enumerate() {
-        if i > 0 {
-            cg.push(", ");
-        }
-        if i == 0 {
-            // First arg: emit string literal bare (no `.to_string()`).
-            // Non-literal: prepend "{}" format specifier so Rust accepts it.
-            match arg {
-                Expr::Literal(Literal::Str(s), _) => cg.push(&format!("\"{}\"", escape_str(s))),
-                other => {
-                    cg.push("\"{}\", ");
-                    emit_expr(cg, other);
-                }
+    if args.is_empty() {
+        return;
+    }
+    match &args[0] {
+        Expr::Literal(Literal::Str(s), _) => {
+            // First arg is a string literal: emit bare, then remaining args as values.
+            cg.push(&format!("\"{}\"", escape_str(s)));
+            for arg in &args[1..] {
+                cg.push(", ");
+                emit_expr_as_arg(cg, arg);
             }
-        } else {
-            // Non-first args are values passed to the macro — clone per Spec 009 Req 2.
-            emit_expr_as_arg(cg, arg);
+        }
+        _ => {
+            // First arg is not a string literal: generate one "{}" placeholder per
+            // argument so the format string matches the argument count (#198).
+            let placeholders = vec!["{}"; args.len()].join(" ");
+            cg.push(&format!("\"{placeholders}\""));
+            for arg in args {
+                cg.push(", ");
+                emit_expr_as_arg(cg, arg);
+            }
         }
     }
 }

@@ -492,3 +492,14 @@ fn else_if_chain_runs_and_produces_expected_output() {
         ],
     );
 }
+
+// ── println_non_string_first_arg.mvl (regression #198) ────────────────────
+
+/// Regression for #198: `println(msg, x)` where the first arg is not a string
+/// literal must generate valid Rust with one `{}` placeholder per argument.
+///
+/// Expected stdout contains both values separated by a space.
+#[test]
+fn println_non_string_first_arg_runs() {
+    assert_run_output("println_non_string_first_arg.mvl", &["hello 42"]);
+}
