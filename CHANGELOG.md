@@ -6,6 +6,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+### Added
+
+- **Phase 4 gate test** — `range()` now has a real MVL body (partial fn with while loop and list mutation) instead of a stub. The transpiler emits non-stub prelude functions before user code, enabling MVL stdlib bodies to be transpiled from source rather than relying on hardcoded Rust mappings. Validates end-to-end: real stdlib function → use → transpile → compile → run (#229).
+- **Comprehensive stdlib demo** — new `core_types_demo.mvl` exercises all 9 core types (Int, Float, Bool, String, List, Map, Set, Option, Result) with representative method calls and pattern matching, proving the foundation is complete.
+- **stdlib_content() lookup helper** — centralised API for accessing embedded stdlib files by name; used in main.rs to eliminate hardcoded "core.mvl" string.
+
+### Fixed
+
+- **Prelude name collision guard** — user-defined functions now shadow prelude functions instead of producing duplicate Rust definitions when a user redefines a stdlib function.
+- **Macro handling consistency** — added `eprintln` to the macro match arm in emit_exprs.rs (was missing, would have emitted plain `eprintln(...)` calls instead of `eprintln!` macros).
+- **Silent parse error on core.mvl** — embedded stdlib parse errors now produce a clear diagnostic instead of silently producing a malformed AST and confusing Rust compilation errors.
+- **Dead code removal** — removed `try_emit_special_fn` stub (always returned false) and its call site in emit_exprs.rs.
+
 ## [0.38.0] — 2026-04-17
 
 ### Added
