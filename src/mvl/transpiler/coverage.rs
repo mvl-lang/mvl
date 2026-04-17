@@ -18,6 +18,9 @@ pub enum BranchKind {
     ForBody,
     /// Entry into a while-loop body (counted per iteration).
     WhileBody,
+    /// Entry into the function body — used so branch-free functions still
+    /// appear in the coverage report as 1/1 (called) or 0/1 (not called).
+    FnEntry,
 }
 
 impl BranchKind {
@@ -28,14 +31,18 @@ impl BranchKind {
             BranchKind::MatchArm(n) => format!("arm {n}"),
             BranchKind::ForBody => "for body".to_string(),
             BranchKind::WhileBody => "while body".to_string(),
+            BranchKind::FnEntry => "fn entry".to_string(),
         }
     }
 
     /// True when this branch represents a non-iteration decision point.
-    /// Used for per-function branch counts (for/while are not counted as
-    /// distinct decision branches for the reachability summary).
+    /// Used for per-function branch counts (for/while and fn-entry probes are
+    /// not counted as distinct decision branches for the reachability summary).
     pub fn is_decision(&self) -> bool {
-        !matches!(self, BranchKind::ForBody | BranchKind::WhileBody)
+        !matches!(
+            self,
+            BranchKind::ForBody | BranchKind::WhileBody | BranchKind::FnEntry
+        )
     }
 }
 
@@ -151,36 +158,53 @@ pub fn emit_cov_report_test(total: usize) -> String {
 // ── Report formatting ─────────────────────────────────────────────────────
 
 /// Format a coverage report from branch metadata and raw hit counts.
-pub fn format_report(branches: &[BranchInfo], hits: &[u64]) -> String {
+///
+/// `all_files` is the ordered list of all test file stems that were transpiled,
+/// so files with zero decision branches still appear in the report.
+pub fn format_report(branches: &[BranchInfo], hits: &[u64], all_files: &[&str]) -> String {
     use std::collections::BTreeMap;
 
-    if branches.is_empty() {
-        return "No behavioral branches found in test files.\n".to_string();
+    // Accumulate per-function decision-branch coverage and fn-entry hits.
+    // file → fn_name → (branches_hit, total_decision_branches)
+    let mut fn_decision: BTreeMap<(&str, &str), (usize, usize)> = BTreeMap::new();
+    // file+fn → was the fn entry probe hit (true = called at least once)?
+    let mut fn_entry_hit: BTreeMap<(&str, &str), bool> = BTreeMap::new();
+
+    for b in branches {
+        if b.is_test_fn {
+            continue;
+        }
+        let count = hits.get(b.id).copied().unwrap_or(0);
+        let key = (b.file.as_str(), b.fn_name.as_str());
+        match &b.kind {
+            BranchKind::FnEntry => {
+                fn_entry_hit.insert(key, count > 0);
+            }
+            k if k.is_decision() => {
+                let e = fn_decision.entry(key).or_insert((0, 0));
+                if count > 0 {
+                    e.0 += 1;
+                }
+                e.1 += 1;
+            }
+            _ => {} // ForBody, WhileBody
+        }
     }
 
-    // Group: file → fn_name → decision branches only (preserving registration order).
-    // Test functions (those whose names start with a test marker) are included since
-    // they may exercise conditional logic, but the summary is per-function.
+    // Build per-file function list.
+    // Functions with decision branches: report their branch hit ratio.
+    // Functions with no decision branches but an fn-entry probe: report 1/1 or 0/1.
     let mut by_file: BTreeMap<&str, Vec<(&str, usize, usize)>> = BTreeMap::new();
-    {
-        // Collect per-function (hit, total) pairs grouped by file.
-        let mut fn_map: BTreeMap<(&str, &str), (usize, usize)> = BTreeMap::new();
-        for b in branches {
-            if !b.kind.is_decision() || b.is_test_fn {
-                continue;
-            }
-            let count = hits.get(b.id).copied().unwrap_or(0);
-            let e = fn_map.entry((&b.file, &b.fn_name)).or_insert((0, 0));
-            if count > 0 {
-                e.0 += 1;
-            }
-            e.1 += 1;
-        }
-        for ((file, fn_name), (hit, total)) in &fn_map {
-            by_file
-                .entry(file)
-                .or_default()
-                .push((fn_name, *hit, *total));
+    for ((file, fn_name), (hit, total)) in &fn_decision {
+        by_file
+            .entry(file)
+            .or_default()
+            .push((fn_name, *hit, *total));
+    }
+    for ((file, fn_name), &called) in &fn_entry_hit {
+        if !fn_decision.contains_key(&(*file, *fn_name)) {
+            let covered = if called { 1 } else { 0 };
+            by_file.entry(file).or_default().push((fn_name, covered, 1));
         }
     }
 
@@ -192,8 +216,16 @@ pub fn format_report(branches: &[BranchInfo], hits: &[u64]) -> String {
     let mut total_hit = 0usize;
     let mut total_branches = 0usize;
 
-    for (file, fns) in &by_file {
+    // Iterate all_files in order so every tested file appears, even with no branches.
+    for file in all_files {
         out.push_str(&format!("\n{file}.mvl\n"));
+        let fns = by_file.get(file).map(|v| v.as_slice()).unwrap_or(&[]);
+
+        if fns.is_empty() {
+            out.push_str("  (no decision branches)\n");
+            continue;
+        }
+
         let mut file_hit = 0usize;
         let mut file_total = 0usize;
 

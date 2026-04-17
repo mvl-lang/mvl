@@ -253,6 +253,53 @@ pub fn transpile_covered(
     (out, branches)
 }
 
+/// Transpile a source [`Program`] (not a `*_test.mvl` file) with branch coverage
+/// instrumentation for inclusion in the test crate.
+///
+/// Unlike [`transpile_covered`], this variant sets `test_extern_stubs = true` so
+/// `extern "rust"` blocks are replaced by `todo!()` stubs.  This allows source
+/// files that depend on external Rust crates (e.g. `extern "rust" { fn analyze… }`)
+/// to compile inside the test crate without the real dependency being present.
+pub fn transpile_covered_source(
+    prog: &Program,
+    crate_name: &str,
+    file_stem: &str,
+    start_id: usize,
+) -> (TranspileOutput, Vec<BranchInfo>) {
+    let has_main = has_main_fn(prog);
+    let extern_count = count_extern_decls(prog);
+    let has_extern_rust = has_extern_rust_decls(prog);
+    let use_runtime = extern_count > 0 || has_std_imports(prog);
+
+    let mut cg = Codegen::new();
+    cg.coverage = Some(CoverageMap::new(start_id));
+    cg.current_file = file_stem.to_string();
+    cg.test_extern_stubs = true;
+    cg.emit_program(prog);
+
+    let branches = cg.coverage.take().map(|c| c.branches).unwrap_or_default();
+    let lib_rs = cg.finish();
+
+    let opts = cargo::CargoOptions {
+        crate_name,
+        use_mvl_runtime: use_runtime,
+        extern_crates: Vec::new(),
+    };
+    let cargo_toml = if has_main {
+        cargo::emit_cargo_toml_binary_opts(&opts)
+    } else {
+        cargo::emit_cargo_toml_library_opts(&opts)
+    };
+    let out = TranspileOutput {
+        lib_rs,
+        cargo_toml,
+        has_main,
+        extern_count,
+        has_extern_rust,
+    };
+    (out, branches)
+}
+
 // ── has_extern_rust unit tests ─────────────────────────────────────────────
 
 #[cfg(test)]

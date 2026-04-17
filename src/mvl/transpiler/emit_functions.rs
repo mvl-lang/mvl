@@ -11,6 +11,7 @@ use crate::mvl::parser::ast::{
     Capability, Constraint, Expr, FnDecl, GenericParam, Param, Totality, TypeExpr,
 };
 use crate::mvl::transpiler::codegen::Codegen;
+use crate::mvl::transpiler::coverage::BranchKind;
 use crate::mvl::transpiler::emit_exprs::{emit_block_stmts, emit_expr};
 use crate::mvl::transpiler::emit_types::{emit_label, emit_ref_expr_for_assert, emit_type_expr};
 
@@ -58,6 +59,10 @@ pub fn emit_fn_decl(cg: &mut Codegen, fd: &FnDecl) {
         fd.name
     ));
     cg.push_indent();
+    // Fn-entry probe: records whether the function was ever called.
+    if let Some(id) = cg.alloc_branch(fd.span.line, BranchKind::FnEntry) {
+        cg.emit_cov_hit(id);
+    }
     emit_fn_body(cg, fd);
     cg.pop_indent();
     cg.line("}");
