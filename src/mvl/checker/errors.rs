@@ -299,8 +299,8 @@ impl CheckError {
             CheckError::UnsupportedExternAbi { .. } => 1,
             // Req 1: Type Safety — Iterator trait constraint
             CheckError::NotIterator { .. } => 1,
-            // Req 1: Type Safety — Generics constraint enforcement
-            CheckError::MissingConstraint { .. } => 1,
+            // Req 9: Generics — constraint enforcement
+            CheckError::MissingConstraint { .. } => 9,
         }
     }
 

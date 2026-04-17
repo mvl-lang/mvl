@@ -1621,6 +1621,28 @@ fn generic_with_constraint_parses() {
 }
 
 #[test]
+fn ord_constraint_satisfies_comparison() {
+    // Req 9: T with Ord bound may use <, >, <=, >= without error
+    parses_and_checks(
+        "total fn max<T>(a: T, b: T) -> T where T: Ord { if a > b { return a; } else { return b; } }",
+    );
+}
+
+#[test]
+fn eq_constraint_satisfies_equality() {
+    // Req 9: T with Eq bound may use == and != without error
+    parses_and_checks("total fn are_equal<T>(a: T, b: T) -> Bool where T: Eq { return a == b; }");
+}
+
+#[test]
+fn ord_constraint_satisfies_eq_check() {
+    // Req 9: Ord is a supertrait of Eq — where T: Ord must also permit == and !=
+    parses_and_checks(
+        "total fn cmp_and_eq<T>(a: T, b: T) -> Bool where T: Ord { if a > b { return true; } else { return a == b; } }",
+    );
+}
+
+#[test]
 fn generic_multiple_constraints_parse() {
     // Req 9: multiple constraints in where clause parse and check
     parses_and_checks(
@@ -1653,18 +1675,109 @@ fn missing_constraint_on_comparison_rejected() {
         "unconstrained T used with > must be rejected, got: {:?}",
         result.errors
     );
+    assert!(
+        result.errors.iter().any(|e| matches!(
+            e,
+            CheckError::MissingConstraint { required_bound, .. } if required_bound == "Ord"
+        )),
+        "expected MissingConstraint(Ord), got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn missing_eq_constraint_on_equality_rejected() {
+    // Req 9: unconstrained T used with == must require Eq bound
+    let (mut p, _) = Parser::new("total fn eq_check<T>(a: T, b: T) -> Bool { return a == b; }");
+    let prog = p.parse_program();
+    assert!(
+        p.errors().is_empty(),
+        "unexpected parse errors: {:?}",
+        p.errors()
+    );
+    let result = check(&prog);
+    assert!(
+        !result.is_ok(),
+        "unconstrained T used with == must be rejected"
+    );
+    assert!(
+        result.errors.iter().any(|e| matches!(
+            e,
+            CheckError::MissingConstraint { required_bound, .. } if required_bound == "Eq"
+        )),
+        "expected MissingConstraint(Eq), got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn missing_eq_constraint_on_ne_rejected() {
+    // Req 9: unconstrained T used with != must require Eq bound
+    let (mut p, _) = Parser::new("total fn neq_check<T>(a: T, b: T) -> Bool { return a != b; }");
+    let prog = p.parse_program();
+    assert!(
+        p.errors().is_empty(),
+        "unexpected parse errors: {:?}",
+        p.errors()
+    );
+    let result = check(&prog);
+    assert!(
+        !result.is_ok(),
+        "unconstrained T used with != must be rejected"
+    );
+    assert!(
+        result.errors.iter().any(|e| matches!(
+            e,
+            CheckError::MissingConstraint { required_bound, .. } if required_bound == "Eq"
+        )),
+        "expected MissingConstraint(Eq), got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn unconstrained_second_param_rejected_when_first_is_constrained() {
+    // Req 9: A has Ord, B does not — comparing two B values must still fail
+    let (mut p, _) = Parser::new(
+        "total fn pair_cmp<A, B>(a1: A, a2: A, b1: B, b2: B) -> Bool where A: Ord { return b1 > b2; }",
+    );
+    let prog = p.parse_program();
+    assert!(
+        p.errors().is_empty(),
+        "unexpected parse errors: {:?}",
+        p.errors()
+    );
+    let result = check(&prog);
+    assert!(
+        !result.is_ok(),
+        "unconstrained B used with > must be rejected even when A has Ord"
+    );
+}
+
+#[test]
+fn constrained_first_param_allowed_when_second_unconstrained() {
+    // Req 9: comparing A values is fine; A's Ord bound must not leak to B
+    parses_and_checks(
+        "total fn pair_cmp<A, B>(a1: A, a2: A, b1: B, b2: B) -> Bool where A: Ord { return a1 > a2; }",
+    );
 }
 
 #[test]
 fn higher_kinded_type_param_rejected() {
     // Req 9 Scenario: No higher-kinded types
     // GIVEN F<_> nested angle-bracket type param
-    // THEN parser MUST reject
+    // THEN parser MUST reject with a higher-kinded diagnostic
     let (mut p, _) = Parser::new("type Functor<F<_>> = struct { val: Int }");
     let _ = p.parse_program();
     assert!(
         !p.errors().is_empty(),
         "HKT type parameter syntax must be rejected by the parser"
+    );
+    let first = p.errors().first().expect("should have at least one error");
+    assert!(
+        first.message.contains("higher-kinded"),
+        "first error should be the HKT rejection, got: {:?}",
+        first.message
     );
 }
 
@@ -1672,12 +1785,18 @@ fn higher_kinded_type_param_rejected() {
 fn inline_constraint_syntax_rejected() {
     // Req 9 Scenario: Inline constraint syntax rejected
     // GIVEN <T: Ord> inline constraint syntax
-    // THEN parser MUST reject in Phase 1
+    // THEN parser MUST reject with a diagnostic mentioning `where`
     let (mut p, _) = Parser::new("total fn max<T: Ord>(a: T, b: T) -> T { return a; }");
     let _ = p.parse_program();
     assert!(
         !p.errors().is_empty(),
         "inline constraint `<T: Ord>` must be rejected in Phase 1"
+    );
+    let first = p.errors().first().expect("should have at least one error");
+    assert!(
+        first.message.contains("inline constraint") && first.message.contains("where"),
+        "error should explain to use a where clause, got: {:?}",
+        first.message
     );
 }
 

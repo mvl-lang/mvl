@@ -34,7 +34,7 @@ use crate::mvl::parser::ast::{
     TypeBody, TypeDecl, UnaryOp,
 };
 use crate::mvl::parser::lexer::Span;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
@@ -150,7 +150,7 @@ struct TypeChecker {
     /// Populated by `register_impl` for `impl Iterator<T> for X` declarations.
     iterator_impls: HashMap<String, Ty>,
     /// Type parameter names in scope for the current function.
-    current_type_params: std::collections::HashSet<String>,
+    current_type_params: HashSet<String>,
     /// Trait bounds for type params in the current function (from `where` clauses).
     current_type_constraints: HashMap<String, Vec<String>>,
 }
@@ -167,7 +167,7 @@ impl TypeChecker {
             extern_count: 0,
             lambda_scope_starts: Vec::new(),
             iterator_impls: HashMap::new(),
-            current_type_params: std::collections::HashSet::new(),
+            current_type_params: HashSet::new(),
             current_type_constraints: HashMap::new(),
         }
     }
@@ -346,7 +346,7 @@ impl TypeChecker {
         let prev_totality = std::mem::replace(&mut self.current_fn_totality, fd.totality.clone());
 
         // Build type-param constraint context (001-type-system/Req 9).
-        let type_params: std::collections::HashSet<String> = fd
+        let type_params: HashSet<String> = fd
             .type_params
             .iter()
             .map(|p| p.name().to_string())
@@ -1324,18 +1324,24 @@ impl TypeChecker {
             | BinaryOp::Ge => {
                 // Constraint enforcement: unconstrained type params may not be compared.
                 // `<`, `>`, `<=`, `>=` require `Ord`; `==`, `!=` require `Eq`.
+                // `Ord` is a supertype of `Eq`, so `where T: Ord` satisfies an `Eq` check.
                 let required_bound = match op {
                     BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge => "Ord",
-                    _ => "Eq",
+                    BinaryOp::Eq | BinaryOp::Ne => "Eq",
+                    _ => unreachable!(),
                 };
                 for operand_ty in [&lt, &rt] {
                     if let Ty::Named(name, args) = operand_ty.unlabeled() {
                         if args.is_empty() && self.current_type_params.contains(name) {
-                            let has_bound = self
-                                .current_type_constraints
-                                .get(name)
-                                .map(|bounds| bounds.iter().any(|b| b == required_bound))
-                                .unwrap_or(false);
+                            let has_bound =
+                                self.current_type_constraints
+                                    .get(name)
+                                    .is_some_and(|bounds| {
+                                        bounds.iter().any(|b| {
+                                            b == required_bound
+                                                || (required_bound == "Eq" && b == "Ord")
+                                        })
+                                    });
                             if !has_bound {
                                 self.emit(CheckError::MissingConstraint {
                                     type_param: name.clone(),
