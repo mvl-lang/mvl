@@ -245,7 +245,29 @@ impl Parser {
                 }
             } else {
                 match self.expect_ident() {
-                    Ok((name, _)) => params.push(GenericParam::Type(name)),
+                    Ok((name, _)) => {
+                        // Reject HKT syntax: `F<_>` is not supported.
+                        if matches!(self.peek_kind(), TokenKind::Lt) {
+                            self.push_error(ParseError {
+                                message: format!(
+                                    "higher-kinded type parameter `{name}<_>` is not supported; type parameters must be simple identifiers"
+                                ),
+                                span: self.peek_span(),
+                            });
+                            break;
+                        }
+                        // Reject inline constraint syntax: `T: Trait`; use `where` instead.
+                        if matches!(self.peek_kind(), TokenKind::Colon) {
+                            self.push_error(ParseError {
+                                message: format!(
+                                    "inline constraint syntax `{name}: Trait` is not supported; use a `where` clause instead"
+                                ),
+                                span: self.peek_span(),
+                            });
+                            break;
+                        }
+                        params.push(GenericParam::Type(name));
+                    }
                     Err(e) => {
                         self.push_error(e);
                         break;

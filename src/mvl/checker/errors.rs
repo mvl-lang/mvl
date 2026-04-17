@@ -196,6 +196,14 @@ pub enum CheckError {
         span: Span,
     },
 
+    // ── Generics constraint enforcement (001-type-system/Req 9) ─────────
+    /// Unconstrained type parameter used with an operator that requires a trait bound.
+    MissingConstraint {
+        type_param: String,
+        required_bound: String,
+        span: Span,
+    },
+
     // ── Information flow control (#23) ───────────────────────────────────
     /// `declassify()` applied to a non-`Secret<T>` type.
     InvalidDeclassify {
@@ -291,6 +299,8 @@ impl CheckError {
             CheckError::UnsupportedExternAbi { .. } => 1,
             // Req 1: Type Safety — Iterator trait constraint
             CheckError::NotIterator { .. } => 1,
+            // Req 9: Generics — constraint enforcement
+            CheckError::MissingConstraint { .. } => 9,
         }
     }
 
@@ -334,7 +344,8 @@ impl CheckError {
             | CheckError::UnsupportedExternAbi { span, .. }
             | CheckError::PropagateIncompatibleError { span, .. }
             | CheckError::NotIterator { span, .. }
-            | CheckError::ForLoopInPartialFn { span } => *span,
+            | CheckError::ForLoopInPartialFn { span }
+            | CheckError::MissingConstraint { span, .. } => *span,
         }
     }
 
@@ -465,6 +476,13 @@ impl CheckError {
             CheckError::ForLoopInPartialFn { .. } => {
                 "`for` is not permitted in `partial` functions; use `while` instead".to_string()
             }
+            CheckError::MissingConstraint {
+                type_param,
+                required_bound,
+                ..
+            } => format!(
+                "type parameter `{type_param}` does not implement `{required_bound}` — add `where {type_param}: {required_bound}` to the function signature"
+            ),
         }
     }
 }

@@ -34,7 +34,7 @@ use crate::mvl::parser::ast::{
     TypeBody, TypeDecl, UnaryOp,
 };
 use crate::mvl::parser::lexer::Span;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
@@ -149,6 +149,10 @@ struct TypeChecker {
     /// Types that implement `Iterator<T>`, mapped to their element type.
     /// Populated by `register_impl` for `impl Iterator<T> for X` declarations.
     iterator_impls: HashMap<String, Ty>,
+    /// Type parameter names in scope for the current function.
+    current_type_params: HashSet<String>,
+    /// Trait bounds for type params in the current function (from `where` clauses).
+    current_type_constraints: HashMap<String, Vec<String>>,
 }
 
 impl TypeChecker {
@@ -163,6 +167,8 @@ impl TypeChecker {
             extern_count: 0,
             lambda_scope_starts: Vec::new(),
             iterator_impls: HashMap::new(),
+            current_type_params: HashSet::new(),
+            current_type_constraints: HashMap::new(),
         }
     }
 
@@ -339,6 +345,23 @@ impl TypeChecker {
         let prev_effects = std::mem::replace(&mut self.current_fn_effects, fd.effects.clone());
         let prev_totality = std::mem::replace(&mut self.current_fn_totality, fd.totality.clone());
 
+        // Build type-param constraint context (001-type-system/Req 9).
+        let type_params: HashSet<String> = fd
+            .type_params
+            .iter()
+            .map(|p| p.name().to_string())
+            .collect();
+        let mut type_constraints: HashMap<String, Vec<String>> = HashMap::new();
+        for c in &fd.constraints {
+            type_constraints
+                .entry(c.name.clone())
+                .or_default()
+                .push(c.bound.clone());
+        }
+        let prev_type_params = std::mem::replace(&mut self.current_type_params, type_params);
+        let prev_type_constraints =
+            std::mem::replace(&mut self.current_type_constraints, type_constraints);
+
         self.env.push_scope();
         for param in &fd.params {
             let ty = resolve(&param.ty);
@@ -359,6 +382,8 @@ impl TypeChecker {
         self.current_fn_name = prev_fn_name;
         self.current_fn_effects = prev_effects;
         self.current_fn_totality = prev_totality;
+        self.current_type_params = prev_type_params;
+        self.current_type_constraints = prev_type_constraints;
     }
 
     fn check_const_decl(&mut self, cd: &ConstDecl) {
@@ -1297,6 +1322,36 @@ impl TypeChecker {
             | BinaryOp::Gt
             | BinaryOp::Le
             | BinaryOp::Ge => {
+                // Constraint enforcement: unconstrained type params may not be compared.
+                // `<`, `>`, `<=`, `>=` require `Ord`; `==`, `!=` require `Eq`.
+                // `Ord` is a supertype of `Eq`, so `where T: Ord` satisfies an `Eq` check.
+                let required_bound = match op {
+                    BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge => "Ord",
+                    BinaryOp::Eq | BinaryOp::Ne => "Eq",
+                    _ => unreachable!(),
+                };
+                for operand_ty in [&lt, &rt] {
+                    if let Ty::Named(name, args) = operand_ty.unlabeled() {
+                        if args.is_empty() && self.current_type_params.contains(name) {
+                            let has_bound =
+                                self.current_type_constraints
+                                    .get(name)
+                                    .is_some_and(|bounds| {
+                                        bounds.iter().any(|b| {
+                                            b == required_bound
+                                                || (required_bound == "Eq" && b == "Ord")
+                                        })
+                                    });
+                            if !has_bound {
+                                self.emit(CheckError::MissingConstraint {
+                                    type_param: name.clone(),
+                                    required_bound: required_bound.to_string(),
+                                    span,
+                                });
+                            }
+                        }
+                    }
+                }
                 if !matches!(lt, Ty::Unknown)
                     && !matches!(rt, Ty::Unknown)
                     && !types_compatible(&lt, &rt)
