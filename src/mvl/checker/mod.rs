@@ -34,6 +34,7 @@ use crate::mvl::parser::ast::{
     TypeBody, TypeDecl, UnaryOp,
 };
 use crate::mvl::parser::lexer::Span;
+use std::collections::HashMap;
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
@@ -145,6 +146,9 @@ struct TypeChecker {
     /// up and its scope index is strictly less than the boundary recorded here, it
     /// was captured from an outer scope and must be immutable.
     lambda_scope_starts: Vec<usize>,
+    /// Types that implement `Iterator<T>`, mapped to their element type.
+    /// Populated by `register_impl` for `impl Iterator<T> for X` declarations.
+    iterator_impls: HashMap<String, Ty>,
 }
 
 impl TypeChecker {
@@ -158,6 +162,7 @@ impl TypeChecker {
             current_fn_totality: None,
             extern_count: 0,
             lambda_scope_starts: Vec::new(),
+            iterator_impls: HashMap::new(),
         }
     }
 
@@ -237,13 +242,53 @@ impl TypeChecker {
         }
     }
 
-    /// Register `impl From<A> for B` so that `?` propagation can use the conversion.
+    /// Register trait implementations for use during type checking.
+    /// - `impl From<A> for B` → enables `?` propagation
+    /// - `impl Iterator<T> for X` → enables `X` in `for...in` loops
     fn register_impl(&mut self, id: &ImplDecl) {
         if id.trait_name == "From" {
             if let Some(source_ty) = id.trait_type_args.first() {
-                // Resolve the source type to its display name for lookup.
                 let source = resolve(source_ty).display();
                 self.env.register_from_impl(id.type_name.clone(), source);
+            }
+        } else if id.trait_name == "Iterator" {
+            let elem_ty = id
+                .trait_type_args
+                .first()
+                .map(resolve)
+                .unwrap_or(Ty::Unknown);
+            self.iterator_impls.insert(id.type_name.clone(), elem_ty);
+        }
+    }
+
+    /// Return the iterator element type for `ty`, or emit `NotIterator` and return `Unknown`.
+    ///
+    /// Accepted iterator types (001-type-system Req 11):
+    /// - `List<T>` — treated as `Iterator<T>` (existing behavior)
+    /// - `Array<T, N>` — built-in `Iterator<T>` implementation
+    /// - Any named type registered via `impl Iterator<T> for X`
+    fn check_iterator_type(&mut self, ty: &Ty, span: Span) -> Ty {
+        match ty.unlabeled() {
+            Ty::List(inner) => *inner.clone(),
+            Ty::Array(inner, _) => *inner.clone(),
+            Ty::Named(name, _) => {
+                if let Some(elem) = self.iterator_impls.get(name).cloned() {
+                    elem
+                } else {
+                    self.emit(CheckError::NotIterator {
+                        ty: ty.display(),
+                        span,
+                    });
+                    Ty::Unknown
+                }
+            }
+            Ty::Unknown => Ty::Unknown, // propagate without double-reporting
+            _ => {
+                self.emit(CheckError::NotIterator {
+                    ty: ty.display(),
+                    span,
+                });
+                Ty::Unknown
             }
         }
     }
@@ -687,13 +732,15 @@ impl TypeChecker {
                 pattern,
                 iter,
                 body,
-                ..
+                span,
             } => {
+                // Req 11: `for` is bounded (total) — reject in `partial` functions.
+                if matches!(self.current_fn_totality, Some(Totality::Partial)) {
+                    self.emit(CheckError::ForLoopInPartialFn { span: *span });
+                }
                 let iter_ty = self.infer_expr(iter);
-                let elem_ty = match iter_ty.unlabeled() {
-                    Ty::List(inner) => *inner.clone(),
-                    _ => Ty::Unknown,
-                };
+                let iter_span = iter.span();
+                let elem_ty = self.check_iterator_type(&iter_ty, iter_span);
                 self.env.push_scope();
                 self.bind_pattern(pattern, &elem_ty, false);
                 self.check_block(body, return_ty);
