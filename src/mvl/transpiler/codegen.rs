@@ -31,6 +31,8 @@ pub struct Codegen {
     pub current_fn: String,
     /// Stem of the source file being transpiled (for coverage metadata).
     pub current_file: String,
+    /// True when the current function is a `test fn` (excluded from coverage report).
+    pub current_fn_is_test: bool,
 }
 
 impl Codegen {
@@ -86,9 +88,10 @@ impl Codegen {
     pub fn alloc_branch(&mut self, line: u32, kind: BranchKind) -> Option<usize> {
         let fn_name = self.current_fn.clone();
         let file = self.current_file.clone();
+        let is_test_fn = self.current_fn_is_test;
         self.coverage
             .as_mut()
-            .map(|c| c.alloc(fn_name, file, line, kind))
+            .map(|c| c.alloc(fn_name, file, line, kind, is_test_fn))
     }
 
     /// Emit a `#[cfg(test)] crate::__mvl_cov::hit(id);` statement at current indent.

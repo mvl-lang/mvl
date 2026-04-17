@@ -15,8 +15,9 @@ use crate::mvl::transpiler::emit_exprs::{emit_block_stmts, emit_expr};
 use crate::mvl::transpiler::emit_types::{emit_label, emit_ref_expr_for_assert, emit_type_expr};
 
 pub fn emit_fn_decl(cg: &mut Codegen, fd: &FnDecl) {
-    // Track current function name for coverage metadata.
+    // Track current function name and test status for coverage metadata.
     cg.current_fn = fd.name.clone();
+    cg.current_fn_is_test = fd.is_test;
 
     // Test functions are emitted inside a #[cfg(test)] mod tests block.
     // The caller (codegen) is responsible for grouping them; here we just

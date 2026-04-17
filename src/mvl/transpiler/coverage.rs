@@ -52,6 +52,8 @@ pub struct BranchInfo {
     pub line: u32,
     /// Kind of branch.
     pub kind: BranchKind,
+    /// True when the enclosing function is a `test fn` — excluded from the report.
+    pub is_test_fn: bool,
 }
 
 /// Accumulates branch registrations during a single transpilation pass.
@@ -69,7 +71,14 @@ impl CoverageMap {
     }
 
     /// Register a new branch and return its unique counter index.
-    pub fn alloc(&mut self, fn_name: String, file: String, line: u32, kind: BranchKind) -> usize {
+    pub fn alloc(
+        &mut self,
+        fn_name: String,
+        file: String,
+        line: u32,
+        kind: BranchKind,
+        is_test_fn: bool,
+    ) -> usize {
         let id = self.next_id;
         self.next_id += 1;
         self.branches.push(BranchInfo {
@@ -78,6 +87,7 @@ impl CoverageMap {
             file,
             line,
             kind,
+            is_test_fn,
         });
         id
     }
@@ -148,15 +158,30 @@ pub fn format_report(branches: &[BranchInfo], hits: &[u64]) -> String {
         return "No behavioral branches found in test files.\n".to_string();
     }
 
-    // Group: file → fn_name → branches (preserving registration order)
-    let mut by_file: BTreeMap<&str, BTreeMap<&str, Vec<&BranchInfo>>> = BTreeMap::new();
-    for b in branches {
-        by_file
-            .entry(&b.file)
-            .or_default()
-            .entry(&b.fn_name)
-            .or_default()
-            .push(b);
+    // Group: file → fn_name → decision branches only (preserving registration order).
+    // Test functions (those whose names start with a test marker) are included since
+    // they may exercise conditional logic, but the summary is per-function.
+    let mut by_file: BTreeMap<&str, Vec<(&str, usize, usize)>> = BTreeMap::new();
+    {
+        // Collect per-function (hit, total) pairs grouped by file.
+        let mut fn_map: BTreeMap<(&str, &str), (usize, usize)> = BTreeMap::new();
+        for b in branches {
+            if !b.kind.is_decision() || b.is_test_fn {
+                continue;
+            }
+            let count = hits.get(b.id).copied().unwrap_or(0);
+            let e = fn_map.entry((&b.file, &b.fn_name)).or_insert((0, 0));
+            if count > 0 {
+                e.0 += 1;
+            }
+            e.1 += 1;
+        }
+        for ((file, fn_name), (hit, total)) in &fn_map {
+            by_file
+                .entry(file)
+                .or_default()
+                .push((fn_name, *hit, *total));
+        }
     }
 
     let mut out = String::new();
@@ -172,32 +197,24 @@ pub fn format_report(branches: &[BranchInfo], hits: &[u64]) -> String {
         let mut file_hit = 0usize;
         let mut file_total = 0usize;
 
-        for (fn_name, brs) in fns {
-            out.push_str(&format!("  fn {fn_name}\n"));
-            for b in brs {
-                let count = hits.get(b.id).copied().unwrap_or(0);
-                let mark = if count > 0 { "✓" } else { "✗" };
-                out.push_str(&format!(
-                    "    {mark} {} (line {}): {count}\n",
-                    b.kind.label(),
-                    b.line,
-                ));
-                if b.kind.is_decision() {
-                    if count > 0 {
-                        file_hit += 1;
-                    }
-                    file_total += 1;
-                }
-            }
+        for (fn_name, hit, total) in fns {
+            let pct = if *total > 0 { (hit * 100) / total } else { 100 };
+            let mark = if *hit == *total { "✓" } else { "△" };
+            out.push_str(&format!(
+                "  {mark}  {fn_name:<40}  {hit}/{total}  ({pct}%)\n"
+            ));
+            file_hit += hit;
+            file_total += total;
         }
 
-        let pct = if file_total > 0 {
+        let file_pct = if file_total > 0 {
             (file_hit * 100) / file_total
         } else {
             100
         };
         out.push_str(&format!(
-            "  coverage: {file_hit}/{file_total} branches ({pct}%)\n"
+            "     {:<40}  {file_hit}/{file_total}  ({file_pct}%)\n",
+            format!("{file}.mvl total")
         ));
         total_hit += file_hit;
         total_branches += file_total;
@@ -210,7 +227,7 @@ pub fn format_report(branches: &[BranchInfo], hits: &[u64]) -> String {
         100
     };
     out.push_str(&format!(
-        "Total: {total_hit}/{total_branches} branches ({total_pct}%)\n"
+        "Total: {total_hit}/{total_branches} branches  ({total_pct}%)\n"
     ));
     out
 }
