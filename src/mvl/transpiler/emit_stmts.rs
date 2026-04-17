@@ -14,6 +14,7 @@
 
 use crate::mvl::parser::ast::{ElseBranch, LValue, MatchBody, Stmt};
 use crate::mvl::transpiler::codegen::Codegen;
+use crate::mvl::transpiler::coverage::BranchKind;
 use crate::mvl::transpiler::emit_exprs::{
     arms_have_str_pattern, emit_block_as_value, emit_block_stmts, emit_expr, emit_pattern,
 };
@@ -68,28 +69,46 @@ pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
         }
 
         Stmt::If {
-            cond, then, else_, ..
+            cond,
+            then,
+            else_,
+            span,
+            ..
         } => {
+            let true_id = cg.alloc_branch(span.line, BranchKind::IfTrue);
+            let false_id = else_
+                .as_ref()
+                .and(cg.alloc_branch(span.line, BranchKind::IfFalse));
             cg.indent();
             cg.push("if ");
             emit_expr(cg, cond);
             cg.push(" {");
             cg.nl();
             cg.push_indent();
+            if let Some(id) = true_id {
+                cg.emit_cov_hit(id);
+            }
             emit_block_as_value(cg, &then.stmts);
             cg.pop_indent();
             cg.indent();
             cg.push("}");
             if let Some(else_branch) = else_ {
                 cg.push(" else ");
-                emit_else_branch(cg, else_branch);
+                emit_else_branch(cg, else_branch, false_id);
             }
             cg.nl();
         }
 
         Stmt::Match {
-            scrutinee, arms, ..
+            scrutinee,
+            arms,
+            span,
+            ..
         } => {
+            // Allocate coverage IDs for each arm up-front (avoids borrow conflict).
+            let arm_ids: Vec<Option<usize>> = (0..arms.len())
+                .map(|i| cg.alloc_branch(span.line, BranchKind::MatchArm(i)))
+                .collect();
             let has_str_arm = arms_have_str_pattern(arms);
             cg.indent();
             cg.push("match ");
@@ -100,7 +119,7 @@ pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
             cg.push(" {");
             cg.nl();
             cg.push_indent();
-            for arm in arms {
+            for (arm, cov_id) in arms.iter().zip(arm_ids.iter()) {
                 cg.indent();
                 emit_pattern(cg, &arm.pattern);
                 if let Some(guard) = &arm.guard {
@@ -110,7 +129,15 @@ pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
                 cg.push(" => ");
                 match &arm.body {
                     MatchBody::Expr(e) => {
-                        emit_expr(cg, e);
+                        if let Some(id) = cov_id {
+                            // Wrap expr arm in a block to inject hit statement.
+                            cg.push("{ ");
+                            cg.push(&format!("#[cfg(test)] crate::__mvl_cov::hit({id}); "));
+                            emit_expr(cg, e);
+                            cg.push(" }");
+                        } else {
+                            emit_expr(cg, e);
+                        }
                         cg.push(",");
                         cg.nl();
                     }
@@ -118,6 +145,9 @@ pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
                         cg.push("{");
                         cg.nl();
                         cg.push_indent();
+                        if let Some(id) = cov_id {
+                            cg.emit_cov_hit(*id);
+                        }
                         // Use emit_block_as_value so the final Stmt::Expr is a tail
                         // expression (no semicolon) and becomes the arm's return value.
                         emit_block_as_value(cg, &block.stmts);
@@ -138,8 +168,10 @@ pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
             pattern,
             iter,
             body,
+            span,
             ..
         } => {
+            let for_id = cg.alloc_branch(span.line, BranchKind::ForBody);
             cg.indent();
             cg.push("for ");
             emit_pattern(cg, pattern);
@@ -152,6 +184,9 @@ pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
             cg.push(").clone() {");
             cg.nl();
             cg.push_indent();
+            if let Some(id) = for_id {
+                cg.emit_cov_hit(id);
+            }
             emit_block_stmts(cg, &body.stmts);
             cg.pop_indent();
             cg.indent();
@@ -159,13 +194,19 @@ pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
             cg.nl();
         }
 
-        Stmt::While { cond, body, .. } => {
+        Stmt::While {
+            cond, body, span, ..
+        } => {
+            let while_id = cg.alloc_branch(span.line, BranchKind::WhileBody);
             cg.indent();
             cg.push("while ");
             emit_expr(cg, cond);
             cg.push(" {");
             cg.nl();
             cg.push_indent();
+            if let Some(id) = while_id {
+                cg.emit_cov_hit(id);
+            }
             emit_block_stmts(cg, &body.stmts);
             cg.pop_indent();
             cg.indent();
@@ -197,12 +238,15 @@ fn emit_lvalue(cg: &mut Codegen, lv: &LValue) {
     }
 }
 
-fn emit_else_branch(cg: &mut Codegen, branch: &ElseBranch) {
+fn emit_else_branch(cg: &mut Codegen, branch: &ElseBranch, cov_id: Option<usize>) {
     match branch {
         ElseBranch::Block(block) => {
             cg.push("{");
             cg.nl();
             cg.push_indent();
+            if let Some(id) = cov_id {
+                cg.emit_cov_hit(id);
+            }
             emit_block_as_value(cg, &block.stmts);
             cg.pop_indent();
             cg.indent();
@@ -211,22 +255,36 @@ fn emit_else_branch(cg: &mut Codegen, branch: &ElseBranch) {
         ElseBranch::If(stmt) => {
             // Emit the `if` inline (no leading indent, no trailing newline) so
             // the caller's `} else ` and this `if` land on the same line.
+            // The false-branch coverage hit for the outer if is injected here
+            // before the inner condition is tested.
             match stmt.as_ref() {
                 Stmt::If {
-                    cond, then, else_, ..
+                    cond,
+                    then,
+                    else_,
+                    span,
+                    ..
                 } => {
+                    // Allocate IDs for the inner else-if's own branches.
+                    let inner_true_id = cg.alloc_branch(span.line, BranchKind::IfTrue);
+                    let inner_false_id = else_
+                        .as_ref()
+                        .and(cg.alloc_branch(span.line, BranchKind::IfFalse));
                     cg.push("if ");
                     emit_expr(cg, cond);
                     cg.push(" {");
                     cg.nl();
                     cg.push_indent();
+                    if let Some(id) = inner_true_id {
+                        cg.emit_cov_hit(id);
+                    }
                     emit_block_as_value(cg, &then.stmts);
                     cg.pop_indent();
                     cg.indent();
                     cg.push("}");
                     if let Some(inner_else) = else_ {
                         cg.push(" else ");
-                        emit_else_branch(cg, inner_else);
+                        emit_else_branch(cg, inner_else, inner_false_id);
                     }
                 }
                 other => unreachable!("ElseBranch::If must always wrap Stmt::If; got {:?}", other),

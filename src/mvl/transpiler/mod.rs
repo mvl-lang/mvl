@@ -23,6 +23,7 @@
 
 pub mod cargo;
 pub mod codegen;
+pub mod coverage;
 pub mod emit_exprs;
 pub mod emit_functions;
 pub mod emit_impls;
@@ -32,6 +33,9 @@ pub mod emit_types;
 use crate::mvl::parser::ast::{Decl, Program};
 use cargo::CargoOptions;
 use codegen::Codegen;
+pub use coverage::{
+    emit_cov_preamble, emit_cov_report_test, format_report, BranchInfo, CoverageMap,
+};
 
 /// Output of a successful transpilation.
 pub struct TranspileOutput {
@@ -202,6 +206,51 @@ pub fn transpile(prog: &Program, crate_name: &str) -> TranspileOutput {
         extern_count,
         has_extern_rust,
     }
+}
+
+/// Transpile a [`Program`] with branch coverage instrumentation.
+///
+/// `file_stem` is the source file name without extension (used in coverage reports).
+/// `start_id` is the first counter index to allocate (allows combining multiple files).
+///
+/// Returns the transpile output plus all registered branch metadata.
+pub fn transpile_covered(
+    prog: &Program,
+    crate_name: &str,
+    file_stem: &str,
+    start_id: usize,
+) -> (TranspileOutput, Vec<BranchInfo>) {
+    let has_main = has_main_fn(prog);
+    let extern_count = count_extern_decls(prog);
+    let has_extern_rust = has_extern_rust_decls(prog);
+    let use_runtime = extern_count > 0 || has_std_imports(prog);
+
+    let mut cg = Codegen::new();
+    cg.coverage = Some(CoverageMap::new(start_id));
+    cg.current_file = file_stem.to_string();
+    cg.emit_program(prog);
+
+    let branches = cg.coverage.take().map(|c| c.branches).unwrap_or_default();
+    let lib_rs = cg.finish();
+
+    let opts = CargoOptions {
+        crate_name,
+        use_mvl_runtime: use_runtime,
+        extern_crates: Vec::new(),
+    };
+    let cargo_toml = if has_main {
+        cargo::emit_cargo_toml_binary_opts(&opts)
+    } else {
+        cargo::emit_cargo_toml_library_opts(&opts)
+    };
+    let out = TranspileOutput {
+        lib_rs,
+        cargo_toml,
+        has_main,
+        extern_count,
+        has_extern_rust,
+    };
+    (out, branches)
 }
 
 // ── has_extern_rust unit tests ─────────────────────────────────────────────

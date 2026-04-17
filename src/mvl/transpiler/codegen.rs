@@ -6,6 +6,7 @@
 use crate::mvl::parser::ast::{
     Decl, ExternDecl, FieldDecl, FnDecl, Param, Program, TypeDecl, TypeExpr, Variant, VariantFields,
 };
+use crate::mvl::transpiler::coverage::{BranchKind, CoverageMap};
 use crate::mvl::transpiler::emit_functions::emit_fn_decl;
 use crate::mvl::transpiler::emit_impls::emit_impl_decl;
 use crate::mvl::transpiler::emit_types::emit_type_decl;
@@ -24,6 +25,12 @@ pub struct Codegen {
     /// When `true`, `ParseFromArgs`, `get_arg`, and other runtime symbols are
     /// in scope; the transpiler may emit impls that reference them.
     pub use_mvl_runtime: bool,
+    /// Active coverage map — `Some` when transpiling with `--coverage`.
+    pub coverage: Option<CoverageMap>,
+    /// Name of the function currently being transpiled (for coverage metadata).
+    pub current_fn: String,
+    /// Stem of the source file being transpiled (for coverage metadata).
+    pub current_file: String,
 }
 
 impl Codegen {
@@ -68,6 +75,25 @@ impl Codegen {
     /// Emit a blank line (just a newline).
     pub fn blank(&mut self) {
         self.buf.push('\n');
+    }
+
+    // ── Coverage helpers ──────────────────────────────────────────────────
+
+    /// Allocate a coverage counter for a decision branch.
+    ///
+    /// Returns `Some(id)` when coverage is active, `None` otherwise.
+    /// Separating allocation from emission avoids simultaneous borrow conflicts.
+    pub fn alloc_branch(&mut self, line: u32, kind: BranchKind) -> Option<usize> {
+        let fn_name = self.current_fn.clone();
+        let file = self.current_file.clone();
+        self.coverage
+            .as_mut()
+            .map(|c| c.alloc(fn_name, file, line, kind))
+    }
+
+    /// Emit a `#[cfg(test)] crate::__mvl_cov::hit(id);` statement at current indent.
+    pub fn emit_cov_hit(&mut self, id: usize) {
+        self.line(&format!("#[cfg(test)] crate::__mvl_cov::hit({id});"));
     }
 
     /// Increase indent level.
