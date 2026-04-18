@@ -31,12 +31,17 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                 // s.concat(other) — String concatenation. Emits `s.clone() + &other`
                 // because Rust's Add<&str> for String requires ownership of the left side.
                 // `.clone()` preserves MVL value semantics (receiver is not consumed).
+                // `&(arg)` works because String: Deref<Target=str>, so the coercion to &str
+                // is automatic. The checker enforces arity=1 and arg type=String before here.
                 "concat" if args.len() == 1 => {
                     cg.push("(");
                     emit_expr(cg, receiver);
                     cg.push(").clone() + &(");
                     emit_expr(cg, &args[0]);
                     cg.push(")");
+                }
+                "concat" => {
+                    unreachable!("concat with arity != 1 must be rejected by the checker")
                 }
                 // s.substring(start, end) — char-based (UTF-8 safe), clamps negatives,
                 // inverted range returns empty string. Never panics.

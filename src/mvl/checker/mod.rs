@@ -1617,8 +1617,29 @@ impl TypeChecker {
         recv_ty: &Ty,
         method: &str,
         arg_tys: &[Ty],
-        _span: crate::mvl::parser::lexer::Span,
+        span: crate::mvl::parser::lexer::Span,
     ) -> Ty {
+        // Validate concat(other: String) — exactly one String argument.
+        // Other String methods have flexible or zero args and don't need pre-validation here.
+        if matches!(recv_ty.unlabeled(), Ty::String) && method == "concat" {
+            if arg_tys.len() != 1 {
+                self.emit(CheckError::WrongArgCount {
+                    name: "String.concat".to_string(),
+                    expected: 1,
+                    found: arg_tys.len(),
+                    span,
+                });
+                return Ty::Unknown;
+            }
+            if !matches!(arg_tys[0].unlabeled(), Ty::String) {
+                self.emit(CheckError::TypeMismatch {
+                    expected: "String".to_string(),
+                    found: arg_tys[0].display(),
+                    span,
+                });
+                return Ty::Unknown;
+            }
+        }
         // Join receiver label with all argument labels (Req 7: result sensitivity is
         // the join of all inputs, e.g. `public_str.replace("x", secret_arg)` → Secret<String>).
         let recv_label = ifc::label_of(recv_ty);
@@ -1684,7 +1705,10 @@ impl TypeChecker {
             "split" | "chars" | "lines" => Ty::List(Box::new(Ty::String)),
             // Transformations returning String
             "trim" | "trim_start" | "trim_end" | "to_upper" | "to_lower" | "replace"
-            | "replace_all" | "format" | "concat" => Ty::String,
+            | "replace_all" | "format" => Ty::String,
+            // concat(other: String) -> String — exactly one String argument required
+            "concat" if arg_tys.len() == 1 && matches!(arg_tys[0], Ty::String) => Ty::String,
+            "concat" => Ty::Unknown,
             // Searching: Option<Int> — returns None when not found
             "find" | "rfind" => Ty::Option(Box::new(Ty::Int)),
             // Predicates

@@ -327,6 +327,44 @@ fn collections_corpus_parses_and_checks() {
     );
 }
 
+// ── String.concat arity/type enforcement ─────────────────────────────────────
+
+#[test]
+fn concat_with_non_string_arg_is_rejected() {
+    // GIVEN: a.concat(n) where n: Int
+    // WHEN: type-checked
+    // THEN: checker returns Ty::Unknown (signals a type mismatch)
+    let errors = errors_for("fn f(a: String, n: Int) -> String { a.concat(n) }");
+    assert!(
+        !errors.is_empty(),
+        "concat(Int) must produce a type error, got no errors"
+    );
+}
+
+#[test]
+fn concat_with_zero_args_is_rejected() {
+    // GIVEN: a.concat() — zero arguments
+    // WHEN: type-checked
+    // THEN: checker returns Ty::Unknown (wrong arity)
+    let errors = errors_for("fn f(a: String) -> String { a.concat() }");
+    assert!(
+        !errors.is_empty(),
+        "concat() with zero args must produce a type error, got no errors"
+    );
+}
+
+#[test]
+fn concat_with_two_args_is_rejected() {
+    // GIVEN: a.concat(b, c) — two arguments
+    // WHEN: type-checked
+    // THEN: checker returns Ty::Unknown (wrong arity)
+    let errors = errors_for("fn f(a: String, b: String, c: String) -> String { a.concat(b, c) }");
+    assert!(
+        !errors.is_empty(),
+        "concat(b, c) with two args must produce a type error, got no errors"
+    );
+}
+
 #[test]
 fn core_types_corpus_parses_and_checks() {
     // GIVEN: the core prelude types corpus (#42)

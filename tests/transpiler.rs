@@ -1085,21 +1085,21 @@ fn main() -> Unit { }
     );
 }
 
-/// range() call is NOT expanded inline — it emits as a plain function call.
-/// Regression: before #229 the transpiler emitted (start..end).collect::<Vec<i64>>()
 #[test]
 fn string_concat_method_emits_clone_plus_borrow() {
     // GIVEN: s.concat(other) in MVL
     // WHEN: transpiled
-    // THEN: emits `(s).clone() + &(other)` — Rust's owned-string Add<&str>
+    // THEN: emits `(a).clone() + &(b)` — Rust's owned-string Add<&str>
     let src = r#"fn f(a: String, b: String) -> String { a.concat(b) }"#;
     let rust = transpile_src(src);
     assert!(
-        rust.contains(".clone() + &("),
-        "concat must emit clone + borrow pattern:\n{rust}"
+        rust.contains("(a).clone() + &(b)"),
+        "concat must emit exact clone+borrow pattern:\n{rust}"
     );
 }
 
+/// range() call is NOT expanded inline — it emits as a plain function call.
+/// Regression: before #229 the transpiler emitted (start..end).collect::<Vec<i64>>()
 #[test]
 fn range_call_emits_as_plain_fn_call_not_inline_rust_range() {
     let src = "fn f() -> Unit { let xs = range(0, 5); }";
