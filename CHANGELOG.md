@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.41.1] — 2026-04-18
+
+### Fixed
+
+- **String.concat() method chaining** — Fixed transpiler emitting concat with insufficient parentheses, causing chained method calls like `.len()` to bind to the argument expression instead of the concatenated String result. Now emits `((receiver).clone() + &(arg))` with outer parens to preserve method call precedence.
+
 ## [0.41.0] — 2026-04-18
 
 ### Added
