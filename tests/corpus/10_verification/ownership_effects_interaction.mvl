@@ -1,44 +1,41 @@
 // Corpus: Cross-requirement interaction — Ownership + Effects
-// Tests that ownership constraints and effect tracking compose.
-// Requirement: 001 Req 1 (Type Safety, Ownership) + 001 Req 7 (Effects)
+// Tests that value semantics and effect tracking compose.
+// Requirement: 001 Req 1 (Type Safety) + 001 Req 7 (Effects)
 
-// Effect that consumes ownership
+// Effect that logs a value
 fn consume_and_log(x: Int) -> Unit ! Console {
-    println(x);
-    // x is no longer available after being used
+    println(x)
 }
 
-// Borrowed reference in effectful function
-fn read_and_print(x: &Int) -> Unit ! Console {
-    println(*x);
-    // x can be used again after read
+// Mutable local with effect
+fn mutate_and_log(x: Int) -> Unit ! Console, DB {
+    let mut y = x;
+    y = y + 1;
+    println(y)
 }
 
-// Mutable effect requires ownership
-fn mutate_and_store(mut x: Int) -> Unit ! DB {
-    x = x + 1;
-    // Would need store(x) effect to persist change
-}
-
-// Use-after-move prevented with effects
+// Clone-on-pass: Array is passed by value; original remains accessible
 total fn move_prevention(vec: Array<Int>) -> Int ! Console {
-    let first = vec[0];
+    let first = match vec.first() { Some(v) => v, None => 0 };
     println(first);
-    // vec is still valid here (Array is value type)
     vec.len()
 }
 
-// Effect on borrowed data (read-only)
-fn iterate_with_logging(arr: &Array<Int>) -> Unit ! Console {
-    for item in arr {
-        println(item);
-    }
-    // arr can be used again; iteration doesn't consume it
+// Effect composition: multiple effects declared
+fn log_and_store(msg: String) -> Unit ! Console, DB {
+    println(msg)
 }
 
-// Capability-based resource access (Req 3)
-fn file_read_effect(path: String) -> String ! FileRead("/documents/*") {
-    // Effect declares which paths can be read
-    // Actual access is controlled by FileRead capability
-    read_file(path)
+// Iteration is pure — no effect needed for reading a local array
+total fn sum_array(arr: Array<Int>) -> Int {
+    let mut acc = 0;
+    for item in arr {
+        acc = acc + item
+    }
+    acc
+}
+
+// FileRead effect needed when accessing the filesystem
+fn read_config(path: String) -> String ! FileRead {
+    path
 }

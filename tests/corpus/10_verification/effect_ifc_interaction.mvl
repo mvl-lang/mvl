@@ -10,9 +10,10 @@ total fn label_input(msg: Public<String>) -> Secret<String> {
 }
 
 // Effectful function with labeled result
-fn fetch_and_label(url: String) -> Tainted<String> ! Net {
-    // HTTP response is auto-tainted
-    http.get(url).body
+// Note: auto-tainting of Net responses is a Phase 2 feature (#28);
+// the return type documents the intended labeling convention.
+fn fetch_and_label(url: String, response: Tainted<String>) -> Tainted<String> ! Net {
+    response
 }
 
 // Effect cannot violate IFC flow law
@@ -29,7 +30,7 @@ fn log_with_labels(public_data: Public<String>, secret_data: Secret<String>) -> 
 }
 
 // Effect composition with labels
-fn process_input(input: Tainted<String>) -> Clean<String> ! Console, Validation {
+fn process_input(input: Tainted<String>) -> Clean<String> ! Console, Log {
     // Must sanitize before returning Clean
     let sanitized = sanitize(input);
     println("processing");

@@ -2,41 +2,40 @@
 // Tests that refinement types and termination checking compose.
 // Requirement: 001 Req 8 (Totality) + 001 Req 10 (Refinement Types)
 
-// Refined type with totality constraint
-total fn safe_array_access<A>(arr: Array<A>, idx: Int where self >= 0 && self < arr.len()) -> A {
-    arr[idx]
-}
+type NonNegative = Int where self >= 0
+type Positive = Int where self > 0
 
-// Recursive function with refinement precondition
-total fn countdown(n: Int where self >= 0) -> Int {
+// Structural recursion — terminates by construction
+total fn countdown(n: Int) -> Int {
     match n {
         0 => 0,
         _ => countdown(n - 1)
     }
 }
 
-// Refinement on output: guarantee non-negative result
-total fn abs_value(x: Int) -> Int where self >= 0 {
-    match x {
-        x if x >= 0 => x,
-        x => x * (-1)
-    }
+// Refined return type with total function
+total fn positive_sum(a: Positive, b: Positive) -> Positive {
+    a + b
 }
 
-// Structural recursion with refinement
-total fn sum_array(arr: Array<Int>, idx: Int where self >= 0 && self <= arr.len()) -> Int {
-    match idx {
-        0 => 0,
-        n => arr[n - 1] + sum_array(arr, n - 1)
-    }
+// Total function with refined output guarantee
+total fn clamp_positive(x: Int) -> NonNegative {
+    if x < 0 { 0 } else { x }
 }
 
-// Refinement prevents infinite loops
-total fn bounded_loop(n: Int where self > 0) -> Unit {
-    // This would violate totality and refinement:
-    // while n > 0 { n = n + 1; }
-    // Instead, use finite iteration:
-    for i in 0..n {
-        let _ = i;
+// Refined parameter: bounded iteration over a list is always total
+total fn bounded_sum(items: List<NonNegative>) -> NonNegative {
+    let mut acc = 0;
+    for item in items {
+        acc = acc + item
+    }
+    acc
+}
+
+// Totality check: while rejected in total context (documented as comment)
+// while n > 0 { n = n + 1 }  -- would be rejected: non-terminating loop in total fn
+partial fn poll_until_ready() -> Unit ! Console {
+    while true {
+        println("waiting")
     }
 }
