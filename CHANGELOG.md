@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.42.1] — 2026-04-18
+
+### Fixed
+
+- **Stdlib embedding** — Added `tui.mvl` to `STDLIB_FILES` constant so it is properly embedded in the binary and extracted at runtime alongside other stdlib files.
+
 ## [0.42.0] — 2026-04-18
 
 ### Added
