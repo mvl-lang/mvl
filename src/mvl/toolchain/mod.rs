@@ -1,4 +1,7 @@
-//! Toolchain management: install, use, list, uninstall.
+//! Toolchain management: install, use, list, uninstall, version resolution.
+//!
+//! Phase B (ADR-0009): versioned side-by-side compiler layout.
+//! Phase C (ADR-0009): version resolution chain + re-exec dispatcher.
 //!
 //! Implements ADR-0009 Phase B — versioned side-by-side compiler layout:
 //!
@@ -15,6 +18,8 @@
 //! Symlinks in `~/.local/bin/`:
 //!   `mvl`         → active toolchain binary (set by `mvl self use`)
 //!   `mvl@{ver}`   → specific version (created by `mvl self install`)
+
+pub mod resolve;
 
 use std::fs;
 use std::path::PathBuf;
@@ -257,7 +262,7 @@ pub fn installed_versions() -> Vec<(String, bool)> {
 
     // Sort by parsed (major, minor, patch) tuples — lexicographic order is
     // wrong for semver (e.g. "0.9.0" > "0.41.0" lexicographically).
-    versions.sort_by_key(|v| parse_semver(v));
+    versions.sort_by_key(|v| resolve::parse_semver(v));
 
     versions
         .into_iter()
@@ -320,19 +325,6 @@ pub fn cmd_self_uninstall(version: &str) {
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
-
-/// Parse a semver string into a `(major, minor, patch)` tuple for sorting.
-///
-/// Non-numeric components are treated as 0 so that garbage versions sort
-/// consistently rather than panicking.
-fn parse_semver(v: &str) -> (u32, u32, u32) {
-    let mut parts = v.splitn(3, '.').map(|p| p.parse::<u32>().unwrap_or(0));
-    (
-        parts.next().unwrap_or(0),
-        parts.next().unwrap_or(0),
-        parts.next().unwrap_or(0),
-    )
-}
 
 /// Run `{binary} init` to extract the stdlib after install.
 ///

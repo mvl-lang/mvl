@@ -64,7 +64,7 @@ Multiple MVL compiler versions MUST coexist in `$XDG_DATA_HOME/mvl/toolchains/{v
 
 When `mvl` is invoked, it MUST resolve the toolchain version in this order: CLI flag > `.mvl-version` (project) > `mvl.toml` > `.mvl-version` (global) > bare symlink.
 
-**Implementation:** `src/mvl/toolchain/resolve.rs` (planned)
+**Implementation:** `src/mvl/toolchain/resolve.rs`
 
 #### Scenario: Project pin overrides global default
 
@@ -73,7 +73,7 @@ When `mvl` is invoked, it MUST resolve the toolchain version in this order: CLI 
 - WHEN `mvl run main.mvl` is invoked in the project
 - THEN the 0.20.0 toolchain is used
 
-**Tests:** `tests/toolchain.rs::project_pin_overrides_global` (planned)
+**Tests:** `src/mvl/toolchain/resolve.rs::tests::project_version_found_in_cwd`
 
 #### Scenario: CLI flag overrides everything
 
@@ -81,7 +81,7 @@ When `mvl` is invoked, it MUST resolve the toolchain version in this order: CLI 
 - WHEN `mvl@0.19.0 run main.mvl` is invoked
 - THEN the 0.19.0 toolchain is used
 
-**Tests:** `tests/toolchain.rs::cli_flag_overrides_all` (planned)
+**Tests:** `src/mvl/toolchain/resolve.rs::tests::argv0_wins_over_project_file`
 
 ---
 

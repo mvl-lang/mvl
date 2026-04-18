@@ -22,7 +22,36 @@ fn main() {
         process::exit(1);
     }
 
+    // ── Phase C: version resolution chain (ADR-0009) ──────────────────────────
+    //
+    // Skip re-exec for `mvl self …`, `mvl --version`, and `mvl version` — these
+    // must always run with the current binary regardless of any project pin.
     let cmd = &args[1];
+    // Commands that must always run with the current binary, regardless of any
+    // project pin.  Keep this list in sync with the `match cmd.as_str()` arm below.
+    let is_toolchain_meta = matches!(
+        cmd.as_str(),
+        "self" | "--version" | "-V" | "version" | "--help" | "-h" | "help" | "init"
+    );
+
+    if !is_toolchain_meta {
+        if let Some(target_version) = toolchain::resolve::resolve_version(
+            &args[0],
+            &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        ) {
+            let target_binary = toolchain::toolchain_bin(&target_version);
+            // Only re-exec if the target binary differs from the current one.
+            let current = std::env::current_exe().unwrap_or_default();
+            let same = std::fs::canonicalize(&target_binary)
+                .ok()
+                .map(|t| t == current)
+                .unwrap_or(false);
+            if !same {
+                toolchain::resolve::reexec(&target_binary, &args);
+            }
+        }
+    }
+
     match cmd.as_str() {
         "--version" | "-V" | "version" => {
             println!("mvl {}", env!("CARGO_PKG_VERSION"));

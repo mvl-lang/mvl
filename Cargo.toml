@@ -3,13 +3,16 @@ members = [".", "mvl_runtime"]
 
 [package]
 name = "mvl"
-version = "0.43.0"
+version = "0.44.0"
 edition = "2021"
 description = "MVL — Minimum Verification Language compiler"
 license = "MIT"
 
 [dependencies]
 ureq = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
