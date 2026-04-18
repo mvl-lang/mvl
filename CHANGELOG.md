@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.41.0] — 2026-04-18
+
+### Added
+
+- **Versioned toolchain stdlib directory layout** — `stdlib_path()` now returns `$XDG_DATA_HOME/mvl/toolchains/{version}/std/` instead of flat `$XDG_DATA_HOME/mvl/std/`, enabling multiple compiler versions to coexist on disk without overwriting each other's stdlib. Implements ADR-0009 Phase A (#220).
+
 ## [0.40.0] — 2026-04-18
 
 ### Added
