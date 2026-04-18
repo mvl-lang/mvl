@@ -260,11 +260,23 @@ fn emit_field_parse(cg: &mut Codegen, field: &FieldDecl) {
                 "let {name} = std::env::args().any(|__a| __a == \"--{name}\");"
             ));
         }
-        // Option<String> → optional string flag
+        // Option<String> → optional string flag (plain String)
         TypeExpr::Option { inner, .. } if matches!(unwrap_refined_ty(inner), TypeExpr::Base { name: n, args, .. } if n == "String" && args.is_empty()) =>
         {
             cg.line(&format!(
                 "let {name} = get_arg(Clean(\"{name}\".to_string())).map(|__v| __v.0);"
+            ));
+        }
+        // Option<Tainted<String>> → optional tainted string flag (preserves IFC label)
+        TypeExpr::Option { inner, .. } if is_tainted_string(unwrap_refined_ty(inner)) => {
+            cg.line(&format!(
+                "let {name} = get_arg(Clean(\"{name}\".to_string()));"
+            ));
+        }
+        // Tainted<String> → required tainted string flag (preserves IFC label)
+        ty if is_tainted_string(ty) => {
+            cg.line(&format!(
+                "let {name} = get_arg(Clean(\"{name}\".to_string())).ok_or_else(|| \"missing required argument: --{name}\".to_string())?;"
             ));
         }
         // Option<Int> → optional integer flag
@@ -367,23 +379,43 @@ fn assert_safe_identifier(name: &str) {
 
 /// Returns `true` when the MVL type can be parsed from a CLI flag string.
 ///
-/// Parseable: Int, Float, String, Bool, Option<Int>, Option<Float>,
-/// Option<String>, and refined wrappers of the above.
+/// Parseable: Int, Float, String, Bool, Tainted<String>, Option<Int>,
+/// Option<Float>, Option<String>, Option<Tainted<String>>,
+/// and refined wrappers of the above.
 fn is_parseable_field_type(ty: &TypeExpr) -> bool {
-    match unwrap_refined_ty(ty) {
+    let base = unwrap_refined_ty(ty);
+    if is_tainted_string(base) {
+        return true;
+    }
+    match base {
         TypeExpr::Base { name, args, .. } => {
             args.is_empty() && matches!(name.as_str(), "Int" | "Float" | "String" | "Bool")
         }
         TypeExpr::Option { inner, .. } => {
-            matches!(
-                unwrap_refined_ty(inner),
-                TypeExpr::Base { name, args, .. }
-                    if args.is_empty()
-                    && matches!(name.as_str(), "Int" | "Float" | "String")
-            )
+            let inner_base = unwrap_refined_ty(inner);
+            is_tainted_string(inner_base)
+                || matches!(
+                    inner_base,
+                    TypeExpr::Base { name, args, .. }
+                        if args.is_empty()
+                        && matches!(name.as_str(), "Int" | "Float" | "String")
+                )
         }
         _ => false,
     }
+}
+
+/// Returns `true` when `ty` (already refined-unwrapped) is `Tainted<String>`.
+fn is_tainted_string(ty: &TypeExpr) -> bool {
+    matches!(
+        ty,
+        TypeExpr::Labeled { label: SecurityLabel::Tainted, inner, .. }
+            if matches!(
+                unwrap_refined_ty(inner),
+                TypeExpr::Base { name, args, .. }
+                    if name == "String" && args.is_empty()
+            )
+    )
 }
 
 /// Strip a `Refined { inner, .. }` wrapper, returning the inner type.

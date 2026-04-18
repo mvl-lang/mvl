@@ -335,7 +335,24 @@ impl Parser {
                 } else {
                     name
                 };
-                if matches!(self.peek_kind(), TokenKind::LParen) {
+                // Generic function call: name[Type](args)
+                // Square brackets for type args (LL(1), following Go 1.18)
+                if matches!(self.peek_kind(), TokenKind::LBracket) {
+                    self.advance(); // consume `[`
+                    let type_arg = self.parse_type_expr()?;
+                    let rb = self.expect(&TokenKind::RBracket);
+                    self.require(rb)?;
+                    let lp = self.expect(&TokenKind::LParen);
+                    self.require(lp)?;
+                    let args = self.parse_call_args()?;
+                    let span = self.span_from(start);
+                    Ok(Expr::FnCall {
+                        name,
+                        type_args: vec![type_arg],
+                        args,
+                        span,
+                    })
+                } else if matches!(self.peek_kind(), TokenKind::LParen) {
                     // Function call: name(args)
                     self.advance();
                     let args = self.parse_call_args()?;
@@ -675,6 +692,54 @@ mod tests {
             }
             _ => panic!("got: {:?}", e),
         }
+    }
+
+    // ── Generic function calls ─────────────────────────────────────────────
+
+    #[test]
+    fn parse_generic_fn_call_no_args() {
+        let e = parse_expr("parse[CliArgs]()");
+        match &e {
+            Expr::FnCall {
+                name,
+                type_args,
+                args,
+                ..
+            } => {
+                assert_eq!(name, "parse");
+                assert_eq!(type_args.len(), 1);
+                assert!(
+                    matches!(&type_args[0], TypeExpr::Base { name, args, .. } if name == "CliArgs" && args.is_empty())
+                );
+                assert!(args.is_empty());
+            }
+            _ => panic!("expected FnCall, got: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn parse_generic_fn_call_with_args() {
+        let e = parse_expr("convert[Int](x, y)");
+        match &e {
+            Expr::FnCall {
+                name,
+                type_args,
+                args,
+                ..
+            } => {
+                assert_eq!(name, "convert");
+                assert_eq!(type_args.len(), 1);
+                assert!(matches!(&type_args[0], TypeExpr::Base { name, .. } if name == "Int"));
+                assert_eq!(args.len(), 2);
+            }
+            _ => panic!("expected FnCall, got: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn list_literal_not_confused_with_generic_call() {
+        let e = parse_expr("[1, 2, 3]");
+        assert!(matches!(&e, Expr::List { elems, .. } if elems.len() == 3));
     }
 
     // ── Method calls ──────────────────────────────────────────────────────
