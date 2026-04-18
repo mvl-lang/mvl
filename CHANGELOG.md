@@ -6,6 +6,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.43.0] — 2026-04-18
+
+### Added
+
+- **Stdlib unit tests — io, args, log** — 94 new stdlib tests across `io_test.mvl` (20 tests: path construction, `join`, `to_string`, filesystem error paths), `args_test.mvl` (18 tests: `get_arg`, `get_args`, `get_env` with `Option<Tainted<String>>` semantics), and `log_test.mvl` (27 tests: all four severity levels, structured field format, `! Log` effect propagation). Total stdlib test count grows from 99 → 193. `mvl_runtime` gains Phase 2 no-op implementations for all log functions, `join`, and `to_string`; adds `FileDelete` and `Log` effect markers to prelude (#256).
+
+### Fixed
+
+- **Float match-branch narrowing** — Collapsed redundant `if !f.is_nan()` guard into the `Pattern::Literal(Float)` match arm to satisfy `clippy::collapsible_match`.
+
 ## [0.42.2] — 2026-04-18
 
 ### Added
