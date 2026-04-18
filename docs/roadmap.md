@@ -1,6 +1,6 @@
 # MVL Roadmap
 
-**Current version:** 0.5.6 (Phase 1 — Rust transpilation)
+**Current version:** 0.10.0 (Phase 2 — It's useful)
 **Updated:** 2026-04-12
 
 ## Where we are
@@ -123,8 +123,6 @@ extern "rust" {
 | Generics | [#48](https://github.com/LAB271/mvl_language/issues/48) | `Array<T>`, `Option<T>`, `Result<T,E>` emit correctly |
 | Test transpilation | [#38](https://github.com/LAB271/mvl_language/issues/38) | `_test.mvl` → Rust `#[test]` |
 | Assurance reports | [#73](https://github.com/LAB271/mvl_language/issues/73) | Compiler tracks verified vs trusted (extern) ratio |
-| Property testing | [#40](https://github.com/LAB271/mvl_language/issues/40) | Refinement types as generators |
-| BDD framework | [#39](https://github.com/LAB271/mvl_language/issues/39) | Scenario tests linked to specs |
 
 ## Phase 3 — It's trustworthy ✅
 
@@ -173,9 +171,13 @@ extern "rust" {
 | Component | Description |
 |-----------|-------------|
 | LLVM IR codegen | Replace Rust transpiler with direct LLVM codegen |
-| Native IFC | Flow analysis in the compiler, not via Rust newtypes |
-| Borrow lifetimes | Full Req 2 enforcement (beyond use-after-move) |
-| Linear resources | Full Req 6 enforcement (must-consume semantics) |
+| SMT integration | [Req 10](requirements.md#req-10) moves from runtime asserts to compile-time proofs (Z3) |
+| Native IFC | [Req 11](requirements.md#req-11) flow analysis in the compiler, not via Rust newtypes |
+| Borrow lifetimes | Full [Req 2](requirements.md#req-2) enforcement (beyond use-after-move) |
+| Linear resources | Full [Req 6](requirements.md#req-6) enforcement (must-consume semantics) |
+| Structural recursion | Full [Req 8](requirements.md#req-8) proof (not just while-rejection) |
+| Model checker | [#37](https://github.com/LAB271/mvl_language/issues/37) — invariants, pre/post, deadlock detection |
+| Property testing | [#40](https://github.com/LAB271/mvl_language/issues/40) — Refinement types as SMT-driven generators |
 | WASM target | Sandboxed execution for The Cog and edge |
 
 ## Phase 6 — It's complete
@@ -190,6 +192,10 @@ extern "rust" {
 | Structured concurrency | [#69](https://github.com/LAB271/mvl_language/issues/69) | Select, timeout, cancellation |
 | Model checker | [#37](https://github.com/LAB271/mvl_language/issues/37) | Pre/post conditions, invariants, WCET |
 | Self-hosting | [#187](https://github.com/LAB271/mvl_language/issues/187) | MVL compiler in MVL |
+| Package manager | [#56](https://github.com/LAB271/mvl_language/issues/56) | Dependency resolution, SBOM, trust scoring |
+| Verified MVL stdlib | — | Replaces extern wrappers — assurance ratio toward 90%+ |
+| Transpilation corpus | — | Seed for LLM training on MVL generation quality |
+| BDD framework | [#39](https://github.com/LAB271/mvl_language/issues/39) | Scenario tests linked to specs |
 | AAE-5 pipeline | — | IEC 61508, DO-178C certification evidence |
 
 ## The six phases
