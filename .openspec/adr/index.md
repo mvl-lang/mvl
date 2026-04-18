@@ -15,3 +15,4 @@
 | ~~0011~~ | ~~Generational toolchain~~ | Merged into 0009 |
 | [0012](0012-extended-package-model.md) | Extended package model — extern inside, verified API outside | Accepted |
 | [0013](0013-transpiler-mediated-codegen.md) | Transpiler-mediated type-directed code generation — no macros, no reflection | Accepted |
+| [0014](0014-mutation-testing-execution-model.md) | Mutation testing execution model — single compile, parallel runs | Accepted |

@@ -4,7 +4,8 @@
 //! All other `emit_*` modules take `&mut Codegen` and append to it.
 
 use crate::mvl::parser::ast::{
-    Decl, ExternDecl, FieldDecl, FnDecl, Param, Program, TypeDecl, TypeExpr, Variant, VariantFields,
+    BinaryOp, Decl, ExternDecl, FieldDecl, FnDecl, Param, Program, TypeDecl, TypeExpr, Variant,
+    VariantFields,
 };
 use crate::mvl::transpiler::coverage::{BranchKind, CoverageMap};
 use crate::mvl::transpiler::emit_functions::emit_fn_decl;
@@ -12,6 +13,9 @@ use crate::mvl::transpiler::emit_impls::emit_impl_decl;
 use crate::mvl::transpiler::emit_types::emit_type_decl;
 use crate::mvl::transpiler::emit_types::{emit_security_preamble, emit_type_expr};
 use crate::mvl::transpiler::has_std_imports;
+use crate::mvl::transpiler::mutation::{
+    mutations_for_binary_op, mutations_for_int_literal, MutationMap,
+};
 
 ///// Code-generation context: accumulates Rust source text.
 #[derive(Default)]
@@ -27,6 +31,8 @@ pub struct Codegen {
     pub use_mvl_runtime: bool,
     /// Active coverage map — `Some` when transpiling with `--coverage`.
     pub coverage: Option<CoverageMap>,
+    /// Active mutation map — `Some` when transpiling with `mvl mutate`.
+    pub mutation: Option<MutationMap>,
     /// Name of the function currently being transpiled (for coverage metadata).
     pub current_fn: String,
     /// Stem of the source file being transpiled (for coverage metadata).
@@ -101,6 +107,70 @@ impl Codegen {
     /// Emit a `#[cfg(test)] crate::__mvl_cov::hit(id);` statement at current indent.
     pub fn emit_cov_hit(&mut self, id: usize) {
         self.line(&format!("#[cfg(test)] crate::__mvl_cov::hit({id});"));
+    }
+
+    // ── Mutation helpers ──────────────────────────────────────────────────
+
+    /// Allocate mutation variants for a binary operator.
+    ///
+    /// Returns `Some(vec)` of `(mutant_id, rust_op_str)` pairs when mutation is
+    /// active and the operator has behavioral alternatives.  Returns `None` when
+    /// mutation is inactive or no alternatives exist.
+    pub fn alloc_binary_mutations(
+        &mut self,
+        op: BinaryOp,
+        line: u32,
+    ) -> Option<Vec<(String, &'static str)>> {
+        let alts = mutations_for_binary_op(op);
+        if alts.is_empty() {
+            return None;
+        }
+        let fn_name = self.current_fn.clone();
+        let file = self.current_file.clone();
+        let mutation_map = self.mutation.as_mut()?;
+        let mut result = Vec::new();
+        for (op_str, desc) in alts {
+            let id = mutation_map.alloc(fn_name.clone(), file.clone(), line, desc.to_string());
+            result.push((id, *op_str));
+        }
+        Some(result)
+    }
+
+    /// Allocate a mutation variant for a boolean literal flip.
+    ///
+    /// Returns `Some(mutant_id)` when mutation is active, `None` otherwise.
+    pub fn alloc_bool_mutation(&mut self, original: bool, line: u32) -> Option<String> {
+        let fn_name = self.current_fn.clone();
+        let file = self.current_file.clone();
+        let desc = format!("BoolLiteral({original} → {})", !original);
+        let id = self.mutation.as_mut()?.alloc(fn_name, file, line, desc);
+        Some(id)
+    }
+
+    /// Allocate mutation variants for an integer literal.
+    ///
+    /// Returns `Some(vec)` of `(mutant_id, replacement_value)` when mutation is
+    /// active and alternatives exist.  Returns `None` when mutation is inactive
+    /// or the literal has no distinct alternatives.
+    pub fn alloc_int_mutations(&mut self, original: i64, line: u32) -> Option<Vec<(String, i64)>> {
+        let alts = mutations_for_int_literal(original);
+        if alts.is_empty() {
+            return None;
+        }
+        let fn_name = self.current_fn.clone();
+        let file = self.current_file.clone();
+        let mutation_map = self.mutation.as_mut()?;
+        let mut result = Vec::new();
+        for alt in alts {
+            let id = mutation_map.alloc(
+                fn_name.clone(),
+                file.clone(),
+                line,
+                format!("IntLiteral({original} → {alt})"),
+            );
+            result.push((id, alt));
+        }
+        Some(result)
     }
 
     /// Increase indent level.

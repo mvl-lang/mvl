@@ -8,7 +8,39 @@ use crate::mvl::transpiler::emit_types::emit_type_expr;
 /// Emit an expression into the code buffer (no trailing newline).
 pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
     match expr {
-        Expr::Literal(lit, _) => emit_literal(cg, lit),
+        Expr::Literal(lit, span) => {
+            // Mutation mode: inject env-var dispatch for Bool and Integer literals.
+            if cg.mutation.is_some() {
+                match lit {
+                    Literal::Bool(b) => {
+                        if let Some(mid) = cg.alloc_bool_mutation(*b, span.line) {
+                            let (alt, orig) = if *b {
+                                ("false", "true")
+                            } else {
+                                ("true", "false")
+                            };
+                            cg.push(&format!(
+                                r#"{{ match ::std::env::var("MVL_MUTANT").as_deref() {{ Ok("{mid}") => {alt}, _ => {orig} }} }}"#
+                            ));
+                            return;
+                        }
+                    }
+                    Literal::Integer(n) => {
+                        if let Some(int_variants) = cg.alloc_int_mutations(*n, span.line) {
+                            cg.push("{ match ::std::env::var(\"MVL_MUTANT\").as_deref() {");
+                            for (mid, alt) in &int_variants {
+                                cg.push(&format!(" Ok(\"{mid}\") => {alt},"));
+                            }
+                            cg.push(&format!(" _ => {n} }}"));
+                            cg.push(" }");
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            emit_literal(cg, lit);
+        }
         Expr::Ident(name, _) => cg.push(&map_ident(name)),
         Expr::FieldAccess { expr, field, .. } => {
             emit_expr(cg, expr);
@@ -376,15 +408,35 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
             }
         },
         Expr::Binary {
-            op, left, right, ..
+            op,
+            left,
+            right,
+            span,
         } => {
-            cg.push("(");
-            emit_expr(cg, left);
-            cg.push(" ");
-            cg.push(emit_binary_op(*op));
-            cg.push(" ");
-            emit_expr(cg, right);
-            cg.push(")");
+            // Mutation mode: inject env-var dispatch for behavioral operator alternatives.
+            if let Some(mut_variants) = cg.alloc_binary_mutations(*op, span.line) {
+                cg.push("{ match ::std::env::var(\"MVL_MUTANT\").as_deref() {");
+                for (mid, alt_op) in &mut_variants {
+                    cg.push(&format!(" Ok(\"{mid}\") => ("));
+                    emit_expr(cg, left);
+                    cg.push(&format!(" {alt_op} "));
+                    emit_expr(cg, right);
+                    cg.push("),");
+                }
+                cg.push(" _ => (");
+                emit_expr(cg, left);
+                cg.push(&format!(" {} ", emit_binary_op(*op)));
+                emit_expr(cg, right);
+                cg.push("), } }");
+            } else {
+                cg.push("(");
+                emit_expr(cg, left);
+                cg.push(" ");
+                cg.push(emit_binary_op(*op));
+                cg.push(" ");
+                emit_expr(cg, right);
+                cg.push(")");
+            }
         }
         Expr::If {
             cond, then, else_, ..
