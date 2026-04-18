@@ -1,0 +1,138 @@
+// tests/stdlib/io_test.mvl — std.io module correctness
+//
+// Verifies runtime behavior of io stdlib functions available in Phase 2.
+// Run with:  mvl test tests/stdlib/
+//
+// Phase 2 runtime coverage:
+//   path        — construct a Path from a String (pure)
+//   join        — append a segment to a Path (pure)
+//   to_string   — convert a Path back to String (pure)
+//   read_to_string — read entire file contents (real filesystem call)
+//   read_file   — read file from a Clean<String> path (real filesystem call)
+//
+// Phase 3 / future runtime additions (not yet in runtime):
+//   exists, is_file, is_dir, open, close, write, append,
+//   buf_reader, buf_writer, read_line, write_line,
+//   create_dir_all, remove, read_dir, metadata, chmod,
+//   create_symlink, read_link, stdin, stdin_read_line, stdin_read_to_string
+
+use std.io.{Path, path, join, to_string, read_to_string, read_file}
+
+// ── path ──────────────────────────────────────────────────────────────────
+
+test fn io_path_from_nonempty_string() -> Unit {
+    let p: Path = path("hello.txt");
+    assert_eq(to_string(p).is_empty(), false);
+}
+
+test fn io_path_from_empty_string() -> Unit {
+    let p: Path = path("");
+    assert_eq(to_string(p).len(), 0);
+}
+
+test fn io_path_from_absolute() -> Unit {
+    let p: Path = path("/etc/app/config.toml");
+    assert_eq(to_string(p).is_empty(), false);
+}
+
+test fn io_path_from_relative() -> Unit {
+    let p: Path = path("./data/file.csv");
+    assert_eq(to_string(p).is_empty(), false);
+}
+
+test fn io_path_short_name_len() -> Unit {
+    let p: Path = path("x.txt");
+    assert_eq(to_string(p).len(), 5);
+}
+
+// ── to_string ─────────────────────────────────────────────────────────────
+
+test fn io_to_string_preserves_nonempty() -> Unit {
+    let p: Path = path("readme.md");
+    assert_eq(to_string(p).is_empty(), false);
+}
+
+test fn io_to_string_empty_path_is_empty() -> Unit {
+    let p: Path = path("");
+    assert_eq(to_string(p).is_empty(), true);
+}
+
+test fn io_to_string_absolute_not_empty() -> Unit {
+    let p: Path = path("/tmp/output.log");
+    assert_eq(to_string(p).is_empty(), false);
+}
+
+test fn io_to_string_preserves_length() -> Unit {
+    // "a/b/c" has 5 chars; platform-neutral
+    let p: Path = path("a/b/c");
+    assert_eq(to_string(p).len(), 5);
+}
+
+test fn io_to_string_filename_len() -> Unit {
+    let p: Path = path("Cargo.toml");
+    assert_eq(to_string(p).len(), 10);
+}
+
+// ── join ──────────────────────────────────────────────────────────────────
+
+test fn io_join_nonempty_result() -> Unit {
+    let base: Path = path("/home/user");
+    let joined: Path = join(base, "docs");
+    assert_eq(to_string(joined).is_empty(), false);
+}
+
+test fn io_join_longer_than_base() -> Unit {
+    let base: Path = path("/home/user");
+    let joined: Path = join(base, "readme.txt");
+    assert_eq(to_string(joined).len() > 10, true);
+}
+
+test fn io_join_dotfile_segment() -> Unit {
+    let base: Path = path("/home/user");
+    let joined: Path = join(base, ".config");
+    assert_eq(to_string(joined).is_empty(), false);
+}
+
+test fn io_join_deep_path_result() -> Unit {
+    let base: Path = path("/var/log");
+    let joined: Path = join(base, "app");
+    assert_eq(to_string(joined).is_empty(), false);
+}
+
+test fn io_join_produces_combined_path() -> Unit {
+    let base: Path = path("src");
+    let joined: Path = join(base, "main.rs");
+    // "src" + "main.rs" → combined path with separator is longer than 3 chars
+    assert_eq(to_string(joined).len() > 3, true);
+}
+
+// ── read_to_string (real filesystem) ─────────────────────────────────────
+
+test fn io_read_to_string_nonexistent_is_err() -> Unit ! FileRead {
+    let result: Result<Tainted<String>, String> = read_to_string(path("/tmp/mvl_nonexistent_xyz_99999"));
+    assert_eq(result.is_err(), true);
+}
+
+test fn io_read_to_string_nonexistent_not_ok() -> Unit ! FileRead {
+    let result: Result<Tainted<String>, String> = read_to_string(path("/nonexistent/path/file.txt"));
+    assert_eq(result.is_ok(), false);
+}
+
+test fn io_read_to_string_missing_file_err_not_ok() -> Unit ! FileRead {
+    let r1: Result<Tainted<String>, String> = read_to_string(path("/mvl_test_missing_abc"));
+    let r2: Result<Tainted<String>, String> = read_to_string(path("/mvl_test_missing_def"));
+    assert_eq(r1.is_err(), true);
+    assert_eq(r2.is_err(), true);
+}
+
+// ── read_file (real filesystem, Clean<String> path) ───────────────────────
+
+test fn io_read_file_nonexistent_is_err() -> Unit ! FileRead {
+    let result: Result<Tainted<String>, String> = read_file("/tmp/mvl_nonexistent_xyz_88888");
+    assert_eq(result.is_err(), true);
+}
+
+test fn io_read_file_nonexistent_not_ok() -> Unit ! FileRead {
+    let result: Result<Tainted<String>, String> = read_file("/nonexistent/mvl/test/file.txt");
+    assert_eq(result.is_ok(), false);
+}

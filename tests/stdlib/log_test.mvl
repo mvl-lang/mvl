@@ -1,0 +1,158 @@
+// tests/stdlib/log_test.mvl — std.log module correctness
+//
+// Verifies runtime behavior of the log stdlib: log_debug, log_info,
+// log_warn, log_error — all four severity levels.
+// Run with:  mvl test tests/stdlib/
+//
+// Phase 2: log functions are no-op stubs (correct signatures, no output).
+// Tests verify:
+//   - All severity levels accept public String data without panic
+//   - Structured key-value fields (Map<String, String>) are accepted
+//   - Effect declaration (! Log) is required and propagates to callers
+//
+// IFC enforcement (Secret<T>/Tainted<T> rejection) is a compile-time type
+// error, not a runtime check — those cases belong in tests/corpus/06_ifc/.
+//
+// Note: Empty map {} is syntactically a block expression in MVL.
+// Use a sentinel field {"_": "_"} when no real fields are needed.
+
+use std.log.{log_debug, log_info, log_warn, log_error}
+
+// ── Helper: wrap each log level, return observable Bool ──────────────────
+
+fn call_log_debug(msg: String) -> Bool ! Log {
+    log_debug(msg, {"level": "debug"});
+    true
+}
+
+fn call_log_info(msg: String) -> Bool ! Log {
+    log_info(msg, {"level": "info"});
+    true
+}
+
+fn call_log_warn(msg: String) -> Bool ! Log {
+    log_warn(msg, {"level": "warn"});
+    true
+}
+
+fn call_log_error(msg: String) -> Bool ! Log {
+    log_error(msg, {"level": "error"});
+    true
+}
+
+// ── log_debug (! Log) ─────────────────────────────────────────────────────
+
+test fn log_debug_single_field_does_not_panic() -> Unit ! Log {
+    log_debug("debug event", {"key": "value"});
+    assert_eq(true, true);
+}
+
+test fn log_debug_multiple_fields_does_not_panic() -> Unit ! Log {
+    log_debug("cache miss", {"key": "user:42", "ttl": "300"});
+    assert_eq(true, true);
+}
+
+test fn log_debug_returns_unit_via_helper() -> Unit ! Log {
+    assert_eq(call_log_debug("processing"), true);
+}
+
+// ── log_info (! Log) ──────────────────────────────────────────────────────
+
+test fn log_info_single_field_does_not_panic() -> Unit ! Log {
+    log_info("server started", {"port": "8080"});
+    assert_eq(true, true);
+}
+
+test fn log_info_with_multiple_fields() -> Unit ! Log {
+    log_info("request received", {"method": "GET", "path": "/health"});
+    assert_eq(true, true);
+}
+
+test fn log_info_request_id_field() -> Unit ! Log {
+    log_info("user registered", {"user_id": "u-1234"});
+    assert_eq(true, true);
+}
+
+test fn log_info_returns_unit_via_helper() -> Unit ! Log {
+    assert_eq(call_log_info("request handled"), true);
+}
+
+// ── log_warn (! Log) ──────────────────────────────────────────────────────
+
+test fn log_warn_single_field_does_not_panic() -> Unit ! Log {
+    log_warn("quota running low", {"user_id": "u-99"});
+    assert_eq(true, true);
+}
+
+test fn log_warn_retry_context() -> Unit ! Log {
+    log_warn("retry attempt", {"attempt": "3", "max": "5"});
+    assert_eq(true, true);
+}
+
+test fn log_warn_returns_unit_via_helper() -> Unit ! Log {
+    assert_eq(call_log_warn("disk space low"), true);
+}
+
+// ── log_error (! Log) ─────────────────────────────────────────────────────
+
+test fn log_error_single_field_does_not_panic() -> Unit ! Log {
+    log_error("connection refused", {"host": "db"});
+    assert_eq(true, true);
+}
+
+test fn log_error_with_reason_field() -> Unit ! Log {
+    log_error("component failed", {"component": "db", "reason": "timeout"});
+    assert_eq(true, true);
+}
+
+test fn log_error_returns_unit_via_helper() -> Unit ! Log {
+    assert_eq(call_log_error("request failed"), true);
+}
+
+// ── Effect propagation ────────────────────────────────────────────────────
+
+fn audit_login(user_id: String, success: Bool) -> Unit ! Log {
+    if success {
+        log_info("login succeeded", {"user_id": user_id})
+    } else {
+        log_warn("login failed", {"user_id": user_id})
+    }
+}
+
+test fn log_effect_propagates_through_caller_success() -> Unit ! Log {
+    audit_login("u-42", true);
+    assert_eq(true, true);
+}
+
+test fn log_effect_propagates_through_caller_failure() -> Unit ! Log {
+    audit_login("u-99", false);
+    assert_eq(true, true);
+}
+
+fn log_all_levels(event: String) -> Unit ! Log {
+    log_debug(event, {"level": "debug"});
+    log_info(event, {"level": "info"});
+    log_warn(event, {"level": "warn"});
+    log_error(event, {"level": "error"})
+}
+
+test fn log_all_severity_levels_in_sequence() -> Unit ! Log {
+    log_all_levels("test event");
+    assert_eq(true, true);
+}
+
+// ── Structured field format ───────────────────────────────────────────────
+
+test fn log_structured_fields_three_pairs() -> Unit ! Log {
+    log_info("order processed", {
+        "order_id": "ord-7",
+        "amount": "99",
+        "currency": "USD"
+    });
+    assert_eq(true, true);
+}
+
+test fn log_structured_field_with_numeric_string_value() -> Unit ! Log {
+    log_info("metric recorded", {"name": "latency_ms", "value": "42"});
+    assert_eq(true, true);
+}

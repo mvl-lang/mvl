@@ -6,7 +6,7 @@
 //! ```
 
 pub use crate::effects::{
-    Alloc, Concurrent, Console, Db, FileRead, FileWrite, Net, Panic, Terminal,
+    Alloc, Concurrent, Console, Db, FileDelete, FileRead, FileWrite, Log, Net, Panic, Terminal,
 };
 pub use crate::ifc::{declassify, sanitize, Clean, Public, Secret, Tainted};
 pub use crate::mvl_refine;
@@ -18,7 +18,10 @@ pub use crate::mvl_refine;
 // call these directly — no per-program `bridge.rs` is needed for generic I/O.
 
 /// `std.io` — file I/O operations.
-pub use crate::stdlib::io::{path, read_file, read_to_string, Path};
+pub use crate::stdlib::io::{join, path, read_file, read_to_string, to_string, Path};
 
 /// `std.args` — CLI argument and environment access.
 pub use crate::stdlib::args::{get_arg, get_args, get_env, parse, ParseFromArgs};
+
+/// `std.log` — structured logging (Phase 2: no-op stubs).
+pub use crate::stdlib::log::{log_debug, log_error, log_info, log_warn};

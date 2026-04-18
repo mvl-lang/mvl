@@ -389,24 +389,22 @@ fn inject_arm_hypotheses(
                 arm_refs.insert(name.to_string(), Some(hyp));
             }
         }
-        Pattern::Literal(Literal::Float(f), _) => {
-            // NaN cannot be a concrete equality hypothesis (NaN != NaN in IEEE 754).
-            if !f.is_nan() {
-                if let Some(name) = scrutinee_name {
-                    let eq_hyp = self_eq_float(*f);
-                    let hyp = if let Some(g) = guard {
-                        let normalized = normalize_pred(g, name);
-                        RefExpr::LogicOp {
-                            op: LogicOp::And,
-                            left: Box::new(eq_hyp),
-                            right: Box::new(normalized),
-                            span: dummy_span(),
-                        }
-                    } else {
-                        eq_hyp
-                    };
-                    arm_refs.insert(name.to_string(), Some(hyp));
-                }
+        // NaN cannot be a concrete equality hypothesis (NaN != NaN in IEEE 754).
+        Pattern::Literal(Literal::Float(f), _) if !f.is_nan() => {
+            if let Some(name) = scrutinee_name {
+                let eq_hyp = self_eq_float(*f);
+                let hyp = if let Some(g) = guard {
+                    let normalized = normalize_pred(g, name);
+                    RefExpr::LogicOp {
+                        op: LogicOp::And,
+                        left: Box::new(eq_hyp),
+                        right: Box::new(normalized),
+                        span: dummy_span(),
+                    }
+                } else {
+                    eq_hyp
+                };
+                arm_refs.insert(name.to_string(), Some(hyp));
             }
         }
         // ── Catch-all ident: bound variable differs from all prior literals ────
