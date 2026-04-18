@@ -1,11 +1,12 @@
-use mvl::mvl::stdlib::{ensure_stdlib, STDLIB_FILES, STDLIB_VERSION};
+use std::fs;
 use std::path::PathBuf;
+use std::sync::{LazyLock, Mutex};
+
+use mvl::mvl::stdlib::{ensure_stdlib, STDLIB_FILES, STDLIB_VERSION};
 
 fn versioned_stdlib_path(home: &std::path::Path) -> PathBuf {
     home.join("toolchains").join(STDLIB_VERSION).join("std")
 }
-use std::fs;
-use std::sync::{LazyLock, Mutex};
 
 // Serialize all tests that mutate the MVL_HOME env var, since env vars are
 // process-global and test threads run concurrently by default.

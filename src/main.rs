@@ -105,7 +105,7 @@ fn print_usage() {
     eprintln!("  mvl assurance <file|dir> --json    — emit assurance report as JSON");
     eprintln!("  mvl assurance <file|dir> --verbose — per-function requirement detail");
     eprintln!("  mvl transpile <file.mvl>           — print transpiled Rust to stdout");
-    eprintln!("  mvl init [--stdlib]                — extract stdlib to XDG_DATA_HOME/mvl/std/");
+    eprintln!("  mvl init [--stdlib]                — extract stdlib to XDG_DATA_HOME/mvl/toolchains/VERSION/std/");
 }
 
 fn cmd_init() {
