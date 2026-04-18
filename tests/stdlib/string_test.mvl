@@ -112,3 +112,38 @@ test fn string_substring_from_start_content() -> Unit {
     assert_eq(t.len(), 3);
     assert_eq(t.is_empty(), false);
 }
+
+// ── concat ─────────────────────────────────────────────────────────────────
+
+test fn string_concat_basic_len() -> Unit {
+    let a: String = "hello";
+    let b: String = " world";
+    let result: String = a.concat(b);
+    assert_eq(result.len(), 11);
+}
+
+test fn string_concat_empty_right() -> Unit {
+    let a: String = "hello";
+    let b: String = "";
+    assert_eq(a.concat(b).len(), 5);
+}
+
+test fn string_concat_empty_left() -> Unit {
+    let a: String = "";
+    let b: String = "world";
+    assert_eq(a.concat(b).len(), 5);
+}
+
+test fn string_concat_preserves_receiver() -> Unit {
+    let a: String = "hello";
+    let b: String = " world";
+    let _c: String = a.concat(b);
+    assert_eq(a.len(), 5);
+}
+
+test fn string_concat_chain_len() -> Unit {
+    let a: String = "foo";
+    let b: String = "-";
+    let c: String = "bar";
+    assert_eq(a.concat(b).concat(c).len(), 7);
+}

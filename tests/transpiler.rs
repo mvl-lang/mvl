@@ -1085,6 +1085,19 @@ fn main() -> Unit { }
     );
 }
 
+#[test]
+fn string_concat_method_emits_clone_plus_borrow() {
+    // GIVEN: s.concat(other) in MVL
+    // WHEN: transpiled
+    // THEN: emits `(a).clone() + &(b)` — Rust's owned-string Add<&str>
+    let src = r#"fn f(a: String, b: String) -> String { a.concat(b) }"#;
+    let rust = transpile_src(src);
+    assert!(
+        rust.contains("(a).clone() + &(b)"),
+        "concat must emit exact clone+borrow pattern:\n{rust}"
+    );
+}
+
 /// range() call is NOT expanded inline — it emits as a plain function call.
 /// Regression: before #229 the transpiler emitted (start..end).collect::<Vec<i64>>()
 #[test]

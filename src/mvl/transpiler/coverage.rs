@@ -239,11 +239,7 @@ pub fn format_report(branches: &[BranchInfo], hits: &[u64], all_files: &[&str]) 
             file_total += total;
         }
 
-        let file_pct = if file_total > 0 {
-            (file_hit * 100) / file_total
-        } else {
-            100
-        };
+        let file_pct = (file_hit * 100).checked_div(file_total).unwrap_or(100);
         out.push_str(&format!(
             "     {:<40}  {file_hit}/{file_total}  ({file_pct}%)\n",
             format!("{file}.mvl total")
@@ -253,11 +249,7 @@ pub fn format_report(branches: &[BranchInfo], hits: &[u64], all_files: &[&str]) 
     }
 
     out.push('\n');
-    let total_pct = if total_branches > 0 {
-        (total_hit * 100) / total_branches
-    } else {
-        100
-    };
+    let total_pct = (total_hit * 100).checked_div(total_branches).unwrap_or(100);
     out.push_str(&format!(
         "Total: {total_hit}/{total_branches} branches  ({total_pct}%)\n"
     ));
