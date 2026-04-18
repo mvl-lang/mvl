@@ -12,6 +12,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 - **`mvl pin [<version>]` — project version pinning (ADR-0009 Phase D)** — `mvl pin 0.34.0` writes a `.mvl-version` file to the project root, pinning the project to that compiler version. `mvl pin` (no argument) pins to the current compiler version. The file is picked up by the Phase C version resolution chain, so subsequent `mvl` invocations in the project directory automatically re-exec the pinned binary (#223).
 
+### Fixed
+
+- **Corpus tier 10_verification for cross-requirement interactions** — ADR-0010 defines 11-tier corpus progression; tier 10 (cross-requirement verification) was missing. Added three interaction test files: effect+IFC composition, refinement+totality constraints, ownership+effects semantics. All tests parse and type-check.
+
+- **Effect+IFC example using extern "rust" bridge** — Rewrote `effect_ifc_interaction` corpus file as a directory with `main.mvl` (extern "rust" declaration) and `bridge.rs` (ureq-based HTTP implementation). Demonstrates proper use of external library (http via extern "rust") with IFC-labeled return type (`Result<Tainted<String>, String>`), documenting Phase 2 auto-tainting convention.
 ## [0.46.0] — 2026-04-18
 
 ### Added

@@ -1,0 +1,41 @@
+// Corpus: Cross-requirement interaction — Ownership + Effects
+// Tests that value semantics and effect tracking compose.
+// Requirement: 001 Req 1 (Type Safety) + 001 Req 7 (Effects)
+
+// Effect that logs a value
+fn consume_and_log(x: Int) -> Unit ! Console {
+    println(x)
+}
+
+// Mutable local with effect
+fn mutate_and_log(x: Int) -> Unit ! Console, DB {
+    let mut y = x;
+    y = y + 1;
+    println(y)
+}
+
+// Clone-on-pass: Array is passed by value; original remains accessible
+total fn move_prevention(vec: Array<Int>) -> Int ! Console {
+    let first = match vec.first() { Some(v) => v, None => 0 };
+    println(first);
+    vec.len()
+}
+
+// Effect composition: multiple effects declared
+fn log_and_store(msg: String) -> Unit ! Console, DB {
+    println(msg)
+}
+
+// Iteration is pure — no effect needed for reading a local array
+total fn sum_array(arr: Array<Int>) -> Int {
+    let mut acc = 0;
+    for item in arr {
+        acc = acc + item
+    }
+    acc
+}
+
+// FileRead effect needed when accessing the filesystem
+fn read_config(path: String) -> String ! FileRead {
+    path
+}
