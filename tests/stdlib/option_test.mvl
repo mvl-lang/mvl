@@ -133,9 +133,9 @@ test fn option_and_then_with_lambda() -> Unit {
 test fn option_and_then_chain_three_steps_some() -> Unit {
     let v: Option<Int> = Some(4);
     let result = v
-        .and_then(safe_double)
-        .and_then(safe_double)
-        .and_then(|x: Int| if x > 10 { Some(x - 1) } else { None });
+        .and_then(safe_double)   // Some(4) → Some(8)
+        .and_then(safe_double)   // Some(8) → Some(16)
+        .and_then(|x: Int| if x > 10 { Some(x - 1) } else { None }); // Some(16) → Some(15)
     assert_eq(result.unwrap_or(0), 15);
 }
 

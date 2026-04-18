@@ -194,6 +194,8 @@ test fn log_in_branch_does_not_affect_return_value() -> Unit ! Log {
 // ── multiple fields map completeness ──────────────────────────────────────
 
 test fn log_info_four_fields_map() -> Unit ! Log {
+    // Compile-time: verifies the effect system accepts a 4-field map without panic.
+    // Runtime log output is not observable in tests; assert_eq(true, true) is intentional.
     log_info("request complete", {
         "method": "POST",
         "path": "/api/v1/items",
@@ -204,6 +206,8 @@ test fn log_info_four_fields_map() -> Unit ! Log {
 }
 
 test fn log_error_with_context_fields() -> Unit ! Log {
+    // Compile-time: verifies the effect system accepts a 3-field error map without panic.
+    // Runtime log output is not observable in tests; assert_eq(true, true) is intentional.
     log_error("db query failed", {
         "table": "users",
         "operation": "select",

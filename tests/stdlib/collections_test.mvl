@@ -506,8 +506,10 @@ test fn collections_partition_evens_further_mapped() -> Unit {
     let xs = [1, 2, 3, 4, 5, 6];
     let (evens, odds) = xs.partition(is_even_chain);
     let doubled_evens = evens.map(|x: Int| x * 2);
+    // evens = [2,4,6] → doubled = [4,8,12]
     assert_eq(doubled_evens.contains(4), true);
     assert_eq(doubled_evens.contains(8), true);
+    assert_eq(doubled_evens.contains(12), true);
     assert_eq(doubled_evens.len(), 3);
 }
 
