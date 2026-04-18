@@ -8,6 +8,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [0.47.0] — 2026-04-18
 
+### Changed
+
+- **Phase 4 example upgrades (`access_control`, `log_analyzer`)** — Both examples upgraded from Phase 2 to Phase 4 stdlib. `std.log` replaces raw `println` for structured audit records (`log_info` on grant, `log_warn` on deny). `Option.map` replaces manual `None/Some` match in `log_analyzer/main.mvl`. `std.string.to_lower` enables case-insensitive level parsing in `parse_level`. `List<LogEntry>` pipeline added: `filter(is_error_level) → map(entry_summary) → fold`. `is_in_range_int()` exported from `utils.mvl`. Effect annotations added (`! CryptoRandom`, `! Log`). `workaround: #96` comments document local type re-declarations throughout (#277).
+
 ### Added
 
 - **`mvl pin [<version>]` — project version pinning (ADR-0009 Phase D)** — `mvl pin 0.34.0` writes a `.mvl-version` file to the project root, pinning the project to that compiler version. `mvl pin` (no argument) pins to the current compiler version. The file is picked up by the Phase C version resolution chain, so subsequent `mvl` invocations in the project directory automatically re-exec the pinned binary (#223).

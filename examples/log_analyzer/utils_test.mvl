@@ -6,6 +6,9 @@
 // Run with:  mvl test examples/log_analyzer/
 
 // ── Local re-declarations (mirrors utils.mvl) ─────────────────────────────
+// workaround: #96 — cross-module type resolution not yet wired into the
+// per-file checker; functions are re-declared locally until the module
+// resolver is integrated.
 
 total fn is_positive(n: Int) -> Bool {
     n > 0

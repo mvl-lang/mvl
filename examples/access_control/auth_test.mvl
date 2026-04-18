@@ -5,6 +5,9 @@
 // Standalone: re-declares all types (cross-module resolution is Phase 2).
 
 // ── Local type re-declarations ─────────────────────────────────────────────
+// workaround: #96 — cross-module type resolution not yet wired into the
+// per-file checker; types are re-declared locally until the module resolver
+// is integrated.
 
 type AuthError = enum {
     InvalidCredentials,

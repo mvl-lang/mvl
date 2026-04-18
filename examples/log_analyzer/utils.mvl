@@ -9,6 +9,11 @@ pub total fn is_positive(n: Int) -> Bool {
     n > 0
 }
 
+// True iff n falls within the inclusive range [lo, hi].
+pub total fn is_in_range_int(n: Int, lo: Int, hi: Int) -> Bool {
+    n >= lo && n <= hi
+}
+
 // Map an Int to a clamped display value (safe for output).
 // Upper bound 99999 keeps log counts within a 5-digit display column.
 pub total fn clamp_display(n: Int) -> Int {
@@ -27,6 +32,26 @@ test fn check_is_positive_zero() -> Unit {
 
 test fn check_is_positive_negative() -> Unit {
     assert_eq(is_positive(-3), false);
+}
+
+test fn check_is_in_range_int_inside() -> Unit {
+    assert_eq(is_in_range_int(5, 1, 10), true);
+}
+
+test fn check_is_in_range_int_at_low_boundary() -> Unit {
+    assert_eq(is_in_range_int(1, 1, 10), true);
+}
+
+test fn check_is_in_range_int_at_high_boundary() -> Unit {
+    assert_eq(is_in_range_int(10, 1, 10), true);
+}
+
+test fn check_is_in_range_int_below() -> Unit {
+    assert_eq(is_in_range_int(0, 1, 10), false);
+}
+
+test fn check_is_in_range_int_above() -> Unit {
+    assert_eq(is_in_range_int(11, 1, 10), false);
 }
 
 test fn check_clamp_display_normal() -> Unit {
