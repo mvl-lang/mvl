@@ -1,4 +1,4 @@
-# log_analyzer example — MVL Phase 2 demonstration
+# log_analyzer example — MVL Phase 4 demonstration
 # Run from this directory: make build, make test, etc.
 .PHONY: help build check test generate run clean
 

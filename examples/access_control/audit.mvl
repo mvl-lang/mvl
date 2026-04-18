@@ -4,18 +4,26 @@
 //   1. Req 7 (Effects): ! Log, Console declares I/O impurity.
 //      Pure policy functions (rbac.mvl) cannot secretly write to logs —
 //      any function that writes must declare ! Log.
-//   2. Req 11 (IFC): only Clean<String> and plain values reach println.
+//   2. Req 11 (IFC): only Clean<String> and plain values reach the log sink.
 //      Secret<T> values are structurally excluded from audit output.
 //      There is no runtime check; the type system prevents leakage.
+//   3. Phase 4 (std.log): structured audit records via log_info / log_warn
+//      replace raw println — each field is individually IFC-checked.
+//      Grant decisions → log_info; deny decisions → log_warn.
 //
-// No extern — audit output uses println (Console + Log effects).
+// No extern — audit output uses std.log (Log effect).
 // Assurance note: 0 extern blocks (effect-declared I/O only).
 
 use model::Resource;
 use model::Action;
 use model::Permission;
 
+use std.log.{log_info, log_warn}
+
 // ── Local type declarations (mirrors model.mvl) ────────────────────────────
+// workaround: #96 — cross-module type resolution not yet wired into the
+// per-file checker; types are re-declared locally until the module resolver
+// is integrated.
 
 type Resource = enum {
     UserProfile,
@@ -61,19 +69,29 @@ total fn permission_name(decision: Permission) -> String {
     }
 }
 
-// ── Audit logging — impure, ! Log, Console ────────────────────────────────
+// ── Audit logging — impure, ! Log ─────────────────────────────────────────
 
-// Log an access decision to the audit trail.
-// Only Clean<String> username and plain strings reach println.
+// Log an access decision to the structured audit trail.
+// Only Clean<String> username and plain String values reach the log sink.
 // Secret<T> cannot appear here — enforced by the IFC type system.
-fn log_access(
+// Grant decisions are logged at INFO; deny decisions at WARN.
+//
+// Note: username is Clean<String> (IFC-safe for output) but log fields
+// require plain String — resource and action strings from the pure helpers
+// carry the contextual audit information without including PII.
+pub fn log_access(
     username: Clean<String>,
     resource: Resource,
     action: Action,
     decision: Permission,
-) -> Unit ! Log, Console {
+) -> Unit ! Log {
+    let resource_str = resource_name(resource);
+    let action_str   = action_name(action);
     let decision_str = permission_name(decision);
-    println(decision_str)
+    match decision {
+        Permission::Allow => log_info("access granted", {"resource": resource_str, "action": action_str, "decision": decision_str}),
+        Permission::Deny  => log_warn("access denied",  {"resource": resource_str, "action": action_str, "decision": decision_str}),
+    }
 }
 
 // ── Internal unit tests ────────────────────────────────────────────────────

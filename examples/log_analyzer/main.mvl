@@ -3,9 +3,11 @@
 // Demonstrates:
 //   1. extern "rust" trust boundary — domain-specific pipeline logic in Rust
 //   2. IFC labels: Tainted CLI input sanitized to Clean before use
-//   3. Effect declarations: FileRead + Console on I/O functions
+//   3. Effect declarations: FileRead + Console + Log on I/O functions
 //   4. Multi-module design: use imports document cross-module dependencies
-//   5. stdlib usage: std.io and std.args replace generic bridge functions
+//   5. stdlib usage: std.io, std.args, std.log
+//   6. Phase 4: Option.map replaces manual None/Some match for level sanitization
+//   7. Phase 4: std.log for structured output replacing raw println
 //
 // NOTE (issue #96): use imports below are module-system declarations.
 // Cross-module type resolution is not yet wired into the per-file checker;
@@ -20,6 +22,7 @@
 
 use parser::parse_line;
 use parser::report_to_json;
+use parser::build_report;
 use parser::LogEntry;
 use parser::Report;
 use utils::clamp_display;
@@ -29,6 +32,7 @@ use utils::is_positive;
 
 use std.args.{parse}
 use std.io.{read_file}
+use std.log.{log_info, log_error}
 
 // ── Trust boundary: domain-specific pipeline logic ──────────────────────────
 
@@ -61,16 +65,18 @@ type CliArgs = struct {
 
 // ── Main pipeline ───────────────────────────────────────────────────────────
 
-fn run() -> Result<Unit, RunError> ! FileRead, Console {
+// Phase 4 changes:
+//   - args.level.map(|v: Tainted<String>| sanitize(v)) replaces the manual None/Some match.
+//   - std.log structured calls replace raw println for operational events.
+//   - Effect list extended with ! Log.
+fn run() -> Result<Unit, RunError> ! FileRead, Console, Log {
     let args_result = parse[CliArgs]();
     match args_result {
         Err(_) => Err(RunError::MissingArg),
         Ok(args) => {
             let file_path: Clean<String> = sanitize(args.file);
-            let level_opt: Option<Clean<String>> = match args.level {
-                None    => None,
-                Some(v) => Some(sanitize(v)),
-            };
+            // Option.map: sanitize each Some(v) without an explicit match ladder.
+            let level_opt: Option<Clean<String>> = args.level.map(|v: Tainted<String>| sanitize(v));
             let file_result = read_file(file_path);
             match file_result {
                 Err(_) => Err(RunError::IOFailure),
@@ -79,6 +85,7 @@ fn run() -> Result<Unit, RunError> ! FileRead, Console {
                     match pipeline_result {
                         Err(_) => Err(RunError::PipelineFailed),
                         Ok(json_report) => {
+                            log_info("analysis complete", {"output": "json"});
                             println(json_report);
                             Ok(())
                         }
@@ -89,10 +96,17 @@ fn run() -> Result<Unit, RunError> ! FileRead, Console {
     }
 }
 
-fn main() -> Unit ! FileRead, Console {
+fn main() -> Unit ! FileRead, Console, Log {
     match run() {
         Ok(_)  => (),
-        Err(_) => println("Error: analysis failed"),
+        Err(e) => {
+            let msg = match e {
+                RunError::MissingArg     => "missing --file argument",
+                RunError::IOFailure      => "failed to read log file",
+                RunError::PipelineFailed => "analysis pipeline failed",
+            };
+            log_error("run failed", {"reason": msg})
+        },
     }
 }
 
@@ -139,4 +153,25 @@ test fn check_cli_args_level_none() -> Unit {
         None    => 0,
     };
     assert_eq(has_level, 0);
+}
+
+// Option.map: None stays None, Some(v) maps through sanitize.
+test fn option_map_sanitize_none_stays_none() -> Unit {
+    let level: Option<Tainted<String>> = None;
+    let sanitized: Option<Clean<String>> = level.map(|v: Tainted<String>| sanitize(v));
+    let is_none = match sanitized {
+        None    => 1,
+        Some(_) => 0,
+    };
+    assert_eq(is_none, 1);
+}
+
+test fn option_map_sanitize_some_maps_value() -> Unit {
+    let level: Option<Tainted<String>> = Some("error");
+    let sanitized: Option<Clean<String>> = level.map(|v: Tainted<String>| sanitize(v));
+    let is_some = match sanitized {
+        Some(_) => 1,
+        None    => 0,
+    };
+    assert_eq(is_some, 1);
 }

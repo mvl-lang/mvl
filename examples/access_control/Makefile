@@ -1,4 +1,4 @@
-# access_control example — MVL Phase 2 security demonstration
+# access_control example — MVL Phase 4 security demonstration
 # Run from this directory or from the repo root.
 .PHONY: help build check test run clean
 

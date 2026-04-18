@@ -8,6 +8,9 @@
 // is Phase 2, issue #96).
 
 // ── Local type re-declarations ─────────────────────────────────────────────
+// workaround: #96 — cross-module type resolution not yet wired into the
+// per-file checker; types and functions are re-declared locally until the
+// module resolver is integrated.
 
 type Role = enum {
     Admin,

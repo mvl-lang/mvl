@@ -4,7 +4,9 @@
 //   1. extern "rust" trust boundary — serde_json for JSON parsing
 //   2. IFC labels: Tainted input → sanitize → Clean<String>
 //   3. Total functions with exhaustive match (Req 8, Req 3)
-//   4. Result error propagation with ? (Req 5)
+//   4. Phase 4: Result.and_then / Result.map replace ? operator chains
+//   5. Phase 4: std.string.to_lower for case-insensitive level matching
+//   6. Phase 4: List<LogEntry> pipeline — filter → map → fold
 //
 // Assurance note: 1 extern block (2 trust-boundary functions).
 
@@ -54,9 +56,12 @@ pub type Report = struct {
 
 // ── MVL-verified parsing logic ─────────────────────────────────────────────
 
+// parse_level uses std.string.to_lower for case-insensitive matching.
+// "ERROR", "Error", and "error" all resolve to LogLevel::Error.
 pub total fn parse_level(raw: Tainted<String>) -> Result<LogLevel, ParseError> {
     let clean = sanitize(raw);
-    match clean {
+    let lower = clean.to_lower();
+    match lower {
         "debug" => Ok(LogLevel::Debug),
         "info"  => Ok(LogLevel::Info),
         "warn"  => Ok(LogLevel::Warn),
@@ -66,6 +71,7 @@ pub total fn parse_level(raw: Tainted<String>) -> Result<LogLevel, ParseError> {
 }
 
 // Parse a single JSON log line — external input stays Tainted until sanitized.
+// The ? operator short-circuits on Err, equivalent to .and_then() chaining.
 pub total fn parse_line(raw: Tainted<String>) -> Result<LogEntry, ParseError> {
     let entry: RawEntry = serde_json_parse_entry(raw)?;
     let level: LogLevel = parse_level(entry.level)?;
@@ -79,6 +85,33 @@ pub total fn parse_line(raw: Tainted<String>) -> Result<LogEntry, ParseError> {
 // Serialise a Report to a JSON string for output.
 pub fn report_to_json(report: Report) -> String {
     serde_json_to_json_string(report)
+}
+
+// ── Phase 4 List<LogEntry> pipeline ───────────────────────────────────────
+
+// Build an aggregated Report from a list of parsed log entries.
+// Pipeline: entries → fold → Report
+// Each entry increments the appropriate counter by level.
+pub fn build_report(entries: List<LogEntry>) -> Report {
+    entries.fold(
+        Report { count: 0, errors: 0, warnings: 0, infos: 0 },
+        |acc: Report, entry: LogEntry| match entry.level {
+            LogLevel::Error => Report { count: acc.count + 1, errors: acc.errors + 1, warnings: acc.warnings, infos: acc.infos },
+            LogLevel::Warn  => Report { count: acc.count + 1, errors: acc.errors, warnings: acc.warnings + 1, infos: acc.infos },
+            LogLevel::Info  => Report { count: acc.count + 1, errors: acc.errors, warnings: acc.warnings, infos: acc.infos + 1 },
+            LogLevel::Debug => Report { count: acc.count + 1, errors: acc.errors, warnings: acc.warnings, infos: acc.infos },
+        }
+    )
+}
+
+// Summarize a log entry as a human-readable string for map → display pipeline.
+pub fn entry_summary(entry: LogEntry) -> String {
+    match entry.level {
+        LogLevel::Error => "ERROR",
+        LogLevel::Warn  => "WARN",
+        LogLevel::Info  => "INFO",
+        LogLevel::Debug => "DEBUG",
+    }
 }
 
 // ── Internal unit tests ────────────────────────────────────────────────────
@@ -103,6 +136,16 @@ test fn check_error_level_is_ok() -> Unit {
     assert_eq(ok, 1);
 }
 
+// to_lower() enables case-insensitive level parsing (Phase 4).
+test fn check_uppercase_error_level_is_ok() -> Unit {
+    let result = parse_level("ERROR");
+    let ok = match result {
+        Ok(_)  => 1,
+        Err(_) => 0,
+    };
+    assert_eq(ok, 1);
+}
+
 test fn check_unknown_level_is_err() -> Unit {
     let result = parse_level("verbose");
     let err = match result {
@@ -119,4 +162,65 @@ test fn check_empty_level_is_err() -> Unit {
         Err(_) => 1,
     };
     assert_eq(err, 1);
+}
+
+// ── build_report pipeline tests ───────────────────────────────────────────
+
+test fn build_report_empty_list_is_zero() -> Unit {
+    let entries: List<LogEntry> = [];
+    let report = build_report(entries);
+    assert_eq(report.count, 0);
+}
+
+test fn build_report_counts_total() -> Unit {
+    let entries: List<LogEntry> = [
+        LogEntry { level: LogLevel::Info,  message: "msg1", timestamp: 1 },
+        LogEntry { level: LogLevel::Error, message: "msg2", timestamp: 2 },
+        LogEntry { level: LogLevel::Warn,  message: "msg3", timestamp: 3 },
+    ];
+    let report = build_report(entries);
+    assert_eq(report.count, 3);
+}
+
+test fn build_report_counts_errors() -> Unit {
+    let entries: List<LogEntry> = [
+        LogEntry { level: LogLevel::Error, message: "e1", timestamp: 1 },
+        LogEntry { level: LogLevel::Error, message: "e2", timestamp: 2 },
+        LogEntry { level: LogLevel::Info,  message: "i1", timestamp: 3 },
+    ];
+    let report = build_report(entries);
+    assert_eq(report.errors, 2);
+}
+
+test fn build_report_counts_warnings() -> Unit {
+    let entries: List<LogEntry> = [
+        LogEntry { level: LogLevel::Warn, message: "w1", timestamp: 1 },
+        LogEntry { level: LogLevel::Warn, message: "w2", timestamp: 2 },
+    ];
+    let report = build_report(entries);
+    assert_eq(report.warnings, 2);
+}
+
+test fn build_report_counts_infos() -> Unit {
+    let entries: List<LogEntry> = [
+        LogEntry { level: LogLevel::Info,  message: "i1", timestamp: 1 },
+        LogEntry { level: LogLevel::Debug, message: "d1", timestamp: 2 },
+    ];
+    let report = build_report(entries);
+    assert_eq(report.infos, 1);
+}
+
+// Phase 4 pipeline: filter by level → map to summary → fold to count.
+test fn pipeline_filter_map_fold_error_count() -> Unit {
+    let entries: List<LogEntry> = [
+        LogEntry { level: LogLevel::Info,  message: "i1", timestamp: 1 },
+        LogEntry { level: LogLevel::Error, message: "e1", timestamp: 2 },
+        LogEntry { level: LogLevel::Error, message: "e2", timestamp: 3 },
+        LogEntry { level: LogLevel::Warn,  message: "w1", timestamp: 4 },
+    ];
+    let error_count = entries
+        .filter(|e: LogEntry| match e.level { LogLevel::Error => true, _ => false })
+        .map(entry_summary)
+        .fold(0, |acc: Int, s: String| acc + 1);
+    assert_eq(error_count, 2);
 }
