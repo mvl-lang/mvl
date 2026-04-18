@@ -31,7 +31,7 @@ The grammar is LL(1) — parseable by a single-lookahead recursive descent parse
 Seven common constructs in popular languages break LL(1). MVL avoids all by design:
 
 1. **Expression statements vs declarations** (C/C++) — MVL: `let` always starts a binding, bare expressions are always statements
-2. **Angle bracket ambiguity** (Java/C++ generics) — MVL: turbofish syntax `name::<T>()` disambiguates
+2. **Angle bracket ambiguity** (Java/C++ generics) — MVL: square brackets `name[T]()` in call position; `<>` only in type definitions (ADR-0005)
 3. **Lambda vs grouping** (JavaScript arrow functions) — MVL: lambdas use `|params|`, not `(params) =>`
 4. **Ternary operator** — MVL: no ternary; use `if`/`else` expression
 5. **Type annotation vs label** (TypeScript) — MVL: `where` keyword disambiguates refinements

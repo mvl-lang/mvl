@@ -113,7 +113,7 @@ No macros, no exceptions, no inheritance, no null, no while (in total functions)
 
 ### 21. Transpiler-Mediated Codegen (ADR-0013)
 
-No macros, no reflection. When a feature requires compile-time struct iteration (derives, `parse<T>()`, serialization), the transpiler generates it from type definitions. The type IS the spec; the transpiler IS the generator; the checker IS the verifier. Third path between macros and reflection.
+No macros, no reflection. When a feature requires compile-time struct iteration (derives, `parse[T]()`, serialization), the transpiler generates it from type definitions. The type IS the spec; the transpiler IS the generator; the checker IS the verifier. Third path between macros and reflection.
 
 ### 22. One Way (ADR-0004)
 
