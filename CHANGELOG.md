@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.44.0] — 2026-04-18
+
+### Added
+
+- **Toolchain version resolution chain (Phase C, ADR-0009)** — `mvl` binary becomes a thin dispatcher that resolves the target toolchain version and re-execs the correct binary. Resolution priority: `argv[0]` (`mvl@X.Y.Z`) > `.mvl-version` (project, CWD walk-up) > `mvl.toml` `requires-mvl` field > `~/.mvl-version` (global default) > active symlink. On Unix this is a true `execv` (control never returns on success); on other platforms a child process is spawned. Version strings from all file-based sources are validated before use; `argv[0]` path-traversal rejection extended to file sources. Adds 17 unit tests covering all resolution paths and edge cases (#222).
+
 ## [0.43.0] — 2026-04-18
 
 ### Added
