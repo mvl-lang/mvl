@@ -130,6 +130,55 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                 "clamp" if args.len() == 2 => {
                     emit_safe_clamp(cg, receiver, &args[0], &args[1]);
                 }
+                // Bitwise ops — Int/Byte: emit as Rust operators, not method calls.
+                // Rust uses `&`, `|`, `^`, `!`, `<<`, `>>` directly on i64/u8.
+                // Parens ensure correct precedence when composed with arithmetic.
+                "bit_and" if args.len() == 1 => {
+                    cg.push("(");
+                    emit_expr(cg, receiver);
+                    cg.push(" & ");
+                    emit_expr(cg, &args[0]);
+                    cg.push(")");
+                }
+                "bit_or" if args.len() == 1 => {
+                    cg.push("(");
+                    emit_expr(cg, receiver);
+                    cg.push(" | ");
+                    emit_expr(cg, &args[0]);
+                    cg.push(")");
+                }
+                "bit_xor" if args.len() == 1 => {
+                    cg.push("(");
+                    emit_expr(cg, receiver);
+                    cg.push(" ^ ");
+                    emit_expr(cg, &args[0]);
+                    cg.push(")");
+                }
+                "bit_not" if args.is_empty() => {
+                    cg.push("(!");
+                    emit_expr(cg, receiver);
+                    cg.push(")");
+                }
+                "shift_left" if args.len() == 1 => {
+                    cg.push("(");
+                    emit_expr(cg, receiver);
+                    cg.push(" << ");
+                    emit_expr(cg, &args[0]);
+                    cg.push(")");
+                }
+                "shift_right" if args.len() == 1 => {
+                    cg.push("(");
+                    emit_expr(cg, receiver);
+                    cg.push(" >> ");
+                    emit_expr(cg, &args[0]);
+                    cg.push(")");
+                }
+                // to_int() on Byte — cast u8 to i64
+                "to_int" if args.is_empty() => {
+                    cg.push("(");
+                    emit_expr(cg, receiver);
+                    cg.push(" as i64)");
+                }
                 _ => {
                     emit_expr(cg, receiver);
                     cg.push(".");
@@ -153,6 +202,13 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                 cg.push("(");
                 emit_args_for_macro(cg, args);
                 cg.push(")");
+            } else if name.as_str() == "from_int" {
+                // from_int(n: Int) -> Byte — wrapping cast i64 → u8
+                cg.push("(");
+                if let Some(arg) = args.first() {
+                    emit_expr(cg, arg);
+                }
+                cg.push(" as u8)");
             } else {
                 let is_extern = cg.extern_fns.contains(name.as_str());
                 if is_extern {

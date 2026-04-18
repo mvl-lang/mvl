@@ -970,6 +970,27 @@ fn corpus_args_transpiles() {
     assert_contains(&rust, "parse::<f64>()");
 }
 
+/// Corpus: `tests/corpus/01_basics/bitwise.mvl` transpiles without errors and
+/// emits Rust bitwise operators for Int and Byte methods (#233).
+#[test]
+fn corpus_bitwise_transpiles() {
+    let src = include_str!("corpus/01_basics/bitwise.mvl");
+    let rust = transpile_src(src);
+    // Int bitwise — Rust operators
+    assert_contains(&rust, "(a & b)");
+    assert_contains(&rust, "(a | b)");
+    assert_contains(&rust, "(a ^ b)");
+    assert_contains(&rust, "(!a)");
+    assert_contains(&rust, "(a << n)");
+    assert_contains(&rust, "(a >> n)");
+    // Byte to_int — cast to i64
+    assert_contains(&rust, " as i64)");
+    // from_int — cast to u8
+    assert_contains(&rust, " as u8)");
+    // Byte functions use u8 types
+    assert_contains(&rust, "pub fn byte_bit_and(a: u8, b: u8) -> u8");
+}
+
 // ── Prelude emission (issue #229, Phase 4) ────────────────────────────────
 
 use mvl::mvl::transpiler::transpile_project;
