@@ -6,6 +6,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.45.0] — 2026-04-18
+
+### Added
+
+- **Native behavioral mutation testing (`mvl mutate`)** — Single-compile, parallel-run mutation testing driven by ADR-0014. The transpiler embeds all mutants behind `MVL_MUTANT` env-var dispatch; N parallel test-binary runs determine which mutants are killed. Mutation operators: arithmetic (`+→-`, `+→*`, …), comparison (`<→<=`, `==→!=`, …), logic (`&&→||`), bool literal flips, integer literal replacements. The compiler's type system pre-kills ~70% of structural mutations, leaving only behavioral mutations for higher-signal test quality assessment (#210).
+
+### Fixed
+
+- **Mutations in test function bodies** — `alloc_binary_mutations`, `alloc_bool_mutation`, and `alloc_int_mutations` now check `current_fn_is_test` to prevent instrumentation of assertions and test setup code.
+- **Baseline run environment isolation** — Baseline test run now explicitly removes `MVL_MUTANT` env var to guard against inherited CI environment accidentally activating a mutant.
+- **Thread panic handling** — Worker thread panics in parallel mutant execution now surface as hard errors (`expect`) instead of silently dropping results.
+- **Help text accuracy** — `--limit N` flag description changed from "sample N mutants" to "take the first N mutants" to accurately reflect the deterministic `take()` semantics.
+
 ## [0.44.1] — 2026-04-18
 
 ### Fixed
