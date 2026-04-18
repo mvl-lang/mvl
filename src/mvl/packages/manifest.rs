@@ -496,6 +496,8 @@ tls = { git = "https://github.com/lab271/mvl_tls", tag = "v0.4.0" }
 hyper = "1.0"
 "#;
 
+    // ── Existing tests ────────────────────────────────────────────────────────
+
     #[test]
     fn parse_minimal_manifest() {
         let m = Manifest::parse(MINIMAL).unwrap();
@@ -558,5 +560,186 @@ hyper = "1.0"
         assert_eq!(m.package.name, "my-app");
         assert_eq!(m.package.version, "0.1.0");
         assert_eq!(m.package.requires_mvl, ">=0.42.0");
+    }
+
+    // ── New tests ─────────────────────────────────────────────────────────────
+
+    // --- missing section ---
+
+    #[test]
+    fn parse_missing_package_section_returns_error() {
+        let content = "name = \"foo\"\nversion = \"1.0.0\"\n";
+        let err = Manifest::parse(content).unwrap_err();
+        assert!(matches!(err, ManifestError::MissingSection(_)));
+    }
+
+    // --- dependency inline-table edge cases ---
+
+    #[test]
+    fn dep_with_inline_table_missing_git_field_returns_error() {
+        let content = r#"
+[package]
+name = "foo"
+version = "1.0.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[dependencies]
+bar = { tag = "v1.0.0" }
+"#;
+        let err = Manifest::parse(content).unwrap_err();
+        assert!(
+            matches!(err, ManifestError::ParseError(ref s) if s.contains("missing 'git'")),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn dep_with_inline_table_missing_tag_field_returns_error() {
+        let content = r#"
+[package]
+name = "foo"
+version = "1.0.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[dependencies]
+bar = { git = "https://example.com/bar" }
+"#;
+        let err = Manifest::parse(content).unwrap_err();
+        assert!(
+            matches!(err, ManifestError::ParseError(ref s) if s.contains("missing 'tag'")),
+            "got: {err}"
+        );
+    }
+
+    // --- validate_extern ---
+
+    #[test]
+    fn validate_extern_passes_when_rationale_present() {
+        let m = Manifest::parse(WITH_DEPS).unwrap();
+        // WITH_DEPS has extern-rationale set
+        assert!(m.validate_extern(true).is_ok());
+        assert!(m.validate_extern(false).is_ok());
+    }
+
+    // --- DepSpec::version_str ---
+
+    #[test]
+    fn dep_version_str_for_version_spec() {
+        let spec = DepSpec::Version(">=1.0.0, <2.0.0".to_string());
+        assert_eq!(spec.version_str(), ">=1.0.0, <2.0.0");
+    }
+
+    #[test]
+    fn dep_version_str_for_git_spec() {
+        let spec = DepSpec::Git {
+            git: "https://example.com/pkg".to_string(),
+            tag: "v1.2.3".to_string(),
+        };
+        assert_eq!(spec.version_str(), "v1.2.3");
+    }
+
+    // --- toml_escape / unescape roundtrip ---
+
+    #[test]
+    fn toml_escape_backslash_and_quote() {
+        let original = r#"has "quotes" and \backslash"#;
+        let escaped = toml_escape(original);
+        let unescaped = unescape_string(&escaped);
+        assert_eq!(unescaped, original);
+    }
+
+    #[test]
+    fn toml_escape_plain_string_unchanged() {
+        let s = "plain string with no special chars";
+        assert_eq!(toml_escape(s), s);
+    }
+
+    // --- strip_comment ---
+
+    #[test]
+    fn strip_comment_ignores_hash_in_string() {
+        // Hash inside a quoted string must not be treated as a comment
+        let line = r#"key = "value # not a comment""#;
+        let stripped = strip_comment(line);
+        assert_eq!(stripped, line);
+    }
+
+    #[test]
+    fn strip_comment_strips_trailing_hash() {
+        let line = r#"key = "value" # this is a comment"#;
+        let stripped = strip_comment(line).trim();
+        assert_eq!(stripped, r#"key = "value""#);
+    }
+
+    // --- new_project ---
+
+    #[test]
+    fn new_project_has_empty_deps_and_native() {
+        let m = Manifest::new_project("app", "1.0.0");
+        assert!(m.dependencies.is_empty());
+        assert!(m.native.is_empty());
+        assert!(m.package.extern_rationale.is_none());
+    }
+
+    // --- ManifestError Display ---
+
+    #[test]
+    fn manifest_error_display_io() {
+        let e = ManifestError::Io("/path".to_string(), "not found".to_string());
+        assert!(e.to_string().contains("/path"));
+    }
+
+    #[test]
+    fn manifest_error_display_missing_section() {
+        let e = ManifestError::MissingSection("[package]".to_string());
+        assert!(e.to_string().contains("[package]"));
+    }
+
+    #[test]
+    fn manifest_error_display_missing_field() {
+        let e = ManifestError::MissingField("license".to_string());
+        assert!(e.to_string().contains("license"));
+    }
+
+    #[test]
+    fn manifest_error_display_extern_rationale() {
+        let e = ManifestError::MissingExternRationale("my-pkg".to_string());
+        let s = e.to_string();
+        assert!(s.contains("E700"));
+        assert!(s.contains("my-pkg"));
+    }
+
+    // --- load from file ---
+
+    #[test]
+    fn load_parses_file_from_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("mvl.toml"), MINIMAL).unwrap();
+        let m = Manifest::load(tmp.path()).unwrap();
+        assert_eq!(m.package.name, "mvl-json");
+    }
+
+    #[test]
+    fn load_returns_io_error_when_file_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = Manifest::load(tmp.path()).unwrap_err();
+        assert!(matches!(err, ManifestError::Io(_, _)));
+    }
+
+    // --- package name with dots and slashes ---
+
+    #[test]
+    fn parse_package_name_with_dots_and_slashes() {
+        let content = r#"
+[package]
+name = "github.com/lab271/mvl-stdlib"
+version = "2.0.0"
+license = "Apache-2.0"
+requires-mvl = ">=0.40.0"
+"#;
+        let m = Manifest::parse(content).unwrap();
+        assert_eq!(m.package.name, "github.com/lab271/mvl-stdlib");
     }
 }

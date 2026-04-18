@@ -123,6 +123,8 @@ pub fn select_maximum<'a>(
 mod tests {
     use super::*;
 
+    // ── Existing tests ────────────────────────────────────────────────────────
+
     #[test]
     fn parse_valid_semver() {
         let v = Version::parse("1.2.3").unwrap();
@@ -208,5 +210,186 @@ mod tests {
     #[test]
     fn version_to_string() {
         assert_eq!(Version::parse("1.2.3").unwrap().to_string(), "1.2.3");
+    }
+
+    // ── New tests ─────────────────────────────────────────────────────────────
+
+    // --- Version::parse edge cases ---
+
+    #[test]
+    fn parse_version_with_leading_whitespace() {
+        // Version::parse trims the input
+        let v = Version::parse("  1.2.3  ").unwrap();
+        assert_eq!(v.major, 1);
+        assert_eq!(v.minor, 2);
+        assert_eq!(v.patch, 3);
+    }
+
+    #[test]
+    fn parse_version_zero_zero_zero() {
+        let v = Version::parse("0.0.0").unwrap();
+        assert_eq!(v.major, 0);
+        assert_eq!(v.minor, 0);
+        assert_eq!(v.patch, 0);
+    }
+
+    #[test]
+    fn parse_version_large_numbers() {
+        let v = Version::parse("99.999.9999").unwrap();
+        assert_eq!(v.major, 99);
+        assert_eq!(v.minor, 999);
+        assert_eq!(v.patch, 9999);
+    }
+
+    #[test]
+    fn parse_version_negative_component_returns_none() {
+        // Negative numbers are not valid semver components
+        assert!(Version::parse("-1.0.0").is_none());
+        assert!(Version::parse("1.-2.0").is_none());
+    }
+
+    #[test]
+    fn parse_version_non_numeric_component_returns_none() {
+        assert!(Version::parse("1.2.x").is_none());
+        assert!(Version::parse("a.b.c").is_none());
+    }
+
+    // --- Version ordering edge cases ---
+
+    #[test]
+    fn version_patch_beats_minor_for_same_major() {
+        let v010 = Version::parse("0.1.0").unwrap();
+        let v001 = Version::parse("0.0.1").unwrap();
+        assert!(v001 < v010);
+    }
+
+    #[test]
+    fn version_equality() {
+        let a = Version::parse("1.2.3").unwrap();
+        let b = Version::parse("1.2.3").unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn version_inequality() {
+        let a = Version::parse("1.2.3").unwrap();
+        let b = Version::parse("1.2.4").unwrap();
+        assert_ne!(a, b);
+    }
+
+    // --- Predicate variants ---
+
+    #[test]
+    fn constraint_gt_strict_excludes_boundary() {
+        let c = VersionConstraint::parse(">1.0.0").unwrap();
+        assert!(
+            !c.matches(&Version::parse("1.0.0").unwrap()),
+            "1.0.0 not > 1.0.0"
+        );
+        assert!(
+            c.matches(&Version::parse("1.0.1").unwrap()),
+            "1.0.1 > 1.0.0"
+        );
+    }
+
+    #[test]
+    fn constraint_lte_includes_boundary() {
+        let c = VersionConstraint::parse("<=2.0.0").unwrap();
+        assert!(
+            c.matches(&Version::parse("2.0.0").unwrap()),
+            "2.0.0 <= 2.0.0"
+        );
+        assert!(
+            c.matches(&Version::parse("1.9.9").unwrap()),
+            "1.9.9 <= 2.0.0"
+        );
+        assert!(
+            !c.matches(&Version::parse("2.0.1").unwrap()),
+            "2.0.1 not <= 2.0.0"
+        );
+    }
+
+    #[test]
+    fn constraint_lt_excludes_boundary() {
+        let c = VersionConstraint::parse("<2.0.0").unwrap();
+        assert!(
+            !c.matches(&Version::parse("2.0.0").unwrap()),
+            "2.0.0 not < 2.0.0"
+        );
+        assert!(
+            c.matches(&Version::parse("1.9.9").unwrap()),
+            "1.9.9 < 2.0.0"
+        );
+    }
+
+    #[test]
+    fn constraint_eq_explicit_operator() {
+        let c = VersionConstraint::parse("=1.5.0").unwrap();
+        assert!(c.matches(&Version::parse("1.5.0").unwrap()));
+        assert!(!c.matches(&Version::parse("1.5.1").unwrap()));
+        assert!(!c.matches(&Version::parse("1.4.9").unwrap()));
+    }
+
+    #[test]
+    fn constraint_parse_returns_none_on_bad_version() {
+        // Invalid version in the constraint → None
+        assert!(VersionConstraint::parse(">=not.a.version").is_none());
+        assert!(VersionConstraint::parse(">=1.2").is_none());
+    }
+
+    // --- select_minimum / select_maximum edge cases ---
+
+    #[test]
+    fn select_minimum_empty_list_returns_none() {
+        let c = VersionConstraint::parse(">=1.0.0").unwrap();
+        assert!(select_minimum(&[], &c).is_none());
+    }
+
+    #[test]
+    fn select_maximum_empty_list_returns_none() {
+        let c = VersionConstraint::parse(">=1.0.0").unwrap();
+        assert!(select_maximum(&[], &c).is_none());
+    }
+
+    #[test]
+    fn select_minimum_single_matching_element() {
+        let available = vec![Version::parse("1.0.0").unwrap()];
+        let c = VersionConstraint::parse(">=1.0.0").unwrap();
+        assert_eq!(select_minimum(&available, &c).unwrap().to_string(), "1.0.0");
+    }
+
+    #[test]
+    fn select_maximum_single_matching_element() {
+        let available = vec![Version::parse("1.0.0").unwrap()];
+        let c = VersionConstraint::parse(">=1.0.0").unwrap();
+        assert_eq!(select_maximum(&available, &c).unwrap().to_string(), "1.0.0");
+    }
+
+    #[test]
+    fn select_minimum_unsorted_input_still_correct() {
+        // select_minimum should not depend on list order
+        let available: Vec<Version> = ["2.0.0", "1.0.0", "1.5.0"]
+            .iter()
+            .map(|s| Version::parse(s).unwrap())
+            .collect();
+        let c = VersionConstraint::parse(">=1.0.0, <2.0.0").unwrap();
+        assert_eq!(select_minimum(&available, &c).unwrap().to_string(), "1.0.0");
+    }
+
+    #[test]
+    fn select_maximum_unsorted_input_still_correct() {
+        let available: Vec<Version> = ["2.0.0", "1.0.0", "1.5.0"]
+            .iter()
+            .map(|s| Version::parse(s).unwrap())
+            .collect();
+        let c = VersionConstraint::parse(">=1.0.0, <2.0.0").unwrap();
+        assert_eq!(select_maximum(&available, &c).unwrap().to_string(), "1.5.0");
+    }
+
+    // --- Version Display ---
+
+    #[test]
+    fn version_display_zero() {
+        assert_eq!(Version::parse("0.0.0").unwrap().to_string(), "0.0.0");
     }
 }

@@ -30,8 +30,14 @@ pub use fetch::{local_override_dir, pkg_cache_root};
 /// Fetches a package from a git URL, adds it to `mvl.toml` and `mvl.lock`.
 /// If `tag` is omitted, queries the git remote for the latest semver tag.
 pub fn cmd_add(pkg_id: &str, tag: Option<&str>, project_root: &Path) {
+    // Reject plain-HTTP URLs — they are vulnerable to MITM at fetch time.
+    if pkg_id.starts_with("http://") {
+        eprintln!("error: plain http:// is not allowed; use https:// to prevent MITM attacks");
+        process::exit(1);
+    }
+
     // Derive the git URL from the pkg-id (strip optional leading scheme)
-    let git_url = if pkg_id.starts_with("https://") || pkg_id.starts_with("http://") {
+    let git_url = if pkg_id.starts_with("https://") || pkg_id.starts_with("git@") {
         pkg_id.to_string()
     } else {
         format!("https://{pkg_id}")
@@ -148,12 +154,10 @@ pub fn cmd_install(project_root: &Path) {
             );
             process::exit(1);
         });
-        let tag_owned = pkg
-            .commit
-            .as_deref()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("v{}", pkg.version));
-        let tag = tag_owned.as_str();
+        // Always clone by version tag.  The `commit` field is informational
+        // only — `git clone --branch` does not accept raw SHAs.
+        let tag = format!("v{}", pkg.version);
+        let tag = tag.as_str();
 
         let locked = fetch_package(&pkg.name, git_url, tag).unwrap_or_else(|e| {
             eprintln!("error fetching {}: {e}", pkg.name);
@@ -259,7 +263,16 @@ pub fn cmd_update(project_root: &Path) {
 pub fn ensure_dependencies(project_root: &Path) -> std::collections::HashMap<String, PathBuf> {
     let manifest = match Manifest::load(project_root) {
         Ok(m) => m,
-        Err(_) => return std::collections::HashMap::new(), // no mvl.toml = no deps
+        // No mvl.toml → no dependencies.  Emit a warning for parse/IO errors
+        // so users aren't silently left without packages they declared.
+        Err(e) => {
+            use manifest::ManifestError;
+            match e {
+                ManifestError::Io(_, _) => {} // file absent is fine
+                other => eprintln!("warning: could not read mvl.toml: {other}"),
+            }
+            return std::collections::HashMap::new();
+        }
     };
 
     if manifest.dependencies.is_empty() {
@@ -274,7 +287,7 @@ pub fn ensure_dependencies(project_root: &Path) -> std::collections::HashMap<Str
 
     let mut pkg_dirs = std::collections::HashMap::new();
 
-    for (name, spec) in &manifest.dependencies {
+    for name in manifest.dependencies.keys() {
         let pinned = lockfile.get(name).unwrap_or_else(|| {
             eprintln!("error: '{name}' in mvl.toml is not in mvl.lock — run 'mvl install'");
             process::exit(1);
@@ -308,7 +321,6 @@ pub fn ensure_dependencies(project_root: &Path) -> std::collections::HashMap<Str
         }
 
         pkg_dirs.insert(name.clone(), dir);
-        let _ = spec; // used for type info only
     }
 
     pkg_dirs
@@ -335,4 +347,98 @@ fn latest_semver_tag(tags: &[String]) -> Option<String> {
         }
     }
     best.map(|(_, tag)| tag)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tags(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    // --- latest_semver_tag ---
+
+    #[test]
+    fn latest_semver_tag_empty_list_returns_none() {
+        assert!(latest_semver_tag(&[]).is_none());
+    }
+
+    #[test]
+    fn latest_semver_tag_picks_highest() {
+        let t = tags(&["v1.0.0", "v2.0.0", "v1.5.0"]);
+        assert_eq!(latest_semver_tag(&t).as_deref(), Some("v2.0.0"));
+    }
+
+    #[test]
+    fn latest_semver_tag_ignores_non_semver_entries() {
+        let t = tags(&["nightly", "v1.0.0", "beta", "latest"]);
+        assert_eq!(latest_semver_tag(&t).as_deref(), Some("v1.0.0"));
+    }
+
+    #[test]
+    fn latest_semver_tag_all_non_semver_returns_none() {
+        let t = tags(&["nightly", "beta", "latest", "stable"]);
+        assert!(latest_semver_tag(&t).is_none());
+    }
+
+    #[test]
+    fn latest_semver_tag_without_v_prefix() {
+        // Tags without a leading 'v' should also parse as semver
+        let t = tags(&["1.0.0", "2.0.0", "1.5.0"]);
+        assert_eq!(latest_semver_tag(&t).as_deref(), Some("2.0.0"));
+    }
+
+    #[test]
+    fn latest_semver_tag_mixed_v_prefix() {
+        // Both "v1.0.0" and "2.0.0" forms present — picks the highest
+        let t = tags(&["v1.0.0", "2.0.0", "v1.5.0"]);
+        assert_eq!(latest_semver_tag(&t).as_deref(), Some("2.0.0"));
+    }
+
+    #[test]
+    fn latest_semver_tag_single_entry() {
+        let t = tags(&["v3.2.1"]);
+        assert_eq!(latest_semver_tag(&t).as_deref(), Some("v3.2.1"));
+    }
+
+    #[test]
+    fn latest_semver_tag_preserves_original_tag_string() {
+        // The returned tag must be the original string (with 'v'), not the stripped version
+        let t = tags(&["v1.2.3"]);
+        assert_eq!(latest_semver_tag(&t).as_deref(), Some("v1.2.3"));
+    }
+
+    // --- is_local_override ---
+
+    #[test]
+    fn is_local_override_true_when_dir_is_under_local_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let local = root.join(".mvl").join("pkg").join("mypkg");
+        std::fs::create_dir_all(&local).unwrap();
+
+        assert!(is_local_override(root, "mypkg", &local));
+    }
+
+    #[test]
+    fn is_local_override_false_when_dir_is_not_under_local_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        // A path outside the .mvl tree
+        let other = tmp.path().join("some").join("other").join("path");
+        std::fs::create_dir_all(&other).unwrap();
+
+        assert!(!is_local_override(root, "mypkg", &other));
+    }
+
+    #[test]
+    fn is_local_override_false_for_cache_path() {
+        // A typical global cache path must not be mistaken for a local override
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let cache_path = std::path::PathBuf::from("/home/user/.local/share/mvl/pkg/mypkg/1.0.0");
+
+        assert!(!is_local_override(root, "mypkg", &cache_path));
+    }
 }

@@ -89,14 +89,14 @@ impl LockFile {
         out.push_str("# Commit this file to source control for reproducible builds.\n");
         for pkg in &self.packages {
             out.push_str("\n[[package]]\n");
-            out.push_str(&format!("name = \"{}\"\n", pkg.name));
-            out.push_str(&format!("version = \"{}\"\n", pkg.version));
-            out.push_str(&format!("hash = \"{}\"\n", pkg.hash));
+            out.push_str(&format!("name = \"{}\"\n", toml_escape(&pkg.name)));
+            out.push_str(&format!("version = \"{}\"\n", toml_escape(&pkg.version)));
+            out.push_str(&format!("hash = \"{}\"\n", toml_escape(&pkg.hash)));
             if let Some(ref c) = pkg.commit {
-                out.push_str(&format!("commit = \"{c}\"\n"));
+                out.push_str(&format!("commit = \"{}\"\n", toml_escape(c)));
             }
             if let Some(ref g) = pkg.git {
-                out.push_str(&format!("git = \"{g}\"\n"));
+                out.push_str(&format!("git = \"{}\"\n", toml_escape(g)));
             }
         }
         out
@@ -176,6 +176,11 @@ fn locked_from_map(mut map: HashMap<String, String>) -> Result<LockedPackage, Lo
     })
 }
 
+/// Escape a string for use inside a TOML double-quoted value.
+fn toml_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +201,8 @@ name = "tls"
 version = "0.4.0"
 hash = "sha256:aaabbbccc"
 "#;
+
+    // ── Existing tests ────────────────────────────────────────────────────────
 
     #[test]
     fn parse_sample_lock() {
@@ -272,5 +279,198 @@ hash = "sha256:aaabbbccc"
         let bad = "[[package]]\nname = \"foo\"\nversion = \"1.0.0\"\n";
         let err = LockFile::parse(bad).unwrap_err();
         assert!(matches!(err, LockError::MissingField(_)));
+    }
+
+    // ── New tests ─────────────────────────────────────────────────────────────
+
+    // --- parse edge cases ---
+
+    #[test]
+    fn parse_empty_content_returns_empty_lockfile() {
+        let lf = LockFile::parse("").unwrap();
+        assert!(lf.packages.is_empty());
+    }
+
+    #[test]
+    fn parse_only_comments_returns_empty() {
+        let content = "# comment\n# another comment\n";
+        let lf = LockFile::parse(content).unwrap();
+        assert!(lf.packages.is_empty());
+    }
+
+    #[test]
+    fn parse_crlf_line_endings() {
+        // The parser uses .lines() which handles \r\n correctly on all platforms
+        let content =
+            "[[package]]\r\nname = \"foo\"\r\nversion = \"1.0.0\"\r\nhash = \"sha256:aaa\"\r\n";
+        let lf = LockFile::parse(content).unwrap();
+        assert_eq!(lf.packages.len(), 1);
+        assert_eq!(lf.packages[0].name, "foo");
+        assert_eq!(lf.packages[0].version, "1.0.0");
+    }
+
+    #[test]
+    fn parse_unquoted_value_is_skipped() {
+        // The parser only accepts quoted string values; bare values are silently skipped.
+        // This means the field will be missing and produce a MissingField error for
+        // required fields (name, version, hash).
+        let content = "[[package]]\nname = unquoted\nversion = \"1.0.0\"\nhash = \"sha256:x\"\n";
+        // 'name' has no quotes → not inserted → MissingField("name")
+        let err = LockFile::parse(content).unwrap_err();
+        assert!(matches!(err, LockError::MissingField(_)));
+    }
+
+    #[test]
+    fn parse_hash_with_embedded_equals_sign() {
+        // Values like "sha256:abc=def" must parse correctly; the parser splits on
+        // the *first* `=` so the rest of the value is preserved.
+        let content =
+            "[[package]]\nname = \"foo\"\nversion = \"1.0.0\"\nhash = \"sha256:abc=def\"\n";
+        let lf = LockFile::parse(content).unwrap();
+        assert_eq!(lf.packages[0].hash, "sha256:abc=def");
+    }
+
+    #[test]
+    fn parse_missing_name_returns_error() {
+        let content = "[[package]]\nversion = \"1.0.0\"\nhash = \"sha256:abc\"\n";
+        let err = LockFile::parse(content).unwrap_err();
+        assert!(matches!(err, LockError::MissingField(ref f) if f == "name"));
+    }
+
+    #[test]
+    fn parse_missing_version_returns_error() {
+        let content = "[[package]]\nname = \"foo\"\nhash = \"sha256:abc\"\n";
+        let err = LockFile::parse(content).unwrap_err();
+        assert!(matches!(err, LockError::MissingField(ref f) if f == "version"));
+    }
+
+    // --- remove ---
+
+    #[test]
+    fn remove_package_by_name() {
+        let mut lf = LockFile::parse(SAMPLE).unwrap();
+        assert_eq!(lf.packages.len(), 2);
+        lf.remove("tls");
+        assert_eq!(lf.packages.len(), 1);
+        assert!(lf.get("tls").is_none());
+        assert!(lf.get("github.com/lab271/mvl-stdlib").is_some());
+    }
+
+    #[test]
+    fn remove_nonexistent_is_noop() {
+        let mut lf = LockFile::parse(SAMPLE).unwrap();
+        let count_before = lf.packages.len();
+        lf.remove("does-not-exist");
+        assert_eq!(lf.packages.len(), count_before);
+    }
+
+    // --- get ---
+
+    #[test]
+    fn get_returns_none_for_missing_package() {
+        let lf = LockFile::parse(SAMPLE).unwrap();
+        assert!(lf.get("nonexistent").is_none());
+    }
+
+    // --- is_complete ---
+
+    #[test]
+    fn is_complete_empty_name_list_is_always_true() {
+        let lf = LockFile::default();
+        assert!(lf.is_complete(&[]));
+    }
+
+    #[test]
+    fn is_complete_partial_match_returns_false() {
+        let lf = LockFile::parse(SAMPLE).unwrap();
+        assert!(!lf.is_complete(&["tls", "missing-pkg"]));
+    }
+
+    // --- to_toml omits optional fields ---
+
+    #[test]
+    fn to_toml_omits_commit_and_git_when_none() {
+        let mut lf = LockFile::default();
+        lf.upsert(LockedPackage {
+            name: "bar".to_string(),
+            version: "2.0.0".to_string(),
+            hash: "sha256:xyz".to_string(),
+            commit: None,
+            git: None,
+        });
+        let toml = lf.to_toml();
+        assert!(!toml.contains("commit ="), "commit should be absent");
+        assert!(!toml.contains("git ="), "git should be absent");
+    }
+
+    #[test]
+    fn to_toml_includes_commit_and_git_when_set() {
+        let mut lf = LockFile::default();
+        lf.upsert(LockedPackage {
+            name: "baz".to_string(),
+            version: "1.0.0".to_string(),
+            hash: "sha256:abc".to_string(),
+            commit: Some("cafebabe".to_string()),
+            git: Some("https://example.com/pkg".to_string()),
+        });
+        let toml = lf.to_toml();
+        assert!(toml.contains("commit = \"cafebabe\""));
+        assert!(toml.contains("git = \"https://example.com/pkg\""));
+    }
+
+    // --- LockError Display ---
+
+    #[test]
+    fn lock_error_display_io() {
+        let e = LockError::Io("/path".to_string(), "not found".to_string());
+        assert!(e.to_string().contains("/path"));
+        assert!(e.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn lock_error_display_missing_field() {
+        let e = LockError::MissingField("hash".to_string());
+        assert!(e.to_string().contains("hash"));
+    }
+
+    #[test]
+    fn lock_error_display_invalid_hash() {
+        let e = LockError::InvalidHash("md5:abc".to_string());
+        assert!(e.to_string().contains("md5:abc"));
+    }
+
+    // --- load_or_empty on missing directory ---
+
+    #[test]
+    fn load_or_empty_returns_empty_when_file_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No mvl.lock file exists
+        let lf = LockFile::load_or_empty(tmp.path());
+        assert!(lf.packages.is_empty());
+    }
+
+    // --- write / load roundtrip ---
+
+    #[test]
+    fn write_then_load_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut lf = LockFile::default();
+        lf.upsert(LockedPackage {
+            name: "mypkg".to_string(),
+            version: "3.0.0".to_string(),
+            hash: "sha256:deadbeef".to_string(),
+            commit: Some("abc123".to_string()),
+            git: Some("https://example.com/mypkg".to_string()),
+        });
+        lf.write(tmp.path()).unwrap();
+
+        let loaded = LockFile::load(tmp.path()).unwrap();
+        assert_eq!(loaded.packages.len(), 1);
+        let p = &loaded.packages[0];
+        assert_eq!(p.name, "mypkg");
+        assert_eq!(p.version, "3.0.0");
+        assert_eq!(p.hash, "sha256:deadbeef");
+        assert_eq!(p.commit.as_deref(), Some("abc123"));
+        assert_eq!(p.git.as_deref(), Some("https://example.com/mypkg"));
     }
 }
