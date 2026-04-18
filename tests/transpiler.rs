@@ -981,8 +981,8 @@ fn corpus_bitwise_transpiles() {
     assert_contains(&rust, "(a | b)");
     assert_contains(&rust, "(a ^ b)");
     assert_contains(&rust, "(!a)");
-    assert_contains(&rust, "(a << n)");
-    assert_contains(&rust, "(a >> n)");
+    assert_contains(&rust, ".wrapping_shl(");
+    assert_contains(&rust, ".wrapping_shr(");
     // Byte to_int — cast to i64
     assert_contains(&rust, " as i64)");
     // from_int — cast to u8

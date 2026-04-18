@@ -3208,3 +3208,54 @@ fn for_loop_non_iterator_in_partial_fn_emits_both_errors() {
         "must also emit NotIterator for Int, got: {errors:?}"
     );
 }
+
+// ── #233: Bitwise operations on Int and Byte ──────────────────────────────────
+
+/// Corpus `tests/corpus/01_basics/bitwise.mvl` must type-check cleanly.
+/// Note: transpile_src() does NOT run the checker; this test is required.
+#[test]
+fn bitwise_corpus_checks_cleanly() {
+    let src = include_str!("corpus/01_basics/bitwise.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "bitwise corpus must type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+/// `from_int()` with zero arguments must be rejected.
+#[test]
+fn from_int_with_no_args_is_rejected() {
+    let errors = errors_for("fn f() -> Byte { from_int() }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::WrongArgCount { name, .. } if name == "from_int")),
+        "zero-arg from_int must emit WrongArgCount, got: {errors:?}"
+    );
+}
+
+/// `from_int(a, b)` with two arguments must be rejected.
+#[test]
+fn from_int_with_too_many_args_is_rejected() {
+    let errors = errors_for("fn f(a: Int, b: Int) -> Byte { from_int(a, b) }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::WrongArgCount { name, .. } if name == "from_int")),
+        "two-arg from_int must emit WrongArgCount, got: {errors:?}"
+    );
+}
+
+/// `from_int(s)` where `s: String` must be rejected with a type mismatch.
+#[test]
+fn from_int_with_non_int_arg_is_rejected() {
+    let errors = errors_for(r#"fn f(s: String) -> Byte { from_int(s) }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { expected, .. } if expected == "Int")),
+        "from_int with String arg must emit TypeMismatch, got: {errors:?}"
+    );
+}

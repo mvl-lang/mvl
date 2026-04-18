@@ -159,21 +159,26 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                     emit_expr(cg, receiver);
                     cg.push(")");
                 }
+                // Use wrapping_shl/wrapping_shr instead of bare `<<`/`>>` to avoid
+                // a debug-mode panic when the shift count is out of range (>= 64 for
+                // i64, >= 8 for u8).  Both i64 and u8 support these methods; the
+                // `as u32` cast is required by Rust's API and is safe for both Int
+                // (wrapping truncation) and Byte (zero-extending widening).
                 "shift_left" if args.len() == 1 => {
                     cg.push("(");
                     emit_expr(cg, receiver);
-                    cg.push(" << ");
+                    cg.push(".wrapping_shl(");
                     emit_expr(cg, &args[0]);
-                    cg.push(")");
+                    cg.push(" as u32))");
                 }
                 "shift_right" if args.len() == 1 => {
                     cg.push("(");
                     emit_expr(cg, receiver);
-                    cg.push(" >> ");
+                    cg.push(".wrapping_shr(");
                     emit_expr(cg, &args[0]);
-                    cg.push(")");
+                    cg.push(" as u32))");
                 }
-                // to_int() on Byte — cast u8 to i64
+                // to_int() on Byte (u8 → i64) or Float (f64 → i64, truncating)
                 "to_int" if args.is_empty() => {
                     cg.push("(");
                     emit_expr(cg, receiver);
@@ -203,7 +208,11 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                 emit_args_for_macro(cg, args);
                 cg.push(")");
             } else if name.as_str() == "from_int" {
-                // from_int(n: Int) -> Byte — wrapping cast i64 → u8
+                // from_int(n: Int) -> Byte — wrapping cast i64 → u8.
+                // The checker enforces exactly 1 Int argument; assert here as a
+                // second line of defence so a missed check produces a clear panic
+                // rather than silent `( as u8)` which would be a Rust syntax error.
+                debug_assert_eq!(args.len(), 1, "from_int requires exactly one argument");
                 cg.push("(");
                 if let Some(arg) = args.first() {
                     emit_expr(cg, arg);
