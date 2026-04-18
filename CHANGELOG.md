@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.42.0] — 2026-04-18
+
+### Added
+
+- **Toolchain management commands** — `mvl self install/use/list/uninstall` for side-by-side compiler versions. Implements ADR-0009 Phase B (#221).
+
 ## [0.41.1] — 2026-04-18
 
 ### Fixed
