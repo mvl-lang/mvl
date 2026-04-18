@@ -9,10 +9,20 @@
 //! - **Integer decrement** — the recursive argument is `param - N` where `N`
 //!   is a positive integer literal and `param` is any function parameter.
 //!   (spec 007 §Req 2)
+//! - **Integer division** — the recursive argument is `param / N` where `N`
+//!   is an integer literal greater than 1 and `param` is any function
+//!   parameter.  Catches binary search, merge sort, and other logarithmic
+//!   algorithms.  (spec 007 §Req 2)
 //! - **Structural subterm** — the recursive argument is a variable that was
 //!   pattern-bound from a *sub-pattern* of a function parameter (e.g. the
 //!   `tail` in `match list { Cons(_, tail) => … }`), where the match
 //!   scrutinee is a *bare parameter identifier*.  (spec 007 §Req 3)
+//! - **Method accessor** — the recursive argument is `param.tail()` or
+//!   `param.rest()` (or the same applied to a known structural subterm),
+//!   which yields a strict substructure of the receiver.  (spec 007 §Req 3)
+//! - **Subterm length** — the recursive argument is `subterm.len()` where
+//!   `subterm` is a known structural subterm; its length is provably smaller
+//!   than the original.  (spec 007 §Req 3)
 //!
 //! Mutual recursion and `while`-loop decreasing-measure annotations are not
 //! yet analysed (tracked in #142; spec 007 §Known Limitations L1/L2).
@@ -266,10 +276,15 @@ fn is_decreasing(args: &[Expr], ctx: &TermCtx<'_>) -> bool {
 /// Return `true` if `arg` is provably smaller than any parameter or is a
 /// known structural subterm.
 ///
-/// Two measures are recognised (spec 007 §Req 2 and §Req 3):
+/// Recognised measures (spec 007 §Req 2 and §Req 3):
 /// - Structural subterm: `arg` is a variable in `smaller`.
 /// - Integer decrement: `arg` is `param - N` where `param` names any
 ///   function parameter and `N > 0`.
+/// - Integer division: `arg` is `param / N` where `N > 1`.
+/// - Method accessor: `arg` is `param.tail()` or `param.rest()` (or the
+///   same on a known subterm) — yields a strict structural subterm.
+/// - Subterm length: `arg` is `subterm.len()` where `subterm` is a known
+///   structural subterm — its length is strictly smaller.
 fn arg_decreases(arg: &Expr, params: &[&str], smaller: &HashSet<String>) -> bool {
     match arg {
         // A variable known to be a structural subterm. (spec 007 §Req 3)
@@ -298,6 +313,61 @@ fn arg_decreases(arg: &Expr, params: &[&str], smaller: &HashSet<String>) -> bool
                 (left.as_ref(), right.as_ref())
             {
                 *n > 0 && params.contains(&lname.as_str())
+            } else {
+                false
+            }
+        }
+
+        // `param / N` where N > 1 and `param` is any function parameter.
+        // Catches binary search, merge sort, and other logarithmic algorithms.
+        // (spec 007 §Req 2)
+        Expr::Binary {
+            op: BinaryOp::Div,
+            left,
+            right,
+            ..
+        } => {
+            if let (Expr::Ident(lname, _), Expr::Literal(Literal::Integer(n), _)) =
+                (left.as_ref(), right.as_ref())
+            {
+                *n > 1 && params.contains(&lname.as_str())
+            } else {
+                false
+            }
+        }
+
+        // `param.tail()` or `param.rest()` — zero-argument accessor methods
+        // that return a strict substructure of their receiver.  Also accepted
+        // when the receiver is already a known structural subterm.
+        // (spec 007 §Req 3)
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } if args.is_empty() && matches!(method.as_str(), "tail" | "rest") => {
+            if let Expr::Ident(rname, _) = receiver.as_ref() {
+                params.contains(&rname.as_str()) || smaller.contains(rname.as_str())
+            } else {
+                false
+            }
+        }
+
+        // `subterm.len()` — the length of a known structural subterm is
+        // strictly smaller than the length of the original parameter.
+        // NOTE: `param.len()` is NOT accepted here — the length of the original
+        // parameter is not smaller than itself.  Only variables already in `smaller`
+        // (i.e. bound as structural subterms via pattern match) qualify.
+        // This is intentionally asymmetric with the `.tail()`/`.rest()` arm above,
+        // which does accept bare parameters.  (spec 007 §Req 3)
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } if args.is_empty() && method == "len" => {
+            if let Expr::Ident(rname, _) = receiver.as_ref() {
+                smaller.contains(rname.as_str())
             } else {
                 false
             }

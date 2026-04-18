@@ -11,11 +11,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 ### Added
 
 - **`String.concat(other)` method** — idiomatic string concatenation via method syntax (`s.concat(other)`), consistent with other string methods. Transpiles to `(s).clone() + &(other)` preserving MVL value semantics (receiver not consumed). Type checker enforces exactly one `String` argument, emitting `WrongArgCount`/`TypeMismatch` for wrong-arity or non-String arguments (#231).
+- **Smarter termination checking** — Extended decrease measures: `param / N` (N > 1) for logarithmic algorithms, `.tail()` / `.rest()` method accessors on parameters or structural subterms, and `subterm.len()` for structural subterm length. Catches binary search, merge sort, and recursive algorithms without requiring `partial` annotation (#237).
 
 ### Fixed
 
 - **Clippy `manual_checked_ops` lint** — replaced `if x > 0 { a / x }` pattern in `coverage.rs` with `.checked_div(x).unwrap_or(100)` to satisfy Rust 1.95 clippy `-D warnings`.
-
 ## [0.39.0] — 2026-04-17
 
 ### Added
