@@ -223,10 +223,18 @@ fn extract_requires_mvl_field(manifest: &Path) -> Option<String> {
                     let value_raw = rest.trim();
                     let value = if let Some(inner) = value_raw.strip_prefix('"') {
                         // Double-quoted: take everything up to the closing quote.
-                        inner.split_once('"').map(|(v, _)| v).unwrap_or(inner).to_owned()
+                        inner
+                            .split_once('"')
+                            .map(|(v, _)| v)
+                            .unwrap_or(inner)
+                            .to_owned()
                     } else if let Some(inner) = value_raw.strip_prefix('\'') {
                         // Single-quoted: take everything up to the closing quote.
-                        inner.split_once('\'').map(|(v, _)| v).unwrap_or(inner).to_owned()
+                        inner
+                            .split_once('\'')
+                            .map(|(v, _)| v)
+                            .unwrap_or(inner)
+                            .to_owned()
                     } else {
                         // Unquoted: take until whitespace or `#` comment.
                         value_raw
