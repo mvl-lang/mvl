@@ -859,6 +859,104 @@ fn structural_recursion_via_non_param_match_rejected() {
 }
 
 #[test]
+fn division_by_constant_recursion_accepted() {
+    // GIVEN: total fn recurses with `n / 2` (provably decreasing, logarithmic)
+    // THEN: no UnprovenRecursion error
+    // spec 007 §Req 2 (integer division by constant > 1)
+    let src = r#"fn halve(n: Int) -> Int { if n == 0 { 0 } else { halve(n / 2) } }"#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { .. })),
+        "expected no UnprovenRecursion for n / 2, got: {errors:?}"
+    );
+}
+
+#[test]
+fn division_by_large_constant_recursion_accepted() {
+    // GIVEN: total fn recurses with `n / 10` (divisor > 2 also accepted)
+    // THEN: no UnprovenRecursion error
+    // spec 007 §Req 2
+    let src = r#"fn f(n: Int) -> Int { if n == 0 { 0 } else { f(n / 10) } }"#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { .. })),
+        "expected no UnprovenRecursion for n / 10, got: {errors:?}"
+    );
+}
+
+#[test]
+fn division_by_one_in_total_fn_rejected() {
+    // GIVEN: total fn recurses with `n / 1` (not a decrease — equal)
+    // THEN: UnprovenRecursion reported
+    // spec 007 §Req 2
+    let src = r#"fn f(n: Int) -> Int { f(n / 1) }"#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { fn_name, .. } if fn_name == "f")),
+        "expected UnprovenRecursion for n / 1, got: {errors:?}"
+    );
+}
+
+#[test]
+fn tail_accessor_recursion_accepted() {
+    // GIVEN: total fn recurses passing `xs.tail()` — structural subterm via method
+    // THEN: no UnprovenRecursion error
+    // spec 007 §Req 3 (method accessor yields strict substructure)
+    let src = r#"fn f(xs: List<Int>) -> Int { if xs == [] { 0 } else { f(xs.tail()) } }"#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { .. })),
+        "expected no UnprovenRecursion for xs.tail(), got: {errors:?}"
+    );
+}
+
+#[test]
+fn rest_accessor_recursion_accepted() {
+    // GIVEN: total fn recurses passing `xs.rest()` — structural subterm via method
+    // THEN: no UnprovenRecursion error
+    // spec 007 §Req 3
+    let src = r#"fn f(xs: List<Int>) -> Int { if xs == [] { 0 } else { f(xs.rest()) } }"#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { .. })),
+        "expected no UnprovenRecursion for xs.rest(), got: {errors:?}"
+    );
+}
+
+#[test]
+fn subterm_len_recursion_accepted() {
+    // GIVEN: total fn matches on list param and recurses with `tail.len()`
+    // THEN: no UnprovenRecursion — tail is a structural subterm, so tail.len() is smaller
+    // spec 007 §Req 3 (subterm length is strictly less than original)
+    let src = r#"
+        enum List { Nil, Cons(Int, List) }
+        fn f(xs: List) -> Int {
+            match xs {
+                List::Nil => 0
+                List::Cons(_, tail) => f(tail.len())
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { .. })),
+        "expected no UnprovenRecursion for subterm.len(), got: {errors:?}"
+    );
+}
+
+#[test]
 fn recursion_inside_lambda_not_flagged() {
     // GIVEN: total fn creates a lambda that references the outer fn by name
     // THEN: no UnprovenRecursion — lambdas have their own scope (spec 007 §Req 4)
