@@ -59,6 +59,18 @@ pub fn emit_security_preamble(cg: &mut Codegen) {
     cg.line("pub fn to_float(&self) -> f64 { self.0 as f64 }");
     cg.pop_indent();
     cg.line("}");
+    cg.blank();
+    // ── Higher-order method traits ─────────────────────────────────────────
+    // MvlMap: uniform `.map(f)` across Vec<T>, Option<T>, Result<T,E>
+    cg.line("pub trait MvlMap { type Inner; type Mapped<U>; fn mvl_map<U, F: FnMut(Self::Inner) -> U>(self, f: F) -> Self::Mapped<U>; }");
+    cg.line("impl<T> MvlMap for Vec<T> { type Inner = T; type Mapped<U> = Vec<U>; fn mvl_map<U, F: FnMut(T) -> U>(self, mut f: F) -> Vec<U> { self.into_iter().map(|x| f(x)).collect() } }");
+    cg.line("impl<T> MvlMap for Option<T> { type Inner = T; type Mapped<U> = Option<U>; fn mvl_map<U, F: FnMut(T) -> U>(self, mut f: F) -> Option<U> { self.map(|x| f(x)) } }");
+    cg.line("impl<T, E> MvlMap for Result<T, E> { type Inner = T; type Mapped<U> = Result<U, E>; fn mvl_map<U, F: FnMut(T) -> U>(self, mut f: F) -> Result<U, E> { self.map(|x| f(x)) } }");
+    cg.blank();
+    // MvlPow: uniform `.pow(e)` for i64 and f64
+    cg.line("pub trait MvlPow { fn mvl_pow(self, exp: Self) -> Self; }");
+    cg.line("impl MvlPow for i64 { fn mvl_pow(self, exp: i64) -> i64 { self.pow(exp as u32) } }");
+    cg.line("impl MvlPow for f64 { fn mvl_pow(self, exp: f64) -> f64 { self.powf(exp) } }");
 }
 
 fn emit_label_newtype(cg: &mut Codegen, label: &str) {

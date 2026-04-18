@@ -2,10 +2,6 @@
 //
 // Verifies runtime behavior of String stdlib methods.
 // Run with:  mvl test tests/stdlib/
-//
-// Note: Some String methods have known transpiler limitations.
-// See GitHub issues for status on: trim, to_upper, to_lower,
-// contains, starts_with, ends_with, find, replace, split.
 
 // ── len ───────────────────────────────────────────────────────────────────
 
@@ -146,4 +142,151 @@ test fn string_concat_chain_len() -> Unit {
     let b: String = "-";
     let c: String = "bar";
     assert_eq(a.concat(b).concat(c).len(), 7);
+}
+
+// ── trim ──────────────────────────────────────────────────────────────────
+
+test fn string_trim_removes_whitespace() -> Unit {
+    let s: String = "  hello  ";
+    assert_eq(s.trim().len(), 5);
+}
+
+test fn string_trim_no_whitespace() -> Unit {
+    let s: String = "hello";
+    assert_eq(s.trim().len(), 5);
+}
+
+test fn string_trim_result_is_nonempty() -> Unit {
+    let s: String = "  hi  ";
+    assert_eq(s.trim().is_empty(), false);
+}
+
+// ── to_upper / to_lower ───────────────────────────────────────────────────
+
+test fn string_to_upper_len_preserved() -> Unit {
+    let s: String = "hello";
+    assert_eq(s.to_upper().len(), 5);
+}
+
+test fn string_to_upper_nonempty() -> Unit {
+    let s: String = "hi";
+    assert_eq(s.to_upper().is_empty(), false);
+}
+
+test fn string_to_lower_len_preserved() -> Unit {
+    let s: String = "HELLO";
+    assert_eq(s.to_lower().len(), 5);
+}
+
+test fn string_to_lower_nonempty() -> Unit {
+    let s: String = "HI";
+    assert_eq(s.to_lower().is_empty(), false);
+}
+
+// ── contains ─────────────────────────────────────────────────────────────
+
+test fn string_contains_sub_true() -> Unit {
+    let s: String = "hello world";
+    let sub: String = "world";
+    assert_eq(s.contains(sub), true);
+}
+
+test fn string_contains_sub_false() -> Unit {
+    let s: String = "hello world";
+    let sub: String = "xyz";
+    assert_eq(s.contains(sub), false);
+}
+
+test fn string_contains_empty_is_true() -> Unit {
+    let s: String = "hello";
+    let sub: String = "";
+    assert_eq(s.contains(sub), true);
+}
+
+// ── starts_with ───────────────────────────────────────────────────────────
+
+test fn string_starts_with_true() -> Unit {
+    let s: String = "hello world";
+    let prefix: String = "hello";
+    assert_eq(s.starts_with(prefix), true);
+}
+
+test fn string_starts_with_false() -> Unit {
+    let s: String = "hello world";
+    let prefix: String = "world";
+    assert_eq(s.starts_with(prefix), false);
+}
+
+// ── ends_with ─────────────────────────────────────────────────────────────
+
+test fn string_ends_with_true() -> Unit {
+    let s: String = "hello world";
+    let suffix: String = "world";
+    assert_eq(s.ends_with(suffix), true);
+}
+
+test fn string_ends_with_false() -> Unit {
+    let s: String = "hello world";
+    let suffix: String = "hello";
+    assert_eq(s.ends_with(suffix), false);
+}
+
+// ── find ──────────────────────────────────────────────────────────────────
+
+test fn string_find_found_returns_some() -> Unit {
+    let s: String = "hello world";
+    let sub: String = "world";
+    assert_eq(s.find(sub).is_some(), true);
+}
+
+test fn string_find_correct_index() -> Unit {
+    let s: String = "hello world";
+    let sub: String = "world";
+    assert_eq(s.find(sub).unwrap_or(-1), 6);
+}
+
+test fn string_find_not_found_returns_none() -> Unit {
+    let s: String = "hello world";
+    let sub: String = "xyz";
+    assert_eq(s.find(sub).is_none(), true);
+}
+
+// ── replace ───────────────────────────────────────────────────────────────
+
+test fn string_replace_changes_content() -> Unit {
+    let s: String = "hello world";
+    let from: String = "world";
+    let to: String = "Rust";
+    let r = s.replace(from, to);
+    assert_eq(r.len(), 10);
+    assert_eq(r.is_empty(), false);
+}
+
+test fn string_replace_not_found_unchanged_len() -> Unit {
+    let s: String = "hello world";
+    let from: String = "xyz";
+    let to: String = "abc";
+    assert_eq(s.replace(from, to).len(), 11);
+}
+
+// ── split ─────────────────────────────────────────────────────────────────
+
+test fn string_split_basic_count() -> Unit {
+    let s: String = "a,b,c";
+    let sep: String = ",";
+    let parts = s.split(sep);
+    assert_eq(parts.len(), 3);
+}
+
+test fn string_split_no_sep_single_element() -> Unit {
+    let s: String = "hello";
+    let sep: String = ",";
+    let parts = s.split(sep);
+    assert_eq(parts.len(), 1);
+}
+
+test fn string_split_result_nonempty() -> Unit {
+    let s: String = "a b c";
+    let sep: String = " ";
+    assert_eq(s.split(sep).is_empty(), false);
 }

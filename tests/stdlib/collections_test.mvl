@@ -3,14 +3,12 @@
 // Verifies runtime behavior of List/collection stdlib methods.
 // Run with:  mvl test tests/stdlib/
 //
-// Note: Higher-order collection methods (map, filter, fold, reverse, sort)
-// have known transpiler limitations — see GitHub issues for status.
-// This file covers what is currently verified at runtime.
-//
 // Helpers used by predicate-based collection tests.
 
 fn is_small(x: Int) -> Bool { x < 3 }
 fn is_even_key(x: Int) -> Bool { x % 2 == 0 }
+fn double(x: Int) -> Int { x * 2 }
+fn is_positive(x: Int) -> Bool { x > 0 }
 fn first_char(s: String) -> String {
     match s.chars().first() {
         Some(c) => c,
@@ -331,4 +329,121 @@ test fn list_group_by_string_key() -> Unit {
     let words: List<String> = ["ant", "bear", "ape"];
     let g = words.group_by(first_char);
     assert_eq(g.len(), 2);
+}
+
+// ── map ────────────────────────────────────────────────────────────────────
+
+test fn list_map_doubles_elements() -> Unit {
+    let xs: List<Int> = [1, 2, 3];
+    let ys = xs.map(|x: Int| x * 2);
+    assert_eq(ys.len(), 3);
+    assert_eq(ys.contains(2), true);
+    assert_eq(ys.contains(6), true);
+}
+
+test fn list_map_empty_is_empty() -> Unit {
+    let xs: List<Int> = [];
+    assert_eq(xs.map(|x: Int| x * 2).len(), 0);
+}
+
+test fn list_map_with_fn_ref() -> Unit {
+    let xs: List<Int> = [1, 2, 3];
+    let ys = xs.map(double);
+    assert_eq(ys.contains(4), true);
+}
+
+test fn list_map_string_transform() -> Unit {
+    let xs: List<Int> = [1, 2, 3];
+    let ys = xs.map(|x: Int| x + 10);
+    assert_eq(ys.len(), 3);
+    assert_eq(ys.contains(11), true);
+    assert_eq(ys.contains(13), true);
+}
+
+// ── filter ─────────────────────────────────────────────────────────────────
+
+test fn list_filter_keeps_matching() -> Unit {
+    let xs: List<Int> = [1, -2, 3, -4, 5];
+    let ys = xs.filter(|x: Int| x > 0);
+    assert_eq(ys.len(), 3);
+}
+
+test fn list_filter_empty() -> Unit {
+    let xs: List<Int> = [];
+    assert_eq(xs.filter(|x: Int| x > 0).len(), 0);
+}
+
+test fn list_filter_with_fn_ref() -> Unit {
+    let xs: List<Int> = [-1, 2, -3, 4];
+    let ys = xs.filter(is_positive);
+    assert_eq(ys.len(), 2);
+}
+
+test fn list_filter_none_match() -> Unit {
+    let xs: List<Int> = [-1, -2, -3];
+    assert_eq(xs.filter(is_positive).len(), 0);
+}
+
+// ── fold ───────────────────────────────────────────────────────────────────
+
+test fn list_fold_sum() -> Unit {
+    let xs: List<Int> = [1, 2, 3, 4, 5];
+    let sum = xs.fold(0, |acc: Int, x: Int| acc + x);
+    assert_eq(sum, 15);
+}
+
+test fn list_fold_empty() -> Unit {
+    let xs: List<Int> = [];
+    assert_eq(xs.fold(0, |acc: Int, x: Int| acc + x), 0);
+}
+
+test fn list_fold_product() -> Unit {
+    let xs: List<Int> = [1, 2, 3, 4];
+    let prod = xs.fold(1, |acc: Int, x: Int| acc * x);
+    assert_eq(prod, 24);
+}
+
+test fn list_fold_count_positives() -> Unit {
+    let xs: List<Int> = [1, -2, 3, -4, 5];
+    let count = xs.fold(0, |acc: Int, x: Int| if x > 0 { acc + 1 } else { acc });
+    assert_eq(count, 3);
+}
+
+// ── reverse ────────────────────────────────────────────────────────────────
+
+test fn list_reverse_preserves_length() -> Unit {
+    let xs: List<Int> = [1, 2, 3, 4, 5];
+    assert_eq(xs.reverse().len(), 5);
+}
+
+test fn list_reverse_empty() -> Unit {
+    let xs: List<Int> = [];
+    assert_eq(xs.reverse().len(), 0);
+}
+
+test fn list_reverse_contains_all_elements() -> Unit {
+    let xs: List<Int> = [10, 20, 30];
+    let ys = xs.reverse();
+    assert_eq(ys.contains(10), true);
+    assert_eq(ys.contains(30), true);
+}
+
+// ── sort ───────────────────────────────────────────────────────────────────
+
+test fn list_sort_preserves_length() -> Unit {
+    let xs: List<Int> = [3, 1, 4, 1, 5, 9, 2];
+    assert_eq(xs.sort().len(), 7);
+}
+
+test fn list_sort_empty() -> Unit {
+    let xs: List<Int> = [];
+    assert_eq(xs.sort().len(), 0);
+}
+
+test fn list_sort_contains_all_elements() -> Unit {
+    let xs: List<Int> = [3, 1, 4, 1, 5];
+    let ys = xs.sort();
+    assert_eq(ys.contains(3), true);
+    assert_eq(ys.contains(5), true);
+    assert_eq(ys.is_empty(), false);
 }

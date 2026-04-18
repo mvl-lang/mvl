@@ -2,9 +2,6 @@
 //
 // Verifies runtime behavior of numeric stdlib methods.
 // Run with:  mvl test tests/stdlib/
-//
-// Known transpiler limitations: Float.pow (no f64.pow in Rust, use powf),
-//   Int.is_zero, Int.to_string, Float.to_string — not yet implemented.
 
 // ── Int methods ────────────────────────────────────────────────────────────
 
@@ -203,4 +200,71 @@ test fn float_clamp_above_max() -> Unit {
 test fn float_clamp_inverted_bounds() -> Unit {
     let x: Float = 3.5;
     assert_eq(x.clamp(5.0, 1.0), 3.5);
+}
+
+// ── Int.is_zero ───────────────────────────────────────────────────────────
+
+test fn int_is_zero_of_zero() -> Unit {
+    let n: Int = 0;
+    assert_eq(n.is_zero(), true);
+}
+
+test fn int_is_zero_of_positive() -> Unit {
+    let n: Int = 5;
+    assert_eq(n.is_zero(), false);
+}
+
+test fn int_is_zero_of_negative() -> Unit {
+    let n: Int = -3;
+    assert_eq(n.is_zero(), false);
+}
+
+// ── Int.to_string ─────────────────────────────────────────────────────────
+
+test fn int_to_string_nonempty() -> Unit {
+    let n: Int = 42;
+    assert_eq(n.to_string().is_empty(), false);
+}
+
+test fn int_to_string_len() -> Unit {
+    let n: Int = 42;
+    assert_eq(n.to_string().len(), 2);
+}
+
+// ── Float.to_string ───────────────────────────────────────────────────────
+
+test fn float_to_string_nonempty() -> Unit {
+    let f: Float = 3.14;
+    assert_eq(f.to_string().is_empty(), false);
+}
+
+// ── Float.pow ─────────────────────────────────────────────────────────────
+
+test fn float_pow_basic() -> Unit {
+    let f: Float = 2.0;
+    assert_eq(f.pow(3.0), 8.0);
+}
+
+test fn float_pow_zero_exponent() -> Unit {
+    let f: Float = 5.0;
+    assert_eq(f.pow(0.0), 1.0);
+}
+
+test fn float_pow_one_exponent() -> Unit {
+    let f: Float = 7.0;
+    assert_eq(f.pow(1.0), 7.0);
+}
+
+// ── Int.pow with variable exponent ────────────────────────────────────────
+
+test fn int_pow_variable_exp() -> Unit {
+    let n: Int = 2;
+    let e: Int = 8;
+    assert_eq(n.pow(e), 256);
+}
+
+test fn int_pow_variable_exp_zero() -> Unit {
+    let n: Int = 5;
+    let e: Int = 0;
+    assert_eq(n.pow(e), 1);
 }

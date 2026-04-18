@@ -1672,6 +1672,8 @@ impl TypeChecker {
             Ty::Float => Self::float_method_ty(method),
             Ty::String => Self::string_method_ty(method, arg_tys),
             Ty::List(elem_ty) => Self::list_method_ty(elem_ty.as_ref(), method, arg_tys),
+            Ty::Option(inner) => Self::option_method_ty(inner.as_ref(), method, arg_tys),
+            Ty::Result(ok_ty, _) => Self::result_method_ty(ok_ty.as_ref(), method, arg_tys),
             Ty::Named(name, type_args) => match name.as_str() {
                 "Map" => Self::map_method_ty(type_args, method),
                 "Set" => Self::set_method_ty(type_args, method),
@@ -1728,9 +1730,64 @@ impl TypeChecker {
             "to_int" => Ty::Int,
             "to_string" => Ty::String,
             // Arithmetic
-            "abs" | "ceil" | "floor" | "round" | "sqrt" | "min" | "max" | "clamp" => Ty::Float,
+            "abs" | "ceil" | "floor" | "round" | "sqrt" | "min" | "max" | "clamp" | "pow" => {
+                Ty::Float
+            }
             // Predicates
             "is_nan" | "is_infinite" | "is_finite" | "is_positive" | "is_negative" => Ty::Bool,
+            _ => Ty::Unknown,
+        }
+    }
+
+    /// Return type for methods on `Option<T>`.
+    fn option_method_ty(inner: &Ty, method: &str, arg_tys: &[Ty]) -> Ty {
+        match method {
+            "is_some" | "is_none" => Ty::Bool,
+            "unwrap_or" => inner.clone(),
+            // map(f: fn(T) -> U) -> Option<U>
+            "map" => {
+                let u = if let Some(Ty::Fn(_, ret)) = arg_tys.first() {
+                    *ret.clone()
+                } else {
+                    Ty::Unknown
+                };
+                Ty::Option(Box::new(u))
+            }
+            // and_then(f: fn(T) -> Option<U>) -> Option<U>
+            "and_then" => {
+                if let Some(Ty::Fn(_, ret)) = arg_tys.first() {
+                    *ret.clone()
+                } else {
+                    Ty::Unknown
+                }
+            }
+            _ => Ty::Unknown,
+        }
+    }
+
+    /// Return type for methods on `Result<T, E>`.
+    fn result_method_ty(ok_ty: &Ty, method: &str, arg_tys: &[Ty]) -> Ty {
+        match method {
+            "is_ok" | "is_err" => Ty::Bool,
+            "unwrap_or" => ok_ty.clone(),
+            // map(f: fn(T) -> U) -> Result<U, E>  — infer U from lambda return type
+            "map" => {
+                let u = if let Some(Ty::Fn(_, ret)) = arg_tys.first() {
+                    *ret.clone()
+                } else {
+                    Ty::Unknown
+                };
+                // We don't track E in the return type here; use Unknown for E
+                Ty::Result(Box::new(u), Box::new(Ty::Unknown))
+            }
+            // and_then(f: fn(T) -> Result<U,E>) -> Result<U,E>
+            "and_then" => {
+                if let Some(Ty::Fn(_, ret)) = arg_tys.first() {
+                    *ret.clone()
+                } else {
+                    Ty::Unknown
+                }
+            }
             _ => Ty::Unknown,
         }
     }
