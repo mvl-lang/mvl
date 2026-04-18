@@ -7,6 +7,7 @@ use mvl::mvl::parser::ast::{Decl, Program, Totality, TypeBody};
 use mvl::mvl::parser::Parser;
 use mvl::mvl::resolver;
 use mvl::mvl::stdlib;
+use mvl::mvl::toolchain;
 use mvl::mvl::transpiler;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -75,6 +76,9 @@ fn main() {
             // only init target for now so the flag is accepted but not required.
             cmd_init();
         }
+        "self" => {
+            cmd_self(&args);
+        }
         other => {
             eprintln!("Unknown command: {other}");
             print_usage();
@@ -106,6 +110,49 @@ fn print_usage() {
     eprintln!("  mvl assurance <file|dir> --verbose — per-function requirement detail");
     eprintln!("  mvl transpile <file.mvl>           — print transpiled Rust to stdout");
     eprintln!("  mvl init [--stdlib]                — extract stdlib to XDG_DATA_HOME/mvl/toolchains/VERSION/std/");
+    eprintln!("  mvl self install <version>         — download and install a toolchain version");
+    eprintln!("  mvl self use <version>             — activate an installed toolchain version");
+    eprintln!("  mvl self list                      — list installed toolchain versions");
+    eprintln!("  mvl self uninstall <version>       — remove an installed toolchain version");
+}
+
+fn cmd_self(args: &[String]) {
+    let subcmd = args.get(2).map(|s| s.as_str()).unwrap_or("");
+    match subcmd {
+        "install" => {
+            let version = args.get(3).unwrap_or_else(|| {
+                eprintln!("Usage: mvl self install <version>");
+                process::exit(1);
+            });
+            toolchain::cmd_self_install(version);
+        }
+        "use" => {
+            let version = args.get(3).unwrap_or_else(|| {
+                eprintln!("Usage: mvl self use <version>");
+                process::exit(1);
+            });
+            toolchain::cmd_self_use(version);
+        }
+        "list" => {
+            toolchain::cmd_self_list();
+        }
+        "uninstall" => {
+            let version = args.get(3).unwrap_or_else(|| {
+                eprintln!("Usage: mvl self uninstall <version>");
+                process::exit(1);
+            });
+            toolchain::cmd_self_uninstall(version);
+        }
+        other => {
+            if other.is_empty() {
+                eprintln!("Usage: mvl self <install|use|list|uninstall>");
+            } else {
+                eprintln!("Unknown self subcommand: {other}");
+                eprintln!("Usage: mvl self <install|use|list|uninstall>");
+            }
+            process::exit(1);
+        }
+    }
 }
 
 fn cmd_init() {
