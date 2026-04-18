@@ -1,0 +1,212 @@
+//! Semver parsing and version constraint checking.
+//!
+//! Handles `>=1.0.0`, `<2.0.0`, `>=1.0.0, <2.0.0` and exact version strings.
+
+/// A parsed semantic version triple.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Version {
+    pub major: u32,
+    pub minor: u32,
+    pub patch: u32,
+}
+
+impl Version {
+    /// Parse a strict semver string (`MAJOR.MINOR.PATCH`).
+    pub fn parse(s: &str) -> Option<Self> {
+        let parts: Vec<&str> = s.trim().split('.').collect();
+        if parts.len() != 3 {
+            return None;
+        }
+        let major = parts[0].parse::<u32>().ok()?;
+        let minor = parts[1].parse::<u32>().ok()?;
+        let patch = parts[2].parse::<u32>().ok()?;
+        Some(Version {
+            major,
+            minor,
+            patch,
+        })
+    }
+}
+
+impl std::fmt::Display for Version {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
+/// A single version predicate: `>=1.0.0`, `>1.0.0`, `<=2.0.0`, `<2.0.0`, `=1.2.3`.
+#[derive(Debug, Clone)]
+enum Predicate {
+    Gte(Version),
+    Gt(Version),
+    Lte(Version),
+    Lt(Version),
+    Eq(Version),
+}
+
+impl Predicate {
+    fn parse(s: &str) -> Option<Self> {
+        let s = s.trim();
+        if let Some(rest) = s.strip_prefix(">=") {
+            Some(Predicate::Gte(Version::parse(rest.trim())?))
+        } else if let Some(rest) = s.strip_prefix("<=") {
+            Some(Predicate::Lte(Version::parse(rest.trim())?))
+        } else if let Some(rest) = s.strip_prefix('>') {
+            Some(Predicate::Gt(Version::parse(rest.trim())?))
+        } else if let Some(rest) = s.strip_prefix('<') {
+            Some(Predicate::Lt(Version::parse(rest.trim())?))
+        } else if let Some(rest) = s.strip_prefix('=') {
+            Some(Predicate::Eq(Version::parse(rest.trim())?))
+        } else {
+            // Bare version means exact match
+            Some(Predicate::Eq(Version::parse(s)?))
+        }
+    }
+
+    fn matches(&self, v: &Version) -> bool {
+        match self {
+            Predicate::Gte(min) => v >= min,
+            Predicate::Gt(min) => v > min,
+            Predicate::Lte(max) => v <= max,
+            Predicate::Lt(max) => v < max,
+            Predicate::Eq(exact) => v == exact,
+        }
+    }
+}
+
+/// A version constraint: one or more comma-separated predicates that must all match.
+#[derive(Debug, Clone)]
+pub struct VersionConstraint {
+    predicates: Vec<Predicate>,
+}
+
+impl VersionConstraint {
+    /// Parse a constraint string like `">=1.0.0, <2.0.0"` or `"1.2.3"`.
+    pub fn parse(s: &str) -> Option<Self> {
+        let predicates: Option<Vec<Predicate>> = s
+            .split(',')
+            .map(|part| Predicate::parse(part.trim()))
+            .collect();
+        Some(VersionConstraint {
+            predicates: predicates?,
+        })
+    }
+
+    /// Returns true if `version` satisfies all predicates.
+    pub fn matches(&self, version: &Version) -> bool {
+        self.predicates.iter().all(|p| p.matches(version))
+    }
+}
+
+/// Given a list of available versions and a constraint, return the highest
+/// matching version using Go's Minimum Version Selection principle
+/// (select the *minimum required* version that satisfies all constraints).
+///
+/// For a single constraint this returns the lowest satisfying version.
+/// Use `select_maximum` when you want the highest satisfying version.
+pub fn select_minimum<'a>(
+    available: &'a [Version],
+    constraint: &VersionConstraint,
+) -> Option<&'a Version> {
+    available.iter().filter(|v| constraint.matches(v)).min()
+}
+
+/// Return the highest available version satisfying the constraint.
+pub fn select_maximum<'a>(
+    available: &'a [Version],
+    constraint: &VersionConstraint,
+) -> Option<&'a Version> {
+    available.iter().filter(|v| constraint.matches(v)).max()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_valid_semver() {
+        let v = Version::parse("1.2.3").unwrap();
+        assert_eq!(v.major, 1);
+        assert_eq!(v.minor, 2);
+        assert_eq!(v.patch, 3);
+    }
+
+    #[test]
+    fn parse_invalid_semver() {
+        assert!(Version::parse("1.2").is_none());
+        assert!(Version::parse("1.2.3.4").is_none());
+        assert!(Version::parse("not.a.version").is_none());
+        assert!(Version::parse("").is_none());
+    }
+
+    #[test]
+    fn version_ordering() {
+        let v100 = Version::parse("1.0.0").unwrap();
+        let v120 = Version::parse("1.2.0").unwrap();
+        let v200 = Version::parse("2.0.0").unwrap();
+        assert!(v100 < v120);
+        assert!(v120 < v200);
+        assert_eq!(v100, Version::parse("1.0.0").unwrap());
+    }
+
+    #[test]
+    fn constraint_gte() {
+        let c = VersionConstraint::parse(">=1.0.0").unwrap();
+        assert!(c.matches(&Version::parse("1.0.0").unwrap()));
+        assert!(c.matches(&Version::parse("1.2.0").unwrap()));
+        assert!(!c.matches(&Version::parse("0.9.0").unwrap()));
+    }
+
+    #[test]
+    fn constraint_range() {
+        let c = VersionConstraint::parse(">=1.0.0, <2.0.0").unwrap();
+        assert!(c.matches(&Version::parse("1.0.0").unwrap()));
+        assert!(c.matches(&Version::parse("1.9.9").unwrap()));
+        assert!(!c.matches(&Version::parse("2.0.0").unwrap()));
+        assert!(!c.matches(&Version::parse("0.9.0").unwrap()));
+    }
+
+    #[test]
+    fn constraint_exact() {
+        let c = VersionConstraint::parse("1.2.0").unwrap();
+        assert!(c.matches(&Version::parse("1.2.0").unwrap()));
+        assert!(!c.matches(&Version::parse("1.2.1").unwrap()));
+    }
+
+    #[test]
+    fn select_minimum_picks_lowest_satisfying() {
+        let available: Vec<Version> = ["1.0.0", "1.2.0", "1.5.0", "2.0.0"]
+            .iter()
+            .map(|s| Version::parse(s).unwrap())
+            .collect();
+        let c = VersionConstraint::parse(">=1.2.0, <2.0.0").unwrap();
+        let selected = select_minimum(&available, &c).unwrap();
+        assert_eq!(selected.to_string(), "1.2.0");
+    }
+
+    #[test]
+    fn select_maximum_picks_highest_satisfying() {
+        let available: Vec<Version> = ["1.0.0", "1.2.0", "1.5.0", "2.0.0"]
+            .iter()
+            .map(|s| Version::parse(s).unwrap())
+            .collect();
+        let c = VersionConstraint::parse(">=1.2.0, <2.0.0").unwrap();
+        let selected = select_maximum(&available, &c).unwrap();
+        assert_eq!(selected.to_string(), "1.5.0");
+    }
+
+    #[test]
+    fn no_satisfying_version_returns_none() {
+        let available: Vec<Version> = ["1.0.0", "1.2.0"]
+            .iter()
+            .map(|s| Version::parse(s).unwrap())
+            .collect();
+        let c = VersionConstraint::parse(">=2.0.0").unwrap();
+        assert!(select_maximum(&available, &c).is_none());
+    }
+
+    #[test]
+    fn version_to_string() {
+        assert_eq!(Version::parse("1.2.3").unwrap().to_string(), "1.2.3");
+    }
+}

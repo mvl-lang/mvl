@@ -3,6 +3,7 @@ use mvl::mvl::checker::passes::{
     aggregate_verdicts, parse_req_filter, source_hash, PassRegistry, Verdict, VerdictCache,
 };
 use mvl::mvl::linter::{self, config::LintConfig};
+use mvl::mvl::packages;
 use mvl::mvl::parser::ast::{Decl, Program, Totality, TypeBody};
 use mvl::mvl::parser::Parser;
 use mvl::mvl::resolver;
@@ -79,6 +80,17 @@ fn main() {
         "self" => {
             cmd_self(&args);
         }
+        "add" => {
+            cmd_pkg_add(&args);
+        }
+        "install" => {
+            let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            packages::cmd_install(&project_root);
+        }
+        "update" => {
+            let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            packages::cmd_update(&project_root);
+        }
         other => {
             eprintln!("Unknown command: {other}");
             print_usage();
@@ -114,6 +126,9 @@ fn print_usage() {
     eprintln!("  mvl self use <version>             — activate an installed toolchain version");
     eprintln!("  mvl self list                      — list installed toolchain versions");
     eprintln!("  mvl self uninstall <version>       — remove an installed toolchain version");
+    eprintln!("  mvl add <pkg-id> [<tag>]           — fetch package, add to mvl.toml + mvl.lock");
+    eprintln!("  mvl install                        — fetch all deps from mvl.lock, verify hashes");
+    eprintln!("  mvl update                         — re-resolve versions, update mvl.lock");
 }
 
 fn cmd_self(args: &[String]) {
@@ -153,6 +168,18 @@ fn cmd_self(args: &[String]) {
             process::exit(1);
         }
     }
+}
+
+fn cmd_pkg_add(args: &[String]) {
+    let pkg_id = args.get(2).unwrap_or_else(|| {
+        eprintln!("Usage: mvl add <pkg-id> [<tag>]");
+        eprintln!("  pkg-id: git URL or github.com/user/repo style identifier");
+        eprintln!("  tag:    optional version tag (e.g. v1.2.0); omit to use latest");
+        process::exit(1);
+    });
+    let tag = args.get(3).map(|s| s.as_str());
+    let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    packages::cmd_add(pkg_id, tag, &project_root);
 }
 
 fn cmd_init() {
