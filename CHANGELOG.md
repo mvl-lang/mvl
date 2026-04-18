@@ -6,6 +6,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+### Fixed
+
+- **Higher-order method trait documentation** — Add missing doc comments to `MvlMap::Inner`, `MvlMap::Mapped<U>`, `MvlMap::mvl_map`, and `MvlPow::mvl_pow` trait items to resolve `missing_docs` warnings (#267).
+
 ## [0.44.0] — 2026-04-18
 
 ### Added

@@ -37,8 +37,11 @@ pub use crate::stdlib::log::{log_debug, log_error, log_info, log_warn};
 /// The transpiler emits `receiver.mvl_map(|__x| f(__x.clone()))` for all MVL
 /// `.map(f)` calls.  Rust resolves the correct impl via type inference.
 pub trait MvlMap {
+    /// The element type being mapped over.
     type Inner;
+    /// The container type after mapping to element type `U`.
     type Mapped<U>;
+    /// Apply `f` to each element, returning a new container of the same shape.
     fn mvl_map<U, F: FnMut(Self::Inner) -> U>(self, f: F) -> Self::Mapped<U>;
 }
 
@@ -72,6 +75,7 @@ impl<T, E> MvlMap for Result<T, E> {
 /// calls.  This fixes `i64::pow`'s `u32`-exponent requirement while also
 /// supporting `f64::powf`.
 pub trait MvlPow {
+    /// Raise `self` to the power `exp`.
     fn mvl_pow(self, exp: Self) -> Self;
 }
 
