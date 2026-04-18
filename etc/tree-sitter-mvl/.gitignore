@@ -1,6 +1,7 @@
 node_modules/
 build/
 bindings/
+!bindings/node/
 package-lock.json
 Cargo.toml
 Makefile

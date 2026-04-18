@@ -542,16 +542,29 @@ module.exports = grammar({
       seq('"', repeat(choice(/[^"\\]/, /\\./)), '"'),
 
     // `"""…"""` — multiline string (escape sequences processed).
-    multiline_string_literal: ($) =>
-      seq('"""', repeat(choice(/[^"\\]|"(?!"")/, /\\./)), '"""'),
+    // Uses token() to avoid lookahead: content is any run of non-quote/non-backslash
+    // chars or escape sequences, with 1- or 2-quote runs allowed when followed by
+    // more content, plus an optional trailing 1 or 2 quotes before the `"""` close.
+    multiline_string_literal: (_) =>
+      token(seq(
+        '"""',
+        /([^"\\]|\\.)*("([^"\\]|\\.)+|""([^"\\]|\\.)+)*(""|")?/,
+        '"""',
+      )),
 
     // `r"…"` — raw single-line string (no escape processing).
     raw_string_literal: ($) =>
       seq('r"', repeat(/[^"]/), '"'),
 
     // `r"""…"""` — raw multiline string (no escape processing).
-    raw_multiline_string_literal: ($) =>
-      seq('r"""', repeat(/[^"]|"(?!"")/), '"""'),
+    // Uses token() to avoid lookahead: same approach as multiline_string_literal
+    // but without escape sequences.
+    raw_multiline_string_literal: (_) =>
+      token(seq(
+        'r"""',
+        /[^"]*("[^"]+|""[^"]+)*(""|")?/,
+        '"""',
+      )),
 
     char_literal: ($) =>
       seq("'", choice(/[^'\\]/, /\\./), "'"),

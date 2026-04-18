@@ -50,7 +50,7 @@ test fn args_get_args_result_is_list() -> Unit ! Console {
     let args: List<Tainted<String>> = get_args();
     // In the test runner context the arg list may be non-empty (cargo test runner
     // args). We only check that the call succeeds and returns a list.
-    assert_eq(args.len() >= 0, true);
+    assert_eq(args.len() == 0, args.is_empty());
 }
 
 test fn args_get_args_all_items_accessible() -> Unit ! Console {

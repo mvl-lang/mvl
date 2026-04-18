@@ -6,9 +6,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.44.1] — 2026-04-18
+
 ### Fixed
 
 - **Higher-order method trait documentation** — Add missing doc comments to `MvlMap::Inner`, `MvlMap::Mapped<U>`, `MvlMap::mvl_map`, and `MvlPow::mvl_pow` trait items to resolve `missing_docs` warnings (#267).
+- **stdlib test warning** — Replace tautological `args.len() >= 0` comparison (always true for `usize`) with `assert_eq(args.len() == 0, args.is_empty())` (#269).
+- **tree-sitter grammar** — Fix lookahead regex (`(?!"")`) in `multiline_string_literal` and `raw_multiline_string_literal` that blocked `tree-sitter generate`; replace with lookahead-free `token()` alternatives (#269).
+- **tree-sitter npm install** — Add missing `bindings/node/{binding.cc,index.js,index.d.ts}` and unblock `bindings/node/` in `.gitignore` so `npm install` works on a clean checkout (#269).
+
+### Added
+
+- **tree-sitter corpus tests** — Add grammar corpus tests for multiline strings, raw strings, raw multiline strings, map literals, and set literals (#269).
 
 ## [0.44.0] — 2026-04-18
 

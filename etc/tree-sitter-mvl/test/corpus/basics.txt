@@ -692,3 +692,132 @@ extern "c" {
         (effect_list
           (effect)
           (effect))))))
+
+===============================================================================
+Multiline string literal
+===============================================================================
+
+const MSG: String = """hello
+world""";
+
+-------------------------------------------------------------------------------
+
+(program
+  (declaration
+    (const_decl
+      (identifier)
+      (type_expr
+        (base_type
+          (identifier)))
+      (expr
+        (literal
+          (multiline_string_literal))))))
+
+===============================================================================
+Raw string literal
+===============================================================================
+
+const REGEX: String = r"[a-z]+\d";
+
+-------------------------------------------------------------------------------
+
+(program
+  (declaration
+    (const_decl
+      (identifier)
+      (type_expr
+        (base_type
+          (identifier)))
+      (expr
+        (literal
+          (raw_string_literal))))))
+
+===============================================================================
+Raw multiline string literal
+===============================================================================
+
+const TEMPLATE: String = r"""line one
+line two""";
+
+-------------------------------------------------------------------------------
+
+(program
+  (declaration
+    (const_decl
+      (identifier)
+      (type_expr
+        (base_type
+          (identifier)))
+      (expr
+        (literal
+          (raw_multiline_string_literal))))))
+
+===============================================================================
+Map literal
+===============================================================================
+
+const SCORES: Map<String, Int> = {"alice": 10, "bob": 20};
+
+-------------------------------------------------------------------------------
+
+(program
+  (declaration
+    (const_decl
+      (identifier)
+      (type_expr
+        (base_type
+          (identifier)
+          (type_list
+            (type_expr
+              (base_type
+                (identifier)))
+            (type_expr
+              (base_type
+                (identifier))))))
+      (expr
+        (literal
+          (map_literal
+            (expr
+              (literal
+                (string_literal)))
+            (expr
+              (literal
+                (integer_literal)))
+            (expr
+              (literal
+                (string_literal)))
+            (expr
+              (literal
+                (integer_literal)))))))))
+
+===============================================================================
+Set literal
+===============================================================================
+
+const PRIMES: Set<Int> = {2, 3, 5};
+
+-------------------------------------------------------------------------------
+
+(program
+  (declaration
+    (const_decl
+      (identifier)
+      (type_expr
+        (base_type
+          (identifier)
+          (type_list
+            (type_expr
+              (base_type
+                (identifier))))))
+      (expr
+        (literal
+          (set_literal
+            (expr
+              (literal
+                (integer_literal)))
+            (expr
+              (literal
+                (integer_literal)))
+            (expr
+              (literal
+                (integer_literal)))))))))
