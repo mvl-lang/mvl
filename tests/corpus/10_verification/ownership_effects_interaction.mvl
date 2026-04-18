@@ -1,0 +1,44 @@
+// Corpus: Cross-requirement interaction — Ownership + Effects
+// Tests that ownership constraints and effect tracking compose.
+// Requirement: 001 Req 1 (Type Safety, Ownership) + 001 Req 7 (Effects)
+
+// Effect that consumes ownership
+fn consume_and_log(x: Int) -> Unit ! Console {
+    println(x);
+    // x is no longer available after being used
+}
+
+// Borrowed reference in effectful function
+fn read_and_print(x: &Int) -> Unit ! Console {
+    println(*x);
+    // x can be used again after read
+}
+
+// Mutable effect requires ownership
+fn mutate_and_store(mut x: Int) -> Unit ! DB {
+    x = x + 1;
+    // Would need store(x) effect to persist change
+}
+
+// Use-after-move prevented with effects
+total fn move_prevention(vec: Array<Int>) -> Int ! Console {
+    let first = vec[0];
+    println(first);
+    // vec is still valid here (Array is value type)
+    vec.len()
+}
+
+// Effect on borrowed data (read-only)
+fn iterate_with_logging(arr: &Array<Int>) -> Unit ! Console {
+    for item in arr {
+        println(item);
+    }
+    // arr can be used again; iteration doesn't consume it
+}
+
+// Capability-based resource access (Req 3)
+fn file_read_effect(path: String) -> String ! FileRead("/documents/*") {
+    // Effect declares which paths can be read
+    // Actual access is controlled by FileRead capability
+    read_file(path)
+}

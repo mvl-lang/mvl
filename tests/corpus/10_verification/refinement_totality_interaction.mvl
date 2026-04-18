@@ -1,0 +1,42 @@
+// Corpus: Cross-requirement interaction — Refinement Types + Totality
+// Tests that refinement types and termination checking compose.
+// Requirement: 001 Req 8 (Totality) + 001 Req 10 (Refinement Types)
+
+// Refined type with totality constraint
+total fn safe_array_access<A>(arr: Array<A>, idx: Int where self >= 0 && self < arr.len()) -> A {
+    arr[idx]
+}
+
+// Recursive function with refinement precondition
+total fn countdown(n: Int where self >= 0) -> Int {
+    match n {
+        0 => 0,
+        _ => countdown(n - 1)
+    }
+}
+
+// Refinement on output: guarantee non-negative result
+total fn abs_value(x: Int) -> Int where self >= 0 {
+    match x {
+        x if x >= 0 => x,
+        x => x * (-1)
+    }
+}
+
+// Structural recursion with refinement
+total fn sum_array(arr: Array<Int>, idx: Int where self >= 0 && self <= arr.len()) -> Int {
+    match idx {
+        0 => 0,
+        n => arr[n - 1] + sum_array(arr, n - 1)
+    }
+}
+
+// Refinement prevents infinite loops
+total fn bounded_loop(n: Int where self > 0) -> Unit {
+    // This would violate totality and refinement:
+    // while n > 0 { n = n + 1; }
+    // Instead, use finite iteration:
+    for i in 0..n {
+        let _ = i;
+    }
+}

@@ -1,0 +1,37 @@
+// Corpus: Cross-requirement interaction — Effect + Information Flow Control
+// Tests that effects and security labels compose correctly.
+// Requirement: 001 Req 7 (Effects) + 001 Req 11 (Information Flow Control)
+
+// Pure computation with labeled types
+total fn label_input(msg: Public<String>) -> Secret<String> {
+    // Cannot directly flow Public to Secret
+    // Would require declassification
+    msg
+}
+
+// Effectful function with labeled result
+fn fetch_and_label(url: String) -> Tainted<String> ! Net {
+    // HTTP response is auto-tainted
+    http.get(url).body
+}
+
+// Effect cannot violate IFC flow law
+total fn compute_with_labels(a: Public<Int>, b: Secret<Int>) -> Public<Int> ! Console {
+    // Cannot flow Secret to Public output
+    // This function body would be rejected
+    a
+}
+
+// Logging respects labels (Req 11.6)
+fn log_with_labels(public_data: Public<String>, secret_data: Secret<String>) -> Unit ! Console {
+    println(public_data);  // OK
+    // println(secret_data);  // would be rejected by checker
+}
+
+// Effect composition with labels
+fn process_input(input: Tainted<String>) -> Clean<String> ! Console, Validation {
+    // Must sanitize before returning Clean
+    let sanitized = sanitize(input);
+    println("processing");
+    sanitized
+}
