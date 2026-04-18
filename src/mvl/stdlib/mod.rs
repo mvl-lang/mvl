@@ -2,7 +2,7 @@
 //!
 //! All `.mvl` stdlib source files are embedded in the binary at compile time
 //! via `include_str!`. On first run (or when the version stamp mismatches),
-//! they are extracted to `$XDG_DATA_HOME/mvl/std/`.
+//! they are extracted to `$XDG_DATA_HOME/mvl/toolchains/{version}/std/`.
 //!
 //! Override: `MVL_HOME` replaces all XDG paths (useful for CI and testing).
 
@@ -55,8 +55,13 @@ fn mvl_data_home() -> PathBuf {
 }
 
 /// Returns the resolved stdlib directory path (may not exist yet).
+///
+/// Path: `<mvl_data_home>/toolchains/{version}/std/` (ADR-0009).
 pub fn stdlib_path() -> PathBuf {
-    mvl_data_home().join("std")
+    mvl_data_home()
+        .join("toolchains")
+        .join(STDLIB_VERSION)
+        .join("std")
 }
 
 // ── Extraction ───────────────────────────────────────────────────────────────

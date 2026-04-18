@@ -1,4 +1,9 @@
 use mvl::mvl::stdlib::{ensure_stdlib, STDLIB_FILES, STDLIB_VERSION};
+use std::path::PathBuf;
+
+fn versioned_stdlib_path(home: &std::path::Path) -> PathBuf {
+    home.join("toolchains").join(STDLIB_VERSION).join("std")
+}
 use std::fs;
 use std::sync::{LazyLock, Mutex};
 
@@ -20,7 +25,7 @@ impl Drop for MvlHomeGuard {
 fn with_mvl_home<F: FnOnce(&std::path::Path)>(f: F) {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = tempfile::tempdir().expect("tempdir");
-    // MVL_HOME points at the data root; ensure_stdlib() appends "std"
+    // MVL_HOME points at the data root; ensure_stdlib() appends "toolchains/{version}/std"
     std::env::set_var("MVL_HOME", tmp.path());
     let _cleanup = MvlHomeGuard;
     f(tmp.path());
@@ -38,8 +43,8 @@ fn fresh_extraction_creates_files_and_stamp() {
         );
         assert_eq!(
             stdlib_dir,
-            home.join("std"),
-            "stdlib dir must be under MVL_HOME/std"
+            versioned_stdlib_path(home),
+            "stdlib dir must be under MVL_HOME/toolchains/VERSION/std"
         );
 
         for (name, _) in STDLIB_FILES {
@@ -140,7 +145,7 @@ fn missing_file_triggers_reextraction_despite_valid_stamp() {
 #[test]
 fn stale_stamp_triggers_reextraction() {
     with_mvl_home(|home| {
-        let std_dir = home.join("std");
+        let std_dir = versioned_stdlib_path(home);
         fs::create_dir_all(&std_dir).expect("mkdir");
         fs::write(std_dir.join(".version"), "0.0.0-stale").expect("write stale stamp");
 
