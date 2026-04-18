@@ -447,3 +447,84 @@ test fn list_sort_contains_all_elements() -> Unit {
     assert_eq(ys.contains(5), true);
     assert_eq(ys.is_empty(), false);
 }
+
+// ── HOF chaining (filter → map → fold pipelines) ──────────────────────────
+
+test fn collections_filter_map_fold_pipeline() -> Unit {
+    let xs = [1, 2, 3, 4, 5, 6];
+    let result = xs
+        .filter(|x: Int| x > 2)
+        .map(|x: Int| x * 2)
+        .fold(0, |acc: Int, x: Int| acc + x);
+    // [3,4,5,6] → [6,8,10,12] → 36
+    assert_eq(result, 36);
+}
+
+test fn collections_filter_map_pipeline_len() -> Unit {
+    let xs = [1, 2, 3, 4, 5, 6];
+    let result = xs
+        .filter(|x: Int| x % 2 == 0)
+        .map(|x: Int| x * 3);
+    assert_eq(result.len(), 3);
+    assert_eq(result.contains(6), true);
+    assert_eq(result.contains(12), true);
+}
+
+test fn collections_filter_map_fold_empty_result() -> Unit {
+    let xs = [1, 2, 3];
+    let result = xs
+        .filter(|x: Int| x > 10)
+        .map(|x: Int| x * 2)
+        .fold(0, |acc: Int, x: Int| acc + x);
+    assert_eq(result, 0);
+}
+
+test fn collections_map_filter_fold_pipeline() -> Unit {
+    let xs = [1, 2, 3, 4, 5];
+    let result = xs
+        .map(|x: Int| x * 2)
+        .filter(|x: Int| x > 4)
+        .fold(0, |acc: Int, x: Int| acc + x);
+    // [2,4,6,8,10] → [6,8,10] → 24
+    assert_eq(result, 24);
+}
+
+// ── partition with destructuring and immediate method access ───────────────
+
+fn is_even_chain(x: Int) -> Bool { x % 2 == 0 }
+fn is_gt_3(x: Int) -> Bool { x > 3 }
+
+test fn collections_partition_destructure_len_ops() -> Unit {
+    let xs = [1, 2, 3, 4, 5, 6];
+    let (evens, odds) = xs.partition(is_even_chain);
+    assert_eq(evens.len(), 3);
+    assert_eq(odds.len(), 3);
+    assert_eq(evens.len() + odds.len(), 6);
+}
+
+test fn collections_partition_evens_further_mapped() -> Unit {
+    let xs = [1, 2, 3, 4, 5, 6];
+    let (evens, odds) = xs.partition(is_even_chain);
+    let doubled_evens = evens.map(|x: Int| x * 2);
+    // evens = [2,4,6] → doubled = [4,8,12]
+    assert_eq(doubled_evens.contains(4), true);
+    assert_eq(doubled_evens.contains(8), true);
+    assert_eq(doubled_evens.contains(12), true);
+    assert_eq(doubled_evens.len(), 3);
+}
+
+test fn collections_partition_odds_filtered_and_summed() -> Unit {
+    let xs = [1, 2, 3, 4, 5, 6, 7];
+    let (evens, odds) = xs.partition(is_even_chain);
+    let odd_sum = odds.fold(0, |acc: Int, x: Int| acc + x);
+    // odds: [1,3,5,7] → sum = 16
+    assert_eq(odd_sum, 16);
+}
+
+test fn collections_partition_then_filter_on_part() -> Unit {
+    let xs = [1, 2, 3, 4, 5, 6];
+    let (evens, odds) = xs.partition(is_even_chain);
+    let large_odds = odds.filter(is_gt_3);
+    assert_eq(large_odds.len(), 1);
+    assert_eq(large_odds.contains(5), true);
+}

@@ -136,3 +136,46 @@ test fn io_read_file_nonexistent_not_ok() -> Unit ! FileRead {
     let result: Result<Tainted<String>, String> = read_file("/nonexistent/mvl/test/file.txt");
     assert_eq(result.is_ok(), false);
 }
+
+// ── read_file: IFC — result is Tainted (untrusted file content) ───────────
+
+test fn io_read_file_returns_tainted_content_type() -> Unit ! FileRead {
+    // File content from disk is always Tainted<String> (untrusted external source).
+    // Compile-time: the type annotation enforces the Ok branch carries Tainted<String>.
+    // Runtime: Err result on missing file confirms read_file was called with correct signature.
+    // Note: testing the Ok branch requires an existing file; see io_read_file tests above.
+    let result: Result<Tainted<String>, String> = read_file("/tmp/mvl_nonexistent_tainted_test");
+    assert_eq(result.is_err(), true);
+}
+
+test fn io_read_to_string_result_carries_tainted_type() -> Unit ! FileRead {
+    // Compile-time: type annotation enforces Ok branch carries Tainted<String>.
+    let result: Result<Tainted<String>, String> = read_to_string(path("/tmp/mvl_nonexistent_tainted2"));
+    assert_eq(result.is_ok(), false);
+}
+
+// ── join edge cases ────────────────────────────────────────────────────────
+
+test fn io_join_empty_segment_produces_path() -> Unit {
+    let base: Path = path("/home/user");
+    let joined: Path = join(base, "");
+    // Joining with an empty segment preserves the base: result is at least as long as "/home/user"
+    let s = to_string(joined);
+    assert_eq(s.is_empty(), false);
+    assert_eq(s.len() >= 10, true);
+}
+
+test fn io_join_empty_base_with_segment() -> Unit {
+    let base: Path = path("");
+    let joined: Path = join(base, "file.txt");
+    assert_eq(to_string(joined).is_empty(), false);
+}
+
+test fn io_join_preserves_extension() -> Unit {
+    let base: Path = path("/var/log");
+    let joined: Path = join(base, "app.log");
+    let s = to_string(joined);
+    // "/var/log/app.log" = 16 chars; ≥ 15 confirms the segment was appended (not just base)
+    assert_eq(s.is_empty(), false);
+    assert_eq(s.len() >= 15, true);
+}

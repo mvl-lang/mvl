@@ -14,6 +14,10 @@ fn parse_positive(n: Int) -> Result<Int, String> {
     if n > 0 { Ok(n) } else { Err("not positive") }
 }
 
+fn always_err(x: Int) -> Result<Int, String> {
+    Err("pipeline failure")
+}
+
 // ── is_ok ─────────────────────────────────────────────────────────────────
 
 test fn result_ok_is_ok_true() -> Unit {
@@ -129,4 +133,42 @@ test fn result_and_then_with_lambda() -> Unit {
     let r: Result<Int, String> = Ok(10);
     let r2 = r.and_then(|x: Int| if x > 5 { Ok(x - 5) } else { Err("too small") });
     assert_eq(r2.unwrap_or(0), 5);
+}
+
+// ── and_then chaining (multi-step monadic pipeline) ────────────────────────
+
+test fn result_and_then_chain_three_steps_ok() -> Unit {
+    let r: Result<Int, String> = Ok(10);
+    let result = r
+        .and_then(parse_positive)              // Ok(10) → Ok(10)
+        .and_then(|x: Int| Ok(x / 2))         // Ok(10) → Ok(5)
+        .and_then(|x: Int| if x > 3 { Ok(x * 2) } else { Err("too small") }); // Ok(5) → Ok(10)
+    assert_eq(result.unwrap_or(0), 10);
+}
+
+test fn result_and_then_chain_short_circuits_on_first_err() -> Unit {
+    let r: Result<Int, String> = Ok(-5);
+    let result = r
+        .and_then(parse_positive)
+        .and_then(|x: Int| Ok(x * 2))
+        .and_then(|x: Int| Ok(x + 1));
+    assert_eq(result.is_err(), true);
+}
+
+test fn result_and_then_chain_short_circuits_on_middle_err() -> Unit {
+    let r: Result<Int, String> = Ok(10);
+    let result = r
+        .and_then(parse_positive)
+        .and_then(always_err)
+        .and_then(|x: Int| Ok(x * 2));
+    assert_eq(result.is_err(), true);
+}
+
+test fn result_and_then_chain_all_steps_transform() -> Unit {
+    let r: Result<Int, String> = Ok(3);
+    let result = r
+        .and_then(|x: Int| Ok(x + 1))
+        .and_then(|x: Int| Ok(x * 2))
+        .and_then(|x: Int| Ok(x - 1));
+    assert_eq(result.unwrap_or(0), 7);
 }

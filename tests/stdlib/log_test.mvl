@@ -156,3 +156,62 @@ test fn log_structured_field_with_numeric_string_value() -> Unit ! Log {
     log_info("metric recorded", {"name": "latency_ms", "value": "42"});
     assert_eq(true, true);
 }
+
+// ── helper-via-result pattern ─────────────────────────────────────────────
+//
+// Verifies that logging inside an error branch does not change the return
+// value of the enclosing function (log calls are pure side-effects).
+
+fn process_value(n: Int) -> Result<Int, String> ! Log {
+    if n > 0 {
+        Ok(n * 2)
+    } else {
+        log_error("invalid value", {"value": n.to_string()});
+        Err("not positive")
+    }
+}
+
+test fn log_helper_via_result_ok_path_unchanged() -> Unit ! Log {
+    let result = process_value(5);
+    assert_eq(result.is_ok(), true);
+    assert_eq(result.unwrap_or(0), 10);
+}
+
+test fn log_helper_via_result_err_path_logs_and_returns_err() -> Unit ! Log {
+    let result = process_value(-3);
+    assert_eq(result.is_err(), true);
+    assert_eq(result.unwrap_or(0), 0);
+}
+
+test fn log_in_branch_does_not_affect_return_value() -> Unit ! Log {
+    // Two calls with different outcomes; log side-effects are invisible to caller
+    let r1 = process_value(10);
+    let r2 = process_value(-1);
+    assert_eq(r1.is_ok(), true);
+    assert_eq(r2.is_err(), true);
+}
+
+// ── multiple fields map completeness ──────────────────────────────────────
+
+test fn log_info_four_fields_map() -> Unit ! Log {
+    // Compile-time: verifies the effect system accepts a 4-field map without panic.
+    // Runtime log output is not observable in tests; assert_eq(true, true) is intentional.
+    log_info("request complete", {
+        "method": "POST",
+        "path": "/api/v1/items",
+        "status": "201",
+        "duration_ms": "45"
+    });
+    assert_eq(true, true);
+}
+
+test fn log_error_with_context_fields() -> Unit ! Log {
+    // Compile-time: verifies the effect system accepts a 3-field error map without panic.
+    // Runtime log output is not observable in tests; assert_eq(true, true) is intentional.
+    log_error("db query failed", {
+        "table": "users",
+        "operation": "select",
+        "error_code": "42P01"
+    });
+    assert_eq(true, true);
+}
