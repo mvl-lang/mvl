@@ -127,3 +127,39 @@ test fn option_and_then_with_lambda() -> Unit {
     let r = v.and_then(|x: Int| if x > 0 { Some(x + 1) } else { None });
     assert_eq(r.unwrap_or(0), 6);
 }
+
+// ── and_then chaining (multi-step monadic pipeline) ────────────────────────
+
+test fn option_and_then_chain_three_steps_some() -> Unit {
+    let v: Option<Int> = Some(4);
+    let result = v
+        .and_then(safe_double)
+        .and_then(safe_double)
+        .and_then(|x: Int| if x > 10 { Some(x - 1) } else { None });
+    assert_eq(result.unwrap_or(0), 15);
+}
+
+test fn option_and_then_chain_short_circuits_on_none() -> Unit {
+    let v: Option<Int> = Some(-1);
+    let result = v
+        .and_then(safe_double)
+        .and_then(safe_double)
+        .and_then(safe_double);
+    assert_eq(result.is_none(), true);
+}
+
+test fn option_and_then_chain_starting_none_stays_none() -> Unit {
+    let v: Option<Int> = None;
+    let result = v
+        .and_then(safe_double)
+        .and_then(|x: Int| Some(x + 100));
+    assert_eq(result.is_none(), true);
+}
+
+test fn option_and_then_chain_two_steps_with_lambdas() -> Unit {
+    let v: Option<Int> = Some(3);
+    let result = v
+        .and_then(|x: Int| if x > 0 { Some(x * 2) } else { None })
+        .and_then(|x: Int| if x < 100 { Some(x + 1) } else { None });
+    assert_eq(result.unwrap_or(0), 7);
+}
