@@ -28,6 +28,16 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                 "slice" if args.len() == 2 => {
                     emit_safe_list_slice(cg, receiver, &args[0], &args[1]);
                 }
+                // s.concat(other) — String concatenation. Emits `s.clone() + &other`
+                // because Rust's Add<&str> for String requires ownership of the left side.
+                // `.clone()` preserves MVL value semantics (receiver is not consumed).
+                "concat" if args.len() == 1 => {
+                    cg.push("(");
+                    emit_expr(cg, receiver);
+                    cg.push(").clone() + &(");
+                    emit_expr(cg, &args[0]);
+                    cg.push(")");
+                }
                 // s.substring(start, end) — char-based (UTF-8 safe), clamps negatives,
                 // inverted range returns empty string. Never panics.
                 "substring" if args.len() == 2 => {

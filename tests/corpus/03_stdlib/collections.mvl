@@ -56,6 +56,19 @@ fn string_ends_with() -> Bool {
     s.ends_with("world")
 }
 
+fn string_concat() -> String {
+    let a = "hello";
+    let b = " world";
+    a.concat(b)
+}
+
+fn string_concat_chain() -> String {
+    let prefix = "foo";
+    let middle = "-";
+    let suffix = "bar";
+    prefix.concat(middle).concat(suffix)
+}
+
 fn string_chars() -> List<String> {
     let s = "abc";
     s.chars()

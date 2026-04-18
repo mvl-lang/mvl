@@ -1684,7 +1684,7 @@ impl TypeChecker {
             "split" | "chars" | "lines" => Ty::List(Box::new(Ty::String)),
             // Transformations returning String
             "trim" | "trim_start" | "trim_end" | "to_upper" | "to_lower" | "replace"
-            | "replace_all" | "format" => Ty::String,
+            | "replace_all" | "format" | "concat" => Ty::String,
             // Searching: Option<Int> — returns None when not found
             "find" | "rfind" => Ty::Option(Box::new(Ty::Int)),
             // Predicates
