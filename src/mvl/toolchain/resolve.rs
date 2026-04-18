@@ -42,7 +42,7 @@ pub fn find_project_mvl_version(start: &Path) -> Option<String> {
         let candidate = dir.join(".mvl-version");
         if let Ok(content) = std::fs::read_to_string(&candidate) {
             let version = content.trim().to_owned();
-            if !version.is_empty() {
+            if !version.is_empty() && validate_version(&version) {
                 return Some(version);
             }
         }
@@ -70,7 +70,7 @@ pub fn find_global_mvl_version() -> Option<String> {
     let path = PathBuf::from(home).join(".mvl-version");
     let content = std::fs::read_to_string(path).ok()?;
     let version = content.trim().to_owned();
-    if version.is_empty() {
+    if version.is_empty() || !validate_version(&version) {
         None
     } else {
         Some(version)
@@ -112,21 +112,11 @@ pub fn resolve_version(argv0: &str, cwd: &Path) -> Option<String> {
 ///
 /// Exits with a clear error message if the binary does not exist or cannot be
 /// executed.
-#[allow(unused_variables)]
+///
+/// Does not perform an `exists()` pre-check — that would introduce a TOCTOU
+/// race between the check and the exec.  Instead, `execv` / `Command` is
+/// called directly and `NotFound` is handled in the error path.
 pub fn reexec(target_binary: &Path, args: &[String]) -> ! {
-    if !target_binary.exists() {
-        // Extract version from path for a friendlier message.
-        let version = target_binary
-            .parent() // bin/
-            .and_then(|p| p.parent()) // {version}/
-            .and_then(|p| p.file_name())
-            .and_then(|s| s.to_str())
-            .unwrap_or("unknown");
-        eprintln!("error: mvl {version} is not installed");
-        eprintln!("  Run `mvl self install {version}` to install it.");
-        std::process::exit(1);
-    }
-
     #[cfg(unix)]
     {
         use std::ffi::CString;
@@ -138,7 +128,13 @@ pub fn reexec(target_binary: &Path, args: &[String]) -> ! {
         let mut c_args: Vec<CString> = Vec::with_capacity(args.len() + 1);
         c_args.push(c_binary.clone());
         for a in args.iter().skip(1) {
-            c_args.push(CString::new(a.as_bytes()).unwrap_or_else(|_| CString::new("").unwrap()));
+            match CString::new(a.as_bytes()) {
+                Ok(s) => c_args.push(s),
+                Err(_) => {
+                    eprintln!("error: argument contains null byte, cannot exec");
+                    std::process::exit(1);
+                }
+            }
         }
         let c_argv: Vec<*const libc::c_char> = c_args
             .iter()
@@ -149,24 +145,49 @@ pub fn reexec(target_binary: &Path, args: &[String]) -> ! {
         unsafe { libc::execv(c_binary.as_ptr(), c_argv.as_ptr()) };
         // execv only returns on error.
         let err = std::io::Error::last_os_error();
-        eprintln!("error: execv failed: {err}");
+        if err.kind() == std::io::ErrorKind::NotFound {
+            let ver = version_from_path(target_binary);
+            eprintln!("error: mvl {ver} is not installed");
+            eprintln!("  Run `mvl self install {ver}` to install it.");
+        } else {
+            eprintln!("error: execv failed: {err}");
+        }
         std::process::exit(1);
     }
 
     #[cfg(not(unix))]
     {
-        let status = std::process::Command::new(target_binary)
+        match std::process::Command::new(target_binary)
             .args(args.iter().skip(1))
             .status()
-            .unwrap_or_else(|e| {
+        {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let ver = version_from_path(target_binary);
+                eprintln!("error: mvl {ver} is not installed");
+                eprintln!("  Run `mvl self install {ver}` to install it.");
+                std::process::exit(1);
+            }
+            Err(e) => {
                 eprintln!("error: cannot execute {}: {e}", target_binary.display());
                 std::process::exit(1);
-            });
-        std::process::exit(status.code().unwrap_or(1));
+            }
+            Ok(status) => {
+                std::process::exit(status.code().unwrap_or(1));
+            }
+        }
     }
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
+
+/// Extract the toolchain version from a binary path (`toolchains/{ver}/bin/mvl`).
+fn version_from_path(p: &Path) -> &str {
+    p.parent() // bin/
+        .and_then(|p| p.parent()) // {version}/
+        .and_then(|p| p.file_name())
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown")
+}
 
 /// Walk up from `start` looking for `mvl.toml`.
 fn find_mvl_toml(start: &Path) -> Option<PathBuf> {
@@ -197,8 +218,23 @@ fn extract_requires_mvl_field(manifest: &Path) -> Option<String> {
             if let Some(rest) = trimmed.strip_prefix("requires-mvl") {
                 let rest = rest.trim();
                 if let Some(rest) = rest.strip_prefix('=') {
-                    // Handles both `requires-mvl = ">=0.24.0"` and `requires-mvl = "0.24.0"`.
-                    let value = rest.trim().trim_matches('"').trim_matches('\'').to_owned();
+                    // Extract the value, respecting quoted strings and stripping
+                    // trailing inline comments (`# ...`).
+                    let value_raw = rest.trim();
+                    let value = if let Some(inner) = value_raw.strip_prefix('"') {
+                        // Double-quoted: take everything up to the closing quote.
+                        inner.split_once('"').map(|(v, _)| v).unwrap_or(inner).to_owned()
+                    } else if let Some(inner) = value_raw.strip_prefix('\'') {
+                        // Single-quoted: take everything up to the closing quote.
+                        inner.split_once('\'').map(|(v, _)| v).unwrap_or(inner).to_owned()
+                    } else {
+                        // Unquoted: take until whitespace or `#` comment.
+                        value_raw
+                            .split(|c: char| c.is_whitespace() || c == '#')
+                            .next()
+                            .unwrap_or("")
+                            .to_owned()
+                    };
                     if !value.is_empty() {
                         return Some(value);
                     }
@@ -238,18 +274,16 @@ fn resolve_constraint(raw: &str) -> Option<String> {
             .filter(|(v, _)| toolchain_bin(v).exists())
             .map(|(v, _)| v)
             .next_back()
-    } else {
+    } else if validate_version(raw) && toolchain_bin(raw).exists() {
         // Exact version (or unrecognised constraint — treat as exact).
-        if validate_version(raw) && toolchain_bin(raw).exists() {
-            Some(raw.to_owned())
-        } else {
-            None
-        }
+        Some(raw.to_owned())
+    } else {
+        None
     }
 }
 
 /// Parse a semver string into `(major, minor, patch)` for comparison.
-fn parse_semver(v: &str) -> (u32, u32, u32) {
+pub(super) fn parse_semver(v: &str) -> (u32, u32, u32) {
     let mut parts = v.splitn(3, '.').map(|p| p.parse::<u32>().unwrap_or(0));
     (
         parts.next().unwrap_or(0),

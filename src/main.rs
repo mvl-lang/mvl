@@ -27,6 +27,8 @@ fn main() {
     // Skip re-exec for `mvl self …`, `mvl --version`, and `mvl version` — these
     // must always run with the current binary regardless of any project pin.
     let cmd = &args[1];
+    // Commands that must always run with the current binary, regardless of any
+    // project pin.  Keep this list in sync with the `match cmd.as_str()` arm below.
     let is_toolchain_meta = matches!(
         cmd.as_str(),
         "self" | "--version" | "-V" | "version" | "--help" | "-h" | "help" | "init"
