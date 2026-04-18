@@ -1,9 +1,7 @@
 // tests/stdlib/option_test.mvl — Option<T> method correctness
 //
-// Verifies runtime behavior of Option methods: unwrap_or, is_some, is_none.
+// Verifies runtime behavior of Option methods.
 // Run with:  mvl test tests/stdlib/
-//
-// Known transpiler limitations: map, and_then — not yet implemented for Option.
 
 // ── unwrap_or ─────────────────────────────────────────────────────────────
 
@@ -78,4 +76,54 @@ test fn option_some_zero_is_some_true() -> Unit {
 test fn option_some_zero_is_none_false() -> Unit {
     let v: Option<Int> = Some(0);
     assert_eq(v.is_none(), false);
+}
+
+// ── map ───────────────────────────────────────────────────────────────────
+
+test fn option_some_map_transforms_value() -> Unit {
+    let v: Option<Int> = Some(5);
+    let r = v.map(|x: Int| x * 2);
+    assert_eq(r.unwrap_or(0), 10);
+}
+
+test fn option_none_map_is_none() -> Unit {
+    let v: Option<Int> = None;
+    let r = v.map(|x: Int| x * 2);
+    assert_eq(r.is_none(), true);
+}
+
+test fn option_map_changes_value() -> Unit {
+    let v: Option<Int> = Some(3);
+    let r = v.map(|x: Int| x + 10);
+    assert_eq(r.unwrap_or(0), 13);
+}
+
+// ── and_then ──────────────────────────────────────────────────────────────
+
+fn safe_double(x: Int) -> Option<Int> {
+    if x >= 0 { Some(x * 2) } else { None }
+}
+
+test fn option_some_and_then_returns_some() -> Unit {
+    let v: Option<Int> = Some(4);
+    let r = v.and_then(safe_double);
+    assert_eq(r.unwrap_or(-1), 8);
+}
+
+test fn option_none_and_then_is_none() -> Unit {
+    let v: Option<Int> = None;
+    let r = v.and_then(safe_double);
+    assert_eq(r.is_none(), true);
+}
+
+test fn option_and_then_inner_none_propagates() -> Unit {
+    let v: Option<Int> = Some(-3);
+    let r = v.and_then(safe_double);
+    assert_eq(r.is_none(), true);
+}
+
+test fn option_and_then_with_lambda() -> Unit {
+    let v: Option<Int> = Some(5);
+    let r = v.and_then(|x: Int| if x > 0 { Some(x + 1) } else { None });
+    assert_eq(r.unwrap_or(0), 6);
 }

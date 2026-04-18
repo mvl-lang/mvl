@@ -184,6 +184,128 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                     emit_expr(cg, receiver);
                     cg.push(" as i64)");
                 }
+                // ── Higher-order collection methods ───────────────────────────────
+                //
+                // map(f) — works for List<T>, Option<T>, and Result<T,E> via the
+                // MvlMap trait emitted in the prelude.  Rust resolves the correct
+                // impl at compile time so no receiver-type info is needed here.
+                // The function arg is wrapped in `(…)` to prevent Rust from parsing
+                // an inline lambda body as the call target when the arg is itself a
+                // lambda: `|__x| (|x| body)(__x.clone())` vs `|__x| |x| body(__x.clone())`.
+                "map" if args.len() == 1 => {
+                    emit_expr(cg, receiver);
+                    cg.push(".mvl_map(|__x| (");
+                    emit_expr(cg, &args[0]);
+                    cg.push(")(__x.clone()))");
+                }
+                // filter(f) — List<T> only; uses Iterator::filter
+                "filter" if args.len() == 1 => {
+                    emit_expr(cg, receiver);
+                    cg.push(".into_iter().filter(|__x| (");
+                    emit_expr(cg, &args[0]);
+                    cg.push(")(__x.clone())).collect::<Vec<_>>()");
+                }
+                // fold(init, f) — List<T> only; uses Iterator::fold
+                "fold" if args.len() == 2 => {
+                    emit_expr(cg, receiver);
+                    cg.push(".into_iter().fold(");
+                    emit_expr_as_arg(cg, &args[0]);
+                    cg.push(", |__acc, __x| (");
+                    emit_expr(cg, &args[1]);
+                    cg.push(")(__acc, __x.clone()))");
+                }
+                // reverse() — List<T> only; uses Iterator::rev
+                "reverse" if args.is_empty() => {
+                    emit_expr(cg, receiver);
+                    cg.push(".into_iter().rev().collect::<Vec<_>>()");
+                }
+                // sort() — List<T>; sort_by with partial_cmp for numeric stability
+                // (works for both i64 and f64; NaN elements sort as equal)
+                "sort" if args.is_empty() => {
+                    cg.push("{let mut __v=(");
+                    emit_expr(cg, receiver);
+                    cg.push(");__v.sort_by(|__a,__b|__a.partial_cmp(__b).unwrap_or(std::cmp::Ordering::Equal));__v}");
+                }
+                // and_then(f) — Option<T> and Result<T,E>; both have native Rust
+                // `and_then` with the same call signature so no disambiguation needed.
+                "and_then" if args.len() == 1 => {
+                    emit_expr(cg, receiver);
+                    cg.push(".and_then(|__x| (");
+                    emit_expr(cg, &args[0]);
+                    cg.push(")(__x.clone()))");
+                }
+                // ── String transformation methods ─────────────────────────────────
+                //
+                // trim() — Rust returns &str; collect to owned String
+                "trim" if args.is_empty() => {
+                    emit_expr(cg, receiver);
+                    cg.push(".trim().to_string()");
+                }
+                // to_upper / to_lower — Rust names differ from MVL names
+                "to_upper" if args.is_empty() => {
+                    emit_expr(cg, receiver);
+                    cg.push(".to_uppercase()");
+                }
+                "to_lower" if args.is_empty() => {
+                    emit_expr(cg, receiver);
+                    cg.push(".to_lowercase()");
+                }
+                // starts_with(s) / ends_with(s) — Pattern requires &str;
+                // wrap arg in &(…) so &String is deref-coerced to &str
+                "starts_with" if args.len() == 1 => {
+                    emit_expr(cg, receiver);
+                    cg.push(".starts_with(&(");
+                    emit_args(cg, args);
+                    cg.push("))");
+                }
+                "ends_with" if args.len() == 1 => {
+                    emit_expr(cg, receiver);
+                    cg.push(".ends_with(&(");
+                    emit_args(cg, args);
+                    cg.push("))");
+                }
+                // find(s: String) -> Option<Int>
+                // Rust returns Option<usize>; cast index to i64 for MVL's Int.
+                "find" if args.len() == 1 => {
+                    cg.push("(");
+                    emit_expr(cg, receiver);
+                    cg.push(".find(&(");
+                    emit_args(cg, args);
+                    cg.push(")).map(|__i| __i as i64))");
+                }
+                // replace(from, to) — both args must be &str; use &* deref on `to`
+                // because str::replace takes &str for the replacement, not &String.
+                "replace" if args.len() == 2 => {
+                    emit_expr(cg, receiver);
+                    cg.push(".replace(&(");
+                    emit_expr_as_arg(cg, &args[0]);
+                    cg.push("), &*(");
+                    emit_expr_as_arg(cg, &args[1]);
+                    cg.push("))");
+                }
+                // split(sep) -> List<String>
+                // Rust's split returns Iterator<&str>; map each slice to owned String.
+                "split" if args.len() == 1 => {
+                    emit_expr(cg, receiver);
+                    cg.push(".split(&(");
+                    emit_args(cg, args);
+                    cg.push(")).map(|__s| __s.to_string()).collect::<Vec<_>>()");
+                }
+                // ── Numeric methods ───────────────────────────────────────────────
+                //
+                // is_zero() — Rust's i64 has no is_zero(); emit comparison with 0
+                "is_zero" if args.is_empty() => {
+                    cg.push("(");
+                    emit_expr(cg, receiver);
+                    cg.push(" == 0)");
+                }
+                // pow(e) — uses MvlPow trait from prelude; works for both i64 and f64
+                "pow" if args.len() == 1 => {
+                    emit_expr(cg, receiver);
+                    cg.push(".mvl_pow(");
+                    emit_expr_as_arg(cg, &args[0]);
+                    cg.push(")");
+                }
                 _ => {
                     emit_expr(cg, receiver);
                     cg.push(".");
