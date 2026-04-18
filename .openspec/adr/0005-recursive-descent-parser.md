@@ -21,10 +21,11 @@ Popular languages have constructs that break LL(1). The MVL avoids all of them b
 | **C/C++** | `a * b` — multiplication or pointer declaration? | Needs type info to disambiguate (the "lexer hack") | No pointer syntax. Ownership, not pointers. |
 | **C++** | `a<b>c` — template or comparison? `>>` closes two templates or is right-shift? | Arbitrary lookahead needed | `<>` only in type position, never as comparison operator in expressions |
 | **Python** | Indentation-based blocks | Not context-free — lexer must track indent stack | Braces `{}` for all blocks |
-| **Rust** | Turbofish `foo::<T>()` — `<` could be comparison or type parameter | Needs context to resolve | Type inference or explicit `: Type` annotation. No turbofish. |
+| **Rust** | Turbofish `foo::<T>()` — `<` could be comparison or type parameter | Needs context to resolve | Square brackets `foo[T]()` — LL(1) with single token lookahead |
 | **Java/C#** | `List<List<Integer>>` — `>>` ambiguity | Same as C++ templates | Same: `<>` only in type position |
 | **JavaScript** | `(a) => b` vs `(a)` — arrow function or grouping? | Can't tell until `=>` | No arrow functions. Named functions only. |
 | **Go** | Semicolons inserted by lexer based on line endings | Lexer has context-dependent behavior | Explicit semicolons |
+| **MVL (pre-v0.46)** | `parse<T>()` — angle-bracket generic call | `<` after identifier ambiguous with comparison; needs 3-token lookahead | Square brackets `parse[T]()` — `[` after identifier is unused in expression position |
 
 The MVL's LL(1) property is not accidental — it's a consequence of the language contraction (ADR-0002). Every dropped feature also dropped a parsing ambiguity. The smallest language is also the easiest to parse.
 
@@ -66,6 +67,43 @@ Source text → Lexer (tokenizer) → Token stream → Parser (recursive descent
 - **Lexer:** Hand-written. Emits tokens with source locations (Span: file, line, column, byte offset). Keywords recognized by table lookup after identifier scan.
 - **Parser:** One function per grammar production. `parse_fn_decl()`, `parse_type_expr()`, `parse_match_arm()`, etc. Each function consumes tokens and returns an AST node or an error with source location.
 - **Error recovery:** On error, skip to the next synchronization point (`;`, `}`, `fn`, `type`). Collect multiple errors per file. Report all of them, not just the first.
+
+## Generic type argument syntax: square brackets `[T]`
+
+The function call `parse[CliArgs]()` uses square brackets for generic type arguments — not angle brackets `parse<CliArgs>()`. This is a direct consequence of the LL(1) commitment.
+
+### Why angle brackets break LL(1)
+
+After an identifier, `<` is ambiguous: it could be a comparison operator (`x < y`) or the start of a generic type argument (`parse<T>()`). Disambiguating requires 3-token lookahead (`< Ident > (`) — a violation of LL(1).
+
+An earlier implementation used a `peek_at()` function for multi-token lookahead. This was removed as a violation of this ADR.
+
+### Why square brackets work
+
+After an identifier in expression position, `[` is currently unused. List literals (`[1, 2, 3]`) only appear at statement-start or after `=`, never immediately after an identifier. This means `name[` unambiguously signals a generic type argument with single-token lookahead.
+
+The parser handles this in `parse_atom()`:
+
+```
+Ident → peek LBracket → consume [ → parse_type_expr() → expect ] → expect ( → parse args → FnCall
+Ident → peek LParen   → consume ( → parse args → FnCall (no type args)
+```
+
+### Precedent
+
+| Language | Generic syntax | Reason |
+|----------|---------------|--------|
+| **Go 1.18** | `f[T]()` | Chose `[]` because `<>` breaks LL(1) — same reasoning |
+| **Scala** | `f[T]()` | Square brackets for type parameters |
+| **Nim** | `f[T]()` | Square brackets for generic instantiation |
+| **V** | `f[T]()` | Square brackets, influenced by Go |
+| **C++** | `f<T>()` | 40 years of disambiguation pain |
+
+### MVL row for the LL(1) table
+
+| **MVL** | `parse<T>()` — angle-bracket generic call | `<` after identifier ambiguous with comparison; needs 3-token lookahead | Square brackets `parse[T]()` — `[` after identifier is unused in expression position |
+
+*Added in v0.46.0. See also: Go 1.18 type parameter proposal.*
 
 ## Alternatives reconsidered for later phases
 

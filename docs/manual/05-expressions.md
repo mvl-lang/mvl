@@ -24,7 +24,7 @@ items.len()                         // method call
 
 ```mvl
 add(1, 2)                           // by name
-sort::<Int>(items)                   // with explicit type parameter (turbofish)
+sort[Int](items)                     // with explicit type parameter (square brackets)
 ```
 
 ## 5.5 Operators

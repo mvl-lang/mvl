@@ -99,7 +99,7 @@ expr           = literal | IDENT | field_access | fn_call | method_call
                | "move" expr | "consume" expr
                | "declassify" "(" expr ")" | "sanitize" "(" expr ")" ;
 propagate      = expr "?" ;                       (* Result/Option propagation *)
-fn_call        = IDENT [ "<" type_list ">" ] "(" [ arg_list ] ")" ;
+fn_call        = IDENT [ "[" type_list "]" ] "(" [ arg_list ] ")" ;
 method_call    = expr "." IDENT "(" [ arg_list ] ")" ;
 field_access   = expr "." IDENT ;
 arg_list       = expr { "," expr } ;

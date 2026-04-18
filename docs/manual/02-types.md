@@ -93,7 +93,7 @@ fn first<T>(items: Array<T>) -> Option<T> {
 }
 ```
 
-Type parameters use angle brackets. Constraints via `where`:
+Type parameters use angle brackets in declarations and square brackets in call position (`f[T]()`). Constraints via `where`:
 
 ```mvl
 fn sort<T>(items: Array<T>) -> Array<T>
