@@ -355,7 +355,11 @@ fn arg_decreases(arg: &Expr, params: &[&str], smaller: &HashSet<String>) -> bool
 
         // `subterm.len()` — the length of a known structural subterm is
         // strictly smaller than the length of the original parameter.
-        // (spec 007 §Req 3)
+        // NOTE: `param.len()` is NOT accepted here — the length of the original
+        // parameter is not smaller than itself.  Only variables already in `smaller`
+        // (i.e. bound as structural subterms via pattern match) qualify.
+        // This is intentionally asymmetric with the `.tail()`/`.rest()` arm above,
+        // which does accept bare parameters.  (spec 007 §Req 3)
         Expr::MethodCall {
             receiver,
             method,

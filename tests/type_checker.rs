@@ -935,15 +935,17 @@ fn rest_accessor_recursion_accepted() {
 
 #[test]
 fn subterm_len_recursion_accepted() {
-    // GIVEN: total fn matches on list param and recurses with `tail.len()`
-    // THEN: no UnprovenRecursion — tail is a structural subterm, so tail.len() is smaller
+    // GIVEN: total fn matches on list param and recurses with (tail, tail.len())
+    //        where tail is a structural subterm — both tail (List) and tail.len() (Int)
+    //        are recognized as decreasing measures for their respective parameters
+    // THEN: no UnprovenRecursion
     // spec 007 §Req 3 (subterm length is strictly less than original)
     let src = r#"
         enum List { Nil, Cons(Int, List) }
-        fn f(xs: List) -> Int {
+        fn f(xs: List, n: Int) -> Int {
             match xs {
                 List::Nil => 0
-                List::Cons(_, tail) => f(tail.len())
+                List::Cons(_, tail) => f(tail, tail.len())
             }
         }
     "#;
@@ -953,6 +955,52 @@ fn subterm_len_recursion_accepted() {
             .iter()
             .any(|e| matches!(e, CheckError::UnprovenRecursion { .. })),
         "expected no UnprovenRecursion for subterm.len(), got: {errors:?}"
+    );
+}
+
+#[test]
+fn len_on_param_directly_rejected() {
+    // GIVEN: total fn recurses with `xs.len()` where xs is a direct parameter
+    //        (not a match-bound structural subterm)
+    // THEN: UnprovenRecursion — only subterm.len() is a recognised decrease, not param.len()
+    // spec 007 §Req 3
+    let src = r#"fn f(xs: List<Int>) -> Int { if xs == [] { 0 } else { f(xs.len()) } }"#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { fn_name, .. } if fn_name == "f")),
+        "expected UnprovenRecursion for param.len() (not a subterm), got: {errors:?}"
+    );
+}
+
+#[test]
+fn tail_on_local_variable_rejected() {
+    // GIVEN: total fn calls .tail() on a local variable, not a parameter or known subterm
+    // THEN: UnprovenRecursion — accessor on a non-param non-subterm is not a proven decrease
+    // spec 007 §Req 3
+    let src = r#"fn f(xs: List<Int>) -> Int { let local = xs; f(local.tail()) }"#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { fn_name, .. } if fn_name == "f")),
+        "expected UnprovenRecursion for local.tail() (not a param/subterm), got: {errors:?}"
+    );
+}
+
+#[test]
+fn rest_on_local_variable_rejected() {
+    // GIVEN: total fn calls .rest() on a local variable, not a parameter or known subterm
+    // THEN: UnprovenRecursion
+    // spec 007 §Req 3
+    let src = r#"fn f(xs: List<Int>) -> Int { let local = xs; f(local.rest()) }"#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnprovenRecursion { fn_name, .. } if fn_name == "f")),
+        "expected UnprovenRecursion for local.rest() (not a param/subterm), got: {errors:?}"
     );
 }
 

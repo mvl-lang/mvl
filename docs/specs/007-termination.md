@@ -110,6 +110,28 @@ supply a non-negative value or the function must include an explicit base-case g
 
 **Tests:** `tests/type_checker.rs::decrement_by_zero_in_total_fn_rejected`
 
+#### Scenario: Integer division by constant accepted
+
+A recursive call is ALSO accepted when at least one argument is of the form `param / N` where
+`param` is any function parameter and `N` is an integer literal greater than 1. This catches
+binary search, merge sort, and other logarithmic algorithms without requiring `partial`.
+
+**Soundness note:** The integer-division measure is syntactic. The checker does not verify that
+`param` holds a non-negative value at the call site. See Known Limitation §L5.
+
+- GIVEN `fn halve(n: Int) -> Int { if n == 0 { 0 } else { halve(n / 2) } }`
+- THEN the compiler MUST accept (`n / 2` is a syntactic division of parameter `n` by a constant > 1)
+
+**Tests:** `tests/type_checker.rs::division_by_constant_recursion_accepted`,
+`tests/type_checker.rs::division_by_large_constant_recursion_accepted`
+
+#### Scenario: Division by one rejected
+
+- GIVEN `fn f(n: Int) -> Int { f(n / 1) }`
+- THEN the compiler MUST reject (`N == 1` is not a decrease — the value is unchanged)
+
+**Tests:** `tests/type_checker.rs::division_by_one_in_total_fn_rejected`
+
 ---
 
 ### Requirement 3: Structural Subterm Measure [MUST]
@@ -156,6 +178,45 @@ establish the relation — those bindings are not in the `smaller` set.
 - THEN the compiler MUST accept (`inner` is a structural subterm of the `Option` parameter)
 
 **Tests:** `tests/type_checker.rs::structural_recursion_on_adt_single_field_accepted`
+
+#### Scenario: Method accessor on parameter accepted [MUST]
+
+A recursive call is ALSO accepted when an argument is `param.tail()` or `param.rest()` (called
+with zero arguments) where `param` is any function parameter. These zero-argument accessor methods
+are treated as yielding a strict structural subterm of their receiver. The same applies when the
+receiver is a variable already in the `smaller` set (i.e. a known structural subterm).
+
+- GIVEN `fn f(xs: List<Int>) -> Int { if xs == [] { 0 } else { f(xs.tail()) } }`
+- THEN the compiler MUST accept (`xs.tail()` is a structural subterm of parameter `xs`)
+
+**Tests:** `tests/type_checker.rs::tail_accessor_recursion_accepted`,
+`tests/type_checker.rs::rest_accessor_recursion_accepted`
+
+#### Scenario: Method accessor on non-parameter rejected
+
+- GIVEN `fn f(xs: List<Int>) -> Int { let local = xs; f(local.tail()) }`
+- THEN the compiler MUST reject (`local` is not a function parameter; `local.tail()` is not a proven structural decrease)
+
+**Tests:** `tests/type_checker.rs::tail_on_local_variable_rejected`
+
+#### Scenario: Subterm length accepted [MUST]
+
+A recursive call is ALSO accepted when an argument is `subterm.len()` (called with zero arguments)
+where `subterm` is a variable in the `smaller` set (i.e. a known structural subterm bound via
+pattern match). The length of a structural subterm is provably smaller than the length of the
+original parameter. Bare function parameters do NOT qualify — only pattern-bound subterms.
+
+- GIVEN `fn f(xs: List) -> Int { match xs { List::Nil => 0, List::Cons(_, tail) => f(tail, tail.len()) } }`
+- THEN the compiler MUST accept (`tail` is a structural subterm; `tail.len()` is its length, which is smaller)
+
+**Tests:** `tests/type_checker.rs::subterm_len_recursion_accepted`
+
+#### Scenario: Length of bare parameter not accepted
+
+- GIVEN `fn f(xs: List<Int>) -> Int { if xs == [] { 0 } else { f(xs.len()) } }`
+- THEN the compiler MUST reject (`xs` is a direct parameter, not a structural subterm; `xs.len()` is not a proven decrease)
+
+**Tests:** `tests/type_checker.rs::len_on_param_directly_rejected`
 
 ---
 
@@ -220,6 +281,13 @@ supported. `while` in total functions is unconditionally rejected in Phase 1. Tr
 The syntactic `param - N` check does not verify that `param` is non-negative at the call site.
 A total function may diverge for negative inputs and still be accepted by the checker.
 
+### L5: Integer-division measure assumes non-negative dividend
+
+The syntactic `param / N` check does not verify that `param` is non-negative at the call site.
+A total function may diverge for negative inputs and still be accepted by the checker. This is
+the same class of limitation as §L3 (integer-decrement measure) — both measures rely on the
+caller supplying non-negative values or the function including an explicit base-case guard.
+
 ### L4: Subterm variable shadowing inside match arm bodies is not tracked
 
 If a `let` binding inside a match arm re-binds a name that is in the `smaller` set (e.g.
@@ -235,6 +303,6 @@ shadowing a subterm variable in an arm body is unusual style.
 |------|----------|
 | Mutual recursion (call-graph cycle detection) | #142 |
 | `while` loop with decreasing measure annotation | #142 |
-| Non-negative precondition check for integer-decrement measure | future |
+| Non-negative precondition check for integer-decrement and integer-division measures | future |
 | Subterm shadowing tracking in match arm bodies | future |
 | Per-function Req 8 status in assurance report | future |
