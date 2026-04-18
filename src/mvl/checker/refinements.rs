@@ -26,8 +26,8 @@ use std::collections::HashMap;
 
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::parser::ast::{
-    ArithOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, LValue, Literal, LogicOp, MatchBody,
-    Pattern, Program, RefExpr, Stmt, TypeBody, TypeExpr, UnaryOp,
+    ArithOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, LValue, Literal, LogicOp, MatchArm,
+    MatchBody, Pattern, Program, RefExpr, Stmt, TypeBody, TypeExpr, UnaryOp,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -219,6 +219,252 @@ fn param_refinements(
     map
 }
 
+// ── Synthetic predicate helpers ──────────────────────────────────────────────
+
+/// A zero-length span used for compiler-synthesised predicates.
+fn dummy_span() -> Span {
+    Span::new(0, 0, 0, 0)
+}
+
+/// `self == n` (integer literal equality).
+fn self_eq_int(n: i64) -> RefExpr {
+    let s = dummy_span();
+    RefExpr::Compare {
+        op: CmpOp::Eq,
+        left: Box::new(RefExpr::Ident {
+            name: "self".to_string(),
+            span: s,
+        }),
+        right: Box::new(RefExpr::Integer { value: n, span: s }),
+        span: s,
+    }
+}
+
+/// `self != n` (integer literal inequality).
+fn self_ne_int(n: i64) -> RefExpr {
+    let s = dummy_span();
+    RefExpr::Compare {
+        op: CmpOp::Ne,
+        left: Box::new(RefExpr::Ident {
+            name: "self".to_string(),
+            span: s,
+        }),
+        right: Box::new(RefExpr::Integer { value: n, span: s }),
+        span: s,
+    }
+}
+
+/// `self == f` (float literal equality).
+fn self_eq_float(f: f64) -> RefExpr {
+    let s = dummy_span();
+    RefExpr::Compare {
+        op: CmpOp::Eq,
+        left: Box::new(RefExpr::Ident {
+            name: "self".to_string(),
+            span: s,
+        }),
+        right: Box::new(RefExpr::Float { value: f, span: s }),
+        span: s,
+    }
+}
+
+/// `self != f` (float literal inequality).
+fn self_ne_float(f: f64) -> RefExpr {
+    let s = dummy_span();
+    RefExpr::Compare {
+        op: CmpOp::Ne,
+        left: Box::new(RefExpr::Ident {
+            name: "self".to_string(),
+            span: s,
+        }),
+        right: Box::new(RefExpr::Float { value: f, span: s }),
+        span: s,
+    }
+}
+
+/// Conjoin a non-empty list of predicates with `&&`.  Returns `None` when empty.
+fn conj_preds(preds: Vec<RefExpr>) -> Option<RefExpr> {
+    let s = dummy_span();
+    let mut iter = preds.into_iter();
+    let first = iter.next()?;
+    Some(iter.fold(first, |acc, p| RefExpr::LogicOp {
+        op: LogicOp::And,
+        left: Box::new(acc),
+        right: Box::new(p),
+        span: s,
+    }))
+}
+
+/// If a hypothesis has the form `self == <integer>`, return that integer.
+///
+/// Used by `check_arg_against_pred` to evaluate the required predicate against a
+/// known concrete value when full structural equivalence does not apply.
+fn extract_eq_int_from_hyp(pred: &RefExpr) -> Option<i64> {
+    match pred {
+        RefExpr::Compare {
+            op: CmpOp::Eq,
+            left,
+            right,
+            ..
+        } => match (left.as_ref(), right.as_ref()) {
+            (RefExpr::Ident { name, .. }, RefExpr::Integer { value, .. }) if is_self_like(name) => {
+                Some(*value)
+            }
+            (RefExpr::Integer { value, .. }, RefExpr::Ident { name, .. }) if is_self_like(name) => {
+                Some(*value)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// If a hypothesis has the form `self == <float>`, return that float.
+fn extract_eq_float_from_hyp(pred: &RefExpr) -> Option<f64> {
+    match pred {
+        RefExpr::Compare {
+            op: CmpOp::Eq,
+            left,
+            right,
+            ..
+        } => match (left.as_ref(), right.as_ref()) {
+            (RefExpr::Ident { name, .. }, RefExpr::Float { value, .. }) if is_self_like(name) => {
+                Some(*value)
+            }
+            (RefExpr::Float { value, .. }, RefExpr::Ident { name, .. }) if is_self_like(name) => {
+                Some(*value)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Extract the identifier name from a simple `Expr::Ident`, if present.
+fn ident_name_from_expr(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Ident(name, _) => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+/// Inject pattern-induced narrowing hypotheses into `arm_refs` for one match arm.
+///
+/// Four kinds of hypotheses are generated:
+///
+/// 1. **Literal arm** — `0 => ...` tells the solver the scrutinee equals `0`.
+///    A guard on a literal arm (unusual but valid) is conjoined with the equality.
+///    NaN float literals are skipped — no hypothesis is injected.
+/// 2. **Catch-all ident arm** — `n => ...` after literal arms `0`, `1` tells the
+///    solver that `n != 0 && n != 1` (complement of all prior literal values).
+///    The complement is also written under the scrutinee name so that passing
+///    either `n` or `x` to a callee proves the same refinement.
+/// 3. **Wildcard arm** — `_ => ...` after literal arms gets the same complement
+///    hypothesis injected under the scrutinee name.
+/// 4. **Guard** — `n if n > 0 => ...` adds `n > 0` as a hypothesis for `n`.
+fn inject_arm_hypotheses(
+    scrutinee_name: Option<&str>,
+    pattern: &Pattern,
+    guard: Option<&RefExpr>,
+    prior_int_lits: &[i64],
+    prior_float_lits: &[f64],
+    arm_refs: &mut HashMap<String, Option<RefExpr>>,
+) {
+    match pattern {
+        // ── Literal arms: scrutinee is known to equal the matched literal ──────
+        Pattern::Literal(Literal::Integer(n), _) => {
+            if let Some(name) = scrutinee_name {
+                let eq_hyp = self_eq_int(*n);
+                let hyp = if let Some(g) = guard {
+                    let normalized = normalize_pred(g, name);
+                    RefExpr::LogicOp {
+                        op: LogicOp::And,
+                        left: Box::new(eq_hyp),
+                        right: Box::new(normalized),
+                        span: dummy_span(),
+                    }
+                } else {
+                    eq_hyp
+                };
+                arm_refs.insert(name.to_string(), Some(hyp));
+            }
+        }
+        Pattern::Literal(Literal::Float(f), _) => {
+            // NaN cannot be a concrete equality hypothesis (NaN != NaN in IEEE 754).
+            if !f.is_nan() {
+                if let Some(name) = scrutinee_name {
+                    let eq_hyp = self_eq_float(*f);
+                    let hyp = if let Some(g) = guard {
+                        let normalized = normalize_pred(g, name);
+                        RefExpr::LogicOp {
+                            op: LogicOp::And,
+                            left: Box::new(eq_hyp),
+                            right: Box::new(normalized),
+                            span: dummy_span(),
+                        }
+                    } else {
+                        eq_hyp
+                    };
+                    arm_refs.insert(name.to_string(), Some(hyp));
+                }
+            }
+        }
+        // ── Catch-all ident: bound variable differs from all prior literals ────
+        Pattern::Ident(var_name, _) => {
+            let mut ne_preds: Vec<RefExpr> =
+                prior_int_lits.iter().map(|&n| self_ne_int(n)).collect();
+            ne_preds.extend(
+                prior_float_lits
+                    .iter()
+                    .filter(|f| !f.is_nan())
+                    .map(|&f| self_ne_float(f)),
+            );
+            let base_hyp = conj_preds(ne_preds);
+            // Merge with guard predicate (if any).
+            let hyp = match (base_hyp, guard) {
+                (Some(base), Some(g)) => {
+                    let normalized = normalize_pred(g, var_name);
+                    Some(RefExpr::LogicOp {
+                        op: LogicOp::And,
+                        left: Box::new(base),
+                        right: Box::new(normalized),
+                        span: dummy_span(),
+                    })
+                }
+                (Some(base), None) => Some(base),
+                (None, Some(g)) => Some(normalize_pred(g, var_name)),
+                (None, None) => None,
+            };
+            if let Some(h) = &hyp {
+                arm_refs.insert(var_name.clone(), Some(h.clone()));
+                // The scrutinee and the bound variable carry the same value;
+                // narrow both so callers can use either name.
+                if let Some(sname) = scrutinee_name {
+                    if sname != var_name.as_str() {
+                        arm_refs.insert(sname.to_string(), Some(h.clone()));
+                    }
+                }
+            }
+        }
+        // ── Wildcard: complement of all prior literals on the scrutinee ───────
+        Pattern::Wildcard(_) => {
+            let mut ne_preds: Vec<RefExpr> =
+                prior_int_lits.iter().map(|&n| self_ne_int(n)).collect();
+            ne_preds.extend(
+                prior_float_lits
+                    .iter()
+                    .filter(|f| !f.is_nan())
+                    .map(|&f| self_ne_float(f)),
+            );
+            if let (Some(name), Some(hyp)) = (scrutinee_name, conj_preds(ne_preds)) {
+                arm_refs.insert(name.to_string(), Some(hyp));
+            }
+        }
+        // ── Other patterns: no scalar refinement hypothesis ───────────────────
+        _ => {}
+    }
+}
+
 // ── Predicate normalisation ───────────────────────────────────────────────────
 
 /// Replace every occurrence of `param_name` with `"self"` in a predicate.
@@ -296,6 +542,51 @@ fn resolve_type_alias_pred(
 }
 
 // ── AST walkers ───────────────────────────────────────────────────────────────
+
+/// Walk the arms of a match expression/statement, injecting per-arm hypotheses.
+///
+/// Shared by `Stmt::Match` and `Expr::Match` — the loop body is identical in
+/// both cases and lives here to avoid duplication.
+fn analyze_match_arms(
+    scrutinee: &Expr,
+    arms: &[MatchArm],
+    var_refs: &mut HashMap<String, Option<RefExpr>>,
+    fn_params: &HashMap<String, Vec<(String, Option<RefExpr>)>>,
+    type_refs: &HashMap<String, Option<RefExpr>>,
+    errors: &mut Vec<CheckError>,
+    counts: &mut RefinementCounts,
+) {
+    analyze_expr(scrutinee, var_refs, fn_params, type_refs, errors, counts);
+    let scrutinee_name = ident_name_from_expr(scrutinee);
+    let mut prior_int_lits: Vec<i64> = Vec::new();
+    let mut prior_float_lits: Vec<f64> = Vec::new();
+    for arm in arms {
+        // Each arm gets its own hypothesis set cloned from the outer scope.
+        let mut arm_refs = var_refs.clone();
+        inject_arm_hypotheses(
+            scrutinee_name,
+            &arm.pattern,
+            arm.guard.as_ref(),
+            &prior_int_lits,
+            &prior_float_lits,
+            &mut arm_refs,
+        );
+        // Record literal values so subsequent catch-all/wildcard arms know what was excluded.
+        match &arm.pattern {
+            Pattern::Literal(Literal::Integer(n), _) => prior_int_lits.push(*n),
+            Pattern::Literal(Literal::Float(f), _) if !f.is_nan() => prior_float_lits.push(*f),
+            _ => {}
+        }
+        match &arm.body {
+            MatchBody::Expr(e) => {
+                analyze_expr(e, &mut arm_refs, fn_params, type_refs, errors, counts)
+            }
+            MatchBody::Block(b) => {
+                analyze_block(b, &mut arm_refs, fn_params, type_refs, errors, counts)
+            }
+        }
+    }
+}
 
 fn analyze_block(
     block: &Block,
@@ -376,17 +667,9 @@ fn analyze_stmt(
         Stmt::Match {
             scrutinee, arms, ..
         } => {
-            analyze_expr(scrutinee, var_refs, fn_params, type_refs, errors, counts);
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Expr(e) => {
-                        analyze_expr(e, var_refs, fn_params, type_refs, errors, counts)
-                    }
-                    MatchBody::Block(b) => {
-                        analyze_block(b, var_refs, fn_params, type_refs, errors, counts)
-                    }
-                }
-            }
+            analyze_match_arms(
+                scrutinee, arms, var_refs, fn_params, type_refs, errors, counts,
+            );
         }
     }
 }
@@ -443,17 +726,9 @@ fn analyze_expr(
         Expr::Match {
             scrutinee, arms, ..
         } => {
-            analyze_expr(scrutinee, var_refs, fn_params, type_refs, errors, counts);
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Expr(e) => {
-                        analyze_expr(e, var_refs, fn_params, type_refs, errors, counts)
-                    }
-                    MatchBody::Block(b) => {
-                        analyze_block(b, var_refs, fn_params, type_refs, errors, counts)
-                    }
-                }
-            }
+            analyze_match_arms(
+                scrutinee, arms, var_refs, fn_params, type_refs, errors, counts,
+            );
         }
         Expr::Lambda { params, body, .. } => {
             // Lambda params may have refinements; normalise them (param name → "self")
@@ -547,9 +822,27 @@ fn check_arg_against_pred(
             _ => RefResult::RuntimeCheck,
         },
 
-        // Variable: check if it carries a normalised-equivalent refinement.
+        // Variable: check if it carries a normalised-equivalent refinement,
+        // or if its hypothesis encodes a concrete known value we can evaluate against.
         Expr::Ident(name, _) => match var_refs.get(name) {
-            Some(Some(arg_pred)) if preds_equivalent(arg_pred, pred) => RefResult::Proven,
+            Some(Some(arg_pred)) => {
+                if preds_equivalent(arg_pred, pred) {
+                    RefResult::Proven
+                } else if let Some(n) = extract_eq_int_from_hyp(arg_pred) {
+                    // Hypothesis says variable == n; evaluate required predicate at n.
+                    eval_pred_int(n, pred)
+                } else if let Some(f) = extract_eq_float_from_hyp(arg_pred) {
+                    // Hypothesis says variable == f; NaN cannot be evaluated against
+                    // predicates (NaN != NaN in IEEE 754) — fall back to runtime check.
+                    if f.is_nan() {
+                        RefResult::RuntimeCheck
+                    } else {
+                        eval_pred_float(f, pred)
+                    }
+                } else {
+                    RefResult::RuntimeCheck
+                }
+            }
             _ => RefResult::RuntimeCheck,
         },
 

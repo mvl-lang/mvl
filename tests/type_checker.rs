@@ -3259,3 +3259,314 @@ fn from_int_with_non_int_arg_is_rejected() {
         "from_int with String arg must emit TypeMismatch, got: {errors:?}"
     );
 }
+
+// ── Match-branch narrowing (Issue #238) ──────────────────────────────────────
+//
+// Req 3 × Req 10: after matching a literal arm the scrutinee is known to equal
+// that literal; after a catch-all ident arm the variable is known to differ from
+// all prior literal values.  These hypotheses allow the refinement solver to
+// statically prove call-site predicates that would otherwise need runtime checks.
+
+/// Catch-all ident after zero arm: solver knows `n != 0` — proven, no error.
+///
+/// GIVEN `match x { 0 => ..., n => safe_divide(a, n) }` where safe_divide needs `b != 0`
+/// WHEN type-checked
+/// THEN no RefinementViolated (hypothesis `n != 0` proves the predicate)
+#[test]
+fn match_narrowing_nonzero_catchall_proven() {
+    let src = r#"
+        total fn safe_divide(a: Int, b: Int where b != 0) -> Int { a / b }
+        total fn caller(a: Int, x: Int) -> Int {
+            match x {
+                0 => 0,
+                n => safe_divide(a, n),
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "n != 0 should be proven via match narrowing, got: {errors:?}"
+    );
+}
+
+/// Literal arm: scrutinee is known to equal the matched value — proven.
+///
+/// GIVEN `match x { 5 => requires_five(x) }` where requires_five needs `b == 5`
+/// WHEN type-checked
+/// THEN no RefinementViolated (hypothesis `x == 5` proves the predicate)
+#[test]
+fn match_narrowing_literal_arm_eq_proven() {
+    let src = r#"
+        total fn requires_five(b: Int where b == 5) -> Int { b }
+        total fn caller(x: Int) -> Int {
+            match x {
+                5 => requires_five(x),
+                _ => 0,
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "x == 5 should be proven in literal arm, got: {errors:?}"
+    );
+}
+
+/// Guard proves refinement: `n if n != 0 => safe_divide(a, n)` — proven.
+///
+/// GIVEN a match arm with guard `n != 0`
+/// WHEN type-checked
+/// THEN the guard adds hypothesis `n != 0` and proves the call
+#[test]
+fn match_narrowing_guard_proves_refinement() {
+    let src = r#"
+        total fn safe_divide(a: Int, b: Int where b != 0) -> Int { a / b }
+        total fn caller(a: Int, x: Int) -> Int {
+            match x {
+                n if n != 0 => safe_divide(a, n),
+                _ => 0,
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "guard `n != 0` should prove refinement, got: {errors:?}"
+    );
+}
+
+/// Unguarded catch-all without prior literal arms: no hypothesis — runtime check, no error.
+///
+/// GIVEN `match x { n => safe_divide(a, n) }` with no prior literal arms
+/// WHEN type-checked
+/// THEN no RefinementViolated (conservative runtime check, not a static violation)
+#[test]
+fn match_narrowing_bare_catchall_no_prior_lits_runtime_check() {
+    let src = r#"
+        total fn safe_divide(a: Int, b: Int where b != 0) -> Int { a / b }
+        total fn caller(a: Int, x: Int) -> Int {
+            match x {
+                n => safe_divide(a, n),
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "catch-all without prior literals is a runtime check (not a static violation), got: {errors:?}"
+    );
+}
+
+/// Literal 0 arm: passing x to `b != 0` inside that arm is a static violation.
+///
+/// GIVEN `match x { 0 => safe_divide(a, x) }` where safe_divide needs `b != 0`
+/// WHEN type-checked
+/// THEN RefinementViolated is emitted (x == 0 is known, violates b != 0)
+#[test]
+fn match_narrowing_literal_zero_arm_violation_detected() {
+    let src = r#"
+        total fn safe_divide(a: Int, b: Int where b != 0) -> Int { a / b }
+        total fn caller(a: Int, x: Int) -> Int {
+            match x {
+                0 => safe_divide(a, x),
+                _ => 1,
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "x == 0 inside literal 0 arm must violate `b != 0`, got: {errors:?}"
+    );
+}
+
+/// Multiple prior literal arms: catch-all knows `n != 0 && n != 1`.
+///
+/// GIVEN `match x { 0 => ..., 1 => ..., n => safe_divide(a, n) }`
+/// WHEN type-checked
+/// THEN proven (n is known != 0 and != 1, so != 0 is satisfied)
+#[test]
+fn match_narrowing_multiple_prior_lits_catchall_proven() {
+    let src = r#"
+        total fn safe_divide(a: Int, b: Int where b != 0) -> Int { a / b }
+        total fn caller(a: Int, x: Int) -> Int {
+            match x {
+                0 => 0,
+                1 => 1,
+                n => safe_divide(a, n),
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "n != 0 && n != 1 should prove `b != 0`, got: {errors:?}"
+    );
+}
+
+// ── Additional narrowing tests (fixes from review) ────────────────────────────
+
+/// Wildcard arm after literal 0: scrutinee gets hypothesis `x != 0` — proven.
+///
+/// GIVEN `match x { 0 => ..., _ => safe_divide(a, x) }` where safe_divide needs `b != 0`
+/// WHEN type-checked
+/// THEN no RefinementViolated (wildcard arm narrows x to x != 0)
+#[test]
+fn match_narrowing_wildcard_arm_proven() {
+    let src = r#"
+        total fn safe_divide(a: Int, b: Int where b != 0) -> Int { a / b }
+        total fn caller(a: Int, x: Int) -> Int {
+            match x {
+                0 => 0,
+                _ => safe_divide(a, x),
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "wildcard arm after 0 should narrow x to x != 0, got: {errors:?}"
+    );
+}
+
+/// Float literal arm: scrutinee is known to equal the matched float — proven.
+///
+/// GIVEN `match x { 1.0 => requires_one(x) }` where requires_one needs `b == 1.0`
+/// WHEN type-checked
+/// THEN no RefinementViolated (hypothesis x == 1.0 proves the predicate)
+#[test]
+fn match_narrowing_float_literal_arm_eq_proven() {
+    let src = r#"
+        total fn requires_one(b: Float where b == 1.0) -> Float { b }
+        total fn caller(x: Float) -> Float {
+            match x {
+                1.0 => requires_one(x),
+                _ => 0.0,
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "x == 1.0 should be proven in float literal arm, got: {errors:?}"
+    );
+}
+
+/// Float literal 0.0 arm: passing x to `b != 0.0` is a static violation.
+///
+/// GIVEN `match x { 0.0 => safe_divide_float(a, x) }` where safe_divide_float needs `b != 0.0`
+/// WHEN type-checked
+/// THEN RefinementViolated is emitted (x == 0.0 is known, violates b != 0.0)
+#[test]
+fn match_narrowing_float_zero_arm_violation_detected() {
+    let src = r#"
+        total fn safe_divide_float(a: Float, b: Float where b != 0.0) -> Float { a / b }
+        total fn caller(a: Float, x: Float) -> Float {
+            match x {
+                0.0 => safe_divide_float(a, x),
+                _ => 1.0,
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "x == 0.0 inside float literal 0.0 arm must violate `b != 0.0`, got: {errors:?}"
+    );
+}
+
+/// Catch-all ident + guard conjunctive merge: prior literal and guard both constrain n.
+///
+/// GIVEN `match x { 0 => ..., n if n > 2 => safe_divide(a, n) }`
+/// WHEN type-checked
+/// THEN proven (n != 0 from prior arm AND n > 2 from guard — together satisfy b != 0)
+#[test]
+fn match_narrowing_prior_lit_and_guard_conjunctive_proven() {
+    let src = r#"
+        total fn safe_divide(a: Int, b: Int where b != 0) -> Int { a / b }
+        total fn caller(a: Int, x: Int) -> Int {
+            match x {
+                0 => 0,
+                n if n != 0 => safe_divide(a, n),
+                _ => 0,
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "n != 0 (prior) && n != 0 (guard) should prove `b != 0`, got: {errors:?}"
+    );
+}
+
+/// Scrutinee is narrowed in ident arm: passing x (not n) to a callee is proven.
+///
+/// GIVEN `match x { 0 => ..., n => safe_divide(a, x) }` — note: passes x, not n
+/// WHEN type-checked
+/// THEN no RefinementViolated (x and n are the same value; both get the n != 0 hypothesis)
+#[test]
+fn match_narrowing_scrutinee_narrowed_in_ident_arm() {
+    let src = r#"
+        total fn safe_divide(a: Int, b: Int where b != 0) -> Int { a / b }
+        total fn caller(a: Int, x: Int) -> Int {
+            match x {
+                0 => 0,
+                n => safe_divide(a, x),
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "scrutinee x should be narrowed to x != 0 in ident arm, got: {errors:?}"
+    );
+}
+
+/// Match-as-expression (Expr::Match) exercises the expression code path.
+///
+/// GIVEN `let result = match x { 0 => 0, n => safe_divide(a, n) }`
+/// WHEN type-checked
+/// THEN no RefinementViolated (Expr::Match path narrows correctly)
+#[test]
+fn match_narrowing_expr_match_path_proven() {
+    let src = r#"
+        total fn safe_divide(a: Int, b: Int where b != 0) -> Int { a / b }
+        total fn caller(a: Int, x: Int) -> Int {
+            let result = match x {
+                0 => 0,
+                n => safe_divide(a, n),
+            };
+            result
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "Expr::Match should narrow n != 0 just like Stmt::Match, got: {errors:?}"
+    );
+}

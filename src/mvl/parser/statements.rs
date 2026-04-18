@@ -289,6 +289,10 @@ impl Parser {
                 let span = self.advance().span;
                 Ok(Pattern::Literal(Literal::Integer(n), span))
             }
+            TokenKind::Float(f) => {
+                let span = self.advance().span;
+                Ok(Pattern::Literal(Literal::Float(f), span))
+            }
             // Fix #8: support negative integer literal patterns like `match n { -1 => … }`
             TokenKind::Minus => {
                 self.advance(); // consume `-`
@@ -297,9 +301,14 @@ impl Parser {
                         let span = self.advance().span;
                         Ok(Pattern::Literal(Literal::Integer(-n), span))
                     }
+                    TokenKind::Float(f) => {
+                        let span = self.advance().span;
+                        Ok(Pattern::Literal(Literal::Float(-f), span))
+                    }
                     _ => {
                         let err = ParseError {
-                            message: "expected integer literal after `-` in pattern".into(),
+                            message: "expected integer or float literal after `-` in pattern"
+                                .into(),
                             span: self.peek_span(),
                         };
                         self.push_recover(err);
