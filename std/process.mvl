@@ -2,9 +2,9 @@
 //
 // Unix process lifecycle: spawning child processes, piped I/O, waiting for exit.
 // Import with: use std.process.{Child, ChildStdin, ChildStdout, ChildStderr,
-//                               ExitStatus, Stdio,
+//                               ExitStatus, ProcessOutput, Stdio,
 //                               spawn, stdin_write, stdout_read, stderr_read,
-//                               wait, kill}
+//                               wait, kill, is_success, exit_code}
 //
 // Phase 2: function stubs with correct signatures and effects.
 // Types are opaque structs until Phase 3 compiles stdlib from source.
@@ -16,9 +16,13 @@
 // external child process and are therefore untrusted. Callers must sanitize
 // before using output in security-sensitive contexts (paths, queries, etc.).
 //
-// Stdio configuration is set at spawn time via Stdio values passed to the
-// builder-style `spawn` call. The returned Child handle carries the open
-// stdin/stdout/stderr channels.
+// Stdio configuration is set at spawn time via positional Stdio arguments.
+// A builder-style API is planned for Phase 3.
+//
+// Lifecycle pattern:
+//   let child = spawn("git", ["status"], Stdio::Devnull, Stdio::Capture, Stdio::Capture)?;
+//   let out = wait(child)?;   // consumes child, returns ProcessOutput
+//   // out.status, out.stdout (captured), out.stderr (captured)
 //
 // Implementation: wraps `extern "rust" { std::process::Command }` (Phase 3).
 // See #45, ADR-0006.
@@ -28,7 +32,7 @@
 /// Configures how a child process's stdio stream is connected.
 ///
 /// - `Pipe`    — connect to a pipe accessible from the parent process
-/// - `Capture` — collect all output into a buffer; available after `wait`
+/// - `Capture` — collect all output into a buffer; available in ProcessOutput after `wait`
 /// - `Inherit` — inherit the parent's stdio stream (no redirection)
 /// - `Devnull` — redirect to /dev/null (discard)
 pub type Stdio = enum {
@@ -47,60 +51,90 @@ pub type Stdio = enum {
 /// Phase 3 will add RAII Drop to close the pipe on drop.
 pub type ChildStdin = struct {}
 
-/// A handle to the stdout pipe or capture buffer of a child process.
+/// A handle to the stdout pipe of a child process.
 ///
 /// Obtained from `Child.stdout` when the child was spawned with `Stdio::Pipe`
-/// or `Stdio::Capture`. Use `stdout_read` to receive data from the child.
+/// on stdout. Use `stdout_read` to receive streaming data from the child
+/// before calling `wait`. For buffered output use `Stdio::Capture` and read
+/// `ProcessOutput.stdout` after `wait`.
 pub type ChildStdout = struct {}
 
-/// A handle to the stderr pipe or capture buffer of a child process.
+/// A handle to the stderr pipe of a child process.
 ///
 /// Obtained from `Child.stderr` when the child was spawned with `Stdio::Pipe`
-/// or `Stdio::Capture`. Use `stderr_read` to receive data from the child.
+/// on stderr. Use `stderr_read` to receive streaming data from the child
+/// before calling `wait`. For buffered output use `Stdio::Capture` and read
+/// `ProcessOutput.stderr` after `wait`.
 pub type ChildStderr = struct {}
 
-/// A running or finished child process.
+/// A running child process.
 ///
-/// Returned by `spawn`. Use `wait` to block until the process exits and
-/// collect its exit status. The `stdin`, `stdout`, and `stderr` fields
-/// are present only when the corresponding `Stdio` mode was `Pipe` or `Capture`.
+/// Returned by `spawn`. Fields are `Option` because a handle is only present
+/// when the corresponding `Stdio` mode was `Pipe`:
 ///
-/// Phase 2 limitation: field presence is not enforced at compile time when
-/// Stdio::Inherit or Stdio::Devnull was used — accessing them will return Err
-/// at runtime. Phase 3 will use Option fields or a typed builder.
+///   - `stdin`  — `Some` when `stdin_mode == Pipe`, otherwise `None`
+///   - `stdout` — `Some` when `stdout_mode == Pipe`, otherwise `None`
+///   - `stderr` — `Some` when `stderr_mode == Pipe`, otherwise `None`
+///
+/// For `Stdio::Capture`, use `wait` and read `ProcessOutput.stdout` /
+/// `ProcessOutput.stderr` after the process exits.
+///
+/// Use `wait` to block until the process exits and collect its exit status
+/// and any captured output. Use `kill` to terminate the process; `kill`
+/// returns the `Child` so it can be passed to `wait` for reaping.
 pub type Child = struct {
-    stdin: ChildStdin,
-    stdout: ChildStdout,
-    stderr: ChildStderr,
+    stdin: Option<ChildStdin>,
+    stdout: Option<ChildStdout>,
+    stderr: Option<ChildStderr>,
 }
 
 /// The exit status of a finished child process.
 ///
-/// Returned by `wait`. Match on `Success` / `Failed(code)` to branch on
-/// the process outcome.
+/// Returned inside `ProcessOutput` by `wait`. Match on `Success` / `Failed(code)`
+/// to branch on the process outcome.
 pub type ExitStatus = enum {
     Success,
     Failed(Int),
+}
+
+/// The result of waiting for a child process to exit.
+///
+/// Returned by `wait`. Contains the exit status and any output that was
+/// buffered via `Stdio::Capture`.
+///
+///   - `status` — how the process terminated
+///   - `stdout` — `Some` when `stdout_mode == Capture`, otherwise `None`
+///   - `stderr` — `Some` when `stderr_mode == Capture`, otherwise `None`
+///
+/// Both `stdout` and `stderr` are `Tainted<String>` — they come from an
+/// external child process and are therefore untrusted.
+pub type ProcessOutput = struct {
+    status: ExitStatus,
+    stdout: Option<Tainted<String>>,
+    stderr: Option<Tainted<String>>,
 }
 
 // ── Process spawning ────────────────────────────────────────────────────────
 
 /// Spawn a child process running `cmd` with the given arguments.
 ///
+/// Both `cmd` and each element of `args` must be `Clean<String>` — callers
+/// must sanitize any externally-sourced paths or argument values before
+/// passing them to `spawn`. This prevents command injection from tainted
+/// sources (env vars, process output, user input).
+///
 /// `stdin_mode`, `stdout_mode`, and `stderr_mode` configure how each stream
 /// is connected (see `Stdio`). Returns a `Child` handle on success.
 ///
-/// Note: `spawn` itself is the capability entry point — it requires
-/// `! ProcessSpawn` because creating a new process is an observable
-/// side-effect. Subsequent reads/writes on the `Child` handle also
-/// require `! ProcessSpawn`.
+/// Note: `spawn` is the capability entry point — it requires `! ProcessSpawn`
+/// because creating a new process is an observable side-effect.
 ///
 /// Example:
 ///   let child = spawn("git", ["status"], Stdio::Inherit, Stdio::Capture, Stdio::Capture)?;
-///   let status = wait(child)?;
+///   let out = wait(child)?;
 pub fn spawn(
-    cmd: String,
-    args: List<String>,
+    cmd: Clean<String>,
+    args: List<Clean<String>>,
     stdin_mode: Stdio,
     stdout_mode: Stdio,
     stderr_mode: Stdio,
@@ -110,38 +144,52 @@ pub fn spawn(
 
 /// Write bytes to the child's stdin pipe.
 ///
-/// `handle` must have been obtained from a child spawned with `Stdio::Pipe`
-/// on stdin. Returns an error if the pipe is closed or broken.
+/// `handle` must have been obtained from `Child.stdin` when the child was
+/// spawned with `Stdio::Pipe` on stdin. Returns an error if the pipe is
+/// closed or broken.
 pub fn stdin_write(handle: ChildStdin, data: String) -> Result<Unit, String> ! ProcessSpawn { Err("") }
 
-/// Read all available output from the child's stdout pipe or capture buffer.
+/// Read available output from the child's stdout pipe.
+///
+/// `handle` must have been obtained from `Child.stdout` when the child was
+/// spawned with `Stdio::Pipe` on stdout. Reads whatever is currently
+/// available from the pipe. Call before `wait` for streaming reads.
 ///
 /// Returns Tainted<String> because process output is external (untrusted) data.
-/// For `Stdio::Capture` this reads the complete buffered output after `wait`.
-/// For `Stdio::Pipe` this reads whatever is currently available.
+/// For buffered output use `Stdio::Capture` and read `ProcessOutput.stdout` after `wait`.
 pub fn stdout_read(handle: ChildStdout) -> Result<Tainted<String>, String> ! ProcessSpawn { Err("") }
 
-/// Read all available output from the child's stderr pipe or capture buffer.
+/// Read available output from the child's stderr pipe.
+///
+/// `handle` must have been obtained from `Child.stderr` when the child was
+/// spawned with `Stdio::Pipe` on stderr. Call before `wait` for streaming reads.
 ///
 /// Returns Tainted<String> because process output is external (untrusted) data.
+/// For buffered output use `Stdio::Capture` and read `ProcessOutput.stderr` after `wait`.
 pub fn stderr_read(handle: ChildStderr) -> Result<Tainted<String>, String> ! ProcessSpawn { Err("") }
 
 // ── Process lifecycle ───────────────────────────────────────────────────────
 
-/// Wait for a child process to exit and return its exit status.
+/// Wait for a child process to exit and return its exit status and captured output.
 ///
-/// Blocks the calling thread until the child terminates. Closes the child's
-/// stdin pipe (if any) before waiting, so the child receives EOF on stdin.
+/// Consumes the `Child`. Blocks the calling thread until the child terminates.
+/// Closes the child's stdin pipe (if any) before waiting, so the child
+/// receives EOF on stdin.
 ///
-/// After `wait` returns, `stdout_read` and `stderr_read` on captured streams
-/// will return the complete output.
-pub fn wait(child: Child) -> Result<ExitStatus, String> ! ProcessSpawn { Err("") }
+/// Returns a `ProcessOutput` containing the exit status and any output
+/// buffered via `Stdio::Capture`. `ProcessOutput.stdout` and `.stderr` are
+/// `Some` when the corresponding mode was `Capture`, `None` otherwise.
+pub fn wait(child: Child) -> Result<ProcessOutput, String> ! ProcessSpawn { Err("") }
 
 /// Send SIGKILL to a child process (Unix) or call TerminateProcess (Windows).
 ///
+/// Returns the `Child` handle so it can be passed to `wait` for reaping:
+///
+///   let child = kill(child)?;
+///   let out = wait(child)?;
+///
 /// Returns an error if the process has already exited or the kill fails.
-/// The child should be `wait`ed after `kill` to reap the process entry.
-pub fn kill(child: Child) -> Result<Unit, String> ! ProcessSpawn { Err("") }
+pub fn kill(child: Child) -> Result<Child, String> ! ProcessSpawn { Err("") }
 
 // ── ExitStatus helpers (pure) ──────────────────────────────────────────────
 

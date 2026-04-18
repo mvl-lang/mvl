@@ -3570,3 +3570,94 @@ fn match_narrowing_expr_match_path_proven() {
         "Expr::Match should narrow n != 0 just like Stmt::Match, got: {errors:?}"
     );
 }
+
+// ── std.process / ! ProcessSpawn + std.env / ! Env effects (#45) ──────────
+
+/// The unix process lifecycle corpus (valid programs) MUST parse and check
+/// without serious errors (#45).
+#[test]
+fn unix_process_lifecycle_corpus_parses_and_checks() {
+    // GIVEN: the unix corpus (valid programs using std.process, std.env, #45)
+    // THEN: no serious type errors; UndefinedFunction/UndefinedType for stdlib
+    //       symbols are expected when stdlib is not loaded in unit tests
+    let src = include_str!("corpus/01_basics/unix.mvl");
+    let result = check_src(src);
+    let serious: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            !matches!(
+                e,
+                CheckError::UndefinedFunction { .. }
+                    | CheckError::UndefinedVariable { .. }
+                    | CheckError::UndefinedType { .. }
+            )
+        })
+        .collect();
+    assert!(
+        serious.is_empty(),
+        "unix process lifecycle corpus should have no serious errors, got: {serious:?}"
+    );
+}
+
+/// A pure function calling a `! ProcessSpawn` function MUST be rejected (#45).
+#[test]
+fn pure_function_calling_process_spawn_rejected() {
+    // GIVEN: fn spawns ! ProcessSpawn; fn caller (no effects) calls spawns
+    // THEN: UndeclaredEffect reported
+    let src = r#"
+        fn spawns() -> Result<Unit, String> ! ProcessSpawn { Err("") }
+        fn caller() -> Result<Unit, String> { spawns() }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            CheckError::UndeclaredEffect { callee, effect, .. }
+            if callee == "spawns" && effect == "ProcessSpawn"
+        )),
+        "expected UndeclaredEffect(spawns, ProcessSpawn), got: {errors:?}"
+    );
+}
+
+/// A caller with `! Env` but not `! ProcessSpawn` calling a `! ProcessSpawn`
+/// function MUST report MissingEffect (#45).
+#[test]
+fn caller_missing_process_spawn_effect_rejected() {
+    // GIVEN: fn spawns ! ProcessSpawn; fn caller ! Env calls spawns
+    // THEN: MissingEffect(spawns, ProcessSpawn) reported
+    let src = r#"
+        fn spawns() -> Result<Unit, String> ! ProcessSpawn { Err("") }
+        fn caller() -> Result<Unit, String> ! Env { spawns() }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            CheckError::MissingEffect { callee, effect, .. }
+            if callee == "spawns" && effect == "ProcessSpawn"
+        )),
+        "expected MissingEffect(spawns, ProcessSpawn), got: {errors:?}"
+    );
+}
+
+/// A caller with `! ProcessSpawn` but not `! Env` calling a `! Env` function
+/// MUST report MissingEffect (#45).
+#[test]
+fn caller_missing_env_effect_rejected() {
+    // GIVEN: fn reads_env ! Env; fn caller ! ProcessSpawn calls reads_env
+    // THEN: MissingEffect(reads_env, Env) reported
+    let src = r#"
+        fn reads_env() -> Unit ! Env { }
+        fn caller() -> Unit ! ProcessSpawn { reads_env() }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            CheckError::MissingEffect { callee, effect, .. }
+            if callee == "reads_env" && effect == "Env"
+        )),
+        "expected MissingEffect(reads_env, Env), got: {errors:?}"
+    );
+}
