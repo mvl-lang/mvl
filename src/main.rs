@@ -90,6 +90,15 @@ fn main() {
             let coverage = args.iter().any(|a| a == "--coverage");
             cmd_test(&path, quiet, verbose, coverage);
         }
+        "mutate" => {
+            let path = require_path_arg(&args, "mutate");
+            let quiet = args.iter().any(|a| a == "--quiet" || a == "-q");
+            let limit: Option<usize> = args
+                .windows(2)
+                .find(|w| w[0] == "--limit")
+                .and_then(|w| w[1].parse().ok());
+            cmd_mutate(&path, quiet, limit);
+        }
         "lint" => {
             let path = require_path_arg(&args, "lint");
             let show_config = args.iter().any(|a| a == "--show-config");
@@ -143,6 +152,11 @@ fn print_usage() {
     eprintln!("  mvl test  <file|dir> --verbose     — show transpile path and all test names with captured stdout");
     eprintln!(
         "  mvl test  <file|dir> --coverage    — run with native behavioral branch coverage report"
+    );
+    eprintln!("  mvl mutate <file|dir>               — behavioral mutation testing (ADR-0014)");
+    eprintln!("  mvl mutate <file|dir> -q            — quiet: only show mutation score");
+    eprintln!(
+        "  mvl mutate <file|dir> --limit N     — take the first N mutants (faster, approximate score)"
     );
     eprintln!("  mvl lint  <file|dir>               — check style rules");
     eprintln!("  mvl lint  <file|dir> --show-config — show active linter configuration");
@@ -1129,6 +1143,324 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool) {
     }
 }
 
+/// Native behavioral mutation testing (ADR-0014).
+///
+/// Execution model: single compile embeds all mutants behind `MVL_MUTANT` env-var
+/// dispatch; N parallel test-binary runs determine which mutants are killed.
+fn cmd_mutate(path: &str, quiet: bool, limit: Option<usize>) {
+    let test_files = mvl_files(path, true);
+    if test_files.is_empty() {
+        eprintln!("No *_test.mvl files found at: {path}");
+        process::exit(1);
+    }
+
+    // Duplicate module name check (same as cmd_test)
+    let mut seen: std::collections::HashMap<String, PathBuf> = std::collections::HashMap::new();
+    for test_file in &test_files {
+        let file_str = test_file.display().to_string();
+        let s = stem(&file_str);
+        let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
+        if let Some(prev) = seen.get(&module_name) {
+            eprintln!(
+                "error: duplicate test module name `{module_name}` from:\n  {}\n  {}",
+                prev.display(),
+                test_file.display()
+            );
+            process::exit(1);
+        }
+        seen.insert(module_name, test_file.clone());
+    }
+
+    let crate_name = "mvl_mutate";
+    let tmp_dir = std::env::temp_dir().join(format!("mvl_mutate_{}", process::id()));
+    let src_dir = tmp_dir.join("src");
+
+    if tmp_dir.exists() {
+        fs::remove_dir_all(&tmp_dir).unwrap_or_else(|e| {
+            eprintln!("Cannot clean temp dir {}: {e}", tmp_dir.display());
+            process::exit(1);
+        });
+    }
+    fs::create_dir_all(&src_dir).unwrap_or_else(|e| {
+        eprintln!("Cannot create temp dir {}: {e}", src_dir.display());
+        process::exit(1);
+    });
+
+    // Load stdlib prelude
+    let prelude_content = stdlib::stdlib_content("core.mvl")
+        .expect("core.mvl is embedded at compile time and must be present");
+    let (mut prelude_parser, _) = Parser::new(prelude_content);
+    let prelude_prog = prelude_parser.parse_program();
+    let stdlib_prelude_progs = vec![prelude_prog];
+
+    // Transpile all test files with mutation instrumentation
+    let mut modules: Vec<(String, String, String)> = Vec::new();
+    let mut all_mutants: Vec<transpiler::MutantInfo> = Vec::new();
+    let mut file_stems: Vec<String> = Vec::new();
+    let mut need_mvl_runtime = false;
+
+    for test_file in &test_files {
+        let file_str = test_file.display().to_string();
+        let (prog, _src) = parse_or_exit(&file_str);
+        let s = stem(&file_str);
+        let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
+        let (out, mutants) = transpiler::transpile_mutated_with_prelude(
+            &prog,
+            &module_name,
+            &module_name,
+            &stdlib_prelude_progs,
+        );
+        if out.has_extern_rust || transpiler::has_std_imports(&prog) {
+            need_mvl_runtime = true;
+        }
+        all_mutants.extend(mutants);
+        file_stems.push(module_name.clone());
+        let module_content: String = out
+            .lib_rs
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("#![allow("))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        modules.push((module_name, file_str, module_content));
+    }
+
+    // Include source files with inline test fns
+    let covered_stems: std::collections::HashSet<String> = file_stems.iter().cloned().collect();
+    let source_files = mvl_files(path, false);
+    for src_file in &source_files {
+        let file_str = src_file.display().to_string();
+        let s = stem(&file_str);
+        let module_name = s.replace('-', "_");
+        if covered_stems.contains(&module_name) {
+            continue;
+        }
+        let (prog, _src) = parse_or_exit(&file_str);
+        let has_tests = prog
+            .declarations
+            .iter()
+            .any(|d| matches!(d, Decl::Fn(fd) if fd.is_test));
+        if !has_tests {
+            continue;
+        }
+        let (out, mutants) = transpiler::transpile_mutated_source_with_prelude(
+            &prog,
+            &module_name,
+            &module_name,
+            &stdlib_prelude_progs,
+        );
+        if out.has_extern_rust || transpiler::has_std_imports(&prog) {
+            need_mvl_runtime = true;
+        }
+        all_mutants.extend(mutants);
+        file_stems.push(module_name.clone());
+        let module_content: String = out
+            .lib_rs
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("#![allow("))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        modules.push((module_name, file_str, module_content));
+    }
+
+    if all_mutants.is_empty() {
+        println!("No mutation points found (no arithmetic/comparison/logic operators or Bool/Int literals in non-test code).");
+        return;
+    }
+
+    // Apply limit: take first N mutants
+    let all_mutants: Vec<transpiler::MutantInfo> = if let Some(n) = limit {
+        all_mutants.into_iter().take(n).collect()
+    } else {
+        all_mutants
+    };
+
+    if !quiet {
+        println!(
+            "Found {} test file(s), {} mutation point(s){}",
+            test_files.len(),
+            all_mutants.len(),
+            if limit.is_some() { " (limited)" } else { "" }
+        );
+    }
+
+    // Build combined lib.rs with all mutation dispatch wrappers embedded
+    let mut combined_rs = String::new();
+    combined_rs.push_str("// MVL mutation runner — generated by `mvl mutate`\n");
+    combined_rs.push_str("// Do not edit; regenerate with `mvl mutate`.\n");
+    combined_rs.push_str(
+        "#![allow(dead_code, unused_variables, unused_imports, unused_parens, unused_unsafe)]\n\n",
+    );
+    for (module_name, label, module_content) in &modules {
+        combined_rs.push_str(&format!("// === {label} ===\n"));
+        combined_rs.push_str("#[cfg(test)]\n");
+        combined_rs.push_str(&format!("mod {module_name} {{\n"));
+        combined_rs.push_str("    #[allow(unused)]\n");
+        combined_rs.push_str("    use super::*;\n");
+        combined_rs.push_str(module_content);
+        combined_rs.push_str("}\n\n");
+    }
+
+    // Write Cargo.toml
+    let mvl_runtime_dep = if need_mvl_runtime {
+        "mvl_runtime = { path = \"./mvl_runtime\" }  # MVL security labels and prelude\n"
+    } else {
+        ""
+    };
+    let cargo_toml = format!(
+        "[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n{mvl_runtime_dep}"
+    );
+    fs::write(tmp_dir.join("Cargo.toml"), &cargo_toml).unwrap_or_else(|e| {
+        eprintln!("Cannot write Cargo.toml: {e}");
+        process::exit(1);
+    });
+    if need_mvl_runtime {
+        let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mvl_runtime");
+        let runtime_dst = tmp_dir.join("mvl_runtime");
+        copy_dir_recursive(&runtime_src, &runtime_dst).unwrap_or_else(|e| {
+            eprintln!("error: cannot copy mvl_runtime: {e}");
+            process::exit(1);
+        });
+    }
+    fs::write(src_dir.join("lib.rs"), &combined_rs).unwrap_or_else(|e| {
+        eprintln!("Cannot write lib.rs: {e}");
+        process::exit(1);
+    });
+
+    // ── Phase 1: compile once ─────────────────────────────────────────────
+    if !quiet {
+        println!(
+            "Compiling mutant binary (one build for all {} mutants)…",
+            all_mutants.len()
+        );
+    }
+    let build_output = process::Command::new("cargo")
+        .args(["test", "--no-run", "--message-format=json"])
+        .current_dir(&tmp_dir)
+        .output()
+        .unwrap_or_else(|e| {
+            eprintln!("error: failed to run cargo: {e}");
+            process::exit(1);
+        });
+    if !build_output.status.success() {
+        eprintln!("error: cargo build failed for mutation crate");
+        eprintln!("{}", String::from_utf8_lossy(&build_output.stderr));
+        process::exit(1);
+    }
+
+    let binary_path =
+        find_test_binary_from_cargo_output(&build_output.stdout).unwrap_or_else(|| {
+            eprintln!("error: could not locate compiled test binary from cargo output");
+            process::exit(1);
+        });
+
+    // ── Phase 2: baseline run (no MVL_MUTANT) ────────────────────────────
+    let baseline = process::Command::new(&binary_path)
+        .env_remove("MVL_MUTANT") // guard against inherited env in CI
+        .args(["--quiet", "--test-threads=1"])
+        .stdout(process::Stdio::null())
+        .stderr(process::Stdio::null())
+        .status()
+        .unwrap_or_else(|e| {
+            eprintln!("error: failed to run baseline test: {e}");
+            process::exit(1);
+        });
+    if !baseline.success() {
+        eprintln!("error: baseline tests fail (without any mutation) — fix tests before running mutation analysis");
+        process::exit(1);
+    }
+
+    // ── Phase 3: run all mutants in parallel ─────────────────────────────
+    let parallelism = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    let chunk_size = all_mutants.len().div_ceil(parallelism);
+
+    if !quiet {
+        println!(
+            "Running {} mutants across {} workers…",
+            all_mutants.len(),
+            parallelism
+        );
+    }
+
+    let killed_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut results: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = all_mutants
+            .chunks(chunk_size.max(1))
+            .map(|chunk| {
+                let bin = binary_path.clone();
+                let kc = std::sync::Arc::clone(&killed_count);
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|m| {
+                            let status = process::Command::new(&bin)
+                                .env("MVL_MUTANT", &m.id)
+                                .args(["--quiet", "--test-threads=1"])
+                                .stdout(process::Stdio::null())
+                                .stderr(process::Stdio::null())
+                                .status()
+                                .unwrap_or_else(|e| {
+                                    eprintln!("warning: failed to run mutant {}: {e}", m.id);
+                                    // treat as survived to avoid false-positives
+                                    process::ExitStatus::default()
+                                });
+                            let killed = !status.success();
+                            if killed {
+                                kc.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
+                            (m.id.clone(), killed)
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            for (id, killed) in handle.join().expect("mutant worker thread panicked") {
+                results.insert(id, killed);
+            }
+        }
+    });
+
+    // ── Report ────────────────────────────────────────────────────────────
+    let stems: Vec<&str> = file_stems.iter().map(|s| s.as_str()).collect();
+    if !quiet {
+        print!(
+            "{}",
+            transpiler::format_mutation_report(&all_mutants, &results, &stems)
+        );
+    } else {
+        let total = all_mutants.len();
+        let killed = killed_count.load(std::sync::atomic::Ordering::Relaxed);
+        let pct = (killed * 100).checked_div(total).unwrap_or(100);
+        println!("Mutation score: {killed}/{total} ({pct}%)");
+    }
+}
+
+/// Extract the test binary path from `cargo test --no-run --message-format=json` stdout.
+fn find_test_binary_from_cargo_output(output: &[u8]) -> Option<std::path::PathBuf> {
+    let text = String::from_utf8_lossy(output);
+    for line in text.lines() {
+        if line.contains(r#""compiler-artifact""#) && line.contains(r#""executable""#) {
+            // Find `"executable":"<path>"` — Cargo JSON uses no spaces around `:`.
+            if let Some(pos) = line.find(r#""executable":""#) {
+                let rest = &line[pos + 14..]; // skip `"executable":"`
+                if let Some(end) = rest.find('"') {
+                    // Unescape backslash sequences on Windows paths
+                    let raw = rest[..end].replace("\\\\", "\\");
+                    return Some(std::path::PathBuf::from(raw));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Emit an assurance report for a file or directory.
 fn cmd_assurance(path: &str, json: bool, verbose: bool) {
     let stdlib_dir = stdlib::ensure_stdlib();
@@ -1924,5 +2256,62 @@ mod bridge_inject_tests {
             1,
             "mod bridge; duplicated"
         );
+    }
+}
+
+// ── find_test_binary_from_cargo_output unit tests ──────────────────────────
+
+#[cfg(test)]
+mod find_test_binary_tests {
+    use super::find_test_binary_from_cargo_output;
+
+    fn cargo_artifact_line(executable: &str) -> String {
+        format!(
+            r#"{{"reason":"compiler-artifact","package_id":"mvl_mutate 0.1.0","executable":"{executable}","features":[]}}"#
+        )
+    }
+
+    #[test]
+    fn happy_path_returns_path() {
+        let line = cargo_artifact_line("/tmp/mvl_mutate/target/debug/mvl_mutate-abc123");
+        let out = find_test_binary_from_cargo_output(line.as_bytes());
+        assert_eq!(
+            out.unwrap().to_str().unwrap(),
+            "/tmp/mvl_mutate/target/debug/mvl_mutate-abc123"
+        );
+    }
+
+    #[test]
+    fn no_matching_line_returns_none() {
+        let line = r#"{"reason":"build-script-executed","package_id":"foo"}"#;
+        assert!(find_test_binary_from_cargo_output(line.as_bytes()).is_none());
+    }
+
+    #[test]
+    fn empty_input_returns_none() {
+        assert!(find_test_binary_from_cargo_output(b"").is_none());
+    }
+
+    #[test]
+    fn compiler_artifact_without_executable_string_returns_none() {
+        // executable field is null, not a string — no `"executable":"` substring
+        let line = r#"{"reason":"compiler-artifact","executable":null}"#;
+        assert!(find_test_binary_from_cargo_output(line.as_bytes()).is_none());
+    }
+
+    #[test]
+    fn first_matching_line_wins() {
+        let line1 = cargo_artifact_line("/tmp/first");
+        let line2 = cargo_artifact_line("/tmp/second");
+        let input = format!("{line1}\n{line2}\n");
+        let out = find_test_binary_from_cargo_output(input.as_bytes());
+        assert_eq!(out.unwrap().to_str().unwrap(), "/tmp/first");
+    }
+
+    #[test]
+    fn windows_backslash_unescaping() {
+        let line = cargo_artifact_line("C:\\\\tmp\\\\mvl\\\\test.exe");
+        let out = find_test_binary_from_cargo_output(line.as_bytes());
+        assert_eq!(out.unwrap().to_str().unwrap(), "C:\\tmp\\mvl\\test.exe");
     }
 }

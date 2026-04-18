@@ -29,6 +29,7 @@ pub mod emit_functions;
 pub mod emit_impls;
 pub mod emit_stmts;
 pub mod emit_types;
+pub mod mutation;
 
 use crate::mvl::parser::ast::{Decl, Program};
 use cargo::CargoOptions;
@@ -36,6 +37,7 @@ use codegen::Codegen;
 pub use coverage::{
     emit_cov_preamble, emit_cov_report_test, format_report, BranchInfo, CoverageMap,
 };
+pub use mutation::{format_mutation_report, MutantInfo, MutationMap};
 
 /// Output of a successful transpilation.
 pub struct TranspileOutput {
@@ -429,6 +431,100 @@ pub fn transpile_covered_source(
         has_extern_rust,
     };
     (out, branches)
+}
+
+// ── Mutation transpile variants ────────────────────────────────────────────
+
+/// Transpile a test [`Program`] with mutation instrumentation, prepending
+/// stdlib prelude functions.
+///
+/// `file_stem` identifies the source file in mutation reports.
+///
+/// Returns `(TranspileOutput, Vec<MutantInfo>)` — the output Rust source and
+/// all registered mutation variants.  The `MutationMap` encodes every
+/// mutation point as a match arm keyed by `MVL_MUTANT` env var.
+pub fn transpile_mutated_with_prelude(
+    prog: &Program,
+    crate_name: &str,
+    file_stem: &str,
+    prelude_progs: &[Program],
+) -> (TranspileOutput, Vec<MutantInfo>) {
+    let has_main = has_main_fn(prog);
+    let extern_count = count_extern_decls(prog);
+    let has_extern_rust = has_extern_rust_decls(prog);
+    let use_runtime = extern_count > 0 || has_std_imports(prog);
+
+    let mut cg = Codegen::new();
+    cg.mutation = Some(MutationMap::new());
+    cg.current_file = file_stem.to_string();
+    cg.emit_program_with_mods(prog, &[], prelude_progs);
+
+    let mutants = cg.mutation.take().map(|m| m.mutants).unwrap_or_default();
+    let lib_rs = cg.finish();
+
+    let opts = CargoOptions {
+        crate_name,
+        use_mvl_runtime: use_runtime,
+        extern_crates: Vec::new(),
+    };
+    let cargo_toml = if has_main {
+        cargo::emit_cargo_toml_binary_opts(&opts)
+    } else {
+        cargo::emit_cargo_toml_library_opts(&opts)
+    };
+    let out = TranspileOutput {
+        lib_rs,
+        cargo_toml,
+        has_main,
+        extern_count,
+        has_extern_rust,
+    };
+    (out, mutants)
+}
+
+/// Transpile a source [`Program`] (not a `*_test.mvl`) with mutation
+/// instrumentation for inclusion in the test crate.
+///
+/// Sets `test_extern_stubs = true` so `extern "rust"` blocks become `todo!()`
+/// stubs, allowing the test crate to link without the real external dependency.
+pub fn transpile_mutated_source_with_prelude(
+    prog: &Program,
+    crate_name: &str,
+    file_stem: &str,
+    prelude_progs: &[Program],
+) -> (TranspileOutput, Vec<MutantInfo>) {
+    let has_main = has_main_fn(prog);
+    let extern_count = count_extern_decls(prog);
+    let has_extern_rust = has_extern_rust_decls(prog);
+    let use_runtime = extern_count > 0 || has_std_imports(prog);
+
+    let mut cg = Codegen::new();
+    cg.mutation = Some(MutationMap::new());
+    cg.current_file = file_stem.to_string();
+    cg.test_extern_stubs = true;
+    cg.emit_program_with_mods(prog, &[], prelude_progs);
+
+    let mutants = cg.mutation.take().map(|m| m.mutants).unwrap_or_default();
+    let lib_rs = cg.finish();
+
+    let opts = CargoOptions {
+        crate_name,
+        use_mvl_runtime: use_runtime,
+        extern_crates: Vec::new(),
+    };
+    let cargo_toml = if has_main {
+        cargo::emit_cargo_toml_binary_opts(&opts)
+    } else {
+        cargo::emit_cargo_toml_library_opts(&opts)
+    };
+    let out = TranspileOutput {
+        lib_rs,
+        cargo_toml,
+        has_main,
+        extern_count,
+        has_extern_rust,
+    };
+    (out, mutants)
 }
 
 // ── has_extern_rust unit tests ─────────────────────────────────────────────
