@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.42.2] — 2026-04-18
+
+### Added
+
+- **Bitwise operations on Int and Byte** — `bit_and`, `bit_or`, `bit_xor`, `bit_not`, `shift_left`, `shift_right` methods on both `Int` (i64) and `Byte` (u8). `Byte` also gains `to_int()` (cast to i64) and `from_int(n: Int)` constructor (wrapping cast to u8). Transpiler emits Rust operators (`&`, `|`, `^`, `!`, `<<`, `>>`) with safe `wrapping_shl`/`wrapping_shr` to avoid out-of-range panics. Unblocks algorithm-level bit manipulation: CRC32, Huffman coding, checksums, binary protocols (#233).
+
 ## [0.42.1] — 2026-04-18
 
 ### Fixed
@@ -17,7 +23,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 ### Added
 
 - **Toolchain management commands** — `mvl self install/use/list/uninstall` for side-by-side compiler versions. Implements ADR-0009 Phase B (#221).
-
 ## [0.41.1] — 2026-04-18
 
 ### Fixed

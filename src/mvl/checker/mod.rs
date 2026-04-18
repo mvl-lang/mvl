@@ -1573,6 +1573,24 @@ impl TypeChecker {
                 "Some" => return Ty::Option(Box::new(first_arg)),
                 "Ok" => return Ty::Result(Box::new(first_arg), Box::new(Ty::Unknown)),
                 "Err" => return Ty::Result(Box::new(Ty::Unknown), Box::new(first_arg)),
+                // Byte constructor: from_int(n: Int) -> Byte  (wrapping cast)
+                "from_int" => {
+                    if arg_count != 1 {
+                        self.emit(CheckError::WrongArgCount {
+                            name: "from_int".to_string(),
+                            expected: 1,
+                            found: arg_count,
+                            span,
+                        });
+                    } else if !matches!(first_arg, Ty::Int) {
+                        self.emit(CheckError::TypeMismatch {
+                            expected: "Int".to_string(),
+                            found: first_arg.display(),
+                            span,
+                        });
+                    }
+                    return Ty::Byte;
+                }
                 // Box::new(x) wraps x in a heap-allocated Box<T> (for recursive ADTs)
                 "Box::new" => {
                     if arg_count != 1 {
@@ -1650,6 +1668,7 @@ impl TypeChecker {
         let base = recv_ty.unlabeled();
         let result = match base {
             Ty::Int => Self::int_method_ty(method),
+            Ty::Byte => Self::byte_method_ty(method),
             Ty::Float => Self::float_method_ty(method),
             Ty::String => Self::string_method_ty(method, arg_tys),
             Ty::List(elem_ty) => Self::list_method_ty(elem_ty.as_ref(), method, arg_tys),
@@ -1678,8 +1697,26 @@ impl TypeChecker {
             "to_string" => Ty::String,
             // Arithmetic
             "abs" | "pow" | "min" | "max" | "clamp" => Ty::Int,
+            // Bitwise
+            "bit_and" | "bit_or" | "bit_xor" | "bit_not" | "shift_left" | "shift_right" => Ty::Int,
             // Predicates
             "is_positive" | "is_negative" | "is_zero" => Ty::Bool,
+            _ => Ty::Unknown,
+        }
+    }
+
+    /// Return type for methods on `Byte`.
+    fn byte_method_ty(method: &str) -> Ty {
+        match method {
+            // Conversion
+            "to_int" => Ty::Int,
+            "to_string" => Ty::String,
+            // Bitwise (same set as Int)
+            "bit_and" | "bit_or" | "bit_xor" | "bit_not" | "shift_left" | "shift_right" => Ty::Byte,
+            // Arithmetic — Rust's u8 exposes these natively; the transpiler's
+            // generic method-call fallthrough emits `receiver.wrapping_add(arg)`
+            // which is valid Rust.  No dedicated emit arm is required.
+            "wrapping_add" | "wrapping_sub" | "wrapping_mul" => Ty::Byte,
             _ => Ty::Unknown,
         }
     }
