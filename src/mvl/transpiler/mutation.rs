@@ -221,3 +221,181 @@ pub fn format_mutation_report(
     out.push_str(&format!("Behavioral mutation score: {grand_pct}%\n"));
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    // ── mutations_for_int_literal ──────────────────────────────────────────
+
+    #[test]
+    fn int_literal_zero_excludes_self() {
+        let alts = mutations_for_int_literal(0);
+        assert!(!alts.contains(&0), "original must be excluded");
+        assert!(alts.contains(&1));
+        assert!(alts.contains(&-1));
+    }
+
+    #[test]
+    fn int_literal_one_excludes_self_and_deduplicates() {
+        let alts = mutations_for_int_literal(1);
+        assert!(!alts.contains(&1), "original must be excluded");
+        // 1-1=0 and the constant 0 both appear; BTreeSet deduplicates
+        assert_eq!(alts.iter().filter(|&&v| v == 0).count(), 1);
+        assert!(alts.contains(&-1));
+        assert!(alts.contains(&2)); // original+1
+    }
+
+    #[test]
+    fn int_literal_minus_one_deduplicates() {
+        let alts = mutations_for_int_literal(-1);
+        assert!(!alts.contains(&-1));
+        assert_eq!(alts.iter().filter(|&&v| v == 0).count(), 1); // -1+1=0 deduped
+        assert!(alts.contains(&1));
+        assert!(alts.contains(&-2)); // original-1
+    }
+
+    #[test]
+    fn int_literal_large_value() {
+        let alts = mutations_for_int_literal(100);
+        assert!(!alts.contains(&100));
+        assert!(alts.contains(&99));
+        assert!(alts.contains(&101));
+        assert!(alts.contains(&0));
+        assert!(alts.contains(&1));
+        assert!(alts.contains(&-1));
+    }
+
+    #[test]
+    fn int_literal_i64_max_saturates() {
+        let alts = mutations_for_int_literal(i64::MAX);
+        assert!(!alts.contains(&i64::MAX));
+        // saturating_add(1) == MAX (excluded), saturating_sub(1) == MAX-1
+        assert!(alts.contains(&(i64::MAX - 1)));
+    }
+
+    #[test]
+    fn int_literal_i64_min_saturates() {
+        let alts = mutations_for_int_literal(i64::MIN);
+        assert!(!alts.contains(&i64::MIN));
+        assert!(alts.contains(&(i64::MIN + 1)));
+    }
+
+    #[test]
+    fn int_literal_result_is_sorted_ascending() {
+        let alts = mutations_for_int_literal(5);
+        let sorted = {
+            let mut v = alts.clone();
+            v.sort();
+            v
+        };
+        assert_eq!(alts, sorted, "BTreeSet iteration must be ascending");
+    }
+
+    // ── MutationMap ───────────────────────────────────────────────────────
+
+    #[test]
+    fn mutation_map_empty_on_new() {
+        let m = MutationMap::new();
+        assert!(m.is_empty());
+        assert_eq!(m.len(), 0);
+    }
+
+    #[test]
+    fn mutation_map_default_equals_new() {
+        let a = MutationMap::new();
+        let b = MutationMap::default();
+        assert_eq!(a.len(), b.len());
+    }
+
+    #[test]
+    fn mutation_map_alloc_sequential_ids() {
+        let mut m = MutationMap::new();
+        let id0 = m.alloc("f".into(), "file".into(), 1, "d0".into());
+        let id1 = m.alloc("f".into(), "file".into(), 2, "d1".into());
+        let id2 = m.alloc("f".into(), "file".into(), 3, "d2".into());
+        assert_eq!(id0, "m0");
+        assert_eq!(id1, "m1");
+        assert_eq!(id2, "m2");
+        assert_eq!(m.len(), 3);
+        assert!(!m.is_empty());
+    }
+
+    #[test]
+    fn mutation_map_alloc_stores_metadata() {
+        let mut m = MutationMap::new();
+        m.alloc("my_fn".into(), "my_file".into(), 42, "desc".into());
+        let info = &m.mutants[0];
+        assert_eq!(info.id, "m0");
+        assert_eq!(info.fn_name, "my_fn");
+        assert_eq!(info.file, "my_file");
+        assert_eq!(info.line, 42);
+        assert_eq!(info.description, "desc");
+    }
+
+    // ── format_mutation_report ────────────────────────────────────────────
+
+    fn make_mutant(id: &str, file: &str, fn_name: &str, line: u32, desc: &str) -> MutantInfo {
+        MutantInfo {
+            id: id.to_string(),
+            fn_name: fn_name.to_string(),
+            file: file.to_string(),
+            line,
+            description: desc.to_string(),
+        }
+    }
+
+    #[test]
+    fn report_all_killed() {
+        let mutants = vec![make_mutant("m0", "math", "add", 10, "+ → -")];
+        let results: HashMap<String, bool> = [("m0".to_string(), true)].into();
+        let report = format_mutation_report(&mutants, &results, &["math"]);
+        assert!(report.contains("✓"));
+        assert!(report.contains("killed"));
+        assert!(report.contains("1/1"));
+        assert!(report.contains("100%"));
+    }
+
+    #[test]
+    fn report_all_survived() {
+        let mutants = vec![make_mutant("m0", "math", "add", 10, "+ → -")];
+        let results: HashMap<String, bool> = [("m0".to_string(), false)].into();
+        let report = format_mutation_report(&mutants, &results, &["math"]);
+        assert!(report.contains("△"));
+        assert!(report.contains("survived"));
+        assert!(report.contains("0/1"));
+        assert!(report.contains("0%"));
+    }
+
+    #[test]
+    fn report_missing_result_treated_as_survived() {
+        let mutants = vec![make_mutant("m0", "math", "add", 10, "+ → -")];
+        let results: HashMap<String, bool> = HashMap::new(); // no entry for m0
+        let report = format_mutation_report(&mutants, &results, &["math"]);
+        assert!(report.contains("0/1"));
+    }
+
+    #[test]
+    fn report_file_with_no_mutation_points() {
+        let mutants: Vec<MutantInfo> = vec![];
+        let results: HashMap<String, bool> = HashMap::new();
+        let report = format_mutation_report(&mutants, &results, &["empty_file"]);
+        assert!(report.contains("no mutation points"));
+        // Grand total: 0/0 → checked_div returns unwrap_or(100) = 100%
+        assert!(report.contains("100%"));
+    }
+
+    #[test]
+    fn report_mixed_kill_survive() {
+        let mutants = vec![
+            make_mutant("m0", "math", "add", 10, "+ → -"),
+            make_mutant("m1", "math", "add", 10, "+ → *"),
+        ];
+        let results: HashMap<String, bool> =
+            [("m0".to_string(), true), ("m1".to_string(), false)].into();
+        let report = format_mutation_report(&mutants, &results, &["math"]);
+        assert!(report.contains("1/2"));
+        assert!(report.contains("50%"));
+    }
+}

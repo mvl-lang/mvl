@@ -156,7 +156,7 @@ fn print_usage() {
     eprintln!("  mvl mutate <file|dir>               — behavioral mutation testing (ADR-0014)");
     eprintln!("  mvl mutate <file|dir> -q            — quiet: only show mutation score");
     eprintln!(
-        "  mvl mutate <file|dir> --limit N     — sample N mutants (faster, approximate score)"
+        "  mvl mutate <file|dir> --limit N     — take the first N mutants (faster, approximate score)"
     );
     eprintln!("  mvl lint  <file|dir>               — check style rules");
     eprintln!("  mvl lint  <file|dir> --show-config — show active linter configuration");
@@ -1269,14 +1269,12 @@ fn cmd_mutate(path: &str, quiet: bool, limit: Option<usize>) {
         return;
     }
 
-    // Apply limit: take first N mutants and filter referenced mutant IDs
+    // Apply limit: take first N mutants
     let all_mutants: Vec<transpiler::MutantInfo> = if let Some(n) = limit {
         all_mutants.into_iter().take(n).collect()
     } else {
         all_mutants
     };
-    let active_ids: std::collections::HashSet<String> =
-        all_mutants.iter().map(|m| m.id.clone()).collect();
 
     if !quiet {
         println!(
@@ -1359,6 +1357,7 @@ fn cmd_mutate(path: &str, quiet: bool, limit: Option<usize>) {
 
     // ── Phase 2: baseline run (no MVL_MUTANT) ────────────────────────────
     let baseline = process::Command::new(&binary_path)
+        .env_remove("MVL_MUTANT") // guard against inherited env in CI
         .args(["--quiet", "--test-threads=1"])
         .stdout(process::Stdio::null())
         .stderr(process::Stdio::null())
@@ -1376,7 +1375,7 @@ fn cmd_mutate(path: &str, quiet: bool, limit: Option<usize>) {
     let parallelism = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
-    let chunk_size = (all_mutants.len() + parallelism - 1).max(1) / parallelism;
+    let chunk_size = all_mutants.len().div_ceil(parallelism);
 
     if !quiet {
         println!(
@@ -1395,11 +1394,9 @@ fn cmd_mutate(path: &str, quiet: bool, limit: Option<usize>) {
             .map(|chunk| {
                 let bin = binary_path.clone();
                 let kc = std::sync::Arc::clone(&killed_count);
-                let active_ids = &active_ids;
                 scope.spawn(move || {
                     chunk
                         .iter()
-                        .filter(|m| active_ids.contains(&m.id))
                         .map(|m| {
                             let status = process::Command::new(&bin)
                                 .env("MVL_MUTANT", &m.id)
@@ -1424,7 +1421,7 @@ fn cmd_mutate(path: &str, quiet: bool, limit: Option<usize>) {
             .collect();
 
         for handle in handles {
-            for (id, killed) in handle.join().unwrap_or_default() {
+            for (id, killed) in handle.join().expect("mutant worker thread panicked") {
                 results.insert(id, killed);
             }
         }
@@ -2259,5 +2256,62 @@ mod bridge_inject_tests {
             1,
             "mod bridge; duplicated"
         );
+    }
+}
+
+// ── find_test_binary_from_cargo_output unit tests ──────────────────────────
+
+#[cfg(test)]
+mod find_test_binary_tests {
+    use super::find_test_binary_from_cargo_output;
+
+    fn cargo_artifact_line(executable: &str) -> String {
+        format!(
+            r#"{{"reason":"compiler-artifact","package_id":"mvl_mutate 0.1.0","executable":"{executable}","features":[]}}"#
+        )
+    }
+
+    #[test]
+    fn happy_path_returns_path() {
+        let line = cargo_artifact_line("/tmp/mvl_mutate/target/debug/mvl_mutate-abc123");
+        let out = find_test_binary_from_cargo_output(line.as_bytes());
+        assert_eq!(
+            out.unwrap().to_str().unwrap(),
+            "/tmp/mvl_mutate/target/debug/mvl_mutate-abc123"
+        );
+    }
+
+    #[test]
+    fn no_matching_line_returns_none() {
+        let line = r#"{"reason":"build-script-executed","package_id":"foo"}"#;
+        assert!(find_test_binary_from_cargo_output(line.as_bytes()).is_none());
+    }
+
+    #[test]
+    fn empty_input_returns_none() {
+        assert!(find_test_binary_from_cargo_output(b"").is_none());
+    }
+
+    #[test]
+    fn compiler_artifact_without_executable_string_returns_none() {
+        // executable field is null, not a string — no `"executable":"` substring
+        let line = r#"{"reason":"compiler-artifact","executable":null}"#;
+        assert!(find_test_binary_from_cargo_output(line.as_bytes()).is_none());
+    }
+
+    #[test]
+    fn first_matching_line_wins() {
+        let line1 = cargo_artifact_line("/tmp/first");
+        let line2 = cargo_artifact_line("/tmp/second");
+        let input = format!("{line1}\n{line2}\n");
+        let out = find_test_binary_from_cargo_output(input.as_bytes());
+        assert_eq!(out.unwrap().to_str().unwrap(), "/tmp/first");
+    }
+
+    #[test]
+    fn windows_backslash_unescaping() {
+        let line = cargo_artifact_line("C:\\\\tmp\\\\mvl\\\\test.exe");
+        let out = find_test_binary_from_cargo_output(line.as_bytes());
+        assert_eq!(out.unwrap().to_str().unwrap(), "C:\\tmp\\mvl\\test.exe");
     }
 }
