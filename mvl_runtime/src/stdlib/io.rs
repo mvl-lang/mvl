@@ -30,6 +30,26 @@ pub fn path(s: String) -> Path {
     Path { inner: s }
 }
 
+/// Append a path segment to a base path, inserting the platform separator.
+///
+/// Pure — no filesystem access.
+/// Implements the Rust backing for `std/io.mvl::join`.
+pub fn join(base: Path, segment: String) -> Path {
+    let mut p = std::path::PathBuf::from(&base.inner);
+    p.push(&segment);
+    Path {
+        inner: p.to_string_lossy().into_owned(),
+    }
+}
+
+/// Return the string representation of a path.
+///
+/// Pure — no filesystem access.
+/// Implements the Rust backing for `std/io.mvl::to_string`.
+pub fn to_string(p: Path) -> String {
+    p.inner
+}
+
 /// Read the entire contents of a file into a string.
 ///
 /// Returns `Ok(Tainted<String>)` on success (file contents are external input).

@@ -28,6 +28,10 @@ pub struct FileRead;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FileWrite;
 
+/// Marks a function that may delete files or directories from the filesystem.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FileDelete;
+
 /// Marks a function that may perform network I/O.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Net;
