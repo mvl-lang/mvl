@@ -23,6 +23,8 @@ pub const STDLIB_FILES: &[(&str, &str)] = &[
     ("crypto.mvl", include_str!("../../../std/crypto.mvl")),
     ("log.mvl", include_str!("../../../std/log.mvl")),
     ("tui.mvl", include_str!("../../../std/tui.mvl")),
+    ("process.mvl", include_str!("../../../std/process.mvl")),
+    ("env.mvl", include_str!("../../../std/env.mvl")),
 ];
 
 /// The stdlib version — tied to the compiler version so they stay in sync.

@@ -556,6 +556,31 @@ fn core_types_demo_runs_and_produces_expected_output() {
     );
 }
 
+// ── unix.mvl — Unix process lifecycle and environment (#45) ───────────────
+
+fn corpus_basics(name: &str) -> String {
+    format!(
+        "{}/tests/corpus/01_basics/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+/// Issue #45: process.spawn/wait/kill, env.get/set/all, signal_on.
+/// Validates that the process and env stdlib modules are accepted by the
+/// type-checker with correct effect annotations and Tainted labels.
+#[test]
+fn unix_process_lifecycle_check_passes() {
+    let out = Command::new(mvl_bin())
+        .args(["check", &corpus_basics("unix.mvl")])
+        .output()
+        .expect("failed to run mvl check");
+    assert!(
+        out.status.success(),
+        "unix: mvl check failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 // ── println_non_string_first_arg.mvl (regression #198) ────────────────────
 
 /// Regression for #198: println with a non-string first arg must generate
