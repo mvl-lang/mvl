@@ -290,10 +290,16 @@ impl Codegen {
             self.line(
                 "// ── stdlib prelude (transpiled from MVL source) ──────────────────────────",
             );
+            // Suspend coverage and mutation tracking for prelude functions — they are
+            // shared stdlib code and must not be attributed to the current module's file.
+            let saved_coverage = self.coverage.take();
+            let saved_mutation = self.mutation.take();
             for fd in prelude_fns {
                 emit_fn_decl(self, fd);
                 self.blank();
             }
+            self.coverage = saved_coverage;
+            self.mutation = saved_mutation;
         }
 
         // Emit placeholder structs for external types referenced but not defined

@@ -6,6 +6,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.46.0] — 2026-04-18
+
+### Added
+
+- **LL(1) compliant generic function call syntax** — `parse[CliArgs]()` using square brackets instead of angle brackets. Single-token lookahead: `[` after identifier unambiguously means generic type argument (list literals only appear at statement-start). Removes multi-token lookahead hack that violated ADR-0005. Follows Go 1.18 and Scala precedent. Parser now populates `FnCall.type_args` field; 3 new unit tests covering generic calls and list literal regression.
+
+### Fixed
+
+- **Transpiler support for tainted string fields** — `is_parseable_field_type()` and `emit_field_parse()` now handle `Tainted<String>` and `Option<Tainted<String>>` in struct fields for `ParseFromArgs` implementations. CLI arguments retain IFC labels through struct parsing, enabling sanitization in client code.
+
+- **Test inline discovery for source files** — Source files included in the test crate via inline-test discovery (e.g. `main.mvl` with `test fn` declarations) were transpiled with `transpile_with_prelude`, leaving `test_extern_stubs = false`. This caused cross-module `use` declarations to emit as `use crate::parser::...` which failed to resolve in the test crate. Fix: use `transpile_source_with_prelude` (with `test_extern_stubs = true`) for non-coverage source file inline test inclusion, mirroring the coverage path.
+
+- **Coverage instrumentation of prelude functions** — Prelude functions (e.g. `range` from `core.mvl`) were being coverage-instrumented while `current_file` was set to the module being transpiled, causing their branches to appear in user-module coverage reports as uncovered. Fix: suspend coverage maps around prelude emission so prelude functions' branch coverage is not attributed to individual modules.
+
 ## [0.45.0] — 2026-04-18
 
 ### Added

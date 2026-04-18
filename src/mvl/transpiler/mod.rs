@@ -212,6 +212,46 @@ pub fn transpile_with_prelude(
     }
 }
 
+/// Transpile a source [`Program`] (not a `*_test.mvl`) with prelude, for inclusion
+/// in the test crate as an inline-test module.
+///
+/// Sets `test_extern_stubs = true` so `extern "rust"` blocks become `todo!()` stubs
+/// and cross-module `use` imports are suppressed — the sibling modules in the test
+/// crate come from `*_test.mvl` files and may not export the same items.
+pub fn transpile_source_with_prelude(
+    prog: &Program,
+    crate_name: &str,
+    prelude_progs: &[Program],
+) -> TranspileOutput {
+    let has_main = has_main_fn(prog);
+    let extern_count = count_extern_decls(prog);
+    let has_extern_rust = has_extern_rust_decls(prog);
+    let use_runtime = extern_count > 0 || has_std_imports(prog);
+
+    let mut cg = Codegen::new();
+    cg.test_extern_stubs = true;
+    cg.emit_program_with_mods(prog, &[], prelude_progs);
+    let lib_rs = cg.finish();
+
+    let opts = CargoOptions {
+        crate_name,
+        use_mvl_runtime: use_runtime,
+        extern_crates: Vec::new(),
+    };
+    let cargo_toml = if has_main {
+        cargo::emit_cargo_toml_binary_opts(&opts)
+    } else {
+        cargo::emit_cargo_toml_library_opts(&opts)
+    };
+    TranspileOutput {
+        lib_rs,
+        cargo_toml,
+        has_main,
+        extern_count,
+        has_extern_rust,
+    }
+}
+
 /// Transpile a parsed [`Program`] to Rust source.
 ///
 /// Always succeeds in Phase 1 — unknown constructs fall back to `todo!()`.

@@ -27,7 +27,7 @@ use utils::is_positive;
 
 // ── Standard library imports ────────────────────────────────────────────────
 
-use std.args.{get_arg}
+use std.args.{parse}
 use std.io.{read_file}
 
 // ── Trust boundary: domain-specific pipeline logic ──────────────────────────
@@ -49,30 +49,28 @@ type RunError = enum {
     PipelineFailed,
 }
 
-// ── Argument helpers (IFC: sanitize Tainted CLI input) ─────────────────────
+// ── CLI argument spec: the struct IS the spec (std.args.parse<T>, #55) ──────
+//
+// `file` is required — parse<CliArgs>() returns Err if --file is absent.
+// `level` is optional — absent flag → None.
 
-fn get_required_arg(name: Clean<String>) -> Result<Clean<String>, RunError> {
-    match get_arg(name) {
-        None    => Err(RunError::MissingArg),
-        Some(v) => Ok(sanitize(v)),
-    }
-}
-
-fn get_optional_arg(name: Clean<String>) -> Option<Clean<String>> {
-    match get_arg(name) {
-        None    => None,
-        Some(v) => Some(sanitize(v)),
-    }
+type CliArgs = struct {
+    file: Tainted<String>,
+    level: Option<Tainted<String>>,
 }
 
 // ── Main pipeline ───────────────────────────────────────────────────────────
 
 fn run() -> Result<Unit, RunError> ! FileRead, Console {
-    let arg_result = get_required_arg("file");
-    match arg_result {
-        Err(e) => Err(e),
-        Ok(file_path) => {
-            let level_opt = get_optional_arg("level");
+    let args_result = parse[CliArgs]();
+    match args_result {
+        Err(_) => Err(RunError::MissingArg),
+        Ok(args) => {
+            let file_path: Clean<String> = sanitize(args.file);
+            let level_opt: Option<Clean<String>> = match args.level {
+                None    => None,
+                Some(v) => Some(sanitize(v)),
+            };
             let file_result = read_file(file_path);
             match file_result {
                 Err(_) => Err(RunError::IOFailure),
@@ -118,4 +116,27 @@ test fn check_run_error_io_failure_variant() -> Unit {
         RunError::PipelineFailed => 0,
     };
     assert_eq(is_io, 1);
+}
+
+test fn check_cli_args_file_field() -> Unit {
+    let args = CliArgs { file: "logs.jsonl", level: None };
+    assert_eq(args.file, "logs.jsonl");
+}
+
+test fn check_cli_args_level_some() -> Unit {
+    let args = CliArgs { file: "logs.jsonl", level: Some("error") };
+    let has_level = match args.level {
+        Some(_) => 1,
+        None    => 0,
+    };
+    assert_eq(has_level, 1);
+}
+
+test fn check_cli_args_level_none() -> Unit {
+    let args = CliArgs { file: "logs.jsonl", level: None };
+    let has_level = match args.level {
+        Some(_) => 1,
+        None    => 0,
+    };
+    assert_eq(has_level, 0);
 }

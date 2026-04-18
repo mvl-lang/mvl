@@ -965,7 +965,11 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool) {
             )
         } else {
             (
-                transpiler::transpile_with_prelude(&prog, &module_name, &stdlib_prelude_progs),
+                transpiler::transpile_source_with_prelude(
+                    &prog,
+                    &module_name,
+                    &stdlib_prelude_progs,
+                ),
                 Vec::new(),
             )
         };
