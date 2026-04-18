@@ -31,7 +31,7 @@ fn main() {
     // project pin.  Keep this list in sync with the `match cmd.as_str()` arm below.
     let is_toolchain_meta = matches!(
         cmd.as_str(),
-        "self" | "--version" | "-V" | "version" | "--help" | "-h" | "help" | "init"
+        "self" | "--version" | "-V" | "version" | "--help" | "-h" | "help" | "init" | "pin"
     );
 
     if !is_toolchain_meta {
@@ -129,6 +129,11 @@ fn main() {
             let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             packages::cmd_update(&project_root);
         }
+        "pin" => {
+            let version_arg = args.get(2).map(|s| s.as_str());
+            let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            toolchain::cmd_pin(version_arg, &project_root);
+        }
         other => {
             eprintln!("Unknown command: {other}");
             print_usage();
@@ -172,6 +177,7 @@ fn print_usage() {
     eprintln!("  mvl add <pkg-id> [<tag>]           — fetch package, add to mvl.toml + mvl.lock");
     eprintln!("  mvl install                        — fetch all deps from mvl.lock, verify hashes");
     eprintln!("  mvl update                         — re-resolve versions, update mvl.lock");
+    eprintln!("  mvl pin [<version>]                — pin project to compiler version (writes .mvl-version)");
 }
 
 fn cmd_self(args: &[String]) {

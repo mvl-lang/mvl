@@ -22,7 +22,7 @@
 pub mod resolve;
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 
 // ── Path helpers ─────────────────────────────────────────────────────────────
@@ -110,6 +110,35 @@ pub fn validate_version(version: &str) -> bool {
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────
+
+/// `mvl pin [<version>]` — write `.mvl-version` to pin the project compiler version.
+///
+/// With no argument, pins to the current compiler version (`CARGO_PKG_VERSION`).
+/// With an explicit version, validates and writes that version.
+///
+/// Phase D (ADR-0009): project-level version pinning.
+pub fn cmd_pin(version_arg: Option<&str>, project_root: &Path) {
+    let version = match version_arg {
+        Some(v) => v.to_string(),
+        None => env!("CARGO_PKG_VERSION").to_string(),
+    };
+
+    if !validate_version(&version) {
+        eprintln!("error: invalid version '{version}' — expected MAJOR.MINOR.PATCH (e.g. 0.34.0)");
+        process::exit(1);
+    }
+
+    let version_file = project_root.join(".mvl-version");
+    fs::write(&version_file, format!("{version}\n")).unwrap_or_else(|e| {
+        eprintln!("error: cannot write {}: {e}", version_file.display());
+        process::exit(1);
+    });
+
+    println!(
+        "Pinned project to mvl {version}  ({})",
+        version_file.display()
+    );
+}
 
 /// `mvl self install <version>` — download release binary and create symlinks.
 ///
@@ -424,4 +453,37 @@ fn active_symlink_target() -> Option<String> {
     fs::canonicalize(active_symlink())
         .ok()
         .map(|p| p.to_string_lossy().into_owned())
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cmd_pin_writes_explicit_version() {
+        let dir = tempfile::tempdir().unwrap();
+        cmd_pin(Some("0.34.0"), dir.path());
+        let content = fs::read_to_string(dir.path().join(".mvl-version")).unwrap();
+        assert_eq!(content, "0.34.0\n");
+    }
+
+    #[test]
+    fn cmd_pin_no_arg_uses_current_version() {
+        let dir = tempfile::tempdir().unwrap();
+        cmd_pin(None, dir.path());
+        let content = fs::read_to_string(dir.path().join(".mvl-version")).unwrap();
+        assert_eq!(content, format!("{}\n", env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn cmd_pin_file_is_picked_up_by_resolver() {
+        let dir = tempfile::tempdir().unwrap();
+        cmd_pin(Some("0.20.0"), dir.path());
+        assert_eq!(
+            resolve::find_project_mvl_version(dir.path()),
+            Some("0.20.0".to_owned())
+        );
+    }
 }

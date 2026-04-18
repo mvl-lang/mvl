@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.47.0] — 2026-04-18
+
+### Added
+
+- **`mvl pin [<version>]` — project version pinning (ADR-0009 Phase D)** — `mvl pin 0.34.0` writes a `.mvl-version` file to the project root, pinning the project to that compiler version. `mvl pin` (no argument) pins to the current compiler version. The file is picked up by the Phase C version resolution chain, so subsequent `mvl` invocations in the project directory automatically re-exec the pinned binary (#223).
+
 ## [0.46.0] — 2026-04-18
 
 ### Added
