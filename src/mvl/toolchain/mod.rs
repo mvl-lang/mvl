@@ -128,6 +128,14 @@ pub fn cmd_pin(version_arg: Option<&str>, project_root: &Path) {
         process::exit(1);
     }
 
+    let installed: Vec<String> = installed_versions().into_iter().map(|(v, _)| v).collect();
+    if !installed.is_empty() && !installed.contains(&version) {
+        eprintln!(
+            "warning: mvl {version} is not installed — \
+             run `mvl self install {version}` before using this project"
+        );
+    }
+
     let version_file = project_root.join(".mvl-version");
     fs::write(&version_file, format!("{version}\n")).unwrap_or_else(|e| {
         eprintln!("error: cannot write {}: {e}", version_file.display());
@@ -135,7 +143,7 @@ pub fn cmd_pin(version_arg: Option<&str>, project_root: &Path) {
     });
 
     println!(
-        "Pinned project to mvl {version}  ({})",
+        "Pinned project to mvl {version} ({})",
         version_file.display()
     );
 }
@@ -485,5 +493,57 @@ mod tests {
             resolve::find_project_mvl_version(dir.path()),
             Some("0.20.0".to_owned())
         );
+    }
+
+    #[test]
+    fn cmd_pin_overwrites_existing_version_file() {
+        let dir = tempfile::tempdir().unwrap();
+        cmd_pin(Some("0.34.0"), dir.path());
+        cmd_pin(Some("0.35.0"), dir.path());
+        let content = fs::read_to_string(dir.path().join(".mvl-version")).unwrap();
+        assert_eq!(content, "0.35.0\n");
+    }
+
+    #[test]
+    fn cmd_pin_file_content_has_trailing_newline() {
+        let dir = tempfile::tempdir().unwrap();
+        cmd_pin(Some("1.2.3"), dir.path());
+        let raw = fs::read_to_string(dir.path().join(".mvl-version")).unwrap();
+        assert!(
+            raw.ends_with('\n'),
+            "file must end with newline, got: {raw:?}"
+        );
+    }
+
+    #[test]
+    fn cmd_pin_no_arg_is_picked_up_by_resolver() {
+        let dir = tempfile::tempdir().unwrap();
+        cmd_pin(None, dir.path());
+        assert_eq!(
+            resolve::find_project_mvl_version(dir.path()),
+            Some(env!("CARGO_PKG_VERSION").to_owned())
+        );
+    }
+
+    #[test]
+    fn validate_version_accepts_valid_triples() {
+        assert!(validate_version("0.0.0"));
+        assert!(validate_version("0.34.0"));
+        assert!(validate_version("1.0.0"));
+        assert!(validate_version("100.200.300"));
+    }
+
+    #[test]
+    fn validate_version_rejects_invalid_inputs() {
+        assert!(!validate_version("1.2"));
+        assert!(!validate_version("1.2.3.4"));
+        assert!(!validate_version(".1.2"));
+        assert!(!validate_version("1..2"));
+        assert!(!validate_version("1.2."));
+        assert!(!validate_version("1.2.x"));
+        assert!(!validate_version("v1.2.3"));
+        assert!(!validate_version("../etc/1.0"));
+        assert!(!validate_version("1.2/3"));
+        assert!(!validate_version(""));
     }
 }
