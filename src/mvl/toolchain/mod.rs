@@ -1,4 +1,7 @@
-//! Toolchain management: install, use, list, uninstall.
+//! Toolchain management: install, use, list, uninstall, version resolution.
+//!
+//! Phase B (ADR-0009): versioned side-by-side compiler layout.
+//! Phase C (ADR-0009): version resolution chain + re-exec dispatcher.
 //!
 //! Implements ADR-0009 Phase B — versioned side-by-side compiler layout:
 //!
@@ -15,6 +18,8 @@
 //! Symlinks in `~/.local/bin/`:
 //!   `mvl`         → active toolchain binary (set by `mvl self use`)
 //!   `mvl@{ver}`   → specific version (created by `mvl self install`)
+
+pub mod resolve;
 
 use std::fs;
 use std::path::PathBuf;
