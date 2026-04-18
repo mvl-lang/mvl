@@ -1,12 +1,15 @@
 // main.mvl — Access control demo entry point.
 //
-// Demonstrates all Phase 2 security requirements as compile-time guarantees:
+// Demonstrates Phase 4 security requirements as compile-time guarantees:
 //   1. extern "rust" trust boundary — demo fixture data (get_demo_hash) lives in Rust.
-//   2. IFC labels: Secret<String> password hash consumed at auth boundary.
+//   2. IFC labels: Secret<String> password hash consumed at auth boundary;
+//      Clean<String> usernames are safe for structured log output.
 //   3. Req 3 (Totality): check_permission from rbac module — exhaustive match.
-//   4. Effect declarations: ! Console on I/O functions; pure functions have none.
+//   4. Effect declarations: ! Log on audit functions; ! CryptoRandom on authenticate().
 //   5. Req 5 (Errors): all failure modes are named in AppError, AuthError.
-//   6. Multi-module: use imports connect this file to model, auth, rbac modules.
+//   6. Multi-module: use imports connect this file to model, auth, rbac, audit modules.
+//   7. Phase 4: log_access emits structured audit records (grant → INFO, deny → WARN).
+//   8. Phase 4: std.log replaces raw println for all operational output.
 //
 // Usage:
 //   mvl run examples/access_control/main.mvl
@@ -16,12 +19,57 @@
 
 use auth::authenticate;
 use rbac::check_permission;
+use audit::log_access;
 use model::Role;
 use model::Resource;
 use model::Action;
 use model::Permission;
 use model::AuthError;
 use model::AppError;
+
+use std.log.{log_info, log_warn}
+
+// ── Local type declarations (mirrors model.mvl) ────────────────────────────
+// workaround: #96 — cross-module type resolution not yet wired into the
+// per-file checker; types are re-declared locally until the module resolver
+// is integrated.
+
+type Role = enum {
+    Admin,
+    Moderator,
+    User,
+    Guest,
+}
+
+type Resource = enum {
+    UserProfile,
+    AdminPanel,
+    Post,
+    AuditLog,
+}
+
+type Action = enum {
+    Read,
+    Write,
+    Delete,
+}
+
+type Permission = enum {
+    Allow,
+    Deny,
+}
+
+type AuthError = enum {
+    InvalidCredentials,
+    SessionExpired,
+    InvalidToken,
+}
+
+type AppError = enum {
+    AuthFailed,
+    UserNotFound,
+    MissingArg,
+}
 
 // ── Trust boundary: demo fixture data lives in Rust ───────────────────────
 
@@ -30,45 +78,51 @@ extern "rust" {
     fn get_demo_hash(username: Clean<String>) -> Option<Secret<String>>;
 }
 
-// ── Print helper ──────────────────────────────────────────────────────────
+// ── Audit helper ──────────────────────────────────────────────────────────
 
-fn show_decision(role: Role, resource: Resource, action: Action) -> Unit ! Console {
+// Check and audit a single RBAC decision.
+// Calls check_permission (pure) then log_access (! Log) to emit a structured
+// audit record. The username is Clean<String> — IFC-safe for log output.
+fn check_and_audit(
+    username: Clean<String>,
+    role: Role,
+    resource: Resource,
+    action: Action,
+) -> Unit ! Log {
     let decision = check_permission(role, resource, action);
-    let s = match decision {
-        Permission::Allow => "ALLOW",
-        Permission::Deny  => "DENY",
-    };
-    println(s)
+    log_access(username, resource, action, decision)
 }
 
 // ── Demo scenarios ────────────────────────────────────────────────────────
 
-// Uses let bindings for Unit-returning calls to sequence multiple effects.
-fn demo_rbac() -> Unit ! Console {
-    let s1 = show_decision(Role::Admin,     Resource::AdminPanel,  Action::Read);
-    let s2 = show_decision(Role::Moderator, Resource::AdminPanel,  Action::Write);
-    let s3 = show_decision(Role::User,      Resource::Post,        Action::Delete);
-    let s4 = show_decision(Role::Guest,     Resource::Post,        Action::Read);
-    show_decision(Role::Guest, Resource::AuditLog, Action::Read)
+// RBAC demo: each call produces a structured audit record (INFO or WARN).
+// String literals are Clean<String>-compatible (compile-time constants at Public level).
+fn demo_rbac() -> Unit ! Log {
+    let u1 = check_and_audit("admin_demo", Role::Admin,     Resource::AdminPanel,  Action::Read);
+    let u2 = check_and_audit("mod_demo",   Role::Moderator, Resource::AdminPanel,  Action::Write);
+    let u3 = check_and_audit("user_demo",  Role::User,      Resource::Post,        Action::Delete);
+    let u4 = check_and_audit("guest_demo", Role::Guest,     Resource::Post,        Action::Read);
+    check_and_audit("guest_demo", Role::Guest, Resource::AuditLog, Action::Read)
 }
 
-// IFC demo: alice's hash is Secret<String> — cannot be printed or leaked.
+// Auth demo: alice's hash is Secret<String> — cannot be printed or leaked.
 // It flows directly into hash_verify at the extern boundary inside auth module.
-fn demo_auth() -> Unit ! Console {
+// Phase 4: std.log replaces raw println; ! CryptoRandom propagated from authenticate().
+fn demo_auth() -> Unit ! Log, CryptoRandom {
     let hash_opt = get_demo_hash("alice");
     match hash_opt {
-        None => println("alice: user not found"),
+        None => log_warn("auth attempt: user not found", {"user": "alice"}),
         Some(stored_hash) => {
             let auth_result = authenticate("alice", "hunter2", stored_hash);
             match auth_result {
-                Ok(_)  => println("alice: auth PASS"),
-                Err(_) => println("alice: auth FAIL"),
+                Ok(_)  => log_info("auth attempt: pass", {"user": "alice"}),
+                Err(_) => log_warn("auth attempt: fail", {"user": "alice"}),
             }
         }
     }
 }
 
-fn main() -> Unit ! Console {
+fn main() -> Unit ! Log, CryptoRandom {
     let rbac_done = demo_rbac();
     demo_auth()
 }

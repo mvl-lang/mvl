@@ -114,6 +114,15 @@ pub fn entry_summary(entry: LogEntry) -> String {
     }
 }
 
+// Predicate: true iff the entry is an error-level log entry.
+// Used as a named filter argument: entries.filter(is_error_level)
+pub fn is_error_level(entry: LogEntry) -> Bool {
+    match entry.level {
+        LogLevel::Error => true,
+        _               => false,
+    }
+}
+
 // ── Internal unit tests ────────────────────────────────────────────────────
 // Plain String literals are compatible with Tainted<String> parameters:
 // unlabeled data flows freely into a Tainted context (Public ⊑ Tainted).
@@ -211,6 +220,8 @@ test fn build_report_counts_infos() -> Unit {
 }
 
 // Phase 4 pipeline: filter by level → map to summary → fold to count.
+// Uses is_error_level predicate (named filter) and verifies that
+// entry_summary produces "ERROR" strings (map output is observed).
 test fn pipeline_filter_map_fold_error_count() -> Unit {
     let entries: List<LogEntry> = [
         LogEntry { level: LogLevel::Info,  message: "i1", timestamp: 1 },
@@ -218,9 +229,76 @@ test fn pipeline_filter_map_fold_error_count() -> Unit {
         LogEntry { level: LogLevel::Error, message: "e2", timestamp: 3 },
         LogEntry { level: LogLevel::Warn,  message: "w1", timestamp: 4 },
     ];
+    // fold observes the string values from entry_summary to verify the map step.
     let error_count = entries
-        .filter(|e: LogEntry| match e.level { LogLevel::Error => true, _ => false })
+        .filter(is_error_level)
         .map(entry_summary)
-        .fold(0, |acc: Int, s: String| acc + 1);
+        .fold(0, |acc: Int, s: String| {
+            let is_error_str = match s { "ERROR" => 1, _ => 0 };
+            acc + is_error_str
+        });
     assert_eq(error_count, 2);
+}
+
+// ── entry_summary tests ───────────────────────────────────────────────────
+
+test fn entry_summary_error() -> Unit {
+    let entry = LogEntry { level: LogLevel::Error, message: "e", timestamp: 0 };
+    let ok = match entry_summary(entry) { "ERROR" => 1, _ => 0 };
+    assert_eq(ok, 1);
+}
+
+test fn entry_summary_warn() -> Unit {
+    let entry = LogEntry { level: LogLevel::Warn, message: "w", timestamp: 0 };
+    let ok = match entry_summary(entry) { "WARN" => 1, _ => 0 };
+    assert_eq(ok, 1);
+}
+
+test fn entry_summary_info() -> Unit {
+    let entry = LogEntry { level: LogLevel::Info, message: "i", timestamp: 0 };
+    let ok = match entry_summary(entry) { "INFO" => 1, _ => 0 };
+    assert_eq(ok, 1);
+}
+
+test fn entry_summary_debug() -> Unit {
+    let entry = LogEntry { level: LogLevel::Debug, message: "d", timestamp: 0 };
+    let ok = match entry_summary(entry) { "DEBUG" => 1, _ => 0 };
+    assert_eq(ok, 1);
+}
+
+// ── is_error_level tests ──────────────────────────────────────────────────
+
+test fn is_error_level_true_for_error() -> Unit {
+    let entry = LogEntry { level: LogLevel::Error, message: "e", timestamp: 0 };
+    assert_eq(is_error_level(entry), true);
+}
+
+test fn is_error_level_false_for_warn() -> Unit {
+    let entry = LogEntry { level: LogLevel::Warn, message: "w", timestamp: 0 };
+    assert_eq(is_error_level(entry), false);
+}
+
+test fn is_error_level_false_for_info() -> Unit {
+    let entry = LogEntry { level: LogLevel::Info, message: "i", timestamp: 0 };
+    assert_eq(is_error_level(entry), false);
+}
+
+test fn is_error_level_false_for_debug() -> Unit {
+    let entry = LogEntry { level: LogLevel::Debug, message: "d", timestamp: 0 };
+    assert_eq(is_error_level(entry), false);
+}
+
+// ── build_report Debug-path isolation test ────────────────────────────────
+
+// Debug entries increment count only — errors/warnings/infos stay at zero.
+test fn build_report_debug_increments_count_only() -> Unit {
+    let entries: List<LogEntry> = [
+        LogEntry { level: LogLevel::Debug, message: "d1", timestamp: 1 },
+        LogEntry { level: LogLevel::Debug, message: "d2", timestamp: 2 },
+    ];
+    let report = build_report(entries);
+    assert_eq(report.count,    2);
+    assert_eq(report.errors,   0);
+    assert_eq(report.warnings, 0);
+    assert_eq(report.infos,    0);
 }
