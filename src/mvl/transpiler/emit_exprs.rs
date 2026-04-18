@@ -34,11 +34,15 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                 // `&(arg)` works because String: Deref<Target=str>, so the coercion to &str
                 // is automatic. The checker enforces arity=1 and arg type=String before here.
                 "concat" if args.len() == 1 => {
-                    cg.push("(");
+                    // Extra outer parens ensure chained method calls bind to the
+                    // concatenated String result, not to the argument expression.
+                    // Without them, `a.concat(b).len()` emits `(a).clone() + &(b).len()`
+                    // which applies `.len()` to `b` due to Rust operator precedence.
+                    cg.push("((");
                     emit_expr(cg, receiver);
                     cg.push(").clone() + &(");
                     emit_expr(cg, &args[0]);
-                    cg.push(")");
+                    cg.push("))");
                 }
                 "concat" => {
                     unreachable!("concat with arity != 1 must be rejected by the checker")
