@@ -216,8 +216,10 @@ impl Codegen {
     ///
     /// Use when the project entry point has `extern` blocks — the sibling must use the same
     /// runtime types (`Tainted`, `Clean`, etc.) to avoid duplicate-definition conflicts.
-    pub fn emit_sibling_module(&mut self, prog: &Program) {
-        self.emit_program_core(prog, &[], true, &[]);
+    /// `prelude_progs` are the same stdlib prelude programs passed to the entry point so that
+    /// stdlib functions (e.g. `to_lower`, `range`) are available in sibling modules too.
+    pub fn emit_sibling_module(&mut self, prog: &Program, prelude_progs: &[Program]) {
+        self.emit_program_core(prog, &[], true, prelude_progs);
     }
 
     fn emit_program_core(
@@ -238,7 +240,14 @@ impl Codegen {
         // otherwise fall back to the inlined preamble for standalone files.
         // `force_runtime` is set for sibling modules in a project that uses mvl_runtime,
         // so all modules share the same type definitions.
+        // Also check prelude programs for extern declarations: std/primitives.mvl
+        // has `extern "rust"` blocks, so any program that loads the Phase 4 prelude
+        // needs `use mvl_runtime::prelude::*;` to resolve the kernel primitives.
+        let prelude_has_extern = prelude_progs
+            .iter()
+            .any(|p| p.declarations.iter().any(|d| matches!(d, Decl::Extern(_))));
         let has_runtime = force_runtime
+            || prelude_has_extern
             || prog
                 .declarations
                 .iter()

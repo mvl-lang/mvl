@@ -1110,13 +1110,11 @@ fn main() -> Unit { }
 fn string_concat_method_emits_clone_plus_borrow() {
     // GIVEN: s.concat(other) in MVL
     // WHEN: transpiled
-    // THEN: emits `(a).clone() + &(b)` — Rust's owned-string Add<&str>
+    // THEN: emits UFCS free-function call `concat(a.clone().into(), ...)`
     let src = r#"fn f(a: String, b: String) -> String { a.concat(b) }"#;
     let rust = transpile_src(src);
-    assert!(
-        rust.contains("(a).clone() + &(b)"),
-        "concat must emit exact clone+borrow pattern:\n{rust}"
-    );
+    assert_contains(&rust, "concat(");
+    assert_contains(&rust, ".clone().into()");
 }
 
 /// range() call is NOT expanded inline — it emits as a plain function call.
@@ -1138,8 +1136,8 @@ fn range_call_emits_as_plain_fn_call_not_inline_rust_range() {
 fn method_take_and_skip_emit_iterator_adapters() {
     let src = "fn f(xs: List<Int>) -> List<Int> { xs.take(3) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, ".into_iter().");
-    assert_contains(&rust, ".collect::<Vec<_>>()");
+    assert_contains(&rust, "take(");
+    assert_contains(&rust, ".clone().into()");
 }
 
 #[test]
@@ -1177,7 +1175,8 @@ fn method_chunks_emits_map_to_vec() {
 fn method_flatten_emits_iterator_flatten() {
     let src = "fn f(xs: List<List<Int>>) -> List<Int> { xs.flatten() }";
     let rust = transpile_src(src);
-    assert_contains(&rust, ".into_iter().flatten().collect::<Vec<_>>()");
+    assert_contains(&rust, "flatten(");
+    assert_contains(&rust, ".clone().into()");
 }
 
 #[test]
@@ -1200,17 +1199,16 @@ fn method_group_by_emits_hashmap_fold() {
 fn method_chars_emits_char_to_string() {
     let src = r#"fn f(s: String) -> List<String> { s.chars() }"#;
     let rust = transpile_src(src);
-    assert_contains(
-        &rust,
-        ".chars().map(|__c| __c.to_string()).collect::<Vec<_>>()",
-    );
+    assert_contains(&rust, "chars(");
+    assert_contains(&rust, ".clone().into()");
 }
 
 #[test]
 fn method_first_last_emit_cloned() {
     let src = "fn f(xs: List<Int>) -> Option<Int> { xs.first() }";
     let rust = transpile_src(src);
-    assert_contains(&rust, ".first().cloned()");
+    assert_contains(&rust, "first(");
+    assert_contains(&rust, ".clone().into()");
 }
 
 #[test]
@@ -1224,19 +1222,16 @@ fn method_contains_borrows_arg() {
 fn method_slice_emits_safe_wrapper() {
     let src = "fn f(xs: List<Int>) -> List<Int> { xs.slice(1, 3) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, "_mvl_r");
-    assert_contains(&rust, "_mvl_s");
-    assert_contains(&rust, "_mvl_e");
-    assert_contains(&rust, ".to_vec()");
+    assert_contains(&rust, "slice(");
+    assert_contains(&rust, ".clone().into()");
 }
 
 #[test]
 fn method_substring_emits_safe_wrapper() {
     let src = r#"fn f(s: String) -> String { s.substring(1, 4) }"#;
     let rust = transpile_src(src);
-    assert_contains(&rust, "_mvl_s");
-    assert_contains(&rust, ".chars().skip(");
-    assert_contains(&rust, "saturating_sub");
+    assert_contains(&rust, "substring(");
+    assert_contains(&rust, ".clone().into()");
 }
 
 #[test]
@@ -1325,7 +1320,8 @@ fn method_fold_emits_iterator_fold() {
 fn method_reverse_emits_rev_collect() {
     let src = "fn f(xs: List<Int>) -> List<Int> { xs.reverse() }";
     let rust = transpile_src(src);
-    assert_contains(&rust, ".into_iter().rev().collect::<Vec<_>>()");
+    assert_contains(&rust, "reverse(");
+    assert_contains(&rust, ".clone().into()");
 }
 
 #[test]
@@ -1347,59 +1343,64 @@ fn method_and_then_emits_closure() {
 fn method_trim_emits_to_string() {
     let src = r#"fn f(s: String) -> String { s.trim() }"#;
     let rust = transpile_src(src);
-    assert_contains(&rust, ".trim().to_string()");
+    assert_contains(&rust, "trim(");
+    assert_contains(&rust, ".clone().into()");
 }
 
 #[test]
 fn method_to_upper_emits_to_uppercase() {
     let src = r#"fn f(s: String) -> String { s.to_upper() }"#;
     let rust = transpile_src(src);
-    assert_contains(&rust, ".to_uppercase()");
+    assert_contains(&rust, "to_upper(");
+    assert_contains(&rust, ".clone().into()");
 }
 
 #[test]
 fn method_to_lower_emits_to_lowercase() {
     let src = r#"fn f(s: String) -> String { s.to_lower() }"#;
     let rust = transpile_src(src);
-    assert_contains(&rust, ".to_lowercase()");
+    assert_contains(&rust, "to_lower(");
+    assert_contains(&rust, ".clone().into()");
 }
 
 #[test]
 fn method_starts_with_borrows_arg() {
     let src = r#"fn f(s: String, p: String) -> Bool { s.starts_with(p) }"#;
     let rust = transpile_src(src);
-    assert_contains(&rust, ".starts_with(&(");
+    assert_contains(&rust, "starts_with(");
+    assert_contains(&rust, ".clone().into()");
 }
 
 #[test]
 fn method_ends_with_borrows_arg() {
     let src = r#"fn f(s: String, p: String) -> Bool { s.ends_with(p) }"#;
     let rust = transpile_src(src);
-    assert_contains(&rust, ".ends_with(&(");
+    assert_contains(&rust, "ends_with(");
+    assert_contains(&rust, ".clone().into()");
 }
 
 #[test]
 fn method_find_emits_cast_to_i64() {
     let src = r#"fn f(s: String, p: String) -> Option<Int> { s.find(p) }"#;
     let rust = transpile_src(src);
-    assert_contains(&rust, ".find(&(");
-    assert_contains(&rust, ".map(|__i| __i as i64)");
+    assert_contains(&rust, "find(");
+    assert_contains(&rust, ".clone().into()");
 }
 
 #[test]
 fn method_replace_emits_deref_on_second_arg() {
     let src = r#"fn f(s: String) -> String { s.replace("a", "b") }"#;
     let rust = transpile_src(src);
-    assert_contains(&rust, ".replace(&(");
-    assert_contains(&rust, "), &*(");
+    assert_contains(&rust, "replace(");
+    assert_contains(&rust, ".clone().into()");
 }
 
 #[test]
 fn method_split_emits_map_to_string() {
     let src = r#"fn f(s: String) -> List<String> { s.split(",") }"#;
     let rust = transpile_src(src);
-    assert_contains(&rust, ".split(&(");
-    assert_contains(&rust, ".map(|__s| __s.to_string()).collect::<Vec<_>>()");
+    assert_contains(&rust, "split(");
+    assert_contains(&rust, ".clone().into()");
 }
 
 #[test]

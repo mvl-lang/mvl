@@ -458,6 +458,10 @@ impl Parser {
         let ident_result = self.expect_ident();
         let (name, _) = self.require(ident_result)?;
 
+        // Optional generic type parameters: `fn foo<T>(…)` — parsed but not stored
+        // since extern fns delegate generics entirely to the Rust implementation.
+        let _ = self.parse_type_params_decl();
+
         // Parameter list
         let lparen = self.expect(&TokenKind::LParen);
         self.require(lparen)?;

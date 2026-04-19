@@ -148,6 +148,44 @@ impl_label!(Clean);
 impl_label!(Public);
 impl_label!(Secret);
 
+// ── UFCS coercions ─────────────────────────────────────────────────────────
+//
+// The MVL transpiler's UFCS dispatch emits `method(receiver.clone().into(), …)`
+// for stdlib method calls.  These impls allow IFC-labelled strings and lists to
+// coerce into their plain inner types so that stdlib functions typed as
+// `fn(String)` or `fn(Vec<T>)` accept labelled values transparently.
+//
+// The `.into()` target is inferred from the callee's parameter type.
+// Orphan rules are satisfied because `Clean`, `Public`, etc. are local types.
+
+macro_rules! impl_label_into {
+    ($Label:ident) => {
+        impl From<$Label<String>> for String {
+            #[inline]
+            fn from(v: $Label<String>) -> String {
+                v.0
+            }
+        }
+        impl<T> From<$Label<Vec<T>>> for Vec<T> {
+            #[inline]
+            fn from(v: $Label<Vec<T>>) -> Vec<T> {
+                v.0
+            }
+        }
+        impl From<$Label<i64>> for i64 {
+            #[inline]
+            fn from(v: $Label<i64>) -> i64 {
+                v.0
+            }
+        }
+    };
+}
+
+impl_label_into!(Tainted);
+impl_label_into!(Clean);
+impl_label_into!(Public);
+impl_label_into!(Secret);
+
 // Display — intentionally omitted for Secret<T> to prevent accidental leaks.
 macro_rules! impl_display {
     ($Label:ident) => {
