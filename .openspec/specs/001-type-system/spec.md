@@ -160,6 +160,10 @@ Every `match` expression MUST cover all variants of the matched type. The compil
 
 The language MUST NOT contain: null/nil/undefined values, throw/catch/try exception mechanism, global mutable variables, or implicit type conversions.
 
+**Implementation:** `src/mvl/parser/functions.rs::parse_decl`
+
+**Tests:** `src/mvl/parser/functions.rs::static_mut_is_rejected`, `src/mvl/parser/functions.rs::static_decl_is_rejected`, `src/mvl/parser/functions.rs::global_keyword_is_rejected`, `src/mvl/parser/statements.rs::throw_is_rejected`, `src/mvl/parser/statements.rs::try_is_rejected`, `src/mvl/parser/statements.rs::catch_is_rejected` (#289)
+
 #### Scenario: No global state
 
 - GIVEN `static mut COUNTER: Int = 0`
@@ -225,7 +229,7 @@ where T: Eq, E: Display
 - `Iterator<T>` — lazy iteration protocol (see Requirement 11)
 - User-defined traits (declared in the module system)
 
-**Implementation:** `src/mvl/parser/ast.rs::Constraint`, `src/mvl/checker/mod.rs`
+**Implementation:** `src/mvl/parser/ast.rs::GenericParam`, `src/mvl/checker/mod.rs`
 
 **Tests:** `tests/type_checker.rs::generic_identity_parses`, `tests/type_checker.rs::generic_type_decl_parses`, `tests/type_checker.rs::generic_pair_type_parses`, `tests/type_checker.rs::generic_with_constraint_parses`, `tests/type_checker.rs::generic_multiple_constraints_parse`, `tests/compile_and_run.rs::linked_list_check_passes`, `tests/compile_and_run.rs::linked_list_runs_and_produces_expected_output` (#194)
 

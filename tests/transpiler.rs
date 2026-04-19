@@ -1131,3 +1131,504 @@ fn range_call_emits_as_plain_fn_call_not_inline_rust_range() {
     );
     assert_contains(&rust, "range(");
 }
+
+// ── emit_exprs coverage: method calls ────────────────────────────────────────
+
+#[test]
+fn method_take_and_skip_emit_iterator_adapters() {
+    let src = "fn f(xs: List<Int>) -> List<Int> { xs.take(3) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".into_iter().");
+    assert_contains(&rust, ".collect::<Vec<_>>()");
+}
+
+#[test]
+fn method_take_while_emits_closure_clone() {
+    let src = "fn f(xs: List<Int>, p: fn(Int) -> Bool) -> List<Int> { xs.take_while(p) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".take_while(|__x|");
+    assert_contains(&rust, "__x.clone()");
+}
+
+#[test]
+fn method_skip_while_emits_closure_clone() {
+    let src = "fn f(xs: List<Int>, p: fn(Int) -> Bool) -> List<Int> { xs.skip_while(p) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".skip_while(|__x|");
+}
+
+#[test]
+fn method_windows_emits_map_to_vec() {
+    let src = "fn f(xs: List<Int>) -> List<List<Int>> { xs.windows(2) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".windows(");
+    assert_contains(&rust, ".map(|w| w.to_vec()).collect::<Vec<_>>()");
+}
+
+#[test]
+fn method_chunks_emits_map_to_vec() {
+    let src = "fn f(xs: List<Int>) -> List<List<Int>> { xs.chunks(3) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".chunks(");
+    assert_contains(&rust, ".map(|w| w.to_vec()).collect::<Vec<_>>()");
+}
+
+#[test]
+fn method_flatten_emits_iterator_flatten() {
+    let src = "fn f(xs: List<List<Int>>) -> List<Int> { xs.flatten() }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".into_iter().flatten().collect::<Vec<_>>()");
+}
+
+#[test]
+fn method_partition_emits_turbofish() {
+    let src =
+        "fn f(xs: List<Int>, p: fn(Int) -> Bool) -> List<Int> { let (a, b) = xs.partition(p); a }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".into_iter().partition::<Vec<_>, _>(|__x|");
+}
+
+#[test]
+fn method_group_by_emits_hashmap_fold() {
+    let src = "fn f(xs: List<Int>, k: fn(Int) -> Int) -> Unit { let m = xs.group_by(k); }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "std::collections::HashMap");
+    assert_contains(&rust, "__m.entry(");
+}
+
+#[test]
+fn method_chars_emits_char_to_string() {
+    let src = r#"fn f(s: String) -> List<String> { s.chars() }"#;
+    let rust = transpile_src(src);
+    assert_contains(
+        &rust,
+        ".chars().map(|__c| __c.to_string()).collect::<Vec<_>>()",
+    );
+}
+
+#[test]
+fn method_first_last_emit_cloned() {
+    let src = "fn f(xs: List<Int>) -> Option<Int> { xs.first() }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".first().cloned()");
+}
+
+#[test]
+fn method_contains_borrows_arg() {
+    let src = "fn f(xs: List<Int>, n: Int) -> Bool { xs.contains(n) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".contains(&(");
+}
+
+#[test]
+fn method_slice_emits_safe_wrapper() {
+    let src = "fn f(xs: List<Int>) -> List<Int> { xs.slice(1, 3) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "_mvl_r");
+    assert_contains(&rust, "_mvl_s");
+    assert_contains(&rust, "_mvl_e");
+    assert_contains(&rust, ".to_vec()");
+}
+
+#[test]
+fn method_substring_emits_safe_wrapper() {
+    let src = r#"fn f(s: String) -> String { s.substring(1, 4) }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "_mvl_s");
+    assert_contains(&rust, ".chars().skip(");
+    assert_contains(&rust, "saturating_sub");
+}
+
+#[test]
+fn method_clamp_emits_safe_wrapper() {
+    let src = "fn f(n: Int) -> Int { n.clamp(0, 100) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "_mvl_n");
+    assert_contains(&rust, "_mvl_lo");
+    assert_contains(&rust, "_mvl_hi");
+}
+
+#[test]
+fn method_bit_and_emits_operator() {
+    let src = "fn f(a: Int, b: Int) -> Int { a.bit_and(b) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, " & ");
+}
+
+#[test]
+fn method_bit_or_emits_operator() {
+    let src = "fn f(a: Int, b: Int) -> Int { a.bit_or(b) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, " | ");
+}
+
+#[test]
+fn method_bit_xor_emits_operator() {
+    let src = "fn f(a: Int, b: Int) -> Int { a.bit_xor(b) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, " ^ ");
+}
+
+#[test]
+fn method_bit_not_emits_prefix_bang() {
+    let src = "fn f(a: Int) -> Int { a.bit_not() }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "(!");
+}
+
+#[test]
+fn method_shift_left_emits_wrapping_shl() {
+    let src = "fn f(a: Int, n: Int) -> Int { a.shift_left(n) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".wrapping_shl(");
+    assert_contains(&rust, " as u32)");
+}
+
+#[test]
+fn method_shift_right_emits_wrapping_shr() {
+    let src = "fn f(a: Int, n: Int) -> Int { a.shift_right(n) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".wrapping_shr(");
+}
+
+#[test]
+fn method_to_int_emits_cast() {
+    let src = "fn f(b: Byte) -> Int { b.to_int() }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, " as i64)");
+}
+
+#[test]
+fn method_map_emits_mvl_map() {
+    let src = "fn f(xs: List<Int>, g: fn(Int) -> Int) -> List<Int> { xs.map(g) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".mvl_map(|__x|");
+    assert_contains(&rust, "__x.clone()");
+}
+
+#[test]
+fn method_filter_emits_iterator_filter() {
+    let src = "fn f(xs: List<Int>, p: fn(Int) -> Bool) -> List<Int> { xs.filter(p) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".into_iter().filter(|__x|");
+}
+
+#[test]
+fn method_fold_emits_iterator_fold() {
+    let src = "fn f(xs: List<Int>, init: Int, g: fn(Int, Int) -> Int) -> Int { xs.fold(init, g) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".into_iter().fold(");
+    assert_contains(&rust, "|__acc, __x|");
+}
+
+#[test]
+fn method_reverse_emits_rev_collect() {
+    let src = "fn f(xs: List<Int>) -> List<Int> { xs.reverse() }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".into_iter().rev().collect::<Vec<_>>()");
+}
+
+#[test]
+fn method_sort_emits_sort_by_partial_cmp() {
+    let src = "fn f(xs: List<Int>) -> List<Int> { xs.sort() }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".sort_by(|__a,__b|");
+    assert_contains(&rust, "partial_cmp");
+}
+
+#[test]
+fn method_and_then_emits_closure() {
+    let src = "fn f(x: Option<Int>, g: fn(Int) -> Option<Int>) -> Option<Int> { x.and_then(g) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".and_then(|__x|");
+}
+
+#[test]
+fn method_trim_emits_to_string() {
+    let src = r#"fn f(s: String) -> String { s.trim() }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".trim().to_string()");
+}
+
+#[test]
+fn method_to_upper_emits_to_uppercase() {
+    let src = r#"fn f(s: String) -> String { s.to_upper() }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".to_uppercase()");
+}
+
+#[test]
+fn method_to_lower_emits_to_lowercase() {
+    let src = r#"fn f(s: String) -> String { s.to_lower() }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".to_lowercase()");
+}
+
+#[test]
+fn method_starts_with_borrows_arg() {
+    let src = r#"fn f(s: String, p: String) -> Bool { s.starts_with(p) }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".starts_with(&(");
+}
+
+#[test]
+fn method_ends_with_borrows_arg() {
+    let src = r#"fn f(s: String, p: String) -> Bool { s.ends_with(p) }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".ends_with(&(");
+}
+
+#[test]
+fn method_find_emits_cast_to_i64() {
+    let src = r#"fn f(s: String, p: String) -> Option<Int> { s.find(p) }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".find(&(");
+    assert_contains(&rust, ".map(|__i| __i as i64)");
+}
+
+#[test]
+fn method_replace_emits_deref_on_second_arg() {
+    let src = r#"fn f(s: String) -> String { s.replace("a", "b") }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".replace(&(");
+    assert_contains(&rust, "), &*(");
+}
+
+#[test]
+fn method_split_emits_map_to_string() {
+    let src = r#"fn f(s: String) -> List<String> { s.split(",") }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".split(&(");
+    assert_contains(&rust, ".map(|__s| __s.to_string()).collect::<Vec<_>>()");
+}
+
+#[test]
+fn method_is_zero_emits_eq_zero() {
+    let src = "fn f(n: Int) -> Bool { n.is_zero() }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, " == 0)");
+}
+
+#[test]
+fn method_pow_emits_mvl_pow() {
+    let src = "fn f(n: Int, e: Int) -> Int { n.pow(e) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".mvl_pow(");
+}
+
+// ── emit_exprs coverage: escape_char ─────────────────────────────────────────
+
+#[test]
+fn char_literal_special_chars_are_escaped() {
+    let src = r#"fn f() -> Char { '\n' }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "'\\n'");
+}
+
+#[test]
+fn char_literal_tab_is_escaped() {
+    let src = "fn f() -> Char { '\t' }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "'\\t'");
+}
+
+#[test]
+fn char_literal_backslash_is_escaped() {
+    let src = "fn f() -> Char { '\\\\' }";
+    let rust = transpile_src(src);
+    // A single backslash char in MVL emits as '\\' in Rust (escaped backslash char literal).
+    assert_contains(&rust, "'\\\\'");
+}
+
+// ── emit_exprs coverage: expr types ──────────────────────────────────────────
+
+#[test]
+fn move_expr_emits_inner() {
+    let src = "fn f(x: Int) -> Int { move(x) }";
+    let rust = transpile_src(src);
+    // move(x) strips the wrapper — the inner expr is emitted directly.
+    assert!(
+        !rust.contains("move("),
+        "move wrapper should not appear in output: {rust}"
+    );
+    assert_contains(&rust, "x");
+}
+
+#[test]
+fn consume_expr_emits_inner() {
+    let src = "fn f(x: Int) -> Int { consume(x) }";
+    let rust = transpile_src(src);
+    // consume(x) strips the wrapper — the inner expr is emitted directly.
+    assert!(
+        !rust.contains("consume("),
+        "consume wrapper should not appear in output: {rust}"
+    );
+    assert_contains(&rust, "x");
+}
+
+#[test]
+fn lambda_expr_emits_closure() {
+    let src = "fn f() -> fn(Int) -> Int { |x: Int| x }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "|x: i64|");
+}
+
+#[test]
+fn lambda_with_return_type_emits_arrow() {
+    let src = "fn f() -> fn(Int) -> Int { |x: Int| -> Int x }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, " -> i64 ");
+}
+
+#[test]
+fn from_int_call_emits_as_u8() {
+    let src = "fn f(n: Int) -> Byte { from_int(n) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, " as u8)");
+}
+
+#[test]
+fn emit_args_for_macro_non_literal_first_arg_generates_placeholder() {
+    // When println's first arg is not a string literal, a "{}" placeholder
+    // must be generated for each argument.
+    let src = r#"fn f(msg: String) -> Unit { println(msg) }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "println!(");
+    assert_contains(&rust, "\"{}\"");
+}
+
+#[test]
+fn propagate_expr_emits_question_mark() {
+    let src = r#"fn f(r: Result<Int, String>) -> Result<Int, String> {
+    let x = r?;
+    Ok(x)
+}"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "?");
+}
+
+#[test]
+fn type_args_in_fn_call_emit_turbofish() {
+    // Functions with explicit type arguments use bracket syntax: name[Type](args)
+    let src = "fn identity<T>(x: T) -> T { x }\nfn f() -> Int { identity[Int](42) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "::<");
+}
+
+// ── transpiler/mod.rs: uncovered entry points ─────────────────────────────────
+
+use mvl::mvl::transpiler::{
+    has_main_fn, has_std_imports, transpile_covered, transpile_covered_source,
+    transpile_covered_source_with_prelude, transpile_covered_with_prelude,
+    transpile_mutated_source_with_prelude, transpile_mutated_with_prelude,
+    transpile_source_with_prelude, transpile_with_prelude,
+};
+
+#[test]
+fn has_main_fn_true_when_main_present() {
+    let prog = parse_prog("fn main() -> Unit { }");
+    assert!(has_main_fn(&prog));
+}
+
+#[test]
+fn has_main_fn_false_when_no_main() {
+    let prog = parse_prog("fn foo() -> Int { 1 }");
+    assert!(!has_main_fn(&prog));
+}
+
+#[test]
+fn has_std_imports_true_for_std_use() {
+    let prog = parse_prog("use std.io.{read_file}");
+    assert!(has_std_imports(&prog));
+}
+
+#[test]
+fn has_std_imports_false_for_non_std_use() {
+    let prog = parse_prog("use mylib.utils.{helper}");
+    assert!(!has_std_imports(&prog));
+}
+
+#[test]
+fn transpile_with_prelude_produces_valid_output() {
+    let prog = parse_prog("fn f(x: Int) -> Int { x }");
+    let out = transpile_with_prelude(&prog, "my_crate", &[]);
+    assert_contains(&out.lib_rs, "fn f(");
+    assert!(!out.has_main);
+    assert_contains(&out.cargo_toml, "my_crate");
+}
+
+#[test]
+fn transpile_with_prelude_has_main_sets_binary() {
+    let prog = parse_prog("fn main() -> Unit { }");
+    let out = transpile_with_prelude(&prog, "my_app", &[]);
+    assert!(out.has_main);
+    assert!(
+        !out.cargo_toml.contains("[lib]"),
+        "binary crate should not have [lib] section"
+    );
+}
+
+#[test]
+fn transpile_source_with_prelude_produces_valid_output() {
+    let prog = parse_prog("fn f(x: Int) -> Int { x }");
+    let out = transpile_source_with_prelude(&prog, "my_crate", &[]);
+    assert_contains(&out.lib_rs, "fn f(");
+    assert!(!out.has_main);
+}
+
+#[test]
+fn transpile_covered_instruments_branches() {
+    let src = "fn f(n: Int) -> Int { if n > 0 { 1 } else { 0 } }";
+    let prog = parse_prog(src);
+    let (out, branches) = transpile_covered(&prog, "my_crate", "f", 0);
+    assert!(!branches.is_empty(), "expected branch coverage entries");
+    assert_contains(&out.lib_rs, "fn f(");
+}
+
+#[test]
+fn transpile_covered_with_prelude_instruments_branches() {
+    let src = "fn f(n: Int) -> Int { if n > 0 { 1 } else { 0 } }";
+    let prog = parse_prog(src);
+    let (out, branches) = transpile_covered_with_prelude(&prog, "my_crate", "f", 0, &[]);
+    assert!(!branches.is_empty(), "expected branch coverage entries");
+    assert_contains(&out.lib_rs, "fn f(");
+}
+
+#[test]
+fn transpile_covered_source_instruments_branches() {
+    let src = "fn f(n: Int) -> Int { match n { 0 => 0, _ => 1 } }";
+    let prog = parse_prog(src);
+    let (out, branches) = transpile_covered_source(&prog, "my_crate", "f", 0);
+    assert!(!branches.is_empty(), "expected branch coverage entries");
+    assert_contains(&out.lib_rs, "fn f(");
+}
+
+#[test]
+fn transpile_covered_source_with_prelude_instruments_branches() {
+    let src = "fn f(n: Int) -> Int { match n { 0 => 0, _ => 1 } }";
+    let prog = parse_prog(src);
+    let (out, branches) = transpile_covered_source_with_prelude(&prog, "my_crate", "f", 0, &[]);
+    assert!(!branches.is_empty());
+    assert_contains(&out.lib_rs, "fn f(");
+}
+
+#[test]
+fn transpile_mutated_with_prelude_produces_mutants() {
+    let src = "fn f(a: Int, b: Int) -> Int { a + b }";
+    let prog = parse_prog(src);
+    let (out, mutants) = transpile_mutated_with_prelude(&prog, "my_crate", "f", &[]);
+    assert!(
+        !mutants.is_empty(),
+        "expected mutation variants for + operator"
+    );
+    assert_contains(&out.lib_rs, "fn f(");
+}
+
+#[test]
+fn transpile_mutated_source_with_prelude_produces_mutants() {
+    let src = "fn f(a: Int, b: Int) -> Int { a + b }";
+    let prog = parse_prog(src);
+    let (out, mutants) = transpile_mutated_source_with_prelude(&prog, "my_crate", "f", &[]);
+    assert!(!mutants.is_empty(), "expected mutation variants");
+    assert_contains(&out.lib_rs, "fn f(");
+}

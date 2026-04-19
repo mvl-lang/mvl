@@ -101,3 +101,123 @@ pub fn lint(prog: &Program, src: &str, cfg: &LintConfig) -> LintResult {
 
     LintResult { diags }
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mvl::parser::Parser;
+
+    fn parse(src: &str) -> Program {
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+        prog
+    }
+
+    fn default_cfg() -> LintConfig {
+        LintConfig::default()
+    }
+
+    // ── LintResult methods ────────────────────────────────────────────────
+
+    #[test]
+    fn lint_result_is_ok_no_diags() {
+        let r = LintResult { diags: vec![] };
+        assert!(r.is_ok());
+        assert_eq!(r.warning_count(), 0);
+        assert_eq!(r.error_count(), 0);
+    }
+
+    #[test]
+    fn lint_result_is_ok_warnings_only() {
+        let r = LintResult {
+            diags: vec![errors::LintDiag::warning("test-rule", "msg", 1, 1)],
+        };
+        assert!(r.is_ok(), "warnings alone should not make is_ok() false");
+        assert_eq!(r.warning_count(), 1);
+        assert_eq!(r.error_count(), 0);
+    }
+
+    #[test]
+    fn lint_result_is_ok_false_on_error() {
+        let r = LintResult {
+            diags: vec![errors::LintDiag::error("test-rule", "msg", 1, 1)],
+        };
+        assert!(!r.is_ok());
+        assert_eq!(r.warning_count(), 0);
+        assert_eq!(r.error_count(), 1);
+    }
+
+    #[test]
+    fn lint_result_counts_mixed_severity() {
+        let r = LintResult {
+            diags: vec![
+                errors::LintDiag::warning("w1", "warn", 1, 1),
+                errors::LintDiag::error("e1", "err", 2, 1),
+                errors::LintDiag::warning("w2", "warn2", 3, 1),
+            ],
+        };
+        assert!(!r.is_ok());
+        assert_eq!(r.warning_count(), 2);
+        assert_eq!(r.error_count(), 1);
+    }
+
+    // ── lint() integration ────────────────────────────────────────────────
+
+    #[test]
+    fn lint_clean_source_no_diags() {
+        let src = "fn add(x: Int, y: Int) -> Int {\n    x + y\n}\n";
+        let prog = parse(src);
+        let result = lint(&prog, src, &default_cfg());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn lint_detects_trailing_whitespace() {
+        let src = "fn foo() -> Int { 1 }   \n";
+        let prog = parse(src);
+        let result = lint(&prog, src, &default_cfg());
+        assert!(
+            result.diags.iter().any(|d| d.rule == "trailing-whitespace"),
+            "expected trailing-whitespace diagnostic"
+        );
+    }
+
+    #[test]
+    fn lint_detects_long_line() {
+        let long_line = "x".repeat(200);
+        let src = format!("fn foo() -> Int {{\n    {long_line}\n}}\n");
+        let prog = parse(&src);
+        let result = lint(&prog, &src, &default_cfg());
+        assert!(
+            result.diags.iter().any(|d| d.rule == "line-length"),
+            "expected line-length diagnostic"
+        );
+    }
+
+    #[test]
+    fn lint_results_sorted_by_line() {
+        let src = "fn foo() -> Int { 1 }   \nfn bar() -> Int { 2 }   \n";
+        let prog = parse(src);
+        let result = lint(&prog, src, &default_cfg());
+        let lines: Vec<u32> = result.diags.iter().map(|d| d.span.line).collect();
+        let mut sorted = lines.clone();
+        sorted.sort();
+        assert_eq!(lines, sorted, "diagnostics should be sorted by line");
+    }
+
+    #[test]
+    fn lint_respects_disabled_trailing_ws_rule() {
+        let src = "fn foo() -> Int { 1 }   \n";
+        let prog = parse(src);
+        let mut cfg = default_cfg();
+        cfg.trailing_ws = false;
+        let result = lint(&prog, src, &cfg);
+        assert!(
+            result.diags.iter().all(|d| d.rule != "trailing-whitespace"),
+            "trailing-whitespace should be suppressed when disabled"
+        );
+    }
+}

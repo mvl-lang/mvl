@@ -180,7 +180,7 @@ Each project MUST store build artifacts in a `.mvl/` directory at the project ro
 
 In Phase 4, the compiler SHOULD support `.mvlo` precompiled modules containing LLVM bitcode and verified metadata. Consumers verify requirements from metadata without needing source.
 
-**Implementation:** `src/mvl/compiler/mvlo.rs` (Phase 4, planned)
+**Implementation:** Deferred to Phase 7 — LLVM backend and `.mvlo` precompiled module format not yet implemented.
 
 #### Scenario: Compile a library to .mvlo
 
@@ -207,7 +207,7 @@ In Phase 4, the compiler SHOULD support `.mvlo` precompiled modules containing L
 
 `mvl audit` SHOULD report the trust composition of the final binary: percentage of MVL-verified code vs extern vs foreign.
 
-**Implementation:** `src/mvl/audit/mod.rs` (planned)
+**Implementation:** Deferred to Phase 7 — `mvl audit` trust reporting not yet implemented.
 
 #### Scenario: Audit a project with mixed trust levels
 

@@ -277,3 +277,162 @@ fn load_from(path: &Path) -> Option<LintConfig> {
 fn parse_bool(s: &str) -> bool {
     matches!(s, "true" | "yes" | "1" | "on")
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    // ── parse_bool ────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_bool_truthy_values() {
+        for val in &["true", "yes", "1", "on"] {
+            assert!(parse_bool(val), "expected true for '{val}'");
+        }
+    }
+
+    #[test]
+    fn parse_bool_falsy_values() {
+        for val in &["false", "no", "0", "off", "", "TRUE", "YES"] {
+            assert!(!parse_bool(val), "expected false for '{val}'");
+        }
+    }
+
+    // ── LintConfig::default ───────────────────────────────────────────────
+
+    #[test]
+    fn default_config_has_expected_values() {
+        let cfg = LintConfig::default();
+        assert_eq!(cfg.line_length, 120);
+        assert_eq!(cfg.indent_size, 4);
+        assert!(cfg.indent_spaces);
+        assert_eq!(cfg.max_fn_length, 50);
+        assert!(cfg.naming);
+        assert!(cfg.trailing_ws);
+        assert!(cfg.unreachable_code);
+        assert!(cfg.redundant_match);
+        assert_eq!(cfg.max_cyclomatic_complexity, 10);
+        assert_eq!(cfg.max_nested_match_depth, 3);
+    }
+
+    // ── load_from via temp file ───────────────────────────────────────────
+
+    fn write_temp_config(content: &str) -> tempfile::NamedTempFile {
+        let mut f = tempfile::NamedTempFile::new().expect("temp file");
+        write!(f, "{content}").expect("write");
+        f
+    }
+
+    #[test]
+    fn load_from_parses_line_length() {
+        let f = write_temp_config("line_length = 80\n");
+        let cfg = load_from(f.path()).expect("load_from");
+        assert_eq!(cfg.line_length, 80);
+    }
+
+    #[test]
+    fn load_from_parses_indent_style_tabs() {
+        let f = write_temp_config("indent_style = tabs\n");
+        let cfg = load_from(f.path()).expect("load_from");
+        assert!(!cfg.indent_spaces);
+    }
+
+    #[test]
+    fn load_from_parses_indent_style_spaces() {
+        let f = write_temp_config("indent_style = spaces\n");
+        let cfg = load_from(f.path()).expect("load_from");
+        assert!(cfg.indent_spaces);
+    }
+
+    #[test]
+    fn load_from_parses_bool_flags() {
+        let content = "trailing_ws = false\nnaming = false\nunreachable_code = false\n";
+        let f = write_temp_config(content);
+        let cfg = load_from(f.path()).expect("load_from");
+        assert!(!cfg.trailing_ws);
+        assert!(!cfg.naming);
+        assert!(!cfg.unreachable_code);
+    }
+
+    #[test]
+    fn load_from_parses_complexity_limits() {
+        let content = "max_cyclomatic_complexity = 5\nmax_nested_match_depth = 2\nmax_effect_signature_width = 1\nmax_trait_impl_count = 3\nmax_module_fanout = 8\nmax_extern_ratio = 0.1\n";
+        let f = write_temp_config(content);
+        let cfg = load_from(f.path()).expect("load_from");
+        assert_eq!(cfg.max_cyclomatic_complexity, 5);
+        assert_eq!(cfg.max_nested_match_depth, 2);
+        assert_eq!(cfg.max_effect_signature_width, 1);
+        assert_eq!(cfg.max_trait_impl_count, 3);
+        assert_eq!(cfg.max_module_fanout, 8);
+        assert!((cfg.max_extern_ratio - 0.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn load_from_ignores_comments_and_blank_lines() {
+        let content = "# This is a comment\n\nline_length = 100\n# another comment\n";
+        let f = write_temp_config(content);
+        let cfg = load_from(f.path()).expect("load_from");
+        assert_eq!(cfg.line_length, 100);
+    }
+
+    #[test]
+    fn load_from_ignores_unknown_keys() {
+        let content = "line_length = 90\nunknown_future_key = somevalue\n";
+        let f = write_temp_config(content);
+        let cfg = load_from(f.path()).expect("load_from");
+        assert_eq!(cfg.line_length, 90);
+    }
+
+    #[test]
+    fn load_from_returns_none_for_missing_file() {
+        let result = load_from(Path::new("/nonexistent/path/.mvllintrc"));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn load_from_rejects_out_of_range_extern_ratio() {
+        let default_ratio = LintConfig::default().max_extern_ratio;
+        let f = write_temp_config("max_extern_ratio = 2.5\n");
+        let cfg = load_from(f.path()).expect("load_from");
+        // Out-of-range value should not be applied — keeps default
+        assert!((cfg.max_extern_ratio - default_ratio).abs() < 1e-9);
+    }
+
+    // ── LintConfig::load ──────────────────────────────────────────────────
+
+    #[test]
+    fn load_returns_default_when_no_file_found() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let cfg = LintConfig::load(dir.path());
+        assert_eq!(cfg, LintConfig::default());
+    }
+
+    #[test]
+    fn load_reads_local_mvllintrc() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let rc_path = dir.path().join(".mvllintrc");
+        std::fs::write(&rc_path, "line_length = 60\n").expect("write");
+        let cfg = LintConfig::load(dir.path());
+        assert_eq!(cfg.line_length, 60);
+    }
+
+    // ── LintConfig::config_file ───────────────────────────────────────────
+
+    #[test]
+    fn config_file_returns_none_when_no_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        assert!(LintConfig::config_file(dir.path()).is_none());
+    }
+
+    #[test]
+    fn config_file_returns_local_path_when_exists() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let rc_path = dir.path().join(".mvllintrc");
+        std::fs::write(&rc_path, "# empty\n").expect("write");
+        let found = LintConfig::config_file(dir.path());
+        assert_eq!(found, Some(rc_path));
+    }
+}

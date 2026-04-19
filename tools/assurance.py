@@ -48,9 +48,13 @@ def parse_specs():
             # Check for Implementation link
             impl_match = re.search(r"\*\*Implementation:\*\*\s*`(.+?)`", block)
             impl_path = impl_match.group(1) if impl_match else None
-            impl_exists = (
-                (SRC_DIR.parent / impl_path).exists() if impl_path else False
-            )
+            impl_file = impl_path.split("::")[0].strip() if impl_path else None
+            if impl_file:
+                _resolved = (SRC_DIR.parent / impl_file).resolve()
+                _repo_root = SRC_DIR.parent.resolve()
+                impl_exists = _resolved.is_relative_to(_repo_root) and _resolved.exists()
+            else:
+                impl_exists = False
 
             # Check for Tests link
             tests_match = re.search(r"\*\*Tests:\*\*\s*(.+)", block)

@@ -52,6 +52,18 @@ impl Parser {
     // ── Statement dispatcher ───────────────────────────────────────────────
 
     pub fn parse_stmt(&mut self) -> Result<Stmt, ()> {
+        // Reject exception-handling constructs with a clear diagnostic.
+        if let TokenKind::Ident(kw) = self.peek_kind() {
+            if matches!(kw.as_str(), "throw" | "try" | "catch") {
+                let span = self.peek_span();
+                let err = ParseError {
+                    message: "MVL uses Result<T, E> for error handling, not exceptions.".into(),
+                    span,
+                };
+                self.push_recover(err);
+                return Err(());
+            }
+        }
         match self.peek_kind() {
             TokenKind::Let => self.parse_let_stmt(),
             TokenKind::Return => self.parse_return_stmt(),
@@ -745,5 +757,39 @@ mod tests {
             }
             _ => panic!("expected match stmt, got: {:?}", s),
         }
+    }
+
+    // ── Req 8: No Exceptions ──────────────────────────────────────────────
+
+    fn parse_stmts_with_errors(src: &str) -> Vec<crate::mvl::parser::ParseError> {
+        let (mut p, _) = Parser::new(src);
+        p.parse_block().ok();
+        p.errors
+    }
+
+    #[test]
+    fn throw_is_rejected() {
+        // Spec 001 Req 8: MVL MUST NOT allow exception-based error handling
+        let errs = parse_stmts_with_errors("{ throw SomeError; }");
+        assert!(!errs.is_empty(), "expected parse error for throw");
+        assert!(
+            errs[0].message.contains("Result<T, E>"),
+            "expected helpful error message, got: {}",
+            errs[0].message
+        );
+    }
+
+    #[test]
+    fn try_is_rejected() {
+        let errs = parse_stmts_with_errors("{ try { foo(); } }");
+        assert!(!errs.is_empty(), "expected parse error for try");
+        assert!(errs[0].message.contains("Result<T, E>"));
+    }
+
+    #[test]
+    fn catch_is_rejected() {
+        let errs = parse_stmts_with_errors("{ catch e { handle(e); } }");
+        assert!(!errs.is_empty(), "expected parse error for catch");
+        assert!(errs[0].message.contains("Result<T, E>"));
     }
 }

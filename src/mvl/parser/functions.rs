@@ -239,8 +239,40 @@ impl Parser {
     pub fn parse_decl(&mut self) -> Result<crate::mvl::parser::ast::Decl, ()> {
         use crate::mvl::parser::ast::Decl;
 
+        // Reject forbidden constructs with clear diagnostics before consuming `pub`.
+        if let TokenKind::Ident(kw) = self.peek_kind() {
+            match kw.as_str() {
+                "static" | "global" => {
+                    let span = self.peek_span();
+                    let err = ParseError {
+                        message: "MVL does not allow global mutable state. Pass state explicitly via function parameters.".into(),
+                        span,
+                    };
+                    self.push_recover(err);
+                    return Err(());
+                }
+                _ => {}
+            }
+        }
+
         // Optional `pub` visibility modifier
         let visible = self.eat(&TokenKind::Pub);
+
+        // Also reject forbidden constructs that appear after `pub` (e.g. `pub static`).
+        if let TokenKind::Ident(kw) = self.peek_kind() {
+            match kw.as_str() {
+                "static" | "global" => {
+                    let span = self.peek_span();
+                    let err = ParseError {
+                        message: "MVL does not allow global mutable state. Pass state explicitly via function parameters.".into(),
+                        span,
+                    };
+                    self.push_recover(err);
+                    return Err(());
+                }
+                _ => {}
+            }
+        }
 
         match self.peek_kind() {
             TokenKind::Use => Ok(Decl::Use(self.parse_use_decl(visible)?)),
@@ -862,5 +894,54 @@ fn main() -> String { greet(String::new()) }"#;
         if let Decl::Fn(fd) = &prog.declarations[0] {
             assert!(!fd.visible, "pub should be cleared after error");
         }
+    }
+
+    // ── Req 8: No Global Mutable State ────────────────────────────────────
+
+    #[test]
+    fn static_mut_is_rejected() {
+        // Spec 001 Req 8: MVL MUST NOT allow global mutable state
+        let src = "static mut COUNTER: Int = 0;";
+        let (mut p, _) = Parser::new(src);
+        p.parse_program();
+        assert!(!p.errors.is_empty(), "expected parse error for static mut");
+        assert!(
+            p.errors[0].message.contains("global mutable state"),
+            "expected helpful error message, got: {}",
+            p.errors[0].message
+        );
+    }
+
+    #[test]
+    fn static_decl_is_rejected() {
+        // `static` without `mut` is also not allowed in MVL
+        let src = "static X: Int = 42;";
+        let (mut p, _) = Parser::new(src);
+        p.parse_program();
+        assert!(!p.errors.is_empty(), "expected parse error for static decl");
+        assert!(p.errors[0].message.contains("global mutable state"));
+    }
+
+    #[test]
+    fn global_keyword_is_rejected() {
+        let src = "global X: Int = 0;";
+        let (mut p, _) = Parser::new(src);
+        p.parse_program();
+        assert!(!p.errors.is_empty(), "expected parse error for global");
+        assert!(p.errors[0].message.contains("global mutable state"));
+    }
+
+    #[test]
+    fn pub_static_is_rejected_with_helpful_message() {
+        // Spec 001 Req 8: `pub static` must also produce the MVL-specific diagnostic
+        let src = "pub static X: Int = 42;";
+        let (mut p, _) = Parser::new(src);
+        p.parse_program();
+        assert!(!p.errors.is_empty(), "expected parse error for pub static");
+        assert!(
+            p.errors[0].message.contains("global mutable state"),
+            "expected helpful error message, got: {}",
+            p.errors[0].message
+        );
     }
 }
