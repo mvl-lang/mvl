@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-release test test-unit test-integration test-corpus test-stdlib test-transpiler test-tree-sitter test-grammar-coverage lint mvl-lint format format-check assurance assurance-verbose assurance-gate docs docs-serve tree-sitter-build install install-nvim doctor clean
+.PHONY: help version build build-release test test-unit test-integration test-corpus test-stdlib test-transpiler test-tree-sitter test-grammar-coverage coverage lint mvl-lint format format-check assurance assurance-verbose assurance-gate docs docs-serve tree-sitter-build install install-nvim doctor clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -121,6 +121,10 @@ format-check: ## Check formatting without changing files
 	cargo fmt -- --check
 
 # === Assurance ===
+
+coverage: ## Run Rust line coverage via cargo-llvm-cov (cached in target/llvm-cov.json)
+	@cargo llvm-cov --json > target/llvm-cov.json 2>/dev/null
+	@python3 -c "import json; d=json.load(open('target/llvm-cov.json')); t=d['data'][0]['totals']; l=t['lines']; f=t['functions']; print(f\"Lines: {l['covered']}/{l['count']} ({l['percent']:.1f}%)\"); print(f\"Functions: {f['covered']}/{f['count']} ({f['percent']:.1f}%)\")"
 
 assurance: ## Check ISPE traceability: spec → implementation → tests (verbose with legend)
 	@python3 tools/assurance.py --verbose

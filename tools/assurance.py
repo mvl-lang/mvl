@@ -92,7 +92,18 @@ def _get_test_coverage():
     """
     import subprocess
 
-    # Try tarpaulin cache
+    # Try llvm-cov cache (macOS + Linux)
+    llvm_cov_out = Path(__file__).parent.parent / "target" / "llvm-cov.json"
+    if llvm_cov_out.exists():
+        try:
+            import json
+            data = json.loads(llvm_cov_out.read_text())
+            lines = data["data"][0]["totals"]["lines"]
+            return f"{lines['percent']:.1f}% ({lines['covered']}/{lines['count']} lines)"
+        except (json.JSONDecodeError, KeyError, IndexError):
+            pass
+
+    # Try tarpaulin cache (Linux only)
     tarpaulin_out = Path(__file__).parent.parent / "target" / "tarpaulin" / "coverage.json"
     if tarpaulin_out.exists():
         try:
