@@ -255,3 +255,354 @@ pub fn format_report(branches: &[BranchInfo], hits: &[u64], all_files: &[&str]) 
     ));
     out
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── BranchKind::label ─────────────────────────────────────────────────
+
+    #[test]
+    fn label_if_true() {
+        assert_eq!(BranchKind::IfTrue.label(), "if true");
+    }
+
+    #[test]
+    fn label_if_false() {
+        assert_eq!(BranchKind::IfFalse.label(), "if false");
+    }
+
+    #[test]
+    fn label_match_arm_zero() {
+        assert_eq!(BranchKind::MatchArm(0).label(), "arm 0");
+    }
+
+    #[test]
+    fn label_match_arm_nonzero() {
+        assert_eq!(BranchKind::MatchArm(3).label(), "arm 3");
+    }
+
+    #[test]
+    fn label_for_body() {
+        assert_eq!(BranchKind::ForBody.label(), "for body");
+    }
+
+    #[test]
+    fn label_while_body() {
+        assert_eq!(BranchKind::WhileBody.label(), "while body");
+    }
+
+    #[test]
+    fn label_fn_entry() {
+        assert_eq!(BranchKind::FnEntry.label(), "fn entry");
+    }
+
+    // ── BranchKind::is_decision ───────────────────────────────────────────
+
+    #[test]
+    fn is_decision_true_for_if_true() {
+        assert!(BranchKind::IfTrue.is_decision());
+    }
+
+    #[test]
+    fn is_decision_true_for_if_false() {
+        assert!(BranchKind::IfFalse.is_decision());
+    }
+
+    #[test]
+    fn is_decision_true_for_match_arm() {
+        assert!(BranchKind::MatchArm(0).is_decision());
+        assert!(BranchKind::MatchArm(5).is_decision());
+    }
+
+    #[test]
+    fn is_decision_false_for_for_body() {
+        assert!(!BranchKind::ForBody.is_decision());
+    }
+
+    #[test]
+    fn is_decision_false_for_while_body() {
+        assert!(!BranchKind::WhileBody.is_decision());
+    }
+
+    #[test]
+    fn is_decision_false_for_fn_entry() {
+        assert!(!BranchKind::FnEntry.is_decision());
+    }
+
+    // ── CoverageMap ───────────────────────────────────────────────────────
+
+    #[test]
+    fn coverage_map_new_starts_empty() {
+        let m = CoverageMap::new(0);
+        assert!(m.branches.is_empty());
+        assert_eq!(m.next_id(), 0);
+    }
+
+    #[test]
+    fn coverage_map_new_with_nonzero_start_id() {
+        let m = CoverageMap::new(10);
+        assert_eq!(m.next_id(), 10);
+    }
+
+    #[test]
+    fn coverage_map_alloc_returns_sequential_ids() {
+        let mut m = CoverageMap::new(0);
+        let id0 = m.alloc("f".into(), "file".into(), 1, BranchKind::IfTrue, false);
+        let id1 = m.alloc("f".into(), "file".into(), 2, BranchKind::IfFalse, false);
+        let id2 = m.alloc("f".into(), "file".into(), 3, BranchKind::MatchArm(0), false);
+        assert_eq!(id0, 0);
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+    }
+
+    #[test]
+    fn coverage_map_alloc_with_nonzero_start_id() {
+        let mut m = CoverageMap::new(5);
+        let id = m.alloc("f".into(), "file".into(), 1, BranchKind::FnEntry, false);
+        assert_eq!(id, 5);
+        assert_eq!(m.next_id(), 6);
+    }
+
+    #[test]
+    fn coverage_map_alloc_stores_metadata() {
+        let mut m = CoverageMap::new(0);
+        m.alloc(
+            "my_fn".into(),
+            "parser".into(),
+            42,
+            BranchKind::MatchArm(1),
+            true,
+        );
+        let b = &m.branches[0];
+        assert_eq!(b.id, 0);
+        assert_eq!(b.fn_name, "my_fn");
+        assert_eq!(b.file, "parser");
+        assert_eq!(b.line, 42);
+        assert!(matches!(b.kind, BranchKind::MatchArm(1)));
+        assert!(b.is_test_fn);
+    }
+
+    #[test]
+    fn coverage_map_next_id_tracks_allocations() {
+        let mut m = CoverageMap::new(0);
+        assert_eq!(m.next_id(), 0);
+        m.alloc("f".into(), "f".into(), 1, BranchKind::IfTrue, false);
+        assert_eq!(m.next_id(), 1);
+        m.alloc("f".into(), "f".into(), 2, BranchKind::IfFalse, false);
+        assert_eq!(m.next_id(), 2);
+    }
+
+    // ── emit_cov_preamble ─────────────────────────────────────────────────
+
+    #[test]
+    fn emit_cov_preamble_empty_when_total_zero() {
+        assert_eq!(emit_cov_preamble(0), "");
+    }
+
+    #[test]
+    fn emit_cov_preamble_contains_module_declaration() {
+        let out = emit_cov_preamble(1);
+        assert!(out.contains("mod __mvl_cov"), "missing module declaration");
+    }
+
+    #[test]
+    fn emit_cov_preamble_array_size_matches_total() {
+        let out = emit_cov_preamble(7);
+        assert!(out.contains("AtomicU64; 7]"), "array size must match total");
+    }
+
+    #[test]
+    fn emit_cov_preamble_exposes_hit_and_get_fns() {
+        let out = emit_cov_preamble(3);
+        assert!(out.contains("pub fn hit(id: usize)"), "missing hit fn");
+        assert!(out.contains("pub fn get(id: usize)"), "missing get fn");
+    }
+
+    #[test]
+    fn emit_cov_preamble_is_cfg_test_gated() {
+        let out = emit_cov_preamble(1);
+        assert!(out.contains("#[cfg(test)]"), "must be cfg(test) gated");
+    }
+
+    // ── emit_cov_report_test ──────────────────────────────────────────────
+
+    #[test]
+    fn emit_cov_report_test_empty_when_total_zero() {
+        assert_eq!(emit_cov_report_test(0), "");
+    }
+
+    #[test]
+    fn emit_cov_report_test_contains_test_fn() {
+        let out = emit_cov_report_test(1);
+        assert!(out.contains("#[test]"), "missing #[test]");
+        assert!(out.contains("fn zzz_mvl_cov_report()"), "missing report fn");
+    }
+
+    #[test]
+    fn emit_cov_report_test_reads_mvl_cov_out_env_var() {
+        let out = emit_cov_report_test(1);
+        assert!(out.contains("MVL_COV_OUT"), "must read MVL_COV_OUT");
+    }
+
+    #[test]
+    fn emit_cov_report_test_emits_one_get_per_branch() {
+        // For total=3, exactly 3 crate::__mvl_cov::get(N) calls must appear.
+        let out = emit_cov_report_test(3);
+        assert!(out.contains("get(0)"), "missing get(0)");
+        assert!(out.contains("get(1)"), "missing get(1)");
+        assert!(out.contains("get(2)"), "missing get(2)");
+        assert!(!out.contains("get(3)"), "must not exceed total");
+    }
+
+    // ── format_report ─────────────────────────────────────────────────────
+
+    fn make_branch(
+        id: usize,
+        fn_name: &str,
+        file: &str,
+        line: u32,
+        kind: BranchKind,
+        is_test_fn: bool,
+    ) -> BranchInfo {
+        BranchInfo {
+            id,
+            fn_name: fn_name.to_string(),
+            file: file.to_string(),
+            line,
+            kind,
+            is_test_fn,
+        }
+    }
+
+    #[test]
+    fn format_report_no_decision_branches_for_file() {
+        // A file listed in all_files but with no branches shows "(no decision branches)".
+        let report = format_report(&[], &[], &["parser"]);
+        assert!(report.contains("parser.mvl"));
+        assert!(report.contains("(no decision branches)"));
+    }
+
+    #[test]
+    fn format_report_excludes_test_functions() {
+        let branches = vec![make_branch(
+            0,
+            "test_fn",
+            "parser",
+            1,
+            BranchKind::IfTrue,
+            true,
+        )];
+        let hits = vec![1u64];
+        let report = format_report(&branches, &hits, &["parser"]);
+        // test fn is excluded, so file should still show "(no decision branches)"
+        assert!(
+            report.contains("(no decision branches)"),
+            "test fns must be excluded"
+        );
+    }
+
+    #[test]
+    fn format_report_all_branches_hit_shows_check_mark() {
+        let branches = vec![
+            make_branch(0, "parse", "parser", 10, BranchKind::IfTrue, false),
+            make_branch(1, "parse", "parser", 11, BranchKind::IfFalse, false),
+        ];
+        let hits = vec![5u64, 3u64];
+        let report = format_report(&branches, &hits, &["parser"]);
+        assert!(report.contains("✓"), "fully-covered fn must show ✓");
+        assert!(report.contains("2/2"), "both branches must be counted");
+        assert!(report.contains("100%"));
+    }
+
+    #[test]
+    fn format_report_partial_coverage_shows_triangle() {
+        let branches = vec![
+            make_branch(0, "parse", "parser", 10, BranchKind::IfTrue, false),
+            make_branch(1, "parse", "parser", 11, BranchKind::IfFalse, false),
+        ];
+        let hits = vec![1u64, 0u64]; // only IfTrue hit
+        let report = format_report(&branches, &hits, &["parser"]);
+        assert!(report.contains("△"), "partially-covered fn must show △");
+        assert!(report.contains("1/2"));
+        assert!(report.contains("50%"));
+    }
+
+    #[test]
+    fn format_report_fn_entry_only_shows_called_uncalled() {
+        // A function with only FnEntry (no decision branches) reports as 1/1 or 0/1.
+        let branches = vec![make_branch(
+            0,
+            "simple_fn",
+            "utils",
+            5,
+            BranchKind::FnEntry,
+            false,
+        )];
+        let hits_called = vec![1u64];
+        let report_called = format_report(&branches, &hits_called, &["utils"]);
+        assert!(report_called.contains("1/1"), "called fn must show 1/1");
+
+        let hits_uncalled = vec![0u64];
+        let report_uncalled = format_report(&branches, &hits_uncalled, &["utils"]);
+        assert!(report_uncalled.contains("0/1"), "uncalled fn must show 0/1");
+    }
+
+    #[test]
+    fn format_report_for_and_while_bodies_not_counted_as_decisions() {
+        // ForBody and WhileBody probes should not appear as decision branches.
+        let branches = vec![
+            make_branch(0, "loop_fn", "main", 1, BranchKind::FnEntry, false),
+            make_branch(1, "loop_fn", "main", 2, BranchKind::ForBody, false),
+            make_branch(2, "loop_fn", "main", 3, BranchKind::WhileBody, false),
+        ];
+        let hits = vec![1u64, 5u64, 0u64];
+        let report = format_report(&branches, &hits, &["main"]);
+        // loop_fn has only FnEntry — should appear as 1/1 (called), not as 3 branches
+        assert!(
+            report.contains("1/1"),
+            "loop/while not counted as decision branches"
+        );
+    }
+
+    #[test]
+    fn format_report_includes_grand_total_line() {
+        let branches = vec![
+            make_branch(0, "f", "a", 1, BranchKind::IfTrue, false),
+            make_branch(1, "f", "a", 2, BranchKind::IfFalse, false),
+        ];
+        let hits = vec![1u64, 1u64];
+        let report = format_report(&branches, &hits, &["a"]);
+        assert!(report.contains("Total:"), "must include grand total line");
+    }
+
+    #[test]
+    fn format_report_multiple_files_in_order() {
+        let branches = vec![
+            make_branch(0, "f", "alpha", 1, BranchKind::IfTrue, false),
+            make_branch(1, "g", "beta", 1, BranchKind::IfTrue, false),
+        ];
+        let hits = vec![1u64, 0u64];
+        let report = format_report(&branches, &hits, &["alpha", "beta"]);
+        let pos_alpha = report.find("alpha.mvl").unwrap();
+        let pos_beta = report.find("beta.mvl").unwrap();
+        assert!(pos_alpha < pos_beta, "files must appear in all_files order");
+    }
+
+    #[test]
+    fn format_report_file_in_all_files_but_no_branches_still_appears() {
+        // "empty.mvl" has no branches at all — must still appear as "(no decision branches)".
+        let report = format_report(&[], &[], &["empty"]);
+        assert!(report.contains("empty.mvl"));
+        assert!(report.contains("(no decision branches)"));
+    }
+
+    #[test]
+    fn format_report_total_zero_branches_shows_100_percent() {
+        // When there are no branches at all, checked_div returns None → 100%.
+        let report = format_report(&[], &[], &[]);
+        assert!(report.contains("Total: 0/0 branches  (100%)"));
+    }
+}
