@@ -65,3 +65,62 @@ impl LintDiag {
         )
     }
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn severity_display_warning() {
+        assert_eq!(format!("{}", Severity::Warning), "warning");
+    }
+
+    #[test]
+    fn severity_display_error() {
+        assert_eq!(format!("{}", Severity::Error), "error");
+    }
+
+    #[test]
+    fn severity_ordering() {
+        assert!(Severity::Warning < Severity::Error);
+    }
+
+    #[test]
+    fn lint_diag_warning_constructor() {
+        let d = LintDiag::warning("my-rule", "something is off", 5, 3);
+        assert_eq!(d.severity, Severity::Warning);
+        assert_eq!(d.rule, "my-rule");
+        assert_eq!(d.message, "something is off");
+        assert_eq!(d.span.line, 5);
+        assert_eq!(d.span.col, 3);
+    }
+
+    #[test]
+    fn lint_diag_error_constructor() {
+        let d = LintDiag::error("bad-rule", "critical issue", 10, 1);
+        assert_eq!(d.severity, Severity::Error);
+        assert_eq!(d.rule, "bad-rule");
+        assert_eq!(d.message, "critical issue");
+    }
+
+    #[test]
+    fn lint_diag_render_format() {
+        let d = LintDiag::warning("line-length", "line too long", 42, 121);
+        let rendered = d.render("src/main.mvl");
+        assert_eq!(
+            rendered,
+            "src/main.mvl:42:121: warning: [line-length] line too long"
+        );
+    }
+
+    #[test]
+    fn lint_diag_render_error_format() {
+        let d = LintDiag::error("naming", "function name must be snake_case", 1, 4);
+        let rendered = d.render("lib.mvl");
+        assert!(rendered.contains("error:"));
+        assert!(rendered.contains("[naming]"));
+        assert!(rendered.contains("snake_case"));
+    }
+}
