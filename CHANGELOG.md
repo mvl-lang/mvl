@@ -6,6 +6,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.48.0] — 2026-04-19
+
+### Added
+
+- **Spec enforcement for forbidden language constructs** — Parser now explicitly rejects `static`, `global`, `throw`, `try`, and `catch` with clear diagnostic messages pointing to MVL's design principles. Covers spec 001 Requirement 8 (no null/exceptions/global state).
+- **Comprehensive linter test coverage** — Full test suites for `linter/mod.rs`, `linter/config.rs`, and `linter/errors.rs`. Tests cover config file I/O with tempfile isolation, parse_bool edge cases, default field validation, rule suppression, and diagnostic formatting.
+- **Transpiler integration tests for all emit_exprs branches** — Extended test coverage for method call emission (50+ tests): iterator adapters, bit operations, string operations, lambda expressions, type arguments, move/consume semantics. All major `transpile_*` entry points exercised.
+
+### Fixed
+
+- **Assurance spec link validation** — Fixed `tools/assurance.py` to strip `::symbol` suffix from spec Implementation paths before checking file existence. Resolved 13 stale "file not found" false positives, lifting spec completeness from 69% → 88%.
+- **Parser guard for pub static/pub global** — Added second validation check after `pub` consumption to catch `pub static X` and `pub global X` declarations with the proper MVL diagnostic (previously emitted generic "expected declaration" error).
+- **Test assertion robustness** — Strengthened move/consume transpiler tests to verify wrapper functions are stripped; fixed backslash char literal test to match exact escaped form; tightened error render format test to use full equality assertion.
+- **Path traversal hardening in assurance** — Added `is_relative_to(repo_root)` guard when resolving spec-controlled file paths, preventing crafted spec entries from traversing outside the repository.
+
 ## [0.47.0] — 2026-04-18
 
 ### Changed
