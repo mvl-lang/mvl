@@ -225,7 +225,7 @@ where T: Eq, E: Display
 - `Iterator<T>` — lazy iteration protocol (see Requirement 11)
 - User-defined traits (declared in the module system)
 
-**Implementation:** `src/mvl/parser/ast.rs::Constraint`, `src/mvl/checker/mod.rs`
+**Implementation:** `src/mvl/parser/ast.rs::GenericParam`, `src/mvl/checker/mod.rs`
 
 **Tests:** `tests/type_checker.rs::generic_identity_parses`, `tests/type_checker.rs::generic_type_decl_parses`, `tests/type_checker.rs::generic_pair_type_parses`, `tests/type_checker.rs::generic_with_constraint_parses`, `tests/type_checker.rs::generic_multiple_constraints_parse`, `tests/compile_and_run.rs::linked_list_check_passes`, `tests/compile_and_run.rs::linked_list_runs_and_produces_expected_output` (#194)
 

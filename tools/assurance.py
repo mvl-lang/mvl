@@ -48,8 +48,9 @@ def parse_specs():
             # Check for Implementation link
             impl_match = re.search(r"\*\*Implementation:\*\*\s*`(.+?)`", block)
             impl_path = impl_match.group(1) if impl_match else None
+            impl_file = impl_path.split("::")[0].strip() if impl_path else None
             impl_exists = (
-                (SRC_DIR.parent / impl_path).exists() if impl_path else False
+                (SRC_DIR.parent / impl_file).exists() if impl_file else False
             )
 
             # Check for Tests link
