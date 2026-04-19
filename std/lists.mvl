@@ -1,0 +1,60 @@
+// MVL stdlib — pure MVL list method implementations
+//
+// Phase 4 (ADR-0003): implementations of list methods that can be expressed
+// as pure MVL using only the kernel primitives from std/primitives.mvl.
+// Method-call syntax `xs.take(n)` compiles to `take(xs, n)` via UFCS dispatch.
+//
+// Higher-order methods (filter, fold, map, etc.) remain in the transpiler for
+// now due to Rust closure/Clone semantics; they will move here in a later phase
+// once MVL gains explicit Clone bounds in generic signatures.
+
+/// Safe slice `[start, end)` — clamped, never panics. Wraps the list_slice kernel.
+pub fn slice<T>(xs: List<T>, start: Int, end: Int) -> List<T> where T: Clone {
+    list_slice(xs, start, end)
+}
+
+/// Return the first `n` elements of `xs`.
+pub fn take<T>(xs: List<T>, n: Int) -> List<T> where T: Clone {
+    list_slice(xs, 0, n)
+}
+
+/// Drop the first `n` elements of `xs`.
+pub fn skip<T>(xs: List<T>, n: Int) -> List<T> where T: Clone {
+    list_slice(xs, n, list_len(xs))
+}
+
+/// Return `Some(xs[0])` or `None` if the list is empty.
+pub fn first<T>(xs: List<T>) -> Option<T> where T: Clone {
+    list_get(xs, 0)
+}
+
+/// Return `Some(xs[last])` or `None` if the list is empty.
+pub fn last<T>(xs: List<T>) -> Option<T> where T: Clone {
+    list_get(xs, list_len(xs) - 1)
+}
+
+/// Flatten a list of lists into a single list.
+pub fn flatten<T>(xs: List<List<T>>) -> List<T> where T: Clone {
+    let mut result: List<T> = [];
+    for inner in xs {
+        for x in inner {
+            result.push(x)
+        }
+    };
+    result
+}
+
+/// Reverse a list.
+pub fn reverse<T>(xs: List<T>) -> List<T> where T: Clone {
+    let len = list_len(xs);
+    let mut result: List<T> = [];
+    let mut i = len - 1;
+    while i >= 0 {
+        match list_get(xs, i) {
+            Some(v) => { result.push(v) },
+            None => {}
+        };
+        i = i - 1
+    };
+    result
+}

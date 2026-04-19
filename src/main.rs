@@ -634,19 +634,11 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
         process::exit(1);
     }
 
-    // Load the implicit stdlib prelude (std/core.mvl) so non-stub functions
-    // (e.g. range()) are transpiled from MVL source rather than relying on
-    // hardcoded Rust mappings in the transpiler.
-    // Use the embedded binary directly (compiled-in, always current).
-    let prelude_content = stdlib::stdlib_content("core.mvl")
-        .expect("core.mvl is embedded at compile time and must be present");
-    let (mut prelude_parser, prelude_lex_errs) = Parser::new(prelude_content);
-    let prelude_prog = prelude_parser.parse_program();
-    if !prelude_lex_errs.is_empty() || !prelude_parser.errors().is_empty() {
-        eprintln!("internal error: embedded core.mvl failed to parse — this is a compiler bug");
-        process::exit(1);
-    }
-    let stdlib_prelude_progs = vec![prelude_prog];
+    // Load the implicit stdlib prelude: core.mvl + Phase 4 stdlib files
+    // (primitives.mvl, strings.mvl, lists.mvl). Non-stub MVL functions
+    // (e.g. range(), trim()) are transpiled from source rather than relying
+    // on hardcoded Rust mappings in the transpiler. Embedded at compile time.
+    let stdlib_prelude_progs = load_implicit_prelude();
 
     let out =
         transpiler::transpile_project(&crate_name, &prog, &sibling_modules, &stdlib_prelude_progs);
@@ -761,7 +753,7 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
     // Idempotent for concurrent invocations with identical source: create_dir_all
     // + fs::copy both tolerate pre-existing targets.  Stale artefacts from a
     // prior build of a different version are handled by cargo's incremental cache.
-    if out.has_extern_rust {
+    if out.use_mvl_runtime {
         let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mvl_runtime");
         let runtime_dst = tmp_dir.join("mvl_runtime");
         if !runtime_src.exists() {
@@ -881,13 +873,8 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool) {
         process::exit(1);
     });
 
-    // Load stdlib prelude so non-stub functions (e.g. range()) are available
-    // in each test module without requiring a hardcoded Rust mapping.
-    let prelude_content = stdlib::stdlib_content("core.mvl")
-        .expect("core.mvl is embedded at compile time and must be present");
-    let (mut prelude_parser, _prelude_lex_errs) = Parser::new(prelude_content);
-    let prelude_prog = prelude_parser.parse_program();
-    let stdlib_prelude_progs = vec![prelude_prog];
+    // Load the implicit stdlib prelude (core + Phase 4 stdlib files).
+    let stdlib_prelude_progs = load_implicit_prelude();
 
     // Build a combined Rust test file from all test modules.
     // Each entry: (module_name, display_label, content)
@@ -1196,12 +1183,8 @@ fn cmd_mutate(path: &str, quiet: bool, limit: Option<usize>) {
         process::exit(1);
     });
 
-    // Load stdlib prelude
-    let prelude_content = stdlib::stdlib_content("core.mvl")
-        .expect("core.mvl is embedded at compile time and must be present");
-    let (mut prelude_parser, _) = Parser::new(prelude_content);
-    let prelude_prog = prelude_parser.parse_program();
-    let stdlib_prelude_progs = vec![prelude_prog];
+    // Load the implicit stdlib prelude (core + Phase 4 stdlib files).
+    let stdlib_prelude_progs = load_implicit_prelude();
 
     // Transpile all test files with mutation instrumentation
     let mut modules: Vec<(String, String, String)> = Vec::new();
@@ -2022,6 +2005,25 @@ fn parse_or_exit(path: &str) -> (mvl::mvl::parser::ast::Program, String) {
 /// The `std` namespace is excluded — it is provided by the runtime, not a sibling file.
 /// Parse the stdlib files imported by the given programs and return them as
 /// prelude programs for the checker.  For `use std.io.{...}` the path stored
+/// Build the implicit prelude: core.mvl + Phase 4 stdlib files (primitives,
+/// strings, lists). Every compile path loads these four files so that the
+/// string/list method implementations and extern declarations are always
+/// visible without requiring an explicit `use std.*` in user programs.
+///
+/// Panics (via `process::exit`) if any embedded file fails to parse, since
+/// that would be a compiler bug.
+fn load_implicit_prelude() -> Vec<mvl::mvl::parser::ast::Program> {
+    const IMPLICIT: &[&str] = &["core.mvl", "primitives.mvl", "strings.mvl", "lists.mvl"];
+    let mut progs = Vec::new();
+    for name in IMPLICIT {
+        let content = stdlib::stdlib_content(name)
+            .unwrap_or_else(|| panic!("{name} is embedded at compile time and must be present"));
+        let (mut parser, _) = Parser::new(content);
+        progs.push(parser.parse_program());
+    }
+    progs
+}
+
 /// is `["std", "io"]`, so we look for `<stdlib_dir>/io.mvl`.
 /// Errors (missing file, parse failure) are silently ignored — the checker
 /// will surface "undefined function" errors for any symbol that wasn't loaded.

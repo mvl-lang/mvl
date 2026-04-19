@@ -14,6 +14,14 @@ use std::path::{Path, PathBuf};
 /// All stdlib `.mvl` source files embedded at compile time.
 pub const STDLIB_FILES: &[(&str, &str)] = &[
     ("core.mvl", include_str!("../../../std/core.mvl")),
+    // Phase 4: extern kernel + pure MVL stdlib (ADR-0003).
+    // These three files are always loaded as the implicit prelude alongside core.mvl.
+    (
+        "primitives.mvl",
+        include_str!("../../../std/primitives.mvl"),
+    ),
+    ("strings.mvl", include_str!("../../../std/strings.mvl")),
+    ("lists.mvl", include_str!("../../../std/lists.mvl")),
     ("io.mvl", include_str!("../../../std/io.mvl")),
     ("args.mvl", include_str!("../../../std/args.mvl")),
     ("time.mvl", include_str!("../../../std/time.mvl")),

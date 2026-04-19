@@ -72,6 +72,18 @@ pub fn count_extern_decls(prog: &Program) -> usize {
         .count()
 }
 
+/// True when any prelude program has `extern "rust"` declarations.
+///
+/// Phase 4: `std/primitives.mvl` is always in the prelude and declares the
+/// kernel trust boundary via `extern "rust" { … }`. Any program that loads
+/// this prelude needs `mvl_runtime` as a Cargo dependency so that the kernel
+/// primitives (re-exported via `mvl_runtime::prelude::*`) are in scope.
+fn prelude_requires_runtime(prelude_progs: &[Program]) -> bool {
+    prelude_progs
+        .iter()
+        .any(|p| p.declarations.iter().any(|d| matches!(d, Decl::Extern(_))))
+}
+
 /// Returns true if the program declares at least one `extern "rust"` block.
 pub fn has_extern_rust_decls(prog: &Program) -> bool {
     prog.declarations
@@ -109,6 +121,9 @@ pub struct ProjectOutput {
     pub extern_count: usize,
     /// True when the entry program declares at least one `extern "rust"` block.
     pub has_extern_rust: bool,
+    /// True when the generated code uses `use mvl_runtime::prelude::*` and the
+    /// runtime crate must be present as a path dependency.
+    pub use_mvl_runtime: bool,
 }
 
 /// Transpile a multi-file project to Rust source.
@@ -133,7 +148,8 @@ pub fn transpile_project(
     // mvl_runtime::prelude::* and require the runtime crate to be present.
     let use_runtime = extern_count > 0
         || has_std_imports(entry_prog)
-        || siblings.iter().any(|(_, p)| has_std_imports(p));
+        || siblings.iter().any(|(_, p)| has_std_imports(p))
+        || prelude_requires_runtime(prelude_progs);
 
     let sibling_names: Vec<&str> = siblings.iter().map(|(n, _)| n.as_str()).collect();
     let mut cg = Codegen::new();
@@ -148,7 +164,7 @@ pub fn transpile_project(
         .map(|(name, prog)| {
             let mut cg = Codegen::new();
             if entry_uses_runtime {
-                cg.emit_sibling_module(prog);
+                cg.emit_sibling_module(prog, prelude_progs);
             } else {
                 cg.emit_program(prog);
             }
@@ -174,6 +190,7 @@ pub fn transpile_project(
         has_main,
         extern_count,
         has_extern_rust,
+        use_mvl_runtime: use_runtime,
     }
 }
 
@@ -187,7 +204,8 @@ pub fn transpile_with_prelude(
     let has_main = has_main_fn(prog);
     let extern_count = count_extern_decls(prog);
     let has_extern_rust = has_extern_rust_decls(prog);
-    let use_runtime = extern_count > 0 || has_std_imports(prog);
+    let use_runtime =
+        extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
     let mut cg = Codegen::new();
     cg.emit_program_with_mods(prog, &[], prelude_progs);
@@ -226,7 +244,8 @@ pub fn transpile_source_with_prelude(
     let has_main = has_main_fn(prog);
     let extern_count = count_extern_decls(prog);
     let has_extern_rust = has_extern_rust_decls(prog);
-    let use_runtime = extern_count > 0 || has_std_imports(prog);
+    let use_runtime =
+        extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
     let mut cg = Codegen::new();
     cg.test_extern_stubs = true;
@@ -303,7 +322,8 @@ pub fn transpile_covered_with_prelude(
     let has_main = has_main_fn(prog);
     let extern_count = count_extern_decls(prog);
     let has_extern_rust = has_extern_rust_decls(prog);
-    let use_runtime = extern_count > 0 || has_std_imports(prog);
+    let use_runtime =
+        extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
     let mut cg = Codegen::new();
     cg.coverage = Some(CoverageMap::new(start_id));
@@ -395,7 +415,8 @@ pub fn transpile_covered_source_with_prelude(
     let has_main = has_main_fn(prog);
     let extern_count = count_extern_decls(prog);
     let has_extern_rust = has_extern_rust_decls(prog);
-    let use_runtime = extern_count > 0 || has_std_imports(prog);
+    let use_runtime =
+        extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
     let mut cg = Codegen::new();
     cg.coverage = Some(CoverageMap::new(start_id));
@@ -492,7 +513,8 @@ pub fn transpile_mutated_with_prelude(
     let has_main = has_main_fn(prog);
     let extern_count = count_extern_decls(prog);
     let has_extern_rust = has_extern_rust_decls(prog);
-    let use_runtime = extern_count > 0 || has_std_imports(prog);
+    let use_runtime =
+        extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
     let mut cg = Codegen::new();
     cg.mutation = Some(MutationMap::new());
@@ -536,7 +558,8 @@ pub fn transpile_mutated_source_with_prelude(
     let has_main = has_main_fn(prog);
     let extern_count = count_extern_decls(prog);
     let has_extern_rust = has_extern_rust_decls(prog);
-    let use_runtime = extern_count > 0 || has_std_imports(prog);
+    let use_runtime =
+        extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
     let mut cg = Codegen::new();
     cg.mutation = Some(MutationMap::new());

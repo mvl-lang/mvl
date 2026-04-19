@@ -5,6 +5,48 @@ use crate::mvl::transpiler::codegen::Codegen;
 use crate::mvl::transpiler::coverage::BranchKind;
 use crate::mvl::transpiler::emit_types::emit_type_expr;
 
+/// Methods implemented as pure MVL functions in std/strings.mvl and std/lists.mvl.
+///
+/// When the transpiler sees `receiver.method(args)` for one of these names it
+/// emits a UFCS free-function call instead: `method(receiver, args)`.  The Rust
+/// function is the transpiled MVL stdlib implementation, available in every
+/// generated file via the implicit prelude.
+///
+/// Phase 4 (ADR-0003): this replaces per-method hardcoded Rust emission with
+/// an explicit trust boundary declared in std/primitives.mvl.
+/// Methods implemented as pure MVL functions in std/strings.mvl and std/lists.mvl.
+///
+/// When the transpiler sees `receiver.method(args)` for one of these names it
+/// emits a UFCS free-function call instead: `method(receiver.clone().into(), args)`.
+/// The `.into()` coercion allows IFC-label wrapper types (`Clean<String>`, etc.) to
+/// flow into functions that take the plain inner type — `From<Label<T>> for T` is
+/// implemented in `mvl_runtime::ifc`.
+///
+/// Phase 4 (ADR-0003): replaces per-method hardcoded Rust emission with an explicit
+/// trust boundary declared in std/primitives.mvl.
+const STDLIB_UFCS_METHODS: &[&str] = &[
+    // std/strings.mvl
+    "trim",
+    "to_upper",
+    "to_lower",
+    "chars",
+    "concat",
+    "starts_with",
+    "ends_with",
+    "find",
+    "replace",
+    "split",
+    "substring",
+    // std/lists.mvl
+    "slice",
+    "take",
+    "skip",
+    "first",
+    "last",
+    "flatten",
+    "reverse",
+];
+
 /// Emit an expression into the code buffer (no trailing newline).
 pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
     match expr {
@@ -54,46 +96,45 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
             ..
         } => {
             // Methods that don't map directly to a Rust method of the same name.
+            //
+            // Phase 4 note: string and list methods that have pure MVL implementations
+            // in std/strings.mvl and std/lists.mvl are dispatched via UFCS in the `_`
+            // fallback below: `s.trim()` → `trim(s)`, `xs.take(n)` → `take(xs, n)`.
+            // The actual Rust implementation is the transpiled MVL stdlib function.
             match method.as_str() {
-                // xs.slice(start, end) — clamps negative indices to 0, OOB end to len,
-                // inverted range (start > end) returns empty. Never panics.
-                "slice" if args.len() == 2 => {
-                    emit_safe_list_slice(cg, receiver, &args[0], &args[1]);
-                }
-                // s.concat(other) — String concatenation. Emits `s.clone() + &other`
-                // because Rust's Add<&str> for String requires ownership of the left side.
-                // `.clone()` preserves MVL value semantics (receiver is not consumed).
-                // `&(arg)` works because String: Deref<Target=str>, so the coercion to &str
-                // is automatic. The checker enforces arity=1 and arg type=String before here.
-                "concat" if args.len() == 1 => {
-                    // Extra outer parens ensure chained method calls bind to the
-                    // concatenated String result, not to the argument expression.
-                    // Without them, `a.concat(b).len()` emits `(a).clone() + &(b).len()`
-                    // which applies `.len()` to `b` due to Rust operator precedence.
-                    cg.push("((");
+                // ── Higher-order collection methods ──────────────────────────────
+                //
+                // These stay as transpiler special cases because they require Rust
+                // iterator/closure semantics that can't yet be expressed in pure MVL
+                // (fn(T)->Bool is a bare fn pointer, not impl Fn; Clone bounds on
+                // generic params are not yet automatic in MVL generics).
+
+                // map(f) — works for List<T>, Option<T>, and Result<T,E> via the
+                // MvlMap trait. The function arg is wrapped in `(…)` to prevent Rust
+                // from parsing a lambda body as the call target.
+                "map" if args.len() == 1 => {
                     emit_expr(cg, receiver);
-                    cg.push(").clone() + &(");
+                    cg.push(".mvl_map(|__x| (");
                     emit_expr(cg, &args[0]);
-                    cg.push("))");
+                    cg.push(")(__x.clone()))");
                 }
-                "concat" => {
-                    unreachable!("concat with arity != 1 must be rejected by the checker")
-                }
-                // s.substring(start, end) — char-based (UTF-8 safe), clamps negatives,
-                // inverted range returns empty string. Never panics.
-                "substring" if args.len() == 2 => {
-                    emit_safe_substring(cg, receiver, &args[0], &args[1]);
-                }
-                // take(n)/skip(n) — List<T> slice methods that need iterator adapter in Rust
-                "take" | "skip" => {
+                // filter(f) — List<T>; iterator::filter with clone for MVL value semantics
+                "filter" if args.len() == 1 => {
                     emit_expr(cg, receiver);
-                    cg.push(".into_iter().");
-                    cg.push(method);
-                    cg.push("(");
-                    emit_args(cg, args);
-                    cg.push(").collect::<Vec<_>>()");
+                    cg.push(".into_iter().filter(|__x| (");
+                    emit_expr(cg, &args[0]);
+                    cg.push(")(__x.clone())).collect::<Vec<_>>()");
                 }
-                // take_while(f)/skip_while(f) — Rust iterator expects &T, MVL predicate takes T
+                // fold(init, f) — List<T>; iterator::fold
+                "fold" if args.len() == 2 => {
+                    emit_expr(cg, receiver);
+                    cg.push(".into_iter().fold(");
+                    emit_expr_as_arg(cg, &args[0]);
+                    cg.push(", |__acc, __x| (");
+                    emit_expr(cg, &args[1]);
+                    cg.push(")(__acc, __x.clone()))");
+                }
+                // take_while(f)/skip_while(f) — iterator with &T predicate bridged to T
                 "take_while" | "skip_while" => {
                     emit_expr(cg, receiver);
                     cg.push(".into_iter().");
@@ -104,7 +145,7 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                     }
                     cg.push("(__x.clone())).collect::<Vec<_>>()");
                 }
-                // windows(n)/chunks(n) — Rust returns &[T] slices, collect into Vec<Vec<T>>
+                // windows(n)/chunks(n) — Rust returns &[T] slices; collect into Vec<Vec<T>>
                 "windows" | "chunks" => {
                     emit_expr(cg, receiver);
                     cg.push(".");
@@ -113,13 +154,7 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                     emit_args(cg, args);
                     cg.push(").map(|w| w.to_vec()).collect::<Vec<_>>()");
                 }
-                // flatten() — List<List<T>> → List<T>
-                "flatten" => {
-                    emit_expr(cg, receiver);
-                    cg.push(".into_iter().flatten().collect::<Vec<_>>()");
-                }
-                // partition(f) — Rust iterator expects &T predicate, MVL takes T
-                // Use turbofish ::<Vec<_>, _> so Rust can infer the element type
+                // partition(f) — turbofish needed so Rust can infer the element type
                 "partition" => {
                     emit_expr(cg, receiver);
                     cg.push(".into_iter().partition::<Vec<_>, _>(|__x| ");
@@ -128,7 +163,7 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                     }
                     cg.push("(__x.clone()))");
                 }
-                // group_by(f: fn(T) -> K) — no native Rust equivalent; fold into HashMap
+                // group_by(f) — no native Rust equivalent; fold into HashMap
                 "group_by" => {
                     cg.push("{ let mut __m = std::collections::HashMap::new(); for __v in ");
                     emit_expr(cg, receiver);
@@ -138,33 +173,24 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                     }
                     cg.push("(__v.clone())).or_insert_with(Vec::new).push(__v); } __m }");
                 }
-                // chars() — String::chars() returns Chars<'a> in Rust, not Vec<String>
-                "chars" => {
+                // and_then(f) — Option<T> and Result<T,E>
+                "and_then" if args.len() == 1 => {
                     emit_expr(cg, receiver);
-                    cg.push(".chars().map(|__c| __c.to_string()).collect::<Vec<_>>()");
+                    cg.push(".and_then(|__x| (");
+                    emit_expr(cg, &args[0]);
+                    cg.push(")(__x.clone()))");
                 }
-                // first()/last() — Vec::first/last return Option<&T>; MVL expects Option<T>
-                "first" | "last" => {
+                // sort() — sort_by with partial_cmp for numeric stability
+                "sort" if args.is_empty() => {
+                    cg.push("{let mut __v=(");
                     emit_expr(cg, receiver);
-                    cg.push(".");
-                    cg.push(method);
-                    cg.push("().cloned()");
+                    cg.push(");__v.sort_by(|__a,__b|__a.partial_cmp(__b).unwrap_or(std::cmp::Ordering::Equal));__v}");
                 }
-                // contains(x) — slice::contains takes &T, so borrow the argument
-                "contains" => {
-                    emit_expr(cg, receiver);
-                    cg.push(".contains(&(");
-                    emit_args(cg, args);
-                    cg.push("))");
-                }
-                // clamp(low, high) — Rust's clamp panics when low > high; emit a safe wrapper
-                // that returns the value unchanged when bounds are inverted.
-                "clamp" if args.len() == 2 => {
-                    emit_safe_clamp(cg, receiver, &args[0], &args[1]);
-                }
-                // Bitwise ops — Int/Byte: emit as Rust operators, not method calls.
-                // Rust uses `&`, `|`, `^`, `!`, `<<`, `>>` directly on i64/u8.
-                // Parens ensure correct precedence when composed with arithmetic.
+
+                // ── Operator-level methods ────────────────────────────────────────
+                //
+                // Bitwise ops on Int/Byte: emitted as Rust operators for LLVM
+                // visibility and future intrinsic optimisation.
                 "bit_and" if args.len() == 1 => {
                     cg.push("(");
                     emit_expr(cg, receiver);
@@ -191,11 +217,7 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                     emit_expr(cg, receiver);
                     cg.push(")");
                 }
-                // Use wrapping_shl/wrapping_shr instead of bare `<<`/`>>` to avoid
-                // a debug-mode panic when the shift count is out of range (>= 64 for
-                // i64, >= 8 for u8).  Both i64 and u8 support these methods; the
-                // `as u32` cast is required by Rust's API and is safe for both Int
-                // (wrapping truncation) and Byte (zero-extending widening).
+                // wrapping_shl/shr avoids debug-mode panic for out-of-range shift counts
                 "shift_left" if args.len() == 1 => {
                     cg.push("(");
                     emit_expr(cg, receiver);
@@ -210,134 +232,60 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                     emit_expr(cg, &args[0]);
                     cg.push(" as u32))");
                 }
-                // to_int() on Byte (u8 → i64) or Float (f64 → i64, truncating)
-                "to_int" if args.is_empty() => {
-                    cg.push("(");
-                    emit_expr(cg, receiver);
-                    cg.push(" as i64)");
-                }
-                // ── Higher-order collection methods ───────────────────────────────
-                //
-                // map(f) — works for List<T>, Option<T>, and Result<T,E> via the
-                // MvlMap trait emitted in the prelude.  Rust resolves the correct
-                // impl at compile time so no receiver-type info is needed here.
-                // The function arg is wrapped in `(…)` to prevent Rust from parsing
-                // an inline lambda body as the call target when the arg is itself a
-                // lambda: `|__x| (|x| body)(__x.clone())` vs `|__x| |x| body(__x.clone())`.
-                "map" if args.len() == 1 => {
-                    emit_expr(cg, receiver);
-                    cg.push(".mvl_map(|__x| (");
-                    emit_expr(cg, &args[0]);
-                    cg.push(")(__x.clone()))");
-                }
-                // filter(f) — List<T> only; uses Iterator::filter
-                "filter" if args.len() == 1 => {
-                    emit_expr(cg, receiver);
-                    cg.push(".into_iter().filter(|__x| (");
-                    emit_expr(cg, &args[0]);
-                    cg.push(")(__x.clone())).collect::<Vec<_>>()");
-                }
-                // fold(init, f) — List<T> only; uses Iterator::fold
-                "fold" if args.len() == 2 => {
-                    emit_expr(cg, receiver);
-                    cg.push(".into_iter().fold(");
-                    emit_expr_as_arg(cg, &args[0]);
-                    cg.push(", |__acc, __x| (");
-                    emit_expr(cg, &args[1]);
-                    cg.push(")(__acc, __x.clone()))");
-                }
-                // reverse() — List<T> only; uses Iterator::rev
-                "reverse" if args.is_empty() => {
-                    emit_expr(cg, receiver);
-                    cg.push(".into_iter().rev().collect::<Vec<_>>()");
-                }
-                // sort() — List<T>; sort_by with partial_cmp for numeric stability
-                // (works for both i64 and f64; NaN elements sort as equal)
-                "sort" if args.is_empty() => {
-                    cg.push("{let mut __v=(");
-                    emit_expr(cg, receiver);
-                    cg.push(");__v.sort_by(|__a,__b|__a.partial_cmp(__b).unwrap_or(std::cmp::Ordering::Equal));__v}");
-                }
-                // and_then(f) — Option<T> and Result<T,E>; both have native Rust
-                // `and_then` with the same call signature so no disambiguation needed.
-                "and_then" if args.len() == 1 => {
-                    emit_expr(cg, receiver);
-                    cg.push(".and_then(|__x| (");
-                    emit_expr(cg, &args[0]);
-                    cg.push(")(__x.clone()))");
-                }
-                // ── String transformation methods ─────────────────────────────────
-                //
-                // trim() — Rust returns &str; collect to owned String
-                "trim" if args.is_empty() => {
-                    emit_expr(cg, receiver);
-                    cg.push(".trim().to_string()");
-                }
-                // to_upper / to_lower — Rust names differ from MVL names
-                "to_upper" if args.is_empty() => {
-                    emit_expr(cg, receiver);
-                    cg.push(".to_uppercase()");
-                }
-                "to_lower" if args.is_empty() => {
-                    emit_expr(cg, receiver);
-                    cg.push(".to_lowercase()");
-                }
-                // starts_with(s) / ends_with(s) — Pattern requires &str;
-                // wrap arg in &(…) so &String is deref-coerced to &str
-                "starts_with" if args.len() == 1 => {
-                    emit_expr(cg, receiver);
-                    cg.push(".starts_with(&(");
-                    emit_args(cg, args);
-                    cg.push("))");
-                }
-                "ends_with" if args.len() == 1 => {
-                    emit_expr(cg, receiver);
-                    cg.push(".ends_with(&(");
-                    emit_args(cg, args);
-                    cg.push("))");
-                }
-                // find(s: String) -> Option<Int>
-                // Rust returns Option<usize>; cast index to i64 for MVL's Int.
-                "find" if args.len() == 1 => {
-                    cg.push("(");
-                    emit_expr(cg, receiver);
-                    cg.push(".find(&(");
-                    emit_args(cg, args);
-                    cg.push(")).map(|__i| __i as i64))");
-                }
-                // replace(from, to) — both args must be &str; use &* deref on `to`
-                // because str::replace takes &str for the replacement, not &String.
-                "replace" if args.len() == 2 => {
-                    emit_expr(cg, receiver);
-                    cg.push(".replace(&(");
-                    emit_expr_as_arg(cg, &args[0]);
-                    cg.push("), &*(");
-                    emit_expr_as_arg(cg, &args[1]);
-                    cg.push("))");
-                }
-                // split(sep) -> List<String>
-                // Rust's split returns Iterator<&str>; map each slice to owned String.
-                "split" if args.len() == 1 => {
-                    emit_expr(cg, receiver);
-                    cg.push(".split(&(");
-                    emit_args(cg, args);
-                    cg.push(")).map(|__s| __s.to_string()).collect::<Vec<_>>()");
-                }
-                // ── Numeric methods ───────────────────────────────────────────────
-                //
-                // is_zero() — Rust's i64 has no is_zero(); emit comparison with 0
+                // is_zero() — i64 has no is_zero(); emit comparison
                 "is_zero" if args.is_empty() => {
                     cg.push("(");
                     emit_expr(cg, receiver);
                     cg.push(" == 0)");
                 }
-                // pow(e) — uses MvlPow trait from prelude; works for both i64 and f64
+                // to_int() on Byte (u8→i64) or Float (f64→i64, truncating)
+                "to_int" if args.is_empty() => {
+                    cg.push("(");
+                    emit_expr(cg, receiver);
+                    cg.push(" as i64)");
+                }
+                // pow(e) — MvlPow trait; works for both i64 and f64
                 "pow" if args.len() == 1 => {
                     emit_expr(cg, receiver);
                     cg.push(".mvl_pow(");
                     emit_expr_as_arg(cg, &args[0]);
                     cg.push(")");
                 }
+                // clamp(low, high) — Rust's clamp panics on inverted bounds; safe wrapper
+                "clamp" if args.len() == 2 => {
+                    emit_safe_clamp(cg, receiver, &args[0], &args[1]);
+                }
+                // contains(x) — slice::contains/str::contains both take &T; borrow arg
+                "contains" => {
+                    emit_expr(cg, receiver);
+                    cg.push(".contains(&(");
+                    emit_args(cg, args);
+                    cg.push("))");
+                }
+
+                // ── UFCS dispatch for pure MVL stdlib methods ─────────────────────
+                //
+                // Methods implemented in std/strings.mvl and std/lists.mvl are
+                // compiled to free Rust functions and emitted in the prelude of every
+                // generated file. `s.trim()` → `trim(s.clone().into(), args)`.
+                //
+                // `.into()` after the receiver clone allows IFC-label wrapper types
+                // (`Clean<String>`, `Public<String>`, etc.) to coerce into the plain
+                // inner type expected by the MVL stdlib function. `From<Label<T>> for T`
+                // is implemented in `mvl_runtime::ifc` for all label variants.
+                m if STDLIB_UFCS_METHODS.contains(&m) => {
+                    cg.push(method);
+                    cg.push("(");
+                    emit_expr(cg, receiver);
+                    cg.push(".clone().into()");
+                    if !args.is_empty() {
+                        cg.push(", ");
+                        emit_args(cg, args);
+                    }
+                    cg.push(")");
+                }
+
+                // ── Generic Rust method fallthrough ───────────────────────────────
                 _ => {
                     emit_expr(cg, receiver);
                     cg.push(".");
@@ -908,39 +856,6 @@ fn map_fn_name(name: &str) -> String {
 ///          let _mvl_s=((start).max(0)as usize).min(_mvl_r.len());
 ///          let _mvl_e=((end).max(0)as usize).min(_mvl_r.len()).max(_mvl_s);
 ///          _mvl_r[_mvl_s.._mvl_e].to_vec()}`
-fn emit_safe_list_slice(cg: &mut Codegen, receiver: &Expr, start: &Expr, end: &Expr) {
-    cg.push("{let _mvl_r=&(");
-    emit_expr(cg, receiver);
-    cg.push(");let _mvl_s=((");
-    emit_expr(cg, start);
-    cg.push(").max(0)as usize).min(_mvl_r.len());let _mvl_e=((");
-    emit_expr(cg, end);
-    cg.push(").max(0)as usize).min(_mvl_r.len()).max(_mvl_s);_mvl_r[_mvl_s.._mvl_e].to_vec()}");
-}
-
-/// Emit `s.substring(start, end)` as a safe Rust block expression.
-///
-/// Semantics:
-/// - Character-based (not byte-based) — safe for multi-byte UTF-8 strings.
-/// - Negative indices are clamped to 0.
-/// - Out-of-bounds `end` is handled naturally by `.take()` (iterator exhaustion).
-/// - Inverted range (`end < start` after clamping) returns an empty string via
-///   `saturating_sub`.
-/// - Never panics.
-///
-/// Emits: `{let _mvl_s=&*(s);let _mvl_a=(start).max(0)as usize;
-///          let _mvl_b=(end).max(0)as usize;
-///          _mvl_s.chars().skip(_mvl_a).take(_mvl_b.saturating_sub(_mvl_a)).collect::<String>()}`
-fn emit_safe_substring(cg: &mut Codegen, receiver: &Expr, start: &Expr, end: &Expr) {
-    cg.push("{let _mvl_s=&*(");
-    emit_expr(cg, receiver);
-    cg.push(");let _mvl_a=(");
-    emit_expr(cg, start);
-    cg.push(").max(0)as usize;let _mvl_b=(");
-    emit_expr(cg, end);
-    cg.push(").max(0)as usize;_mvl_s.chars().skip(_mvl_a).take(_mvl_b.saturating_sub(_mvl_a)).collect::<String>()}");
-}
-
 /// Emit `n.clamp(low, high)` as a safe Rust block expression.
 ///
 /// Semantics:

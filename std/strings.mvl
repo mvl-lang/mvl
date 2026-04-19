@@ -1,0 +1,63 @@
+// MVL stdlib — pure MVL string method implementations
+//
+// Phase 4 (ADR-0003): each function here is a thin pure-MVL wrapper over an
+// extern primitive from std/primitives.mvl. The method-call syntax
+// `s.trim()` is compiled to `trim(s)` by the transpiler's UFCS dispatch.
+//
+// Trust boundary: the extern primitives in std/primitives.mvl. Everything
+// in this file is verified MVL code that composes only those primitives.
+
+/// Remove leading and trailing ASCII whitespace.
+pub fn trim(s: String) -> String {
+    str_trim(s)
+}
+
+/// Convert all characters to uppercase.
+pub fn to_upper(s: String) -> String {
+    str_to_upper(s)
+}
+
+/// Convert all characters to lowercase.
+pub fn to_lower(s: String) -> String {
+    str_to_lower(s)
+}
+
+/// Decompose a string into a list of single-character strings.
+pub fn chars(s: String) -> List<String> {
+    str_chars(s)
+}
+
+/// Concatenate `other` onto `s`.
+pub fn concat(s: String, other: String) -> String {
+    str_concat(s, other)
+}
+
+/// True if `s` starts with `prefix`.
+pub fn starts_with(s: String, prefix: String) -> Bool {
+    str_starts_with(s, prefix)
+}
+
+/// True if `s` ends with `suffix`.
+pub fn ends_with(s: String, suffix: String) -> Bool {
+    str_ends_with(s, suffix)
+}
+
+/// Char-index of first occurrence of `sub` in `s`, or None.
+pub fn find(s: String, sub: String) -> Option<Int> {
+    str_find(s, sub)
+}
+
+/// Replace all occurrences of `from` with `to` in `s`.
+pub fn replace(s: String, from: String, to: String) -> String {
+    str_replace(s, from, to)
+}
+
+/// Split `s` on `sep`, returning a list of substrings.
+pub fn split(s: String, sep: String) -> List<String> {
+    str_split(s, sep)
+}
+
+/// Char-index substring `[start, end)` with safe clamping.
+pub fn substring(s: String, start: Int, end: Int) -> String {
+    str_substring(s, start, end)
+}

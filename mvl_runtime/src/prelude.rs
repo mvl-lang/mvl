@@ -26,6 +26,25 @@ pub use crate::stdlib::args::{get_arg, get_args, get_env, parse, ParseFromArgs};
 /// `std.log` — structured logging (Phase 2: no-op stubs).
 pub use crate::stdlib::log::{log_debug, log_error, log_info, log_warn};
 
+// ── Extern kernel primitives ───────────────────────────────────────────────
+//
+// These are the `extern "rust"` trust-boundary functions declared in
+// `std/primitives.mvl`. Pure MVL stdlib wrappers (`std/strings.mvl`,
+// `std/lists.mvl`) call these; they are available in every generated file via
+// `use mvl_runtime::prelude::*`. ADR-0012: explicit extern bridge pattern.
+
+/// String kernel (17 primitives — trust boundary for string stdlib methods).
+pub use crate::stdlib::primitives::{
+    str_byte_at, str_char_at, str_chars, str_concat, str_contains, str_ends_with, str_find,
+    str_from_bytes, str_from_chars, str_len, str_replace, str_split, str_starts_with,
+    str_substring, str_to_lower, str_to_upper, str_trim,
+};
+
+/// List kernel (6 primitives — trust boundary for list stdlib methods).
+pub use crate::stdlib::primitives::{
+    list_concat, list_contains, list_get, list_len, list_push, list_slice,
+};
+
 // ── Higher-order method traits ─────────────────────────────────────────────
 //
 // These traits allow the transpiler to emit a single method name for `map`
