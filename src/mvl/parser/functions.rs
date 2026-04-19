@@ -258,6 +258,22 @@ impl Parser {
         // Optional `pub` visibility modifier
         let visible = self.eat(&TokenKind::Pub);
 
+        // Also reject forbidden constructs that appear after `pub` (e.g. `pub static`).
+        if let TokenKind::Ident(kw) = self.peek_kind() {
+            match kw.as_str() {
+                "static" | "global" => {
+                    let span = self.peek_span();
+                    let err = ParseError {
+                        message: "MVL does not allow global mutable state. Pass state explicitly via function parameters.".into(),
+                        span,
+                    };
+                    self.push_recover(err);
+                    return Err(());
+                }
+                _ => {}
+            }
+        }
+
         match self.peek_kind() {
             TokenKind::Use => Ok(Decl::Use(self.parse_use_decl(visible)?)),
             TokenKind::Type => {
@@ -913,5 +929,19 @@ fn main() -> String { greet(String::new()) }"#;
         p.parse_program();
         assert!(!p.errors.is_empty(), "expected parse error for global");
         assert!(p.errors[0].message.contains("global mutable state"));
+    }
+
+    #[test]
+    fn pub_static_is_rejected_with_helpful_message() {
+        // Spec 001 Req 8: `pub static` must also produce the MVL-specific diagnostic
+        let src = "pub static X: Int = 42;";
+        let (mut p, _) = Parser::new(src);
+        p.parse_program();
+        assert!(!p.errors.is_empty(), "expected parse error for pub static");
+        assert!(
+            p.errors[0].message.contains("global mutable state"),
+            "expected helpful error message, got: {}",
+            p.errors[0].message
+        );
     }
 }

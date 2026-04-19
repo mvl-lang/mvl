@@ -119,8 +119,9 @@ mod tests {
     fn lint_diag_render_error_format() {
         let d = LintDiag::error("naming", "function name must be snake_case", 1, 4);
         let rendered = d.render("lib.mvl");
-        assert!(rendered.contains("error:"));
-        assert!(rendered.contains("[naming]"));
-        assert!(rendered.contains("snake_case"));
+        assert_eq!(
+            rendered,
+            "lib.mvl:1:4: error: [naming] function name must be snake_case"
+        );
     }
 }

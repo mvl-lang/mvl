@@ -1436,8 +1436,8 @@ fn char_literal_tab_is_escaped() {
 fn char_literal_backslash_is_escaped() {
     let src = "fn f() -> Char { '\\\\' }";
     let rust = transpile_src(src);
-    // Double backslash escapes to \\
-    assert!(rust.contains("'\\\\'") || rust.contains("'\\\\\\\\' ") || rust.contains("\\\\"));
+    // A single backslash char in MVL emits as '\\' in Rust (escaped backslash char literal).
+    assert_contains(&rust, "'\\\\'");
 }
 
 // ── emit_exprs coverage: expr types ──────────────────────────────────────────
@@ -1446,6 +1446,11 @@ fn char_literal_backslash_is_escaped() {
 fn move_expr_emits_inner() {
     let src = "fn f(x: Int) -> Int { move(x) }";
     let rust = transpile_src(src);
+    // move(x) strips the wrapper — the inner expr is emitted directly.
+    assert!(
+        !rust.contains("move("),
+        "move wrapper should not appear in output: {rust}"
+    );
     assert_contains(&rust, "x");
 }
 
@@ -1453,6 +1458,11 @@ fn move_expr_emits_inner() {
 fn consume_expr_emits_inner() {
     let src = "fn f(x: Int) -> Int { consume(x) }";
     let rust = transpile_src(src);
+    // consume(x) strips the wrapper — the inner expr is emitted directly.
+    assert!(
+        !rust.contains("consume("),
+        "consume wrapper should not appear in output: {rust}"
+    );
     assert_contains(&rust, "x");
 }
 

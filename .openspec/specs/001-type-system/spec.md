@@ -160,9 +160,9 @@ Every `match` expression MUST cover all variants of the matched type. The compil
 
 The language MUST NOT contain: null/nil/undefined values, throw/catch/try exception mechanism, global mutable variables, or implicit type conversions.
 
-**Implementation:** `src/mvl/parser/functions.rs::parse_decl`, `src/mvl/parser/statements.rs::parse_stmt`
+**Implementation:** `src/mvl/parser/functions.rs::parse_decl`
 
-**Tests:** `tests/parser.rs` (via `src/mvl/parser/functions.rs::static_mut_is_rejected`, `src/mvl/parser/functions.rs::global_keyword_is_rejected`, `src/mvl/parser/statements.rs::throw_is_rejected`, `src/mvl/parser/statements.rs::try_is_rejected`, `src/mvl/parser/statements.rs::catch_is_rejected`) (#289)
+**Tests:** `src/mvl/parser/functions.rs::static_mut_is_rejected`, `src/mvl/parser/functions.rs::static_decl_is_rejected`, `src/mvl/parser/functions.rs::global_keyword_is_rejected`, `src/mvl/parser/statements.rs::throw_is_rejected`, `src/mvl/parser/statements.rs::try_is_rejected`, `src/mvl/parser/statements.rs::catch_is_rejected` (#289)
 
 #### Scenario: No global state
 
