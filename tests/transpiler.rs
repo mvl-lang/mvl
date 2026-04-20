@@ -1212,10 +1212,56 @@ fn method_first_last_emit_cloned() {
 }
 
 #[test]
-fn method_contains_borrows_arg() {
+fn method_contains_emits_mvl_contains() {
+    // List<T>.contains(x) — emits via MvlContains trait, not hardcoded Rust
     let src = "fn f(xs: List<Int>, n: Int) -> Bool { xs.contains(n) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, ".contains(&(");
+    assert_contains(&rust, ".mvl_contains(&(n");
+    assert_contains(&rust, "))");
+}
+
+#[test]
+fn method_contains_string_emits_mvl_contains() {
+    // String.contains(sub) — same MvlContains trait dispatch
+    let src = r#"fn f(s: String, sub: String) -> Bool { s.contains(sub) }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".mvl_contains(&(sub");
+    assert_contains(&rust, "))");
+}
+
+#[test]
+fn method_contains_set_emits_mvl_contains() {
+    // Set<T>.contains(x) — routes to HashSet MvlContains impl
+    let src = "fn f(ss: Set<Int>, n: Int) -> Bool { ss.contains(n) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".mvl_contains(&(");
+}
+
+#[test]
+fn mvl_contains_trait_is_emitted_in_preamble() {
+    // The preamble must define MvlContains so generated code can call .mvl_contains()
+    let src = "fn f(xs: List<Int>, n: Int) -> Bool { xs.contains(n) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "pub trait MvlContains<T:");
+    assert_contains(&rust, "impl<T: PartialEq> MvlContains<T> for Vec<T>");
+    assert_contains(&rust, "impl MvlContains<String> for String");
+    assert_contains(&rust, "impl MvlContains<str> for String");
+    assert_contains(
+        &rust,
+        "impl<T: Eq + std::hash::Hash> MvlContains<T> for std::collections::HashSet<T>",
+    );
+}
+
+#[test]
+fn method_contains_wrong_arity_falls_through_to_generic() {
+    // contains() with 0 args fails the arity guard and falls to the generic arm
+    let src = "fn f(xs: List<Int>) -> Unit { xs.contains() }";
+    let rust = transpile_src(src);
+    // Must not emit the MvlContains path
+    assert!(
+        !rust.contains(".mvl_contains("),
+        "zero-arg contains must not use mvl_contains"
+    );
 }
 
 #[test]

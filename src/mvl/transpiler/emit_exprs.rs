@@ -255,10 +255,13 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                 "clamp" if args.len() == 2 => {
                     emit_safe_clamp(cg, receiver, &args[0], &args[1]);
                 }
-                // contains(x) — slice::contains/str::contains both take &T; borrow arg
-                "contains" => {
+                // contains(x) — MvlContains trait handles both Vec<T> and String.
+                // Corresponds to list_contains / str_contains in std/primitives.mvl.
+                // Uses a trait (not UFCS) because both List and String use the same
+                // method name but require different free-function signatures.
+                "contains" if args.len() == 1 => {
                     emit_expr(cg, receiver);
-                    cg.push(".contains(&(");
+                    cg.push(".mvl_contains(&(");
                     emit_args(cg, args);
                     cg.push("))");
                 }
