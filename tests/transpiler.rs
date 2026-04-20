@@ -548,8 +548,8 @@ impl From<IoError> for AppError {
     let rust = transpile_src(src);
     assert_contains(&rust, "impl std::convert::From<IoError> for AppError {");
     assert_contains(&rust, "fn from(e: IoError) -> Self {");
-    // MVL value semantics: ident args are cloned on pass so the caller retains ownership.
-    assert_contains(&rust, "AppError::Io(e.clone())");
+    // Phase A: e is used exactly once — last use is a move, not a clone.
+    assert_contains(&rust, "AppError::Io(e)");
 }
 
 /// `impl From<A> for B` with no `from` method emits a todo!().
@@ -686,16 +686,41 @@ fn process(c: Container) -> Unit ! Console {
 
 // ── Spec 009 Req 2: Clone-on-pass ─────────────────────────────────────────
 
-/// Struct ident passed to a function gets `.clone()` appended.
-/// Spec 009 Req 2, Scenario "Struct passed to two functions".
+/// Phase A (last-use move): a variable used exactly once is moved, not cloned.
+/// Spec 009 Req 2: the last use of a value in its scope is a move.
 #[test]
-fn struct_ident_as_arg_gets_clone() {
+fn struct_ident_single_use_is_moved() {
     let src = r#"
 type Point = struct { x: Int, y: Int }
 fn show(p: Point) -> Int { p.x }
 fn f(p: Point) -> Int { show(p) }
 "#;
     let rust = transpile_src(src);
+    // Phase A: p is used exactly once in f — emit move, not clone.
+    assert_contains(&rust, "show(p)");
+    assert!(
+        !rust.contains("show(p.clone())"),
+        "single-use arg must not be cloned"
+    );
+}
+
+/// Phase A: a variable used more than once is cloned on all but the last use.
+/// Spec 009 Req 2, Scenario "Struct passed to two functions".
+#[test]
+fn struct_ident_multi_use_gets_clone() {
+    let src = r#"
+type Point = struct { x: Int, y: Int }
+fn show(p: Point) -> Int { p.x }
+fn g(p: Point) -> Int { show(p) }
+fn f(p: Point) -> Int { g(p) }
+fn double_show(p: Point) -> Int {
+    let a = show(p);
+    let b = show(p);
+    a
+}
+"#;
+    let rust = transpile_src(src);
+    // p is used twice in double_show — at least one call must clone.
     assert_contains(&rust, "show(p.clone())");
 }
 
