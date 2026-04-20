@@ -45,7 +45,14 @@ pub fn emit_fn_decl(cg: &mut Codegen, fd: &FnDecl) {
         cg.line("/// This function is declared `total` in MVL: it must terminate for all inputs.");
     }
     if !fd.effects.is_empty() {
-        cg.line(&format!("/// # Effects: {}", fd.effects.join(", ")));
+        cg.line(&format!(
+            "/// # Effects: {}",
+            fd.effects
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
         cg.line("/// MVL effect annotations — informational in Phase 1.");
     }
 

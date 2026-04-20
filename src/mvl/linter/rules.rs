@@ -656,7 +656,11 @@ pub fn redundant_effects(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDia
                         "function `{}` declares effect(s) [{}] but contains no calls — \
                          remove the effect declaration",
                         f.name,
-                        f.effects.join(", "),
+                        f.effects
+                            .iter()
+                            .map(|e| e.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", "),
                     ),
                     f.span.line,
                     f.span.col,
@@ -1431,7 +1435,7 @@ pub fn complexity_effect_width(prog: &Program, cfg: &LintConfig, out: &mut Vec<L
 fn check_effect_width(
     name: &str,
     impl_ctx: Option<(&str, &str)>,
-    effects: &[String],
+    effects: &[crate::mvl::parser::ast::Effect],
     span: crate::mvl::parser::lexer::Span,
     cfg: &LintConfig,
     out: &mut Vec<LintDiag>,
@@ -1448,7 +1452,11 @@ fn check_effect_width(
             format!(
                 "{label} declares {} effects [{}] (max {})",
                 effects.len(),
-                effects.join(", "),
+                effects
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
                 cfg.max_effect_signature_width
             ),
             span.line,

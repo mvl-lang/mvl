@@ -195,14 +195,9 @@ module.exports = grammar({
     effect_list: ($) => seq($.effect, repeat(seq(",", $.effect))),
 
     effect: ($) =>
-      choice(
-        "IO",
-        "Console",
-        "FileRead",
-        "FileWrite",
-        "Net",
-        "DB",
-        $.identifier
+      seq(
+        $.identifier,
+        optional(seq("(", $.string, ")"))
       ),
 
     constraints: ($) => seq($.constraint, repeat(seq(",", $.constraint))),
