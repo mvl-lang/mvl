@@ -1510,6 +1510,22 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
     let assurance_prelude =
         load_stdlib_prelude(parsed_assurance.iter().map(|(_, p, _)| p), &stdlib_dir);
 
+    // Count extern kernel primitives from the implicit stdlib prelude (primitives.mvl).
+    // These are always part of the trust boundary for any MVL program, even though they
+    // are not declared in user code. ADR-0006: trust boundaries must be declared and
+    // countable — this surfaces the kernel extern count in every assurance report.
+    let kernel_extern_count: usize = load_implicit_prelude()
+        .iter()
+        .flat_map(|p| p.declarations.iter())
+        .filter_map(|d| {
+            if let mvl::mvl::parser::ast::Decl::Extern(ed) = d {
+                Some(ed.fns.len())
+            } else {
+                None
+            }
+        })
+        .sum();
+
     for (file_str, prog, src) in &parsed_assurance {
         let file_str = file_str.as_str();
         let stats = collect_assurance_stats(prog, verbose);
@@ -1596,6 +1612,7 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
     "verified_total": {total_verified},
     "partial": {total_partial},
     "extern": {total_extern},
+    "kernel_extern": {kernel_extern_count},
     "implemented": {implemented},
     "test": {total_test_fns}
   }},
@@ -1625,6 +1642,7 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
         println!("  total fn:          {total_verified} ({verified_pct}% of implemented)");
         println!("  partial fn:        {total_partial}");
         println!("  extern fn:         {total_extern} ({extern_pct}% trust boundary)");
+        println!("  kernel extern:     {kernel_extern_count} (stdlib primitives.mvl)");
         println!("  implemented:       {implemented}");
         println!("  test fn:           {total_test_fns}");
         println!();

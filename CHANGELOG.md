@@ -10,6 +10,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ### Added
 
+- **Phase 4 stdlib: extern kernel + pure MVL implementations (closes #296)** — Replaces 17 transpiler-hardcoded method special-cases with an explicit trust boundary. `std/primitives.mvl` declares 23 `extern "rust"` kernel primitives (17 string + 6 list). `std/strings.mvl` provides 11 pure MVL wrappers (`trim`, `to_upper`, `to_lower`, `chars`, `concat`, `starts_with`, `ends_with`, `find`, `replace`, `split`, `substring`). `std/lists.mvl` provides 7 pure MVL implementations (`slice`, `take`, `skip`, `first`, `last`, `flatten`, `reverse`). Transpiler now emits UFCS free-function calls (`s.trim()` → `trim(s)`) for all 17 methods instead of hardcoded Rust. Trust boundaries are declared, greppable, and countable. Parser extended to support generic type parameters in `extern fn` declarations. IFC label coercion (`Clean<String>` → `String`) added to `mvl_runtime::ifc` for transparent stdlib interop.
 - **Compile-time evaluation of pure functions (constant folding)** — The type checker now evaluates pure functions (no declared effects) at compile time when called with all-literal arguments. Results feed into the refinement solver, allowing predicates on folded values to be proved statically without runtime checks. Handles arithmetic, comparisons, boolean logic, if/else, match, and mutual recursion within a 10,000-step budget. Closes #239.
 
 ### Fixed
