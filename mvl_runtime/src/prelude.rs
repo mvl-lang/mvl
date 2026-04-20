@@ -67,35 +67,41 @@ pub trait MvlMap {
 impl<T> MvlMap for Vec<T> {
     type Inner = T;
     type Mapped<U> = Vec<U>;
-    fn mvl_map<U, F: FnMut(T) -> U>(self, mut f: F) -> Vec<U> {
-        self.into_iter().map(|x| f(x)).collect()
+    fn mvl_map<U, F: FnMut(T) -> U>(self, f: F) -> Vec<U> {
+        self.into_iter().map(f).collect()
     }
 }
 
 impl<T> MvlMap for Option<T> {
     type Inner = T;
     type Mapped<U> = Option<U>;
-    fn mvl_map<U, F: FnMut(T) -> U>(self, mut f: F) -> Option<U> {
-        self.map(|x| f(x))
+    fn mvl_map<U, F: FnMut(T) -> U>(self, f: F) -> Option<U> {
+        self.map(f)
     }
 }
 
 impl<T, E> MvlMap for Result<T, E> {
     type Inner = T;
     type Mapped<U> = Result<U, E>;
-    fn mvl_map<U, F: FnMut(T) -> U>(self, mut f: F) -> Result<U, E> {
-        self.map(|x| f(x))
+    fn mvl_map<U, F: FnMut(T) -> U>(self, f: F) -> Result<U, E> {
+        self.map(f)
     }
 }
 
-/// Uniform `contains` check across `Vec<T>` and `String`.
+/// Uniform `contains` check across `Vec<T>`, `String`, and `HashSet<T>`.
 ///
-/// The transpiler emits `receiver.mvl_contains(&arg.clone())` for all MVL
-/// `.contains(x)` calls.  This lets the same method syntax work on both
-/// lists and strings without requiring type information at codegen time.
-/// Corresponds to the `list_contains` / `str_contains` extern primitives
-/// declared in `std/primitives.mvl`.
-pub trait MvlContains<T> {
+/// The transpiler emits `receiver.mvl_contains(&(...))` for all MVL
+/// `.contains(x)` calls (see `emit_exprs.rs`).  This lets the same method
+/// syntax work on all three container types without requiring type information
+/// at codegen time.  Corresponds to the `list_contains` / `str_contains`
+/// extern primitives declared in `std/primitives.mvl`.
+///
+/// Note: constraint requirements differ per impl — `Vec<T>` needs `T: PartialEq`,
+/// `HashSet<T>` needs `T: Eq + Hash` (required by the underlying collection).
+/// MVL's `Set<T>` therefore requires `T` to be both `Eq` and `Hash`.
+///
+/// Keep in sync with the inline strings in `src/mvl/transpiler/emit_types.rs`.
+pub trait MvlContains<T: ?Sized> {
     /// Return `true` if `self` contains `x`.
     fn mvl_contains(&self, x: &T) -> bool;
 }
@@ -109,6 +115,12 @@ impl<T: PartialEq> MvlContains<T> for Vec<T> {
 impl MvlContains<String> for String {
     fn mvl_contains(&self, x: &String) -> bool {
         self.contains(x.as_str())
+    }
+}
+
+impl MvlContains<str> for String {
+    fn mvl_contains(&self, x: &str) -> bool {
+        self.contains(x)
     }
 }
 

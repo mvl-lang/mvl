@@ -67,10 +67,12 @@ pub fn emit_security_preamble(cg: &mut Codegen) {
     cg.line("impl<T> MvlMap for Option<T> { type Inner = T; type Mapped<U> = Option<U>; fn mvl_map<U, F: FnMut(T) -> U>(self, mut f: F) -> Option<U> { self.map(|x| f(x)) } }");
     cg.line("impl<T, E> MvlMap for Result<T, E> { type Inner = T; type Mapped<U> = Result<U, E>; fn mvl_map<U, F: FnMut(T) -> U>(self, mut f: F) -> Result<U, E> { self.map(|x| f(x)) } }");
     cg.blank();
-    // MvlContains: uniform `.contains(x)` for Vec<T> and String
-    cg.line("pub trait MvlContains<T> { fn mvl_contains(&self, x: &T) -> bool; }");
+    // MvlContains: uniform `.contains(x)` for Vec<T>, String, and HashSet<T>
+    // Keep in sync with mvl_runtime/src/prelude.rs MvlContains section.
+    cg.line("pub trait MvlContains<T: ?Sized> { fn mvl_contains(&self, x: &T) -> bool; }");
     cg.line("impl<T: PartialEq> MvlContains<T> for Vec<T> { fn mvl_contains(&self, x: &T) -> bool { self.contains(x) } }");
     cg.line("impl MvlContains<String> for String { fn mvl_contains(&self, x: &String) -> bool { self.contains(x.as_str()) } }");
+    cg.line("impl MvlContains<str> for String { fn mvl_contains(&self, x: &str) -> bool { self.contains(x) } }");
     cg.line("impl<T: Eq + std::hash::Hash> MvlContains<T> for std::collections::HashSet<T> { fn mvl_contains(&self, x: &T) -> bool { self.contains(x) } }");
     cg.blank();
     // MvlPow: uniform `.pow(e)` for i64 and f64
