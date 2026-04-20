@@ -4,7 +4,51 @@
 //! passes can produce precise diagnostics.  The tree is intentionally verbose:
 //! no information is discarded from the source.
 
+use std::fmt;
+
 use crate::mvl::parser::lexer::Span;
+
+// ── Effect ─────────────────────────────────────────────────────────────────
+
+/// A single effect declaration, optionally restricted to a resource parameter.
+///
+/// Examples:
+/// - `FileRead`               → `Effect { name: "FileRead", param: None }`
+/// - `FileRead("/etc/config")` → `Effect { name: "FileRead", param: Some("/etc/config") }`
+/// - `Net("api.example.com")`  → `Effect { name: "Net",      param: Some("api.example.com") }`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Effect {
+    pub name: String,
+    pub param: Option<String>,
+    pub span: Span,
+}
+
+impl Effect {
+    pub fn new(name: impl Into<String>, span: Span) -> Self {
+        Effect {
+            name: name.into(),
+            param: None,
+            span,
+        }
+    }
+
+    pub fn with_param(name: impl Into<String>, param: impl Into<String>, span: Span) -> Self {
+        Effect {
+            name: name.into(),
+            param: Some(param.into()),
+            span,
+        }
+    }
+}
+
+impl fmt::Display for Effect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.param {
+            None => write!(f, "{}", self.name),
+            Some(p) => write!(f, "{}(\"{}\")", self.name, p),
+        }
+    }
+}
 
 // ── Program ────────────────────────────────────────────────────────────────
 
@@ -136,8 +180,8 @@ pub struct FnDecl {
     pub return_type: Box<TypeExpr>,
     /// Refinement on the return type: `-> Int where self > 0`
     pub return_refinement: Option<RefExpr>,
-    /// Effect list: `! DB, Console`
-    pub effects: Vec<String>,
+    /// Effect list: `! DB, Console` or `! FileRead("/path")`
+    pub effects: Vec<Effect>,
     /// Where-clause constraints: `where T: Eq`
     pub constraints: Vec<Constraint>,
     pub body: Block,
@@ -210,7 +254,7 @@ pub struct ExternFnDecl {
     pub params: Vec<Param>,
     pub return_type: Box<TypeExpr>,
     /// Declared effects — enforced on the MVL caller side.
-    pub effects: Vec<String>,
+    pub effects: Vec<Effect>,
     pub span: Span,
 }
 
@@ -273,7 +317,7 @@ pub enum TypeExpr {
     Fn {
         params: Vec<TypeExpr>,
         ret: Box<TypeExpr>,
-        effects: Vec<String>,
+        effects: Vec<Effect>,
         span: Span,
     },
     /// `(A, B, C)`

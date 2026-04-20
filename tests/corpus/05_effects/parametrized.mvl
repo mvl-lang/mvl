@@ -1,0 +1,68 @@
+// Corpus: Parametrized capability effects (Requirement 3 / issue #290)
+// Exercises: Effect parameters restricting access to specific resources,
+//            effect subsetting (prefix matching for path-style params).
+//
+// All declarations are valid: parametrized effects parse and are accepted
+// by the checker when the caller's declared effect covers the callee's.
+
+use std.io.{ Path, path, join, read_to_string, write }
+
+// ── Unparametrized effects still work (backward compat) ───────────────────
+
+fn read_any(p: Path) -> Result<String, String> ! FileRead {
+    read_to_string(p)
+}
+
+fn write_any(p: Path, data: String) -> Result<Unit, String> ! FileWrite {
+    write(p, data)
+}
+
+// ── Parametrized effects: restrict to specific path ───────────────────────
+
+fn read_config() -> Result<String, String> ! FileRead("/etc/app/") {
+    read_to_string(path("/etc/app/config.toml"))
+}
+
+fn read_log() -> Result<String, String> ! FileRead("/var/log/") {
+    read_to_string(path("/var/log/app.log"))
+}
+
+fn write_report() -> Result<Unit, String> ! FileWrite("/tmp/") {
+    write(path("/tmp/report.txt"), "done")
+}
+
+// ── Caller with general effect covers specific callee ─────────────────────
+
+fn load_all_configs() -> Result<String, String> ! FileRead {
+    read_config()
+}
+
+// ── Caller with prefix covers callee with more-specific path ─────────────
+
+fn load_config_top() -> Result<String, String> ! FileRead("/etc/") {
+    read_config()
+}
+
+// ── Net effect parametrized by host ───────────────────────────────────────
+
+// Note: Net effects with host parameters parse correctly; enforcement of
+// network-level restrictions is a runtime capability concern. The checker
+// validates syntax and subsetting only.
+
+fn fetch_metrics() -> Result<String, String> ! Net("metrics.internal") {
+    Ok("metrics-data")
+}
+
+fn collect_metrics() -> Result<String, String> ! Net("metrics.internal") {
+    fetch_metrics()
+}
+
+// ── DB effect parametrized by operation ───────────────────────────────────
+
+fn db_select() -> Result<String, String> ! DB("SELECT") {
+    Ok("rows")
+}
+
+fn db_read() -> Result<String, String> ! DB {
+    db_select()
+}

@@ -30,9 +30,9 @@ use crate::mvl::checker::context::{
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
 use crate::mvl::parser::ast::{
-    BinaryOp, Block, Capability, ConstDecl, Decl, ElseBranch, Expr, ExternDecl, FnDecl, ImplDecl,
-    LValue, Literal, MatchArm, MatchBody, Pattern, Program, SecurityLabel, Stmt, Totality,
-    TypeBody, TypeDecl, UnaryOp,
+    BinaryOp, Block, Capability, ConstDecl, Decl, Effect, ElseBranch, Expr, ExternDecl, FnDecl,
+    ImplDecl, LValue, Literal, MatchArm, MatchBody, Pattern, Program, SecurityLabel, Stmt,
+    Totality, TypeBody, TypeDecl, UnaryOp,
 };
 use crate::mvl::parser::lexer::Span;
 use std::collections::{HashMap, HashSet};
@@ -99,6 +99,32 @@ pub fn check(prog: &Program) -> CheckResult {
     check_with_prelude(&[], prog)
 }
 
+// ── Effect subsetting (002-effect-system/Req 3) ───────────────────────────────
+
+/// Returns `true` when `declared` covers `required` for effect propagation.
+///
+/// Rules:
+/// - Different effect names never satisfy each other.
+/// - `declared` with no param (wildcard) satisfies any `required` for that name.
+/// - `declared` with a param satisfies `required` with the same or more-specific param,
+///   using prefix matching for path-style params (e.g. `declared("/data")` covers
+///   `required("/data/config.toml")`).
+/// - `declared` with a param does NOT satisfy a `required` with no param (general
+///   access required but only restricted access declared).
+fn effect_satisfies(declared: &Effect, required: &Effect) -> bool {
+    if declared.name != required.name {
+        return false;
+    }
+    match (&declared.param, &required.param) {
+        // Wildcard declared covers everything with that name.
+        (None, _) => true,
+        // Specific declared cannot cover a general requirement.
+        (Some(_), None) => false,
+        // Both parametrized: declared must be a prefix of required (path subsetting).
+        (Some(d), Some(r)) => r.starts_with(d.as_str()),
+    }
+}
+
 // ── Valid effect names (002-effect-system/Req 2) ──────────────────────────────
 
 /// The canonical set of effect names permitted in `! Effect` declarations.
@@ -136,7 +162,7 @@ struct TypeChecker {
     /// Name of the function currently being checked (for effect error messages).
     current_fn_name: String,
     /// Effects declared by the current function (Req 7, 8).
-    current_fn_effects: Vec<String>,
+    current_fn_effects: Vec<Effect>,
     /// Totality of the current function (Req 8); None = implicitly total.
     current_fn_totality: Option<Totality>,
     /// Count of extern declarations for assurance reporting.
@@ -331,12 +357,10 @@ impl TypeChecker {
 
         // Validate effect names against the canonical set (002-effect-system/Req 2).
         for effect in &fd.effects {
-            if !VALID_EFFECT_NAMES.contains(&effect.as_str()) {
-                // TODO: per-effect span requires AST change to Vec<(String, Span)>;
-                // currently the whole function declaration span is used.
+            if !VALID_EFFECT_NAMES.contains(&effect.name.as_str()) {
                 self.emit(CheckError::InvalidEffectName {
-                    name: effect.clone(),
-                    span: fd.span,
+                    name: effect.name.clone(),
+                    span: effect.span,
                 });
             }
         }
@@ -1525,13 +1549,19 @@ impl TypeChecker {
             }
 
             // Req 7/8: Effect propagation — caller must declare all effects of callee.
-            for effect in &fn_info.effects {
-                if !self.current_fn_effects.contains(effect) {
+            // Req 3: Parametrized effects — declared `/data` covers required `/data/file.txt`
+            // (prefix subsetting via `effect_satisfies`).
+            for required in &fn_info.effects {
+                let covered = self
+                    .current_fn_effects
+                    .iter()
+                    .any(|declared| effect_satisfies(declared, required));
+                if !covered {
                     if self.current_fn_effects.is_empty() {
                         // Pure function calling effectful one (#19)
                         self.emit(CheckError::UndeclaredEffect {
                             callee: name.to_string(),
-                            effect: effect.clone(),
+                            effect: required.to_string(),
                             span,
                         });
                     } else {
@@ -1539,7 +1569,7 @@ impl TypeChecker {
                         self.emit(CheckError::MissingEffect {
                             caller: self.current_fn_name.clone(),
                             callee: name.to_string(),
-                            effect: effect.clone(),
+                            effect: required.to_string(),
                             span,
                         });
                     }
@@ -2918,6 +2948,112 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, CheckError::InvalidEffectName { .. })),
             "expected Terminal to be a valid effect name, got: {errors:?}"
+        );
+    }
+
+    // ── Parametrized effects (002-effect-system Req 3 / issue #290) ──────
+
+    #[test]
+    fn parametrized_effect_parses_and_is_accepted() {
+        let src = r#"fn f() -> Unit ! FileRead("/etc/app/") { }"#;
+        let errors = errors_for(src);
+        assert!(
+            errors.is_empty(),
+            "expected no errors for parametrized effect, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn parametrized_effect_invalid_name_rejected() {
+        let src = r#"fn f() -> Unit ! Bogus("/path") { }"#;
+        let errors = errors_for(src);
+        assert!(
+            errors.iter().any(
+                |e| matches!(e, CheckError::InvalidEffectName { name, .. } if name == "Bogus")
+            ),
+            "expected InvalidEffectName for parametrized unknown effect, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn general_caller_covers_parametrized_callee() {
+        // Unparametrized FileRead (wildcard) covers FileRead("/etc/").
+        let src = r#"
+            extern "kernel" {
+                fn read_config() -> Unit ! FileRead("/etc/")
+            }
+            fn caller() -> Unit ! FileRead {
+                read_config()
+            }
+        "#;
+        let errors = errors_for(src);
+        assert!(
+            !errors.iter().any(|e| matches!(
+                e,
+                CheckError::UndeclaredEffect { .. } | CheckError::MissingEffect { .. }
+            )),
+            "general FileRead should cover FileRead(\"/etc/\"), got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn prefix_caller_covers_more_specific_parametrized_callee() {
+        // FileRead("/etc/") covers FileRead("/etc/app/config.toml") via prefix match.
+        let src = r#"
+            extern "kernel" {
+                fn read_file() -> Unit ! FileRead("/etc/app/config.toml")
+            }
+            fn caller() -> Unit ! FileRead("/etc/") {
+                read_file()
+            }
+        "#;
+        let errors = errors_for(src);
+        assert!(
+            !errors.iter().any(|e| matches!(
+                e,
+                CheckError::MissingEffect { .. } | CheckError::UndeclaredEffect { .. }
+            )),
+            "FileRead(\"/etc/\") should cover FileRead(\"/etc/app/config.toml\"), got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn specific_caller_does_not_cover_different_path_callee() {
+        // FileRead("/data/") must NOT satisfy FileRead("/etc/").
+        let src = r#"
+            extern "kernel" {
+                fn read_etc() -> Unit ! FileRead("/etc/")
+            }
+            fn caller() -> Unit ! FileRead("/data/") {
+                read_etc()
+            }
+        "#;
+        let errors = errors_for(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, CheckError::MissingEffect { .. })),
+            "FileRead(\"/data/\") should NOT cover FileRead(\"/etc/\"), got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn specific_caller_does_not_cover_general_callee() {
+        // FileRead("/etc/") must NOT satisfy unparametrized FileRead.
+        let src = r#"
+            extern "kernel" {
+                fn read_any() -> Unit ! FileRead
+            }
+            fn caller() -> Unit ! FileRead("/etc/") {
+                read_any()
+            }
+        "#;
+        let errors = errors_for(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, CheckError::MissingEffect { .. })),
+            "FileRead(\"/etc/\") should NOT cover general FileRead, got: {errors:?}"
         );
     }
 

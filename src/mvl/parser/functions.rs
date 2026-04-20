@@ -620,7 +620,13 @@ mod tests {
         let d = fn_decl("total fn read(path: Path) -> Result<String, IOError> ! FileRead { }");
         assert_eq!(d.totality, Some(Totality::Total));
         assert_eq!(d.name, "read");
-        assert_eq!(d.effects, vec!["FileRead"]);
+        assert_eq!(
+            d.effects
+                .iter()
+                .map(|e| e.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["FileRead"]
+        );
         assert!(matches!(*d.return_type, TypeExpr::Result { .. }));
     }
 
@@ -650,7 +656,13 @@ mod tests {
             d.params[0].ty,
             TypeExpr::Ref { mutable: false, .. }
         ));
-        assert_eq!(d.effects, vec!["DB"]);
+        assert_eq!(
+            d.effects
+                .iter()
+                .map(|e| e.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["DB"]
+        );
     }
 
     #[test]
@@ -698,7 +710,13 @@ mod tests {
     #[test]
     fn parse_fn_multiple_effects() {
         let d = fn_decl("fn log(msg: String) -> Unit ! DB, Console { }");
-        assert_eq!(d.effects, vec!["DB", "Console"]);
+        assert_eq!(
+            d.effects
+                .iter()
+                .map(|e| e.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["DB", "Console"]
+        );
     }
 
     #[test]
@@ -775,7 +793,13 @@ mod tests {
             }
         ));
         assert!(matches!(*d.return_type, TypeExpr::Result { .. }));
-        assert_eq!(d.effects, vec!["DB", "Console"]);
+        assert_eq!(
+            d.effects
+                .iter()
+                .map(|e| e.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["DB", "Console"]
+        );
     }
 
     // ── Extern block parsing ──────────────────────────────────────────────
@@ -819,7 +843,14 @@ mod tests {
         );
         assert_eq!(ed.fns.len(), 1);
         assert_eq!(ed.fns[0].name, "http_get");
-        assert_eq!(ed.fns[0].effects, vec!["Net"]);
+        assert_eq!(
+            ed.fns[0]
+                .effects
+                .iter()
+                .map(|e| e.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Net"]
+        );
         assert!(matches!(*ed.fns[0].return_type, TypeExpr::Result { .. }));
     }
 
@@ -836,7 +867,14 @@ mod tests {
         assert_eq!(ed.fns.len(), 3);
         assert_eq!(ed.fns[0].name, "connect");
         assert_eq!(ed.fns[1].name, "query");
-        assert_eq!(ed.fns[1].effects, vec!["DB"]);
+        assert_eq!(
+            ed.fns[1]
+                .effects
+                .iter()
+                .map(|e| e.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["DB"]
+        );
         assert_eq!(ed.fns[2].name, "disconnect");
     }
 

@@ -460,7 +460,14 @@ fn emit_extern_decl(cg: &mut Codegen, ed: &ExternDecl) {
     for f in &ed.fns {
         // Emit effects as a doc comment (not enforced by Rust's type system yet)
         if !f.effects.is_empty() {
-            cg.line(&format!("// ! {}", f.effects.join(", ")));
+            cg.line(&format!(
+                "// ! {}",
+                f.effects
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
         }
         let params_str: Vec<String> = f
             .params

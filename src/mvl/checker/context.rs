@@ -43,8 +43,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{
-    Capability, FieldDecl, GenericParam, SecurityLabel, Totality, Variant,
+    Capability, Effect, FieldDecl, GenericParam, SecurityLabel, Totality, Variant,
 };
+use crate::mvl::parser::lexer::Span;
 
 // ── Variable binding ─────────────────────────────────────────────────────────
 
@@ -114,8 +115,8 @@ pub enum VariantFieldsInfo {
 pub struct FnInfo {
     pub params: Vec<Ty>,
     pub ret: Ty,
-    /// Declared effects (Req 7): `! DB, Console`
-    pub effects: Vec<String>,
+    /// Declared effects (Req 7): `! DB, Console` or `! FileRead("/path")`
+    pub effects: Vec<Effect>,
     /// Totality annotation (Req 8): None = implicitly total, Some(Partial) = partial.
     pub totality: Option<Totality>,
 }
@@ -167,6 +168,9 @@ impl TypeEnv {
 
     /// Register built-in stdlib functions so the checker accepts them.
     ///
+    /// Note: `builtin_effect` is a convenience for constructing unparametrized `Effect`
+    /// values with a zero span (builtins have no source location).
+    ///
     /// These correspond to the MVL standard library tier 1 (core) functions
     /// that every program has access to without an import.
     fn register_builtins(&mut self) {
@@ -183,7 +187,7 @@ impl TypeEnv {
             FnInfo {
                 params: vec![],
                 ret: Ty::Unit,
-                effects: vec!["Console".into()],
+                effects: vec![Effect::new("Console", Span::new(0, 0, 0, 0))],
                 totality: None,
             },
         );
@@ -192,7 +196,7 @@ impl TypeEnv {
             FnInfo {
                 params: vec![],
                 ret: Ty::Unit,
-                effects: vec!["Console".into()],
+                effects: vec![Effect::new("Console", Span::new(0, 0, 0, 0))],
                 totality: None,
             },
         );
@@ -283,7 +287,7 @@ impl TypeEnv {
             FnInfo {
                 params: vec![],
                 ret: Ty::Named("Instant".into(), vec![]),
-                effects: vec!["Clock".into()],
+                effects: vec![Effect::new("Clock", Span::new(0, 0, 0, 0))],
                 totality: None,
             },
         );
@@ -293,7 +297,7 @@ impl TypeEnv {
             FnInfo {
                 params: vec![Ty::Named("Duration".into(), vec![])],
                 ret: Ty::Unit,
-                effects: vec!["Clock".into()],
+                effects: vec![Effect::new("Clock", Span::new(0, 0, 0, 0))],
                 totality: None,
             },
         );
@@ -463,7 +467,7 @@ impl TypeEnv {
             FnInfo {
                 params: vec![Ty::Int, Ty::Int],
                 ret: Ty::Int,
-                effects: vec!["Random".into()],
+                effects: vec![Effect::new("Random", Span::new(0, 0, 0, 0))],
                 totality: None,
             },
         );
@@ -472,7 +476,7 @@ impl TypeEnv {
             FnInfo {
                 params: vec![],
                 ret: Ty::Float,
-                effects: vec!["Random".into()],
+                effects: vec![Effect::new("Random", Span::new(0, 0, 0, 0))],
                 totality: None,
             },
         );
@@ -481,7 +485,7 @@ impl TypeEnv {
             FnInfo {
                 params: vec![Ty::Int],
                 ret: Ty::List(Box::new(Ty::Int)),
-                effects: vec!["Random".into()],
+                effects: vec![Effect::new("Random", Span::new(0, 0, 0, 0))],
                 totality: None,
             },
         );
@@ -491,7 +495,7 @@ impl TypeEnv {
             FnInfo {
                 params: vec![],
                 ret: Ty::Option(Box::new(Ty::Unknown)),
-                effects: vec!["Random".into()],
+                effects: vec![Effect::new("Random", Span::new(0, 0, 0, 0))],
                 totality: None,
             },
         );
@@ -501,7 +505,7 @@ impl TypeEnv {
             FnInfo {
                 params: vec![],
                 ret: Ty::List(Box::new(Ty::Unknown)),
-                effects: vec!["Random".into()],
+                effects: vec![Effect::new("Random", Span::new(0, 0, 0, 0))],
                 totality: None,
             },
         );
@@ -531,7 +535,7 @@ impl TypeEnv {
             FnInfo {
                 params: vec![Ty::Int],
                 ret: Ty::Labeled(SecurityLabel::Secret, Box::new(Ty::List(Box::new(Ty::Int)))),
-                effects: vec!["CryptoRandom".into()],
+                effects: vec![Effect::new("CryptoRandom", Span::new(0, 0, 0, 0))],
                 totality: None,
             },
         );
@@ -547,7 +551,7 @@ impl TypeEnv {
                 FnInfo {
                     params: vec![],
                     ret: Ty::Unit,
-                    effects: vec!["Log".into()],
+                    effects: vec![Effect::new("Log", Span::new(0, 0, 0, 0))],
                     totality: None,
                 },
             );

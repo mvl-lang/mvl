@@ -1883,7 +1883,7 @@ fn collect_stats_from_decls(decls: &[Decl], stats: &mut AssuranceStats, collect_
                     stats.fn_details.push(FnDetail {
                         name: fd.name.clone(),
                         totality: fd.totality.clone(),
-                        effects: fd.effects.clone(),
+                        effects: fd.effects.iter().map(|e| e.to_string()).collect(),
                         has_capabilities: has_caps,
                         has_refinements: has_refs,
                         is_test: fd.is_test,
@@ -1900,7 +1900,7 @@ fn collect_stats_from_decls(decls: &[Decl], stats: &mut AssuranceStats, collect_
                         stats.fn_details.push(FnDetail {
                             name: ef.name.clone(),
                             totality: None,
-                            effects: ef.effects.clone(),
+                            effects: ef.effects.iter().map(|e| e.to_string()).collect(),
                             has_capabilities: false,
                             has_refinements: false,
                             is_test: false,
@@ -2203,7 +2203,7 @@ mod assurance_tests {
             .iter()
             .find(|d| d.name == "effectful")
             .unwrap();
-        assert_eq!(eff.effects, vec!["DB"]);
+        assert_eq!(eff.effects, vec!["DB".to_string()]);
         assert!(!eff.is_test);
         let test = stats
             .fn_details

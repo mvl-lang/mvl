@@ -8,8 +8,8 @@
 //! - All type expressions including security labels (Requirement 7)
 
 use crate::mvl::parser::ast::{
-    ArithOp, Capability, CmpOp, FieldDecl, GenericParam, LogicOp, RefExpr, SecurityLabel, TypeBody,
-    TypeDecl, TypeExpr, Variant, VariantFields,
+    ArithOp, Capability, CmpOp, Effect, FieldDecl, GenericParam, LogicOp, RefExpr, SecurityLabel,
+    TypeBody, TypeDecl, TypeExpr, Variant, VariantFields,
 };
 use crate::mvl::parser::lexer::{Span, TokenKind};
 use crate::mvl::parser::{ParseError, Parser};
@@ -523,26 +523,56 @@ impl Parser {
     }
 
     /// Parse `! Effect, Effect, …` if the next token is `!`.
-    pub fn parse_optional_effects(&mut self) -> Vec<String> {
+    pub fn parse_optional_effects(&mut self) -> Vec<Effect> {
         if !self.eat(&TokenKind::Bang) {
             return Vec::new();
         }
         self.parse_effect_list()
     }
 
-    /// Parse a non-empty comma-separated list of effect names.
+    /// Parse a non-empty comma-separated list of effect names with optional parameters.
     ///
-    /// Effect names must be plain identifiers.  Accepting keyword tokens here
-    /// caused `where` and other keywords to be silently consumed as effect names
-    /// (Fix #6).
-    pub fn parse_effect_list(&mut self) -> Vec<String> {
+    /// Grammar: `effect = IDENT [ "(" STRING ")" ]`
+    ///
+    /// Examples:
+    /// - `FileRead`               — unparametrized effect
+    /// - `FileRead("/etc/config")` — restricted to a specific path
+    /// - `Net("api.example.com")`  — restricted to a specific host
+    ///
+    /// Fix #6: only plain Ident tokens are valid effect names.  Previously the
+    /// fallback accepted any alphabetic token string, which incorrectly consumed
+    /// `where`, `fn`, `let`, etc.
+    pub fn parse_effect_list(&mut self) -> Vec<Effect> {
         let mut effects = Vec::new();
-        // Fix #6: only plain Ident tokens are valid effect names.
-        // Previously the fallback accepted any alphabetic token string,
-        // which incorrectly consumed `where`, `fn`, `let`, etc.
-        while let TokenKind::Ident(s) = self.peek_kind().clone() {
+        while let TokenKind::Ident(name) = self.peek_kind().clone() {
+            let start = self.peek_span();
             self.advance();
-            effects.push(s);
+            // Parse optional resource parameter: `("path/or/value")`
+            let param = if self.eat(&TokenKind::LParen) {
+                match self.peek_kind().clone() {
+                    TokenKind::Str(s) => {
+                        self.advance();
+                        let _ = self.expect(&TokenKind::RParen);
+                        Some(s)
+                    }
+                    _ => {
+                        // Malformed parameter — skip to closing paren for recovery.
+                        while !matches!(self.peek_kind(), TokenKind::RParen | TokenKind::Eof) {
+                            self.advance();
+                        }
+                        let _ = self.expect(&TokenKind::RParen);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let span = self.span_from(start);
+            let effect = match param {
+                None => Effect::new(name, span),
+                Some(p) => Effect::with_param(name, p, span),
+            };
+            effects.push(effect);
             if !self.eat(&TokenKind::Comma) {
                 break;
             }
