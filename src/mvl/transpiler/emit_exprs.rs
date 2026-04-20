@@ -625,14 +625,26 @@ fn emit_args(cg: &mut Codegen, args: &[Expr]) {
 /// away by the compiler.
 ///
 /// String literals get `.to_string().into()` for label type coercion.
+///
+/// # Phase A: last-use move elision (Spec 009 Req 2)
+///
+/// When an `Expr::Ident`'s span appears in [`Codegen::last_uses`], the variable
+/// is used for the last time in this function.  Emitting a Rust move (no
+/// `.clone()`) is sound: the caller's binding is consumed but never read again.
 fn emit_expr_as_arg(cg: &mut Codegen, expr: &Expr) {
     match expr {
         Expr::Literal(Literal::Str(s), _) => {
             cg.push(&format!("\"{}\".to_string().into()", escape_str(s)));
         }
-        // Identifiers and field accesses may be non-Copy user types.
-        // Clone so the caller retains ownership (MVL value semantics).
-        Expr::Ident(_, _) | Expr::FieldAccess { .. } => {
+        // Identifiers: check if this is the last use — if so, move instead of clone.
+        Expr::Ident(_, span) => {
+            emit_expr(cg, expr);
+            if !cg.last_uses.contains(span) {
+                cg.push(".clone()");
+            }
+        }
+        // Field accesses: conservatively clone (partial moves are complex in Rust).
+        Expr::FieldAccess { .. } => {
             emit_expr(cg, expr);
             cg.push(".clone()");
         }

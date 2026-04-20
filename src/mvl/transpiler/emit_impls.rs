@@ -46,9 +46,16 @@ use crate::mvl::parser::ast::{ImplDecl, Stmt}; // Stmt used in match below
 use crate::mvl::transpiler::codegen::Codegen;
 use crate::mvl::transpiler::emit_exprs::{emit_block_stmts, emit_expr};
 use crate::mvl::transpiler::emit_types::emit_type_expr;
+use crate::mvl::transpiler::last_use::compute_last_uses;
 
 /// Emit a trait implementation block.
 pub fn emit_impl_decl(cg: &mut Codegen, id: &ImplDecl) {
+    // Phase A: reset last_uses before each impl block so that stale spans from the
+    // preceding function body cannot bleed into branches that do not call
+    // compute_last_uses (the unsupported-trait fallthrough and the Display
+    // None-method branch).  Each supported impl re-sets last_uses per method body
+    // immediately before emitting that body.
+    cg.last_uses = Default::default();
     match id.trait_name.as_str() {
         "Display" => emit_display_impl(cg, id),
         "From" => emit_from_impl(cg, id),
@@ -75,6 +82,8 @@ fn emit_display_impl(cg: &mut Codegen, id: &ImplDecl) {
 
     match fmt_method {
         Some(fd) => {
+            // Phase A: last-use analysis for clone elision within the fmt method body.
+            cg.last_uses = compute_last_uses(&fd.body);
             let stmts = &fd.body.stmts;
             if stmts.is_empty() {
                 cg.line("write!(f, \"\")");
@@ -152,6 +161,8 @@ fn emit_iterator_impl(cg: &mut Codegen, id: &ImplDecl) {
         Some(fd) => match fd.body.stmts.split_last() {
             None => cg.line("todo!(\"Iterator::next not implemented\")"),
             Some((last, head)) => {
+                // Phase A: last-use analysis for clone elision within the next method body.
+                cg.last_uses = compute_last_uses(&fd.body);
                 emit_block_stmts(cg, head);
                 match last {
                     Stmt::Expr { expr, .. } => {
@@ -204,6 +215,8 @@ fn emit_from_impl(cg: &mut Codegen, id: &ImplDecl) {
 
     match from_method {
         Some(fd) => {
+            // Phase A: last-use analysis for clone elision within the from method body.
+            cg.last_uses = compute_last_uses(&fd.body);
             let stmts = &fd.body.stmts;
             if stmts.is_empty() {
                 cg.line("todo!(\"From::from not implemented\")");
