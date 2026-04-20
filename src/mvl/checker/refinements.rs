@@ -24,6 +24,7 @@
 
 use std::collections::HashMap;
 
+use crate::mvl::checker::const_eval;
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::parser::ast::{
     ArithOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, LValue, Literal, LogicOp, MatchArm,
@@ -62,6 +63,7 @@ pub fn check_refinements(prog: &Program, errors: &mut Vec<CheckError>) {
     let mut counts = RefinementCounts::default();
     let fn_params = build_fn_param_refinements(prog);
     let type_refs = build_type_alias_refinements(prog);
+    let fn_decls = build_pure_fn_decls(prog);
     for decl in &prog.declarations {
         match decl {
             Decl::Fn(fd) => {
@@ -71,6 +73,7 @@ pub fn check_refinements(prog: &Program, errors: &mut Vec<CheckError>) {
                     &mut var_refs,
                     &fn_params,
                     &type_refs,
+                    &fn_decls,
                     errors,
                     &mut counts,
                 );
@@ -83,6 +86,7 @@ pub fn check_refinements(prog: &Program, errors: &mut Vec<CheckError>) {
                         &mut var_refs,
                         &fn_params,
                         &type_refs,
+                        &fn_decls,
                         errors,
                         &mut counts,
                     );
@@ -102,6 +106,7 @@ pub fn count_refinements(prog: &Program) -> RefinementCounts {
     let mut counts = RefinementCounts::default();
     let fn_params = build_fn_param_refinements(prog);
     let type_refs = build_type_alias_refinements(prog);
+    let fn_decls = build_pure_fn_decls(prog);
     for decl in &prog.declarations {
         match decl {
             Decl::Fn(fd) => {
@@ -111,6 +116,7 @@ pub fn count_refinements(prog: &Program) -> RefinementCounts {
                     &mut var_refs,
                     &fn_params,
                     &type_refs,
+                    &fn_decls,
                     &mut errors,
                     &mut counts,
                 );
@@ -123,6 +129,7 @@ pub fn count_refinements(prog: &Program) -> RefinementCounts {
                         &mut var_refs,
                         &fn_params,
                         &type_refs,
+                        &fn_decls,
                         &mut errors,
                         &mut counts,
                     );
@@ -135,6 +142,22 @@ pub fn count_refinements(prog: &Program) -> RefinementCounts {
 }
 
 // ── Lookup table builders ─────────────────────────────────────────────────────
+
+/// Maps pure function name → `FnDecl` for compile-time constant folding.
+///
+/// Only pure functions (empty effects list) are included; effectful functions
+/// cannot be safely evaluated at compile time.
+fn build_pure_fn_decls(prog: &Program) -> HashMap<String, FnDecl> {
+    let mut map = HashMap::new();
+    for decl in &prog.declarations {
+        if let Decl::Fn(fd) = decl {
+            if fd.effects.is_empty() {
+                map.insert(fd.name.clone(), fd.clone());
+            }
+        }
+    }
+    map
+}
 
 /// Maps function name → `Vec<(param_name, Option<RefExpr>)>` for top-level functions.
 fn build_fn_param_refinements(prog: &Program) -> HashMap<String, Vec<(String, Option<RefExpr>)>> {
@@ -337,6 +360,44 @@ fn extract_eq_float_from_hyp(pred: &RefExpr) -> Option<f64> {
             _ => None,
         },
         _ => None,
+    }
+}
+
+/// Build a `self == value` refinement predicate from a `ConstValue`.
+///
+/// Used when a `let` binding is initialised with a constant-folded pure-function
+/// call — we inject `self == <folded_value>` into `var_refs` so that the
+/// refinement solver can statically prove predicates on that variable.
+fn lit_eq_pred(cv: &const_eval::ConstValue) -> RefExpr {
+    let dummy = Span::default();
+    let self_ref = Box::new(RefExpr::Ident {
+        name: "self".to_string(),
+        span: dummy,
+    });
+    let rhs = match cv {
+        const_eval::ConstValue::Integer(n) => Box::new(RefExpr::Integer {
+            value: *n,
+            span: dummy,
+        }),
+        const_eval::ConstValue::Float(f) => Box::new(RefExpr::Float {
+            value: *f,
+            span: dummy,
+        }),
+        // For non-numeric folded values we still need a RefExpr, but integer 0
+        // would be wrong — callers should only inject numeric const values.
+        // This branch is a safe fallback that evaluates to an un-provable form.
+        _ => {
+            return RefExpr::Ident {
+                name: "__const_non_numeric".to_string(),
+                span: dummy,
+            };
+        }
+    };
+    RefExpr::Compare {
+        op: CmpOp::Eq,
+        left: self_ref,
+        right: rhs,
+        span: dummy,
     }
 }
 
@@ -545,16 +606,20 @@ fn resolve_type_alias_pred(
 ///
 /// Shared by `Stmt::Match` and `Expr::Match` — the loop body is identical in
 /// both cases and lives here to avoid duplication.
+#[allow(clippy::too_many_arguments)]
 fn analyze_match_arms(
     scrutinee: &Expr,
     arms: &[MatchArm],
     var_refs: &mut HashMap<String, Option<RefExpr>>,
     fn_params: &HashMap<String, Vec<(String, Option<RefExpr>)>>,
     type_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
     errors: &mut Vec<CheckError>,
     counts: &mut RefinementCounts,
 ) {
-    analyze_expr(scrutinee, var_refs, fn_params, type_refs, errors, counts);
+    analyze_expr(
+        scrutinee, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+    );
     let scrutinee_name = ident_name_from_expr(scrutinee);
     let mut prior_int_lits: Vec<i64> = Vec::new();
     let mut prior_float_lits: Vec<f64> = Vec::new();
@@ -576,12 +641,24 @@ fn analyze_match_arms(
             _ => {}
         }
         match &arm.body {
-            MatchBody::Expr(e) => {
-                analyze_expr(e, &mut arm_refs, fn_params, type_refs, errors, counts)
-            }
-            MatchBody::Block(b) => {
-                analyze_block(b, &mut arm_refs, fn_params, type_refs, errors, counts)
-            }
+            MatchBody::Expr(e) => analyze_expr(
+                e,
+                &mut arm_refs,
+                fn_params,
+                type_refs,
+                fn_decls,
+                errors,
+                counts,
+            ),
+            MatchBody::Block(b) => analyze_block(
+                b,
+                &mut arm_refs,
+                fn_params,
+                type_refs,
+                fn_decls,
+                errors,
+                counts,
+            ),
         }
     }
 }
@@ -591,11 +668,14 @@ fn analyze_block(
     var_refs: &mut HashMap<String, Option<RefExpr>>,
     fn_params: &HashMap<String, Vec<(String, Option<RefExpr>)>>,
     type_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
     errors: &mut Vec<CheckError>,
     counts: &mut RefinementCounts,
 ) {
     for stmt in &block.stmts {
-        analyze_stmt(stmt, var_refs, fn_params, type_refs, errors, counts);
+        analyze_stmt(
+            stmt, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+        );
     }
 }
 
@@ -604,6 +684,7 @@ fn analyze_stmt(
     var_refs: &mut HashMap<String, Option<RefExpr>>,
     fn_params: &HashMap<String, Vec<(String, Option<RefExpr>)>>,
     type_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
     errors: &mut Vec<CheckError>,
     counts: &mut RefinementCounts,
 ) {
@@ -611,19 +692,35 @@ fn analyze_stmt(
         Stmt::Let {
             pattern, ty, init, ..
         } => {
-            analyze_expr(init, var_refs, fn_params, type_refs, errors, counts);
+            analyze_expr(
+                init, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+            );
             // Record refinement for the new variable, from its declared type or alias.
-            let pred = ty.as_ref().and_then(extract_type_refinement).or_else(|| {
+            let mut pred = ty.as_ref().and_then(extract_type_refinement).or_else(|| {
                 ty.as_ref()
                     .and_then(|t| resolve_type_alias_pred(t, type_refs))
             });
+            // If no explicit refinement, try to constant-fold the initialiser.
+            // When successful, inject a `self == folded_value` hypothesis so that
+            // the refinement solver can prove predicates on the bound name statically.
+            if pred.is_none() {
+                if let Expr::FnCall { name, args, .. } = init {
+                    if let Some(fd) = fn_decls.get(name) {
+                        if let Some(cv) = const_eval::try_fold_call(fd, args, fn_decls) {
+                            pred = Some(lit_eq_pred(&cv));
+                        }
+                    }
+                }
+            }
             // Bind the refinement to any simple identifier in the pattern.
             if let Pattern::Ident(name, _) = pattern {
                 var_refs.insert(name.clone(), pred);
             }
         }
         Stmt::Assign { target, value, .. } => {
-            analyze_expr(value, var_refs, fn_params, type_refs, errors, counts);
+            analyze_expr(
+                value, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+            );
             // Reassignment invalidates any refinement the variable carried from its binding.
             // Field assignments don't affect the variable's top-level refinement.
             if let LValue::Ident(name, _) = target {
@@ -632,41 +729,53 @@ fn analyze_stmt(
         }
         Stmt::Return { value, .. } => {
             if let Some(e) = value {
-                analyze_expr(e, var_refs, fn_params, type_refs, errors, counts);
+                analyze_expr(e, var_refs, fn_params, type_refs, fn_decls, errors, counts);
             }
         }
         Stmt::Expr { expr: e, .. } => {
-            analyze_expr(e, var_refs, fn_params, type_refs, errors, counts);
+            analyze_expr(e, var_refs, fn_params, type_refs, fn_decls, errors, counts);
         }
         Stmt::If {
             cond, then, else_, ..
         } => {
-            analyze_expr(cond, var_refs, fn_params, type_refs, errors, counts);
-            analyze_block(then, var_refs, fn_params, type_refs, errors, counts);
+            analyze_expr(
+                cond, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+            );
+            analyze_block(
+                then, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+            );
             if let Some(eb) = else_ {
                 match eb {
                     ElseBranch::Block(b) => {
-                        analyze_block(b, var_refs, fn_params, type_refs, errors, counts)
+                        analyze_block(b, var_refs, fn_params, type_refs, fn_decls, errors, counts)
                     }
                     ElseBranch::If(s) => {
-                        analyze_stmt(s, var_refs, fn_params, type_refs, errors, counts)
+                        analyze_stmt(s, var_refs, fn_params, type_refs, fn_decls, errors, counts)
                     }
                 }
             }
         }
         Stmt::While { cond, body, .. } => {
-            analyze_expr(cond, var_refs, fn_params, type_refs, errors, counts);
-            analyze_block(body, var_refs, fn_params, type_refs, errors, counts);
+            analyze_expr(
+                cond, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+            );
+            analyze_block(
+                body, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+            );
         }
         Stmt::For { iter, body, .. } => {
-            analyze_expr(iter, var_refs, fn_params, type_refs, errors, counts);
-            analyze_block(body, var_refs, fn_params, type_refs, errors, counts);
+            analyze_expr(
+                iter, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+            );
+            analyze_block(
+                body, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+            );
         }
         Stmt::Match {
             scrutinee, arms, ..
         } => {
             analyze_match_arms(
-                scrutinee, arms, var_refs, fn_params, type_refs, errors, counts,
+                scrutinee, arms, var_refs, fn_params, type_refs, fn_decls, errors, counts,
             );
         }
     }
@@ -677,6 +786,7 @@ fn analyze_expr(
     var_refs: &mut HashMap<String, Option<RefExpr>>,
     fn_params: &HashMap<String, Vec<(String, Option<RefExpr>)>>,
     type_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
     errors: &mut Vec<CheckError>,
     counts: &mut RefinementCounts,
 ) {
@@ -686,22 +796,34 @@ fn analyze_expr(
         } => {
             // Check each argument against the callee's parameter refinements.
             if let Some(param_refs) = fn_params.get(name) {
-                check_call_site(name, args, *span, param_refs, var_refs, errors, counts);
+                check_call_site(
+                    name, args, *span, param_refs, var_refs, fn_decls, errors, counts,
+                );
             }
             // Recurse into arguments regardless.
             for arg in args {
-                analyze_expr(arg, var_refs, fn_params, type_refs, errors, counts);
+                analyze_expr(
+                    arg, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+                );
             }
         }
         Expr::MethodCall { receiver, args, .. } => {
-            analyze_expr(receiver, var_refs, fn_params, type_refs, errors, counts);
+            analyze_expr(
+                receiver, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+            );
             for arg in args {
-                analyze_expr(arg, var_refs, fn_params, type_refs, errors, counts);
+                analyze_expr(
+                    arg, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+                );
             }
         }
         Expr::Binary { left, right, .. } => {
-            analyze_expr(left, var_refs, fn_params, type_refs, errors, counts);
-            analyze_expr(right, var_refs, fn_params, type_refs, errors, counts);
+            analyze_expr(
+                left, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+            );
+            analyze_expr(
+                right, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+            );
         }
         Expr::Unary { expr: inner, .. }
         | Expr::FieldAccess { expr: inner, .. }
@@ -710,22 +832,28 @@ fn analyze_expr(
         | Expr::Consume { expr: inner, .. }
         | Expr::Declassify { expr: inner, .. }
         | Expr::Sanitize { expr: inner, .. } => {
-            analyze_expr(inner, var_refs, fn_params, type_refs, errors, counts);
+            analyze_expr(
+                inner, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+            );
         }
         Expr::If {
             cond, then, else_, ..
         } => {
-            analyze_expr(cond, var_refs, fn_params, type_refs, errors, counts);
-            analyze_block(then, var_refs, fn_params, type_refs, errors, counts);
+            analyze_expr(
+                cond, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+            );
+            analyze_block(
+                then, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+            );
             if let Some(e) = else_ {
-                analyze_expr(e, var_refs, fn_params, type_refs, errors, counts);
+                analyze_expr(e, var_refs, fn_params, type_refs, fn_decls, errors, counts);
             }
         }
         Expr::Match {
             scrutinee, arms, ..
         } => {
             analyze_match_arms(
-                scrutinee, arms, var_refs, fn_params, type_refs, errors, counts,
+                scrutinee, arms, var_refs, fn_params, type_refs, fn_decls, errors, counts,
             );
         }
         Expr::Lambda { params, body, .. } => {
@@ -736,25 +864,33 @@ fn analyze_expr(
                 let pred = p.refinement.as_ref().map(|r| normalize_pred(r, &p.name));
                 child_refs.insert(p.name.clone(), pred);
             }
-            analyze_expr(body, &mut child_refs, fn_params, type_refs, errors, counts);
+            analyze_expr(
+                body,
+                &mut child_refs,
+                fn_params,
+                type_refs,
+                fn_decls,
+                errors,
+                counts,
+            );
         }
         Expr::Block(b) => {
-            analyze_block(b, var_refs, fn_params, type_refs, errors, counts);
+            analyze_block(b, var_refs, fn_params, type_refs, fn_decls, errors, counts);
         }
         Expr::Construct { fields, .. } => {
             for (_, e) in fields {
-                analyze_expr(e, var_refs, fn_params, type_refs, errors, counts);
+                analyze_expr(e, var_refs, fn_params, type_refs, fn_decls, errors, counts);
             }
         }
         Expr::List { elems, .. } | Expr::Set { elems, .. } => {
             for e in elems {
-                analyze_expr(e, var_refs, fn_params, type_refs, errors, counts);
+                analyze_expr(e, var_refs, fn_params, type_refs, fn_decls, errors, counts);
             }
         }
         Expr::Map { pairs, .. } => {
             for (k, v) in pairs {
-                analyze_expr(k, var_refs, fn_params, type_refs, errors, counts);
-                analyze_expr(v, var_refs, fn_params, type_refs, errors, counts);
+                analyze_expr(k, var_refs, fn_params, type_refs, fn_decls, errors, counts);
+                analyze_expr(v, var_refs, fn_params, type_refs, fn_decls, errors, counts);
             }
         }
         // Leaves: Literal, Ident — no sub-expressions to walk.
@@ -764,18 +900,20 @@ fn analyze_expr(
 
 // ── Call-site checker ─────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn check_call_site(
     fn_name: &str,
     args: &[Expr],
     call_span: Span,
     param_refs: &[(String, Option<RefExpr>)],
     var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
     errors: &mut Vec<CheckError>,
     counts: &mut RefinementCounts,
 ) {
     for (arg, (_, param_pred)) in args.iter().zip(param_refs.iter()) {
         let Some(pred) = param_pred else { continue };
-        let outcome = check_arg_against_pred(arg, pred, var_refs);
+        let outcome = check_arg_against_pred(arg, pred, var_refs, fn_decls);
         match outcome {
             RefResult::Proven => counts.proven += 1,
             RefResult::RuntimeCheck => counts.runtime_checked += 1,
@@ -799,6 +937,7 @@ fn check_arg_against_pred(
     arg: &Expr,
     pred: &RefExpr,
     var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
 ) -> RefResult {
     match arg {
         // Integer literals: evaluate in the integer domain for exact semantics.
@@ -843,6 +982,20 @@ fn check_arg_against_pred(
             }
             _ => RefResult::RuntimeCheck,
         },
+
+        // Pure function call with all-literal args: constant-fold and check result.
+        Expr::FnCall { name, args, .. } => {
+            if let Some(fd) = fn_decls.get(name) {
+                if let Some(cv) = const_eval::try_fold_call(fd, args, fn_decls) {
+                    return match cv {
+                        const_eval::ConstValue::Integer(n) => eval_pred_int(n, pred),
+                        const_eval::ConstValue::Float(f) => eval_pred_float(f, pred),
+                        _ => RefResult::RuntimeCheck,
+                    };
+                }
+            }
+            RefResult::RuntimeCheck
+        }
 
         // All other expressions: conservative runtime check.
         _ => RefResult::RuntimeCheck,

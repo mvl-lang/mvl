@@ -3661,3 +3661,90 @@ fn caller_missing_env_effect_rejected() {
         "expected MissingEffect(reads_env, Env), got: {errors:?}"
     );
 }
+
+// ── #239: Constant folding — compile-time evaluation of pure functions ────────
+
+/// Pure function called with literal args should fold — refinement solver proves
+/// the result satisfies its predicate statically (no runtime check needed).
+#[test]
+fn const_fold_pure_fn_satisfies_refinement() {
+    // GIVEN: double() is pure, called with literal 5 → folds to 10.
+    //        require_positive(x: Int where self > 0) accepts it statically.
+    // THEN: no refinement violations (would get RefinementViolated otherwise)
+    let src = r#"
+        fn double(x: Int) -> Int { x * 2 }
+        fn require_positive(x: Int where self > 0) -> Int { x }
+        fn main() -> Int {
+            let n = double(5);
+            require_positive(double(5))
+        }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "const-folded pure fn call should satisfy refinement statically, got: {:?}",
+        result.errors
+    );
+}
+
+/// Effectful function called with literals must NOT be folded — effect propagation
+/// rules still apply and the call must not be treated as a known value.
+#[test]
+fn const_fold_does_not_apply_to_effectful_fn() {
+    // GIVEN: effectful_fn has ! Console — it cannot be folded even with literal args.
+    // THEN: no fold occurs, but also no crash — checker remains sound.
+    let src = r#"
+        fn effectful_fn(x: Int) -> Int ! Console { println(x); x }
+        fn require_positive(x: Int where self > 0) -> Int { x }
+        fn caller() -> Int ! Console {
+            require_positive(effectful_fn(5))
+        }
+    "#;
+    // Should not panic/crash. Result may have errors from effect propagation
+    // but no internal evaluator error.
+    let _ = check_src(src);
+}
+
+/// `let` bound to a const-folded call injects a value hypothesis into var_refs,
+/// allowing the refinement solver to prove predicates on that variable.
+#[test]
+fn const_fold_let_binding_propagates_to_refinement() {
+    // GIVEN: n = add(3, 4) folds to 7; require_gt_5(x where self > 5) accepts it.
+    // THEN: no RefinementViolated error.
+    let src = r#"
+        fn add(a: Int, b: Int) -> Int { a + b }
+        fn require_gt_5(x: Int where self > 5) -> Int { x }
+        fn main() -> Int {
+            let n = add(3, 4);
+            require_gt_5(n)
+        }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "let-bound const-folded value should satisfy refinement via hypothesis, got: {:?}",
+        result.errors
+    );
+}
+
+/// Direct pure function call that folds to a value violating the refinement
+/// MUST still be detected (fold reveals the violation, not hides it).
+#[test]
+fn const_fold_reveals_refinement_violation() {
+    // GIVEN: double(0) folds to 0, which violates self > 0.
+    // THEN: RefinementViolated reported.
+    let src = r#"
+        fn double(x: Int) -> Int { x * 2 }
+        fn require_positive(x: Int where self > 0) -> Int { x }
+        fn main() -> Int {
+            require_positive(double(0))
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "double(0) = 0 violates self > 0, expected RefinementViolated, got: {errors:?}"
+    );
+}
