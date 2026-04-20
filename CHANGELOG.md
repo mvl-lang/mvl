@@ -6,6 +6,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.49.0] — 2026-04-20
+
+### Added
+
+- **Compile-time evaluation of pure functions (constant folding)** — The type checker now evaluates pure functions (no declared effects) at compile time when called with all-literal arguments. Results feed into the refinement solver, allowing predicates on folded values to be proved statically without runtime checks. Handles arithmetic, comparisons, boolean logic, if/else, match, and mutual recursion within a 10,000-step budget. Closes #239.
+
+### Fixed
+
+- **Constant-folding correctness** — Guarded match arms now conservatively return `None` rather than skipping to the next arm (which could execute semantically wrong code). `lit_eq_pred` now returns `Option<RefExpr>` instead of a sentinel identifier, eliminating a potential false `Proven` via `preds_equivalent` name collision. `build_pure_fn_decls` now includes pure `impl` methods alongside top-level functions.
+- **Constant-folding safety** — Integer `%` uses `checked_rem` to avoid `i64::MIN % -1` panic in debug builds. Float arithmetic guards NaN inputs and non-finite results. The `FnCall` folding path in `check_arg_against_pred` now guards NaN float results before calling `eval_pred_float`.
+
 ## [0.48.0] — 2026-04-19
 
 ### Added

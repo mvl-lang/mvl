@@ -14,6 +14,7 @@
 //!                 └─ check_block / check_stmt / infer_expr
 //! ```
 
+pub mod const_eval;
 pub mod context;
 pub mod data_race;
 pub mod errors;
