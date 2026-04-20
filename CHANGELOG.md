@@ -6,6 +6,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.49.1] — 2026-04-20
+
+### Added
+
+- **Phase A: last-use move elision** — The transpiler now performs a single-pass last-use analysis over each function body before emission. Variables used for the last time in their scope are moved (no `.clone()`) instead of copied, eliminating unnecessary allocation for non-Copy types such as structs, `String`, and `List`. Variables used inside `for`/`while` loops are conservatively always cloned; lambda bodies are not analysed; `FieldAccess` expressions always clone. Closes #234 (Phase A).
+
+### Fixed
+
+- **Phase A last-use stale state** — `emit_impl_decl` now resets `last_uses` at entry, preventing spans from the preceding function body bleeding into unsupported-trait and Display None-method branches.
+- **Phase A test coverage** — Added tests for if/else single-branch use, both-branch use, match scrutinee vs. arm use, and while-condition in-loop handling (these paths were previously untested).
+
 ## [0.49.0] — 2026-04-20
 
 ### Added
