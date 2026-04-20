@@ -1212,10 +1212,19 @@ fn method_first_last_emit_cloned() {
 }
 
 #[test]
-fn method_contains_borrows_arg() {
+fn method_contains_emits_mvl_contains() {
+    // List<T>.contains(x) — emits via MvlContains trait, not hardcoded Rust
     let src = "fn f(xs: List<Int>, n: Int) -> Bool { xs.contains(n) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, ".contains(&(");
+    assert_contains(&rust, ".mvl_contains(&(");
+}
+
+#[test]
+fn method_contains_string_emits_mvl_contains() {
+    // String.contains(sub) — same MvlContains trait dispatch
+    let src = r#"fn f(s: String, sub: String) -> Bool { s.contains(sub) }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".mvl_contains(&(");
 }
 
 #[test]

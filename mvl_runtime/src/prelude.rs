@@ -88,6 +88,36 @@ impl<T, E> MvlMap for Result<T, E> {
     }
 }
 
+/// Uniform `contains` check across `Vec<T>` and `String`.
+///
+/// The transpiler emits `receiver.mvl_contains(&arg.clone())` for all MVL
+/// `.contains(x)` calls.  This lets the same method syntax work on both
+/// lists and strings without requiring type information at codegen time.
+/// Corresponds to the `list_contains` / `str_contains` extern primitives
+/// declared in `std/primitives.mvl`.
+pub trait MvlContains<T> {
+    /// Return `true` if `self` contains `x`.
+    fn mvl_contains(&self, x: &T) -> bool;
+}
+
+impl<T: PartialEq> MvlContains<T> for Vec<T> {
+    fn mvl_contains(&self, x: &T) -> bool {
+        self.contains(x)
+    }
+}
+
+impl MvlContains<String> for String {
+    fn mvl_contains(&self, x: &String) -> bool {
+        self.contains(x.as_str())
+    }
+}
+
+impl<T: Eq + std::hash::Hash> MvlContains<T> for std::collections::HashSet<T> {
+    fn mvl_contains(&self, x: &T) -> bool {
+        self.contains(x)
+    }
+}
+
 /// Uniform `pow` for `i64` (uses `u32` exponent cast) and `f64` (uses `powf`).
 ///
 /// The transpiler emits `receiver.mvl_pow(arg.clone())` for all MVL `.pow(e)`
