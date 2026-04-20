@@ -3775,3 +3775,20 @@ fn parametrized_effects_corpus_parses_and_checks() {
         "parametrized effects corpus should have no serious errors, got: {serious:?}"
     );
 }
+
+#[test]
+fn stdlib_args_mvl_parses_without_errors() {
+    // GIVEN: std/args.mvl (embedded stdlib source)
+    // THEN: the parser produces zero errors
+    // Regression guard: ensures stdlib files use valid MVL syntax.
+    // Function declarations use `fn foo<T>()` (angle brackets); call expressions use `foo[T]()`.
+    let src = include_str!("../std/args.mvl");
+    let (mut p, lex_errors) = mvl::mvl::parser::Parser::new(src);
+    assert!(lex_errors.is_empty(), "args.mvl lex errors: {lex_errors:?}");
+    let _ = p.parse_program();
+    assert!(
+        p.errors().is_empty(),
+        "args.mvl parse errors: {:?}",
+        p.errors()
+    );
+}
