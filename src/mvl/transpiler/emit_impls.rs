@@ -50,6 +50,12 @@ use crate::mvl::transpiler::last_use::compute_last_uses;
 
 /// Emit a trait implementation block.
 pub fn emit_impl_decl(cg: &mut Codegen, id: &ImplDecl) {
+    // Phase A: reset last_uses before each impl block so that stale spans from the
+    // preceding function body cannot bleed into branches that do not call
+    // compute_last_uses (the unsupported-trait fallthrough and the Display
+    // None-method branch).  Each supported impl re-sets last_uses per method body
+    // immediately before emitting that body.
+    cg.last_uses = Default::default();
     match id.trait_name.as_str() {
         "Display" => emit_display_impl(cg, id),
         "From" => emit_from_impl(cg, id),

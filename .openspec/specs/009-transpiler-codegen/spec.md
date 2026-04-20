@@ -275,7 +275,7 @@ for item in get_items().clone() { ... }  // .clone() chains on return value, not
 
 These are explicitly out of scope for the current transpiler:
 
-- **Clone elision / last-use analysis:** Always clone. Let LLVM optimise.
+- **Clone elision beyond Phase A:** Phase A (last-use move) is implemented. Phase B (Copy inference, cross-scope borrow) is deferred.
 - **Copy inference:** Don't auto-derive Copy on structs. Derive Clone uniformly.
 - **Expression-level type tracking in emitter:** The transpiler operates on AST nodes, not typed IR. Type-aware emission is Phase 3.
 - **Rust formatting:** The emitted Rust does not need to pass `rustfmt`. Correctness over style.

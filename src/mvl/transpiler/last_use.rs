@@ -81,7 +81,13 @@ impl LastUseTracker {
     fn visit_stmt(&mut self, stmt: &Stmt, in_loop: bool) {
         match stmt {
             Stmt::Let { init, .. } => self.visit_expr(init, in_loop),
-            Stmt::Assign { value, .. } => self.visit_expr(value, in_loop),
+            Stmt::Assign { value, .. } => {
+                // LValue target is intentionally not visited: assignment is a write,
+                // not a read.  Last-use analysis tracks read uses only — the value
+                // currently bound to the name is consumed by the RHS expression, not
+                // by being written to.
+                self.visit_expr(value, in_loop);
+            }
             Stmt::Return { value, .. } => {
                 if let Some(e) = value {
                     self.visit_expr(e, in_loop);

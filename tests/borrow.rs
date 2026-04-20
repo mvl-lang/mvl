@@ -239,3 +239,82 @@ fn once(c: Counter) -> Int { get(c) }
     assert_contains(&rust, "get(c)");
     assert_not_contains(&rust, "get(c.clone())");
 }
+
+// ── Phase A: if/else branch coverage ─────────────────────────────────────────
+
+/// Variable used only in the then-branch is moved (its only occurrence is last).
+#[test]
+fn move_var_used_only_in_then_branch() {
+    let src = r#"
+type Buf = struct { data: String }
+fn take(b: Buf) -> String { b.data }
+fn process(b: Buf, flag: Bool) -> String {
+    if flag { take(b) } else { "none" }
+}
+"#;
+    let rust = transpile_src(src);
+    // b's only use is in the then-branch — last textual occurrence → move.
+    assert_contains(&rust, "take(b)");
+    assert_not_contains(&rust, "take(b.clone())");
+}
+
+/// Variable used in both then and else branches: last textual occurrence moves,
+/// earlier clones.
+#[test]
+fn clone_var_used_in_both_if_branches() {
+    let src = r#"
+type Buf = struct { data: String }
+fn take(b: Buf) -> String { b.data }
+fn process(b: Buf, flag: Bool) -> String {
+    if flag { take(b) } else { take(b) }
+}
+"#;
+    let rust = transpile_src(src);
+    // Two uses: the first (then) clones, the last (else) moves.
+    assert_contains(&rust, "take(b.clone())");
+}
+
+// ── Phase A: match arm coverage ───────────────────────────────────────────────
+
+/// Variable used as the match scrutinee and again in an arm: scrutinee clones,
+/// arm use moves.
+#[test]
+fn clone_scrutinee_move_arm_use() {
+    let src = r#"
+type Buf = struct { data: String }
+fn size(b: Buf) -> Int { 0 }
+fn take(b: Buf) -> String { b.data }
+fn process(b: Buf) -> String {
+    match size(b) {
+        0 => take(b),
+        _ => "other"
+    }
+}
+"#;
+    let rust = transpile_src(src);
+    // size(b) is earlier — should clone; take(b) is last — should move.
+    assert_contains(&rust, "size(b.clone())");
+    assert_contains(&rust, "take(b)");
+    assert_not_contains(&rust, "take(b.clone())");
+}
+
+// ── Phase A: while condition coverage ────────────────────────────────────────
+
+/// Variable used only in the while condition is treated as in-loop (condition
+/// executes on every iteration) and must always clone.
+#[test]
+fn clone_var_used_only_in_while_condition() {
+    let src = r#"
+type Buf = struct { data: String }
+fn should_continue(b: Buf) -> Bool { true }
+partial fn process(b: Buf, mut n: Int) -> Unit {
+    while should_continue(b) {
+        n = n - 1;
+        ()
+    }
+}
+"#;
+    let rust = transpile_src(src);
+    // b is used in the while condition which runs repeatedly → must clone.
+    assert_contains(&rust, "should_continue(b.clone())");
+}
