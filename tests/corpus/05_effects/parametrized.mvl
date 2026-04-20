@@ -4,12 +4,19 @@
 //
 // All declarations are valid: parametrized effects parse and are accepted
 // by the checker when the caller's declared effect covers the callee's.
+//
+// Design note: a function declared `! FileRead("/etc/app/")` cannot call a
+// function that requires the general `! FileRead` — the specific effect does
+// not cover the more permissive requirement (checker rule: specific declared
+// does not satisfy general required). Instead, parametrized-effect functions
+// call `extern "rust"` primitives that declare matching or more-specific
+// effects, forming an explicit trust-boundary chain.
 
 use std.io.{ Path, path, join, read_to_string, write }
 
 // ── Unparametrized effects still work (backward compat) ───────────────────
 
-fn read_any(p: Path) -> Result<String, String> ! FileRead {
+fn read_any(p: Path) -> Result<Tainted<String>, String> ! FileRead {
     read_to_string(p)
 }
 
@@ -17,29 +24,42 @@ fn write_any(p: Path, data: String) -> Result<Unit, String> ! FileWrite {
     write(p, data)
 }
 
-// ── Parametrized effects: restrict to specific path ───────────────────────
+// ── Parametrized IO primitives (extern trust boundary) ────────────────────
+// These extern declarations model runtime IO restricted to specific paths.
+// They are the leaf of the parametrized-effect call chain.
 
-fn read_config() -> Result<String, String> ! FileRead("/etc/app/") {
-    read_to_string(path("/etc/app/config.toml"))
+extern "rust" {
+    /// Read a file under /etc/app/ — config-read trust boundary.
+    fn read_etc_app_file(p: Path) -> Result<Tainted<String>, String> ! FileRead("/etc/app/")
+    /// Read a file under /var/log/ — log-read trust boundary.
+    fn read_var_log_file(p: Path) -> Result<Tainted<String>, String> ! FileRead("/var/log/")
+    /// Write a file under /tmp/ — report-write trust boundary.
+    fn write_tmp_file(p: Path, content: String) -> Result<Unit, String> ! FileWrite("/tmp/")
 }
 
-fn read_log() -> Result<String, String> ! FileRead("/var/log/") {
-    read_to_string(path("/var/log/app.log"))
+// ── Parametrized effects: restrict to specific path ───────────────────────
+
+fn read_config() -> Result<Tainted<String>, String> ! FileRead("/etc/app/") {
+    read_etc_app_file(path("/etc/app/config.toml"))
+}
+
+fn read_log() -> Result<Tainted<String>, String> ! FileRead("/var/log/") {
+    read_var_log_file(path("/var/log/app.log"))
 }
 
 fn write_report() -> Result<Unit, String> ! FileWrite("/tmp/") {
-    write(path("/tmp/report.txt"), "done")
+    write_tmp_file(path("/tmp/report.txt"), "done")
 }
 
 // ── Caller with general effect covers specific callee ─────────────────────
 
-fn load_all_configs() -> Result<String, String> ! FileRead {
+fn load_all_configs() -> Result<Tainted<String>, String> ! FileRead {
     read_config()
 }
 
 // ── Caller with prefix covers callee with more-specific path ─────────────
 
-fn load_config_top() -> Result<String, String> ! FileRead("/etc/") {
+fn load_config_top() -> Result<Tainted<String>, String> ! FileRead("/etc/") {
     read_config()
 }
 
