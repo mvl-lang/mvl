@@ -12,7 +12,7 @@
 // call `extern "rust"` primitives that declare matching or more-specific
 // effects, forming an explicit trust-boundary chain.
 
-use std.io.{ Path, path, join, read_to_string, write }
+use std.io.{ Path, path, read_to_string, write }
 
 // ── Unparametrized effects still work (backward compat) ───────────────────
 
@@ -20,13 +20,19 @@ fn read_any(p: Path) -> Result<Tainted<String>, String> ! FileRead {
     read_to_string(p)
 }
 
-fn write_any(p: Path, data: String) -> Result<Unit, String> ! FileWrite {
+fn write_any(p: Path, data: Tainted<String>) -> Result<Unit, String> ! FileWrite {
     write(p, data)
 }
 
 // ── Parametrized IO primitives (extern trust boundary) ────────────────────
 // These extern declarations model runtime IO restricted to specific paths.
 // They are the leaf of the parametrized-effect call chain.
+//
+// Note: The Tainted<String> return type and path-restricted effects are
+// auditable declarations — the checker accepts them structurally but does NOT
+// verify that the Rust bridge implementation respects the path restriction at
+// runtime (ADR-0006, current limitations). The bridge MUST independently
+// validate that p falls under the declared prefix.
 
 extern "rust" {
     /// Read a file under /etc/app/ — config-read trust boundary.
@@ -34,7 +40,9 @@ extern "rust" {
     /// Read a file under /var/log/ — log-read trust boundary.
     fn read_var_log_file(p: Path) -> Result<Tainted<String>, String> ! FileRead("/var/log/")
     /// Write a file under /tmp/ — report-write trust boundary.
-    fn write_tmp_file(p: Path, content: String) -> Result<Unit, String> ! FileWrite("/tmp/")
+    /// Accepts Tainted<String> — caller is responsible for sanitization
+    /// before passing content if clean output is required.
+    fn write_tmp_file(p: Path, content: Tainted<String>) -> Result<Unit, String> ! FileWrite("/tmp/")
 }
 
 // ── Parametrized effects: restrict to specific path ───────────────────────
