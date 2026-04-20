@@ -71,6 +71,12 @@ fn load_config_top() -> Result<Tainted<String>, String> ! FileRead("/etc/") {
     read_config()
 }
 
+// ── Caller for read_log: general effect covers specific callee ─────────────
+
+fn load_log() -> Result<Tainted<String>, String> ! FileRead {
+    read_log()
+}
+
 // ── Net effect parametrized by host ───────────────────────────────────────
 
 // Note: Net effects with host parameters parse correctly; enforcement of

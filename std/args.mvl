@@ -51,4 +51,4 @@ pub fn get_env(name: Clean<String>) -> Option<Tainted<String>> ! Console { None 
 /// No DSL, no builder, no macros — the type is the spec.
 ///
 /// Requires `! Console` effect (reads process arguments).
-pub fn parse[T]() -> Result[T, String] ! Console { Err("") }
+pub fn parse<T>() -> Result<T, String> ! Console { Err("") }
