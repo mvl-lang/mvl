@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.49.2] — 2026-04-20
+
+### Fixed
+
+- **Parametrized effects corpus test** — Repaired `tests/corpus/05_effects/parametrized.mvl` broken by PR #303 (parametrized effects feature). Fixed two req bugs: (1) `read_any` declared `Result<String, String>` but called `read_to_string` returning `Result<Tainted<String>, String>` — type mismatch; (2) functions declared parametrized effects but called general-effect stdlib functions, violating the checker's subsetting rule (specific declared does not satisfy general required). Solution: added `extern "rust"` primitives with matching parametrized effects as the trust-boundary leaf of the call chain. Proven requirements: 8/11 → 9/11.
+
 ## [0.49.1] — 2026-04-20
 
 ### Added
