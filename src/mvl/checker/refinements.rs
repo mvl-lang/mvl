@@ -147,13 +147,26 @@ pub fn count_refinements(prog: &Program) -> RefinementCounts {
 ///
 /// Only pure functions (empty effects list) are included; effectful functions
 /// cannot be safely evaluated at compile time.
+///
+/// Both top-level `fn` declarations and pure methods inside `impl` blocks are
+/// collected.  Methods are registered under their bare name; if two methods on
+/// different types share the same name the last one wins (acceptable — folding
+/// is conservative and `None` is always a safe fallback).
 fn build_pure_fn_decls(prog: &Program) -> HashMap<String, FnDecl> {
     let mut map = HashMap::new();
     for decl in &prog.declarations {
-        if let Decl::Fn(fd) = decl {
-            if fd.effects.is_empty() {
+        match decl {
+            Decl::Fn(fd) if fd.effects.is_empty() => {
                 map.insert(fd.name.clone(), fd.clone());
             }
+            Decl::Impl(impl_decl) => {
+                for method in &impl_decl.methods {
+                    if method.effects.is_empty() {
+                        map.insert(method.name.clone(), method.clone());
+                    }
+                }
+            }
+            _ => {}
         }
     }
     map
@@ -363,12 +376,16 @@ fn extract_eq_float_from_hyp(pred: &RefExpr) -> Option<f64> {
     }
 }
 
-/// Build a `self == value` refinement predicate from a `ConstValue`.
+/// Build a `self == value` refinement predicate from a numeric `ConstValue`.
 ///
 /// Used when a `let` binding is initialised with a constant-folded pure-function
 /// call — we inject `self == <folded_value>` into `var_refs` so that the
 /// refinement solver can statically prove predicates on that variable.
-fn lit_eq_pred(cv: &const_eval::ConstValue) -> RefExpr {
+///
+/// Returns `None` for non-numeric values (`Bool`, `Str`, `Unit`) because the
+/// refinement language has no literal form for those types. Callers must skip
+/// insertion into `var_refs` when `None` is returned.
+fn lit_eq_pred(cv: &const_eval::ConstValue) -> Option<RefExpr> {
     let dummy = Span::default();
     let self_ref = Box::new(RefExpr::Ident {
         name: "self".to_string(),
@@ -383,22 +400,15 @@ fn lit_eq_pred(cv: &const_eval::ConstValue) -> RefExpr {
             value: *f,
             span: dummy,
         }),
-        // For non-numeric folded values we still need a RefExpr, but integer 0
-        // would be wrong — callers should only inject numeric const values.
-        // This branch is a safe fallback that evaluates to an un-provable form.
-        _ => {
-            return RefExpr::Ident {
-                name: "__const_non_numeric".to_string(),
-                span: dummy,
-            };
-        }
+        // Non-numeric folded values have no useful refinement hypothesis.
+        _ => return None,
     };
-    RefExpr::Compare {
+    Some(RefExpr::Compare {
         op: CmpOp::Eq,
         left: self_ref,
         right: rhs,
         span: dummy,
-    }
+    })
 }
 
 /// Extract the identifier name from a simple `Expr::Ident`, if present.
@@ -707,7 +717,7 @@ fn analyze_stmt(
                 if let Expr::FnCall { name, args, .. } = init {
                     if let Some(fd) = fn_decls.get(name) {
                         if let Some(cv) = const_eval::try_fold_call(fd, args, fn_decls) {
-                            pred = Some(lit_eq_pred(&cv));
+                            pred = lit_eq_pred(&cv);
                         }
                     }
                 }
@@ -989,7 +999,9 @@ fn check_arg_against_pred(
                 if let Some(cv) = const_eval::try_fold_call(fd, args, fn_decls) {
                     return match cv {
                         const_eval::ConstValue::Integer(n) => eval_pred_int(n, pred),
-                        const_eval::ConstValue::Float(f) => eval_pred_float(f, pred),
+                        // Guard NaN — NaN comparisons are always false in IEEE 754,
+                        // which would produce incorrect Failed/Proven outcomes.
+                        const_eval::ConstValue::Float(f) if !f.is_nan() => eval_pred_float(f, pred),
                         _ => RefResult::RuntimeCheck,
                     };
                 }

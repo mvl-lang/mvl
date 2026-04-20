@@ -202,10 +202,12 @@ fn eval_stmt(
             let val = eval_expr(scrutinee, env, fn_decls, budget)?;
             for arm in arms {
                 if let Some(mut arm_env) = match_pattern(&arm.pattern, &val, env) {
-                    // Evaluate optional guard.
-                    if let Some(_guard) = &arm.guard {
-                        // Guards reference RefExpr, not Expr — skip for now (conservative).
-                        continue;
+                    // Guards reference RefExpr, not Expr — cannot evaluate statically.
+                    // Return None immediately rather than continuing to the next arm:
+                    // skipping a matching guarded arm and executing a later arm would
+                    // produce the wrong result.
+                    if arm.guard.is_some() {
+                        return None;
                     }
                     let result = match &arm.body {
                         MatchBody::Expr(e) => eval_expr(e, &arm_env, fn_decls, budget)?,
@@ -348,9 +350,12 @@ fn eval_match_arms(
 ) -> Option<ConstValue> {
     for arm in arms {
         if let Some(mut arm_env) = match_pattern(&arm.pattern, val, env) {
-            // Guards use RefExpr — skip armed with guards conservatively.
+            // Guards reference RefExpr — cannot evaluate statically.
+            // Return None immediately rather than continuing to the next arm:
+            // skipping a matching guarded arm and executing a later arm would
+            // produce the wrong result.
             if arm.guard.is_some() {
-                continue;
+                return None;
             }
             return match &arm.body {
                 MatchBody::Expr(e) => eval_expr(e, &arm_env, fn_decls, budget),
@@ -425,7 +430,7 @@ fn eval_binary(op: BinaryOp, lv: ConstValue, rv: ConstValue) -> Option<ConstValu
             if r == 0 {
                 None
             } else {
-                Some(ConstValue::Integer(l % r))
+                l.checked_rem(r).map(ConstValue::Integer)
             }
         }
         // Integer comparisons
@@ -435,24 +440,62 @@ fn eval_binary(op: BinaryOp, lv: ConstValue, rv: ConstValue) -> Option<ConstValu
         (Gt, ConstValue::Integer(l), ConstValue::Integer(r)) => Some(ConstValue::Bool(l > r)),
         (Le, ConstValue::Integer(l), ConstValue::Integer(r)) => Some(ConstValue::Bool(l <= r)),
         (Ge, ConstValue::Integer(l), ConstValue::Integer(r)) => Some(ConstValue::Bool(l >= r)),
-        // Float arithmetic
-        (Add, ConstValue::Float(l), ConstValue::Float(r)) => Some(ConstValue::Float(l + r)),
-        (Sub, ConstValue::Float(l), ConstValue::Float(r)) => Some(ConstValue::Float(l - r)),
-        (Mul, ConstValue::Float(l), ConstValue::Float(r)) => Some(ConstValue::Float(l * r)),
-        (Div, ConstValue::Float(l), ConstValue::Float(r)) => {
-            if r == 0.0 {
-                None
+        // Float arithmetic — guard NaN inputs and non-finite results.
+        (Add, ConstValue::Float(l), ConstValue::Float(r)) => {
+            let v = l + r;
+            if v.is_finite() {
+                Some(ConstValue::Float(v))
             } else {
-                Some(ConstValue::Float(l / r))
+                None
             }
         }
-        // Float comparisons
-        (Eq, ConstValue::Float(l), ConstValue::Float(r)) => Some(ConstValue::Bool(l == r)),
-        (Ne, ConstValue::Float(l), ConstValue::Float(r)) => Some(ConstValue::Bool(l != r)),
-        (Lt, ConstValue::Float(l), ConstValue::Float(r)) => Some(ConstValue::Bool(l < r)),
-        (Gt, ConstValue::Float(l), ConstValue::Float(r)) => Some(ConstValue::Bool(l > r)),
-        (Le, ConstValue::Float(l), ConstValue::Float(r)) => Some(ConstValue::Bool(l <= r)),
-        (Ge, ConstValue::Float(l), ConstValue::Float(r)) => Some(ConstValue::Bool(l >= r)),
+        (Sub, ConstValue::Float(l), ConstValue::Float(r)) => {
+            let v = l - r;
+            if v.is_finite() {
+                Some(ConstValue::Float(v))
+            } else {
+                None
+            }
+        }
+        (Mul, ConstValue::Float(l), ConstValue::Float(r)) => {
+            let v = l * r;
+            if v.is_finite() {
+                Some(ConstValue::Float(v))
+            } else {
+                None
+            }
+        }
+        (Div, ConstValue::Float(l), ConstValue::Float(r)) => {
+            if r == 0.0 || r.is_nan() || l.is_nan() {
+                None
+            } else {
+                let v = l / r;
+                if v.is_finite() {
+                    Some(ConstValue::Float(v))
+                } else {
+                    None
+                }
+            }
+        }
+        // Float comparisons — NaN operands produce unreliable results; return None.
+        (Eq, ConstValue::Float(l), ConstValue::Float(r)) if !l.is_nan() && !r.is_nan() => {
+            Some(ConstValue::Bool(l == r))
+        }
+        (Ne, ConstValue::Float(l), ConstValue::Float(r)) if !l.is_nan() && !r.is_nan() => {
+            Some(ConstValue::Bool(l != r))
+        }
+        (Lt, ConstValue::Float(l), ConstValue::Float(r)) if !l.is_nan() && !r.is_nan() => {
+            Some(ConstValue::Bool(l < r))
+        }
+        (Gt, ConstValue::Float(l), ConstValue::Float(r)) if !l.is_nan() && !r.is_nan() => {
+            Some(ConstValue::Bool(l > r))
+        }
+        (Le, ConstValue::Float(l), ConstValue::Float(r)) if !l.is_nan() && !r.is_nan() => {
+            Some(ConstValue::Bool(l <= r))
+        }
+        (Ge, ConstValue::Float(l), ConstValue::Float(r)) if !l.is_nan() && !r.is_nan() => {
+            Some(ConstValue::Bool(l >= r))
+        }
         // Boolean logic
         (And, ConstValue::Bool(l), ConstValue::Bool(r)) => Some(ConstValue::Bool(l && r)),
         (Or, ConstValue::Bool(l), ConstValue::Bool(r)) => Some(ConstValue::Bool(l || r)),
