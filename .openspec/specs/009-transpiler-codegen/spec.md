@@ -59,13 +59,33 @@ All transpiled struct and enum declarations MUST include `#[derive(Debug, Clone,
 MVL has value semantics: passing a value to a function conceptually copies it. The transpiler MUST insert `.clone()` on every value-typed argument at function call sites, EXCEPT:
 
 - Copy types (`Int`, `Float`, `Bool`, `Char`, refined aliases over Copy primitives)
-- The last use of a value in its scope (move is sufficient)
-
-Phase 1 simplification: clone ALL non-Copy arguments unconditionally. Last-use analysis is a Phase 3 optimisation.
+- The last use of a value in its scope (move is sufficient — Phase A)
 
 **Implementation:** `src/mvl/transpiler/emit_exprs.rs::emit_expr_as_arg`
 
-#### Scenario: Struct passed to two functions
+#### Phase A: Last-use move elision (implemented, issue #234)
+
+The transpiler performs a single-pass last-use analysis over each function body
+before emission (`src/mvl/transpiler/last_use.rs::compute_last_uses`).  Variables
+used exactly once, or whose last occurrence is outside any loop, are moved instead
+of cloned.  This eliminates unnecessary copies for the common case: a value passed
+to one function and never used again.
+
+**Conservative rules:**
+- Variables used inside `for`/`while` bodies are always cloned (loop-bound variables
+  may be accessed on each iteration; even their outside-loop use is excluded).
+- Lambda bodies are not analysed (captures may be called multiple times).
+- `FieldAccess` expressions are always cloned (partial struct moves are complex).
+
+**Tests:** `tests/borrow.rs` — 12 targeted Phase A tests.
+
+#### Scenario: Single-use variable is moved (Phase A)
+
+- GIVEN `fn f(p: Point) -> Int { show(p) }` where `p` is used exactly once
+- WHEN transpiled
+- THEN the emitted Rust contains `show(p)` without `.clone()`
+
+#### Scenario: Multi-use variable clones all but last (Phase A)
 
 - GIVEN:
   ```mvl
@@ -80,19 +100,25 @@ Phase 1 simplification: clone ALL non-Copy arguments unconditionally. Last-use a
 - THEN the emitted Rust contains `show(p.clone())` for at least the first call
 - AND the emitted Rust compiles without move errors
 
-#### Scenario: Copy types not cloned (Phase 3 target)
+#### Scenario: Loop variable always cloned (Phase A conservative)
 
-> **Phase 1 note:** The current transpiler has no type information at emit time. All
-> `Expr::Ident` and `Expr::FieldAccess` arguments are cloned unconditionally, including
-> Copy types (`Int`, `Bool`, `Char`). The emitted Rust is `add(x.clone(), x.clone())`.
-> This is correct — `.clone()` on a Copy type is a no-op optimised away by the compiler.
-> Last-use analysis and Copy inference are Phase 3 optimisations.
+- GIVEN `for _ in range(0, n) { f(b); () }` where `b` is defined outside the loop
+- WHEN transpiled
+- THEN every call to `f(b)` inside the loop emits `f(b.clone())`
+- AND the outside-loop use of `b` also clones if `b` appears anywhere in the loop
+
+#### Scenario: Copy types not cloned (Phase B/C target)
+
+> **Phase A note:** The transpiler has no type information at emit time. Copy types
+> (`Int`, `Bool`, `Char`) still emit `.clone()` when used in non-last-use positions.
+> `.clone()` on a Copy type is a no-op optimised away by the compiler.
+> Copy inference is deferred to a future phase.
 >
 > **Tests:** `tests/transpiler.rs::copy_type_ident_clone_is_emitted_but_harmless`
 
 - GIVEN `fn add(a: Int, b: Int) -> Int { a + b }`
 - AND `let x = 1; add(x, x);`
-- WHEN transpiled (Phase 3)
+- WHEN transpiled (future phase)
 - THEN the emitted Rust contains `add(x, x)` without `.clone()`
 
 #### Scenario: Collection iterable cloned before for-in

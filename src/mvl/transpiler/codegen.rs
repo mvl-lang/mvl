@@ -7,6 +7,7 @@ use crate::mvl::parser::ast::{
     BinaryOp, Decl, ExternDecl, FieldDecl, FnDecl, Param, Program, TypeDecl, TypeExpr, Variant,
     VariantFields,
 };
+use crate::mvl::parser::lexer::Span;
 use crate::mvl::transpiler::coverage::{BranchKind, CoverageMap};
 use crate::mvl::transpiler::emit_functions::emit_fn_decl;
 use crate::mvl::transpiler::emit_impls::emit_impl_decl;
@@ -43,6 +44,12 @@ pub struct Codegen {
     /// `todo!`) instead of real extern declarations.  Used when compiling source
     /// files into the test crate so the crate can link without the external dep.
     pub test_extern_stubs: bool,
+    /// Spans of last uses for the current function body (Phase A, Spec 009 Req 2).
+    ///
+    /// Populated by [`last_use::compute_last_uses`] before each function body is
+    /// emitted.  [`emit_expr_as_arg`] suppresses `.clone()` when the argument's
+    /// span appears here — emitting a Rust move instead.
+    pub last_uses: std::collections::HashSet<Span>,
 }
 
 impl Codegen {

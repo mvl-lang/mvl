@@ -29,6 +29,7 @@ pub mod emit_functions;
 pub mod emit_impls;
 pub mod emit_stmts;
 pub mod emit_types;
+pub mod last_use;
 pub mod mutation;
 
 use crate::mvl::parser::ast::{Decl, Program};

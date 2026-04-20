@@ -10,7 +10,7 @@ use std::fmt;
 // ── Source location ────────────────────────────────────────────────────────
 
 /// Half-open byte range in the source, with human-readable line/col.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Span {
     /// 1-based line number.
     pub line: u32,
