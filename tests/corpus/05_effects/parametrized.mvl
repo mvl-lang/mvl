@@ -16,11 +16,11 @@ use std.io.{ Path, path, read_to_string, write }
 
 // ── Unparametrized effects still work (backward compat) ───────────────────
 
-fn read_any(p: Path) -> Result<Tainted<String>, String> ! FileRead {
+fn read_any(p: Path) -> Result[Tainted[String], String] ! FileRead {
     read_to_string(p)
 }
 
-fn write_any(p: Path, data: Tainted<String>) -> Result<Unit, String> ! FileWrite {
+fn write_any(p: Path, data: Tainted[String]) -> Result[Unit, String] ! FileWrite {
     write(p, data)
 }
 
@@ -28,7 +28,7 @@ fn write_any(p: Path, data: Tainted<String>) -> Result<Unit, String> ! FileWrite
 // These extern declarations model runtime IO restricted to specific paths.
 // They are the leaf of the parametrized-effect call chain.
 //
-// Note: The Tainted<String> return type and path-restricted effects are
+// Note: The Tainted[String] return type and path-restricted effects are
 // auditable declarations — the checker accepts them structurally but does NOT
 // verify that the Rust bridge implementation respects the path restriction at
 // runtime (ADR-0006, current limitations). The bridge MUST independently
@@ -36,38 +36,38 @@ fn write_any(p: Path, data: Tainted<String>) -> Result<Unit, String> ! FileWrite
 
 extern "rust" {
     /// Read a file under /etc/app/ — config-read trust boundary.
-    fn read_etc_app_file(p: Path) -> Result<Tainted<String>, String> ! FileRead("/etc/app/")
+    fn read_etc_app_file(p: Path) -> Result[Tainted[String], String] ! FileRead("/etc/app/")
     /// Read a file under /var/log/ — log-read trust boundary.
-    fn read_var_log_file(p: Path) -> Result<Tainted<String>, String> ! FileRead("/var/log/")
+    fn read_var_log_file(p: Path) -> Result[Tainted[String], String] ! FileRead("/var/log/")
     /// Write a file under /tmp/ — report-write trust boundary.
-    /// Accepts Tainted<String> — caller is responsible for sanitization
+    /// Accepts Tainted[String] — caller is responsible for sanitization
     /// before passing content if clean output is required.
-    fn write_tmp_file(p: Path, content: Tainted<String>) -> Result<Unit, String> ! FileWrite("/tmp/")
+    fn write_tmp_file(p: Path, content: Tainted[String]) -> Result[Unit, String] ! FileWrite("/tmp/")
 }
 
 // ── Parametrized effects: restrict to specific path ───────────────────────
 
-fn read_config() -> Result<Tainted<String>, String> ! FileRead("/etc/app/") {
+fn read_config() -> Result[Tainted[String], String] ! FileRead("/etc/app/") {
     read_etc_app_file(path("/etc/app/config.toml"))
 }
 
-fn read_log() -> Result<Tainted<String>, String> ! FileRead("/var/log/") {
+fn read_log() -> Result[Tainted[String], String] ! FileRead("/var/log/") {
     read_var_log_file(path("/var/log/app.log"))
 }
 
-fn write_report() -> Result<Unit, String> ! FileWrite("/tmp/") {
+fn write_report() -> Result[Unit, String] ! FileWrite("/tmp/") {
     write_tmp_file(path("/tmp/report.txt"), "done")
 }
 
 // ── Caller with general effect covers specific callee ─────────────────────
 
-fn load_all_configs() -> Result<Tainted<String>, String> ! FileRead {
+fn load_all_configs() -> Result[Tainted[String], String] ! FileRead {
     read_config()
 }
 
 // ── Caller with prefix covers callee with more-specific path ─────────────
 
-fn load_config_top() -> Result<Tainted<String>, String> ! FileRead("/etc/") {
+fn load_config_top() -> Result[Tainted[String], String] ! FileRead("/etc/") {
     read_config()
 }
 
@@ -83,20 +83,20 @@ fn load_log() -> Result<Tainted<String>, String> ! FileRead {
 // network-level restrictions is a runtime capability concern. The checker
 // validates syntax and subsetting only.
 
-fn fetch_metrics() -> Result<String, String> ! Net("metrics.internal") {
+fn fetch_metrics() -> Result[String, String] ! Net("metrics.internal") {
     Ok("metrics-data")
 }
 
-fn collect_metrics() -> Result<String, String> ! Net("metrics.internal") {
+fn collect_metrics() -> Result[String, String] ! Net("metrics.internal") {
     fetch_metrics()
 }
 
 // ── DB effect parametrized by operation ───────────────────────────────────
 
-fn db_select() -> Result<String, String> ! DB("SELECT") {
+fn db_select() -> Result[String, String] ! DB("SELECT") {
     Ok("rows")
 }
 
-fn db_read() -> Result<String, String> ! DB {
+fn db_read() -> Result[String, String] ! DB {
     db_select()
 }

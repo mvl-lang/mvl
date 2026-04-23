@@ -7,9 +7,9 @@
 //
 // Design: CLI argument access is a Console effect — it reads from the
 // process environment, which is externally controlled (untrusted) input.
-// Values returned are Tainted<String> until validated by the caller.
+// Values returned are Tainted[String] until validated by the caller.
 //
-// IFC: CLI and environment values are Tainted<String>. Callers must
+// IFC: CLI and environment values are Tainted[String]. Callers must
 // sanitize (validate) before use in security-sensitive contexts.
 //
 // Implementation: wraps `extern "rust" { std::env::args, std::env::var }` (Phase 3).
@@ -19,31 +19,31 @@
 ///
 /// Looks for the flag `--<name>` followed by a value argument.
 /// Returns `None` if the flag is absent or has no value.
-/// Returns `Tainted<String>` because CLI arguments are untrusted external input.
-pub fn get_arg(name: Clean<String>) -> Option<Tainted<String>> ! Console { None }
+/// Returns `Tainted[String]` because CLI arguments are untrusted external input.
+pub fn get_arg(name: Clean[String]) -> Option[Tainted[String]] ! Console { None }
 
 /// Return all command-line arguments (excluding the program name).
 ///
-/// Returns `Tainted<String>` values — callers must validate each argument.
-pub fn get_args() -> List<Tainted<String>> ! Console { [] }
+/// Returns `Tainted[String]` values — callers must validate each argument.
+pub fn get_args() -> List[Tainted[String]] ! Console { [] }
 
 /// Read an environment variable by name.
 ///
 /// Returns `None` if the variable is not set.
-/// Returns `Tainted<String>` because environment variables are externally controlled.
+/// Returns `Tainted[String]` because environment variables are externally controlled.
 ///
 /// NOTE: The `! Console` effect is a Phase 2 placeholder. Environment variable
 /// access is process-environment I/O, which is semantically distinct from
 /// console (stdin/stdout) access. A dedicated `Env` effect will be introduced
 /// in a future phase. See ADR-0007.
-pub fn get_env(name: Clean<String>) -> Option<Tainted<String>> ! Console { None }
+pub fn get_env(name: Clean[String]) -> Option[Tainted[String]] ! Console { None }
 
 /// Parse command-line arguments into a struct `T`.
 ///
 /// The struct IS the argument specification:
 /// - Field names become flag names (`--<field>`)
 /// - `Bool` fields are presence flags (no value needed: `--verbose`)
-/// - `Option<T>` fields are optional (absent flag → `None`)
+/// - `Option[T]` fields are optional (absent flag → `None`)
 /// - All other fields are required (absent flag → `Err`)
 /// - Refinement predicates are validated at parse time
 ///
@@ -51,4 +51,4 @@ pub fn get_env(name: Clean<String>) -> Option<Tainted<String>> ! Console { None 
 /// No DSL, no builder, no macros — the type is the spec.
 ///
 /// Requires `! Console` effect (reads process arguments).
-pub fn parse<T>() -> Result<T, String> ! Console { Err("") }
+pub fn parse[T]() -> Result[T, String] ! Console { Err("") }

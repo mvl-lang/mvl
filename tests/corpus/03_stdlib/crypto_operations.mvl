@@ -10,7 +10,7 @@ fn crypto_hash_sha512(data: String) -> String {
     sha512(data)
 }
 
-fn crypto_secure_random_bytes(n: Int) -> Secret<List<Int>> ! CryptoRandom {
+fn crypto_secure_random_bytes(n: Int) -> Secret[List[Int]] ! CryptoRandom {
     crypto_random_bytes(n)
 }
 

@@ -23,7 +23,7 @@ pub fn to_lower(s: String) -> String {
 }
 
 /// Decompose a string into a list of single-character strings.
-pub fn chars(s: String) -> List<String> {
+pub fn chars(s: String) -> List[String] {
     str_chars(s)
 }
 
@@ -43,7 +43,7 @@ pub fn ends_with(s: String, suffix: String) -> Bool {
 }
 
 /// Char-index of first occurrence of `sub` in `s`, or None.
-pub fn find(s: String, sub: String) -> Option<Int> {
+pub fn find(s: String, sub: String) -> Option[Int] {
     str_find(s, sub)
 }
 
@@ -53,7 +53,7 @@ pub fn replace(s: String, from: String, to: String) -> String {
 }
 
 /// Split `s` on `sep`, returning a list of substrings.
-pub fn split(s: String, sep: String) -> List<String> {
+pub fn split(s: String, sep: String) -> List[String] {
     str_split(s, sep)
 }
 

@@ -13,7 +13,7 @@
 //   Option: got 42
 //   Result: value=42
 
-fn demo_option(x: Option<Int>) -> String {
+fn demo_option(x: Option[Int]) -> String {
     match x {
         Some(v) => format("got {}", v),
         None    => "nothing",
@@ -22,7 +22,7 @@ fn demo_option(x: Option<Int>) -> String {
 
 type AppError = enum { ParseFail }
 
-fn safe_value(x: Int) -> Result<Int, AppError> {
+fn safe_value(x: Int) -> Result[Int, AppError] {
     Ok(x)
 }
 
@@ -53,25 +53,25 @@ fn main() -> Unit ! Console {
     let s: String = "hello";
     println("String: len={}", s.len());
 
-    // ── List<T> ──────────────────────────────────────────────────────────────
-    let xs: List<Int> = [1, 2, 3, 4, 5];
+    // ── List[T] ──────────────────────────────────────────────────────────────
+    let xs: List[Int] = [1, 2, 3, 4, 5];
     let xfirst = match xs.first() { Some(v) => v, None => 0 };
     println("List: len={} first={}", xs.len(), xfirst);
 
-    // ── Map<K,V> ─────────────────────────────────────────────────────────────
-    let m: Map<String, Int> = {"alice": 95, "bob": 87};
+    // ── Map[K,V] ─────────────────────────────────────────────────────────────
+    let m: Map[String, Int] = {"alice": 95, "bob": 87};
     println("Map: len={}", m.len());
 
-    // ── Set<T> ───────────────────────────────────────────────────────────────
-    let ss: Set<Int> = {1, 2, 3};
+    // ── Set[T] ───────────────────────────────────────────────────────────────
+    let ss: Set[Int] = {1, 2, 3};
     let has_two = ss.contains(2);
     println("Set: has_two={} len={}", has_two, ss.len());
 
-    // ── Option<T> ────────────────────────────────────────────────────────────
-    let opt: Option<Int> = Some(42);
+    // ── Option[T] ────────────────────────────────────────────────────────────
+    let opt: Option[Int] = Some(42);
     println("Option: {}", demo_option(opt));
 
-    // ── Result<T,E> ──────────────────────────────────────────────────────────
+    // ── Result[T,E] ──────────────────────────────────────────────────────────
     match safe_value(42) {
         Ok(v)  => println("Result: value={}", v),
         Err(_) => println("Result: error"),

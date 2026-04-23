@@ -2705,7 +2705,7 @@ mod tests {
 
     #[test]
     fn option_match_exhaustive() {
-        let src = "fn f(x: Option<Int>) -> Int { match x { Some(v) => v, None => 0 } }";
+        let src = "fn f(x: Option[Int]) -> Int { match x { Some(v) => v, None => 0 } }";
         let result = check_src(src);
         let exhaustive_errors: Vec<_> = result
             .errors
@@ -2720,7 +2720,7 @@ mod tests {
 
     #[test]
     fn option_match_missing_none_rejected() {
-        let src = "fn f(x: Option<Int>) -> Int { match x { Some(v) => v } }";
+        let src = "fn f(x: Option[Int]) -> Int { match x { Some(v) => v } }";
         let errors = errors_for(src);
         assert!(
             errors.iter().any(|e| matches!(
@@ -2733,7 +2733,7 @@ mod tests {
 
     #[test]
     fn result_match_exhaustive() {
-        let src = "fn f(x: Result<Int, String>) -> Int { match x { Ok(v) => v, Err(_) => 0 } }";
+        let src = "fn f(x: Result[Int, String]) -> Int { match x { Ok(v) => v, Err(_) => 0 } }";
         let result = check_src(src);
         let exhaustive_errors: Vec<_> = result
             .errors
@@ -2748,7 +2748,7 @@ mod tests {
 
     #[test]
     fn result_match_missing_err_rejected() {
-        let src = "fn f(x: Result<Int, String>) -> Int { match x { Ok(v) => v } }";
+        let src = "fn f(x: Result[Int, String]) -> Int { match x { Ok(v) => v } }";
         let errors = errors_for(src);
         assert!(
             errors.iter().any(|e| matches!(
@@ -2763,7 +2763,7 @@ mod tests {
 
     #[test]
     fn option_direct_access_rejected() {
-        let src = "fn f(x: Option<Int>) -> Int { x.value }";
+        let src = "fn f(x: Option[Int]) -> Int { x.value }";
         let errors = errors_for(src);
         assert!(
             errors
@@ -2775,7 +2775,7 @@ mod tests {
 
     #[test]
     fn result_ignored_rejected() {
-        let src = "fn produce() -> Result<Int, String> { Ok(1) }\nfn f() -> Unit { produce() }";
+        let src = "fn produce() -> Result[Int, String] { Ok(1) }\nfn f() -> Unit { produce() }";
         let errors = errors_for(src);
         assert!(
             errors
@@ -2832,7 +2832,7 @@ mod tests {
 
     #[test]
     fn some_constructor_no_undefined_function() {
-        let src = "fn f(x: Int) -> Option<Int> { Some(x) }";
+        let src = "fn f(x: Int) -> Option[Int] { Some(x) }";
         let errors = errors_for(src);
         assert!(
             !errors
@@ -2844,7 +2844,7 @@ mod tests {
 
     #[test]
     fn ok_constructor_no_undefined_function() {
-        let src = "fn produce() -> Result<Int, String> { Ok(1) }";
+        let src = "fn produce() -> Result[Int, String] { Ok(1) }";
         let errors = errors_for(src);
         assert!(
             !errors
@@ -2856,7 +2856,7 @@ mod tests {
 
     #[test]
     fn err_constructor_no_undefined_function() {
-        let src = "fn f() -> Result<Int, String> { Err(\"oops\") }";
+        let src = "fn f() -> Result[Int, String] { Err(\"oops\") }";
         let errors = errors_for(src);
         assert!(
             !errors
@@ -2868,7 +2868,7 @@ mod tests {
 
     #[test]
     fn none_ident_no_undefined_variable() {
-        let src = "fn f() -> Option<Int> { None }";
+        let src = "fn f() -> Option[Int] { None }";
         let errors = errors_for(src);
         assert!(
             !errors
@@ -3388,7 +3388,7 @@ mod tests {
         // GIVEN: a Unit function whose tail match returns a Result
         // THEN: ResultIgnored is emitted — same behaviour as a bare tail expression
         let src = r#"
-            fn produce() -> Result<Int, String> { Ok(1) }
+            fn produce() -> Result[Int, String] { Ok(1) }
             fn f(x: Int) -> Unit {
                 match x {
                     0 => produce(),

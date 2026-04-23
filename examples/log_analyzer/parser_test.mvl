@@ -4,10 +4,10 @@
 // Until it is available, test files are self-contained: the functions under
 // test are re-declared locally so this file transpiles and runs independently.
 //
-// IFC note: The live parser.mvl version takes Tainted<String> and sanitizes
+// IFC note: The live parser.mvl version takes Tainted[String] and sanitizes
 // input at the trust boundary.  This standalone test file accepts plain String
 // so that call sites can pass literals directly.  String literals are subtype-
-// compatible with Tainted<String> (Public ⊑ Tainted), so the IFC invariants are
+// compatible with Tainted[String] (Public ⊑ Tainted), so the IFC invariants are
 // preserved — unlabeled data may flow into a Tainted context without error.
 // The Tainted→Clean sanitize() flow is exercised in parser.mvl itself.
 //
@@ -35,7 +35,7 @@ type ParseError = enum {
 // inputs ("ERROR", "Warn") are accepted.  This local version mirrors that
 // behaviour so the standalone tests stay in sync.
 
-total fn parse_level(raw: String) -> Result<LogLevel, ParseError> {
+total fn parse_level(raw: String) -> Result[LogLevel, ParseError] {
     let lower = raw.to_lower();
     match lower {
         "debug" => Ok(LogLevel::Debug),

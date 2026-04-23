@@ -15,7 +15,7 @@ total fn factorial(n: Int where self >= 0) -> Int {
 }
 
 // Partial function (may not terminate)
-partial fn search(xs: List<Int>, target: Int) -> Option<Int> {
+partial fn search(xs: List[Int], target: Int) -> Option[Int] {
     xs.find(target)
 }
 
@@ -25,13 +25,13 @@ fn log_message(msg: String) -> Unit ! Console {
 }
 
 // Function with multiple effects
-fn save_and_log(data: String, path: Path) -> Result<Unit, IOError> ! FileWrite, Console {
+fn save_and_log(data: String, path: Path) -> Result[Unit, IOError] ! FileWrite, Console {
     println("saving...");
     Ok(())
 }
 
 // Function with capability parameter
-fn process(iso db: &DbConn) -> Result<Data, Error> ! DB {
+fn process(iso db: &DbConn) -> Result[Data, Error] ! DB {
     db.query("SELECT * FROM data")
 }
 
@@ -50,33 +50,33 @@ fn increment(mut counter: Int) -> Int {
 }
 
 // Generic function
-fn identity<T>(x: T) -> T { x }
+fn identity[T](x: T) -> T { x }
 
-fn map<A, B>(f: fn(A) -> B, xs: List<A>) -> List<B> {
+fn map[A, B](f: fn(A) -> B, xs: List[A]) -> List[B] {
     xs.map(f)
 }
 
 // Function with security labels
 total fn authenticate(
     iso db: &DbConn,
-    input_password: Tainted<String>,
-    user_id: Public<UserId>,
-) -> Result<Session, AuthError> ! DB, Console {
+    input_password: Tainted[String],
+    user_id: Public[UserId],
+) -> Result[Session, AuthError] ! DB, Console {
     db.find_and_verify(user_id, input_password)?
 }
 
-fn sanitize_input(raw: Tainted<String>) -> Clean<String> {
+fn sanitize_input(raw: Tainted[String]) -> Clean[String] {
     sanitize(raw)
 }
 
-fn declassify_result(secret: Secret<Data>) -> Public<Data> {
+fn declassify_result(secret: Secret[Data]) -> Public[Data] {
     declassify(secret)
 }
 
 // Function with where-clause constraints
-fn compare<T>(a: T, b: T) -> Bool where T: Eq { a == b }
+fn compare[T](a: T, b: T) -> Bool where T: Eq { a == b }
 
-fn sort<T>(xs: List<T>) -> List<T> where T: Ord {
+fn sort[T](xs: List[T]) -> List[T] where T: Ord {
     xs.sort()
 }
 

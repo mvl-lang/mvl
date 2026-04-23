@@ -9,33 +9,33 @@
 // once MVL gains explicit Clone bounds in generic signatures.
 
 /// Safe slice `[start, end)` — clamped, never panics. Wraps the list_slice kernel.
-pub fn slice<T>(xs: List<T>, start: Int, end: Int) -> List<T> where T: Clone {
+pub fn slice[T](xs: List[T], start: Int, end: Int) -> List[T] where T: Clone {
     list_slice(xs, start, end)
 }
 
 /// Return the first `n` elements of `xs`.
-pub fn take<T>(xs: List<T>, n: Int) -> List<T> where T: Clone {
+pub fn take[T](xs: List[T], n: Int) -> List[T] where T: Clone {
     list_slice(xs, 0, n)
 }
 
 /// Drop the first `n` elements of `xs`.
-pub fn skip<T>(xs: List<T>, n: Int) -> List<T> where T: Clone {
+pub fn skip[T](xs: List[T], n: Int) -> List[T] where T: Clone {
     list_slice(xs, n, list_len(xs))
 }
 
 /// Return `Some(xs[0])` or `None` if the list is empty.
-pub fn first<T>(xs: List<T>) -> Option<T> where T: Clone {
+pub fn first[T](xs: List[T]) -> Option[T] where T: Clone {
     list_get(xs, 0)
 }
 
 /// Return `Some(xs[last])` or `None` if the list is empty.
-pub fn last<T>(xs: List<T>) -> Option<T> where T: Clone {
+pub fn last[T](xs: List[T]) -> Option[T] where T: Clone {
     list_get(xs, list_len(xs) - 1)
 }
 
 /// Flatten a list of lists into a single list.
-pub fn flatten<T>(xs: List<List<T>>) -> List<T> where T: Clone {
-    let mut result: List<T> = [];
+pub fn flatten[T](xs: List[List[T]]) -> List[T] where T: Clone {
+    let mut result: List[T] = [];
     for inner in xs {
         for x in inner {
             result.push(x)
@@ -45,9 +45,9 @@ pub fn flatten<T>(xs: List<List<T>>) -> List<T> where T: Clone {
 }
 
 /// Reverse a list.
-pub fn reverse<T>(xs: List<T>) -> List<T> where T: Clone {
+pub fn reverse[T](xs: List[T]) -> List[T] where T: Clone {
     let len = list_len(xs);
-    let mut result: List<T> = [];
+    let mut result: List[T] = [];
     let mut i = len - 1;
     while i >= 0 {
         match list_get(xs, i) {

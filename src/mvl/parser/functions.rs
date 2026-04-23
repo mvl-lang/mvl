@@ -1,7 +1,7 @@
 //! Function-declaration parser (Requirement 4).
 //!
 //! Parses:
-//! - `[total|partial] fn Name [<TypeParams>] (params) -> ReturnType [! Effects] [where Constraints] { body }`
+//! - `[total|partial] fn Name [[TypeParams]] (params) -> ReturnType [! Effects] [where Constraints] { body }`
 //! - `test fn Name() -> Unit { body }` — unit test function
 //! - Parameters with optional capability (`iso`/`val`/`ref`/`tag`), `mut`, type, and refinement
 //! - Totality annotations, effect lists, and where-clause constraints
@@ -519,11 +519,11 @@ impl Parser {
         let ident_result = self.expect_ident();
         let (trait_name, _) = self.require(ident_result)?;
 
-        // Optional generic type args on the trait, e.g. `<IoError>` in `From<IoError>`
-        let trait_type_args = if self.eat(&TokenKind::Lt) {
+        // Optional generic type args on the trait, e.g. `[IoError]` in `From[IoError]`
+        let trait_type_args = if self.eat(&TokenKind::LBracket) {
             let args = self.parse_type_list()?;
-            let gt = self.expect(&TokenKind::Gt);
-            self.require(gt)?;
+            let rb = self.expect(&TokenKind::RBracket);
+            self.require(rb)?;
             args
         } else {
             Vec::new()
@@ -615,9 +615,9 @@ mod tests {
 
     #[test]
     fn parse_total_fn_with_effects() {
-        // GIVEN: total fn read(path: Path) -> Result<String, IOError> ! FileRead { }
-        // THEN: FnDecl with totality=Total, effects=[FileRead], return=Result<String, IOError>
-        let d = fn_decl("total fn read(path: Path) -> Result<String, IOError> ! FileRead { }");
+        // GIVEN: total fn read(path: Path) -> Result[String, IOError] ! FileRead { }
+        // THEN: FnDecl with totality=Total, effects=[FileRead], return=Result[String, IOError]
+        let d = fn_decl("total fn read(path: Path) -> Result[String, IOError] ! FileRead { }");
         assert_eq!(d.totality, Some(Totality::Total));
         assert_eq!(d.name, "read");
         assert_eq!(
@@ -647,9 +647,9 @@ mod tests {
 
     #[test]
     fn parse_fn_with_iso_param() {
-        // GIVEN: fn process(iso db: &DbConn) -> Result<Data, Error> ! DB { }
+        // GIVEN: fn process(iso db: &DbConn) -> Result[Data, Error] ! DB { }
         // THEN: parameter has capability=Iso, type=Ref(DbConn)
-        let d = fn_decl("fn process(iso db: &DbConn) -> Result<Data, Error> ! DB { }");
+        let d = fn_decl("fn process(iso db: &DbConn) -> Result[Data, Error] ! DB { }");
         assert_eq!(d.params[0].capability, Some(Capability::Iso));
         assert_eq!(d.params[0].name, "db");
         assert!(matches!(
@@ -678,10 +678,10 @@ mod tests {
 
     #[test]
     fn parse_fn_with_security_labels() {
-        // GIVEN: fn handle(input: Tainted<String>, key: Secret<ApiKey>) -> Public<Response>
+        // GIVEN: fn handle(input: Tainted[String], key: Secret[ApiKey]) -> Public[Response]
         // THEN: params have correct security labels, return has Public label
         let d = fn_decl(
-            "fn handle(input: Tainted<String>, key: Secret<ApiKey>) -> Public<Response> { }",
+            "fn handle(input: Tainted[String], key: Secret[ApiKey]) -> Public[Response] { }",
         );
         assert_eq!(d.params.len(), 2);
         assert!(matches!(
@@ -734,14 +734,14 @@ mod tests {
 
     #[test]
     fn parse_fn_with_type_params() {
-        let d = fn_decl("fn identity<T>(x: T) -> T { }");
+        let d = fn_decl("fn identity[T](x: T) -> T { }");
         assert_eq!(d.type_params, vec![GenericParam::Type("T".to_string())]);
         assert_eq!(d.params[0].name, "x");
     }
 
     #[test]
     fn parse_fn_with_const_generic() {
-        let d = fn_decl("fn fill<T, const N: Int>(item: T) -> Int { 0 }");
+        let d = fn_decl("fn fill[T, const N: Int](item: T) -> Int { 0 }");
         assert_eq!(
             d.type_params,
             vec![
@@ -759,7 +759,7 @@ mod tests {
 
     #[test]
     fn parse_fn_where_constraints() {
-        let d = fn_decl("fn compare<T>(a: T, b: T) -> Bool where T: Eq { }");
+        let d = fn_decl("fn compare[T](a: T, b: T) -> Bool where T: Eq { }");
         assert_eq!(d.constraints.len(), 1);
         assert_eq!(d.constraints[0].name, "T");
         assert_eq!(d.constraints[0].bound, "Eq");
@@ -770,9 +770,9 @@ mod tests {
         // From tests/corpus/11_programs/auth_handler.mvl
         let src = r#"total fn authenticate(
     iso db: &DbConn,
-    input_password: Tainted<String>,
-    user_id: Public<UserId>
-) -> Result<Session, AuthError> ! DB, Console { }"#;
+    input_password: Tainted[String],
+    user_id: Public[UserId]
+) -> Result[Session, AuthError] ! DB, Console { }"#;
         let d = fn_decl(src);
         assert_eq!(d.totality, Some(Totality::Total));
         assert_eq!(d.name, "authenticate");
@@ -838,7 +838,7 @@ mod tests {
     fn parse_extern_rust_with_effects() {
         let ed = extern_decl(
             r#"extern "rust" {
-    fn http_get(url: String) -> Result<String, String> ! Net;
+    fn http_get(url: String) -> Result[String, String] ! Net;
 }"#,
         );
         assert_eq!(ed.fns.len(), 1);

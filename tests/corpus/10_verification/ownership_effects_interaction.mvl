@@ -15,7 +15,7 @@ fn mutate_and_log(x: Int) -> Unit ! Console, DB {
 }
 
 // Clone-on-pass: Array is passed by value; original remains accessible
-total fn move_prevention(vec: Array<Int>) -> Int ! Console {
+total fn move_prevention(vec: Array[Int]) -> Int ! Console {
     let first = match vec.first() { Some(v) => v, None => 0 };
     println(first);
     vec.len()
@@ -27,7 +27,7 @@ fn log_and_store(msg: String) -> Unit ! Console, DB {
 }
 
 // Iteration is pure — no effect needed for reading a local array
-total fn sum_array(arr: Array<Int>) -> Int {
+total fn sum_array(arr: Array[Int]) -> Int {
     let mut acc = 0;
     for item in arr {
         acc = acc + item

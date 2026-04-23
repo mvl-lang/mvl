@@ -802,7 +802,7 @@ fn alias_iso(channel: Channel, iso x: Payload) -> Unit {
         // GIVEN: a function with Secret-labeled parameter that never reaches a sink
         // WHEN: IFCPass is run
         // THEN: Verdict::Proven (no violations, has labeled types)
-        let src = r#"fn secure(x: Secret<Bool>) -> Unit { }"#;
+        let src = r#"fn secure(x: Secret[Bool]) -> Unit { }"#;
         let (prog, result) = check_src(src);
         let reg = PassRegistry::default_registry();
         let v = reg.run_req(11, &prog, &result);
@@ -816,7 +816,7 @@ fn alias_iso(channel: Channel, iso x: Payload) -> Unit {
     fn req11_proven_evidence_contains_audit_counts() {
         // GIVEN: a function with labeled types and no violations
         // THEN: evidence string references declassification/sanitization counts
-        let src = r#"fn secure(x: Secret<Bool>) -> Unit { }"#;
+        let src = r#"fn secure(x: Secret[Bool]) -> Unit { }"#;
         let (prog, result) = check_src(src);
         let reg = PassRegistry::default_registry();
         if let Verdict::Proven { evidence } = reg.run_req(11, &prog, &result) {

@@ -1,5 +1,5 @@
 // Corpus: Structured logging with ! Log effect and IFC enforcement (#54)
-// Exercises: Log effect; Secret<T> rejection at compile time; effect propagation;
+// Exercises: Log effect; Secret[T] rejection at compile time; effect propagation;
 //            pure functions provably silent; structured key-value fields.
 //
 // All declarations in this file are VALID — no expected errors.

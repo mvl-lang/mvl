@@ -6,7 +6,7 @@ total fn add(a: Int, b: Int) -> Int { a + b }
 total fn mul(a: Int, b: Int) -> Int { a * b }
 
 // Total with for loop (bounded — allowed)
-total fn sum(items: List<Int>) -> Int {
+total fn sum(items: List[Int]) -> Int {
     let mut acc = 0;
     for item in items {
         acc = add(acc, item)
@@ -14,7 +14,7 @@ total fn sum(items: List<Int>) -> Int {
     acc
 }
 
-total fn product(items: List<Int>) -> Int {
+total fn product(items: List[Int]) -> Int {
     let mut acc = 1;
     for item in items {
         acc = mul(acc, item)
@@ -22,7 +22,7 @@ total fn product(items: List<Int>) -> Int {
     acc
 }
 
-total fn count(items: List<Int>) -> Int {
+total fn count(items: List[Int]) -> Int {
     let mut n = 0;
     for _x in items {
         n = add(n, 1)
@@ -31,21 +31,21 @@ total fn count(items: List<Int>) -> Int {
 }
 
 // Total calling total (allowed)
-total fn sum_and_product(items: List<Int>) -> Int {
+total fn sum_and_product(items: List[Int]) -> Int {
     let s = sum(items);
     let p = product(items);
     add(s, p)
 }
 
 // Total with effects but still bounded
-total fn count_with_effect(items: List<String>) -> Unit ! Console {
+total fn count_with_effect(items: List[String]) -> Unit ! Console {
     for msg in items {
         msg.print()
     }
 }
 
 // Partial: allowed to use while loop
-partial fn drain_until_empty(queue: List<Int>, limit: Int) -> Int {
+partial fn drain_until_empty(queue: List[Int], limit: Int) -> Int {
     let mut acc = 0;
     while queue.not_empty(limit) {
         let task = queue.pop();

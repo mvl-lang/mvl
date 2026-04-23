@@ -8,11 +8,11 @@ type IOError = struct { msg: String }
 type NetError = struct { msg: String }
 type Error = enum { Io(IOError), Net(NetError) }
 
-impl From<IOError> for Error {
+impl From[IOError] for Error {
     fn from(e: IOError) -> Self { Error::Io(e) }
 }
 
-impl From<NetError> for Error {
+impl From[NetError] for Error {
     fn from(e: NetError) -> Self { Error::Net(e) }
 }
 
@@ -34,19 +34,19 @@ fn emit_console(msg: String) -> Unit ! Console {
     msg.print()
 }
 
-fn read_path(path: Path) -> Result<String, IOError> ! FileRead {
+fn read_path(path: Path) -> Result[String, IOError] ! FileRead {
     path.read()
 }
 
-fn write_path(path: Path, content: String) -> Result<Unit, IOError> ! FileWrite {
+fn write_path(path: Path, content: String) -> Result[Unit, IOError] ! FileWrite {
     path.write(content)
 }
 
-fn query(sql: String) -> Result<Rows, DBError> ! DB {
+fn query(sql: String) -> Result[Rows, DBError] ! DB {
     sql.execute()
 }
 
-fn fetch(url: String) -> Result<Response, NetError> ! Net {
+fn fetch(url: String) -> Result[Response, NetError] ! Net {
     url.get()
 }
 
@@ -55,18 +55,18 @@ fn greet(name: String) -> Unit ! Console {
     emit_console(name)
 }
 
-fn load_config(path: Path) -> Result<String, IOError> ! FileRead {
+fn load_config(path: Path) -> Result[String, IOError] ! FileRead {
     read_path(path)
 }
 
-fn save_and_log(path: Path, content: String) -> Result<Unit, Error> ! FileWrite, Console {
+fn save_and_log(path: Path, content: String) -> Result[Unit, Error] ! FileWrite, Console {
     write_path(path, content)?;
     emit_console("saved");
     Ok(())
 }
 
 // Caller with superset of effects (valid)
-fn full_pipeline(url: String, path: Path) -> Result<Unit, Error> ! Net, FileWrite, Console {
+fn full_pipeline(url: String, path: Path) -> Result[Unit, Error] ! Net, FileWrite, Console {
     let data = fetch(url)?;
     write_path(path, data.body)?;
     emit_console("done");

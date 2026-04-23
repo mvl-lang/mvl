@@ -57,8 +57,8 @@ pub type Style = struct {
     bold: Bool,
     italic: Bool,
     underline: Bool,
-    fg: Option<Color>,
-    bg: Option<Color>,
+    fg: Option[Color],
+    bg: Option[Color],
 }
 
 /// A foreground or background terminal color.
@@ -94,7 +94,7 @@ pub type Color = enum {
 /// keypress-by-keypress. Call `close` to restore the previous terminal state.
 /// Note: open() does not require `! Terminal` — it is the capability entry point
 /// that grants the handle; callers annotate `! Terminal` because they use it.
-pub fn open() -> Result<Terminal, String> { Err("") }
+pub fn open() -> Result[Terminal, String] { Err("") }
 
 /// Release raw mode and restore the previous terminal state.
 ///
@@ -104,36 +104,36 @@ pub fn close(term: Terminal) -> Unit ! Terminal { }
 // ── Screen control ─────────────────────────────────────────────────────────
 
 /// Clear the entire screen and move cursor to (0, 0).
-pub fn clear(term: &Terminal) -> Result<Unit, String> ! Terminal { Err("") }
+pub fn clear(term: &Terminal) -> Result[Unit, String] ! Terminal { Err("") }
 
 /// Move the cursor to the given (row, col) position (0-indexed).
 ///
 /// Note: crossterm's MoveTo uses (col, row) order — the Phase 2 implementation
 /// transposes these internally. row is vertical, col is horizontal.
-pub fn set_cursor(term: &Terminal, row: Int, col: Int) -> Result<Unit, String> ! Terminal { Err("") }
+pub fn set_cursor(term: &Terminal, row: Int, col: Int) -> Result[Unit, String] ! Terminal { Err("") }
 
 /// Hide the terminal cursor.
-pub fn hide_cursor(term: &Terminal) -> Result<Unit, String> ! Terminal { Err("") }
+pub fn hide_cursor(term: &Terminal) -> Result[Unit, String] ! Terminal { Err("") }
 
 /// Show the terminal cursor.
-pub fn show_cursor(term: &Terminal) -> Result<Unit, String> ! Terminal { Err("") }
+pub fn show_cursor(term: &Terminal) -> Result[Unit, String] ! Terminal { Err("") }
 
 /// Return the current terminal size as (rows, cols).
-pub fn size(term: &Terminal) -> Result<(Int, Int), String> ! Terminal { Err("") }
+pub fn size(term: &Terminal) -> Result[(Int, Int), String] ! Terminal { Err("") }
 
 // ── Output ─────────────────────────────────────────────────────────────────
 
 /// Print text at the current cursor position with no styling.
-pub fn print(term: &Terminal, text: String) -> Result<Unit, String> ! Terminal { Err("") }
+pub fn print(term: &Terminal, text: String) -> Result[Unit, String] ! Terminal { Err("") }
 
 /// Print text with the given style (bold, italic, fg/bg color).
-pub fn print_styled(term: &Terminal, text: String, style: Style) -> Result<Unit, String> ! Terminal { Err("") }
+pub fn print_styled(term: &Terminal, text: String, style: Style) -> Result[Unit, String] ! Terminal { Err("") }
 
 // ── Input ──────────────────────────────────────────────────────────────────
 
 /// Block until a key is pressed and return it.
 /// Returns Err on I/O failure.
-pub fn read_key(term: &Terminal) -> Result<Key, String> ! Terminal { Err("") }
+pub fn read_key(term: &Terminal) -> Result[Key, String] ! Terminal { Err("") }
 
 // ── Style helpers ──────────────────────────────────────────────────────────
 

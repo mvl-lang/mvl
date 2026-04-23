@@ -26,7 +26,7 @@ fn is_red(c: Color) -> Bool {
 }
 
 // Option exhaustive match
-fn unwrap_or_zero(x: Option<Int>) -> Int {
+fn unwrap_or_zero(x: Option[Int]) -> Int {
     match x {
         Some(v) => v,
         None    => 0,
@@ -34,7 +34,7 @@ fn unwrap_or_zero(x: Option<Int>) -> Int {
 }
 
 // Result exhaustive match
-fn unwrap_result(r: Result<Int, String>) -> Int {
+fn unwrap_result(r: Result[Int, String]) -> Int {
     match r {
         Ok(v)  => v,
         Err(_) => -1,

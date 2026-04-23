@@ -12,7 +12,7 @@
 // Design: All process-spawn and process-communication operations require
 //   ! ProcessSpawn — spawning a child process or communicating with one.
 //
-// IFC: Process stdout and stderr are Tainted<String> — they come from an
+// IFC: Process stdout and stderr are Tainted[String] — they come from an
 // external child process and are therefore untrusted. Callers must sanitize
 // before using output in security-sensitive contexts (paths, queries, etc.).
 //
@@ -83,9 +83,9 @@ pub type ChildStderr = struct {}
 /// and any captured output. Use `kill` to terminate the process; `kill`
 /// returns the `Child` so it can be passed to `wait` for reaping.
 pub type Child = struct {
-    stdin: Option<ChildStdin>,
-    stdout: Option<ChildStdout>,
-    stderr: Option<ChildStderr>,
+    stdin: Option[ChildStdin],
+    stdout: Option[ChildStdout],
+    stderr: Option[ChildStderr],
 }
 
 /// The exit status of a finished child process.
@@ -106,19 +106,19 @@ pub type ExitStatus = enum {
 ///   - `stdout` — `Some` when `stdout_mode == Capture`, otherwise `None`
 ///   - `stderr` — `Some` when `stderr_mode == Capture`, otherwise `None`
 ///
-/// Both `stdout` and `stderr` are `Tainted<String>` — they come from an
+/// Both `stdout` and `stderr` are `Tainted[String]` — they come from an
 /// external child process and are therefore untrusted.
 pub type ProcessOutput = struct {
     status: ExitStatus,
-    stdout: Option<Tainted<String>>,
-    stderr: Option<Tainted<String>>,
+    stdout: Option[Tainted[String]],
+    stderr: Option[Tainted[String]],
 }
 
 // ── Process spawning ────────────────────────────────────────────────────────
 
 /// Spawn a child process running `cmd` with the given arguments.
 ///
-/// Both `cmd` and each element of `args` must be `Clean<String>` — callers
+/// Both `cmd` and each element of `args` must be `Clean[String]` — callers
 /// must sanitize any externally-sourced paths or argument values before
 /// passing them to `spawn`. This prevents command injection from tainted
 /// sources (env vars, process output, user input).
@@ -133,12 +133,12 @@ pub type ProcessOutput = struct {
 ///   let child = spawn("git", ["status"], Stdio::Inherit, Stdio::Capture, Stdio::Capture)?;
 ///   let out = wait(child)?;
 pub fn spawn(
-    cmd: Clean<String>,
-    args: List<Clean<String>>,
+    cmd: Clean[String],
+    args: List[Clean[String]],
     stdin_mode: Stdio,
     stdout_mode: Stdio,
     stderr_mode: Stdio,
-) -> Result<Child, String> ! ProcessSpawn { Err("") }
+) -> Result[Child, String] ! ProcessSpawn { Err("") }
 
 // ── Pipe I/O ────────────────────────────────────────────────────────────────
 
@@ -147,7 +147,7 @@ pub fn spawn(
 /// `handle` must have been obtained from `Child.stdin` when the child was
 /// spawned with `Stdio::Pipe` on stdin. Returns an error if the pipe is
 /// closed or broken.
-pub fn stdin_write(handle: ChildStdin, data: String) -> Result<Unit, String> ! ProcessSpawn { Err("") }
+pub fn stdin_write(handle: ChildStdin, data: String) -> Result[Unit, String] ! ProcessSpawn { Err("") }
 
 /// Read available output from the child's stdout pipe.
 ///
@@ -155,18 +155,18 @@ pub fn stdin_write(handle: ChildStdin, data: String) -> Result<Unit, String> ! P
 /// spawned with `Stdio::Pipe` on stdout. Reads whatever is currently
 /// available from the pipe. Call before `wait` for streaming reads.
 ///
-/// Returns Tainted<String> because process output is external (untrusted) data.
+/// Returns Tainted[String] because process output is external (untrusted) data.
 /// For buffered output use `Stdio::Capture` and read `ProcessOutput.stdout` after `wait`.
-pub fn stdout_read(handle: ChildStdout) -> Result<Tainted<String>, String> ! ProcessSpawn { Err("") }
+pub fn stdout_read(handle: ChildStdout) -> Result[Tainted[String], String] ! ProcessSpawn { Err("") }
 
 /// Read available output from the child's stderr pipe.
 ///
 /// `handle` must have been obtained from `Child.stderr` when the child was
 /// spawned with `Stdio::Pipe` on stderr. Call before `wait` for streaming reads.
 ///
-/// Returns Tainted<String> because process output is external (untrusted) data.
+/// Returns Tainted[String] because process output is external (untrusted) data.
 /// For buffered output use `Stdio::Capture` and read `ProcessOutput.stderr` after `wait`.
-pub fn stderr_read(handle: ChildStderr) -> Result<Tainted<String>, String> ! ProcessSpawn { Err("") }
+pub fn stderr_read(handle: ChildStderr) -> Result[Tainted[String], String] ! ProcessSpawn { Err("") }
 
 // ── Process lifecycle ───────────────────────────────────────────────────────
 
@@ -179,7 +179,7 @@ pub fn stderr_read(handle: ChildStderr) -> Result<Tainted<String>, String> ! Pro
 /// Returns a `ProcessOutput` containing the exit status and any output
 /// buffered via `Stdio::Capture`. `ProcessOutput.stdout` and `.stderr` are
 /// `Some` when the corresponding mode was `Capture`, `None` otherwise.
-pub fn wait(child: Child) -> Result<ProcessOutput, String> ! ProcessSpawn { Err("") }
+pub fn wait(child: Child) -> Result[ProcessOutput, String] ! ProcessSpawn { Err("") }
 
 /// Send SIGKILL to a child process (Unix) or call TerminateProcess (Windows).
 ///
@@ -189,7 +189,7 @@ pub fn wait(child: Child) -> Result<ProcessOutput, String> ! ProcessSpawn { Err(
 ///   let out = wait(child)?;
 ///
 /// Returns an error if the process has already exited or the kill fails.
-pub fn kill(child: Child) -> Result<Child, String> ! ProcessSpawn { Err("") }
+pub fn kill(child: Child) -> Result[Child, String] ! ProcessSpawn { Err("") }
 
 // ── ExitStatus helpers (pure) ──────────────────────────────────────────────
 

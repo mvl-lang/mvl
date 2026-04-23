@@ -37,7 +37,7 @@ use std.log.{log_info, log_error}
 // ── Trust boundary: domain-specific pipeline logic ──────────────────────────
 
 extern "rust" {
-    fn analyze_and_format(content: Tainted<String>, level: Option<Clean<String>>) -> Result<String, PipelineError>;
+    fn analyze_and_format(content: Tainted[String], level: Option[Clean[String]]) -> Result[String, PipelineError];
 }
 
 // ── Domain types ───────────────────────────────────────────────────────────
@@ -53,30 +53,30 @@ type RunError = enum {
     PipelineFailed,
 }
 
-// ── CLI argument spec: the struct IS the spec (std.args.parse<T>, #55) ──────
+// ── CLI argument spec: the struct IS the spec (std.args.parse[T], #55) ──────
 //
-// `file` is required — parse<CliArgs>() returns Err if --file is absent.
+// `file` is required — parse[CliArgs]() returns Err if --file is absent.
 // `level` is optional — absent flag → None.
 
 type CliArgs = struct {
-    file: Tainted<String>,
-    level: Option<Tainted<String>>,
+    file: Tainted[String],
+    level: Option[Tainted[String]],
 }
 
 // ── Main pipeline ───────────────────────────────────────────────────────────
 
 // Phase 4 changes:
-//   - args.level.map(|v: Tainted<String>| sanitize(v)) replaces the manual None/Some match.
+//   - args.level.map(|v: Tainted[String]| sanitize(v)) replaces the manual None/Some match.
 //   - std.log structured calls replace raw println for operational events.
 //   - Effect list extended with ! Log.
-fn run() -> Result<Unit, RunError> ! FileRead, Console, Log {
+fn run() -> Result[Unit, RunError] ! FileRead, Console, Log {
     let args_result = parse[CliArgs]();
     match args_result {
         Err(_) => Err(RunError::MissingArg),
         Ok(args) => {
-            let file_path: Clean<String> = sanitize(args.file);
+            let file_path: Clean[String] = sanitize(args.file);
             // Option.map: sanitize each Some(v) without an explicit match ladder.
-            let level_opt: Option<Clean<String>> = args.level.map(|v: Tainted<String>| sanitize(v));
+            let level_opt: Option[Clean[String]] = args.level.map(|v: Tainted[String]| sanitize(v));
             let file_result = read_file(file_path);
             match file_result {
                 Err(_) => Err(RunError::IOFailure),
@@ -157,8 +157,8 @@ test fn check_cli_args_level_none() -> Unit {
 
 // Option.map: None stays None, Some(v) maps through sanitize.
 test fn option_map_sanitize_none_stays_none() -> Unit {
-    let level: Option<Tainted<String>> = None;
-    let sanitized: Option<Clean<String>> = level.map(|v: Tainted<String>| sanitize(v));
+    let level: Option[Tainted[String]] = None;
+    let sanitized: Option[Clean[String]] = level.map(|v: Tainted[String]| sanitize(v));
     let is_none = match sanitized {
         None    => 1,
         Some(_) => 0,
@@ -167,8 +167,8 @@ test fn option_map_sanitize_none_stays_none() -> Unit {
 }
 
 test fn option_map_sanitize_some_maps_value() -> Unit {
-    let level: Option<Tainted<String>> = Some("error");
-    let sanitized: Option<Clean<String>> = level.map(|v: Tainted<String>| sanitize(v));
+    let level: Option[Tainted[String]] = Some("error");
+    let sanitized: Option[Clean[String]] = level.map(|v: Tainted[String]| sanitize(v));
     let is_some = match sanitized {
         Some(_) => 1,
         None    => 0,

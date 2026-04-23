@@ -2,18 +2,18 @@
 //
 // Demonstrates:
 //   1. extern "rust" trust boundary — serde_json for JSON parsing
-//   2. IFC labels: Tainted input → sanitize → Clean<String>
+//   2. IFC labels: Tainted input → sanitize → Clean[String]
 //   3. Total functions with exhaustive match (Req 8, Req 3)
 //   4. Phase 4: Result.and_then / Result.map replace ? operator chains
 //   5. Phase 4: std.string.to_lower for case-insensitive level matching
-//   6. Phase 4: List<LogEntry> pipeline — filter → map → fold
+//   6. Phase 4: List[LogEntry] pipeline — filter → map → fold
 //
 // Assurance note: 1 extern block (2 trust-boundary functions).
 
 // ── Trust boundary: serde_json crate ──────────────────────────────────────
 
 extern "rust" {
-    fn serde_json_parse_entry(raw: Tainted<String>) -> Result<RawEntry, ParseError>;
+    fn serde_json_parse_entry(raw: Tainted[String]) -> Result[RawEntry, ParseError];
     fn serde_json_to_json_string(report: Report) -> String;
 }
 
@@ -34,15 +34,15 @@ pub type LogLevel = enum {
 
 // Raw deserialized entry — fields arrive as Tainted from serde.
 type RawEntry = struct {
-    level:     Tainted<String>,
-    message:   Tainted<String>,
+    level:     Tainted[String],
+    message:   Tainted[String],
     timestamp: Int,
 }
 
 // Validated log entry with sanitized message text.
 pub type LogEntry = struct {
     level:     LogLevel,
-    message:   Clean<String>,
+    message:   Clean[String],
     timestamp: Int,
 }
 
@@ -58,7 +58,7 @@ pub type Report = struct {
 
 // parse_level uses std.string.to_lower for case-insensitive matching.
 // "ERROR", "Error", and "error" all resolve to LogLevel::Error.
-pub total fn parse_level(raw: Tainted<String>) -> Result<LogLevel, ParseError> {
+pub total fn parse_level(raw: Tainted[String]) -> Result[LogLevel, ParseError] {
     let clean = sanitize(raw);
     let lower = clean.to_lower();
     match lower {
@@ -72,7 +72,7 @@ pub total fn parse_level(raw: Tainted<String>) -> Result<LogLevel, ParseError> {
 
 // Parse a single JSON log line — external input stays Tainted until sanitized.
 // The ? operator short-circuits on Err, equivalent to .and_then() chaining.
-pub total fn parse_line(raw: Tainted<String>) -> Result<LogEntry, ParseError> {
+pub total fn parse_line(raw: Tainted[String]) -> Result[LogEntry, ParseError] {
     let entry: RawEntry = serde_json_parse_entry(raw)?;
     let level: LogLevel = parse_level(entry.level)?;
     Ok(LogEntry {
@@ -87,12 +87,12 @@ pub fn report_to_json(report: Report) -> String {
     serde_json_to_json_string(report)
 }
 
-// ── Phase 4 List<LogEntry> pipeline ───────────────────────────────────────
+// ── Phase 4 List[LogEntry] pipeline ───────────────────────────────────────
 
 // Build an aggregated Report from a list of parsed log entries.
 // Pipeline: entries → fold → Report
 // Each entry increments the appropriate counter by level.
-pub fn build_report(entries: List<LogEntry>) -> Report {
+pub fn build_report(entries: List[LogEntry]) -> Report {
     entries.fold(
         Report { count: 0, errors: 0, warnings: 0, infos: 0 },
         |acc: Report, entry: LogEntry| match entry.level {
@@ -124,7 +124,7 @@ pub fn is_error_level(entry: LogEntry) -> Bool {
 }
 
 // ── Internal unit tests ────────────────────────────────────────────────────
-// Plain String literals are compatible with Tainted<String> parameters:
+// Plain String literals are compatible with Tainted[String] parameters:
 // unlabeled data flows freely into a Tainted context (Public ⊑ Tainted).
 
 test fn check_debug_level_is_ok() -> Unit {
@@ -176,13 +176,13 @@ test fn check_empty_level_is_err() -> Unit {
 // ── build_report pipeline tests ───────────────────────────────────────────
 
 test fn build_report_empty_list_is_zero() -> Unit {
-    let entries: List<LogEntry> = [];
+    let entries: List[LogEntry] = [];
     let report = build_report(entries);
     assert_eq(report.count, 0);
 }
 
 test fn build_report_counts_total() -> Unit {
-    let entries: List<LogEntry> = [
+    let entries: List[LogEntry] = [
         LogEntry { level: LogLevel::Info,  message: "msg1", timestamp: 1 },
         LogEntry { level: LogLevel::Error, message: "msg2", timestamp: 2 },
         LogEntry { level: LogLevel::Warn,  message: "msg3", timestamp: 3 },
@@ -192,7 +192,7 @@ test fn build_report_counts_total() -> Unit {
 }
 
 test fn build_report_counts_errors() -> Unit {
-    let entries: List<LogEntry> = [
+    let entries: List[LogEntry] = [
         LogEntry { level: LogLevel::Error, message: "e1", timestamp: 1 },
         LogEntry { level: LogLevel::Error, message: "e2", timestamp: 2 },
         LogEntry { level: LogLevel::Info,  message: "i1", timestamp: 3 },
@@ -202,7 +202,7 @@ test fn build_report_counts_errors() -> Unit {
 }
 
 test fn build_report_counts_warnings() -> Unit {
-    let entries: List<LogEntry> = [
+    let entries: List[LogEntry] = [
         LogEntry { level: LogLevel::Warn, message: "w1", timestamp: 1 },
         LogEntry { level: LogLevel::Warn, message: "w2", timestamp: 2 },
     ];
@@ -211,7 +211,7 @@ test fn build_report_counts_warnings() -> Unit {
 }
 
 test fn build_report_counts_infos() -> Unit {
-    let entries: List<LogEntry> = [
+    let entries: List[LogEntry] = [
         LogEntry { level: LogLevel::Info,  message: "i1", timestamp: 1 },
         LogEntry { level: LogLevel::Debug, message: "d1", timestamp: 2 },
     ];
@@ -223,7 +223,7 @@ test fn build_report_counts_infos() -> Unit {
 // Uses is_error_level predicate (named filter) and verifies that
 // entry_summary produces "ERROR" strings (map output is observed).
 test fn pipeline_filter_map_fold_error_count() -> Unit {
-    let entries: List<LogEntry> = [
+    let entries: List[LogEntry] = [
         LogEntry { level: LogLevel::Info,  message: "i1", timestamp: 1 },
         LogEntry { level: LogLevel::Error, message: "e1", timestamp: 2 },
         LogEntry { level: LogLevel::Error, message: "e2", timestamp: 3 },
@@ -292,7 +292,7 @@ test fn is_error_level_false_for_debug() -> Unit {
 
 // Debug entries increment count only — errors/warnings/infos stay at zero.
 test fn build_report_debug_increments_count_only() -> Unit {
-    let entries: List<LogEntry> = [
+    let entries: List[LogEntry] = [
         LogEntry { level: LogLevel::Debug, message: "d1", timestamp: 1 },
         LogEntry { level: LogLevel::Debug, message: "d2", timestamp: 2 },
     ];
