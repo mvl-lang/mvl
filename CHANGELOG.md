@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.50.0] — 2026-04-21
+
+### Changed
+
+- **Complete LL(1) migration: `<T>` → `[T]` everywhere (closes #312, breaking change)** — All angle-bracket generics have been replaced with square-bracket generics across the entire language. This completes the LL(1) migration begun in v0.46.0 (ADR-0005). Previously only function call sites (`parse[T]()`) used square brackets; now ALL positions use `[T]`: function type parameter declarations (`fn foo[T]`), type alias/struct/enum declarations (`type List[T]`), type expressions (`Option[T]`, `Result[T, E]`, `List[T]`), security-labeled types (`Secret[T]`, `Public[T]`, `Tainted[T]`, `Clean[T]`), extern declarations, and `impl` trait type args. The parser now rejects `<` as a generic delimiter in all positions with a clear diagnostic referencing ADR-0005. Updated: parser (`types.rs`, `functions.rs`), all stdlib files (16 files), all test corpus files (41 files), all examples. This matches Go 1.18's design choice: `[T]` everywhere, no angle brackets in the grammar.
+
 ## [0.49.2] — 2026-04-20
 
 ### Fixed

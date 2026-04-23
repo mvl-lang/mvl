@@ -10,15 +10,15 @@ fn random_unit_float() -> Float ! Random {
     float()
 }
 
-fn random_byte_sequence(n: Int) -> List<Int> ! Random {
+fn random_byte_sequence(n: Int) -> List[Int] ! Random {
     bytes(n)
 }
 
-fn random_pick_element(items: List<Int>) -> Option<Int> ! Random {
+fn random_pick_element(items: List[Int]) -> Option[Int] ! Random {
     choice(items)
 }
 
-fn random_shuffled(items: List<Int>) -> List<Int> ! Random {
+fn random_shuffled(items: List[Int]) -> List[Int] ! Random {
     shuffle(items)
 }
 

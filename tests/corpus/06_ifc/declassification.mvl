@@ -1,29 +1,29 @@
 // Corpus: Declassification as explicit chokepoints (Requirement 11, #27)
 // Only declassify() lowers Secret→Public; only sanitize() lowers Tainted→Clean.
 
-// ── sanitize(): Tainted<T> → Clean<T> ────────────────────────────────────
+// ── sanitize(): Tainted[T] → Clean[T] ────────────────────────────────────
 
-fn sanitize_string(input: Tainted<String>) -> Clean<String> {
+fn sanitize_string(input: Tainted[String]) -> Clean[String] {
     sanitize(input)
 }
 
-fn sanitize_int(input: Tainted<Int>) -> Clean<Int> {
+fn sanitize_int(input: Tainted[Int]) -> Clean[Int] {
     sanitize(input)
 }
 
-// ── declassify(): Secret<T> → Public<T> ──────────────────────────────────
+// ── declassify(): Secret[T] → Public[T] ──────────────────────────────────
 
-fn declassify_token(secret: Secret<Token>) -> Public<Token> {
+fn declassify_token(secret: Secret[Token]) -> Public[Token] {
     declassify(secret)
 }
 
-fn declassify_int(secret: Secret<Int>) -> Public<Int> {
+fn declassify_int(secret: Secret[Int]) -> Public[Int] {
     declassify(secret)
 }
 
 // ── Chained: sanitize then use ────────────────────────────────────────────
 
-fn process_input(raw: Tainted<String>) -> Clean<String> {
+fn process_input(raw: Tainted[String]) -> Clean[String] {
     let clean = sanitize(raw);
     clean
 }

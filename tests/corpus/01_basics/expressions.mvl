@@ -22,7 +22,7 @@ fn field_access(point: Point) -> Int {
 }
 
 // Method calls
-fn method_call(xs: List<Int>) -> Int {
+fn method_call(xs: List[Int]) -> Int {
     xs.len()
 }
 
@@ -77,7 +77,7 @@ fn precedence(a: Int, b: Int, c: Int) -> Int {
 }
 
 // ? propagation
-fn propagation(input: String) -> Result<Int, String> {
+fn propagation(input: String) -> Result[Int, String] {
     let n = parse_int(input)?;
     Ok(n)
 }
@@ -89,7 +89,7 @@ fn if_expr(n: Int) -> String {
 }
 
 // Match expression
-fn match_expr(opt: Option<Int>) -> Int {
+fn match_expr(opt: Option[Int]) -> Int {
     match opt {
         Some(v) => v,
         None => 0,
@@ -102,7 +102,7 @@ fn nested_access(conn: DbConn) -> String {
 }
 
 // List literal
-fn list_literal() -> List<Int> {
+fn list_literal() -> List[Int] {
     [1, 2, 3, 4, 5]
 }
 
@@ -112,11 +112,11 @@ fn struct_construction() -> Point {
 }
 
 // Security-flow operations
-fn security_ops(raw: Tainted<String>) -> Clean<String> {
+fn security_ops(raw: Tainted[String]) -> Clean[String] {
     let clean = sanitize(raw);
     clean
 }
 
-fn declassify_op(secret: Secret<Data>) -> Public<Data> {
+fn declassify_op(secret: Secret[Data]) -> Public[Data] {
     declassify(secret)
 }

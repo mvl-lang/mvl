@@ -31,14 +31,14 @@ fn example_if_else_if(n: Int) -> String {
     }
 }
 
-fn example_match_option(opt: Option<Int>) -> Int {
+fn example_match_option(opt: Option[Int]) -> Int {
     match opt {
         Some(v) => v,
         None => 0,
     }
 }
 
-fn example_match_result(res: Result<Int, String>) -> Int {
+fn example_match_result(res: Result[Int, String]) -> Int {
     match res {
         Ok(v) => v,
         Err(e) => -1,
@@ -52,7 +52,7 @@ fn example_match_literal(n: Int) -> Bool {
     }
 }
 
-fn example_for(items: List<Int>) -> Int {
+fn example_for(items: List[Int]) -> Int {
     let mut sum: Int = 0;
     for item in items {
         sum = sum + item;

@@ -11,8 +11,8 @@ pub type Value = enum {
     Bool(Bool),
     Number(Float),
     String(String),
-    Array(List<Value>),
-    Object(Map<String, Value>),
+    Array(List[Value]),
+    Object(Map[String, Value]),
 }
 
 /// Serialises a Value to a JSON string.
@@ -23,7 +23,7 @@ pub fn encode(v: Value) -> String { "" }
 /// Returns Err if the input is not valid JSON.
 /// Pure — parsing is a deterministic transformation.
 ///
-/// IFC note: ideally `decode<L>(s: L<String>) -> Result<L<Value>, String>` so that
+/// IFC note: ideally `decode[L](s: L[String]) -> Result[L[Value], String]` so that
 /// taint from network input propagates to the result. Deferred pending label-polymorphic
 /// generics (#179).
-pub fn decode(s: String) -> Result<Value, String> { Err("") }
+pub fn decode(s: String) -> Result[Value, String] { Err("") }

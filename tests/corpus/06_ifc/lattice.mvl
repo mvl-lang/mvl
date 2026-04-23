@@ -4,36 +4,36 @@
 
 // ── Public → * (always allowed) ──────────────────────────────────────────
 
-fn public_to_clean(x: Public<Int>) -> Clean<Int> {
+fn public_to_clean(x: Public[Int]) -> Clean[Int] {
     x
 }
 
-fn public_to_tainted(x: Public<Int>) -> Tainted<Int> {
+fn public_to_tainted(x: Public[Int]) -> Tainted[Int] {
     x
 }
 
-fn public_to_secret(x: Public<Int>) -> Secret<Int> {
+fn public_to_secret(x: Public[Int]) -> Secret[Int] {
     x
 }
 
 // ── Clean → * (Clean and above) ──────────────────────────────────────────
 
-fn clean_to_tainted(x: Clean<Int>) -> Tainted<Int> {
+fn clean_to_tainted(x: Clean[Int]) -> Tainted[Int] {
     x
 }
 
-fn clean_to_secret(x: Clean<Int>) -> Secret<Int> {
+fn clean_to_secret(x: Clean[Int]) -> Secret[Int] {
     x
 }
 
 // ── Tainted → Secret (upward) ────────────────────────────────────────────
 
-fn tainted_to_secret(x: Tainted<String>) -> Secret<String> {
+fn tainted_to_secret(x: Tainted[String]) -> Secret[String] {
     x
 }
 
 // ── Same label (always compatible) ───────────────────────────────────────
 
-fn pass_through(x: Secret<String>) -> Secret<String> {
+fn pass_through(x: Secret[String]) -> Secret[String] {
     x
 }

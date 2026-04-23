@@ -1,8 +1,8 @@
 //! Type-declaration and type-expression parser.
 //!
 //! Handles:
-//! - `type Name [<params>] = struct { … }` (Requirement 3)
-//! - `type Name [<params>] = enum { … }`   (Requirement 3)
+//! - `type Name [[params]] = struct { … }` (Requirement 3)
+//! - `type Name [[params]] = enum { … }`   (Requirement 3)
 //! - `type Name = ExistingType`             (Requirement 3)
 //! - `type Name = T where predicate`        (Requirement 3)
 //! - All type expressions including security labels (Requirement 7)
@@ -211,15 +211,15 @@ impl Parser {
 
     // ── Generic type-parameter declarations ───────────────────────────────
 
-    /// Parse optional `<A, B, const N: Int>` on a type or function declaration.
-    /// Returns empty vec if the next token is not `<`.
+    /// Parse optional `[A, B, const N: Int]` on a type or function declaration.
+    /// Returns empty vec if the next token is not `[`.
     pub fn parse_type_params_decl(&mut self) -> Vec<GenericParam> {
-        if !self.eat(&TokenKind::Lt) {
+        if !self.eat(&TokenKind::LBracket) {
             return Vec::new();
         }
         let mut params = Vec::new();
         loop {
-            if matches!(self.peek_kind(), TokenKind::Gt | TokenKind::Eof) {
+            if matches!(self.peek_kind(), TokenKind::RBracket | TokenKind::Eof) {
                 break;
             }
             // Const generic: `const N: Int`
@@ -246,11 +246,11 @@ impl Parser {
             } else {
                 match self.expect_ident() {
                     Ok((name, _)) => {
-                        // Reject HKT syntax: `F<_>` is not supported.
-                        if matches!(self.peek_kind(), TokenKind::Lt) {
+                        // Reject HKT syntax: `F[_]` is not supported.
+                        if matches!(self.peek_kind(), TokenKind::LBracket) {
                             self.push_error(ParseError {
                                 message: format!(
-                                    "higher-kinded type parameter `{name}<_>` is not supported; type parameters must be simple identifiers"
+                                    "higher-kinded type parameter `{name}[_]` is not supported; type parameters must be simple identifiers"
                                 ),
                                 span: self.peek_span(),
                             });
@@ -278,11 +278,11 @@ impl Parser {
                 break;
             }
         }
-        // Fix #13: report a diagnostic if the closing `>` is missing rather
-        // than silently accepting `fn f<T(x: T) -> T` as valid syntax.
-        if !self.eat(&TokenKind::Gt) {
+        // Fix #13: report a diagnostic if the closing `]` is missing rather
+        // than silently accepting `fn f[T(x: T) -> T` as valid syntax.
+        if !self.eat(&TokenKind::RBracket) {
             self.push_error(ParseError {
-                message: "expected `>` to close type parameter list".into(),
+                message: "expected `]` to close type parameter list".into(),
                 span: self.peek_span(),
             });
         }
@@ -356,7 +356,7 @@ impl Parser {
                 Ok(TypeExpr::Tuple { elems, span })
             }
 
-            // Security-labeled types: Public<T>, Tainted<T>, Secret<T>, Clean<T>
+            // Security-labeled types: Public[T], Tainted[T], Secret[T], Clean[T]
             TokenKind::Public => {
                 self.advance();
                 let (inner, span) = self.parse_labeled_inner(start)?;
@@ -394,7 +394,7 @@ impl Parser {
                 })
             }
 
-            // Named types: Option<T>, Result<T, E>, or generic Foo<A, B>
+            // Named types: Option[T], Result[T, E], or generic Foo[A, B]
             TokenKind::Ident(name) => {
                 self.advance();
                 self.parse_named_type(name, start)
@@ -418,13 +418,13 @@ impl Parser {
         }
     }
 
-    /// Parse `<T>` or `<T where pred>` for a security-labeled type.
+    /// Parse `[T]` or `[T where pred]` for a security-labeled type.
     fn parse_labeled_inner(&mut self, start: Span) -> Result<(Box<TypeExpr>, Span), ()> {
-        let lt = self.expect(&TokenKind::Lt);
-        self.require(lt)?;
+        let lb = self.expect(&TokenKind::LBracket);
+        self.require(lb)?;
         let ty_start = self.peek_span();
         let inner = self.parse_type_expr()?;
-        // Allow inline refinement: `Public<Int where self > 0>`
+        // Allow inline refinement: `Public[Int where self > 0]`
         let inner = if self.eat(&TokenKind::Where) {
             let pred = self.parse_ref_expr()?;
             let refined_span = self.span_from(ty_start);
@@ -436,22 +436,22 @@ impl Parser {
         } else {
             inner
         };
-        let gt = self.expect(&TokenKind::Gt);
-        self.require(gt)?;
+        let rb = self.expect(&TokenKind::RBracket);
+        self.require(rb)?;
         let span = self.span_from(start);
         Ok((Box::new(inner), span))
     }
 
-    /// Parse `Option<T>`, `Result<T, E>`, or a generic `Foo<A, B>`.
+    /// Parse `Option[T]`, `Result[T, E]`, or a generic `Foo[A, B]`.
     /// `name` has already been consumed; `start` is its span.
     fn parse_named_type(&mut self, name: String, start: Span) -> Result<TypeExpr, ()> {
         match name.as_str() {
             "Option" => {
-                let lt = self.expect(&TokenKind::Lt);
-                self.require(lt)?;
+                let lb = self.expect(&TokenKind::LBracket);
+                self.require(lb)?;
                 let inner = self.parse_type_expr()?;
-                let gt = self.expect(&TokenKind::Gt);
-                self.require(gt)?;
+                let rb = self.expect(&TokenKind::RBracket);
+                self.require(rb)?;
                 let span = self.span_from(start);
                 Ok(TypeExpr::Option {
                     inner: Box::new(inner),
@@ -459,14 +459,14 @@ impl Parser {
                 })
             }
             "Result" => {
-                let lt = self.expect(&TokenKind::Lt);
-                self.require(lt)?;
+                let lb = self.expect(&TokenKind::LBracket);
+                self.require(lb)?;
                 let ok = self.parse_type_expr()?;
                 let comma = self.expect(&TokenKind::Comma);
                 self.require(comma)?;
                 let err = self.parse_type_expr()?;
-                let gt = self.expect(&TokenKind::Gt);
-                self.require(gt)?;
+                let rb = self.expect(&TokenKind::RBracket);
+                self.require(rb)?;
                 let span = self.span_from(start);
                 Ok(TypeExpr::Result {
                     ok: Box::new(ok),
@@ -476,10 +476,10 @@ impl Parser {
             }
             _ => {
                 // Generic base type or plain base type
-                let args = if self.eat(&TokenKind::Lt) {
+                let args = if self.eat(&TokenKind::LBracket) {
                     let list = self.parse_type_list()?;
-                    let gt = self.expect(&TokenKind::Gt);
-                    self.require(gt)?;
+                    let rb = self.expect(&TokenKind::RBracket);
+                    self.require(rb)?;
                     list
                 } else {
                     Vec::new()
@@ -491,13 +491,13 @@ impl Parser {
     }
 
     /// Parse a comma-separated list of type expressions.
-    /// Does NOT consume the surrounding `<` or `>`.
+    /// Does NOT consume the surrounding `[` or `]`.
     pub(super) fn parse_type_list(&mut self) -> Result<Vec<TypeExpr>, ()> {
         let mut types = Vec::new();
         loop {
             if matches!(
                 self.peek_kind(),
-                TokenKind::Gt | TokenKind::RParen | TokenKind::Eof
+                TokenKind::RBracket | TokenKind::RParen | TokenKind::Eof
             ) {
                 break;
             }
@@ -854,8 +854,8 @@ mod tests {
 
     #[test]
     fn parse_enum_with_type_params() {
-        // GIVEN: type Result<T, E> = enum { Ok(T), Err(E) }
-        let d = type_decl("type Result<T, E> = enum { Ok(T), Err(E) }");
+        // GIVEN: type Result[T, E] = enum { Ok(T), Err(E) }
+        let d = type_decl("type Result[T, E] = enum { Ok(T), Err(E) }");
         assert_eq!(d.name, "Result");
         assert_eq!(
             d.params,
@@ -924,9 +924,9 @@ mod tests {
 
     #[test]
     fn parse_labeled_type_tainted() {
-        // GIVEN: Tainted<String>
+        // GIVEN: Tainted[String]
         // THEN: LabeledType with label=Tainted, inner=String
-        let ty = type_expr("Tainted<String>");
+        let ty = type_expr("Tainted[String]");
         assert!(
             matches!(
                 &ty,
@@ -935,7 +935,7 @@ mod tests {
                     ..
                 }
             ),
-            "expected Tainted<String>, got {:?}",
+            "expected Tainted[String], got {:?}",
             ty
         );
     }
@@ -943,10 +943,10 @@ mod tests {
     #[test]
     fn parse_all_security_labels() {
         for (src, expected) in [
-            ("Public<Int>", SecurityLabel::Public),
-            ("Tainted<String>", SecurityLabel::Tainted),
-            ("Secret<Key>", SecurityLabel::Secret),
-            ("Clean<String>", SecurityLabel::Clean),
+            ("Public[Int]", SecurityLabel::Public),
+            ("Tainted[String]", SecurityLabel::Tainted),
+            ("Secret[Key]", SecurityLabel::Secret),
+            ("Clean[String]", SecurityLabel::Clean),
         ] {
             let ty = type_expr(src);
             let TypeExpr::Labeled { label, .. } = ty else {
@@ -960,22 +960,22 @@ mod tests {
 
     #[test]
     fn parse_nested_labeled_types() {
-        // GIVEN: Public<Option<Secret<Key>>>
+        // GIVEN: Public[Option[Secret[Key]]]
         // THEN: LabeledType(Public) → OptionType → LabeledType(Secret)
-        let ty = type_expr("Public<Option<Secret<Key>>>");
+        let ty = type_expr("Public[Option[Secret[Key]]]");
         let TypeExpr::Labeled {
             label: SecurityLabel::Public,
             inner: opt,
             ..
         } = ty
         else {
-            panic!("outer must be Public<…>")
+            panic!("outer must be Public[…]")
         };
         let TypeExpr::Option {
             inner: secret_key, ..
         } = *opt
         else {
-            panic!("middle must be Option<…>")
+            panic!("middle must be Option[…]")
         };
         assert!(
             matches!(
@@ -985,7 +985,7 @@ mod tests {
                     ..
                 }
             ),
-            "inner must be Secret<Key>"
+            "inner must be Secret[Key]"
         );
     }
 
@@ -993,13 +993,13 @@ mod tests {
 
     #[test]
     fn parse_result_type() {
-        let ty = type_expr("Result<Session, AuthError>");
+        let ty = type_expr("Result[Session, AuthError]");
         assert!(matches!(ty, TypeExpr::Result { .. }));
     }
 
     #[test]
     fn parse_option_type() {
-        let ty = type_expr("Option<User>");
+        let ty = type_expr("Option[User]");
         assert!(matches!(ty, TypeExpr::Option { .. }));
     }
 
@@ -1032,7 +1032,7 @@ mod tests {
 
     #[test]
     fn parse_generic_base_type() {
-        let ty = type_expr("Map<Key, Value>");
+        let ty = type_expr("Map[Key, Value]");
         let TypeExpr::Base { name, args, .. } = ty else {
             panic!()
         };
@@ -1085,8 +1085,8 @@ mod tests {
 
     #[test]
     fn parse_array_type_expr() {
-        // Array<Int, 16> should parse as Base { name: "Array", args: [Int, IntConst(16)] }
-        let ty = type_expr("Array<Int, 16>");
+        // Array[Int, 16] should parse as Base { name: "Array", args: [Int, IntConst(16)] }
+        let ty = type_expr("Array[Int, 16]");
         let TypeExpr::Base { name, args, .. } = ty else {
             panic!("expected Base, got {ty:?}");
         };
@@ -1098,8 +1098,8 @@ mod tests {
 
     #[test]
     fn parse_const_generic_param_in_type_decl() {
-        // type FixedBuf<T, const N: Int> = struct { … }
-        let d = type_decl("type FixedBuf<T, const N: Int> = struct { len: Int }");
+        // type FixedBuf[T, const N: Int] = struct { … }
+        let d = type_decl("type FixedBuf[T, const N: Int] = struct { len: Int }");
         assert_eq!(
             d.params,
             vec![
@@ -1111,12 +1111,66 @@ mod tests {
 
     #[test]
     fn parse_array_type_as_function_param() {
-        // fn f(buf: Array<Byte, 32>) -> Int
-        let ty = type_expr("Array<Byte, 32>");
+        // fn f(buf: Array[Byte, 32]) -> Int
+        let ty = type_expr("Array[Byte, 32]");
         let TypeExpr::Base { name, args, .. } = ty else {
             panic!("expected Base");
         };
         assert_eq!(name, "Array");
         assert!(matches!(args[1], TypeExpr::IntConst { value: 32, .. }));
+    }
+
+    // ── Regression: angle-bracket generics must be rejected (ADR-0005) ────
+
+    #[test]
+    fn reject_angle_bracket_option() {
+        let (mut p, _) = Parser::new("Option<String>");
+        let _ = p.parse_type_expr();
+        assert!(
+            !p.errors.is_empty(),
+            "Option<String> should produce a parse error (ADR-0005: use Option[String])"
+        );
+    }
+
+    #[test]
+    fn reject_angle_bracket_result() {
+        let (mut p, _) = Parser::new("Result<Int, String>");
+        let _ = p.parse_type_expr();
+        assert!(
+            !p.errors.is_empty(),
+            "Result<Int, String> should produce a parse error (ADR-0005: use Result[Int, String])"
+        );
+    }
+
+    #[test]
+    fn reject_angle_bracket_list() {
+        // List<Int> in a function signature should produce a parse error because
+        // `<` is not a valid token after a type expression (ADR-0005: use List[Int])
+        let (mut p, _) = Parser::new("fn f(x: List<Int>) -> Unit { }");
+        let _ = p.parse_fn_decl();
+        assert!(
+            !p.errors.is_empty(),
+            "List<Int> in function params should produce a parse error (ADR-0005: use List[Int])"
+        );
+    }
+
+    #[test]
+    fn reject_angle_bracket_fn_type_params() {
+        let (mut p, _) = Parser::new("fn foo<T>(x: T) -> T { }");
+        let _ = p.parse_fn_decl();
+        assert!(
+            !p.errors.is_empty(),
+            "fn foo<T> should produce a parse error (ADR-0005: use fn foo[T])"
+        );
+    }
+
+    #[test]
+    fn reject_angle_bracket_type_decl() {
+        let (mut p, _) = Parser::new("type Foo<T> = struct { x: T }");
+        let _ = p.parse_type_decl();
+        assert!(
+            !p.errors.is_empty(),
+            "type Foo<T> should produce a parse error (ADR-0005: use type Foo[T])"
+        );
     }
 }

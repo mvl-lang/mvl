@@ -33,8 +33,8 @@ fn char_literals() -> Char {
     letter
 }
 
-fn list_literals() -> List<Int> {
-    let nums: List<Int> = [1, 2, 3, 42];
+fn list_literals() -> List[Int] {
+    let nums: List[Int] = [1, 2, 3, 42];
     nums
 }
 

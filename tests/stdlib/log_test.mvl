@@ -7,10 +7,10 @@
 // Phase 2: log functions are no-op stubs (correct signatures, no output).
 // Tests verify:
 //   - All severity levels accept public String data without panic
-//   - Structured key-value fields (Map<String, String>) are accepted
+//   - Structured key-value fields (Map[String, String]) are accepted
 //   - Effect declaration (! Log) is required and propagates to callers
 //
-// IFC enforcement (Secret<T>/Tainted<T> rejection) is a compile-time type
+// IFC enforcement (Secret[T]/Tainted[T] rejection) is a compile-time type
 // error, not a runtime check — those cases belong in tests/corpus/06_ifc/.
 //
 // Note: Empty map {} is syntactically a block expression in MVL.
@@ -162,7 +162,7 @@ test fn log_structured_field_with_numeric_string_value() -> Unit ! Log {
 // Verifies that logging inside an error branch does not change the return
 // value of the enclosing function (log calls are pure side-effects).
 
-fn process_value(n: Int) -> Result<Int, String> ! Log {
+fn process_value(n: Int) -> Result[Int, String] ! Log {
     if n > 0 {
         Ok(n * 2)
     } else {

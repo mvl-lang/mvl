@@ -1,7 +1,7 @@
 // Reference Example 2: Safe Division with Audit Trail
 // Demonstrates: refinement types, IFC, effects, totality
 //
-// Req 5:  Result<T,E> and match on Result (error visibility)
+// Req 5:  Result[T,E] and match on Result (error visibility)
 // Req 7:  Effects (Console, DB)
 // Req 8:  total — pure math provably terminates
 // Req 10: NonZero refinement, Amount non-negative, positive parties
@@ -12,26 +12,26 @@
 
 type Amount = Float where self >= 0.0
 type NonZero = Float where self != 0.0
-type AccountId = Secret<String>
+type AccountId = Secret[String]
 
 // Stub: always returns Ok. The Err branches in main verify match exhaustiveness,
 // not runtime error path — a real implementation would return Err for zero input.
-fn to_nonzero(f: Float) -> Result<Public<Float>, DivError> { Ok(f) }
+fn to_nonzero(f: Float) -> Result[Public[Float], DivError] { Ok(f) }
 
 type DivError = enum { DivisionByZero }
 
 total fn safe_divide(
-    numerator: Public<Float>,
-    denominator: Public<Float>,
-) -> Public<Float> {
+    numerator: Public[Float],
+    denominator: Public[Float],
+) -> Public[Float] {
     numerator / denominator
 }
 
 total fn calculate_share(
-    iso account: Secret<AccountId>,
-    total_amount: Public<Float>,
-    num_parties: Public<Int where self > 0>,
-) -> Result<Public<Float>, DivError> ! Console {
+    iso account: Secret[AccountId],
+    total_amount: Public[Float],
+    num_parties: Public[Int where self > 0],
+) -> Result[Public[Float], DivError] ! Console {
 
     let divisor = to_nonzero(num_parties.to_float())?;
     let share = safe_divide(total_amount, divisor);

@@ -1877,7 +1877,7 @@ mod tests {
 
     #[test]
     fn public_label_on_param_detected() {
-        let src = "fn f(x: Public<Int>) -> Int { x }\n";
+        let src = "fn f(x: Public[Int]) -> Int { x }\n";
         let prog = parse(src);
         let mut diags = vec![];
         redundant_ifc_labels(&prog, &cfg(), &mut diags);
@@ -1888,7 +1888,7 @@ mod tests {
 
     #[test]
     fn secret_label_on_param_clean() {
-        let src = "fn f(x: Secret<Int>) -> Int { x }\n";
+        let src = "fn f(x: Secret[Int]) -> Int { x }\n";
         let prog = parse(src);
         let mut diags = vec![];
         redundant_ifc_labels(&prog, &cfg(), &mut diags);
@@ -1897,7 +1897,7 @@ mod tests {
 
     #[test]
     fn public_label_on_return_type_detected() {
-        let src = "fn f() -> Public<String> { \"hi\" }\n";
+        let src = "fn f() -> Public[String] { \"hi\" }\n";
         let prog = parse(src);
         let mut diags = vec![];
         redundant_ifc_labels(&prog, &cfg(), &mut diags);
@@ -1907,7 +1907,7 @@ mod tests {
 
     #[test]
     fn redundant_ifc_disabled() {
-        let src = "fn f(x: Public<Int>) -> Int { x }\n";
+        let src = "fn f(x: Public[Int]) -> Int { x }\n";
         let prog = parse(src);
         let mut diags = vec![];
         let mut c = cfg();
@@ -1918,7 +1918,7 @@ mod tests {
 
     #[test]
     fn public_label_on_struct_field_detected() {
-        let src = "type Wrapper = struct { data: Public<Int> }\n";
+        let src = "type Wrapper = struct { data: Public[Int] }\n";
         let prog = parse(src);
         let mut diags = vec![];
         redundant_ifc_labels(&prog, &cfg(), &mut diags);
@@ -1928,7 +1928,7 @@ mod tests {
 
     #[test]
     fn public_label_in_type_alias_detected() {
-        let src = "type MyInt = Public<Int>\n";
+        let src = "type MyInt = Public[Int]\n";
         let prog = parse(src);
         let mut diags = vec![];
         redundant_ifc_labels(&prog, &cfg(), &mut diags);

@@ -21,15 +21,15 @@ pub type Captures = struct {}
 
 /// Compiles a regex pattern. Returns Err if the pattern is invalid.
 /// Pure — compilation is deterministic.
-pub fn compile(pattern: String) -> Result<Regex, String> { Err("") }
+pub fn compile(pattern: String) -> Result[Regex, String] { Err("") }
 
 /// Returns the first match of re in s, or None.
 /// Pure. Named `find` (not `match`) to avoid collision with the `match` keyword.
-pub fn find(re: Regex, s: String) -> Option<Match> { None }
+pub fn find(re: Regex, s: String) -> Option[Match] { None }
 
 /// Returns all non-overlapping matches of re in s.
 /// Pure.
-pub fn find_all(re: Regex, s: String) -> List<Match> { [] }
+pub fn find_all(re: Regex, s: String) -> List[Match] { [] }
 
 /// Replaces all matches of re in s with replacement.
 /// Pure.
@@ -37,4 +37,4 @@ pub fn replace(re: Regex, s: String, replacement: String) -> String { "" }
 
 /// Returns the captures of the first match of re in s, or None.
 /// Pure.
-pub fn captures(re: Regex, s: String) -> Option<Captures> { None }
+pub fn captures(re: Regex, s: String) -> Option[Captures] { None }

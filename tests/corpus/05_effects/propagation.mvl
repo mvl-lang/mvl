@@ -8,44 +8,44 @@ type IOError = struct { msg: String }
 type NetError = struct { msg: String }
 type Error = enum { Io(IOError), Net(NetError) }
 
-impl From<IOError> for Error {
+impl From[IOError] for Error {
     fn from(e: IOError) -> Self { Error::Io(e) }
 }
 
-impl From<NetError> for Error {
+impl From[NetError] for Error {
     fn from(e: NetError) -> Self { Error::Net(e) }
 }
 
 // Leaf: reads from FileRead
-fn read_config(path: Path) -> Result<String, IOError> ! FileRead {
+fn read_config(path: Path) -> Result[String, IOError] ! FileRead {
     path.read()
 }
 
 // Leaf: writes
-fn write_output(path: Path, data: String) -> Result<Unit, IOError> ! FileWrite {
+fn write_output(path: Path, data: String) -> Result[Unit, IOError] ! FileWrite {
     path.write(data)
 }
 
 // Leaf: net
-fn fetch_data(url: String) -> Result<String, NetError> ! Net {
+fn fetch_data(url: String) -> Result[String, NetError] ! Net {
     url.get()
 }
 
 // Caller declares FileRead (correct propagation)
-fn load_app_config(path: Path) -> Result<String, Error> ! FileRead {
+fn load_app_config(path: Path) -> Result[String, Error] ! FileRead {
     let raw = read_config(path)?;
     Ok(raw)
 }
 
 // Transitive caller also declares FileRead + Console
-fn bootstrap(path: Path) -> Result<Unit, Error> ! FileRead, Console {
+fn bootstrap(path: Path) -> Result[Unit, Error] ! FileRead, Console {
     let cfg = load_app_config(path)?;
     cfg.print();
     Ok(())
 }
 
 // Effect union: caller declares union of all callees
-fn fetch_and_write(url: String, path: Path) -> Result<Unit, Error> ! Net, FileWrite {
+fn fetch_and_write(url: String, path: Path) -> Result[Unit, Error] ! Net, FileWrite {
     let data = fetch_data(url)?;
     write_output(path, data)?;
     Ok(())

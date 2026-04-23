@@ -103,7 +103,7 @@ Ident → peek LParen   → consume ( → parse args → FnCall (no type args)
 
 | **MVL** | `parse<T>()` — angle-bracket generic call | `<` after identifier ambiguous with comparison; needs 3-token lookahead | Square brackets `parse[T]()` — `[` after identifier is unused in expression position |
 
-*Added in v0.46.0. See also: Go 1.18 type parameter proposal.*
+*Call sites migrated in v0.46.0. Full migration (all positions) completed in v0.50.0 (#312). `<` is now rejected as a generic delimiter everywhere — in type declarations (`fn foo[T]`, `type List[T]`), type expressions (`Option[T]`, `Result[T, E]`), and security labels (`Secret[T]`). `<` remains valid only as a comparison operator. See also: Go 1.18 type parameter proposal.*
 
 ## Alternatives reconsidered for later phases
 

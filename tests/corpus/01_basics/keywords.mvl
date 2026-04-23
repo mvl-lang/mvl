@@ -38,11 +38,11 @@ fn ref_fn(ref x: Int) -> Int { x }
 fn tag_fn(tag x: Int) -> Int { 0 }
 
 // IFC keywords: Tainted, Clean, Secret, Public
-fn check_tainted(input: Tainted<String>) -> Clean<String> {
+fn check_tainted(input: Tainted[String]) -> Clean[String] {
     sanitize(input)
 }
 
-fn reveal(s: Secret<String>) -> Public<String> {
+fn reveal(s: Secret[String]) -> Public[String] {
     declassify(s)
 }
 

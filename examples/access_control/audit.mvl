@@ -4,8 +4,8 @@
 //   1. Req 7 (Effects): ! Log declares I/O impurity.
 //      Pure policy functions (rbac.mvl) cannot secretly write to logs —
 //      any function that writes must declare ! Log.
-//   2. Req 11 (IFC): only Clean<String> and plain values reach the log sink.
-//      Secret<T> values are structurally excluded from audit output.
+//   2. Req 11 (IFC): only Clean[String] and plain values reach the log sink.
+//      Secret[T] values are structurally excluded from audit output.
 //      There is no runtime check; the type system prevents leakage.
 //   3. Phase 4 (std.log): structured audit records via log_info / log_warn
 //      replace raw println — each field is individually IFC-checked.
@@ -83,13 +83,13 @@ fn log_level_for_decision(decision: Permission) -> String {
 }
 
 // Log an access decision to the structured audit trail.
-// Only Clean<String> username and plain String values reach the log sink.
-// Secret<T> cannot appear here — enforced by the IFC type system.
+// Only Clean[String] username and plain String values reach the log sink.
+// Secret[T] cannot appear here — enforced by the IFC type system.
 // Grant decisions are logged at INFO; deny decisions at WARN.
-// username is Clean<String> (IFC-safe for output) and is included in every
+// username is Clean[String] (IFC-safe for output) and is included in every
 // audit record so that access decisions are attributable to a principal.
 pub fn log_access(
-    username: Clean<String>,
+    username: Clean[String],
     resource: Resource,
     action: Action,
     decision: Permission,

@@ -11,7 +11,7 @@
 // A function without `! Log` in its signature provably never logs.
 // The compiler enforces this statically — no runtime check needed.
 //
-// IFC: Secret<T> arguments are rejected at compile time (Req 6, #54).
+// IFC: Secret[T] arguments are rejected at compile time (Req 6, #54).
 // "Don't log secrets" is not a code review rule in MVL — it's a type error.
 // This covers OWASP A07 (information leakage in errors) by construction.
 //
@@ -34,26 +34,26 @@
 /// Requires `! Log`. A function that calls `log_debug` without `! Log`
 /// in its own signature is a compile error.
 ///
-/// IFC: Secret<T> or Tainted<T> arguments are rejected at compile time.
-pub fn log_debug(msg: String, fields: Map<String, String>) -> Unit ! Log { () }
+/// IFC: Secret[T] or Tainted[T] arguments are rejected at compile time.
+pub fn log_debug(msg: String, fields: Map[String, String]) -> Unit ! Log { () }
 
 /// Emit an INFO-level structured log record.
 ///
 /// Use for normal operational events (server started, request handled, etc.).
 ///
-/// Requires `! Log`. IFC: Secret<T> or Tainted<T> arguments cause a compile error.
-pub fn log_info(msg: String, fields: Map<String, String>) -> Unit ! Log { () }
+/// Requires `! Log`. IFC: Secret[T] or Tainted[T] arguments cause a compile error.
+pub fn log_info(msg: String, fields: Map[String, String]) -> Unit ! Log { () }
 
 /// Emit a WARN-level structured log record.
 ///
 /// Use for recoverable anomalies that may need attention.
 ///
-/// Requires `! Log`. IFC: Secret<T> or Tainted<T> arguments cause a compile error.
-pub fn log_warn(msg: String, fields: Map<String, String>) -> Unit ! Log { () }
+/// Requires `! Log`. IFC: Secret[T] or Tainted[T] arguments cause a compile error.
+pub fn log_warn(msg: String, fields: Map[String, String]) -> Unit ! Log { () }
 
 /// Emit an ERROR-level structured log record.
 ///
 /// Use for failures that affect a specific operation but not the whole process.
 ///
-/// Requires `! Log`. IFC: Secret<T> or Tainted<T> arguments cause a compile error.
-pub fn log_error(msg: String, fields: Map<String, String>) -> Unit ! Log { () }
+/// Requires `! Log`. IFC: Secret[T] or Tainted[T] arguments cause a compile error.
+pub fn log_error(msg: String, fields: Map[String, String]) -> Unit ! Log { () }

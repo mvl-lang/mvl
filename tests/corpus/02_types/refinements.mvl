@@ -31,4 +31,4 @@ type NotMax = Int where !( self == 2147483647 )
 type UserId = Int where self > 0
 type Amount = Float where self >= 0.0
 type NonZeroFloat = Float where self != 0.0
-type AccountId = Secret<String>
+type AccountId = Secret[String]

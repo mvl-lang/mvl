@@ -19,7 +19,7 @@ fn time_format_datetime(t: DateTime) -> String {
     format_datetime(t, "%Y-%m-%d %H:%M:%S")
 }
 
-fn time_parse_date(s: String) -> Option<DateTime> {
+fn time_parse_date(s: String) -> Option[DateTime] {
     parse(s, "%Y-%m-%d")
 }
 

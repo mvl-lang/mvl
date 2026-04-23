@@ -114,7 +114,7 @@ fn security_preamble_always_emitted() {
 /// Requirement 11 / Scenario: Security labeled fields in struct
 #[test]
 fn struct_with_labeled_fields_transpiles() {
-    let src = "type Session = struct { token: Secret<String>, visible: Public<Int> }";
+    let src = "type Session = struct { token: Secret[String], visible: Public[Int] }";
     let rust = transpile_src(src);
     assert_contains(&rust, "pub token: Secret<String>,");
     assert_contains(&rust, "pub visible: Public<i64>,");
@@ -160,7 +160,7 @@ fn capability_param_emits_comment() {
 /// Requirement 4 / Scenario: Option return type transpiles
 #[test]
 fn option_return_type_transpiles() {
-    let src = "fn find(x: Int) -> Option<Int> { x }";
+    let src = "fn find(x: Int) -> Option[Int] { x }";
     let rust = transpile_src(src);
     assert_contains(&rust, "pub fn find(x: i64) -> Option<i64> {");
 }
@@ -168,7 +168,7 @@ fn option_return_type_transpiles() {
 /// Requirement 5 / Scenario: Result return type transpiles
 #[test]
 fn result_return_type_transpiles() {
-    let src = "type MyErr = enum { Oops }  fn risky(x: Int) -> Result<Int, MyErr> { x }";
+    let src = "type MyErr = enum { Oops }  fn risky(x: Int) -> Result[Int, MyErr] { x }";
     let rust = transpile_src(src);
     assert_contains(&rust, "-> Result<i64, MyErr>");
 }
@@ -178,7 +178,7 @@ fn result_return_type_transpiles() {
 /// Requirement 11 / Scenario: Labeled parameter type transpiles
 #[test]
 fn labeled_param_transpiles() {
-    let src = "fn process(input: Tainted<String>) -> Clean<String> { sanitize(input) }";
+    let src = "fn process(input: Tainted[String]) -> Clean[String] { sanitize(input) }";
     let rust = transpile_src(src);
     assert_contains(&rust, "input: Tainted<String>");
     assert_contains(&rust, "-> Clean<String>");
@@ -188,7 +188,7 @@ fn labeled_param_transpiles() {
 /// Requirement 11 / Scenario: Declassify expression transpiles
 #[test]
 fn declassify_expr_transpiles() {
-    let src = "fn reveal(s: Secret<Int>) -> Public<Int> { declassify(s) }";
+    let src = "fn reveal(s: Secret[Int]) -> Public[Int] { declassify(s) }";
     let rust = transpile_src(src);
     assert_contains(&rust, "declassify(s)");
 }
@@ -295,7 +295,7 @@ fn extern_rust_block_transpiles() {
 #[test]
 fn extern_rust_fn_effects_emitted_as_comment() {
     let src = r#"extern "rust" {
-    fn fetch_url(url: String) -> Result<String, String> ! Net;
+    fn fetch_url(url: String) -> Result[String, String] ! Net;
 }"#;
     let rust = transpile_src(src);
     assert_contains(&rust, "// ! Net");
@@ -533,13 +533,13 @@ fn scientific_notation_transpiles_to_float() {
 
 // ── From/Into conversion (#62) ────────────────────────────────────────────
 
-/// `impl From<A> for B` emits a `std::convert::From` implementation.
+/// `impl From[A] for B` emits a `std::convert::From` implementation.
 #[test]
 fn impl_from_emits_from_trait() {
     let src = r#"
 type IoError = struct { msg: String }
 type AppError = enum { Io(IoError), Other }
-impl From<IoError> for AppError {
+impl From[IoError] for AppError {
     fn from(e: IoError) -> Self {
         AppError::Io(e)
     }
@@ -552,13 +552,13 @@ impl From<IoError> for AppError {
     assert_contains(&rust, "AppError::Io(e)");
 }
 
-/// `impl From<A> for B` with no `from` method emits a todo!().
+/// `impl From[A] for B` with no `from` method emits a todo!().
 #[test]
 fn impl_from_without_method_emits_todo() {
     let src = r#"
 type ParseError = struct { msg: String }
 type MyError = enum { Parse(ParseError) }
-impl From<ParseError> for MyError {}
+impl From[ParseError] for MyError {}
 "#;
     let rust = transpile_src(src);
     assert_contains(&rust, "impl std::convert::From<ParseError> for MyError {");
@@ -600,20 +600,20 @@ fn multiline_string_newline_escaped_in_output() {
     assert_contains(&rust, "\\n");
 }
 
-// ── #68: Const generics — Array<T, N> ─────────────────────────────────────
+// ── #68: Const generics — Array[T, N] ─────────────────────────────────────
 
-/// Array<T, N> in a parameter type emits Rust fixed-size array syntax [T; N].
+/// Array[T, N] in a parameter type emits Rust fixed-size array syntax [T; N].
 #[test]
 fn array_type_emits_fixed_size_rust_array() {
-    let src = "fn process(buf: Array<Byte, 16>) -> Int { 0 }";
+    let src = "fn process(buf: Array[Byte, 16]) -> Int { 0 }";
     let rust = transpile_src(src);
     assert_contains(&rust, "[u8; 16]");
 }
 
-/// Array<T, N> as a return type emits [T; N].
+/// Array[T, N] as a return type emits [T; N].
 #[test]
 fn array_return_type_emits_fixed_size_rust_array() {
-    let src = "fn zeros() -> Array<Int, 4> { [0, 0, 0, 0] }";
+    let src = "fn zeros() -> Array[Int, 4] { [0, 0, 0, 0] }";
     let rust = transpile_src(src);
     assert_contains(&rust, "[i64; 4]");
 }
@@ -621,7 +621,7 @@ fn array_return_type_emits_fixed_size_rust_array() {
 /// A type alias with const generic param emits Rust const generic syntax.
 #[test]
 fn type_alias_with_const_generic_emits_rust_const_generic() {
-    let src = "type FixedBuf<T, const N: Int> = struct { len: Int }";
+    let src = "type FixedBuf[T, const N: Int] = struct { len: Int }";
     let rust = transpile_src(src);
     assert_contains(&rust, "const N: usize");
 }
@@ -629,7 +629,7 @@ fn type_alias_with_const_generic_emits_rust_const_generic() {
 /// A function with a const generic param emits Rust const generic syntax.
 #[test]
 fn fn_with_const_generic_emits_rust_const_generic() {
-    let src = "fn fill<T, const N: Int>(item: T) -> Int { 0 }";
+    let src = "fn fill[T, const N: Int](item: T) -> Int { 0 }";
     let rust = transpile_src(src);
     assert_contains(&rust, "const N: usize");
 }
@@ -641,7 +641,7 @@ fn fn_with_const_generic_emits_rust_const_generic() {
 #[test]
 fn for_loop_clone_expression() {
     let src = r#"
-fn process(items: List<Int>) -> Unit ! Console {
+fn process(items: List[Int]) -> Unit ! Console {
     for x in items {
         println(x);
     }
@@ -657,7 +657,7 @@ fn process(items: List<Int>) -> Unit ! Console {
 #[test]
 fn for_loop_clone_fn_call_expression() {
     let src = r#"
-fn get_items() -> List<Int> { [1, 2, 3] }
+fn get_items() -> List[Int] { [1, 2, 3] }
 fn process() -> Unit ! Console {
     for x in get_items() {
         println(x);
@@ -673,7 +673,7 @@ fn process() -> Unit ! Console {
 #[test]
 fn for_loop_clone_field_access_expression() {
     let src = r#"
-type Container = struct { items: List<Int> }
+type Container = struct { items: List[Int] }
 fn process(c: Container) -> Unit ! Console {
     for x in c.items {
         println(x);
@@ -741,17 +741,17 @@ fn f(x: Int) -> Int { add(x, x) }
 
 // ── #219: Iterator trait transpilation (001-type-system Req 11) ───────────────
 
-/// Spec 001 Req 11 / Scenario: `impl Iterator<T> for X` emits Rust iterator impl.
+/// Spec 001 Req 11 / Scenario: `impl Iterator[T] for X` emits Rust iterator impl.
 ///
-/// GIVEN `impl Iterator<Int> for Counter { fn next(…) -> Option<Int> { … } }`
+/// GIVEN `impl Iterator[Int] for Counter { fn next(…) -> Option[Int] { … } }`
 /// THEN  transpiler emits `impl std::iter::Iterator for Counter { type Item = i64; … }`
 #[test]
 fn iterator_impl_emits_rust_iterator() {
     let src = r#"
 type Counter = struct { mut current: Int, limit: Int }
 
-impl Iterator<Int> for Counter {
-    fn next(mut self: Counter) -> Option<Int> {
+impl Iterator[Int] for Counter {
+    fn next(mut self: Counter) -> Option[Int] {
         None
     }
 }
@@ -762,19 +762,19 @@ impl Iterator<Int> for Counter {
     assert_contains(&rust, "fn next(&mut self) -> Option<i64> {");
 }
 
-/// `impl Iterator<T> for X` with no `next` method emits a todo!().
+/// `impl Iterator[T] for X` with no `next` method emits a todo!().
 #[test]
 fn iterator_impl_without_next_emits_todo() {
     let src = r#"
 type Counter = struct { current: Int }
-impl Iterator<Int> for Counter {}
+impl Iterator[Int] for Counter {}
 "#;
     let rust = transpile_src(src);
     assert_contains(&rust, "impl std::iter::Iterator for Counter {");
     assert_contains(&rust, "todo!(\"Iterator::next not implemented\")");
 }
 
-// ── #55: args.parse<T>() — struct-derived CLI parsing ─────────────────────
+// ── #55: args.parse[T]() — struct-derived CLI parsing ─────────────────────
 
 /// Concrete struct with stdlib import emits `impl ParseFromArgs`.
 #[test]
@@ -831,12 +831,12 @@ type Cfg = struct { verbose: Bool }
     assert_contains(&rust, "std::env::args().any(|__a| __a == \"--verbose\")");
 }
 
-/// `Option<String>` field emits optional `get_arg` with `.map(…)`.
+/// `Option[String]` field emits optional `get_arg` with `.map(…)`.
 #[test]
 fn option_string_field_emits_optional_parse() {
     let src = r#"
 use std.args.{parse}
-type Cfg = struct { config: Option<String> }
+type Cfg = struct { config: Option[String] }
 "#;
     let rust = transpile_src(src);
     assert_contains(
@@ -845,12 +845,12 @@ type Cfg = struct { config: Option<String> }
     );
 }
 
-/// `Option<Int>` field emits optional integer parsing with error propagation.
+/// `Option[Int]` field emits optional integer parsing with error propagation.
 #[test]
 fn option_int_field_emits_optional_int_parse() {
     let src = r#"
 use std.args.{parse}
-type Cfg = struct { count: Option<Int> }
+type Cfg = struct { count: Option[Int] }
 "#;
     let rust = transpile_src(src);
     assert_contains(&rust, "get_arg(Clean(\"count\".to_string()))");
@@ -878,7 +878,7 @@ type Cfg = struct { port: Int where self > 0 && self <= 65535 }
 fn generic_struct_does_not_emit_parse_from_args() {
     let src = r#"
 use std.args.{parse}
-type Pair<A, B> = struct { first: A, second: B }
+type Pair[A, B] = struct { first: A, second: B }
 "#;
     let rust = transpile_src(src);
     assert!(
@@ -928,32 +928,32 @@ type Cfg = struct { scale: Float }
     assert_contains(&rust, "missing required argument: --scale");
 }
 
-/// `Option<Float>` field emits optional float parsing.
+/// `Option[Float]` field emits optional float parsing.
 #[test]
 fn option_float_field_emits_optional_float_parse() {
     let src = r#"
 use std.args.{parse}
-type Cfg = struct { ratio: Option<Float> }
+type Cfg = struct { ratio: Option[Float] }
 "#;
     let rust = transpile_src(src);
     assert_contains(&rust, "get_arg(Clean(\"ratio\".to_string()))");
     assert_contains(&rust, "parse::<f64>()");
 }
 
-/// Struct with `Option<Bool>` field does NOT get a `ParseFromArgs` impl.
+/// Struct with `Option[Bool]` field does NOT get a `ParseFromArgs` impl.
 ///
-/// `Option<Bool>` is excluded because a bare `Bool` already encodes presence;
-/// `Option<Bool>` has no meaningful CLI representation.
+/// `Option[Bool]` is excluded because a bare `Bool` already encodes presence;
+/// `Option[Bool]` has no meaningful CLI representation.
 #[test]
 fn struct_with_option_bool_field_omits_parse_from_args() {
     let src = r#"
 use std.args.{parse}
-type Cfg = struct { verbose: Option<Bool> }
+type Cfg = struct { verbose: Option[Bool] }
 "#;
     let rust = transpile_src(src);
     assert!(
         !rust.contains("impl ParseFromArgs for Cfg"),
-        "Option<Bool> is not parseable; ParseFromArgs impl must be omitted"
+        "Option[Bool] is not parseable; ParseFromArgs impl must be omitted"
     );
 }
 
@@ -991,7 +991,7 @@ fn corpus_args_transpiles() {
     assert_contains(&rust, "impl ParseFromArgs for OptArgs {");
     // Bool fields → presence flags
     assert_contains(&rust, "std::env::args().any(|__a| __a == \"--verbose\")");
-    // Option<Float> → f64 parse
+    // Option[Float] → f64 parse
     assert_contains(&rust, "parse::<f64>()");
 }
 
@@ -1159,7 +1159,7 @@ fn range_call_emits_as_plain_fn_call_not_inline_rust_range() {
 
 #[test]
 fn method_take_and_skip_emit_iterator_adapters() {
-    let src = "fn f(xs: List<Int>) -> List<Int> { xs.take(3) }";
+    let src = "fn f(xs: List[Int]) -> List[Int] { xs.take(3) }";
     let rust = transpile_src(src);
     assert_contains(&rust, "take(");
     assert_contains(&rust, ".clone().into()");
@@ -1167,7 +1167,7 @@ fn method_take_and_skip_emit_iterator_adapters() {
 
 #[test]
 fn method_take_while_emits_closure_clone() {
-    let src = "fn f(xs: List<Int>, p: fn(Int) -> Bool) -> List<Int> { xs.take_while(p) }";
+    let src = "fn f(xs: List[Int], p: fn(Int) -> Bool) -> List[Int] { xs.take_while(p) }";
     let rust = transpile_src(src);
     assert_contains(&rust, ".take_while(|__x|");
     assert_contains(&rust, "__x.clone()");
@@ -1175,14 +1175,14 @@ fn method_take_while_emits_closure_clone() {
 
 #[test]
 fn method_skip_while_emits_closure_clone() {
-    let src = "fn f(xs: List<Int>, p: fn(Int) -> Bool) -> List<Int> { xs.skip_while(p) }";
+    let src = "fn f(xs: List[Int], p: fn(Int) -> Bool) -> List[Int] { xs.skip_while(p) }";
     let rust = transpile_src(src);
     assert_contains(&rust, ".skip_while(|__x|");
 }
 
 #[test]
 fn method_windows_emits_map_to_vec() {
-    let src = "fn f(xs: List<Int>) -> List<List<Int>> { xs.windows(2) }";
+    let src = "fn f(xs: List[Int]) -> List[List[Int]] { xs.windows(2) }";
     let rust = transpile_src(src);
     assert_contains(&rust, ".windows(");
     assert_contains(&rust, ".map(|w| w.to_vec()).collect::<Vec<_>>()");
@@ -1190,7 +1190,7 @@ fn method_windows_emits_map_to_vec() {
 
 #[test]
 fn method_chunks_emits_map_to_vec() {
-    let src = "fn f(xs: List<Int>) -> List<List<Int>> { xs.chunks(3) }";
+    let src = "fn f(xs: List[Int]) -> List[List[Int]] { xs.chunks(3) }";
     let rust = transpile_src(src);
     assert_contains(&rust, ".chunks(");
     assert_contains(&rust, ".map(|w| w.to_vec()).collect::<Vec<_>>()");
@@ -1198,7 +1198,7 @@ fn method_chunks_emits_map_to_vec() {
 
 #[test]
 fn method_flatten_emits_iterator_flatten() {
-    let src = "fn f(xs: List<List<Int>>) -> List<Int> { xs.flatten() }";
+    let src = "fn f(xs: List[List[Int]]) -> List[Int] { xs.flatten() }";
     let rust = transpile_src(src);
     assert_contains(&rust, "flatten(");
     assert_contains(&rust, ".clone().into()");
@@ -1207,14 +1207,14 @@ fn method_flatten_emits_iterator_flatten() {
 #[test]
 fn method_partition_emits_turbofish() {
     let src =
-        "fn f(xs: List<Int>, p: fn(Int) -> Bool) -> List<Int> { let (a, b) = xs.partition(p); a }";
+        "fn f(xs: List[Int], p: fn(Int) -> Bool) -> List[Int] { let (a, b) = xs.partition(p); a }";
     let rust = transpile_src(src);
     assert_contains(&rust, ".into_iter().partition::<Vec<_>, _>(|__x|");
 }
 
 #[test]
 fn method_group_by_emits_hashmap_fold() {
-    let src = "fn f(xs: List<Int>, k: fn(Int) -> Int) -> Unit { let m = xs.group_by(k); }";
+    let src = "fn f(xs: List[Int], k: fn(Int) -> Int) -> Unit { let m = xs.group_by(k); }";
     let rust = transpile_src(src);
     assert_contains(&rust, "std::collections::HashMap");
     assert_contains(&rust, "__m.entry(");
@@ -1222,7 +1222,7 @@ fn method_group_by_emits_hashmap_fold() {
 
 #[test]
 fn method_chars_emits_char_to_string() {
-    let src = r#"fn f(s: String) -> List<String> { s.chars() }"#;
+    let src = r#"fn f(s: String) -> List[String] { s.chars() }"#;
     let rust = transpile_src(src);
     assert_contains(&rust, "chars(");
     assert_contains(&rust, ".clone().into()");
@@ -1230,7 +1230,7 @@ fn method_chars_emits_char_to_string() {
 
 #[test]
 fn method_first_last_emit_cloned() {
-    let src = "fn f(xs: List<Int>) -> Option<Int> { xs.first() }";
+    let src = "fn f(xs: List[Int]) -> Option[Int] { xs.first() }";
     let rust = transpile_src(src);
     assert_contains(&rust, "first(");
     assert_contains(&rust, ".clone().into()");
@@ -1238,8 +1238,8 @@ fn method_first_last_emit_cloned() {
 
 #[test]
 fn method_contains_emits_mvl_contains() {
-    // List<T>.contains(x) — emits via MvlContains trait, not hardcoded Rust
-    let src = "fn f(xs: List<Int>, n: Int) -> Bool { xs.contains(n) }";
+    // List[T].contains(x) — emits via MvlContains trait, not hardcoded Rust
+    let src = "fn f(xs: List[Int], n: Int) -> Bool { xs.contains(n) }";
     let rust = transpile_src(src);
     assert_contains(&rust, ".mvl_contains(&(n");
     assert_contains(&rust, "))");
@@ -1256,8 +1256,8 @@ fn method_contains_string_emits_mvl_contains() {
 
 #[test]
 fn method_contains_set_emits_mvl_contains() {
-    // Set<T>.contains(x) — routes to HashSet MvlContains impl
-    let src = "fn f(ss: Set<Int>, n: Int) -> Bool { ss.contains(n) }";
+    // Set[T].contains(x) — routes to HashSet MvlContains impl
+    let src = "fn f(ss: Set[Int], n: Int) -> Bool { ss.contains(n) }";
     let rust = transpile_src(src);
     assert_contains(&rust, ".mvl_contains(&(");
 }
@@ -1265,7 +1265,7 @@ fn method_contains_set_emits_mvl_contains() {
 #[test]
 fn mvl_contains_trait_is_emitted_in_preamble() {
     // The preamble must define MvlContains so generated code can call .mvl_contains()
-    let src = "fn f(xs: List<Int>, n: Int) -> Bool { xs.contains(n) }";
+    let src = "fn f(xs: List[Int], n: Int) -> Bool { xs.contains(n) }";
     let rust = transpile_src(src);
     assert_contains(&rust, "pub trait MvlContains<T:");
     assert_contains(&rust, "impl<T: PartialEq> MvlContains<T> for Vec<T>");
@@ -1280,7 +1280,7 @@ fn mvl_contains_trait_is_emitted_in_preamble() {
 #[test]
 fn method_contains_wrong_arity_falls_through_to_generic() {
     // contains() with 0 args fails the arity guard and falls to the generic arm
-    let src = "fn f(xs: List<Int>) -> Unit { xs.contains() }";
+    let src = "fn f(xs: List[Int]) -> Unit { xs.contains() }";
     let rust = transpile_src(src);
     // Must not emit the MvlContains path
     assert!(
@@ -1291,7 +1291,7 @@ fn method_contains_wrong_arity_falls_through_to_generic() {
 
 #[test]
 fn method_slice_emits_safe_wrapper() {
-    let src = "fn f(xs: List<Int>) -> List<Int> { xs.slice(1, 3) }";
+    let src = "fn f(xs: List[Int]) -> List[Int] { xs.slice(1, 3) }";
     let rust = transpile_src(src);
     assert_contains(&rust, "slice(");
     assert_contains(&rust, ".clone().into()");
@@ -1366,7 +1366,7 @@ fn method_to_int_emits_cast() {
 
 #[test]
 fn method_map_emits_mvl_map() {
-    let src = "fn f(xs: List<Int>, g: fn(Int) -> Int) -> List<Int> { xs.map(g) }";
+    let src = "fn f(xs: List[Int], g: fn(Int) -> Int) -> List[Int] { xs.map(g) }";
     let rust = transpile_src(src);
     assert_contains(&rust, ".mvl_map(|__x|");
     assert_contains(&rust, "__x.clone()");
@@ -1374,14 +1374,14 @@ fn method_map_emits_mvl_map() {
 
 #[test]
 fn method_filter_emits_iterator_filter() {
-    let src = "fn f(xs: List<Int>, p: fn(Int) -> Bool) -> List<Int> { xs.filter(p) }";
+    let src = "fn f(xs: List[Int], p: fn(Int) -> Bool) -> List[Int] { xs.filter(p) }";
     let rust = transpile_src(src);
     assert_contains(&rust, ".into_iter().filter(|__x|");
 }
 
 #[test]
 fn method_fold_emits_iterator_fold() {
-    let src = "fn f(xs: List<Int>, init: Int, g: fn(Int, Int) -> Int) -> Int { xs.fold(init, g) }";
+    let src = "fn f(xs: List[Int], init: Int, g: fn(Int, Int) -> Int) -> Int { xs.fold(init, g) }";
     let rust = transpile_src(src);
     assert_contains(&rust, ".into_iter().fold(");
     assert_contains(&rust, "|__acc, __x|");
@@ -1389,7 +1389,7 @@ fn method_fold_emits_iterator_fold() {
 
 #[test]
 fn method_reverse_emits_rev_collect() {
-    let src = "fn f(xs: List<Int>) -> List<Int> { xs.reverse() }";
+    let src = "fn f(xs: List[Int]) -> List[Int] { xs.reverse() }";
     let rust = transpile_src(src);
     assert_contains(&rust, "reverse(");
     assert_contains(&rust, ".clone().into()");
@@ -1397,7 +1397,7 @@ fn method_reverse_emits_rev_collect() {
 
 #[test]
 fn method_sort_emits_sort_by_partial_cmp() {
-    let src = "fn f(xs: List<Int>) -> List<Int> { xs.sort() }";
+    let src = "fn f(xs: List[Int]) -> List[Int] { xs.sort() }";
     let rust = transpile_src(src);
     assert_contains(&rust, ".sort_by(|__a,__b|");
     assert_contains(&rust, "partial_cmp");
@@ -1405,7 +1405,7 @@ fn method_sort_emits_sort_by_partial_cmp() {
 
 #[test]
 fn method_and_then_emits_closure() {
-    let src = "fn f(x: Option<Int>, g: fn(Int) -> Option<Int>) -> Option<Int> { x.and_then(g) }";
+    let src = "fn f(x: Option[Int], g: fn(Int) -> Option[Int]) -> Option[Int] { x.and_then(g) }";
     let rust = transpile_src(src);
     assert_contains(&rust, ".and_then(|__x|");
 }
@@ -1452,7 +1452,7 @@ fn method_ends_with_borrows_arg() {
 
 #[test]
 fn method_find_emits_cast_to_i64() {
-    let src = r#"fn f(s: String, p: String) -> Option<Int> { s.find(p) }"#;
+    let src = r#"fn f(s: String, p: String) -> Option[Int] { s.find(p) }"#;
     let rust = transpile_src(src);
     assert_contains(&rust, "find(");
     assert_contains(&rust, ".clone().into()");
@@ -1468,7 +1468,7 @@ fn method_replace_emits_deref_on_second_arg() {
 
 #[test]
 fn method_split_emits_map_to_string() {
-    let src = r#"fn f(s: String) -> List<String> { s.split(",") }"#;
+    let src = r#"fn f(s: String) -> List[String] { s.split(",") }"#;
     let rust = transpile_src(src);
     assert_contains(&rust, "split(");
     assert_contains(&rust, ".clone().into()");
@@ -1571,7 +1571,7 @@ fn emit_args_for_macro_non_literal_first_arg_generates_placeholder() {
 
 #[test]
 fn propagate_expr_emits_question_mark() {
-    let src = r#"fn f(r: Result<Int, String>) -> Result<Int, String> {
+    let src = r#"fn f(r: Result[Int, String]) -> Result[Int, String] {
     let x = r?;
     Ok(x)
 }"#;
@@ -1582,7 +1582,7 @@ fn propagate_expr_emits_question_mark() {
 #[test]
 fn type_args_in_fn_call_emit_turbofish() {
     // Functions with explicit type arguments use bracket syntax: name[Type](args)
-    let src = "fn identity<T>(x: T) -> T { x }\nfn f() -> Int { identity[Int](42) }";
+    let src = "fn identity[T](x: T) -> T { x }\nfn f() -> Int { identity[Int](42) }";
     let rust = transpile_src(src);
     assert_contains(&rust, "::<");
 }

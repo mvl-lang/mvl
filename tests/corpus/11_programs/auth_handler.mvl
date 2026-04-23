@@ -4,8 +4,8 @@
 // Req 1:  ADTs (AuthError enum, Session struct)
 // Req 2:  Memory safety (ownership, no raw pointers)
 // Req 3:  Exhaustive match on Option
-// Req 4:  Option<User> — no null
-// Req 5:  Result<Session, AuthError> — errors in signature
+// Req 4:  Option[User] — no null
+// Req 5:  Result[Session, AuthError] — errors in signature
 // Req 6:  Ownership — token moved, not copied
 // Req 7:  Effects declared: ! Console
 // Req 8:  total — must terminate
@@ -16,13 +16,13 @@
 // Supporting types and stub functions (would be provided by a library in practice).
 // UserStore and sanitize are declared here as stubs; real implementations are injected at runtime.
 type UserId = Int where self > 0
-type User = struct { id: UserId, password_hash: Secret<String> }
+type User = struct { id: UserId, password_hash: Secret[String] }
 type UserStore = struct {}
 
-fn verify_hash(pwd: Clean<String>, stored: Secret<String>) -> Bool { true }
-fn generate_token(id: UserId) -> Secret<String> { "token" }
-fn now_plus(secs: Int) -> Public<Int> { 0 }
-fn clean_input(s: Tainted<String>) -> Clean<String> { "" }
+fn verify_hash(pwd: Clean[String], stored: Secret[String]) -> Bool { true }
+fn generate_token(id: UserId) -> Secret[String] { "token" }
+fn now_plus(secs: Int) -> Public[Int] { 0 }
+fn clean_input(s: Tainted[String]) -> Clean[String] { "" }
 
 type AuthError = enum {
     NotFound,
@@ -31,24 +31,24 @@ type AuthError = enum {
 }
 
 type Session = struct {
-    token: Secret<String>,
-    user_id: Public<UserId>,
-    expires_at: Public<Int>,
+    token: Secret[String],
+    user_id: Public[UserId],
+    expires_at: Public[Int],
 }
 
 total fn authenticate(
     iso store: &UserStore,
-    input_password: Tainted<String>,
-    user_id: Public<UserId>,
-) -> Result<Session, AuthError> ! Console {
+    input_password: Tainted[String],
+    user_id: Public[UserId],
+) -> Result[Session, AuthError] ! Console {
 
-    let user: Option<User> = store.find_user(user_id)?;
+    let user: Option[User] = store.find_user(user_id)?;
 
     match user {
         None => Err(AuthError::NotFound),
         Some(u) => {
-            let clean_pwd: Clean<String> = clean_input(input_password);
-            let stored: Secret<String> = u.password_hash;
+            let clean_pwd: Clean[String] = clean_input(input_password);
+            let stored: Secret[String] = u.password_hash;
             let valid: Bool = verify_hash(clean_pwd, stored);
 
             if valid {

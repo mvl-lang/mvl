@@ -214,7 +214,7 @@ fn enum_match_missing_variant_rejected() {
 fn result_match_missing_ok_rejected() {
     // GIVEN: Result match with only Err arm
     // THEN: NonExhaustiveMatch(Ok(_)) reported
-    let errors = errors_for("fn f(r: Result<Int, String>) -> Int { match r { Err(_) => -1 } }");
+    let errors = errors_for("fn f(r: Result[Int, String]) -> Int { match r { Err(_) => -1 } }");
     assert!(
         errors.iter().any(|e| matches!(
             e,
@@ -252,9 +252,9 @@ fn option_result_corpus_parses_and_checks() {
 
 #[test]
 fn option_field_access_rejected() {
-    // GIVEN: direct `.field` on Option<T>
+    // GIVEN: direct `.field` on Option[T]
     // THEN: OptionDirectAccess reported
-    let errors = errors_for("fn f(x: Option<Int>) -> Int { x.value }");
+    let errors = errors_for("fn f(x: Option[Int]) -> Int { x.value }");
     assert!(
         errors
             .iter()
@@ -268,7 +268,7 @@ fn result_in_stmt_without_use_rejected() {
     // GIVEN: Result returned by function used as a standalone statement
     // THEN: ResultIgnored reported
     let errors =
-        errors_for("fn produce() -> Result<Int, String> { Ok(1) }\nfn f() -> Unit { produce() }");
+        errors_for("fn produce() -> Result[Int, String] { Ok(1) }\nfn f() -> Unit { produce() }");
     assert!(
         errors
             .iter()
@@ -281,7 +281,7 @@ fn result_in_stmt_without_use_rejected() {
 fn propagate_on_non_result_rejected() {
     // GIVEN: `?` applied to Int
     // THEN: PropagateNotResult reported
-    let errors = errors_for("fn f() -> Result<Int, String> { let x = 1?; Ok(x) }");
+    let errors = errors_for("fn f() -> Result[Int, String] { let x = 1?; Ok(x) }");
     assert!(
         errors
             .iter()
@@ -638,7 +638,7 @@ fn while_loop_in_partial_function_accepted() {
 fn for_loop_in_total_function_accepted() {
     // GIVEN: total fn with for loop (bounded)
     // THEN: no totality error
-    let src = "total fn f(items: List<Int>) -> Unit { for x in items { } }";
+    let src = "total fn f(items: List[Int]) -> Unit { for x in items { } }";
     let errors = errors_for(src);
     assert!(
         !errors
@@ -908,7 +908,7 @@ fn tail_accessor_recursion_accepted() {
     // GIVEN: total fn recurses passing `xs.tail()` — structural subterm via method
     // THEN: no UnprovenRecursion error
     // spec 007 §Req 3 (method accessor yields strict substructure)
-    let src = r#"fn f(xs: List<Int>) -> Int { if xs == [] { 0 } else { f(xs.tail()) } }"#;
+    let src = r#"fn f(xs: List[Int]) -> Int { if xs == [] { 0 } else { f(xs.tail()) } }"#;
     let errors = errors_for(src);
     assert!(
         !errors
@@ -923,7 +923,7 @@ fn rest_accessor_recursion_accepted() {
     // GIVEN: total fn recurses passing `xs.rest()` — structural subterm via method
     // THEN: no UnprovenRecursion error
     // spec 007 §Req 3
-    let src = r#"fn f(xs: List<Int>) -> Int { if xs == [] { 0 } else { f(xs.rest()) } }"#;
+    let src = r#"fn f(xs: List[Int]) -> Int { if xs == [] { 0 } else { f(xs.rest()) } }"#;
     let errors = errors_for(src);
     assert!(
         !errors
@@ -964,7 +964,7 @@ fn len_on_param_directly_rejected() {
     //        (not a match-bound structural subterm)
     // THEN: UnprovenRecursion — only subterm.len() is a recognised decrease, not param.len()
     // spec 007 §Req 3
-    let src = r#"fn f(xs: List<Int>) -> Int { if xs == [] { 0 } else { f(xs.len()) } }"#;
+    let src = r#"fn f(xs: List[Int]) -> Int { if xs == [] { 0 } else { f(xs.len()) } }"#;
     let errors = errors_for(src);
     assert!(
         errors
@@ -979,7 +979,7 @@ fn tail_on_local_variable_rejected() {
     // GIVEN: total fn calls .tail() on a local variable, not a parameter or known subterm
     // THEN: UnprovenRecursion — accessor on a non-param non-subterm is not a proven decrease
     // spec 007 §Req 3
-    let src = r#"fn f(xs: List<Int>) -> Int { let local = xs; f(local.tail()) }"#;
+    let src = r#"fn f(xs: List[Int]) -> Int { let local = xs; f(local.tail()) }"#;
     let errors = errors_for(src);
     assert!(
         errors
@@ -994,7 +994,7 @@ fn rest_on_local_variable_rejected() {
     // GIVEN: total fn calls .rest() on a local variable, not a parameter or known subterm
     // THEN: UnprovenRecursion
     // spec 007 §Req 3
-    let src = r#"fn f(xs: List<Int>) -> Int { let local = xs; f(local.rest()) }"#;
+    let src = r#"fn f(xs: List[Int]) -> Int { let local = xs; f(local.rest()) }"#;
     let errors = errors_for(src);
     assert!(
         errors
@@ -1316,9 +1316,9 @@ fn label_types_corpus_parses_and_checks() {
 
 #[test]
 fn secret_flows_to_public_rejected() {
-    // GIVEN: a function returning Public<String> but body is Secret<String>
+    // GIVEN: a function returning Public[String] but body is Secret[String]
     // THEN: TypeMismatch (downward flow rejected)
-    let errors = errors_for(r#"fn leak(k: Secret<String>) -> Public<String> { k }"#);
+    let errors = errors_for(r#"fn leak(k: Secret[String]) -> Public[String] { k }"#);
     assert!(
         errors
             .iter()
@@ -1329,9 +1329,9 @@ fn secret_flows_to_public_rejected() {
 
 #[test]
 fn public_flows_to_secret_accepted() {
-    // GIVEN: a function accepting Public<String> parameter assigned to Secret<String>
+    // GIVEN: a function accepting Public[String] parameter assigned to Secret[String]
     // THEN: no type error (upward flow)
-    let errors = errors_for(r#"fn store(x: Public<String>) -> Secret<String> { x }"#);
+    let errors = errors_for(r#"fn store(x: Public[String]) -> Secret[String] { x }"#);
     assert!(
         !errors
             .iter()
@@ -1342,9 +1342,9 @@ fn public_flows_to_secret_accepted() {
 
 #[test]
 fn tainted_flows_to_clean_rejected() {
-    // GIVEN: a function returning Clean<String> but body is Tainted<String>
+    // GIVEN: a function returning Clean[String] but body is Tainted[String]
     // THEN: TypeMismatch (downward flow rejected — needs sanitize)
-    let errors = errors_for(r#"fn use_raw(input: Tainted<String>) -> Clean<String> { input }"#);
+    let errors = errors_for(r#"fn use_raw(input: Tainted[String]) -> Clean[String] { input }"#);
     assert!(
         errors
             .iter()
@@ -1370,9 +1370,9 @@ fn lattice_corpus_parses_and_checks() {
 
 #[test]
 fn secret_to_tainted_rejected() {
-    // GIVEN: function returns Tainted<Int> but body is Secret<Int> (downward)
+    // GIVEN: function returns Tainted[Int] but body is Secret[Int] (downward)
     // THEN: TypeMismatch
-    let errors = errors_for(r#"fn downgrade(s: Secret<Int>) -> Tainted<Int> { s }"#);
+    let errors = errors_for(r#"fn downgrade(s: Secret[Int]) -> Tainted[Int] { s }"#);
     assert!(
         errors
             .iter()
@@ -1383,9 +1383,9 @@ fn secret_to_tainted_rejected() {
 
 #[test]
 fn clean_to_public_rejected() {
-    // GIVEN: function returns Public<Int> but body is Clean<Int> (downward)
+    // GIVEN: function returns Public[Int] but body is Clean[Int] (downward)
     // THEN: TypeMismatch
-    let errors = errors_for(r#"fn expose(s: Clean<Int>) -> Public<Int> { s }"#);
+    let errors = errors_for(r#"fn expose(s: Clean[Int]) -> Public[Int] { s }"#);
     assert!(
         errors
             .iter()
@@ -1411,27 +1411,27 @@ fn propagation_ifc_corpus_parses_and_checks() {
 
 #[test]
 fn arithmetic_label_join_propagates() {
-    // GIVEN: Secret<Int> + Public<Int> — the result carries the join (Secret)
-    // THEN: no type error when assigned to Secret<Int>
-    let errors = errors_for(r#"fn add(a: Secret<Int>, b: Public<Int>) -> Secret<Int> { a + b }"#);
+    // GIVEN: Secret[Int] + Public[Int] — the result carries the join (Secret)
+    // THEN: no type error when assigned to Secret[Int]
+    let errors = errors_for(r#"fn add(a: Secret[Int], b: Public[Int]) -> Secret[Int] { a + b }"#);
     assert!(
         !errors
             .iter()
             .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "Secret<Int> + Public<Int> should yield Secret<Int>, got: {errors:?}"
+        "Secret[Int] + Public[Int] should yield Secret[Int], got: {errors:?}"
     );
 }
 
 #[test]
 fn arithmetic_label_join_downgrade_rejected() {
-    // GIVEN: Secret<Int> + Public<Int> — trying to assign to Public<Int>
+    // GIVEN: Secret[Int] + Public[Int] — trying to assign to Public[Int]
     // THEN: TypeMismatch (result is Secret, expected Public)
-    let errors = errors_for(r#"fn add(a: Secret<Int>, b: Public<Int>) -> Public<Int> { a + b }"#);
+    let errors = errors_for(r#"fn add(a: Secret[Int], b: Public[Int]) -> Public[Int] { a + b }"#);
     assert!(
         errors
             .iter()
             .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "Secret+Public result cannot flow to Public<Int>, got: {errors:?}"
+        "Secret+Public result cannot flow to Public[Int], got: {errors:?}"
     );
 }
 
@@ -1456,38 +1456,38 @@ fn declassification_corpus_parses_and_checks() {
 
 #[test]
 fn sanitize_tainted_returns_clean() {
-    // GIVEN: sanitize(tainted_string) where tainted_string: Tainted<String>
-    // THEN: no type error when returning Clean<String>
+    // GIVEN: sanitize(tainted_string) where tainted_string: Tainted[String]
+    // THEN: no type error when returning Clean[String]
     let errors =
-        errors_for(r#"fn clean_up(input: Tainted<String>) -> Clean<String> { sanitize(input) }"#);
+        errors_for(r#"fn clean_up(input: Tainted[String]) -> Clean[String] { sanitize(input) }"#);
     assert!(
         !errors
             .iter()
             .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "sanitize(Tainted<String>) should yield Clean<String>, got: {errors:?}"
+        "sanitize(Tainted[String]) should yield Clean[String], got: {errors:?}"
     );
 }
 
 #[test]
 fn declassify_secret_returns_public() {
-    // GIVEN: declassify(secret) where secret: Secret<Int>
-    // THEN: no type error when returning Public<Int>
+    // GIVEN: declassify(secret) where secret: Secret[Int]
+    // THEN: no type error when returning Public[Int]
     let errors =
-        errors_for(r#"fn expose(secret: Secret<Int>) -> Public<Int> { declassify(secret) }"#);
+        errors_for(r#"fn expose(secret: Secret[Int]) -> Public[Int] { declassify(secret) }"#);
     assert!(
         !errors
             .iter()
             .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "declassify(Secret<Int>) should yield Public<Int>, got: {errors:?}"
+        "declassify(Secret[Int]) should yield Public[Int], got: {errors:?}"
     );
 }
 
 #[test]
 fn sanitize_on_non_tainted_rejected() {
-    // GIVEN: sanitize() applied to Public<String> (not Tainted)
+    // GIVEN: sanitize() applied to Public[String] (not Tainted)
     // THEN: InvalidSanitize error
     let errors =
-        errors_for(r#"fn bad(input: Public<String>) -> Clean<String> { sanitize(input) }"#);
+        errors_for(r#"fn bad(input: Public[String]) -> Clean[String] { sanitize(input) }"#);
     assert!(
         errors
             .iter()
@@ -1498,9 +1498,9 @@ fn sanitize_on_non_tainted_rejected() {
 
 #[test]
 fn declassify_on_non_secret_rejected() {
-    // GIVEN: declassify() applied to Tainted<Int> (not Secret)
+    // GIVEN: declassify() applied to Tainted[Int] (not Secret)
     // THEN: InvalidDeclassify error
-    let errors = errors_for(r#"fn bad(input: Tainted<Int>) -> Public<Int> { declassify(input) }"#);
+    let errors = errors_for(r#"fn bad(input: Tainted[Int]) -> Public[Int] { declassify(input) }"#);
     assert!(
         errors
             .iter()
@@ -1511,27 +1511,27 @@ fn declassify_on_non_secret_rejected() {
 
 #[test]
 fn direct_tainted_to_clean_without_sanitize_rejected() {
-    // GIVEN: assigning Tainted<String> directly to Clean<String> param
+    // GIVEN: assigning Tainted[String] directly to Clean[String] param
     // THEN: TypeMismatch (must use sanitize explicitly)
     let errors = errors_for(
         r#"
-        fn needs_clean(s: Clean<String>) -> Clean<String> { s }
-        fn caller(raw: Tainted<String>) -> Clean<String> { needs_clean(raw) }
+        fn needs_clean(s: Clean[String]) -> Clean[String] { s }
+        fn caller(raw: Tainted[String]) -> Clean[String] { needs_clean(raw) }
     "#,
     );
     assert!(
         errors
             .iter()
             .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "Tainted should not flow to Clean<String> param, got: {errors:?}"
+        "Tainted should not flow to Clean[String] param, got: {errors:?}"
     );
 }
 
 #[test]
 fn sanitize_on_clean_rejected() {
-    // GIVEN: sanitize() applied to Clean<String> (not Tainted)
+    // GIVEN: sanitize() applied to Clean[String] (not Tainted)
     // THEN: InvalidSanitize error
-    let errors = errors_for(r#"fn bad(input: Clean<String>) -> Clean<String> { sanitize(input) }"#);
+    let errors = errors_for(r#"fn bad(input: Clean[String]) -> Clean[String] { sanitize(input) }"#);
     assert!(
         errors
             .iter()
@@ -1542,10 +1542,10 @@ fn sanitize_on_clean_rejected() {
 
 #[test]
 fn sanitize_on_secret_rejected() {
-    // GIVEN: sanitize() applied to Secret<String> (not Tainted)
+    // GIVEN: sanitize() applied to Secret[String] (not Tainted)
     // THEN: InvalidSanitize error (use declassify for Secret)
     let errors =
-        errors_for(r#"fn bad(input: Secret<String>) -> Clean<String> { sanitize(input) }"#);
+        errors_for(r#"fn bad(input: Secret[String]) -> Clean[String] { sanitize(input) }"#);
     assert!(
         errors
             .iter()
@@ -1556,46 +1556,46 @@ fn sanitize_on_secret_rejected() {
 
 #[test]
 fn secret_to_unlabeled_param_rejected() {
-    // GIVEN: function with unlabeled String param called with Secret<String>
+    // GIVEN: function with unlabeled String param called with Secret[String]
     // THEN: TypeMismatch — unlabeled context is treated as Public, downward flow rejected
     let errors = errors_for(
         r#"
         fn sink(s: String) -> String { s }
-        fn caller(k: Secret<String>) -> String { sink(k) }
+        fn caller(k: Secret[String]) -> String { sink(k) }
     "#,
     );
     assert!(
         errors
             .iter()
             .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "Secret<String> must not flow silently to unlabeled String param, got: {errors:?}"
+        "Secret[String] must not flow silently to unlabeled String param, got: {errors:?}"
     );
 }
 
 #[test]
 fn unlabeled_to_secret_param_accepted() {
-    // GIVEN: function with Secret<String> param called with unlabeled String
+    // GIVEN: function with Secret[String] param called with unlabeled String
     // THEN: accepted — unlabeled data is treated as Public, upward flow to Secret is fine
     let errors = errors_for(
         r#"
-        fn vault(s: Secret<String>) -> Secret<String> { s }
-        fn caller(name: String) -> Secret<String> { vault(name) }
+        fn vault(s: Secret[String]) -> Secret[String] { s }
+        fn caller(name: String) -> Secret[String] { vault(name) }
     "#,
     );
     assert!(
         !errors
             .iter()
             .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "unlabeled String should flow up to Secret<String> param, got: {errors:?}"
+        "unlabeled String should flow up to Secret[String] param, got: {errors:?}"
     );
 }
 
 #[test]
 fn if_with_labeled_bool_condition_promotes_result() {
-    // GIVEN: if-condition is Secret<Bool>, branch results are Public<Int>
-    // THEN: result type is Secret<Int> — cannot be returned as Public<Int>
+    // GIVEN: if-condition is Secret[Bool], branch results are Public[Int]
+    // THEN: result type is Secret[Int] — cannot be returned as Public[Int]
     let errors = errors_for(
-        r#"fn select(flag: Secret<Bool>, a: Public<Int>, b: Public<Int>) -> Public<Int> {
+        r#"fn select(flag: Secret[Bool], a: Public[Int], b: Public[Int]) -> Public[Int] {
             if flag { a } else { b }
         }"#,
     );
@@ -1603,7 +1603,7 @@ fn if_with_labeled_bool_condition_promotes_result() {
         errors
             .iter()
             .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "if Secret<Bool> must promote result to Secret<Int>, rejecting Public<Int> return, got: {errors:?}"
+        "if Secret[Bool] must promote result to Secret[Int], rejecting Public[Int] return, got: {errors:?}"
     );
 }
 
@@ -1624,58 +1624,58 @@ fn if_with_unlabeled_bool_condition_unchanged() {
     );
 }
 
-/// Regression: `Secret<Bool>` as if-condition must NOT produce a TypeMismatch on the condition
+/// Regression: `Secret[Bool]` as if-condition must NOT produce a TypeMismatch on the condition
 /// check itself — `is_bool()` must strip the label before testing for Bool.
 ///
-/// - GIVEN `fn f(flag: Secret<Bool>) -> Unit`
-/// - WHEN the condition is `Secret<Bool>` (labeled Bool)
+/// - GIVEN `fn f(flag: Secret[Bool]) -> Unit`
+/// - WHEN the condition is `Secret[Bool]` (labeled Bool)
 /// - THEN no TypeMismatch is emitted for the condition expression
 #[test]
 fn secret_bool_if_condition_accepted() {
     let errors =
-        errors_for(r#"fn f(flag: Secret<Bool>) -> Unit ! Console { if flag { println("x"); } }"#);
+        errors_for(r#"fn f(flag: Secret[Bool]) -> Unit ! Console { if flag { println("x"); } }"#);
     let cond_mismatch = errors
         .iter()
         .any(|e| matches!(e, CheckError::TypeMismatch { found, .. } if found.contains("Secret")));
     assert!(
         !cond_mismatch,
-        "Secret<Bool> must be accepted as if-condition (is_bool strips label), got: {errors:?}"
+        "Secret[Bool] must be accepted as if-condition (is_bool strips label), got: {errors:?}"
     );
 }
 
-/// Regression: `Tainted<Bool>` as while-condition must NOT produce a TypeMismatch on the
+/// Regression: `Tainted[Bool]` as while-condition must NOT produce a TypeMismatch on the
 /// condition check itself.
 ///
-/// - GIVEN `partial fn poll(cond: Tainted<Bool>) -> Unit`
-/// - WHEN the while-condition is `Tainted<Bool>`
+/// - GIVEN `partial fn poll(cond: Tainted[Bool]) -> Unit`
+/// - WHEN the while-condition is `Tainted[Bool]`
 /// - THEN no TypeMismatch is emitted for the condition expression
 #[test]
 fn tainted_bool_while_condition_accepted() {
     let errors = errors_for(
-        r#"partial fn poll(cond: Tainted<Bool>) -> Unit ! Console { while cond { println("x"); } }"#,
+        r#"partial fn poll(cond: Tainted[Bool]) -> Unit ! Console { while cond { println("x"); } }"#,
     );
     let cond_mismatch = errors
         .iter()
         .any(|e| matches!(e, CheckError::TypeMismatch { found, .. } if found.contains("Tainted")));
     assert!(
         !cond_mismatch,
-        "Tainted<Bool> must be accepted as while-condition (is_bool strips label), got: {errors:?}"
+        "Tainted[Bool] must be accepted as while-condition (is_bool strips label), got: {errors:?}"
     );
 }
 
-/// `Secret<Int>` must still be rejected as an if-condition — only labeled Bools are valid.
+/// `Secret[Int]` must still be rejected as an if-condition — only labeled Bools are valid.
 ///
-/// - GIVEN `fn f(n: Secret<Int>) -> Unit`
-/// - WHEN the if-condition is `Secret<Int>`
-/// - THEN TypeMismatch is emitted (expected Bool, found Secret<Int>)
+/// - GIVEN `fn f(n: Secret[Int]) -> Unit`
+/// - WHEN the if-condition is `Secret[Int]`
+/// - THEN TypeMismatch is emitted (expected Bool, found Secret[Int])
 #[test]
 fn secret_int_if_condition_rejected() {
-    let errors = errors_for(r#"fn f(n: Secret<Int>) -> Unit ! Console { if n { println("x"); } }"#);
+    let errors = errors_for(r#"fn f(n: Secret[Int]) -> Unit ! Console { if n { println("x"); } }"#);
     assert!(
         errors
             .iter()
             .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "Secret<Int> must be rejected as if-condition (not a Bool), got: {errors:?}"
+        "Secret[Int] must be rejected as if-condition (not a Bool), got: {errors:?}"
     );
 }
 
@@ -1755,9 +1755,9 @@ fn use_extern(x: Int) -> Int {
 #[test]
 fn sanitize_before_validation_guard_accepted() {
     // GIVEN: sanitize() called after an explicit guard check (correct ordering)
-    // THEN: no type error — sanitize(Tainted<String>) → Clean<String> is valid
+    // THEN: no type error — sanitize(Tainted[String]) → Clean[String] is valid
     let errors = errors_for(
-        r#"fn validate(raw: Tainted<String>) -> Result<Clean<String>, String> {
+        r#"fn validate(raw: Tainted[String]) -> Result[Clean[String], String] {
     if raw.len() < 8 {
         return Err("too short".to_string());
     }
@@ -1783,46 +1783,46 @@ fn parses_and_checks(src: &str) {
 #[test]
 fn generic_identity_parses() {
     // Req 9: generic function with type parameter parses and checks
-    parses_and_checks("total fn identity<T>(x: T) -> T { return x; }");
+    parses_and_checks("total fn identity[T](x: T) -> T { return x; }");
 }
 
 #[test]
 fn generic_type_decl_parses() {
     // Req 9: generic type declaration parses and checks
-    parses_and_checks("type Container<T> = struct { value: T }");
+    parses_and_checks("type Container[T] = struct { value: T }");
 }
 
 #[test]
 fn generic_pair_type_parses() {
     // Req 9: multiple type parameters parse and check
-    parses_and_checks("type Pair<A, B> = struct { first: A, second: B }");
+    parses_and_checks("type Pair[A, B] = struct { first: A, second: B }");
 }
 
 #[test]
 fn generic_with_constraint_parses() {
     // Req 9: where-clause constraint parses and checks
-    parses_and_checks("total fn max<T>(a: T, b: T) -> T where T: Ord { return a; }");
+    parses_and_checks("total fn max[T](a: T, b: T) -> T where T: Ord { return a; }");
 }
 
 #[test]
 fn ord_constraint_satisfies_comparison() {
     // Req 9: T with Ord bound may use <, >, <=, >= without error
     parses_and_checks(
-        "total fn max<T>(a: T, b: T) -> T where T: Ord { if a > b { return a; } else { return b; } }",
+        "total fn max[T](a: T, b: T) -> T where T: Ord { if a > b { return a; } else { return b; } }",
     );
 }
 
 #[test]
 fn eq_constraint_satisfies_equality() {
     // Req 9: T with Eq bound may use == and != without error
-    parses_and_checks("total fn are_equal<T>(a: T, b: T) -> Bool where T: Eq { return a == b; }");
+    parses_and_checks("total fn are_equal[T](a: T, b: T) -> Bool where T: Eq { return a == b; }");
 }
 
 #[test]
 fn ord_constraint_satisfies_eq_check() {
     // Req 9: Ord is a supertrait of Eq — where T: Ord must also permit == and !=
     parses_and_checks(
-        "total fn cmp_and_eq<T>(a: T, b: T) -> Bool where T: Ord { if a > b { return true; } else { return a == b; } }",
+        "total fn cmp_and_eq[T](a: T, b: T) -> Bool where T: Ord { if a > b { return true; } else { return a == b; } }",
     );
 }
 
@@ -1830,7 +1830,7 @@ fn ord_constraint_satisfies_eq_check() {
 fn generic_multiple_constraints_parse() {
     // Req 9: multiple constraints in where clause parse and check
     parses_and_checks(
-        "total fn show_max<T>(a: T, b: T) -> T where T: Ord, T: Display { return a; }",
+        "total fn show_max[T](a: T, b: T) -> T where T: Ord, T: Display { return a; }",
     );
 }
 
@@ -1845,7 +1845,7 @@ fn missing_constraint_on_comparison_rejected() {
     // GIVEN unconstrained T used with `>` operator
     // THEN checker MUST reject with a missing-constraint error
     let (mut p, _) = Parser::new(
-        "total fn max<T>(a: T, b: T) -> T { if a > b { return a; } else { return b; } }",
+        "total fn max[T](a: T, b: T) -> T { if a > b { return a; } else { return b; } }",
     );
     let prog = p.parse_program();
     assert!(
@@ -1872,7 +1872,7 @@ fn missing_constraint_on_comparison_rejected() {
 #[test]
 fn missing_eq_constraint_on_equality_rejected() {
     // Req 9: unconstrained T used with == must require Eq bound
-    let (mut p, _) = Parser::new("total fn eq_check<T>(a: T, b: T) -> Bool { return a == b; }");
+    let (mut p, _) = Parser::new("total fn eq_check[T](a: T, b: T) -> Bool { return a == b; }");
     let prog = p.parse_program();
     assert!(
         p.errors().is_empty(),
@@ -1897,7 +1897,7 @@ fn missing_eq_constraint_on_equality_rejected() {
 #[test]
 fn missing_eq_constraint_on_ne_rejected() {
     // Req 9: unconstrained T used with != must require Eq bound
-    let (mut p, _) = Parser::new("total fn neq_check<T>(a: T, b: T) -> Bool { return a != b; }");
+    let (mut p, _) = Parser::new("total fn neq_check[T](a: T, b: T) -> Bool { return a != b; }");
     let prog = p.parse_program();
     assert!(
         p.errors().is_empty(),
@@ -1923,7 +1923,7 @@ fn missing_eq_constraint_on_ne_rejected() {
 fn unconstrained_second_param_rejected_when_first_is_constrained() {
     // Req 9: A has Ord, B does not — comparing two B values must still fail
     let (mut p, _) = Parser::new(
-        "total fn pair_cmp<A, B>(a1: A, a2: A, b1: B, b2: B) -> Bool where A: Ord { return b1 > b2; }",
+        "total fn pair_cmp[A, B](a1: A, a2: A, b1: B, b2: B) -> Bool where A: Ord { return b1 > b2; }",
     );
     let prog = p.parse_program();
     assert!(
@@ -1942,16 +1942,16 @@ fn unconstrained_second_param_rejected_when_first_is_constrained() {
 fn constrained_first_param_allowed_when_second_unconstrained() {
     // Req 9: comparing A values is fine; A's Ord bound must not leak to B
     parses_and_checks(
-        "total fn pair_cmp<A, B>(a1: A, a2: A, b1: B, b2: B) -> Bool where A: Ord { return a1 > a2; }",
+        "total fn pair_cmp[A, B](a1: A, a2: A, b1: B, b2: B) -> Bool where A: Ord { return a1 > a2; }",
     );
 }
 
 #[test]
 fn higher_kinded_type_param_rejected() {
     // Req 9 Scenario: No higher-kinded types
-    // GIVEN F<_> nested angle-bracket type param
+    // GIVEN F[_] nested square-bracket type param (HKT)
     // THEN parser MUST reject with a higher-kinded diagnostic
-    let (mut p, _) = Parser::new("type Functor<F<_>> = struct { val: Int }");
+    let (mut p, _) = Parser::new("type Functor[F[_]] = struct { val: Int }");
     let _ = p.parse_program();
     assert!(
         !p.errors().is_empty(),
@@ -1968,13 +1968,13 @@ fn higher_kinded_type_param_rejected() {
 #[test]
 fn inline_constraint_syntax_rejected() {
     // Req 9 Scenario: Inline constraint syntax rejected
-    // GIVEN <T: Ord> inline constraint syntax
+    // GIVEN [T: Ord] inline constraint syntax
     // THEN parser MUST reject with a diagnostic mentioning `where`
-    let (mut p, _) = Parser::new("total fn max<T: Ord>(a: T, b: T) -> T { return a; }");
+    let (mut p, _) = Parser::new("total fn max[T: Ord](a: T, b: T) -> T { return a; }");
     let _ = p.parse_program();
     assert!(
         !p.errors().is_empty(),
-        "inline constraint `<T: Ord>` must be rejected in Phase 1"
+        "inline constraint `[T: Ord]` must be rejected in Phase 1"
     );
     let first = p.errors().first().expect("should have at least one error");
     assert!(
@@ -1990,8 +1990,8 @@ fn inline_constraint_syntax_rejected() {
 #[test]
 fn propagate_same_error_type_accepted() {
     let src = r#"
-fn inner() -> Result<Int, String> { Ok(0) }
-fn outer() -> Result<Int, String> {
+fn inner() -> Result[Int, String] { Ok(0) }
+fn outer() -> Result[Int, String] {
     let x = inner()?;
     Ok(x)
 }
@@ -2007,8 +2007,8 @@ fn outer() -> Result<Int, String> {
 #[test]
 fn propagate_mismatched_error_type_rejected() {
     let src = r#"
-fn inner() -> Result<Int, String> { Ok(0) }
-fn outer() -> Result<Int, Bool> {
+fn inner() -> Result[Int, String] { Ok(0) }
+fn outer() -> Result[Int, Bool] {
     let x = inner()?;
     Ok(x)
 }
@@ -2028,11 +2028,11 @@ fn propagate_with_from_impl_accepted() {
     let src = r#"
 type IoError = struct { msg: String }
 type AppError = enum { Io(IoError) }
-impl From<IoError> for AppError {
+impl From[IoError] for AppError {
     fn from(e: IoError) -> Self { AppError::Io(e) }
 }
-fn load() -> Result<String, IoError> { Ok("data") }
-fn run() -> Result<String, AppError> {
+fn load() -> Result[String, IoError] { Ok("data") }
+fn run() -> Result[String, AppError] {
     let s = load()?;
     Ok(s)
 }
@@ -2095,7 +2095,7 @@ fn set_literal_infers_named_set_type() {
 /// `println` with a Secret argument MUST be rejected (003-information-flow/Req 6).
 #[test]
 fn println_rejects_secret_argument() {
-    let errors = errors_for(r#"fn f(pwd: Secret<String>) -> Unit ! Console { println(pwd); }"#);
+    let errors = errors_for(r#"fn f(pwd: Secret[String]) -> Unit ! Console { println(pwd); }"#);
     assert!(
         errors.iter().any(
             |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Secret")
@@ -2108,7 +2108,7 @@ fn println_rejects_secret_argument() {
 #[test]
 fn println_rejects_tainted_argument() {
     let errors =
-        errors_for(r#"fn f(input: Tainted<String>) -> Unit ! Console { println(input); }"#);
+        errors_for(r#"fn f(input: Tainted[String]) -> Unit ! Console { println(input); }"#);
     assert!(
         errors.iter().any(
             |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Tainted")
@@ -2120,7 +2120,7 @@ fn println_rejects_tainted_argument() {
 /// `println` with a Public argument MUST be accepted (003-information-flow/Req 6).
 #[test]
 fn println_accepts_public_argument() {
-    let errors = errors_for(r#"fn f(msg: Public<String>) -> Unit ! Console { println(msg); }"#);
+    let errors = errors_for(r#"fn f(msg: Public[String]) -> Unit ! Console { println(msg); }"#);
     let label_errors: Vec<_> = errors
         .iter()
         .filter(|e| matches!(e, CheckError::LoggingLabelViolation { .. }))
@@ -2132,11 +2132,11 @@ fn println_accepts_public_argument() {
 }
 
 /// `println` with a Clean argument MUST be rejected (003-information-flow/Req 6).
-/// Clean<T> is sanitized but not declassified — an explicit declassify() is required
+/// Clean[T] is sanitized but not declassified — an explicit declassify() is required
 /// before logging.
 #[test]
 fn println_rejects_clean_argument() {
-    let errors = errors_for(r#"fn f(s: Clean<String>) -> Unit ! Console { println(s); }"#);
+    let errors = errors_for(r#"fn f(s: Clean[String]) -> Unit ! Console { println(s); }"#);
     assert!(
         errors.iter().any(
             |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Clean")
@@ -2148,7 +2148,7 @@ fn println_rejects_clean_argument() {
 /// `print` with a Secret argument MUST be rejected (003-information-flow/Req 6).
 #[test]
 fn print_rejects_secret_argument() {
-    let errors = errors_for(r#"fn f(pwd: Secret<String>) -> Unit ! Console { print(pwd); }"#);
+    let errors = errors_for(r#"fn f(pwd: Secret[String]) -> Unit ! Console { print(pwd); }"#);
     assert!(
         errors.iter().any(
             |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Secret")
@@ -2160,7 +2160,7 @@ fn print_rejects_secret_argument() {
 /// `print` with a Tainted argument MUST be rejected (003-information-flow/Req 6).
 #[test]
 fn print_rejects_tainted_argument() {
-    let errors = errors_for(r#"fn f(input: Tainted<String>) -> Unit ! Console { print(input); }"#);
+    let errors = errors_for(r#"fn f(input: Tainted[String]) -> Unit ! Console { print(input); }"#);
     assert!(
         errors.iter().any(
             |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Tainted")
@@ -2266,13 +2266,13 @@ fn lambda_immutable_capture_accepted() {
 /// Even though the argument to `println` is a literal (Public), the fact that
 /// the print fires at all reveals whether `flag` was truthy — an implicit flow.
 ///
-/// - GIVEN `fn f(flag: Secret<Bool>) -> Unit`
+/// - GIVEN `fn f(flag: Secret[Bool]) -> Unit`
 /// - WHEN `if flag { println("branch taken") }`
 /// - THEN `ImplicitFlowViolation` with pc_label="Secret" is emitted
 #[test]
 fn implicit_flow_secret_if_condition_rejected() {
     let errors = errors_for(
-        r#"fn f(flag: Secret<Bool>) -> Unit ! Console { if flag { println("branch taken"); } }"#,
+        r#"fn f(flag: Secret[Bool]) -> Unit ! Console { if flag { println("branch taken"); } }"#,
     );
     assert!(
         errors.iter().any(
@@ -2285,13 +2285,13 @@ fn implicit_flow_secret_if_condition_rejected() {
 
 /// `println` inside a branch controlled by a `Tainted` condition MUST be rejected.
 ///
-/// - GIVEN `fn f(cond: Tainted<Bool>) -> Unit`
+/// - GIVEN `fn f(cond: Tainted[Bool]) -> Unit`
 /// - WHEN `if cond { println("ok") }`
 /// - THEN `ImplicitFlowViolation` with pc_label="Tainted" is emitted
 #[test]
 fn implicit_flow_tainted_if_condition_rejected() {
     let errors =
-        errors_for(r#"fn f(cond: Tainted<Bool>) -> Unit ! Console { if cond { println("ok"); } }"#);
+        errors_for(r#"fn f(cond: Tainted[Bool]) -> Unit ! Console { if cond { println("ok"); } }"#);
     assert!(
         errors.iter().any(
             |e| matches!(e, CheckError::ImplicitFlowViolation { pc_label, sink, .. }
@@ -2305,13 +2305,13 @@ fn implicit_flow_tainted_if_condition_rejected() {
 ///
 /// No implicit flow: the condition has no security label, so the branch is safe.
 ///
-/// - GIVEN `fn f(x: Public<Bool>) -> Unit`
+/// - GIVEN `fn f(x: Public[Bool]) -> Unit`
 /// - WHEN `if x { println("ok") }`
 /// - THEN no `ImplicitFlowViolation`
 #[test]
 fn implicit_flow_public_condition_accepted() {
     let errors =
-        errors_for(r#"fn f(x: Public<Bool>) -> Unit ! Console { if x { println("ok"); } }"#);
+        errors_for(r#"fn f(x: Public[Bool]) -> Unit ! Console { if x { println("ok"); } }"#);
     let implicit: Vec<_> = errors
         .iter()
         .filter(|e| matches!(e, CheckError::ImplicitFlowViolation { .. }))
@@ -2324,12 +2324,12 @@ fn implicit_flow_public_condition_accepted() {
 
 /// `print` inside a `Secret`-controlled branch MUST also be rejected.
 ///
-/// - GIVEN `fn g(s: Secret<Bool>) -> Unit`
+/// - GIVEN `fn g(s: Secret[Bool]) -> Unit`
 /// - WHEN `if s { print("x"); }`
 /// - THEN `ImplicitFlowViolation` with sink="print" is emitted
 #[test]
 fn implicit_flow_print_sink_rejected() {
-    let errors = errors_for(r#"fn g(s: Secret<Bool>) -> Unit ! Console { if s { print("x"); } }"#);
+    let errors = errors_for(r#"fn g(s: Secret[Bool]) -> Unit ! Console { if s { print("x"); } }"#);
     assert!(
         errors.iter().any(
             |e| matches!(e, CheckError::ImplicitFlowViolation { pc_label, sink, .. }
@@ -2344,13 +2344,13 @@ fn implicit_flow_print_sink_rejected() {
 /// Both branches are controlled by the condition; the else branch also leaks
 /// information (its firing reveals the condition was false).
 ///
-/// - GIVEN `fn h(flag: Secret<Bool>) -> Unit`
+/// - GIVEN `fn h(flag: Secret[Bool]) -> Unit`
 /// - WHEN `if flag { 0; } else { println("not taken"); }`
 /// - THEN `ImplicitFlowViolation` is emitted for the else-branch println
 #[test]
 fn implicit_flow_else_branch_rejected() {
     let errors = errors_for(
-        r#"fn h(flag: Secret<Bool>) -> Unit ! Console { if flag { } else { println("not taken"); } }"#,
+        r#"fn h(flag: Secret[Bool]) -> Unit ! Console { if flag { } else { println("not taken"); } }"#,
     );
     assert!(
         errors.iter().any(
@@ -2364,13 +2364,13 @@ fn implicit_flow_else_branch_rejected() {
 /// Let-bound variable with `Secret` type annotation propagates its label into
 /// nested branch conditions.
 ///
-/// - GIVEN `fn f(raw: Secret<Int>) -> Unit`
-/// - WHEN `let x: Secret<Int> = raw; if x { println("y"); }`
+/// - GIVEN `fn f(raw: Secret[Int]) -> Unit`
+/// - WHEN `let x: Secret[Int] = raw; if x { println("y"); }`
 /// - THEN `ImplicitFlowViolation` is emitted (label propagated through let binding)
 #[test]
 fn implicit_flow_label_propagated_through_let() {
     let errors = errors_for(
-        r#"fn f(raw: Secret<Int>) -> Unit ! Console { let x: Secret<Int> = raw; if x { println("y"); } }"#,
+        r#"fn f(raw: Secret[Int]) -> Unit ! Console { let x: Secret[Int] = raw; if x { println("y"); } }"#,
     );
     assert!(
         errors.iter().any(
@@ -2386,13 +2386,13 @@ fn implicit_flow_label_propagated_through_let() {
 /// A while-loop fires zero or more times depending on the condition — its
 /// execution reveals information about the Secret value, creating an implicit flow.
 ///
-/// - GIVEN `fn poll(flag: Secret<Bool>) -> Unit ! Console`
+/// - GIVEN `fn poll(flag: Secret[Bool]) -> Unit ! Console`
 /// - WHEN `while flag { println("still waiting"); }`
 /// - THEN `ImplicitFlowViolation` with pc_label="Secret" and sink="println" is emitted
 #[test]
 fn implicit_flow_while_secret_condition_rejected() {
     let errors = errors_for(
-        r#"fn poll(flag: Secret<Bool>) -> Unit ! Console { while flag { println("still waiting"); } }"#,
+        r#"fn poll(flag: Secret[Bool]) -> Unit ! Console { while flag { println("still waiting"); } }"#,
     );
     assert!(
         errors.iter().any(
@@ -2408,13 +2408,13 @@ fn implicit_flow_while_secret_condition_rejected() {
 /// The else-branch println leaks information about the Secret condition
 /// (its firing proves the condition was false).
 ///
-/// - GIVEN `fn h(flag: Secret<Bool>) -> Unit ! Console`
+/// - GIVEN `fn h(flag: Secret[Bool]) -> Unit ! Console`
 /// - WHEN `if flag { 0; } else { println("not taken"); }`
 /// - THEN `ImplicitFlowViolation` with pc_label="Secret" and sink="println"
 #[test]
 fn implicit_flow_else_branch_sink_verified() {
     let errors = errors_for(
-        r#"fn h(flag: Secret<Bool>) -> Unit ! Console { if flag { } else { println("not taken"); } }"#,
+        r#"fn h(flag: Secret[Bool]) -> Unit ! Console { if flag { } else { println("not taken"); } }"#,
     );
     assert!(
         errors.iter().any(
@@ -2901,8 +2901,8 @@ fn caller_missing_file_write_effect_rejected() {
     // GIVEN: fn writes ! FileWrite; fn caller ! FileRead calls writes
     // THEN: MissingEffect(writes, FileWrite) reported
     let src = r#"
-        fn writes() -> Result<Unit, String> ! FileWrite { Err("") }
-        fn caller() -> Result<Unit, String> ! FileRead { writes() }
+        fn writes() -> Result[Unit, String] ! FileWrite { Err("") }
+        fn caller() -> Result[Unit, String] ! FileRead { writes() }
     "#;
     let errors = errors_for(src);
     assert!(
@@ -2920,8 +2920,8 @@ fn caller_missing_file_delete_effect_rejected() {
     // GIVEN: fn deletes ! FileDelete; fn caller ! FileWrite calls deletes
     // THEN: MissingEffect(deletes, FileDelete) reported
     let src = r#"
-        fn deletes() -> Result<Unit, String> ! FileDelete { Err("") }
-        fn caller() -> Result<Unit, String> ! FileWrite { deletes() }
+        fn deletes() -> Result[Unit, String] ! FileDelete { Err("") }
+        fn caller() -> Result[Unit, String] ! FileWrite { deletes() }
     "#;
     let errors = errors_for(src);
     assert!(
@@ -2967,7 +2967,7 @@ fn logging_corpus_parses_and_checks() {
 /// "Don't log secrets" is a type error in MVL, not a code review rule.
 #[test]
 fn log_info_rejects_secret_argument() {
-    let errors = errors_for(r#"fn f(pwd: Secret<String>) -> Unit ! Log { log_info(pwd, {}); }"#);
+    let errors = errors_for(r#"fn f(pwd: Secret[String]) -> Unit ! Log { log_info(pwd, {}); }"#);
     assert!(
         errors.iter().any(
             |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Secret")
@@ -2980,7 +2980,7 @@ fn log_info_rejects_secret_argument() {
 #[test]
 fn log_error_rejects_tainted_argument() {
     let errors =
-        errors_for(r#"fn f(input: Tainted<String>) -> Unit ! Log { log_error(input, {}); }"#);
+        errors_for(r#"fn f(input: Tainted[String]) -> Unit ! Log { log_error(input, {}); }"#);
     assert!(
         errors.iter().any(
             |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Tainted")
@@ -2993,7 +2993,7 @@ fn log_error_rejects_tainted_argument() {
 /// not declassified; an explicit `declassify()` is required before logging (#54).
 #[test]
 fn log_warn_rejects_clean_argument() {
-    let errors = errors_for(r#"fn f(s: Clean<String>) -> Unit ! Log { log_warn(s, {}); }"#);
+    let errors = errors_for(r#"fn f(s: Clean[String]) -> Unit ! Log { log_warn(s, {}); }"#);
     assert!(
         errors.iter().any(
             |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Clean")
@@ -3043,7 +3043,7 @@ fn caller_missing_log_effect_with_other_effects_rejected() {
 /// `log_debug` with a Secret argument MUST be rejected (#54, 003-information-flow/Req 6).
 #[test]
 fn log_debug_rejects_secret_argument() {
-    let errors = errors_for(r#"fn f(pwd: Secret<String>) -> Unit ! Log { log_debug(pwd, {}); }"#);
+    let errors = errors_for(r#"fn f(pwd: Secret[String]) -> Unit ! Log { log_debug(pwd, {}); }"#);
     assert!(
         errors.iter().any(
             |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Secret")
@@ -3069,12 +3069,12 @@ fn log_info_accepts_public_argument() {
     );
 }
 
-/// A `Secret<String>` value embedded as a map field value MUST be rejected (#54).
+/// A `Secret[String]` value embedded as a map field value MUST be rejected (#54).
 /// "Don't log secrets" applies to structured fields too — not just the msg argument.
 #[test]
 fn log_info_rejects_secret_value_in_fields_map() {
     let errors = errors_for(
-        r#"fn f(pwd: Secret<String>) -> Unit ! Log { log_info("login", {"password": pwd}); }"#,
+        r#"fn f(pwd: Secret[String]) -> Unit ! Log { log_info("login", {"password": pwd}); }"#,
     );
     assert!(
         errors.iter().any(
@@ -3088,14 +3088,14 @@ fn log_info_rejects_secret_value_in_fields_map() {
 
 /// Spec 001 Req 11 / Scenario: For loop over array accepted.
 ///
-/// GIVEN `let items: Array<Int, 3> = [1, 2, 3]`
+/// GIVEN `let items: Array[Int, 3] = [1, 2, 3]`
 /// WHEN  `for x in items { }`
-/// THEN  type checker MUST accept (Array<T> implements Iterator<T>)
+/// THEN  type checker MUST accept (Array[T] implements Iterator[T])
 #[test]
 fn iterator_trait_for_loop_accepted() {
     let src = r#"
         fn f() -> Unit {
-            let items: Array<Int, 3> = [1, 2, 3];
+            let items: Array[Int, 3] = [1, 2, 3];
             for x in items {
                 let _: Int = x;
             }
@@ -3106,7 +3106,7 @@ fn iterator_trait_for_loop_accepted() {
         !errors
             .iter()
             .any(|e| matches!(e, CheckError::NotIterator { .. })),
-        "Array<Int, 3> implements Iterator — for loop should be accepted, got: {errors:?}"
+        "Array[Int, 3] implements Iterator — for loop should be accepted, got: {errors:?}"
     );
 }
 
@@ -3134,7 +3134,7 @@ fn non_iterator_for_loop_rejected() {
 
 /// Spec 001 Req 11 / Scenario: Custom type implements Iterator.
 ///
-/// GIVEN `type Counter = struct { … }` with `impl Iterator<Int> for Counter`
+/// GIVEN `type Counter = struct { … }` with `impl Iterator[Int] for Counter`
 /// WHEN  `for n in Counter { current: 0, limit: 3 } { }`
 /// THEN  type checker MUST accept
 #[test]
@@ -3142,8 +3142,8 @@ fn custom_iterator_impl_accepted() {
     let src = r#"
         type Counter = struct { mut current: Int, limit: Int }
 
-        impl Iterator<Int> for Counter {
-            fn next(mut self: Counter) -> Option<Int> { None }
+        impl Iterator[Int] for Counter {
+            fn next(mut self: Counter) -> Option[Int] { None }
         }
 
         fn f() -> Unit {
@@ -3163,13 +3163,13 @@ fn custom_iterator_impl_accepted() {
 
 /// Spec 001 Req 11 / Scenario: For loop rejected inside partial function.
 ///
-/// GIVEN `partial fn f(items: Array<Int, 3>) { for x in items { … } }`
+/// GIVEN `partial fn f(items: Array[Int, 3]) { for x in items { … } }`
 /// WHEN  the function is type-checked
 /// THEN  type checker MUST reject: `for` is not permitted in `partial` functions
 #[test]
 fn for_loop_rejected_in_partial_fn() {
     let src = r#"
-        partial fn f(items: Array<Int, 3>) -> Unit {
+        partial fn f(items: Array[Int, 3]) -> Unit {
             for x in items { }
         }
     "#;
@@ -3606,8 +3606,8 @@ fn pure_function_calling_process_spawn_rejected() {
     // GIVEN: fn spawns ! ProcessSpawn; fn caller (no effects) calls spawns
     // THEN: UndeclaredEffect reported
     let src = r#"
-        fn spawns() -> Result<Unit, String> ! ProcessSpawn { Err("") }
-        fn caller() -> Result<Unit, String> { spawns() }
+        fn spawns() -> Result[Unit, String] ! ProcessSpawn { Err("") }
+        fn caller() -> Result[Unit, String] { spawns() }
     "#;
     let errors = errors_for(src);
     assert!(
@@ -3627,8 +3627,8 @@ fn caller_missing_process_spawn_effect_rejected() {
     // GIVEN: fn spawns ! ProcessSpawn; fn caller ! Env calls spawns
     // THEN: MissingEffect(spawns, ProcessSpawn) reported
     let src = r#"
-        fn spawns() -> Result<Unit, String> ! ProcessSpawn { Err("") }
-        fn caller() -> Result<Unit, String> ! Env { spawns() }
+        fn spawns() -> Result[Unit, String] ! ProcessSpawn { Err("") }
+        fn caller() -> Result[Unit, String] ! Env { spawns() }
     "#;
     let errors = errors_for(src);
     assert!(

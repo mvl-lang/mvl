@@ -13,7 +13,7 @@ fn log_and_store(msg: String) -> Unit ! DB, Console {
 // Pure functions (no effects)
 total fn pure_add(a: Int, b: Int) -> Int { a + b }
 
-total fn pure_map<A, B>(f: fn(A) -> B, xs: List<A>) -> List<B> {
+total fn pure_map[A, B](f: fn(A) -> B, xs: List[A]) -> List[B] {
     xs.map(f)
 }
 

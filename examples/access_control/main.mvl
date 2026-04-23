@@ -2,8 +2,8 @@
 //
 // Demonstrates Phase 4 security requirements as compile-time guarantees:
 //   1. extern "rust" trust boundary — demo fixture data (get_demo_hash) lives in Rust.
-//   2. IFC labels: Secret<String> password hash consumed at auth boundary;
-//      Clean<String> usernames are safe for structured log output.
+//   2. IFC labels: Secret[String] password hash consumed at auth boundary;
+//      Clean[String] usernames are safe for structured log output.
 //   3. Req 3 (Totality): check_permission from rbac module — exhaustive match.
 //   4. Effect declarations: ! Log on audit functions; ! CryptoRandom on authenticate().
 //   5. Req 5 (Errors): all failure modes are named in AppError, AuthError.
@@ -75,16 +75,16 @@ type AppError = enum {
 
 extern "rust" {
     // Demo fixture: returns hardcoded hash for known usernames.
-    fn get_demo_hash(username: Clean<String>) -> Option<Secret<String>>;
+    fn get_demo_hash(username: Clean[String]) -> Option[Secret[String]];
 }
 
 // ── Audit helper ──────────────────────────────────────────────────────────
 
 // Check and audit a single RBAC decision.
 // Calls check_permission (pure) then log_access (! Log) to emit a structured
-// audit record. The username is Clean<String> — IFC-safe for log output.
+// audit record. The username is Clean[String] — IFC-safe for log output.
 fn check_and_audit(
-    username: Clean<String>,
+    username: Clean[String],
     role: Role,
     resource: Resource,
     action: Action,
@@ -96,7 +96,7 @@ fn check_and_audit(
 // ── Demo scenarios ────────────────────────────────────────────────────────
 
 // RBAC demo: each call produces a structured audit record (INFO or WARN).
-// String literals are Clean<String>-compatible (compile-time constants at Public level).
+// String literals are Clean[String]-compatible (compile-time constants at Public level).
 fn demo_rbac() -> Unit ! Log {
     let u1 = check_and_audit("admin_demo", Role::Admin,     Resource::AdminPanel,  Action::Read);
     let u2 = check_and_audit("mod_demo",   Role::Moderator, Resource::AdminPanel,  Action::Write);
@@ -105,7 +105,7 @@ fn demo_rbac() -> Unit ! Log {
     check_and_audit("guest_demo", Role::Guest, Resource::AuditLog, Action::Read)
 }
 
-// Auth demo: alice's hash is Secret<String> — cannot be printed or leaked.
+// Auth demo: alice's hash is Secret[String] — cannot be printed or leaked.
 // It flows directly into hash_verify at the extern boundary inside auth module.
 // Phase 4: std.log replaces raw println; ! CryptoRandom propagated from authenticate().
 fn demo_auth() -> Unit ! Log, CryptoRandom {
