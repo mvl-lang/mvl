@@ -1,4 +1,4 @@
-// tests/stdlib/option_test.mvl — Option<T> method correctness
+// tests/stdlib/option_test.mvl — Option[T] method correctness
 //
 // Verifies runtime behavior of Option methods.
 // Run with:  mvl test tests/stdlib/
@@ -6,124 +6,124 @@
 // ── unwrap_or ─────────────────────────────────────────────────────────────
 
 test fn option_some_unwrap_or_returns_value() -> Unit {
-    let v: Option<Int> = Some(5);
+    let v: Option[Int] = Some(5);
     assert_eq(v.unwrap_or(0), 5);
 }
 
 test fn option_none_unwrap_or_returns_default() -> Unit {
-    let v: Option<Int> = None;
+    let v: Option[Int] = None;
     assert_eq(v.unwrap_or(0), 0);
 }
 
 test fn option_some_unwrap_or_ignores_default() -> Unit {
-    let v: Option<Int> = Some(42);
+    let v: Option[Int] = Some(42);
     assert_eq(v.unwrap_or(99), 42);
 }
 
 test fn option_none_unwrap_or_negative_default() -> Unit {
-    let v: Option<Int> = None;
+    let v: Option[Int] = None;
     assert_eq(v.unwrap_or(-1), -1);
 }
 
 // ── is_some ───────────────────────────────────────────────────────────────
 
 test fn option_some_is_some_true() -> Unit {
-    let v: Option<Int> = Some(1);
+    let v: Option[Int] = Some(1);
     assert_eq(v.is_some(), true);
 }
 
 test fn option_none_is_some_false() -> Unit {
-    let v: Option<Int> = None;
+    let v: Option[Int] = None;
     assert_eq(v.is_some(), false);
 }
 
 // ── is_none ───────────────────────────────────────────────────────────────
 
 test fn option_none_is_none_true() -> Unit {
-    let v: Option<Int> = None;
+    let v: Option[Int] = None;
     assert_eq(v.is_none(), true);
 }
 
 test fn option_some_is_none_false() -> Unit {
-    let v: Option<Int> = Some(7);
+    let v: Option[Int] = Some(7);
     assert_eq(v.is_none(), false);
 }
 
-// ── Option<Bool> ──────────────────────────────────────────────────────────
+// ── Option[Bool] ──────────────────────────────────────────────────────────
 
 test fn option_some_bool_unwrap_or() -> Unit {
-    let v: Option<Bool> = Some(true);
+    let v: Option[Bool] = Some(true);
     assert_eq(v.unwrap_or(false), true);
 }
 
 test fn option_none_bool_unwrap_or() -> Unit {
-    let v: Option<Bool> = None;
+    let v: Option[Bool] = None;
     assert_eq(v.unwrap_or(false), false);
 }
 
 // ── Some(0) edge cases — zero must not be treated as None ──────────────────
 
 test fn option_some_zero_unwrap_or() -> Unit {
-    let v: Option<Int> = Some(0);
+    let v: Option[Int] = Some(0);
     assert_eq(v.unwrap_or(99), 0);
 }
 
 test fn option_some_zero_is_some_true() -> Unit {
-    let v: Option<Int> = Some(0);
+    let v: Option[Int] = Some(0);
     assert_eq(v.is_some(), true);
 }
 
 test fn option_some_zero_is_none_false() -> Unit {
-    let v: Option<Int> = Some(0);
+    let v: Option[Int] = Some(0);
     assert_eq(v.is_none(), false);
 }
 
 // ── map ───────────────────────────────────────────────────────────────────
 
 test fn option_some_map_transforms_value() -> Unit {
-    let v: Option<Int> = Some(5);
+    let v: Option[Int] = Some(5);
     let r = v.map(|x: Int| x * 2);
     assert_eq(r.unwrap_or(0), 10);
 }
 
 test fn option_none_map_is_none() -> Unit {
-    let v: Option<Int> = None;
+    let v: Option[Int] = None;
     let r = v.map(|x: Int| x * 2);
     assert_eq(r.is_none(), true);
 }
 
 test fn option_map_changes_value() -> Unit {
-    let v: Option<Int> = Some(3);
+    let v: Option[Int] = Some(3);
     let r = v.map(|x: Int| x + 10);
     assert_eq(r.unwrap_or(0), 13);
 }
 
 // ── and_then ──────────────────────────────────────────────────────────────
 
-fn safe_double(x: Int) -> Option<Int> {
+fn safe_double(x: Int) -> Option[Int] {
     if x >= 0 { Some(x * 2) } else { None }
 }
 
 test fn option_some_and_then_returns_some() -> Unit {
-    let v: Option<Int> = Some(4);
+    let v: Option[Int] = Some(4);
     let r = v.and_then(safe_double);
     assert_eq(r.unwrap_or(-1), 8);
 }
 
 test fn option_none_and_then_is_none() -> Unit {
-    let v: Option<Int> = None;
+    let v: Option[Int] = None;
     let r = v.and_then(safe_double);
     assert_eq(r.is_none(), true);
 }
 
 test fn option_and_then_inner_none_propagates() -> Unit {
-    let v: Option<Int> = Some(-3);
+    let v: Option[Int] = Some(-3);
     let r = v.and_then(safe_double);
     assert_eq(r.is_none(), true);
 }
 
 test fn option_and_then_with_lambda() -> Unit {
-    let v: Option<Int> = Some(5);
+    let v: Option[Int] = Some(5);
     let r = v.and_then(|x: Int| if x > 0 { Some(x + 1) } else { None });
     assert_eq(r.unwrap_or(0), 6);
 }
@@ -131,7 +131,7 @@ test fn option_and_then_with_lambda() -> Unit {
 // ── and_then chaining (multi-step monadic pipeline) ────────────────────────
 
 test fn option_and_then_chain_three_steps_some() -> Unit {
-    let v: Option<Int> = Some(4);
+    let v: Option[Int] = Some(4);
     let result = v
         .and_then(safe_double)   // Some(4) → Some(8)
         .and_then(safe_double)   // Some(8) → Some(16)
@@ -140,7 +140,7 @@ test fn option_and_then_chain_three_steps_some() -> Unit {
 }
 
 test fn option_and_then_chain_short_circuits_on_none() -> Unit {
-    let v: Option<Int> = Some(-1);
+    let v: Option[Int] = Some(-1);
     let result = v
         .and_then(safe_double)
         .and_then(safe_double)
@@ -149,7 +149,7 @@ test fn option_and_then_chain_short_circuits_on_none() -> Unit {
 }
 
 test fn option_and_then_chain_starting_none_stays_none() -> Unit {
-    let v: Option<Int> = None;
+    let v: Option[Int] = None;
     let result = v
         .and_then(safe_double)
         .and_then(|x: Int| Some(x + 100));
@@ -157,7 +157,7 @@ test fn option_and_then_chain_starting_none_stays_none() -> Unit {
 }
 
 test fn option_and_then_chain_two_steps_with_lambdas() -> Unit {
-    let v: Option<Int> = Some(3);
+    let v: Option[Int] = Some(3);
     let result = v
         .and_then(|x: Int| if x > 0 { Some(x * 2) } else { None })
         .and_then(|x: Int| if x < 100 { Some(x + 1) } else { None });

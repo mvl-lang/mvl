@@ -356,7 +356,7 @@ impl Parser {
                 Ok(TypeExpr::Tuple { elems, span })
             }
 
-            // Security-labeled types: Public<T>, Tainted<T>, Secret<T>, Clean<T>
+            // Security-labeled types: Public[T], Tainted[T], Secret[T], Clean[T]
             TokenKind::Public => {
                 self.advance();
                 let (inner, span) = self.parse_labeled_inner(start)?;
@@ -394,7 +394,7 @@ impl Parser {
                 })
             }
 
-            // Named types: Option<T>, Result<T, E>, or generic Foo<A, B>
+            // Named types: Option[T], Result[T, E], or generic Foo[A, B]
             TokenKind::Ident(name) => {
                 self.advance();
                 self.parse_named_type(name, start)
@@ -1161,6 +1161,16 @@ mod tests {
         assert!(
             !p.errors.is_empty(),
             "fn foo<T> should produce a parse error (ADR-0005: use fn foo[T])"
+        );
+    }
+
+    #[test]
+    fn reject_angle_bracket_type_decl() {
+        let (mut p, _) = Parser::new("type Foo<T> = struct { x: T }");
+        let _ = p.parse_type_decl();
+        assert!(
+            !p.errors.is_empty(),
+            "type Foo<T> should produce a parse error (ADR-0005: use type Foo[T])"
         );
     }
 }
