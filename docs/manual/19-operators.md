@@ -10,7 +10,7 @@ Listed from highest to lowest precedence:
 |------|----------|--------------|-------------|
 | 1 | `.` | Left | Field access, method call |
 | 1 | `()` | — | Function call |
-| 1 | `[]` | Left | Index access (returns `Option<T>`) |
+| 1 | `[]` | Left | Index access (returns `Option[T]`) |
 | 1 | `?` | Postfix | Result/Option propagation |
 | 2 | `!` | Prefix | Logical NOT |
 | 2 | `-` | Prefix | Numeric negation |
@@ -44,7 +44,7 @@ On fixed-width integers (`Int32`, `UInt64`, etc.):
 | Method | Behavior on overflow |
 |--------|---------------------|
 | `a + b` | Compile error if overflow possible |
-| `a.checked_add(b)` | Returns `Option<T>` |
+| `a.checked_add(b)` | Returns `Option[T]` |
 | `a.wrapping_add(b)` | Wraps around |
 | `a.saturating_add(b)` | Clamps to min/max |
 

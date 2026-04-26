@@ -4,40 +4,40 @@ Derived from cross-language analysis of Rust std, Go std, Python stdlib, and C l
 
 #### Core (every program needs these)
 
-**Types:** `Bool`, `Int` (arbitrary precision), `Int8`..`Int64`, `UInt8`..`UInt64`, `Float32`, `Float64`, `Byte`, `Char` (Unicode scalar), `String` (UTF-8, immutable), `Array<T>`, `Map<K,V>`, `Set<T>`, `Option<T>`, `Result<T,E>`, `Tuple`, `Range`, `Iterator<T>`.
+**Types:** `Bool`, `Int` (arbitrary precision), `Int8`..`Int64`, `UInt8`..`UInt64`, `Float32`, `Float64`, `Byte`, `Char` (Unicode scalar), `String` (UTF-8, immutable), `Array[T]`, `Map[K,V]`, `Set[T]`, `Option[T]`, `Result[T,E]`, `Tuple`, `Range`, `Iterator[T]`.
 
 **String ops:** `len`, `is_empty`, `concat`, `join`, `split`, `trim`, `contains`, `starts_with`, `ends_with`, `find`, `replace`, `to_upper`, `to_lower`, `format`, `to_string`/`from_string`, `chars`, `bytes`.
 
-**Collection ops:** `new`, `push`, `pop`, `insert`, `remove`, `get` → `Option<T>` (never panic), `contains`, `len`, `is_empty`, `iter` → `Iterator<T>`, `map`, `filter`, `fold`, `flat_map`, `any`, `all`, `find`, `sort`, `sort_by`, `reverse`, `enumerate`, `zip`, `collect`, `min`, `max`, `sum`.
+**Collection ops:** `new`, `push`, `pop`, `insert`, `remove`, `get` → `Option[T]` (never panic), `contains`, `len`, `is_empty`, `iter` → `Iterator[T]`, `map`, `filter`, `fold`, `flat_map`, `any`, `all`, `find`, `sort`, `sort_by`, `reverse`, `enumerate`, `zip`, `collect`, `min`, `max`, `sum`.
 
-**Iterator protocol:** All collection types implement `Iterator<T>` via `.iter()`. Lazy operations (`map`, `filter`, `flat_map`) return `Iterator<U>` — no allocation until a terminal operation forces evaluation. Terminal operations: `fold`, `collect`, `any`, `all`, `find`, `sum`, `min`, `max`.
+**Iterator protocol:** All collection types implement `Iterator[T]` via `.iter()`. Lazy operations (`map`, `filter`, `flat_map`) return `Iterator[U]` — no allocation until a terminal operation forces evaluation. Terminal operations: `fold`, `collect`, `any`, `all`, `find`, `sum`, `min`, `max`.
 
 ```mvl
-// Lazy — returns Iterator<Int>, no allocation yet
-fn map<T, U>(self: Iterator<T>, f: fn(T) -> U) -> Iterator<U>
-fn filter<T>(self: Iterator<T>, pred: fn(&T) -> Bool) -> Iterator<T>
-fn flat_map<T, U>(self: Iterator<T>, f: fn(T) -> Iterator<U>) -> Iterator<U>
-fn enumerate<T>(self: Iterator<T>) -> Iterator<(UInt, T)>
-fn zip<T, U>(self: Iterator<T>, other: Iterator<U>) -> Iterator<(T, U)>
+// Lazy — returns Iterator[Int], no allocation yet
+fn map[T, U](self: Iterator[T], f: fn(T) -> U) -> Iterator[U]
+fn filter[T](self: Iterator[T], pred: fn(&T) -> Bool) -> Iterator[T]
+fn flat_map[T, U](self: Iterator[T], f: fn(T) -> Iterator[U]) -> Iterator[U]
+fn enumerate[T](self: Iterator[T]) -> Iterator<(UInt, T)>
+fn zip[T, U](self: Iterator[T], other: Iterator[U]) -> Iterator<(T, U)>
 
 // Terminal — forces evaluation
-fn fold<T, U>(self: Iterator<T>, init: U, f: fn(U, T) -> U) -> U
-fn collect<T>(self: Iterator<T>) -> Array<T>
-fn any<T>(self: Iterator<T>, pred: fn(&T) -> Bool) -> Bool
-fn all<T>(self: Iterator<T>, pred: fn(&T) -> Bool) -> Bool
-fn find<T>(self: Iterator<T>, pred: fn(&T) -> Bool) -> Option<T>
-fn sum<T>(self: Iterator<T>) -> T  where T: Add, T: Default
-fn min<T>(self: Iterator<T>) -> Option<T>  where T: Ord
-fn max<T>(self: Iterator<T>) -> Option<T>  where T: Ord
+fn fold[T, U](self: Iterator[T], init: U, f: fn(U, T) -> U) -> U
+fn collect[T](self: Iterator[T]) -> Array[T]
+fn any[T](self: Iterator[T], pred: fn(&T) -> Bool) -> Bool
+fn all[T](self: Iterator[T], pred: fn(&T) -> Bool) -> Bool
+fn find[T](self: Iterator[T], pred: fn(&T) -> Bool) -> Option[T]
+fn sum[T](self: Iterator[T]) -> T  where T: Add, T: Default
+fn min[T](self: Iterator[T]) -> Option[T]  where T: Ord
+fn max[T](self: Iterator[T]) -> Option[T]  where T: Ord
 ```
 
-**Errors:** `Result<T,E>` + `Option<T>` with `?` propagation. `.map()`, `.and_then()`, `.unwrap_or()`. `Error` interface with `.message()` and `.source()`. `panic` for unrecoverable only.
+**Errors:** `Result[T,E]` + `Option[T]` with `?` propagation. `.map()`, `.and_then()`, `.unwrap_or()`. `Error` interface with `.message()` and `.source()`. `panic` for unrecoverable only.
 
 **Math (core):** `+`, `-`, `*`, `/`, `%`, `abs`, `min`, `max`. `checked_add`, `checked_sub`, `checked_mul`, `checked_div` → `Option` (overflow-safe). Default `+` on fixed-width integers requires proof of no overflow or is a compile error.
 
 **I/O (core):** `print`, `println`, `eprint`, `eprintln`, `stdin`, `stdout`, `stderr`.
 
-**OS (core):** `env.get(key)` → `Option<String>`, `args()` → `Array<String>`, `exit(code)`, `current_dir()` → `Result<Path>`, `chdir(path)` → `Result ! Env`.
+**OS (core):** `env.get(key)` → `Option[String]`, `args()` → `Array[String]`, `exit(code)`, `current_dir()` → `Result[Path]`, `chdir(path)` → `Result ! Env`.
 
 #### Standard (most programs need these)
 
@@ -50,11 +50,11 @@ fn max<T>(self: Iterator<T>) -> Option<T>  where T: Ord
 | **Math** | `floor`, `ceil`, `round`, `sqrt`, `pow`, `sin`, `cos`, `tan`, `log`, `exp`, `PI`, `E`, `NAN`, `INFINITY` |
 | **Random** | `random.int(min,max)`, `random.float()`, `random.choice()`, `crypto_random.bytes(n)` |
 | **Time** | `Instant`, `DateTime`, `Duration`, `now()`, `sleep()`, `format()`, `parse()`, timezone (IANA) |
-| **Concurrency** | `spawn(fn)` → `Handle<T>`, `Channel<T>`, `Mutex<T>`, `RwLock<T>`, `Atomic<T>`, `select` |
-| **JSON** | `json.encode(value)` → `Result<String>`, `json.decode<T>(string)` → `Result<T>` |
-| **TOML** | `toml.encode(value)` → `Result<String>`, `toml.decode<T>(string)` → `Result<T>`. Config file format — MVL's own `dependency.toml` uses it. |
+| **Concurrency** | `spawn(fn)` → `Handle[T]`, `Channel[T]`, `Mutex[T]`, `RwLock[T]`, `Atomic[T]`, `select` |
+| **JSON** | `json.encode(value)` → `Result[String]`, `json.decode[T](string)` → `Result[T]` |
+| **TOML** | `toml.encode(value)` → `Result[String]`, `toml.decode[T](string)` → `Result[T]`. Config file format — MVL's own `dependency.toml` uses it. |
 | **Crypto (basic)** | `sha256`, `sha512`, `crypto_random.bytes` |
-| **Process** | `process.spawn(cmd, args)` -> `Result<Child> ! ProcessSpawn` with `.stdin(Pipe)`, `.stdout(Capture)`, `.stderr(Capture)`. `child.wait()` -> `ExitStatus`. Process stdout is `Tainted`. |
+| **Process** | `process.spawn(cmd, args)` -> `Result[Child] ! ProcessSpawn` with `.stdin(Pipe)`, `.stdout(Capture)`, `.stderr(Capture)`. `child.wait()` -> `ExitStatus`. Process stdout is `Tainted`. |
 | **OS** | `env.set`, `env.all`, `current_dir`, `chdir`, `getuid`, `getgid`, `signal.on(SIGINT, handler)` |
 | **Testing** | `#[test]`, `assert`, `assert_eq`, `assert_ne`, built-in test runner, `#[bench]` |
 | **Logging** | `log.debug`, `log.info`, `log.warn`, `log.error`, structured key-value pairs |
@@ -81,18 +81,18 @@ The eleven requirements make familiar stdlib functions unfamiliar:
 fn divide(a: Int, b: Int where b != 0) -> Int
 
 // Collection access: Req 4 — returns Option, never panics
-fn Map.get(key: K) -> Option<V>
-fn Array.get(index: UInt) -> Option<T>
+fn Map.get(key: K) -> Option[V]
+fn Array.get(index: UInt) -> Option[T]
 
 // File I/O: Req 7 — effects declared
-fn read_file(path: Path) -> Result<String, IOError> ! FileRead
+fn read_file(path: Path) -> Result[String, IOError] ! FileRead
 fn write_file(path: Path, data: String) -> Result<(), IOError> ! FileWrite
 
 // Network: Req 11 — data from network is Tainted
-fn http_get(url: Clean<Url>) -> Result<Tainted<Response>, NetError> ! Net
+fn http_get(url: Clean[Url]) -> Result<Tainted[Response], NetError> ! Net
 
 // String formatting: Req 11 — no tainted interpolation
-fn sql_query(template: String, params: Array<SqlParam>) -> Query ! DB
+fn sql_query(template: String, params: Array[SqlParam]) -> Query ! DB
 // format("SELECT * WHERE id = {}", tainted_input)  → COMPILE ERROR
 
 // Numeric: Req 10 — overflow checked by default
@@ -103,7 +103,7 @@ let b = a.wrapping_add(1)        // → Int32 (explicit wrap)
 let b = a.saturating_add(1)      // → Int32 (clamps to MAX)
 
 // Resource cleanup: Req 6 — files must be closed
-fn open_file(path: Path) -> Result<File, IOError> ! FileRead
+fn open_file(path: Path) -> Result[File, IOError] ! FileRead
 // File has linear type: must be consumed (closed/passed/returned)
 
 // Random: Req 7 — randomness is an effect

@@ -76,7 +76,7 @@ Phase 1 ships with **no MVL stdlib**. The entire standard library is Rust's ecos
 
 ```mvl
 // MVL code — verified (11/11)
-fn handle_request(req: Tainted<Request>) -> Result<Response, AppError> ! Net, DB {
+fn handle_request(req: Tainted[Request]) -> Result[Response, AppError] ! Net, DB {
     let user = authenticate(sanitize(req.token))?;
     let data = pg_query(&db, "SELECT ...", [user.id])?;
     Ok(Response { body: data })
@@ -84,8 +84,8 @@ fn handle_request(req: Tainted<Request>) -> Result<Response, AppError> ! Net, DB
 
 // Trust boundary — explicit, auditable
 extern "rust" {
-    fn pg_query(conn: &DbConn, sql: String, params: Array<SqlParam>) -> Result<Rows, DbError> ! DB
-    fn authenticate(token: Clean<Token>) -> Result<User, AuthError> ! Net
+    fn pg_query(conn: &DbConn, sql: String, params: Array[SqlParam]) -> Result[Rows, DbError] ! DB
+    fn authenticate(token: Clean[Token]) -> Result[User, AuthError] ! Net
 }
 ```
 
@@ -95,13 +95,13 @@ extern "rust" {
 |-----|------|
 | `Int` | `i64` |
 | `String` | `String` |
-| `Array<T>` | `Vec<T>` |
-| `Map<K,V>` | `HashMap<K,V>` |
-| `Option<T>` | `Option<T>` |
-| `Result<T,E>` | `Result<T,E>` |
-| `Public<T>` | Newtype `pub struct Public<T>(T)` |
-| `Tainted<T>` | Newtype `pub struct Tainted<T>(T)` |
-| `Secret<T>` | Newtype `pub struct Secret<T>(T)` |
+| `Array[T]` | `Vec<T>` |
+| `Map[K,V]` | `HashMap<K,V>` |
+| `Option[T]` | `Option<T>` |
+| `Result[T,E]` | `Result<T,E>` |
+| `Public[T]` | Newtype `pub struct Public<T>(T)` |
+| `Tainted[T]` | Newtype `pub struct Tainted<T>(T)` |
+| `Secret[T]` | Newtype `pub struct Secret<T>(T)` |
 | `Int where x > 0` | `debug_assert!(x > 0)` |
 
 **Stdlib growth path:**
@@ -120,7 +120,7 @@ extern "rust" {
 |-----------|--------|-------------|
 | Rust FFI | [#91](https://github.com/LAB271/mvl_language/issues/91), [#52](https://github.com/LAB271/mvl_language/issues/52) | `extern "rust"` blocks — typed, effect-tracked, IFC-labeled trust boundary |
 | Module system | [#47](https://github.com/LAB271/mvl_language/issues/47) | Multi-file programs with `module` and `use` |
-| Generics | [#48](https://github.com/LAB271/mvl_language/issues/48) | `Array<T>`, `Option<T>`, `Result<T,E>` emit correctly |
+| Generics | [#48](https://github.com/LAB271/mvl_language/issues/48) | `Array[T]`, `Option[T]`, `Result[T,E]` emit correctly |
 | Test transpilation | [#38](https://github.com/LAB271/mvl_language/issues/38) | `_test.mvl` → Rust `#[test]` |
 | Assurance reports | [#73](https://github.com/LAB271/mvl_language/issues/73) | Compiler tracks verified vs trusted (extern) ratio |
 

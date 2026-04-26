@@ -72,7 +72,7 @@ The parser MUST produce a typed AST using Rust enums and structs. All AST nodes 
 
 #### Scenario: AST node with security labels
 
-- GIVEN a parsed `fn f(x: Tainted<String>) -> Clean<String>`
+- GIVEN a parsed `fn f(x: Tainted[String]) -> Clean[String]`
 - THEN the param type MUST be `LabeledType(Tainted, String)` and return type MUST be `LabeledType(Clean, String)`
 
 ### Requirement 3: Parse Type Declarations [MUST]
@@ -91,7 +91,7 @@ The parser MUST parse struct, enum, type alias, and refinement type declarations
 
 #### Scenario: Parse enum
 
-- GIVEN `type Result<T, E> = enum { Ok(T), Err(E) }`
+- GIVEN `type Result[T, E] = enum { Ok(T), Err(E) }`
 - WHEN parsed
 - THEN AST contains EnumDecl with name="Result", type_params=[T,E], variants=[Ok(T), Err(E)]
 
@@ -113,19 +113,19 @@ The parser MUST parse function declarations including totality annotation, param
 
 #### Scenario: Parse total function with effects
 
-- GIVEN `total fn read_file(path: Path) -> Result<String, IOError> ! FileRead { ... }`
+- GIVEN `total fn read_file(path: Path) -> Result[String, IOError] ! FileRead { ... }`
 - WHEN parsed
-- THEN AST contains FnDecl with totality=Total, effects=[FileRead], return_type=Result<String, IOError>
+- THEN AST contains FnDecl with totality=Total, effects=[FileRead], return_type=Result[String, IOError]
 
 #### Scenario: Parse function with capability parameter
 
-- GIVEN `fn process(iso db: &DbConn) -> Result<Data, Error> ! DB { ... }`
+- GIVEN `fn process(iso db: &DbConn) -> Result[Data, Error] ! DB { ... }`
 - WHEN parsed
 - THEN parameter has capability=Iso, type=Ref(DbConn)
 
 #### Scenario: Parse function with security-labeled params
 
-- GIVEN `fn handle(input: Tainted<String>, key: Secret<ApiKey>) -> Public<Response>`
+- GIVEN `fn handle(input: Tainted[String], key: Secret[ApiKey]) -> Public[Response]`
 - WHEN parsed
 - THEN params have correct security labels, return has Public label
 
@@ -189,7 +189,7 @@ The parser MUST parse all MVL expression forms: literals, identifiers, field acc
 
 ### Requirement 7: Parse Security Labels [MUST]
 
-The parser MUST parse security-labeled types (`Public<T>`, `Tainted<T>`, `Secret<T>`, `Clean<T>`) and capability annotations (`iso`, `val`, `ref`, `tag`) as first-class type constructs.
+The parser MUST parse security-labeled types (`Public[T]`, `Tainted[T]`, `Secret[T]`, `Clean[T]`) and capability annotations (`iso`, `val`, `ref`, `tag`) as first-class type constructs.
 
 **Implementation:** `src/mvl/parser/types.rs`
 
@@ -197,13 +197,13 @@ The parser MUST parse security-labeled types (`Public<T>`, `Tainted<T>`, `Secret
 
 #### Scenario: Parse labeled type
 
-- GIVEN type annotation `Tainted<String>`
+- GIVEN type annotation `Tainted[String]`
 - WHEN parsed
 - THEN AST contains LabeledType with label=Tainted, inner=String
 
 #### Scenario: Parse nested labels
 
-- GIVEN type annotation `Public<Option<Secret<Key>>>`
+- GIVEN type annotation `Public<Option<Secret[Key]>>`
 - WHEN parsed
 - THEN AST contains nested LabeledType → OptionType → LabeledType
 

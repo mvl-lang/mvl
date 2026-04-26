@@ -24,12 +24,12 @@ fn listen(port: UInt16 where port >= 1 && port <= 65535) -> () ! Net {
 }
 
 // Non-empty collection
-fn first<T>(items: Array<T> where len(items) > 0) -> T {
+fn first[T](items: Array[T] where len(items) > 0) -> T {
     items[0]     // safe — compiler knows items is non-empty
 }
 
 // Bounded array index
-fn get_safe(arr: Array<Int>, i: UInt where i < len(arr)) -> Int {
+fn get_safe(arr: Array[Int], i: UInt where i < len(arr)) -> Int {
     arr[i]       // safe — compiler knows i is in bounds
 }
 ```
@@ -60,7 +60,7 @@ Refinement predicates support:
 ```mvl
 type NonZero = Int where self != 0
 type Percentage = Float64 where self >= 0.0 && self <= 100.0
-type NonEmpty<T> = Array<T> where len(self) > 0
+type NonEmpty[T] = Array[T] where len(self) > 0
 type ValidPort = UInt16 where self >= 1 && self <= 65535
 ```
 

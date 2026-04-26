@@ -72,14 +72,14 @@ let result = {
 ## 5.9 Propagation Operator (?)
 
 ```mvl
-fn load_config() -> Result<Config, Error> ! FileRead {
+fn load_config() -> Result[Config, Error] ! FileRead {
     let text = read_to_string("config.toml")?;  // propagates Err
     let config = parse(text)?;                   // propagates Err
     Ok(config)
 }
 ```
 
-`?` works on both `Result<T, E>` and `Option<T>`:
+`?` works on both `Result[T, E]` and `Option[T]`:
 - On `Result`: if `Err`, return the error to the caller
 - On `Option`: if `None`, return `None` to the caller
 

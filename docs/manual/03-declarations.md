@@ -19,7 +19,7 @@ Pure functions have no effects. The compiler rejects any side-effecting operatio
 ### Effectful functions
 
 ```mvl
-fn read_config(path: Path) -> Result<Config, IOError> ! FileRead {
+fn read_config(path: Path) -> Result[Config, IOError] ! FileRead {
     let content = read_to_string(path)?;
     parse_config(content)
 }
@@ -109,7 +109,7 @@ module http {
     type Request = struct { ... }
     type Response = struct { ... }
 
-    fn get(url: Clean<Url>) -> Result<Tainted<Response>, NetError> ! Net {
+    fn get(url: Clean[Url]) -> Result<Tainted[Response], NetError> ! Net {
         // ...
     }
 }
@@ -121,7 +121,7 @@ See [Chapter 13: Module System](13-modules.md).
 
 ```mvl
 extern "rust" {
-    fn crypto_random_bytes(n: UInt) -> Array<Byte>;
+    fn crypto_random_bytes(n: UInt) -> Array[Byte];
 }
 ```
 

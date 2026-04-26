@@ -127,7 +127,7 @@ In most languages, mocking is hard because dependencies are hidden — globals, 
 
 ```mvl
 // Production
-fn get_user(db: &DbConn, id: UserId) -> Result<User, DbError> ! DB {
+fn get_user(db: &DbConn, id: UserId) -> Result[User, DbError] ! DB {
     db.query("SELECT ...", id)?
 }
 
@@ -146,17 +146,17 @@ Traits define contracts. Production and test implementations are swappable:
 
 ```mvl
 type FileSystem = trait {
-    fn read(self, path: Path) -> Result<String, IOError> ! FileRead
+    fn read(self, path: Path) -> Result[String, IOError] ! FileRead
 }
 
 type RealFS = struct {}
 impl FileSystem for RealFS { /* real implementation */ }
 
 type StubFS = struct {
-    files: Map<Path, String>
+    files: Map[Path, String]
 }
 impl FileSystem for StubFS {
-    fn read(self, path: Path) -> Result<String, IOError> ! FileRead {
+    fn read(self, path: Path) -> Result[String, IOError] ! FileRead {
         match self.files.get(path) {
             Some(content) => Ok(content),
             None => Err(IOError.not_found(path)),
@@ -193,18 +193,18 @@ Property tests verify that a property holds for *all* valid inputs, not just spe
 
 ```mvl
 #[property]
-fn sort_preserves_length(items: Array<Int>) -> Bool {
+fn sort_preserves_length(items: Array[Int]) -> Bool {
     sort(items).len() == items.len()
 }
 
 #[property]
-fn sort_is_ordered(items: Array<Int>) -> Bool {
+fn sort_is_ordered(items: Array[Int]) -> Bool {
     let sorted = sort(items);
     sorted.windows(2).all(|w| w[0] <= w[1])
 }
 
 #[property]
-fn sort_is_idempotent(items: Array<Int>) -> Bool {
+fn sort_is_idempotent(items: Array[Int]) -> Bool {
     sort(items) == sort(sort(items))
 }
 ```
@@ -323,17 +323,17 @@ For bounded state spaces (enums, refinement-typed integers), this is exhaustive.
 ```mvl
 #[model]
 fn producer_consumer() {
-    let (tx, rx) = Channel.new::<Int>();
+    let (tx, rx) = Channel.new[Int]();
 
     #[actor]
-    fn producer(tx: iso Sender<Int>) {
+    fn producer(tx: iso Sender[Int]) {
         for i in 0..10 {
             tx.send(i);
         }
     }
 
     #[actor]
-    fn consumer(rx: iso Receiver<Int>) {
+    fn consumer(rx: iso Receiver[Int]) {
         for msg in rx {
             process(msg);
         }
@@ -448,7 +448,7 @@ Tests connect to specifications through attributes:
 #[test]
 #[spec("001", "Req 2", "Scenario: Option forces handling")]
 fn test_option_access() {
-    let user: Option<User> = find_user(42);
+    let user: Option[User] = find_user(42);
     // Cannot access user.name directly — must match
     match user {
         Some(u) => assert_eq(u.name, "Alice"),

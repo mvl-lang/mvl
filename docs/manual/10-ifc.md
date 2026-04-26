@@ -19,13 +19,13 @@ Data flows **up** freely. Flowing **down** requires explicit declassification.
 ## 10.2 Labels on Types
 
 ```mvl
-let api_key: Secret<String> = load_key();
-let user_input: Tainted<String> = read_line();
-let safe_name: Clean<String> = sanitize(user_input);
-let message: Public<String> = "hello";
+let api_key: Secret[String] = load_key();
+let user_input: Tainted[String] = read_line();
+let safe_name: Clean[String] = sanitize(user_input);
+let message: Public[String] = "hello";
 ```
 
-`Secret<String>` and `Public<String>` are different types. You cannot pass one where the other is expected (unless flowing up).
+`Secret[String]` and `Public[String]` are different types. You cannot pass one where the other is expected (unless flowing up).
 
 ## 10.3 Automatic Labeling
 
@@ -46,7 +46,7 @@ Data from external sources is automatically `Tainted`:
 ### sanitize — Tainted → Clean
 
 ```mvl
-fn sanitize_email(input: Tainted<String>) -> Result<Clean<Email>, ValidationError> {
+fn sanitize_email(input: Tainted[String]) -> Result<Clean[Email], ValidationError> {
     let trimmed = input.trim();
     if is_valid_email(trimmed) {
         Ok(sanitize(Email.parse(trimmed)))
@@ -61,7 +61,7 @@ fn sanitize_email(input: Tainted<String>) -> Result<Clean<Email>, ValidationErro
 ### declassify — Secret → Public
 
 ```mvl
-fn log_key_fingerprint(key: Secret<ApiKey>) -> () ! Log {
+fn log_key_fingerprint(key: Secret[ApiKey]) -> () ! Log {
     let fingerprint = key.sha256_prefix(8);
     log.info("Key fingerprint: " + declassify(fingerprint));
 }
@@ -72,15 +72,15 @@ fn log_key_fingerprint(key: Secret<ApiKey>) -> () ! Log {
 ## 10.5 Compile-Time Enforcement
 
 ```mvl
-fn log_message(msg: Public<String>) -> () ! Log { ... }
+fn log_message(msg: Public[String]) -> () ! Log { ... }
 
-let secret: Secret<String> = "password123";
+let secret: Secret[String] = "password123";
 log_message(secret);
-// COMPILE ERROR: cannot pass Secret<String> where Public<String> expected
+// COMPILE ERROR: cannot pass Secret[String] where Public[String] expected
 
-let tainted: Tainted<String> = read_line();
+let tainted: Tainted[String] = read_line();
 sql_query("SELECT * WHERE name = " + tainted);
-// COMPILE ERROR: cannot concatenate Clean<String> with Tainted<String>
+// COMPILE ERROR: cannot concatenate Clean[String] with Tainted[String]
 ```
 
 ## 10.6 OWASP Coverage

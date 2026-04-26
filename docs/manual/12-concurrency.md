@@ -44,7 +44,7 @@ These rules guarantee data race freedom at compile time. No locks needed.
 ## 12.3 Channels
 
 ```mvl
-let (tx, rx) = Channel.new::<Message>();
+let (tx, rx) = Channel.new[Message]();
 
 // Sender (in one actor)
 tx.send(iso message);                // must send iso or val
@@ -61,7 +61,7 @@ match rx.recv() {
 No orphan tasks. Every spawned task is tied to a scope:
 
 ```mvl
-fn parallel_fetch(urls: Array<Url>) -> Array<Result<Response, Error>> ! Net, Async {
+fn parallel_fetch(urls: Array[Url]) -> Array<Result[Response, Error]> ! Net, Async {
     scope(|s| {
         let handles = urls.map(|url| s.spawn(|| fetch(url)));
         handles.map(|h| h.join())

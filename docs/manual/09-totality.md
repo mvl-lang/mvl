@@ -24,7 +24,7 @@ The compiler accepts recursion where the recursive call operates on a structural
 - Tree getting shallower (recursion on children)
 
 ```mvl
-fn sum(items: Array<Int>) -> Int {
+fn sum(items: Array[Int]) -> Int {
     match items {
         [] => 0,
         [head, ..tail] => head + sum(tail),   // tail is smaller — accepted

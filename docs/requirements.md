@@ -62,7 +62,7 @@ let b = move a;           // ownership transferred
 // println(a);            // COMPILE ERROR: use after move
 
 let data = [1, 2, 3];
-let x = data.get(10);    // returns Option<Int>, not a segfault
+let x = data.get(10);    // returns Option[Int], not a segfault
 ```
 
 **What it eliminates:** Buffer overflows, use-after-free, double-free, dangling pointers, undefined behavior.
@@ -101,9 +101,9 @@ match color {
 
 ### Req 4: Null Elimination {#req-4}
 
-**`Option<T>` instead of null — absence is in the type, not the value.**
+**`Option[T]` instead of null — absence is in the type, not the value.**
 
-The type system MUST NOT have null, nil, or undefined. Absence MUST be represented by `Option<T>` (either `Some(value)` or `None`). Accessing the inner value MUST require pattern matching.
+The type system MUST NOT have null, nil, or undefined. Absence MUST be represented by `Option[T]` (either `Some(value)` or `None`). Accessing the inner value MUST require pattern matching.
 
 **If dropped:** Severe — Hoare's billion-dollar mistake. Every reference becomes potentially invalid. Null checks are discipline, not proof.
 
@@ -112,12 +112,12 @@ The type system MUST NOT have null, nil, or undefined. Absence MUST be represent
 **Industrial validation:** Cross-industry — null pointer exceptions are the single most common runtime error class.
 
 ```mvl
-fn find_user(id: UserId) -> Option<User> ! DB {
+fn find_user(id: UserId) -> Option[User] ! DB {
     db.query_optional("...", id)
 }
 
 let user = find_user(42);
-// user.name;             // COMPILE ERROR: cannot access field on Option<User>
+// user.name;             // COMPILE ERROR: cannot access field on Option[User]
 
 match user {
     Some(u) => u.name,    // safe — compiler verified Some
@@ -133,29 +133,29 @@ match user {
 
 ### Req 5: Error Path Visibility {#req-5}
 
-**`Result<T, E>` — every error in the type signature, no hidden paths.**
+**`Result[T, E]` — every error in the type signature, no hidden paths.**
 
-Functions that can fail MUST return `Result<T, E>`. Error types MUST be visible in the function signature. The caller MUST handle the error via `match`, `?` propagation, or combinators.
+Functions that can fail MUST return `Result[T, E]`. Error types MUST be visible in the function signature. The caller MUST handle the error via `match`, `?` propagation, or combinators.
 
 **If dropped:** High — hidden failure paths, callers can't reason about control flow. Exceptions make error paths invisible; ignored return codes make them silent.
 
-**Origin:** Monadic error handling (Wadler, 1995). OCaml `result`, Haskell `Either`, Rust `Result<T,E>`. Built on algebraic data types (Req 1).
+**Origin:** Monadic error handling (Wadler, 1995). OCaml `result`, Haskell `Either`, Rust `Result[T,E]`. Built on algebraic data types (Req 1).
 
 **Industrial validation:** MISRA C Rule 17.x (return values must be used), IEC 61508 error handling requirements.
 
 ```mvl
-fn parse_config(text: String) -> Result<Config, ParseError> {
+fn parse_config(text: String) -> Result[Config, ParseError] {
     // ...
 }
 
-fn load() -> Result<Config, AppError> ! FileRead {
+fn load() -> Result[Config, AppError] ! FileRead {
     let text = read_to_string("config.toml")?;   // ? propagates Err
     let config = parse_config(text)?;             // ? propagates Err
     Ok(config)
 }
 
 // Ignoring an error is a COMPILE ERROR:
-// parse_config(text);    // Result<Config, ParseError> unused
+// parse_config(text);    // Result[Config, ParseError] unused
 ```
 
 **What it eliminates:** Unhandled exceptions, ignored return codes, silent failures, hidden control flow.
@@ -276,7 +276,7 @@ Values carry reference capabilities (`iso`, `val`, `ref`, `tag`) that determine 
 **Why LLMs unblock it:** Reference capability annotations are verbose. LLMs generate capability annotations automatically.
 
 ```mvl
-let data: iso Array<Int> = [1, 2, 3];
+let data: iso Array[Int] = [1, 2, 3];
 actor_a.send(consume data);        // iso → sendable, data moved
 
 let shared: val Config = load_config();
@@ -296,7 +296,7 @@ let local: ref Buffer = Buffer.new();
 
 **Values within valid ranges at compile time — right type, right value.**
 
-Types can carry predicates: `Int where x > 0`, `Array<T> where len(self) > 0`. The compiler verifies predicates via SMT solving. Fixed-width arithmetic is checked by default — overflow is a compile error.
+Types can carry predicates: `Int where x > 0`, `Array[T] where len(self) > 0`. The compiler verifies predicates via SMT solving. Fixed-width arithmetic is checked by default — overflow is a compile error.
 
 **If dropped:** Right type, wrong value. `divide(x, 0)` type-checks. Array bounds violations. Integer overflow.
 
@@ -309,7 +309,7 @@ fn divide(a: Int, b: Int where b != 0) -> Int {
     a / b                           // safe — compiler proved b ≠ 0
 }
 
-fn first<T>(items: Array<T> where len(items) > 0) -> T {
+fn first[T](items: Array[T] where len(items) > 0) -> T {
     items[0]                        // safe — compiler proved non-empty
 }
 
@@ -337,10 +337,10 @@ Every value carries a security label: `Public`, `Clean`, `Tainted`, `Secret`. Da
 **Why LLMs unblock it:** Security lattice annotations on every variable are prohibitive for humans. LLMs propagate taint labels through the codebase automatically.
 
 ```mvl
-let user_input: Tainted<String> = read_line();
-let api_key: Secret<String> = load_key();
+let user_input: Tainted[String] = read_line();
+let api_key: Secret[String] = load_key();
 
-fn log_msg(msg: Public<String>) -> () ! Log { ... }
+fn log_msg(msg: Public[String]) -> () ! Log { ... }
 
 log_msg(api_key);                   // COMPILE ERROR: Secret → Public
 log_msg(user_input);                // COMPILE ERROR: Tainted → Public

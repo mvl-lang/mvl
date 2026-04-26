@@ -34,12 +34,12 @@ The type system MUST support sum types (enums) and product types (structs) as fi
 #### Scenario: Adding a variant forces updates
 
 - GIVEN a `match` on `Shape` that handles all three variants
-- WHEN a fourth variant `Polygon(Array<Point>)` is added to the enum
+- WHEN a fourth variant `Polygon(Array[Point])` is added to the enum
 - THEN every `match` on `Shape` MUST fail compilation until the new variant is handled
 
 ### Requirement 2: Null Elimination [MUST]
 
-The type system MUST NOT have a null, nil, or undefined value. Absence MUST be represented by `Option<T>` (either `Some(value)` or `None`). Accessing the value inside an `Option` MUST require pattern matching or explicit unwrapping.
+The type system MUST NOT have a null, nil, or undefined value. Absence MUST be represented by `Option[T]` (either `Some(value)` or `None`). Accessing the value inside an `Option` MUST require pattern matching or explicit unwrapping.
 
 **Implementation:** `src/mvl/checker/mod.rs`
 
@@ -47,19 +47,19 @@ The type system MUST NOT have a null, nil, or undefined value. Absence MUST be r
 
 #### Scenario: Option forces handling
 
-- GIVEN `fn find_user(id: UserId) -> Option<User>`
+- GIVEN `fn find_user(id: UserId) -> Option[User]`
 - WHEN the caller writes `find_user(42).name`
-- THEN the compiler MUST reject: "cannot access field `name` on `Option<User>`"
+- THEN the compiler MUST reject: "cannot access field `name` on `Option[User]`"
 
 #### Scenario: Pattern matching on Option
 
-- GIVEN `let user: Option<User> = find_user(42)`
+- GIVEN `let user: Option[User] = find_user(42)`
 - WHEN the caller writes `match user { Some(u) => u.name, None => "unknown" }`
 - THEN the compiler MUST accept
 
 ### Requirement 3: Error Visibility [MUST]
 
-Functions that can fail MUST return `Result<T, E>`. Error types MUST be visible in the function signature. The caller MUST handle the error (via `match`, `?` propagation, or combinators).
+Functions that can fail MUST return `Result[T, E]`. Error types MUST be visible in the function signature. The caller MUST handle the error (via `match`, `?` propagation, or combinators).
 
 **Implementation:** `src/mvl/checker/mod.rs`
 
@@ -67,13 +67,13 @@ Functions that can fail MUST return `Result<T, E>`. Error types MUST be visible 
 
 #### Scenario: Result forces error handling
 
-- GIVEN `fn parse_int(s: String) -> Result<Int, ParseError>`
+- GIVEN `fn parse_int(s: String) -> Result[Int, ParseError]`
 - WHEN the caller writes `let n: Int = parse_int(input)`
-- THEN the compiler MUST reject: "expected `Int`, got `Result<Int, ParseError>`"
+- THEN the compiler MUST reject: "expected `Int`, got `Result[Int, ParseError]`"
 
 #### Scenario: Propagation with ?
 
-- GIVEN a function that returns `Result<T, E>`
+- GIVEN a function that returns `Result[T, E]`
 - WHEN the caller uses `parse_int(input)?` inside a function that also returns `Result<_, ParseError>`
 - THEN the compiler MUST accept and propagate the error
 
@@ -119,7 +119,7 @@ The type system MUST support refinement predicates on types: `T where predicate`
 
 #### Scenario: Array bounds
 
-- GIVEN `fn get(arr: Array<T>, i: Int where i >= 0 && i < len(arr)) -> T`
+- GIVEN `fn get(arr: Array[T], i: Int where i >= 0 && i < len(arr)) -> T`
 - WHEN the caller writes `get(arr, arr.len())`
 - THEN the compiler MUST reject: "refinement violated: `len(arr) < len(arr)` is false"
 
@@ -190,18 +190,18 @@ Type parameters MUST be declared in angle brackets after the item name:
 
 ```mvl
 // Generic type declaration
-type Container<T> = struct { value: T }
+type Container[T] = struct { value: T }
 
 // Generic function
-total fn identity<T>(x: T) -> T {
+total fn identity[T](x: T) -> T {
     return x;
 }
 
 // Multiple type parameters
-type Pair<A, B> = struct { first: A, second: B }
+type Pair[A, B] = struct { first: A, second: B }
 
 // Generic with constraint
-total fn sort<T>(items: List<T>) -> List<T>
+total fn sort[T](items: List[T]) -> List[T]
 where T: Ord
 {
     // …
@@ -213,7 +213,7 @@ where T: Ord
 Constraints MUST appear in a `where` clause after the function signature (before the body). Multiple constraints MUST be separated by commas:
 
 ```mvl
-total fn merge<T, E>(a: Result<T, E>, b: Result<T, E>) -> Result<T, E>
+total fn merge[T, E](a: Result[T, E], b: Result[T, E]) -> Result[T, E]
 where T: Eq, E: Display
 {
     // …
@@ -226,7 +226,7 @@ where T: Eq, E: Display
 - `Display` — human-readable formatting
 - `Clone` — explicit value duplication
 - `Default` — zero-value construction
-- `Iterator<T>` — lazy iteration protocol (see Requirement 11)
+- `Iterator[T]` — lazy iteration protocol (see Requirement 11)
 - User-defined traits (declared in the module system)
 
 **Implementation:** `src/mvl/parser/ast.rs::GenericParam`, `src/mvl/checker/mod.rs`
@@ -237,19 +237,19 @@ where T: Eq, E: Display
 
 #### Scenario: Generic identity function
 
-- GIVEN `total fn identity<T>(x: T) -> T { return x; }`
+- GIVEN `total fn identity[T](x: T) -> T { return x; }`
 - WHEN the checker processes the declaration
 - THEN it MUST accept: the type parameter is consistent
 
 #### Scenario: Constraint bounds checked
 
-- GIVEN `total fn max<T>(a: T, b: T) -> T where T: Ord { … }`
+- GIVEN `total fn max[T](a: T, b: T) -> T where T: Ord { … }`
 - WHEN called with `max(1, 2)` where `Int: Ord`
 - THEN the compiler MUST accept
 
 #### Scenario: Missing constraint rejected
 
-- GIVEN `total fn max<T>(a: T, b: T) -> T { if a > b { a } else { b } }`
+- GIVEN `total fn max[T](a: T, b: T) -> T { if a > b { a } else { b } }`
 - WHEN the checker sees `a > b` with unconstrained `T`
 - THEN the compiler MUST reject: "type parameter `T` does not implement `Ord`"
 
@@ -270,10 +270,10 @@ where T: Eq, E: Display
 MVL generics transpile to Rust generics with the same monomorphization semantics. Each instantiation is a concrete Rust function. The transpiler MUST emit:
 
 ```rust
-// MVL: total fn identity<T>(x: T) -> T { return x; }
+// MVL: total fn identity[T](x: T) -> T { return x; }
 fn identity<T>(x: T) -> T { x }
 
-// MVL: total fn sort<T>(items: Vec<T>) -> Vec<T> where T: Ord
+// MVL: total fn sort[T](items: Vec<T>) -> Vec<T> where T: Ord
 fn sort<T>(mut items: Vec<T>) -> Vec<T>
 where T: std::cmp::Ord
 {
@@ -362,15 +362,15 @@ Float literals MUST support scientific notation (`1.5e10`, `2.0e-3`).
 
 ### Requirement 11: Iterator Trait [MUST]
 
-The type system MUST define the `Iterator<T>` trait as the protocol for lazy, sequential element access. Every type used in a `for...in` loop MUST implement `Iterator<T>`. Collection operations that transform sequences (`map`, `filter`, `flat_map`) MUST return `Iterator<U>` rather than a concrete collection — evaluation is deferred until elements are consumed.
+The type system MUST define the `Iterator[T]` trait as the protocol for lazy, sequential element access. Every type used in a `for...in` loop MUST implement `Iterator[T]`. Collection operations that transform sequences (`map`, `filter`, `flat_map`) MUST return `Iterator[U]` rather than a concrete collection — evaluation is deferred until elements are consumed.
 
 **Implementation:** `src/mvl/checker/mod.rs`, `src/mvl/transpiler/emit_impls.rs`, `src/mvl/transpiler/emit_stmts.rs`
 
 #### Iterator trait definition
 
 ```mvl
-type Iterator<T> = trait {
-    fn next(mut self) -> Option<T>
+type Iterator[T] = trait {
+    fn next(mut self) -> Option[T]
 }
 ```
 
@@ -378,14 +378,14 @@ type Iterator<T> = trait {
 
 #### Built-in Iterator implementations
 
-The following core types MUST implement `Iterator<T>`:
+The following core types MUST implement `Iterator[T]`:
 
 | Type | Element type | Notes |
 |------|-------------|-------|
-| `Array<T>` | `T` | via `.iter()` method |
+| `Array[T]` | `T` | via `.iter()` method |
 | `Range` | `Int` | `0..10` produces `0, 1, …, 9` |
-| `Map<K, V>` | `(K, V)` | insertion order |
-| `Set<T>` | `T` | unspecified order |
+| `Map[K, V]` | `(K, V)` | insertion order |
+| `Set[T]` | `T` | unspecified order |
 
 #### For loop desugaring
 
@@ -398,48 +398,48 @@ for item in collection {
 }
 
 // Desugars to (conceptually)
-let mut iter: Iterator<T> = collection.iter();
+let mut iter: Iterator[T] = collection.iter();
 while let Some(item) = iter.next() {
     process(item);
 }
 ```
 
-The type checker MUST verify that the expression after `in` implements `Iterator<T>` or has an `.iter()` method that returns `Iterator<T>`. The for loop MUST only appear in `total` functions — bounded iteration is guaranteed by the fused, finite iterator contract. Infinite iterators (types whose `next` never returns `None`) are only permitted in `partial` functions using `while`.
+The type checker MUST verify that the expression after `in` implements `Iterator[T]` or has an `.iter()` method that returns `Iterator[T]`. The for loop MUST only appear in `total` functions — bounded iteration is guaranteed by the fused, finite iterator contract. Infinite iterators (types whose `next` never returns `None`) are only permitted in `partial` functions using `while`.
 
 #### Lazy collection operations
 
 `map`, `filter`, and `flat_map` MUST return `Iterator`, not a concrete collection. No elements are computed until consumed:
 
 ```mvl
-fn map<T, U>(self: Iterator<T>, f: fn(T) -> U) -> Iterator<U>
-fn filter<T>(self: Iterator<T>, pred: fn(&T) -> Bool) -> Iterator<T>
-fn flat_map<T, U>(self: Iterator<T>, f: fn(T) -> Iterator<U>) -> Iterator<U>
-fn enumerate<T>(self: Iterator<T>) -> Iterator<(UInt, T)>
-fn zip<T, U>(self: Iterator<T>, other: Iterator<U>) -> Iterator<(T, U)>
+fn map[T, U](self: Iterator[T], f: fn(T) -> U) -> Iterator[U]
+fn filter[T](self: Iterator[T], pred: fn(&T) -> Bool) -> Iterator[T]
+fn flat_map[T, U](self: Iterator[T], f: fn(T) -> Iterator[U]) -> Iterator[U]
+fn enumerate[T](self: Iterator[T]) -> Iterator<(UInt, T)>
+fn zip[T, U](self: Iterator[T], other: Iterator[U]) -> Iterator<(T, U)>
 ```
 
 Terminal operations that force evaluation:
 
 ```mvl
-fn fold<T, U>(self: Iterator<T>, init: U, f: fn(U, T) -> U) -> U
-fn collect<T>(self: Iterator<T>) -> Array<T>
-fn any<T>(self: Iterator<T>, pred: fn(&T) -> Bool) -> Bool
-fn all<T>(self: Iterator<T>, pred: fn(&T) -> Bool) -> Bool
-fn find<T>(self: Iterator<T>, pred: fn(&T) -> Bool) -> Option<T>
-fn sum<T>(self: Iterator<T>) -> T  where T: Add, T: Default
-fn min<T>(self: Iterator<T>) -> Option<T>  where T: Ord
-fn max<T>(self: Iterator<T>) -> Option<T>  where T: Ord
+fn fold[T, U](self: Iterator[T], init: U, f: fn(U, T) -> U) -> U
+fn collect[T](self: Iterator[T]) -> Array[T]
+fn any[T](self: Iterator[T], pred: fn(&T) -> Bool) -> Bool
+fn all[T](self: Iterator[T], pred: fn(&T) -> Bool) -> Bool
+fn find[T](self: Iterator[T], pred: fn(&T) -> Bool) -> Option[T]
+fn sum[T](self: Iterator[T]) -> T  where T: Add, T: Default
+fn min[T](self: Iterator[T]) -> Option[T]  where T: Ord
+fn max[T](self: Iterator[T]) -> Option[T]  where T: Ord
 ```
 
 #### Custom Iterator implementations
 
-Any user-defined type MAY implement `Iterator<T>`:
+Any user-defined type MAY implement `Iterator[T]`:
 
 ```mvl
 type Counter = struct { mut current: Int, limit: Int }
 
-impl Iterator<Int> for Counter {
-    fn next(mut self) -> Option<Int> {
+impl Iterator[Int] for Counter {
+    fn next(mut self) -> Option[Int] {
         if self.current >= self.limit {
             None
         } else {
@@ -462,11 +462,11 @@ for n in Counter { current: 0, limit: 5 } {
 
 #### Constraint syntax
 
-Functions accepting any iterable use `where T: Iterator<E>`:
+Functions accepting any iterable use `where T: Iterator[E]`:
 
 ```mvl
-fn sum_all<T, E>(items: T) -> E
-where T: Iterator<E>, E: Add, E: Default
+fn sum_all[T, E](items: T) -> E
+where T: Iterator[E], E: Add, E: Default
 {
     items.fold(E.default(), |acc, x| acc + x)
 }
@@ -474,13 +474,13 @@ where T: Iterator<E>, E: Add, E: Default
 
 #### Transpilation
 
-`Iterator<T>` transpiles to Rust's `std::iter::Iterator<Item = T>`:
+`Iterator[T]` transpiles to Rust's `std::iter::Iterator<Item = T>`:
 
 ```rust
-// MVL: type Iterator<T> = trait { fn next(mut self) -> Option<T> }
+// MVL: type Iterator[T] = trait { fn next(mut self) -> Option[T] }
 // → Rust built-in: std::iter::Iterator
 
-// MVL: impl Iterator<Int> for Counter
+// MVL: impl Iterator[Int] for Counter
 impl std::iter::Iterator for Counter {
     type Item = i64;
     fn next(&mut self) -> Option<i64> { … }
@@ -494,9 +494,9 @@ for item in collection.iter() { … }
 
 #### Scenario: For loop over array accepted
 
-- GIVEN `let items: Array<Int> = [1, 2, 3]`
+- GIVEN `let items: Array[Int] = [1, 2, 3]`
 - WHEN `for x in items { println(x.to_string()); }`
-- THEN the type checker MUST accept: `Array<Int>` implements `Iterator<Int>`
+- THEN the type checker MUST accept: `Array[Int]` implements `Iterator[Int]`
 
 #### Scenario: For loop over non-iterator rejected
 
@@ -506,7 +506,7 @@ for item in collection.iter() { … }
 
 #### Scenario: Custom type implements Iterator
 
-- GIVEN `type Counter = struct { mut current: Int, limit: Int }` with `impl Iterator<Int> for Counter`
+- GIVEN `type Counter = struct { mut current: Int, limit: Int }` with `impl Iterator[Int] for Counter`
 - WHEN `for n in Counter { current: 0, limit: 3 } { … }`
 - THEN the type checker MUST accept
 
@@ -514,7 +514,7 @@ for item in collection.iter() { … }
 
 - GIVEN `let result = items.iter().map(|x| x + 1).filter(|x| x > 2).collect()`
 - WHEN the expression is type-checked
-- THEN the type of `.map(…)` MUST be `Iterator<Int>`, not `Array<Int>`
+- THEN the type of `.map(…)` MUST be `Iterator[Int]`, not `Array[Int]`
 - AND no intermediate array MUST be allocated between `.map()` and `.filter()`
 
 #### Scenario: Fold terminates the chain
@@ -525,6 +525,6 @@ for item in collection.iter() { … }
 
 #### Scenario: For loop rejected inside partial function
 
-- GIVEN `partial fn f(items: Array<Int>) { for x in items { println(x.to_string()); } }`
+- GIVEN `partial fn f(items: Array[Int]) { for x in items { println(x.to_string()); } }`
 - WHEN the function is type-checked
 - THEN the type checker MUST reject with: "`for` is not permitted in `partial` functions; use `while` instead"

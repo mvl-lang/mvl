@@ -48,8 +48,8 @@ independently, providing a second line of defence.
 | 1 — Type safety (ADTs) | `type T = struct { … }` / `type T = enum { … }` | `pub struct T { … }` / `pub enum T { … }` | rustc |
 | 2 — Memory safety | ownership model | normal Rust ownership | rustc borrow checker |
 | 3 — Exhaustive match | `match` over ADT | `match` | rustc exhaustiveness |
-| 4 — Null elimination | `Option<T>` | `Option<T>` | rustc |
-| 5 — Error visibility | `Result<T, E>` | `Result<T, E>` | rustc |
+| 4 — Null elimination | `Option[T]` | `Option<T>` | rustc |
+| 5 — Error visibility | `Result[T, E]` | `Result<T, E>` | rustc |
 | 6 — Linearity / ownership | move semantics | Rust move semantics | rustc borrow checker |
 
 ### Requirements preserved as documentation
@@ -59,14 +59,14 @@ emitted doc comment is the certificate.  A human reviewer — or a future
 tool — can audit it.
 
 ```rust
-// MVL: total fn safe_divide(...) -> Public<Float>
+// MVL: total fn safe_divide(...) -> Public[Float]
 /// # Totality
 /// This function is declared `total` in MVL: it must terminate for all inputs.
 pub fn safe_divide(numerator: Public<Amount>, denominator: Public<NonZero>) -> Public<f64> {
     …
 }
 
-// MVL: fn authenticate(…) -> Result<Session, AuthError> ! IO, Console
+// MVL: fn authenticate(…) -> Result[Session, AuthError] ! IO, Console
 /// # Effects: IO, Console
 /// MVL effect annotations — informational in Phase 1.
 pub fn authenticate(…) -> Result<Session, AuthError> {
@@ -102,7 +102,7 @@ impl Amount {
 ```
 
 ```rust
-// MVL: Tainted<String> cannot flow to Console effect
+// MVL: Tainted[String] cannot flow to Console effect
 // Rust Phase 1: newtype wrapper + explicit sanitize()/declassify()
 pub struct Tainted<T>(pub T);
 pub fn sanitize<T>(v: Tainted<T>) -> Clean<T> { Clean(v.0) }
@@ -116,7 +116,7 @@ pub fn sanitize<T>(v: Tainted<T>) -> Clean<T> { Clean(v.0) }
 |-----|--------------|---------------|
 | 10 — Refinement types | `type T = Base where pred` | newtype `struct T(Base)` with `debug_assert!(pred)` constructor |
 | 10 — Field refinements | `field: Int where self >= 0` | `debug_assert!` in struct `new()` |
-| 11 — IFC labels | `Public<T>`, `Tainted<T>`, `Secret<T>`, `Clean<T>` | generic newtypes with `Copy`/`Display`/arithmetic impls; `sanitize()`/`declassify()` for allowed flows |
+| 11 — IFC labels | `Public[T]`, `Tainted[T]`, `Secret[T]`, `Clean[T]` | generic newtypes with `Copy`/`Display`/arithmetic impls; `sanitize()`/`declassify()` for allowed flows |
 
 ### External type stubs (Phase 1)
 
@@ -131,7 +131,7 @@ information inferred from the call-site let-binding:
 pub struct UserStore;
 
 impl UserStore {
-    // inferred from: let user: Option<User> = store.find_user(user_id)?
+    // inferred from: let user: Option[User] = store.find_user(user_id)?
     pub fn find_user(&self, _: Public<UserId>) -> Result<Option<User>, AuthError> { todo!() }
 }
 ```
@@ -210,7 +210,7 @@ a compile-time error.  No runtime overhead, no `debug_assert!`.
 
 ### IFC in LLVM IR
 
-LLVM's type system does not have `Public<T>` and `Secret<T>` built in.
+LLVM's type system does not have `Public[T]` and `Secret[T]` built in.
 Phase 2 encodes the lattice using distinct LLVM struct types and a
 taint-propagation pass that runs on the IR.  Any value flow that crosses
 a label boundary without an explicit declassify/sanitize emits a

@@ -6,8 +6,8 @@ The FFI allows MVL to call functions written in other languages. Extern blocks a
 
 ```mvl
 extern "rust" {
-    fn sha256(data: &Array<Byte>) -> Array<Byte>;
-    fn aes_encrypt(key: Secret<Array<Byte>>, data: Array<Byte>) -> Array<Byte>;
+    fn sha256(data: &Array[Byte]) -> Array[Byte];
+    fn aes_encrypt(key: Secret[Array[Byte]], data: Array[Byte]) -> Array[Byte];
 }
 ```
 
@@ -44,5 +44,5 @@ use crypto.sha256;
 let hash = sha256(data);
 
 // Over this (raw extern, unverified):
-extern "rust" { fn sha256(data: &Array<Byte>) -> Array<Byte>; }
+extern "rust" { fn sha256(data: &Array[Byte]) -> Array[Byte]; }
 ```
