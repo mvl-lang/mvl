@@ -55,7 +55,7 @@ Phase 1 is **done** when:
 3. **All 11 requirements are enforced** — 9 at MVL compile time, Req 10 as Rust runtime asserts, Req 11 as Rust newtypes
 4. **`mvl test` runs tests** — transpile `_test.mvl` files to Rust `#[test]`, invoke `cargo test`
 5. **Module system works** — multi-file programs with `module` and `use`
-6. **Generics emit correctly** — `Array<T>`, `Option<T>`, `Result<T,E>` map to Rust generics
+6. **Generics emit correctly** — `Array[T]`, `Option[T]`, `Result[T,E]` map to Rust generics
 7. **Core stdlib bridge exists** — core types and operations map to Rust std equivalents
 
 ### Phase 1 Critical Path
@@ -68,7 +68,7 @@ Step 4: Cargo integration (#34)          → `mvl build` = transpile + cargo
 Step 5: IFC as newtypes (#31)            → Req 11 enforcement via Rust
 Step 6: Refinements as asserts (#32)     → Req 10 enforcement via Rust
 Step 7: Module system (#47)              → multi-file programs
-Step 8: Generics (#48)                   → Array<T>, Option<T> emit correctly
+Step 8: Generics (#48)                   → Array[T], Option[T] emit correctly
 ```
 
 Steps 1-4 achieve "hello world to binary." Steps 5-6 complete all 11 requirements. Steps 7-8 make it usable for real programs.
@@ -79,7 +79,7 @@ Steps 1-4 achieve "hello world to binary." Steps 5-6 complete all 11 requirement
 
 - **`extern "rust"` blocks** (#52, #91) — call any Rust crate through typed, effect-tracked, IFC-labeled boundaries
 - **Module system** (#47) — multi-file programs with `module` and `use`
-- **Generics** (#48) — `Array<T>`, `Option<T>`, `Result<T,E>` emit correctly
+- **Generics** (#48) — `Array[T]`, `Option[T]`, `Result[T,E]` emit correctly
 - **Test transpilation** (#38) — `_test.mvl` → Rust `#[test]`
 - **Assurance reports** (#73) — compiler tracks verified vs trusted (extern) ratio
 - **Zero MVL stdlib** — Rust is the stdlib, accessed through extern. Stdlib grows later as verified MVL wrappers.

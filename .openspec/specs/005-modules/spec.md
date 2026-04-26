@@ -187,7 +187,7 @@ The MVL standard library MUST be organized as a module tree rooted at `std`. All
 #### Scenario: Explicit stdlib import
 
 - GIVEN `use std::collections::List;` at top of file
-- WHEN `List<Int>` is used in the file
+- WHEN `List[Int]` is used in the file
 - THEN it MUST resolve correctly
 
 ## EBNF Updates

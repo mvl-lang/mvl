@@ -109,7 +109,7 @@ If a program declares `extern "rust"` blocks but no `bridge.rs` is found in the 
 
 A `bridge.rs` file SHOULD follow these conventions to integrate correctly with the generated crate:
 
-1. `use mvl_runtime::prelude::*;` at the top (for access to `Clean<T>`, `Tainted<T>`, etc.)
+1. `use mvl_runtime::prelude::*;` at the top (for access to `Clean[T]`, `Tainted[T]`, etc.)
 2. Each function declared in the MVL `extern "rust"` block MUST have a matching `pub extern "Rust" fn` with `#[no_mangle]`
 3. The function signatures MUST match exactly the types emitted by the MVL transpiler
 
@@ -117,9 +117,9 @@ A `bridge.rs` file SHOULD follow these conventions to integrate correctly with t
 
 #### Scenario: Bridge function signature alignment
 
-- GIVEN MVL declares `extern "rust" { fn read_log_file(path: String) -> Tainted<String>; }`
-- THEN the transpiler emits `extern "Rust" { fn read_log_file(path: String) -> Tainted<String>; }`
-- AND `bridge.rs` provides `#[no_mangle] pub extern "Rust" fn read_log_file(path: String) -> Tainted<String>`
+- GIVEN MVL declares `extern "rust" { fn read_log_file(path: String) -> Tainted[String]; }`
+- THEN the transpiler emits `extern "Rust" { fn read_log_file(path: String) -> Tainted[String]; }`
+- AND `bridge.rs` provides `#[no_mangle] pub extern "Rust" fn read_log_file(path: String) -> Tainted[String]`
 - WHEN `cargo build` links the generated crate
 - THEN the extern symbol resolves without linker errors
 
@@ -161,11 +161,11 @@ CLI args / filesystem (Rust, unverified)
     │
     │  extern "rust" boundary
     ▼
-Tainted<String>   ← read_log_file() returns raw file contents
+Tainted[String]   ← read_log_file() returns raw file contents
     │
     │  sanitize()  (MVL built-in, explicit lattice step)
     ▼
-Clean<String>     ← count_and_format() receives verified-clean content
+Clean[String]     ← count_and_format() receives verified-clean content
     │
     ▼
 String            ← returned to fn main, printed to stdout

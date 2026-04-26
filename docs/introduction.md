@@ -40,7 +40,7 @@ Everything that exists for human writability is dropped. No anonymous lambdas, n
 
 What survives: `fn`, `let`, `if`/`else`, `match`, `for`, `return`, method calls, `?` propagation, type declarations, and modules. One way to branch. One way to loop. One way to handle errors. One way to represent absence.
 
-The standard library follows the same philosophy. `Map.get()` returns `Option<T>` — never panics, never returns null. `format()` takes IFC-typed arguments — tainted strings cannot enter clean queries. Division requires a non-zero denominator in the type. File operations declare their effects. The stdlib isn't just functions you call — it's contracts the compiler verifies.
+The standard library follows the same philosophy. `Map.get()` returns `Option[T]` — never panics, never returns null. `format()` takes IFC-typed arguments — tainted strings cannot enter clean queries. Division requires a non-zero denominator in the type. File operations declare their effects. The stdlib isn't just functions you call — it's contracts the compiler verifies.
 
 ## The compilation strategy
 

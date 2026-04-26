@@ -18,13 +18,13 @@ The MVL drops every feature that exists for writability over readability. One wa
 | Operator overloading | Go (2009) | Named methods: `matrix.add(other)` |
 | Implicit conversions | — | Explicit: `to_float(x)` |
 | Default arguments | — | Overloaded names or `Option` params |
-| Variadic arguments | — | `List<T>` for N args |
+| Variadic arguments | — | `List[T]` for N args |
 | Macros | — | Stdlib functions (vocabulary over syntax) |
 | Ternary operator | — | `if expr { a } else { b }` |
 | String interpolation | C sprintf (1972), Go fmt (2009), Perl taint (1989) | Explicit `format()` with IFC-typed args |
 | Inheritance | Rust traits (2015), Haskell typeclasses (1989), GoF (1994) | Composition + traits only |
-| Exceptions | Rust Result (2015), Haskell Either (1990s) | `Result<T,E>` only |
-| Null | SML option (1990), Hoare recanted (2009) | `Option<T>` only |
+| Exceptions | Rust Result (2015), Haskell Either (1990s) | `Result[T,E]` only |
+| Null | SML option (1990), Hoare recanted (2009) | `Option[T]` only |
 | Mutable by default | Haskell (1990), Rust (2015) | Immutable default, `mut` opts in |
 | Global state | E language (1997), Pony (2015), Koka (2014) | All state passed explicitly |
 | `while` in total functions | Idris 2 (2021), Lean 4 (2021) | `for` with bounded iterators; `while` only in `partial` fns |
@@ -45,7 +45,7 @@ Dropping features makes the language more powerful, not less. Every dropped feat
 
 Two kinds of compression:
 - **Syntax compression (dropped):** Lambdas, comprehensions, sugar. Hides semantics from the compiler. Bad compression.
-- **Vocabulary compression (stdlib):** `Map.get()` → `Option<T>`, `format()` with IFC labels. Compresses through named, typed, verifiable functions. Good compression.
+- **Vocabulary compression (stdlib):** `Map.get()` → `Option[T]`, `format()` with IFC labels. Compresses through named, typed, verifiable functions. Good compression.
 
 Compress through vocabulary (library functions the compiler understands), not through syntax (sugar the compiler can't see through).
 

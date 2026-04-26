@@ -11,14 +11,14 @@ MVL SHALL use `extern "rust"` blocks to declare trust boundaries, and the `bridg
 ```mvl
 // In foo.mvl — declaration side (verified by MVL)
 extern "rust" {
-    fn read_file(path: Clean<String>) -> Tainted<String>;
+    fn read_file(path: Clean[String]) -> Tainted[String];
 }
 ```
 
 ```rust
 // In bridge.rs — implementation side (trusted but unverified)
 #[no_mangle]
-pub extern "Rust" fn read_file(path: Clean<String>) -> Tainted<String> {
+pub extern "Rust" fn read_file(path: Clean[String]) -> Tainted[String] {
     Tainted(std::fs::read_to_string(&**path).unwrap())
 }
 ```

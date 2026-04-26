@@ -13,8 +13,8 @@ Provides syntax highlighting for **Zed** and **Neovim** (and any editor backed b
   - Totality modifiers: `total` / `partial`
   - Security modifiers: `public` / `tainted` / `secret`
   - Capability annotations: `iso` / `val` / `ref` / `tag`
-  - Security labels: `Public<T>` / `Tainted<T>` / `Secret<T>` / `Clean<T>`
-  - Built-in generic types: `Option<T>` / `Result<T, E>`
+  - Security labels: `Public[T]` / `Tainted[T]` / `Secret[T]` / `Clean[T]`
+  - Built-in generic types: `Option[T]` / `Result[T, E]`
   - Effects: `! IO`, `! Console`, `! DB`, …
   - Special forms: `sanitize()` / `declassify()` / `?` propagation
 - Code folding queries (`queries/folds.scm`)
@@ -150,8 +150,8 @@ It maps cleanly to tree-sitter's context-free grammar DSL with no ambiguities.
 | Totality | `total`, `partial` |
 | Security (function) | `public`, `tainted`, `secret` |
 | Capabilities | `iso`, `val`, `ref`, `tag` |
-| Security labels | `Public<T>`, `Tainted<T>`, `Secret<T>`, `Clean<T>` |
-| Built-in types | `Option<T>`, `Result<T, E>` |
+| Security labels | `Public[T]`, `Tainted[T]`, `Secret[T]`, `Clean[T]` |
+| Built-in types | `Option[T]`, `Result[T, E]` |
 | Effects | `IO`, `Console`, `FileRead`, `FileWrite`, `Net`, `DB` |
 | Special forms | `sanitize()`, `declassify()`, `?` propagation |
 
@@ -161,7 +161,7 @@ See [`docs/grammar.ebnf`](../../docs/grammar.ebnf) for the complete formal gramm
 
 ### `>` in refinements inside generics
 
-The expression `Public<Int where self > 0>` causes a parse error because tree-sitter's
+The expression `Public[Int where self ] 0>` causes a parse error because tree-sitter's
 context-free parser cannot distinguish the `>` in `self > 0` from the closing `>` of
 the generic bracket. This is the classic "angle bracket" ambiguity.
 
@@ -170,14 +170,14 @@ the type alias:
 
 ```mvl
 // ❌ Ambiguous for the tree-sitter grammar:
-num_parties: Public<Int where self > 0>
+num_parties: Public[Int where self ] 0>
 
 // ✅ Works: use alias
 type PositiveInt = Int where self > 0
-num_parties: Public<PositiveInt>
+num_parties: Public[PositiveInt]
 
 // ✅ Works: use >= which is a two-character unambiguous token
-num_parties: Public<Int where self >= 1>
+num_parties: Public[Int where self ]= 1>
 ```
 
 The MVL compiler itself (hand-written recursive descent) handles this correctly.

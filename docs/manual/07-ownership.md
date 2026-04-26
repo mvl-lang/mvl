@@ -35,7 +35,7 @@ Multiple shared borrows can coexist. Shared borrows are immutable.
 ### Exclusive borrows (`&mut T`)
 
 ```mvl
-fn push_item(list: &mut Array<Int>, item: Int) -> () {
+fn push_item(list: &mut Array[Int], item: Int) -> () {
     list.push(item);
 }
 

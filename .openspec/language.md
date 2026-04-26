@@ -122,14 +122,14 @@ Lambdas have immutable captures only. Mutable closures are banned (violate Req 7
 Int, Int8..Int64, UInt8..UInt64       // integers (Int = arbitrary precision)
 Float32, Float64                      // floating point
 Bool, Char, Byte, String              // primitives
-Array<T>, Map<K,V>, Set<T>           // collections
-Option<T>                             // absence (Some | None)
-Result<T,E>                           // fallibility (Ok | Err)
+Array[T], Map[K,V], Set[T]           // collections
+Option[T]                             // absence (Some | None)
+Result[T,E]                           // fallibility (Ok | Err)
 (T, U)                                // tuple
 T where predicate                     // refinement type
 
-Public<T>, Tainted<T>,                // security labels
-Clean<T>, Secret<T>
+Public[T], Tainted[T],                // security labels
+Clean[T], Secret[T]
 
 &T, &mut T                            // shared / exclusive borrow
 iso T, val T, ref T, tag T           // reference capabilities
@@ -243,7 +243,7 @@ This is a stdlib concern, not a language feature. Zero keywords added.
 | Testing | Yes — external/internal, BDD, property, model checker | Tickets #37-40 | Needs spec (005) | #50 |
 | Concurrency | Yes — actors, capabilities, WCET | In research doc | No dedicated spec yet | — |
 | Module system | `module Name { }` in EBNF | Not specced | Imports, visibility, packages | #47 |
-| Generics | Type params `<T>` in EBNF | Not specced | Constraints, monomorphization | #48 |
+| Generics | Type params `[T]` | Not specced | Constraints, monomorphization | #48 |
 | Memory model | Ownership + borrow in spec 001 | Partially specced | Allocator, stack vs heap | — |
 | FFI / interop | `extern "rust"` blocks with trust boundaries | Not specced | Explicit, greppable, assurance-tracked | #52 |
 | Build system | `mvl build` = transpile + cargo | In ADR-0003 | Package manager not designed | — |

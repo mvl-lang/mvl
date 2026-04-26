@@ -93,14 +93,14 @@ No string interpolation. Use `format()` from stdlib. Rationale: string interpola
 ### Collection literals
 
 ```
-[1, 2, 3]           // Array<Int>
-{1, 2, 3}           // Set<Int>
-{"a": 1, "b": 2}    // Map<String, Int>
+[1, 2, 3]           // Array[Int]
+{1, 2, 3}           // Set[Int]
+{"a": 1, "b": 2}    // Map[String, Int]
 (1, "hello")        // Tuple (Int, String)
 ()                  // Unit
 ```
 
-Note: empty `{}` is ambiguous between empty set and empty map. Requires type annotation: `let m: Map<K,V> = {}`.
+Note: empty `{}` is ambiguous between empty set and empty map. Requires type annotation: `let m: Map[K,V] = {}`.
 
 ## 1.5 Comments
 

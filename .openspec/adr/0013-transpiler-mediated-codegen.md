@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-04-17
-**Context:** MVL has no macros (ADR-0002, language contraction) and no runtime reflection. Some stdlib features — `parse<T>()`, derives (`Debug`, `Clone`, `PartialEq`), and future serialization/formatting — require iterating over struct fields at compile time. This ADR documents the mechanism MVL uses instead of macros or reflection.
+**Context:** MVL has no macros (ADR-0002, language contraction) and no runtime reflection. Some stdlib features — `parse[T]()`, derives (`Debug`, `Clone`, `PartialEq`), and future serialization/formatting — require iterating over struct fields at compile time. This ADR documents the mechanism MVL uses instead of macros or reflection.
 
 ---
 
@@ -35,14 +35,14 @@ The transpiler sees the type definition (a struct or enum) and emits the appropr
 | Feature | What the transpiler generates | Status |
 |---------|------------------------------|--------|
 | `Debug`, `Clone`, `PartialEq` derives | Rust `#[derive(...)]` on transpiled structs/enums | ✅ Implemented |
-| `parse<T>()` for arg parsing | Struct field iteration → flag matching → type conversion | ✅ Implemented (#55) |
-| IFC newtypes (`Public<T>`, `Secret<T>`, ...) | Newtype wrappers with arithmetic, Display, Copy | ✅ Implemented |
+| `parse[T]()` for arg parsing | Struct field iteration → flag matching → type conversion | ✅ Implemented (#55) |
+| IFC newtypes (`Public[T]`, `Secret[T]`, ...) | Newtype wrappers with arithmetic, Display, Copy | ✅ Implemented |
 
 ## Future scope — features that will use this mechanism
 
 | Feature | What the transpiler would generate | Phase |
 |---------|-----------------------------------|-------|
-| `json.encode<T>()` / `json.decode<T>()` | Struct field → JSON key mapping | Phase 5 |
+| `json.encode[T]()` / `json.decode[T]()` | Struct field → JSON key mapping | Phase 5 |
 | `Display` / `format()` for custom types | Field-by-field string formatting | Phase 5 |
 | `Eq`, `Ord` for custom types | Field-by-field comparison | Phase 5 |
 | `Serialize` / `Deserialize` (general) | Format-agnostic struct traversal | Phase 6 |

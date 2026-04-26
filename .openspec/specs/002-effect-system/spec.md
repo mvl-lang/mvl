@@ -134,7 +134,7 @@ Non-terminating functions MUST be marked `partial`. Total functions (the default
 
 #### Scenario: Total function with bounded loop
 
-- GIVEN `total fn sum(items: Array<Int>) -> Int { for item in items { ... } }`
+- GIVEN `total fn sum(items: Array[Int]) -> Int { for item in items { ... } }`
 - THEN the compiler MUST accept: `for` over array is bounded
 
 **Tests:** `tests/type_checker.rs::for_loop_in_total_function_accepted`, `tests/type_checker.rs::totality_corpus_parses_and_checks`

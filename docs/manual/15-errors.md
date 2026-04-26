@@ -1,11 +1,11 @@
 # 15. Error Handling
 
-MVL has one error handling mechanism: `Result<T, E>` ([Req 5](../requirements.md#req-5)). No exceptions, no panics (except truly unrecoverable), no sentinel values.
+MVL has one error handling mechanism: `Result[T, E]` ([Req 5](../requirements.md#req-5)). No exceptions, no panics (except truly unrecoverable), no sentinel values.
 
 ## 15.1 Result\<T, E\>
 
 ```mvl
-type Result<T, E> = enum {
+type Result[T, E] = enum {
     Ok(T),
     Err(E),
 }
@@ -16,7 +16,7 @@ Functions that can fail return `Result`. The error type is visible in the signat
 ## 15.2 Propagation with ?
 
 ```mvl
-fn load_user(id: UserId) -> Result<User, AppError> ! DB {
+fn load_user(id: UserId) -> Result[User, AppError] ! DB {
     let row = db.query("...", id)?;          // propagates DbError
     let user = parse_user(row)?;             // propagates ParseError
     Ok(user)
@@ -59,7 +59,7 @@ impl Error for AppError {
         }
     }
 
-    fn source(self) -> Option<&Error> {
+    fn source(self) -> Option[&Error] {
         match self {
             DatabaseError(e) => Some(&e),
             _ => None,
@@ -71,7 +71,7 @@ impl Error for AppError {
 ## 15.5 Option\<T\> for Absence
 
 ```mvl
-fn find(items: Array<Int>, target: Int) -> Option<UInt> {
+fn find(items: Array[Int], target: Int) -> Option[UInt] {
     for (i, item) in items.enumerate() {
         if item == target {
             return Some(i);

@@ -186,7 +186,7 @@ with zero arguments) where `param` is any function parameter. These zero-argumen
 are treated as yielding a strict structural subterm of their receiver. The same applies when the
 receiver is a variable already in the `smaller` set (i.e. a known structural subterm).
 
-- GIVEN `fn f(xs: List<Int>) -> Int { if xs == [] { 0 } else { f(xs.tail()) } }`
+- GIVEN `fn f(xs: List[Int]) -> Int { if xs == [] { 0 } else { f(xs.tail()) } }`
 - THEN the compiler MUST accept (`xs.tail()` is a structural subterm of parameter `xs`)
 
 **Tests:** `tests/type_checker.rs::tail_accessor_recursion_accepted`,
@@ -194,7 +194,7 @@ receiver is a variable already in the `smaller` set (i.e. a known structural sub
 
 #### Scenario: Method accessor on non-parameter rejected
 
-- GIVEN `fn f(xs: List<Int>) -> Int { let local = xs; f(local.tail()) }`
+- GIVEN `fn f(xs: List[Int]) -> Int { let local = xs; f(local.tail()) }`
 - THEN the compiler MUST reject (`local` is not a function parameter; `local.tail()` is not a proven structural decrease)
 
 **Tests:** `tests/type_checker.rs::tail_on_local_variable_rejected`
@@ -213,7 +213,7 @@ original parameter. Bare function parameters do NOT qualify — only pattern-bou
 
 #### Scenario: Length of bare parameter not accepted
 
-- GIVEN `fn f(xs: List<Int>) -> Int { if xs == [] { 0 } else { f(xs.len()) } }`
+- GIVEN `fn f(xs: List[Int]) -> Int { if xs == [] { 0 } else { f(xs.len()) } }`
 - THEN the compiler MUST reject (`xs` is a direct parameter, not a structural subterm; `xs.len()` is not a proven decrease)
 
 **Tests:** `tests/type_checker.rs::len_on_param_directly_rejected`

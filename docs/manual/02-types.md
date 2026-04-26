@@ -55,7 +55,7 @@ type Coordinates = (Float64, Float64)
 ### Option\<T\> — absence ([Req 4](../requirements.md#req-4))
 
 ```mvl
-type Option<T> = enum {
+type Option[T] = enum {
     Some(T),
     None,
 }
@@ -66,7 +66,7 @@ Replaces `null`. Accessing the inner value requires pattern matching or `?` prop
 ### Result\<T, E\> — fallibility ([Req 5](../requirements.md#req-5))
 
 ```mvl
-type Result<T, E> = enum {
+type Result[T, E] = enum {
     Ok(T),
     Err(E),
 }
@@ -77,26 +77,26 @@ Functions that can fail MUST return `Result`. Error types are visible in the sig
 ### Collections
 
 ```mvl
-Array<T>            // ordered, indexed, growable
-Map<K, V>           // key-value, ordered by insertion
-Set<T>              // unique elements
+Array[T]            // ordered, indexed, growable
+Map[K, V]           // key-value, ordered by insertion
+Set[T]              // unique elements
 (T, U)              // tuple (fixed size, heterogeneous)
 ```
 
-`Array.get(index)` returns `Option<T>` — never panics, never returns null.
+`Array.get(index)` returns `Option[T]` — never panics, never returns null.
 
 ## 2.4 Generics
 
 ```mvl
-fn first<T>(items: Array<T>) -> Option<T> {
+fn first[T](items: Array[T]) -> Option[T] {
     items.get(0)
 }
 ```
 
-Type parameters use angle brackets in declarations and square brackets in call position (`f[T]()`). Constraints via `where`:
+Type parameters use square brackets in all positions. Constraints via `where`:
 
 ```mvl
-fn sort<T>(items: Array<T>) -> Array<T>
+fn sort[T](items: Array[T]) -> Array[T]
     where T: Ord
 {
     // ...
@@ -112,7 +112,7 @@ type Display = trait {
 
 type Error = trait {
     fn message(self) -> String
-    fn source(self) -> Option<&Error>
+    fn source(self) -> Option[&Error]
 }
 ```
 
@@ -128,23 +128,23 @@ impl Display for Point {
 
 ## 2.6 Iterator Trait
 
-The `Iterator<T>` trait is the protocol for lazy, sequential element access:
+The `Iterator[T]` trait is the protocol for lazy, sequential element access:
 
 ```mvl
-type Iterator<T> = trait {
-    fn next(mut self) -> Option<T>
+type Iterator[T] = trait {
+    fn next(mut self) -> Option[T]
 }
 ```
 
-`next` advances the iterator and returns the next element, or `None` when exhausted. `Array<T>`, `Range`, `Map<K,V>`, and `Set<T>` all implement `Iterator` out of the box.
+`next` advances the iterator and returns the next element, or `None` when exhausted. `Array[T]`, `Range`, `Map[K,V]`, and `Set[T]` all implement `Iterator` out of the box.
 
 Custom types implement it with `impl`:
 
 ```mvl
 type Counter = struct { mut current: Int, limit: Int }
 
-impl Iterator<Int> for Counter {
-    fn next(mut self) -> Option<Int> {
+impl Iterator[Int] for Counter {
+    fn next(mut self) -> Option[Int] {
         if self.current >= self.limit {
             None
         } else {
@@ -156,7 +156,7 @@ impl Iterator<Int> for Counter {
 }
 ```
 
-Any type implementing `Iterator<T>` can be used in a `for...in` loop. See [§4.5 For Loop](04-statements.md#45-for-loop).
+Any type implementing `Iterator[T]` can be used in a `for...in` loop. See [§4.5 For Loop](04-statements.md#45-for-loop).
 
 ## 2.7 Refinement Types ([Req 10](../requirements.md#req-10))
 
@@ -171,7 +171,7 @@ fn create_port(n: UInt16 where n >= 1 && n <= 65535) -> Port {
     Port { number: n }
 }
 
-type NonEmpty<T> = Array<T> where len(self) > 0
+type NonEmpty[T] = Array[T] where len(self) > 0
 ```
 
 The compiler verifies refinement predicates at compile time using SMT solving. If the predicate cannot be statically verified, the compiler requires a runtime check at the call site.
@@ -181,10 +181,10 @@ The compiler verifies refinement predicates at compile time using SMT solving. I
 Every type can carry a security label:
 
 ```mvl
-Public<T>           // safe for any output
-Clean<T>            // sanitized external data
-Tainted<T>          // from external sources (user input, network, files)
-Secret<T>           // cryptographic material, passwords, keys
+Public[T]           // safe for any output
+Clean[T]            // sanitized external data
+Tainted[T]          // from external sources (user input, network, files)
+Secret[T]           // cryptographic material, passwords, keys
 ```
 
 Data flows up the lattice freely (`Public` → `Secret`). Flowing down requires explicit action:
@@ -225,7 +225,7 @@ See [Chapter 12: Concurrency](12-concurrency.md).
 
 ```mvl
 fn(Int, Int) -> Int                 // pure function
-fn(String) -> Result<Int, ParseError> ! FileRead  // effectful function
+fn(String) -> Result[Int, ParseError] ! FileRead  // effectful function
 ```
 
 Function types include their effects. A `fn(A) -> B` is pure; a `fn(A) -> B ! E` has effect `E`.

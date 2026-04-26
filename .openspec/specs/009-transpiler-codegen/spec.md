@@ -123,7 +123,7 @@ to one function and never used again.
 
 #### Scenario: Collection iterable cloned before for-in
 
-- GIVEN `for item in items { ... }` where `items` is a `List<T>`
+- GIVEN `for item in items { ... }` where `items` is a `List[T]`
 - WHEN transpiled
 - THEN the emitted Rust iterates over `(items).clone()` or equivalent
 - AND `items` remains usable after the loop

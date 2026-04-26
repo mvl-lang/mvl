@@ -12,11 +12,11 @@ Sum types (enums) and product types (structs) with exhaustive pattern matching. 
 
 ### 2. Generics with Const Parameters
 
-Type parameters (`List<T>`) and const-generic fixed-size arrays (`Array<T, N>`). Monomorphized at transpile time — each concrete instantiation gets its own Rust code. Constraint enforcement on generics is Phase 4 (#225).
+Type parameters (`List[T]`) and const-generic fixed-size arrays (`Array[T, N]`). Monomorphized at transpile time — each concrete instantiation gets its own Rust code. Constraint enforcement on generics is Phase 4 (#225).
 
 ### 3. Refinement Types (Req 10)
 
-Value-level predicates on types: `Int where x > 0`, `Array<T> where len(self) > 0`. Currently symbolic proof for literals, runtime checks otherwise. SMT integration deferred. Gets you "right type AND right value."
+Value-level predicates on types: `Int where x > 0`, `Array[T] where len(self) > 0`. Currently symbolic proof for literals, runtime checks otherwise. SMT integration deferred. Gets you "right type AND right value."
 
 ### 4. Security Labels / IFC (Req 11)
 
@@ -32,11 +32,11 @@ Ownership tracking with use-after-move detection. Passing a value transfers owne
 
 ### 6. Null Elimination (Req 4)
 
-No null. Absence is `Option<T>` — `Some(value)` or `None`. Accessing the inner value requires pattern matching. The billion-dollar mistake is a compile error.
+No null. Absence is `Option[T]` — `Some(value)` or `None`. Accessing the inner value requires pattern matching. The billion-dollar mistake is a compile error.
 
 ### 7. Error Path Visibility (Req 5)
 
-Functions that can fail return `Result<T, E>`. Error type is in the signature. Ignoring a Result is a compile error. `?` propagates errors explicitly. No hidden exception paths.
+Functions that can fail return `Result[T, E]`. Error type is in the signature. Ignoring a Result is a compile error. `?` propagates errors explicitly. No hidden exception paths.
 
 ### 8. Resource Linearity (Req 6)
 
