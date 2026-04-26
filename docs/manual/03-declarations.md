@@ -109,7 +109,7 @@ module http {
     type Request = struct { ... }
     type Response = struct { ... }
 
-    fn get(url: Clean[Url]) -> Result<Tainted[Response], NetError> ! Net {
+    fn get(url: Clean[Url]) -> Result[Tainted[Response], NetError] ! Net {
         // ...
     }
 }

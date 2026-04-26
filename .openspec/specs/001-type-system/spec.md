@@ -414,8 +414,8 @@ The type checker MUST verify that the expression after `in` implements `Iterator
 fn map[T, U](self: Iterator[T], f: fn(T) -> U) -> Iterator[U]
 fn filter[T](self: Iterator[T], pred: fn(&T) -> Bool) -> Iterator[T]
 fn flat_map[T, U](self: Iterator[T], f: fn(T) -> Iterator[U]) -> Iterator[U]
-fn enumerate[T](self: Iterator[T]) -> Iterator<(UInt, T)>
-fn zip[T, U](self: Iterator[T], other: Iterator[U]) -> Iterator<(T, U)>
+fn enumerate[T](self: Iterator[T]) -> Iterator[(UInt, T)]
+fn zip[T, U](self: Iterator[T], other: Iterator[U]) -> Iterator[(T, U)]
 ```
 
 Terminal operations that force evaluation:

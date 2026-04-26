@@ -46,7 +46,7 @@ Data from external sources is automatically `Tainted`:
 ### sanitize — Tainted → Clean
 
 ```mvl
-fn sanitize_email(input: Tainted[String]) -> Result<Clean[Email], ValidationError> {
+fn sanitize_email(input: Tainted[String]) -> Result[Clean[Email], ValidationError] {
     let trimmed = input.trim();
     if is_valid_email(trimmed) {
         Ok(sanitize(Email.parse(trimmed)))

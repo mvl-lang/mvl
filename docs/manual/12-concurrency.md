@@ -61,7 +61,7 @@ match rx.recv() {
 No orphan tasks. Every spawned task is tied to a scope:
 
 ```mvl
-fn parallel_fetch(urls: Array[Url]) -> Array<Result[Response, Error]> ! Net, Async {
+fn parallel_fetch(urls: Array[Url]) -> Array[Result[Response, Error]] ! Net, Async {
     scope(|s| {
         let handles = urls.map(|url| s.spawn(|| fetch(url)));
         handles.map(|h| h.join())

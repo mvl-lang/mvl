@@ -17,8 +17,8 @@ Derived from cross-language analysis of Rust std, Go std, Python stdlib, and C l
 fn map[T, U](self: Iterator[T], f: fn(T) -> U) -> Iterator[U]
 fn filter[T](self: Iterator[T], pred: fn(&T) -> Bool) -> Iterator[T]
 fn flat_map[T, U](self: Iterator[T], f: fn(T) -> Iterator[U]) -> Iterator[U]
-fn enumerate[T](self: Iterator[T]) -> Iterator<(UInt, T)>
-fn zip[T, U](self: Iterator[T], other: Iterator[U]) -> Iterator<(T, U)>
+fn enumerate[T](self: Iterator[T]) -> Iterator[(UInt, T)]
+fn zip[T, U](self: Iterator[T], other: Iterator[U]) -> Iterator[(T, U)]
 
 // Terminal — forces evaluation
 fn fold[T, U](self: Iterator[T], init: U, f: fn(U, T) -> U) -> U
@@ -89,7 +89,7 @@ fn read_file(path: Path) -> Result[String, IOError] ! FileRead
 fn write_file(path: Path, data: String) -> Result<(), IOError> ! FileWrite
 
 // Network: Req 11 — data from network is Tainted
-fn http_get(url: Clean[Url]) -> Result<Tainted[Response], NetError> ! Net
+fn http_get(url: Clean[Url]) -> Result[Tainted[Response], NetError] ! Net
 
 // String formatting: Req 11 — no tainted interpolation
 fn sql_query(template: String, params: Array[SqlParam]) -> Query ! DB

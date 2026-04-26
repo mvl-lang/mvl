@@ -203,7 +203,7 @@ The parser MUST parse security-labeled types (`Public[T]`, `Tainted[T]`, `Secret
 
 #### Scenario: Parse nested labels
 
-- GIVEN type annotation `Public<Option<Secret[Key]>>`
+- GIVEN type annotation `Public[Option[Secret[Key]]]`
 - WHEN parsed
 - THEN AST contains nested LabeledType → OptionType → LabeledType
 
