@@ -51,7 +51,7 @@ MVL's type system pre-kills structural mutants (~70% of all possible mutations):
 | Mutation category | Pre-killed by compiler? | Example |
 |-------------------|------------------------|---------|
 | Type changes (`Int` → `String`) | ✅ Type error | Compiler rejects |
-| Null removal (`Option<T>` → `T`) | ✅ Type error | Compiler rejects |
+| Null removal (`Option[T]` → `T`) | ✅ Type error | Compiler rejects |
 | Effect removal (`!DB` → pure) | ✅ Effect checker | Compiler rejects |
 | Taint change (`Tainted` → `Clean`) | ✅ IFC checker | Compiler rejects |
 | Arithmetic flip (`+` → `-`) | ❌ Type-preserving | Tests must catch |

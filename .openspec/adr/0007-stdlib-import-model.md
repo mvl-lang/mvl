@@ -16,7 +16,7 @@ Three-tier import model. The boundary rule: **if the compiler needs it to verify
 
 ## Core prelude contents
 
-Types: `Bool`, `Int`, `Int8`..`Int64`, `UInt8`..`UInt64`, `Float32`, `Float64`, `Byte`, `Char`, `String`, `Array<T>`, `Map<K,V>`, `Set<T>`, `Option<T>`, `Result<T,E>`, `Tuple`, `Range`.
+Types: `Bool`, `Int`, `Int8`..`Int64`, `UInt8`..`UInt64`, `Float32`, `Float64`, `Byte`, `Char`, `String`, `Array[T]`, `Map[K,V]`, `Set[T]`, `Option[T]`, `Result[T,E]`, `Tuple`, `Range`.
 
 Traits: `Eq`, `Ord`, `Hash`, `Display`, `Debug`, `Iterator`.
 
@@ -26,7 +26,7 @@ No effects in the prelude. `println` requires `! Console` — but the *type* is 
 
 ## Why not everything explicit (Go model)?
 
-The MVL already dropped every implicit feature that hurts verification (implicit conversions, default args, macros, inheritance, null). The remaining prelude items are safe to keep implicit because they ARE the type system — `Option<T>` and `Result<T,E>` aren't library conveniences, they're how the compiler reasons about absence and errors. Forcing explicit imports for these adds verbosity without adding safety.
+The MVL already dropped every implicit feature that hurts verification (implicit conversions, default args, macros, inheritance, null). The remaining prelude items are safe to keep implicit because they ARE the type system — `Option[T]` and `Result[T,E]` aren't library conveniences, they're how the compiler reasons about absence and errors. Forcing explicit imports for these adds verbosity without adding safety.
 
 ## Why not everything implicit (Python model)?
 
@@ -36,7 +36,7 @@ Python imports everything and you can't tell from a file what it depends on. The
 
 Core — no import needed:
 ```mvl
-fn main() -> Result<(), Error> ! Console {
+fn main() -> Result[(), Error] ! Console {
     let names = ["alice", "bob", "charlie"]
     let upper = names.map(String.to_upper)
     println(upper.join(", "))
@@ -48,9 +48,9 @@ Standard — explicit import, effects visible:
 use std.fs.{File, read_to_string}
 use std.json
 
-fn load_config(path: Path) -> Result<Config, Error> ! FileRead {
+fn load_config(path: Path) -> Result[Config, Error] ! FileRead {
     let text = read_to_string(path)?
-    json.decode<Config>(text)
+    json.decode[Config](text)
 }
 ```
 

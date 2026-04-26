@@ -73,7 +73,7 @@ fn load_config_top() -> Result[Tainted[String], String] ! FileRead("/etc/") {
 
 // ── Caller for read_log: general effect covers specific callee ─────────────
 
-fn load_log() -> Result<Tainted<String>, String> ! FileRead {
+fn load_log() -> Result[Tainted[String], String] ! FileRead {
     read_log()
 }
 
