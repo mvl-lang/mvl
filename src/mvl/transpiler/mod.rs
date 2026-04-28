@@ -81,7 +81,7 @@ pub fn count_extern_decls(prog: &Program) -> usize {
 /// kernel trust boundary via `extern "rust" { … }`. Any program that loads
 /// this prelude needs `mvl_runtime` as a Cargo dependency so that the kernel
 /// primitives (re-exported via `mvl_runtime::prelude::*`) are in scope.
-fn prelude_requires_runtime(prelude_progs: &[Program]) -> bool {
+pub fn prelude_requires_runtime(prelude_progs: &[Program]) -> bool {
     prelude_progs
         .iter()
         .any(|p| p.declarations.iter().any(|d| matches!(d, Decl::Extern(_))))

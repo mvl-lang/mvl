@@ -1,0 +1,122 @@
+// clearance.mvl — Flight clearance decision logic.
+//
+// Demonstrates:
+//   1. Req 3 (Totality): total fn with exhaustive match
+//   2. Req 7 (Effects): pure functions — no I/O, deterministic
+//   3. Compound boolean decisions — designed for MC/DC analysis
+//      - weather_ok:    (visibility && wind && !icing && !thunderstorm)
+//      - aircraft_ok:   (maintenance && fuel && crew)
+//      - can_dispatch:  (weather && aircraft && route_ok)
+//   4. Mutation-friendly: multiple conditions with distinct paths
+//
+// No extern, no effects — pure decision logic.
+// Assurance note: 0 extern blocks.
+
+use model::Visibility;
+use model::WindCondition;
+use model::Weather;
+use model::MaintenanceStatus;
+use model::FuelStatus;
+use model::Aircraft;
+use model::Clearance;
+use model::RejectionReason;
+use model::RouteType;
+
+// ── Weather assessment ───────────────────────────────────────────────────
+// Decision: visibility_ok AND wind_ok AND NOT icing AND NOT thunderstorm
+// MC/DC: 4 conditions → minimum 5 test cases
+
+pub fn visibility_ok(v: Visibility) -> Bool {
+    match v {
+        Visibility::Good    => true,
+        Visibility::Reduced => true,
+        Visibility::Poor    => false,
+    }
+}
+
+pub fn wind_ok(w: WindCondition) -> Bool {
+    match w {
+        WindCondition::Calm     => true,
+        WindCondition::Moderate => true,
+        WindCondition::Strong   => false,
+    }
+}
+
+pub fn weather_clear(wx: Weather) -> Bool {
+    visibility_ok(wx.visibility) && wind_ok(wx.wind) && !wx.icing && !wx.thunderstorm
+}
+
+// ── Aircraft assessment ──────────────────────────────────────────────────
+// Decision: NOT grounded AND fuel_sufficient AND crew_valid
+// MC/DC: 3 conditions → minimum 4 test cases
+
+pub fn maintenance_ok(m: MaintenanceStatus) -> Bool {
+    match m {
+        MaintenanceStatus::Cleared      => true,
+        MaintenanceStatus::DeferredItem => true,
+        MaintenanceStatus::Grounded     => false,
+    }
+}
+
+pub fn fuel_ok(f: FuelStatus) -> Bool {
+    match f {
+        FuelStatus::Sufficient   => true,
+        FuelStatus::Marginal     => true,
+        FuelStatus::Insufficient => false,
+    }
+}
+
+pub fn aircraft_ready(ac: Aircraft) -> Bool {
+    maintenance_ok(ac.maintenance) && fuel_ok(ac.fuel) && ac.crew_valid
+}
+
+// ── Route constraint ─────────────────────────────────────────────────────
+// Decision: if oceanic THEN etops_cert required
+// MC/DC: 2 conditions (is_oceanic AND etops_cert) → minimum 3 test cases
+
+pub fn route_ok(route: RouteType, ac: Aircraft) -> Bool {
+    match route {
+        RouteType::Oceanic => ac.etops_cert,
+        RouteType::International => true,
+        RouteType::Domestic => true,
+    }
+}
+
+// ── Top-level dispatch decision ──────────────────────────────────────────
+// Decision: weather_clear AND aircraft_ready AND route_ok
+// MC/DC: 3 conditions → minimum 4 test cases
+// Total obligations across all decisions: ~15
+
+pub fn can_dispatch(wx: Weather, ac: Aircraft, route: RouteType) -> Clearance {
+    if weather_clear(wx) && aircraft_ready(ac) && route_ok(route, ac) {
+        Clearance::Cleared
+    } else {
+        Clearance::Rejected
+    }
+}
+
+// ── Detailed rejection reason (first failure wins) ───────────────────────
+// Provides the specific reason for rejection — used for pilot briefing.
+// Order matters: most critical checks first.
+
+pub fn rejection_reason(wx: Weather, ac: Aircraft, route: RouteType) -> Result[Clearance, RejectionReason] {
+    if !visibility_ok(wx.visibility) {
+        Err(RejectionReason::WeatherBelowMinima)
+    } else if wx.thunderstorm {
+        Err(RejectionReason::ThunderstormEnRoute)
+    } else if wx.icing {
+        Err(RejectionReason::IcingNoDeice)
+    } else if !wind_ok(wx.wind) {
+        Err(RejectionReason::WindExceedsLimit)
+    } else if !maintenance_ok(ac.maintenance) {
+        Err(RejectionReason::AircraftGrounded)
+    } else if !fuel_ok(ac.fuel) {
+        Err(RejectionReason::InsufficientFuel)
+    } else if !ac.crew_valid {
+        Err(RejectionReason::CrewNotValid)
+    } else if !route_ok(route, ac) {
+        Err(RejectionReason::EtopsNotCertified)
+    } else {
+        Ok(Clearance::Cleared)
+    }
+}

@@ -1,0 +1,59 @@
+// main.mvl — Flight clearance demo scenario.
+//
+// Demonstrates:
+//   1. End-to-end dispatch decision with detailed rejection reasons
+//   2. Multiple scenarios: clear day, storm, grounded aircraft, oceanic
+//
+// Assurance note: 0 extern blocks (pure logic demo).
+
+use model::Visibility;
+use model::WindCondition;
+use model::Weather;
+use model::MaintenanceStatus;
+use model::FuelStatus;
+use model::Aircraft;
+use model::Clearance;
+use model::RejectionReason;
+use model::RouteType;
+
+fn main() -> Unit {
+    // Scenario 1: clear day, good aircraft, domestic
+    let wx1 = Weather { visibility: Visibility::Good, wind: WindCondition::Calm, icing: false, thunderstorm: false };
+    let ac1 = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: false };
+    let r1 = can_dispatch(wx1, ac1, RouteType::Domestic);
+    let s1 = match r1 { Clearance::Cleared => "CLEARED", Clearance::Rejected => "REJECTED" };
+    println("Scenario 1 (clear/domestic): " + s1);
+
+    // Scenario 2: thunderstorm
+    let wx2 = Weather { visibility: Visibility::Good, wind: WindCondition::Moderate, icing: false, thunderstorm: true };
+    let ac2 = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: true };
+    let r2 = rejection_reason(wx2, ac2, RouteType::International);
+    let s2 = match r2 {
+        Ok(_)  => "CLEARED",
+        Err(RejectionReason::ThunderstormEnRoute) => "REJECTED: thunderstorm",
+        Err(_) => "REJECTED: other",
+    };
+    println("Scenario 2 (thunderstorm): " + s2);
+
+    // Scenario 3: grounded aircraft
+    let wx3 = Weather { visibility: Visibility::Good, wind: WindCondition::Calm, icing: false, thunderstorm: false };
+    let ac3 = Aircraft { maintenance: MaintenanceStatus::Grounded, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: true };
+    let r3 = rejection_reason(wx3, ac3, RouteType::Domestic);
+    let s3 = match r3 {
+        Ok(_)  => "CLEARED",
+        Err(RejectionReason::AircraftGrounded) => "REJECTED: grounded",
+        Err(_) => "REJECTED: other",
+    };
+    println("Scenario 3 (grounded): " + s3);
+
+    // Scenario 4: oceanic without ETOPS
+    let wx4 = Weather { visibility: Visibility::Good, wind: WindCondition::Calm, icing: false, thunderstorm: false };
+    let ac4 = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: false };
+    let r4 = rejection_reason(wx4, ac4, RouteType::Oceanic);
+    let s4 = match r4 {
+        Ok(_)  => "CLEARED",
+        Err(RejectionReason::EtopsNotCertified) => "REJECTED: no ETOPS",
+        Err(_) => "REJECTED: other",
+    };
+    println("Scenario 4 (oceanic/no ETOPS): " + s4);
+}

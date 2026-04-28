@@ -480,7 +480,9 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool) {
     let mut modules: Vec<(String, String, String)> = Vec::new();
     let mut all_decisions: Vec<MCDCDecision> = Vec::new();
     let mut file_stems: Vec<String> = Vec::new();
-    let mut need_mvl_runtime = false;
+    // The stdlib prelude (strings.mvl, lists.mvl, …) uses extern "rust" blocks,
+    // so the runtime crate is always needed when the prelude is loaded.
+    let mut need_mvl_runtime = transpiler::prelude_requires_runtime(&stdlib_prelude_progs);
 
     for test_file in &test_files {
         let file_str = test_file.display().to_string();
@@ -1210,7 +1212,9 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool) {
     let mut all_branches: Vec<transpiler::BranchInfo> = Vec::new();
     let mut next_branch_id = 0usize;
     let mut file_stems: Vec<String> = Vec::new(); // ordered list for the coverage report
-    let mut need_mvl_runtime = false;
+                                                  // The stdlib prelude (strings.mvl, lists.mvl, …) uses extern "rust" blocks,
+                                                  // so the runtime crate is always needed when the prelude is loaded.
+    let mut need_mvl_runtime = transpiler::prelude_requires_runtime(&stdlib_prelude_progs);
 
     for test_file in &test_files {
         let file_str = test_file.display().to_string();
@@ -1518,7 +1522,9 @@ fn cmd_mutate(path: &str, quiet: bool, limit: Option<usize>) {
     let mut modules: Vec<(String, String, String)> = Vec::new();
     let mut all_mutants: Vec<transpiler::MutantInfo> = Vec::new();
     let mut file_stems: Vec<String> = Vec::new();
-    let mut need_mvl_runtime = false;
+    // The stdlib prelude (strings.mvl, lists.mvl, …) uses extern "rust" blocks,
+    // so the runtime crate is always needed when the prelude is loaded.
+    let mut need_mvl_runtime = transpiler::prelude_requires_runtime(&stdlib_prelude_progs);
 
     for test_file in &test_files {
         let file_str = test_file.display().to_string();

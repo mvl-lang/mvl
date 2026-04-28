@@ -396,8 +396,9 @@ impl Codegen {
                         let source_mod = ud.path[..ud.path.len() - 1].join("::");
                         if source_mod != "std" {
                             // In test-stub mode (source file included in test crate) skip
-                            // cross-module imports — the sibling modules in the test crate may
-                            // not export the same items as the real modules.
+                            // cross-module imports — the test crate re-declares types locally
+                            // (workaround for #96) and emitting `use crate::mod::Type` for a
+                            // locally re-declared type causes name conflicts.
                             if !self.test_extern_stubs {
                                 self.line(&format!("use crate::{};", ud.path.join("::")));
                             }
