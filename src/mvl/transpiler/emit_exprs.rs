@@ -478,6 +478,10 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                     emit_expr(&mut tmp, k);
                     tmp.push(", ");
                     emit_expr(&mut tmp, v);
+                    // `.into()` coerces IFC-label wrappers (Clean<String>, etc.) to
+                    // their plain inner type so map values match HashMap<String, String>
+                    // signatures in stdlib functions like log_info / log_warn.
+                    tmp.push(".into()");
                     tmp.push(")");
                     tmp.finish()
                 })
