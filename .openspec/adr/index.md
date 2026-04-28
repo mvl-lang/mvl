@@ -16,3 +16,4 @@
 | [0012](0012-extended-package-model.md) | Extended package model — extern inside, verified API outside | Accepted |
 | [0013](0013-transpiler-mediated-codegen.md) | Transpiler-mediated type-directed code generation — no macros, no reflection | Accepted |
 | [0014](0014-mutation-testing-execution-model.md) | Mutation testing execution model — single compile, parallel runs | Accepted |
+| [0015](0015-mcdc-coverage-execution-model.md) | MC/DC coverage execution model — eager evaluation, Unique-Cause, u16 encoding | Accepted |
