@@ -23,6 +23,8 @@ pub struct MCDCDecision {
     pub line: u32,
     /// Number of atomic boolean clauses.
     pub clause_count: usize,
+    /// `true` when the decision is a `while` condition; `false` for `if`.
+    pub is_while: bool,
 }
 
 /// Accumulates MC/DC decision registrations during a transpilation pass.
@@ -40,13 +42,24 @@ impl MCDCMap {
     }
 
     /// Register a new decision and return its unique counter index.
+    ///
+    /// # Panics
+    /// Panics if `clause_count > 15`: the u16 encoding reserves one bit for
+    /// the outcome, leaving 15 bits for clauses.  Conditions with 16+ clauses
+    /// are pathological and the assertion catches silent data corruption that
+    /// would produce false COVERED results.
     pub fn alloc(
         &mut self,
         fn_name: String,
         file: String,
         line: u32,
         clause_count: usize,
+        is_while: bool,
     ) -> usize {
+        assert!(
+            clause_count <= 15,
+            "MC/DC: decision at line {line} has {clause_count} clauses; max supported is 15 (u16 encoding)"
+        );
         let id = self.next_id;
         self.next_id += 1;
         self.decisions.push(MCDCDecision {
@@ -55,6 +68,7 @@ impl MCDCMap {
             file,
             line,
             clause_count,
+            is_while,
         });
         id
     }
@@ -123,6 +137,11 @@ pub fn emit_mcdc_report_test(n_decisions: usize) -> String {
     let mut s = String::new();
     s.push_str("// ── MVL MC/DC report (auto-generated) ───────────────────────────────────────\n");
     s.push_str("#[cfg(test)]\n#[test]\n");
+    // IMPORTANT: The `zzz_` prefix is relied upon to sort this test last in
+    // cargo's default alphabetic ordering, so all clause observations are
+    // recorded before the file is written.  Cargo does not formally guarantee
+    // test execution order; if a future cargo version changes ordering, some
+    // observations may be missing from the output file.
     s.push_str("fn zzz_mvl_mcdc_report() {\n");
     s.push_str("    if let Ok(path) = std::env::var(\"MVL_MCDC_OUT\") {\n");
     s.push_str("        let mut out = String::new();\n");
@@ -243,5 +262,41 @@ mod tests {
         // A: bit 0 differs (1 vs 0), other clause B: bit 1 differs too (1 vs 0) → fail
         assert!(!is_clause_covered(2, 0, &obs));
         assert!(!is_clause_covered(2, 1, &obs));
+    }
+
+    // ── 3-clause coverage (A && B && C) ───────────────────────────────────
+
+    #[test]
+    fn three_clause_b_covered() {
+        // A && B && C: B independently toggles outcome when A=1,C=1
+        // t1: A=1,B=1,C=1 → outcome=1 → bits: vals=0b111, outcome → (0b111 | (1<<3)) = 0b1111 = 15
+        // t2: A=1,B=0,C=1 → outcome=0 → bits: vals=0b101, outcome=0 → 0b0101 = 5
+        let obs = vec![0b1111u16, 0b0101u16];
+        // clause_count=3, clause_bit=1 (B)
+        assert!(is_clause_covered(3, 1, &obs), "B should be covered");
+        // A and C are not covered by just these two obs
+        assert!(!is_clause_covered(3, 0, &obs), "A not covered by these obs");
+        assert!(!is_clause_covered(3, 2, &obs), "C not covered by these obs");
+    }
+
+    #[test]
+    fn three_clause_all_covered() {
+        // Full independence pairs for A && B && C:
+        // A: t1=(1,1,1,out=1)=0b1111, t2=(0,1,1,out=0)=0b0110
+        // B: t1=(1,1,1,out=1)=0b1111, t2=(1,0,1,out=0)=0b0101
+        // C: t1=(1,1,1,out=1)=0b1111, t2=(1,1,0,out=0)=0b0011
+        let obs = vec![0b1111u16, 0b0110u16, 0b0101u16, 0b0011u16];
+        assert!(is_clause_covered(3, 0, &obs), "A should be covered");
+        assert!(is_clause_covered(3, 1, &obs), "B should be covered");
+        assert!(is_clause_covered(3, 2, &obs), "C should be covered");
+    }
+
+    #[test]
+    fn alloc_panics_on_too_many_clauses() {
+        let result = std::panic::catch_unwind(|| {
+            let mut m = MCDCMap::new(0);
+            m.alloc("f".into(), "f".into(), 1, 16, false);
+        });
+        assert!(result.is_err(), "should panic for clause_count=16");
     }
 }

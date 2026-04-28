@@ -125,7 +125,12 @@ impl Codegen {
     ///
     /// Returns `Some(id)` when MC/DC instrumentation is active, `None` otherwise.
     /// Test functions are excluded (returns `None` when `current_fn_is_test`).
-    pub fn alloc_mcdc_decision(&mut self, line: u32, clause_count: usize) -> Option<usize> {
+    pub fn alloc_mcdc_decision(
+        &mut self,
+        line: u32,
+        clause_count: usize,
+        is_while: bool,
+    ) -> Option<usize> {
         if self.current_fn_is_test {
             return None;
         }
@@ -133,7 +138,7 @@ impl Codegen {
         let file = self.current_file.clone();
         self.mcdc
             .as_mut()
-            .map(|m| m.alloc(fn_name, file, line, clause_count))
+            .map(|m| m.alloc(fn_name, file, line, clause_count, is_while))
     }
 
     // ── Mutation helpers ──────────────────────────────────────────────────

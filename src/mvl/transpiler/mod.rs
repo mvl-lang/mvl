@@ -699,6 +699,144 @@ mod tests {
         prog
     }
 
+    // ── MC/DC codegen structural tests ────────────────────────────────────
+
+    /// Compound `if (A && B)` emits clause locals, outcome var, and record call.
+    #[test]
+    fn mcdc_if_emits_clause_locals_and_record() {
+        let prog = parse("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
+        let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert_eq!(decisions.len(), 1, "one compound decision");
+        assert!(!decisions[0].is_while);
+        let rs = &out.lib_rs;
+        assert!(
+            rs.contains("let __d0_c0: bool ="),
+            "missing clause 0 local: {rs}"
+        );
+        assert!(
+            rs.contains("let __d0_c1: bool ="),
+            "missing clause 1 local: {rs}"
+        );
+        assert!(
+            rs.contains("let __d0_outcome: bool ="),
+            "missing outcome var: {rs}"
+        );
+        assert!(
+            rs.contains("__mvl_mcdc::record(0usize,"),
+            "missing record call: {rs}"
+        );
+        assert!(
+            rs.contains("if __d0_outcome {"),
+            "missing instrumented if: {rs}"
+        );
+    }
+
+    /// The recomposed expression preserves boolean operator structure with parens.
+    #[test]
+    fn mcdc_if_recomposed_uses_clause_vars() {
+        let prog = parse("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
+        let (out, _) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let rs = &out.lib_rs;
+        // Recomposed: (__d0_c0 && __d0_c1) — clause vars, not original exprs
+        assert!(
+            rs.contains("(__d0_c0 && __d0_c1)"),
+            "recomposed expression wrong: {rs}"
+        );
+    }
+
+    /// Three-clause `A || B || C` emits three clause locals.
+    #[test]
+    fn mcdc_if_three_clauses_emits_three_locals() {
+        let prog =
+            parse("fn f(a: Bool, b: Bool, c: Bool) -> Int { if a || b || c { 1 } else { 0 } }");
+        let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert_eq!(decisions[0].clause_count, 3);
+        let rs = &out.lib_rs;
+        assert!(rs.contains("let __d0_c0: bool ="), "{rs}");
+        assert!(rs.contains("let __d0_c1: bool ="), "{rs}");
+        assert!(rs.contains("let __d0_c2: bool ="), "{rs}");
+    }
+
+    /// `emit_mcdc_record` encodes clauses as shifted bits in the record call.
+    #[test]
+    fn mcdc_record_encoding_present() {
+        let prog = parse("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
+        let (out, _) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let rs = &out.lib_rs;
+        // Encoding: clause 0 at bit 0, clause 1 at bit 1, outcome at bit 2
+        assert!(
+            rs.contains("(__d0_c0 as u16) << 0u16"),
+            "missing bit-0 encoding: {rs}"
+        );
+        assert!(
+            rs.contains("(__d0_c1 as u16) << 1u16"),
+            "missing bit-1 encoding: {rs}"
+        );
+        assert!(
+            rs.contains("(__d0_outcome as u16) << 2u16"),
+            "missing outcome encoding: {rs}"
+        );
+        assert!(
+            rs.contains("#[cfg(test)] crate::__mvl_mcdc::record("),
+            "missing cfg(test) guard: {rs}"
+        );
+    }
+
+    /// Compound `while` is restructured as `loop { … if !outcome { break; } … }`.
+    #[test]
+    fn mcdc_while_restructured_as_loop() {
+        let prog = parse(
+            "partial fn f(a: Bool, b: Bool) -> Int { let mut x: Int = 0; while a && b { x = x + 1; } x }",
+        );
+        let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert_eq!(decisions.len(), 1);
+        assert!(decisions[0].is_while);
+        let rs = &out.lib_rs;
+        assert!(rs.contains("loop {"), "missing loop restructuring: {rs}");
+        assert!(
+            rs.contains("if !__d0_outcome { break; }"),
+            "missing break guard: {rs}"
+        );
+        assert!(rs.contains("let __d0_c0: bool ="), "{rs}");
+        assert!(rs.contains("let __d0_c1: bool ="), "{rs}");
+    }
+
+    /// Simple (single-clause) conditions are NOT instrumented for MC/DC.
+    #[test]
+    fn mcdc_simple_condition_not_instrumented() {
+        let prog = parse("fn f(x: Int) -> Int { if x > 0 { 1 } else { 0 } }");
+        let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert!(
+            decisions.is_empty(),
+            "simple condition must not be instrumented"
+        );
+        assert!(!out.lib_rs.contains("__d0_c0"), "no clause locals expected");
+    }
+
+    /// Test functions are excluded from MC/DC instrumentation.
+    #[test]
+    fn mcdc_test_fn_excluded() {
+        let prog =
+            parse("test fn t(a: Bool, b: Bool) -> Bool { if a && b { true } else { false } }");
+        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert!(
+            decisions.is_empty(),
+            "test fn must not generate MC/DC decisions"
+        );
+    }
+
+    /// `start_id` offsets decision IDs correctly for multi-file projects.
+    #[test]
+    fn mcdc_start_id_offset_applied() {
+        let prog = parse("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
+        let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 5, &[]);
+        assert_eq!(decisions[0].id, 5, "decision ID should be start_id");
+        assert!(
+            out.lib_rs.contains("__mvl_mcdc::record(5usize,"),
+            "record call must use offset id"
+        );
+    }
+
     /// `has_extern_rust` is `true` when program contains `extern "rust"` block.
     #[test]
     fn has_extern_rust_true_for_rust_abi() {

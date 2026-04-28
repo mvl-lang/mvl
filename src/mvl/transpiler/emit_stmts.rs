@@ -324,7 +324,7 @@ fn emit_mcdc_if(
         return false;
     }
     let n = clauses.len();
-    let Some(decision_id) = cg.alloc_mcdc_decision(line, n) else {
+    let Some(decision_id) = cg.alloc_mcdc_decision(line, n, false) else {
         return false;
     };
 
@@ -383,7 +383,7 @@ fn emit_mcdc_while(
         return false;
     }
     let n = clauses.len();
-    let Some(decision_id) = cg.alloc_mcdc_decision(line, n) else {
+    let Some(decision_id) = cg.alloc_mcdc_decision(line, n, true) else {
         return false;
     };
 
