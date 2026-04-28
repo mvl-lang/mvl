@@ -328,19 +328,14 @@ fn emit_mcdc_if(
         return false;
     };
 
-    // Emit clause locals (eager evaluation — MVL expressions are pure).
-    for (i, clause_expr) in clauses.iter().enumerate() {
-        cg.indent();
-        cg.push(&format!("let __d{decision_id}_c{i}: bool = "));
-        emit_expr(cg, clause_expr);
-        cg.push(";");
-        cg.nl();
-    }
+    // Emit clause value and eval-flag arrays (short-circuit — only observed clauses are set).
+    cg.line(&format!("let mut __d{decision_id}_c = [false; {n}];"));
+    cg.line(&format!("let mut __d{decision_id}_e = [false; {n}];"));
 
-    // Emit outcome via recomposed boolean expression using clause vars.
+    // Emit outcome via short-circuit tree that sets c[i]/e[i] for each leaf when reached.
     cg.indent();
     cg.push(&format!("let __d{decision_id}_outcome: bool = "));
-    emit_mcdc_recomposed(cg, cond, decision_id, &mut 0);
+    emit_mcdc_sc_outcome(cg, cond, decision_id, &mut 0, &mut 0);
     cg.push(";");
     cg.nl();
 
@@ -393,19 +388,14 @@ fn emit_mcdc_while(
     cg.nl();
     cg.push_indent();
 
-    // Clause locals.
-    for (i, clause_expr) in clauses.iter().enumerate() {
-        cg.indent();
-        cg.push(&format!("let __d{decision_id}_c{i}: bool = "));
-        emit_expr(cg, clause_expr);
-        cg.push(";");
-        cg.nl();
-    }
+    // Clause value and eval-flag arrays.
+    cg.line(&format!("let mut __d{decision_id}_c = [false; {n}];"));
+    cg.line(&format!("let mut __d{decision_id}_e = [false; {n}];"));
 
-    // Outcome.
+    // Outcome via short-circuit tree.
     cg.indent();
     cg.push(&format!("let __d{decision_id}_outcome: bool = "));
-    emit_mcdc_recomposed(cg, cond, decision_id, &mut 0);
+    emit_mcdc_sc_outcome(cg, cond, decision_id, &mut 0, &mut 0);
     cg.push(";");
     cg.nl();
 
@@ -428,37 +418,69 @@ fn emit_mcdc_while(
     true
 }
 
-/// Recompose a compound boolean expression using pre-evaluated clause variables.
+/// Emit the short-circuit evaluation tree for a compound boolean condition.
 ///
-/// Leaf nodes are replaced with `__d{decision_id}_c{i}` in left-to-right order.
-fn emit_mcdc_recomposed(cg: &mut Codegen, expr: &Expr, decision_id: usize, clause_idx: &mut usize) {
+/// Sets `__d{id}_c[i]` (clause value) and `__d{id}_e[i]` (evaluated flag) for
+/// each leaf clause *only when it is actually reached* by short-circuit execution.
+/// Emits a Rust block expression whose value is the overall boolean outcome.
+///
+/// `clause_idx` counts leaf clauses (left-to-right); `tmp_idx` numbers internal
+/// temporaries so nested `&&`/`||` nodes use distinct names.
+fn emit_mcdc_sc_outcome(
+    cg: &mut Codegen,
+    expr: &Expr,
+    decision_id: usize,
+    clause_idx: &mut usize,
+    tmp_idx: &mut usize,
+) {
     if let Expr::Binary {
         op, left, right, ..
     } = expr
     {
         if matches!(op, BinaryOp::And | BinaryOp::Or) {
-            cg.push("(");
-            emit_mcdc_recomposed(cg, left, decision_id, clause_idx);
-            cg.push(if *op == BinaryOp::And { " && " } else { " || " });
-            emit_mcdc_recomposed(cg, right, decision_id, clause_idx);
-            cg.push(")");
+            let t = *tmp_idx;
+            *tmp_idx += 1;
+            cg.push("{");
+            cg.push(&format!(" let __d{decision_id}_t{t} = "));
+            emit_mcdc_sc_outcome(cg, left, decision_id, clause_idx, tmp_idx);
+            cg.push(";");
+            if *op == BinaryOp::And {
+                cg.push(&format!(" if __d{decision_id}_t{t} {{ "));
+                emit_mcdc_sc_outcome(cg, right, decision_id, clause_idx, tmp_idx);
+                cg.push(" } else { false }");
+            } else {
+                cg.push(&format!(" if __d{decision_id}_t{t} {{ true }} else {{ "));
+                emit_mcdc_sc_outcome(cg, right, decision_id, clause_idx, tmp_idx);
+                cg.push(" }");
+            }
+            cg.push(" }");
             return;
         }
     }
+    // Leaf: set eval flag, record value, return value.
     let i = *clause_idx;
     *clause_idx += 1;
-    cg.push(&format!("__d{decision_id}_c{i}"));
+    cg.push(&format!(
+        "{{ __d{decision_id}_e[{i}] = true; __d{decision_id}_c[{i}] = "
+    ));
+    emit_expr(cg, expr);
+    cg.push(&format!("; __d{decision_id}_c[{i}] }}"));
 }
 
 /// Emit the `__mvl_mcdc::record(…)` call for a decision with `n` clauses.
+///
+/// Encoding (u32): bits 0..n-1 = clause vals, bits n..2n-1 = eval flags, bit 2n = outcome.
 fn emit_mcdc_record(cg: &mut Codegen, decision_id: usize, n: usize) {
-    // Encode: bits 0..n-1 = clause vals, bit n = outcome.
     let vals: Vec<String> = (0..n)
-        .map(|i| format!("((__d{decision_id}_c{i} as u16) << {i}u16)"))
+        .map(|i| format!("((__d{decision_id}_c[{i}] as u32) << {i}u32)"))
         .collect();
-    let outcome = format!("((__d{decision_id}_outcome as u16) << {n}u16)");
+    let evals: Vec<String> = (0..n)
+        .map(|i| format!("((__d{decision_id}_e[{i}] as u32) << {}u32)", n + i))
+        .collect();
+    let outcome = format!("((__d{decision_id}_outcome as u32) << {}u32)", 2 * n);
     let encoded = vals
         .into_iter()
+        .chain(evals)
         .chain(std::iter::once(outcome))
         .collect::<Vec<_>>()
         .join(" | ");

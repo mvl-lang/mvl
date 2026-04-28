@@ -100,13 +100,13 @@ decision in non-test functions when invoked in MC/DC mode.
 For a decision with N clauses at id D, the transpiler MUST emit:
 
 ```rust
-// Eager clause evaluation (MVL expressions are pure — no side effects)
-let __dD_c0: bool = <clause 0 expr>;
-let __dD_c1: bool = <clause 1 expr>;
-// … one local per clause …
+// Arrays initialised false; only observed clauses are set (short-circuit semantics)
+let mut __dD_c = [false; N];   // clause values
+let mut __dD_e = [false; N];   // evaluation flags (true = clause was reached)
 
-// Recompose outcome using clause variables (preserves operator structure)
-let __dD_outcome: bool = (<__dD_c0> && <__dD_c1>);  // or ||, or mixed
+// Short-circuit evaluation tree — each leaf sets e[i]=true and c[i]=value
+// only when that clause is actually evaluated by &&/|| logic
+let __dD_outcome: bool = <sc-tree>;
 
 // Record observation (only in test builds)
 #[cfg(test)] crate::__mvl_mcdc::record(D, <encoded>);
@@ -115,28 +115,35 @@ let __dD_outcome: bool = (<__dD_c0> && <__dD_c1>);  // or ||, or mixed
 if __dD_outcome { … }
 ```
 
-The observation encoding is a `u16`:
-- bits 0..N-1: clause values (bit i = 1 iff clause i was true)
-- bit N: decision outcome (1 = true)
+The short-circuit tree emitted for `A && B` is:
+```rust
+{ let __dD_t0 = { __dD_e[0] = true; __dD_c[0] = A; __dD_c[0] };
+  if __dD_t0 { { __dD_e[1] = true; __dD_c[1] = B; __dD_c[1] } } else { false } }
+```
 
-The clause count MUST NOT exceed 15 (the remaining bit capacity of u16). The
-transpiler MUST panic at code-generation time if this limit is exceeded.
+The observation encoding is a `u32`:
+- bits 0..N-1: clause values (bit i = 1 iff clause i was true)
+- bits N..2N-1: eval flags (bit N+i = 1 iff clause i was evaluated)
+- bit 2N: decision outcome (1 = true)
+
+The clause count MUST NOT exceed 15. The transpiler MUST panic at
+code-generation time if this limit is exceeded.
 
 `while` conditions MUST be restructured as `loop { … if !outcome { break; } … body … }`
-so clause locals are re-evaluated on every iteration. This is safe because MVL
-expressions are pure (no side effects, no short-circuit divergence).
+so clause arrays are re-evaluated on every iteration.
 
 **Implementation:** `src/mvl/transpiler/emit_stmts.rs::emit_mcdc_if`,
 `src/mvl/transpiler/emit_stmts.rs::emit_mcdc_while`,
-`src/mvl/transpiler/emit_stmts.rs::emit_mcdc_recomposed`,
+`src/mvl/transpiler/emit_stmts.rs::emit_mcdc_sc_outcome`,
 `src/mvl/transpiler/emit_stmts.rs::emit_mcdc_record`
 
-#### Scenario: if with A && B emits clause locals and record call
+#### Scenario: if with A && B emits clause arrays and record call
 
 - GIVEN `fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }`
 - WHEN transpiled with MC/DC instrumentation
-- THEN emitted Rust contains `let __d0_c0: bool =`, `let __d0_c1: bool =`,
-  `let __d0_outcome: bool =`, and `__mvl_mcdc::record(0usize,`
+- THEN emitted Rust contains `let mut __d0_c = [false; 2]`,
+  `let mut __d0_e = [false; 2]`, `let __d0_outcome: bool =`,
+  and `__mvl_mcdc::record(0usize,`
 
 **Tests:** `src/mvl/transpiler/mod.rs::tests::mcdc_if_emits_clause_locals_and_record`,
 `src/mvl/transpiler/mod.rs::tests::mcdc_record_encoding_present`
@@ -149,11 +156,12 @@ expressions are pure (no side effects, no short-circuit divergence).
 
 **Tests:** `src/mvl/transpiler/mod.rs::tests::mcdc_while_restructured_as_loop`
 
-#### Scenario: recomposed expression uses clause variables
+#### Scenario: short-circuit tree sets eval flags per clause
 
 - GIVEN `fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }`
 - WHEN transpiled with MC/DC instrumentation
-- THEN outcome expression is `(__d0_c0 && __d0_c1)` — not the original AST nodes
+- THEN emitted Rust contains `__d0_e[0] = true` and `__d0_e[1] = true`
+  inside the short-circuit tree
 
 **Tests:** `src/mvl/transpiler/mod.rs::tests::mcdc_if_recomposed_uses_clause_vars`
 
@@ -194,17 +202,21 @@ DO-178C / ED-12C Section 6.4.4.2(d):
 
 > For each condition C in a decision D, there exist two test cases t1 and t2
 > such that:
-> 1. C differs between t1 and t2
-> 2. All other conditions are identical between t1 and t2
+> 1. C differs between t1 and t2 (and both observations evaluated C)
+> 2. All other conditions that were evaluated in both t1 and t2 are identical
 > 3. The decision outcome differs between t1 and t2
 
-This is stricter than Masking MC/DC (which allows other conditions to vary
-provided they do not mask the effect). Unique-Cause is chosen because:
-- MVL uses eager evaluation — all clauses are always evaluated, so short-circuit
-  masking cannot occur and independence pairs are always findable when they exist
+The independence check MUST handle **masked clauses**: a clause not evaluated
+in an observation (eval flag = 0) due to short-circuit semantics imposes NO
+constraint on the independence pair — it is treated as "not reachable under
+that input", not as a conflicting value.
+
+Unique-Cause is chosen over Masking MC/DC because:
+- The instrumentation faithfully models short-circuit execution; masked clauses
+  are identified precisely via eval flags
 - DO-178C DAL-A qualification evidence is cleaner with the stricter criterion
-- The independence check algorithm is O(|obs|²) per clause — practical because
-  the `HashSet` bounds |obs| to `2^(N+1)`
+- The O(|obs|²) per-clause algorithm is practical because the `HashSet` bounds
+  |obs| to `2^(N+1)`
 
 **Implementation:** `src/mvl/transpiler/mcdc_instr.rs::is_clause_covered`
 

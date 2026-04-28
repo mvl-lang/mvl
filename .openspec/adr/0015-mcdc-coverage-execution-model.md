@@ -26,70 +26,80 @@ evaluation.
 
 **Why Unique-Cause for MVL:**
 
-MVL uses **eager evaluation** for MC/DC instrumentation — all clauses are evaluated
-before the outcome is computed, regardless of `&&`/`||` structure. This is safe
-because MVL expressions in conditions are **pure** (the effect system guarantees no
-observable side effects). With eager evaluation, short-circuit masking cannot occur,
-so independence pairs are always findable when they exist. Unique-Cause is therefore
-not more restrictive in practice — every Masking pair is also a Unique-Cause pair
-when all clauses are independently observed.
+MVL uses **short-circuit evaluation** with per-clause eval flags. Masked clauses
+(not evaluated due to `&&`/`||` short-circuiting) are tracked and treated as
+unconstrained for independence matching — they impose no requirement on the pair.
+This makes the Unique-Cause criterion practical: the "all other clauses identical"
+rule applies only to clauses that were actually evaluated in both observations.
 
-Using Unique-Cause also produces simpler qualification evidence for DO-178C Tool
-Qualification: the independence criterion is a straightforward pairwise comparison
-with no short-circuit reasoning required.
+Using Unique-Cause produces simpler qualification evidence for DO-178C Tool
+Qualification: the independence criterion is a pairwise comparison with a
+well-defined mask-handling rule, requiring no reasoning about which clauses
+could mask others.
 
 ---
 
-## Decision 2: Eager Clause Evaluation via Pre-Computed Locals
+## Decision 2: Short-Circuit Clause Evaluation with Eval-Flag Arrays
 
-The instrumented Rust emits clause values as `let` bindings before the condition:
+The instrumented Rust emits clause value arrays and eval-flag arrays, then
+evaluates the boolean tree using faithful short-circuit semantics:
 
 ```rust
 // Original: if a && b { … }
-let __d0_c0: bool = a;      // clause 0
-let __d0_c1: bool = b;      // clause 1
-let __d0_outcome: bool = (__d0_c0 && __d0_c1);
+let mut __d0_c = [false; 2];   // clause values
+let mut __d0_e = [false; 2];   // evaluation flags
+let __d0_outcome: bool = {
+    let __d0_t0 = { __d0_e[0] = true; __d0_c[0] = a; __d0_c[0] };
+    if __d0_t0 { { __d0_e[1] = true; __d0_c[1] = b; __d0_c[1] } } else { false }
+};
 #[cfg(test)] crate::__mvl_mcdc::record(0, encoded);
 if __d0_outcome { … }
 ```
 
-**Rejected alternative: instrument inside short-circuit** — intercept each clause
-evaluation within the `&&`/`||` chain and record a partial observation, then
-combine. This is the approach taken by LLVM's SanitizerCoverage MC/DC mode.
+Clauses not reached (e.g. `b` when `a` is false) remain `e[i] = false`.
+The independence check treats masked clauses as unconstrained.
 
-| Approach | Side-effect safety | Observation completeness | Complexity |
-|----------|-------------------|--------------------------|-----------|
-| **Eager pre-evaluation** | ✅ Pure MVL exprs only | Full truth table per test | Low |
-| Short-circuit intercept | Works for impure exprs | Partial (early exits) | High |
+**Rejected alternative: eager pre-evaluation** — evaluate all clauses before the
+condition regardless of `&&`/`||` structure.
 
-**Why eager pre-evaluation:**
+| Approach | Faithful semantics | Masked clause info | Complexity |
+|----------|-------------------|--------------------|------------|
+| **Short-circuit + eval flags** | ✅ Matches runtime | ✅ Precisely tracked | Moderate |
+| Eager pre-evaluation | ✗ All clauses always set | ✗ None | Low |
 
-MVL's effect system guarantees that condition expressions in `if`/`while` are pure.
-Eager pre-evaluation is therefore correct — there are no side effects to observe
-out-of-order. It also captures the complete truth table per test case (all clause
-values observed), which gives maximum coverage information for the independence check.
-The generated code is simple and auditable by a DO-178C reviewer.
+**Why short-circuit evaluation:**
+
+Although MVL expressions are pure, short-circuit evaluation matters for
+**observation correctness**. With eager evaluation, observations for `a=false,b=false`
+and `a=true,b=true` both have both clauses fully observed — but these cannot form a
+Unique-Cause pair for clause A (B also differs). With short-circuit evaluation,
+`a=false` masks clause B (e[1]=false), making it unconstrained for independence
+matching. This faithfully reflects DO-178C semantics where "tested" means
+"evaluated under that test case's execution path."
 
 ---
 
-## Decision 3: u16 Observation Encoding
+## Decision 3: u32 Observation Encoding
 
-Each observation is encoded as a single `u16`:
+Each observation is encoded as a single `u32`:
 - bits 0..N-1: clause values (bit i = 1 iff clause i was true)
-- bit N: decision outcome (1 = true)
+- bits N..2N-1: eval flags (bit N+i = 1 iff clause i was evaluated)
+- bit 2N: decision outcome (1 = true)
 
-**Why u16:**
-- Maximum practical clause count (15) fits comfortably in a u16 (16 bits minus 1 outcome bit)
+**Why u32:**
+- N ≤ 15 clauses require 2N+1 = 31 bits, fitting in a u32
+- Maximum practical clause count (15) fits comfortably (31 bits used of 32)
 - MVL conditions with 15+ clauses are pathological — the language's minimality ethos
   and DO-178C structural test requirements make such conditions unlikely
-- HashSet deduplication bounds observation count to ≤ 2^(N+1) per decision; for N=15
-  that is 65536 entries (64 KB of u16 values), acceptable in test memory
+- HashSet deduplication bounds observation count to ≤ 2^(2N+1) per decision
+- For N=15 that is at most 2^31 ≈ 2 billion entries; in practice far fewer because
+  short-circuit masking means many bit combinations are unreachable
 
 **Enforcement:** `MCDCMap::alloc` panics if `clause_count > 15`. This produces a
 clear build-time error rather than silent data corruption.
 
-**Rejected alternative: u32 encoding** — doubles memory per observation, no practical
-benefit since N > 15 is considered a design defect in MVL code.
+**Rejected alternative: u16 encoding** — insufficient bits; 16 bits can only encode
+7 clauses with eval flags (2×7+1 = 15 ≤ 16), excluding the N=8..15 range.
 
 ---
 
@@ -145,8 +155,9 @@ negatives (under-reported coverage), not false positives.
 
 ## Consequences
 
-- **Qualifiable for DO-178C DAL-A.** Unique-Cause criterion + eager evaluation +
-  pure expression guarantee + instrumented binary evidence satisfies Section 6.4.4.2(d).
+- **Qualifiable for DO-178C DAL-A.** Unique-Cause criterion + short-circuit
+  evaluation + eval-flag tracking + pure expression guarantee + instrumented
+  binary evidence satisfies Section 6.4.4.2(d).
 - **Clause count limit.** Functions with compound conditions of 16+ clauses fail
   the tool with a clear error. This is a deliberate quality gate, not a limitation.
 - **Pure expressions required.** MC/DC instrumentation relies on MVL's effect system.

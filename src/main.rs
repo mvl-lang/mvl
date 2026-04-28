@@ -653,14 +653,14 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool) {
 
     // Parse observations.
     let raw_obs = fs::read_to_string(&mcdc_out_path).unwrap_or_default();
-    let observations: Vec<Vec<u16>> = raw_obs
+    let observations: Vec<Vec<u32>> = raw_obs
         .lines()
         .map(|line| {
             if line.is_empty() {
                 Vec::new()
             } else {
                 line.split(',')
-                    .filter_map(|hex| u16::from_str_radix(hex.trim(), 16).ok())
+                    .filter_map(|hex| u32::from_str_radix(hex.trim(), 16).ok())
                     .collect()
             }
         })

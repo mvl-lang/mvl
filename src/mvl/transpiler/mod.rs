@@ -701,7 +701,7 @@ mod tests {
 
     // ── MC/DC codegen structural tests ────────────────────────────────────
 
-    /// Compound `if (A && B)` emits clause locals, outcome var, and record call.
+    /// Compound `if (A && B)` emits clause arrays, outcome var, and record call.
     #[test]
     fn mcdc_if_emits_clause_locals_and_record() {
         let prog = parse("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
@@ -710,12 +710,12 @@ mod tests {
         assert!(!decisions[0].is_while);
         let rs = &out.lib_rs;
         assert!(
-            rs.contains("let __d0_c0: bool ="),
-            "missing clause 0 local: {rs}"
+            rs.contains("let mut __d0_c = [false; 2]"),
+            "missing clause array: {rs}"
         );
         assert!(
-            rs.contains("let __d0_c1: bool ="),
-            "missing clause 1 local: {rs}"
+            rs.contains("let mut __d0_e = [false; 2]"),
+            "missing eval array: {rs}"
         );
         assert!(
             rs.contains("let __d0_outcome: bool ="),
@@ -731,20 +731,24 @@ mod tests {
         );
     }
 
-    /// The recomposed expression preserves boolean operator structure with parens.
+    /// The short-circuit tree sets clause array entries and uses sc semantics.
     #[test]
     fn mcdc_if_recomposed_uses_clause_vars() {
         let prog = parse("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
         let (out, _) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
         let rs = &out.lib_rs;
-        // Recomposed: (__d0_c0 && __d0_c1) — clause vars, not original exprs
+        // Short-circuit: left evaluated first, right only if left is true
         assert!(
-            rs.contains("(__d0_c0 && __d0_c1)"),
-            "recomposed expression wrong: {rs}"
+            rs.contains("__d0_e[0] = true"),
+            "missing eval-flag for clause 0: {rs}"
+        );
+        assert!(
+            rs.contains("__d0_e[1] = true"),
+            "missing eval-flag for clause 1: {rs}"
         );
     }
 
-    /// Three-clause `A || B || C` emits three clause locals.
+    /// Three-clause `A || B || C` emits arrays of size 3.
     #[test]
     fn mcdc_if_three_clauses_emits_three_locals() {
         let prog =
@@ -752,28 +756,35 @@ mod tests {
         let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
         assert_eq!(decisions[0].clause_count, 3);
         let rs = &out.lib_rs;
-        assert!(rs.contains("let __d0_c0: bool ="), "{rs}");
-        assert!(rs.contains("let __d0_c1: bool ="), "{rs}");
-        assert!(rs.contains("let __d0_c2: bool ="), "{rs}");
+        assert!(rs.contains("let mut __d0_c = [false; 3]"), "{rs}");
+        assert!(rs.contains("let mut __d0_e = [false; 3]"), "{rs}");
     }
 
-    /// `emit_mcdc_record` encodes clauses as shifted bits in the record call.
+    /// `emit_mcdc_record` encodes clause vals, eval flags, and outcome as u32.
     #[test]
     fn mcdc_record_encoding_present() {
         let prog = parse("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
         let (out, _) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
         let rs = &out.lib_rs;
-        // Encoding: clause 0 at bit 0, clause 1 at bit 1, outcome at bit 2
+        // Clause vals: bits 0 and 1; eval flags: bits 2 and 3; outcome: bit 4
         assert!(
-            rs.contains("(__d0_c0 as u16) << 0u16"),
-            "missing bit-0 encoding: {rs}"
+            rs.contains("(__d0_c[0] as u32) << 0u32"),
+            "missing bit-0 val encoding: {rs}"
         );
         assert!(
-            rs.contains("(__d0_c1 as u16) << 1u16"),
-            "missing bit-1 encoding: {rs}"
+            rs.contains("(__d0_c[1] as u32) << 1u32"),
+            "missing bit-1 val encoding: {rs}"
         );
         assert!(
-            rs.contains("(__d0_outcome as u16) << 2u16"),
+            rs.contains("(__d0_e[0] as u32) << 2u32"),
+            "missing eval-0 encoding: {rs}"
+        );
+        assert!(
+            rs.contains("(__d0_e[1] as u32) << 3u32"),
+            "missing eval-1 encoding: {rs}"
+        );
+        assert!(
+            rs.contains("(__d0_outcome as u32) << 4u32"),
             "missing outcome encoding: {rs}"
         );
         assert!(
@@ -797,8 +808,8 @@ mod tests {
             rs.contains("if !__d0_outcome { break; }"),
             "missing break guard: {rs}"
         );
-        assert!(rs.contains("let __d0_c0: bool ="), "{rs}");
-        assert!(rs.contains("let __d0_c1: bool ="), "{rs}");
+        assert!(rs.contains("let mut __d0_c = [false; 2]"), "{rs}");
+        assert!(rs.contains("let mut __d0_e = [false; 2]"), "{rs}");
     }
 
     /// Simple (single-clause) conditions are NOT instrumented for MC/DC.
@@ -810,7 +821,7 @@ mod tests {
             decisions.is_empty(),
             "simple condition must not be instrumented"
         );
-        assert!(!out.lib_rs.contains("__d0_c0"), "no clause locals expected");
+        assert!(!out.lib_rs.contains("__d0_c"), "no clause arrays expected");
     }
 
     /// Test functions are excluded from MC/DC instrumentation.

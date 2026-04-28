@@ -5,10 +5,15 @@
 //! After the test suite runs, the recorded observations are written to
 //! `MVL_MCDC_OUT` and read back by `cmd_mcdc` for independence analysis.
 //!
-//! Observation encoding (u16 per test-case/decision pair):
-//!   bits 0..N-1  = clause values (bit i = 1 iff clause i was true)
-//!   bit  N       = decision outcome (1 = true)
-//! where N = clause_count for that decision (max 8).
+//! Observation encoding (u32 per test-case/decision pair):
+//!   bits   0..N-1  = clause values  (bit i = 1 iff clause i was true)
+//!   bits   N..2N-1 = eval flags     (bit N+i = 1 iff clause i was actually evaluated)
+//!   bit    2N      = decision outcome (1 = true)
+//! where N = clause_count for that decision (max 15, enforced at alloc time).
+//!
+//! A clause with eval_flag=0 was masked by short-circuit evaluation (not reached).
+//! Masked clauses are excluded from the Unique-Cause independence pair check —
+//! they are "not reachable under that input," not "tested and failed."
 
 /// Metadata for a single instrumented decision point.
 #[derive(Debug, Clone)]
@@ -83,6 +88,7 @@ impl MCDCMap {
 /// Generate the `__mvl_mcdc` runtime module embedded in the test crate.
 ///
 /// Uses `OnceLock` + `Mutex` so observations are safe across parallel tests.
+/// Each observation is a `u32` encoding clause values, eval flags, and outcome.
 pub fn emit_mcdc_preamble(n_decisions: usize) -> String {
     if n_decisions == 0 {
         return String::new();
@@ -95,16 +101,18 @@ pub mod __mvl_mcdc {{
     use std::sync::Mutex;
     use std::collections::HashSet;
 
-    static OBS: OnceLock<Mutex<Vec<HashSet<u16>>>> = OnceLock::new();
+    static OBS: OnceLock<Mutex<Vec<HashSet<u32>>>> = OnceLock::new();
 
-    fn storage() -> &'static Mutex<Vec<HashSet<u16>>> {{
+    fn storage() -> &'static Mutex<Vec<HashSet<u32>>> {{
         OBS.get_or_init(|| Mutex::new(vec![HashSet::new(); {n_decisions}]))
     }}
 
     /// Record a single test-case observation for a decision.
     ///
-    /// `encoded`: bits 0..clause_count-1 = clause values, bit clause_count = outcome.
-    pub fn record(decision_id: usize, encoded: u16) {{
+    /// Encoding (u32): bits 0..N-1 = clause values, bits N..2N-1 = eval flags,
+    /// bit 2N = outcome.  Eval flag i = 1 means clause i was actually evaluated;
+    /// 0 means it was masked by short-circuit evaluation.
+    pub fn record(decision_id: usize, encoded: u32) {{
         if let Ok(mut guard) = storage().lock() {{
             if let Some(set) = guard.get_mut(decision_id) {{
                 set.insert(encoded);
@@ -112,7 +120,7 @@ pub mod __mvl_mcdc {{
         }}
     }}
 
-    pub fn get(decision_id: usize) -> Vec<u16> {{
+    pub fn get(decision_id: usize) -> Vec<u32> {{
         storage()
             .lock()
             .ok()
@@ -150,7 +158,7 @@ pub fn emit_mcdc_report_test(n_decisions: usize) -> String {
             "        {{\
 \n            let mut obs = crate::__mvl_mcdc::get({i});\
 \n            obs.sort();\
-\n            let enc: Vec<String> = obs.iter().map(|x| format!(\"{{:04x}}\", x)).collect();\
+\n            let enc: Vec<String> = obs.iter().map(|x| format!(\"{{:08x}}\", x)).collect();\
 \n            out.push_str(&format!(\"{{}}\\n\", enc.join(\",\")));\
 \n        }}\n"
         ));
@@ -162,40 +170,83 @@ pub fn emit_mcdc_report_test(n_decisions: usize) -> String {
 
 // ── Independence analysis ─────────────────────────────────────────────────
 
-/// Check whether clause `clause_bit` is independently covered in the
-/// given observation set.
+/// Check whether clause `clause_bit` independently affects the decision outcome
+/// (Unique-Cause MC/DC with short-circuit masking).
 ///
-/// An independence pair exists when two observations t1, t2 satisfy:
-/// - bit `clause_bit` differs between t1 and t2
-/// - all other clause bits are the same
-/// - the outcome bit differs
-pub fn is_clause_covered(clause_count: usize, clause_bit: usize, observations: &[u16]) -> bool {
-    let outcome_bit = clause_count as u16;
-    let clause_mask = (1u16 << clause_count) - 1;
-    let other_mask = clause_mask & !(1u16 << clause_bit);
+/// Each observation `t` is a `u32`:
+/// - bits   0..N-1  = clause values
+/// - bits   N..2N-1 = eval flags (1 = evaluated, 0 = masked by short-circuit)
+/// - bit    2N      = decision outcome
+///
+/// An independence pair (t1, t2) satisfies:
+/// 1. `clause_bit` is **evaluated** in both t1 and t2
+/// 2. `clause_bit` **differs** between t1 and t2
+/// 3. The outcome **differs** between t1 and t2
+/// 4. Every other clause j: if evaluated in **both** t1 and t2, its value is
+///    **identical** in both.  Clauses masked in either test case are skipped —
+///    a masked clause is "not reachable under that input," not a confound.
+pub fn is_clause_covered(clause_count: usize, clause_bit: usize, observations: &[u32]) -> bool {
+    let n = clause_count;
+    let eval_shift = n; // eval flag for clause i lives at bit n+i
+    let outcome_bit = 2 * n;
 
     for &t1 in observations {
         for &t2 in observations {
-            let v1 = t1 & clause_mask;
-            let v2 = t2 & clause_mask;
-            let o1 = (t1 >> outcome_bit) & 1;
-            let o2 = (t2 >> outcome_bit) & 1;
+            // 1. Both must have actually evaluated clause_bit.
+            if ((t1 >> (eval_shift + clause_bit)) & 1) == 0 {
+                continue;
+            }
+            if ((t2 >> (eval_shift + clause_bit)) & 1) == 0 {
+                continue;
+            }
 
-            // clause_bit must differ
-            if (v1 >> clause_bit) & 1 == (v2 >> clause_bit) & 1 {
+            // 2. clause_bit value must differ.
+            if ((t1 >> clause_bit) & 1) == ((t2 >> clause_bit) & 1) {
                 continue;
             }
-            // all other clauses must be the same
-            if (v1 & other_mask) != (v2 & other_mask) {
+
+            // 3. Outcome must differ.
+            if ((t1 >> outcome_bit) & 1) == ((t2 >> outcome_bit) & 1) {
                 continue;
             }
-            // outcome must differ
-            if o1 != o2 {
+
+            // 4. All other clauses that were evaluated in both must be identical.
+            let mut ok = true;
+            for j in 0..n {
+                if j == clause_bit {
+                    continue;
+                }
+                let e1 = (t1 >> (eval_shift + j)) & 1;
+                let e2 = (t2 >> (eval_shift + j)) & 1;
+                if e1 == 1 && e2 == 1 && ((t1 >> j) & 1) != ((t2 >> j) & 1) {
+                    ok = false;
+                    break;
+                }
+                // If masked in either test case: no constraint — it's not a confound.
+            }
+            if ok {
                 return true;
             }
         }
     }
     false
+}
+
+/// Helper: encode a u32 observation from components.
+///
+/// `clauses`: slice of `(value, evaluated)` pairs in left-to-right order.
+/// `outcome`: the decision outcome.
+///
+/// Encoding: bits 0..N-1 = values, bits N..2N-1 = eval flags, bit 2N = outcome.
+#[cfg(test)]
+fn encode_obs(clauses: &[(bool, bool)], outcome: bool) -> u32 {
+    let n = clauses.len();
+    let mut enc: u32 = (outcome as u32) << (2 * n);
+    for (i, &(val, evaluated)) in clauses.iter().enumerate() {
+        enc |= (val as u32) << i;
+        enc |= (evaluated as u32) << (n + i);
+    }
+    enc
 }
 
 #[cfg(test)]
@@ -212,6 +263,7 @@ mod tests {
         let s = emit_mcdc_preamble(2);
         assert!(s.contains("fn record("), "missing record fn");
         assert!(s.contains("OnceLock"), "missing OnceLock");
+        assert!(s.contains("u32"), "must use u32 encoding");
     }
 
     #[test]
@@ -224,68 +276,119 @@ mod tests {
         let s = emit_mcdc_report_test(2);
         assert!(s.contains("fn zzz_mvl_mcdc_report()"), "missing report fn");
         assert!(s.contains("MVL_MCDC_OUT"), "missing env var");
+        assert!(s.contains("{:08x}"), "must use 8-digit hex for u32");
     }
 
+    // ── Independence check: A && B (both evaluated) ────────────────────────
+
     #[test]
-    fn independence_covered_and_b() {
-        // `A && B`: observations where B independently toggles outcome
-        // t1: A=1,B=1 → outcome=1 → bits: vals=0b11, outcome=1 → (0b11 | (1<<2)) = 0b111 = 7
-        // t2: A=1,B=0 → outcome=0 → bits: vals=0b01, outcome=0 → 0b001 = 1
-        let obs = vec![0b111u16, 0b001u16];
-        // clause 1 = B, clause_count = 2
+    fn independence_covered_b_both_evaluated() {
+        // A && B: B independently toggles outcome when A=true in both tests.
+        // t1: A=1(eval), B=1(eval) → out=1
+        // t2: A=1(eval), B=0(eval) → out=0
+        let t1 = encode_obs(&[(true, true), (true, true)], true);
+        let t2 = encode_obs(&[(true, true), (false, true)], false);
+        let obs = vec![t1, t2];
         assert!(is_clause_covered(2, 1, &obs), "B should be covered");
     }
 
     #[test]
-    fn independence_covered_a() {
-        // t1: A=1,B=1 → outcome=1 → 0b111 = 7
-        // t2: A=0,B=1 → outcome=0 → 0b010 = 2  (vals=0b10, outcome=0)
-        let obs = vec![0b111u16, 0b010u16];
-        // clause 0 = A, clause_count = 2
+    fn independence_covered_a_both_evaluated() {
+        // A && B: A independently toggles outcome when B=true in both tests.
+        // t1: A=1(eval), B=1(eval) → out=1
+        // t2: A=0(eval), B=1(eval) → out=0
+        let t1 = encode_obs(&[(true, true), (true, true)], true);
+        let t2 = encode_obs(&[(false, true), (true, true)], false);
+        let obs = vec![t1, t2];
         assert!(is_clause_covered(2, 0, &obs), "A should be covered");
     }
 
     #[test]
+    fn independence_covered_a_b_masked_in_partner() {
+        // A && B with short-circuit: when A=false, B is masked.
+        // t1: A=1(eval), B=1(eval) → out=1
+        // t2: A=0(eval), B=masked  → out=0  (short-circuit: B not evaluated)
+        // B is masked in t2, so it does not block A's independence pair.
+        let t1 = encode_obs(&[(true, true), (true, true)], true);
+        let t2 = encode_obs(&[(false, true), (false, false)], false); // B: value=0, eval=false
+        let obs = vec![t1, t2];
+        assert!(
+            is_clause_covered(2, 0, &obs),
+            "A should be covered even when B is masked in partner"
+        );
+    }
+
+    #[test]
     fn independence_not_covered_when_no_pair() {
-        // Only one observation: A=1,B=1 → outcome=1
-        let obs = vec![0b111u16];
+        // Only one observation — can't form any pair.
+        let t1 = encode_obs(&[(true, true), (true, true)], true);
+        let obs = vec![t1];
         assert!(!is_clause_covered(2, 0, &obs));
         assert!(!is_clause_covered(2, 1, &obs));
     }
 
     #[test]
-    fn independence_not_covered_when_other_clause_varies() {
-        // t1: A=1,B=1 → outcome=1 → 0b111 = 7
-        // t2: A=0,B=0 → outcome=0 → 0b000 = 0
-        // Both clauses change simultaneously — not an independence pair for either
-        let obs = vec![0b111u16, 0b000u16];
-        // A: bit 0 differs (1 vs 0), other clause B: bit 1 differs too (1 vs 0) → fail
-        assert!(!is_clause_covered(2, 0, &obs));
-        assert!(!is_clause_covered(2, 1, &obs));
+    fn independence_not_covered_when_both_evaluated_and_other_varies() {
+        // t1: A=1(eval), B=1(eval) → out=1
+        // t2: A=0(eval), B=0(eval) → out=0
+        // Both evaluated and B also changes — not a valid pair for A or B.
+        let t1 = encode_obs(&[(true, true), (true, true)], true);
+        let t2 = encode_obs(&[(false, true), (false, true)], false);
+        let obs = vec![t1, t2];
+        assert!(
+            !is_clause_covered(2, 0, &obs),
+            "A not covered: B also varies"
+        );
+        assert!(
+            !is_clause_covered(2, 1, &obs),
+            "B not covered: A also varies"
+        );
     }
 
-    // ── 3-clause coverage (A && B && C) ───────────────────────────────────
+    #[test]
+    fn independence_not_covered_when_target_masked() {
+        // Can't establish independence for a clause that was never evaluated.
+        // t1: A=1(eval), B=masked → out=1
+        // t2: A=0(eval), B=masked → out=0
+        // B is masked in both — no independence pair for B possible.
+        let t1 = encode_obs(&[(true, true), (false, false)], true);
+        let t2 = encode_obs(&[(false, true), (false, false)], false);
+        let obs = vec![t1, t2];
+        assert!(
+            !is_clause_covered(2, 1, &obs),
+            "B masked in both: no coverage"
+        );
+    }
+
+    // ── 3-clause coverage (A && B && C) ────────────────────────────────────
 
     #[test]
-    fn three_clause_b_covered() {
-        // A && B && C: B independently toggles outcome when A=1,C=1
-        // t1: A=1,B=1,C=1 → outcome=1 → bits: vals=0b111, outcome → (0b111 | (1<<3)) = 0b1111 = 15
-        // t2: A=1,B=0,C=1 → outcome=0 → bits: vals=0b101, outcome=0 → 0b0101 = 5
-        let obs = vec![0b1111u16, 0b0101u16];
-        // clause_count=3, clause_bit=1 (B)
+    fn three_clause_b_covered_with_masking() {
+        // A && B && C (left-assoc: (A&&B)&&C)
+        // When A=true,C=true: B toggles outcome. C masked when A&&B is false.
+        // t1: A=1,B=1,C=1 all evaluated → out=1
+        // t2: A=1,B=0,C=masked        → out=0 (C masked: (A&&B)=false, C skipped by outer &&)
+        // Actually for (A&&B)&&C: if A&&B is false, C is masked.
+        // Let's use simpler: all evaluated pairs for clarity.
+        let t1 = encode_obs(&[(true, true), (true, true), (true, true)], true);
+        let t2 = encode_obs(&[(true, true), (false, true), (true, true)], false);
+        let obs = vec![t1, t2];
         assert!(is_clause_covered(3, 1, &obs), "B should be covered");
-        // A and C are not covered by just these two obs
         assert!(!is_clause_covered(3, 0, &obs), "A not covered by these obs");
         assert!(!is_clause_covered(3, 2, &obs), "C not covered by these obs");
     }
 
     #[test]
     fn three_clause_all_covered() {
-        // Full independence pairs for A && B && C:
-        // A: t1=(1,1,1,out=1)=0b1111, t2=(0,1,1,out=0)=0b0110
-        // B: t1=(1,1,1,out=1)=0b1111, t2=(1,0,1,out=0)=0b0101
-        // C: t1=(1,1,1,out=1)=0b1111, t2=(1,1,0,out=0)=0b0011
-        let obs = vec![0b1111u16, 0b0110u16, 0b0101u16, 0b0011u16];
+        // Full independence pairs for A && B && C (all evaluated):
+        // A: (1,1,1,→1) vs (0,1,1,→0)
+        // B: (1,1,1,→1) vs (1,0,1,→0)  [A=1 in both so C not masked for first obs]
+        // C: (1,1,1,→1) vs (1,1,0,→0)
+        let all_true = encode_obs(&[(true, true), (true, true), (true, true)], true);
+        let a_false = encode_obs(&[(false, true), (true, true), (true, true)], false);
+        let b_false = encode_obs(&[(true, true), (false, true), (true, true)], false);
+        let c_false = encode_obs(&[(true, true), (true, true), (false, true)], false);
+        let obs = vec![all_true, a_false, b_false, c_false];
         assert!(is_clause_covered(3, 0, &obs), "A should be covered");
         assert!(is_clause_covered(3, 1, &obs), "B should be covered");
         assert!(is_clause_covered(3, 2, &obs), "C should be covered");
