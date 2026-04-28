@@ -14,6 +14,7 @@ use crate::mvl::transpiler::emit_impls::emit_impl_decl;
 use crate::mvl::transpiler::emit_types::emit_type_decl;
 use crate::mvl::transpiler::emit_types::{emit_security_preamble, emit_type_expr};
 use crate::mvl::transpiler::has_std_imports;
+use crate::mvl::transpiler::mcdc_instr::MCDCMap;
 use crate::mvl::transpiler::mutation::{
     mutations_for_binary_op, mutations_for_int_literal, MutationMap,
 };
@@ -32,6 +33,8 @@ pub struct Codegen {
     pub use_mvl_runtime: bool,
     /// Active coverage map — `Some` when transpiling with `--coverage`.
     pub coverage: Option<CoverageMap>,
+    /// Active MC/DC map — `Some` when transpiling with `mvl mcdc`.
+    pub mcdc: Option<MCDCMap>,
     /// Active mutation map — `Some` when transpiling with `mvl mutate`.
     pub mutation: Option<MutationMap>,
     /// Name of the function currently being transpiled (for coverage metadata).
@@ -114,6 +117,23 @@ impl Codegen {
     /// Emit a `#[cfg(test)] crate::__mvl_cov::hit(id);` statement at current indent.
     pub fn emit_cov_hit(&mut self, id: usize) {
         self.line(&format!("#[cfg(test)] crate::__mvl_cov::hit({id});"));
+    }
+
+    // ── MC/DC helpers ────────────────────────────────────────────────────
+
+    /// Allocate an MC/DC decision slot for a compound boolean condition.
+    ///
+    /// Returns `Some(id)` when MC/DC instrumentation is active, `None` otherwise.
+    /// Test functions are excluded (returns `None` when `current_fn_is_test`).
+    pub fn alloc_mcdc_decision(&mut self, line: u32, clause_count: usize) -> Option<usize> {
+        if self.current_fn_is_test {
+            return None;
+        }
+        let fn_name = self.current_fn.clone();
+        let file = self.current_file.clone();
+        self.mcdc
+            .as_mut()
+            .map(|m| m.alloc(fn_name, file, line, clause_count))
     }
 
     // ── Mutation helpers ──────────────────────────────────────────────────

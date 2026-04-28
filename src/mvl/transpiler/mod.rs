@@ -30,6 +30,7 @@ pub mod emit_impls;
 pub mod emit_stmts;
 pub mod emit_types;
 pub mod last_use;
+pub mod mcdc_instr;
 pub mod mutation;
 
 use crate::mvl::parser::ast::{Decl, Program};
@@ -38,6 +39,7 @@ use codegen::Codegen;
 pub use coverage::{
     emit_cov_preamble, emit_cov_report_test, format_report, BranchInfo, CoverageMap,
 };
+pub use mcdc_instr::{emit_mcdc_preamble, emit_mcdc_report_test, MCDCDecision};
 pub use mutation::{format_mutation_report, MutantInfo, MutationMap};
 
 /// Output of a successful transpilation.
@@ -589,6 +591,98 @@ pub fn transpile_mutated_source_with_prelude(
         has_extern_rust,
     };
     (out, mutants)
+}
+
+// ── MC/DC transpilation ───────────────────────────────────────────────────
+
+/// Transpile a test [`Program`] with MC/DC condition instrumentation.
+///
+/// Injects per-clause tracking for every compound `&&`/`||` condition in
+/// non-test functions.  Returns the transpile output plus metadata for all
+/// instrumented decisions.
+pub fn transpile_mcdc_with_prelude(
+    prog: &Program,
+    crate_name: &str,
+    file_stem: &str,
+    start_id: usize,
+    prelude_progs: &[Program],
+) -> (TranspileOutput, Vec<MCDCDecision>) {
+    let has_main = has_main_fn(prog);
+    let extern_count = count_extern_decls(prog);
+    let has_extern_rust = has_extern_rust_decls(prog);
+    let use_runtime =
+        extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
+
+    let mut cg = Codegen::new();
+    cg.mcdc = Some(mcdc_instr::MCDCMap::new(start_id));
+    cg.current_file = file_stem.to_string();
+    cg.emit_program_with_mods(prog, &[], prelude_progs);
+
+    let decisions = cg.mcdc.take().map(|m| m.decisions).unwrap_or_default();
+    let lib_rs = cg.finish();
+
+    let opts = CargoOptions {
+        crate_name,
+        use_mvl_runtime: use_runtime,
+        extern_crates: Vec::new(),
+    };
+    let cargo_toml = if has_main {
+        cargo::emit_cargo_toml_binary_opts(&opts)
+    } else {
+        cargo::emit_cargo_toml_library_opts(&opts)
+    };
+    let out = TranspileOutput {
+        lib_rs,
+        cargo_toml,
+        has_main,
+        extern_count,
+        has_extern_rust,
+    };
+    (out, decisions)
+}
+
+/// Transpile a source [`Program`] (not a `*_test.mvl` file) with MC/DC
+/// instrumentation for inclusion in the test crate.
+pub fn transpile_mcdc_source_with_prelude(
+    prog: &Program,
+    crate_name: &str,
+    file_stem: &str,
+    start_id: usize,
+    prelude_progs: &[Program],
+) -> (TranspileOutput, Vec<MCDCDecision>) {
+    let has_main = has_main_fn(prog);
+    let extern_count = count_extern_decls(prog);
+    let has_extern_rust = has_extern_rust_decls(prog);
+    let use_runtime =
+        extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
+
+    let mut cg = Codegen::new();
+    cg.mcdc = Some(mcdc_instr::MCDCMap::new(start_id));
+    cg.current_file = file_stem.to_string();
+    cg.test_extern_stubs = true;
+    cg.emit_program_with_mods(prog, &[], prelude_progs);
+
+    let decisions = cg.mcdc.take().map(|m| m.decisions).unwrap_or_default();
+    let lib_rs = cg.finish();
+
+    let opts = CargoOptions {
+        crate_name,
+        use_mvl_runtime: use_runtime,
+        extern_crates: Vec::new(),
+    };
+    let cargo_toml = if has_main {
+        cargo::emit_cargo_toml_binary_opts(&opts)
+    } else {
+        cargo::emit_cargo_toml_library_opts(&opts)
+    };
+    let out = TranspileOutput {
+        lib_rs,
+        cargo_toml,
+        has_main,
+        extern_count,
+        has_extern_rust,
+    };
+    (out, decisions)
 }
 
 // ── has_extern_rust unit tests ─────────────────────────────────────────────

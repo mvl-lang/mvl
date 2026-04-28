@@ -99,6 +99,12 @@ fn main() {
                 .and_then(|w| w[1].parse().ok());
             cmd_mutate(&path, quiet, limit);
         }
+        "mcdc" => {
+            let path = require_path_arg(&args, "mcdc");
+            let quiet = args.iter().any(|a| a == "--quiet" || a == "-q");
+            let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
+            cmd_mcdc(&path, quiet, verbose);
+        }
         "lint" => {
             let path = require_path_arg(&args, "lint");
             let show_config = args.iter().any(|a| a == "--show-config");
@@ -163,6 +169,9 @@ fn print_usage() {
     eprintln!(
         "  mvl mutate <file|dir> --limit N     — take the first N mutants (faster, approximate score)"
     );
+    eprintln!("  mvl mcdc   <file|dir>               — MC/DC coverage analysis (DO-178C DAL-A)");
+    eprintln!("  mvl mcdc   <file|dir> -q            — quiet: only show MC/DC score");
+    eprintln!("  mvl mcdc   <file|dir> --verbose     — full covered/missed clause report");
     eprintln!("  mvl lint  <file|dir>               — check style rules");
     eprintln!("  mvl lint  <file|dir> --show-config — show active linter configuration");
     eprintln!("  mvl assurance <file|dir>           — emit assurance report");
@@ -406,6 +415,310 @@ fn cmd_check(path: &str, req_filter: Option<u8>) {
     }
 
     if had_errors {
+        process::exit(1);
+    }
+}
+
+/// MC/DC coverage analysis (DO-178C DAL-A).
+///
+/// Execution model (mirrors `mvl mutate`):
+///   1. Parse + static analysis — build decision/clause table
+///   2. Transpile with per-clause instrumentation
+///   3. Compile + run tests — collect observations via `MVL_MCDC_OUT`
+///   4. Independence check — for each clause, verify it independently toggles outcome
+///   5. Report — score + optional verbose covered/missed table
+fn cmd_mcdc(path: &str, quiet: bool, verbose: bool) {
+    use mvl::mvl::checker::mcdc::{analyze_mcdc, DecisionInfo, DecisionKind, MCDCStats};
+    use mvl::mvl::transpiler::{
+        emit_mcdc_preamble, emit_mcdc_report_test, transpile_mcdc_source_with_prelude,
+        transpile_mcdc_with_prelude, MCDCDecision,
+    };
+    use std::collections::HashSet;
+
+    let test_files = mvl_files(path, true);
+    if test_files.is_empty() {
+        eprintln!("No *_test.mvl files found at: {path}");
+        process::exit(1);
+    }
+
+    let crate_name = "mvl_mcdc";
+    let tmp_dir = std::env::temp_dir().join(format!("mvl_mcdc_{}", process::id()));
+    let src_dir = tmp_dir.join("src");
+
+    if tmp_dir.exists() {
+        fs::remove_dir_all(&tmp_dir).unwrap_or_else(|e| {
+            eprintln!("Cannot clean temp dir {}: {e}", tmp_dir.display());
+            process::exit(1);
+        });
+    }
+    fs::create_dir_all(&src_dir).unwrap_or_else(|e| {
+        eprintln!("Cannot create temp dir {}: {e}", src_dir.display());
+        process::exit(1);
+    });
+
+    let stdlib_prelude_progs = load_implicit_prelude();
+
+    // Transpile all test files with MC/DC instrumentation.
+    let mut modules: Vec<(String, String, String)> = Vec::new();
+    let mut all_decisions: Vec<MCDCDecision> = Vec::new();
+    let mut all_static_decisions: Vec<DecisionInfo> = Vec::new();
+    let mut file_stems: Vec<String> = Vec::new();
+    let mut need_mvl_runtime = false;
+
+    for test_file in &test_files {
+        let file_str = test_file.display().to_string();
+        let (prog, _src) = parse_or_exit(&file_str);
+        let s = stem(&file_str);
+        let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
+        let start_id = all_decisions.len();
+        let static_d = analyze_mcdc(&prog, &module_name);
+        all_static_decisions.extend(static_d);
+        let (out, decisions) = transpile_mcdc_with_prelude(
+            &prog,
+            &module_name,
+            &module_name,
+            start_id,
+            &stdlib_prelude_progs,
+        );
+        if out.has_extern_rust || transpiler::has_std_imports(&prog) {
+            need_mvl_runtime = true;
+        }
+        all_decisions.extend(decisions);
+        file_stems.push(module_name.clone());
+        let module_content: String = out
+            .lib_rs
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("#![allow("))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        modules.push((module_name, file_str, module_content));
+    }
+
+    // Include source files that contain inline test fns.
+    let covered_stems: HashSet<String> = file_stems.iter().cloned().collect();
+    let source_files = mvl_files(path, false);
+    for src_file in &source_files {
+        let file_str = src_file.display().to_string();
+        let s = stem(&file_str);
+        let module_name = s.replace('-', "_");
+        if covered_stems.contains(&module_name) {
+            continue;
+        }
+        let (prog, _src) = parse_or_exit(&file_str);
+        let has_tests = prog
+            .declarations
+            .iter()
+            .any(|d| matches!(d, Decl::Fn(fd) if fd.is_test));
+        if !has_tests {
+            continue;
+        }
+        let start_id = all_decisions.len();
+        let static_d = analyze_mcdc(&prog, &module_name);
+        all_static_decisions.extend(static_d);
+        let (out, decisions) = transpile_mcdc_source_with_prelude(
+            &prog,
+            &module_name,
+            &module_name,
+            start_id,
+            &stdlib_prelude_progs,
+        );
+        if out.has_extern_rust || transpiler::has_std_imports(&prog) {
+            need_mvl_runtime = true;
+        }
+        all_decisions.extend(decisions);
+        file_stems.push(module_name.clone());
+        let module_content: String = out
+            .lib_rs
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("#![allow("))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        modules.push((module_name, file_str, module_content));
+    }
+
+    let total_decisions = all_decisions.len();
+
+    if total_decisions == 0 {
+        println!("No compound boolean conditions found — no MC/DC obligations.");
+        return;
+    }
+
+    if !quiet {
+        let stats = MCDCStats::from_decisions(&all_static_decisions);
+        println!(
+            "Found {} test file(s), {} compound decisions, {} obligations",
+            test_files.len(),
+            stats.compound_decisions,
+            stats.total_obligations,
+        );
+    }
+
+    // Build combined lib.rs.
+    let mut combined_rs = String::new();
+    combined_rs.push_str("// MVL MC/DC runner — generated by `mvl mcdc`\n");
+    combined_rs.push_str(
+        "#![allow(dead_code, unused_variables, unused_imports, unused_parens, unused_unsafe)]\n\n",
+    );
+    combined_rs.push_str(&emit_mcdc_preamble(total_decisions));
+    for (module_name, label, module_content) in &modules {
+        combined_rs.push_str(&format!("// === {label} ===\n"));
+        combined_rs.push_str("#[cfg(test)]\n");
+        combined_rs.push_str(&format!("mod {module_name} {{\n"));
+        combined_rs.push_str("    #[allow(unused)]\n");
+        combined_rs.push_str("    use super::*;\n");
+        combined_rs.push_str(module_content);
+        combined_rs.push_str("}\n\n");
+    }
+    combined_rs.push_str(&emit_mcdc_report_test(total_decisions));
+
+    // Write Cargo.toml + lib.rs.
+    let mvl_runtime_dep = if need_mvl_runtime {
+        "mvl_runtime = { path = \"./mvl_runtime\" }\n"
+    } else {
+        ""
+    };
+    let cargo_toml = format!(
+        "[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n{mvl_runtime_dep}"
+    );
+    fs::write(tmp_dir.join("Cargo.toml"), &cargo_toml).unwrap_or_else(|e| {
+        eprintln!("Cannot write Cargo.toml: {e}");
+        process::exit(1);
+    });
+    if need_mvl_runtime {
+        let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mvl_runtime");
+        let runtime_dst = tmp_dir.join("mvl_runtime");
+        copy_dir_recursive(&runtime_src, &runtime_dst).unwrap_or_else(|e| {
+            eprintln!("error: cannot copy mvl_runtime: {e}");
+            process::exit(1);
+        });
+    }
+    fs::write(src_dir.join("lib.rs"), &combined_rs).unwrap_or_else(|e| {
+        eprintln!("Cannot write lib.rs: {e}");
+        process::exit(1);
+    });
+
+    // Compile.
+    let build_status = std::process::Command::new("cargo")
+        .args(["build", "--tests", "--quiet"])
+        .current_dir(&tmp_dir)
+        .status()
+        .unwrap_or_else(|e| {
+            eprintln!("error: cargo build failed: {e}");
+            process::exit(1);
+        });
+    if !build_status.success() {
+        eprintln!("error: MC/DC instrumented build failed");
+        process::exit(1);
+    }
+
+    // Run tests with MVL_MCDC_OUT set.
+    let mcdc_out_path = tmp_dir.join("mcdc_observations.txt");
+    let test_output = std::process::Command::new("cargo")
+        .args(["test", "--quiet"])
+        .env("MVL_MCDC_OUT", &mcdc_out_path)
+        .current_dir(&tmp_dir)
+        .output()
+        .unwrap_or_else(|e| {
+            eprintln!("error: cargo test failed: {e}");
+            process::exit(1);
+        });
+
+    // Filter out the internal report test from stdout.
+    for line in String::from_utf8_lossy(&test_output.stdout).lines() {
+        if !line.contains("zzz_mvl_mcdc_report") {
+            println!("{line}");
+        }
+    }
+
+    // Parse observations.
+    let raw_obs = fs::read_to_string(&mcdc_out_path).unwrap_or_default();
+    let observations: Vec<Vec<u16>> = raw_obs
+        .lines()
+        .map(|line| {
+            if line.is_empty() {
+                Vec::new()
+            } else {
+                line.split(',')
+                    .filter_map(|hex| u16::from_str_radix(hex.trim(), 16).ok())
+                    .collect()
+            }
+        })
+        .collect();
+
+    // Independence analysis.
+    use mvl::mvl::transpiler::mcdc_instr::is_clause_covered;
+    let mut covered = 0usize;
+    let mut total_obligations = 0usize;
+
+    // Collect per-decision results for verbose output.
+    let mut decision_results: Vec<(usize, Vec<bool>)> = Vec::new();
+
+    for decision in &all_decisions {
+        let obs = observations
+            .get(decision.id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+        let mut clause_results = Vec::new();
+        for clause_bit in 0..decision.clause_count {
+            let ok = is_clause_covered(decision.clause_count, clause_bit, obs);
+            clause_results.push(ok);
+            total_obligations += 1;
+            if ok {
+                covered += 1;
+            }
+        }
+        decision_results.push((decision.id, clause_results));
+    }
+
+    // Report.
+    if !quiet {
+        let pct = if total_obligations > 0 {
+            covered * 100 / total_obligations
+        } else {
+            100
+        };
+        println!("\nMC/DC coverage: {covered}/{total_obligations} obligations met ({pct}%)");
+    }
+
+    if verbose {
+        println!("\nDETAILED RESULTS");
+        println!("{}", "─".repeat(60));
+        for (decision, (_, clause_results)) in all_decisions.iter().zip(decision_results.iter()) {
+            let kind_label = match all_static_decisions.iter().find(|d| d.id == decision.id) {
+                Some(d) if d.kind == DecisionKind::If => "if",
+                Some(_) => "while",
+                None => "?",
+            };
+            let status: Vec<&str> = clause_results
+                .iter()
+                .map(|ok| if *ok { "✓" } else { "✗" })
+                .collect();
+            let all_ok = clause_results.iter().all(|ok| *ok);
+            println!(
+                "  {}:{:<4} {} ({} clauses) [{}] {}",
+                decision.file,
+                decision.line,
+                kind_label,
+                decision.clause_count,
+                status.join(" "),
+                if all_ok { "COVERED" } else { "MISSED" }
+            );
+        }
+        println!("{}", "─".repeat(60));
+    }
+
+    let all_covered = covered == total_obligations;
+    if !quiet {
+        if all_covered {
+            println!("PASS");
+        } else {
+            println!("FAIL");
+        }
+    }
+
+    if !all_covered {
         process::exit(1);
     }
 }

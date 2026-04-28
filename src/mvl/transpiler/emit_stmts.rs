@@ -12,7 +12,8 @@
 //!
 //! See ADR-0003 for the overall compilation strategy.
 
-use crate::mvl::parser::ast::{ElseBranch, LValue, MatchBody, Stmt};
+use crate::mvl::checker::mcdc::collect_clauses;
+use crate::mvl::parser::ast::{BinaryOp, ElseBranch, Expr, LValue, MatchBody, Stmt};
 use crate::mvl::transpiler::codegen::Codegen;
 use crate::mvl::transpiler::coverage::BranchKind;
 use crate::mvl::transpiler::emit_exprs::{
@@ -79,24 +80,28 @@ pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
             let false_id = else_
                 .as_ref()
                 .and(cg.alloc_branch(span.line, BranchKind::IfFalse));
-            cg.indent();
-            cg.push("if ");
-            emit_expr(cg, cond);
-            cg.push(" {");
-            cg.nl();
-            cg.push_indent();
-            if let Some(id) = true_id {
-                cg.emit_cov_hit(id);
+            if emit_mcdc_if(cg, cond, then, else_, span.line, true_id, false_id) {
+                // MC/DC instrumented emission handled the full if-statement.
+            } else {
+                cg.indent();
+                cg.push("if ");
+                emit_expr(cg, cond);
+                cg.push(" {");
+                cg.nl();
+                cg.push_indent();
+                if let Some(id) = true_id {
+                    cg.emit_cov_hit(id);
+                }
+                emit_block_as_value(cg, &then.stmts);
+                cg.pop_indent();
+                cg.indent();
+                cg.push("}");
+                if let Some(else_branch) = else_ {
+                    cg.push(" else ");
+                    emit_else_branch(cg, else_branch, false_id);
+                }
+                cg.nl();
             }
-            emit_block_as_value(cg, &then.stmts);
-            cg.pop_indent();
-            cg.indent();
-            cg.push("}");
-            if let Some(else_branch) = else_ {
-                cg.push(" else ");
-                emit_else_branch(cg, else_branch, false_id);
-            }
-            cg.nl();
         }
 
         Stmt::Match {
@@ -198,20 +203,24 @@ pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
             cond, body, span, ..
         } => {
             let while_id = cg.alloc_branch(span.line, BranchKind::WhileBody);
-            cg.indent();
-            cg.push("while ");
-            emit_expr(cg, cond);
-            cg.push(" {");
-            cg.nl();
-            cg.push_indent();
-            if let Some(id) = while_id {
-                cg.emit_cov_hit(id);
+            if emit_mcdc_while(cg, cond, body, span.line, while_id) {
+                // MC/DC instrumented emission handled the full while-loop.
+            } else {
+                cg.indent();
+                cg.push("while ");
+                emit_expr(cg, cond);
+                cg.push(" {");
+                cg.nl();
+                cg.push_indent();
+                if let Some(id) = while_id {
+                    cg.emit_cov_hit(id);
+                }
+                emit_block_stmts(cg, &body.stmts);
+                cg.pop_indent();
+                cg.indent();
+                cg.push("}");
+                cg.nl();
             }
-            emit_block_stmts(cg, &body.stmts);
-            cg.pop_indent();
-            cg.indent();
-            cg.push("}");
-            cg.nl();
         }
 
         Stmt::Expr { expr, .. } => {
@@ -291,4 +300,169 @@ fn emit_else_branch(cg: &mut Codegen, branch: &ElseBranch, cov_id: Option<usize>
             }
         }
     }
+}
+
+// ── MC/DC instrumentation helpers ────────────────────────────────────────
+
+/// Emit an if-statement with MC/DC clause tracking for compound conditions.
+///
+/// Returns `true` when MC/DC instrumentation was applied (compound condition
+/// with an active MC/DC map).  Returns `false` when the caller should fall
+/// back to normal emission (simple condition or MC/DC inactive).
+fn emit_mcdc_if(
+    cg: &mut Codegen,
+    cond: &Expr,
+    then: &crate::mvl::parser::ast::Block,
+    else_: &Option<ElseBranch>,
+    line: u32,
+    true_id: Option<usize>,
+    false_id: Option<usize>,
+) -> bool {
+    let mut clauses = Vec::new();
+    collect_clauses(cond, &mut clauses);
+    if clauses.len() <= 1 || cg.mcdc.is_none() {
+        return false;
+    }
+    let n = clauses.len();
+    let Some(decision_id) = cg.alloc_mcdc_decision(line, n) else {
+        return false;
+    };
+
+    // Emit clause locals (eager evaluation — MVL expressions are pure).
+    for (i, clause_expr) in clauses.iter().enumerate() {
+        cg.indent();
+        cg.push(&format!("let __d{decision_id}_c{i}: bool = "));
+        emit_expr(cg, clause_expr);
+        cg.push(";");
+        cg.nl();
+    }
+
+    // Emit outcome via recomposed boolean expression using clause vars.
+    cg.indent();
+    cg.push(&format!("let __d{decision_id}_outcome: bool = "));
+    emit_mcdc_recomposed(cg, cond, decision_id, &mut 0);
+    cg.push(";");
+    cg.nl();
+
+    // Emit observation record.
+    emit_mcdc_record(cg, decision_id, n);
+
+    // Emit: if __d{id}_outcome { ... }
+    cg.indent();
+    cg.push(&format!("if __d{decision_id}_outcome {{"));
+    cg.nl();
+    cg.push_indent();
+    if let Some(id) = true_id {
+        cg.emit_cov_hit(id);
+    }
+    emit_block_as_value(cg, &then.stmts);
+    cg.pop_indent();
+    cg.indent();
+    cg.push("}");
+    if let Some(else_branch) = else_ {
+        cg.push(" else ");
+        emit_else_branch(cg, else_branch, false_id);
+    }
+    cg.nl();
+    true
+}
+
+/// Emit a while-loop with MC/DC clause tracking, restructured as `loop { … }`.
+///
+/// Returns `true` when MC/DC instrumentation was applied, `false` to fall back.
+fn emit_mcdc_while(
+    cg: &mut Codegen,
+    cond: &Expr,
+    body: &crate::mvl::parser::ast::Block,
+    line: u32,
+    while_id: Option<usize>,
+) -> bool {
+    let mut clauses = Vec::new();
+    collect_clauses(cond, &mut clauses);
+    if clauses.len() <= 1 || cg.mcdc.is_none() {
+        return false;
+    }
+    let n = clauses.len();
+    let Some(decision_id) = cg.alloc_mcdc_decision(line, n) else {
+        return false;
+    };
+
+    // Restructure as `loop` so clause locals can be re-evaluated each iteration.
+    cg.indent();
+    cg.push("loop {");
+    cg.nl();
+    cg.push_indent();
+
+    // Clause locals.
+    for (i, clause_expr) in clauses.iter().enumerate() {
+        cg.indent();
+        cg.push(&format!("let __d{decision_id}_c{i}: bool = "));
+        emit_expr(cg, clause_expr);
+        cg.push(";");
+        cg.nl();
+    }
+
+    // Outcome.
+    cg.indent();
+    cg.push(&format!("let __d{decision_id}_outcome: bool = "));
+    emit_mcdc_recomposed(cg, cond, decision_id, &mut 0);
+    cg.push(";");
+    cg.nl();
+
+    // Record observation.
+    emit_mcdc_record(cg, decision_id, n);
+
+    // Break when condition is false.
+    cg.line(&format!("if !__d{decision_id}_outcome {{ break; }}"));
+
+    // Coverage hit (body entry).
+    if let Some(id) = while_id {
+        cg.emit_cov_hit(id);
+    }
+
+    emit_block_stmts(cg, &body.stmts);
+    cg.pop_indent();
+    cg.indent();
+    cg.push("}");
+    cg.nl();
+    true
+}
+
+/// Recompose a compound boolean expression using pre-evaluated clause variables.
+///
+/// Leaf nodes are replaced with `__d{decision_id}_c{i}` in left-to-right order.
+fn emit_mcdc_recomposed(cg: &mut Codegen, expr: &Expr, decision_id: usize, clause_idx: &mut usize) {
+    if let Expr::Binary {
+        op, left, right, ..
+    } = expr
+    {
+        if matches!(op, BinaryOp::And | BinaryOp::Or) {
+            cg.push("(");
+            emit_mcdc_recomposed(cg, left, decision_id, clause_idx);
+            cg.push(if *op == BinaryOp::And { " && " } else { " || " });
+            emit_mcdc_recomposed(cg, right, decision_id, clause_idx);
+            cg.push(")");
+            return;
+        }
+    }
+    let i = *clause_idx;
+    *clause_idx += 1;
+    cg.push(&format!("__d{decision_id}_c{i}"));
+}
+
+/// Emit the `__mvl_mcdc::record(…)` call for a decision with `n` clauses.
+fn emit_mcdc_record(cg: &mut Codegen, decision_id: usize, n: usize) {
+    // Encode: bits 0..n-1 = clause vals, bit n = outcome.
+    let vals: Vec<String> = (0..n)
+        .map(|i| format!("((__d{decision_id}_c{i} as u16) << {i}u16)"))
+        .collect();
+    let outcome = format!("((__d{decision_id}_outcome as u16) << {n}u16)");
+    let encoded = vals
+        .into_iter()
+        .chain(std::iter::once(outcome))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    cg.line(&format!(
+        "#[cfg(test)] crate::__mvl_mcdc::record({decision_id}usize, {encoded});"
+    ));
 }
