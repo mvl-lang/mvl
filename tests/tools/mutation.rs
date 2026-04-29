@@ -78,7 +78,135 @@ fn compound_binary_expression_produces_exact_mutation_count() {
     assert_eq!(
         mutants.len(),
         9,
-        "expected 9 mutations (1+3+3+2), got {}\n  mutants: {:#?}",
+        "expected 9 mutations (1(||) + 3(<) + 3(>) + 2(0)), got {}\n  mutants: {:#?}",
+        mutants.len(),
+        mutants
+    );
+}
+
+/// Three-level deep nesting: `(a + b) < (c - d)`.
+///
+/// Expected breakdown:
+///   `<`  → 3 variants
+///   `+`  → 4 variants
+///   `-`  → 4 variants
+///   Total = 11
+///
+/// Verifies that the hoisting fix holds under full recursion: the inner `+` and `-`
+/// nodes each enter the mutation path and allocate their own unique temp-var names.
+#[test]
+fn three_level_arithmetic_binary_produces_exact_mutation_count() {
+    let src = "fn f(a: Int, b: Int, c: Int, d: Int) -> Bool { (a + b) < (c - d) }";
+    let prog = parse(src);
+    let (_out, mutants) = transpile_mutated_source_with_prelude(&prog, "my_crate", "f", &[]);
+
+    let ids: Vec<&str> = mutants.iter().map(|m| m.id.as_str()).collect();
+    let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();
+    assert_eq!(
+        ids.len(),
+        unique.len(),
+        "duplicate mutation IDs detected — inflation bug present\n  ids: {ids:?}"
+    );
+
+    // 3(<) + 4(+) + 4(-) = 11
+    assert_eq!(
+        mutants.len(),
+        11,
+        "expected 11 mutations (3(<) + 4(+) + 4(-)), got {}\n  mutants: {:#?}",
+        mutants.len(),
+        mutants
+    );
+}
+
+/// Integer literal on LHS: `5 < x`.
+///
+/// Expected breakdown:
+///   `<`  → 3 variants
+///   `5`  → 5 variants (0, 1, -1, 4, 6)
+///   Total = 8
+///
+/// Confirms the left-operand hoisting path is exercised (the existing tests only
+/// place mutable literals on the right-hand side).
+#[test]
+fn integer_literal_on_lhs_produces_exact_mutation_count() {
+    let src = "fn f(x: Int) -> Bool { 5 < x }";
+    let prog = parse(src);
+    let (_out, mutants) = transpile_mutated_source_with_prelude(&prog, "my_crate", "f", &[]);
+
+    let ids: Vec<&str> = mutants.iter().map(|m| m.id.as_str()).collect();
+    let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();
+    assert_eq!(
+        ids.len(),
+        unique.len(),
+        "duplicate mutation IDs detected — inflation bug present\n  ids: {ids:?}"
+    );
+
+    // 3(<) + 5(literal 5: 0,1,-1,4,6) = 8
+    assert_eq!(
+        mutants.len(),
+        8,
+        "expected 8 mutations (3(<) + 5(literal 5)), got {}\n  mutants: {:#?}",
+        mutants.len(),
+        mutants
+    );
+}
+
+/// Left-associative chain: `a + b + c` parses as `(a + b) + c` — two `Add` nodes.
+///
+/// Expected breakdown:
+///   outer `+`  → 4 variants
+///   inner `+`  → 4 variants
+///   Total = 8
+///
+/// Verifies that a same-operator repeated chain produces the correct count and that
+/// temp-var names from the two `+` nodes do not collide.
+#[test]
+fn left_associative_chain_produces_exact_mutation_count() {
+    let src = "fn f(a: Int, b: Int, c: Int) -> Int { a + b + c }";
+    let prog = parse(src);
+    let (_out, mutants) = transpile_mutated_source_with_prelude(&prog, "my_crate", "f", &[]);
+
+    let ids: Vec<&str> = mutants.iter().map(|m| m.id.as_str()).collect();
+    let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();
+    assert_eq!(
+        ids.len(),
+        unique.len(),
+        "duplicate mutation IDs detected — inflation bug present\n  ids: {ids:?}"
+    );
+
+    // 4(outer +) + 4(inner +) = 8
+    assert_eq!(
+        mutants.len(),
+        8,
+        "expected 8 mutations (4 + 4 for two `+` nodes), got {}\n  mutants: {:#?}",
+        mutants.len(),
+        mutants
+    );
+}
+
+/// Single-variant operator: `a && b` — `&&` has exactly one mutation variant (`||`).
+///
+/// Verifies the lower boundary: a binary with no literal sub-expressions and an
+/// operator that has only one alternative produces exactly 1 mutation.
+#[test]
+fn single_variant_operator_produces_exact_mutation_count() {
+    let src = "fn f(a: Bool, b: Bool) -> Bool { a && b }";
+    let prog = parse(src);
+    let (_out, mutants) = transpile_mutated_source_with_prelude(&prog, "my_crate", "f", &[]);
+
+    let ids: Vec<&str> = mutants.iter().map(|m| m.id.as_str()).collect();
+    let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();
+    assert_eq!(
+        ids.len(),
+        unique.len(),
+        "duplicate mutation IDs detected — inflation bug present\n  ids: {ids:?}"
+    );
+
+    // &&→|| is the only variant
+    assert_eq!(
+        mutants.len(),
+        1,
+        "expected 1 mutation (&& → ||), got {}\n  mutants: {:#?}",
         mutants.len(),
         mutants
     );
