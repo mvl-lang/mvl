@@ -103,7 +103,8 @@ fn main() {
             let path = require_path_arg(&args, "mcdc");
             let quiet = args.iter().any(|a| a == "--quiet" || a == "-q");
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
-            cmd_mcdc(&path, quiet, verbose);
+            let masking = args.iter().any(|a| a == "--masking");
+            cmd_mcdc(&path, quiet, verbose, masking);
         }
         "lint" => {
             let path = require_path_arg(&args, "lint");
@@ -172,6 +173,7 @@ fn print_usage() {
     eprintln!("  mvl mcdc   <file|dir>               — MC/DC coverage analysis (DO-178C DAL-A)");
     eprintln!("  mvl mcdc   <file|dir> -q            — quiet: only show MC/DC score");
     eprintln!("  mvl mcdc   <file|dir> --verbose     — full covered/missed clause report");
+    eprintln!("  mvl mcdc   <file|dir> --masking     — masking MC/DC (DO-178C): exempt coupled obligations");
     eprintln!("  mvl lint  <file|dir>               — check style rules");
     eprintln!("  mvl lint  <file|dir> --show-config — show active linter configuration");
     eprintln!("  mvl assurance <file|dir>           — emit assurance report");
@@ -448,7 +450,7 @@ fn cmd_check(path: &str, req_filter: Option<u8>) {
 ///   3. Compile + run tests — collect observations via `MVL_MCDC_OUT`
 ///   4. Independence check — for each clause, verify it independently toggles outcome
 ///   5. Report — score + optional verbose covered/missed table
-fn cmd_mcdc(path: &str, quiet: bool, verbose: bool) {
+fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
     use mvl::mvl::transpiler::{
         emit_mcdc_preamble, emit_mcdc_report_test, transpile_mcdc_source_with_prelude,
         transpile_mcdc_with_prelude, MCDCDecision,
@@ -673,8 +675,10 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool) {
     let mut covered = 0usize;
     let mut total_obligations = 0usize;
 
-    // Collect per-decision results for verbose output.
+    // Collect per-decision results.
+    // coupled_missed: number of obligations that are uncovered AND in a coupled pair.
     let mut decision_results: Vec<(usize, Vec<bool>)> = Vec::new();
+    let mut coupled_missed = 0usize;
 
     for decision in &all_decisions {
         let obs = observations
@@ -688,10 +692,22 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool) {
             total_obligations += 1;
             if ok {
                 covered += 1;
+            } else {
+                // Count as coupled-missed if this clause appears in any coupled pair.
+                let is_coupled = decision
+                    .coupled_pairs
+                    .iter()
+                    .any(|(i, j, _)| *i == clause_bit || *j == clause_bit);
+                if is_coupled {
+                    coupled_missed += 1;
+                }
             }
         }
         decision_results.push((decision.id, clause_results));
     }
+
+    // In masking mode, exempt coupled-missed obligations from the failure count.
+    let effective_missed = (total_obligations - covered) - if masking { coupled_missed } else { 0 };
 
     // Report.
     if !quiet {
@@ -701,6 +717,14 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool) {
             100
         };
         println!("\nMC/DC coverage: {covered}/{total_obligations} obligations met ({pct}%)");
+        if coupled_missed > 0 {
+            if masking {
+                println!("  Coupled (structurally exempt under masking MC/DC): {coupled_missed}");
+            } else {
+                println!("  Coupled (unique-cause independence impossible): {coupled_missed}");
+                println!("  Use --masking to apply DO-178C masking MC/DC rules");
+            }
+        }
     }
 
     if verbose {
@@ -722,11 +746,32 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool) {
                 status.join(" "),
                 if all_ok { "COVERED" } else { "MISSED" }
             );
+            // Show coupling info for any missed clause that is part of a coupled pair.
+            for (clause_bit, ok) in clause_results.iter().enumerate() {
+                if *ok {
+                    continue;
+                }
+                for (ci, cj, shared) in &decision.coupled_pairs {
+                    if *ci == clause_bit || *cj == clause_bit {
+                        let other = if *ci == clause_bit { *cj } else { *ci };
+                        println!(
+                            "    └─ clause {} COUPLED with clause {} via: {}",
+                            clause_bit,
+                            other,
+                            shared.join(", ")
+                        );
+                        println!("       unique-cause independence may be structurally impossible");
+                        if masking {
+                            println!("       masking MC/DC: exempt (--masking)");
+                        }
+                    }
+                }
+            }
         }
         println!("{}", "─".repeat(60));
     }
 
-    let all_covered = covered == total_obligations;
+    let all_covered = effective_missed == 0;
     if !quiet {
         if all_covered {
             println!("PASS");

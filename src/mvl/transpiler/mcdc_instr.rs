@@ -1,4 +1,4 @@
-//! MC/DC instrumentation: runtime types and generated code.
+//! MC/DC instrumentation: runtime types, coupling analysis, and generated code.
 //!
 //! When `mvl mcdc` is active the transpiler injects per-clause evaluation
 //! capture for every compound boolean condition (those using `&&` / `||`).
@@ -14,6 +14,73 @@
 //! A clause with eval_flag=0 was masked by short-circuit evaluation (not reached).
 //! Masked clauses are excluded from the Unique-Cause independence pair check —
 //! they are "not reachable under that input," not "tested and failed."
+
+use crate::mvl::parser::ast::Expr;
+
+/// Collect all identifier names referenced by an expression (recursively).
+/// Used for coupling detection: two clauses that share a variable are
+/// potentially coupled — toggling one may force the other to change.
+fn collect_clause_idents<'a>(expr: &'a Expr, out: &mut Vec<&'a str>) {
+    match expr {
+        Expr::Ident(name, _) => out.push(name.as_str()),
+        Expr::Binary { left, right, .. } => {
+            collect_clause_idents(left, out);
+            collect_clause_idents(right, out);
+        }
+        Expr::FnCall { args, .. } => {
+            for a in args {
+                collect_clause_idents(a, out);
+            }
+        }
+        Expr::FieldAccess { expr, .. } => collect_clause_idents(expr, out),
+        Expr::Unary { expr, .. } => collect_clause_idents(expr, out),
+        Expr::MethodCall { receiver, args, .. } => {
+            collect_clause_idents(receiver, out);
+            for a in args {
+                collect_clause_idents(a, out);
+            }
+        }
+        // Literals, blocks, etc. don't contribute idents relevant to coupling
+        _ => {}
+    }
+}
+
+/// Detect potentially coupled clause pairs for a compound decision.
+///
+/// Two clauses are "potentially coupled" when they share at least one
+/// free variable (identifier). This means toggling the shared variable
+/// may change both clauses simultaneously, making it impossible to
+/// satisfy unique-cause independence for either.
+///
+/// Returns a list of `(clause_i, clause_j, shared_vars)` triples,
+/// one entry per coupled pair.
+pub fn detect_coupled_pairs(clauses: &[&Expr]) -> Vec<(usize, usize, Vec<String>)> {
+    use std::collections::HashSet;
+    let idents: Vec<HashSet<&str>> = clauses
+        .iter()
+        .map(|expr| {
+            let mut v = Vec::new();
+            collect_clause_idents(expr, &mut v);
+            v.into_iter().collect()
+        })
+        .collect();
+
+    let mut pairs = Vec::new();
+    for i in 0..idents.len() {
+        for j in (i + 1)..idents.len() {
+            let shared: Vec<String> = idents[i]
+                .intersection(&idents[j])
+                .map(|s| s.to_string())
+                .collect();
+            if !shared.is_empty() {
+                let mut shared = shared;
+                shared.sort();
+                pairs.push((i, j, shared));
+            }
+        }
+    }
+    pairs
+}
 
 /// The syntactic position of a compound boolean decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +119,10 @@ pub struct MCDCDecision {
     pub clause_count: usize,
     /// Syntactic position of the decision.
     pub kind: DecisionKind,
+    /// Potentially coupled clause pairs: `(clause_i, clause_j, shared_vars)`.
+    /// Two clauses are coupled when they reference the same variable, making it
+    /// impossible to toggle one independently of the other via that variable.
+    pub coupled_pairs: Vec<(usize, usize, Vec<String>)>,
 }
 
 /// Accumulates MC/DC decision registrations during a transpilation pass.
@@ -82,6 +153,7 @@ impl MCDCMap {
         line: u32,
         clause_count: usize,
         kind: DecisionKind,
+        coupled_pairs: Vec<(usize, usize, Vec<String>)>,
     ) -> usize {
         assert!(
             clause_count <= 15,
@@ -96,6 +168,7 @@ impl MCDCMap {
             line,
             clause_count,
             kind,
+            coupled_pairs,
         });
         id
     }
@@ -420,7 +493,7 @@ mod tests {
     fn alloc_panics_on_too_many_clauses() {
         let result = std::panic::catch_unwind(|| {
             let mut m = MCDCMap::new(0);
-            m.alloc("f".into(), "f".into(), 1, 16, DecisionKind::If);
+            m.alloc("f".into(), "f".into(), 1, 16, DecisionKind::If, vec![]);
         });
         assert!(result.is_err(), "should panic for clause_count=16");
     }

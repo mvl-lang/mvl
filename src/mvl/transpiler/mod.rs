@@ -39,7 +39,9 @@ use codegen::Codegen;
 pub use coverage::{
     emit_cov_preamble, emit_cov_report_test, format_report, BranchInfo, CoverageMap,
 };
-pub use mcdc_instr::{emit_mcdc_preamble, emit_mcdc_report_test, MCDCDecision};
+pub use mcdc_instr::{
+    detect_coupled_pairs, emit_mcdc_preamble, emit_mcdc_report_test, MCDCDecision,
+};
 pub use mutation::{format_mutation_report, MutantInfo, MutationMap};
 
 /// Output of a successful transpilation.
@@ -867,6 +869,42 @@ mod tests {
         assert!(
             decisions.is_empty(),
             "non-Bool return must not be instrumented"
+        );
+    }
+
+    /// Clauses that share a variable are detected as a coupled pair.
+    #[test]
+    fn mcdc_coupled_pairs_detected() {
+        // f(a) and g(a, b) both take `a` — they are coupled.
+        // h(b) and g(a, b) both take `b` — also coupled.
+        let prog =
+            parse("fn d(a: Bool, b: Bool, c: Bool) -> Bool { f(a) && g(a, b) && h(b) && k(c) }");
+        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert_eq!(decisions.len(), 1);
+        // Expect at least: (0,1) via "a" and (1,2) via "b"
+        let pairs = &decisions[0].coupled_pairs;
+        let has_01 = pairs
+            .iter()
+            .any(|(i, j, v)| *i == 0 && *j == 1 && v.contains(&"a".to_string()));
+        let has_12 = pairs
+            .iter()
+            .any(|(i, j, v)| *i == 1 && *j == 2 && v.contains(&"b".to_string()));
+        assert!(has_01, "clauses 0 and 1 share variable 'a'");
+        assert!(has_12, "clauses 1 and 2 share variable 'b'");
+        // Clause 3 (k(c)) is independent — not coupled with others
+        let has_3 = pairs.iter().any(|(i, j, _)| *i == 3 || *j == 3);
+        assert!(!has_3, "clause 3 (k(c)) must not be coupled");
+    }
+
+    /// Clauses with disjoint variable sets are not coupled.
+    #[test]
+    fn mcdc_independent_clauses_not_coupled() {
+        let prog = parse("fn f(a: Bool, b: Bool) -> Bool { a && b }");
+        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert_eq!(decisions.len(), 1);
+        assert!(
+            decisions[0].coupled_pairs.is_empty(),
+            "a and b are independent — no coupling"
         );
     }
 

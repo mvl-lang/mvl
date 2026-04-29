@@ -513,7 +513,17 @@ test fn d9_toggle_aircraft() -> Unit {
     assert_eq(ok, 1);
 }
 
-// Toggle crew_duty: crew invalid on domestic → crew_duty_ok fails
+// Toggle crew_duty_ok only: crew_valid=true (so aircraft_ready stays true),
+// but insufficient fuel on international → crew_duty_ok = true && (false || false) = false.
+// aircraft_ready uses fuel_ok (marginal=ok), so use Insufficient to fail crew_duty
+// while keeping aircraft_ready true via a different path — not possible with shared fields.
+// Solution: crew_valid=false breaks both. Instead, exploit crew_duty_ok's OR branch:
+// crew_valid=true, fuel=Insufficient, route=International → crew_duty_ok = true && (false || false) = false
+// BUT aircraft_ready = maint_ok && fuel_ok && crew → fuel_ok(Insufficient) = false → also fails.
+// Real fix: fuel=Marginal (fuel_ok=true, but fuel_sufficient=false), route=Oceanic,
+// crew_duty_ok = true && (false || true) = true — that doesn't fail.
+// The coupling means we can't toggle crew_duty_ok independently from aircraft_ready
+// with these shared fields. Accept: use crew_valid=false and note the coupled toggle.
 test fn d9_toggle_crew_duty() -> Unit {
     let wx = good_weather();
     let ac = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: false, etops_cert: true };

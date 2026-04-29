@@ -20,7 +20,7 @@ use crate::mvl::transpiler::emit_exprs::{
     arms_have_str_pattern, emit_block_as_value, emit_block_stmts, emit_expr, emit_pattern,
 };
 use crate::mvl::transpiler::emit_types::{emit_ref_expr_for_assert, emit_type_expr};
-use crate::mvl::transpiler::mcdc_instr::DecisionKind;
+use crate::mvl::transpiler::mcdc_instr::{detect_coupled_pairs, DecisionKind};
 
 /// Emit a single statement (with indentation and trailing newline).
 pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
@@ -325,7 +325,8 @@ fn emit_mcdc_if(
         return false;
     }
     let n = clauses.len();
-    let Some(decision_id) = cg.alloc_mcdc_decision(line, n, DecisionKind::If) else {
+    let coupled = detect_coupled_pairs(&clauses);
+    let Some(decision_id) = cg.alloc_mcdc_decision(line, n, DecisionKind::If, coupled) else {
         return false;
     };
 
@@ -379,7 +380,8 @@ fn emit_mcdc_while(
         return false;
     }
     let n = clauses.len();
-    let Some(decision_id) = cg.alloc_mcdc_decision(line, n, DecisionKind::While) else {
+    let coupled = detect_coupled_pairs(&clauses);
+    let Some(decision_id) = cg.alloc_mcdc_decision(line, n, DecisionKind::While, coupled) else {
         return false;
     };
 
@@ -444,7 +446,8 @@ pub fn emit_mcdc_return_expr(
         return false;
     }
     let n = clauses.len();
-    let Some(decision_id) = cg.alloc_mcdc_decision(line, n, DecisionKind::Return) else {
+    let coupled = detect_coupled_pairs(&clauses);
+    let Some(decision_id) = cg.alloc_mcdc_decision(line, n, DecisionKind::Return, coupled) else {
         return false;
     };
 

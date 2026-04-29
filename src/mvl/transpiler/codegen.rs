@@ -130,6 +130,7 @@ impl Codegen {
         line: u32,
         clause_count: usize,
         kind: DecisionKind,
+        coupled_pairs: Vec<(usize, usize, Vec<String>)>,
     ) -> Option<usize> {
         if self.current_fn_is_test {
             return None;
@@ -138,7 +139,7 @@ impl Codegen {
         let file = self.current_file.clone();
         self.mcdc
             .as_mut()
-            .map(|m| m.alloc(fn_name, file, line, clause_count, kind))
+            .map(|m| m.alloc(fn_name, file, line, clause_count, kind, coupled_pairs))
     }
 
     // ── Mutation helpers ──────────────────────────────────────────────────
