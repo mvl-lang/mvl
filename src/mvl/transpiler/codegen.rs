@@ -129,7 +129,8 @@ impl Codegen {
     /// Allocate an MC/DC decision slot for a compound boolean condition.
     ///
     /// Returns `Some(id)` when MC/DC instrumentation is active, `None` otherwise.
-    /// Test functions are excluded (returns `None` when `current_fn_is_test`).
+    /// Test functions and non-test `fn` bodies in `_test.mvl` files are excluded
+    /// (returns `None` when `current_fn_is_test` or `current_file_is_test`).
     pub fn alloc_mcdc_decision(
         &mut self,
         line: u32,
@@ -137,7 +138,7 @@ impl Codegen {
         kind: DecisionKind,
         coupled_pairs: Vec<(usize, usize, Vec<String>)>,
     ) -> Option<usize> {
-        if self.current_fn_is_test {
+        if self.current_fn_is_test || self.current_file_is_test {
             return None;
         }
         let fn_name = self.current_fn.clone();

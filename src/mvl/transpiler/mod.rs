@@ -555,6 +555,10 @@ pub fn transpile_mutated_with_prelude(
 ///
 /// Sets `test_extern_stubs = true` so `extern "rust"` blocks become `todo!()`
 /// stubs, allowing the test crate to link without the real external dependency.
+///
+/// **Invariant:** must NOT set `current_file_is_test = true`.  That flag is
+/// reserved for [`transpile_mutated_with_prelude`] (the `_test.mvl` path).
+/// Setting it here would suppress mutation points in source functions.
 pub fn transpile_mutated_source_with_prelude(
     prog: &Program,
     crate_name: &str,

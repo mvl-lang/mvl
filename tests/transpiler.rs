@@ -1708,3 +1708,45 @@ fn transpile_mutated_source_with_prelude_produces_mutants() {
     assert!(!mutants.is_empty(), "expected mutation variants");
     assert_contains(&out.lib_rs, "fn f(");
 }
+
+#[test]
+fn transpile_mutated_with_prelude_skips_bool_literal_in_non_test_fn() {
+    // alloc_bool_mutation must also be suppressed for non-test fn bodies in test files.
+    let src = "fn flag() -> Bool { true }";
+    let prog = parse_prog(src);
+    let (_out, mutants) = transpile_mutated_with_prelude(&prog, "my_crate", "flag", &[]);
+    assert!(
+        mutants.is_empty(),
+        "bool literal in non-test fn of test file must not produce mutants (got {})",
+        mutants.len()
+    );
+}
+
+#[test]
+fn transpile_mutated_with_prelude_skips_int_literal_in_non_test_fn() {
+    // alloc_int_mutations must also be suppressed for non-test fn bodies in test files.
+    let src = "fn answer() -> Int { 42 }";
+    let prog = parse_prog(src);
+    let (_out, mutants) = transpile_mutated_with_prelude(&prog, "my_crate", "answer", &[]);
+    assert!(
+        mutants.is_empty(),
+        "int literal in non-test fn of test file must not produce mutants (got {})",
+        mutants.len()
+    );
+}
+
+#[test]
+fn transpile_mutated_with_prelude_mixed_file_non_test_fn_produces_no_mutants() {
+    // In a _test.mvl file the non-test fn `f` is a re-declaration of the source
+    // function and must not produce mutants.  The test fn body is also currently
+    // suppressed (deferred per issue #330 req 2).
+    let src = "fn f(a: Int, b: Int) -> Int { a + b }\ntest fn check_f() -> Unit { let _ = 1 + 2; }";
+    let prog = parse_prog(src);
+    let (_out, mutants) = transpile_mutated_with_prelude(&prog, "my_crate", "check_f", &[]);
+    let non_test_mutants: Vec<_> = mutants.iter().filter(|m| m.fn_name == "f").collect();
+    assert!(
+        non_test_mutants.is_empty(),
+        "non-test fn `f` in test file must not produce mutants (got {})",
+        non_test_mutants.len()
+    );
+}
