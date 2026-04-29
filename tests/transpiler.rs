@@ -1741,9 +1741,12 @@ fn transpile_mutated_with_prelude_mixed_file_non_test_fn_produces_mutants() {
     // function and MUST produce mutants (cmd_mutate skips the source file when a
     // _test.mvl covers it, so the test file's non-test fns are the only mutation points).
     // The test fn body is suppressed via current_fn_is_test.
-    let src = "fn f(a: Int, b: Int) -> Int { a + b }\ntest fn check_f() -> Unit { let _ = 1 + 2; }";
+    // TODO: issue #330 also lists "mutate test fn bodies" as a requirement; that
+    // half is deferred — when implemented, flip the assertion below.
+    let src =
+        "fn f(a: Int, b: Int) -> Int { a + b }\ntest fn check_f() -> Unit { let _x = 1 + 2; }";
     let prog = parse_prog(src);
-    let (_out, mutants) = transpile_mutated_with_prelude(&prog, "my_crate", "check_f", &[]);
+    let (_out, mutants) = transpile_mutated_with_prelude(&prog, "my_crate", "my_test_file", &[]);
     let non_test_mutants: Vec<_> = mutants.iter().filter(|m| m.fn_name == "f").collect();
     assert!(
         !non_test_mutants.is_empty(),

@@ -129,8 +129,11 @@ impl Codegen {
     /// Allocate an MC/DC decision slot for a compound boolean condition.
     ///
     /// Returns `Some(id)` when MC/DC instrumentation is active, `None` otherwise.
-    /// Test functions and non-test `fn` bodies in `_test.mvl` files are excluded
-    /// (returns `None` when `current_fn_is_test` or `current_file_is_test`).
+    /// Test functions are excluded (`current_fn_is_test`).  The `current_file_is_test`
+    /// guard is retained for defence-in-depth but is effectively dead code today:
+    /// only `transpile_mutated_with_prelude` sets that flag, and it does not enable
+    /// MC/DC.  Mutation helpers use only `current_fn_is_test` (see
+    /// `alloc_binary_mutations`).
     pub fn alloc_mcdc_decision(
         &mut self,
         line: u32,
