@@ -17,7 +17,10 @@ pub type Match = struct {
 }
 
 /// Named and positional captures from a match.
-pub type Captures = struct {}
+pub type Captures = struct {
+    groups: List[Option[String]],
+    named: Map[String, String],
+}
 
 /// Compiles a regex pattern. Returns Err if the pattern is invalid.
 /// Pure — compilation is deterministic.

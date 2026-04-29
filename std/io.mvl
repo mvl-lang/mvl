@@ -89,11 +89,11 @@ pub fn path(s: String) -> Path { Path { inner: s } }
 ///
 /// Inserts the platform separator between segments.
 /// Pure — no filesystem access.
-pub fn join(base: Path, segment: String) -> Path { Path { inner: "" } }
+pub fn join(base: Path, segment: String) -> Path { Path { inner: str_concat(str_concat(base.inner, "/"), segment) } }
 
 /// Return the string representation of a path.
 /// Pure — no filesystem access.
-pub fn to_string(p: Path) -> String { "" }
+pub fn to_string(p: Path) -> String { p.inner }
 
 // ── Path queries ───────────────────────────────────────────────────────────
 

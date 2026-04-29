@@ -26,7 +26,7 @@ pub type Duration = struct {
 }
 
 /// Returns the current wall-clock time. Requires `! Clock`.
-pub fn now() -> Instant ! Clock { }
+pub fn now() -> Instant ! Clock { Instant {} }
 
 /// Suspends execution for the given duration. Requires `! Clock`.
 pub fn sleep(d: Duration) -> Unit ! Clock { }
