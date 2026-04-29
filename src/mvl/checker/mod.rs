@@ -3429,4 +3429,116 @@ mod tests {
             result.errors
         );
     }
+    // ── Fix #332: enum variant qualified paths in == / != expressions ─────
+
+    #[test]
+    fn enum_variant_qualified_path_in_eq_no_undefined_variable() {
+        let src = "type Status = enum { Absent, Present }
+fn f(s: Status) -> Bool { s == Status::Absent }";
+        let errors = errors_for(src);
+        assert!(
+            !errors.iter().any(
+                |e| matches!(e, CheckError::UndefinedVariable { name, .. } if name == "Status::Absent")
+            ),
+            "qualified enum variant in == should not emit UndefinedVariable, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn enum_variant_qualified_path_in_ne_no_undefined_variable() {
+        let src = "type Status = enum { Absent, Present }
+fn f(s: Status) -> Bool { s != Status::Absent }";
+        let errors = errors_for(src);
+        assert!(
+            !errors.iter().any(
+                |e| matches!(e, CheckError::UndefinedVariable { name, .. } if name == "Status::Absent")
+            ),
+            "qualified enum variant in != should not emit UndefinedVariable, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn enum_variant_qualified_path_compound_boolean_expr() {
+        // Two distinct enums with different variant names — both paths must resolve.
+        let src = "type A = enum { X, Y }
+type B = enum { P, Q }
+fn f(a: A, b: B) -> Bool { a == A::X && b == B::P }";
+        let errors = errors_for(src);
+        assert!(
+            !errors
+                .iter()
+                .any(|e| matches!(e, CheckError::UndefinedVariable { .. })),
+            "compound enum == should not emit UndefinedVariable, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn enum_variant_qualified_path_in_struct_field_eq() {
+        // Matches the medical_triage scenario: field access on the left, qualified variant on the right.
+        let src = r#"
+            type BreathingStatus = enum { Absent, Labored, Normal }
+            type Patient = struct { breathing: BreathingStatus, age: Int }
+            fn is_apnoeic(v: Patient) -> Bool {
+                v.breathing == BreathingStatus::Absent
+            }
+        "#;
+        let errors = errors_for(src);
+        assert!(
+            !errors.iter().any(
+                |e| matches!(e, CheckError::UndefinedVariable { name, .. } if name == "BreathingStatus::Absent")
+            ),
+            "qualified enum variant in struct field == should not emit UndefinedVariable, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn enum_variant_qualified_path_in_let_binding() {
+        let src = r#"
+            type Status = enum { Absent, Present }
+            fn f() -> Bool {
+                let x = Status::Absent
+                x == Status::Absent
+            }
+        "#;
+        let errors = errors_for(src);
+        assert!(
+            !errors.iter().any(
+                |e| matches!(e, CheckError::UndefinedVariable { name, .. } if name == "Status::Absent")
+            ),
+            "qualified enum variant in let binding should not emit UndefinedVariable, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn enum_variant_qualified_path_in_return_value() {
+        let src = r#"
+            type Status = enum { Absent, Present }
+            fn default_status() -> Status {
+                Status::Absent
+            }
+        "#;
+        let errors = errors_for(src);
+        assert!(
+            !errors.iter().any(
+                |e| matches!(e, CheckError::UndefinedVariable { name, .. } if name == "Status::Absent")
+            ),
+            "qualified enum variant in return should not emit UndefinedVariable, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn enum_variant_qualified_path_as_fn_arg() {
+        let src = r#"
+            type Status = enum { Absent, Present }
+            fn check(s: Status) -> Bool { s == Status::Absent }
+            fn outer() -> Bool { check(Status::Absent) }
+        "#;
+        let errors = errors_for(src);
+        assert!(
+            !errors.iter().any(
+                |e| matches!(e, CheckError::UndefinedVariable { name, .. } if name == "Status::Absent")
+            ),
+            "qualified enum variant as fn arg should not emit UndefinedVariable, got: {errors:?}"
+        );
+    }
 }

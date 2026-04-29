@@ -478,13 +478,15 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
 
     let stdlib_prelude_progs = load_implicit_prelude();
 
+    // The implicit prelude (primitives.mvl) always has `extern "rust"`, so
+    // mvl_runtime is always required for MC/DC instrumented builds.
+    let need_mvl_runtime = transpiler::prelude_requires_runtime(&stdlib_prelude_progs);
+
     // Transpile all test files with MC/DC instrumentation.
     let mut modules: Vec<(String, String, String)> = Vec::new();
     let mut all_decisions: Vec<MCDCDecision> = Vec::new();
+    let mut all_static_decisions: Vec<DecisionInfo> = Vec::new();
     let mut file_stems: Vec<String> = Vec::new();
-    // The stdlib prelude (strings.mvl, lists.mvl, …) uses extern "rust" blocks,
-    // so the runtime crate is always needed when the prelude is loaded.
-    let mut need_mvl_runtime = transpiler::prelude_requires_runtime(&stdlib_prelude_progs);
 
     for test_file in &test_files {
         let file_str = test_file.display().to_string();
@@ -493,6 +495,8 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
         let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
         validate_module_name(&module_name, &file_str);
         let start_id = all_decisions.len();
+        let static_d = analyze_mcdc(&prog, &module_name, start_id);
+        all_static_decisions.extend(static_d);
         let (out, decisions) = transpile_mcdc_with_prelude(
             &prog,
             &module_name,
@@ -500,9 +504,7 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
             start_id,
             &stdlib_prelude_progs,
         );
-        if out.has_extern_rust || transpiler::has_std_imports(&prog) {
-            need_mvl_runtime = true;
-        }
+        let _ = out;
         all_decisions.extend(decisions);
         file_stems.push(module_name.clone());
         let module_content: String = out
@@ -535,6 +537,8 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
         }
         validate_module_name(&module_name, &file_str);
         let start_id = all_decisions.len();
+        let static_d = analyze_mcdc(&prog, &module_name, start_id);
+        all_static_decisions.extend(static_d);
         let (out, decisions) = transpile_mcdc_source_with_prelude(
             &prog,
             &module_name,
@@ -542,9 +546,7 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
             start_id,
             &stdlib_prelude_progs,
         );
-        if out.has_extern_rust || transpiler::has_std_imports(&prog) {
-            need_mvl_runtime = true;
-        }
+        let _ = out;
         all_decisions.extend(decisions);
         file_stems.push(module_name.clone());
         let module_content: String = out

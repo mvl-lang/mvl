@@ -51,13 +51,18 @@ impl DecisionInfo {
     }
 }
 
-/// Walk a program and collect all instrumented decision points.
+/// Walk a program and collect all compound-condition decision points.
 ///
 /// `file_stem` is the source file name without extension (for reporting).
+/// `start_id` is the first decision ID to assign; use `0` for the first file
+/// and `existing_decisions.len()` for subsequent files in a multi-file run.
+///
 /// Test functions are excluded — only production code decisions are tracked.
-pub fn analyze_mcdc(prog: &Program, file_stem: &str) -> Vec<DecisionInfo> {
+/// Single-clause conditions (no `&&`/`||`) are excluded — they carry no MC/DC
+/// obligations and do not receive IDs from the transpiler.
+pub fn analyze_mcdc(prog: &Program, file_stem: &str, start_id: usize) -> Vec<DecisionInfo> {
     let mut decisions = Vec::new();
-    let mut next_id = 0usize;
+    let mut next_id = start_id;
     for decl in &prog.declarations {
         if let Decl::Fn(fd) = decl {
             if fd.is_test {
@@ -96,15 +101,17 @@ fn collect_from_stmt(
             span,
         } => {
             let clause_count = count_clauses(cond);
-            decisions.push(DecisionInfo {
-                id: *next_id,
-                fn_name: fn_name.to_string(),
-                file: file.to_string(),
-                line: span.line,
-                kind: DecisionKind::If,
-                clause_count,
-            });
-            *next_id += 1;
+            if clause_count > 1 {
+                decisions.push(DecisionInfo {
+                    id: *next_id,
+                    fn_name: fn_name.to_string(),
+                    file: file.to_string(),
+                    line: span.line,
+                    kind: DecisionKind::If,
+                    clause_count,
+                });
+                *next_id += 1;
+            }
             collect_from_block(then, fn_name, file, decisions, next_id);
             if let Some(else_branch) = else_ {
                 match else_branch {
@@ -119,15 +126,17 @@ fn collect_from_stmt(
         }
         Stmt::While { cond, body, span } => {
             let clause_count = count_clauses(cond);
-            decisions.push(DecisionInfo {
-                id: *next_id,
-                fn_name: fn_name.to_string(),
-                file: file.to_string(),
-                line: span.line,
-                kind: DecisionKind::While,
-                clause_count,
-            });
-            *next_id += 1;
+            if clause_count > 1 {
+                decisions.push(DecisionInfo {
+                    id: *next_id,
+                    fn_name: fn_name.to_string(),
+                    file: file.to_string(),
+                    line: span.line,
+                    kind: DecisionKind::While,
+                    clause_count,
+                });
+                *next_id += 1;
+            }
             collect_from_block(body, fn_name, file, decisions, next_id);
         }
         Stmt::Match { arms, .. } => {
@@ -176,15 +185,17 @@ fn collect_from_expr(
             span,
         } => {
             let clause_count = count_clauses(cond);
-            decisions.push(DecisionInfo {
-                id: *next_id,
-                fn_name: fn_name.to_string(),
-                file: file.to_string(),
-                line: span.line,
-                kind: DecisionKind::If,
-                clause_count,
-            });
-            *next_id += 1;
+            if clause_count > 1 {
+                decisions.push(DecisionInfo {
+                    id: *next_id,
+                    fn_name: fn_name.to_string(),
+                    file: file.to_string(),
+                    line: span.line,
+                    kind: DecisionKind::If,
+                    clause_count,
+                });
+                *next_id += 1;
+            }
             collect_from_block(then, fn_name, file, decisions, next_id);
             if let Some(e) = else_ {
                 collect_from_expr(e, fn_name, file, decisions, next_id);
@@ -299,15 +310,14 @@ mod tests {
         let (mut p, _) = Parser::new(src);
         let prog = p.parse_program();
         assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
-        analyze_mcdc(&prog, "test")
+        analyze_mcdc(&prog, "test", 0)
     }
 
     #[test]
-    fn simple_if_has_one_clause() {
+    fn simple_if_excluded_no_compound() {
+        // Single-clause conditions carry no MC/DC obligations — not tracked.
         let decisions = decisions_for("fn f(x: Int) -> Int { if x > 0 { 1 } else { 0 } }");
-        assert_eq!(decisions.len(), 1);
-        assert_eq!(decisions[0].clause_count, 1);
-        assert!(!decisions[0].is_compound());
+        assert_eq!(decisions.len(), 0);
     }
 
     #[test]
@@ -331,8 +341,19 @@ mod tests {
 
     #[test]
     fn nested_decisions_get_sequential_ids() {
+        // Inner `if c` is single-clause — excluded. Only `if a && b` is tracked.
         let decisions = decisions_for(
             "fn f(a: Bool, b: Bool, c: Bool) -> Int { if a && b { if c { 1 } else { 2 } } else { 0 } }"
+        );
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].id, 0);
+        assert_eq!(decisions[0].clause_count, 2);
+    }
+
+    #[test]
+    fn two_compound_decisions_get_sequential_ids() {
+        let decisions = decisions_for(
+            "fn f(a: Bool, b: Bool, c: Bool) -> Int { if a && b { 1 } else { if b || c { 2 } else { 0 } } }"
         );
         assert_eq!(decisions.len(), 2);
         assert_eq!(decisions[0].id, 0);
@@ -361,12 +382,32 @@ mod tests {
 
     #[test]
     fn stats_counts_compound_only() {
+        // Single-clause `if x > 0` is not tracked; compound `if a && b` is.
         let decisions = decisions_for(
             "fn f(a: Bool, b: Bool, x: Int) -> Int { if x > 0 { 1 } else { if a && b { 2 } else { 0 } } }"
         );
         let stats = MCDCStats::from_decisions(&decisions);
-        assert_eq!(stats.total_decisions, 2);
+        assert_eq!(stats.total_decisions, 1);
         assert_eq!(stats.compound_decisions, 1);
         assert_eq!(stats.total_obligations, 2); // 2 clauses in the compound decision
+    }
+
+    #[test]
+    fn start_id_offsets_decision_ids() {
+        let (mut p, _) =
+            Parser::new("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
+        let prog = p.parse_program();
+        let decisions = analyze_mcdc(&prog, "test", 5);
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].id, 5);
+    }
+
+    #[test]
+    fn correct_line_numbers_reported() {
+        // The if statement is on line 3 of this snippet; verify span.line is captured correctly.
+        let src = "fn f(a: Bool, b: Bool) -> Bool {\n    let x: Bool = a;\n    if a && b {\n        return true\n    }\n    return false\n}";
+        let decisions = decisions_for(src);
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].line, 3, "if statement should report line 3");
     }
 }
