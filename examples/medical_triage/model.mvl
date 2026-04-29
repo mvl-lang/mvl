@@ -1,0 +1,93 @@
+// model.mvl — Domain types for emergency triage.
+//
+// Based on Manchester Triage System (MTS) — 5 priority levels.
+// Demonstrates:
+//   1. Req 1 (ADTs): enum + struct types model clinical domain
+//   2. Req 5 (Errors): named error variants for invalid input
+//
+// No extern, no effects — pure type declarations.
+// Assurance note: 0 extern blocks (domain model only).
+
+// ── Triage priority (Manchester Triage System) ───────────────────────────
+
+pub type Priority = enum {
+    Red,        // Immediate — life-threatening, seen within 0 min
+    Orange,     // Very urgent — serious risk, seen within 10 min
+    Yellow,     // Urgent — significant problem, seen within 60 min
+    Green,      // Standard — minor, seen within 120 min
+    Blue,       // Non-urgent — can wait, seen within 240 min
+}
+
+// ── Vital signs ──────────────────────────────────────────────────────────
+
+pub type Consciousness = enum {
+    Alert,          // A — fully alert and oriented
+    VoiceResponse,  // V — responds to voice
+    PainResponse,   // P — responds to pain only
+    Unresponsive,   // U — no response (AVPU scale)
+}
+
+pub type BreathingStatus = enum {
+    Normal,         // 12-20 breaths/min
+    Labored,        // accessory muscle use, increased rate
+    Absent,         // apnea — immediate intervention
+}
+
+pub type PulseStrength = enum {
+    Strong,         // normal, palpable
+    Weak,           // thready, hard to find
+    Absent,         // no pulse detected
+}
+
+pub type Vitals = struct {
+    heart_rate:     Int,    // bpm
+    systolic_bp:    Int,    // mmHg
+    oxygen_sat:     Int,    // SpO2 percentage
+    temperature:    Int,    // celsius × 10 (e.g., 385 = 38.5°C) — avoids float
+    consciousness:  Consciousness,
+    breathing:      BreathingStatus,
+    pulse:          PulseStrength,
+}
+
+// ── Patient context ──────────────────────────────────────────────────────
+
+pub type AgeGroup = enum {
+    Infant,     // 0-1 year
+    Child,      // 1-12 years
+    Adult,      // 12-65 years
+    Elderly,    // 65+ years
+}
+
+pub type ChiefComplaint = enum {
+    ChestPain,
+    Breathing,
+    Trauma,
+    Abdominal,
+    Neurological,
+    Fever,
+    Minor,
+}
+
+pub type Patient = struct {
+    age_group:  AgeGroup,
+    complaint:  ChiefComplaint,
+    vitals:     Vitals,
+    allergies:  Bool,
+    pregnant:   Bool,
+}
+
+// ── Clinical assessment ──────────────────────────────────────────────────
+
+pub type Assessment = struct {
+    priority:       Priority,
+    resuscitate:    Bool,   // needs immediate resuscitation team
+    isolate:        Bool,   // infection control isolation
+    reassess_mins:  Int,    // minutes until reassessment
+}
+
+pub type TriageError = enum {
+    InvalidHeartRate,
+    InvalidBloodPressure,
+    InvalidOxygenSat,
+    InvalidTemperature,
+}
