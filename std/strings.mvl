@@ -61,3 +61,27 @@ pub fn split(s: String, sep: String) -> List[String] {
 pub fn substring(s: String, start: Int, end: Int) -> String {
     str_substring(s, start, end)
 }
+
+// ── Additional wrappers ───────────────────────────────────────────────────────
+// These are declared for documentation and IFC-label visibility. The
+// transpiler resolves s.len() / s.is_empty() / s.contains() via infer_method_call;
+// the free-function forms below use type-prefixed names to avoid collisions
+// with the identically-named List wrappers in lists.mvl.
+
+/// Number of Unicode scalar values (characters) in `s`.
+/// Call as `s.len()` in user code; `str_len(s)` for primitive access.
+pub fn str_length(s: String) -> Int {
+    str_len(s)
+}
+
+/// True if `s` has no characters.
+/// Call as `s.is_empty()` in user code.
+pub fn str_is_empty(s: String) -> Bool {
+    str_len(s) == 0
+}
+
+/// True if `sub` appears anywhere in `s`.
+/// Call as `s.contains(sub)` in user code.
+pub fn str_contains_sub(s: String, sub: String) -> Bool {
+    str_contains(s, sub)
+}

@@ -4,9 +4,9 @@
 // as pure MVL using only the kernel primitives from std/primitives.mvl.
 // Method-call syntax `xs.take(n)` compiles to `take(xs, n)` via UFCS dispatch.
 //
-// Higher-order methods (filter, fold, map, etc.) remain in the transpiler for
-// now due to Rust closure/Clone semantics; they will move here in a later phase
-// once MVL gains explicit Clone bounds in generic signatures.
+// Higher-order methods (filter, fold, map, etc.) were previously transpiler-only.
+// Declarations below provide the verification surface for the IFC label checker,
+// effect tracker, and totality checker (issue #341).
 
 /// Safe slice `[start, end)` — clamped, never panics. Wraps the list_slice kernel.
 pub fn slice[T](xs: List[T], start: Int, end: Int) -> List[T] where T: Clone {
@@ -57,4 +57,119 @@ pub fn reverse[T](xs: List[T]) -> List[T] where T: Clone {
         i = i - 1
     };
     result
+}
+
+// ── Primitive wrappers ────────────────────────────────────────────────────────
+
+/// Number of elements in `xs`.
+pub fn len[T](xs: List[T]) -> Int {
+    list_len(xs)
+}
+
+/// True if `xs` has no elements.
+pub fn is_empty[T](xs: List[T]) -> Bool {
+    list_len(xs) == 0
+}
+
+/// Element at index `i`, or None if out of range.
+pub fn get[T](xs: List[T], i: Int) -> Option[T] where T: Clone {
+    list_get(xs, i)
+}
+
+/// Append `x` to `xs`, returning the new list.
+pub fn push[T](xs: List[T], x: T) -> List[T] where T: Clone {
+    list_push(xs, x)
+}
+
+/// True if `xs` contains `x`.
+pub fn contains[T](xs: List[T], x: T) -> Bool where T: Clone, T: PartialEq {
+    list_contains(xs, x)
+}
+
+/// Reverse `xs`. Alias for `reverse`.
+pub fn rev[T](xs: List[T]) -> List[T] where T: Clone {
+    reverse(xs)
+}
+
+// ── Higher-order operations ───────────────────────────────────────────────────
+//
+// These methods are handled by the transpiler's specific emit arms in
+// emit_exprs.rs. Declarations here give the IFC label checker and effect
+// tracker a visible signature to reason about. The function bodies delegate
+// back to the method call so the transpiler emits the correct Rust code.
+
+/// Apply `f` to each element of `xs`, collecting results.
+pub fn map[T, U](xs: List[T], f: fn(T) -> U) -> List[U] where T: Clone {
+    xs.map(f)
+}
+
+/// Retain elements of `xs` satisfying predicate `f`.
+pub fn filter[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
+    xs.filter(f)
+}
+
+/// Left fold: reduce `xs` to a single value using `f` and accumulator `init`.
+///
+/// Stub body returns `init` unchanged; the transpiler's fold arm handles
+/// actual semantics at `xs.fold(init, f)` call sites.
+pub fn fold[T, U](xs: List[T], init: U, f: fn(U, T) -> U) -> U {
+    init
+}
+
+/// Sort `xs` in ascending order using natural ordering.
+///
+/// Stub body returns `xs` unchanged (requires PartialOrd which MVL cannot
+/// express as a where-bound); the transpiler's sort arm handles actual
+/// semantics at `xs.sort()` call sites.
+pub fn sort[T](xs: List[T]) -> List[T] where T: Clone {
+    slice(xs, 0, list_len(xs))
+}
+
+/// Split `xs` into elements satisfying `f` and those that do not.
+pub fn partition[T](xs: List[T], f: fn(T) -> Bool) -> (List[T], List[T]) where T: Clone {
+    xs.partition(f)
+}
+
+/// Retain leading elements while `f` returns true; stop at first false.
+pub fn take_while[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
+    xs.take_while(f)
+}
+
+/// Drop leading elements while `f` returns true; keep from first false onward.
+pub fn skip_while[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
+    xs.skip_while(f)
+}
+
+/// True if at least one element satisfies `f`.
+pub fn any[T](xs: List[T], f: fn(T) -> Bool) -> Bool where T: Clone {
+    xs.filter(f).is_empty() == false
+}
+
+/// True if every element satisfies `f`.
+pub fn all[T](xs: List[T], f: fn(T) -> Bool) -> Bool where T: Clone {
+    xs.skip_while(f).is_empty()
+}
+
+/// Smallest element, or None for an empty list.
+///
+/// Stub body delegates to `first`; the transpiler's generic fallthrough handles
+/// actual min semantics at `xs.min()` call sites.
+pub fn min[T](xs: List[T]) -> Option[T] where T: Clone {
+    first(xs)
+}
+
+/// Largest element, or None for an empty list.
+///
+/// Stub body delegates to `last`; the transpiler's generic fallthrough handles
+/// actual max semantics at `xs.max()` call sites.
+pub fn max[T](xs: List[T]) -> Option[T] where T: Clone {
+    last(xs)
+}
+
+/// Join a list of strings with separator `sep`.
+///
+/// Stub body returns empty string; the transpiler's generic fallthrough handles
+/// actual semantics at `xs.join(sep)` call sites (delegates to Rust's slice::join).
+pub fn join(xs: List[String], sep: String) -> String {
+    ""
 }

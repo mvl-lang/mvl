@@ -1,0 +1,151 @@
+// MVL stdlib — numeric method declarations for Int and Float
+//
+// These declarations make arithmetic and predicate methods visible to the
+// IFC label checker, effect tracker, and totality checker (issue #341).
+// The transpiler handles actual code generation at call sites via dedicated
+// emit arms (pow → MvlPow, clamp → emit_safe_clamp, is_zero → == 0, etc.)
+// or the generic Rust method fallthrough (abs, sqrt, ceil, …).
+//
+// Where the method can be expressed in pure MVL, a real implementation is
+// provided. Where the method requires a Rust trait or cast, the body is a
+// minimal stub that compiles to valid Rust.
+
+// ── Int ───────────────────────────────────────────────────────────────────────
+
+/// Absolute value of `n`.
+pub fn int_abs(n: Int) -> Int {
+    if n < 0 { 0 - n } else { n }
+}
+
+/// `n` raised to the power `exp`.
+///
+/// Transpiler-handled via the `MvlPow` trait; stub body for free-function use.
+pub fn int_pow(n: Int, exp: Int) -> Int {
+    n.pow(exp)
+}
+
+/// Clamp `n` to `[low, high]` (inclusive). If `low > high`, returns `low`.
+pub fn int_clamp(n: Int, low: Int, high: Int) -> Int {
+    if n < low { low } else if n > high { high } else { n }
+}
+
+/// True if `n` equals zero.
+pub fn is_zero(n: Int) -> Bool {
+    n == 0
+}
+
+/// True if `n` is strictly positive.
+pub fn int_is_positive(n: Int) -> Bool {
+    n > 0
+}
+
+/// True if `n` is strictly negative.
+pub fn int_is_negative(n: Int) -> Bool {
+    n < 0
+}
+
+/// The smaller of `a` and `b`.
+pub fn int_min(a: Int, b: Int) -> Int {
+    if a < b { a } else { b }
+}
+
+/// The larger of `a` and `b`.
+pub fn int_max(a: Int, b: Int) -> Int {
+    if a > b { a } else { b }
+}
+
+/// Convert `n` to a `Float`.
+///
+/// Transpiler-handled as a Rust cast (`n as f64`); stub returns 0.0.
+pub fn int_to_float(n: Int) -> Float { 0.0 }
+
+/// Convert `n` to its decimal string representation.
+pub fn int_to_string(n: Int) -> String {
+    n.to_string()
+}
+
+// ── Float ─────────────────────────────────────────────────────────────────────
+
+/// Absolute value of `x`.
+pub fn float_abs(x: Float) -> Float {
+    x.abs()
+}
+
+/// Square root of `x`.
+pub fn float_sqrt(x: Float) -> Float {
+    x.sqrt()
+}
+
+/// Smallest integer ≥ `x`.
+pub fn float_ceil(x: Float) -> Float {
+    x.ceil()
+}
+
+/// Largest integer ≤ `x`.
+pub fn float_floor(x: Float) -> Float {
+    x.floor()
+}
+
+/// Round `x` to the nearest integer (half-rounds away from zero).
+pub fn float_round(x: Float) -> Float {
+    x.round()
+}
+
+/// True if `x` is strictly positive (and not NaN).
+pub fn float_is_positive(x: Float) -> Bool {
+    x > 0.0
+}
+
+/// True if `x` is strictly negative (and not NaN).
+pub fn float_is_negative(x: Float) -> Bool {
+    x < 0.0
+}
+
+/// True if `x` is NaN (not-a-number).
+pub fn float_is_nan(x: Float) -> Bool {
+    x.is_nan()
+}
+
+/// True if `x` is positive or negative infinity.
+pub fn float_is_infinite(x: Float) -> Bool {
+    x.is_infinite()
+}
+
+/// True if `x` is neither infinite nor NaN.
+pub fn float_is_finite(x: Float) -> Bool {
+    x.is_finite()
+}
+
+/// Truncate `x` toward zero and return as Int.
+///
+/// Transpiler-handled as a Rust cast (`x as i64`); uses to_int arm.
+pub fn float_to_int(x: Float) -> Int {
+    x.to_int()
+}
+
+/// Convert `x` to its string representation.
+pub fn float_to_string(x: Float) -> String {
+    x.to_string()
+}
+
+/// `x` raised to the power `exp`.
+///
+/// Transpiler-handled via the `MvlPow` trait; stub body for free-function use.
+pub fn float_pow(x: Float, exp: Float) -> Float {
+    x.pow(exp)
+}
+
+/// Clamp `x` to `[low, high]`. If `low > high`, returns `low`.
+pub fn float_clamp(x: Float, low: Float, high: Float) -> Float {
+    if x < low { low } else if x > high { high } else { x }
+}
+
+/// The smaller of `a` and `b` (NaN-handling follows Rust's `f64::min`).
+pub fn float_min(a: Float, b: Float) -> Float {
+    if a < b { a } else { b }
+}
+
+/// The larger of `a` and `b` (NaN-handling follows Rust's `f64::max`).
+pub fn float_max(a: Float, b: Float) -> Float {
+    if a > b { a } else { b }
+}

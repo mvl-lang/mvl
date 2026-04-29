@@ -35,3 +35,47 @@ pub partial fn range(start: Int, end: Int) -> List[Int] {
     }
     result
 }
+
+// ── Option predicates ─────────────────────────────────────────────────────────
+
+/// True if `opt` holds a value.
+pub fn is_some[T](opt: Option[T]) -> Bool {
+    match opt {
+        Some(_) => true,
+        None => false
+    }
+}
+
+/// True if `opt` is empty.
+pub fn is_none[T](opt: Option[T]) -> Bool {
+    match opt {
+        Some(_) => false,
+        None => true
+    }
+}
+
+/// Return the contained value, or `default` if None.
+pub fn unwrap_or[T](opt: Option[T], default: T) -> T {
+    match opt {
+        Some(v) => v,
+        None => default
+    }
+}
+
+// ── Result predicates ─────────────────────────────────────────────────────────
+
+/// True if `res` is Ok.
+pub fn is_ok[T, E](res: Result[T, E]) -> Bool {
+    match res {
+        Ok(_) => true,
+        Err(_) => false
+    }
+}
+
+/// True if `res` is Err.
+pub fn is_err[T, E](res: Result[T, E]) -> Bool {
+    match res {
+        Ok(_) => false,
+        Err(_) => true
+    }
+}
