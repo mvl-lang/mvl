@@ -17,30 +17,61 @@
 
 use crate::mvl::parser::ast::Expr;
 
-/// Collect all identifier names referenced by an expression (recursively).
-/// Used for coupling detection: two clauses that share a variable are
-/// potentially coupled — toggling one may force the other to change.
-fn collect_clause_idents<'a>(expr: &'a Expr, out: &mut Vec<&'a str>) {
+/// Build a dotted access path for a pure ident / field-access chain.
+/// Returns `None` for anything that involves computation (calls, operators).
+///
+/// Examples:
+///   `v`             → Some("v")
+///   `v.breathing`   → Some("v.breathing")
+///   `p.vitals.pulse`→ Some("p.vitals.pulse")
+///   `f(v).field`    → None  (call at base — not a simple path)
+fn expr_to_path(expr: &Expr) -> Option<String> {
     match expr {
-        Expr::Ident(name, _) => out.push(name.as_str()),
+        Expr::Ident(name, _) => Some(name.clone()),
+        Expr::FieldAccess { expr, field, .. } => {
+            expr_to_path(expr).map(|base| format!("{}.{}", base, field))
+        }
+        _ => None,
+    }
+}
+
+/// Collect access paths for all free-variable references in a clause expression.
+///
+/// For field accesses like `v.breathing` the full path `"v.breathing"` is
+/// collected rather than just the root `"v"`. This prevents false coupling
+/// between clauses that share a struct parameter but access disjoint fields.
+///
+/// Examples:
+///   `breathing_absent(v.breathing)` → ["v.breathing"]
+///   `oxygen_low(v.oxygen_sat)`      → ["v.oxygen_sat"]
+///   `v.systolic_bp < 90`            → ["v.systolic_bp"]
+///   `f(a, b)`                       → ["a", "b"]
+///   `f(v)`                          → ["v"]       (bare var, not a field)
+fn collect_access_paths(expr: &Expr, out: &mut Vec<String>) {
+    // Try to extract a pure access path first (handles Ident and FieldAccess chains).
+    if let Some(path) = expr_to_path(expr) {
+        out.push(path);
+        return;
+    }
+    // Recurse into sub-expressions for calls, operators, etc.
+    match expr {
         Expr::Binary { left, right, .. } => {
-            collect_clause_idents(left, out);
-            collect_clause_idents(right, out);
+            collect_access_paths(left, out);
+            collect_access_paths(right, out);
         }
         Expr::FnCall { args, .. } => {
             for a in args {
-                collect_clause_idents(a, out);
+                collect_access_paths(a, out);
             }
         }
-        Expr::FieldAccess { expr, .. } => collect_clause_idents(expr, out),
-        Expr::Unary { expr, .. } => collect_clause_idents(expr, out),
+        Expr::FieldAccess { expr, .. } => collect_access_paths(expr, out),
+        Expr::Unary { expr, .. } => collect_access_paths(expr, out),
         Expr::MethodCall { receiver, args, .. } => {
-            collect_clause_idents(receiver, out);
+            collect_access_paths(receiver, out);
             for a in args {
-                collect_clause_idents(a, out);
+                collect_access_paths(a, out);
             }
         }
-        // Literals, blocks, etc. don't contribute idents relevant to coupling
         _ => {}
     }
 }
@@ -48,30 +79,27 @@ fn collect_clause_idents<'a>(expr: &'a Expr, out: &mut Vec<&'a str>) {
 /// Detect potentially coupled clause pairs for a compound decision.
 ///
 /// Two clauses are "potentially coupled" when they share at least one
-/// free variable (identifier). This means toggling the shared variable
-/// may change both clauses simultaneously, making it impossible to
-/// satisfy unique-cause independence for either.
+/// access path (a full dotted identifier like `v.breathing` or a bare
+/// variable like `hr`). Clauses that share a struct parameter but access
+/// disjoint fields (e.g. `v.breathing` vs `v.oxygen_sat`) are NOT flagged.
 ///
-/// Returns a list of `(clause_i, clause_j, shared_vars)` triples,
+/// Returns a list of `(clause_i, clause_j, shared_paths)` triples,
 /// one entry per coupled pair.
 pub fn detect_coupled_pairs(clauses: &[&Expr]) -> Vec<(usize, usize, Vec<String>)> {
     use std::collections::HashSet;
-    let idents: Vec<HashSet<&str>> = clauses
+    let paths: Vec<HashSet<String>> = clauses
         .iter()
         .map(|expr| {
             let mut v = Vec::new();
-            collect_clause_idents(expr, &mut v);
+            collect_access_paths(expr, &mut v);
             v.into_iter().collect()
         })
         .collect();
 
     let mut pairs = Vec::new();
-    for i in 0..idents.len() {
-        for j in (i + 1)..idents.len() {
-            let shared: Vec<String> = idents[i]
-                .intersection(&idents[j])
-                .map(|s| s.to_string())
-                .collect();
+    for i in 0..paths.len() {
+        for j in (i + 1)..paths.len() {
+            let shared: Vec<String> = paths[i].intersection(&paths[j]).cloned().collect();
             if !shared.is_empty() {
                 let mut shared = shared;
                 shared.sort();

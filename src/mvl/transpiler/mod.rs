@@ -908,6 +908,48 @@ mod tests {
         );
     }
 
+    /// Field-level coupling: same struct param, disjoint fields → NOT coupled.
+    #[test]
+    fn mcdc_disjoint_field_access_not_coupled() {
+        // f(v.breathing) and g(v.oxygen_sat) share param `v` but access different fields.
+        let prog = parse("fn d(v: Vitals) -> Bool { f(v.breathing) && g(v.oxygen_sat) }");
+        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert_eq!(decisions.len(), 1);
+        assert!(
+            decisions[0].coupled_pairs.is_empty(),
+            "disjoint fields v.breathing vs v.oxygen_sat must not be coupled"
+        );
+    }
+
+    /// Field-level coupling: same field accessed by two clauses → genuinely coupled.
+    #[test]
+    fn mcdc_shared_field_access_is_coupled() {
+        // Both clauses use v.bp — toggling it affects both simultaneously.
+        let prog = parse("fn d(v: V) -> Bool { f(v.bp) && g(v.bp) }");
+        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert_eq!(decisions.len(), 1);
+        let pairs = &decisions[0].coupled_pairs;
+        assert_eq!(pairs.len(), 1, "one coupled pair expected");
+        assert_eq!(pairs[0].0, 0);
+        assert_eq!(pairs[0].1, 1);
+        assert!(
+            pairs[0].2.contains(&"v.bp".to_string()),
+            "shared path must be v.bp"
+        );
+    }
+
+    /// Nested field access: p.vitals.pulse vs p.vitals.bp → disjoint → NOT coupled.
+    #[test]
+    fn mcdc_nested_field_access_not_coupled() {
+        let prog = parse("fn d(p: Patient) -> Bool { f(p.vitals.pulse) && g(p.vitals.bp) }");
+        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert_eq!(decisions.len(), 1);
+        assert!(
+            decisions[0].coupled_pairs.is_empty(),
+            "p.vitals.pulse vs p.vitals.bp are disjoint nested paths — not coupled"
+        );
+    }
+
     /// `start_id` offsets decision IDs correctly for multi-file projects.
     #[test]
     fn mcdc_start_id_offset_applied() {
