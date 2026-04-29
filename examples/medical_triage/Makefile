@@ -1,6 +1,6 @@
 # medical_triage example — MC/DC coverage demonstration (IEC 62304)
 # Run from this directory or from the repo root.
-.PHONY: help check test mcdc mutate run clean
+.PHONY: help check test mcdc mutate run all clean
 
 MVL  := $(shell test -x ../../target/debug/mvl && echo ../../target/debug/mvl || echo mvl)
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
@@ -13,7 +13,7 @@ check: ## Type-check all source files
 	$(MVL) check $(DIR)triage.mvl
 	$(MVL) check $(DIR)main.mvl
 
-test: ## Run MC/DC test suite
+test: ## Run unit tests
 	$(MVL) test $(DIR)
 
 mcdc: ## Run MC/DC coverage analysis (use ARGS="--masking" to exempt coupled)
@@ -21,6 +21,8 @@ mcdc: ## Run MC/DC coverage analysis (use ARGS="--masking" to exempt coupled)
 
 mutate: ## Run mutation testing
 	$(MVL) mutate $(DIR)
+
+all: check test mcdc ## Run full quality pipeline: check + test + mcdc
 
 run: ## Execute the demo scenarios
 	$(MVL) run $(DIR)main.mvl
