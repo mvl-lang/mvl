@@ -1,4 +1,5 @@
 use mvl::mvl::checker;
+use mvl::mvl::checker::mcdc::{analyze_mcdc, DecisionInfo};
 use mvl::mvl::checker::passes::{
     aggregate_verdicts, parse_req_filter, source_hash, PassRegistry, Verdict, VerdictCache,
 };
@@ -557,6 +558,39 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
             .join("\n")
             + "\n";
         modules.push((module_name, file_str, module_content));
+    }
+
+    // Fix line numbers for Return decisions: *_test.mvl re-declares functions
+    // (workaround for #96) at different line numbers than the original source.
+    // Build a (module, fn_name) → line map from source files and override
+    // the line for any Return decision whose function exists in the source.
+    {
+        use mvl::mvl::transpiler::mcdc_instr::DecisionKind;
+        use std::collections::HashMap;
+        let mut source_fn_lines: HashMap<(String, String), u32> = HashMap::new();
+        for src_file in &source_files {
+            let file_str = src_file.display().to_string();
+            let s = stem(&file_str);
+            let module_name = s.replace('-', "_");
+            let (prog, _src) = parse_or_exit(&file_str);
+            for decl in &prog.declarations {
+                if let Decl::Fn(fd) = decl {
+                    if !fd.is_test {
+                        source_fn_lines
+                            .insert((module_name.clone(), fd.name.clone()), fd.span.line);
+                    }
+                }
+            }
+        }
+        for decision in &mut all_decisions {
+            if matches!(decision.kind, DecisionKind::Return) {
+                if let Some(&line) =
+                    source_fn_lines.get(&(decision.file.clone(), decision.fn_name.clone()))
+                {
+                    decision.line = line;
+                }
+            }
+        }
     }
 
     let total_decisions = all_decisions.len();

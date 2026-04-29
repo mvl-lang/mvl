@@ -6,6 +6,23 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.51.0] — 2026-04-29
+
+### Added
+
+- **MC/DC coverage analysis — `mvl mcdc` (closes #319)** — New command performs Modified Condition/Decision Coverage analysis on MVL test suites. Detects all compound boolean decisions (`&&`/`||`), generates independence pairs, evaluates coverage against existing tests, and reports uncovered obligations. Supports `--masking` flag to exempt genuinely coupled conditions (field-path coupling detection eliminates false positives). Targets DO-178C/IEC 62304 assurance workflows.
+- **`examples/medical_triage/`** — Complete Manchester Triage System (MTS) implementation demonstrating MC/DC coverage for IEC 62304 compliance. 11 compound boolean decisions, 68 unit tests covering 44 of 47 MC/DC obligations (3 genuinely coupled).
+- **`examples/flight_clearance/`** — Flight clearance decision logic demonstrating DO-178C MC/DC discipline. 9 compound boolean decisions, 29 obligations, ~50 tests with documented independence pairs.
+- **Coupled condition detection and `--masking` flag (#325)** — MC/DC analyzer detects genuinely coupled conditions (where two conditions always move together) and reports them separately. `--masking` suppresses coupled obligations from the coverage report.
+- **Short-circuit clause evaluation with u32 eval-flag encoding (#319)** — Runtime instrumentation uses bitfield encoding for efficient per-clause capture during test execution.
+
+### Fixed
+
+- **String concatenation transpiler fix** — Emitter now wraps the right-hand side of string-literal-rooted `+` chains with `&(rhs)` to satisfy Rust's `String + &str` type requirement. Fixes `E0308` for all `"prefix" + variable` patterns.
+- **MC/DC line numbers and runtime copy (#329)** — Corrected line number reporting in `mvl mcdc` output; fixed runtime copy path for generated test crates.
+- **Doc-test suppression** — `make test` and `mvl test` no longer emit spurious `Doc-tests` output (0 tests sections).
+- **Access control example** — IFC map coercion and cross-module test scope fixes.
+
 ## [0.50.0] — 2026-04-21
 
 ### Changed
