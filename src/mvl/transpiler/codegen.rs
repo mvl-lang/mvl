@@ -43,6 +43,11 @@ pub struct Codegen {
     pub current_file: String,
     /// True when the current function is a `test fn` (excluded from coverage report).
     pub current_fn_is_test: bool,
+    /// True when transpiling a `_test.mvl` file.
+    ///
+    /// Non-test `fn` bodies in test files are re-declarations of source functions
+    /// (workaround for #96) and must not generate mutation points.
+    pub current_file_is_test: bool,
     /// When true, `extern "rust"` blocks are emitted as stub functions (using
     /// `todo!`) instead of real extern declarations.  Used when compiling source
     /// files into the test crate so the crate can link without the external dep.
@@ -124,7 +129,8 @@ impl Codegen {
     /// Allocate an MC/DC decision slot for a compound boolean condition.
     ///
     /// Returns `Some(id)` when MC/DC instrumentation is active, `None` otherwise.
-    /// Test functions are excluded (returns `None` when `current_fn_is_test`).
+    /// Test functions and non-test `fn` bodies in `_test.mvl` files are excluded
+    /// (returns `None` when `current_fn_is_test` or `current_file_is_test`).
     pub fn alloc_mcdc_decision(
         &mut self,
         line: u32,
@@ -132,7 +138,7 @@ impl Codegen {
         kind: DecisionKind,
         coupled_pairs: Vec<(usize, usize, Vec<String>)>,
     ) -> Option<usize> {
-        if self.current_fn_is_test {
+        if self.current_fn_is_test || self.current_file_is_test {
             return None;
         }
         let fn_name = self.current_fn.clone();
@@ -154,7 +160,7 @@ impl Codegen {
         op: BinaryOp,
         line: u32,
     ) -> Option<Vec<(String, &'static str)>> {
-        if self.current_fn_is_test {
+        if self.current_fn_is_test || self.current_file_is_test {
             return None;
         }
         let alts = mutations_for_binary_op(op);
@@ -176,7 +182,7 @@ impl Codegen {
     ///
     /// Returns `Some(mutant_id)` when mutation is active, `None` otherwise.
     pub fn alloc_bool_mutation(&mut self, original: bool, line: u32) -> Option<String> {
-        if self.current_fn_is_test {
+        if self.current_fn_is_test || self.current_file_is_test {
             return None;
         }
         let fn_name = self.current_fn.clone();
@@ -192,7 +198,7 @@ impl Codegen {
     /// active and alternatives exist.  Returns `None` when mutation is inactive
     /// or the literal has no distinct alternatives.
     pub fn alloc_int_mutations(&mut self, original: i64, line: u32) -> Option<Vec<(String, i64)>> {
-        if self.current_fn_is_test {
+        if self.current_fn_is_test || self.current_file_is_test {
             return None;
         }
         let alts = mutations_for_int_literal(original);
