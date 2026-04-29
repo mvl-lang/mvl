@@ -1,4 +1,4 @@
-# flight_clearance example — MC/DC coverage demonstration
+# medical_triage example — MC/DC coverage demonstration (IEC 62304)
 # Run from this directory or from the repo root.
 .PHONY: help check test mcdc mutate run clean
 
@@ -10,7 +10,7 @@ help: ## Show this help
 
 check: ## Type-check all source files
 	$(MVL) check $(DIR)model.mvl
-	$(MVL) check $(DIR)clearance.mvl
+	$(MVL) check $(DIR)triage.mvl
 	$(MVL) check $(DIR)main.mvl
 
 test: ## Run MC/DC test suite
@@ -26,4 +26,4 @@ run: ## Execute the demo scenarios
 	$(MVL) run $(DIR)main.mvl
 
 clean: ## Remove build artifacts
-	rm -rf $(TMPDIR)mvl_build_flight_clearance
+	rm -rf $(TMPDIR)mvl_build_medical_triage
