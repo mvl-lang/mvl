@@ -170,6 +170,7 @@ pub fn max[T](xs: List[T]) -> Option[T] where T: Clone {
 ///
 /// Stub body returns empty string; the transpiler's generic fallthrough handles
 /// actual semantics at `xs.join(sep)` call sites (delegates to Rust's slice::join).
-pub fn join(xs: List[String], sep: String) -> String {
+/// Named `str_join` to avoid collision with `io::join(Path, String) -> Path`.
+pub fn str_join(xs: List[String], sep: String) -> String {
     ""
 }
