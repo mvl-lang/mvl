@@ -365,20 +365,46 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
             span,
         } => {
             // Mutation mode: inject env-var dispatch for behavioral operator alternatives.
-            if let Some(mut_variants) = cg.alloc_binary_mutations(*op, span.line) {
-                cg.push("{ match ::std::env::var(\"MVL_MUTANT\").as_deref() {");
-                for (mid, alt_op) in &mut_variants {
-                    cg.push(&format!(" Ok(\"{mid}\") => ("));
-                    emit_expr(cg, left);
-                    cg.push(&format!(" {alt_op} "));
-                    emit_expr(cg, right);
-                    cg.push("),");
-                }
-                cg.push(" _ => (");
+            // String concatenation (`+` on string-literal-rooted chains) is excluded from
+            // mutation: the `&`/`*` hoisting pattern cannot satisfy Rust's `String + &str`
+            // ownership requirement, and the arithmetic alternatives (-, *, /) don't
+            // type-check on strings. Such expressions fall through to the regular path.
+            let mut_variants_opt = if *op == BinaryOp::Add && is_string_add_chain(left) {
+                None
+            } else {
+                cg.alloc_binary_mutations(*op, span.line)
+            };
+            if let Some(mut_variants) = mut_variants_opt {
+                // Hoist operands into temp bindings so each sub-expression is emitted
+                // (and its nested mutations allocated) exactly once — not N+1 times.
+                //
+                // `first_id` is the lowest ID allocated for this binary node. IDs are
+                // globally monotonic, so `__mvl_l_{first_id}` / `__mvl_r_{first_id}` are
+                // unique even across deeply nested binary expressions.
+                //
+                // `&(expr)` rather than a plain `let` binding is used because operands may
+                // be non-Copy MVL enum values (e.g. struct fields). Dereferencing with `*`
+                // in each arm provides the operand by reference without moving it. This is
+                // valid for all numeric and boolean types that binary operators act on.
+                let first_id = mut_variants
+                    .first()
+                    .expect("alloc_binary_mutations guarantees a non-empty variant list")
+                    .0
+                    .clone();
+                let lvar = format!("__mvl_l_{first_id}");
+                let rvar = format!("__mvl_r_{first_id}");
+                cg.push(&format!("{{ let {lvar} = &("));
                 emit_expr(cg, left);
-                cg.push(&format!(" {} ", emit_binary_op(*op)));
+                cg.push(&format!("); let {rvar} = &("));
                 emit_expr(cg, right);
-                cg.push("), } }");
+                cg.push("); match ::std::env::var(\"MVL_MUTANT\").as_deref() {");
+                for (mid, alt_op) in &mut_variants {
+                    cg.push(&format!(" Ok(\"{mid}\") => (*{lvar} {alt_op} *{rvar}),"));
+                }
+                cg.push(&format!(
+                    " _ => (*{lvar} {} *{rvar}), }} }}",
+                    emit_binary_op(*op)
+                ));
             } else {
                 cg.push("(");
                 emit_expr(cg, left);

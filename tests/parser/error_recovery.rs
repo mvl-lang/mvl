@@ -15,7 +15,7 @@ fn parser_reports_multiple_errors() {
     // GIVEN: a source file with three syntax errors
     // WHEN: parsed
     // THEN: the parser MUST report all three errors, not just the first
-    let src = include_str!("integration/error_messages/multiple_errors.mvl");
+    let src = include_str!("../integration/error_messages/multiple_errors.mvl");
     let (mut p, _) = Parser::new(src);
     let _prog = p.parse_program();
     // There are 3 broken functions; parser should report at least 3 errors
