@@ -11,6 +11,10 @@ use model::FuelStatus;
 use model::Aircraft;
 use model::Clearance;
 use model::RouteType;
+use clearance::departure_gate;
+use clearance::needs_diversion;
+use clearance::fuel_planning_ok;
+use clearance::route_permitted;
 
 fn main() -> Unit {
     // Scenario 1: perfect conditions, domestic
