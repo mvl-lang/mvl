@@ -558,7 +558,7 @@ pub fn transpile_mutated_with_prelude(
 ///
 /// **Invariant:** must NOT set `current_file_is_test = true`.  That flag is
 /// reserved for [`transpile_mutated_with_prelude`] (the `_test.mvl` path).
-/// Setting it here would suppress mutation points in source functions.
+/// Setting it here would suppress MC/DC instrumentation in source functions.
 pub fn transpile_mutated_source_with_prelude(
     prog: &Program,
     crate_name: &str,

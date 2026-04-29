@@ -160,7 +160,7 @@ impl Codegen {
         op: BinaryOp,
         line: u32,
     ) -> Option<Vec<(String, &'static str)>> {
-        if self.current_fn_is_test || self.current_file_is_test {
+        if self.current_fn_is_test {
             return None;
         }
         let alts = mutations_for_binary_op(op);
@@ -182,7 +182,7 @@ impl Codegen {
     ///
     /// Returns `Some(mutant_id)` when mutation is active, `None` otherwise.
     pub fn alloc_bool_mutation(&mut self, original: bool, line: u32) -> Option<String> {
-        if self.current_fn_is_test || self.current_file_is_test {
+        if self.current_fn_is_test {
             return None;
         }
         let fn_name = self.current_fn.clone();
@@ -198,7 +198,7 @@ impl Codegen {
     /// active and alternatives exist.  Returns `None` when mutation is inactive
     /// or the literal has no distinct alternatives.
     pub fn alloc_int_mutations(&mut self, original: i64, line: u32) -> Option<Vec<(String, i64)>> {
-        if self.current_fn_is_test || self.current_file_is_test {
+        if self.current_fn_is_test {
             return None;
         }
         let alts = mutations_for_int_literal(original);

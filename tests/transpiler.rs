@@ -1685,17 +1685,17 @@ fn transpile_covered_source_with_prelude_instruments_branches() {
 }
 
 #[test]
-fn transpile_mutated_with_prelude_skips_non_test_fn_bodies() {
+fn transpile_mutated_with_prelude_mutates_non_test_fn_bodies() {
     // Regular fn bodies in _test.mvl files are re-declarations of source functions
-    // (workaround for #96) and must NOT generate mutation points — only the source
-    // copy should be mutated to avoid duplicate mutants.
+    // (workaround for #96, no cross-module imports yet).  cmd_mutate skips the source
+    // file when a _test.mvl covers it, so mutations must come from the test file's
+    // non-test fn re-declarations.
     let src = "fn f(a: Int, b: Int) -> Int { a + b }";
     let prog = parse_prog(src);
     let (out, mutants) = transpile_mutated_with_prelude(&prog, "my_crate", "f", &[]);
     assert!(
-        mutants.is_empty(),
-        "non-test fn bodies in test files must not produce mutants (got {})",
-        mutants.len()
+        !mutants.is_empty(),
+        "non-test fn bodies in test files must produce mutants"
     );
     assert_contains(&out.lib_rs, "fn f(");
 }
@@ -1710,43 +1710,49 @@ fn transpile_mutated_source_with_prelude_produces_mutants() {
 }
 
 #[test]
-fn transpile_mutated_with_prelude_skips_bool_literal_in_non_test_fn() {
-    // alloc_bool_mutation must also be suppressed for non-test fn bodies in test files.
+fn transpile_mutated_with_prelude_mutates_bool_literal_in_non_test_fn() {
+    // alloc_bool_mutation must fire for non-test fn bodies in test files (they are
+    // source function re-declarations that cmd_mutate relies on for mutation points).
     let src = "fn flag() -> Bool { true }";
     let prog = parse_prog(src);
     let (_out, mutants) = transpile_mutated_with_prelude(&prog, "my_crate", "flag", &[]);
     assert!(
-        mutants.is_empty(),
-        "bool literal in non-test fn of test file must not produce mutants (got {})",
-        mutants.len()
+        !mutants.is_empty(),
+        "bool literal in non-test fn of test file must produce mutants"
     );
 }
 
 #[test]
-fn transpile_mutated_with_prelude_skips_int_literal_in_non_test_fn() {
-    // alloc_int_mutations must also be suppressed for non-test fn bodies in test files.
+fn transpile_mutated_with_prelude_mutates_int_literal_in_non_test_fn() {
+    // alloc_int_mutations must fire for non-test fn bodies in test files (they are
+    // source function re-declarations that cmd_mutate relies on for mutation points).
     let src = "fn answer() -> Int { 42 }";
     let prog = parse_prog(src);
     let (_out, mutants) = transpile_mutated_with_prelude(&prog, "my_crate", "answer", &[]);
     assert!(
-        mutants.is_empty(),
-        "int literal in non-test fn of test file must not produce mutants (got {})",
-        mutants.len()
+        !mutants.is_empty(),
+        "int literal in non-test fn of test file must produce mutants"
     );
 }
 
 #[test]
-fn transpile_mutated_with_prelude_mixed_file_non_test_fn_produces_no_mutants() {
+fn transpile_mutated_with_prelude_mixed_file_non_test_fn_produces_mutants() {
     // In a _test.mvl file the non-test fn `f` is a re-declaration of the source
-    // function and must not produce mutants.  The test fn body is also currently
-    // suppressed (deferred per issue #330 req 2).
+    // function and MUST produce mutants (cmd_mutate skips the source file when a
+    // _test.mvl covers it, so the test file's non-test fns are the only mutation points).
+    // The test fn body is suppressed via current_fn_is_test.
     let src = "fn f(a: Int, b: Int) -> Int { a + b }\ntest fn check_f() -> Unit { let _ = 1 + 2; }";
     let prog = parse_prog(src);
     let (_out, mutants) = transpile_mutated_with_prelude(&prog, "my_crate", "check_f", &[]);
     let non_test_mutants: Vec<_> = mutants.iter().filter(|m| m.fn_name == "f").collect();
     assert!(
-        non_test_mutants.is_empty(),
-        "non-test fn `f` in test file must not produce mutants (got {})",
-        non_test_mutants.len()
+        !non_test_mutants.is_empty(),
+        "non-test fn `f` in test file must produce mutants"
+    );
+    let test_mutants: Vec<_> = mutants.iter().filter(|m| m.fn_name == "check_f").collect();
+    assert!(
+        test_mutants.is_empty(),
+        "test fn `check_f` must not produce mutants (got {})",
+        test_mutants.len()
     );
 }
