@@ -87,9 +87,10 @@ pub fn path(s: String) -> Path { Path { inner: s } }
 
 /// Append a path segment to a base path.
 ///
-/// Inserts the platform separator between segments.
+/// Inserts `/` between base and segment. Phase 2 stub: uses Unix separator
+/// unconditionally; Phase 3 will delegate to `std::path::Path::join`.
 /// Pure — no filesystem access.
-pub fn join(base: Path, segment: String) -> Path { Path { inner: str_concat(str_concat(base.inner, "/"), segment) } }
+pub fn join(base: Path, segment: Clean[String]) -> Path { Path { inner: str_concat(str_concat(base.inner, "/"), segment) } }
 
 /// Return the string representation of a path.
 /// Pure — no filesystem access.
