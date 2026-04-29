@@ -14,7 +14,7 @@ use crate::mvl::transpiler::emit_impls::emit_impl_decl;
 use crate::mvl::transpiler::emit_types::emit_type_decl;
 use crate::mvl::transpiler::emit_types::{emit_security_preamble, emit_type_expr};
 use crate::mvl::transpiler::has_std_imports;
-use crate::mvl::transpiler::mcdc_instr::MCDCMap;
+use crate::mvl::transpiler::mcdc_instr::{DecisionKind, MCDCMap};
 use crate::mvl::transpiler::mutation::{
     mutations_for_binary_op, mutations_for_int_literal, MutationMap,
 };
@@ -125,7 +125,13 @@ impl Codegen {
     ///
     /// Returns `Some(id)` when MC/DC instrumentation is active, `None` otherwise.
     /// Test functions are excluded (returns `None` when `current_fn_is_test`).
-    pub fn alloc_mcdc_decision(&mut self, line: u32, clause_count: usize) -> Option<usize> {
+    pub fn alloc_mcdc_decision(
+        &mut self,
+        line: u32,
+        clause_count: usize,
+        kind: DecisionKind,
+        coupled_pairs: Vec<(usize, usize, Vec<String>)>,
+    ) -> Option<usize> {
         if self.current_fn_is_test {
             return None;
         }
@@ -133,7 +139,7 @@ impl Codegen {
         let file = self.current_file.clone();
         self.mcdc
             .as_mut()
-            .map(|m| m.alloc(fn_name, file, line, clause_count))
+            .map(|m| m.alloc(fn_name, file, line, clause_count, kind, coupled_pairs))
     }
 
     // ── Mutation helpers ──────────────────────────────────────────────────
@@ -391,8 +397,9 @@ impl Codegen {
                         let source_mod = ud.path[..ud.path.len() - 1].join("::");
                         if source_mod != "std" {
                             // In test-stub mode (source file included in test crate) skip
-                            // cross-module imports — the sibling modules in the test crate may
-                            // not export the same items as the real modules.
+                            // cross-module imports — the test crate re-declares types locally
+                            // (workaround for #96) and emitting `use crate::mod::Type` for a
+                            // locally re-declared type causes name conflicts.
                             if !self.test_extern_stubs {
                                 self.line(&format!("use crate::{};", ud.path.join("::")));
                             }

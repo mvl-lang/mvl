@@ -1,0 +1,58 @@
+// main.mvl — Flight clearance demo scenarios.
+//
+// Exercises all 9 compound boolean decisions across realistic scenarios.
+// Assurance note: 0 extern blocks (pure logic demo).
+
+use model::Visibility;
+use model::WindCondition;
+use model::Weather;
+use model::MaintenanceStatus;
+use model::FuelStatus;
+use model::Aircraft;
+use model::Clearance;
+use model::RouteType;
+use clearance::departure_gate;
+use clearance::needs_diversion;
+use clearance::fuel_planning_ok;
+use clearance::route_permitted;
+
+fn main() -> Unit {
+    // Scenario 1: perfect conditions, domestic
+    let wx1 = Weather { visibility: Visibility::Good, wind: WindCondition::Calm, icing: false, thunderstorm: false };
+    let ac1 = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: false };
+    let r1 = match departure_gate(wx1, ac1, RouteType::Domestic) { Clearance::Cleared => "CLEARED", Clearance::Rejected => "REJECTED" };
+    println("1. Domestic/clear:     " + r1);
+
+    // Scenario 2: thunderstorm — needs diversion
+    let wx2 = Weather { visibility: Visibility::Good, wind: WindCondition::Moderate, icing: false, thunderstorm: true };
+    let ac2 = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: true };
+    let div2 = match needs_diversion(wx2, ac2) { true => "DIVERT", false => "OK" };
+    println("2. Thunderstorm:       " + div2);
+
+    // Scenario 3: marginal fuel on domestic, no icing — fuel planning ok
+    let wx3 = Weather { visibility: Visibility::Good, wind: WindCondition::Calm, icing: false, thunderstorm: false };
+    let ac3 = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: false };
+    let fp3 = match fuel_planning_ok(ac3, RouteType::Domestic, wx3) { true => "OK", false => "FAIL" };
+    println("3. Marginal/domestic:  " + fp3);
+
+    // Scenario 4: marginal fuel on international — fuel planning fails
+    let fp4 = match fuel_planning_ok(ac3, RouteType::International, wx3) { true => "OK", false => "FAIL" };
+    println("4. Marginal/intl:      " + fp4);
+
+    // Scenario 5: oceanic without ETOPS
+    let ac5 = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: false };
+    let rp5 = match route_permitted(RouteType::Oceanic, ac5) { true => "PERMITTED", false => "DENIED" };
+    println("5. Oceanic/no ETOPS:   " + rp5);
+
+    // Scenario 6: icing + poor visibility — needs diversion
+    let wx6 = Weather { visibility: Visibility::Poor, wind: WindCondition::Calm, icing: true, thunderstorm: false };
+    let ac6 = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: true };
+    let div6 = match needs_diversion(wx6, ac6) { true => "DIVERT", false => "OK" };
+    println("6. Icing+poor vis:     " + div6);
+
+    // Scenario 7: full departure gate check — all systems go, oceanic
+    let wx7 = Weather { visibility: Visibility::Good, wind: WindCondition::Moderate, icing: false, thunderstorm: false };
+    let ac7 = Aircraft { maintenance: MaintenanceStatus::DeferredItem, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: true };
+    let r7 = match departure_gate(wx7, ac7, RouteType::Oceanic) { Clearance::Cleared => "CLEARED", Clearance::Rejected => "REJECTED" };
+    println("7. Oceanic/deferred:   " + r7);
+}

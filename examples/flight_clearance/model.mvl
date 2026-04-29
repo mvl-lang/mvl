@@ -1,0 +1,76 @@
+// model.mvl — Domain types for flight clearance.
+//
+// Demonstrates:
+//   1. Req 1 (ADTs): enum + struct types model the aviation domain
+//   2. Req 5 (Errors): named error variants for every rejection reason
+//
+// No extern, no effects — pure type declarations.
+// Assurance note: 0 extern blocks (domain model only).
+
+// ── Weather conditions ───────────────────────────────────────────────────
+
+pub type Visibility = enum {
+    Good,       // > 5000m
+    Reduced,    // 1500-5000m
+    Poor,       // < 1500m
+}
+
+pub type WindCondition = enum {
+    Calm,       // < 15 kt
+    Moderate,   // 15-30 kt
+    Strong,     // > 30 kt
+}
+
+pub type Weather = struct {
+    visibility: Visibility,
+    wind:       WindCondition,
+    icing:      Bool,
+    thunderstorm: Bool,
+}
+
+// ── Aircraft status ──────────────────────────────────────────────────────
+
+pub type MaintenanceStatus = enum {
+    Cleared,
+    DeferredItem,   // MEL item — may still fly with restrictions
+    Grounded,       // AOG — no flight permitted
+}
+
+pub type FuelStatus = enum {
+    Sufficient,     // fuel >= required + reserve
+    Marginal,       // fuel >= required, < reserve
+    Insufficient,   // fuel < required
+}
+
+pub type Aircraft = struct {
+    maintenance: MaintenanceStatus,
+    fuel:        FuelStatus,
+    crew_valid:  Bool,
+    etops_cert:  Bool,
+}
+
+// ── Clearance decision ───────────────────────────────────────────────────
+
+pub type Clearance = enum {
+    Cleared,
+    Rejected,
+}
+
+pub type RejectionReason = enum {
+    WeatherBelowMinima,
+    AircraftGrounded,
+    InsufficientFuel,
+    CrewNotValid,
+    IcingNoDeice,
+    ThunderstormEnRoute,
+    WindExceedsLimit,
+    EtopsNotCertified,
+}
+
+// ── Route type ───────────────────────────────────────────────────────────
+
+pub type RouteType = enum {
+    Domestic,
+    International,
+    Oceanic,        // requires ETOPS
+}

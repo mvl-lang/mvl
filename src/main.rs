@@ -103,7 +103,8 @@ fn main() {
             let path = require_path_arg(&args, "mcdc");
             let quiet = args.iter().any(|a| a == "--quiet" || a == "-q");
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
-            cmd_mcdc(&path, quiet, verbose);
+            let masking = args.iter().any(|a| a == "--masking");
+            cmd_mcdc(&path, quiet, verbose, masking);
         }
         "lint" => {
             let path = require_path_arg(&args, "lint");
@@ -172,6 +173,7 @@ fn print_usage() {
     eprintln!("  mvl mcdc   <file|dir>               — MC/DC coverage analysis (DO-178C DAL-A)");
     eprintln!("  mvl mcdc   <file|dir> -q            — quiet: only show MC/DC score");
     eprintln!("  mvl mcdc   <file|dir> --verbose     — full covered/missed clause report");
+    eprintln!("  mvl mcdc   <file|dir> --masking     — masking MC/DC (DO-178C): exempt coupled obligations");
     eprintln!("  mvl lint  <file|dir>               — check style rules");
     eprintln!("  mvl lint  <file|dir> --show-config — show active linter configuration");
     eprintln!("  mvl assurance <file|dir>           — emit assurance report");
@@ -292,6 +294,27 @@ fn require_path_arg(args: &[String], cmd: &str) -> String {
         process::exit(1);
     }
     args[idx].clone()
+}
+
+/// Validate that a derived module name is safe to embed in generated Rust source.
+///
+/// Module names must be non-empty, start with a letter, and contain only
+/// ASCII lowercase letters, digits, or underscores.  A name that fails this
+/// check could produce a malformed `mod {name} { … }` block or escape a
+/// Rust comment (`// === {file} ===`) in the generated crate.
+fn validate_module_name(name: &str, source_path: &str) {
+    let valid = !name.is_empty()
+        && name.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    if !valid {
+        eprintln!(
+            "error: file '{source_path}' produces invalid module name '{name}'; \
+             rename the file to use only lowercase ASCII letters, digits, and hyphens"
+        );
+        process::exit(1);
+    }
 }
 
 // ── Commands ─────────────────────────────────────────────────────────────
@@ -427,8 +450,7 @@ fn cmd_check(path: &str, req_filter: Option<u8>) {
 ///   3. Compile + run tests — collect observations via `MVL_MCDC_OUT`
 ///   4. Independence check — for each clause, verify it independently toggles outcome
 ///   5. Report — score + optional verbose covered/missed table
-fn cmd_mcdc(path: &str, quiet: bool, verbose: bool) {
-    use mvl::mvl::checker::mcdc::{analyze_mcdc, DecisionInfo, DecisionKind, MCDCStats};
+fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
     use mvl::mvl::transpiler::{
         emit_mcdc_preamble, emit_mcdc_report_test, transpile_mcdc_source_with_prelude,
         transpile_mcdc_with_prelude, MCDCDecision,
@@ -442,17 +464,15 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool) {
     }
 
     let crate_name = "mvl_mcdc";
-    let tmp_dir = std::env::temp_dir().join(format!("mvl_mcdc_{}", process::id()));
+    // Use a randomly-named temp dir (avoids PID-based TOCTOU attacks on shared machines).
+    let tmp_dir_guard = tempfile::tempdir().unwrap_or_else(|e| {
+        eprintln!("Cannot create temp dir: {e}");
+        process::exit(1);
+    });
+    let tmp_dir = tmp_dir_guard.path().to_path_buf();
     let src_dir = tmp_dir.join("src");
-
-    if tmp_dir.exists() {
-        fs::remove_dir_all(&tmp_dir).unwrap_or_else(|e| {
-            eprintln!("Cannot clean temp dir {}: {e}", tmp_dir.display());
-            process::exit(1);
-        });
-    }
     fs::create_dir_all(&src_dir).unwrap_or_else(|e| {
-        eprintln!("Cannot create temp dir {}: {e}", src_dir.display());
+        eprintln!("Cannot create temp src dir {}: {e}", src_dir.display());
         process::exit(1);
     });
 
@@ -461,18 +481,18 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool) {
     // Transpile all test files with MC/DC instrumentation.
     let mut modules: Vec<(String, String, String)> = Vec::new();
     let mut all_decisions: Vec<MCDCDecision> = Vec::new();
-    let mut all_static_decisions: Vec<DecisionInfo> = Vec::new();
     let mut file_stems: Vec<String> = Vec::new();
-    let mut need_mvl_runtime = false;
+    // The stdlib prelude (strings.mvl, lists.mvl, …) uses extern "rust" blocks,
+    // so the runtime crate is always needed when the prelude is loaded.
+    let mut need_mvl_runtime = transpiler::prelude_requires_runtime(&stdlib_prelude_progs);
 
     for test_file in &test_files {
         let file_str = test_file.display().to_string();
         let (prog, _src) = parse_or_exit(&file_str);
         let s = stem(&file_str);
         let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
+        validate_module_name(&module_name, &file_str);
         let start_id = all_decisions.len();
-        let static_d = analyze_mcdc(&prog, &module_name);
-        all_static_decisions.extend(static_d);
         let (out, decisions) = transpile_mcdc_with_prelude(
             &prog,
             &module_name,
@@ -513,9 +533,8 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool) {
         if !has_tests {
             continue;
         }
+        validate_module_name(&module_name, &file_str);
         let start_id = all_decisions.len();
-        let static_d = analyze_mcdc(&prog, &module_name);
-        all_static_decisions.extend(static_d);
         let (out, decisions) = transpile_mcdc_source_with_prelude(
             &prog,
             &module_name,
@@ -546,12 +565,13 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool) {
     }
 
     if !quiet {
-        let stats = MCDCStats::from_decisions(&all_static_decisions);
+        // all_decisions contains only compound decisions (clause_count > 1)
+        let total_obligations: usize = all_decisions.iter().map(|d| d.clause_count).sum();
         println!(
             "Found {} test file(s), {} compound decisions, {} obligations",
             test_files.len(),
-            stats.compound_decisions,
-            stats.total_obligations,
+            total_decisions,
+            total_obligations,
         );
     }
 
@@ -599,8 +619,11 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool) {
         process::exit(1);
     });
 
+    // Resolve cargo binary: honour rustup's CARGO env var if set.
+    let cargo_bin = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+
     // Compile.
-    let build_status = std::process::Command::new("cargo")
+    let build_status = std::process::Command::new(&cargo_bin)
         .args(["build", "--tests", "--quiet"])
         .current_dir(&tmp_dir)
         .status()
@@ -615,8 +638,8 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool) {
 
     // Run tests with MVL_MCDC_OUT set.
     let mcdc_out_path = tmp_dir.join("mcdc_observations.txt");
-    let test_output = std::process::Command::new("cargo")
-        .args(["test", "--quiet"])
+    let test_output = std::process::Command::new(&cargo_bin)
+        .args(["test", "--lib", "--quiet"])
         .env("MVL_MCDC_OUT", &mcdc_out_path)
         .current_dir(&tmp_dir)
         .output()
@@ -634,14 +657,14 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool) {
 
     // Parse observations.
     let raw_obs = fs::read_to_string(&mcdc_out_path).unwrap_or_default();
-    let observations: Vec<Vec<u16>> = raw_obs
+    let observations: Vec<Vec<u32>> = raw_obs
         .lines()
         .map(|line| {
             if line.is_empty() {
                 Vec::new()
             } else {
                 line.split(',')
-                    .filter_map(|hex| u16::from_str_radix(hex.trim(), 16).ok())
+                    .filter_map(|hex| u32::from_str_radix(hex.trim(), 16).ok())
                     .collect()
             }
         })
@@ -652,8 +675,10 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool) {
     let mut covered = 0usize;
     let mut total_obligations = 0usize;
 
-    // Collect per-decision results for verbose output.
+    // Collect per-decision results.
+    // coupled_missed: number of obligations that are uncovered AND in a coupled pair.
     let mut decision_results: Vec<(usize, Vec<bool>)> = Vec::new();
+    let mut coupled_missed = 0usize;
 
     for decision in &all_decisions {
         let obs = observations
@@ -667,10 +692,22 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool) {
             total_obligations += 1;
             if ok {
                 covered += 1;
+            } else {
+                // Count as coupled-missed if this clause appears in any coupled pair.
+                let is_coupled = decision
+                    .coupled_pairs
+                    .iter()
+                    .any(|(i, j, _)| *i == clause_bit || *j == clause_bit);
+                if is_coupled {
+                    coupled_missed += 1;
+                }
             }
         }
         decision_results.push((decision.id, clause_results));
     }
+
+    // In masking mode, exempt coupled-missed obligations from the failure count.
+    let effective_missed = (total_obligations - covered) - if masking { coupled_missed } else { 0 };
 
     // Report.
     if !quiet {
@@ -680,17 +717,21 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool) {
             100
         };
         println!("\nMC/DC coverage: {covered}/{total_obligations} obligations met ({pct}%)");
+        if coupled_missed > 0 {
+            if masking {
+                println!("  Coupled (structurally exempt under masking MC/DC): {coupled_missed}");
+            } else {
+                println!("  Coupled (unique-cause independence impossible): {coupled_missed}");
+                println!("  Use --masking to apply DO-178C masking MC/DC rules");
+            }
+        }
     }
 
     if verbose {
         println!("\nDETAILED RESULTS");
         println!("{}", "─".repeat(60));
         for (decision, (_, clause_results)) in all_decisions.iter().zip(decision_results.iter()) {
-            let kind_label = match all_static_decisions.iter().find(|d| d.id == decision.id) {
-                Some(d) if d.kind == DecisionKind::If => "if",
-                Some(_) => "while",
-                None => "?",
-            };
+            let kind_label = decision.kind.label();
             let status: Vec<&str> = clause_results
                 .iter()
                 .map(|ok| if *ok { "✓" } else { "✗" })
@@ -705,11 +746,32 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool) {
                 status.join(" "),
                 if all_ok { "COVERED" } else { "MISSED" }
             );
+            // Show coupling info for any missed clause that is part of a coupled pair.
+            for (clause_bit, ok) in clause_results.iter().enumerate() {
+                if *ok {
+                    continue;
+                }
+                for (ci, cj, shared) in &decision.coupled_pairs {
+                    if *ci == clause_bit || *cj == clause_bit {
+                        let other = if *ci == clause_bit { *cj } else { *ci };
+                        println!(
+                            "    └─ clause {} COUPLED with clause {} via: {}",
+                            clause_bit,
+                            other,
+                            shared.join(", ")
+                        );
+                        println!("       unique-cause independence may be structurally impossible");
+                        if masking {
+                            println!("       masking MC/DC: exempt (--masking)");
+                        }
+                    }
+                }
+            }
         }
         println!("{}", "─".repeat(60));
     }
 
-    let all_covered = covered == total_obligations;
+    let all_covered = effective_missed == 0;
     if !quiet {
         if all_covered {
             println!("PASS");
@@ -1195,7 +1257,9 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool) {
     let mut all_branches: Vec<transpiler::BranchInfo> = Vec::new();
     let mut next_branch_id = 0usize;
     let mut file_stems: Vec<String> = Vec::new(); // ordered list for the coverage report
-    let mut need_mvl_runtime = false;
+                                                  // The stdlib prelude (strings.mvl, lists.mvl, …) uses extern "rust" blocks,
+                                                  // so the runtime crate is always needed when the prelude is loaded.
+    let mut need_mvl_runtime = transpiler::prelude_requires_runtime(&stdlib_prelude_progs);
 
     for test_file in &test_files {
         let file_str = test_file.display().to_string();
@@ -1368,7 +1432,7 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool) {
     let cov_out_path = tmp_dir.join("mvl_cov.txt");
 
     let mut cmd = process::Command::new("cargo");
-    cmd.arg("test").current_dir(&tmp_dir);
+    cmd.arg("test").arg("--lib").current_dir(&tmp_dir);
     if quiet && !coverage {
         cmd.arg("-q");
     }
@@ -1503,7 +1567,9 @@ fn cmd_mutate(path: &str, quiet: bool, limit: Option<usize>) {
     let mut modules: Vec<(String, String, String)> = Vec::new();
     let mut all_mutants: Vec<transpiler::MutantInfo> = Vec::new();
     let mut file_stems: Vec<String> = Vec::new();
-    let mut need_mvl_runtime = false;
+    // The stdlib prelude (strings.mvl, lists.mvl, …) uses extern "rust" blocks,
+    // so the runtime crate is always needed when the prelude is loaded.
+    let mut need_mvl_runtime = transpiler::prelude_requires_runtime(&stdlib_prelude_progs);
 
     for test_file in &test_files {
         let file_str = test_file.display().to_string();

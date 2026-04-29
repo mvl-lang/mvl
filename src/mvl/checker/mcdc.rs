@@ -35,8 +35,12 @@ pub struct DecisionInfo {
 }
 
 impl DecisionInfo {
-    /// Minimum number of test cases required for full MC/DC: one per clause
-    /// plus one to establish the base outcome.
+    /// Minimum number of test cases required for full MC/DC under optimal
+    /// (independent-effect) test design: N clauses + 1 base case.
+    ///
+    /// Note: used in tests and reserved for future report output.
+    /// This lower bound assumes optimal test design; coupled conditions may
+    /// require more test cases in practice.
     pub fn min_tests(&self) -> usize {
         self.clause_count + 1
     }

@@ -51,7 +51,7 @@ MVL ?= ./target/debug/mvl
 
 test: test-corpus test-stdlib test-transpiler test-tree-sitter test-grammar-coverage ## Run all tests (unit + corpus + stdlib + transpiler + tree-sitter grammar + grammar coverage)
 	@echo "Running unit tests..."
-	cargo test
+	cargo test --lib --tests
 
 test-unit: ## Run unit tests only
 	cargo test --lib

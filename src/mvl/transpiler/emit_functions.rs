@@ -13,6 +13,7 @@ use crate::mvl::parser::ast::{
 use crate::mvl::transpiler::codegen::Codegen;
 use crate::mvl::transpiler::coverage::BranchKind;
 use crate::mvl::transpiler::emit_exprs::{emit_block_stmts, emit_expr};
+use crate::mvl::transpiler::emit_stmts::emit_mcdc_return_expr;
 use crate::mvl::transpiler::emit_types::{emit_label, emit_ref_expr_for_assert, emit_type_expr};
 use crate::mvl::transpiler::last_use::compute_last_uses;
 
@@ -101,9 +102,11 @@ fn emit_fn_body(cg: &mut Codegen, fd: &FnDecl) {
         use crate::mvl::parser::ast::Stmt;
         match last {
             Stmt::Expr { expr, .. } => {
-                cg.indent();
-                emit_expr_tail_with_return_type(cg, expr, &fd.return_type, &fd.params);
-                cg.nl();
+                if !emit_mcdc_return_expr(cg, expr, &fd.return_type, expr.span().line) {
+                    cg.indent();
+                    emit_expr_tail_with_return_type(cg, expr, &fd.return_type, &fd.params);
+                    cg.nl();
+                }
             }
             other => emit_block_stmts(cg, std::slice::from_ref(other)),
         }
