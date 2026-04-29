@@ -747,11 +747,9 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
 
     // Report.
     if !quiet {
-        let pct = if total_obligations > 0 {
-            covered * 100 / total_obligations
-        } else {
-            100
-        };
+        let pct = (covered * 100)
+            .checked_div(total_obligations)
+            .unwrap_or(100);
         println!("\nMC/DC coverage: {covered}/{total_obligations} obligations met ({pct}%)");
         if coupled_missed > 0 {
             if masking {
