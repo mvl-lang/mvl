@@ -366,19 +366,23 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
         } => {
             // Mutation mode: inject env-var dispatch for behavioral operator alternatives.
             if let Some(mut_variants) = cg.alloc_binary_mutations(*op, span.line) {
-                cg.push("{ match ::std::env::var(\"MVL_MUTANT\").as_deref() {");
-                for (mid, alt_op) in &mut_variants {
-                    cg.push(&format!(" Ok(\"{mid}\") => ("));
-                    emit_expr(cg, left);
-                    cg.push(&format!(" {alt_op} "));
-                    emit_expr(cg, right);
-                    cg.push("),");
-                }
-                cg.push(" _ => (");
+                // Hoist operands into temp bindings so each sub-expression is emitted
+                // (and its nested mutations allocated) exactly once — not N+1 times.
+                let first_id = mut_variants[0].0.clone();
+                let lvar = format!("__mvl_l_{first_id}");
+                let rvar = format!("__mvl_r_{first_id}");
+                cg.push(&format!("{{ let {lvar} = &("));
                 emit_expr(cg, left);
-                cg.push(&format!(" {} ", emit_binary_op(*op)));
+                cg.push(&format!("); let {rvar} = &("));
                 emit_expr(cg, right);
-                cg.push("), } }");
+                cg.push("); match ::std::env::var(\"MVL_MUTANT\").as_deref() {");
+                for (mid, alt_op) in &mut_variants {
+                    cg.push(&format!(" Ok(\"{mid}\") => (*{lvar} {alt_op} *{rvar}),"));
+                }
+                cg.push(&format!(
+                    " _ => (*{lvar} {} *{rvar}), }} }}",
+                    emit_binary_op(*op)
+                ));
             } else {
                 cg.push("(");
                 emit_expr(cg, left);
