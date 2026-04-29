@@ -55,3 +55,24 @@ fn direction_label(d: Direction) -> String {
         West  => "west",
     }
 }
+
+// ── Enum variant qualified paths in == / != expressions (#332) ───────────────
+
+// Enum variant paths (Enum::Variant) must resolve in == and != expressions,
+// not just in match arm patterns.
+
+fn direction_is_north(d: Direction) -> Bool {
+    d == Direction::North
+}
+
+fn direction_is_not_south(d: Direction) -> Bool {
+    d != Direction::South
+}
+
+fn direction_is_horizontal(d: Direction) -> Bool {
+    d == Direction::East || d == Direction::West
+}
+
+fn make_circle(r: Float) -> Shape {
+    Shape::Circle(r)
+}
