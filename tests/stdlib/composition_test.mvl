@@ -18,14 +18,19 @@ use std.io.{Path, path, join, to_string, read_to_string, read_file}
 // ── Cross-module import: both modules usable in same file ─────────────────
 
 test fn composition_args_and_io_both_compile_in_same_scope() -> Unit ! Console {
-    // Compile-time check: both module imports accepted in one file
+    // Compile-time check: both module imports accepted in one file.
+    // path/to_string are real implementations; get_arg scans std::env::args() and returns None for unknown flags.
     let flag: Option[Tainted[String]] = get_arg("mvl-nonexistent-flag-xyz");
     let p: Path = path("/tmp/mvl_test_placeholder");
     assert_eq(flag.is_none(), true);
-    assert_eq(to_string(p).is_empty(), false);
+    // "/tmp/mvl_test_placeholder" = 25 chars; proves path was stored verbatim
+    assert_eq(to_string(p).len(), 25);
 }
 
 // ── Args produces Tainted; Option semantics hold ──────────────────────────
+// NOTE: get_arg/get_env are real implementations. Tests pass because flag/var names
+// use unique suffixes never seen in the test runner environment.
+// Phase 3 positive-path target: inject known args/env and assert Some(value).
 
 test fn composition_missing_arg_is_none() -> Unit ! Console {
     let config: Option[Tainted[String]] = get_arg("mvl-input-file-xyz");
@@ -61,11 +66,12 @@ test fn composition_env_is_some_false_when_absent() -> Unit ! Console {
 // ── IFC: sanitize pipeline — compile-time type enforcement ───────────────
 //
 // NOTE: Tainted[String] can only originate from untrusted runtime sources
-// (get_arg / get_env / get_args). With stub implementations returning None/[],
+// (get_arg / get_env / get_args). With absent flags/vars returning None,
 // runtime IFC flow through sanitize() cannot be tested in the stdlib test suite.
 // The tests below verify compile-time type annotations and the reachable runtime paths.
 
 test fn composition_sanitize_type_enforced_at_compile_time() -> Unit ! FileRead {
+    // STUB: update when implemented — read_file always returns Err in Phase 2.
     // read_file requires Clean[String]; passing a literal String is legal because
     // String (Public) can be used where Clean[String] is expected (upward coercion).
     // This confirms the compiler enforces the Clean[String] boundary at the call site.
@@ -76,6 +82,7 @@ test fn composition_sanitize_type_enforced_at_compile_time() -> Unit ! FileRead 
 // ── Cross-module value flow: std.args controls std.io execution path ──────
 
 test fn composition_arg_absence_routes_to_io_fallback() -> Unit ! Console, FileRead {
+    // STUB: update when implemented — read_to_string always returns Err("") in Phase 2.
     // Demonstrates actual cross-module control flow:
     // get_env (std.args) → None → read_to_string (std.io) called on fallback path.
     // Both modules execute; the args result determines which io operation runs.
@@ -93,6 +100,7 @@ test fn composition_arg_absence_routes_to_io_fallback() -> Unit ! Console, FileR
 // ── IFC: path from literal, read_to_string returns Tainted ───────────────
 
 test fn composition_read_to_string_gives_tainted_on_err() -> Unit ! FileRead {
+    // STUB: update when implemented — read_to_string always returns Err in Phase 2.
     let result: Result[Tainted[String], String] = read_to_string(path("/tmp/mvl_nonexistent_composition_xyz"));
     // Err path confirms the function was called with correct signature
     assert_eq(result.is_ok(), false);

@@ -46,6 +46,9 @@ test fn io_path_short_name_len() -> Unit {
 }
 
 // ── to_string ─────────────────────────────────────────────────────────────
+// path() and to_string() are real implementations: Path { inner: s } / p.inner.
+// Positive-path tests verify exact character counts (String-to-String assert_eq
+// is not supported by the codegen; len() is the precise alternative).
 
 test fn io_to_string_preserves_nonempty() -> Unit {
     let p: Path = path("readme.md");
@@ -73,24 +76,26 @@ test fn io_to_string_filename_len() -> Unit {
     assert_eq(to_string(p).len(), 10);
 }
 
-// ── join ──────────────────────────────────────────────────────────────────
-
-test fn io_join_nonempty_result() -> Unit {
-    let base: Path = path("/home/user");
-    let joined: Path = join(base, "docs");
-    assert_eq(to_string(joined).is_empty(), false);
+test fn io_to_string_exact_roundtrip_len() -> Unit {
+    // "hello.txt" = 9 chars; proves no characters dropped or added
+    let p: Path = path("hello.txt");
+    assert_eq(to_string(p).len(), 9);
 }
+
+test fn io_to_string_exact_absolute_path_len() -> Unit {
+    // "/tmp/output.log" = 15 chars; proves absolute path preserved verbatim
+    let p: Path = path("/tmp/output.log");
+    assert_eq(to_string(p).len(), 15);
+}
+
+// ── join ──────────────────────────────────────────────────────────────────
+// join() is a real implementation: str_concat(str_concat(base.inner, "/"), segment).
+// These tests verify exact output values, not just length bounds.
 
 test fn io_join_longer_than_base() -> Unit {
     let base: Path = path("/home/user");
     let joined: Path = join(base, "readme.txt");
     assert_eq(to_string(joined).len() > 10, true);
-}
-
-test fn io_join_dotfile_segment() -> Unit {
-    let base: Path = path("/home/user");
-    let joined: Path = join(base, ".config");
-    assert_eq(to_string(joined).is_empty(), false);
 }
 
 test fn io_join_deep_path_result() -> Unit {
@@ -99,26 +104,47 @@ test fn io_join_deep_path_result() -> Unit {
     assert_eq(to_string(joined).is_empty(), false);
 }
 
-test fn io_join_produces_combined_path() -> Unit {
+test fn io_join_separator_is_inserted() -> Unit {
+    // "src" (3) + "/" (1) + "main.rs" (7) = 11 chars.
+    // len == 11 proves exactly one separator was inserted between base and segment.
     let base: Path = path("src");
     let joined: Path = join(base, "main.rs");
-    // "src" + "main.rs" → combined path with separator is longer than 3 chars
-    assert_eq(to_string(joined).len() > 3, true);
+    assert_eq(to_string(joined).len(), 11);
+}
+
+test fn io_join_absolute_exact_len() -> Unit {
+    // "/home/user" (10) + "/" (1) + "docs" (4) = 15 chars.
+    let base: Path = path("/home/user");
+    let joined: Path = join(base, "docs");
+    assert_eq(to_string(joined).len(), 15);
+}
+
+test fn io_join_dotfile_exact_len() -> Unit {
+    // "/home/user" (10) + "/" (1) + ".config" (7) = 18 chars.
+    let base: Path = path("/home/user");
+    let joined: Path = join(base, ".config");
+    assert_eq(to_string(joined).len(), 18);
 }
 
 // ── read_to_string (real filesystem) ─────────────────────────────────────
+// STUB: update when implemented — Phase 2 read_to_string always returns Err("").
+// All tests below verify only the error path (nonexistent files).
+// Phase 3 positive-path target: read an existing file and assert Ok(content).
 
 test fn io_read_to_string_nonexistent_is_err() -> Unit ! FileRead {
+    // STUB: update when implemented
     let result: Result[Tainted[String], String] = read_to_string(path("/tmp/mvl_nonexistent_xyz_99999"));
     assert_eq(result.is_err(), true);
 }
 
 test fn io_read_to_string_nonexistent_not_ok() -> Unit ! FileRead {
+    // STUB: update when implemented
     let result: Result[Tainted[String], String] = read_to_string(path("/nonexistent/path/file.txt"));
     assert_eq(result.is_ok(), false);
 }
 
 test fn io_read_to_string_missing_file_err_not_ok() -> Unit ! FileRead {
+    // STUB: update when implemented
     let r1: Result[Tainted[String], String] = read_to_string(path("/mvl_test_missing_abc"));
     let r2: Result[Tainted[String], String] = read_to_string(path("/mvl_test_missing_def"));
     assert_eq(r1.is_err(), true);
@@ -126,13 +152,18 @@ test fn io_read_to_string_missing_file_err_not_ok() -> Unit ! FileRead {
 }
 
 // ── read_file (real filesystem, Clean[String] path) ───────────────────────
+// STUB: update when implemented — Phase 2 read_file always returns Err("").
+// All tests below verify only the error path (nonexistent files).
+// Phase 3 positive-path target: read an existing file and assert Ok(Tainted[content]).
 
 test fn io_read_file_nonexistent_is_err() -> Unit ! FileRead {
+    // STUB: update when implemented
     let result: Result[Tainted[String], String] = read_file("/tmp/mvl_nonexistent_xyz_88888");
     assert_eq(result.is_err(), true);
 }
 
 test fn io_read_file_nonexistent_not_ok() -> Unit ! FileRead {
+    // STUB: update when implemented
     let result: Result[Tainted[String], String] = read_file("/nonexistent/mvl/test/file.txt");
     assert_eq(result.is_ok(), false);
 }
@@ -143,13 +174,14 @@ test fn io_read_file_returns_tainted_content_type() -> Unit ! FileRead {
     // File content from disk is always Tainted[String] (untrusted external source).
     // Compile-time: the type annotation enforces the Ok branch carries Tainted[String].
     // Runtime: Err result on missing file confirms read_file was called with correct signature.
-    // Note: testing the Ok branch requires an existing file; see io_read_file tests above.
+    // STUB: update when implemented — add Ok-path assertion once Phase 3 lands.
     let result: Result[Tainted[String], String] = read_file("/tmp/mvl_nonexistent_tainted_test");
     assert_eq(result.is_err(), true);
 }
 
 test fn io_read_to_string_result_carries_tainted_type() -> Unit ! FileRead {
     // Compile-time: type annotation enforces Ok branch carries Tainted[String].
+    // STUB: update when implemented — add Ok-path assertion once Phase 3 lands.
     let result: Result[Tainted[String], String] = read_to_string(path("/tmp/mvl_nonexistent_tainted2"));
     assert_eq(result.is_ok(), false);
 }
@@ -159,23 +191,26 @@ test fn io_read_to_string_result_carries_tainted_type() -> Unit ! FileRead {
 test fn io_join_empty_segment_produces_path() -> Unit {
     let base: Path = path("/home/user");
     let joined: Path = join(base, "");
-    // Joining with an empty segment preserves the base: result is at least as long as "/home/user"
+    // join with empty segment still inserts the separator:
+    // "/home/user" (10) + "/" (1) + "" (0) = 11 chars
     let s = to_string(joined);
     assert_eq(s.is_empty(), false);
-    assert_eq(s.len() >= 10, true);
+    assert_eq(s.len(), 11);
 }
 
 test fn io_join_empty_base_with_segment() -> Unit {
     let base: Path = path("");
     let joined: Path = join(base, "file.txt");
-    assert_eq(to_string(joined).is_empty(), false);
+    // Rust runtime (PathBuf::push) elides the separator for an empty base:
+    // "" + "file.txt" = "file.txt" (8 chars).
+    // NOTE: the MVL source join (str_concat) would produce "/file.txt" (9 chars) —
+    // the two implementations diverge for empty-base inputs. Phase 3 should resolve this.
+    assert_eq(to_string(joined).len(), 8);
 }
 
 test fn io_join_preserves_extension() -> Unit {
     let base: Path = path("/var/log");
     let joined: Path = join(base, "app.log");
-    let s = to_string(joined);
-    // "/var/log/app.log" = 16 chars; ≥ 15 confirms the segment was appended (not just base)
-    assert_eq(s.is_empty(), false);
-    assert_eq(s.len() >= 15, true);
+    // "/var/log" (8) + "/" (1) + "app.log" (7) = 16 chars
+    assert_eq(to_string(joined).len(), 16);
 }

@@ -41,71 +41,90 @@ fn call_log_error(msg: String) -> Bool ! Log {
 }
 
 // ── log_debug (! Log) ─────────────────────────────────────────────────────
+// STUB: update when implemented — Phase 2 log functions are no-ops.
+// assert_eq(true, true) is intentional: log output is not observable at runtime.
+// Phase 3 positive-path target: capture log sink output and assert message/field values.
 
 test fn log_debug_single_field_does_not_panic() -> Unit ! Log {
+    // STUB: update when implemented
     log_debug("debug event", {"key": "value"});
     assert_eq(true, true);
 }
 
 test fn log_debug_multiple_fields_does_not_panic() -> Unit ! Log {
+    // STUB: update when implemented
     log_debug("cache miss", {"key": "user:42", "ttl": "300"});
     assert_eq(true, true);
 }
 
 test fn log_debug_returns_unit_via_helper() -> Unit ! Log {
+    // STUB: update when implemented
     assert_eq(call_log_debug("processing"), true);
 }
 
 // ── log_info (! Log) ──────────────────────────────────────────────────────
+// STUB: update when implemented — Phase 2 log functions are no-ops.
 
 test fn log_info_single_field_does_not_panic() -> Unit ! Log {
+    // STUB: update when implemented
     log_info("server started", {"port": "8080"});
     assert_eq(true, true);
 }
 
 test fn log_info_with_multiple_fields() -> Unit ! Log {
+    // STUB: update when implemented
     log_info("request received", {"method": "GET", "path": "/health"});
     assert_eq(true, true);
 }
 
 test fn log_info_request_id_field() -> Unit ! Log {
+    // STUB: update when implemented
     log_info("user registered", {"user_id": "u-1234"});
     assert_eq(true, true);
 }
 
 test fn log_info_returns_unit_via_helper() -> Unit ! Log {
+    // STUB: update when implemented
     assert_eq(call_log_info("request handled"), true);
 }
 
 // ── log_warn (! Log) ──────────────────────────────────────────────────────
+// STUB: update when implemented — Phase 2 log functions are no-ops.
 
 test fn log_warn_single_field_does_not_panic() -> Unit ! Log {
+    // STUB: update when implemented
     log_warn("quota running low", {"user_id": "u-99"});
     assert_eq(true, true);
 }
 
 test fn log_warn_retry_context() -> Unit ! Log {
+    // STUB: update when implemented
     log_warn("retry attempt", {"attempt": "3", "max": "5"});
     assert_eq(true, true);
 }
 
 test fn log_warn_returns_unit_via_helper() -> Unit ! Log {
+    // STUB: update when implemented
     assert_eq(call_log_warn("disk space low"), true);
 }
 
 // ── log_error (! Log) ─────────────────────────────────────────────────────
+// STUB: update when implemented — Phase 2 log functions are no-ops.
 
 test fn log_error_single_field_does_not_panic() -> Unit ! Log {
+    // STUB: update when implemented
     log_error("connection refused", {"host": "db"});
     assert_eq(true, true);
 }
 
 test fn log_error_with_reason_field() -> Unit ! Log {
+    // STUB: update when implemented
     log_error("component failed", {"component": "db", "reason": "timeout"});
     assert_eq(true, true);
 }
 
 test fn log_error_returns_unit_via_helper() -> Unit ! Log {
+    // STUB: update when implemented
     assert_eq(call_log_error("request failed"), true);
 }
 
@@ -120,11 +139,13 @@ fn audit_login(user_id: String, success: Bool) -> Unit ! Log {
 }
 
 test fn log_effect_propagates_through_caller_success() -> Unit ! Log {
+    // STUB: update when implemented
     audit_login("u-42", true);
     assert_eq(true, true);
 }
 
 test fn log_effect_propagates_through_caller_failure() -> Unit ! Log {
+    // STUB: update when implemented
     audit_login("u-99", false);
     assert_eq(true, true);
 }
@@ -137,13 +158,16 @@ fn log_all_levels(event: String) -> Unit ! Log {
 }
 
 test fn log_all_severity_levels_in_sequence() -> Unit ! Log {
+    // STUB: update when implemented
     log_all_levels("test event");
     assert_eq(true, true);
 }
 
 // ── Structured field format ───────────────────────────────────────────────
+// STUB: update when implemented — output not observable until Phase 3 log sink.
 
 test fn log_structured_fields_three_pairs() -> Unit ! Log {
+    // STUB: update when implemented
     log_info("order processed", {
         "order_id": "ord-7",
         "amount": "99",
@@ -153,6 +177,7 @@ test fn log_structured_fields_three_pairs() -> Unit ! Log {
 }
 
 test fn log_structured_field_with_numeric_string_value() -> Unit ! Log {
+    // STUB: update when implemented
     log_info("metric recorded", {"name": "latency_ms", "value": "42"});
     assert_eq(true, true);
 }
@@ -192,8 +217,10 @@ test fn log_in_branch_does_not_affect_return_value() -> Unit ! Log {
 }
 
 // ── multiple fields map completeness ──────────────────────────────────────
+// STUB: update when implemented — output not observable until Phase 3 log sink.
 
 test fn log_info_four_fields_map() -> Unit ! Log {
+    // STUB: update when implemented
     // Compile-time: verifies the effect system accepts a 4-field map without panic.
     // Runtime log output is not observable in tests; assert_eq(true, true) is intentional.
     log_info("request complete", {
@@ -206,6 +233,7 @@ test fn log_info_four_fields_map() -> Unit ! Log {
 }
 
 test fn log_error_with_context_fields() -> Unit ! Log {
+    // STUB: update when implemented
     // Compile-time: verifies the effect system accepts a 3-field error map without panic.
     // Runtime log output is not observable in tests; assert_eq(true, true) is intentional.
     log_error("db query failed", {
