@@ -22,6 +22,12 @@ pub const STDLIB_FILES: &[(&str, &str)] = &[
     ),
     ("strings.mvl", include_str!("../../../std/strings.mvl")),
     ("lists.mvl", include_str!("../../../std/lists.mvl")),
+    // Issue #341: collection and numeric method declarations.
+    (
+        "collections.mvl",
+        include_str!("../../../std/collections.mvl"),
+    ),
+    ("math.mvl", include_str!("../../../std/math.mvl")),
     ("io.mvl", include_str!("../../../std/io.mvl")),
     ("args.mvl", include_str!("../../../std/args.mvl")),
     ("time.mvl", include_str!("../../../std/time.mvl")),

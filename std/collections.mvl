@@ -1,0 +1,67 @@
+// MVL stdlib — Map and Set method declarations
+//
+// These declarations make the collection API visible to the IFC label checker,
+// effect tracker, and totality checker (issue #341). The transpiler continues
+// to emit direct Rust calls (HashMap/HashSet methods) at call sites; these
+// free-function forms provide the verification surface.
+//
+// Note: function bodies are stubs — the transpiler handles actual code
+// generation for `m.method(args)` syntax via the generic method-call fallthrough
+// in emit_exprs.rs. Stub bodies ensure the declarations compile as valid Rust
+// when included in the stdlib prelude.
+
+// ── Map[K, V] ────────────────────────────────────────────────────────────────
+
+/// Look up `key` in `m`, returning `Some(value)` or `None` if absent.
+pub fn map_get[K, V](m: Map[K, V], key: K) -> Option[V] { None }
+
+/// Insert `key → value` into `m`, overwriting any existing entry.
+/// Returns Unit; the old value is discarded.
+pub fn map_insert[K, V](m: Map[K, V], key: K, value: V) -> Unit { }
+
+/// Remove `key` from `m`, returning the old value if present.
+pub fn map_remove[K, V](m: Map[K, V], key: K) -> Option[V] { None }
+
+/// True if `m` contains an entry for `key`.
+pub fn map_contains_key[K, V](m: Map[K, V], key: K) -> Bool { false }
+
+/// Return all keys of `m` as a list (order unspecified).
+pub fn map_keys[K, V](m: Map[K, V]) -> List[K] { [] }
+
+/// Return all values of `m` as a list (order unspecified).
+pub fn map_values[K, V](m: Map[K, V]) -> List[V] { [] }
+
+/// Number of entries in `m`.
+pub fn map_len[K, V](m: Map[K, V]) -> Int { 0 }
+
+/// True if `m` has no entries.
+pub fn map_is_empty[K, V](m: Map[K, V]) -> Bool { false }
+
+// ── Set[T] ───────────────────────────────────────────────────────────────────
+
+/// True if `s` contains `x`.
+pub fn set_contains[T](s: Set[T], x: T) -> Bool { false }
+
+/// Insert `x` into `s`. No-op if already present.
+pub fn set_insert[T](s: Set[T], x: T) -> Unit { }
+
+/// Remove `x` from `s`. No-op if absent.
+pub fn set_remove[T](s: Set[T], x: T) -> Unit { }
+
+/// Return all elements of `s` as a list (order unspecified).
+pub fn set_to_list[T](s: Set[T]) -> List[T] { [] }
+
+/// Number of elements in `s`.
+pub fn set_len[T](s: Set[T]) -> Int { 0 }
+
+/// True if `s` has no elements.
+pub fn set_is_empty[T](s: Set[T]) -> Bool { false }
+
+/// Elements present in both `a` and `b`.
+pub fn set_intersection[T](a: Set[T], b: Set[T]) -> Set[T] { a }
+
+/// Elements present in `a` but not `b`.
+pub fn set_difference[T](a: Set[T], b: Set[T]) -> Set[T] { a }
+
+/// Elements present in either `a` or `b`.
+pub fn set_union[T](a: Set[T], b: Set[T]) -> Set[T] { a }

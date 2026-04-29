@@ -6,6 +6,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.52.0] — 2026-04-29
+
+### Added
+
+- **Transpiler-implicit method declarations in MVL stdlib source (closes #341)** — Added ~50 MVL source declarations for methods previously only represented as hardcoded Rust emission rules in the transpiler. Now visible to the IFC label checker, effect tracker, and totality checker. New file `std/math.mvl` (Int/Float arithmetic, predicates, casting, min/max, clamp, pow); new file `std/collections.mvl` (Map and Set operations: get/insert/remove/contains/keys/values/len/is_empty, plus set intersection/difference/union). Extended `std/lists.mvl` with primitive wrappers (len, is_empty, get, push, contains, rev) and HOF declarations (map, filter, fold, sort, partition, take_while, skip_while, any, all, min, max, str_join). Extended `std/core.mvl` with Option/Result predicates (is_some, is_none, unwrap_or, is_ok, is_err) using pure MVL match expressions. Extended `std/strings.mvl` with type-prefixed string wrappers (str_length, str_is_empty, str_contains_sub).
+
+
 ## [0.51.0] — 2026-04-29
 
 ### Added
