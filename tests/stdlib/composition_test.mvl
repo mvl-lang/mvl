@@ -19,7 +19,7 @@ use std.io.{Path, path, join, to_string, read_to_string, read_file}
 
 test fn composition_args_and_io_both_compile_in_same_scope() -> Unit ! Console {
     // Compile-time check: both module imports accepted in one file.
-    // path/to_string are real implementations; get_arg is a stub returning None.
+    // path/to_string are real implementations; get_arg scans std::env::args() and returns None for unknown flags.
     let flag: Option[Tainted[String]] = get_arg("mvl-nonexistent-flag-xyz");
     let p: Path = path("/tmp/mvl_test_placeholder");
     assert_eq(flag.is_none(), true);
@@ -28,23 +28,21 @@ test fn composition_args_and_io_both_compile_in_same_scope() -> Unit ! Console {
 }
 
 // ── Args produces Tainted; Option semantics hold ──────────────────────────
-// STUB: update when implemented — get_arg/get_env always return None in Phase 2.
+// NOTE: get_arg/get_env are real implementations. Tests pass because flag/var names
+// use unique suffixes never seen in the test runner environment.
 // Phase 3 positive-path target: inject known args/env and assert Some(value).
 
 test fn composition_missing_arg_is_none() -> Unit ! Console {
-    // STUB: update when implemented
     let config: Option[Tainted[String]] = get_arg("mvl-input-file-xyz");
     assert_eq(config.is_none(), true);
 }
 
 test fn composition_missing_env_is_none() -> Unit ! Console {
-    // STUB: update when implemented
     let data_dir: Option[Tainted[String]] = get_env("MVL_NONEXISTENT_DATA_DIR_XYZ");
     assert_eq(data_dir.is_none(), true);
 }
 
 test fn composition_multiple_args_all_none() -> Unit ! Console {
-    // STUB: update when implemented
     let a: Option[Tainted[String]] = get_arg("mvl-flag-alpha-xyz");
     let b: Option[Tainted[String]] = get_arg("mvl-flag-beta-xyz");
     let c: Option[Tainted[String]] = get_env("MVL_NONEXISTENT_FLAG_XYZ");
@@ -56,13 +54,11 @@ test fn composition_multiple_args_all_none() -> Unit ! Console {
 // ── Missing args: is_some / is_none predicates ────────────────────────────
 
 test fn composition_arg_is_some_false_when_absent() -> Unit ! Console {
-    // STUB: update when implemented
     let v: Option[Tainted[String]] = get_arg("mvl-nonexistent-arg-xyz");
     assert_eq(v.is_some(), false);
 }
 
 test fn composition_env_is_some_false_when_absent() -> Unit ! Console {
-    // STUB: update when implemented
     let v: Option[Tainted[String]] = get_env("MVL_NONEXISTENT_TEST_ENV_XYZ");
     assert_eq(v.is_some(), false);
 }
@@ -70,7 +66,7 @@ test fn composition_env_is_some_false_when_absent() -> Unit ! Console {
 // ── IFC: sanitize pipeline — compile-time type enforcement ───────────────
 //
 // NOTE: Tainted[String] can only originate from untrusted runtime sources
-// (get_arg / get_env / get_args). With stub implementations returning None/[],
+// (get_arg / get_env / get_args). With absent flags/vars returning None,
 // runtime IFC flow through sanitize() cannot be tested in the stdlib test suite.
 // The tests below verify compile-time type annotations and the reachable runtime paths.
 
@@ -86,7 +82,7 @@ test fn composition_sanitize_type_enforced_at_compile_time() -> Unit ! FileRead 
 // ── Cross-module value flow: std.args controls std.io execution path ──────
 
 test fn composition_arg_absence_routes_to_io_fallback() -> Unit ! Console, FileRead {
-    // STUB: update when implemented — both get_env (None) and read_to_string (Err) are stubs.
+    // STUB: update when implemented — read_to_string always returns Err("") in Phase 2.
     // Demonstrates actual cross-module control flow:
     // get_env (std.args) → None → read_to_string (std.io) called on fallback path.
     // Both modules execute; the args result determines which io operation runs.

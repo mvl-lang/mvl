@@ -92,35 +92,16 @@ test fn io_to_string_exact_absolute_path_len() -> Unit {
 // join() is a real implementation: str_concat(str_concat(base.inner, "/"), segment).
 // These tests verify exact output values, not just length bounds.
 
-test fn io_join_nonempty_result() -> Unit {
-    let base: Path = path("/home/user");
-    let joined: Path = join(base, "docs");
-    assert_eq(to_string(joined).is_empty(), false);
-}
-
 test fn io_join_longer_than_base() -> Unit {
     let base: Path = path("/home/user");
     let joined: Path = join(base, "readme.txt");
     assert_eq(to_string(joined).len() > 10, true);
 }
 
-test fn io_join_dotfile_segment() -> Unit {
-    let base: Path = path("/home/user");
-    let joined: Path = join(base, ".config");
-    assert_eq(to_string(joined).is_empty(), false);
-}
-
 test fn io_join_deep_path_result() -> Unit {
     let base: Path = path("/var/log");
     let joined: Path = join(base, "app");
     assert_eq(to_string(joined).is_empty(), false);
-}
-
-test fn io_join_produces_combined_path() -> Unit {
-    let base: Path = path("src");
-    let joined: Path = join(base, "main.rs");
-    // "src" + "main.rs" → combined path with separator is longer than 3 chars
-    assert_eq(to_string(joined).len() > 3, true);
 }
 
 test fn io_join_separator_is_inserted() -> Unit {
@@ -220,8 +201,10 @@ test fn io_join_empty_segment_produces_path() -> Unit {
 test fn io_join_empty_base_with_segment() -> Unit {
     let base: Path = path("");
     let joined: Path = join(base, "file.txt");
-    // empty base: runtime produces "file.txt" (8 chars) — separator is elided when base is empty
-    assert_eq(to_string(joined).is_empty(), false);
+    // Rust runtime (PathBuf::push) elides the separator for an empty base:
+    // "" + "file.txt" = "file.txt" (8 chars).
+    // NOTE: the MVL source join (str_concat) would produce "/file.txt" (9 chars) —
+    // the two implementations diverge for empty-base inputs. Phase 3 should resolve this.
     assert_eq(to_string(joined).len(), 8);
 }
 

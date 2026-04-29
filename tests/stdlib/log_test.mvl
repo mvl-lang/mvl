@@ -58,11 +58,12 @@ test fn log_debug_multiple_fields_does_not_panic() -> Unit ! Log {
 }
 
 test fn log_debug_returns_unit_via_helper() -> Unit ! Log {
+    // STUB: update when implemented
     assert_eq(call_log_debug("processing"), true);
 }
 
 // ── log_info (! Log) ──────────────────────────────────────────────────────
-// STUB: update when implemented — Phase 2 log_info is a no-op.
+// STUB: update when implemented — Phase 2 log functions are no-ops.
 
 test fn log_info_single_field_does_not_panic() -> Unit ! Log {
     // STUB: update when implemented
@@ -83,11 +84,12 @@ test fn log_info_request_id_field() -> Unit ! Log {
 }
 
 test fn log_info_returns_unit_via_helper() -> Unit ! Log {
+    // STUB: update when implemented
     assert_eq(call_log_info("request handled"), true);
 }
 
 // ── log_warn (! Log) ──────────────────────────────────────────────────────
-// STUB: update when implemented — Phase 2 log_warn is a no-op.
+// STUB: update when implemented — Phase 2 log functions are no-ops.
 
 test fn log_warn_single_field_does_not_panic() -> Unit ! Log {
     // STUB: update when implemented
@@ -102,11 +104,12 @@ test fn log_warn_retry_context() -> Unit ! Log {
 }
 
 test fn log_warn_returns_unit_via_helper() -> Unit ! Log {
+    // STUB: update when implemented
     assert_eq(call_log_warn("disk space low"), true);
 }
 
 // ── log_error (! Log) ─────────────────────────────────────────────────────
-// STUB: update when implemented — Phase 2 log_error is a no-op.
+// STUB: update when implemented — Phase 2 log functions are no-ops.
 
 test fn log_error_single_field_does_not_panic() -> Unit ! Log {
     // STUB: update when implemented
@@ -121,6 +124,7 @@ test fn log_error_with_reason_field() -> Unit ! Log {
 }
 
 test fn log_error_returns_unit_via_helper() -> Unit ! Log {
+    // STUB: update when implemented
     assert_eq(call_log_error("request failed"), true);
 }
 

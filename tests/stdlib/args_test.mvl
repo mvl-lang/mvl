@@ -17,107 +17,53 @@
 use std.args.{get_arg, get_args, get_env}
 
 // ── get_arg (! Console) ───────────────────────────────────────────────────
-// STUB: update when implemented — Phase 2 get_arg always returns None.
-// All tests below verify only the None path (absent flags).
+// NOTE: get_arg is a real implementation that scans std::env::args() for --<name>.
+// Tests pass because flag names use unique suffixes never passed by the test runner.
 // Phase 3 positive-path target: inject a known flag via test harness and assert Some(value).
 
 test fn args_get_arg_unknown_flag_is_none() -> Unit ! Console {
-    // STUB: update when implemented
     // The test runner does not pass --mvl-nonexistent-flag-xyz
     let v: Option[Tainted[String]] = get_arg("mvl-nonexistent-flag-xyz");
     assert_eq(v.is_none(), true);
 }
 
-test fn args_get_arg_missing_flag_not_some() -> Unit ! Console {
-    // STUB: update when implemented
-    let v: Option[Tainted[String]] = get_arg("mvl-absent-flag-abc");
-    assert_eq(v.is_some(), false);
-}
-
 test fn args_get_arg_none_unwrap_or_uses_default() -> Unit ! Console {
-    // STUB: update when implemented
     let v: Option[Tainted[String]] = get_arg("mvl-test-flag-with-default");
     assert_eq(v.unwrap_or("fallback").is_empty(), false);
 }
 
-test fn args_get_arg_another_missing_flag() -> Unit ! Console {
-    // STUB: update when implemented
-    let v: Option[Tainted[String]] = get_arg("mvl-verbose-xyz");
-    assert_eq(v.is_none(), true);
-}
-
-test fn args_get_arg_config_flag_absent() -> Unit ! Console {
-    // STUB: update when implemented
-    let v: Option[Tainted[String]] = get_arg("mvl-config-path-xyz");
-    assert_eq(v.is_none(), true);
-}
-
 // ── get_args (! Console) ──────────────────────────────────────────────────
-// STUB: update when implemented — Phase 2 get_args always returns [].
-// Phase 3 positive-path target: assert the list contains expected arg values.
+// NOTE: get_args is a real implementation that returns std::env::args().skip(1).
+// Phase 3 positive-path target: inject known arg values via test harness and assert their presence.
 
 test fn args_get_args_result_is_list() -> Unit ! Console {
-    // STUB: update when implemented
     let args: List[Tainted[String]] = get_args();
     // In the test runner context the arg list may be non-empty (cargo test runner
     // args). We only check that the call succeeds and returns a list.
     assert_eq(args.len() == 0, args.is_empty());
 }
 
-test fn args_get_args_all_items_accessible() -> Unit ! Console {
-    // STUB: update when implemented
-    let args: List[Tainted[String]] = get_args();
-    // Verify is_empty is consistent with len
-    assert_eq(args.is_empty(), args.len() == 0);
-}
-
 // ── get_env (! Console) ───────────────────────────────────────────────────
-// STUB: update when implemented — Phase 2 get_env always returns None.
-// All tests below verify only the None path (absent env vars).
-// Phase 3 positive-path target: read a known env var (e.g. HOME or PATH) and assert Some(value).
+// NOTE: get_env is a real implementation that calls std::env::var(name).
+// Tests pass because var names use unique suffixes never set in CI or local environments.
+// Phase 3 positive-path target: inject a known sentinel (e.g. MVL_TEST_KNOWN_VAR=sentinel)
+// via test harness and assert Some(value).
 
 test fn args_get_env_unknown_var_is_none() -> Unit ! Console {
-    // STUB: update when implemented
     // This env var is never set in CI or local test environments
     let v: Option[Tainted[String]] = get_env("MVL_NONEXISTENT_VAR_XYZ_12345");
     assert_eq(v.is_none(), true);
 }
 
-test fn args_get_env_unknown_var_not_some() -> Unit ! Console {
-    // STUB: update when implemented
-    let v: Option[Tainted[String]] = get_env("MVL_TEST_ABSENT_VAR_ABC_67890");
-    assert_eq(v.is_some(), false);
-}
-
 test fn args_get_env_none_unwrap_or_returns_default() -> Unit ! Console {
-    // STUB: update when implemented
     let v: Option[Tainted[String]] = get_env("MVL_NONEXISTENT_PORT_XYZ");
     // When None, unwrap_or returns the default
     assert_eq(v.unwrap_or("8080").is_empty(), false);
 }
 
-test fn args_get_env_another_unknown_var() -> Unit ! Console {
-    // STUB: update when implemented
-    let v: Option[Tainted[String]] = get_env("MVL_NONEXISTENT_DATABASE_URL_XYZ");
-    assert_eq(v.is_none(), true);
-}
-
 // ── Option[Tainted[String]] semantics ─────────────────────────────────────
 
 test fn args_option_none_is_none_is_true() -> Unit ! Console {
-    // STUB: update when implemented
     let flag: Option[Tainted[String]] = get_arg("mvl-test-output-xyz");
     assert_eq(flag.is_none(), true);
-}
-
-test fn args_option_none_is_some_is_false() -> Unit ! Console {
-    // STUB: update when implemented
-    let flag: Option[Tainted[String]] = get_arg("mvl-test-input-xyz");
-    assert_eq(flag.is_some(), false);
-}
-
-test fn args_env_none_is_none_true() -> Unit ! Console {
-    // STUB: update when implemented
-    let env_val: Option[Tainted[String]] = get_env("MVL_NONEXISTENT_XYZ_VAR");
-    assert_eq(env_val.is_none(), true);
 }
