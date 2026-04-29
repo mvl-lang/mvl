@@ -12,13 +12,15 @@
 //!
 //! See ADR-0003 for the overall compilation strategy.
 
-use crate::mvl::parser::ast::{ElseBranch, LValue, MatchBody, Stmt};
+use crate::mvl::checker::mcdc::collect_clauses;
+use crate::mvl::parser::ast::{BinaryOp, ElseBranch, Expr, LValue, MatchBody, Stmt, TypeExpr};
 use crate::mvl::transpiler::codegen::Codegen;
 use crate::mvl::transpiler::coverage::BranchKind;
 use crate::mvl::transpiler::emit_exprs::{
     arms_have_str_pattern, emit_block_as_value, emit_block_stmts, emit_expr, emit_pattern,
 };
 use crate::mvl::transpiler::emit_types::{emit_ref_expr_for_assert, emit_type_expr};
+use crate::mvl::transpiler::mcdc_instr::{detect_coupled_pairs, DecisionKind};
 
 /// Emit a single statement (with indentation and trailing newline).
 pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
@@ -79,24 +81,28 @@ pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
             let false_id = else_
                 .as_ref()
                 .and(cg.alloc_branch(span.line, BranchKind::IfFalse));
-            cg.indent();
-            cg.push("if ");
-            emit_expr(cg, cond);
-            cg.push(" {");
-            cg.nl();
-            cg.push_indent();
-            if let Some(id) = true_id {
-                cg.emit_cov_hit(id);
+            if emit_mcdc_if(cg, cond, then, else_, span.line, true_id, false_id) {
+                // MC/DC instrumented emission handled the full if-statement.
+            } else {
+                cg.indent();
+                cg.push("if ");
+                emit_expr(cg, cond);
+                cg.push(" {");
+                cg.nl();
+                cg.push_indent();
+                if let Some(id) = true_id {
+                    cg.emit_cov_hit(id);
+                }
+                emit_block_as_value(cg, &then.stmts);
+                cg.pop_indent();
+                cg.indent();
+                cg.push("}");
+                if let Some(else_branch) = else_ {
+                    cg.push(" else ");
+                    emit_else_branch(cg, else_branch, false_id);
+                }
+                cg.nl();
             }
-            emit_block_as_value(cg, &then.stmts);
-            cg.pop_indent();
-            cg.indent();
-            cg.push("}");
-            if let Some(else_branch) = else_ {
-                cg.push(" else ");
-                emit_else_branch(cg, else_branch, false_id);
-            }
-            cg.nl();
         }
 
         Stmt::Match {
@@ -198,20 +204,24 @@ pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
             cond, body, span, ..
         } => {
             let while_id = cg.alloc_branch(span.line, BranchKind::WhileBody);
-            cg.indent();
-            cg.push("while ");
-            emit_expr(cg, cond);
-            cg.push(" {");
-            cg.nl();
-            cg.push_indent();
-            if let Some(id) = while_id {
-                cg.emit_cov_hit(id);
+            if emit_mcdc_while(cg, cond, body, span.line, while_id) {
+                // MC/DC instrumented emission handled the full while-loop.
+            } else {
+                cg.indent();
+                cg.push("while ");
+                emit_expr(cg, cond);
+                cg.push(" {");
+                cg.nl();
+                cg.push_indent();
+                if let Some(id) = while_id {
+                    cg.emit_cov_hit(id);
+                }
+                emit_block_stmts(cg, &body.stmts);
+                cg.pop_indent();
+                cg.indent();
+                cg.push("}");
+                cg.nl();
             }
-            emit_block_stmts(cg, &body.stmts);
-            cg.pop_indent();
-            cg.indent();
-            cg.push("}");
-            cg.nl();
         }
 
         Stmt::Expr { expr, .. } => {
@@ -291,4 +301,237 @@ fn emit_else_branch(cg: &mut Codegen, branch: &ElseBranch, cov_id: Option<usize>
             }
         }
     }
+}
+
+// ── MC/DC instrumentation helpers ────────────────────────────────────────
+
+/// Emit an if-statement with MC/DC clause tracking for compound conditions.
+///
+/// Returns `true` when MC/DC instrumentation was applied (compound condition
+/// with an active MC/DC map).  Returns `false` when the caller should fall
+/// back to normal emission (simple condition or MC/DC inactive).
+fn emit_mcdc_if(
+    cg: &mut Codegen,
+    cond: &Expr,
+    then: &crate::mvl::parser::ast::Block,
+    else_: &Option<ElseBranch>,
+    line: u32,
+    true_id: Option<usize>,
+    false_id: Option<usize>,
+) -> bool {
+    let mut clauses = Vec::new();
+    collect_clauses(cond, &mut clauses);
+    if clauses.len() <= 1 || cg.mcdc.is_none() {
+        return false;
+    }
+    let n = clauses.len();
+    let coupled = detect_coupled_pairs(&clauses);
+    let Some(decision_id) = cg.alloc_mcdc_decision(line, n, DecisionKind::If, coupled) else {
+        return false;
+    };
+
+    // Emit clause value and eval-flag arrays (short-circuit — only observed clauses are set).
+    cg.line(&format!("let mut __d{decision_id}_c = [false; {n}];"));
+    cg.line(&format!("let mut __d{decision_id}_e = [false; {n}];"));
+
+    // Emit outcome via short-circuit tree that sets c[i]/e[i] for each leaf when reached.
+    cg.indent();
+    cg.push(&format!("let __d{decision_id}_outcome: bool = "));
+    emit_mcdc_sc_outcome(cg, cond, decision_id, &mut 0, &mut 0);
+    cg.push(";");
+    cg.nl();
+
+    // Emit observation record.
+    emit_mcdc_record(cg, decision_id, n);
+
+    // Emit: if __d{id}_outcome { ... }
+    cg.indent();
+    cg.push(&format!("if __d{decision_id}_outcome {{"));
+    cg.nl();
+    cg.push_indent();
+    if let Some(id) = true_id {
+        cg.emit_cov_hit(id);
+    }
+    emit_block_as_value(cg, &then.stmts);
+    cg.pop_indent();
+    cg.indent();
+    cg.push("}");
+    if let Some(else_branch) = else_ {
+        cg.push(" else ");
+        emit_else_branch(cg, else_branch, false_id);
+    }
+    cg.nl();
+    true
+}
+
+/// Emit a while-loop with MC/DC clause tracking, restructured as `loop { … }`.
+///
+/// Returns `true` when MC/DC instrumentation was applied, `false` to fall back.
+fn emit_mcdc_while(
+    cg: &mut Codegen,
+    cond: &Expr,
+    body: &crate::mvl::parser::ast::Block,
+    line: u32,
+    while_id: Option<usize>,
+) -> bool {
+    let mut clauses = Vec::new();
+    collect_clauses(cond, &mut clauses);
+    if clauses.len() <= 1 || cg.mcdc.is_none() {
+        return false;
+    }
+    let n = clauses.len();
+    let coupled = detect_coupled_pairs(&clauses);
+    let Some(decision_id) = cg.alloc_mcdc_decision(line, n, DecisionKind::While, coupled) else {
+        return false;
+    };
+
+    // Restructure as `loop` so clause locals can be re-evaluated each iteration.
+    cg.indent();
+    cg.push("loop {");
+    cg.nl();
+    cg.push_indent();
+
+    // Clause value and eval-flag arrays.
+    cg.line(&format!("let mut __d{decision_id}_c = [false; {n}];"));
+    cg.line(&format!("let mut __d{decision_id}_e = [false; {n}];"));
+
+    // Outcome via short-circuit tree.
+    cg.indent();
+    cg.push(&format!("let __d{decision_id}_outcome: bool = "));
+    emit_mcdc_sc_outcome(cg, cond, decision_id, &mut 0, &mut 0);
+    cg.push(";");
+    cg.nl();
+
+    // Record observation.
+    emit_mcdc_record(cg, decision_id, n);
+
+    // Break when condition is false.
+    cg.line(&format!("if !__d{decision_id}_outcome {{ break; }}"));
+
+    // Coverage hit (body entry).
+    if let Some(id) = while_id {
+        cg.emit_cov_hit(id);
+    }
+
+    emit_block_stmts(cg, &body.stmts);
+    cg.pop_indent();
+    cg.indent();
+    cg.push("}");
+    cg.nl();
+    true
+}
+
+/// Emit MC/DC instrumentation for a compound boolean function-return expression.
+///
+/// When a production function returns `Bool` and its body ends with a compound
+/// `&&`/`||` expression, this wraps the expression with clause arrays, the
+/// short-circuit evaluation tree, and an observation record — identical in
+/// structure to `emit_mcdc_if` but without any control-flow branching.
+///
+/// Returns `true` when instrumentation was applied; `false` to fall back to
+/// normal emission (simple expression, non-Bool return, or MC/DC inactive).
+pub fn emit_mcdc_return_expr(
+    cg: &mut Codegen,
+    expr: &Expr,
+    return_type: &TypeExpr,
+    line: u32,
+) -> bool {
+    let is_bool = matches!(return_type, TypeExpr::Base { name, .. } if name == "Bool");
+    if !is_bool {
+        return false;
+    }
+    let mut clauses = Vec::new();
+    collect_clauses(expr, &mut clauses);
+    if clauses.len() <= 1 || cg.mcdc.is_none() {
+        return false;
+    }
+    let n = clauses.len();
+    let coupled = detect_coupled_pairs(&clauses);
+    let Some(decision_id) = cg.alloc_mcdc_decision(line, n, DecisionKind::Return, coupled) else {
+        return false;
+    };
+
+    cg.line(&format!("let mut __d{decision_id}_c = [false; {n}];"));
+    cg.line(&format!("let mut __d{decision_id}_e = [false; {n}];"));
+    cg.indent();
+    cg.push(&format!("let __d{decision_id}_outcome: bool = "));
+    emit_mcdc_sc_outcome(cg, expr, decision_id, &mut 0, &mut 0);
+    cg.push(";");
+    cg.nl();
+    emit_mcdc_record(cg, decision_id, n);
+    cg.indent();
+    cg.push(&format!("__d{decision_id}_outcome"));
+    cg.nl();
+    true
+}
+
+/// Emit the short-circuit evaluation tree for a compound boolean condition.
+///
+/// Sets `__d{id}_c[i]` (clause value) and `__d{id}_e[i]` (evaluated flag) for
+/// each leaf clause *only when it is actually reached* by short-circuit execution.
+/// Emits a Rust block expression whose value is the overall boolean outcome.
+///
+/// `clause_idx` counts leaf clauses (left-to-right); `tmp_idx` numbers internal
+/// temporaries so nested `&&`/`||` nodes use distinct names.
+fn emit_mcdc_sc_outcome(
+    cg: &mut Codegen,
+    expr: &Expr,
+    decision_id: usize,
+    clause_idx: &mut usize,
+    tmp_idx: &mut usize,
+) {
+    if let Expr::Binary {
+        op, left, right, ..
+    } = expr
+    {
+        if matches!(op, BinaryOp::And | BinaryOp::Or) {
+            let t = *tmp_idx;
+            *tmp_idx += 1;
+            cg.push("{");
+            cg.push(&format!(" let __d{decision_id}_t{t} = "));
+            emit_mcdc_sc_outcome(cg, left, decision_id, clause_idx, tmp_idx);
+            cg.push(";");
+            if *op == BinaryOp::And {
+                cg.push(&format!(" if __d{decision_id}_t{t} {{ "));
+                emit_mcdc_sc_outcome(cg, right, decision_id, clause_idx, tmp_idx);
+                cg.push(" } else { false }");
+            } else {
+                cg.push(&format!(" if __d{decision_id}_t{t} {{ true }} else {{ "));
+                emit_mcdc_sc_outcome(cg, right, decision_id, clause_idx, tmp_idx);
+                cg.push(" }");
+            }
+            cg.push(" }");
+            return;
+        }
+    }
+    // Leaf: set eval flag, record value, return value.
+    let i = *clause_idx;
+    *clause_idx += 1;
+    cg.push(&format!(
+        "{{ __d{decision_id}_e[{i}] = true; __d{decision_id}_c[{i}] = "
+    ));
+    emit_expr(cg, expr);
+    cg.push(&format!("; __d{decision_id}_c[{i}] }}"));
+}
+
+/// Emit the `__mvl_mcdc::record(…)` call for a decision with `n` clauses.
+///
+/// Encoding (u32): bits 0..n-1 = clause vals, bits n..2n-1 = eval flags, bit 2n = outcome.
+fn emit_mcdc_record(cg: &mut Codegen, decision_id: usize, n: usize) {
+    let vals: Vec<String> = (0..n)
+        .map(|i| format!("((__d{decision_id}_c[{i}] as u32) << {i}u32)"))
+        .collect();
+    let evals: Vec<String> = (0..n)
+        .map(|i| format!("((__d{decision_id}_e[{i}] as u32) << {}u32)", n + i))
+        .collect();
+    let outcome = format!("((__d{decision_id}_outcome as u32) << {}u32)", 2 * n);
+    let encoded = vals
+        .into_iter()
+        .chain(evals)
+        .chain(std::iter::once(outcome))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    cg.line(&format!(
+        "#[cfg(test)] crate::__mvl_mcdc::record({decision_id}usize, {encoded});"
+    ));
 }

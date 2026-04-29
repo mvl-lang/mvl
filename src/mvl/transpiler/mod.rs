@@ -30,6 +30,7 @@ pub mod emit_impls;
 pub mod emit_stmts;
 pub mod emit_types;
 pub mod last_use;
+pub mod mcdc_instr;
 pub mod mutation;
 
 use crate::mvl::parser::ast::{Decl, Program};
@@ -37,6 +38,9 @@ use cargo::CargoOptions;
 use codegen::Codegen;
 pub use coverage::{
     emit_cov_preamble, emit_cov_report_test, format_report, BranchInfo, CoverageMap,
+};
+pub use mcdc_instr::{
+    detect_coupled_pairs, emit_mcdc_preamble, emit_mcdc_report_test, MCDCDecision,
 };
 pub use mutation::{format_mutation_report, MutantInfo, MutationMap};
 
@@ -79,7 +83,7 @@ pub fn count_extern_decls(prog: &Program) -> usize {
 /// kernel trust boundary via `extern "rust" { … }`. Any program that loads
 /// this prelude needs `mvl_runtime` as a Cargo dependency so that the kernel
 /// primitives (re-exported via `mvl_runtime::prelude::*`) are in scope.
-fn prelude_requires_runtime(prelude_progs: &[Program]) -> bool {
+pub fn prelude_requires_runtime(prelude_progs: &[Program]) -> bool {
     prelude_progs
         .iter()
         .any(|p| p.declarations.iter().any(|d| matches!(d, Decl::Extern(_))))
@@ -591,6 +595,98 @@ pub fn transpile_mutated_source_with_prelude(
     (out, mutants)
 }
 
+// ── MC/DC transpilation ───────────────────────────────────────────────────
+
+/// Transpile a test [`Program`] with MC/DC condition instrumentation.
+///
+/// Injects per-clause tracking for every compound `&&`/`||` condition in
+/// non-test functions.  Returns the transpile output plus metadata for all
+/// instrumented decisions.
+pub fn transpile_mcdc_with_prelude(
+    prog: &Program,
+    crate_name: &str,
+    file_stem: &str,
+    start_id: usize,
+    prelude_progs: &[Program],
+) -> (TranspileOutput, Vec<MCDCDecision>) {
+    let has_main = has_main_fn(prog);
+    let extern_count = count_extern_decls(prog);
+    let has_extern_rust = has_extern_rust_decls(prog);
+    let use_runtime =
+        extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
+
+    let mut cg = Codegen::new();
+    cg.mcdc = Some(mcdc_instr::MCDCMap::new(start_id));
+    cg.current_file = file_stem.to_string();
+    cg.emit_program_with_mods(prog, &[], prelude_progs);
+
+    let decisions = cg.mcdc.take().map(|m| m.decisions).unwrap_or_default();
+    let lib_rs = cg.finish();
+
+    let opts = CargoOptions {
+        crate_name,
+        use_mvl_runtime: use_runtime,
+        extern_crates: Vec::new(),
+    };
+    let cargo_toml = if has_main {
+        cargo::emit_cargo_toml_binary_opts(&opts)
+    } else {
+        cargo::emit_cargo_toml_library_opts(&opts)
+    };
+    let out = TranspileOutput {
+        lib_rs,
+        cargo_toml,
+        has_main,
+        extern_count,
+        has_extern_rust,
+    };
+    (out, decisions)
+}
+
+/// Transpile a source [`Program`] (not a `*_test.mvl` file) with MC/DC
+/// instrumentation for inclusion in the test crate.
+pub fn transpile_mcdc_source_with_prelude(
+    prog: &Program,
+    crate_name: &str,
+    file_stem: &str,
+    start_id: usize,
+    prelude_progs: &[Program],
+) -> (TranspileOutput, Vec<MCDCDecision>) {
+    let has_main = has_main_fn(prog);
+    let extern_count = count_extern_decls(prog);
+    let has_extern_rust = has_extern_rust_decls(prog);
+    let use_runtime =
+        extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
+
+    let mut cg = Codegen::new();
+    cg.mcdc = Some(mcdc_instr::MCDCMap::new(start_id));
+    cg.current_file = file_stem.to_string();
+    cg.test_extern_stubs = true;
+    cg.emit_program_with_mods(prog, &[], prelude_progs);
+
+    let decisions = cg.mcdc.take().map(|m| m.decisions).unwrap_or_default();
+    let lib_rs = cg.finish();
+
+    let opts = CargoOptions {
+        crate_name,
+        use_mvl_runtime: use_runtime,
+        extern_crates: Vec::new(),
+    };
+    let cargo_toml = if has_main {
+        cargo::emit_cargo_toml_binary_opts(&opts)
+    } else {
+        cargo::emit_cargo_toml_library_opts(&opts)
+    };
+    let out = TranspileOutput {
+        lib_rs,
+        cargo_toml,
+        has_main,
+        extern_count,
+        has_extern_rust,
+    };
+    (out, decisions)
+}
+
 // ── has_extern_rust unit tests ─────────────────────────────────────────────
 
 #[cfg(test)]
@@ -603,6 +699,267 @@ mod tests {
         let prog = p.parse_program();
         assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
         prog
+    }
+
+    // ── MC/DC codegen structural tests ────────────────────────────────────
+
+    /// Compound `if (A && B)` emits clause arrays, outcome var, and record call.
+    #[test]
+    fn mcdc_if_emits_clause_locals_and_record() {
+        let prog = parse("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
+        let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert_eq!(decisions.len(), 1, "one compound decision");
+        assert_eq!(decisions[0].kind, mcdc_instr::DecisionKind::If);
+        let rs = &out.lib_rs;
+        assert!(
+            rs.contains("let mut __d0_c = [false; 2]"),
+            "missing clause array: {rs}"
+        );
+        assert!(
+            rs.contains("let mut __d0_e = [false; 2]"),
+            "missing eval array: {rs}"
+        );
+        assert!(
+            rs.contains("let __d0_outcome: bool ="),
+            "missing outcome var: {rs}"
+        );
+        assert!(
+            rs.contains("__mvl_mcdc::record(0usize,"),
+            "missing record call: {rs}"
+        );
+        assert!(
+            rs.contains("if __d0_outcome {"),
+            "missing instrumented if: {rs}"
+        );
+    }
+
+    /// The short-circuit tree sets clause array entries and uses sc semantics.
+    #[test]
+    fn mcdc_if_recomposed_uses_clause_vars() {
+        let prog = parse("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
+        let (out, _) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let rs = &out.lib_rs;
+        // Short-circuit: left evaluated first, right only if left is true
+        assert!(
+            rs.contains("__d0_e[0] = true"),
+            "missing eval-flag for clause 0: {rs}"
+        );
+        assert!(
+            rs.contains("__d0_e[1] = true"),
+            "missing eval-flag for clause 1: {rs}"
+        );
+    }
+
+    /// Three-clause `A || B || C` emits arrays of size 3.
+    #[test]
+    fn mcdc_if_three_clauses_emits_three_locals() {
+        let prog =
+            parse("fn f(a: Bool, b: Bool, c: Bool) -> Int { if a || b || c { 1 } else { 0 } }");
+        let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert_eq!(decisions[0].clause_count, 3);
+        let rs = &out.lib_rs;
+        assert!(rs.contains("let mut __d0_c = [false; 3]"), "{rs}");
+        assert!(rs.contains("let mut __d0_e = [false; 3]"), "{rs}");
+    }
+
+    /// `emit_mcdc_record` encodes clause vals, eval flags, and outcome as u32.
+    #[test]
+    fn mcdc_record_encoding_present() {
+        let prog = parse("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
+        let (out, _) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let rs = &out.lib_rs;
+        // Clause vals: bits 0 and 1; eval flags: bits 2 and 3; outcome: bit 4
+        assert!(
+            rs.contains("(__d0_c[0] as u32) << 0u32"),
+            "missing bit-0 val encoding: {rs}"
+        );
+        assert!(
+            rs.contains("(__d0_c[1] as u32) << 1u32"),
+            "missing bit-1 val encoding: {rs}"
+        );
+        assert!(
+            rs.contains("(__d0_e[0] as u32) << 2u32"),
+            "missing eval-0 encoding: {rs}"
+        );
+        assert!(
+            rs.contains("(__d0_e[1] as u32) << 3u32"),
+            "missing eval-1 encoding: {rs}"
+        );
+        assert!(
+            rs.contains("(__d0_outcome as u32) << 4u32"),
+            "missing outcome encoding: {rs}"
+        );
+        assert!(
+            rs.contains("#[cfg(test)] crate::__mvl_mcdc::record("),
+            "missing cfg(test) guard: {rs}"
+        );
+    }
+
+    /// Compound `while` is restructured as `loop { … if !outcome { break; } … }`.
+    #[test]
+    fn mcdc_while_restructured_as_loop() {
+        let prog = parse(
+            "partial fn f(a: Bool, b: Bool) -> Int { let mut x: Int = 0; while a && b { x = x + 1; } x }",
+        );
+        let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].kind, mcdc_instr::DecisionKind::While);
+        let rs = &out.lib_rs;
+        assert!(rs.contains("loop {"), "missing loop restructuring: {rs}");
+        assert!(
+            rs.contains("if !__d0_outcome { break; }"),
+            "missing break guard: {rs}"
+        );
+        assert!(rs.contains("let mut __d0_c = [false; 2]"), "{rs}");
+        assert!(rs.contains("let mut __d0_e = [false; 2]"), "{rs}");
+    }
+
+    /// Simple (single-clause) conditions are NOT instrumented for MC/DC.
+    #[test]
+    fn mcdc_simple_condition_not_instrumented() {
+        let prog = parse("fn f(x: Int) -> Int { if x > 0 { 1 } else { 0 } }");
+        let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert!(
+            decisions.is_empty(),
+            "simple condition must not be instrumented"
+        );
+        assert!(!out.lib_rs.contains("__d0_c"), "no clause arrays expected");
+    }
+
+    /// Test functions are excluded from MC/DC instrumentation.
+    #[test]
+    fn mcdc_test_fn_excluded() {
+        let prog =
+            parse("test fn t(a: Bool, b: Bool) -> Bool { if a && b { true } else { false } }");
+        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert!(
+            decisions.is_empty(),
+            "test fn must not generate MC/DC decisions"
+        );
+    }
+
+    /// Compound boolean return expressions in `Bool`-valued functions are
+    /// instrumented as `DecisionKind::Return` decisions.
+    #[test]
+    fn mcdc_bool_return_expr_instrumented() {
+        let prog = parse("fn f(a: Bool, b: Bool) -> Bool { a && b }");
+        let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert_eq!(decisions.len(), 1, "compound bool return is one decision");
+        assert_eq!(decisions[0].kind, mcdc_instr::DecisionKind::Return);
+        assert_eq!(decisions[0].clause_count, 2);
+        assert!(
+            out.lib_rs.contains("let mut __d0_c = [false; 2]"),
+            "clause array emitted"
+        );
+        assert!(
+            out.lib_rs.contains("__d0_outcome"),
+            "outcome variable emitted"
+        );
+        assert!(
+            out.lib_rs.contains("__mvl_mcdc::record(0usize,"),
+            "record call emitted"
+        );
+    }
+
+    /// Non-Bool return expressions are NOT instrumented even if compound.
+    #[test]
+    fn mcdc_non_bool_return_not_instrumented() {
+        let prog = parse("fn f(a: Int, b: Int) -> Int { a + b }");
+        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert!(
+            decisions.is_empty(),
+            "non-Bool return must not be instrumented"
+        );
+    }
+
+    /// Clauses that share a variable are detected as a coupled pair.
+    #[test]
+    fn mcdc_coupled_pairs_detected() {
+        // f(a) and g(a, b) both take `a` — they are coupled.
+        // h(b) and g(a, b) both take `b` — also coupled.
+        let prog =
+            parse("fn d(a: Bool, b: Bool, c: Bool) -> Bool { f(a) && g(a, b) && h(b) && k(c) }");
+        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert_eq!(decisions.len(), 1);
+        // Expect at least: (0,1) via "a" and (1,2) via "b"
+        let pairs = &decisions[0].coupled_pairs;
+        let has_01 = pairs
+            .iter()
+            .any(|(i, j, v)| *i == 0 && *j == 1 && v.contains(&"a".to_string()));
+        let has_12 = pairs
+            .iter()
+            .any(|(i, j, v)| *i == 1 && *j == 2 && v.contains(&"b".to_string()));
+        assert!(has_01, "clauses 0 and 1 share variable 'a'");
+        assert!(has_12, "clauses 1 and 2 share variable 'b'");
+        // Clause 3 (k(c)) is independent — not coupled with others
+        let has_3 = pairs.iter().any(|(i, j, _)| *i == 3 || *j == 3);
+        assert!(!has_3, "clause 3 (k(c)) must not be coupled");
+    }
+
+    /// Clauses with disjoint variable sets are not coupled.
+    #[test]
+    fn mcdc_independent_clauses_not_coupled() {
+        let prog = parse("fn f(a: Bool, b: Bool) -> Bool { a && b }");
+        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert_eq!(decisions.len(), 1);
+        assert!(
+            decisions[0].coupled_pairs.is_empty(),
+            "a and b are independent — no coupling"
+        );
+    }
+
+    /// Field-level coupling: same struct param, disjoint fields → NOT coupled.
+    #[test]
+    fn mcdc_disjoint_field_access_not_coupled() {
+        // f(v.breathing) and g(v.oxygen_sat) share param `v` but access different fields.
+        let prog = parse("fn d(v: Vitals) -> Bool { f(v.breathing) && g(v.oxygen_sat) }");
+        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert_eq!(decisions.len(), 1);
+        assert!(
+            decisions[0].coupled_pairs.is_empty(),
+            "disjoint fields v.breathing vs v.oxygen_sat must not be coupled"
+        );
+    }
+
+    /// Field-level coupling: same field accessed by two clauses → genuinely coupled.
+    #[test]
+    fn mcdc_shared_field_access_is_coupled() {
+        // Both clauses use v.bp — toggling it affects both simultaneously.
+        let prog = parse("fn d(v: V) -> Bool { f(v.bp) && g(v.bp) }");
+        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert_eq!(decisions.len(), 1);
+        let pairs = &decisions[0].coupled_pairs;
+        assert_eq!(pairs.len(), 1, "one coupled pair expected");
+        assert_eq!(pairs[0].0, 0);
+        assert_eq!(pairs[0].1, 1);
+        assert!(
+            pairs[0].2.contains(&"v.bp".to_string()),
+            "shared path must be v.bp"
+        );
+    }
+
+    /// Nested field access: p.vitals.pulse vs p.vitals.bp → disjoint → NOT coupled.
+    #[test]
+    fn mcdc_nested_field_access_not_coupled() {
+        let prog = parse("fn d(p: Patient) -> Bool { f(p.vitals.pulse) && g(p.vitals.bp) }");
+        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert_eq!(decisions.len(), 1);
+        assert!(
+            decisions[0].coupled_pairs.is_empty(),
+            "p.vitals.pulse vs p.vitals.bp are disjoint nested paths — not coupled"
+        );
+    }
+
+    /// `start_id` offsets decision IDs correctly for multi-file projects.
+    #[test]
+    fn mcdc_start_id_offset_applied() {
+        let prog = parse("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
+        let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 5, &[]);
+        assert_eq!(decisions[0].id, 5, "decision ID should be start_id");
+        assert!(
+            out.lib_rs.contains("__mvl_mcdc::record(5usize,"),
+            "record call must use offset id"
+        );
     }
 
     /// `has_extern_rust` is `true` when program contains `extern "rust"` block.

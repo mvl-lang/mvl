@@ -385,7 +385,15 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                 cg.push(" ");
                 cg.push(emit_binary_op(*op));
                 cg.push(" ");
-                emit_expr(cg, right);
+                // Rust requires `String + &str` for string concatenation.
+                // If the left side is a string-literal-rooted chain, borrow the right.
+                if *op == BinaryOp::Add && is_string_add_chain(left) {
+                    cg.push("&(");
+                    emit_expr(cg, right);
+                    cg.push(")");
+                } else {
+                    emit_expr(cg, right);
+                }
                 cg.push(")");
             }
         }
@@ -478,6 +486,10 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                     emit_expr(&mut tmp, k);
                     tmp.push(", ");
                     emit_expr(&mut tmp, v);
+                    // `.into()` coerces IFC-label wrappers (Clean<String>, etc.) to
+                    // their plain inner type so map values match HashMap<String, String>
+                    // signatures in stdlib functions like log_info / log_warn.
+                    tmp.push(".into()");
                     tmp.push(")");
                     tmp.finish()
                 })
@@ -688,6 +700,22 @@ fn emit_args_for_macro(cg: &mut Codegen, args: &[Expr]) {
 }
 
 // ── Binary operators ──────────────────────────────────────────────────────
+
+/// Return true when `expr` is the left side of a string concatenation chain.
+/// A chain is rooted in a string literal: `"literal"`, `"a" + b`, etc.
+/// Used to decide whether the right operand of `+` needs a borrow (`&rhs`)
+/// to satisfy Rust's `String + &str` requirement.
+fn is_string_add_chain(expr: &Expr) -> bool {
+    match expr {
+        Expr::Literal(Literal::Str(_), _) => true,
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left,
+            ..
+        } => is_string_add_chain(left),
+        _ => false,
+    }
+}
 
 fn emit_binary_op(op: BinaryOp) -> &'static str {
     match op {

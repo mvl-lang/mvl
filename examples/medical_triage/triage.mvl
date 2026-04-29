@@ -1,0 +1,158 @@
+// triage.mvl — Emergency triage decision logic.
+//
+// 11 compound boolean decisions using conditionals (&&, ||, ==, <, >).
+// Pure clinical logic — no input validation, no wrapper functions.
+//
+// No extern, no effects — pure decision logic.
+// Assurance note: 0 extern blocks.
+
+use model::Priority;
+use model::Consciousness;
+use model::BreathingStatus;
+use model::PulseStrength;
+use model::Vitals;
+use model::AgeGroup;
+use model::ChiefComplaint;
+use model::Patient;
+use model::Assessment;
+
+// ── Decision 1: airway_compromise ────────────────────────────────────────
+// breathing absent OR (labored breathing AND low oxygen) OR no pulse
+
+pub fn airway_compromise(v: Vitals) -> Bool {
+    v.breathing == BreathingStatus::Absent
+    || (v.breathing == BreathingStatus::Labored && v.oxygen_sat < 92)
+    || v.pulse == PulseStrength::Absent
+}
+
+// ── Decision 2: circulation_failure ──────────────────────────────────────
+// (low BP AND weak pulse) OR (tachycardia AND moderately low BP)
+// Coupled: v.systolic_bp in both branches
+
+pub fn circulation_failure(v: Vitals) -> Bool {
+    (v.systolic_bp < 90 && v.pulse == PulseStrength::Weak)
+    || (v.heart_rate > 130 && v.systolic_bp < 100)
+}
+
+// ── Decision 3: neuro_critical ───────────────────────────────────────────
+// unresponsive OR (pain response AND neuro complaint) OR (voice response AND low oxygen)
+
+pub fn neuro_critical(v: Vitals, complaint: ChiefComplaint) -> Bool {
+    v.consciousness == Consciousness::Unresponsive
+    || (v.consciousness == Consciousness::PainResponse && complaint == ChiefComplaint::Neurological)
+    || (v.consciousness == Consciousness::VoiceResponse && v.oxygen_sat < 92)
+}
+
+// ── Decision 4: is_red ───────────────────────────────────────────────────
+// Any life-threatening condition
+
+pub fn is_red(v: Vitals, complaint: ChiefComplaint) -> Bool {
+    airway_compromise(v) || circulation_failure(v) || neuro_critical(v, complaint)
+}
+
+// ── Decision 5: is_orange ────────────────────────────────────────────────
+// (chest pain AND vulnerable age) OR (borderline oxygen AND labored) OR severe hypertension
+// Coupled: oxygen_sat in borderline sub-expression (>91 && <95)
+
+pub fn is_orange(p: Patient) -> Bool {
+    (p.complaint == ChiefComplaint::ChestPain
+        && (p.age_group == AgeGroup::Elderly || p.age_group == AgeGroup::Infant))
+    || (p.vitals.oxygen_sat > 91 && p.vitals.oxygen_sat < 95
+        && p.vitals.breathing == BreathingStatus::Labored)
+    || p.vitals.systolic_bp > 200
+}
+
+// ── Decision 6: fever_risk ───────────────────────────────────────────────
+// high fever AND vulnerable age AND fever complaint
+
+pub fn fever_risk(p: Patient) -> Bool {
+    p.vitals.temperature > 390
+    && (p.age_group == AgeGroup::Infant || p.age_group == AgeGroup::Elderly)
+    && p.complaint == ChiefComplaint::Fever
+}
+
+// ── Decision 7: trauma_urgent ────────────────────────────────────────────
+// trauma AND (weak pulse OR low systolic) AND not alert
+
+pub fn trauma_urgent(p: Patient) -> Bool {
+    p.complaint == ChiefComplaint::Trauma
+    && (p.vitals.pulse == PulseStrength::Weak || p.vitals.systolic_bp < 110)
+    && p.vitals.consciousness != Consciousness::Alert
+}
+
+// ── Decision 8: needs_isolation ──────────────────────────────────────────
+// high fever AND (breathing OR fever complaint) AND not trauma
+// Coupled: p.complaint in all three clause groups
+
+pub fn needs_isolation(p: Patient) -> Bool {
+    p.vitals.temperature > 390
+    && (p.complaint == ChiefComplaint::Breathing || p.complaint == ChiefComplaint::Fever)
+    && p.complaint != ChiefComplaint::Trauma
+}
+
+// ── Decision 9: elderly_risk ─────────────────────────────────────────────
+// elderly AND (low oxygen OR low BP) AND not minor complaint
+
+pub fn elderly_risk(p: Patient) -> Bool {
+    p.age_group == AgeGroup::Elderly
+    && (p.vitals.oxygen_sat < 92 || p.vitals.systolic_bp < 100)
+    && p.complaint != ChiefComplaint::Minor
+}
+
+// ── Decision 10: pregnancy_escalate ──────────────────────────────────────
+// pregnant AND (abdominal OR high fever OR low BP)
+
+pub fn pregnancy_escalate(p: Patient) -> Bool {
+    p.pregnant
+    && (p.complaint == ChiefComplaint::Abdominal || p.vitals.temperature > 390 || p.vitals.systolic_bp < 100)
+}
+
+// ── Decision 11: needs_resuscitation ─────────────────────────────────────
+// breathing absent OR pulse absent OR unresponsive OR (circulation failure AND airway compromise)
+
+pub fn needs_resuscitation(v: Vitals, complaint: ChiefComplaint) -> Bool {
+    v.breathing == BreathingStatus::Absent
+    || v.pulse == PulseStrength::Absent
+    || v.consciousness == Consciousness::Unresponsive
+    || (circulation_failure(v) && airway_compromise(v))
+}
+
+// ── Priority assignment ──────────────────────────────────────────────────
+
+pub fn assign_priority(p: Patient) -> Priority {
+    if is_red(p.vitals, p.complaint) {
+        Priority::Red
+    } else if is_orange(p) || fever_risk(p) || trauma_urgent(p) || pregnancy_escalate(p) || elderly_risk(p) {
+        Priority::Orange
+    } else if needs_isolation(p) {
+        Priority::Yellow
+    } else if p.complaint == ChiefComplaint::Minor {
+        Priority::Blue
+    } else {
+        Priority::Green
+    }
+}
+
+// ── Reassessment interval ────────────────────────────────────────────────
+
+pub fn reassess_interval(pri: Priority) -> Int {
+    match pri {
+        Priority::Red    => 0,
+        Priority::Orange => 10,
+        Priority::Yellow => 60,
+        Priority::Green  => 120,
+        Priority::Blue   => 240,
+    }
+}
+
+// ── Full assessment ──────────────────────────────────────────────────────
+
+pub fn assess(p: Patient) -> Assessment {
+    let pri = assign_priority(p);
+    Assessment {
+        priority:      pri,
+        resuscitate:   needs_resuscitation(p.vitals, p.complaint),
+        isolate:       needs_isolation(p),
+        reassess_mins: reassess_interval(pri),
+    }
+}

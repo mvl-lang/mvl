@@ -1,0 +1,73 @@
+// main.mvl — Emergency triage demo scenarios.
+//
+// Exercises the triage pipeline across 6 clinical scenarios.
+// Assurance note: 0 extern blocks (pure logic demo).
+
+use model::Priority;
+use model::Consciousness;
+use model::BreathingStatus;
+use model::PulseStrength;
+use model::Vitals;
+use model::AgeGroup;
+use model::ChiefComplaint;
+use model::Patient;
+use model::Assessment;
+use triage::assess;
+
+fn pri_str(p: Priority) -> String {
+    match p {
+        Priority::Red    => "RED",
+        Priority::Orange => "ORANGE",
+        Priority::Yellow => "YELLOW",
+        Priority::Green  => "GREEN",
+        Priority::Blue   => "BLUE",
+    }
+}
+
+fn main() -> Unit {
+    // Scenario 1: stable adult, minor complaint → Blue
+    let v1 = Vitals { heart_rate: 72, systolic_bp: 118, oxygen_sat: 98, temperature: 368,
+                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
+    let p1 = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Minor, vitals: v1, allergies: false, pregnant: false };
+    let r1 = pri_str(assess(p1).priority);
+    println("1. Stable adult/minor:     " + r1);
+
+    // Scenario 2: unresponsive patient → Red + resuscitation
+    let v2 = Vitals { heart_rate: 45, systolic_bp: 80, oxygen_sat: 88, temperature: 365,
+                      consciousness: Consciousness::Unresponsive, breathing: BreathingStatus::Labored, pulse: PulseStrength::Weak };
+    let p2 = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Neurological, vitals: v2, allergies: false, pregnant: false };
+    let r2 = pri_str(assess(p2).priority);
+    println("2. Unresponsive/neuro:     " + r2);
+
+    // Scenario 3: elderly chest pain → Orange
+    let v3 = Vitals { heart_rate: 88, systolic_bp: 145, oxygen_sat: 96, temperature: 370,
+                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
+    let p3 = Patient { age_group: AgeGroup::Elderly, complaint: ChiefComplaint::ChestPain, vitals: v3, allergies: true, pregnant: false };
+    let r3 = pri_str(assess(p3).priority);
+    println("3. Elderly/chest pain:     " + r3);
+
+    // Scenario 4: febrile infant → Orange (fever_risk)
+    // Note: hr and bp must not trigger circulation_failure (hr>130 && bp<100)
+    let v4 = Vitals { heart_rate: 120, systolic_bp: 100, oxygen_sat: 97, temperature: 396,
+                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
+    let p4 = Patient { age_group: AgeGroup::Infant, complaint: ChiefComplaint::Fever, vitals: v4, allergies: false, pregnant: false };
+    let r4 = pri_str(assess(p4).priority);
+    println("4. Febrile infant:         " + r4);
+
+    // Scenario 5: pregnant with abdominal pain → Orange (pregnancy_escalate)
+    let v5 = Vitals { heart_rate: 90, systolic_bp: 110, oxygen_sat: 99, temperature: 372,
+                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
+    let p5 = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Abdominal, vitals: v5, allergies: false, pregnant: true };
+    let r5 = pri_str(assess(p5).priority);
+    println("5. Pregnant/abdominal:     " + r5);
+
+    // Scenario 6: high fever + breathing complaint → Yellow (isolation)
+    let v6 = Vitals { heart_rate: 95, systolic_bp: 115, oxygen_sat: 96, temperature: 393,
+                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
+    let p6 = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Breathing, vitals: v6, allergies: false, pregnant: false };
+    let a6 = assess(p6);
+    let r6 = pri_str(a6.priority);
+    let isolate = a6.isolate;
+    let iso_str = match isolate { true => " [ISOLATE]", false => "" };
+    println("6. Fever/breathing:        " + r6 + iso_str);
+}

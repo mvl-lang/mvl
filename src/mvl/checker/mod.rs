@@ -19,6 +19,7 @@ pub mod context;
 pub mod data_race;
 pub mod errors;
 pub mod ifc;
+pub mod mcdc;
 pub mod passes;
 pub mod refinements;
 pub mod termination;

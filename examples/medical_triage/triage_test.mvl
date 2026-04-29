@@ -1,0 +1,96 @@
+// Medical Triage Assessment — MC/DC coverage example
+//
+// Demonstrates DO-178C MC/DC analysis on safety-critical boolean logic.
+// All production functions use compound conditions; the test suite supplies
+// independence pairs for each clause.
+//
+// Run:  mvl mcdc examples/medical_triage/
+// Expected: MC/DC coverage: N/N obligations met (100%)  →  PASS
+
+// ── Airway assessment ─────────────────────────────────────────────────────
+//
+// fn airway_compromise starts at line 15; compound `if` is on line 16.
+// `mvl mcdc --verbose` must report `triage:16` — no line-number offset.
+
+fn airway_compromise(stridor: Bool, secretions: Bool, obstruction: Bool, gurgling: Bool) -> Bool {
+    if stridor && secretions || obstruction && gurgling {
+        return true
+    }
+    return false
+}
+
+// ── Breathing assessment ──────────────────────────────────────────────────
+
+fn breathing_failure(rate_low: Bool, spo2_low: Bool, rate_high: Bool, cyanosis: Bool) -> Bool {
+    if rate_low && spo2_low || rate_high && cyanosis {
+        return true
+    }
+    return false
+}
+
+// ── Circulation assessment ────────────────────────────────────────────────
+
+fn circulation_shock(hr_high: Bool, bp_low: Bool) -> Bool {
+    if hr_high && bp_low {
+        return true
+    }
+    return false
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────
+
+// airway_compromise — 4-clause condition, needs 4 independence pairs
+
+test fn airway_stridor_toggles_outcome() -> Unit {
+    assert_eq(airway_compromise(true, true, false, false), true)
+    assert_eq(airway_compromise(false, true, false, false), false)
+}
+
+test fn airway_secretions_toggles_outcome() -> Unit {
+    assert_eq(airway_compromise(true, true, false, false), true)
+    assert_eq(airway_compromise(true, false, false, false), false)
+}
+
+test fn airway_obstruction_toggles_outcome() -> Unit {
+    assert_eq(airway_compromise(false, false, true, true), true)
+    assert_eq(airway_compromise(false, false, false, true), false)
+}
+
+test fn airway_gurgling_toggles_outcome() -> Unit {
+    assert_eq(airway_compromise(false, false, true, true), true)
+    assert_eq(airway_compromise(false, false, true, false), false)
+}
+
+// breathing_failure — 4 distinct clauses: rate_low, spo2_low, rate_high, cyanosis
+
+test fn breathing_rate_low_toggles_outcome() -> Unit {
+    assert_eq(breathing_failure(true, true, false, false), true)
+    assert_eq(breathing_failure(false, true, false, false), false)
+}
+
+test fn breathing_spo2_low_toggles_outcome() -> Unit {
+    assert_eq(breathing_failure(true, true, false, false), true)
+    assert_eq(breathing_failure(true, false, false, false), false)
+}
+
+test fn breathing_rate_high_toggles_outcome() -> Unit {
+    assert_eq(breathing_failure(false, false, true, true), true)
+    assert_eq(breathing_failure(false, false, false, true), false)
+}
+
+test fn breathing_cyanosis_toggles_outcome() -> Unit {
+    assert_eq(breathing_failure(false, false, true, true), true)
+    assert_eq(breathing_failure(false, false, true, false), false)
+}
+
+// circulation_shock — 2-clause condition
+
+test fn shock_hr_high_toggles_outcome() -> Unit {
+    assert_eq(circulation_shock(true, true), true)
+    assert_eq(circulation_shock(false, true), false)
+}
+
+test fn shock_bp_low_toggles_outcome() -> Unit {
+    assert_eq(circulation_shock(true, true), true)
+    assert_eq(circulation_shock(true, false), false)
+}
