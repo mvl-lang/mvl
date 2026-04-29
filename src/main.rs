@@ -639,7 +639,7 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
     // Run tests with MVL_MCDC_OUT set.
     let mcdc_out_path = tmp_dir.join("mcdc_observations.txt");
     let test_output = std::process::Command::new(&cargo_bin)
-        .args(["test", "--quiet"])
+        .args(["test", "--lib", "--quiet"])
         .env("MVL_MCDC_OUT", &mcdc_out_path)
         .current_dir(&tmp_dir)
         .output()
