@@ -14,7 +14,7 @@ use crate::mvl::transpiler::emit_impls::emit_impl_decl;
 use crate::mvl::transpiler::emit_types::emit_type_decl;
 use crate::mvl::transpiler::emit_types::{emit_security_preamble, emit_type_expr};
 use crate::mvl::transpiler::has_std_imports;
-use crate::mvl::transpiler::mcdc_instr::MCDCMap;
+use crate::mvl::transpiler::mcdc_instr::{DecisionKind, MCDCMap};
 use crate::mvl::transpiler::mutation::{
     mutations_for_binary_op, mutations_for_int_literal, MutationMap,
 };
@@ -129,7 +129,7 @@ impl Codegen {
         &mut self,
         line: u32,
         clause_count: usize,
-        is_while: bool,
+        kind: DecisionKind,
     ) -> Option<usize> {
         if self.current_fn_is_test {
             return None;
@@ -138,7 +138,7 @@ impl Codegen {
         let file = self.current_file.clone();
         self.mcdc
             .as_mut()
-            .map(|m| m.alloc(fn_name, file, line, clause_count, is_while))
+            .map(|m| m.alloc(fn_name, file, line, clause_count, kind))
     }
 
     // ── Mutation helpers ──────────────────────────────────────────────────

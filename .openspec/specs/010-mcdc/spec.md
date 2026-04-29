@@ -52,14 +52,18 @@ This enables direct use in CI pipelines as a hard quality gate.
 ### Requirement 2: Static Obligation Analysis [MUST]
 
 The analyser MUST walk the AST of every non-test production function and
-identify all *compound decisions*: `if` and `while` conditions whose boolean
-expression contains at least one `&&` or `||` operator.
+identify all *compound decisions*: boolean expressions containing at least one
+`&&` or `||` operator that appear in any of these positions:
+
+- The condition of an `if` expression
+- The condition of a `while` loop
+- The return expression of a `Bool`-valued function body
 
 For each compound decision the obligation table records:
 - Sequential decision ID (zero-based, incrementing across all input files)
 - Source file stem and line number
 - Clause count N — the number of atomic boolean leaf nodes in the `&&`/`||` tree
-- Whether the decision is an `if` or `while`
+- The decision kind: `if`, `while`, or `fn` (Bool return expression)
 
 Single-clause conditions (`if x > 0 { … }`) are NOT MC/DC obligations: a
 single condition trivially affects the outcome by definition.
@@ -88,7 +92,9 @@ applies only to production code.
 - THEN the second file's decision has id = 1 (not id = 0)
 
 **Tests:** `src/mvl/transpiler/mod.rs::tests::mcdc_test_fn_excluded`,
-`src/mvl/transpiler/mod.rs::tests::mcdc_start_id_offset_applied`
+`src/mvl/transpiler/mod.rs::tests::mcdc_start_id_offset_applied`,
+`src/mvl/transpiler/mod.rs::tests::mcdc_bool_return_expr_instrumented`,
+`src/mvl/transpiler/mod.rs::tests::mcdc_non_bool_return_not_instrumented`
 
 ---
 

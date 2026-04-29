@@ -707,7 +707,7 @@ mod tests {
         let prog = parse("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
         let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
         assert_eq!(decisions.len(), 1, "one compound decision");
-        assert!(!decisions[0].is_while);
+        assert_eq!(decisions[0].kind, mcdc_instr::DecisionKind::If);
         let rs = &out.lib_rs;
         assert!(
             rs.contains("let mut __d0_c = [false; 2]"),
@@ -801,7 +801,7 @@ mod tests {
         );
         let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
         assert_eq!(decisions.len(), 1);
-        assert!(decisions[0].is_while);
+        assert_eq!(decisions[0].kind, mcdc_instr::DecisionKind::While);
         let rs = &out.lib_rs;
         assert!(rs.contains("loop {"), "missing loop restructuring: {rs}");
         assert!(
@@ -833,6 +833,40 @@ mod tests {
         assert!(
             decisions.is_empty(),
             "test fn must not generate MC/DC decisions"
+        );
+    }
+
+    /// Compound boolean return expressions in `Bool`-valued functions are
+    /// instrumented as `DecisionKind::Return` decisions.
+    #[test]
+    fn mcdc_bool_return_expr_instrumented() {
+        let prog = parse("fn f(a: Bool, b: Bool) -> Bool { a && b }");
+        let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert_eq!(decisions.len(), 1, "compound bool return is one decision");
+        assert_eq!(decisions[0].kind, mcdc_instr::DecisionKind::Return);
+        assert_eq!(decisions[0].clause_count, 2);
+        assert!(
+            out.lib_rs.contains("let mut __d0_c = [false; 2]"),
+            "clause array emitted"
+        );
+        assert!(
+            out.lib_rs.contains("__d0_outcome"),
+            "outcome variable emitted"
+        );
+        assert!(
+            out.lib_rs.contains("__mvl_mcdc::record(0usize,"),
+            "record call emitted"
+        );
+    }
+
+    /// Non-Bool return expressions are NOT instrumented even if compound.
+    #[test]
+    fn mcdc_non_bool_return_not_instrumented() {
+        let prog = parse("fn f(a: Int, b: Int) -> Int { a + b }");
+        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        assert!(
+            decisions.is_empty(),
+            "non-Bool return must not be instrumented"
         );
     }
 

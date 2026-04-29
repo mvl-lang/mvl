@@ -15,6 +15,28 @@
 //! Masked clauses are excluded from the Unique-Cause independence pair check —
 //! they are "not reachable under that input," not "tested and failed."
 
+/// The syntactic position of a compound boolean decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecisionKind {
+    /// The condition of an `if` expression.
+    If,
+    /// The condition of a `while` loop.
+    While,
+    /// The return expression of a `Bool`-valued function body.
+    Return,
+}
+
+impl DecisionKind {
+    /// Short label used in the verbose MC/DC report.
+    pub fn label(&self) -> &'static str {
+        match self {
+            DecisionKind::If => "if",
+            DecisionKind::While => "while",
+            DecisionKind::Return => "fn",
+        }
+    }
+}
+
 /// Metadata for a single instrumented decision point.
 #[derive(Debug, Clone)]
 pub struct MCDCDecision {
@@ -28,8 +50,8 @@ pub struct MCDCDecision {
     pub line: u32,
     /// Number of atomic boolean clauses.
     pub clause_count: usize,
-    /// `true` when the decision is a `while` condition; `false` for `if`.
-    pub is_while: bool,
+    /// Syntactic position of the decision.
+    pub kind: DecisionKind,
 }
 
 /// Accumulates MC/DC decision registrations during a transpilation pass.
@@ -59,7 +81,7 @@ impl MCDCMap {
         file: String,
         line: u32,
         clause_count: usize,
-        is_while: bool,
+        kind: DecisionKind,
     ) -> usize {
         assert!(
             clause_count <= 15,
@@ -73,7 +95,7 @@ impl MCDCMap {
             file,
             line,
             clause_count,
-            is_while,
+            kind,
         });
         id
     }
@@ -398,7 +420,7 @@ mod tests {
     fn alloc_panics_on_too_many_clauses() {
         let result = std::panic::catch_unwind(|| {
             let mut m = MCDCMap::new(0);
-            m.alloc("f".into(), "f".into(), 1, 16, false);
+            m.alloc("f".into(), "f".into(), 1, 16, DecisionKind::If);
         });
         assert!(result.is_err(), "should panic for clause_count=16");
     }

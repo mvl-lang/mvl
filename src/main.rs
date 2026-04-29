@@ -707,7 +707,7 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool) {
         println!("\nDETAILED RESULTS");
         println!("{}", "─".repeat(60));
         for (decision, (_, clause_results)) in all_decisions.iter().zip(decision_results.iter()) {
-            let kind_label = if decision.is_while { "while" } else { "if" };
+            let kind_label = decision.kind.label();
             let status: Vec<&str> = clause_results
                 .iter()
                 .map(|ok| if *ok { "✓" } else { "✗" })

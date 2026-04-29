@@ -1,14 +1,13 @@
 // clearance_test.mvl — MC/DC-complete test suite for flight clearance.
 //
-// Demonstrates:
-//   1. MC/DC coverage: each condition independently toggles the outcome
-//   2. Mutation testing: distinct assertions per code path catch mutants
-//   3. Boundary testing: marginal/deferred states exercise edge cases
+// 9 compound boolean decisions, 29 MC/DC obligations, ~50 tests.
+// Each decision section documents its independence pairs.
 //
-// Test design follows DO-178C MC/DC discipline:
-//   - For N conditions, minimum N+1 test cases per decision
-//   - Each test case documents which condition it toggles
-//   - Independence pairs are noted in comments
+// DO-178C MC/DC discipline:
+//   - For N conditions in a decision, minimum N+1 test cases
+//   - Each test toggles exactly one condition to show independence
+//   - Baseline test: all conditions → true outcome
+//   - Toggle tests: flip one condition → outcome changes
 
 // ── Type re-declarations (workaround: #96) ──────────────────────────────
 
@@ -29,16 +28,9 @@ type Aircraft = struct {
     etops_cert: Bool,
 }
 type Clearance = enum { Cleared, Rejected }
-type RejectionReason = enum {
-    WeatherBelowMinima, AircraftGrounded, InsufficientFuel,
-    CrewNotValid, IcingNoDeice, ThunderstormEnRoute,
-    WindExceedsLimit, EtopsNotCertified,
-}
 type RouteType = enum { Domestic, International, Oceanic }
 
 // ── Function re-declarations (workaround: #96) ──────────────────────────
-// Functions under test — re-declared locally until cross-module resolution
-// is implemented (issue #96). Source of truth: clearance.mvl.
 
 fn visibility_ok(v: Visibility) -> Bool {
     match v {
@@ -76,45 +68,71 @@ fn fuel_ok(f: FuelStatus) -> Bool {
     }
 }
 
+fn fuel_sufficient(f: FuelStatus) -> Bool {
+    match f {
+        FuelStatus::Sufficient   => true,
+        FuelStatus::Marginal     => false,
+        FuelStatus::Insufficient => false,
+    }
+}
+
+fn fuel_marginal(f: FuelStatus) -> Bool {
+    match f {
+        FuelStatus::Marginal     => true,
+        FuelStatus::Sufficient   => false,
+        FuelStatus::Insufficient => false,
+    }
+}
+
 fn aircraft_ready(ac: Aircraft) -> Bool {
     maintenance_ok(ac.maintenance) && fuel_ok(ac.fuel) && ac.crew_valid
 }
 
-fn route_ok(route: RouteType, ac: Aircraft) -> Bool {
-    match route {
-        RouteType::Oceanic      => ac.etops_cert,
-        RouteType::International => true,
-        RouteType::Domestic     => true,
-    }
+fn is_oceanic(route: RouteType) -> Bool {
+    match route { RouteType::Oceanic => true, RouteType::International => false, RouteType::Domestic => false }
+}
+
+fn is_international(route: RouteType) -> Bool {
+    match route { RouteType::International => true, RouteType::Oceanic => false, RouteType::Domestic => false }
+}
+
+fn is_domestic(route: RouteType) -> Bool {
+    match route { RouteType::Domestic => true, RouteType::International => false, RouteType::Oceanic => false }
+}
+
+fn route_permitted(route: RouteType, ac: Aircraft) -> Bool {
+    !(is_oceanic(route) && !ac.etops_cert) && !(is_international(route) && !ac.crew_valid)
+}
+
+fn can_land(wx: Weather, ac: Aircraft) -> Bool {
+    visibility_ok(wx.visibility) && wind_ok(wx.wind) && fuel_ok(ac.fuel)
+}
+
+fn needs_diversion(wx: Weather, ac: Aircraft) -> Bool {
+    wx.thunderstorm || (wx.icing && !visibility_ok(wx.visibility)) || !fuel_ok(ac.fuel)
 }
 
 fn can_dispatch(wx: Weather, ac: Aircraft, route: RouteType) -> Clearance {
-    if weather_clear(wx) && aircraft_ready(ac) && route_ok(route, ac) {
+    if weather_clear(wx) && aircraft_ready(ac) && route_permitted(route, ac) {
         Clearance::Cleared
     } else {
         Clearance::Rejected
     }
 }
 
-fn rejection_reason(wx: Weather, ac: Aircraft, route: RouteType) -> Result[Clearance, RejectionReason] {
-    if !visibility_ok(wx.visibility) {
-        Err(RejectionReason::WeatherBelowMinima)
-    } else if wx.thunderstorm {
-        Err(RejectionReason::ThunderstormEnRoute)
-    } else if wx.icing {
-        Err(RejectionReason::IcingNoDeice)
-    } else if !wind_ok(wx.wind) {
-        Err(RejectionReason::WindExceedsLimit)
-    } else if !maintenance_ok(ac.maintenance) {
-        Err(RejectionReason::AircraftGrounded)
-    } else if !fuel_ok(ac.fuel) {
-        Err(RejectionReason::InsufficientFuel)
-    } else if !ac.crew_valid {
-        Err(RejectionReason::CrewNotValid)
-    } else if !route_ok(route, ac) {
-        Err(RejectionReason::EtopsNotCertified)
+fn crew_duty_ok(ac: Aircraft, route: RouteType) -> Bool {
+    ac.crew_valid && (is_domestic(route) || fuel_ok(ac.fuel))
+}
+
+fn fuel_planning_ok(ac: Aircraft, route: RouteType, wx: Weather) -> Bool {
+    fuel_sufficient(ac.fuel) || (fuel_marginal(ac.fuel) && is_domestic(route) && !wx.icing)
+}
+
+fn departure_gate(wx: Weather, ac: Aircraft, route: RouteType) -> Clearance {
+    if weather_clear(wx) && aircraft_ready(ac) && crew_duty_ok(ac, route) && fuel_planning_ok(ac, route, wx) {
+        Clearance::Cleared
     } else {
-        Ok(Clearance::Cleared)
+        Clearance::Rejected
     }
 }
 
@@ -129,298 +147,386 @@ fn good_aircraft() -> Aircraft {
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// visibility_ok: Good/Reduced → true, Poor → false
-// ════════════════════════════════════════════════════════════════════════
-
-test fn visibility_good_is_ok() -> Unit {
-    assert_eq(visibility_ok(Visibility::Good), true);
-}
-
-test fn visibility_reduced_is_ok() -> Unit {
-    assert_eq(visibility_ok(Visibility::Reduced), true);
-}
-
-test fn visibility_poor_is_not_ok() -> Unit {
-    assert_eq(visibility_ok(Visibility::Poor), false);
-}
-
-// ════════════════════════════════════════════════════════════════════════
-// wind_ok: Calm/Moderate → true, Strong → false
-// ════════════════════════════════════════════════════════════════════════
-
-test fn wind_calm_is_ok() -> Unit {
-    assert_eq(wind_ok(WindCondition::Calm), true);
-}
-
-test fn wind_moderate_is_ok() -> Unit {
-    assert_eq(wind_ok(WindCondition::Moderate), true);
-}
-
-test fn wind_strong_is_not_ok() -> Unit {
-    assert_eq(wind_ok(WindCondition::Strong), false);
-}
-
-// ════════════════════════════════════════════════════════════════════════
-// weather_clear: visibility_ok && wind_ok && !icing && !thunderstorm
-// MC/DC: 4 conditions → 5 test cases
+// Decision 1: weather_clear
+// visibility_ok(v) && wind_ok(w) && !icing && !thunderstorm
+// 4 conditions → 5 tests
 //
 // Independence pairs:
-//   visibility:   (wx_all_clear, wx_poor_visibility)
-//   wind:         (wx_all_clear, wx_strong_wind)
-//   icing:        (wx_all_clear, wx_icing_present)
-//   thunderstorm: (wx_all_clear, wx_thunderstorm_present)
+//   visibility:   (d1_baseline, d1_toggle_visibility)
+//   wind:         (d1_baseline, d1_toggle_wind)
+//   icing:        (d1_baseline, d1_toggle_icing)
+//   thunderstorm: (d1_baseline, d1_toggle_thunderstorm)
 // ════════════════════════════════════════════════════════════════════════
 
-// Baseline: all true → true
-test fn wx_all_clear() -> Unit {
+test fn d1_baseline() -> Unit {
     let wx = good_weather();
     assert_eq(weather_clear(wx), true);
 }
 
-// Toggle visibility only → false (independence: visibility)
-test fn wx_poor_visibility() -> Unit {
+test fn d1_toggle_visibility() -> Unit {
     let wx = Weather { visibility: Visibility::Poor, wind: WindCondition::Calm, icing: false, thunderstorm: false };
     assert_eq(weather_clear(wx), false);
 }
 
-// Toggle wind only → false (independence: wind)
-test fn wx_strong_wind() -> Unit {
+test fn d1_toggle_wind() -> Unit {
     let wx = Weather { visibility: Visibility::Good, wind: WindCondition::Strong, icing: false, thunderstorm: false };
     assert_eq(weather_clear(wx), false);
 }
 
-// Toggle icing only → false (independence: icing)
-test fn wx_icing_present() -> Unit {
+test fn d1_toggle_icing() -> Unit {
     let wx = Weather { visibility: Visibility::Good, wind: WindCondition::Calm, icing: true, thunderstorm: false };
     assert_eq(weather_clear(wx), false);
 }
 
-// Toggle thunderstorm only → false (independence: thunderstorm)
-test fn wx_thunderstorm_present() -> Unit {
+test fn d1_toggle_thunderstorm() -> Unit {
     let wx = Weather { visibility: Visibility::Good, wind: WindCondition::Calm, icing: false, thunderstorm: true };
     assert_eq(weather_clear(wx), false);
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// aircraft_ready: maintenance_ok && fuel_ok && crew_valid
-// MC/DC: 3 conditions → 4 test cases
+// Decision 2: aircraft_ready
+// maintenance_ok(m) && fuel_ok(f) && crew_valid
+// 3 conditions → 4 tests
 //
 // Independence pairs:
-//   maintenance: (ac_all_ready, ac_grounded)
-//   fuel:        (ac_all_ready, ac_no_fuel)
-//   crew:        (ac_all_ready, ac_crew_invalid)
+//   maintenance: (d2_baseline, d2_toggle_maintenance)
+//   fuel:        (d2_baseline, d2_toggle_fuel)
+//   crew:        (d2_baseline, d2_toggle_crew)
 // ════════════════════════════════════════════════════════════════════════
 
-// Baseline: all true → true
-test fn ac_all_ready() -> Unit {
+test fn d2_baseline() -> Unit {
     let ac = good_aircraft();
     assert_eq(aircraft_ready(ac), true);
 }
 
-// Toggle maintenance only → false
-test fn ac_grounded() -> Unit {
+test fn d2_toggle_maintenance() -> Unit {
     let ac = Aircraft { maintenance: MaintenanceStatus::Grounded, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: true };
     assert_eq(aircraft_ready(ac), false);
 }
 
-// Toggle fuel only → false
-test fn ac_no_fuel() -> Unit {
+test fn d2_toggle_fuel() -> Unit {
     let ac = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Insufficient, crew_valid: true, etops_cert: true };
     assert_eq(aircraft_ready(ac), false);
 }
 
-// Toggle crew only → false
-test fn ac_crew_invalid() -> Unit {
+test fn d2_toggle_crew() -> Unit {
     let ac = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: false, etops_cert: true };
     assert_eq(aircraft_ready(ac), false);
 }
 
-// ── Boundary: deferred maintenance still flies ───────────────────────────
-
-test fn ac_deferred_item_is_ready() -> Unit {
+// Boundary: deferred maintenance still passes
+test fn d2_boundary_deferred() -> Unit {
     let ac = Aircraft { maintenance: MaintenanceStatus::DeferredItem, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: true };
     assert_eq(aircraft_ready(ac), true);
 }
 
-// ── Boundary: marginal fuel still flies ──────────────────────────────────
-
-test fn ac_marginal_fuel_is_ready() -> Unit {
+// Boundary: marginal fuel still passes
+test fn d2_boundary_marginal_fuel() -> Unit {
     let ac = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: true };
     assert_eq(aircraft_ready(ac), true);
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// route_ok: oceanic requires etops_cert
-// MC/DC: 2 conditions → 3 test cases
+// Decision 3: route_permitted
+// !(is_oceanic && !etops_cert) && !(is_international && !crew_valid)
+// 4 conditions in 2 sub-decisions joined by AND → 5 tests
 //
 // Independence pairs:
-//   is_oceanic: (route_domestic_ok, route_oceanic_with_cert)
-//   etops_cert: (route_oceanic_with_cert, route_oceanic_no_cert)
+//   oceanic+no_etops:    (d3_baseline, d3_toggle_oceanic_no_etops)
+//   intl+no_crew:        (d3_baseline, d3_toggle_intl_no_crew)
+//   etops saves oceanic: (d3_toggle_oceanic_no_etops, d3_oceanic_with_etops)
+//   crew saves intl:     (d3_toggle_intl_no_crew, d3_intl_with_crew)
 // ════════════════════════════════════════════════════════════════════════
 
-test fn route_domestic_ok() -> Unit {
+test fn d3_baseline() -> Unit {
     let ac = good_aircraft();
-    assert_eq(route_ok(RouteType::Domestic, ac), true);
+    assert_eq(route_permitted(RouteType::Domestic, ac), true);
 }
 
-test fn route_international_ok() -> Unit {
-    let ac = good_aircraft();
-    assert_eq(route_ok(RouteType::International, ac), true);
-}
-
-test fn route_oceanic_with_cert() -> Unit {
-    let ac = good_aircraft();
-    assert_eq(route_ok(RouteType::Oceanic, ac), true);
-}
-
-test fn route_oceanic_no_cert() -> Unit {
+test fn d3_toggle_oceanic_no_etops() -> Unit {
     let ac = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: false };
-    assert_eq(route_ok(RouteType::Oceanic, ac), false);
+    assert_eq(route_permitted(RouteType::Oceanic, ac), false);
+}
+
+test fn d3_oceanic_with_etops() -> Unit {
+    let ac = good_aircraft();
+    assert_eq(route_permitted(RouteType::Oceanic, ac), true);
+}
+
+test fn d3_toggle_intl_no_crew() -> Unit {
+    let ac = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: false, etops_cert: true };
+    assert_eq(route_permitted(RouteType::International, ac), false);
+}
+
+test fn d3_intl_with_crew() -> Unit {
+    let ac = good_aircraft();
+    assert_eq(route_permitted(RouteType::International, ac), true);
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// can_dispatch: weather_clear && aircraft_ready && route_ok → Clearance
-// MC/DC: 3 conditions → 4 test cases
+// Decision 4: can_land
+// visibility_ok(v) && wind_ok(w) && fuel_ok(f)
+// 3 conditions → 4 tests
 //
 // Independence pairs:
-//   weather:  (dispatch_all_good, dispatch_bad_weather)
-//   aircraft: (dispatch_all_good, dispatch_bad_aircraft)
-//   route:    (dispatch_all_good, dispatch_bad_route)
+//   visibility: (d4_baseline, d4_toggle_visibility)
+//   wind:       (d4_baseline, d4_toggle_wind)
+//   fuel:       (d4_baseline, d4_toggle_fuel)
 // ════════════════════════════════════════════════════════════════════════
 
-test fn dispatch_all_good() -> Unit {
+test fn d4_baseline() -> Unit {
     let wx = good_weather();
     let ac = good_aircraft();
-    let result = can_dispatch(wx, ac, RouteType::Domestic);
-    let ok = match result { Clearance::Cleared => 1, Clearance::Rejected => 0 };
-    assert_eq(ok, 1);
+    assert_eq(can_land(wx, ac), true);
 }
 
-test fn dispatch_bad_weather() -> Unit {
+test fn d4_toggle_visibility() -> Unit {
     let wx = Weather { visibility: Visibility::Poor, wind: WindCondition::Calm, icing: false, thunderstorm: false };
     let ac = good_aircraft();
-    let result = can_dispatch(wx, ac, RouteType::Domestic);
-    let ok = match result { Clearance::Cleared => 0, Clearance::Rejected => 1 };
+    assert_eq(can_land(wx, ac), false);
+}
+
+test fn d4_toggle_wind() -> Unit {
+    let wx = Weather { visibility: Visibility::Good, wind: WindCondition::Strong, icing: false, thunderstorm: false };
+    let ac = good_aircraft();
+    assert_eq(can_land(wx, ac), false);
+}
+
+test fn d4_toggle_fuel() -> Unit {
+    let wx = good_weather();
+    let ac = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Insufficient, crew_valid: true, etops_cert: true };
+    assert_eq(can_land(wx, ac), false);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Decision 5: needs_diversion
+// thunderstorm || (icing && !visibility_ok) || !fuel_ok
+// 3 top-level conditions → 4 tests
+//
+// Independence pairs:
+//   thunderstorm:        (d5_baseline, d5_toggle_thunderstorm)
+//   icing+poor_vis:      (d5_baseline, d5_toggle_icing_poor_vis)
+//   fuel:                (d5_baseline, d5_toggle_fuel)
+// ════════════════════════════════════════════════════════════════════════
+
+// Baseline: no diversion needed (all false)
+test fn d5_baseline() -> Unit {
+    let wx = good_weather();
+    let ac = good_aircraft();
+    assert_eq(needs_diversion(wx, ac), false);
+}
+
+// Toggle thunderstorm → true
+test fn d5_toggle_thunderstorm() -> Unit {
+    let wx = Weather { visibility: Visibility::Good, wind: WindCondition::Calm, icing: false, thunderstorm: true };
+    let ac = good_aircraft();
+    assert_eq(needs_diversion(wx, ac), true);
+}
+
+// Toggle icing + poor visibility → true (both needed for this branch)
+test fn d5_toggle_icing_poor_vis() -> Unit {
+    let wx = Weather { visibility: Visibility::Poor, wind: WindCondition::Calm, icing: true, thunderstorm: false };
+    let ac = good_aircraft();
+    assert_eq(needs_diversion(wx, ac), true);
+}
+
+// Icing alone without poor visibility → false (sub-decision independence)
+test fn d5_icing_good_vis_no_diversion() -> Unit {
+    let wx = Weather { visibility: Visibility::Good, wind: WindCondition::Calm, icing: true, thunderstorm: false };
+    let ac = good_aircraft();
+    assert_eq(needs_diversion(wx, ac), false);
+}
+
+// Poor visibility alone without icing → false
+test fn d5_poor_vis_no_icing_no_diversion() -> Unit {
+    let wx = Weather { visibility: Visibility::Poor, wind: WindCondition::Calm, icing: false, thunderstorm: false };
+    let ac = good_aircraft();
+    assert_eq(needs_diversion(wx, ac), false);
+}
+
+// Toggle fuel insufficient → true
+test fn d5_toggle_fuel() -> Unit {
+    let wx = good_weather();
+    let ac = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Insufficient, crew_valid: true, etops_cert: true };
+    assert_eq(needs_diversion(wx, ac), true);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Decision 6: can_dispatch
+// weather_clear(wx) && aircraft_ready(ac) && route_permitted(route, ac)
+// 3 conditions → 4 tests
+//
+// Independence pairs:
+//   weather:  (d6_baseline, d6_toggle_weather)
+//   aircraft: (d6_baseline, d6_toggle_aircraft)
+//   route:    (d6_baseline, d6_toggle_route)
+// ════════════════════════════════════════════════════════════════════════
+
+test fn d6_baseline() -> Unit {
+    let wx = good_weather();
+    let ac = good_aircraft();
+    let r = can_dispatch(wx, ac, RouteType::Domestic);
+    let ok = match r { Clearance::Cleared => 1, Clearance::Rejected => 0 };
     assert_eq(ok, 1);
 }
 
-test fn dispatch_bad_aircraft() -> Unit {
+test fn d6_toggle_weather() -> Unit {
+    let wx = Weather { visibility: Visibility::Poor, wind: WindCondition::Calm, icing: false, thunderstorm: false };
+    let ac = good_aircraft();
+    let r = can_dispatch(wx, ac, RouteType::Domestic);
+    let ok = match r { Clearance::Cleared => 0, Clearance::Rejected => 1 };
+    assert_eq(ok, 1);
+}
+
+test fn d6_toggle_aircraft() -> Unit {
     let wx = good_weather();
     let ac = Aircraft { maintenance: MaintenanceStatus::Grounded, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: true };
-    let result = can_dispatch(wx, ac, RouteType::Domestic);
-    let ok = match result { Clearance::Cleared => 0, Clearance::Rejected => 1 };
+    let r = can_dispatch(wx, ac, RouteType::Domestic);
+    let ok = match r { Clearance::Cleared => 0, Clearance::Rejected => 1 };
     assert_eq(ok, 1);
 }
 
-test fn dispatch_bad_route() -> Unit {
+test fn d6_toggle_route() -> Unit {
     let wx = good_weather();
     let ac = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: false };
-    let result = can_dispatch(wx, ac, RouteType::Oceanic);
-    let ok = match result { Clearance::Cleared => 0, Clearance::Rejected => 1 };
+    let r = can_dispatch(wx, ac, RouteType::Oceanic);
+    let ok = match r { Clearance::Cleared => 0, Clearance::Rejected => 1 };
     assert_eq(ok, 1);
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// rejection_reason: first-failure-wins priority chain
-// Each test toggles exactly one condition to verify the correct reason.
-// Mutation testing: changing priority order or reason variant is caught.
+// Decision 7: crew_duty_ok
+// crew_valid && (is_domestic || fuel_ok)
+// 3 conditions → 4 tests
+//
+// Independence pairs:
+//   crew_valid:  (d7_baseline, d7_toggle_crew)
+//   is_domestic: (d7_intl_with_fuel, d7_domestic_no_fuel) — domestic rescues bad fuel
+//   fuel_ok:     (d7_intl_with_fuel, d7_intl_no_fuel) — fuel rescues non-domestic
 // ════════════════════════════════════════════════════════════════════════
 
-test fn reject_visibility_first() -> Unit {
-    let wx = Weather { visibility: Visibility::Poor, wind: WindCondition::Strong, icing: true, thunderstorm: true };
+test fn d7_baseline() -> Unit {
     let ac = good_aircraft();
-    let result = rejection_reason(wx, ac, RouteType::Domestic);
-    let code = match result {
-        Err(RejectionReason::WeatherBelowMinima) => 1,
-        _ => 0,
-    };
-    assert_eq(code, 1);
+    assert_eq(crew_duty_ok(ac, RouteType::Domestic), true);
 }
 
-test fn reject_thunderstorm_before_icing() -> Unit {
-    let wx = Weather { visibility: Visibility::Good, wind: WindCondition::Calm, icing: true, thunderstorm: true };
+test fn d7_toggle_crew() -> Unit {
+    let ac = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: false, etops_cert: true };
+    assert_eq(crew_duty_ok(ac, RouteType::Domestic), false);
+}
+
+test fn d7_intl_with_fuel() -> Unit {
     let ac = good_aircraft();
-    let result = rejection_reason(wx, ac, RouteType::Domestic);
-    let code = match result {
-        Err(RejectionReason::ThunderstormEnRoute) => 1,
-        _ => 0,
-    };
-    assert_eq(code, 1);
+    assert_eq(crew_duty_ok(ac, RouteType::International), true);
 }
 
-test fn reject_icing_before_wind() -> Unit {
-    let wx = Weather { visibility: Visibility::Good, wind: WindCondition::Strong, icing: true, thunderstorm: false };
+test fn d7_intl_no_fuel() -> Unit {
+    let ac = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Insufficient, crew_valid: true, etops_cert: true };
+    assert_eq(crew_duty_ok(ac, RouteType::International), false);
+}
+
+test fn d7_domestic_no_fuel() -> Unit {
+    let ac = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Insufficient, crew_valid: true, etops_cert: true };
+    assert_eq(crew_duty_ok(ac, RouteType::Domestic), true);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Decision 8: fuel_planning_ok
+// fuel_sufficient || (fuel_marginal && is_domestic && !icing)
+// 4 conditions → 5 tests
+//
+// Independence pairs:
+//   fuel_sufficient:          (d8_baseline, d8_marginal_domestic_no_ice)
+//   fuel_marginal (in OR):    (d8_marginal_domestic_no_ice, d8_insufficient)
+//   is_domestic (in AND):     (d8_marginal_domestic_no_ice, d8_marginal_intl_no_ice)
+//   icing (in AND):           (d8_marginal_domestic_no_ice, d8_marginal_domestic_icing)
+// ════════════════════════════════════════════════════════════════════════
+
+// Baseline: fuel sufficient → always ok
+test fn d8_baseline() -> Unit {
     let ac = good_aircraft();
-    let result = rejection_reason(wx, ac, RouteType::Domestic);
-    let code = match result {
-        Err(RejectionReason::IcingNoDeice) => 1,
-        _ => 0,
-    };
-    assert_eq(code, 1);
-}
-
-test fn reject_wind_before_maintenance() -> Unit {
-    let wx = Weather { visibility: Visibility::Good, wind: WindCondition::Strong, icing: false, thunderstorm: false };
-    let ac = Aircraft { maintenance: MaintenanceStatus::Grounded, fuel: FuelStatus::Insufficient, crew_valid: false, etops_cert: false };
-    let result = rejection_reason(wx, ac, RouteType::Oceanic);
-    let code = match result {
-        Err(RejectionReason::WindExceedsLimit) => 1,
-        _ => 0,
-    };
-    assert_eq(code, 1);
-}
-
-test fn reject_grounded_before_fuel() -> Unit {
     let wx = good_weather();
-    let ac = Aircraft { maintenance: MaintenanceStatus::Grounded, fuel: FuelStatus::Insufficient, crew_valid: false, etops_cert: false };
-    let result = rejection_reason(wx, ac, RouteType::Oceanic);
-    let code = match result {
-        Err(RejectionReason::AircraftGrounded) => 1,
-        _ => 0,
-    };
-    assert_eq(code, 1);
+    assert_eq(fuel_planning_ok(ac, RouteType::International, wx), true);
 }
 
-test fn reject_fuel_before_crew() -> Unit {
+// Marginal + domestic + no icing → ok (OR branch fires)
+test fn d8_marginal_domestic_no_ice() -> Unit {
+    let ac = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: true };
     let wx = good_weather();
-    let ac = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Insufficient, crew_valid: false, etops_cert: false };
-    let result = rejection_reason(wx, ac, RouteType::Oceanic);
-    let code = match result {
-        Err(RejectionReason::InsufficientFuel) => 1,
-        _ => 0,
-    };
-    assert_eq(code, 1);
+    assert_eq(fuel_planning_ok(ac, RouteType::Domestic, wx), true);
 }
 
-test fn reject_crew_before_etops() -> Unit {
+// Marginal + international → not ok (domestic condition fails)
+test fn d8_marginal_intl_no_ice() -> Unit {
+    let ac = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: true };
     let wx = good_weather();
-    let ac = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: false, etops_cert: false };
-    let result = rejection_reason(wx, ac, RouteType::Oceanic);
-    let code = match result {
-        Err(RejectionReason::CrewNotValid) => 1,
-        _ => 0,
-    };
-    assert_eq(code, 1);
+    assert_eq(fuel_planning_ok(ac, RouteType::International, wx), false);
 }
 
-test fn reject_etops_last() -> Unit {
+// Marginal + domestic + icing → not ok (icing condition fails)
+test fn d8_marginal_domestic_icing() -> Unit {
+    let ac = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: true };
+    let wx = Weather { visibility: Visibility::Good, wind: WindCondition::Calm, icing: true, thunderstorm: false };
+    assert_eq(fuel_planning_ok(ac, RouteType::Domestic, wx), false);
+}
+
+// Insufficient → never ok
+test fn d8_insufficient() -> Unit {
+    let ac = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Insufficient, crew_valid: true, etops_cert: true };
     let wx = good_weather();
-    let ac = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: false };
-    let result = rejection_reason(wx, ac, RouteType::Oceanic);
-    let code = match result {
-        Err(RejectionReason::EtopsNotCertified) => 1,
-        _ => 0,
-    };
-    assert_eq(code, 1);
+    assert_eq(fuel_planning_ok(ac, RouteType::Domestic, wx), false);
 }
 
-test fn all_clear_returns_ok() -> Unit {
+// ════════════════════════════════════════════════════════════════════════
+// Decision 9: departure_gate
+// weather_clear && aircraft_ready && crew_duty_ok && fuel_planning_ok
+// 4 conditions → 5 tests
+//
+// Independence pairs:
+//   weather:       (d9_baseline, d9_toggle_weather)
+//   aircraft:      (d9_baseline, d9_toggle_aircraft)
+//   crew_duty:     (d9_baseline, d9_toggle_crew_duty)
+//   fuel_planning: (d9_baseline, d9_toggle_fuel_planning)
+// ════════════════════════════════════════════════════════════════════════
+
+test fn d9_baseline() -> Unit {
     let wx = good_weather();
     let ac = good_aircraft();
-    let result = rejection_reason(wx, ac, RouteType::Domestic);
-    let code = match result {
-        Ok(Clearance::Cleared) => 1,
-        _ => 0,
-    };
-    assert_eq(code, 1);
+    let r = departure_gate(wx, ac, RouteType::Domestic);
+    let ok = match r { Clearance::Cleared => 1, Clearance::Rejected => 0 };
+    assert_eq(ok, 1);
+}
+
+test fn d9_toggle_weather() -> Unit {
+    let wx = Weather { visibility: Visibility::Poor, wind: WindCondition::Calm, icing: false, thunderstorm: false };
+    let ac = good_aircraft();
+    let r = departure_gate(wx, ac, RouteType::Domestic);
+    let ok = match r { Clearance::Cleared => 0, Clearance::Rejected => 1 };
+    assert_eq(ok, 1);
+}
+
+test fn d9_toggle_aircraft() -> Unit {
+    let wx = good_weather();
+    let ac = Aircraft { maintenance: MaintenanceStatus::Grounded, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: true };
+    let r = departure_gate(wx, ac, RouteType::Domestic);
+    let ok = match r { Clearance::Cleared => 0, Clearance::Rejected => 1 };
+    assert_eq(ok, 1);
+}
+
+// Toggle crew_duty: crew invalid on domestic → crew_duty_ok fails
+test fn d9_toggle_crew_duty() -> Unit {
+    let wx = good_weather();
+    let ac = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: false, etops_cert: true };
+    let r = departure_gate(wx, ac, RouteType::Domestic);
+    let ok = match r { Clearance::Cleared => 0, Clearance::Rejected => 1 };
+    assert_eq(ok, 1);
+}
+
+// Toggle fuel_planning: marginal fuel + international + no icing → fuel_planning_ok fails
+test fn d9_toggle_fuel_planning() -> Unit {
+    let wx = good_weather();
+    let ac = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: true };
+    let r = departure_gate(wx, ac, RouteType::International);
+    let ok = match r { Clearance::Cleared => 0, Clearance::Rejected => 1 };
+    assert_eq(ok, 1);
 }

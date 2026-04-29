@@ -13,13 +13,14 @@
 //! See ADR-0003 for the overall compilation strategy.
 
 use crate::mvl::checker::mcdc::collect_clauses;
-use crate::mvl::parser::ast::{BinaryOp, ElseBranch, Expr, LValue, MatchBody, Stmt};
+use crate::mvl::parser::ast::{BinaryOp, ElseBranch, Expr, LValue, MatchBody, Stmt, TypeExpr};
 use crate::mvl::transpiler::codegen::Codegen;
 use crate::mvl::transpiler::coverage::BranchKind;
 use crate::mvl::transpiler::emit_exprs::{
     arms_have_str_pattern, emit_block_as_value, emit_block_stmts, emit_expr, emit_pattern,
 };
 use crate::mvl::transpiler::emit_types::{emit_ref_expr_for_assert, emit_type_expr};
+use crate::mvl::transpiler::mcdc_instr::DecisionKind;
 
 /// Emit a single statement (with indentation and trailing newline).
 pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
@@ -324,7 +325,7 @@ fn emit_mcdc_if(
         return false;
     }
     let n = clauses.len();
-    let Some(decision_id) = cg.alloc_mcdc_decision(line, n, false) else {
+    let Some(decision_id) = cg.alloc_mcdc_decision(line, n, DecisionKind::If) else {
         return false;
     };
 
@@ -378,7 +379,7 @@ fn emit_mcdc_while(
         return false;
     }
     let n = clauses.len();
-    let Some(decision_id) = cg.alloc_mcdc_decision(line, n, true) else {
+    let Some(decision_id) = cg.alloc_mcdc_decision(line, n, DecisionKind::While) else {
         return false;
     };
 
@@ -414,6 +415,49 @@ fn emit_mcdc_while(
     cg.pop_indent();
     cg.indent();
     cg.push("}");
+    cg.nl();
+    true
+}
+
+/// Emit MC/DC instrumentation for a compound boolean function-return expression.
+///
+/// When a production function returns `Bool` and its body ends with a compound
+/// `&&`/`||` expression, this wraps the expression with clause arrays, the
+/// short-circuit evaluation tree, and an observation record — identical in
+/// structure to `emit_mcdc_if` but without any control-flow branching.
+///
+/// Returns `true` when instrumentation was applied; `false` to fall back to
+/// normal emission (simple expression, non-Bool return, or MC/DC inactive).
+pub fn emit_mcdc_return_expr(
+    cg: &mut Codegen,
+    expr: &Expr,
+    return_type: &TypeExpr,
+    line: u32,
+) -> bool {
+    let is_bool = matches!(return_type, TypeExpr::Base { name, .. } if name == "Bool");
+    if !is_bool {
+        return false;
+    }
+    let mut clauses = Vec::new();
+    collect_clauses(expr, &mut clauses);
+    if clauses.len() <= 1 || cg.mcdc.is_none() {
+        return false;
+    }
+    let n = clauses.len();
+    let Some(decision_id) = cg.alloc_mcdc_decision(line, n, DecisionKind::Return) else {
+        return false;
+    };
+
+    cg.line(&format!("let mut __d{decision_id}_c = [false; {n}];"));
+    cg.line(&format!("let mut __d{decision_id}_e = [false; {n}];"));
+    cg.indent();
+    cg.push(&format!("let __d{decision_id}_outcome: bool = "));
+    emit_mcdc_sc_outcome(cg, expr, decision_id, &mut 0, &mut 0);
+    cg.push(";");
+    cg.nl();
+    emit_mcdc_record(cg, decision_id, n);
+    cg.indent();
+    cg.push(&format!("__d{decision_id}_outcome"));
     cg.nl();
     true
 }
