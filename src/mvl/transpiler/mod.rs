@@ -21,6 +21,7 @@
 //! // println!("{}", out.lib_rs);
 //! ```
 
+pub mod boundary_gen;
 pub mod cargo;
 pub mod codegen;
 pub mod coverage;
@@ -34,6 +35,7 @@ pub mod mcdc_instr;
 pub mod mutation;
 
 use crate::mvl::parser::ast::{Decl, Program};
+pub use boundary_gen::format_boundary_report;
 use cargo::CargoOptions;
 use codegen::Codegen;
 pub use coverage::{

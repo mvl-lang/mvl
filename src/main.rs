@@ -94,11 +94,12 @@ fn main() {
         "mutate" => {
             let path = require_path_arg(&args, "mutate");
             let quiet = args.iter().any(|a| a == "--quiet" || a == "-q");
+            let gen_boundary = args.iter().any(|a| a == "--gen-boundary");
             let limit: Option<usize> = args
                 .windows(2)
                 .find(|w| w[0] == "--limit")
                 .and_then(|w| w[1].parse().ok());
-            cmd_mutate(&path, quiet, limit);
+            cmd_mutate(&path, quiet, gen_boundary, limit);
         }
         "mcdc" => {
             let path = require_path_arg(&args, "mcdc");
@@ -170,6 +171,9 @@ fn print_usage() {
     eprintln!("  mvl mutate <file|dir> -q            — quiet: only show mutation score");
     eprintln!(
         "  mvl mutate <file|dir> --limit N     — take the first N mutants (faster, approximate score)"
+    );
+    eprintln!(
+        "  mvl mutate <file|dir> --gen-boundary — show boundary values that kill surviving comparison/threshold mutants"
     );
     eprintln!("  mvl mcdc   <file|dir>               — MC/DC coverage analysis (DO-178C DAL-A)");
     eprintln!("  mvl mcdc   <file|dir> -q            — quiet: only show MC/DC score");
@@ -1555,7 +1559,7 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool) {
 ///
 /// Execution model: single compile embeds all mutants behind `MVL_MUTANT` env-var
 /// dispatch; N parallel test-binary runs determine which mutants are killed.
-fn cmd_mutate(path: &str, quiet: bool, limit: Option<usize>) {
+fn cmd_mutate(path: &str, quiet: bool, gen_boundary: bool, limit: Option<usize>) {
     let test_files = mvl_files(path, true);
     if test_files.is_empty() {
         eprintln!("No *_test.mvl files found at: {path}");
@@ -1601,6 +1605,9 @@ fn cmd_mutate(path: &str, quiet: bool, limit: Option<usize>) {
     let mut modules: Vec<(String, String, String)> = Vec::new();
     let mut all_mutants: Vec<transpiler::MutantInfo> = Vec::new();
     let mut file_stems: Vec<String> = Vec::new();
+    // module_name → original file path, used by --gen-boundary to read source lines
+    let mut file_paths: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     // The stdlib prelude (strings.mvl, lists.mvl, …) uses extern "rust" blocks,
     // so the runtime crate is always needed when the prelude is loaded.
     let mut need_mvl_runtime = transpiler::prelude_requires_runtime(&stdlib_prelude_progs);
@@ -1621,6 +1628,9 @@ fn cmd_mutate(path: &str, quiet: bool, limit: Option<usize>) {
         }
         all_mutants.extend(mutants);
         file_stems.push(module_name.clone());
+        file_paths
+            .entry(module_name.clone())
+            .or_insert_with(|| file_str.clone());
         let module_content: String = out
             .lib_rs
             .lines()
@@ -1660,6 +1670,9 @@ fn cmd_mutate(path: &str, quiet: bool, limit: Option<usize>) {
         }
         all_mutants.extend(mutants);
         file_stems.push(module_name.clone());
+        file_paths
+            .entry(module_name.clone())
+            .or_insert_with(|| file_str.clone());
         let module_content: String = out
             .lib_rs
             .lines()
@@ -1845,6 +1858,14 @@ fn cmd_mutate(path: &str, quiet: bool, limit: Option<usize>) {
         let killed = killed_count.load(std::sync::atomic::Ordering::Relaxed);
         let pct = (killed * 100).checked_div(total).unwrap_or(100);
         println!("Mutation score: {killed}/{total} ({pct}%)");
+    }
+
+    // ── Boundary value analysis (--gen-boundary) ──────────────────────────
+    if gen_boundary {
+        print!(
+            "{}",
+            transpiler::format_boundary_report(&all_mutants, &results, &file_paths)
+        );
     }
 }
 
