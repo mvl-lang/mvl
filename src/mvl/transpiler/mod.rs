@@ -524,6 +524,7 @@ pub fn transpile_mutated_with_prelude(
     let mut cg = Codegen::new();
     cg.mutation = Some(MutationMap::new());
     cg.current_file = file_stem.to_string();
+    cg.current_file_is_test = true;
     cg.emit_program_with_mods(prog, &[], prelude_progs);
 
     let mutants = cg.mutation.take().map(|m| m.mutants).unwrap_or_default();

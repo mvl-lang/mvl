@@ -1685,13 +1685,17 @@ fn transpile_covered_source_with_prelude_instruments_branches() {
 }
 
 #[test]
-fn transpile_mutated_with_prelude_produces_mutants() {
+fn transpile_mutated_with_prelude_skips_non_test_fn_bodies() {
+    // Regular fn bodies in _test.mvl files are re-declarations of source functions
+    // (workaround for #96) and must NOT generate mutation points — only the source
+    // copy should be mutated to avoid duplicate mutants.
     let src = "fn f(a: Int, b: Int) -> Int { a + b }";
     let prog = parse_prog(src);
     let (out, mutants) = transpile_mutated_with_prelude(&prog, "my_crate", "f", &[]);
     assert!(
-        !mutants.is_empty(),
-        "expected mutation variants for + operator"
+        mutants.is_empty(),
+        "non-test fn bodies in test files must not produce mutants (got {})",
+        mutants.len()
     );
     assert_contains(&out.lib_rs, "fn f(");
 }
