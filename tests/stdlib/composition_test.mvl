@@ -18,26 +18,33 @@ use std.io.{Path, path, join, to_string, read_to_string, read_file}
 // ── Cross-module import: both modules usable in same file ─────────────────
 
 test fn composition_args_and_io_both_compile_in_same_scope() -> Unit ! Console {
-    // Compile-time check: both module imports accepted in one file
+    // Compile-time check: both module imports accepted in one file.
+    // path/to_string are real implementations; get_arg is a stub returning None.
     let flag: Option[Tainted[String]] = get_arg("mvl-nonexistent-flag-xyz");
     let p: Path = path("/tmp/mvl_test_placeholder");
     assert_eq(flag.is_none(), true);
-    assert_eq(to_string(p).is_empty(), false);
+    // "/tmp/mvl_test_placeholder" = 25 chars; proves path was stored verbatim
+    assert_eq(to_string(p).len(), 25);
 }
 
 // ── Args produces Tainted; Option semantics hold ──────────────────────────
+// STUB: update when implemented — get_arg/get_env always return None in Phase 2.
+// Phase 3 positive-path target: inject known args/env and assert Some(value).
 
 test fn composition_missing_arg_is_none() -> Unit ! Console {
+    // STUB: update when implemented
     let config: Option[Tainted[String]] = get_arg("mvl-input-file-xyz");
     assert_eq(config.is_none(), true);
 }
 
 test fn composition_missing_env_is_none() -> Unit ! Console {
+    // STUB: update when implemented
     let data_dir: Option[Tainted[String]] = get_env("MVL_NONEXISTENT_DATA_DIR_XYZ");
     assert_eq(data_dir.is_none(), true);
 }
 
 test fn composition_multiple_args_all_none() -> Unit ! Console {
+    // STUB: update when implemented
     let a: Option[Tainted[String]] = get_arg("mvl-flag-alpha-xyz");
     let b: Option[Tainted[String]] = get_arg("mvl-flag-beta-xyz");
     let c: Option[Tainted[String]] = get_env("MVL_NONEXISTENT_FLAG_XYZ");
@@ -49,11 +56,13 @@ test fn composition_multiple_args_all_none() -> Unit ! Console {
 // ── Missing args: is_some / is_none predicates ────────────────────────────
 
 test fn composition_arg_is_some_false_when_absent() -> Unit ! Console {
+    // STUB: update when implemented
     let v: Option[Tainted[String]] = get_arg("mvl-nonexistent-arg-xyz");
     assert_eq(v.is_some(), false);
 }
 
 test fn composition_env_is_some_false_when_absent() -> Unit ! Console {
+    // STUB: update when implemented
     let v: Option[Tainted[String]] = get_env("MVL_NONEXISTENT_TEST_ENV_XYZ");
     assert_eq(v.is_some(), false);
 }
@@ -66,6 +75,7 @@ test fn composition_env_is_some_false_when_absent() -> Unit ! Console {
 // The tests below verify compile-time type annotations and the reachable runtime paths.
 
 test fn composition_sanitize_type_enforced_at_compile_time() -> Unit ! FileRead {
+    // STUB: update when implemented — read_file always returns Err in Phase 2.
     // read_file requires Clean[String]; passing a literal String is legal because
     // String (Public) can be used where Clean[String] is expected (upward coercion).
     // This confirms the compiler enforces the Clean[String] boundary at the call site.
@@ -76,6 +86,7 @@ test fn composition_sanitize_type_enforced_at_compile_time() -> Unit ! FileRead 
 // ── Cross-module value flow: std.args controls std.io execution path ──────
 
 test fn composition_arg_absence_routes_to_io_fallback() -> Unit ! Console, FileRead {
+    // STUB: update when implemented — both get_env (None) and read_to_string (Err) are stubs.
     // Demonstrates actual cross-module control flow:
     // get_env (std.args) → None → read_to_string (std.io) called on fallback path.
     // Both modules execute; the args result determines which io operation runs.
@@ -93,6 +104,7 @@ test fn composition_arg_absence_routes_to_io_fallback() -> Unit ! Console, FileR
 // ── IFC: path from literal, read_to_string returns Tainted ───────────────
 
 test fn composition_read_to_string_gives_tainted_on_err() -> Unit ! FileRead {
+    // STUB: update when implemented — read_to_string always returns Err in Phase 2.
     let result: Result[Tainted[String], String] = read_to_string(path("/tmp/mvl_nonexistent_composition_xyz"));
     // Err path confirms the function was called with correct signature
     assert_eq(result.is_ok(), false);
