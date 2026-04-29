@@ -735,22 +735,6 @@ fn emit_binary_op(op: BinaryOp) -> &'static str {
     }
 }
 
-/// Return true when `expr` is the left side of a string concatenation chain.
-/// A chain is rooted in a string literal: `"literal"`, `"a" + b`, etc.
-/// Used to decide whether the right operand of `+` needs a borrow (`&rhs`)
-/// to satisfy Rust's `String + &str` requirement.
-fn is_string_add_chain(expr: &Expr) -> bool {
-    match expr {
-        Expr::Literal(Literal::Str(_), _) => true,
-        Expr::Binary {
-            op: BinaryOp::Add,
-            left,
-            ..
-        } => is_string_add_chain(left),
-        _ => false,
-    }
-}
-
 // ── Match arms ────────────────────────────────────────────────────────────
 
 fn emit_match_arm(cg: &mut Codegen, arm: &MatchArm, cov_id: Option<usize>) {

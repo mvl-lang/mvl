@@ -1432,7 +1432,7 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool) {
     let cov_out_path = tmp_dir.join("mvl_cov.txt");
 
     let mut cmd = process::Command::new("cargo");
-    cmd.arg("test").current_dir(&tmp_dir);
+    cmd.arg("test").arg("--lib").current_dir(&tmp_dir);
     if quiet && !coverage {
         cmd.arg("-q");
     }
