@@ -86,6 +86,17 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
+      - name: Locate LLVM 22 (required by default feature)
+        run: |
+          PREFIX=$(llvm-config-22 --prefix 2>/dev/null || llvm-config --prefix 2>/dev/null || echo "")
+          if [ -z "$PREFIX" ]; then
+            echo "LLVM 22 not found via llvm-config — installing"
+            sudo apt-get install -y llvm-22 libllvm22 llvm-22-dev
+            PREFIX=$(llvm-config-22 --prefix)
+          fi
+          echo "LLVM_SYS_221_PREFIX=$PREFIX" >> "$GITHUB_ENV"
+          echo "Found LLVM at: $PREFIX"
+
       - name: Check formatting
         run: cargo fmt -- --check
 

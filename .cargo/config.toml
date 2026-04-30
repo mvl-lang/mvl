@@ -1,9 +1,8 @@
 # Build configuration for MVL compiler.
 #
-# LLVM backend (--features llvm):
-#   macOS homebrew installs LLVM as keg-only at /opt/homebrew/opt/llvm.
-#   LLVM_SYS_221_PREFIX points llvm-sys to the correct installation.
-#   Override with an env var if your LLVM 22 lives elsewhere.
-
-[env]
-LLVM_SYS_221_PREFIX = { value = "/opt/homebrew/opt/llvm", force = false }
+# LLVM backend (default feature, requires LLVM 22):
+#   macOS homebrew (keg-only): add to PATH or set env before building:
+#     export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
+#   Linux: install llvm-22 (apt install llvm-22) — llvm-sys finds it via llvm-config-22.
+#   CI: sets LLVM_SYS_221_PREFIX dynamically in .github/workflows/ci.yml.
+#   Build without LLVM: cargo build --no-default-features
