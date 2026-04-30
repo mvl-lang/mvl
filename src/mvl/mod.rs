@@ -1,4 +1,6 @@
 pub mod checker;
+#[cfg(feature = "llvm")]
+pub mod codegen;
 pub mod linter;
 pub mod packages;
 pub mod parser;
