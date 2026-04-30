@@ -100,6 +100,11 @@ pub fn rev[T](xs: List[T]) -> List[T] where T: Clone {
 // function pointers and closures are accepted at call sites.
 
 /// Apply `f` to each element of `xs`, collecting results.
+///
+/// Note: `xs.map(f)` call sites dispatch through the `MvlMap` trait path in
+/// the transpiler (for Option/Result polymorphism), not through this function
+/// body.  This body is compiled into the stdlib but is only reachable via
+/// direct free-function call `map(xs, f)`.
 pub fn map[T, U](xs: List[T], f: fn(T) -> U) -> List[U] where T: Clone, U: Clone {
     let mut result: List[U] = [];
     for x in xs {
@@ -120,6 +125,11 @@ pub fn filter[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
 }
 
 /// Left fold: reduce `xs` to a single value using `f` and accumulator `init`.
+///
+/// `U: Clone` is required by the generated Rust: the `let mut acc = init`
+/// binding and the `acc = f(acc, x)` rebinding both move `acc`, so the
+/// transpiled code needs `U: Clone` to re-bind after each iteration.  This
+/// is an implementation constraint, not a semantic requirement of fold itself.
 pub fn fold[T, U](xs: List[T], init: U, f: fn(U, T) -> U) -> U where T: Clone, U: Clone {
     let mut acc = init;
     for x in xs {
@@ -185,8 +195,25 @@ pub fn skip_while[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
 }
 
 /// True if at least one element satisfies `f`.
+///
+/// Short-circuits: stops at the first element where `f` returns true.
 pub fn any[T](xs: List[T], f: fn(T) -> Bool) -> Bool where T: Clone {
-    xs.filter(f).is_empty() == false
+    let mut i = 0;
+    let len = list_len(xs);
+    let mut found = false;
+    while found == false && i < len {
+        match list_get(xs, i) {
+            Some(x) => {
+                if f(x.clone()) {
+                    found = true
+                } else {
+                    i = i + 1
+                }
+            },
+            None => { i = i + 1 }
+        }
+    };
+    found
 }
 
 /// True if every element satisfies `f`.

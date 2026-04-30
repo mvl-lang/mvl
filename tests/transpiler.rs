@@ -1390,6 +1390,35 @@ fn method_fold_emits_iterator_fold() {
 }
 
 #[test]
+fn method_any_emits_ufcs_call() {
+    let src = "fn f(xs: List[Int], p: fn(Int) -> Bool) -> Bool { xs.any(p) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "any(");
+    assert_contains(&rust, ".clone().into()");
+}
+
+#[test]
+fn method_all_emits_ufcs_call() {
+    let src = "fn f(xs: List[Int], p: fn(Int) -> Bool) -> Bool { xs.all(p) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "all(");
+    assert_contains(&rust, ".clone().into()");
+}
+
+/// Verifies that `fn(T) -> U` typed parameters emit as `impl Fn(T) -> U` so
+/// that closures are accepted at HOF call sites (not just bare fn pointers).
+#[test]
+fn fn_type_param_emits_impl_fn_not_bare_fn() {
+    let src = "fn apply(xs: List[Int], p: fn(Int) -> Bool) -> List[Int] { xs.filter(p) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "impl Fn(");
+    assert!(
+        !rust.contains("fn(i64) -> bool"),
+        "bare fn pointer must not appear as a parameter type; got:\n{rust}"
+    );
+}
+
+#[test]
 fn method_reverse_emits_rev_collect() {
     let src = "fn f(xs: List[Int]) -> List[Int] { xs.reverse() }";
     let rust = transpile_src(src);

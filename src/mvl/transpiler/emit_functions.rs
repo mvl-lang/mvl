@@ -15,6 +15,7 @@ use crate::mvl::transpiler::coverage::BranchKind;
 use crate::mvl::transpiler::emit_exprs::{emit_block_stmts, emit_expr};
 use crate::mvl::transpiler::emit_stmts::emit_mcdc_return_expr;
 use crate::mvl::transpiler::emit_types::{emit_label, emit_ref_expr_for_assert, emit_type_expr};
+use crate::mvl::transpiler::last_use::compute_last_uses;
 
 /// Emit a function-parameter type.
 ///
@@ -37,7 +38,6 @@ fn emit_fn_param_type(ty: &TypeExpr) -> String {
         _ => emit_type_expr(ty),
     }
 }
-use crate::mvl::transpiler::last_use::compute_last_uses;
 
 pub fn emit_fn_decl(cg: &mut Codegen, fd: &FnDecl) {
     // Track current function name and test status for coverage metadata.
