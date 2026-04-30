@@ -3,7 +3,7 @@
 //! # Design constraints
 //!
 //! - **Zero runtime overhead** — all newtypes are `#[repr(transparent)]`.
-//! - **No dependencies** — this crate has zero Cargo dependencies.
+//! - **Minimal dependencies** — only `sha2` and `hex` for crypto stdlib backing.
 //! - **No unsafe code** — pure safe Rust.
 //! - **Prelude** — generated files `use mvl_runtime::prelude::*` to get everything.
 //!
