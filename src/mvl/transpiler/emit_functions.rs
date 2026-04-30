@@ -47,10 +47,17 @@ pub fn emit_fn_decl(cg: &mut Codegen, fd: &FnDecl) {
     // Test functions are emitted inside a #[cfg(test)] mod tests block.
     // The caller (codegen) is responsible for grouping them; here we just
     // emit the #[test] attribute and a non-pub signature.
+    // Retrieve borrow flags for this function (Phase B, Spec 009 Req 2).
+    let borrows: Vec<bool> = cg
+        .borrow_params_map
+        .get(&fd.name)
+        .cloned()
+        .unwrap_or_default();
+
     if fd.is_test {
         cg.line("#[test]");
         let generics = emit_generics(&fd.type_params, &fd.constraints);
-        let params_str = emit_params(&fd.params);
+        let params_str = emit_params(&fd.params, &borrows);
         let ret_str = emit_type_expr(&fd.return_type);
         cg.line(&format!(
             "fn {}{generics}({params_str}) -> {ret_str} {{",
@@ -82,7 +89,7 @@ pub fn emit_fn_decl(cg: &mut Codegen, fd: &FnDecl) {
 
     // Function signature
     let generics = emit_generics(&fd.type_params, &fd.constraints);
-    let params_str = emit_params(&fd.params);
+    let params_str = emit_params(&fd.params, &borrows);
     let ret_str = emit_type_expr(&fd.return_type);
 
     cg.line(&format!(
@@ -174,11 +181,20 @@ fn emit_generics(type_params: &[GenericParam], constraints: &[Constraint]) -> St
 
 // ── Parameters ───────────────────────────────────────────────────────────
 
-fn emit_params(params: &[Param]) -> String {
+fn emit_params(params: &[Param], borrows: &[bool]) -> String {
     params
         .iter()
-        .map(|p| {
-            let ty_str = emit_fn_param_type(&p.ty);
+        .enumerate()
+        .map(|(i, p)| {
+            // Phase B: if this param is an inferred borrow (not already TypeExpr::Ref),
+            // wrap the emitted type in `&`.
+            let is_inferred_borrow =
+                borrows.get(i).copied().unwrap_or(false) && !matches!(p.ty, TypeExpr::Ref { .. });
+            let ty_str = if is_inferred_borrow {
+                format!("&{}", emit_fn_param_type(&p.ty))
+            } else {
+                emit_fn_param_type(&p.ty)
+            };
             // Capability annotation as a comment prefix: kept in name for now
             let cap_comment = match &p.capability {
                 Some(Capability::Iso) => "/* iso */ ",

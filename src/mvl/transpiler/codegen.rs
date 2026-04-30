@@ -8,6 +8,7 @@ use crate::mvl::parser::ast::{
     VariantFields,
 };
 use crate::mvl::parser::lexer::Span;
+use crate::mvl::transpiler::borrow_params::build_borrow_params_map;
 use crate::mvl::transpiler::coverage::{BranchKind, CoverageMap};
 use crate::mvl::transpiler::emit_functions::emit_fn_decl;
 use crate::mvl::transpiler::emit_impls::emit_impl_decl;
@@ -58,6 +59,16 @@ pub struct Codegen {
     /// emitted.  [`emit_expr_as_arg`] suppresses `.clone()` when the argument's
     /// span appears here — emitting a Rust move instead.
     pub last_uses: std::collections::HashSet<Span>,
+    /// Per-function borrow flags (Phase B, Spec 009 Req 2).
+    ///
+    /// Maps function name → `Vec<bool>` where `true` at index `i` means
+    /// "parameter `i` is a reference (`&T`)".  Built once before emission
+    /// from all [`FnDecl`] nodes in the program.
+    ///
+    /// Used in two places:
+    /// * `emit_params` — wraps inferred-borrow param types in `&`.
+    /// * `emit_args` at call sites — emits `&x` instead of `x.clone()`.
+    pub borrow_params_map: std::collections::HashMap<String, Vec<bool>>,
 }
 
 impl Codegen {
@@ -337,6 +348,11 @@ impl Codegen {
             .filter(|fd| !fd.is_test)
             .filter(|fd| !user_fn_names.contains(fd.name.as_str()))
             .collect();
+
+        // Phase B: build the borrow-params map from all known functions so that
+        // call sites can emit `&x` instead of `x.clone()` for reference params.
+        self.borrow_params_map = build_borrow_params_map(prog, &prelude_fns);
+
         if !prelude_fns.is_empty() {
             self.line(
                 "// ── stdlib prelude (transpiled from MVL source) ──────────────────────────",
