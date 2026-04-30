@@ -686,28 +686,31 @@ fn process(c: Container) -> Unit ! Console {
 
 // ── Spec 009 Req 2: Clone-on-pass ─────────────────────────────────────────
 
-/// Phase A (last-use move): a variable used exactly once is moved, not cloned.
-/// Spec 009 Req 2: the last use of a value in its scope is a move.
+/// Phase B (borrow inference): read-only struct params are inferred as &T.
+/// Call sites emit &p (borrow) rather than move or clone.
+/// Spec 009 Req 2.
 #[test]
-fn struct_ident_single_use_is_moved() {
+fn struct_ident_inferred_borrow_at_call_site() {
     let src = r#"
 type Point = struct { x: Int, y: Int }
 fn show(p: Point) -> Int { p.x }
 fn f(p: Point) -> Int { show(p) }
 "#;
     let rust = transpile_src(src);
-    // Phase A: p is used exactly once in f — emit move, not clone.
-    assert_contains(&rust, "show(p)");
+    // show's p only uses p.x (field access) → inferred as &Point.
+    // f's p is passed to show → disqualified from inference → owned.
+    // Call site emits &p (borrow) not a move or clone.
+    assert_contains(&rust, "show(&p)");
     assert!(
         !rust.contains("show(p.clone())"),
-        "single-use arg must not be cloned"
+        "inferred-borrow param must not produce clone at call site"
     );
 }
 
-/// Phase A: a variable used more than once is cloned on all but the last use.
+/// Phase B: borrow inference eliminates clones even for multi-use params.
 /// Spec 009 Req 2, Scenario "Struct passed to two functions".
 #[test]
-fn struct_ident_multi_use_gets_clone() {
+fn struct_ident_borrow_inference_eliminates_clones() {
     let src = r#"
 type Point = struct { x: Int, y: Int }
 fn show(p: Point) -> Int { p.x }
@@ -720,8 +723,12 @@ fn double_show(p: Point) -> Int {
 }
 "#;
     let rust = transpile_src(src);
-    // p is used twice in double_show — at least one call must clone.
-    assert_contains(&rust, "show(p.clone())");
+    // show inferred as &Point → call sites use &p, no clones needed.
+    assert_contains(&rust, "show(&p)");
+    assert!(
+        !rust.contains("show(p.clone())"),
+        "borrow inference must eliminate clones for read-only params"
+    );
 }
 
 /// Phase 1: Int idents are also cloned at call sites. Redundant for Copy types
