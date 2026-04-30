@@ -66,17 +66,6 @@ fn assert_check_ok(name: &str) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-/// Build a corpus program and assert the build succeeds.
-fn assert_build_ok(name: &str) {
-    let out = run_mvl_build(&corpus(name));
-    assert!(
-        out.status.success(),
-        "{name}: mvl build must succeed;\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
-}
-
 /// Run a corpus program and assert each expected line appears in stdout.
 fn assert_run_output(name: &str, expected_lines: &[&str]) {
     let out = run_mvl_run(&corpus(name));
