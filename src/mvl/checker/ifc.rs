@@ -174,7 +174,7 @@ fn infer_label(expr: &Expr, env: &HashMap<String, SecurityLabel>) -> Option<Secu
         Expr::Binary { left, right, .. } => {
             join_opt(infer_label(left, env), infer_label(right, env))
         }
-        Expr::Unary { expr, .. } => infer_label(expr, env),
+        Expr::Unary { expr, .. } | Expr::Borrow { expr, .. } => infer_label(expr, env),
         Expr::FieldAccess { expr, .. } => infer_label(expr, env),
         // `declassify()` always produces Public; `sanitize()` produces Clean.
         Expr::Declassify { .. } => Some(SecurityLabel::Public),
@@ -378,7 +378,8 @@ fn check_expr_flows(
         | Expr::Move { expr, .. }
         | Expr::Consume { expr, .. }
         | Expr::Propagate { expr, .. }
-        | Expr::FieldAccess { expr, .. } => {
+        | Expr::FieldAccess { expr, .. }
+        | Expr::Borrow { expr, .. } => {
             check_expr_flows(expr, pc, env, errors);
         }
         Expr::MethodCall { receiver, args, .. } => {
@@ -486,7 +487,8 @@ fn count_in_expr(expr: &Expr, dc: &mut usize, sc: &mut usize) {
         | Expr::Move { expr, .. }
         | Expr::Consume { expr, .. }
         | Expr::Propagate { expr, .. }
-        | Expr::FieldAccess { expr, .. } => count_in_expr(expr, dc, sc),
+        | Expr::FieldAccess { expr, .. }
+        | Expr::Borrow { expr, .. } => count_in_expr(expr, dc, sc),
         Expr::MethodCall { receiver, args, .. } => {
             count_in_expr(receiver, dc, sc);
             for a in args {

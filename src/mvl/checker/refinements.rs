@@ -841,7 +841,8 @@ fn analyze_expr(
         | Expr::Move { expr: inner, .. }
         | Expr::Consume { expr: inner, .. }
         | Expr::Declassify { expr: inner, .. }
-        | Expr::Sanitize { expr: inner, .. } => {
+        | Expr::Sanitize { expr: inner, .. }
+        | Expr::Borrow { expr: inner, .. } => {
             analyze_expr(
                 inner, var_refs, fn_params, type_refs, fn_decls, errors, counts,
             );

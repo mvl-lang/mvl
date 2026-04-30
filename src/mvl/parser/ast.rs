@@ -520,6 +520,12 @@ pub enum Expr {
         expr: Box<Expr>,
         span: Span,
     },
+    /// Expression-level borrow: `&expr` (shared) or `&mut expr` (mutable).
+    Borrow {
+        mutable: bool,
+        expr: Box<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -543,7 +549,8 @@ impl Expr {
             | Expr::Move { span, .. }
             | Expr::Consume { span, .. }
             | Expr::Declassify { span, .. }
-            | Expr::Sanitize { span, .. } => *span,
+            | Expr::Sanitize { span, .. }
+            | Expr::Borrow { span, .. } => *span,
             Expr::Block(b) => b.span,
         }
     }

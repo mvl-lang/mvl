@@ -179,7 +179,8 @@ fn check_expr(expr: &Expr, ctx: &TermCtx<'_>, errors: &mut Vec<CheckError>) {
         | Expr::Move { expr: inner, .. }
         | Expr::Consume { expr: inner, .. }
         | Expr::Declassify { expr: inner, .. }
-        | Expr::Sanitize { expr: inner, .. } => check_expr(inner, ctx, errors),
+        | Expr::Sanitize { expr: inner, .. }
+        | Expr::Borrow { expr: inner, .. } => check_expr(inner, ctx, errors),
 
         Expr::Binary { left, right, .. } => {
             check_expr(left, ctx, errors);

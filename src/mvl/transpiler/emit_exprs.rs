@@ -168,9 +168,25 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                     emit_expr(cg, receiver);
                     cg.push(".into_iter() { __m.entry(");
                     if let Some(arg) = args.first() {
+                        // Phase B: if the key function takes a reference for its first
+                        // parameter, emit `&__v.clone()` instead of `__v.clone()`.
+                        let needs_borrow = if let Expr::Ident(name, _) = arg {
+                            cg.borrow_params_map
+                                .get(name.as_str())
+                                .and_then(|b| b.first().copied())
+                                .flatten()
+                                .is_some()
+                        } else {
+                            false
+                        };
                         emit_expr(cg, arg);
+                        if needs_borrow {
+                            cg.push("(&__v.clone())");
+                        } else {
+                            cg.push("(__v.clone())");
+                        }
                     }
-                    cg.push("(__v.clone())).or_insert_with(Vec::new).push(__v); } __m }");
+                    cg.push(").or_insert_with(Vec::new).push(__v); } __m }");
                 }
                 // and_then(f) — Option<T> and Result<T,E>
                 "and_then" if args.len() == 1 => {
@@ -347,6 +363,21 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                 if is_extern {
                     cg.push(" }");
                 }
+            }
+        }
+        Expr::Borrow { mutable, expr, .. } => {
+            // Fix 7: parenthesise compound inner expressions to preserve precedence.
+            // e.g. `&(a + b)` must not emit `&a + b` (which Rust parses as `(&a) + b`).
+            let needs_parens =
+                !matches!(expr.as_ref(), Expr::Ident(_, _) | Expr::FieldAccess { .. });
+            if *mutable {
+                cg.push(if needs_parens { "&mut (" } else { "&mut " });
+            } else {
+                cg.push(if needs_parens { "&(" } else { "&" });
+            }
+            emit_expr(cg, expr);
+            if needs_parens {
+                cg.push(")");
             }
         }
         Expr::Unary { op, expr, .. } => match op {
@@ -687,6 +718,8 @@ fn emit_args_with_borrows(cg: &mut Codegen, args: &[Expr], borrows: &[Option<boo
 /// temporaries live until the end of the enclosing statement.
 fn emit_expr_as_borrow_arg(cg: &mut Codegen, expr: &Expr, mutable: bool) {
     match expr {
+        // Fix 3: already a borrow expression — emit as-is, no extra & needed
+        Expr::Borrow { .. } => emit_expr(cg, expr),
         Expr::Ident(_, _) | Expr::FieldAccess { .. } => {
             cg.push(if mutable { "&mut " } else { "&" });
             emit_expr(cg, expr);

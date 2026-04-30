@@ -1847,3 +1847,29 @@ fn multiple_call_sites_both_emit_ampersand() {
     assert_contains(&rust, "f(&a)");
     assert_contains(&rust, "f(&b)");
 }
+
+/// Expression-level borrow `&x` emits `&x` in Rust. (#366)
+#[test]
+fn borrow_expr_shared_emits_ampersand() {
+    let src = "fn f(x: Int) -> Unit { let r: &Int = &x; }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "&x");
+}
+
+/// Expression-level mutable borrow `&mut x` emits `&mut x` in Rust. (#366)
+#[test]
+fn borrow_expr_mutable_emits_ampersand_mut() {
+    let src = "fn f(mut x: Int) -> Unit { let r: &mut Int = &mut x; }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "&mut x");
+}
+
+/// Fix 5: group_by with a declared &String key function emits `&__v.clone()`. (#366)
+/// Phase B borrow inference maps declared functions with explicit &T params so
+/// group_by correctly wraps the loop variable in `&__v.clone()`.
+#[test]
+fn group_by_with_ref_string_key_emits_borrow_on_clone() {
+    let src = "fn key(s: &String) -> String { s }  fn f(xs: List[String]) -> Unit { let m = xs.group_by(key); }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "&__v.clone()");
+}

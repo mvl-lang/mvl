@@ -124,6 +124,17 @@ impl Parser {
                     span,
                 })
             }
+            TokenKind::Amp => {
+                self.advance();
+                let mutable = self.eat(&TokenKind::Mut);
+                let expr = self.parse_unary()?;
+                let span = self.span_from(start);
+                Ok(Expr::Borrow {
+                    mutable,
+                    expr: Box::new(expr),
+                    span,
+                })
+            }
             _ => self.parse_postfix(),
         }
     }

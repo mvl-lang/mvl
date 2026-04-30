@@ -1035,6 +1035,37 @@ impl TypeChecker {
 
             Expr::Unary { op, expr, span } => self.infer_unary(*op, expr, *span),
 
+            Expr::Borrow {
+                mutable,
+                expr,
+                span,
+            } => {
+                let inner = self.infer_expr(expr);
+                // Fix 1: reject `&mut x` on an immutable binding (#366)
+                if *mutable {
+                    if let Expr::Ident(name, _) = expr.as_ref() {
+                        if let Some(info) = self.env.lookup(name).cloned() {
+                            if !info.mutable {
+                                self.emit(CheckError::AssignToImmutable {
+                                    name: name.clone(),
+                                    span: *span,
+                                });
+                            }
+                        }
+                    }
+                }
+                // Fix 4: reject `&&x` — borrowing an already-borrowed value (#366)
+                if let Ty::Ref(_, _) = &inner {
+                    self.emit(CheckError::TypeMismatch {
+                        expected: inner.display(),
+                        found: format!("&{}", inner.display()),
+                        span: *span,
+                    });
+                    return Ty::Unknown;
+                }
+                Ty::Ref(*mutable, Box::new(inner))
+            }
+
             // #12: Field access — reject direct field access on enum or Option
             Expr::FieldAccess { expr, field, span } => {
                 let ty = self.infer_expr(expr);
@@ -2500,7 +2531,8 @@ fn collect_refs_expr(expr: &Expr, params: &[&str], out: &mut Vec<(String, Span)>
         | Expr::Move { expr: e, .. }
         | Expr::Consume { expr: e, .. }
         | Expr::Declassify { expr: e, .. }
-        | Expr::Sanitize { expr: e, .. } => collect_refs_expr(e, params, out),
+        | Expr::Sanitize { expr: e, .. }
+        | Expr::Borrow { expr: e, .. } => collect_refs_expr(e, params, out),
         Expr::Binary { left, right, .. } => {
             collect_refs_expr(left, params, out);
             collect_refs_expr(right, params, out);

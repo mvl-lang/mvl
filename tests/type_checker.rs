@@ -3855,6 +3855,32 @@ fn two_mut_ref_params_of_different_types_accepted() {
     );
 }
 
+// ── Expression-level borrow operator (#366) ──────────────────────────────────
+
+#[test]
+fn borrow_expr_shared_type_checks() {
+    // GIVEN: `let r: &Int = &x` where x: Int
+    // THEN: checker accepts and r has type &Int
+    let result = check_src("fn f(x: Int) -> Unit { let r: &Int = &x; }");
+    assert!(
+        result.errors.is_empty(),
+        "expected no errors, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn borrow_expr_mutable_type_checks() {
+    // GIVEN: `let r: &mut Int = &mut x` where x: mut Int
+    // THEN: checker accepts and r has type &mut Int
+    let result = check_src("fn f(mut x: Int) -> Unit { let r: &mut Int = &mut x; }");
+    assert!(
+        result.errors.is_empty(),
+        "expected no errors, got: {:?}",
+        result.errors
+    );
+}
+
 // ── Gap-documenting tests: unimplemented checker checks ──────────────────────
 //
 // These tests are marked #[ignore] because the underlying checker logic is not
@@ -3875,6 +3901,30 @@ fn shared_and_mut_ref_params_of_same_type_rejected() {
             .iter()
             .any(|e| matches!(e, CheckError::AliasingMutableBorrow { .. })),
         "expected AliasingMutableBorrow, got: {:?}",
+        result.errors
+    );
+}
+
+/// Phase D (#362): BorrowState transitions — `Expr::Borrow` should update
+/// `VarInfo::borrow_state` so the checker can enforce single-writer/multiple-reader.
+///
+/// TODO(#362/#366): wire BorrowState transitions in the Expr::Borrow checker arm.
+#[test]
+#[ignore = "BorrowState transitions not yet driven by Expr::Borrow (TODO #362/#366)"]
+fn borrow_expr_transitions_borrow_state_rejected_on_double_mut() {
+    // Two simultaneous `&mut x` borrows must be rejected via BorrowState tracking.
+    let result = check_src(
+        "fn f(mut x: Int) -> Unit {
+            let r1: &mut Int = &mut x
+            let r2: &mut Int = &mut x
+        }",
+    );
+    assert!(
+        result.errors.iter().any(|e| matches!(
+            e,
+            CheckError::AliasingMutableBorrow { .. } | CheckError::DoubleMutableBorrow { .. }
+        )),
+        "expected AliasingMutableBorrow or DoubleMutableBorrow, got: {:?}",
         result.errors
     );
 }
