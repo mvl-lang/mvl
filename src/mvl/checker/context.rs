@@ -49,6 +49,27 @@ use crate::mvl::parser::lexer::Span;
 
 // ── Variable binding ─────────────────────────────────────────────────────────
 
+/// Borrow state of a variable (Phase D, Spec 009 Req 2).
+///
+/// Tracks whether a variable currently has any outstanding references,
+/// enforcing the Rust borrow rules at the checker level.
+///
+/// State machine:
+/// * `Owned` → `SharedBorrowed(n)` when `&x` is created.
+/// * `Owned` → `MutablyBorrowed` when `&mut x` is created.
+/// * `SharedBorrowed(n)` → `SharedBorrowed(n-1)` when a shared borrow goes out of scope.
+/// * `SharedBorrowed(0)` == `Owned`.
+/// * `MutablyBorrowed` → `Owned` when the mutable borrow goes out of scope.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BorrowState {
+    /// No outstanding borrows — value is exclusively owned.
+    Owned,
+    /// `n` shared (`&T`) borrows are live.  Value may still be read but not mutably borrowed.
+    SharedBorrowed(usize),
+    /// Exactly one exclusive (`&mut T`) borrow is live.  Value may not be read or re-borrowed.
+    MutablyBorrowed,
+}
+
 #[derive(Debug, Clone)]
 pub struct VarInfo {
     pub ty: Ty,
@@ -56,6 +77,15 @@ pub struct VarInfo {
     pub moved: bool,
     /// Reference capability for actor-boundary checking (Req 9).
     pub capability: Option<Capability>,
+    /// Scope depth at which this variable was defined (Phase C, Spec 009 Req 2).
+    ///
+    /// Used for scope-based lifetime checking: a `&T` reference to this variable
+    /// must not be assigned to a binding at a shallower scope depth.
+    pub scope_depth: usize,
+    /// Active borrow state (Phase D, Spec 009 Req 2).
+    ///
+    /// Tracks outstanding shared and mutable borrows to enforce alias safety.
+    pub borrow_state: BorrowState,
 }
 
 impl VarInfo {
@@ -65,11 +95,19 @@ impl VarInfo {
             mutable,
             moved: false,
             capability: None,
+            scope_depth: 0,
+            borrow_state: BorrowState::Owned,
         }
     }
 
     pub fn with_capability(mut self, cap: Option<Capability>) -> Self {
         self.capability = cap;
+        self
+    }
+
+    /// Set the scope depth at definition time.
+    pub fn with_scope_depth(mut self, depth: usize) -> Self {
+        self.scope_depth = depth;
         self
     }
 }
@@ -570,7 +608,9 @@ impl TypeEnv {
 
     // ── Variable operations ──────────────────────────────────────────────
 
-    pub fn define(&mut self, name: String, info: VarInfo) {
+    pub fn define(&mut self, name: String, mut info: VarInfo) {
+        // Record scope depth so lifetime checking can compare referent vs binding depth.
+        info.scope_depth = self.scopes.len().saturating_sub(1);
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name, info);
         }

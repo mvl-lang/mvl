@@ -356,6 +356,23 @@ impl TypeChecker {
         let ret_ty = resolve(&fd.return_type);
         let prev_ret = self.current_return_ty.replace(ret_ty.clone());
 
+        // Phase C (Spec 009 Req 2): scope-based lifetime check.
+        // If the return type is &T (immutable or mutable reference) and the function has
+        // no &T parameters, the reference can only point to a local variable — which would
+        // be deallocated when the function returns.  Reject this statically.
+        if matches!(ret_ty, Ty::Ref(_, _)) {
+            let has_ref_param = fd
+                .params
+                .iter()
+                .any(|p| matches!(resolve(&p.ty), Ty::Ref(_, _)));
+            if !has_ref_param {
+                self.emit(CheckError::ReferenceEscapesScope {
+                    name: fd.name.clone(),
+                    span: fd.span,
+                });
+            }
+        }
+
         // Validate effect names against the canonical set (002-effect-system/Req 2).
         for effect in &fd.effects {
             if !VALID_EFFECT_NAMES.contains(&effect.name.as_str()) {
@@ -387,6 +404,26 @@ impl TypeChecker {
         let prev_type_params = std::mem::replace(&mut self.current_type_params, type_params);
         let prev_type_constraints =
             std::mem::replace(&mut self.current_type_constraints, type_constraints);
+
+        // Phase D (Spec 009 Req 2): mutable-borrow alias check.
+        // Two `&mut T` parameters of the same inner type at the same function signature
+        // could be aliased at a call site.  Reject this statically.
+        {
+            let mut mut_ref_types: Vec<String> = Vec::new();
+            for param in &fd.params {
+                if let Ty::Ref(true, inner) = resolve(&param.ty) {
+                    let inner_str = inner.display();
+                    if mut_ref_types.contains(&inner_str) {
+                        self.emit(CheckError::DoubleMutableBorrow {
+                            name: param.name.clone(),
+                            span: param.span,
+                        });
+                    } else {
+                        mut_ref_types.push(inner_str);
+                    }
+                }
+            }
+        }
 
         self.env.push_scope();
         for param in &fd.params {

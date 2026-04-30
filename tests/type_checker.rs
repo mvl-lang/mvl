@@ -3792,3 +3792,65 @@ fn stdlib_args_mvl_parses_without_errors() {
         p.errors()
     );
 }
+
+// ── Phase C & D: Borrow / Lifetime / Alias Checks (#305, #306) ────────────────
+
+#[test]
+fn function_returning_ref_without_ref_params_rejected() {
+    // GIVEN: a function that declares &T return type but has no &T parameters
+    // THEN: checker rejects — reference can only point to a local (would escape)
+    let result = check_src("fn bad() -> &Int { 42 }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::ReferenceEscapesScope { .. })),
+        "expected ReferenceEscapesScope, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn function_returning_ref_with_ref_param_accepted() {
+    // GIVEN: a function that declares &T return type AND has a &T parameter
+    // THEN: checker accepts — the reference can legally point to the parameter
+    let result = check_src("fn ok(x: &Int) -> &Int { x }");
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::ReferenceEscapesScope { .. })),
+        "unexpected ReferenceEscapesScope: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn two_mut_ref_params_of_same_type_rejected() {
+    // GIVEN: a function with two &mut T params of the same inner type
+    // THEN: checker rejects — they could alias at the call site (Phase D)
+    let result = check_src("fn bad(a: &mut Int, b: &mut Int) -> Unit { }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::DoubleMutableBorrow { .. })),
+        "expected DoubleMutableBorrow, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn two_mut_ref_params_of_different_types_accepted() {
+    // GIVEN: a function with two &mut T params of DIFFERENT inner types
+    // THEN: checker accepts — they cannot alias (different types)
+    let result = check_src("fn ok(a: &mut Int, b: &mut Bool) -> Unit { }");
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::DoubleMutableBorrow { .. })),
+        "unexpected DoubleMutableBorrow: {:?}",
+        result.errors
+    );
+}
