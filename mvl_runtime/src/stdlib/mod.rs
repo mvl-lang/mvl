@@ -9,7 +9,7 @@
 //!
 //! - Phase 2: stubs in `.mvl` files gain real Rust implementations here.
 //! - Phase 3: implementations move to MVL source compiled from `.mvl` files.
-//! - Zero Cargo dependencies — only `std` Rust library is used.
+//! - Minimal dependencies — `sha2`, `hex`, `getrandom` for crypto backing; everything else uses `std` only.
 
 pub mod args;
 pub mod crypto;
