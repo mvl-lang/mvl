@@ -448,6 +448,48 @@ test fn list_sort_contains_all_elements() -> Unit {
     assert_eq(ys.is_empty(), false);
 }
 
+// ── any / all ─────────────────────────────────────────────────────────────
+
+test fn list_any_empty_returns_false() -> Unit {
+    let xs: List[Int] = [];
+    assert_eq(xs.any(is_positive), false);
+}
+
+test fn list_any_all_match_returns_true() -> Unit {
+    let xs: List[Int] = [1, 2, 3];
+    assert_eq(xs.any(is_positive), true);
+}
+
+test fn list_any_none_match_returns_false() -> Unit {
+    let xs: List[Int] = [-1, -2, -3];
+    assert_eq(xs.any(is_positive), false);
+}
+
+test fn list_any_partial_match_returns_true() -> Unit {
+    let xs: List[Int] = [-1, 2, -3];
+    assert_eq(xs.any(is_positive), true);
+}
+
+test fn list_all_empty_returns_true() -> Unit {
+    let xs: List[Int] = [];
+    assert_eq(xs.all(is_positive), true);
+}
+
+test fn list_all_all_match_returns_true() -> Unit {
+    let xs: List[Int] = [1, 2, 3];
+    assert_eq(xs.all(is_positive), true);
+}
+
+test fn list_all_none_match_returns_false() -> Unit {
+    let xs: List[Int] = [-1, -2, -3];
+    assert_eq(xs.all(is_positive), false);
+}
+
+test fn list_all_partial_match_returns_false() -> Unit {
+    let xs: List[Int] = [1, -2, 3];
+    assert_eq(xs.all(is_positive), false);
+}
+
 // ── HOF chaining (filter → map → fold pipelines) ──────────────────────────
 
 test fn collections_filter_map_fold_pipeline() -> Unit {

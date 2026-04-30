@@ -103,47 +103,46 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
             // The actual Rust implementation is the transpiled MVL stdlib function.
             match method.as_str() {
                 // ── Higher-order collection methods ──────────────────────────────
-                //
-                // These stay as transpiler special cases because they require Rust
-                // iterator/closure semantics that can't yet be expressed in pure MVL
-                // (fn(T)->Bool is a bare fn pointer, not impl Fn; Clone bounds on
-                // generic params are not yet automatic in MVL generics).
 
                 // map(f) — works for List<T>, Option<T>, and Result<T,E> via the
-                // MvlMap trait. The function arg is wrapped in `(…)` to prevent Rust
-                // from parsing a lambda body as the call target.
+                // MvlMap trait (the transpiler cannot distinguish receiver types at
+                // emit time, so we keep the trait-dispatch path for polymorphism).
                 "map" if args.len() == 1 => {
                     emit_expr(cg, receiver);
                     cg.push(".mvl_map(|__x| (");
                     emit_expr(cg, &args[0]);
                     cg.push(")(__x.clone()))");
                 }
-                // filter(f) — List<T>; iterator::filter with clone for MVL value semantics
-                "filter" if args.len() == 1 => {
-                    emit_expr(cg, receiver);
-                    cg.push(".into_iter().filter(|__x| (");
-                    emit_expr(cg, &args[0]);
-                    cg.push(")(__x.clone())).collect::<Vec<_>>()");
-                }
-                // fold(init, f) — List<T>; iterator::fold
-                "fold" if args.len() == 2 => {
-                    emit_expr(cg, receiver);
-                    cg.push(".into_iter().fold(");
-                    emit_expr_as_arg(cg, &args[0]);
-                    cg.push(", |__acc, __x| (");
-                    emit_expr(cg, &args[1]);
-                    cg.push(")(__acc, __x.clone()))");
-                }
-                // take_while(f)/skip_while(f) — iterator with &T predicate bridged to T
-                "take_while" | "skip_while" => {
-                    emit_expr(cg, receiver);
-                    cg.push(".into_iter().");
+
+                // ── Pure MVL higher-order list methods ────────────────────────────
+                //
+                // These are implemented as pure MVL in std/lists.mvl and dispatched
+                // via UFCS free-function calls.  The receiver is cloned (value
+                // semantics); the function argument is emitted directly — NOT via
+                // emit_expr_as_arg — because closures do not implement Clone.
+                // Passing by move is correct: MVL callers cannot reuse a function
+                // value after passing it anyway.
+                //
+                // filter / take_while / skip_while / any / all share identical
+                // single-arg emit structure.  `method` is safe to push verbatim
+                // because the match arm already constrains it to these literals.
+                "filter" | "take_while" | "skip_while" | "any" | "all" if args.len() == 1 => {
                     cg.push(method);
-                    cg.push("(|__x| ");
-                    if let Some(arg) = args.first() {
-                        emit_expr(cg, arg);
-                    }
-                    cg.push("(__x.clone())).collect::<Vec<_>>()");
+                    cg.push("(");
+                    emit_expr(cg, receiver);
+                    cg.push(".clone().into(), ");
+                    emit_expr(cg, &args[0]);
+                    cg.push(")");
+                }
+                // fold(init, f) — init is cloned (value arg); f is moved
+                "fold" if args.len() == 2 => {
+                    cg.push("fold(");
+                    emit_expr(cg, receiver);
+                    cg.push(".clone().into(), ");
+                    emit_expr_as_arg(cg, &args[0]);
+                    cg.push(", ");
+                    emit_expr(cg, &args[1]);
+                    cg.push(")");
                 }
                 // windows(n)/chunks(n) — Rust returns &[T] slices; collect into Vec<Vec<T>>
                 "windows" | "chunks" => {

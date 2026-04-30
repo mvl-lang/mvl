@@ -1169,15 +1169,16 @@ fn method_take_and_skip_emit_iterator_adapters() {
 fn method_take_while_emits_closure_clone() {
     let src = "fn f(xs: List[Int], p: fn(Int) -> Bool) -> List[Int] { xs.take_while(p) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, ".take_while(|__x|");
-    assert_contains(&rust, "__x.clone()");
+    assert_contains(&rust, "take_while(");
+    assert_contains(&rust, ".clone().into()");
 }
 
 #[test]
 fn method_skip_while_emits_closure_clone() {
     let src = "fn f(xs: List[Int], p: fn(Int) -> Bool) -> List[Int] { xs.skip_while(p) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, ".skip_while(|__x|");
+    assert_contains(&rust, "skip_while(");
+    assert_contains(&rust, ".clone().into()");
 }
 
 #[test]
@@ -1376,15 +1377,45 @@ fn method_map_emits_mvl_map() {
 fn method_filter_emits_iterator_filter() {
     let src = "fn f(xs: List[Int], p: fn(Int) -> Bool) -> List[Int] { xs.filter(p) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, ".into_iter().filter(|__x|");
+    assert_contains(&rust, "filter(");
+    assert_contains(&rust, ".clone().into()");
 }
 
 #[test]
 fn method_fold_emits_iterator_fold() {
     let src = "fn f(xs: List[Int], init: Int, g: fn(Int, Int) -> Int) -> Int { xs.fold(init, g) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, ".into_iter().fold(");
-    assert_contains(&rust, "|__acc, __x|");
+    assert_contains(&rust, "fold(");
+    assert_contains(&rust, ".clone().into()");
+}
+
+#[test]
+fn method_any_emits_ufcs_call() {
+    let src = "fn f(xs: List[Int], p: fn(Int) -> Bool) -> Bool { xs.any(p) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "any(");
+    assert_contains(&rust, ".clone().into()");
+}
+
+#[test]
+fn method_all_emits_ufcs_call() {
+    let src = "fn f(xs: List[Int], p: fn(Int) -> Bool) -> Bool { xs.all(p) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "all(");
+    assert_contains(&rust, ".clone().into()");
+}
+
+/// Verifies that `fn(T) -> U` typed parameters emit as `impl Fn(T) -> U` so
+/// that closures are accepted at HOF call sites (not just bare fn pointers).
+#[test]
+fn fn_type_param_emits_impl_fn_not_bare_fn() {
+    let src = "fn apply(xs: List[Int], p: fn(Int) -> Bool) -> List[Int] { xs.filter(p) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "impl Fn(");
+    assert!(
+        !rust.contains("fn(i64) -> bool"),
+        "bare fn pointer must not appear as a parameter type; got:\n{rust}"
+    );
 }
 
 #[test]
