@@ -21,6 +21,7 @@
 //! // println!("{}", out.lib_rs);
 //! ```
 
+pub mod borrow_params;
 pub mod boundary_gen;
 pub mod cargo;
 pub mod codegen;

@@ -49,6 +49,34 @@ use crate::mvl::parser::lexer::Span;
 
 // ── Variable binding ─────────────────────────────────────────────────────────
 
+/// Borrow state of a variable (Phase D, Spec 009 Req 2).
+///
+/// Tracks whether a variable currently has any outstanding references,
+/// enforcing the Rust borrow rules at the checker level.
+///
+/// # State machine (not yet driven — TODO #306)
+///
+/// The transitions below are the intended semantics for the full Phase D
+/// implementation.  Currently the field is always `Owned`; no code in the
+/// checker reads or mutates it.  `AliasingMutableBorrow` (the error for
+/// creating `&mut x` while `x` is already borrowed) is also not yet emitted.
+///
+/// * `Owned` → `SharedBorrowed(n)` when `&x` is created.
+/// * `Owned` → `MutablyBorrowed` when `&mut x` is created.
+/// * `SharedBorrowed(n)` → `SharedBorrowed(n-1)` when a shared borrow goes out of scope.
+/// * `SharedBorrowed(0)` == `Owned`.
+/// * `MutablyBorrowed` → `Owned` when the mutable borrow goes out of scope.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum BorrowState {
+    /// No outstanding borrows — value is exclusively owned.
+    Owned,
+    /// `n` shared (`&T`) borrows are live.  Value may still be read but not mutably borrowed.
+    SharedBorrowed(usize),
+    /// Exactly one exclusive (`&mut T`) borrow is live.  Value may not be read or re-borrowed.
+    MutablyBorrowed,
+}
+
 #[derive(Debug, Clone)]
 pub struct VarInfo {
     pub ty: Ty,
@@ -56,6 +84,17 @@ pub struct VarInfo {
     pub moved: bool,
     /// Reference capability for actor-boundary checking (Req 9).
     pub capability: Option<Capability>,
+    /// Scope depth at which this variable was defined (Phase C, Spec 009 Req 2).
+    ///
+    /// Used for scope-based lifetime checking: a `&T` reference to this variable
+    /// must not be assigned to a binding at a shallower scope depth.
+    pub scope_depth: usize,
+    /// Active borrow state (Phase D, Spec 009 Req 2).
+    ///
+    /// Tracks outstanding shared and mutable borrows to enforce alias safety.
+    /// Not yet driven — always `Owned`. See `BorrowState` doc for TODO.
+    #[allow(dead_code)]
+    pub borrow_state: BorrowState,
 }
 
 impl VarInfo {
@@ -65,6 +104,8 @@ impl VarInfo {
             mutable,
             moved: false,
             capability: None,
+            scope_depth: 0,
+            borrow_state: BorrowState::Owned,
         }
     }
 
@@ -570,7 +611,11 @@ impl TypeEnv {
 
     // ── Variable operations ──────────────────────────────────────────────
 
-    pub fn define(&mut self, name: String, info: VarInfo) {
+    pub fn define(&mut self, name: String, mut info: VarInfo) {
+        // Record scope depth (0-based: outermost scope = 0) so lifetime checking can
+        // compare referent depth vs binding depth.  Note: scope_depth() returns
+        // scopes.len() (raw length) — a different convention; do not cross-compare.
+        info.scope_depth = self.scopes.len().saturating_sub(1);
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name, info);
         }
@@ -597,8 +642,11 @@ impl TypeEnv {
         None
     }
 
-    /// Returns the current scope stack depth.  Used by lambda-capture checking to
-    /// record the depth at which a lambda was entered.
+    /// Returns the raw scope stack height (= number of open scopes).
+    /// Used by lambda-capture checking to record the depth at which a lambda was entered.
+    ///
+    /// Convention: returns `scopes.len()` (raw length, not 0-based).
+    /// `VarInfo.scope_depth` uses `scopes.len() - 1` (0-based index); do not cross-compare.
     pub fn scope_depth(&self) -> usize {
         self.scopes.len()
     }

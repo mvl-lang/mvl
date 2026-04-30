@@ -118,6 +118,45 @@ pub enum CheckError {
         span: Span,
     },
 
+    // ── Lifetime safety (Phase C, #305) ──────────────────────────────────
+    /// A `&T` reference to a local variable escapes its owner's scope.
+    ///
+    /// This happens when a function's return type is `&T` but the referenced
+    /// value is a local binding that would be deallocated on return.
+    ReferenceEscapesScope {
+        /// Name of the referenced variable (if known).
+        name: String,
+        span: Span,
+    },
+    /// A `&T` reference is assigned to a binding with a shallower scope depth
+    /// than the referent, meaning the reference would outlive the owner.
+    ///
+    /// TODO(#305): not yet emitted — scope-depth comparison is not implemented.
+    #[allow(dead_code)]
+    ReferenceOutlivesOwner {
+        /// The reference binding being created.
+        ref_name: String,
+        /// The variable being borrowed.
+        owner_name: String,
+        span: Span,
+    },
+
+    // ── Mutable borrow alias checking (Phase D, #306) ────────────────────
+    /// A mutable borrow `&mut x` was requested while `x` is already borrowed
+    /// (either shared or mutably).
+    ///
+    /// TODO(#306): not yet emitted — requires `BorrowState` transitions in the checker.
+    #[allow(dead_code)]
+    AliasingMutableBorrow {
+        name: String,
+        span: Span,
+    },
+    /// Two mutable borrows `&mut x` were created for the same variable.
+    DoubleMutableBorrow {
+        name: String,
+        span: Span,
+    },
+
     // ── Lambda capture immutability (ADR-0002) ───────────────────────────
     /// Lambda captures a `mut` binding from an outer scope (ADR-0002).
     CaptureMutabilityViolation {
@@ -263,7 +302,11 @@ impl CheckError {
             | CheckError::UnknownVariant { .. }
             | CheckError::NotAStruct { .. } => 1,
             // Req 2: Memory Safety
-            CheckError::UseAfterMove { .. } => 2,
+            CheckError::UseAfterMove { .. }
+            | CheckError::ReferenceEscapesScope { .. }
+            | CheckError::ReferenceOutlivesOwner { .. }
+            | CheckError::AliasingMutableBorrow { .. }
+            | CheckError::DoubleMutableBorrow { .. } => 2,
             // Req 3: Totality (exhaustive match)
             CheckError::NonExhaustiveMatch { .. } => 3,
             // Req 4: Null Elimination
@@ -328,6 +371,10 @@ impl CheckError {
             | CheckError::MutateImmutableField { span, .. }
             | CheckError::CaptureMutabilityViolation { span, .. }
             | CheckError::UseAfterMove { span, .. }
+            | CheckError::ReferenceEscapesScope { span, .. }
+            | CheckError::ReferenceOutlivesOwner { span, .. }
+            | CheckError::AliasingMutableBorrow { span, .. }
+            | CheckError::DoubleMutableBorrow { span, .. }
             | CheckError::RefinementViolated { span, .. }
             | CheckError::InvalidEffectName { span, .. }
             | CheckError::UndeclaredEffect { span, .. }
@@ -416,6 +463,22 @@ impl CheckError {
                 format!("cannot assign to immutable field `{field}` on `{ty}`")
             }
             CheckError::UseAfterMove { name, .. } => format!("use of moved value `{name}`"),
+            CheckError::ReferenceEscapesScope { name, .. } => format!(
+                "reference to `{name}` escapes its scope — the referenced value would be deallocated before the reference is used"
+            ),
+            CheckError::ReferenceOutlivesOwner {
+                ref_name,
+                owner_name,
+                ..
+            } => format!(
+                "binding `{ref_name}` of reference type outlives `{owner_name}` — the reference would be dangling when `{owner_name}` is dropped"
+            ),
+            CheckError::AliasingMutableBorrow { name, .. } => format!(
+                "cannot borrow `{name}` mutably: it is already borrowed — release existing borrows before creating a mutable borrow"
+            ),
+            CheckError::DoubleMutableBorrow { name, .. } => format!(
+                "cannot borrow `{name}` mutably more than once at a time — only one mutable borrow is allowed"
+            ),
             CheckError::RefinementViolated { pred, .. } => {
                 format!("refinement predicate violated: `{pred}`")
             }

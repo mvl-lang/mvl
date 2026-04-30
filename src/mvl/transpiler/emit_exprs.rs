@@ -335,7 +335,14 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                     cg.push(">");
                 }
                 cg.push("(");
-                emit_args(cg, args);
+                // Phase B: look up borrow flags for this callee so we can emit `&x`
+                // instead of `x.clone()` for reference parameters.
+                let borrows: Vec<Option<bool>> = cg
+                    .borrow_params_map
+                    .get(name.as_str())
+                    .cloned()
+                    .unwrap_or_default();
+                emit_args_with_borrows(cg, args, &borrows);
                 cg.push(")");
                 if is_extern {
                     cg.push(" }");
@@ -649,6 +656,46 @@ fn emit_args(cg: &mut Codegen, args: &[Expr]) {
             cg.push(", ");
         }
         emit_expr_as_arg(cg, arg);
+    }
+}
+
+/// Emit arguments for a function call, using per-parameter borrow kinds (Phase B).
+///
+/// * `Some(false)` — emit `&x` (shared reference).
+/// * `Some(true)`  — emit `&mut x` (mutable reference).
+/// * `None`        — emit normally (`x.clone()` / move).
+///
+/// When `borrows` is shorter than `args` (unknown callee / variadic),
+/// the remaining args fall through to normal value-argument emission.
+fn emit_args_with_borrows(cg: &mut Codegen, args: &[Expr], borrows: &[Option<bool>]) {
+    for (i, arg) in args.iter().enumerate() {
+        if i > 0 {
+            cg.push(", ");
+        }
+        match borrows.get(i).copied().flatten() {
+            Some(mutable) => emit_expr_as_borrow_arg(cg, arg, mutable),
+            None => emit_expr_as_arg(cg, arg),
+        }
+    }
+}
+
+/// Emit an expression as a reference argument (`&x` or `&mut x`).
+///
+/// For identifiers and field accesses the prefix is prepended directly.
+/// For temporaries (function call results, struct literals, block expressions)
+/// the expression is wrapped in `&(…)` / `&mut (…)` — valid in Rust because
+/// temporaries live until the end of the enclosing statement.
+fn emit_expr_as_borrow_arg(cg: &mut Codegen, expr: &Expr, mutable: bool) {
+    match expr {
+        Expr::Ident(_, _) | Expr::FieldAccess { .. } => {
+            cg.push(if mutable { "&mut " } else { "&" });
+            emit_expr(cg, expr);
+        }
+        _ => {
+            cg.push(if mutable { "&mut (" } else { "&(" });
+            emit_expr(cg, expr);
+            cg.push(")");
+        }
     }
 }
 
