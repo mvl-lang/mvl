@@ -324,3 +324,81 @@ fn double(n: Int) -> Int {
     // n: Int is Copy — never cloned regardless of phase.
     assert_not_contains(&rust, "n.clone()");
 }
+
+// ── Regression: clone-retention when callee is disqualified ───────────────────
+
+/// Phase A regression: when a callee is disqualified from borrow inference
+/// (because it returns its param), the caller that uses the variable more than
+/// once must still emit .clone() for all-but-last uses.
+#[test]
+fn clone_multi_use_when_callee_disqualified() {
+    let src = r#"
+type Buf = struct { data: String }
+fn take(b: Buf) -> Buf { b }
+fn caller(b: Buf) -> Buf {
+    let _x = take(b);
+    take(b)
+}
+"#;
+    let rust = transpile_src(src);
+    // take returns b → disqualified from borrow inference → kept as owned.
+    // caller uses b twice: first call must clone, last call moves.
+    assert_contains(&rust, "take(b.clone())");
+    assert_contains(&rust, "take(b)");
+}
+
+// ── Regression: for-loop iterable param must not be inferred as borrow ────────
+
+/// Phase B fix: a param used as the direct for-loop iterable is disqualified
+/// from borrow inference.  The emitter wraps the iterable in `.clone()`, but
+/// `(&Vec<T>).clone()` yields `&Vec<T>`, not `Vec<T>` — wrong element type.
+/// The param stays owned so Phase A move/clone handles it normally.
+#[test]
+fn param_as_direct_for_iterable_not_inferred_as_borrow() {
+    let src = r#"
+fn process(xs: List[Int]) -> Int {
+    let mut s = 0;
+    for x in xs {
+        s = s + x
+    }
+    s
+}
+fn caller(xs: List[Int]) -> Int { process(xs) }
+"#;
+    let rust = transpile_src(src);
+    // process: xs is the direct for-loop iterable → disqualified.
+    // caller: single use of xs → moved (Phase A last-use move).
+    assert_not_contains(&rust, "process(&xs)");
+    assert_contains(&rust, "process(xs)");
+}
+
+// ── Fix: callee signature emits &T for inferred-borrow params (AC #1) ─────────
+
+/// Issue #365 AC #1: a read-only struct param is emitted as &T in the
+/// callee's Rust function signature.
+#[test]
+fn inferred_borrow_emits_ref_in_callee_signature() {
+    let src = r#"
+type Point = struct { x: Int, y: Int }
+fn get_x(p: Point) -> Int { p.x }
+fn caller(p: Point) -> Int { get_x(p) }
+"#;
+    let rust = transpile_src(src);
+    // get_x's p is read-only (field access) → inferred as &Point.
+    assert_contains(&rust, "fn get_x(p: &Point)");
+    assert_not_contains(&rust, "fn get_x(p: Point)");
+    assert_contains(&rust, "get_x(&p)");
+}
+
+/// Issue #365 AC #5: List[Byte] param inferred as &Vec<u8> — no clone at call site.
+#[test]
+fn list_byte_param_inferred_as_borrow_no_clone() {
+    let src = r#"
+fn process_bytes(data: List[Byte]) -> Int { data.len() }
+fn caller(data: List[Byte]) -> Int { process_bytes(data) }
+"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "process_bytes(&data)");
+    assert_not_contains(&rust, "process_bytes(data.clone())");
+    assert_contains(&rust, "fn process_bytes(data: &Vec<u8>)");
+}

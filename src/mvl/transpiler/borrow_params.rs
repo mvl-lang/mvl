@@ -34,6 +34,7 @@ use std::collections::HashMap;
 
 use crate::mvl::parser::ast::{
     Block, Decl, ElseBranch, Expr, FnDecl, LValue, MatchBody, Param, Program, Stmt, TypeExpr,
+    UnaryOp,
 };
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -130,7 +131,11 @@ fn explicit_borrow_flags(params: &[Param]) -> Vec<Option<bool>> {
 fn is_copy_type(ty: &TypeExpr) -> bool {
     match ty {
         TypeExpr::Base { name, args, .. } => {
-            args.is_empty() && matches!(name.as_str(), "Int" | "Float" | "Bool" | "Byte" | "Unit")
+            args.is_empty()
+                && matches!(
+                    name.as_str(),
+                    "Int" | "Float" | "Bool" | "Byte" | "Unit" | "Char"
+                )
         }
         // References and fn-pointer types are always Copy in Rust.
         TypeExpr::Ref { .. } | TypeExpr::Fn { .. } => true,
@@ -212,12 +217,16 @@ fn stmt_has_disqualifying_use(param: &str, stmt: &Stmt, is_last: bool) -> bool {
                 })
         }
 
-        // For-loop: the iterable is wrapped in `.clone()` at emit time, so
-        // `for x in param` is safe — the param is not consumed.  We still
-        // check the iter expression for nested disqualifying uses (e.g. if
-        // `iter` is `f(param, …)`).
+        // For-loop: when the param IS the direct iterable (`for x in param`),
+        // the emitter wraps it in `.clone()`.  However, `.clone()` on a `&Vec<T>`
+        // yields another `&Vec<T>`, not a `Vec<T>` — so the loop would iterate
+        // by reference, giving `&T` elements instead of `T` elements.  Disqualify
+        // the param in this case.  Compound iter expressions (e.g. `f(param)`)
+        // are already caught by the recursive disqualification below.
         Stmt::For { iter, body, .. } => {
-            expr_has_disqualifying_use(param, iter) || block_has_disqualifying_use(param, body)
+            matches!(iter, Expr::Ident(n, _) if n == param)
+                || expr_has_disqualifying_use(param, iter)
+                || block_has_disqualifying_use(param, body)
         }
 
         Stmt::While { cond, body, .. } => {
@@ -243,7 +252,7 @@ fn stmt_has_disqualifying_use(param: &str, stmt: &Stmt, is_last: bool) -> bool {
 ///
 /// **Not** disqualifying at this level:
 /// * `param.method()` — receiver of a method call (auto-deref in Rust)
-/// * `for x in param` — for-loop iter (cloned at emit time)
+/// * `for x in param` — disqualified in `stmt_has_disqualifying_use` (direct iter)
 fn expr_has_disqualifying_use(param: &str, expr: &Expr) -> bool {
     match expr {
         // Free-function call: param directly as an argument → disqualify.
@@ -311,15 +320,24 @@ fn expr_has_disqualifying_use(param: &str, expr: &Expr) -> bool {
                 || expr_has_disqualifying_use(param, expr)
         }
 
-        // Unary operators: treat the same way — any direct reference to the
-        // param as the sole operand is a value-level use.
-        Expr::Unary { expr, .. } => {
-            matches!(expr.as_ref(), Expr::Ident(n, _) if n == param)
+        // Unary operators: Neg and Not on the param directly consume it as a
+        // value — disqualifying.  Deref (`*param`) is sound for `&T` because
+        // that is exactly how references are used; do not disqualify it.
+        Expr::Unary { op, expr, .. } => {
+            (*op != UnaryOp::Deref && matches!(expr.as_ref(), Expr::Ident(n, _) if n == param))
                 || expr_has_disqualifying_use(param, expr)
         }
 
+        // Binary operators: param as a direct operand is disqualifying.
+        // Rust's arithmetic operators (`+`, `-`, `*`, etc.) do not auto-deref,
+        // so `(&xs + rhs)` would be a compile error for non-Copy custom types.
+        // Equality/comparison operators work via `PartialEq for &T`, but we
+        // conservatively disqualify all binary uses for simplicity.
         Expr::Binary { left, right, .. } => {
-            expr_has_disqualifying_use(param, left) || expr_has_disqualifying_use(param, right)
+            matches!(left.as_ref(), Expr::Ident(n, _) if n == param)
+                || matches!(right.as_ref(), Expr::Ident(n, _) if n == param)
+                || expr_has_disqualifying_use(param, left)
+                || expr_has_disqualifying_use(param, right)
         }
 
         Expr::FieldAccess { expr, .. } => expr_has_disqualifying_use(param, expr),
@@ -336,13 +354,127 @@ fn expr_has_disqualifying_use(param: &str, expr: &Expr) -> bool {
 
         Expr::Block(b) => block_has_disqualifying_use(param, b),
 
-        Expr::Lambda { body, .. } => expr_has_disqualifying_use(param, body),
+        // Lambda: any capture of the param (at any depth, even as a method
+        // receiver) is disqualifying.  The lambda's lifetime is not controlled
+        // by this analysis — if the lambda escapes the current call frame,
+        // the inferred `&T` reference could be dangling.  Lambda params that
+        // shadow the outer param are excluded from this check.
+        Expr::Lambda {
+            params: lambda_params,
+            body,
+            ..
+        } => {
+            let shadowed = lambda_params.iter().any(|p| p.name == param);
+            !shadowed && expr_mentions_param(param, body)
+        }
 
         // Leaves that are never disqualifying at this level:
         // Expr::Ident, Expr::Literal — checked by the caller at the specific
         // position (arg, field, scrutinee, …) rather than here, so that
         // `param.method()` (receiver) is not flagged.
         _ => false,
+    }
+}
+
+/// Returns `true` if `param` appears anywhere inside `expr` — at any depth
+/// and in any syntactic position (including safe ones like method receivers).
+///
+/// Used to conservatively disqualify params captured by lambdas, where the
+/// lifetime of the capture cannot be determined by local analysis.
+fn expr_mentions_param(param: &str, expr: &Expr) -> bool {
+    match expr {
+        Expr::Ident(n, _) => n == param,
+        Expr::FnCall { args, .. } => args.iter().any(|a| expr_mentions_param(param, a)),
+        Expr::MethodCall { receiver, args, .. } => {
+            expr_mentions_param(param, receiver)
+                || args.iter().any(|a| expr_mentions_param(param, a))
+        }
+        Expr::Binary { left, right, .. } => {
+            expr_mentions_param(param, left) || expr_mentions_param(param, right)
+        }
+        Expr::Unary { expr, .. }
+        | Expr::FieldAccess { expr, .. }
+        | Expr::Sanitize { expr, .. }
+        | Expr::Declassify { expr, .. }
+        | Expr::Move { expr, .. }
+        | Expr::Consume { expr, .. }
+        | Expr::Propagate { expr, .. } => expr_mentions_param(param, expr),
+        Expr::Construct { fields, .. } => fields.iter().any(|(_, v)| expr_mentions_param(param, v)),
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+            elems.iter().any(|e| expr_mentions_param(param, e))
+        }
+        Expr::Map { pairs, .. } => pairs
+            .iter()
+            .any(|(k, v)| expr_mentions_param(param, k) || expr_mentions_param(param, v)),
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            expr_mentions_param(param, scrutinee)
+                || arms.iter().any(|arm| match &arm.body {
+                    MatchBody::Expr(e) => expr_mentions_param(param, e),
+                    MatchBody::Block(b) => b.stmts.iter().any(|s| stmt_mentions_param(param, s)),
+                })
+        }
+        Expr::If {
+            cond, then, else_, ..
+        } => {
+            expr_mentions_param(param, cond)
+                || b_mentions_param(param, then)
+                || else_
+                    .as_ref()
+                    .is_some_and(|e| expr_mentions_param(param, e))
+        }
+        Expr::Block(b) => b_mentions_param(param, b),
+        Expr::Lambda {
+            params: lambda_params,
+            body,
+            ..
+        } => {
+            let shadowed = lambda_params.iter().any(|p| p.name == param);
+            !shadowed && expr_mentions_param(param, body)
+        }
+        _ => false,
+    }
+}
+
+fn b_mentions_param(param: &str, block: &Block) -> bool {
+    block.stmts.iter().any(|s| stmt_mentions_param(param, s))
+}
+
+fn stmt_mentions_param(param: &str, stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Expr { expr, .. }
+        | Stmt::Return {
+            value: Some(expr), ..
+        } => expr_mentions_param(param, expr),
+        Stmt::Let { init, .. } => expr_mentions_param(param, init),
+        Stmt::Assign { value, .. } => expr_mentions_param(param, value),
+        Stmt::If {
+            cond, then, else_, ..
+        } => {
+            expr_mentions_param(param, cond)
+                || b_mentions_param(param, then)
+                || else_.as_ref().is_some_and(|e| match e {
+                    ElseBranch::Block(b) => b_mentions_param(param, b),
+                    ElseBranch::If(s) => stmt_mentions_param(param, s),
+                })
+        }
+        Stmt::For { iter, body, .. } => {
+            expr_mentions_param(param, iter) || b_mentions_param(param, body)
+        }
+        Stmt::While { cond, body, .. } => {
+            expr_mentions_param(param, cond) || b_mentions_param(param, body)
+        }
+        Stmt::Match {
+            scrutinee, arms, ..
+        } => {
+            expr_mentions_param(param, scrutinee)
+                || arms.iter().any(|arm| match &arm.body {
+                    MatchBody::Expr(e) => expr_mentions_param(param, e),
+                    MatchBody::Block(b) => b_mentions_param(param, b),
+                })
+        }
+        Stmt::Return { value: None, .. } => false,
     }
 }
 
@@ -441,12 +573,15 @@ mod tests {
     }
 
     #[test]
-    fn list_param_used_only_in_for_iter_inferred_as_borrow() {
-        // for-loop iter is cloned at emit time, so using xs there is safe.
+    fn list_param_used_directly_as_for_iter_is_not_borrow() {
+        // `for x in xs` where xs is the direct iterable: the emitter wraps in
+        // `.clone()`, but `(&Vec<T>).clone()` yields `&Vec<T>`, not `Vec<T>`.
+        // Iterating `&Vec<T>` gives `&T` elements — type error in the body.
+        // Disqualify xs so it stays owned and the move/clone path handles it.
         let fd = parse_fn(
             "fn sum(xs: List[Int]) -> Int { let mut acc = 0; for x in xs { acc = acc } acc }",
         );
-        assert_eq!(borrow_params_for_fn(&fd), vec![Some(false)]);
+        assert_eq!(borrow_params_for_fn(&fd), vec![None]);
     }
 
     #[test]
@@ -541,5 +676,64 @@ mod tests {
         let prog = parse_prog("");
         let map = build_borrow_params_map(&prog, &[&prelude_fn]);
         assert_eq!(map.get("print_ref"), Some(&vec![Some(false)]));
+    }
+
+    // ── Fix: is_copy_type must include Char ──────────────────────────────
+
+    #[test]
+    fn char_param_is_not_inferred_as_borrow() {
+        // Char maps to Rust `char` which is Copy — no benefit to borrowing.
+        let fd = parse_fn("fn f(c: Char) -> Bool { true }");
+        assert_eq!(borrow_params_for_fn(&fd), vec![None]);
+    }
+
+    // ── Fix: Binary operand disqualifies ─────────────────────────────────
+
+    #[test]
+    fn param_as_direct_binary_operand_is_not_borrow() {
+        // xs used directly as a binary operand: Rust arithmetic doesn't auto-deref,
+        // so `&Vec<i64> + rhs` would fail to compile.  Must disqualify.
+        let fd = parse_fn("fn f(xs: List[Int], ys: List[Int]) -> Bool { xs == ys }");
+        // both xs and ys appear as direct binary operands → both disqualified.
+        assert_eq!(borrow_params_for_fn(&fd), vec![None, None]);
+    }
+
+    #[test]
+    fn param_not_disqualified_when_only_in_method_call_inside_binary() {
+        // xs.len() is just a method receiver — the Int result is used in binary.
+        // xs itself is never a direct binary operand, so it stays read-only.
+        let fd = parse_fn("fn f(xs: List[Int]) -> Bool { xs.len() == 0 }");
+        assert_eq!(borrow_params_for_fn(&fd), vec![Some(false)]);
+    }
+
+    // ── Fix: Deref unary does not disqualify ─────────────────────────────
+
+    #[test]
+    fn deref_unary_on_explicit_ref_param_does_not_disqualify() {
+        // A parameter already declared as `&T` won't go through inference
+        // (explicit annotation takes priority), but verify that Deref on a
+        // non-Copy param in the body doesn't disqualify inference for OTHER params.
+        // Here `b` is field-accessed only → still inferred as borrow.
+        let fd = parse_fn("fn f(b: Point, r: &Int) -> Int { b.x }");
+        // b: Point — field access only → Some(false); r: &Int — explicit → Some(false).
+        assert_eq!(borrow_params_for_fn(&fd), vec![Some(false), Some(false)]);
+    }
+
+    // ── Fix: Lambda capture disqualifies ─────────────────────────────────
+
+    #[test]
+    fn param_captured_in_lambda_body_is_not_borrow() {
+        // xs is captured inside a lambda passed to apply().
+        // The lambda's lifetime is unknown — disqualify xs.
+        let fd = parse_fn("fn f(xs: List[Int]) -> Int { apply(|| xs.len()) }");
+        assert_eq!(borrow_params_for_fn(&fd), vec![None]);
+    }
+
+    #[test]
+    fn param_shadowed_by_lambda_param_is_still_borrow() {
+        // The lambda introduces its own `xs` parameter, shadowing the outer one.
+        // The outer `xs` is never captured — still inferred as borrow.
+        let fd = parse_fn("fn f(xs: List[Int]) -> Int { apply(|xs: List[Int]| xs.len()) }");
+        assert_eq!(borrow_params_for_fn(&fd), vec![Some(false)]);
     }
 }
