@@ -93,51 +93,95 @@ pub fn rev[T](xs: List[T]) -> List[T] where T: Clone {
 
 // ── Higher-order operations ───────────────────────────────────────────────────
 //
-// These methods are handled by the transpiler's specific emit arms in
-// emit_exprs.rs. Declarations here give the IFC label checker and effect
-// tracker a visible signature to reason about. The function bodies delegate
-// back to the method call so the transpiler emits the correct Rust code.
+// Phase 4 (ADR-0003): pure MVL implementations replacing transpiler special
+// cases.  Each function uses only `for`/`while` loops and kernel primitives
+// (list_get, list_len, slice).  The transpiler emits these as-is, with the
+// function-type parameter `f` emitted as `impl Fn(…)` so that both bare
+// function pointers and closures are accepted at call sites.
 
 /// Apply `f` to each element of `xs`, collecting results.
-pub fn map[T, U](xs: List[T], f: fn(T) -> U) -> List[U] where T: Clone {
-    xs.map(f)
+pub fn map[T, U](xs: List[T], f: fn(T) -> U) -> List[U] where T: Clone, U: Clone {
+    let mut result: List[U] = [];
+    for x in xs {
+        result.push(f(x))
+    };
+    result
 }
 
 /// Retain elements of `xs` satisfying predicate `f`.
 pub fn filter[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
-    xs.filter(f)
+    let mut result: List[T] = [];
+    for x in xs {
+        if f(x.clone()) {
+            result.push(x)
+        }
+    };
+    result
 }
 
 /// Left fold: reduce `xs` to a single value using `f` and accumulator `init`.
-///
-/// Stub body returns `init` unchanged; the transpiler's fold arm handles
-/// actual semantics at `xs.fold(init, f)` call sites.
-pub fn fold[T, U](xs: List[T], init: U, f: fn(U, T) -> U) -> U {
-    init
+pub fn fold[T, U](xs: List[T], init: U, f: fn(U, T) -> U) -> U where T: Clone, U: Clone {
+    let mut acc = init;
+    for x in xs {
+        acc = f(acc, x)
+    };
+    acc
 }
 
 /// Sort `xs` in ascending order using natural ordering.
 ///
-/// Stub body returns `xs` unchanged (requires PartialOrd which MVL cannot
-/// express as a where-bound); the transpiler's sort arm handles actual
-/// semantics at `xs.sort()` call sites.
+/// Stub: requires PartialOrd which MVL cannot express as a where-bound yet.
+/// The transpiler's sort arm handles actual semantics at `xs.sort()` call sites.
 pub fn sort[T](xs: List[T]) -> List[T] where T: Clone {
     slice(xs, 0, list_len(xs))
 }
 
 /// Split `xs` into elements satisfying `f` and those that do not.
+///
+/// Stub: MVL has no tuple-construction expression yet; the transpiler's
+/// partition arm handles actual semantics at `xs.partition(f)` call sites.
 pub fn partition[T](xs: List[T], f: fn(T) -> Bool) -> (List[T], List[T]) where T: Clone {
     xs.partition(f)
 }
 
 /// Retain leading elements while `f` returns true; stop at first false.
 pub fn take_while[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
-    xs.take_while(f)
+    let mut i = 0;
+    let len = list_len(xs);
+    let mut running = true;
+    while running && i < len {
+        match list_get(xs, i) {
+            Some(x) => {
+                if f(x.clone()) {
+                    i = i + 1
+                } else {
+                    running = false
+                }
+            },
+            None => { running = false }
+        }
+    };
+    slice(xs, 0, i)
 }
 
 /// Drop leading elements while `f` returns true; keep from first false onward.
 pub fn skip_while[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
-    xs.skip_while(f)
+    let mut i = 0;
+    let len = list_len(xs);
+    let mut running = true;
+    while running && i < len {
+        match list_get(xs, i) {
+            Some(x) => {
+                if f(x.clone()) {
+                    i = i + 1
+                } else {
+                    running = false
+                }
+            },
+            None => { running = false }
+        }
+    };
+    slice(xs, i, len)
 }
 
 /// True if at least one element satisfies `f`.
