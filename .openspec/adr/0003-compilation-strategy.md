@@ -2,15 +2,24 @@
 
 **Status:** Accepted
 **Date:** 2026-04-11
+**Revised:** 2026-04-30 — expanded to five phases; Phases 1–4 completed; Phase 5 (LLVM) active
 **Context:** How should the MVL compiler emit executable code? Transpile to an existing language or target LLVM IR directly?
 
 ## Decision
 
-Four-phase approach:
-1. **Phase 1 — It compiles:** MVL → Rust transpilation
-2. **Phase 2 — It's useful:** Rust FFI ecosystem, real programs
-3. **Phase 3 — It's trustworthy:** LLVM backend, all 11 proven at compile time
-4. **Phase 4 — It's self-sufficient:** Self-hosting, package ecosystem, certification
+Five-phase approach (originally four; Phase 3 split as the project matured):
+
+| Phase | Name | Status |
+|-------|------|--------|
+| 1 | **It compiles** — MVL → Rust transpilation | ✅ Complete |
+| 2 | **It's useful** — Rust FFI ecosystem, real programs | ✅ Complete |
+| 3 | **It's verified** — All 11 requirements enforced at compile time | ✅ Complete |
+| 4 | **It's complete** — Full stdlib in pure MVL | ✅ Complete |
+| 5 | **It's native** — Direct LLVM IR backend | 🔄 Active (Phase A done) |
+| 6 | **It's trustworthy** — Formal proofs, SMT solver, model checker | ⬜ Planned |
+| 7 | **It's self-sufficient** — Self-hosting, certification pipeline | ⬜ Planned |
+
+> **Why the split?** The original Phase 3 bundled LLVM codegen and formal provers together as a single milestone. In practice, the type checker achieved full 11-requirement enforcement via the Rust transpiler (completing "trustworthy" semantics without LLVM), and the stdlib matured enough to warrant its own phase. LLVM IR codegen is now a distinct engineering phase (Phase 5) tracked under the `phase-5` GitHub label.
 
 ## Rationale
 
@@ -28,7 +37,7 @@ CompCert (Leroy, INRIA, 2006) proved this: the compiler IS the theorem prover, t
 
 Rust scores 7/11 — highest of any mainstream language. The transpilation only adds 4 requirements (termination, races, refinements, IFC). Go would require adding 10.5. Zig 6.5. Rust is the closest starting point.
 
-### Why LLVM for Phase 3
+### Why LLVM for Phase 5
 
 - One compiler, one proof chain
 - All targets: ARM, x86, WASM, RISC-V
@@ -46,72 +55,112 @@ Rust scores 7/11 — highest of any mainstream language. The transpilation only 
 | MVL → JVM bytecode | JVM has GC | Violates Req 6 (ownership), no deterministic deallocation |
 | Direct machine code | — | Reimplements optimization. LLVM does this better. |
 
-## Phase 1 Completion Criteria
+## Phase 1 — It compiles ✅
 
-Phase 1 is **done** when:
+**Done when:** `mvl build` produces a native binary.
 
-1. **`mvl build` produces a native binary** — transpile to Rust, generate `Cargo.toml`, invoke `cargo build`
-2. **Both reference examples compile and run** — `auth_handler.mvl` and `safe_division.mvl` produce working binaries
-3. **All 11 requirements are enforced** — 9 at MVL compile time, Req 10 as Rust runtime asserts, Req 11 as Rust newtypes
-4. **`mvl test` runs tests** — transpile `_test.mvl` files to Rust `#[test]`, invoke `cargo test`
-5. **Module system works** — multi-file programs with `module` and `use`
-6. **Generics emit correctly** — `Array[T]`, `Option[T]`, `Result[T,E]` map to Rust generics
-7. **Core stdlib bridge exists** — core types and operations map to Rust std equivalents
+- `mvl build` = transpile to Rust + invoke `cargo build` (#29, #30, #33, #34)
+- Both reference examples compile and run (`auth_handler.mvl`, `safe_division.mvl`)
+- IFC as Rust newtypes (#31) — Req 11 enforcement
+- Refinements as Rust runtime asserts (#32) — Req 10 enforcement
+- Module system (#47) — multi-file programs with `module` and `use`
+- Generics (#48) — `Array[T]`, `Option[T]`, `Result[T,E]` emit correctly
 
-### Phase 1 Critical Path
+## Phase 2 — It's useful ✅
 
-```
-Step 1: Transpiler basics (#29, #30)     → types + functions emit Rust
-Step 2: Stdlib bridge (#42, #43)         → core types map to Rust std
-Step 3: End-to-end (#33)                 → corpus compiles to binary
-Step 4: Cargo integration (#34)          → `mvl build` = transpile + cargo
-Step 5: IFC as newtypes (#31)            → Req 11 enforcement via Rust
-Step 6: Refinements as asserts (#32)     → Req 10 enforcement via Rust
-Step 7: Module system (#47)              → multi-file programs
-Step 8: Generics (#48)                   → Array[T], Option[T] emit correctly
-```
+**Done when:** Real programs written in MVL calling the Rust ecosystem via FFI.
 
-Steps 1-4 achieve "hello world to binary." Steps 5-6 complete all 11 requirements. Steps 7-8 make it usable for real programs.
+- `extern "rust"` blocks (#52, #91) — typed, effect-tracked, IFC-labeled FFI
+- Test transpilation (#38) — `_test.mvl` → Rust `#[test]`; `mvl test` runs corpus
+- Assurance reports (#73) — compiler tracks verified vs trusted (extern) ratio
+- `mvl mutate`, `mvl coverage` — mutation testing and MC/DC tooling
 
-## Phase 2 — It's useful
+## Phase 3 — It's verified ✅
 
-**Done when:** Real programs written in MVL, calling Rust ecosystem via FFI.
+**Done when:** All 11 requirements enforced at MVL compile time (not only at Rust level).
 
-- **`extern "rust"` blocks** (#52, #91) — call any Rust crate through typed, effect-tracked, IFC-labeled boundaries
-- **Module system** (#47) — multi-file programs with `module` and `use`
-- **Generics** (#48) — `Array[T]`, `Option[T]`, `Result[T,E]` emit correctly
-- **Test transpilation** (#38) — `_test.mvl` → Rust `#[test]`
-- **Assurance reports** (#73) — compiler tracks verified vs trusted (extern) ratio
-- **Zero MVL stdlib** — Rust is the stdlib, accessed through extern. Stdlib grows later as verified MVL wrappers.
+- Full type checker — 200+ integration tests, all 11 requirements assigned to error variants
+- Borrow tracking — `BorrowState` (Owned/SharedBorrowed/MutablyBorrowed), lifetime scope depth
+- Effect system — `IO`, `Net`, `FS`, `Terminal` capabilities tracked; `pure` enforcement
+- IFC label propagation — Req 11 checked in checker, not only as Rust newtypes
+- Mutation testing engine (#331) — boundary value analysis, surviving mutant reports
+- MC/DC coverage (#315) — condition/decision coverage reporting
 
-## Phase 3 — It's trustworthy
+## Phase 4 — It's complete ✅
 
-**Done when:** All 11 requirements proven at compile time. One compiler, one trust chain.
+**Done when:** A genuine MVL stdlib exists, written in MVL, not just Rust wrappers.
 
-- **LLVM IR backend** — replace Rust transpilation with direct LLVM codegen
-- **SMT solver integration** — Req 10 moves from runtime asserts to compile-time proofs
-- **Native IFC analysis** — Req 11 moves from Rust newtypes to compiler-native flow checking
-- **Borrow lifetimes** — full Req 2 enforcement (beyond use-after-move)
-- **Linear resources** — full Req 6 enforcement (must-consume semantics)
-- **Structural recursion proofs** — full Req 8 enforcement
-- **Model checker** (#37) — invariants, deadlock/livelock detection as compiler pass
-- **WASM target** — sandboxed execution for The Cog and edge deployment
+- Pure MVL higher-order list methods (#307) — `filter`, `fold`, `take_while`, `skip_while`, `any`, `all`
+- `std/crypto` with real SHA-256/512 and CSPRNG (#349) — backed by Rust runtime
+- Stdlib scope defined: `std/lists`, `std/strings`, `std/math`, `std/crypto`, `std/io`, `std/args`, `std/log`
+- Assurance ratio enforced — `mvl test` harness with `// expect:` annotation support
 
-## Phase 4 — It's self-sufficient
+## Phase 5 — It's native 🔄
 
-**Done when:** MVL compiler compiles itself. Full ecosystem.
+**Done when:** Direct LLVM IR backend replaces Rust transpilation as the primary compilation path.
 
-- **Self-hosting** — MVL compiler rewritten in MVL, compiled by Phase 3 compiler
-- **Package manager** (#56) — dependency resolution, SBOM generation, trust scoring
-- **Verified MVL stdlib** — replaces extern wrappers, pushes assurance ratio toward 90%+
-- **Concurrency model** — actors, reference capabilities, WCET refinements
-- **Transpilation corpus** — seed for LLM training on MVL generation quality
-- **AAE-5 certification pipeline** — automated evidence for IEC 61508, DO-178C
+The LLVM backend is gated on the `llvm` Cargo feature (default-on). `mvl build/run/test --backend=llvm` invokes it.
+
+### Phase 5A — Hello World ✅ (v0.55.0, closes #352)
+
+| Story | Description | Status |
+|-------|-------------|--------|
+| L5-01 | `inkwell` optional dep, `llvm` Cargo feature gate | ✅ |
+| L5-02 | LLVM module setup: target triple, data layout, `main() → i32 0` | ✅ |
+| L5-03 | `mvl test --backend=llvm` dual-backend harness with `// expect:` | ✅ |
+| L5-04 | Primitive type codegen: `Int→i64`, `Float→f64`, `Bool→i1`, `Byte→i8`, `Char→i32`, `Unit→void`, `String→ptr` | ✅ |
+| L5-07 | Functions: two-pass emit, parameter alloca pattern, if-expressions with phi nodes | ✅ |
+| L5-10 | Arithmetic with checked overflow (`llvm.sadd/ssub/smul.with.overflow` + `llvm.trap`), comparisons, float ops | ✅ |
+| L5-17 | `print`/`println` → libc `printf`; typed format dispatch (`%lld`/`%f`/`%s`) | ✅ |
+
+### Phase 5B — Structs & Enums (planned)
+
+- Struct type codegen → LLVM `{field...}` aggregate types
+- Enum codegen → tagged union representation
+- Pattern matching → `switch` + phi
+
+### Phase 5C — Generics & Polymorphism (planned)
+
+- Monomorphisation pass — instantiate generic functions at call sites
+- `Array[T]` → heap-allocated with bounds-checked indexing
+
+### Phase 5D — Borrow Analysis (planned)
+
+- Move elision and borrow tracking in LLVM backend (currently only in Rust transpiler)
+- `&T` / `&mut T` as LLVM pointer types with compiler-enforced aliasing rules
+
+### Phase 5E — WASM & Targets (planned)
+
+- `--target=wasm32` — WASM output for The Cog and edge deployment
+- `--target=aarch64` — ARM support
+- One compiler, all targets — the core promise of Phase 5
+
+## Phase 6 — It's trustworthy ⬜
+
+**Done when:** Formal proofs replace runtime asserts and extern trust.
+
+- SMT solver integration — Req 10 (refinements) proven at compile time
+- Native IFC flow analysis — Req 11 proven without Rust newtypes
+- Full Non-Lexical Lifetimes — Req 2 (memory safety) with complete borrow analysis
+- Linear resources — Req 6 (must-consume) enforced in compiler, not just runtime
+- Structural recursion proofs — Req 8 termination
+- Model checker (#37) — invariants, deadlock/livelock detection
+
+## Phase 7 — It's self-sufficient ⬜
+
+**Done when:** MVL compiler compiles itself. Full ecosystem for certified software.
+
+- Self-hosting — MVL compiler rewritten in MVL, compiled by Phase 6 compiler
+- Package manager (#56) — dependency resolution, SBOM generation, trust scoring
+- Verified MVL stdlib — replaces Rust runtime wrappers, assurance ratio → 90%+
+- Concurrency model — actors, reference capabilities, WCET refinements
+- AAE-5 certification pipeline — automated evidence for IEC 61508, DO-178C
 
 ## Consequences
 
-- Phase 1 accepts two-compiler friction as temporary cost
-- Phase 2 makes the language immediately useful without building a stdlib
-- Phase 3 requires building LLVM codegen — significant investment
-- Phase 4 is the long game — self-hosting proves the language is general-purpose
-- WASM target (Phase 3) unlocks sandboxed execution for The Cog and edge deployment
+- Phase 1 accepted two-compiler friction as a temporary cost — now complete
+- Phases 1-4 on the Rust transpiler proved the language design before building LLVM
+- Phase 5 is the production path: one compiler, one proof chain, all targets
+- The `llvm` Cargo feature is default-on from v0.55.0; `--no-default-features` keeps the Rust backend
+- WASM target (Phase 5E) unlocks sandboxed execution for The Cog and edge deployment
+- Phases 6-7 are the long game — formal verification and self-hosting prove the language is general-purpose

@@ -3,6 +3,8 @@ use mvl::mvl::checker::mcdc::{analyze_mcdc, DecisionInfo};
 use mvl::mvl::checker::passes::{
     aggregate_verdicts, parse_req_filter, source_hash, PassRegistry, Verdict, VerdictCache,
 };
+#[cfg(feature = "llvm")]
+use mvl::mvl::codegen;
 use mvl::mvl::linter::{self, config::LintConfig};
 use mvl::mvl::packages;
 use mvl::mvl::parser::ast::{Decl, Program, Totality, TypeBody};
@@ -67,10 +69,22 @@ fn main() {
         }
         "build" => {
             let path = require_path_arg(&args, "build");
-            build_project(&path, false, &[]);
+            let backend = parse_backend(&args);
+            if backend == "llvm" {
+                #[cfg(feature = "llvm")]
+                build_project_llvm(&path);
+                #[cfg(not(feature = "llvm"))]
+                {
+                    eprintln!("error: --backend=llvm requires the `llvm` feature (rebuild with --features llvm)");
+                    process::exit(1);
+                }
+            } else {
+                build_project(&path, false, &[]);
+            }
         }
         "run" => {
             let path = require_path_arg(&args, "run");
+            let backend = parse_backend(&args);
             let path_idx = path_arg_index(&args);
             let run_args: Vec<String> = args[path_idx + 1..]
                 .iter()
@@ -78,7 +92,17 @@ fn main() {
                 .skip(1)
                 .cloned()
                 .collect();
-            build_project(&path, true, &run_args);
+            if backend == "llvm" {
+                #[cfg(feature = "llvm")]
+                run_project_llvm(&path);
+                #[cfg(not(feature = "llvm"))]
+                {
+                    eprintln!("error: --backend=llvm requires the `llvm` feature (rebuild with --features llvm)");
+                    process::exit(1);
+                }
+            } else {
+                build_project(&path, true, &run_args);
+            }
         }
         "transpile" => {
             let path = require_path_arg(&args, "transpile");
@@ -86,10 +110,21 @@ fn main() {
         }
         "test" => {
             let path = require_path_arg(&args, "test");
+            let backend = parse_backend(&args);
             let quiet = args.iter().any(|a| a == "--quiet" || a == "-q");
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
             let coverage = args.iter().any(|a| a == "--coverage");
-            cmd_test(&path, quiet, verbose, coverage);
+            if backend == "llvm" {
+                #[cfg(feature = "llvm")]
+                cmd_test_llvm(&path, quiet, verbose);
+                #[cfg(not(feature = "llvm"))]
+                {
+                    eprintln!("error: --backend=llvm requires the `llvm` feature (rebuild with --features llvm)");
+                    process::exit(1);
+                }
+            } else {
+                cmd_test(&path, quiet, verbose, coverage);
+            }
         }
         "mutate" => {
             let path = require_path_arg(&args, "mutate");
@@ -165,7 +200,10 @@ fn print_usage() {
     eprintln!("  mvl test  <file|dir> -q            — suppress MVL output, pass -q to cargo test (dot progress)");
     eprintln!("  mvl test  <file|dir> --verbose     — show transpile path and all test names with captured stdout");
     eprintln!(
-        "  mvl test  <file|dir> --coverage    — run with native behavioral branch coverage report"
+        "  mvl test  <file|dir> --coverage    — run with native behavioral branch coverage report
+  mvl test  <file|dir> --backend=llvm  — compile + run via LLVM/lli, check // expect: annotations
+  mvl build <file|dir> --backend=llvm  — compile to LLVM IR and invoke lli (requires --features llvm)
+  mvl run   <file|dir> --backend=llvm  — compile and run via LLVM lli (requires --features llvm)"
     );
     eprintln!("  mvl mutate <file|dir>               — behavioral mutation testing (ADR-0014)");
     eprintln!("  mvl mutate <file|dir> -q            — quiet: only show mutation score");
@@ -194,6 +232,13 @@ fn print_usage() {
     eprintln!("  mvl install                        — fetch all deps from mvl.lock, verify hashes");
     eprintln!("  mvl update                         — re-resolve versions, update mvl.lock");
     eprintln!("  mvl pin [<version>]                — pin project to compiler version (writes .mvl-version)");
+}
+
+/// Parse `--backend=<name>` from args; defaults to `"rust"`.
+fn parse_backend(args: &[String]) -> &str {
+    args.iter()
+        .find_map(|a| a.strip_prefix("--backend="))
+        .unwrap_or("rust")
 }
 
 fn cmd_self(args: &[String]) {
@@ -2778,4 +2823,219 @@ mod find_test_binary_tests {
         let out = find_test_binary_from_cargo_output(line.as_bytes());
         assert_eq!(out.unwrap().to_str().unwrap(), "C:\\tmp\\mvl\\test.exe");
     }
+}
+
+// ── LLVM backend commands (feature = "llvm") ──────────────────────────────────
+
+/// Compile an MVL file to LLVM IR and write the .ll file to the current directory.
+/// `mvl build --backend=llvm <file>`
+#[cfg(feature = "llvm")]
+fn build_project_llvm(path: &str) {
+    let (prog, _src) = parse_or_exit(path);
+    let module_name = stem(path);
+    match codegen::compile_to_ir(&prog, &module_name) {
+        Ok(ir) => {
+            let out_path = format!("{module_name}.ll");
+            fs::write(&out_path, &ir).unwrap_or_else(|e| {
+                eprintln!("error: cannot write {out_path}: {e}");
+                process::exit(1);
+            });
+            println!("LLVM IR written to: {out_path}");
+        }
+        Err(e) => {
+            eprintln!("error: LLVM codegen failed: {e}");
+            process::exit(1);
+        }
+    }
+}
+
+/// Compile an MVL file to LLVM IR and execute it via `lli`.
+/// `mvl run --backend=llvm <file>`
+#[cfg(feature = "llvm")]
+fn run_project_llvm(path: &str) {
+    let lli = codegen::find_lli().unwrap_or_else(|| {
+        eprintln!("error: `lli` not found — install LLVM 22 (brew install llvm)");
+        process::exit(1);
+    });
+
+    let (prog, _src) = parse_or_exit(path);
+    let module_name = stem(path);
+    let ir = match codegen::compile_to_ir(&prog, &module_name) {
+        Ok(ir) => ir,
+        Err(e) => {
+            eprintln!("error: LLVM codegen failed: {e}");
+            process::exit(1);
+        }
+    };
+
+    // Write IR to a temp file and run via lli.
+    let tmp = tempfile::NamedTempFile::with_suffix(".ll").unwrap_or_else(|e| {
+        eprintln!("error: cannot create temp file: {e}");
+        process::exit(1);
+    });
+    fs::write(tmp.path(), &ir).unwrap_or_else(|e| {
+        eprintln!("error: cannot write IR: {e}");
+        process::exit(1);
+    });
+    let status = process::Command::new(&lli)
+        .arg(tmp.path())
+        .status()
+        .unwrap_or_else(|e| {
+            eprintln!("error: failed to run lli: {e}");
+            process::exit(1);
+        });
+    if !status.success() {
+        process::exit(status.code().unwrap_or(1));
+    }
+}
+
+/// LLVM integration test harness (L5-03).
+///
+/// Finds all `.mvl` files under `path` that have `// expect:` or
+/// `// Expected stdout:` annotations, compiles each via the LLVM backend,
+/// runs the IR with `lli`, and asserts that stdout matches the annotation.
+///
+/// `mvl test --backend=llvm <path>`
+#[cfg(feature = "llvm")]
+fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
+    let lli = codegen::find_lli().unwrap_or_else(|| {
+        eprintln!("error: `lli` not found — install LLVM 22 (brew install llvm)");
+        process::exit(1);
+    });
+
+    // Collect all .mvl files with expect annotations + fn main.
+    let all_mvl = mvl_files_all(path);
+    let mut test_cases: Vec<(PathBuf, String)> = Vec::new();
+    for file in &all_mvl {
+        let src = match fs::read_to_string(file) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        // Only test files that have a fn main.
+        let has_main = src.contains("fn main(");
+        if !has_main {
+            continue;
+        }
+        if let Some(expected) = codegen::parse_expect_annotation(&src) {
+            test_cases.push((file.clone(), expected));
+        }
+    }
+
+    if test_cases.is_empty() {
+        if !quiet {
+            println!("No LLVM test cases found (files with `fn main` + `// expect:` annotations).");
+        }
+        return;
+    }
+
+    if !quiet {
+        println!("LLVM backend: {} test file(s)", test_cases.len());
+    }
+
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+
+    for (file, expected) in &test_cases {
+        let file_str = file.display().to_string();
+        let module_name = stem(&file_str);
+
+        let (prog, _src) = parse_or_exit(&file_str);
+        let ir = match codegen::compile_to_ir(&prog, &module_name) {
+            Ok(ir) => ir,
+            Err(e) => {
+                eprintln!("  FAIL (codegen): {file_str}");
+                eprintln!("    {e}");
+                failed += 1;
+                continue;
+            }
+        };
+
+        // Write IR to a temp file.
+        let tmp = match tempfile::NamedTempFile::with_suffix(".ll") {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("  FAIL (tempfile): {file_str}: {e}");
+                failed += 1;
+                continue;
+            }
+        };
+        if let Err(e) = fs::write(tmp.path(), &ir) {
+            eprintln!("  FAIL (write IR): {file_str}: {e}");
+            failed += 1;
+            continue;
+        }
+
+        // Run via lli and capture stdout.
+        let output = process::Command::new(&lli)
+            .arg(tmp.path())
+            .output()
+            .unwrap_or_else(|e| {
+                eprintln!("error: failed to run lli: {e}");
+                process::exit(1);
+            });
+
+        let actual = String::from_utf8_lossy(&output.stdout);
+        let actual_trimmed = actual.trim_end_matches('\n');
+        let expected_trimmed = expected.trim_end_matches('\n');
+
+        if actual_trimmed == expected_trimmed {
+            passed += 1;
+            if verbose {
+                println!("  PASS: {file_str}");
+            } else if !quiet {
+                print!(".");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+            }
+        } else {
+            failed += 1;
+            if !quiet {
+                println!("\n  FAIL: {file_str}");
+                println!("    expected: {:?}", expected_trimmed);
+                println!("    got:      {:?}", actual_trimmed);
+                if verbose && !ir.is_empty() {
+                    println!("    --- IR ---");
+                    for line in ir.lines().take(40) {
+                        println!("    {line}");
+                    }
+                }
+            }
+        }
+    }
+
+    if !quiet && !verbose {
+        println!(); // newline after dots
+    }
+    println!("{} passed, {} failed", passed, failed);
+    if failed > 0 {
+        process::exit(1);
+    }
+}
+
+/// Recursively find all `.mvl` files under `path` (both test and non-test).
+#[cfg(feature = "llvm")]
+fn mvl_files_all(path: &str) -> Vec<PathBuf> {
+    let root = Path::new(path);
+    if root.is_file() {
+        if root.extension().map(|e| e == "mvl").unwrap_or(false) {
+            return vec![root.to_path_buf()];
+        }
+        return vec![];
+    }
+    let mut result = Vec::new();
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().map(|e| e == "mvl").unwrap_or(false) {
+                out.push(p);
+            }
+        }
+    }
+    walk(root, &mut result);
+    result.sort();
+    result
 }

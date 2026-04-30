@@ -86,6 +86,16 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
+      - name: Install LLVM 22
+        run: |
+          # Install LLVM 22 from the official apt.llvm.org repository.
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-22.list
+          sudo apt-get update -qq
+          sudo apt-get install -y llvm-22-dev libclang-22-dev libpolly-22-dev
+          echo "LLVM_SYS_221_PREFIX=$(llvm-config-22 --prefix)" >> "$GITHUB_ENV"
+
       - name: Check formatting
         run: cargo fmt -- --check
 
