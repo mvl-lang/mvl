@@ -9,8 +9,10 @@ description = "MVL — Minimum Verification Language compiler"
 license = "Apache-2.0"
 
 [features]
-# Enable LLVM backend via inkwell. Requires LLVM 22 installed.
-# macOS homebrew: LLVM_SYS_221_PREFIX=/opt/homebrew/opt/llvm cargo build --features llvm
+# LLVM backend is on by default. Requires LLVM 22 installed.
+# macOS homebrew: brew install llvm  (path set via .cargo/config.toml)
+# To build without LLVM: cargo build --no-default-features
+default = ["llvm"]
 llvm = ["dep:inkwell"]
 
 [dependencies]

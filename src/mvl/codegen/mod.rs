@@ -865,7 +865,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                         // Assume char* string.
                         (format!("%s{suffix}"), Some(v.into()))
                     }
-                    _ => (format!("{suffix}"), None),
+                    _ => (suffix.to_string(), None),
                 };
                 let fmt_global = self
                     .builder
