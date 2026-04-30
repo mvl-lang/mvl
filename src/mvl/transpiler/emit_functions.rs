@@ -48,7 +48,7 @@ pub fn emit_fn_decl(cg: &mut Codegen, fd: &FnDecl) {
     // The caller (codegen) is responsible for grouping them; here we just
     // emit the #[test] attribute and a non-pub signature.
     // Retrieve borrow flags for this function (Phase B, Spec 009 Req 2).
-    let borrows: Vec<bool> = cg
+    let borrows: Vec<Option<bool>> = cg
         .borrow_params_map
         .get(&fd.name)
         .cloned()
@@ -181,19 +181,22 @@ fn emit_generics(type_params: &[GenericParam], constraints: &[Constraint]) -> St
 
 // ── Parameters ───────────────────────────────────────────────────────────
 
-fn emit_params(params: &[Param], borrows: &[bool]) -> String {
+fn emit_params(params: &[Param], borrows: &[Option<bool>]) -> String {
     params
         .iter()
         .enumerate()
         .map(|(i, p)| {
             // Phase B: if this param is an inferred borrow (not already TypeExpr::Ref),
-            // wrap the emitted type in `&`.
-            let is_inferred_borrow =
-                borrows.get(i).copied().unwrap_or(false) && !matches!(p.ty, TypeExpr::Ref { .. });
-            let ty_str = if is_inferred_borrow {
-                format!("&{}", emit_fn_param_type(&p.ty))
-            } else {
-                emit_fn_param_type(&p.ty)
+            // wrap the emitted type in `&` or `&mut `.
+            let ty_str = match borrows.get(i).copied().flatten() {
+                Some(mutable) if !matches!(p.ty, TypeExpr::Ref { .. }) => {
+                    if mutable {
+                        format!("&mut {}", emit_fn_param_type(&p.ty))
+                    } else {
+                        format!("&{}", emit_fn_param_type(&p.ty))
+                    }
+                }
+                _ => emit_fn_param_type(&p.ty),
             };
             // Capability annotation as a comment prefix: kept in name for now
             let cap_comment = match &p.capability {

@@ -409,17 +409,14 @@ impl TypeChecker {
         // Two `&mut T` parameters of the same inner type at the same function signature
         // could be aliased at a call site.  Reject this statically.
         {
-            let mut mut_ref_types: Vec<String> = Vec::new();
+            let mut seen_mut_ref_types: HashSet<String> = HashSet::new();
             for param in &fd.params {
                 if let Ty::Ref(true, inner) = resolve(&param.ty) {
-                    let inner_str = inner.display();
-                    if mut_ref_types.contains(&inner_str) {
+                    if !seen_mut_ref_types.insert(inner.display()) {
                         self.emit(CheckError::DoubleMutableBorrow {
                             name: param.name.clone(),
                             span: param.span,
                         });
-                    } else {
-                        mut_ref_types.push(inner_str);
                     }
                 }
             }

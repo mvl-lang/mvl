@@ -54,12 +54,19 @@ use crate::mvl::parser::lexer::Span;
 /// Tracks whether a variable currently has any outstanding references,
 /// enforcing the Rust borrow rules at the checker level.
 ///
-/// State machine:
+/// # State machine (not yet driven — TODO #306)
+///
+/// The transitions below are the intended semantics for the full Phase D
+/// implementation.  Currently the field is always `Owned`; no code in the
+/// checker reads or mutates it.  `AliasingMutableBorrow` (the error for
+/// creating `&mut x` while `x` is already borrowed) is also not yet emitted.
+///
 /// * `Owned` → `SharedBorrowed(n)` when `&x` is created.
 /// * `Owned` → `MutablyBorrowed` when `&mut x` is created.
 /// * `SharedBorrowed(n)` → `SharedBorrowed(n-1)` when a shared borrow goes out of scope.
 /// * `SharedBorrowed(0)` == `Owned`.
 /// * `MutablyBorrowed` → `Owned` when the mutable borrow goes out of scope.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum BorrowState {
     /// No outstanding borrows — value is exclusively owned.
@@ -85,6 +92,8 @@ pub struct VarInfo {
     /// Active borrow state (Phase D, Spec 009 Req 2).
     ///
     /// Tracks outstanding shared and mutable borrows to enforce alias safety.
+    /// Not yet driven — always `Owned`. See `BorrowState` doc for TODO.
+    #[allow(dead_code)]
     pub borrow_state: BorrowState,
 }
 
@@ -102,12 +111,6 @@ impl VarInfo {
 
     pub fn with_capability(mut self, cap: Option<Capability>) -> Self {
         self.capability = cap;
-        self
-    }
-
-    /// Set the scope depth at definition time.
-    pub fn with_scope_depth(mut self, depth: usize) -> Self {
-        self.scope_depth = depth;
         self
     }
 }
@@ -609,7 +612,9 @@ impl TypeEnv {
     // ── Variable operations ──────────────────────────────────────────────
 
     pub fn define(&mut self, name: String, mut info: VarInfo) {
-        // Record scope depth so lifetime checking can compare referent vs binding depth.
+        // Record scope depth (0-based: outermost scope = 0) so lifetime checking can
+        // compare referent depth vs binding depth.  Note: scope_depth() returns
+        // scopes.len() (raw length) — a different convention; do not cross-compare.
         info.scope_depth = self.scopes.len().saturating_sub(1);
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name, info);
@@ -637,8 +642,11 @@ impl TypeEnv {
         None
     }
 
-    /// Returns the current scope stack depth.  Used by lambda-capture checking to
-    /// record the depth at which a lambda was entered.
+    /// Returns the raw scope stack height (= number of open scopes).
+    /// Used by lambda-capture checking to record the depth at which a lambda was entered.
+    ///
+    /// Convention: returns `scopes.len()` (raw length, not 0-based).
+    /// `VarInfo.scope_depth` uses `scopes.len() - 1` (0-based index); do not cross-compare.
     pub fn scope_depth(&self) -> usize {
         self.scopes.len()
     }

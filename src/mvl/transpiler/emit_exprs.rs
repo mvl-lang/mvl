@@ -337,7 +337,7 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                 cg.push("(");
                 // Phase B: look up borrow flags for this callee so we can emit `&x`
                 // instead of `x.clone()` for reference parameters.
-                let borrows: Vec<bool> = cg
+                let borrows: Vec<Option<bool>> = cg
                     .borrow_params_map
                     .get(name.as_str())
                     .cloned()
@@ -659,44 +659,40 @@ fn emit_args(cg: &mut Codegen, args: &[Expr]) {
     }
 }
 
-/// Emit arguments for a function call, using per-parameter borrow flags (Phase B).
+/// Emit arguments for a function call, using per-parameter borrow kinds (Phase B).
 ///
-/// When `borrows[i]` is `true`, argument `i` is emitted as `&x` (a shared
-/// reference) instead of `x.clone()`.  For mutable references (the flag is
-/// still `true`; callee declares `&mut T`) the call site emits `&mut x`.
-/// The `mutable` distinction is encoded in the callee's [`TypeExpr::Ref`];
-/// here we conservatively emit `&` for all reference params because the
-/// transpiler does not thread mutability flags through the borrow map.
+/// * `Some(false)` — emit `&x` (shared reference).
+/// * `Some(true)`  — emit `&mut x` (mutable reference).
+/// * `None`        — emit normally (`x.clone()` / move).
 ///
-/// When `borrows` is shorter than `args` (variadic-style or unknown callee),
+/// When `borrows` is shorter than `args` (unknown callee / variadic),
 /// the remaining args fall through to normal value-argument emission.
-fn emit_args_with_borrows(cg: &mut Codegen, args: &[Expr], borrows: &[bool]) {
+fn emit_args_with_borrows(cg: &mut Codegen, args: &[Expr], borrows: &[Option<bool>]) {
     for (i, arg) in args.iter().enumerate() {
         if i > 0 {
             cg.push(", ");
         }
-        if borrows.get(i).copied().unwrap_or(false) {
-            emit_expr_as_borrow_arg(cg, arg);
-        } else {
-            emit_expr_as_arg(cg, arg);
+        match borrows.get(i).copied().flatten() {
+            Some(mutable) => emit_expr_as_borrow_arg(cg, arg, mutable),
+            None => emit_expr_as_arg(cg, arg),
         }
     }
 }
 
-/// Emit an expression as a reference argument (`&x`).
+/// Emit an expression as a reference argument (`&x` or `&mut x`).
 ///
-/// For identifiers and field accesses we prepend `&`.  For temporaries
-/// (function call results, struct literals, block expressions) we wrap
-/// in `&(…)` to borrow the temporary — this is valid in Rust because
+/// For identifiers and field accesses the prefix is prepended directly.
+/// For temporaries (function call results, struct literals, block expressions)
+/// the expression is wrapped in `&(…)` / `&mut (…)` — valid in Rust because
 /// temporaries live until the end of the enclosing statement.
-fn emit_expr_as_borrow_arg(cg: &mut Codegen, expr: &Expr) {
+fn emit_expr_as_borrow_arg(cg: &mut Codegen, expr: &Expr, mutable: bool) {
     match expr {
         Expr::Ident(_, _) | Expr::FieldAccess { .. } => {
-            cg.push("&");
+            cg.push(if mutable { "&mut " } else { "&" });
             emit_expr(cg, expr);
         }
         _ => {
-            cg.push("&(");
+            cg.push(if mutable { "&mut (" } else { "&(" });
             emit_expr(cg, expr);
             cg.push(")");
         }

@@ -130,6 +130,9 @@ pub enum CheckError {
     },
     /// A `&T` reference is assigned to a binding with a shallower scope depth
     /// than the referent, meaning the reference would outlive the owner.
+    ///
+    /// TODO(#305): not yet emitted — scope-depth comparison is not implemented.
+    #[allow(dead_code)]
     ReferenceOutlivesOwner {
         /// The reference binding being created.
         ref_name: String,
@@ -141,6 +144,9 @@ pub enum CheckError {
     // ── Mutable borrow alias checking (Phase D, #306) ────────────────────
     /// A mutable borrow `&mut x` was requested while `x` is already borrowed
     /// (either shared or mutably).
+    ///
+    /// TODO(#306): not yet emitted — requires `BorrowState` transitions in the checker.
+    #[allow(dead_code)]
     AliasingMutableBorrow {
         name: String,
         span: Span,

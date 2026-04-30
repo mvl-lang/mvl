@@ -59,16 +59,19 @@ pub struct Codegen {
     /// emitted.  [`emit_expr_as_arg`] suppresses `.clone()` when the argument's
     /// span appears here — emitting a Rust move instead.
     pub last_uses: std::collections::HashSet<Span>,
-    /// Per-function borrow flags (Phase B, Spec 009 Req 2).
+    /// Per-function borrow kinds (Phase B, Spec 009 Req 2).
     ///
-    /// Maps function name → `Vec<bool>` where `true` at index `i` means
-    /// "parameter `i` is a reference (`&T`)".  Built once before emission
-    /// from all [`FnDecl`] nodes in the program.
+    /// Maps function name → `Vec<Option<bool>>` where:
+    /// * `Some(false)` at index `i` — parameter `i` is `&T`; emit `&x` at call sites.
+    /// * `Some(true)`  at index `i` — parameter `i` is `&mut T`; emit `&mut x`.
+    /// * `None`        at index `i` — pass by value (clone / move as normal).
+    ///
+    /// Built once before emission from all [`FnDecl`] nodes in the program.
     ///
     /// Used in two places:
-    /// * `emit_params` — wraps inferred-borrow param types in `&`.
-    /// * `emit_args` at call sites — emits `&x` instead of `x.clone()`.
-    pub borrow_params_map: std::collections::HashMap<String, Vec<bool>>,
+    /// * `emit_params` — wraps inferred-borrow param types in `&` / `&mut `.
+    /// * `emit_args` at call sites — emits `&x` / `&mut x` instead of `x.clone()`.
+    pub borrow_params_map: std::collections::HashMap<String, Vec<Option<bool>>>,
 }
 
 impl Codegen {

@@ -1790,3 +1790,53 @@ fn transpile_mutated_with_prelude_mixed_file_non_test_fn_produces_mutants() {
         test_mutants.len()
     );
 }
+
+// ── Phase B: borrow params — call-site &x / &mut x emission (#304) ───────────
+
+/// Shared ref param: call site emits `&y`, signature emits `&i64`.
+#[test]
+fn ref_param_fn_call_emits_ampersand() {
+    let src = "fn f(x: &Int) -> Unit { }  fn g(y: Int) -> Unit { f(y) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "f(&y)");
+    assert_contains(&rust, "x: &i64");
+}
+
+/// Mutable ref param: call site emits `&mut y`, signature emits `&mut i64`.
+#[test]
+fn mut_ref_param_fn_call_emits_ampersand_mut() {
+    let src = "fn f(x: &mut Int) -> Unit { }  fn g(y: Int) -> Unit { f(y) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "f(&mut y)");
+    assert_contains(&rust, "x: &mut i64");
+}
+
+/// Mixed params: only the ref-annotated argument gets `&`; owned stays as-is.
+#[test]
+fn mixed_params_selective_borrow_emission() {
+    let src = "fn f(a: Int, b: &Int) -> Unit { }  fn g(x: Int, y: Int) -> Unit { f(x, y) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "&y");
+    // First arg must NOT receive a & prefix
+    assert!(
+        !rust.contains("f(&x"),
+        "owned first arg must not be prefixed with &: {rust}"
+    );
+}
+
+/// Literal argument to ref param: wrapped as `&(42)`.
+#[test]
+fn literal_arg_to_ref_param_wrapped_in_ampersand_paren() {
+    let src = "fn f(x: &Int) -> Unit { }  fn g() -> Unit { f(42) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "&(42)");
+}
+
+/// Multiple call sites to the same ref fn both emit `&`.
+#[test]
+fn multiple_call_sites_both_emit_ampersand() {
+    let src = "fn f(x: &Int) -> Unit { }  fn g(a: Int, b: Int) -> Unit { f(a)  f(b) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "f(&a)");
+    assert_contains(&rust, "f(&b)");
+}

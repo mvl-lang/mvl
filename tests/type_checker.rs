@@ -3854,3 +3854,52 @@ fn two_mut_ref_params_of_different_types_accepted() {
         result.errors
     );
 }
+
+// ── Gap-documenting tests: unimplemented checker checks ──────────────────────
+//
+// These tests are marked #[ignore] because the underlying checker logic is not
+// yet implemented.  They document known gaps and will pass once the feature is
+// complete.  Do NOT remove them — they are the acceptance criteria.
+
+/// Phase D (#306): AliasingMutableBorrow — creating `&mut T` while a shared `&T`
+/// borrow of the same inner type is also present in the signature.
+///
+/// TODO(#306): implement BorrowState transitions in the checker to emit this error.
+#[test]
+#[ignore = "AliasingMutableBorrow not yet emitted (TODO #306)"]
+fn shared_and_mut_ref_params_of_same_type_rejected() {
+    let result = check_src("fn bad(a: &Int, b: &mut Int) -> Unit { }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::AliasingMutableBorrow { .. })),
+        "expected AliasingMutableBorrow, got: {:?}",
+        result.errors
+    );
+}
+
+/// Phase C (#305): ReferenceOutlivesOwner — assigning a `&T` reference to a
+/// binding at a shallower scope depth than the referent.
+///
+/// TODO(#305): implement scope-depth comparison in the checker to emit this error.
+#[test]
+#[ignore = "ReferenceOutlivesOwner not yet emitted (TODO #305)"]
+fn ref_binding_outliving_owner_rejected() {
+    let result = check_src(
+        "fn bad() -> Unit {
+            let r: &Int = {
+                let x: Int = 42
+                x
+            }
+        }",
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::ReferenceOutlivesOwner { .. })),
+        "expected ReferenceOutlivesOwner, got: {:?}",
+        result.errors
+    );
+}

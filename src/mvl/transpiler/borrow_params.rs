@@ -33,20 +33,21 @@ use crate::mvl::parser::ast::{Decl, FnDecl, Param, Program, TypeExpr};
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Build a map from every function name in `prog` (and all `prelude_fns`) to
-/// its per-parameter borrow flags.
+/// its per-parameter borrow kinds.
 ///
-/// `true` at index `i` means "argument `i` should be passed as `&x`".
-/// `false` means "pass by value (clone / move as normal)".
+/// `Some(false)` at index `i` means "pass as `&x`" (shared reference).
+/// `Some(true)` means "pass as `&mut x`" (mutable reference).
+/// `None` means "pass by value (clone / move as normal)".
 pub fn build_borrow_params_map(
     prog: &Program,
     prelude_fns: &[&FnDecl],
-) -> HashMap<String, Vec<bool>> {
+) -> HashMap<String, Vec<Option<bool>>> {
     let mut map = HashMap::new();
 
     // Prelude functions (stdlib) — explicit &T only, no body to analyse.
     for fd in prelude_fns {
         let flags = explicit_borrow_flags(&fd.params);
-        if flags.iter().any(|&b| b) {
+        if flags.iter().any(|b| b.is_some()) {
             map.insert(fd.name.clone(), flags);
         }
     }
@@ -55,7 +56,7 @@ pub fn build_borrow_params_map(
     for decl in &prog.declarations {
         if let Decl::Fn(fd) = decl {
             let flags = borrow_params_for_fn(fd);
-            if flags.iter().any(|&b| b) {
+            if flags.iter().any(|b| b.is_some()) {
                 map.insert(fd.name.clone(), flags);
             }
         }
@@ -64,49 +65,40 @@ pub fn build_borrow_params_map(
     map
 }
 
-/// Borrow flags for a single function declaration.
+/// Borrow kinds for a single function declaration.
 ///
 /// The returned `Vec` has the same length as `fd.params`.
-pub fn borrow_params_for_fn(fd: &FnDecl) -> Vec<bool> {
-    fd.params.iter().map(|p| param_is_borrow(p, fd)).collect()
+/// Currently only explicit `&T` / `&mut T` annotations are detected.
+/// Read-only inference (`TODO #304`) is not yet implemented — see below.
+pub fn borrow_params_for_fn(fd: &FnDecl) -> Vec<Option<bool>> {
+    // TODO(#304): add read-only inference once the transpiler emits `*x` derefs
+    // for inferred-borrow params inside function bodies.
+    fd.params
+        .iter()
+        .map(|p| explicit_ref_mutability(&p.ty))
+        .collect()
 }
 
 // ── Per-parameter analysis ────────────────────────────────────────────────────
 
-/// A parameter is a borrow if it is explicitly typed `&T` / `&mut T`, or if
-/// analysis proves it is read-only in the function body.
-fn param_is_borrow(p: &Param, fd: &FnDecl) -> bool {
-    if is_explicit_ref(&p.ty) {
-        return true;
+/// Returns the borrow kind for an explicitly annotated reference type.
+///
+/// * `Some(false)` — `&T`  (shared reference)
+/// * `Some(true)`  — `&mut T` (mutable reference)
+/// * `None`        — `T`  (owned; not a reference)
+fn explicit_ref_mutability(ty: &TypeExpr) -> Option<bool> {
+    match ty {
+        TypeExpr::Ref { mutable, .. } => Some(*mutable),
+        _ => None,
     }
-    is_read_only_param(&p.name, fd)
 }
 
-fn is_explicit_ref(ty: &TypeExpr) -> bool {
-    matches!(ty, TypeExpr::Ref { .. })
-}
-
-/// Returns the explicit borrow flags for a list of parameters (no body analysis).
-fn explicit_borrow_flags(params: &[Param]) -> Vec<bool> {
-    params.iter().map(|p| is_explicit_ref(&p.ty)).collect()
-}
-
-// ── Read-only inference ───────────────────────────────────────────────────────
-
-/// Infer whether a parameter is read-only (future work).
-///
-/// # Why this is currently disabled
-///
-/// Emitting an inferred `&T` parameter also requires the transpiler to insert
-/// `*x` dereferences every time the parameter is used in a position that
-/// expects `T` (arithmetic, comparisons, struct construction, etc.).
-/// Without that companion change the generated Rust does not type-check.
-///
-/// Until the transpiler handles automatic dereferencing of inferred borrows,
-/// we conservatively return `false` here, meaning only EXPLICIT `&T`
-/// annotations drive borrow inference.
-fn is_read_only_param(_name: &str, _fd: &FnDecl) -> bool {
-    false
+/// Returns the explicit borrow kinds for a list of parameters (no body analysis).
+fn explicit_borrow_flags(params: &[Param]) -> Vec<Option<bool>> {
+    params
+        .iter()
+        .map(|p| explicit_ref_mutability(&p.ty))
+        .collect()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -132,33 +124,33 @@ mod tests {
     }
 
     #[test]
-    fn explicit_ref_param_is_borrow() {
+    fn explicit_ref_param_is_shared_borrow() {
         let fd = parse_fn("fn f(x: &Int) -> Unit { }");
         let flags = borrow_params_for_fn(&fd);
-        assert_eq!(flags, vec![true]);
+        assert_eq!(flags, vec![Some(false)]);
     }
 
     #[test]
-    fn explicit_mut_ref_param_is_borrow() {
+    fn explicit_mut_ref_param_is_mutable_borrow() {
         let fd = parse_fn("fn f(x: &mut Int) -> Unit { }");
         let flags = borrow_params_for_fn(&fd);
-        assert_eq!(flags, vec![true]);
+        assert_eq!(flags, vec![Some(true)]);
     }
 
     #[test]
-    fn owned_param_without_explicit_ref_is_not_borrow() {
+    fn owned_param_is_not_borrow() {
         // Inference is disabled — owned params are never auto-inferred as borrows.
         let fd = parse_fn("fn f(x: Int) -> Int { x }");
         let flags = borrow_params_for_fn(&fd);
-        assert_eq!(flags, vec![false]);
+        assert_eq!(flags, vec![None]);
     }
 
     #[test]
-    fn owned_param_only_read_is_not_borrow_without_explicit_annotation() {
-        // Even a clearly read-only param stays owned until inference is enabled.
+    fn owned_read_only_param_is_not_borrow_without_explicit_annotation() {
+        // Even a clearly read-only param stays owned until inference is enabled (TODO #304).
         let fd = parse_fn("fn f(x: Int) -> Bool { if x == 0 { true } else { false } }");
         let flags = borrow_params_for_fn(&fd);
-        assert_eq!(flags, vec![false]);
+        assert_eq!(flags, vec![None]);
     }
 
     #[test]
@@ -166,6 +158,38 @@ mod tests {
         // Only the explicitly &-annotated param is a borrow.
         let fd = parse_fn("fn f(a: Int, b: &Int) -> Int { a }");
         let flags = borrow_params_for_fn(&fd);
-        assert_eq!(flags, vec![false, true]);
+        assert_eq!(flags, vec![None, Some(false)]);
+    }
+
+    #[test]
+    fn all_ref_params_flags_correct() {
+        let fd = parse_fn("fn f(a: &Int, b: &mut Bool) -> Unit { }");
+        let flags = borrow_params_for_fn(&fd);
+        assert_eq!(flags, vec![Some(false), Some(true)]);
+    }
+
+    #[test]
+    fn no_params_returns_empty_flags() {
+        let fd = parse_fn("fn f() -> Unit { }");
+        let flags = borrow_params_for_fn(&fd);
+        assert!(flags.is_empty());
+    }
+
+    #[test]
+    fn owned_only_fn_absent_from_map() {
+        let prog = parse_prog("fn f(x: Int) -> Int { x }");
+        let map = build_borrow_params_map(&prog, &[]);
+        assert!(
+            !map.contains_key("f"),
+            "owned-only fn must not appear in borrow_params_map"
+        );
+    }
+
+    #[test]
+    fn prelude_fn_with_ref_param_appears_in_map() {
+        let prelude_fn = parse_fn("fn print_ref(x: &Int) -> Unit { }");
+        let prog = parse_prog("");
+        let map = build_borrow_params_map(&prog, &[&prelude_fn]);
+        assert_eq!(map.get("print_ref"), Some(&vec![Some(false)]));
     }
 }
