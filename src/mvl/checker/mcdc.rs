@@ -205,7 +205,7 @@ fn collect_from_expr(
             collect_from_expr(left, fn_name, file, decisions, next_id);
             collect_from_expr(right, fn_name, file, decisions, next_id);
         }
-        Expr::Unary { expr: e, .. } => {
+        Expr::Unary { expr: e, .. } | Expr::Borrow { expr: e, .. } => {
             collect_from_expr(e, fn_name, file, decisions, next_id);
         }
         Expr::FnCall { args, .. } => {

@@ -212,7 +212,8 @@ fn check_expr_iso(expr: &Expr, iso_vars: &HashSet<&str>, errors: &mut Vec<CheckE
         | Expr::Propagate { expr: inner, .. }
         | Expr::FieldAccess { expr: inner, .. }
         | Expr::Declassify { expr: inner, .. }
-        | Expr::Sanitize { expr: inner, .. } => check_expr_iso(inner, iso_vars, errors),
+        | Expr::Sanitize { expr: inner, .. }
+        | Expr::Borrow { expr: inner, .. } => check_expr_iso(inner, iso_vars, errors),
 
         Expr::Binary { left, right, .. } => {
             check_expr_iso(left, iso_vars, errors);

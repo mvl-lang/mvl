@@ -328,6 +328,13 @@ fn expr_has_disqualifying_use(param: &str, expr: &Expr) -> bool {
                 || expr_has_disqualifying_use(param, expr)
         }
 
+        // &param or &mut param creates &&T — disqualifying since the caller already
+        // infers &T; recurse for nested uses.
+        Expr::Borrow { expr, .. } => {
+            matches!(expr.as_ref(), Expr::Ident(n, _) if n == param)
+                || expr_has_disqualifying_use(param, expr)
+        }
+
         // Binary operators: param as a direct operand is disqualifying.
         // Rust's arithmetic operators (`+`, `-`, `*`, etc.) do not auto-deref,
         // so `(&xs + rhs)` would be a compile error for non-Copy custom types.
@@ -398,7 +405,8 @@ fn expr_mentions_param(param: &str, expr: &Expr) -> bool {
         | Expr::Declassify { expr, .. }
         | Expr::Move { expr, .. }
         | Expr::Consume { expr, .. }
-        | Expr::Propagate { expr, .. } => expr_mentions_param(param, expr),
+        | Expr::Propagate { expr, .. }
+        | Expr::Borrow { expr, .. } => expr_mentions_param(param, expr),
         Expr::Construct { fields, .. } => fields.iter().any(|(_, v)| expr_mentions_param(param, v)),
         Expr::List { elems, .. } | Expr::Set { elems, .. } => {
             elems.iter().any(|e| expr_mentions_param(param, e))

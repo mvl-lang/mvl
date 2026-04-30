@@ -65,7 +65,7 @@ fn collect_access_paths(expr: &Expr, out: &mut Vec<String>) {
             }
         }
         Expr::FieldAccess { expr, .. } => collect_access_paths(expr, out),
-        Expr::Unary { expr, .. } => collect_access_paths(expr, out),
+        Expr::Unary { expr, .. } | Expr::Borrow { expr, .. } => collect_access_paths(expr, out),
         Expr::MethodCall { receiver, args, .. } => {
             collect_access_paths(receiver, out);
             for a in args {

@@ -1035,6 +1035,11 @@ impl TypeChecker {
 
             Expr::Unary { op, expr, span } => self.infer_unary(*op, expr, *span),
 
+            Expr::Borrow { mutable, expr, .. } => {
+                let inner = self.infer_expr(expr);
+                Ty::Ref(*mutable, Box::new(inner))
+            }
+
             // #12: Field access — reject direct field access on enum or Option
             Expr::FieldAccess { expr, field, span } => {
                 let ty = self.infer_expr(expr);
@@ -2500,7 +2505,8 @@ fn collect_refs_expr(expr: &Expr, params: &[&str], out: &mut Vec<(String, Span)>
         | Expr::Move { expr: e, .. }
         | Expr::Consume { expr: e, .. }
         | Expr::Declassify { expr: e, .. }
-        | Expr::Sanitize { expr: e, .. } => collect_refs_expr(e, params, out),
+        | Expr::Sanitize { expr: e, .. }
+        | Expr::Borrow { expr: e, .. } => collect_refs_expr(e, params, out),
         Expr::Binary { left, right, .. } => {
             collect_refs_expr(left, params, out);
             collect_refs_expr(right, params, out);

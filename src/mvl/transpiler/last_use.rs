@@ -154,7 +154,8 @@ impl LastUseTracker {
             | Expr::Move { expr, .. }
             | Expr::Consume { expr, .. }
             | Expr::Declassify { expr, .. }
-            | Expr::Sanitize { expr, .. } => self.visit_expr(expr, in_loop),
+            | Expr::Sanitize { expr, .. }
+            | Expr::Borrow { expr, .. } => self.visit_expr(expr, in_loop),
             Expr::Binary { left, right, .. } => {
                 self.visit_expr(left, in_loop);
                 self.visit_expr(right, in_loop);

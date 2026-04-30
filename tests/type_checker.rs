@@ -3855,6 +3855,32 @@ fn two_mut_ref_params_of_different_types_accepted() {
     );
 }
 
+// ── Expression-level borrow operator (#366) ──────────────────────────────────
+
+#[test]
+fn borrow_expr_shared_type_checks() {
+    // GIVEN: `let r: &Int = &x` where x: Int
+    // THEN: checker accepts and r has type &Int
+    let result = check_src("fn f(x: Int) -> Unit { let r: &Int = &x; }");
+    assert!(
+        result.errors.is_empty(),
+        "expected no errors, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn borrow_expr_mutable_type_checks() {
+    // GIVEN: `let r: &mut Int = &mut x` where x: mut Int
+    // THEN: checker accepts and r has type &mut Int
+    let result = check_src("fn f(mut x: Int) -> Unit { let r: &mut Int = &mut x; }");
+    assert!(
+        result.errors.is_empty(),
+        "expected no errors, got: {:?}",
+        result.errors
+    );
+}
+
 // ── Gap-documenting tests: unimplemented checker checks ──────────────────────
 //
 // These tests are marked #[ignore] because the underlying checker logic is not

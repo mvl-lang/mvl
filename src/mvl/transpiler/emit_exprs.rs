@@ -168,9 +168,25 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                     emit_expr(cg, receiver);
                     cg.push(".into_iter() { __m.entry(");
                     if let Some(arg) = args.first() {
+                        // Phase B: if the key function takes a reference for its first
+                        // parameter, emit `&__v.clone()` instead of `__v.clone()`.
+                        let needs_borrow = if let Expr::Ident(name, _) = arg {
+                            cg.borrow_params_map
+                                .get(name.as_str())
+                                .and_then(|b| b.first().copied())
+                                .flatten()
+                                .is_some()
+                        } else {
+                            false
+                        };
                         emit_expr(cg, arg);
+                        if needs_borrow {
+                            cg.push("(&__v.clone())");
+                        } else {
+                            cg.push("(__v.clone())");
+                        }
                     }
-                    cg.push("(__v.clone())).or_insert_with(Vec::new).push(__v); } __m }");
+                    cg.push(").or_insert_with(Vec::new).push(__v); } __m }");
                 }
                 // and_then(f) — Option<T> and Result<T,E>
                 "and_then" if args.len() == 1 => {
@@ -348,6 +364,14 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
                     cg.push(" }");
                 }
             }
+        }
+        Expr::Borrow { mutable, expr, .. } => {
+            if *mutable {
+                cg.push("&mut ");
+            } else {
+                cg.push("&");
+            }
+            emit_expr(cg, expr);
         }
         Expr::Unary { op, expr, .. } => match op {
             UnaryOp::Neg => {
