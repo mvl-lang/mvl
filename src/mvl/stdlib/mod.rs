@@ -36,7 +36,6 @@ pub const STDLIB_FILES: &[(&str, &str)] = &[
     ("random.mvl", include_str!("../../../std/random.mvl")),
     ("crypto.mvl", include_str!("../../../std/crypto.mvl")),
     ("log.mvl", include_str!("../../../std/log.mvl")),
-    ("tui.mvl", include_str!("../../../std/tui.mvl")),
     ("process.mvl", include_str!("../../../std/process.mvl")),
     ("env.mvl", include_str!("../../../std/env.mvl")),
 ];

@@ -12,6 +12,7 @@
 //! - Zero Cargo dependencies — only `std` Rust library is used.
 
 pub mod args;
+pub mod crypto;
 pub mod io;
 pub mod log;
 pub mod primitives;

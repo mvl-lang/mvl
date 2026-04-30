@@ -23,6 +23,9 @@ pub use crate::stdlib::io::{join, path, read_file, read_to_string, to_string, Pa
 /// `std.args` — CLI argument and environment access.
 pub use crate::stdlib::args::{get_arg, get_args, get_env, parse, ParseFromArgs};
 
+/// `std.crypto` — hashing and CSPRNG (Phase 3: real Rust backing).
+pub use crate::stdlib::crypto::{crypto_random_bytes, sha256, sha512};
+
 /// `std.log` — structured logging (Phase 2: no-op stubs).
 pub use crate::stdlib::log::{log_debug, log_error, log_info, log_warn};
 
