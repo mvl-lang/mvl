@@ -1035,8 +1035,34 @@ impl TypeChecker {
 
             Expr::Unary { op, expr, span } => self.infer_unary(*op, expr, *span),
 
-            Expr::Borrow { mutable, expr, .. } => {
+            Expr::Borrow {
+                mutable,
+                expr,
+                span,
+            } => {
                 let inner = self.infer_expr(expr);
+                // Fix 1: reject `&mut x` on an immutable binding (#366)
+                if *mutable {
+                    if let Expr::Ident(name, _) = expr.as_ref() {
+                        if let Some(info) = self.env.lookup(name).cloned() {
+                            if !info.mutable {
+                                self.emit(CheckError::AssignToImmutable {
+                                    name: name.clone(),
+                                    span: *span,
+                                });
+                            }
+                        }
+                    }
+                }
+                // Fix 4: reject `&&x` — borrowing an already-borrowed value (#366)
+                if let Ty::Ref(_, _) = &inner {
+                    self.emit(CheckError::TypeMismatch {
+                        expected: inner.display(),
+                        found: format!("&{}", inner.display()),
+                        span: *span,
+                    });
+                    return Ty::Unknown;
+                }
                 Ty::Ref(*mutable, Box::new(inner))
             }
 

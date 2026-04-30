@@ -329,11 +329,8 @@ fn expr_has_disqualifying_use(param: &str, expr: &Expr) -> bool {
         }
 
         // &param or &mut param creates &&T — disqualifying since the caller already
-        // infers &T; recurse for nested uses.
-        Expr::Borrow { expr, .. } => {
-            matches!(expr.as_ref(), Expr::Ident(n, _) if n == param)
-                || expr_has_disqualifying_use(param, expr)
-        }
+        // infers &T; recurse into the inner expression for nested uses.
+        Expr::Borrow { expr, .. } => expr_has_disqualifying_use(param, expr),
 
         // Binary operators: param as a direct operand is disqualifying.
         // Rust's arithmetic operators (`+`, `-`, `*`, etc.) do not auto-deref,

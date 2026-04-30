@@ -3905,6 +3905,30 @@ fn shared_and_mut_ref_params_of_same_type_rejected() {
     );
 }
 
+/// Phase D (#362): BorrowState transitions — `Expr::Borrow` should update
+/// `VarInfo::borrow_state` so the checker can enforce single-writer/multiple-reader.
+///
+/// TODO(#362/#366): wire BorrowState transitions in the Expr::Borrow checker arm.
+#[test]
+#[ignore = "BorrowState transitions not yet driven by Expr::Borrow (TODO #362/#366)"]
+fn borrow_expr_transitions_borrow_state_rejected_on_double_mut() {
+    // Two simultaneous `&mut x` borrows must be rejected via BorrowState tracking.
+    let result = check_src(
+        "fn f(mut x: Int) -> Unit {
+            let r1: &mut Int = &mut x
+            let r2: &mut Int = &mut x
+        }",
+    );
+    assert!(
+        result.errors.iter().any(|e| matches!(
+            e,
+            CheckError::AliasingMutableBorrow { .. } | CheckError::DoubleMutableBorrow { .. }
+        )),
+        "expected AliasingMutableBorrow or DoubleMutableBorrow, got: {:?}",
+        result.errors
+    );
+}
+
 /// Phase C (#305): ReferenceOutlivesOwner — assigning a `&T` reference to a
 /// binding at a shallower scope depth than the referent.
 ///

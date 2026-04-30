@@ -366,12 +366,19 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
             }
         }
         Expr::Borrow { mutable, expr, .. } => {
+            // Fix 7: parenthesise compound inner expressions to preserve precedence.
+            // e.g. `&(a + b)` must not emit `&a + b` (which Rust parses as `(&a) + b`).
+            let needs_parens =
+                !matches!(expr.as_ref(), Expr::Ident(_, _) | Expr::FieldAccess { .. });
             if *mutable {
-                cg.push("&mut ");
+                cg.push(if needs_parens { "&mut (" } else { "&mut " });
             } else {
-                cg.push("&");
+                cg.push(if needs_parens { "&(" } else { "&" });
             }
             emit_expr(cg, expr);
+            if needs_parens {
+                cg.push(")");
+            }
         }
         Expr::Unary { op, expr, .. } => match op {
             UnaryOp::Neg => {
@@ -711,6 +718,8 @@ fn emit_args_with_borrows(cg: &mut Codegen, args: &[Expr], borrows: &[Option<boo
 /// temporaries live until the end of the enclosing statement.
 fn emit_expr_as_borrow_arg(cg: &mut Codegen, expr: &Expr, mutable: bool) {
     match expr {
+        // Fix 3: already a borrow expression — emit as-is, no extra & needed
+        Expr::Borrow { .. } => emit_expr(cg, expr),
         Expr::Ident(_, _) | Expr::FieldAccess { .. } => {
             cg.push(if mutable { "&mut " } else { "&" });
             emit_expr(cg, expr);

@@ -1863,3 +1863,13 @@ fn borrow_expr_mutable_emits_ampersand_mut() {
     let rust = transpile_src(src);
     assert_contains(&rust, "&mut x");
 }
+
+/// Fix 5: group_by with a declared &String key function emits `&__v.clone()`. (#366)
+/// Phase B borrow inference maps declared functions with explicit &T params so
+/// group_by correctly wraps the loop variable in `&__v.clone()`.
+#[test]
+fn group_by_with_ref_string_key_emits_borrow_on_clone() {
+    let src = "fn key(s: &String) -> String { s }  fn f(xs: List[String]) -> Unit { let m = xs.group_by(key); }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "&__v.clone()");
+}
