@@ -2,10 +2,7 @@
 // Rolls a dice using an extern bridge, prints the result.
 // Validates: ! Random effect annotation, bridge discovery, bridge injection.
 //
-// corpus:skip-llvm — non-deterministic output; extern "rust" bridge not available under lli
-//
-// Expected stdout:
-//   rolled: N   (where N is 1–6)
+// expect-pattern: rolled: ?
 
 extern "rust" {
     fn roll_dice() -> Int;

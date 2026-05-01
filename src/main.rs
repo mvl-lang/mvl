@@ -2904,8 +2904,9 @@ fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
     });
 
     // Collect all .mvl files with expect annotations + fn main.
+    // Each entry: (file, expected_text, is_pattern)
     let all_mvl = mvl_files_all(path);
-    let mut test_cases: Vec<(PathBuf, String)> = Vec::new();
+    let mut test_cases: Vec<(PathBuf, String, bool)> = Vec::new();
     for file in &all_mvl {
         let src = match fs::read_to_string(file) {
             Ok(s) => s,
@@ -2920,8 +2921,10 @@ fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
         if src.contains("corpus:skip-llvm") {
             continue;
         }
-        if let Some(expected) = codegen::parse_expect_annotation(&src) {
-            test_cases.push((file.clone(), expected));
+        if let Some(pat) = codegen::parse_expect_pattern_annotation(&src) {
+            test_cases.push((file.clone(), pat, true));
+        } else if let Some(expected) = codegen::parse_expect_annotation(&src) {
+            test_cases.push((file.clone(), expected, false));
         }
     }
 
@@ -2939,7 +2942,7 @@ fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
     let mut passed = 0usize;
     let mut failed = 0usize;
 
-    for (file, expected) in &test_cases {
+    for (file, expected, is_pattern) in &test_cases {
         let file_str = file.display().to_string();
         let module_name = stem(&file_str);
 
@@ -2982,7 +2985,13 @@ fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
         let actual_trimmed = actual.trim_end_matches('\n');
         let expected_trimmed = expected.trim_end_matches('\n');
 
-        if actual_trimmed == expected_trimmed {
+        let matched = if *is_pattern {
+            codegen::glob_match(expected_trimmed, actual_trimmed)
+        } else {
+            actual_trimmed == expected_trimmed
+        };
+
+        if matched {
             passed += 1;
             if verbose {
                 println!("  PASS: {file_str}");
@@ -2994,7 +3003,11 @@ fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
             failed += 1;
             if !quiet {
                 println!("\n  FAIL: {file_str}");
-                println!("    expected: {:?}", expected_trimmed);
+                if *is_pattern {
+                    println!("    pattern:  {:?}", expected_trimmed);
+                } else {
+                    println!("    expected: {:?}", expected_trimmed);
+                }
                 println!("    got:      {:?}", actual_trimmed);
                 if verbose && !ir.is_empty() {
                     println!("    --- IR ---");

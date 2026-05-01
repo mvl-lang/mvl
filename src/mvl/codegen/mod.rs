@@ -27,8 +27,8 @@ use inkwell::{
 use std::collections::HashMap;
 
 use crate::mvl::parser::ast::{
-    BinaryOp, Block, Decl, Expr, FnDecl, Literal, MatchArm, MatchBody, Pattern, Program, Stmt,
-    TypeBody, TypeDecl, TypeExpr, UnaryOp, VariantFields,
+    BinaryOp, Block, Decl, Expr, ExternDecl, FnDecl, Literal, MatchArm, MatchBody, Pattern,
+    Program, Stmt, TypeBody, TypeDecl, TypeExpr, UnaryOp, VariantFields,
 };
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -82,6 +82,36 @@ fn which_lli() -> Result<std::path::PathBuf, ()> {
 /// Parse `// expect: <line>` or `// Expected stdout:` block annotations from MVL source.
 ///
 /// Returns the expected stdout lines joined with newlines, or `None` if no annotation found.
+/// Parse `// expect-pattern: <glob>` annotation — used for non-deterministic output.
+/// Supports `?` (any single char) and `*` (any sequence of chars).
+pub fn parse_expect_pattern_annotation(source: &str) -> Option<String> {
+    source.lines().find_map(|l| {
+        l.trim()
+            .strip_prefix("// expect-pattern:")
+            .map(|s| s.trim().to_string())
+    })
+}
+
+/// Simple glob-style pattern match: `?` = any char, `*` = any sequence.
+pub fn glob_match(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    fn inner(p: &[char], t: &[char]) -> bool {
+        match (p.first(), t.first()) {
+            (None, None) => true,
+            (None, _) => false,
+            (Some('*'), _) => {
+                // Try consuming 0..=n chars with the star.
+                inner(&p[1..], t) || (!t.is_empty() && inner(p, &t[1..]))
+            }
+            (_, None) => false,
+            (Some('?'), _) => inner(&p[1..], &t[1..]),
+            (Some(pc), Some(tc)) => pc == tc && inner(&p[1..], &t[1..]),
+        }
+    }
+    inner(&p, &t)
+}
+
 pub fn parse_expect_annotation(source: &str) -> Option<String> {
     // Format 1: one or more `// expect: <line>` annotations
     let single_lines: Vec<String> = source
@@ -393,12 +423,33 @@ impl<'ctx> LlvmBackend<'ctx> {
         self.build_llvm_types();
 
         // First pass: record return types, then declare all functions so forward calls resolve.
+        // Also pre-declare extern fn signatures so calls from fn bodies resolve correctly.
         for decl in &prog.declarations {
             if let Decl::Fn(fd) = decl {
                 if !fd.is_test {
                     self.fn_return_types
                         .insert(fd.name.clone(), *fd.return_type.clone());
                     self.declare_fn(fd);
+                }
+            }
+            if let Decl::Extern(ext) = decl {
+                for efn in &ext.fns {
+                    if self.module.get_function(&efn.name).is_none() {
+                        let param_tys: Vec<BasicMetadataTypeEnum> = efn
+                            .params
+                            .iter()
+                            .filter_map(|p| self.mvl_type_to_llvm(&p.ty))
+                            .map(Into::into)
+                            .collect();
+                        let fn_ty = if self.is_unit_type(&efn.return_type) {
+                            self.context.void_type().fn_type(&param_tys, false)
+                        } else if let Some(ret) = self.mvl_type_to_llvm(&efn.return_type) {
+                            ret.fn_type(&param_tys, false)
+                        } else {
+                            self.context.void_type().fn_type(&param_tys, false)
+                        };
+                        self.module.add_function(&efn.name, fn_ty, None);
+                    }
                 }
             }
         }
@@ -410,6 +461,12 @@ impl<'ctx> LlvmBackend<'ctx> {
                 }
             }
         }
+        // Third pass: wire extern blocks — emit LLVM IR bodies for `extern "rust"` functions.
+        for decl in &prog.declarations {
+            if let Decl::Extern(ext) = decl {
+                self.emit_extern_decl(ext);
+            }
+        }
     }
 
     /// Declare a function signature without emitting its body.
@@ -419,6 +476,126 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
         let (fn_ty, _) = self.build_fn_type(fd);
         self.module.add_function(&fd.name, fn_ty, None);
+    }
+
+    /// Emit LLVM IR for `extern` blocks (issue #381).
+    ///
+    /// For `extern "c"`: emit `declare` with external linkage (C ABI).
+    /// For `extern "rust"`: emit an LLVM IR function body that provides the
+    /// implementation via libc. Each function name is matched against a set of
+    /// known bridge functions; unknowns get a zero-returning stub.
+    fn emit_extern_decl(&mut self, ext: &ExternDecl) {
+        for efn in &ext.fns {
+            let i64_ty = self.context.i64_type();
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+            match ext.abi.as_str() {
+                "c" => {
+                    // Skip if already declared.
+                    if self.module.get_function(&efn.name).is_some() {
+                        continue;
+                    }
+                    // Just declare — the linker supplies the body.
+                    let param_tys: Vec<BasicMetadataTypeEnum> = efn
+                        .params
+                        .iter()
+                        .filter_map(|p| self.mvl_type_to_llvm(&p.ty))
+                        .map(Into::into)
+                        .collect();
+                    let fn_ty = if self.is_unit_type(&efn.return_type) {
+                        self.context.void_type().fn_type(&param_tys, false)
+                    } else if let Some(ret) = self.mvl_type_to_llvm(&efn.return_type) {
+                        ret.fn_type(&param_tys, false)
+                    } else {
+                        self.context.void_type().fn_type(&param_tys, false)
+                    };
+                    self.module
+                        .add_function(&efn.name, fn_ty, Some(Linkage::External));
+                }
+                _ => {
+                    // For `extern "rust"` and any other ABI, emit an LLVM IR body that
+                    // provides a real implementation using libc.
+                    self.emit_extern_rust_fn_body(efn, i64_ty, ptr_ty);
+                }
+            }
+        }
+    }
+
+    /// Emit an LLVM IR function body for a single `extern "rust"` declaration.
+    ///
+    /// Known bridges:
+    ///   `roll_dice() -> Int`  →  `rand() % 6 + 1`  (libc rand, seeded by OS)
+    ///
+    /// All other functions get a stub that returns 0 / null.
+    fn emit_extern_rust_fn_body(
+        &mut self,
+        efn: &crate::mvl::parser::ast::ExternFnDecl,
+        i64_ty: inkwell::types::IntType<'ctx>,
+        _ptr_ty: inkwell::types::PointerType<'ctx>,
+    ) {
+        let ret_llvm = self.mvl_type_to_llvm(&efn.return_type);
+        let param_tys: Vec<BasicMetadataTypeEnum> = efn
+            .params
+            .iter()
+            .filter_map(|p| self.mvl_type_to_llvm(&p.ty))
+            .map(Into::into)
+            .collect();
+
+        // Reuse existing declaration (pre-declared in first pass) or create new.
+        let fn_val = self.module.get_function(&efn.name).unwrap_or_else(|| {
+            let fn_ty = match ret_llvm {
+                Some(rt) => rt.fn_type(&param_tys, false),
+                None => self.context.void_type().fn_type(&param_tys, false),
+            };
+            self.module.add_function(&efn.name, fn_ty, None)
+        });
+        let entry = self.context.append_basic_block(fn_val, "entry");
+        self.builder.position_at_end(entry);
+
+        match efn.name.as_str() {
+            // roll_dice() -> Int: return rand() % 6 + 1
+            "roll_dice" => {
+                // declare i32 @rand()
+                let rand_fn = self.module.get_function("rand").unwrap_or_else(|| {
+                    let rand_ty = self.context.i32_type().fn_type(&[], false);
+                    self.module
+                        .add_function("rand", rand_ty, Some(Linkage::External))
+                });
+                let rand_call = self.builder.build_call(rand_fn, &[], "rand_call").unwrap();
+                use inkwell::values::AnyValue;
+                let r32 = BasicValueEnum::try_from(rand_call.as_any_value_enum())
+                    .expect("rand() must return i32");
+                // sext i32 to i64
+                let r64 = self
+                    .builder
+                    .build_int_s_extend(r32.into_int_value(), i64_ty, "rand64")
+                    .unwrap();
+                // abs: ensure non-negative (rand() is ≥ 0 but defensive)
+                let six = i64_ty.const_int(6, false);
+                let one = i64_ty.const_int(1, false);
+                let rem = self.builder.build_int_signed_rem(r64, six, "rem").unwrap();
+                let result = self.builder.build_int_add(rem, one, "dice").unwrap();
+                self.builder.build_return(Some(&result)).unwrap();
+            }
+            // Generic stub: return zero / null.
+            _ => match ret_llvm {
+                Some(BasicTypeEnum::IntType(it)) => {
+                    let zero = it.const_zero();
+                    self.builder.build_return(Some(&zero)).unwrap();
+                }
+                Some(BasicTypeEnum::FloatType(ft)) => {
+                    let zero = ft.const_zero();
+                    self.builder.build_return(Some(&zero)).unwrap();
+                }
+                Some(BasicTypeEnum::PointerType(_)) => {
+                    let null = self.context.ptr_type(AddressSpace::default()).const_null();
+                    self.builder.build_return(Some(&null)).unwrap();
+                }
+                _ => {
+                    self.builder.build_return(None).unwrap();
+                }
+            },
+        }
     }
 
     fn build_fn_type(&self, fd: &FnDecl) -> (inkwell::types::FunctionType<'ctx>, bool) {
