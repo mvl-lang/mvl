@@ -1,9 +1,9 @@
 //! Emit Rust expressions from MVL [`Expr`] nodes.
 
 use crate::mvl::parser::ast::{BinaryOp, Expr, Literal, MatchArm, MatchBody, Pattern, UnaryOp};
-use crate::mvl::transpiler::codegen::Codegen;
 use crate::mvl::transpiler::coverage::BranchKind;
 use crate::mvl::transpiler::emit_types::emit_type_expr;
+use crate::mvl::transpiler::emitter::RustEmitter;
 
 /// Methods implemented as pure MVL functions in std/strings.mvl and std/lists.mvl.
 ///
@@ -48,7 +48,7 @@ const STDLIB_UFCS_METHODS: &[&str] = &[
 ];
 
 /// Emit an expression into the code buffer (no trailing newline).
-pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
+pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
     match expr {
         Expr::Literal(lit, span) => {
             // Mutation mode: inject env-var dispatch for Bool and Integer literals.
@@ -522,7 +522,7 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
             let parts: Vec<String> = fields
                 .iter()
                 .map(|(fname, fexpr)| {
-                    let mut tmp = Codegen::new();
+                    let mut tmp = RustEmitter::new();
                     tmp.push(&format!("{fname}: "));
                     // Clone field values: placing a value into a struct field is a move
                     // in Rust. MVL value semantics require the source binding to remain
@@ -544,7 +544,7 @@ pub fn emit_expr(cg: &mut Codegen, expr: &Expr) {
             let pair_strs: Vec<String> = pairs
                 .iter()
                 .map(|(k, v)| {
-                    let mut tmp = Codegen::new();
+                    let mut tmp = RustEmitter::new();
                     tmp.push("(");
                     emit_expr(&mut tmp, k);
                     tmp.push(", ");
@@ -641,7 +641,7 @@ fn escape_char(c: char) -> String {
     }
 }
 
-fn emit_literal(cg: &mut Codegen, lit: &Literal) {
+fn emit_literal(cg: &mut RustEmitter, lit: &Literal) {
     match lit {
         Literal::Integer(n) => cg.push(&n.to_string()),
         Literal::Float(f) => {
@@ -672,7 +672,7 @@ pub fn arms_have_str_pattern(arms: &[MatchArm]) -> bool {
 
 /// Emit a literal in pattern position.  String literals must be bare `"s"`
 /// (not `"s".to_string()`) because Rust patterns cannot contain method calls.
-fn emit_literal_in_pattern(cg: &mut Codegen, lit: &Literal) {
+fn emit_literal_in_pattern(cg: &mut RustEmitter, lit: &Literal) {
     match lit {
         Literal::Str(s) => cg.push(&format!("\"{}\"", escape_str(s))),
         other => emit_literal(cg, other),
@@ -681,7 +681,7 @@ fn emit_literal_in_pattern(cg: &mut Codegen, lit: &Literal) {
 
 // ── Arguments ─────────────────────────────────────────────────────────────
 
-fn emit_args(cg: &mut Codegen, args: &[Expr]) {
+fn emit_args(cg: &mut RustEmitter, args: &[Expr]) {
     for (i, arg) in args.iter().enumerate() {
         if i > 0 {
             cg.push(", ");
@@ -698,7 +698,7 @@ fn emit_args(cg: &mut Codegen, args: &[Expr]) {
 ///
 /// When `borrows` is shorter than `args` (unknown callee / variadic),
 /// the remaining args fall through to normal value-argument emission.
-fn emit_args_with_borrows(cg: &mut Codegen, args: &[Expr], borrows: &[Option<bool>]) {
+fn emit_args_with_borrows(cg: &mut RustEmitter, args: &[Expr], borrows: &[Option<bool>]) {
     for (i, arg) in args.iter().enumerate() {
         if i > 0 {
             cg.push(", ");
@@ -716,7 +716,7 @@ fn emit_args_with_borrows(cg: &mut Codegen, args: &[Expr], borrows: &[Option<boo
 /// For temporaries (function call results, struct literals, block expressions)
 /// the expression is wrapped in `&(…)` / `&mut (…)` — valid in Rust because
 /// temporaries live until the end of the enclosing statement.
-fn emit_expr_as_borrow_arg(cg: &mut Codegen, expr: &Expr, mutable: bool) {
+fn emit_expr_as_borrow_arg(cg: &mut RustEmitter, expr: &Expr, mutable: bool) {
     match expr {
         // Fix 3: already a borrow expression — emit as-is, no extra & needed
         Expr::Borrow { .. } => emit_expr(cg, expr),
@@ -745,10 +745,10 @@ fn emit_expr_as_borrow_arg(cg: &mut Codegen, expr: &Expr, mutable: bool) {
 ///
 /// # Phase A: last-use move elision (Spec 009 Req 2)
 ///
-/// When an `Expr::Ident`'s span appears in [`Codegen::last_uses`], the variable
+/// When an `Expr::Ident`'s span appears in [`RustEmitter::last_uses`], the variable
 /// is used for the last time in this function.  Emitting a Rust move (no
 /// `.clone()`) is sound: the caller's binding is consumed but never read again.
-fn emit_expr_as_arg(cg: &mut Codegen, expr: &Expr) {
+fn emit_expr_as_arg(cg: &mut RustEmitter, expr: &Expr) {
     match expr {
         Expr::Literal(Literal::Str(s), _) => {
             cg.push(&format!("\"{}\".to_string().into()", escape_str(s)));
@@ -778,7 +778,7 @@ fn emit_expr_as_arg(cg: &mut Codegen, expr: &Expr) {
 
 /// Emit arguments for Rust macros like `println!` where the first argument
 /// must be a bare string literal (not a `.to_string()` expression).
-fn emit_args_for_macro(cg: &mut Codegen, args: &[Expr]) {
+fn emit_args_for_macro(cg: &mut RustEmitter, args: &[Expr]) {
     if args.is_empty() {
         return;
     }
@@ -842,7 +842,7 @@ fn emit_binary_op(op: BinaryOp) -> &'static str {
 
 // ── Match arms ────────────────────────────────────────────────────────────
 
-fn emit_match_arm(cg: &mut Codegen, arm: &MatchArm, cov_id: Option<usize>) {
+fn emit_match_arm(cg: &mut RustEmitter, arm: &MatchArm, cov_id: Option<usize>) {
     cg.indent();
     emit_pattern(cg, &arm.pattern);
     if let Some(guard) = &arm.guard {
@@ -884,7 +884,7 @@ fn emit_match_arm(cg: &mut Codegen, arm: &MatchArm, cov_id: Option<usize>) {
 
 // ── Patterns ─────────────────────────────────────────────────────────────
 
-pub fn emit_pattern(cg: &mut Codegen, pat: &Pattern) {
+pub fn emit_pattern(cg: &mut RustEmitter, pat: &Pattern) {
     match pat {
         Pattern::Wildcard(_) => cg.push("_"),
         Pattern::Ident(name, _) => cg.push(&map_ident(name)),
@@ -944,7 +944,7 @@ pub fn emit_pattern(cg: &mut Codegen, pat: &Pattern) {
 
 // ── Block statements (used in if/match body/function body) ────────────────
 
-pub fn emit_block_stmts(cg: &mut Codegen, stmts: &[crate::mvl::parser::ast::Stmt]) {
+pub fn emit_block_stmts(cg: &mut RustEmitter, stmts: &[crate::mvl::parser::ast::Stmt]) {
     use crate::mvl::transpiler::emit_stmts::emit_stmt;
     for stmt in stmts {
         emit_stmt(cg, stmt);
@@ -953,7 +953,7 @@ pub fn emit_block_stmts(cg: &mut Codegen, stmts: &[crate::mvl::parser::ast::Stmt
 
 /// Emit block statements where the final `Stmt::Expr` is a tail expression
 /// (no semicolon), so it becomes the implicit return value of the block.
-pub fn emit_block_as_value(cg: &mut Codegen, stmts: &[crate::mvl::parser::ast::Stmt]) {
+pub fn emit_block_as_value(cg: &mut RustEmitter, stmts: &[crate::mvl::parser::ast::Stmt]) {
     use crate::mvl::parser::ast::Stmt;
     use crate::mvl::transpiler::emit_stmts::emit_stmt;
     if stmts.is_empty() {
@@ -1013,7 +1013,7 @@ fn map_fn_name(name: &str) -> String {
 ///
 /// Emits: `{let _mvl_n=(n);let _mvl_lo=(low);let _mvl_hi=(high);
 ///          if _mvl_lo>_mvl_hi{_mvl_n}else{_mvl_n.clamp(_mvl_lo,_mvl_hi)}}`
-fn emit_safe_clamp(cg: &mut Codegen, receiver: &Expr, low: &Expr, high: &Expr) {
+fn emit_safe_clamp(cg: &mut RustEmitter, receiver: &Expr, low: &Expr, high: &Expr) {
     cg.push("{let _mvl_n=(");
     emit_expr(cg, receiver);
     cg.push(");let _mvl_lo=(");

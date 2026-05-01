@@ -13,7 +13,7 @@ use crate::mvl::parser::ast::{
     FieldDecl, GenericParam, RefExpr, SecurityLabel, TypeBody, TypeDecl, TypeExpr, Variant,
     VariantFields,
 };
-use crate::mvl::transpiler::codegen::Codegen;
+use crate::mvl::transpiler::emitter::RustEmitter;
 
 // ── Security label preamble ───────────────────────────────────────────────
 
@@ -29,7 +29,7 @@ use crate::mvl::transpiler::codegen::Codegen;
 /// The lattice is: Tainted → Clean → Public (least trusted to most trusted).
 /// Secret is a separate confidentiality label; only explicit declassify/sanitize
 /// can convert between them.
-pub fn emit_security_preamble(cg: &mut Codegen) {
+pub fn emit_security_preamble(cg: &mut RustEmitter) {
     cg.line("// ── Security label newtypes (MVL Req 11) ─────────────────────────────────");
     cg.blank();
 
@@ -81,7 +81,7 @@ pub fn emit_security_preamble(cg: &mut Codegen) {
     cg.line("impl MvlPow for f64 { fn mvl_pow(self, exp: f64) -> f64 { self.powf(exp) } }");
 }
 
-fn emit_label_newtype(cg: &mut Codegen, label: &str) {
+fn emit_label_newtype(cg: &mut RustEmitter, label: &str) {
     cg.line("#[derive(Debug, Clone, PartialEq)]");
     cg.line(&format!("pub struct {label}<T>(pub T);"));
     cg.blank();
@@ -142,7 +142,7 @@ fn emit_label_newtype(cg: &mut Codegen, label: &str) {
 
 // ── TypeDecl ─────────────────────────────────────────────────────────────
 
-pub fn emit_type_decl(cg: &mut Codegen, td: &TypeDecl) {
+pub fn emit_type_decl(cg: &mut RustEmitter, td: &TypeDecl) {
     match &td.body {
         TypeBody::Struct(fields) => {
             emit_struct(cg, &td.name, &td.params, fields);
@@ -161,7 +161,7 @@ pub fn emit_type_decl(cg: &mut Codegen, td: &TypeDecl) {
 
 // ── Struct ────────────────────────────────────────────────────────────────
 
-fn emit_struct(cg: &mut Codegen, name: &str, params: &[GenericParam], fields: &[FieldDecl]) {
+fn emit_struct(cg: &mut RustEmitter, name: &str, params: &[GenericParam], fields: &[FieldDecl]) {
     emit_derive(cg, &["Debug", "Clone", "PartialEq"]);
     cg.line(&format!("pub struct {}{} {{", name, generic_params(params)));
     cg.push_indent();
@@ -222,7 +222,7 @@ fn emit_struct(cg: &mut Codegen, name: &str, params: &[GenericParam], fields: &[
 /// Skipped when any field has an unsupported type (e.g. nested structs,
 /// generic params, security labels) — callers receive a Rust type-error if
 /// they attempt `parse::<T>()` on such a struct.
-pub(crate) fn emit_parse_from_args_impl(cg: &mut Codegen, name: &str, fields: &[FieldDecl]) {
+pub(crate) fn emit_parse_from_args_impl(cg: &mut RustEmitter, name: &str, fields: &[FieldDecl]) {
     // Only emit for structs where every field is parseable
     if !fields.iter().all(|f| is_parseable_field_type(&f.ty)) {
         return;
@@ -249,7 +249,7 @@ pub(crate) fn emit_parse_from_args_impl(cg: &mut Codegen, name: &str, fields: &[
 ///
 /// Field names must be valid Rust identifiers — asserted by
 /// `assert_safe_identifier` before any interpolation into generated code.
-fn emit_field_parse(cg: &mut Codegen, field: &FieldDecl) {
+fn emit_field_parse(cg: &mut RustEmitter, field: &FieldDecl) {
     let name = &field.name;
     // The CLI flag name is the field name directly: `port` → `--port`.
     assert_safe_identifier(name);
@@ -344,7 +344,12 @@ fn emit_field_parse(cg: &mut Codegen, field: &FieldDecl) {
 /// Emit optional numeric parsing for `Option<Int>` / `Option<Float>` fields.
 ///
 /// `rust_type` is `"i64"` or `"f64"`; `type_label` is `"integer"` or `"float"`.
-fn emit_optional_numeric_parse(cg: &mut Codegen, name: &str, rust_type: &str, type_label: &str) {
+fn emit_optional_numeric_parse(
+    cg: &mut RustEmitter,
+    name: &str,
+    rust_type: &str,
+    type_label: &str,
+) {
     cg.line(&format!(
         "let {name} = match get_arg(Clean(\"{name}\".to_string())) {{"
     ));
@@ -360,7 +365,12 @@ fn emit_optional_numeric_parse(cg: &mut Codegen, name: &str, rust_type: &str, ty
 /// Emit required numeric parsing for `Int` / `Float` fields.
 ///
 /// `rust_type` is `"i64"` or `"f64"`; `type_label` is `"integer"` or `"float"`.
-fn emit_required_numeric_parse(cg: &mut Codegen, name: &str, rust_type: &str, type_label: &str) {
+fn emit_required_numeric_parse(
+    cg: &mut RustEmitter,
+    name: &str,
+    rust_type: &str,
+    type_label: &str,
+) {
     cg.line(&format!(
         "let __raw_{name} = get_arg(Clean(\"{name}\".to_string())).ok_or_else(|| \"missing required argument: --{name}\".to_string())?;"
     ));
@@ -437,7 +447,7 @@ fn unwrap_refined_ty(ty: &TypeExpr) -> &TypeExpr {
 
 // ── Enum ──────────────────────────────────────────────────────────────────
 
-fn emit_enum(cg: &mut Codegen, name: &str, params: &[GenericParam], variants: &[Variant]) {
+fn emit_enum(cg: &mut RustEmitter, name: &str, params: &[GenericParam], variants: &[Variant]) {
     emit_derive(cg, &["Debug", "Clone", "PartialEq"]);
     cg.line(&format!("pub enum {}{} {{", name, generic_params(params)));
     cg.push_indent();
@@ -466,7 +476,7 @@ fn emit_enum(cg: &mut Codegen, name: &str, params: &[GenericParam], variants: &[
 
 // ── Type alias / refined alias ────────────────────────────────────────────
 
-fn emit_alias(cg: &mut Codegen, name: &str, params: &[GenericParam], ty: &TypeExpr) {
+fn emit_alias(cg: &mut RustEmitter, name: &str, params: &[GenericParam], ty: &TypeExpr) {
     match ty {
         TypeExpr::Refined { inner, pred, .. } => {
             // Refined alias becomes a newtype with constructor validation
@@ -529,7 +539,7 @@ fn is_copy_primitive(ty: &TypeExpr) -> bool {
     }
 }
 
-fn emit_derive(cg: &mut Codegen, traits: &[&str]) {
+fn emit_derive(cg: &mut RustEmitter, traits: &[&str]) {
     cg.line(&format!("#[derive({})]", traits.join(", ")));
 }
 

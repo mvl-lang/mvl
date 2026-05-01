@@ -24,13 +24,13 @@
 pub mod borrow_params;
 pub mod boundary_gen;
 pub mod cargo;
-pub mod codegen;
 pub mod coverage;
 pub mod emit_exprs;
 pub mod emit_functions;
 pub mod emit_impls;
 pub mod emit_stmts;
 pub mod emit_types;
+pub mod emitter;
 pub mod last_use;
 pub mod mcdc_instr;
 pub mod mutation;
@@ -38,10 +38,10 @@ pub mod mutation;
 use crate::mvl::parser::ast::{Decl, Program};
 pub use boundary_gen::format_boundary_report;
 use cargo::CargoOptions;
-use codegen::Codegen;
 pub use coverage::{
     emit_cov_preamble, emit_cov_report_test, format_report, BranchInfo, CoverageMap,
 };
+use emitter::RustEmitter;
 pub use mcdc_instr::{
     detect_coupled_pairs, emit_mcdc_preamble, emit_mcdc_report_test, MCDCDecision,
 };
@@ -160,7 +160,7 @@ pub fn transpile_project(
         || prelude_requires_runtime(prelude_progs);
 
     let sibling_names: Vec<&str> = siblings.iter().map(|(n, _)| n.as_str()).collect();
-    let mut cg = Codegen::new();
+    let mut cg = RustEmitter::new();
     cg.emit_program_with_mods(entry_prog, &sibling_names, prelude_progs);
     let main_rs = cg.finish();
 
@@ -170,7 +170,7 @@ pub fn transpile_project(
     let module_files: Vec<(String, String)> = siblings
         .iter()
         .map(|(name, prog)| {
-            let mut cg = Codegen::new();
+            let mut cg = RustEmitter::new();
             if entry_uses_runtime {
                 cg.emit_sibling_module(prog, prelude_progs);
             } else {
@@ -215,7 +215,7 @@ pub fn transpile_with_prelude(
     let use_runtime =
         extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
-    let mut cg = Codegen::new();
+    let mut cg = RustEmitter::new();
     cg.emit_program_with_mods(prog, &[], prelude_progs);
     let lib_rs = cg.finish();
 
@@ -255,7 +255,7 @@ pub fn transpile_source_with_prelude(
     let use_runtime =
         extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
-    let mut cg = Codegen::new();
+    let mut cg = RustEmitter::new();
     cg.test_extern_stubs = true;
     cg.emit_program_with_mods(prog, &[], prelude_progs);
     let lib_rs = cg.finish();
@@ -289,7 +289,7 @@ pub fn transpile(prog: &Program, crate_name: &str) -> TranspileOutput {
     // Link mvl_runtime when extern "rust" is used OR when stdlib is imported.
     let use_runtime = extern_count > 0 || has_std_imports(prog);
 
-    let mut cg = Codegen::new();
+    let mut cg = RustEmitter::new();
     cg.emit_program(prog);
     let lib_rs = cg.finish();
 
@@ -333,7 +333,7 @@ pub fn transpile_covered_with_prelude(
     let use_runtime =
         extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
-    let mut cg = Codegen::new();
+    let mut cg = RustEmitter::new();
     cg.coverage = Some(CoverageMap::new(start_id));
     cg.current_file = file_stem.to_string();
     cg.emit_program_with_mods(prog, &[], prelude_progs);
@@ -378,7 +378,7 @@ pub fn transpile_covered(
     let has_extern_rust = has_extern_rust_decls(prog);
     let use_runtime = extern_count > 0 || has_std_imports(prog);
 
-    let mut cg = Codegen::new();
+    let mut cg = RustEmitter::new();
     cg.coverage = Some(CoverageMap::new(start_id));
     cg.current_file = file_stem.to_string();
     cg.emit_program(prog);
@@ -426,7 +426,7 @@ pub fn transpile_covered_source_with_prelude(
     let use_runtime =
         extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
-    let mut cg = Codegen::new();
+    let mut cg = RustEmitter::new();
     cg.coverage = Some(CoverageMap::new(start_id));
     cg.current_file = file_stem.to_string();
     cg.test_extern_stubs = true;
@@ -473,7 +473,7 @@ pub fn transpile_covered_source(
     let has_extern_rust = has_extern_rust_decls(prog);
     let use_runtime = extern_count > 0 || has_std_imports(prog);
 
-    let mut cg = Codegen::new();
+    let mut cg = RustEmitter::new();
     cg.coverage = Some(CoverageMap::new(start_id));
     cg.current_file = file_stem.to_string();
     cg.test_extern_stubs = true;
@@ -524,7 +524,7 @@ pub fn transpile_mutated_with_prelude(
     let use_runtime =
         extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
-    let mut cg = Codegen::new();
+    let mut cg = RustEmitter::new();
     cg.mutation = Some(MutationMap::new());
     cg.current_file = file_stem.to_string();
     cg.current_file_is_test = true;
@@ -574,7 +574,7 @@ pub fn transpile_mutated_source_with_prelude(
     let use_runtime =
         extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
-    let mut cg = Codegen::new();
+    let mut cg = RustEmitter::new();
     cg.mutation = Some(MutationMap::new());
     cg.current_file = file_stem.to_string();
     cg.test_extern_stubs = true;
@@ -623,7 +623,7 @@ pub fn transpile_mcdc_with_prelude(
     let use_runtime =
         extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
-    let mut cg = Codegen::new();
+    let mut cg = RustEmitter::new();
     cg.mcdc = Some(mcdc_instr::MCDCMap::new(start_id));
     cg.current_file = file_stem.to_string();
     cg.emit_program_with_mods(prog, &[], prelude_progs);
@@ -666,7 +666,7 @@ pub fn transpile_mcdc_source_with_prelude(
     let use_runtime =
         extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
-    let mut cg = Codegen::new();
+    let mut cg = RustEmitter::new();
     cg.mcdc = Some(mcdc_instr::MCDCMap::new(start_id));
     cg.current_file = file_stem.to_string();
     cg.test_extern_stubs = true;

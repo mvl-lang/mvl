@@ -10,11 +10,11 @@
 use crate::mvl::parser::ast::{
     Capability, Constraint, Expr, FnDecl, GenericParam, Param, Totality, TypeExpr,
 };
-use crate::mvl::transpiler::codegen::Codegen;
 use crate::mvl::transpiler::coverage::BranchKind;
 use crate::mvl::transpiler::emit_exprs::{emit_block_stmts, emit_expr};
 use crate::mvl::transpiler::emit_stmts::emit_mcdc_return_expr;
 use crate::mvl::transpiler::emit_types::{emit_label, emit_ref_expr_for_assert, emit_type_expr};
+use crate::mvl::transpiler::emitter::RustEmitter;
 use crate::mvl::transpiler::last_use::compute_last_uses;
 
 /// Emit a function-parameter type.
@@ -39,7 +39,7 @@ fn emit_fn_param_type(ty: &TypeExpr) -> String {
     }
 }
 
-pub fn emit_fn_decl(cg: &mut Codegen, fd: &FnDecl) {
+pub fn emit_fn_decl(cg: &mut RustEmitter, fd: &FnDecl) {
     // Track current function name and test status for coverage metadata.
     cg.current_fn = fd.name.clone();
     cg.current_fn_is_test = fd.is_test;
@@ -107,7 +107,7 @@ pub fn emit_fn_decl(cg: &mut Codegen, fd: &FnDecl) {
 }
 
 /// Emit the statements and return-refinement check for a function body.
-fn emit_fn_body(cg: &mut Codegen, fd: &FnDecl) {
+fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
     // Phase A: compute last uses so emit_expr_as_arg can elide .clone() at move points.
     cg.last_uses = compute_last_uses(&fd.body);
 
@@ -226,7 +226,7 @@ fn emit_params(params: &[Param], borrows: &[Option<bool>]) -> String {
 /// ```
 /// → `Secret("token".to_string())`
 fn emit_expr_tail_with_return_type(
-    cg: &mut Codegen,
+    cg: &mut RustEmitter,
     expr: &Expr,
     return_type: &TypeExpr,
     params: &[Param],

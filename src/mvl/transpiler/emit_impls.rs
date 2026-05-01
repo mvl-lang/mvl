@@ -43,13 +43,13 @@
 //! ```
 
 use crate::mvl::parser::ast::{ImplDecl, Stmt}; // Stmt used in match below
-use crate::mvl::transpiler::codegen::Codegen;
 use crate::mvl::transpiler::emit_exprs::{emit_block_stmts, emit_expr};
 use crate::mvl::transpiler::emit_types::emit_type_expr;
+use crate::mvl::transpiler::emitter::RustEmitter;
 use crate::mvl::transpiler::last_use::compute_last_uses;
 
 /// Emit a trait implementation block.
-pub fn emit_impl_decl(cg: &mut Codegen, id: &ImplDecl) {
+pub fn emit_impl_decl(cg: &mut RustEmitter, id: &ImplDecl) {
     // Phase A: reset last_uses before each impl block so that stale spans from the
     // preceding function body cannot bleed into branches that do not call
     // compute_last_uses (the unsupported-trait fallthrough and the Display
@@ -70,7 +70,7 @@ pub fn emit_impl_decl(cg: &mut Codegen, id: &ImplDecl) {
 }
 
 /// Emit `impl std::fmt::Display for TypeName`.
-fn emit_display_impl(cg: &mut Codegen, id: &ImplDecl) {
+fn emit_display_impl(cg: &mut RustEmitter, id: &ImplDecl) {
     cg.line(&format!("impl std::fmt::Display for {} {{", id.type_name));
     cg.push_indent();
 
@@ -136,7 +136,7 @@ fn emit_display_impl(cg: &mut Codegen, id: &ImplDecl) {
 ///     fn next(&mut self) -> Option<i64> { … }
 /// }
 /// ```
-fn emit_iterator_impl(cg: &mut Codegen, id: &ImplDecl) {
+fn emit_iterator_impl(cg: &mut RustEmitter, id: &ImplDecl) {
     let item_ty = match id.trait_type_args.first() {
         Some(ty) => emit_type_expr(ty),
         None => {
@@ -184,7 +184,7 @@ fn emit_iterator_impl(cg: &mut Codegen, id: &ImplDecl) {
 }
 
 /// Emit `impl std::convert::From<SourceType> for TargetType`.
-fn emit_from_impl(cg: &mut Codegen, id: &ImplDecl) {
+fn emit_from_impl(cg: &mut RustEmitter, id: &ImplDecl) {
     let source_ty = match id.trait_type_args.first() {
         Some(ty) => emit_type_expr(ty),
         None => {
