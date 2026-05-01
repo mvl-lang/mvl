@@ -3855,6 +3855,48 @@ fn two_mut_ref_params_of_different_types_accepted() {
     );
 }
 
+// ── Phase C: return expression flows from &T param (#364) ────────────────────
+
+#[test]
+fn function_returning_ref_literal_with_ref_param_rejected() {
+    // GIVEN: a function with a &T param but the body returns a literal
+    // THEN: checker rejects — the literal does not flow from the parameter
+    let result = check_src("fn bad(x: &Int) -> &Int { 42 }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::ReferenceEscapesScope { .. })),
+        "expected ReferenceEscapesScope, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn function_returning_ref_param_accepted() {
+    // GIVEN: a function that returns exactly its &T parameter
+    // THEN: checker accepts — the reference flows from the parameter
+    let result = check_src("fn ok(x: &Int) -> &Int { x }");
+    assert!(
+        result.errors.is_empty(),
+        "expected no errors, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn function_returning_ref_from_if_branches_accepted() {
+    // GIVEN: a function that returns a &T from both branches of an if/else
+    // THEN: checker accepts — both branches flow from reference parameters
+    let result =
+        check_src("fn ok(cond: Bool, x: &Int, y: &Int) -> &Int { if cond { x } else { y } }");
+    assert!(
+        result.errors.is_empty(),
+        "expected no errors, got: {:?}",
+        result.errors
+    );
+}
+
 // ── Expression-level borrow operator (#366) ──────────────────────────────────
 
 #[test]

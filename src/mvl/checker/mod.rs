@@ -360,15 +360,26 @@ impl TypeChecker {
         // If the return type is &T (immutable or mutable reference) and the function has
         // no &T parameters, the reference can only point to a local variable — which would
         // be deallocated when the function returns.  Reject this statically.
+        // Additionally verify that the tail expression actually flows from one of those
+        // &T parameters (not from a local variable or literal).
         if matches!(ret_ty, Ty::Ref(_, _)) {
-            let has_ref_param = fd
+            let ref_param_names: HashSet<&str> = fd
                 .params
                 .iter()
-                .any(|p| matches!(resolve(&p.ty), Ty::Ref(_, _)));
-            if !has_ref_param {
+                .filter(|p| matches!(resolve(&p.ty), Ty::Ref(_, _)))
+                .map(|p| p.name.as_str())
+                .collect();
+            if ref_param_names.is_empty() {
                 self.emit(CheckError::ReferenceEscapesScope {
                     name: fd.name.clone(),
                     span: fd.span,
+                });
+            } else if let Some(bad_span) =
+                block_return_flows_from_ref_param(&fd.body, &ref_param_names)
+            {
+                self.emit(CheckError::ReferenceEscapesScope {
+                    name: fd.name.clone(),
+                    span: bad_span,
                 });
             }
         }
@@ -2690,6 +2701,99 @@ fn referent_ident(expr: &Expr) -> Option<&str> {
             _ => None,
         }),
         _ => None,
+    }
+}
+
+/// Check whether the tail return expression of a block flows from one of the
+/// given reference-parameter names.
+///
+/// Returns `None` if every path through the block tail returns a value whose
+/// origin is one of `ref_params`.  Returns `Some(span)` pointing at the first
+/// sub-expression that is NOT traceable to a reference parameter.
+///
+/// Used by Phase C return-flow checking (#364).
+fn block_return_flows_from_ref_param(block: &Block, ref_params: &HashSet<&str>) -> Option<Span> {
+    match block.stmts.last() {
+        None => Some(block.span),
+        Some(stmt) => stmt_return_flows_from_ref_param(stmt, block.span, ref_params),
+    }
+}
+
+fn stmt_return_flows_from_ref_param(
+    stmt: &Stmt,
+    fallback_span: Span,
+    ref_params: &HashSet<&str>,
+) -> Option<Span> {
+    match stmt {
+        Stmt::Expr { expr, .. } => expr_return_flows_from_ref_param(expr, ref_params),
+        Stmt::Return {
+            value: Some(expr), ..
+        } => expr_return_flows_from_ref_param(expr, ref_params),
+        Stmt::Return { value: None, span } => Some(*span),
+        Stmt::If {
+            then, else_, span, ..
+        } => {
+            if let Some(bad) = block_return_flows_from_ref_param(then, ref_params) {
+                return Some(bad);
+            }
+            match else_ {
+                None => Some(*span),
+                Some(ElseBranch::Block(b)) => block_return_flows_from_ref_param(b, ref_params),
+                Some(ElseBranch::If(inner)) => {
+                    stmt_return_flows_from_ref_param(inner, *span, ref_params)
+                }
+            }
+        }
+        Stmt::Match { arms, .. } => {
+            for arm in arms {
+                let bad = match &arm.body {
+                    MatchBody::Expr(e) => expr_return_flows_from_ref_param(e, ref_params),
+                    MatchBody::Block(b) => block_return_flows_from_ref_param(b, ref_params),
+                };
+                if let Some(bad_span) = bad {
+                    return Some(bad_span);
+                }
+            }
+            None
+        }
+        _ => Some(fallback_span),
+    }
+}
+
+fn expr_return_flows_from_ref_param(expr: &Expr, ref_params: &HashSet<&str>) -> Option<Span> {
+    match expr {
+        Expr::Ident(name, _) => {
+            if ref_params.contains(name.as_str()) {
+                None
+            } else {
+                Some(expr.span())
+            }
+        }
+        Expr::If {
+            then, else_, span, ..
+        } => {
+            if let Some(bad) = block_return_flows_from_ref_param(then, ref_params) {
+                return Some(bad);
+            }
+            match else_ {
+                None => Some(*span),
+                Some(else_expr) => expr_return_flows_from_ref_param(else_expr, ref_params),
+            }
+        }
+        Expr::Match { arms, .. } => {
+            for arm in arms {
+                let bad = match &arm.body {
+                    MatchBody::Expr(e) => expr_return_flows_from_ref_param(e, ref_params),
+                    MatchBody::Block(b) => block_return_flows_from_ref_param(b, ref_params),
+                };
+                if let Some(bad_span) = bad {
+                    return Some(bad_span);
+                }
+            }
+            None
+        }
+        Expr::Block(block) => block_return_flows_from_ref_param(block, ref_params),
+        _ => Some(expr.span()),
     }
 }
 
