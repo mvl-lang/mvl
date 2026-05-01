@@ -18,7 +18,8 @@
 (* Semantic constraint: "pub" is required before reexport_decl.           *)
 program        = { use_decl } { declaration } ;
 declaration    = [ "pub" ] decl_body ;
-decl_body      = type_decl | fn_decl | const_decl | reexport_decl ;
+decl_body      = type_decl | fn_decl | const_decl | reexport_decl
+               | extern_decl | impl_decl ;
 
 (* === Modules and imports === *)
 (* One file = one module. Module name = filename without extension. *)
@@ -62,6 +63,17 @@ constraint     = IDENT ":" trait_bound ;
 (* Phase 1 trait bounds — one bound per constraint; "+" compound bounds deferred to Phase 2 *)
 trait_bound    = IDENT ;
 
+(* === Extern blocks === *)
+(* Declares foreign functions.  "c" ABI: thin C-linkage declarations (linker provides body). *)
+(* "rust" ABI: the compiler emits an IR bridge body (e.g. rand-based roll_dice).             *)
+extern_decl    = "extern" STRING "{" { extern_fn_decl } "}" ;
+extern_fn_decl = "fn" IDENT "(" [ param_list ] ")" "->" return_type
+                 [ "!" effect_list ] ";" ;
+
+(* === Impl blocks === *)
+(* Provides method implementations for a trait on a named type. *)
+impl_decl      = "impl" IDENT [ "[" type_list "]" ] "for" IDENT "{" { fn_decl } "}" ;
+
 (* === Type expressions === *)
 type_expr      = base_type | option_type | result_type | ref_type
                | labeled_type | refined_type | fn_type | tuple_type ;
@@ -100,10 +112,11 @@ expr_stmt      = expr ";" ;
 
 (* === Expressions === *)
 expr           = literal | IDENT | field_access | fn_call | method_call
-               | unary_expr | binary_expr | if_expr | match_expr
+               | unary_expr | binary_expr | borrow_expr | if_expr | match_expr
                | lambda | block_expr | propagate | construct
                | "move" expr | "consume" expr
                | "declassify" "(" expr ")" | "sanitize" "(" expr ")" ;
+borrow_expr    = "&" [ "mut" ] expr ;              (* take shared or mutable borrow *)
 propagate      = expr "?" ;                       (* Result/Option propagation *)
 fn_call        = IDENT [ "[" type_list "]" ] "(" [ arg_list ] ")" ;
 method_call    = expr "." IDENT "(" [ arg_list ] ")" ;
