@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-release test test-unit test-integration test-corpus test-stdlib test-transpiler test-llvm test-tree-sitter test-grammar-coverage coverage lint mvl-lint format format-check assurance assurance-verbose assurance-gate docs docs-serve tree-sitter-build install install-nvim doctor clean
+.PHONY: help version build build-release test test-unit test-integration test-corpus test-stdlib test-transpiler test-llvm test-tree-sitter test-grammar-coverage coverage lint mvl-lint format format-check assurance assurance-summary assurance-gate docs docs-serve tree-sitter-build install install-nvim setup doctor clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -50,9 +50,7 @@ build-release: ## Build release binary
 
 MVL ?= ./target/debug/mvl
 
-test: test-corpus test-stdlib test-transpiler test-tree-sitter test-grammar-coverage ## Run all tests (unit + corpus + stdlib + transpiler + tree-sitter grammar + grammar coverage)
-	@echo "Running unit tests..."
-	cargo test --lib --tests
+test: test-unit test-corpus test-stdlib test-transpiler test-llvm test-tree-sitter test-grammar-coverage ## Run all tests
 
 test-unit: ## Run unit tests only
 	cargo test --lib
@@ -84,19 +82,8 @@ test-stdlib: build ## Verify stdlib runtime correctness: transpile tests/stdlib/
 	@echo "Running stdlib correctness tests..."
 	$(MVL) test tests/stdlib/
 
-test-transpiler: build ## Run full build-chain tests: .mvl → parse → check → transpile → cargo → binary → verify output
-	@echo "Running end-to-end transpiler tests..."
-	cargo test --test compile_and_run -- --nocapture
-	@echo ""
-	@echo "Manual compilation session (using target/debug/mvl):"
-	@mvl=./target/debug/mvl; \
-	for f in hello_world hello_mvl calculator shapes; do \
-		src=$$(find tests/corpus -name "$${f}.mvl" 2>/dev/null | head -1 | tr -d '\n'); \
-		echo ""; \
-		echo "  --- $$f ---"; \
-		if [ -z "$$src" ]; then echo "  SKIP: $${f}.mvl not found in corpus"; continue; fi; \
-		$$mvl run "$$src" || exit 1; \
-	done
+test-transpiler: build ## Run end-to-end transpiler tests: .mvl → parse → check → transpile → cargo → binary → assert output
+	cargo test --test compile_and_run
 
 test-llvm: build ## Run LLVM backend tests across full corpus
 	@echo "Running LLVM backend tests (full corpus)..."
@@ -150,8 +137,6 @@ docs-serve: ## Serve documentation locally (http://localhost:8000)
 	bash tools/harvest-specs.sh
 	uvx --with mkdocs-material mkdocs serve
 
-# === Clean ===
-
 # === Tree-sitter (editor support) ===
 # Grammar is derived from docs/grammar.ebnf — keep in sync manually.
 
@@ -166,7 +151,6 @@ test-grammar-coverage: ## Cross-validate docs/grammar.ebnf against tree-sitter g
 
 install-nvim: ## Install nvim-mvl plugin + compile tree-sitter parser
 	etc/nvim-mvl/install.sh
-
 
 # === Clean ===
 
