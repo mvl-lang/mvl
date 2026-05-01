@@ -142,6 +142,9 @@ struct LlvmBackend<'ctx> {
     struct_fields: HashMap<String, Vec<(String, TypeExpr)>>,
     /// LLVM named struct types (for structs and payload enums).
     llvm_struct_types: HashMap<String, StructType<'ctx>>,
+    /// Return types of user-defined functions (name → MVL TypeExpr).
+    /// Used to determine the Ok/Some payload type when extracting from Result/Option.
+    fn_return_types: HashMap<String, TypeExpr>,
 }
 
 impl<'ctx> LlvmBackend<'ctx> {
@@ -161,6 +164,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             enum_variants: HashMap::new(),
             struct_fields: HashMap::new(),
             llvm_struct_types: HashMap::new(),
+            fn_return_types: HashMap::new(),
         }
     }
 
@@ -308,6 +312,11 @@ impl<'ctx> LlvmBackend<'ctx> {
             },
             // Ref types fall back to ptr
             TypeExpr::Ref { .. } => Some(self.context.ptr_type(AddressSpace::default()).into()),
+            // Security labels (Public[T], Secret[T], Tainted[T]) and refinements
+            // (T where pred) are transparent: use the inner type.
+            TypeExpr::Labeled { inner, .. } | TypeExpr::Refined { inner, .. } => {
+                self.mvl_type_to_llvm(inner)
+            }
             // Result[T, E] and Option[T]: tagged union { i8, [8 x i8] }
             TypeExpr::Result { .. } | TypeExpr::Option { .. } => {
                 let payload_ty = self.context.i8_type().array_type(8);
@@ -324,6 +333,39 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     fn is_unit_type(&self, ty: &TypeExpr) -> bool {
         matches!(ty, TypeExpr::Base { name, .. } if name == "Unit")
+    }
+
+    /// Peel `Labeled { inner }` and `Refined { inner }` wrappers recursively.
+    fn strip_type_wrappers(ty: &TypeExpr) -> &TypeExpr {
+        match ty {
+            TypeExpr::Labeled { inner, .. } | TypeExpr::Refined { inner, .. } => {
+                Self::strip_type_wrappers(inner)
+            }
+            other => other,
+        }
+    }
+
+    /// Given an expression whose value is a `Result[T,E]` or `Option[T]`, return
+    /// the LLVM type of the Ok/Some payload.  Falls back to `i64` if unknown.
+    fn infer_result_ok_llvm_ty(&self, expr: &Expr) -> BasicTypeEnum<'ctx> {
+        if let Expr::FnCall { name, .. } = expr {
+            if let Some(ret_ty) = self.fn_return_types.get(name.as_str()) {
+                let inner = Self::strip_type_wrappers(ret_ty);
+                let payload_ty = match inner {
+                    TypeExpr::Result { ok, .. } => Some(ok.as_ref()),
+                    TypeExpr::Option {
+                        inner: opt_inner, ..
+                    } => Some(opt_inner.as_ref()),
+                    _ => None,
+                };
+                if let Some(pt) = payload_ty {
+                    if let Some(llvm_ty) = self.mvl_type_to_llvm(Self::strip_type_wrappers(pt)) {
+                        return llvm_ty;
+                    }
+                }
+            }
+        }
+        self.context.i64_type().into()
     }
 
     // ── Printf declaration (L5-17) ───────────────────────────────────────────
@@ -350,10 +392,12 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
         self.build_llvm_types();
 
-        // First pass: declare all functions so forward calls resolve.
+        // First pass: record return types, then declare all functions so forward calls resolve.
         for decl in &prog.declarations {
             if let Decl::Fn(fd) = decl {
                 if !fd.is_test {
+                    self.fn_return_types
+                        .insert(fd.name.clone(), *fd.return_type.clone());
                     self.declare_fn(fd);
                 }
             }
@@ -666,6 +710,7 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     /// Emit a match expression or statement, returning the phi-merged result value (if any).
     fn emit_match(&mut self, scrutinee: &Expr, arms: &[MatchArm]) -> Option<BasicValueEnum<'ctx>> {
+        let ok_ty = self.infer_result_ok_llvm_ty(scrutinee);
         let scrutinee_val = self.emit_expr(scrutinee)?;
 
         // Extract i8 discriminant from the scrutinee value.
@@ -719,7 +764,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             self.terminated = false;
 
             // Bind pattern variables if needed (Phase B: simple cases only).
-            self.bind_pattern_vars(&arm.pattern, scrutinee_val);
+            self.bind_pattern_vars(&arm.pattern, scrutinee_val, Some(ok_ty));
 
             let arm_val = match &arm.body {
                 MatchBody::Expr(e) => self.emit_expr(e),
@@ -833,7 +878,16 @@ impl<'ctx> LlvmBackend<'ctx> {
     /// Bind pattern-introduced variables into `self.locals` before emitting arm body.
     ///
     /// For tuple-variant patterns like `Some(v)`, extracts the payload and stores it.
-    fn bind_pattern_vars(&mut self, pat: &Pattern, scrutinee: BasicValueEnum<'ctx>) {
+    /// `ok_ty` is the expected LLVM type of an Ok/Some payload (defaults to i64 if None).
+    fn bind_pattern_vars(
+        &mut self,
+        pat: &Pattern,
+        scrutinee: BasicValueEnum<'ctx>,
+        ok_ty: Option<BasicTypeEnum<'ctx>>,
+    ) {
+        let default_ok_ty: BasicTypeEnum = self.context.i64_type().into();
+        let ok_llvm_ty = ok_ty.unwrap_or(default_ok_ty);
+
         // Built-in Pattern::Ok(inner), Pattern::Err(inner), Pattern::Some(inner).
         let (inner_pat, is_err) = match pat {
             Pattern::Ok { inner, .. } | Pattern::Some { inner, .. } => {
@@ -854,7 +908,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 let llvm_ty: BasicTypeEnum = if is_err {
                     self.context.ptr_type(AddressSpace::default()).into()
                 } else {
-                    self.context.i64_type().into()
+                    ok_llvm_ty
                 };
                 let payload_ty = payload.get_type();
                 let tmp = self
@@ -881,7 +935,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 Err(_) => return,
             };
 
-            // Built-in Result/Option variants: Ok(v), Some(v) → i64; Err(e) → ptr.
+            // Built-in Result/Option variants: Ok(v), Some(v) → ok_llvm_ty; Err(e) → ptr.
             if matches!(name.as_str(), "Ok" | "Some" | "Err") {
                 let bind_name = match fields.first() {
                     Some(Pattern::Ident(n, _)) => n.clone(),
@@ -894,7 +948,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 let llvm_ty: BasicTypeEnum = if name == "Err" {
                     self.context.ptr_type(AddressSpace::default()).into()
                 } else {
-                    self.context.i64_type().into()
+                    ok_llvm_ty
                 };
                 let payload_arr_ty = payload_arr.get_type();
                 let tmp = self
@@ -1484,6 +1538,7 @@ impl<'ctx> LlvmBackend<'ctx> {
     /// Emit `expr?` — evaluate expr (must return `Result[T, E]` tagged union),
     /// branch to ok/err: on Err, return early; on Ok, yield the payload value.
     fn emit_propagate(&mut self, expr: &Expr) -> Option<BasicValueEnum<'ctx>> {
+        let ok_ty = self.infer_result_ok_llvm_ty(expr);
         let result_val = self.emit_expr(expr)?;
         let BasicValueEnum::StructValue(sv) = result_val else {
             return None;
@@ -1512,7 +1567,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         self.builder.position_at_end(err_bb);
         self.builder.build_return(Some(&result_val)).unwrap();
 
-        // Ok branch: extract payload and yield as i64 (Int).
+        // Ok branch: extract payload and yield with the correct type.
         self.builder.position_at_end(ok_bb);
         let payload = self
             .builder
@@ -1521,8 +1576,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         let payload_ty = payload.get_type();
         let tmp = self.builder.build_alloca(payload_ty, "prop_tmp").unwrap();
         self.builder.build_store(tmp, payload).unwrap();
-        let i64_ty = self.context.i64_type();
-        let ok_val = self.builder.build_load(i64_ty, tmp, "prop_ok_val").unwrap();
+        let ok_val = self.builder.build_load(ok_ty, tmp, "prop_ok_val").unwrap();
         Some(ok_val)
     }
 
@@ -1873,7 +1927,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                                 "%lld"
                             }
                         }
-                        BasicValueEnum::FloatValue(_) => "%f",
+                        BasicValueEnum::FloatValue(_) => "%g",
                         BasicValueEnum::PointerValue(_) => "%s",
                         _ => "%d",
                     })
@@ -2021,7 +2075,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                                 "%lld"
                             }
                         }
-                        BasicValueEnum::FloatValue(_) => "%f",
+                        BasicValueEnum::FloatValue(_) => "%g",
                         BasicValueEnum::PointerValue(_) => "%s",
                         _ => "%d",
                     }
@@ -2084,7 +2138,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                         let spec = if bits <= 32 { "%d" } else { "%lld" };
                         (format!("{spec}{suffix}"), Some(v.into()))
                     }
-                    BasicValueEnum::FloatValue(v) => (format!("%f{suffix}"), Some(v.into())),
+                    BasicValueEnum::FloatValue(v) => (format!("%g{suffix}"), Some(v.into())),
                     BasicValueEnum::PointerValue(v) => {
                         // Assume char* string.
                         (format!("%s{suffix}"), Some(v.into()))
