@@ -6,6 +6,23 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.60.0] — 2026-05-01
+
+### Added
+
+- **LLVM Phase B: Advanced Type System (closes #367, #371, #381, #382)** — Complete LLVM IR generation for structs, enums, match expressions, control flow, and FFI bridges.
+  - **Structs & Field Access**: LLVM named structs with extractvalue/insertvalue GEP operations
+  - **Enums & ADTs**: Unit enum discriminants (i8), tagged unions {i8, [N×i8]} for `Result[T,E]` and `Option[T]`
+  - **Pattern Matching**: LLVM switch statements with phi node merging for `match` expressions
+  - **Control Flow**: `while` loops, `for` loops over ranges, `?` result propagation (early return)
+  - **Extern "rust" Bridges**: Pre-declared signatures + real LLVM IR implementations; `roll_dice()` calls libc `rand() % 6 + 1`
+  - **Method Calls**: `.len()` for String/List/Map/Set/Range, `.to_string()` for all types, math intrinsics for `Int`/`Float` (`abs`, `min`, `max`, `ceil`, `floor`, `sqrt`)
+  - **Collection Literals**: List/Map/Set constructors with proper struct layout
+  - **Built-in Conversions**: `format()` string interpolation
+  - **Pattern Matching for Non-Deterministic Output**: `// expect-pattern:` annotation with glob-style matching (`?` = any char, `*` = any sequence)
+- 15/15 LLVM corpus tests pass; 722 unit tests pass
+- Improved Makefile: `make test` shows per-suite PASS/FAIL summary; individual `test-*` targets retain full output
+
 ## [0.59.0] — 2026-05-01
 
 ### Added
