@@ -2088,30 +2088,12 @@ impl<'ctx> LlvmBackend<'ctx> {
                 }
                 // Forward call to a user-defined function (already declared).
                 let fn_val = self.module.get_function(name)?;
-                // Use undef for args that can't be emitted (e.g. unimplemented method
-                // calls) so the arg count stays correct and IR validation passes.
-                let param_types = fn_val.get_type().get_param_types();
+                // If any argument fails to emit, propagate the failure rather than
+                // silently substituting undef, which would produce undefined behaviour.
                 let meta_args: Vec<inkwell::values::BasicMetadataValueEnum> = args
                     .iter()
-                    .enumerate()
-                    .map(|(i, a)| match self.emit_expr(a) {
-                        Some(v) => v.into(),
-                        None => {
-                            let ty = param_types
-                                .get(i)
-                                .copied()
-                                .unwrap_or_else(|| self.context.i64_type().into());
-                            match ty {
-                                BasicMetadataTypeEnum::IntType(t) => t.get_undef().into(),
-                                BasicMetadataTypeEnum::FloatType(t) => t.get_undef().into(),
-                                BasicMetadataTypeEnum::PointerType(t) => t.get_undef().into(),
-                                BasicMetadataTypeEnum::StructType(t) => t.get_undef().into(),
-                                BasicMetadataTypeEnum::ArrayType(t) => t.get_undef().into(),
-                                _ => self.context.i64_type().get_undef().into(),
-                            }
-                        }
-                    })
-                    .collect();
+                    .map(|a| self.emit_expr(a).map(Into::into))
+                    .collect::<Option<Vec<_>>>()?;
                 let call = self.builder.build_call(fn_val, &meta_args, "call").unwrap();
                 use inkwell::values::AnyValue;
                 BasicValueEnum::try_from(call.as_any_value_enum()).ok()
