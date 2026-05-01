@@ -509,10 +509,12 @@ impl<'ctx> LlvmBackend<'ctx> {
                 pattern, init, ty, ..
             } => {
                 let val = self.emit_expr(init)?;
-                // Determine the LLVM type: prefer the declared type, fall back to inferred.
-                let llvm_ty = ty
-                    .as_ref()
-                    .and_then(|t| self.mvl_type_to_llvm(t))
+                // Determine the LLVM type: use the annotation type only when it matches the
+                // actual value type (annotation may fall back to i64 for unknown generics
+                // like List[T], Map[K,V] — in that case trust the value's own type).
+                let ann_ty = ty.as_ref().and_then(|t| self.mvl_type_to_llvm(t));
+                let llvm_ty = ann_ty
+                    .filter(|&t| t == val.get_type())
                     .unwrap_or_else(|| val.get_type());
                 let name = match pattern {
                     Pattern::Ident(name, _) => name.clone(),
@@ -1080,6 +1082,11 @@ impl<'ctx> LlvmBackend<'ctx> {
 
             // L5-12: ? propagation
             Expr::Propagate { expr, .. } => self.emit_propagate(expr),
+
+            // Collection literals
+            Expr::List { elems, .. } => self.emit_list_literal(elems),
+            Expr::Map { pairs, .. } => self.emit_map_literal(pairs),
+            Expr::Set { elems, .. } => self.emit_set_literal(elems),
 
             // Method calls: minimal support for .len() on range and .to_string() on Int
             Expr::MethodCall {
@@ -1935,54 +1942,429 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
     }
 
+    // ── Collection literals ──────────────────────────────────────────────────
+
+    /// Emit `[e1, ..., eN]` → `{ i64 len, ptr data }` struct with a stack-allocated array.
+    fn emit_list_literal(&mut self, elems: &[Expr]) -> Option<BasicValueEnum<'ctx>> {
+        let i64_ty = self.context.i64_type();
+        let n = elems.len() as u32;
+        let arr_ty = i64_ty.array_type(n.max(1));
+        let arr = self.builder.build_alloca(arr_ty, "list_data").unwrap();
+        for (i, elem) in elems.iter().enumerate() {
+            if let Some(BasicValueEnum::IntValue(v)) = self.emit_expr(elem) {
+                let idx = i64_ty.const_int(i as u64, false);
+                let ptr = unsafe {
+                    self.builder
+                        .build_gep(i64_ty, arr, &[idx], "elem_ptr")
+                        .unwrap()
+                };
+                self.builder.build_store(ptr, v).unwrap();
+            }
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let list_ty = self
+            .context
+            .struct_type(&[i64_ty.into(), ptr_ty.into()], false);
+        let alloca = self.builder.build_alloca(list_ty, "list_tmp").unwrap();
+        let len_ptr = self
+            .builder
+            .build_struct_gep(list_ty, alloca, 0, "ll_ptr")
+            .unwrap();
+        let data_ptr = self
+            .builder
+            .build_struct_gep(list_ty, alloca, 1, "ld_ptr")
+            .unwrap();
+        self.builder
+            .build_store(len_ptr, i64_ty.const_int(n as u64, false))
+            .unwrap();
+        self.builder.build_store(data_ptr, arr).unwrap();
+        Some(
+            self.builder
+                .build_load(list_ty, alloca, "list_val")
+                .unwrap(),
+        )
+    }
+
+    /// Emit `{"k": v, ...}` → `{ i64 len }` struct (only `.len()` supported).
+    fn emit_map_literal(&mut self, pairs: &[(Expr, Expr)]) -> Option<BasicValueEnum<'ctx>> {
+        let i64_ty = self.context.i64_type();
+        let n = pairs.len() as u64;
+        let map_ty = self.context.struct_type(&[i64_ty.into()], false);
+        let alloca = self.builder.build_alloca(map_ty, "map_tmp").unwrap();
+        let len_ptr = self
+            .builder
+            .build_struct_gep(map_ty, alloca, 0, "ml_ptr")
+            .unwrap();
+        self.builder
+            .build_store(len_ptr, i64_ty.const_int(n, false))
+            .unwrap();
+        Some(self.builder.build_load(map_ty, alloca, "map_val").unwrap())
+    }
+
+    /// Emit `{e1, ..., eN}` → `{ i64 len, ptr data }` (same shape as List).
+    fn emit_set_literal(&mut self, elems: &[Expr]) -> Option<BasicValueEnum<'ctx>> {
+        let i64_ty = self.context.i64_type();
+        let n = elems.len() as u32;
+        let arr_ty = i64_ty.array_type(n.max(1));
+        let arr = self.builder.build_alloca(arr_ty, "set_data").unwrap();
+        for (i, elem) in elems.iter().enumerate() {
+            if let Some(BasicValueEnum::IntValue(v)) = self.emit_expr(elem) {
+                let idx = i64_ty.const_int(i as u64, false);
+                let ptr = unsafe {
+                    self.builder
+                        .build_gep(i64_ty, arr, &[idx], "set_ep")
+                        .unwrap()
+                };
+                self.builder.build_store(ptr, v).unwrap();
+            }
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let set_ty = self
+            .context
+            .struct_type(&[i64_ty.into(), ptr_ty.into()], false);
+        let alloca = self.builder.build_alloca(set_ty, "set_tmp").unwrap();
+        let len_ptr = self
+            .builder
+            .build_struct_gep(set_ty, alloca, 0, "sl_ptr")
+            .unwrap();
+        let data_ptr = self
+            .builder
+            .build_struct_gep(set_ty, alloca, 1, "sd_ptr")
+            .unwrap();
+        self.builder
+            .build_store(len_ptr, i64_ty.const_int(n as u64, false))
+            .unwrap();
+        self.builder.build_store(data_ptr, arr).unwrap();
+        Some(self.builder.build_load(set_ty, alloca, "set_val").unwrap())
+    }
+
     // ── Method call emission ─────────────────────────────────────────────────
 
     /// Emit `receiver.method(args)`.
-    ///
-    /// Supported:
-    /// - `range_struct.len()` → `end - start` (i64)
-    /// - `int_val.to_string()` → snprintf to a static 32-byte buffer (ptr)
     fn emit_method_call(
         &mut self,
         receiver: &Expr,
         method: &str,
-        _args: &[Expr],
+        args: &[Expr],
     ) -> Option<BasicValueEnum<'ctx>> {
         let recv_val = self.emit_expr(receiver)?;
         match method {
-            "len" => {
-                // Expect a range struct { i64, i64 } — return end - start.
-                let BasicValueEnum::StructValue(sv) = recv_val else {
-                    return None;
+            // ── len ──────────────────────────────────────────────────────────
+            "len" => match recv_val {
+                // String (ptr) → strlen
+                BasicValueEnum::PointerValue(ptr) => {
+                    let strlen = self.get_strlen();
+                    let call = self
+                        .builder
+                        .build_call(strlen, &[ptr.into()], "strlen_res")
+                        .unwrap();
+                    use inkwell::values::AnyValue;
+                    BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+                }
+                BasicValueEnum::StructValue(sv) => {
+                    let n = sv.get_type().count_fields();
+                    if n == 1 {
+                        // Map { i64 } → field 0
+                        self.builder.build_extract_value(sv, 0, "map_len").ok()
+                    } else if n == 2 {
+                        let f1_ty = sv.get_type().get_field_type_at_index(1).unwrap();
+                        if matches!(f1_ty, BasicTypeEnum::IntType(_)) {
+                            // Range { i64 start, i64 end } → end - start
+                            let s = self
+                                .builder
+                                .build_extract_value(sv, 0, "r_s")
+                                .ok()?
+                                .into_int_value();
+                            let e = self
+                                .builder
+                                .build_extract_value(sv, 1, "r_e")
+                                .ok()?
+                                .into_int_value();
+                            Some(
+                                self.builder
+                                    .build_int_sub(e, s, "range_len")
+                                    .unwrap()
+                                    .into(),
+                            )
+                        } else {
+                            // List/Set { i64 len, ptr } → field 0
+                            self.builder.build_extract_value(sv, 0, "coll_len").ok()
+                        }
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            },
+
+            // ── Int math ─────────────────────────────────────────────────────
+            "abs" => match recv_val {
+                BasicValueEnum::IntValue(v) => {
+                    let zero = self.context.i64_type().const_int(0, false);
+                    let is_neg = self
+                        .builder
+                        .build_int_compare(IntPredicate::SLT, v, zero, "is_neg")
+                        .unwrap();
+                    let neg = self.builder.build_int_neg(v, "neg_v").unwrap();
+                    Some(self.builder.build_select(is_neg, neg, v, "abs_v").unwrap())
+                }
+                _ => None,
+            },
+            "min" => {
+                let arg = match self.emit_expr(args.first()?)? {
+                    BasicValueEnum::IntValue(v) => v,
+                    _ => return None,
                 };
-                let start = self
-                    .builder
-                    .build_extract_value(sv, 0, "range_s")
-                    .ok()?
-                    .into_int_value();
-                let end = self
-                    .builder
-                    .build_extract_value(sv, 1, "range_e")
-                    .ok()?
-                    .into_int_value();
-                Some(
-                    self.builder
-                        .build_int_sub(end, start, "range_len")
-                        .unwrap()
-                        .into(),
-                )
-            }
-            "to_string" => {
-                // Convert an integer to its decimal string representation.
                 match recv_val {
-                    BasicValueEnum::IntValue(v) => Some(self.emit_int_to_string(v)),
-                    BasicValueEnum::FloatValue(v) => Some(self.emit_float_to_string(v)),
-                    BasicValueEnum::PointerValue(p) => Some(p.into()), // already a string
+                    BasicValueEnum::IntValue(a) => {
+                        let lt = self
+                            .builder
+                            .build_int_compare(IntPredicate::SLT, a, arg, "lt")
+                            .unwrap();
+                        Some(self.builder.build_select(lt, a, arg, "min_v").unwrap())
+                    }
                     _ => None,
                 }
             }
+            "max" => {
+                let arg = match self.emit_expr(args.first()?)? {
+                    BasicValueEnum::IntValue(v) => v,
+                    _ => return None,
+                };
+                match recv_val {
+                    BasicValueEnum::IntValue(a) => {
+                        let gt = self
+                            .builder
+                            .build_int_compare(IntPredicate::SGT, a, arg, "gt")
+                            .unwrap();
+                        Some(self.builder.build_select(gt, a, arg, "max_v").unwrap())
+                    }
+                    _ => None,
+                }
+            }
+
+            // ── Float intrinsics ──────────────────────────────────────────────
+            "ceil" | "floor" | "sqrt" => match recv_val {
+                BasicValueEnum::FloatValue(v) => {
+                    let name = format!("llvm.{method}.f64");
+                    let f64_ty = self.context.f64_type();
+                    let fn_val = self.module.get_function(&name).unwrap_or_else(|| {
+                        let fn_ty = f64_ty.fn_type(&[f64_ty.into()], false);
+                        self.module.add_function(&name, fn_ty, None)
+                    });
+                    let call = self
+                        .builder
+                        .build_call(fn_val, &[v.into()], "fintrinsic")
+                        .unwrap();
+                    use inkwell::values::AnyValue;
+                    BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+                }
+                _ => None,
+            },
+
+            // ── List.first() → Option[Int] ────────────────────────────────────
+            "first" => match recv_val {
+                BasicValueEnum::StructValue(sv) if sv.get_type().count_fields() == 2 => {
+                    let len = self
+                        .builder
+                        .build_extract_value(sv, 0, "lst_len")
+                        .ok()?
+                        .into_int_value();
+                    let data_ptr = self
+                        .builder
+                        .build_extract_value(sv, 1, "lst_data")
+                        .ok()?
+                        .into_pointer_value();
+                    let i64_ty = self.context.i64_type();
+                    let first = self
+                        .builder
+                        .build_load(i64_ty, data_ptr, "first_elem")
+                        .unwrap()
+                        .into_int_value();
+                    let parent_fn = self.builder.get_insert_block()?.get_parent()?;
+                    let some_bb = self.context.append_basic_block(parent_fn, "first_some");
+                    let none_bb = self.context.append_basic_block(parent_fn, "first_none");
+                    let merge_bb = self.context.append_basic_block(parent_fn, "first_merge");
+                    let zero = i64_ty.const_int(0, false);
+                    let nonempty = self
+                        .builder
+                        .build_int_compare(IntPredicate::SGT, len, zero, "nonempty")
+                        .unwrap();
+                    self.builder
+                        .build_conditional_branch(nonempty, some_bb, none_bb)
+                        .unwrap();
+                    // Some branch
+                    self.builder.position_at_end(some_bb);
+                    let some_val = self.emit_some_from_val(first.into())?;
+                    let some_end = self.builder.get_insert_block()?;
+                    self.builder.build_unconditional_branch(merge_bb).unwrap();
+                    // None branch
+                    self.builder.position_at_end(none_bb);
+                    let none_val = self.emit_none_val()?;
+                    let none_end = self.builder.get_insert_block()?;
+                    self.builder.build_unconditional_branch(merge_bb).unwrap();
+                    // Merge
+                    self.builder.position_at_end(merge_bb);
+                    if some_val.get_type() == none_val.get_type() {
+                        let phi = self
+                            .builder
+                            .build_phi(some_val.get_type(), "first_result")
+                            .unwrap();
+                        phi.add_incoming(&[(&some_val, some_end), (&none_val, none_end)]);
+                        Some(phi.as_basic_value())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            },
+
+            // ── Set.contains(v) → Bool ────────────────────────────────────────
+            "contains" => {
+                let needle = match self.emit_expr(args.first()?)? {
+                    BasicValueEnum::IntValue(v) => v,
+                    _ => return None,
+                };
+                match recv_val {
+                    BasicValueEnum::StructValue(sv) if sv.get_type().count_fields() == 2 => {
+                        let len = self
+                            .builder
+                            .build_extract_value(sv, 0, "set_len")
+                            .ok()?
+                            .into_int_value();
+                        let data_ptr = self
+                            .builder
+                            .build_extract_value(sv, 1, "set_data")
+                            .ok()?
+                            .into_pointer_value();
+                        let i64_ty = self.context.i64_type();
+                        let bool_ty = self.context.bool_type();
+                        let found_alloca = self.builder.build_alloca(bool_ty, "found").unwrap();
+                        let i_alloca = self.builder.build_alloca(i64_ty, "set_i").unwrap();
+                        self.builder
+                            .build_store(found_alloca, bool_ty.const_int(0, false))
+                            .unwrap();
+                        self.builder
+                            .build_store(i_alloca, i64_ty.const_int(0, false))
+                            .unwrap();
+                        let parent_fn = self.builder.get_insert_block()?.get_parent()?;
+                        let cond_bb = self.context.append_basic_block(parent_fn, "set_cond");
+                        let body_bb = self.context.append_basic_block(parent_fn, "set_body");
+                        let exit_bb = self.context.append_basic_block(parent_fn, "set_exit");
+                        self.builder.build_unconditional_branch(cond_bb).unwrap();
+                        // Cond: i < len && !found
+                        self.builder.position_at_end(cond_bb);
+                        let i = self
+                            .builder
+                            .build_load(i64_ty, i_alloca, "i")
+                            .unwrap()
+                            .into_int_value();
+                        let found = self
+                            .builder
+                            .build_load(bool_ty, found_alloca, "f")
+                            .unwrap()
+                            .into_int_value();
+                        let i_lt = self
+                            .builder
+                            .build_int_compare(IntPredicate::SLT, i, len, "i_lt")
+                            .unwrap();
+                        let not_found = self.builder.build_not(found, "nf").unwrap();
+                        let go = self.builder.build_and(i_lt, not_found, "go").unwrap();
+                        self.builder
+                            .build_conditional_branch(go, body_bb, exit_bb)
+                            .unwrap();
+                        // Body
+                        self.builder.position_at_end(body_bb);
+                        let elem_ptr = unsafe {
+                            self.builder
+                                .build_gep(i64_ty, data_ptr, &[i], "ep")
+                                .unwrap()
+                        };
+                        let elem = self
+                            .builder
+                            .build_load(i64_ty, elem_ptr, "elem")
+                            .unwrap()
+                            .into_int_value();
+                        let eq = self
+                            .builder
+                            .build_int_compare(IntPredicate::EQ, elem, needle, "eq")
+                            .unwrap();
+                        self.builder.build_store(found_alloca, eq).unwrap();
+                        let i_next = self
+                            .builder
+                            .build_int_add(i, i64_ty.const_int(1, false), "i_next")
+                            .unwrap();
+                        self.builder.build_store(i_alloca, i_next).unwrap();
+                        self.builder.build_unconditional_branch(cond_bb).unwrap();
+                        // Exit
+                        self.builder.position_at_end(exit_bb);
+                        Some(
+                            self.builder
+                                .build_load(bool_ty, found_alloca, "contains_res")
+                                .unwrap(),
+                        )
+                    }
+                    _ => None,
+                }
+            }
+
+            // ── to_string ────────────────────────────────────────────────────
+            "to_string" => match recv_val {
+                BasicValueEnum::IntValue(v) => Some(self.emit_int_to_string(v)),
+                BasicValueEnum::FloatValue(v) => Some(self.emit_float_to_string(v)),
+                BasicValueEnum::PointerValue(p) => Some(p.into()),
+                _ => None,
+            },
+
             _ => None,
         }
+    }
+
+    /// Build a `Some(val)` tagged union `{ i8 disc=0, [8 x i8] payload }`.
+    fn emit_some_from_val(&mut self, val: BasicValueEnum<'ctx>) -> Option<BasicValueEnum<'ctx>> {
+        let payload_ty = self.context.i8_type().array_type(8);
+        let result_ty = self
+            .context
+            .struct_type(&[self.context.i8_type().into(), payload_ty.into()], false);
+        let alloca = self.builder.build_alloca(result_ty, "some_tmp").unwrap();
+        let disc_ptr = self
+            .builder
+            .build_struct_gep(result_ty, alloca, 0, "some_disc")
+            .unwrap();
+        self.builder
+            .build_store(disc_ptr, self.context.i8_type().const_int(0, false))
+            .unwrap();
+        let payload_ptr = self
+            .builder
+            .build_struct_gep(result_ty, alloca, 1, "some_payload")
+            .unwrap();
+        self.builder.build_store(payload_ptr, val).unwrap();
+        Some(
+            self.builder
+                .build_load(result_ty, alloca, "some_val")
+                .unwrap(),
+        )
+    }
+
+    /// Build a `None` tagged union `{ i8 disc=1, [8 x i8] payload=undef }`.
+    fn emit_none_val(&mut self) -> Option<BasicValueEnum<'ctx>> {
+        let payload_ty = self.context.i8_type().array_type(8);
+        let result_ty = self
+            .context
+            .struct_type(&[self.context.i8_type().into(), payload_ty.into()], false);
+        let alloca = self.builder.build_alloca(result_ty, "none_tmp").unwrap();
+        let disc_ptr = self
+            .builder
+            .build_struct_gep(result_ty, alloca, 0, "none_disc")
+            .unwrap();
+        self.builder
+            .build_store(disc_ptr, self.context.i8_type().const_int(1, false))
+            .unwrap();
+        Some(
+            self.builder
+                .build_load(result_ty, alloca, "none_val")
+                .unwrap(),
+        )
     }
 
     /// Emit snprintf(buf, 32, "%lld", v) and return buf ptr.
@@ -2036,6 +2418,31 @@ impl<'ctx> LlvmBackend<'ctx> {
             )
             .unwrap();
         alloca.into()
+    }
+
+    fn get_strlen(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("strlen") {
+            return f;
+        }
+        let ptr_ty: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
+        let strlen_ty = self.context.i64_type().fn_type(&[ptr_ty], false);
+        self.module
+            .add_function("strlen", strlen_ty, Some(Linkage::External))
+    }
+
+    /// Select "true" or "false" string pointer based on an i1 value.
+    fn emit_bool_to_str_ptr(&mut self, v: inkwell::values::IntValue<'ctx>) -> BasicValueEnum<'ctx> {
+        let t = self
+            .builder
+            .build_global_string_ptr("true", "true_str")
+            .unwrap();
+        let f = self
+            .builder
+            .build_global_string_ptr("false", "false_str")
+            .unwrap();
+        self.builder
+            .build_select(v, t.as_pointer_value(), f.as_pointer_value(), "bool_str")
+            .unwrap()
     }
 
     fn get_snprintf(&self) -> FunctionValue<'ctx> {
@@ -2212,11 +2619,22 @@ impl<'ctx> LlvmBackend<'ctx> {
         value_args: &[Expr],
         newline: bool,
     ) -> Option<BasicValueEnum<'ctx>> {
-        // Emit all value expressions first so we know their LLVM types.
-        let values: Vec<BasicValueEnum<'ctx>> = value_args
-            .iter()
-            .filter_map(|e| self.emit_expr(e))
-            .collect();
+        // Emit all value expressions, converting i1 (Bool) → "true"/"false" ptr.
+        let mut values: Vec<BasicValueEnum<'ctx>> = Vec::new();
+        for e in value_args {
+            if let Some(v) = self.emit_expr(e) {
+                let v = if let BasicValueEnum::IntValue(iv) = v {
+                    if iv.get_type().get_bit_width() == 1 {
+                        self.emit_bool_to_str_ptr(iv)
+                    } else {
+                        v
+                    }
+                } else {
+                    v
+                };
+                values.push(v);
+            }
+        }
 
         // Build the printf format string by replacing `{}` with specifiers.
         let mut result_fmt = String::new();
@@ -2288,6 +2706,16 @@ impl<'ctx> LlvmBackend<'ctx> {
         // Single expression → emit value and choose format specifier.
         if let Some(expr) = args.first() {
             if let Some(val) = self.emit_expr(expr) {
+                // Convert i1 Bool → "true"/"false" ptr.
+                let val = if let BasicValueEnum::IntValue(iv) = val {
+                    if iv.get_type().get_bit_width() == 1 {
+                        self.emit_bool_to_str_ptr(iv)
+                    } else {
+                        val
+                    }
+                } else {
+                    val
+                };
                 let (fmt_str, extra_arg): (
                     String,
                     Option<inkwell::values::BasicMetadataValueEnum>,
