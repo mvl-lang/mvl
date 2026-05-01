@@ -14,7 +14,7 @@
 //!   L5-05: structs → LLVM named structs, field access via extractvalue/insertvalue
 //!   L5-06: enums/ADTs → i8 discriminant (unit enums) or tagged union {i8, [N×i8]}
 //!   L5-11: match → LLVM switch + phi nodes
-//!   L5-12: while loops → cond/body/exit blocks; for loops stubbed
+//!   L5-12: while + for (range) loops; ? propagation on Result[T,E]
 
 use inkwell::{
     builder::Builder,
@@ -132,6 +132,8 @@ struct LlvmBackend<'ctx> {
     locals: HashMap<String, LocalEntry<'ctx>>,
     /// Whether the current basic block already has a terminator.
     terminated: bool,
+    /// Current function being emitted — needed for `?` early return.
+    current_fn: Option<FunctionValue<'ctx>>,
 
     // ── Phase B: type knowledge ──────────────────────────────────────────────
     /// Enum types: enum_name → [(variant_name, VariantFields)].
@@ -155,6 +157,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             builder,
             locals: HashMap::new(),
             terminated: false,
+            current_fn: None,
             enum_variants: HashMap::new(),
             struct_fields: HashMap::new(),
             llvm_struct_types: HashMap::new(),
@@ -305,6 +308,15 @@ impl<'ctx> LlvmBackend<'ctx> {
             },
             // Ref types fall back to ptr
             TypeExpr::Ref { .. } => Some(self.context.ptr_type(AddressSpace::default()).into()),
+            // Result[T, E] and Option[T]: tagged union { i8, [8 x i8] }
+            TypeExpr::Result { .. } | TypeExpr::Option { .. } => {
+                let payload_ty = self.context.i8_type().array_type(8);
+                Some(
+                    self.context
+                        .struct_type(&[self.context.i8_type().into(), payload_ty.into()], false)
+                        .into(),
+                )
+            }
             // Generic / compound types: i64 placeholder for Phase B
             _ => Some(self.context.i64_type().into()),
         }
@@ -402,6 +414,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         self.builder.position_at_end(entry);
         self.locals.clear();
         self.terminated = false;
+        self.current_fn = Some(fn_val);
 
         // Alloca each parameter so they can be loaded by name as variables.
         for (i, param) in fd.params.iter().enumerate() {
@@ -508,8 +521,16 @@ impl<'ctx> LlvmBackend<'ctx> {
                 None
             }
 
-            // L5-12: for loop — stub (iterator protocol not yet available)
-            Stmt::For { .. } => None,
+            // L5-12: for loop (range-based)
+            Stmt::For {
+                pattern,
+                iter,
+                body,
+                ..
+            } => {
+                self.emit_for(pattern, iter, body);
+                None
+            }
         }
     }
 
@@ -764,6 +785,13 @@ impl<'ctx> LlvmBackend<'ctx> {
             Pattern::Ident(name, _) | Pattern::TupleStruct { name, .. } => {
                 self.lookup_enum_variant_disc(name)
             }
+            // Built-in Result/Option patterns.
+            Pattern::Ok { .. } | Pattern::Some { .. } => {
+                Some(self.context.i8_type().const_int(0, false))
+            }
+            Pattern::Err { .. } | Pattern::None(_) => {
+                Some(self.context.i8_type().const_int(1, false))
+            }
             _ => None,
         }
     }
@@ -772,6 +800,12 @@ impl<'ctx> LlvmBackend<'ctx> {
     ///
     /// Accepts both qualified (`Shape::Circle`) and unqualified (`Circle`) names.
     fn lookup_enum_variant_disc(&self, name: &str) -> Option<inkwell::values::IntValue<'ctx>> {
+        // Built-in Result/Option variants.
+        match name {
+            "Ok" | "Some" => return Some(self.context.i8_type().const_int(0, false)),
+            "Err" | "None" => return Some(self.context.i8_type().const_int(1, false)),
+            _ => {}
+        }
         // Qualified: "Shape::Circle"
         if let Some(pos) = name.find("::") {
             let type_name = &name[..pos];
@@ -795,6 +829,42 @@ impl<'ctx> LlvmBackend<'ctx> {
     ///
     /// For tuple-variant patterns like `Some(v)`, extracts the payload and stores it.
     fn bind_pattern_vars(&mut self, pat: &Pattern, scrutinee: BasicValueEnum<'ctx>) {
+        // Built-in Pattern::Ok(inner), Pattern::Err(inner), Pattern::Some(inner).
+        let (inner_pat, is_err) = match pat {
+            Pattern::Ok { inner, .. } | Pattern::Some { inner, .. } => {
+                (Some(inner.as_ref()), false)
+            }
+            Pattern::Err { inner, .. } => (Some(inner.as_ref()), true),
+            _ => (None, false),
+        };
+        if let Some(inner) = inner_pat {
+            if let Pattern::Ident(bind_name, _) = inner {
+                let BasicValueEnum::StructValue(sv) = scrutinee else {
+                    return;
+                };
+                let payload = match self.builder.build_extract_value(sv, 1, "payload") {
+                    Ok(v) => v,
+                    Err(_) => return,
+                };
+                let llvm_ty: BasicTypeEnum = if is_err {
+                    self.context.ptr_type(AddressSpace::default()).into()
+                } else {
+                    self.context.i64_type().into()
+                };
+                let payload_ty = payload.get_type();
+                let tmp = self
+                    .builder
+                    .build_alloca(payload_ty, "res_payload_tmp")
+                    .unwrap();
+                self.builder.build_store(tmp, payload).unwrap();
+                let loaded = self.builder.build_load(llvm_ty, tmp, bind_name).unwrap();
+                let alloca = self.builder.build_alloca(llvm_ty, bind_name).unwrap();
+                self.builder.build_store(alloca, loaded).unwrap();
+                self.locals.insert(bind_name.clone(), (alloca, llvm_ty));
+            }
+            return;
+        }
+
         if let Pattern::TupleStruct { name, fields, .. } = pat {
             // Extract payload from tagged union.
             let BasicValueEnum::StructValue(sv) = scrutinee else {
@@ -805,6 +875,34 @@ impl<'ctx> LlvmBackend<'ctx> {
                 Ok(v) => v,
                 Err(_) => return,
             };
+
+            // Built-in Result/Option variants: Ok(v), Some(v) → i64; Err(e) → ptr.
+            if matches!(name.as_str(), "Ok" | "Some" | "Err") {
+                let bind_name = match fields.first() {
+                    Some(Pattern::Ident(n, _)) => n.clone(),
+                    _ => return,
+                };
+                let payload_arr = match self.builder.build_extract_value(sv, 1, "payload") {
+                    Ok(v) => v,
+                    Err(_) => return,
+                };
+                let llvm_ty: BasicTypeEnum = if name == "Err" {
+                    self.context.ptr_type(AddressSpace::default()).into()
+                } else {
+                    self.context.i64_type().into()
+                };
+                let payload_arr_ty = payload_arr.get_type();
+                let tmp = self
+                    .builder
+                    .build_alloca(payload_arr_ty, "res_payload_tmp")
+                    .unwrap();
+                self.builder.build_store(tmp, payload_arr).unwrap();
+                let loaded = self.builder.build_load(llvm_ty, tmp, &bind_name).unwrap();
+                let alloca = self.builder.build_alloca(llvm_ty, &bind_name).unwrap();
+                self.builder.build_store(alloca, loaded).unwrap();
+                self.locals.insert(bind_name, (alloca, llvm_ty));
+                return;
+            }
 
             // Determine variant payload types.
             let (type_name, variant_name) = if let Some(pos) = name.find("::") {
@@ -920,6 +1018,9 @@ impl<'ctx> LlvmBackend<'ctx> {
 
             // L5-05: field access
             Expr::FieldAccess { expr, field, .. } => self.emit_field_access(expr, field),
+
+            // L5-12: ? propagation
+            Expr::Propagate { expr, .. } => self.emit_propagate(expr),
 
             _ => None,
         }
@@ -1255,6 +1356,171 @@ impl<'ctx> LlvmBackend<'ctx> {
         )
     }
 
+    // ── Result/Option construction ────────────────────────────────────────────
+
+    /// Emit `Ok(val)` (disc=0) or `Err(val)` (disc=1) as a tagged union `{i8, [8 x i8]}`.
+    fn emit_result_variant(&mut self, disc: u64, args: &[Expr]) -> Option<BasicValueEnum<'ctx>> {
+        let payload_ty = self.context.i8_type().array_type(8);
+        let result_ty = self
+            .context
+            .struct_type(&[self.context.i8_type().into(), payload_ty.into()], false);
+        let alloca = self.builder.build_alloca(result_ty, "res_tmp").unwrap();
+
+        // Store discriminant.
+        let disc_val = self.context.i8_type().const_int(disc, false);
+        let disc_ptr = self
+            .builder
+            .build_struct_gep(result_ty, alloca, 0, "res_disc")
+            .unwrap();
+        self.builder.build_store(disc_ptr, disc_val).unwrap();
+
+        // Store payload value.
+        if let Some(arg) = args.first() {
+            if let Some(val) = self.emit_expr(arg) {
+                let payload_ptr = self
+                    .builder
+                    .build_struct_gep(result_ty, alloca, 1, "res_payload")
+                    .unwrap();
+                self.builder.build_store(payload_ptr, val).unwrap();
+            }
+        }
+
+        Some(
+            self.builder
+                .build_load(result_ty, alloca, "res_val")
+                .unwrap(),
+        )
+    }
+
+    // ── L5-12: for loop ───────────────────────────────────────────────────────
+
+    /// Emit `for pat in range(a, b) { body }` as a counted LLVM loop.
+    ///
+    /// Only `range(a, b)` iterators are supported for now.
+    fn emit_for(&mut self, pattern: &Pattern, iter: &Expr, body: &Block) {
+        // Only handle `for x in range(a, b)`.
+        let (var_name, start_expr, end_expr) = match iter {
+            Expr::FnCall { name, args, .. } if name == "range" && args.len() == 2 => {
+                let var = match pattern {
+                    Pattern::Ident(n, _) => n.clone(),
+                    _ => return,
+                };
+                (var, &args[0], &args[1])
+            }
+            _ => return,
+        };
+
+        let start_val = match self.emit_expr(start_expr) {
+            Some(BasicValueEnum::IntValue(v)) => v,
+            _ => return,
+        };
+        let end_val = match self.emit_expr(end_expr) {
+            Some(BasicValueEnum::IntValue(v)) => v,
+            _ => return,
+        };
+
+        let i64_ty = self.context.i64_type();
+        let alloca = self.builder.build_alloca(i64_ty, &var_name).unwrap();
+        self.builder.build_store(alloca, start_val).unwrap();
+        self.locals
+            .insert(var_name.clone(), (alloca, i64_ty.into()));
+
+        let parent_fn = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
+        let cond_bb = self.context.append_basic_block(parent_fn, "for_cond");
+        let body_bb = self.context.append_basic_block(parent_fn, "for_body");
+        let exit_bb = self.context.append_basic_block(parent_fn, "for_exit");
+
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        // Condition: i < end
+        self.builder.position_at_end(cond_bb);
+        let cur = self
+            .builder
+            .build_load(i64_ty, alloca, "for_i")
+            .unwrap()
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, cur, end_val, "for_lt")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body_bb, exit_bb)
+            .unwrap();
+
+        // Body: execute, then increment and loop back.
+        self.builder.position_at_end(body_bb);
+        let prev_terminated = self.terminated;
+        self.terminated = false;
+        self.emit_block(body);
+        if !self.terminated {
+            let cur = self
+                .builder
+                .build_load(i64_ty, alloca, "for_i_inc")
+                .unwrap()
+                .into_int_value();
+            let one = i64_ty.const_int(1, false);
+            let next = self.builder.build_int_add(cur, one, "for_next").unwrap();
+            self.builder.build_store(alloca, next).unwrap();
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+        }
+        self.terminated = prev_terminated;
+
+        // Exit block.
+        self.builder.position_at_end(exit_bb);
+    }
+
+    // ── L5-12: ? propagation ─────────────────────────────────────────────────
+
+    /// Emit `expr?` — evaluate expr (must return `Result[T, E]` tagged union),
+    /// branch to ok/err: on Err, return early; on Ok, yield the payload value.
+    fn emit_propagate(&mut self, expr: &Expr) -> Option<BasicValueEnum<'ctx>> {
+        let result_val = self.emit_expr(expr)?;
+        let BasicValueEnum::StructValue(sv) = result_val else {
+            return None;
+        };
+
+        // Extract i8 discriminant (field 0).
+        let disc = self.builder.build_extract_value(sv, 0, "prop_disc").ok()?;
+        let BasicValueEnum::IntValue(disc_i) = disc else {
+            return None;
+        };
+
+        let parent_fn = self.builder.get_insert_block()?.get_parent()?;
+        let ok_bb = self.context.append_basic_block(parent_fn, "prop_ok");
+        let err_bb = self.context.append_basic_block(parent_fn, "prop_err");
+
+        let zero = self.context.i8_type().const_int(0, false);
+        let is_ok = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, disc_i, zero, "is_ok")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_ok, ok_bb, err_bb)
+            .unwrap();
+
+        // Err branch: return the Result struct unchanged (propagate the error).
+        self.builder.position_at_end(err_bb);
+        self.builder.build_return(Some(&result_val)).unwrap();
+
+        // Ok branch: extract payload and yield as i64 (Int).
+        self.builder.position_at_end(ok_bb);
+        let payload = self
+            .builder
+            .build_extract_value(sv, 1, "prop_payload")
+            .ok()?;
+        let payload_ty = payload.get_type();
+        let tmp = self.builder.build_alloca(payload_ty, "prop_tmp").unwrap();
+        self.builder.build_store(tmp, payload).unwrap();
+        let i64_ty = self.context.i64_type();
+        let ok_val = self.builder.build_load(i64_ty, tmp, "prop_ok_val").unwrap();
+        Some(ok_val)
+    }
+
     // ── Literal emission ─────────────────────────────────────────────────────
 
     fn emit_literal(&self, lit: &Literal) -> Option<BasicValueEnum<'ctx>> {
@@ -1513,6 +1779,13 @@ impl<'ctx> LlvmBackend<'ctx> {
             "println" => self.emit_println(args),
             "print" => self.emit_print(args),
             _ => {
+                // Built-in Result/Option constructors: Ok(v), Err(e), Some(v)
+                if matches!(name, "Ok" | "Some") && args.len() == 1 {
+                    return self.emit_result_variant(0, args);
+                }
+                if name == "Err" && args.len() == 1 {
+                    return self.emit_result_variant(1, args);
+                }
                 // L5-06: enum tuple variant constructor, e.g. `Shape::Circle(r)`
                 if name.contains("::") {
                     if let Some(pos) = name.find("::") {
