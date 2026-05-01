@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-release test test-unit test-integration test-corpus test-stdlib test-transpiler test-tree-sitter test-grammar-coverage coverage lint mvl-lint format format-check assurance assurance-verbose assurance-gate docs docs-serve tree-sitter-build install install-nvim doctor clean
+.PHONY: help version build build-release test test-unit test-integration test-corpus test-stdlib test-transpiler test-llvm test-tree-sitter test-grammar-coverage coverage lint mvl-lint format format-check assurance assurance-summary assurance-gate docs docs-serve tree-sitter-build install install-nvim setup doctor clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -29,6 +29,7 @@ doctor: ## Check that all dev tools are available
 	check clippy-driver "rustup component add clippy"; \
 	check node          "https://nodejs.org"; \
 	check python3       "required for make assurance"; \
+	check /opt/homebrew/opt/llvm/bin/lli "brew install llvm  (required for LLVM backend)"; \
 	echo
 
 install: build-release ## Install mvl binary to ~/.local/bin
@@ -49,9 +50,35 @@ build-release: ## Build release binary
 
 MVL ?= ./target/debug/mvl
 
-test: test-corpus test-stdlib test-transpiler test-tree-sitter test-grammar-coverage ## Run all tests (unit + corpus + stdlib + transpiler + tree-sitter grammar + grammar coverage)
-	@echo "Running unit tests..."
-	cargo test --lib --tests
+test: ## Run all test suites and print a one-line PASS/FAIL summary for each
+	@pass=0; fail=0; \
+	run_suite() { \
+		label="$$1"; target="$$2"; \
+		out=$$($(MAKE) --no-print-directory "$$target" 2>&1); rc=$$?; \
+		if [ $$rc -eq 0 ]; then \
+			printf "  \033[32m✓  PASS\033[0m  %s\n" "$$label"; \
+			pass=$$((pass + 1)); \
+		else \
+			printf "  \033[31m✗  FAIL\033[0m  %s\n" "$$label"; \
+			printf "%s\n" "$$out" | sed 's/^/         /'; \
+			fail=$$((fail + 1)); \
+		fi; \
+	}; \
+	echo ""; \
+	run_suite "Unit tests"        test-unit; \
+	run_suite "Corpus"            test-corpus; \
+	run_suite "Stdlib"            test-stdlib; \
+	run_suite "Transpiler"        test-transpiler; \
+	run_suite "LLVM backend"      test-llvm; \
+	run_suite "Tree-sitter"       test-tree-sitter; \
+	run_suite "Grammar coverage"  test-grammar-coverage; \
+	echo ""; \
+	if [ $$fail -eq 0 ]; then \
+		printf "  \033[32m✓  All $$((pass)) suites passed\033[0m\n\n"; \
+	else \
+		printf "  \033[31m✗  $$fail of $$((pass + fail)) suites failed\033[0m\n\n"; \
+		exit 1; \
+	fi
 
 test-unit: ## Run unit tests only
 	cargo test --lib
@@ -83,19 +110,12 @@ test-stdlib: build ## Verify stdlib runtime correctness: transpile tests/stdlib/
 	@echo "Running stdlib correctness tests..."
 	$(MVL) test tests/stdlib/
 
-test-transpiler: build ## Run full build-chain tests: .mvl → parse → check → transpile → cargo → binary → verify output
-	@echo "Running end-to-end transpiler tests..."
-	cargo test --test compile_and_run -- --nocapture
-	@echo ""
-	@echo "Manual compilation session (using target/debug/mvl):"
-	@mvl=./target/debug/mvl; \
-	for f in hello_world hello_mvl calculator shapes; do \
-		src=$$(find tests/corpus -name "$${f}.mvl" 2>/dev/null | head -1 | tr -d '\n'); \
-		echo ""; \
-		echo "  --- $$f ---"; \
-		if [ -z "$$src" ]; then echo "  SKIP: $${f}.mvl not found in corpus"; continue; fi; \
-		$$mvl run "$$src" || exit 1; \
-	done
+test-transpiler: build ## Run end-to-end transpiler tests: .mvl → parse → check → transpile → cargo → binary → assert output
+	cargo test --test compile_and_run
+
+test-llvm: build ## Run LLVM backend tests across full corpus
+	@echo "Running LLVM backend tests (full corpus)..."
+	$(MVL) test tests/corpus/ --backend=llvm
 
 # === Quality ===
 
@@ -145,8 +165,6 @@ docs-serve: ## Serve documentation locally (http://localhost:8000)
 	bash tools/harvest-specs.sh
 	uvx --with mkdocs-material mkdocs serve
 
-# === Clean ===
-
 # === Tree-sitter (editor support) ===
 # Grammar is derived from docs/grammar.ebnf — keep in sync manually.
 
@@ -161,7 +179,6 @@ test-grammar-coverage: ## Cross-validate docs/grammar.ebnf against tree-sitter g
 
 install-nvim: ## Install nvim-mvl plugin + compile tree-sitter parser
 	etc/nvim-mvl/install.sh
-
 
 # === Clean ===
 
