@@ -3931,6 +3931,7 @@ fn borrow_expr_transitions_borrow_state_rejected_on_double_mut() {
 
 /// Phase C (#305, #363): ReferenceOutlivesOwner — assigning a `&T` reference to a
 /// binding at a shallower scope depth than the referent.
+/// Also verifies that `ref_name` and `owner_name` fields are correctly populated.
 #[test]
 fn ref_binding_outliving_owner_rejected() {
     let result = check_src(
@@ -3942,12 +3943,98 @@ fn ref_binding_outliving_owner_rejected() {
         }",
     );
     assert!(
+        result.errors.iter().any(|e| matches!(
+            e,
+            CheckError::ReferenceOutlivesOwner { ref_name, owner_name, .. }
+            if ref_name == "r" && owner_name == "x"
+        )),
+        "expected ReferenceOutlivesOwner{{ref_name:r, owner_name:x}}, got: {:?}",
+        result.errors
+    );
+}
+
+/// Phase C (#363): `&mut T` implicit borrow from deeper scope is also rejected.
+#[test]
+fn ref_mut_binding_outliving_owner_rejected() {
+    let result = check_src(
+        "fn bad() -> Unit {
+            let r: &mut Int = {
+                let mut x: Int = 42;
+                x
+            };
+        }",
+    );
+    assert!(
         result
             .errors
             .iter()
             .any(|e| matches!(e, CheckError::ReferenceOutlivesOwner { .. })),
-        "expected ReferenceOutlivesOwner, got: {:?}",
+        "expected ReferenceOutlivesOwner for &mut binding, got: {:?}",
         result.errors
+    );
+}
+
+/// Phase C (#363): explicit `&x` borrow from deeper scope is rejected.
+#[test]
+fn ref_explicit_borrow_outliving_owner_rejected() {
+    let result = check_src(
+        "fn bad() -> Unit {
+            let r: &Int = {
+                let x: Int = 42;
+                &x
+            };
+        }",
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::ReferenceOutlivesOwner { .. })),
+        "expected ReferenceOutlivesOwner for explicit &x borrow, got: {:?}",
+        result.errors
+    );
+}
+
+/// Phase C (#363): two levels of block nesting — referent_ident recurses through both.
+#[test]
+fn ref_binding_doubly_nested_rejected() {
+    let result = check_src(
+        "fn bad() -> Unit {
+            let r: &Int = {
+                {
+                    let x: Int = 42;
+                    x
+                }
+            };
+        }",
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::ReferenceOutlivesOwner { .. })),
+        "expected ReferenceOutlivesOwner for doubly-nested block-local, got: {:?}",
+        result.errors
+    );
+}
+
+/// Phase C (#363): reference binding inside a nested block borrowing an outer-scope
+/// variable is accepted (`r_depth > owner.scope_depth` → false → no error).
+#[test]
+fn ref_binding_inner_borrows_outer_accepted() {
+    let x_depth_outer = errors_for(
+        "fn ok() -> Unit {
+            let x: Int = 42;
+            let r: &Int = {
+                x
+            };
+        }",
+    );
+    assert!(
+        !x_depth_outer
+            .iter()
+            .any(|e| matches!(e, CheckError::ReferenceOutlivesOwner { .. })),
+        "unexpected ReferenceOutlivesOwner when binding outer-scope var, got: {x_depth_outer:?}"
     );
 }
 
@@ -3965,5 +4052,22 @@ fn ref_binding_same_scope_accepted() {
             .iter()
             .any(|e| matches!(e, CheckError::ReferenceOutlivesOwner { .. })),
         "unexpected ReferenceOutlivesOwner for same-scope binding, got: {errors:?}"
+    );
+}
+
+/// Phase C (#363): a function parameter used as referent is always in scope —
+/// no ReferenceOutlivesOwner should be emitted.
+#[test]
+fn ref_binding_from_param_accepted() {
+    let errors = errors_for(
+        "fn ok(x: Int) -> Unit {
+            let r: &Int = x;
+        }",
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::ReferenceOutlivesOwner { .. })),
+        "unexpected ReferenceOutlivesOwner for param-referent binding, got: {errors:?}"
     );
 }
