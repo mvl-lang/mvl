@@ -711,6 +711,8 @@ impl<'ctx> LlvmBackend<'ctx> {
         let mut phi_incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
             Vec::new();
 
+        let mut arms_reaching_merge = 0usize;
+
         for (i, arm) in arms.iter().enumerate() {
             let arm_bb = arm_blocks[i];
             self.builder.position_at_end(arm_bb);
@@ -726,6 +728,7 @@ impl<'ctx> LlvmBackend<'ctx> {
 
             let arm_end = self.builder.get_insert_block().unwrap();
             if !self.terminated {
+                arms_reaching_merge += 1;
                 if let Some(val) = arm_val {
                     phi_incoming.push((val, arm_end));
                 }
@@ -740,7 +743,9 @@ impl<'ctx> LlvmBackend<'ctx> {
         self.terminated = prev_terminated;
         self.builder.position_at_end(merge_bb);
 
-        if phi_incoming.is_empty() {
+        // Only build a phi if every arm that reaches merge_bb produced a value.
+        // Fewer phi entries than predecessors would produce invalid LLVM IR.
+        if phi_incoming.is_empty() || phi_incoming.len() < arms_reaching_merge {
             return None;
         }
 
@@ -1778,6 +1783,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         match name {
             "println" => self.emit_println(args),
             "print" => self.emit_print(args),
+            "format" => self.emit_format(args),
             _ => {
                 // Built-in Result/Option constructors: Ok(v), Err(e), Some(v)
                 if matches!(name, "Ok" | "Some") && args.len() == 1 {
@@ -1802,16 +1808,121 @@ impl<'ctx> LlvmBackend<'ctx> {
                 }
                 // Forward call to a user-defined function (already declared).
                 let fn_val = self.module.get_function(name)?;
+                // Use undef for args that can't be emitted (e.g. unimplemented method
+                // calls) so the arg count stays correct and IR validation passes.
+                let param_types = fn_val.get_type().get_param_types();
                 let meta_args: Vec<inkwell::values::BasicMetadataValueEnum> = args
                     .iter()
-                    .filter_map(|a| self.emit_expr(a))
-                    .map(|v| v.into())
+                    .enumerate()
+                    .map(|(i, a)| match self.emit_expr(a) {
+                        Some(v) => v.into(),
+                        None => {
+                            let ty = param_types
+                                .get(i)
+                                .copied()
+                                .unwrap_or_else(|| self.context.i64_type().into());
+                            match ty {
+                                BasicMetadataTypeEnum::IntType(t) => t.get_undef().into(),
+                                BasicMetadataTypeEnum::FloatType(t) => t.get_undef().into(),
+                                BasicMetadataTypeEnum::PointerType(t) => t.get_undef().into(),
+                                BasicMetadataTypeEnum::StructType(t) => t.get_undef().into(),
+                                BasicMetadataTypeEnum::ArrayType(t) => t.get_undef().into(),
+                                _ => self.context.i64_type().get_undef().into(),
+                            }
+                        }
+                    })
                     .collect();
                 let call = self.builder.build_call(fn_val, &meta_args, "call").unwrap();
                 use inkwell::values::AnyValue;
                 BasicValueEnum::try_from(call.as_any_value_enum()).ok()
             }
         }
+    }
+
+    // ── format() built-in ────────────────────────────────────────────────────
+
+    /// Emit `format("template {}", a, b)` → `sprintf` into a global 256-byte buffer,
+    /// returning a `ptr` (char*) to that buffer.
+    fn emit_format(&mut self, args: &[Expr]) -> Option<BasicValueEnum<'ctx>> {
+        let Some(Expr::Literal(Literal::Str(fmt_template), _)) = args.first() else {
+            return None;
+        };
+        let fmt_template = fmt_template.clone();
+        let value_args = &args[1..];
+
+        // Emit all value expressions first so we know their LLVM types.
+        let values: Vec<BasicValueEnum<'ctx>> = value_args
+            .iter()
+            .filter_map(|e| self.emit_expr(e))
+            .collect();
+
+        // Build sprintf format string (same specifier logic as emit_printf_format).
+        let mut fmt = String::new();
+        let mut arg_idx = 0usize;
+        let mut chars = fmt_template.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '{' && chars.peek() == Some(&'}') {
+                chars.next();
+                let spec = values
+                    .get(arg_idx)
+                    .map(|val| match val {
+                        BasicValueEnum::IntValue(v) => {
+                            if v.get_type().get_bit_width() <= 32 {
+                                "%d"
+                            } else {
+                                "%lld"
+                            }
+                        }
+                        BasicValueEnum::FloatValue(_) => "%f",
+                        BasicValueEnum::PointerValue(_) => "%s",
+                        _ => "%d",
+                    })
+                    .unwrap_or("%d");
+                fmt.push_str(spec);
+                arg_idx += 1;
+            } else {
+                fmt.push(c);
+            }
+        }
+
+        // Get or create global 256-byte format buffer.
+        let buf_name = "format_buf";
+        let buf_ty = self.context.i8_type().array_type(256);
+        let buf_global = if let Some(g) = self.module.get_global(buf_name) {
+            g
+        } else {
+            let g = self.module.add_global(buf_ty, None, buf_name);
+            g.set_initializer(&buf_ty.const_zero());
+            g
+        };
+        let buf_ptr = buf_global.as_pointer_value();
+
+        // Call sprintf(buf, fmt, args...).
+        let sprintf = self.get_sprintf();
+        let fmt_global = self
+            .builder
+            .build_global_string_ptr(&fmt, "sprintf_fmt")
+            .unwrap();
+        let mut call_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> =
+            vec![buf_ptr.into(), fmt_global.as_pointer_value().into()];
+        for val in values {
+            call_args.push(val.into());
+        }
+        self.builder
+            .build_call(sprintf, &call_args, "sprintf_call")
+            .unwrap();
+
+        Some(buf_ptr.into())
+    }
+
+    fn get_sprintf(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("sprintf") {
+            return f;
+        }
+        let ptr_ty: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
+        let sprintf_ty = self.context.i32_type().fn_type(&[ptr_ty, ptr_ty], true);
+        self.module
+            .add_function("sprintf", sprintf_ty, Some(Linkage::External))
     }
 
     // ── Printf / println (L5-17, enhanced for Phase B) ───────────────────────
