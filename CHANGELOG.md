@@ -6,6 +6,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.58.0] — 2026-05-01
+
+### Added
+
+- **Phase C scope-depth checking for reference bindings (closes #363)** — When a local binding is assigned a reference to a variable (implicit borrow `let r: &T = x` or explicit borrow `let r: &T = &x`), the checker verifies the referent lives at least as long as the binding. Emits `ReferenceOutlivesOwner` when the referent is defined at a deeper scope (shorter lifetime) or inside an initializer block that exits before the binding is made.
+  - `referent_ident()` helper extracts root identifiers from complex expressions, supporting plain idents, block tails, and explicit borrows `&expr`.
+  - Scope comparison uses `VarInfo.scope_depth` (0-based index) to detect lifetime mismatches.
+  - Block-local variables (not in scope after init evaluation) are conservatively treated as always-dangling.
+  - Covers both implicit (`let r: &T = x`) and explicit (`let r: &T = &x`) borrow forms.
+
+### Fixed
+
+- `check_stmt` Phase C logic extracted to `check_borrow_lifetime()` method — reduces nesting from 7 levels to ~3 and improves readability.
+- Unified reference-assignment detection eliminates duplicated TypeMismatch emission.
+- Added clarifying comment on scope_depth dual-convention (raw count vs. 0-based index).
+
 ## [0.57.0] — 2026-04-30
 
 ### Added
