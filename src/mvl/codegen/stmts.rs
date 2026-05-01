@@ -5,6 +5,9 @@
 
 use inkwell::{types::BasicTypeEnum, values::BasicValueEnum, AddressSpace, IntPredicate};
 
+use crate::mvl::codegen::HeapKind;
+use crate::mvl::parser::ast::TypeExpr;
+
 use crate::mvl::parser::ast::{
     Block, ElseBranch, Expr, LValue, MatchArm, MatchBody, Pattern, Stmt, VariantFields,
 };
@@ -48,12 +51,31 @@ impl<'ctx> LlvmBackend<'ctx> {
                 self.locals.insert(name.clone(), (alloca, llvm_ty));
                 // L5-08: record MVL type annotation for Ok/Some payload inference.
                 if let Some(type_expr) = ty {
-                    self.local_mvl_types.insert(name, type_expr.clone());
+                    self.local_mvl_types.insert(name.clone(), type_expr.clone());
+                    // L5-14: track heap-allocated collection locals for drop at function exit.
+                    if let Some(kind) = heap_kind_of(type_expr) {
+                        // Only register if the value is a pointer (heap collection).
+                        if matches!(llvm_ty, BasicTypeEnum::PointerType(_)) {
+                            self.heap_locals.insert(name, kind);
+                        }
+                    }
                 }
                 None
             }
             Stmt::Return { value, .. } => {
                 let ret_val = value.as_ref().and_then(|e| self.emit_expr(e));
+                // L5-14: drop heap locals before returning, but skip the returned variable.
+                // Returning a heap pointer transfers ownership to the caller — dropping it
+                // here would be a use-after-free.
+                let ret_heap_name: Option<String> = value.as_ref().and_then(|e| {
+                    if let Expr::Ident(name, _) = e {
+                        if self.heap_locals.contains_key(name.as_str()) {
+                            return Some(name.clone());
+                        }
+                    }
+                    None
+                });
+                self.emit_heap_drops_except(ret_heap_name.as_deref());
                 if let Some(v) = ret_val {
                     self.builder.build_return(Some(&v)).unwrap();
                 } else {
@@ -68,6 +90,26 @@ impl<'ctx> LlvmBackend<'ctx> {
                 match target {
                     LValue::Ident(n, _) => {
                         if let Some((alloca, _)) = self.locals.get(n).copied() {
+                            // L5-14: drop the old heap value before overwriting to prevent a
+                            // memory leak (the previous pointer is unreachable after the store).
+                            let kind_opt = self.heap_locals.get(n.as_str()).copied();
+                            if let Some(kind) = kind_opt {
+                                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                                if let Ok(old_ptr) =
+                                    self.builder.build_load(ptr_ty, alloca, "old_heap")
+                                {
+                                    let drop_fn = match kind {
+                                        HeapKind::String => self.get_mvl_string_drop(),
+                                        HeapKind::Array => self.get_mvl_array_drop(),
+                                        HeapKind::Map => self.get_mvl_map_drop(),
+                                    };
+                                    let _ = self.builder.build_call(
+                                        drop_fn,
+                                        &[old_ptr.into()],
+                                        "assign_drop",
+                                    );
+                                }
+                            }
                             self.builder.build_store(alloca, val).unwrap();
                         }
                     }
@@ -653,5 +695,25 @@ impl<'ctx> LlvmBackend<'ctx> {
 
         // Exit block.
         self.builder.position_at_end(exit_bb);
+    }
+}
+
+/// Map a MVL TypeExpr to the HeapKind it represents, if any.
+/// Used to register `let` bindings that hold heap-allocated collection values
+/// for automatic drop emission at function exit (L5-14).
+pub(crate) fn heap_kind_of(ty: &TypeExpr) -> Option<HeapKind> {
+    let base = match ty {
+        TypeExpr::Base { name, .. } => name.as_str(),
+        TypeExpr::Labeled { inner, .. } | TypeExpr::Refined { inner, .. } => {
+            return heap_kind_of(inner);
+        }
+        _ => return None,
+    };
+    match base {
+        "String" => Some(HeapKind::String),
+        "List" | "Array" => Some(HeapKind::Array),
+        "Map" => Some(HeapKind::Map),
+        "Set" => Some(HeapKind::Array), // Set uses the array backend
+        _ => None,
     }
 }

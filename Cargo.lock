@@ -433,12 +433,19 @@ dependencies = [
 
 [[package]]
 name = "mvl"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "inkwell",
  "libc",
  "tempfile",
  "ureq",
+]
+
+[[package]]
+name = "mvl_memory"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

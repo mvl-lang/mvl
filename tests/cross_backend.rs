@@ -25,6 +25,13 @@ fn corpus(name: &str) -> String {
     )
 }
 
+fn corpus_types(name: &str) -> String {
+    format!(
+        "{}/tests/corpus/02_types/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
 /// Run a program via the Rust transpiler backend; return stdout.
 fn run_transpiler(file: &str) -> String {
     let out = Command::new(mvl_bin())
@@ -72,6 +79,31 @@ fn run_llvm(file: &str) -> Option<String> {
     )
 }
 
+/// Run a program via the LLVM backend and assert expected output.
+/// Skips silently if `lli` is not available.
+fn assert_llvm_output(file: &str, expected: &str) {
+    if mvl::mvl::codegen::find_lli().is_none() {
+        eprintln!("SKIP {file}: lli not found — install LLVM (brew install llvm)");
+        return;
+    }
+    let out = Command::new(mvl_bin())
+        .args(["run", file, "--backend=llvm"])
+        .output()
+        .expect("failed to run mvl run --backend=llvm");
+    assert!(
+        out.status.success(),
+        "LLVM backend failed for {file}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let actual = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        actual.trim(),
+        expected.trim(),
+        "{file}: LLVM output mismatch.\nexpected: {expected:?}\nactual:   {actual:?}"
+    );
+}
+
 /// Assert that both backends produce identical stdout for the given corpus program.
 fn assert_backends_agree(name: &str) {
     let file = corpus(name);
@@ -106,4 +138,12 @@ fn cross_backend_calculator() {
 #[test]
 fn cross_backend_shapes() {
     assert_backends_agree("shapes.mvl");
+}
+
+// ── Phase C: heap allocation tests (LLVM-only) ────────────────────────────────
+
+#[test]
+fn llvm_string_heap() {
+    let file = corpus_types("string_heap_llvm.mvl");
+    assert_llvm_output(&file, "5\nhello world\n11");
 }

@@ -28,6 +28,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             .add_function("printf", printf_ty, Some(Linkage::External))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn get_strlen(&self) -> FunctionValue<'ctx> {
         if let Some(f) = self.module.get_function("strlen") {
             return f;
@@ -54,7 +55,47 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     // ── String conversion helpers ─────────────────────────────────────────────
 
-    /// Emit snprintf(buf, 32, "%lld", v) and return buf ptr.
+    /// Emit `snprintf` into a stack buffer, then wrap the result in a heap
+    /// `MvlString` via `mvl_string_new`.  Returns an `MvlString*` so that:
+    /// - `mvl_string_ptr()` in the printf path works correctly (no more
+    ///   "treat char[] as MvlString*" crash in `range_pipeline` / `to_string`).
+    /// - The pointer stays valid after the caller's stack frame is torn down
+    ///   (fixes the dangling-stack-ptr crash in `generic_fns` / `struct_value_semantics`).
+    fn snprintf_to_mvl_string(
+        &mut self,
+        alloca: inkwell::values::PointerValue<'ctx>,
+        snprintf_call: inkwell::values::CallSiteValue<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        // snprintf returns i32 = bytes written (not including null terminator).
+        use inkwell::values::AnyValue;
+        let written = BasicValueEnum::try_from(snprintf_call.as_any_value_enum())
+            .ok()
+            .and_then(|v| {
+                if let BasicValueEnum::IntValue(n) = v {
+                    Some(n)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| self.context.i32_type().const_int(0, false));
+        let len = self
+            .builder
+            .build_int_z_extend(written, self.context.i64_type(), "str_len")
+            .unwrap();
+        let new_fn = self.get_mvl_string_new();
+        let call = self
+            .builder
+            .build_call(new_fn, &[alloca.into(), len.into()], "str_new")
+            .unwrap();
+        BasicValueEnum::try_from(call.as_any_value_enum()).unwrap_or_else(|_| {
+            self.context
+                .ptr_type(AddressSpace::default())
+                .const_null()
+                .into()
+        })
+    }
+
+    /// Emit `Int.to_string()` → heap `MvlString*`.
     pub(crate) fn emit_int_to_string(
         &mut self,
         v: inkwell::values::IntValue<'ctx>,
@@ -67,7 +108,8 @@ impl<'ctx> LlvmBackend<'ctx> {
             .build_global_string_ptr("%lld", "int_fmt")
             .unwrap();
         let size = self.context.i64_type().const_int(32, false);
-        self.builder
+        let call = self
+            .builder
             .build_call(
                 snprintf,
                 &[
@@ -79,10 +121,10 @@ impl<'ctx> LlvmBackend<'ctx> {
                 "snprintf_int",
             )
             .unwrap();
-        alloca.into()
+        self.snprintf_to_mvl_string(alloca, call)
     }
 
-    /// Emit snprintf(buf, 32, "%g", v) and return buf ptr.
+    /// Emit `Float.to_string()` → heap `MvlString*`.
     pub(crate) fn emit_float_to_string(
         &mut self,
         v: inkwell::values::FloatValue<'ctx>,
@@ -95,7 +137,8 @@ impl<'ctx> LlvmBackend<'ctx> {
             .build_global_string_ptr("%g", "flt_fmt")
             .unwrap();
         let size = self.context.i64_type().const_int(32, false);
-        self.builder
+        let call = self
+            .builder
             .build_call(
                 snprintf,
                 &[
@@ -107,10 +150,15 @@ impl<'ctx> LlvmBackend<'ctx> {
                 "snprintf_flt",
             )
             .unwrap();
-        alloca.into()
+        self.snprintf_to_mvl_string(alloca, call)
     }
 
-    /// Select "true" or "false" string pointer based on an i1 value.
+    /// Select "true" or "false" and return a heap `MvlString*`.
+    ///
+    /// Previously returned a raw `char*` to a global string literal.  That
+    /// broke the printf path which calls `mvl_string_ptr()` on every
+    /// `PointerValue` argument (treating the raw char* as MvlString* caused
+    /// a crash in `core_types_demo`'s Bool section).
     pub(crate) fn emit_bool_to_str_ptr(
         &mut self,
         v: inkwell::values::IntValue<'ctx>,
@@ -123,9 +171,39 @@ impl<'ctx> LlvmBackend<'ctx> {
             .builder
             .build_global_string_ptr("false", "false_str")
             .unwrap();
-        self.builder
-            .build_select(v, t.as_pointer_value(), f.as_pointer_value(), "bool_str")
-            .unwrap()
+        let i64_ty = self.context.i64_type();
+        // "true" = 4 bytes, "false" = 5 bytes.
+        let true_len = i64_ty.const_int(4, false);
+        let false_len = i64_ty.const_int(5, false);
+        let selected_ptr = self
+            .builder
+            .build_select(v, t.as_pointer_value(), f.as_pointer_value(), "bool_cstr")
+            .unwrap();
+        let selected_len = self
+            .builder
+            .build_select(v, true_len, false_len, "bool_len")
+            .unwrap();
+        let (BasicValueEnum::PointerValue(char_ptr), BasicValueEnum::IntValue(len)) =
+            (selected_ptr, selected_len)
+        else {
+            return self
+                .context
+                .ptr_type(AddressSpace::default())
+                .const_null()
+                .into();
+        };
+        let new_fn = self.get_mvl_string_new();
+        let call = self
+            .builder
+            .build_call(new_fn, &[char_ptr.into(), len.into()], "bool_str_new")
+            .unwrap();
+        use inkwell::values::AnyValue;
+        BasicValueEnum::try_from(call.as_any_value_enum()).unwrap_or_else(|_| {
+            self.context
+                .ptr_type(AddressSpace::default())
+                .const_null()
+                .into()
+        })
     }
 
     // ── format() built-in ────────────────────────────────────────────────────
@@ -196,11 +274,15 @@ impl<'ctx> LlvmBackend<'ctx> {
         for val in values {
             call_args.push(val.into());
         }
-        self.builder
+        let snprintf_call = self
+            .builder
             .build_call(snprintf, &call_args, "snprintf_fmt_call")
             .unwrap();
 
-        Some(buf_alloca.into())
+        // Wrap the stack buffer in a heap MvlString* so the pointer stays valid
+        // after this stack frame exits (fixes dangling-ptr crash when format()
+        // result is returned from a function like `show` in struct_value_semantics).
+        Some(self.snprintf_to_mvl_string(buf_alloca, snprintf_call))
     }
 
     // ── Printf / println (L5-17, enhanced for Phase B) ───────────────────────
@@ -335,7 +417,20 @@ impl<'ctx> LlvmBackend<'ctx> {
         let mut call_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> =
             vec![fmt_global.as_pointer_value().into()];
         for val in values {
-            call_args.push(val.into());
+            // L5-14: MvlString* values must be converted to char* for printf.
+            let printf_val = match val {
+                BasicValueEnum::PointerValue(p) => {
+                    let sp = self.get_mvl_string_ptr();
+                    let cstr_call = self
+                        .builder
+                        .build_call(sp, &[p.into()], "str_cptr_fmt")
+                        .unwrap();
+                    use inkwell::values::AnyValue;
+                    BasicValueEnum::try_from(cstr_call.as_any_value_enum()).unwrap_or(val)
+                }
+                other => other,
+            };
+            call_args.push(printf_val.into());
         }
         self.builder
             .build_call(printf, &call_args, "printf_fmt_call")
@@ -385,8 +480,17 @@ impl<'ctx> LlvmBackend<'ctx> {
                     }
                     BasicValueEnum::FloatValue(v) => (format!("%g{suffix}"), Some(v.into())),
                     BasicValueEnum::PointerValue(v) => {
-                        // Assume char* string.
-                        (format!("%s{suffix}"), Some(v.into()))
+                        // L5-14: in Phase C, pointer values are MvlString*.
+                        // Call mvl_string_ptr to extract the null-terminated char* for printf.
+                        let sp = self.get_mvl_string_ptr();
+                        let cstr_call = self
+                            .builder
+                            .build_call(sp, &[v.into()], "str_cptr")
+                            .unwrap();
+                        use inkwell::values::AnyValue;
+                        let cstr = BasicValueEnum::try_from(cstr_call.as_any_value_enum())
+                            .unwrap_or(v.into());
+                        (format!("%s{suffix}"), Some(cstr.into()))
                     }
                     _ => (suffix.to_string(), None),
                 };

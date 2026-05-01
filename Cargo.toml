@@ -1,9 +1,9 @@
 [workspace]
-members = [".", "mvl_runtime"]
+members = [".", "mvl_runtime", "mvl_memory"]
 
 [package]
 name = "mvl"
-version = "0.62.0"
+version = "0.63.0"
 edition = "2021"
 description = "MVL — Minimum Verification Language compiler"
 license = "Apache-2.0"

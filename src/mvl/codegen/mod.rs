@@ -18,8 +18,11 @@
 
 mod builtins;
 mod exprs;
+mod memory;
 mod stmts;
 mod types;
+
+pub(crate) use memory::HeapKind;
 
 use inkwell::{
     builder::Builder,
@@ -31,7 +34,9 @@ use inkwell::{
 };
 use std::collections::{HashMap, HashSet};
 
-use crate::mvl::parser::ast::{Decl, ExternDecl, ExternFnDecl, FnDecl, Program, TypeExpr};
+use crate::mvl::parser::ast::{
+    Block, Decl, Expr, ExternDecl, ExternFnDecl, FnDecl, Program, Stmt, TypeExpr,
+};
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -64,6 +69,44 @@ pub fn find_lli() -> Option<std::path::PathBuf> {
     if brew_intel.exists() {
         return Some(brew_intel);
     }
+    None
+}
+
+/// Find the `libmvl_memory` shared library for the `lli --load` flag (ADR-0016).
+///
+/// Search order:
+/// 1. `MVL_MEMORY_LIB` environment variable (explicit override)
+/// 2. Sibling of the current executable in `target/{debug,release}/`
+/// 3. Returns `None` if not found — lli runs without it (Phase B programs still work)
+pub fn find_mvl_memory_lib() -> Option<std::path::PathBuf> {
+    // 1. Explicit override
+    if let Ok(path) = std::env::var("MVL_MEMORY_LIB") {
+        let p = std::path::PathBuf::from(path);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
+    // 2. Relative to the current executable.
+    //    In development: target/debug/mvl → target/debug/libmvl_memory.{dylib,so}
+    //                                    or target/debug/deps/libmvl_memory.{dylib,so}
+    //    In release:     target/release/mvl → target/release/libmvl_memory.{dylib,so}
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            for ext in &["dylib", "so"] {
+                let lib = dir.join(format!("libmvl_memory.{ext}"));
+                if lib.exists() {
+                    return Some(lib);
+                }
+                // Cargo places cdylib artifacts under target/{profile}/deps/
+                let lib = dir.join(format!("deps/libmvl_memory.{ext}"));
+                if lib.exists() {
+                    return Some(lib);
+                }
+            }
+        }
+    }
+
     None
 }
 
@@ -190,6 +233,12 @@ struct LlvmBackend<'ctx> {
     /// MVL TypeExpr for each local variable that has an explicit type annotation.
     /// Used to infer the Ok/Some payload type when the scrutinee is a local variable.
     local_mvl_types: HashMap<String, TypeExpr>,
+
+    // ── L5-14: heap drop tracking ────────────────────────────────────────────
+    /// Locals that hold heap-allocated collection values (String, Array, Map).
+    /// Keyed by variable name → HeapKind.  Cleared at function entry.
+    /// Used to emit `_drop` calls before `return` and at function end.
+    pub(crate) heap_locals: HashMap<String, HeapKind>,
 }
 
 impl<'ctx> LlvmBackend<'ctx> {
@@ -214,6 +263,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             type_subs: HashMap::new(),
             emitted_monomorphs: HashSet::new(),
             local_mvl_types: HashMap::new(),
+            heap_locals: HashMap::new(),
         }
     }
 
@@ -447,6 +497,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         self.builder.position_at_end(entry);
         self.locals.clear();
         self.local_mvl_types.clear();
+        self.heap_locals.clear();
         self.terminated = false;
         self.current_fn = Some(fn_val);
 
@@ -469,6 +520,10 @@ impl<'ctx> LlvmBackend<'ctx> {
 
         // Emit return terminator if the block didn't already terminate.
         if !self.terminated {
+            // L5-14: drop heap locals; exclude the implicit return value if it is a heap
+            // collection (ownership transfers to the caller — dropping it here is a UAF).
+            let ret_name = self.heap_return_ident(&fd.body);
+            self.emit_heap_drops_except(ret_name);
             if is_c_main {
                 let zero = self.context.i32_type().const_int(0, false);
                 self.builder.build_return(Some(&zero)).unwrap();
@@ -516,6 +571,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         self.builder.position_at_end(entry);
         self.locals.clear();
         self.local_mvl_types.clear();
+        self.heap_locals.clear();
         self.terminated = false;
         self.current_fn = Some(fn_val);
 
@@ -536,6 +592,10 @@ impl<'ctx> LlvmBackend<'ctx> {
         let body_val = self.emit_block(&fd.body);
 
         if !self.terminated {
+            // L5-14: drop heap locals; exclude the implicit return value if it is a heap
+            // collection (ownership transfers to the caller — dropping it here is a UAF).
+            let ret_name = self.heap_return_ident(&fd.body);
+            self.emit_heap_drops_except(ret_name);
             if self.is_unit_type(&fd.return_type) {
                 self.builder.build_return(None).unwrap();
             } else if let Some(val) = body_val {
@@ -544,6 +604,22 @@ impl<'ctx> LlvmBackend<'ctx> {
                 self.builder.build_return(None).unwrap();
             }
         }
+    }
+
+    /// Return the name of the last expression in `block` if it is a bare identifier
+    /// tracked as a heap local.  Used to exclude the implicit return value from drops
+    /// (returning a heap pointer transfers ownership to the caller).
+    fn heap_return_ident<'b>(&self, block: &'b Block) -> Option<&'b str> {
+        let last = block.stmts.last()?;
+        let Stmt::Expr { expr, .. } = last else {
+            return None;
+        };
+        let Expr::Ident(name, _) = expr else {
+            return None;
+        };
+        self.heap_locals
+            .contains_key(name.as_str())
+            .then_some(name.as_str())
     }
 
     /// Emit a monomorphized copy of `fd` with the given type-parameter substitutions,
