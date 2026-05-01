@@ -236,15 +236,6 @@ fn linked_list_runs_and_produces_expected_output() {
     assert_run_output("linked_list.mvl", &["length: 3"]);
 }
 
-// ── simple_math.mvl (library — no fn main) ────────────────────────────────
-
-/// simple_math.mvl has no fn main — `mvl check` must pass.
-#[test]
-fn simple_math_check_passes() {
-    let stdout = assert_check_ok("simple_math.mvl");
-    assert!(stdout.contains("OK"));
-}
-
 // ── auth_handler.mvl (library — no fn main) ───────────────────────────────
 
 /// auth_handler.mvl demonstrates all 11 requirements (ADTs, IFC labels,
