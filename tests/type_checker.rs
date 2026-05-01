@@ -4024,7 +4024,6 @@ fn borrow_expr_mutable_type_checks() {
 ///
 /// TODO(#306): implement BorrowState transitions in the checker to emit this error.
 #[test]
-#[ignore = "AliasingMutableBorrow not yet emitted (TODO #306)"]
 fn shared_and_mut_ref_params_of_same_type_rejected() {
     let result = check_src("fn bad(a: &Int, b: &mut Int) -> Unit { }");
     assert!(
@@ -4042,14 +4041,10 @@ fn shared_and_mut_ref_params_of_same_type_rejected() {
 ///
 /// TODO(#362/#366): wire BorrowState transitions in the Expr::Borrow checker arm.
 #[test]
-#[ignore = "BorrowState transitions not yet driven by Expr::Borrow (TODO #362/#366)"]
 fn borrow_expr_transitions_borrow_state_rejected_on_double_mut() {
     // Two simultaneous `&mut x` borrows must be rejected via BorrowState tracking.
     let result = check_src(
-        "fn f(mut x: Int) -> Unit {
-            let r1: &mut Int = &mut x
-            let r2: &mut Int = &mut x
-        }",
+        "fn f(mut x: Int) -> Unit { let r1: &mut Int = &mut x; let r2: &mut Int = &mut x; }",
     );
     assert!(
         result.errors.iter().any(|e| matches!(

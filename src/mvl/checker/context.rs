@@ -57,16 +57,13 @@ use crate::mvl::parser::lexer::Span;
 /// # State machine (not yet driven — TODO #306)
 ///
 /// The transitions below are the intended semantics for the full Phase D
-/// implementation.  Currently the field is always `Owned`; no code in the
-/// checker reads or mutates it.  `AliasingMutableBorrow` (the error for
-/// creating `&mut x` while `x` is already borrowed) is also not yet emitted.
+/// implementation.
 ///
 /// * `Owned` → `SharedBorrowed(n)` when `&x` is created.
 /// * `Owned` → `MutablyBorrowed` when `&mut x` is created.
 /// * `SharedBorrowed(n)` → `SharedBorrowed(n-1)` when a shared borrow goes out of scope.
 /// * `SharedBorrowed(0)` == `Owned`.
 /// * `MutablyBorrowed` → `Owned` when the mutable borrow goes out of scope.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum BorrowState {
     /// No outstanding borrows — value is exclusively owned.
@@ -92,9 +89,12 @@ pub struct VarInfo {
     /// Active borrow state (Phase D, Spec 009 Req 2).
     ///
     /// Tracks outstanding shared and mutable borrows to enforce alias safety.
-    /// Not yet driven — always `Owned`. See `BorrowState` doc for TODO.
-    #[allow(dead_code)]
     pub borrow_state: BorrowState,
+    /// Name of the variable this reference borrows, if any (Phase D).
+    ///
+    /// Set when `let r = &x` or `let r = &mut x` is bound.  Used by `pop_scope()`
+    /// to release the borrow on `x` when `r` goes out of scope.
+    pub borrows_var: Option<String>,
 }
 
 impl VarInfo {
@@ -106,6 +106,7 @@ impl VarInfo {
             capability: None,
             scope_depth: 0,
             borrow_state: BorrowState::Owned,
+            borrows_var: None,
         }
     }
 
@@ -641,7 +642,22 @@ impl TypeEnv {
     }
 
     pub fn pop_scope(&mut self) {
-        self.scopes.pop();
+        if let Some(scope) = self.scopes.pop() {
+            // Phase D: release borrows held by variables going out of scope.
+            for info in scope.values() {
+                if let Some(ref borrowed_name) = info.borrows_var {
+                    if let Some(target) = self.lookup_mut_var(borrowed_name) {
+                        target.borrow_state = match target.borrow_state {
+                            BorrowState::SharedBorrowed(1) | BorrowState::MutablyBorrowed => {
+                                BorrowState::Owned
+                            }
+                            BorrowState::SharedBorrowed(n) => BorrowState::SharedBorrowed(n - 1),
+                            BorrowState::Owned => BorrowState::Owned,
+                        };
+                    }
+                }
+            }
+        }
     }
 
     // ── Variable operations ──────────────────────────────────────────────
