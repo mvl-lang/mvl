@@ -6,6 +6,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.59.0] — 2026-05-01
+
+### Added
+
+- **Phase C return-flow verification (closes #364)** — Extended the Phase C escape check to verify that when a function returning `&T` has a `&T` parameter, the tail expression actually flows from one of those parameters—not a local variable, literal, or non-reference value. Previous behavior only syntactically checked that the function *has* at least one `&T` param, which could allow code like `fn bad(x: &Int) -> &Int { 42 }` to pass the checker but fail in rustc.
+  - `block_return_flows_from_ref_param()` / `stmt_return_flows_from_ref_param()` / `expr_return_flows_from_ref_param()` recursively trace return expressions through tail-position `if/else` and `match` branches.
+  - `block_early_return_violation()` / `stmt_early_return_violation()` / `expr_early_return_violation()` scan all statements at any depth to catch early `return` statements that don't flow from a reference parameter.
+  - `check_match_arms_flow()` helper deduplicates match-arm checking logic.
+  - Handles `Expr::Borrow` correctly: `&x` where `x` is a reference parameter is accepted.
+  - Rejects empty match arms (no valid return path).
+  - Error spans now point to the problematic return expression, not the function declaration.
+
 ## [0.58.0] — 2026-05-01
 
 ### Added
