@@ -50,7 +50,35 @@ build-release: ## Build release binary
 
 MVL ?= ./target/debug/mvl
 
-test: test-unit test-corpus test-stdlib test-transpiler test-llvm test-tree-sitter test-grammar-coverage ## Run all tests
+test: ## Run all test suites and print a one-line PASS/FAIL summary for each
+	@pass=0; fail=0; \
+	run_suite() { \
+		label="$$1"; target="$$2"; \
+		out=$$($(MAKE) --no-print-directory "$$target" 2>&1); rc=$$?; \
+		if [ $$rc -eq 0 ]; then \
+			printf "  \033[32m✓  PASS\033[0m  %s\n" "$$label"; \
+			pass=$$((pass + 1)); \
+		else \
+			printf "  \033[31m✗  FAIL\033[0m  %s\n" "$$label"; \
+			printf "%s\n" "$$out" | sed 's/^/         /'; \
+			fail=$$((fail + 1)); \
+		fi; \
+	}; \
+	echo ""; \
+	run_suite "Unit tests"        test-unit; \
+	run_suite "Corpus"            test-corpus; \
+	run_suite "Stdlib"            test-stdlib; \
+	run_suite "Transpiler"        test-transpiler; \
+	run_suite "LLVM backend"      test-llvm; \
+	run_suite "Tree-sitter"       test-tree-sitter; \
+	run_suite "Grammar coverage"  test-grammar-coverage; \
+	echo ""; \
+	if [ $$fail -eq 0 ]; then \
+		printf "  \033[32m✓  All $$((pass)) suites passed\033[0m\n\n"; \
+	else \
+		printf "  \033[31m✗  $$fail of $$((pass + fail)) suites failed\033[0m\n\n"; \
+		exit 1; \
+	fi
 
 test-unit: ## Run unit tests only
 	cargo test --lib
