@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-release test test-unit test-integration test-corpus test-stdlib test-transpiler test-llvm test-llvm-all test-tree-sitter test-grammar-coverage coverage lint mvl-lint format format-check assurance assurance-verbose assurance-gate docs docs-serve tree-sitter-build install install-nvim doctor clean
+.PHONY: help version build build-release test test-unit test-integration test-corpus test-stdlib test-transpiler test-llvm test-tree-sitter test-grammar-coverage coverage lint mvl-lint format format-check assurance assurance-verbose assurance-gate docs docs-serve tree-sitter-build install install-nvim doctor clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -98,13 +98,9 @@ test-transpiler: build ## Run full build-chain tests: .mvl → parse → check �
 		$$mvl run "$$src" || exit 1; \
 	done
 
-test-llvm: build ## Run Phase B LLVM corpus tests (tests/corpus/02_types/ — always green)
-	@echo "Running LLVM backend tests (Phase B corpus)..."
-	$(MVL) test tests/corpus/02_types/ --backend=llvm
-
-test-llvm-all: build ## Run all LLVM tests across full corpus (some Phase A+ failures expected)
+test-llvm: build ## Run LLVM backend tests across full corpus
 	@echo "Running LLVM backend tests (full corpus)..."
-	$(MVL) test tests/corpus/ --backend=llvm; true
+	$(MVL) test tests/corpus/ --backend=llvm
 
 # === Quality ===
 
