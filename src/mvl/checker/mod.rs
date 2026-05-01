@@ -717,7 +717,37 @@ impl TypeChecker {
                 let init_ty = self.infer_expr(init);
                 if let Some(ann) = ty {
                     let ann_ty = resolve(ann);
-                    if !types_compatible(&ann_ty, &init_ty) {
+                    // Phase C (#305, #363): implicit-borrow scope-depth check.
+                    // `let r: &T = expr` where `expr: T` is an implicit borrow.
+                    // Verify the referent lives at least as long as `r`.
+                    if let Ty::Ref(_, inner_ty) = &ann_ty {
+                        if types_compatible(inner_ty, &init_ty) {
+                            // Implicit borrow — check scope depth instead of TypeMismatch.
+                            if let (Pattern::Ident(ref_name, _), Some(owner_name)) =
+                                (pattern, referent_ident(init))
+                            {
+                                let r_depth = self.env.scope_depth().saturating_sub(1);
+                                let owner_too_deep = match self.env.lookup(owner_name) {
+                                    Some(info) => info.scope_depth > r_depth,
+                                    // Not in scope: defined inside the init block → always dangling.
+                                    None => true,
+                                };
+                                if owner_too_deep {
+                                    self.emit(CheckError::ReferenceOutlivesOwner {
+                                        ref_name: ref_name.clone(),
+                                        owner_name: owner_name.to_owned(),
+                                        span: init.span(),
+                                    });
+                                }
+                            }
+                        } else if !types_compatible(&ann_ty, &init_ty) {
+                            self.emit(CheckError::TypeMismatch {
+                                expected: ann_ty.display(),
+                                found: init_ty.display(),
+                                span: init.span(),
+                            });
+                        }
+                    } else if !types_compatible(&ann_ty, &init_ty) {
                         self.emit(CheckError::TypeMismatch {
                             expected: ann_ty.display(),
                             found: init_ty.display(),
@@ -2629,6 +2659,24 @@ fn collect_refs_block(block: &Block, params: &[&str], out: &mut Vec<(String, Spa
             }
             Stmt::Expr { expr, .. } => collect_refs_expr(expr, params, out),
         }
+    }
+}
+
+/// Extract the "root identifier" from an expression used as a `&T` init.
+///
+/// For `let r: &T = x`, returns `Some("x")`.
+/// For `let r: &T = { ...; x }`, returns `Some("x")` (the block's tail ident).
+/// Returns `None` for complex expressions where the referent cannot be named.
+///
+/// Used by Phase C scope-depth checking (#305, #363).
+fn referent_ident(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Ident(name, _) => Some(name),
+        Expr::Block(block) => block.stmts.last().and_then(|s| match s {
+            Stmt::Expr { expr, .. } => referent_ident(expr),
+            _ => None,
+        }),
+        _ => None,
     }
 }
 

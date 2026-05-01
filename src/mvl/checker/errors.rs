@@ -131,8 +131,7 @@ pub enum CheckError {
     /// A `&T` reference is assigned to a binding with a shallower scope depth
     /// than the referent, meaning the reference would outlive the owner.
     ///
-    /// TODO(#305): not yet emitted — scope-depth comparison is not implemented.
-    #[allow(dead_code)]
+    /// Emitted by Phase C scope-depth comparison in `check_stmt` (#305, #363).
     ReferenceOutlivesOwner {
         /// The reference binding being created.
         ref_name: String,

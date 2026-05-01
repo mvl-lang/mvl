@@ -3929,19 +3929,16 @@ fn borrow_expr_transitions_borrow_state_rejected_on_double_mut() {
     );
 }
 
-/// Phase C (#305): ReferenceOutlivesOwner — assigning a `&T` reference to a
+/// Phase C (#305, #363): ReferenceOutlivesOwner — assigning a `&T` reference to a
 /// binding at a shallower scope depth than the referent.
-///
-/// TODO(#305): implement scope-depth comparison in the checker to emit this error.
 #[test]
-#[ignore = "ReferenceOutlivesOwner not yet emitted (TODO #305)"]
 fn ref_binding_outliving_owner_rejected() {
     let result = check_src(
         "fn bad() -> Unit {
             let r: &Int = {
-                let x: Int = 42
+                let x: Int = 42;
                 x
-            }
+            };
         }",
     );
     assert!(
@@ -3951,5 +3948,22 @@ fn ref_binding_outliving_owner_rejected() {
             .any(|e| matches!(e, CheckError::ReferenceOutlivesOwner { .. })),
         "expected ReferenceOutlivesOwner, got: {:?}",
         result.errors
+    );
+}
+
+/// Phase C (#363): same-scope `&T` binding is accepted — no ReferenceOutlivesOwner.
+#[test]
+fn ref_binding_same_scope_accepted() {
+    let errors = errors_for(
+        "fn ok() -> Unit {
+            let x: Int = 42;
+            let r: &Int = x;
+        }",
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::ReferenceOutlivesOwner { .. })),
+        "unexpected ReferenceOutlivesOwner for same-scope binding, got: {errors:?}"
     );
 }
