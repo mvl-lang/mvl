@@ -1,6 +1,6 @@
 //! Built-in function emission for the MVL LLVM backend.
 //!
-//! Covers libc wrappers (printf, snprintf, sprintf, strlen), collection literals
+//! Covers libc wrappers (printf, snprintf, strlen), collection literals
 //! (List, Map, Set), and the `println` / `print` / `format` built-ins (L5-17).
 
 use inkwell::{
@@ -50,16 +50,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             .fn_type(&[ptr_ty, i64_ty, ptr_ty], true);
         self.module
             .add_function("snprintf", snprintf_ty, Some(Linkage::External))
-    }
-
-    pub(crate) fn get_sprintf(&self) -> FunctionValue<'ctx> {
-        if let Some(f) = self.module.get_function("sprintf") {
-            return f;
-        }
-        let ptr_ty: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
-        let sprintf_ty = self.context.i32_type().fn_type(&[ptr_ty, ptr_ty], true);
-        self.module
-            .add_function("sprintf", sprintf_ty, Some(Linkage::External))
     }
 
     // ── String conversion helpers ─────────────────────────────────────────────
@@ -140,8 +130,11 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     // ── format() built-in ────────────────────────────────────────────────────
 
-    /// Emit `format("template {}", a, b)` → `sprintf` into a global 256-byte buffer,
+    /// Emit `format("template {}", a, b)` → `snprintf` into a stack-allocated 256-byte buffer,
     /// returning a `ptr` (char*) to that buffer.
+    ///
+    /// Uses a per-call stack allocation (not a global) so multiple format() calls in the same
+    /// function each get an independent buffer.
     pub(crate) fn emit_format(&mut self, args: &[Expr]) -> Option<BasicValueEnum<'ctx>> {
         let Some(Expr::Literal(Literal::Str(fmt_template), _)) = args.first() else {
             return None;
@@ -149,13 +142,13 @@ impl<'ctx> LlvmBackend<'ctx> {
         let fmt_template = fmt_template.clone();
         let value_args = &args[1..];
 
-        // Emit all value expressions first so we know their LLVM types.
+        // Emit all value expressions — fail fast if any argument cannot be emitted.
         let values: Vec<BasicValueEnum<'ctx>> = value_args
             .iter()
-            .filter_map(|e| self.emit_expr(e))
-            .collect();
+            .map(|e| self.emit_expr(e))
+            .collect::<Option<Vec<_>>>()?;
 
-        // Build sprintf format string (same specifier logic as emit_printf_format).
+        // Build snprintf format string (same specifier logic as emit_printf_format).
         let mut fmt = String::new();
         let mut arg_idx = 0usize;
         let mut chars = fmt_template.chars().peekable();
@@ -184,34 +177,30 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
         }
 
-        // Get or create global 256-byte format buffer.
-        let buf_name = "format_buf";
+        // Stack-allocate a 256-byte buffer for this call (not a shared global).
         let buf_ty = self.context.i8_type().array_type(256);
-        let buf_global = if let Some(g) = self.module.get_global(buf_name) {
-            g
-        } else {
-            let g = self.module.add_global(buf_ty, None, buf_name);
-            g.set_initializer(&buf_ty.const_zero());
-            g
-        };
-        let buf_ptr = buf_global.as_pointer_value();
+        let buf_alloca = self.builder.build_alloca(buf_ty, "format_buf").unwrap();
 
-        // Call sprintf(buf, fmt, args...).
-        let sprintf = self.get_sprintf();
+        // Call snprintf(buf, 256, fmt, args...).
+        let snprintf = self.get_snprintf();
         let fmt_global = self
             .builder
-            .build_global_string_ptr(&fmt, "sprintf_fmt")
+            .build_global_string_ptr(&fmt, "format_fmt")
             .unwrap();
-        let mut call_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> =
-            vec![buf_ptr.into(), fmt_global.as_pointer_value().into()];
+        let size = self.context.i64_type().const_int(256, false);
+        let mut call_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = vec![
+            buf_alloca.into(),
+            size.into(),
+            fmt_global.as_pointer_value().into(),
+        ];
         for val in values {
             call_args.push(val.into());
         }
         self.builder
-            .build_call(sprintf, &call_args, "sprintf_call")
+            .build_call(snprintf, &call_args, "snprintf_fmt_call")
             .unwrap();
 
-        Some(buf_ptr.into())
+        Some(buf_alloca.into())
     }
 
     // ── Printf / println (L5-17, enhanced for Phase B) ───────────────────────
@@ -288,21 +277,21 @@ impl<'ctx> LlvmBackend<'ctx> {
         value_args: &[Expr],
         newline: bool,
     ) -> Option<BasicValueEnum<'ctx>> {
-        // Emit all value expressions, converting i1 (Bool) → "true"/"false" ptr.
+        // Emit all value expressions — fail fast if any argument cannot be emitted.
+        // Convert i1 (Bool) → "true"/"false" ptr as we go.
         let mut values: Vec<BasicValueEnum<'ctx>> = Vec::new();
         for e in value_args {
-            if let Some(v) = self.emit_expr(e) {
-                let v = if let BasicValueEnum::IntValue(iv) = v {
-                    if iv.get_type().get_bit_width() == 1 {
-                        self.emit_bool_to_str_ptr(iv)
-                    } else {
-                        v
-                    }
+            let v = self.emit_expr(e)?;
+            let v = if let BasicValueEnum::IntValue(iv) = v {
+                if iv.get_type().get_bit_width() == 1 {
+                    self.emit_bool_to_str_ptr(iv)
                 } else {
                     v
-                };
-                values.push(v);
-            }
+                }
+            } else {
+                v
+            };
+            values.push(v);
         }
 
         // Build the printf format string by replacing `{}` with specifiers.

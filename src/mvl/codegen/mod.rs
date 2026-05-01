@@ -237,7 +237,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                         } else {
                             self.context.void_type().fn_type(&param_tys, false)
                         };
-                        self.module.add_function(&efn.name, fn_ty, None);
+                        self.module
+                            .add_function(&efn.name, fn_ty, Some(Linkage::External));
                     }
                 }
             }
@@ -450,7 +451,10 @@ impl<'ctx> LlvmBackend<'ctx> {
             } else if let Some(val) = body_val {
                 self.builder.build_return(Some(&val)).unwrap();
             } else {
-                // Fallback: void return.
+                // Fallback: void return for non-unit functions whose body failed to emit.
+                // LLVM verification will catch the type mismatch and surface an error.
+                // TODO(#385): surface a user-visible "unsupported construct" diagnostic here
+                //   instead of relying on the IR verifier's opaque error message.
                 self.builder.build_return(None).unwrap();
             }
         }

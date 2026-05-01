@@ -70,7 +70,16 @@ impl<'ctx> LlvmBackend<'ctx> {
                 ..
             } => self.emit_method_call(receiver, method, args),
 
-            _ => None,
+            other => {
+                // Unhandled Expr variant: return None so the caller can propagate failure.
+                // In debug builds, print a notice to help catch missing codegen arms early.
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[llvm-backend] unhandled Expr variant in emit_expr: {:?}",
+                    std::mem::discriminant(other)
+                );
+                None
+            }
         }
     }
 
@@ -184,17 +193,23 @@ impl<'ctx> LlvmBackend<'ctx> {
         let field_info: Vec<(String, TypeExpr)> = self.struct_fields.get(name)?.clone();
         let struct_ty = *self.llvm_struct_types.get(name)?;
 
-        let mut sv = struct_ty.get_undef();
+        // Collect all field values first — fail if any field expression cannot be emitted.
+        let mut field_vals: Vec<(u32, BasicValueEnum<'ctx>)> = Vec::new();
         for (idx, (fname, _)) in field_info.iter().enumerate() {
             if let Some((_, fexpr)) = fields.iter().find(|(n, _)| n == fname) {
-                if let Some(fval) = self.emit_expr(fexpr) {
-                    sv = self
-                        .builder
-                        .build_insert_value(sv, fval, idx as u32, &format!("s{idx}"))
-                        .unwrap()
-                        .into_struct_value();
-                }
+                let fval = self.emit_expr(fexpr)?;
+                field_vals.push((idx as u32, fval));
             }
+        }
+
+        // Build the struct value by inserting each field.
+        let mut sv = struct_ty.const_zero();
+        for (idx, fval) in field_vals {
+            sv = self
+                .builder
+                .build_insert_value(sv, fval, idx, &format!("s{idx}"))
+                .unwrap()
+                .into_struct_value();
         }
         Some(sv.into())
     }

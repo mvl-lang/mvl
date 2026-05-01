@@ -13,11 +13,9 @@
 use std::process::Command;
 
 fn mvl_bin() -> std::path::PathBuf {
-    let mut p = std::env::current_exe().expect("current_exe");
-    p.pop(); // file
-    p.pop(); // deps/
-    p.push("mvl");
-    p
+    // CARGO_BIN_EXE_mvl is set at compile time and works correctly under
+    // cargo test, cargo nextest, and cross-compiled builds.
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_mvl"))
 }
 
 fn corpus(name: &str) -> String {
@@ -64,7 +62,14 @@ fn run_llvm(file: &str) -> Option<String> {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );
-    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+    // Strip any backend progress lines that may appear on stdout, same as run_transpiler.
+    let raw = String::from_utf8_lossy(&out.stdout);
+    Some(
+        raw.lines()
+            .filter(|l| !l.starts_with("Transpiled to:") && !l.starts_with("Running:"))
+            .map(|l| format!("{l}\n"))
+            .collect(),
+    )
 }
 
 /// Assert that both backends produce identical stdout for the given corpus program.
