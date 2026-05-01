@@ -426,29 +426,29 @@ impl TypeChecker {
         // Phase D (Spec 009 Req 2): mutable-borrow alias check.
         // Two `&mut T` parameters of the same inner type, or a `&T` + `&mut T` pair,
         // could be aliased at a call site.  Reject both statically.
+        // Two-pass: collect all `&T` inner types first so the check is order-independent.
         {
             let mut seen_shared_ref_types: HashSet<String> = HashSet::new();
             let mut seen_mut_ref_types: HashSet<String> = HashSet::new();
             for param in &fd.params {
-                match resolve(&param.ty) {
-                    Ty::Ref(false, inner) => {
-                        seen_shared_ref_types.insert(inner.display());
+                if let Ty::Ref(false, inner) = resolve(&param.ty) {
+                    seen_shared_ref_types.insert(inner.display());
+                }
+            }
+            for param in &fd.params {
+                if let Ty::Ref(true, inner) = resolve(&param.ty) {
+                    let key = inner.display();
+                    if seen_shared_ref_types.contains(&key) {
+                        self.emit(CheckError::AliasingMutableBorrow {
+                            name: param.name.clone(),
+                            span: param.span,
+                        });
+                    } else if !seen_mut_ref_types.insert(key) {
+                        self.emit(CheckError::DoubleMutableBorrow {
+                            name: param.name.clone(),
+                            span: param.span,
+                        });
                     }
-                    Ty::Ref(true, inner) => {
-                        let key = inner.display();
-                        if seen_shared_ref_types.contains(&key) {
-                            self.emit(CheckError::AliasingMutableBorrow {
-                                name: param.name.clone(),
-                                span: param.span,
-                            });
-                        } else if !seen_mut_ref_types.insert(key) {
-                            self.emit(CheckError::DoubleMutableBorrow {
-                                name: param.name.clone(),
-                                span: param.span,
-                            });
-                        }
-                    }
-                    _ => {}
                 }
             }
         }
@@ -771,11 +771,26 @@ impl TypeChecker {
                 }
                 // Phase D (#362): record which variable the new binding borrows so that
                 // `pop_scope()` can release the borrow when the binding goes out of scope.
-                if let (Pattern::Ident(bound_name, _), Expr::Borrow { expr, .. }) = (pattern, init)
+                // Also update the referent's borrow_state here (not in Expr::Borrow) so
+                // that state is only set when borrows_var is simultaneously recorded.
+                if let (Pattern::Ident(bound_name, _), Expr::Borrow { expr, mutable, .. }) =
+                    (pattern, init)
                 {
                     if let Expr::Ident(borrowed_name, _) = expr.as_ref() {
                         if let Some(bound_info) = self.env.lookup_mut_var(bound_name) {
                             bound_info.borrows_var = Some(borrowed_name.clone());
+                        }
+                        if let Some(referent) = self.env.lookup_mut_var(borrowed_name) {
+                            referent.borrow_state = if *mutable {
+                                BorrowState::MutablyBorrowed
+                            } else {
+                                match referent.borrow_state.clone() {
+                                    BorrowState::SharedBorrowed(n) => {
+                                        BorrowState::SharedBorrowed(n + 1)
+                                    }
+                                    _ => BorrowState::SharedBorrowed(1),
+                                }
+                            };
                         }
                     }
                 }
@@ -1114,7 +1129,10 @@ impl TypeChecker {
                     });
                     return Ty::Unknown;
                 }
-                // Phase D (#362): update BorrowState on the referent variable.
+                // Phase D (#362): check BorrowState on the referent (error only).
+                // State updates are deferred to Stmt::Let where borrows_var is also set,
+                // so that borrow_state is always released on scope exit. Updating state
+                // here (expression position) would leak when the borrow is not `let`-bound.
                 if let Expr::Ident(name, _) = expr.as_ref() {
                     let current = self
                         .env
@@ -1128,19 +1146,12 @@ impl TypeChecker {
                                 name: name.clone(),
                                 span: *span,
                             });
-                        } else if let Some(info) = self.env.lookup_mut_var(name) {
-                            info.borrow_state = BorrowState::MutablyBorrowed;
                         }
                     } else if matches!(current, BorrowState::MutablyBorrowed) {
                         self.emit(CheckError::AliasingMutableBorrow {
                             name: name.clone(),
                             span: *span,
                         });
-                    } else if let Some(info) = self.env.lookup_mut_var(name) {
-                        info.borrow_state = match current {
-                            BorrowState::SharedBorrowed(n) => BorrowState::SharedBorrowed(n + 1),
-                            _ => BorrowState::SharedBorrowed(1),
-                        };
                     }
                 }
                 Ty::Ref(*mutable, Box::new(inner))
