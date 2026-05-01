@@ -509,6 +509,16 @@ impl<'ctx> LlvmBackend<'ctx> {
                     let alloca = self.builder.build_alloca(ty, &param.name).unwrap();
                     self.builder.build_store(alloca, param_val).unwrap();
                     self.locals.insert(param.name.clone(), (alloca, ty));
+                    // L5-15: value parameters of heap types are owned by the callee —
+                    // register them for drop at function exit.  Borrow params (&T) don't
+                    // own the value, so skip them.
+                    if !matches!(&param.ty, TypeExpr::Ref { .. }) {
+                        if let Some(kind) = stmts::heap_kind_of(&param.ty) {
+                            if matches!(ty, BasicTypeEnum::PointerType(_)) {
+                                self.heap_locals.insert(param.name.clone(), kind);
+                            }
+                        }
+                    }
                 }
                 // L5-08: record MVL type for Ok/Some payload inference in match arms.
                 self.local_mvl_types
@@ -582,6 +592,14 @@ impl<'ctx> LlvmBackend<'ctx> {
                     let alloca = self.builder.build_alloca(ty, &param.name).unwrap();
                     self.builder.build_store(alloca, param_val).unwrap();
                     self.locals.insert(param.name.clone(), (alloca, ty));
+                    // L5-15: value parameters of heap types are owned by the callee.
+                    if !matches!(&param.ty, TypeExpr::Ref { .. }) {
+                        if let Some(kind) = stmts::heap_kind_of(&param.ty) {
+                            if matches!(ty, BasicTypeEnum::PointerType(_)) {
+                                self.heap_locals.insert(param.name.clone(), kind);
+                            }
+                        }
+                    }
                 }
                 // L5-08: record MVL type for Ok/Some payload inference in match arms.
                 self.local_mvl_types

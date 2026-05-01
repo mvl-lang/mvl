@@ -12,7 +12,7 @@ use crate::mvl::parser::ast::{
     BinaryOp, Block, Expr, LValue, Literal, TypeExpr, UnaryOp, VariantFields,
 };
 
-use super::LlvmBackend;
+use super::{stmts, LlvmBackend};
 
 impl<'ctx> LlvmBackend<'ctx> {
     // ── Expression emission ──────────────────────────────────────────────────
@@ -857,6 +857,29 @@ impl<'ctx> LlvmBackend<'ctx> {
                                 &variant_name,
                                 args,
                             );
+                        }
+                    }
+                }
+                // L5-15: when calling a known user-defined function, mark heap-typed
+                // value arguments as moved (ownership transfers to the callee).
+                // Borrow parameters (&T) are skipped — the caller retains ownership.
+                if let Some(fd) = self.fn_decls.get(name).cloned() {
+                    for (arg, param) in args.iter().zip(fd.params.iter()) {
+                        if matches!(&param.ty, crate::mvl::parser::ast::TypeExpr::Ref { .. }) {
+                            continue;
+                        }
+                        if stmts::heap_kind_of(&param.ty).is_some() {
+                            let src = match arg {
+                                Expr::Ident(s, _) => Some(s.as_str()),
+                                Expr::Move { expr, .. } => match expr.as_ref() {
+                                    Expr::Ident(s, _) => Some(s.as_str()),
+                                    _ => None,
+                                },
+                                _ => None,
+                            };
+                            if let Some(src) = src {
+                                self.heap_locals.remove(src);
+                            }
                         }
                     }
                 }
