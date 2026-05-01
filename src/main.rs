@@ -2877,13 +2877,15 @@ fn run_project_llvm(path: &str) {
         eprintln!("error: cannot write IR: {e}");
         process::exit(1);
     });
-    let status = process::Command::new(&lli)
-        .arg(tmp.path())
-        .status()
-        .unwrap_or_else(|e| {
-            eprintln!("error: failed to run lli: {e}");
-            process::exit(1);
-        });
+    let mut cmd = process::Command::new(&lli);
+    // L5-16: load the MVL memory runtime if present (needed for Phase C heap types).
+    if let Some(lib) = codegen::find_mvl_memory_lib() {
+        cmd.arg(format!("--load={}", lib.display()));
+    }
+    let status = cmd.arg(tmp.path()).status().unwrap_or_else(|e| {
+        eprintln!("error: failed to run lli: {e}");
+        process::exit(1);
+    });
     if !status.success() {
         process::exit(status.code().unwrap_or(1));
     }
@@ -2973,13 +2975,15 @@ fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
         }
 
         // Run via lli and capture stdout.
-        let output = process::Command::new(&lli)
-            .arg(tmp.path())
-            .output()
-            .unwrap_or_else(|e| {
-                eprintln!("error: failed to run lli: {e}");
-                process::exit(1);
-            });
+        // L5-16: load the MVL memory runtime if present (needed for Phase C heap types).
+        let mut lli_cmd = process::Command::new(&lli);
+        if let Some(lib) = codegen::find_mvl_memory_lib() {
+            lli_cmd.arg(format!("--load={}", lib.display()));
+        }
+        let output = lli_cmd.arg(tmp.path()).output().unwrap_or_else(|e| {
+            eprintln!("error: failed to run lli: {e}");
+            process::exit(1);
+        });
 
         let actual = String::from_utf8_lossy(&output.stdout);
         let actual_trimmed = actual.trim_end_matches('\n');

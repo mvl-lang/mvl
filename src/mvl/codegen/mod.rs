@@ -67,6 +67,38 @@ pub fn find_lli() -> Option<std::path::PathBuf> {
     None
 }
 
+/// Find the `libmvl_memory` shared library for the `lli --load` flag (ADR-0016).
+///
+/// Search order:
+/// 1. `MVL_MEMORY_LIB` environment variable (explicit override)
+/// 2. Sibling of the current executable in `target/{debug,release}/`
+/// 3. Returns `None` if not found — lli runs without it (Phase B programs still work)
+pub fn find_mvl_memory_lib() -> Option<std::path::PathBuf> {
+    // 1. Explicit override
+    if let Ok(path) = std::env::var("MVL_MEMORY_LIB") {
+        let p = std::path::PathBuf::from(path);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
+    // 2. Relative to the current executable.
+    //    In development: target/debug/mvl → target/debug/libmvl_memory.{dylib,so}
+    //    In release:     target/release/mvl → target/release/libmvl_memory.{dylib,so}
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            for ext in &["dylib", "so"] {
+                let lib = dir.join(format!("libmvl_memory.{ext}"));
+                if lib.exists() {
+                    return Some(lib);
+                }
+            }
+        }
+    }
+
+    None
+}
+
 fn which_lli() -> Result<std::path::PathBuf, ()> {
     let output = std::process::Command::new("which")
         .arg("lli")

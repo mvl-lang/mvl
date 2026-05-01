@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "mvl_runtime"]
+members = [".", "mvl_runtime", "mvl_memory"]
 
 [package]
 name = "mvl"
