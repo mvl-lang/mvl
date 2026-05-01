@@ -548,9 +548,21 @@ impl<'ctx> LlvmBackend<'ctx> {
                 Some(v.into())
             }
             Literal::Str(s) => {
-                // Create a global null-terminated string constant and return its pointer.
+                // L5-14: allocate a heap MvlString so String values have RC semantics.
+                // The global provides stable bytes; mvl_string_new copies them to the heap.
                 let global = self.builder.build_global_string_ptr(s, "str_lit").unwrap();
-                Some(global.as_pointer_value().into())
+                let len = self.context.i64_type().const_int(s.len() as u64, false);
+                let new_fn = self.get_mvl_string_new();
+                let call = self
+                    .builder
+                    .build_call(
+                        new_fn,
+                        &[global.as_pointer_value().into(), len.into()],
+                        "str_new",
+                    )
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                BasicValueEnum::try_from(call.as_any_value_enum()).ok()
             }
             Literal::Char(c) => {
                 let v = self.context.i32_type().const_int(*c as u64, false);
@@ -885,107 +897,155 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     // ── Collection literals ──────────────────────────────────────────────────
 
-    /// Emit `[e1, ..., eN]` → `ptr` to a stack-allocated `{ i64 len, ptr data }` struct.
+    /// Emit `[e1, ..., eN]` → `ptr` to a heap-allocated `MvlArray` via `mvl_array_new`.
     ///
-    /// L5-13: returns a pointer (not a struct value) so the type is consistent with
-    /// `mvl_type_to_llvm(List[T]) = ptr`.  In L5-14 this will be replaced by a
-    /// `mvl_array_new` heap allocation call.
+    /// L5-14: replaces the stack-allocated stub with proper heap allocation.
+    /// All element types are 8 bytes on x86-64/arm64 (i64, f64, ptr are all 8).
     pub(crate) fn emit_list_literal(&mut self, elems: &[Expr]) -> Option<BasicValueEnum<'ctx>> {
         let i64_ty = self.context.i64_type();
-        let n = elems.len() as u32;
-        let arr_ty = i64_ty.array_type(n.max(1));
-        let arr = self.builder.build_alloca(arr_ty, "list_data").unwrap();
-        for (i, elem) in elems.iter().enumerate() {
-            if let Some(BasicValueEnum::IntValue(v)) = self.emit_expr(elem) {
-                let idx = i64_ty.const_int(i as u64, false);
-                let ptr = unsafe {
-                    self.builder
-                        .build_gep(i64_ty, arr, &[idx], "elem_ptr")
-                        .unwrap()
-                };
-                self.builder.build_store(ptr, v).unwrap();
-            }
+        let n = elems.len();
+        // Emit all element values first (before calling mvl_array_new, in case
+        // any element expr has side effects we don't want to reorder).
+        let elem_vals: Vec<BasicValueEnum<'ctx>> =
+            elems.iter().filter_map(|e| self.emit_expr(e)).collect();
+
+        // elem_size: 8 bytes covers i64, f64, and ptr on all supported platforms.
+        let elem_size = i64_ty.const_int(8, false);
+        let initial_cap = i64_ty.const_int(n.max(4) as u64, false);
+        let new_fn = self.get_mvl_array_new();
+        let call = self
+            .builder
+            .build_call(new_fn, &[elem_size.into(), initial_cap.into()], "arr_new")
+            .unwrap();
+        use inkwell::values::AnyValue;
+        let arr_ptr = BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
+
+        // Push each element.
+        let push_fn = self.get_mvl_array_push();
+        for val in elem_vals {
+            // Store the element in a temporary stack slot so we can pass a `ptr`.
+            let slot = self
+                .builder
+                .build_alloca(val.get_type(), "elem_slot")
+                .unwrap();
+            self.builder.build_store(slot, val).unwrap();
+            self.builder
+                .build_call(push_fn, &[arr_ptr.into(), slot.into()], "arr_push")
+                .unwrap();
         }
-        let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let list_ty = self
-            .context
-            .struct_type(&[i64_ty.into(), ptr_ty.into()], false);
-        let alloca = self.builder.build_alloca(list_ty, "list_tmp").unwrap();
-        let len_ptr = self
-            .builder
-            .build_struct_gep(list_ty, alloca, 0, "ll_ptr")
-            .unwrap();
-        let data_ptr = self
-            .builder
-            .build_struct_gep(list_ty, alloca, 1, "ld_ptr")
-            .unwrap();
-        self.builder
-            .build_store(len_ptr, i64_ty.const_int(n as u64, false))
-            .unwrap();
-        self.builder.build_store(data_ptr, arr).unwrap();
-        // Return the pointer to the struct, not a loaded value.
-        Some(alloca.into())
+
+        Some(arr_ptr)
     }
 
-    /// Emit `{"k": v, ...}` → `ptr` to a stack-allocated `{ i64 len }` stub.
+    /// Emit `{"k": v, ...}` → `ptr` to a heap-allocated `MvlMap` via `mvl_map_new`.
     ///
-    /// L5-13: returns a pointer consistent with `mvl_type_to_llvm(Map[K,V]) = ptr`.
-    /// In L5-14 this will be replaced by a `mvl_map_new` heap allocation call.
+    /// L5-14: replaces the stub with proper heap allocation.
     pub(crate) fn emit_map_literal(
         &mut self,
         pairs: &[(Expr, Expr)],
     ) -> Option<BasicValueEnum<'ctx>> {
         let i64_ty = self.context.i64_type();
-        let n = pairs.len() as u64;
-        let map_ty = self.context.struct_type(&[i64_ty.into()], false);
-        let alloca = self.builder.build_alloca(map_ty, "map_tmp").unwrap();
-        let len_ptr = self
+        let n = pairs.len();
+        let initial_cap = i64_ty.const_int(n.max(8) as u64, false);
+        let new_fn = self.get_mvl_map_new();
+        let call = self
             .builder
-            .build_struct_gep(map_ty, alloca, 0, "ml_ptr")
+            .build_call(new_fn, &[initial_cap.into()], "map_new")
             .unwrap();
-        self.builder
-            .build_store(len_ptr, i64_ty.const_int(n, false))
-            .unwrap();
-        Some(alloca.into())
+        use inkwell::values::AnyValue;
+        let map_ptr = BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
+
+        let insert_fn = self.get_mvl_map_insert();
+        for (key_expr, val_expr) in pairs {
+            let key_val = self.emit_expr(key_expr)?;
+            let val_val = self.emit_expr(val_expr)?;
+            // Keys are String (MvlString*) — pass data ptr + len as key bytes.
+            // For non-string keys, store in a slot and use raw bytes.
+            let (key_ptr, key_len) = match key_val {
+                BasicValueEnum::PointerValue(p) => {
+                    // Assume String key: use mvl_string_ptr + mvl_string_len.
+                    let sp = self.get_mvl_string_ptr();
+                    let sl = self.get_mvl_string_len();
+                    let cstr = self
+                        .builder
+                        .build_call(sp, &[p.into()], "map_key_ptr")
+                        .unwrap();
+                    let cstr_ptr = BasicValueEnum::try_from(cstr.as_any_value_enum())
+                        .ok()?
+                        .into_pointer_value();
+                    let slen = self
+                        .builder
+                        .build_call(sl, &[p.into()], "map_key_len")
+                        .unwrap();
+                    let slen_val = BasicValueEnum::try_from(slen.as_any_value_enum()).ok()?;
+                    (cstr_ptr, slen_val)
+                }
+                other => {
+                    let slot = self
+                        .builder
+                        .build_alloca(other.get_type(), "key_slot")
+                        .unwrap();
+                    self.builder.build_store(slot, other).unwrap();
+                    let size = i64_ty.const_int(8, false);
+                    (slot, size.into())
+                }
+            };
+            let val_slot = self
+                .builder
+                .build_alloca(val_val.get_type(), "val_slot")
+                .unwrap();
+            self.builder.build_store(val_slot, val_val).unwrap();
+            let val_size = i64_ty.const_int(8, false);
+            self.builder
+                .build_call(
+                    insert_fn,
+                    &[
+                        map_ptr.into(),
+                        key_ptr.into(),
+                        key_len.into(),
+                        val_slot.into(),
+                        val_size.into(),
+                    ],
+                    "map_insert",
+                )
+                .unwrap();
+        }
+
+        Some(map_ptr)
     }
 
-    /// Emit `{e1, ..., eN}` → `ptr` to a stack-allocated `{ i64 len, ptr data }` stub.
+    /// Emit `{e1, ..., eN}` → `ptr` to a heap-allocated `MvlArray` via `mvl_array_new`.
     ///
-    /// L5-13: returns a pointer consistent with `mvl_type_to_llvm(Set[T]) = ptr`.
+    /// L5-14: Set uses the same MvlArray backend as List.
     pub(crate) fn emit_set_literal(&mut self, elems: &[Expr]) -> Option<BasicValueEnum<'ctx>> {
         let i64_ty = self.context.i64_type();
-        let n = elems.len() as u32;
-        let arr_ty = i64_ty.array_type(n.max(1));
-        let arr = self.builder.build_alloca(arr_ty, "set_data").unwrap();
-        for (i, elem) in elems.iter().enumerate() {
-            if let Some(BasicValueEnum::IntValue(v)) = self.emit_expr(elem) {
-                let idx = i64_ty.const_int(i as u64, false);
-                let ptr = unsafe {
-                    self.builder
-                        .build_gep(i64_ty, arr, &[idx], "set_ep")
-                        .unwrap()
-                };
-                self.builder.build_store(ptr, v).unwrap();
-            }
+        let n = elems.len();
+        let elem_vals: Vec<BasicValueEnum<'ctx>> =
+            elems.iter().filter_map(|e| self.emit_expr(e)).collect();
+
+        let elem_size = i64_ty.const_int(8, false);
+        let initial_cap = i64_ty.const_int(n.max(4) as u64, false);
+        let new_fn = self.get_mvl_array_new();
+        let call = self
+            .builder
+            .build_call(new_fn, &[elem_size.into(), initial_cap.into()], "set_new")
+            .unwrap();
+        use inkwell::values::AnyValue;
+        let set_ptr = BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
+
+        let push_fn = self.get_mvl_array_push();
+        for val in elem_vals {
+            let slot = self
+                .builder
+                .build_alloca(val.get_type(), "set_elem_slot")
+                .unwrap();
+            self.builder.build_store(slot, val).unwrap();
+            self.builder
+                .build_call(push_fn, &[set_ptr.into(), slot.into()], "set_push")
+                .unwrap();
         }
-        let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let set_ty = self
-            .context
-            .struct_type(&[i64_ty.into(), ptr_ty.into()], false);
-        let alloca = self.builder.build_alloca(set_ty, "set_tmp").unwrap();
-        let len_ptr = self
-            .builder
-            .build_struct_gep(set_ty, alloca, 0, "sl_ptr")
-            .unwrap();
-        let data_ptr = self
-            .builder
-            .build_struct_gep(set_ty, alloca, 1, "sd_ptr")
-            .unwrap();
-        self.builder
-            .build_store(len_ptr, i64_ty.const_int(n as u64, false))
-            .unwrap();
-        self.builder.build_store(data_ptr, arr).unwrap();
-        Some(alloca.into())
+
+        Some(set_ptr)
     }
 
     // ── Method call emission ─────────────────────────────────────────────────
@@ -1001,64 +1061,35 @@ impl<'ctx> LlvmBackend<'ctx> {
         match method {
             // ── len ──────────────────────────────────────────────────────────
             "len" => match recv_val {
-                // L5-13: collection ptr (List/Set → { i64 len, ptr data },
-                //         Map → { i64 len }) or String (char*).
-                // Dispatch: check if the receiver's MVL type is a known collection.
+                // L5-14: all collection ptrs use runtime len functions.
+                // Dispatch by MVL type; default to mvl_string_len for unknown ptrs.
                 BasicValueEnum::PointerValue(ptr) => {
                     let recv_mvl_ty = match receiver {
                         Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
                         _ => None,
                     };
-                    let is_collection = recv_mvl_ty.as_ref().is_some_and(|t| {
-                        matches!(
-                            t,
-                            TypeExpr::Base { name, .. }
-                                if matches!(
-                                    name.as_str(),
-                                    "List" | "Array" | "Map" | "Set"
-                                )
-                        )
+                    let base_name = recv_mvl_ty.as_ref().and_then(|t| match t {
+                        TypeExpr::Base { name, .. } => Some(name.as_str()),
+                        _ => None,
                     });
-                    if is_collection {
-                        // GEP to field 0 (i64 len) and load.
-                        let i64_ty = self.context.i64_type();
-                        // Use a { i64, ptr } type for List/Set; { i64 } for Map.
-                        // Both have len at offset 0, so we can always use i64_ty GEP.
-                        let len_ptr = unsafe {
-                            self.builder
-                                .build_gep(
-                                    i64_ty,
-                                    ptr,
-                                    &[self.context.i64_type().const_int(0, false)],
-                                    "coll_len_ptr",
-                                )
-                                .unwrap()
-                        };
-                        Some(
-                            self.builder
-                                .build_load(i64_ty, len_ptr, "coll_len")
-                                .unwrap(),
-                        )
-                    } else {
-                        // String (char*) → strlen
-                        let strlen = self.get_strlen();
-                        let call = self
-                            .builder
-                            .build_call(strlen, &[ptr.into()], "strlen_res")
-                            .unwrap();
-                        use inkwell::values::AnyValue;
-                        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
-                    }
+                    let len_fn = match base_name {
+                        Some("List") | Some("Array") | Some("Set") => self.get_mvl_array_len(),
+                        Some("Map") => self.get_mvl_map_len(),
+                        _ => self.get_mvl_string_len(), // String or unknown ptr
+                    };
+                    let call = self
+                        .builder
+                        .build_call(len_fn, &[ptr.into()], "coll_len")
+                        .unwrap();
+                    use inkwell::values::AnyValue;
+                    BasicValueEnum::try_from(call.as_any_value_enum()).ok()
                 }
                 BasicValueEnum::StructValue(sv) => {
+                    // Legacy Range struct: { i64 start, i64 end } → end - start
                     let n = sv.get_type().count_fields();
-                    if n == 1 {
-                        // Map { i64 } → field 0 (legacy path, kept for safety)
-                        self.builder.build_extract_value(sv, 0, "map_len").ok()
-                    } else if n == 2 {
+                    if n == 2 {
                         let f1_ty = sv.get_type().get_field_type_at_index(1).unwrap();
                         if matches!(f1_ty, BasicTypeEnum::IntType(_)) {
-                            // Range { i64 start, i64 end } → end - start
                             let s = self
                                 .builder
                                 .build_extract_value(sv, 0, "r_s")
@@ -1069,22 +1100,72 @@ impl<'ctx> LlvmBackend<'ctx> {
                                 .build_extract_value(sv, 1, "r_e")
                                 .ok()?
                                 .into_int_value();
-                            Some(
+                            return Some(
                                 self.builder
                                     .build_int_sub(e, s, "range_len")
                                     .unwrap()
                                     .into(),
-                            )
-                        } else {
-                            // List/Set struct value (legacy path)
-                            self.builder.build_extract_value(sv, 0, "coll_len").ok()
+                            );
                         }
-                    } else {
-                        None
                     }
+                    None
                 }
                 _ => None,
             },
+
+            // ── concat (String) ───────────────────────────────────────────────
+            "concat" => {
+                let arg = self.emit_expr(args.first()?)?;
+                match (recv_val, arg) {
+                    (BasicValueEnum::PointerValue(a), BasicValueEnum::PointerValue(b)) => {
+                        let concat_fn = self.get_mvl_string_concat();
+                        let call = self
+                            .builder
+                            .build_call(concat_fn, &[a.into(), b.into()], "str_concat")
+                            .unwrap();
+                        use inkwell::values::AnyValue;
+                        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+                    }
+                    _ => None,
+                }
+            }
+
+            // ── push (Array / List) ───────────────────────────────────────────
+            "push" => {
+                let elem = self.emit_expr(args.first()?)?;
+                match recv_val {
+                    BasicValueEnum::PointerValue(arr) => {
+                        let slot = self
+                            .builder
+                            .build_alloca(elem.get_type(), "push_slot")
+                            .unwrap();
+                        self.builder.build_store(slot, elem).unwrap();
+                        let push_fn = self.get_mvl_array_push();
+                        self.builder
+                            .build_call(push_fn, &[arr.into(), slot.into()], "arr_push")
+                            .unwrap();
+                        None
+                    }
+                    _ => None,
+                }
+            }
+
+            // ── get (Array / List) ────────────────────────────────────────────
+            "get" => {
+                let idx = self.emit_expr(args.first()?)?;
+                match (recv_val, idx) {
+                    (BasicValueEnum::PointerValue(arr), BasicValueEnum::IntValue(i)) => {
+                        let get_fn = self.get_mvl_array_get();
+                        let call = self
+                            .builder
+                            .build_call(get_fn, &[arr.into(), i.into()], "arr_get")
+                            .unwrap();
+                        use inkwell::values::AnyValue;
+                        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+                    }
+                    _ => None,
+                }
+            }
 
             // ── Int math ─────────────────────────────────────────────────────
             "abs" => match recv_val {

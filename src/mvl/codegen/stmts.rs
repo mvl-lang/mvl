@@ -5,6 +5,9 @@
 
 use inkwell::{types::BasicTypeEnum, values::BasicValueEnum, AddressSpace, IntPredicate};
 
+use crate::mvl::codegen::HeapKind;
+use crate::mvl::parser::ast::TypeExpr;
+
 use crate::mvl::parser::ast::{
     Block, ElseBranch, Expr, LValue, MatchArm, MatchBody, Pattern, Stmt, VariantFields,
 };
@@ -48,12 +51,21 @@ impl<'ctx> LlvmBackend<'ctx> {
                 self.locals.insert(name.clone(), (alloca, llvm_ty));
                 // L5-08: record MVL type annotation for Ok/Some payload inference.
                 if let Some(type_expr) = ty {
-                    self.local_mvl_types.insert(name, type_expr.clone());
+                    self.local_mvl_types.insert(name.clone(), type_expr.clone());
+                    // L5-14: track heap-allocated collection locals for drop at function exit.
+                    if let Some(kind) = heap_kind_of(type_expr) {
+                        // Only register if the value is a pointer (heap collection).
+                        if matches!(llvm_ty, BasicTypeEnum::PointerType(_)) {
+                            self.heap_locals.insert(name, kind);
+                        }
+                    }
                 }
                 None
             }
             Stmt::Return { value, .. } => {
                 let ret_val = value.as_ref().and_then(|e| self.emit_expr(e));
+                // L5-14: drop heap-allocated collection locals before returning.
+                self.emit_heap_drops();
                 if let Some(v) = ret_val {
                     self.builder.build_return(Some(&v)).unwrap();
                 } else {
@@ -653,5 +665,25 @@ impl<'ctx> LlvmBackend<'ctx> {
 
         // Exit block.
         self.builder.position_at_end(exit_bb);
+    }
+}
+
+/// Map a MVL TypeExpr to the HeapKind it represents, if any.
+/// Used to register `let` bindings that hold heap-allocated collection values
+/// for automatic drop emission at function exit (L5-14).
+pub(crate) fn heap_kind_of(ty: &TypeExpr) -> Option<HeapKind> {
+    let base = match ty {
+        TypeExpr::Base { name, .. } => name.as_str(),
+        TypeExpr::Labeled { inner, .. } | TypeExpr::Refined { inner, .. } => {
+            return heap_kind_of(inner);
+        }
+        _ => return None,
+    };
+    match base {
+        "String" => Some(HeapKind::String),
+        "List" | "Array" => Some(HeapKind::Array),
+        "Map" => Some(HeapKind::Map),
+        "Set" => Some(HeapKind::Array), // Set uses the array backend
+        _ => None,
     }
 }

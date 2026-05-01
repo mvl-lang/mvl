@@ -18,8 +18,11 @@
 
 mod builtins;
 mod exprs;
+mod memory;
 mod stmts;
 mod types;
+
+pub(crate) use memory::HeapKind;
 
 use inkwell::{
     builder::Builder,
@@ -84,11 +87,17 @@ pub fn find_mvl_memory_lib() -> Option<std::path::PathBuf> {
 
     // 2. Relative to the current executable.
     //    In development: target/debug/mvl → target/debug/libmvl_memory.{dylib,so}
+    //                                    or target/debug/deps/libmvl_memory.{dylib,so}
     //    In release:     target/release/mvl → target/release/libmvl_memory.{dylib,so}
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             for ext in &["dylib", "so"] {
                 let lib = dir.join(format!("libmvl_memory.{ext}"));
+                if lib.exists() {
+                    return Some(lib);
+                }
+                // Cargo places cdylib artifacts under target/{profile}/deps/
+                let lib = dir.join(format!("deps/libmvl_memory.{ext}"));
                 if lib.exists() {
                     return Some(lib);
                 }
@@ -222,6 +231,12 @@ struct LlvmBackend<'ctx> {
     /// MVL TypeExpr for each local variable that has an explicit type annotation.
     /// Used to infer the Ok/Some payload type when the scrutinee is a local variable.
     local_mvl_types: HashMap<String, TypeExpr>,
+
+    // ── L5-14: heap drop tracking ────────────────────────────────────────────
+    /// Locals that hold heap-allocated collection values (String, Array, Map).
+    /// Keyed by variable name → HeapKind.  Cleared at function entry.
+    /// Used to emit `_drop` calls before `return` and at function end.
+    pub(crate) heap_locals: HashMap<String, HeapKind>,
 }
 
 impl<'ctx> LlvmBackend<'ctx> {
@@ -246,6 +261,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             type_subs: HashMap::new(),
             emitted_monomorphs: HashSet::new(),
             local_mvl_types: HashMap::new(),
+            heap_locals: HashMap::new(),
         }
     }
 
@@ -479,6 +495,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         self.builder.position_at_end(entry);
         self.locals.clear();
         self.local_mvl_types.clear();
+        self.heap_locals.clear();
         self.terminated = false;
         self.current_fn = Some(fn_val);
 
@@ -501,6 +518,8 @@ impl<'ctx> LlvmBackend<'ctx> {
 
         // Emit return terminator if the block didn't already terminate.
         if !self.terminated {
+            // L5-14: drop heap-allocated collection locals before returning.
+            self.emit_heap_drops();
             if is_c_main {
                 let zero = self.context.i32_type().const_int(0, false);
                 self.builder.build_return(Some(&zero)).unwrap();
@@ -548,6 +567,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         self.builder.position_at_end(entry);
         self.locals.clear();
         self.local_mvl_types.clear();
+        self.heap_locals.clear();
         self.terminated = false;
         self.current_fn = Some(fn_val);
 
@@ -568,6 +588,8 @@ impl<'ctx> LlvmBackend<'ctx> {
         let body_val = self.emit_block(&fd.body);
 
         if !self.terminated {
+            // L5-14: drop heap-allocated collection locals before returning.
+            self.emit_heap_drops();
             if self.is_unit_type(&fd.return_type) {
                 self.builder.build_return(None).unwrap();
             } else if let Some(val) = body_val {

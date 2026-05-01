@@ -28,6 +28,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             .add_function("printf", printf_ty, Some(Linkage::External))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn get_strlen(&self) -> FunctionValue<'ctx> {
         if let Some(f) = self.module.get_function("strlen") {
             return f;
@@ -335,7 +336,20 @@ impl<'ctx> LlvmBackend<'ctx> {
         let mut call_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> =
             vec![fmt_global.as_pointer_value().into()];
         for val in values {
-            call_args.push(val.into());
+            // L5-14: MvlString* values must be converted to char* for printf.
+            let printf_val = match val {
+                BasicValueEnum::PointerValue(p) => {
+                    let sp = self.get_mvl_string_ptr();
+                    let cstr_call = self
+                        .builder
+                        .build_call(sp, &[p.into()], "str_cptr_fmt")
+                        .unwrap();
+                    use inkwell::values::AnyValue;
+                    BasicValueEnum::try_from(cstr_call.as_any_value_enum()).unwrap_or(val)
+                }
+                other => other,
+            };
+            call_args.push(printf_val.into());
         }
         self.builder
             .build_call(printf, &call_args, "printf_fmt_call")
@@ -385,8 +399,17 @@ impl<'ctx> LlvmBackend<'ctx> {
                     }
                     BasicValueEnum::FloatValue(v) => (format!("%g{suffix}"), Some(v.into())),
                     BasicValueEnum::PointerValue(v) => {
-                        // Assume char* string.
-                        (format!("%s{suffix}"), Some(v.into()))
+                        // L5-14: in Phase C, pointer values are MvlString*.
+                        // Call mvl_string_ptr to extract the null-terminated char* for printf.
+                        let sp = self.get_mvl_string_ptr();
+                        let cstr_call = self
+                            .builder
+                            .build_call(sp, &[v.into()], "str_cptr")
+                            .unwrap();
+                        use inkwell::values::AnyValue;
+                        let cstr = BasicValueEnum::try_from(cstr_call.as_any_value_enum())
+                            .unwrap_or(v.into());
+                        (format!("%s{suffix}"), Some(cstr.into()))
                     }
                     _ => (suffix.to_string(), None),
                 };
