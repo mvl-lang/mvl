@@ -1235,6 +1235,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             // ── List.first() → Option[Int] ────────────────────────────────────
             "first" => match recv_val {
                 BasicValueEnum::StructValue(sv) if sv.get_type().count_fields() == 2 => {
+                    // Pre-Phase C struct layout (kept for compatibility)
                     let len = self
                         .builder
                         .build_extract_value(sv, 0, "lst_len")
@@ -1286,6 +1287,68 @@ impl<'ctx> LlvmBackend<'ctx> {
                         None
                     }
                 }
+                // Post-Phase C: List is MvlArray* (heap pointer). Use runtime
+                // mvl_array_len + mvl_array_get to access element 0.
+                BasicValueEnum::PointerValue(arr_ptr) => {
+                    use inkwell::values::AnyValue;
+                    let i64_ty = self.context.i64_type();
+                    // Get length via runtime call
+                    let len_fn = self.get_mvl_array_len();
+                    let len_call = self
+                        .builder
+                        .build_call(len_fn, &[arr_ptr.into()], "arr_len")
+                        .ok()?;
+                    let len = BasicValueEnum::try_from(len_call.as_any_value_enum())
+                        .ok()?
+                        .into_int_value();
+                    let parent_fn = self.builder.get_insert_block()?.get_parent()?;
+                    let some_bb = self.context.append_basic_block(parent_fn, "first_some");
+                    let none_bb = self.context.append_basic_block(parent_fn, "first_none");
+                    let merge_bb = self.context.append_basic_block(parent_fn, "first_merge");
+                    let zero = i64_ty.const_int(0, false);
+                    let nonempty = self
+                        .builder
+                        .build_int_compare(IntPredicate::SGT, len, zero, "nonempty")
+                        .unwrap();
+                    self.builder
+                        .build_conditional_branch(nonempty, some_bb, none_bb)
+                        .unwrap();
+                    // Some branch: get element pointer at index 0, load i64
+                    self.builder.position_at_end(some_bb);
+                    let get_fn = self.get_mvl_array_get();
+                    let elem_ptr_call = self
+                        .builder
+                        .build_call(get_fn, &[arr_ptr.into(), zero.into()], "elem_ptr")
+                        .ok()?;
+                    let elem_ptr = BasicValueEnum::try_from(elem_ptr_call.as_any_value_enum())
+                        .ok()?
+                        .into_pointer_value();
+                    let first = self
+                        .builder
+                        .build_load(i64_ty, elem_ptr, "first_elem")
+                        .unwrap()
+                        .into_int_value();
+                    let some_val = self.emit_some_from_val(first.into())?;
+                    let some_end = self.builder.get_insert_block()?;
+                    self.builder.build_unconditional_branch(merge_bb).unwrap();
+                    // None branch
+                    self.builder.position_at_end(none_bb);
+                    let none_val = self.emit_none_val()?;
+                    let none_end = self.builder.get_insert_block()?;
+                    self.builder.build_unconditional_branch(merge_bb).unwrap();
+                    // Merge
+                    self.builder.position_at_end(merge_bb);
+                    if some_val.get_type() == none_val.get_type() {
+                        let phi = self
+                            .builder
+                            .build_phi(some_val.get_type(), "first_result")
+                            .unwrap();
+                        phi.add_incoming(&[(&some_val, some_end), (&none_val, none_end)]);
+                        Some(phi.as_basic_value())
+                    } else {
+                        None
+                    }
+                }
                 _ => None,
             },
 
@@ -1297,6 +1360,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 };
                 match recv_val {
                     BasicValueEnum::StructValue(sv) if sv.get_type().count_fields() == 2 => {
+                        // Pre-Phase C struct layout (kept for compatibility)
                         let len = self
                             .builder
                             .build_extract_value(sv, 0, "set_len")
@@ -1350,6 +1414,89 @@ impl<'ctx> LlvmBackend<'ctx> {
                                 .build_gep(i64_ty, data_ptr, &[i], "ep")
                                 .unwrap()
                         };
+                        let elem = self
+                            .builder
+                            .build_load(i64_ty, elem_ptr, "elem")
+                            .unwrap()
+                            .into_int_value();
+                        let eq = self
+                            .builder
+                            .build_int_compare(IntPredicate::EQ, elem, needle, "eq")
+                            .unwrap();
+                        self.builder.build_store(found_alloca, eq).unwrap();
+                        let i_next = self
+                            .builder
+                            .build_int_add(i, i64_ty.const_int(1, false), "i_next")
+                            .unwrap();
+                        self.builder.build_store(i_alloca, i_next).unwrap();
+                        self.builder.build_unconditional_branch(cond_bb).unwrap();
+                        // Exit
+                        self.builder.position_at_end(exit_bb);
+                        Some(
+                            self.builder
+                                .build_load(bool_ty, found_alloca, "contains_res")
+                                .unwrap(),
+                        )
+                    }
+                    // Post-Phase C: Set is MvlArray* (heap pointer). Use runtime
+                    // mvl_array_len + mvl_array_get to iterate and compare elements.
+                    BasicValueEnum::PointerValue(arr_ptr) => {
+                        use inkwell::values::AnyValue;
+                        let i64_ty = self.context.i64_type();
+                        let bool_ty = self.context.bool_type();
+                        // Get length via runtime call
+                        let len_fn = self.get_mvl_array_len();
+                        let len_call = self
+                            .builder
+                            .build_call(len_fn, &[arr_ptr.into()], "arr_len")
+                            .ok()?;
+                        let len = BasicValueEnum::try_from(len_call.as_any_value_enum())
+                            .ok()?
+                            .into_int_value();
+                        let found_alloca = self.builder.build_alloca(bool_ty, "found").unwrap();
+                        let i_alloca = self.builder.build_alloca(i64_ty, "set_i").unwrap();
+                        self.builder
+                            .build_store(found_alloca, bool_ty.const_int(0, false))
+                            .unwrap();
+                        self.builder
+                            .build_store(i_alloca, i64_ty.const_int(0, false))
+                            .unwrap();
+                        let parent_fn = self.builder.get_insert_block()?.get_parent()?;
+                        let cond_bb = self.context.append_basic_block(parent_fn, "set_cond");
+                        let body_bb = self.context.append_basic_block(parent_fn, "set_body");
+                        let exit_bb = self.context.append_basic_block(parent_fn, "set_exit");
+                        self.builder.build_unconditional_branch(cond_bb).unwrap();
+                        // Cond: i < len && !found
+                        self.builder.position_at_end(cond_bb);
+                        let i = self
+                            .builder
+                            .build_load(i64_ty, i_alloca, "i")
+                            .unwrap()
+                            .into_int_value();
+                        let found = self
+                            .builder
+                            .build_load(bool_ty, found_alloca, "f")
+                            .unwrap()
+                            .into_int_value();
+                        let i_lt = self
+                            .builder
+                            .build_int_compare(IntPredicate::SLT, i, len, "i_lt")
+                            .unwrap();
+                        let not_found = self.builder.build_not(found, "nf").unwrap();
+                        let go = self.builder.build_and(i_lt, not_found, "go").unwrap();
+                        self.builder
+                            .build_conditional_branch(go, body_bb, exit_bb)
+                            .unwrap();
+                        // Body: fetch element pointer via runtime, load i64, compare
+                        self.builder.position_at_end(body_bb);
+                        let get_fn = self.get_mvl_array_get();
+                        let elem_ptr_call = self
+                            .builder
+                            .build_call(get_fn, &[arr_ptr.into(), i.into()], "ep")
+                            .ok()?;
+                        let elem_ptr = BasicValueEnum::try_from(elem_ptr_call.as_any_value_enum())
+                            .ok()?
+                            .into_pointer_value();
                         let elem = self
                             .builder
                             .build_load(i64_ty, elem_ptr, "elem")
