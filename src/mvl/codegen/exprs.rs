@@ -198,25 +198,28 @@ impl<'ctx> LlvmBackend<'ctx> {
         let field_info: Vec<(String, TypeExpr)> = self.struct_fields.get(name)?.clone();
         let struct_ty = *self.llvm_struct_types.get(name)?;
 
-        // Collect all field values first — fail if any field expression cannot be emitted.
-        let mut field_vals: Vec<(u32, BasicValueEnum<'ctx>)> = Vec::new();
+        // L5-13: use alloca+GEP to build the struct so every value type has an
+        // address.  This is the foundation L5-14 heap types rely on for consistent
+        // pointer semantics (ADR-0016).
+        let alloca = self.builder.build_alloca(struct_ty, "struct_tmp").unwrap();
+
         for (idx, (fname, _)) in field_info.iter().enumerate() {
             if let Some((_, fexpr)) = fields.iter().find(|(n, _)| n == fname) {
-                let fval = self.emit_expr(fexpr)?;
-                field_vals.push((idx as u32, fval));
+                if let Some(fval) = self.emit_expr(fexpr) {
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(struct_ty, alloca, idx as u32, &format!("f{idx}_ptr"))
+                        .unwrap();
+                    self.builder.build_store(field_ptr, fval).unwrap();
+                }
             }
         }
 
-        // Build the struct value by inserting each field.
-        let mut sv = struct_ty.const_zero();
-        for (idx, fval) in field_vals {
-            sv = self
-                .builder
-                .build_insert_value(sv, fval, idx, &format!("s{idx}"))
-                .unwrap()
-                .into_struct_value();
-        }
-        Some(sv.into())
+        Some(
+            self.builder
+                .build_load(struct_ty, alloca, "struct_val")
+                .unwrap(),
+        )
     }
 
     /// Emit a struct-variant enum construction: `AuthError::AccountLocked { attempts: 3 }`.
@@ -882,7 +885,11 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     // ── Collection literals ──────────────────────────────────────────────────
 
-    /// Emit `[e1, ..., eN]` → `{ i64 len, ptr data }` struct with a stack-allocated array.
+    /// Emit `[e1, ..., eN]` → `ptr` to a stack-allocated `{ i64 len, ptr data }` struct.
+    ///
+    /// L5-13: returns a pointer (not a struct value) so the type is consistent with
+    /// `mvl_type_to_llvm(List[T]) = ptr`.  In L5-14 this will be replaced by a
+    /// `mvl_array_new` heap allocation call.
     pub(crate) fn emit_list_literal(&mut self, elems: &[Expr]) -> Option<BasicValueEnum<'ctx>> {
         let i64_ty = self.context.i64_type();
         let n = elems.len() as u32;
@@ -916,14 +923,14 @@ impl<'ctx> LlvmBackend<'ctx> {
             .build_store(len_ptr, i64_ty.const_int(n as u64, false))
             .unwrap();
         self.builder.build_store(data_ptr, arr).unwrap();
-        Some(
-            self.builder
-                .build_load(list_ty, alloca, "list_val")
-                .unwrap(),
-        )
+        // Return the pointer to the struct, not a loaded value.
+        Some(alloca.into())
     }
 
-    /// Emit `{"k": v, ...}` → `{ i64 len }` struct (only `.len()` supported).
+    /// Emit `{"k": v, ...}` → `ptr` to a stack-allocated `{ i64 len }` stub.
+    ///
+    /// L5-13: returns a pointer consistent with `mvl_type_to_llvm(Map[K,V]) = ptr`.
+    /// In L5-14 this will be replaced by a `mvl_map_new` heap allocation call.
     pub(crate) fn emit_map_literal(
         &mut self,
         pairs: &[(Expr, Expr)],
@@ -939,10 +946,12 @@ impl<'ctx> LlvmBackend<'ctx> {
         self.builder
             .build_store(len_ptr, i64_ty.const_int(n, false))
             .unwrap();
-        Some(self.builder.build_load(map_ty, alloca, "map_val").unwrap())
+        Some(alloca.into())
     }
 
-    /// Emit `{e1, ..., eN}` → `{ i64 len, ptr data }` (same shape as List).
+    /// Emit `{e1, ..., eN}` → `ptr` to a stack-allocated `{ i64 len, ptr data }` stub.
+    ///
+    /// L5-13: returns a pointer consistent with `mvl_type_to_llvm(Set[T]) = ptr`.
     pub(crate) fn emit_set_literal(&mut self, elems: &[Expr]) -> Option<BasicValueEnum<'ctx>> {
         let i64_ty = self.context.i64_type();
         let n = elems.len() as u32;
@@ -976,7 +985,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             .build_store(len_ptr, i64_ty.const_int(n as u64, false))
             .unwrap();
         self.builder.build_store(data_ptr, arr).unwrap();
-        Some(self.builder.build_load(set_ty, alloca, "set_val").unwrap())
+        Some(alloca.into())
     }
 
     // ── Method call emission ─────────────────────────────────────────────────
@@ -992,20 +1001,59 @@ impl<'ctx> LlvmBackend<'ctx> {
         match method {
             // ── len ──────────────────────────────────────────────────────────
             "len" => match recv_val {
-                // String (ptr) → strlen
+                // L5-13: collection ptr (List/Set → { i64 len, ptr data },
+                //         Map → { i64 len }) or String (char*).
+                // Dispatch: check if the receiver's MVL type is a known collection.
                 BasicValueEnum::PointerValue(ptr) => {
-                    let strlen = self.get_strlen();
-                    let call = self
-                        .builder
-                        .build_call(strlen, &[ptr.into()], "strlen_res")
-                        .unwrap();
-                    use inkwell::values::AnyValue;
-                    BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+                    let recv_mvl_ty = match receiver {
+                        Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
+                        _ => None,
+                    };
+                    let is_collection = recv_mvl_ty.as_ref().is_some_and(|t| {
+                        matches!(
+                            t,
+                            TypeExpr::Base { name, .. }
+                                if matches!(
+                                    name.as_str(),
+                                    "List" | "Array" | "Map" | "Set"
+                                )
+                        )
+                    });
+                    if is_collection {
+                        // GEP to field 0 (i64 len) and load.
+                        let i64_ty = self.context.i64_type();
+                        // Use a { i64, ptr } type for List/Set; { i64 } for Map.
+                        // Both have len at offset 0, so we can always use i64_ty GEP.
+                        let len_ptr = unsafe {
+                            self.builder
+                                .build_gep(
+                                    i64_ty,
+                                    ptr,
+                                    &[self.context.i64_type().const_int(0, false)],
+                                    "coll_len_ptr",
+                                )
+                                .unwrap()
+                        };
+                        Some(
+                            self.builder
+                                .build_load(i64_ty, len_ptr, "coll_len")
+                                .unwrap(),
+                        )
+                    } else {
+                        // String (char*) → strlen
+                        let strlen = self.get_strlen();
+                        let call = self
+                            .builder
+                            .build_call(strlen, &[ptr.into()], "strlen_res")
+                            .unwrap();
+                        use inkwell::values::AnyValue;
+                        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+                    }
                 }
                 BasicValueEnum::StructValue(sv) => {
                     let n = sv.get_type().count_fields();
                     if n == 1 {
-                        // Map { i64 } → field 0
+                        // Map { i64 } → field 0 (legacy path, kept for safety)
                         self.builder.build_extract_value(sv, 0, "map_len").ok()
                     } else if n == 2 {
                         let f1_ty = sv.get_type().get_field_type_at_index(1).unwrap();
@@ -1028,7 +1076,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                                     .into(),
                             )
                         } else {
-                            // List/Set { i64 len, ptr } → field 0
+                            // List/Set struct value (legacy path)
                             self.builder.build_extract_value(sv, 0, "coll_len").ok()
                         }
                     } else {

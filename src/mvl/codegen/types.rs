@@ -140,7 +140,12 @@ impl<'ctx> LlvmBackend<'ctx> {
                     "Byte" => Some(self.context.i8_type().into()),
                     "Char" => Some(self.context.i32_type().into()),
                     "Unit" => None,
-                    "String" => Some(self.context.ptr_type(AddressSpace::default()).into()),
+                    // L5-13: heap-allocated collection types are uniform `ptr` values.
+                    // Phase B used i64 stubs for List/Array/Map/Set; Phase C uses
+                    // pointers to runtime-managed heap structs (ADR-0016).
+                    "String" | "List" | "Array" | "Map" | "Set" => {
+                        Some(self.context.ptr_type(AddressSpace::default()).into())
+                    }
                     _ => {
                         // Known struct type → %StructName
                         if let Some(&st) = self.llvm_struct_types.get(name.as_str()) {
