@@ -1081,6 +1081,14 @@ impl<'ctx> LlvmBackend<'ctx> {
             // L5-12: ? propagation
             Expr::Propagate { expr, .. } => self.emit_propagate(expr),
 
+            // Method calls: minimal support for .len() on range and .to_string() on Int
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } => self.emit_method_call(receiver, method, args),
+
             _ => None,
         }
     }
@@ -1838,6 +1846,40 @@ impl<'ctx> LlvmBackend<'ctx> {
             "println" => self.emit_println(args),
             "print" => self.emit_print(args),
             "format" => self.emit_format(args),
+            // range(start, end) as a value → { i64 start, i64 end } range struct
+            "range" if args.len() == 2 => {
+                let start = match self.emit_expr(&args[0])? {
+                    BasicValueEnum::IntValue(v) => v,
+                    _ => return None,
+                };
+                let end = match self.emit_expr(&args[1])? {
+                    BasicValueEnum::IntValue(v) => v,
+                    _ => return None,
+                };
+                let range_ty = self.context.struct_type(
+                    &[
+                        self.context.i64_type().into(),
+                        self.context.i64_type().into(),
+                    ],
+                    false,
+                );
+                let alloca = self.builder.build_alloca(range_ty, "range_tmp").unwrap();
+                let s_ptr = self
+                    .builder
+                    .build_struct_gep(range_ty, alloca, 0, "range_start")
+                    .unwrap();
+                let e_ptr = self
+                    .builder
+                    .build_struct_gep(range_ty, alloca, 1, "range_end")
+                    .unwrap();
+                self.builder.build_store(s_ptr, start).unwrap();
+                self.builder.build_store(e_ptr, end).unwrap();
+                Some(
+                    self.builder
+                        .build_load(range_ty, alloca, "range_val")
+                        .unwrap(),
+                )
+            }
             _ => {
                 // Built-in Result/Option constructors: Ok(v), Err(e), Some(v)
                 if matches!(name, "Ok" | "Some") && args.len() == 1 {
@@ -1891,6 +1933,123 @@ impl<'ctx> LlvmBackend<'ctx> {
                 BasicValueEnum::try_from(call.as_any_value_enum()).ok()
             }
         }
+    }
+
+    // ── Method call emission ─────────────────────────────────────────────────
+
+    /// Emit `receiver.method(args)`.
+    ///
+    /// Supported:
+    /// - `range_struct.len()` → `end - start` (i64)
+    /// - `int_val.to_string()` → snprintf to a static 32-byte buffer (ptr)
+    fn emit_method_call(
+        &mut self,
+        receiver: &Expr,
+        method: &str,
+        _args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let recv_val = self.emit_expr(receiver)?;
+        match method {
+            "len" => {
+                // Expect a range struct { i64, i64 } — return end - start.
+                let BasicValueEnum::StructValue(sv) = recv_val else {
+                    return None;
+                };
+                let start = self
+                    .builder
+                    .build_extract_value(sv, 0, "range_s")
+                    .ok()?
+                    .into_int_value();
+                let end = self
+                    .builder
+                    .build_extract_value(sv, 1, "range_e")
+                    .ok()?
+                    .into_int_value();
+                Some(
+                    self.builder
+                        .build_int_sub(end, start, "range_len")
+                        .unwrap()
+                        .into(),
+                )
+            }
+            "to_string" => {
+                // Convert an integer to its decimal string representation.
+                match recv_val {
+                    BasicValueEnum::IntValue(v) => Some(self.emit_int_to_string(v)),
+                    BasicValueEnum::FloatValue(v) => Some(self.emit_float_to_string(v)),
+                    BasicValueEnum::PointerValue(p) => Some(p.into()), // already a string
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Emit snprintf(buf, 32, "%lld", v) and return buf ptr.
+    fn emit_int_to_string(&mut self, v: inkwell::values::IntValue<'ctx>) -> BasicValueEnum<'ctx> {
+        let buf_ty = self.context.i8_type().array_type(32);
+        let alloca = self.builder.build_alloca(buf_ty, "int_str_buf").unwrap();
+        let snprintf = self.get_snprintf();
+        let fmt = self
+            .builder
+            .build_global_string_ptr("%lld", "int_fmt")
+            .unwrap();
+        let size = self.context.i64_type().const_int(32, false);
+        self.builder
+            .build_call(
+                snprintf,
+                &[
+                    alloca.into(),
+                    size.into(),
+                    fmt.as_pointer_value().into(),
+                    v.into(),
+                ],
+                "snprintf_int",
+            )
+            .unwrap();
+        alloca.into()
+    }
+
+    /// Emit snprintf(buf, 32, "%g", v) and return buf ptr.
+    fn emit_float_to_string(
+        &mut self,
+        v: inkwell::values::FloatValue<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let buf_ty = self.context.i8_type().array_type(32);
+        let alloca = self.builder.build_alloca(buf_ty, "flt_str_buf").unwrap();
+        let snprintf = self.get_snprintf();
+        let fmt = self
+            .builder
+            .build_global_string_ptr("%g", "flt_fmt")
+            .unwrap();
+        let size = self.context.i64_type().const_int(32, false);
+        self.builder
+            .build_call(
+                snprintf,
+                &[
+                    alloca.into(),
+                    size.into(),
+                    fmt.as_pointer_value().into(),
+                    v.into(),
+                ],
+                "snprintf_flt",
+            )
+            .unwrap();
+        alloca.into()
+    }
+
+    fn get_snprintf(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("snprintf") {
+            return f;
+        }
+        let ptr_ty: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
+        let i64_ty: BasicMetadataTypeEnum = self.context.i64_type().into();
+        let snprintf_ty = self
+            .context
+            .i32_type()
+            .fn_type(&[ptr_ty, i64_ty, ptr_ty], true);
+        self.module
+            .add_function("snprintf", snprintf_ty, Some(Linkage::External))
     }
 
     // ── format() built-in ────────────────────────────────────────────────────
