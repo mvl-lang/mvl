@@ -1,7 +1,7 @@
-//! Core code generator: string-builder with indentation tracking.
+//! Rust source emitter: string-builder with indentation tracking.
 //!
-//! [`Codegen`] is the single writer passed through every emit function.
-//! All other `emit_*` modules take `&mut Codegen` and append to it.
+//! [`RustEmitter`] is the single writer passed through every emit function.
+//! All other `emit_*` modules take `&mut RustEmitter` and append to it.
 
 use crate::mvl::parser::ast::{
     BinaryOp, Decl, ExternDecl, FieldDecl, FnDecl, Param, Program, TypeDecl, TypeExpr, Variant,
@@ -22,7 +22,7 @@ use crate::mvl::transpiler::mutation::{
 
 ///// Code-generation context: accumulates Rust source text.
 #[derive(Default)]
-pub struct Codegen {
+pub struct RustEmitter {
     buf: String,
     indent: usize,
     /// Names of functions declared in `extern` blocks — calls must be wrapped in `unsafe`.
@@ -74,7 +74,7 @@ pub struct Codegen {
     pub borrow_params_map: std::collections::HashMap<String, Vec<Option<bool>>>,
 }
 
-impl Codegen {
+impl RustEmitter {
     pub fn new() -> Self {
         Self::default()
     }
@@ -470,7 +470,7 @@ impl Codegen {
 /// For `extern "rust"`: the functions are declared as regular `extern "Rust"`
 /// Rust items — the linker resolves them from the crate in `Cargo.toml`.
 /// For `extern "c"`: standard C ABI extern block.
-fn emit_extern_decl(cg: &mut Codegen, ed: &ExternDecl) {
+fn emit_extern_decl(cg: &mut RustEmitter, ed: &ExternDecl) {
     // Register extern function names so calls can be wrapped in unsafe
     for f in &ed.fns {
         cg.extern_fns.insert(f.name.clone());

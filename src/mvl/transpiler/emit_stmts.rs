@@ -14,16 +14,16 @@
 
 use crate::mvl::checker::mcdc::collect_clauses;
 use crate::mvl::parser::ast::{BinaryOp, ElseBranch, Expr, LValue, MatchBody, Stmt, TypeExpr};
-use crate::mvl::transpiler::codegen::Codegen;
 use crate::mvl::transpiler::coverage::BranchKind;
 use crate::mvl::transpiler::emit_exprs::{
     arms_have_str_pattern, emit_block_as_value, emit_block_stmts, emit_expr, emit_pattern,
 };
 use crate::mvl::transpiler::emit_types::{emit_ref_expr_for_assert, emit_type_expr};
+use crate::mvl::transpiler::emitter::RustEmitter;
 use crate::mvl::transpiler::mcdc_instr::{detect_coupled_pairs, DecisionKind};
 
 /// Emit a single statement (with indentation and trailing newline).
-pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
+pub fn emit_stmt(cg: &mut RustEmitter, stmt: &Stmt) {
     match stmt {
         Stmt::Let {
             mutable,
@@ -237,7 +237,7 @@ pub fn emit_stmt(cg: &mut Codegen, stmt: &Stmt) {
     }
 }
 
-fn emit_lvalue(cg: &mut Codegen, lv: &LValue) {
+fn emit_lvalue(cg: &mut RustEmitter, lv: &LValue) {
     match lv {
         LValue::Ident(name, _) => cg.push(name),
         LValue::Field { base, field, .. } => {
@@ -248,7 +248,7 @@ fn emit_lvalue(cg: &mut Codegen, lv: &LValue) {
     }
 }
 
-fn emit_else_branch(cg: &mut Codegen, branch: &ElseBranch, cov_id: Option<usize>) {
+fn emit_else_branch(cg: &mut RustEmitter, branch: &ElseBranch, cov_id: Option<usize>) {
     match branch {
         ElseBranch::Block(block) => {
             cg.push("{");
@@ -311,7 +311,7 @@ fn emit_else_branch(cg: &mut Codegen, branch: &ElseBranch, cov_id: Option<usize>
 /// with an active MC/DC map).  Returns `false` when the caller should fall
 /// back to normal emission (simple condition or MC/DC inactive).
 fn emit_mcdc_if(
-    cg: &mut Codegen,
+    cg: &mut RustEmitter,
     cond: &Expr,
     then: &crate::mvl::parser::ast::Block,
     else_: &Option<ElseBranch>,
@@ -368,7 +368,7 @@ fn emit_mcdc_if(
 ///
 /// Returns `true` when MC/DC instrumentation was applied, `false` to fall back.
 fn emit_mcdc_while(
-    cg: &mut Codegen,
+    cg: &mut RustEmitter,
     cond: &Expr,
     body: &crate::mvl::parser::ast::Block,
     line: u32,
@@ -431,7 +431,7 @@ fn emit_mcdc_while(
 /// Returns `true` when instrumentation was applied; `false` to fall back to
 /// normal emission (simple expression, non-Bool return, or MC/DC inactive).
 pub fn emit_mcdc_return_expr(
-    cg: &mut Codegen,
+    cg: &mut RustEmitter,
     expr: &Expr,
     return_type: &TypeExpr,
     line: u32,
@@ -474,7 +474,7 @@ pub fn emit_mcdc_return_expr(
 /// `clause_idx` counts leaf clauses (left-to-right); `tmp_idx` numbers internal
 /// temporaries so nested `&&`/`||` nodes use distinct names.
 fn emit_mcdc_sc_outcome(
-    cg: &mut Codegen,
+    cg: &mut RustEmitter,
     expr: &Expr,
     decision_id: usize,
     clause_idx: &mut usize,
@@ -517,7 +517,7 @@ fn emit_mcdc_sc_outcome(
 /// Emit the `__mvl_mcdc::record(…)` call for a decision with `n` clauses.
 ///
 /// Encoding (u32): bits 0..n-1 = clause vals, bits n..2n-1 = eval flags, bit 2n = outcome.
-fn emit_mcdc_record(cg: &mut Codegen, decision_id: usize, n: usize) {
+fn emit_mcdc_record(cg: &mut RustEmitter, decision_id: usize, n: usize) {
     let vals: Vec<String> = (0..n)
         .map(|i| format!("((__d{decision_id}_c[{i}] as u32) << {i}u32)"))
         .collect();
