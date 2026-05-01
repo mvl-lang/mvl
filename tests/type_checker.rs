@@ -3873,18 +3873,6 @@ fn function_returning_ref_literal_with_ref_param_rejected() {
 }
 
 #[test]
-fn function_returning_ref_param_accepted() {
-    // GIVEN: a function that returns exactly its &T parameter
-    // THEN: checker accepts — the reference flows from the parameter
-    let result = check_src("fn ok(x: &Int) -> &Int { x }");
-    assert!(
-        result.errors.is_empty(),
-        "expected no errors, got: {:?}",
-        result.errors
-    );
-}
-
-#[test]
 fn function_returning_ref_from_if_branches_accepted() {
     // GIVEN: a function that returns a &T from both branches of an if/else
     // THEN: checker accepts — both branches flow from reference parameters
@@ -3893,6 +3881,108 @@ fn function_returning_ref_from_if_branches_accepted() {
     assert!(
         result.errors.is_empty(),
         "expected no errors, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn function_explicit_return_ref_param_accepted() {
+    // GIVEN: function uses explicit `return x` where x: &Int
+    // THEN: checker accepts — the reference flows from the parameter
+    let result = check_src("fn ok(x: &Int) -> &Int { return x; }");
+    assert!(
+        result.errors.is_empty(),
+        "expected no errors for explicit return of ref param, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn function_explicit_return_local_rejected() {
+    // GIVEN: function uses explicit `return y` where y is a local Int (not a ref param)
+    // THEN: checker rejects — the return value does not flow from a reference parameter
+    let result = check_src("fn bad(x: &Int) -> &Int { return 42; }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::ReferenceEscapesScope { .. })),
+        "expected ReferenceEscapesScope for explicit return of non-ref, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn function_bare_return_in_ref_returning_fn_rejected() {
+    // GIVEN: `return;` (no value) in a function returning &Int
+    // THEN: checker rejects — bare return cannot produce a reference
+    let result = check_src("fn bad(x: &Int) -> &Int { return; }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::ReferenceEscapesScope { .. })),
+        "expected ReferenceEscapesScope for bare return, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn function_early_return_non_ref_rejected() {
+    // GIVEN: function has a guard `if cond { return 42; }` before a valid tail
+    // THEN: checker rejects — the early return does not flow from a reference parameter
+    let result = check_src("fn bad(cond: Bool, x: &Int) -> &Int { if cond { return 42; } x }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::ReferenceEscapesScope { .. })),
+        "expected ReferenceEscapesScope for early return of non-ref, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn function_returning_match_with_all_ref_arms_accepted() {
+    // GIVEN: match where every arm returns one of the &T params
+    // THEN: checker accepts — all paths flow from reference parameters
+    let result = check_src(
+        "fn ok(flag: Bool, x: &Int, y: &Int) -> &Int { match flag { true => x, false => y } }",
+    );
+    assert!(
+        result.errors.is_empty(),
+        "expected no errors for match with all ref-param arms, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn function_returning_match_with_non_ref_arm_rejected() {
+    // GIVEN: match where one arm returns a literal (not a ref param)
+    // THEN: checker rejects — the literal arm does not flow from a reference parameter
+    let result =
+        check_src("fn bad(flag: Bool, x: &Int) -> &Int { match flag { true => x, false => 42 } }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::ReferenceEscapesScope { .. })),
+        "expected ReferenceEscapesScope for non-ref match arm, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn function_returning_if_without_else_rejected() {
+    // GIVEN: body's last statement is an if without an else branch
+    // THEN: checker rejects — the else path cannot return a reference
+    let result = check_src("fn bad(cond: Bool, x: &Int) -> &Int { if cond { x } }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::ReferenceEscapesScope { .. })),
+        "expected ReferenceEscapesScope for if-without-else, got: {:?}",
         result.errors
     );
 }
