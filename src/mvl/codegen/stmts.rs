@@ -64,8 +64,18 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
             Stmt::Return { value, .. } => {
                 let ret_val = value.as_ref().and_then(|e| self.emit_expr(e));
-                // L5-14: drop heap-allocated collection locals before returning.
-                self.emit_heap_drops();
+                // L5-14: drop heap locals before returning, but skip the returned variable.
+                // Returning a heap pointer transfers ownership to the caller — dropping it
+                // here would be a use-after-free.
+                let ret_heap_name: Option<String> = value.as_ref().and_then(|e| {
+                    if let Expr::Ident(name, _) = e {
+                        if self.heap_locals.contains_key(name.as_str()) {
+                            return Some(name.clone());
+                        }
+                    }
+                    None
+                });
+                self.emit_heap_drops_except(ret_heap_name.as_deref());
                 if let Some(v) = ret_val {
                     self.builder.build_return(Some(&v)).unwrap();
                 } else {
@@ -80,6 +90,26 @@ impl<'ctx> LlvmBackend<'ctx> {
                 match target {
                     LValue::Ident(n, _) => {
                         if let Some((alloca, _)) = self.locals.get(n).copied() {
+                            // L5-14: drop the old heap value before overwriting to prevent a
+                            // memory leak (the previous pointer is unreachable after the store).
+                            let kind_opt = self.heap_locals.get(n.as_str()).copied();
+                            if let Some(kind) = kind_opt {
+                                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                                if let Ok(old_ptr) =
+                                    self.builder.build_load(ptr_ty, alloca, "old_heap")
+                                {
+                                    let drop_fn = match kind {
+                                        HeapKind::String => self.get_mvl_string_drop(),
+                                        HeapKind::Array => self.get_mvl_array_drop(),
+                                        HeapKind::Map => self.get_mvl_map_drop(),
+                                    };
+                                    let _ = self.builder.build_call(
+                                        drop_fn,
+                                        &[old_ptr.into()],
+                                        "assign_drop",
+                                    );
+                                }
+                            }
                             self.builder.build_store(alloca, val).unwrap();
                         }
                     }

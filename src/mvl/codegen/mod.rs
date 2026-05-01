@@ -34,7 +34,9 @@ use inkwell::{
 };
 use std::collections::{HashMap, HashSet};
 
-use crate::mvl::parser::ast::{Decl, ExternDecl, ExternFnDecl, FnDecl, Program, TypeExpr};
+use crate::mvl::parser::ast::{
+    Block, Decl, Expr, ExternDecl, ExternFnDecl, FnDecl, Program, Stmt, TypeExpr,
+};
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -518,8 +520,10 @@ impl<'ctx> LlvmBackend<'ctx> {
 
         // Emit return terminator if the block didn't already terminate.
         if !self.terminated {
-            // L5-14: drop heap-allocated collection locals before returning.
-            self.emit_heap_drops();
+            // L5-14: drop heap locals; exclude the implicit return value if it is a heap
+            // collection (ownership transfers to the caller — dropping it here is a UAF).
+            let ret_name = self.heap_return_ident(&fd.body);
+            self.emit_heap_drops_except(ret_name);
             if is_c_main {
                 let zero = self.context.i32_type().const_int(0, false);
                 self.builder.build_return(Some(&zero)).unwrap();
@@ -588,8 +592,10 @@ impl<'ctx> LlvmBackend<'ctx> {
         let body_val = self.emit_block(&fd.body);
 
         if !self.terminated {
-            // L5-14: drop heap-allocated collection locals before returning.
-            self.emit_heap_drops();
+            // L5-14: drop heap locals; exclude the implicit return value if it is a heap
+            // collection (ownership transfers to the caller — dropping it here is a UAF).
+            let ret_name = self.heap_return_ident(&fd.body);
+            self.emit_heap_drops_except(ret_name);
             if self.is_unit_type(&fd.return_type) {
                 self.builder.build_return(None).unwrap();
             } else if let Some(val) = body_val {
@@ -598,6 +604,22 @@ impl<'ctx> LlvmBackend<'ctx> {
                 self.builder.build_return(None).unwrap();
             }
         }
+    }
+
+    /// Return the name of the last expression in `block` if it is a bare identifier
+    /// tracked as a heap local.  Used to exclude the implicit return value from drops
+    /// (returning a heap pointer transfers ownership to the caller).
+    fn heap_return_ident<'b>(&self, block: &'b Block) -> Option<&'b str> {
+        let last = block.stmts.last()?;
+        let Stmt::Expr { expr, .. } = last else {
+            return None;
+        };
+        let Expr::Ident(name, _) = expr else {
+            return None;
+        };
+        self.heap_locals
+            .contains_key(name.as_str())
+            .then_some(name.as_str())
     }
 
     /// Emit a monomorphized copy of `fd` with the given type-parameter substitutions,

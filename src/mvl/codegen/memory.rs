@@ -265,13 +265,17 @@ impl<'ctx> LlvmBackend<'ctx> {
     // ── Drop emission (per-function heap cleanup) ─────────────────────────────
 
     /// Emit `_drop` calls for all tracked heap locals in the current function.
+    /// Drop all heap locals except `exclude` (if `Some`).
     ///
-    /// Called before every `return` instruction and after the final statement
-    /// in functions with implicit void return.  Loads each alloca to get the
-    /// heap pointer, then dispatches to the appropriate `mvl_*_drop` runtime fn.
-    pub(crate) fn emit_heap_drops(&self) {
+    /// Pass `Some(name)` when emitting a `return <name>` for a heap-allocated
+    /// variable: ownership of the returned pointer transfers to the caller, so
+    /// dropping it here would produce a use-after-free.
+    pub(crate) fn emit_heap_drops_except(&self, exclude: Option<&str>) {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         for (name, kind) in &self.heap_locals {
+            if exclude == Some(name.as_str()) {
+                continue;
+            }
             let Some(&(alloca, _)) = self.locals.get(name.as_str()) else {
                 continue;
             };

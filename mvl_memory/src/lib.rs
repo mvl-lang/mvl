@@ -22,6 +22,24 @@
 use std::alloc::{alloc, dealloc, Layout};
 use std::ptr;
 
+// ── Internal size arithmetic helpers ─────────────────────────────────────────
+//
+// All size calculations before `mvl_alloc` calls use these helpers to abort
+// on integer overflow instead of producing a truncated allocation that could
+// lead to heap buffer overruns.
+
+/// Checked size multiply — aborts on overflow.
+#[inline(always)]
+fn checked_mul_size(a: usize, b: usize) -> usize {
+    a.checked_mul(b).unwrap_or_else(|| std::process::abort())
+}
+
+/// Checked size addition — aborts on overflow.
+#[inline(always)]
+fn checked_add_size(a: usize, b: usize) -> usize {
+    a.checked_add(b).unwrap_or_else(|| std::process::abort())
+}
+
 // ── Allocation primitives ─────────────────────────────────────────────────────
 
 /// Allocate `size` bytes, aligned to 8 bytes.  Aborts on allocation failure.
@@ -33,7 +51,9 @@ pub unsafe extern "C" fn mvl_alloc(size: usize) -> *mut u8 {
     if size == 0 {
         return ptr::NonNull::dangling().as_ptr();
     }
-    let layout = Layout::from_size_align(size, 8).expect("invalid layout");
+    let Ok(layout) = Layout::from_size_align(size, 8) else {
+        std::process::abort();
+    };
     let ptr = alloc(layout);
     if ptr.is_null() {
         mvl_panic(b"mvl_alloc: out of memory\0".as_ptr().cast());
@@ -51,7 +71,9 @@ pub unsafe extern "C" fn mvl_free(ptr: *mut u8, size: usize) {
     if size == 0 || ptr.is_null() {
         return;
     }
-    let layout = Layout::from_size_align(size, 8).expect("invalid layout");
+    let Ok(layout) = Layout::from_size_align(size, 8) else {
+        std::process::abort();
+    };
     dealloc(ptr, layout);
 }
 
@@ -102,7 +124,7 @@ impl MvlString {
 /// `bytes` must be a valid pointer to at least `len` readable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn mvl_string_new(bytes: *const u8, len: usize) -> *mut MvlString {
-    let cap = len + 1; // +1 for null terminator
+    let cap = checked_add_size(len, 1); // +1 for null terminator
     let data = MvlString::alloc_bytes(cap);
     if len > 0 {
         ptr::copy_nonoverlapping(bytes, data, len);
@@ -127,7 +149,10 @@ pub unsafe extern "C" fn mvl_string_clone(s: *mut MvlString) -> *mut MvlString {
     if s.is_null() {
         return s;
     }
-    (*s).refcount += 1;
+    (*s).refcount = (*s)
+        .refcount
+        .checked_add(1)
+        .unwrap_or_else(|| std::process::abort());
     s
 }
 
@@ -140,7 +165,10 @@ pub unsafe extern "C" fn mvl_string_drop(s: *mut MvlString) {
     if s.is_null() {
         return;
     }
-    (*s).refcount -= 1;
+    (*s).refcount = (*s)
+        .refcount
+        .checked_sub(1)
+        .unwrap_or_else(|| std::process::abort());
     if (*s).refcount == 0 {
         MvlString::free_bytes((*s).ptr, (*s).cap as usize);
         mvl_free(s as *mut u8, std::mem::size_of::<MvlString>());
@@ -184,8 +212,8 @@ pub unsafe extern "C" fn mvl_string_concat(
 ) -> *mut MvlString {
     let la = if a.is_null() { 0 } else { (*a).len as usize };
     let lb = if b.is_null() { 0 } else { (*b).len as usize };
-    let total = la + lb;
-    let cap = total + 1;
+    let total = checked_add_size(la, lb);
+    let cap = checked_add_size(total, 1);
     let data = MvlString::alloc_bytes(cap);
     if la > 0 {
         ptr::copy_nonoverlapping((*a).ptr, data, la);
@@ -260,7 +288,7 @@ const ARRAY_INITIAL_CAP: u64 = 4;
 pub unsafe extern "C" fn mvl_array_new(elem_size: usize, initial_cap: usize) -> *mut MvlArray {
     let cap = initial_cap.max(ARRAY_INITIAL_CAP as usize);
     let data = if cap > 0 && elem_size > 0 {
-        mvl_alloc(cap * elem_size)
+        mvl_alloc(checked_mul_size(cap, elem_size))
     } else {
         ptr::null_mut()
     };
@@ -284,7 +312,10 @@ pub unsafe extern "C" fn mvl_array_clone(a: *mut MvlArray) -> *mut MvlArray {
     if a.is_null() {
         return a;
     }
-    (*a).refcount += 1;
+    (*a).refcount = (*a)
+        .refcount
+        .checked_add(1)
+        .unwrap_or_else(|| std::process::abort());
     a
 }
 
@@ -297,9 +328,12 @@ pub unsafe extern "C" fn mvl_array_drop(a: *mut MvlArray) {
     if a.is_null() {
         return;
     }
-    (*a).refcount -= 1;
+    (*a).refcount = (*a)
+        .refcount
+        .checked_sub(1)
+        .unwrap_or_else(|| std::process::abort());
     if (*a).refcount == 0 {
-        let data_size = (*a).cap as usize * (*a).elem_size as usize;
+        let data_size = checked_mul_size((*a).cap as usize, (*a).elem_size as usize);
         if data_size > 0 && !(*a).ptr.is_null() {
             mvl_free((*a).ptr, data_size);
         }
@@ -322,11 +356,12 @@ pub unsafe extern "C" fn mvl_array_push(a: *mut MvlArray, elem: *const u8) {
     if (*a).len >= (*a).cap {
         // Grow 2x
         let old_cap = (*a).cap as usize;
-        let new_cap = (old_cap * 2).max(ARRAY_INITIAL_CAP as usize);
-        let new_data = mvl_alloc(new_cap * es);
+        let new_cap = checked_mul_size(old_cap, 2).max(ARRAY_INITIAL_CAP as usize);
+        let new_data = mvl_alloc(checked_mul_size(new_cap, es));
         if old_cap > 0 && !(*a).ptr.is_null() {
-            ptr::copy_nonoverlapping((*a).ptr, new_data, old_cap * es);
-            mvl_free((*a).ptr, old_cap * es);
+            let old_bytes = checked_mul_size(old_cap, es);
+            ptr::copy_nonoverlapping((*a).ptr, new_data, old_bytes);
+            mvl_free((*a).ptr, old_bytes);
         }
         (*a).ptr = new_data;
         (*a).cap = new_cap as u64;
@@ -428,9 +463,10 @@ pub unsafe extern "C" fn mvl_map_new(initial_cap: usize) -> *mut MvlMap {
     let cap = initial_cap
         .next_power_of_two()
         .max(MAP_INITIAL_CAP as usize);
-    let slots = mvl_alloc(cap * SLOT_SIZE) as *mut MvlMapSlot;
+    let slot_bytes = checked_mul_size(cap, SLOT_SIZE);
+    let slots = mvl_alloc(slot_bytes) as *mut MvlMapSlot;
     // Zero-initialize all slots (occupied = 0).
-    ptr::write_bytes(slots as *mut u8, 0, cap * SLOT_SIZE);
+    ptr::write_bytes(slots as *mut u8, 0, slot_bytes);
     let m = mvl_alloc(std::mem::size_of::<MvlMap>()) as *mut MvlMap;
     m.write(MvlMap {
         slots,
@@ -450,7 +486,10 @@ pub unsafe extern "C" fn mvl_map_clone(m: *mut MvlMap) -> *mut MvlMap {
     if m.is_null() {
         return m;
     }
-    (*m).refcount += 1;
+    (*m).refcount = (*m)
+        .refcount
+        .checked_add(1)
+        .unwrap_or_else(|| std::process::abort());
     m
 }
 
@@ -463,7 +502,10 @@ pub unsafe extern "C" fn mvl_map_drop(m: *mut MvlMap) {
     if m.is_null() {
         return;
     }
-    (*m).refcount -= 1;
+    (*m).refcount = (*m)
+        .refcount
+        .checked_sub(1)
+        .unwrap_or_else(|| std::process::abort());
     if (*m).refcount == 0 {
         let cap = (*m).cap as usize;
         for i in 0..cap {
@@ -473,7 +515,7 @@ pub unsafe extern "C" fn mvl_map_drop(m: *mut MvlMap) {
                 mvl_free(slot.val_ptr, slot.val_len as usize);
             }
         }
-        mvl_free((*m).slots as *mut u8, cap * SLOT_SIZE);
+        mvl_free((*m).slots as *mut u8, checked_mul_size(cap, SLOT_SIZE));
         mvl_free(m as *mut u8, std::mem::size_of::<MvlMap>());
     }
 }
@@ -498,9 +540,10 @@ pub unsafe extern "C" fn mvl_map_insert(
     // Grow if load factor > 50%.
     if (*m).len + 1 > (*m).cap / 2 {
         let old_cap = (*m).cap as usize;
-        let new_cap = (old_cap * 2).max(MAP_INITIAL_CAP as usize);
-        let new_slots = mvl_alloc(new_cap * SLOT_SIZE) as *mut MvlMapSlot;
-        ptr::write_bytes(new_slots as *mut u8, 0, new_cap * SLOT_SIZE);
+        let new_cap = checked_mul_size(old_cap, 2).max(MAP_INITIAL_CAP as usize);
+        let new_slot_bytes = checked_mul_size(new_cap, SLOT_SIZE);
+        let new_slots = mvl_alloc(new_slot_bytes) as *mut MvlMapSlot;
+        ptr::write_bytes(new_slots as *mut u8, 0, new_slot_bytes);
         for i in 0..old_cap {
             let old = &*(*m).slots.add(i);
             if old.occupied != 0 {
@@ -509,7 +552,7 @@ pub unsafe extern "C" fn mvl_map_insert(
                 ptr::copy_nonoverlapping(old, new_slots.add(idx), 1);
             }
         }
-        mvl_free((*m).slots as *mut u8, old_cap * SLOT_SIZE);
+        mvl_free((*m).slots as *mut u8, checked_mul_size(old_cap, SLOT_SIZE));
         (*m).slots = new_slots;
         (*m).cap = new_cap as u64;
     }
