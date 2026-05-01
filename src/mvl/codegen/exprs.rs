@@ -860,10 +860,10 @@ impl<'ctx> LlvmBackend<'ctx> {
                         }
                     }
                 }
-                // L5-15: when calling a known user-defined function, mark heap-typed
-                // value arguments as moved (ownership transfers to the callee).
-                // Borrow parameters (&T) are skipped — the caller retains ownership.
+                // L5-15 + L5-08: single lookup for user-defined function metadata.
                 if let Some(fd) = self.fn_decls.get(name).cloned() {
+                    // L5-15: mark heap-typed value arguments as moved (ownership
+                    // transfers to the callee). Borrow params (&T) are skipped.
                     for (arg, param) in args.iter().zip(fd.params.iter()) {
                         if matches!(&param.ty, crate::mvl::parser::ast::TypeExpr::Ref { .. }) {
                             continue;
@@ -882,9 +882,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                             }
                         }
                     }
-                }
-                // L5-08: generic function → monomorphize JIT and call the mangled version.
-                if let Some(fd) = self.fn_decls.get(name).cloned() {
+                    // L5-08: generic function → monomorphize JIT and call the mangled version.
                     if !fd.type_params.is_empty() {
                         // Emit all arguments first to get their concrete LLVM types.
                         let arg_vals: Vec<BasicValueEnum<'ctx>> =
