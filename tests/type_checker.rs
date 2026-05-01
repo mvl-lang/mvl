@@ -4021,10 +4021,7 @@ fn borrow_expr_mutable_type_checks() {
 
 /// Phase D (#306): AliasingMutableBorrow — creating `&mut T` while a shared `&T`
 /// borrow of the same inner type is also present in the signature.
-///
-/// TODO(#306): implement BorrowState transitions in the checker to emit this error.
 #[test]
-#[ignore = "AliasingMutableBorrow not yet emitted (TODO #306)"]
 fn shared_and_mut_ref_params_of_same_type_rejected() {
     let result = check_src("fn bad(a: &Int, b: &mut Int) -> Unit { }");
     assert!(
@@ -4037,19 +4034,13 @@ fn shared_and_mut_ref_params_of_same_type_rejected() {
     );
 }
 
-/// Phase D (#362): BorrowState transitions — `Expr::Borrow` should update
-/// `VarInfo::borrow_state` so the checker can enforce single-writer/multiple-reader.
-///
-/// TODO(#362/#366): wire BorrowState transitions in the Expr::Borrow checker arm.
+/// Phase D (#362): BorrowState transitions — `Expr::Borrow` emits `AliasingMutableBorrow`
+/// when `&mut x` is created while `x` is already borrowed.
 #[test]
-#[ignore = "BorrowState transitions not yet driven by Expr::Borrow (TODO #362/#366)"]
 fn borrow_expr_transitions_borrow_state_rejected_on_double_mut() {
     // Two simultaneous `&mut x` borrows must be rejected via BorrowState tracking.
     let result = check_src(
-        "fn f(mut x: Int) -> Unit {
-            let r1: &mut Int = &mut x
-            let r2: &mut Int = &mut x
-        }",
+        "fn f(mut x: Int) -> Unit { let r1: &mut Int = &mut x; let r2: &mut Int = &mut x; }",
     );
     assert!(
         result.errors.iter().any(|e| matches!(
@@ -4057,6 +4048,36 @@ fn borrow_expr_transitions_borrow_state_rejected_on_double_mut() {
             CheckError::AliasingMutableBorrow { .. } | CheckError::DoubleMutableBorrow { .. }
         )),
         "expected AliasingMutableBorrow or DoubleMutableBorrow, got: {:?}",
+        result.errors
+    );
+}
+
+/// Phase D (#362): `&mut T` before `&T` in params — order-independent alias check.
+/// Ensures `fn bad(b: &mut Int, a: &Int)` is rejected even when `&mut T` comes first.
+#[test]
+fn shared_and_mut_ref_params_reversed_order_rejected() {
+    let result = check_src("fn bad(b: &mut Int, a: &Int) -> Unit { }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::AliasingMutableBorrow { .. })),
+        "expected AliasingMutableBorrow for reversed param order, got: {:?}",
+        result.errors
+    );
+}
+
+/// Phase D (#362): shared borrow `&x` while `x` is mutably borrowed is rejected.
+#[test]
+fn borrow_expr_shared_of_mutably_borrowed_rejected() {
+    let result =
+        check_src("fn f(mut x: Int) -> Unit { let r1: &mut Int = &mut x; let r2: &Int = &x; }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::AliasingMutableBorrow { .. })),
+        "expected AliasingMutableBorrow for &x while x is mutably borrowed, got: {:?}",
         result.errors
     );
 }

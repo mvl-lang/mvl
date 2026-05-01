@@ -144,8 +144,6 @@ pub enum CheckError {
     /// A mutable borrow `&mut x` was requested while `x` is already borrowed
     /// (either shared or mutably).
     ///
-    /// TODO(#306): not yet emitted — requires `BorrowState` transitions in the checker.
-    #[allow(dead_code)]
     AliasingMutableBorrow {
         name: String,
         span: Span,
