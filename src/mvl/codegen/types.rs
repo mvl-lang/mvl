@@ -126,33 +126,41 @@ impl<'ctx> LlvmBackend<'ctx> {
     /// Returns None for the `Unit` / void type.
     pub(crate) fn mvl_type_to_llvm(&self, ty: &TypeExpr) -> Option<BasicTypeEnum<'ctx>> {
         match ty {
-            TypeExpr::Base { name, .. } => match name.as_str() {
-                "Int" => Some(self.context.i64_type().into()),
-                "Float" => Some(self.context.f64_type().into()),
-                "Bool" => Some(self.context.bool_type().into()),
-                "Byte" => Some(self.context.i8_type().into()),
-                "Char" => Some(self.context.i32_type().into()),
-                "Unit" => None,
-                "String" => Some(self.context.ptr_type(AddressSpace::default()).into()),
-                _ => {
-                    // Known struct type → %StructName
-                    if let Some(&st) = self.llvm_struct_types.get(name.as_str()) {
-                        return Some(st.into());
+            TypeExpr::Base { name, args, .. } => {
+                // L5-08: if this bare name is an active type-parameter substitution, use it.
+                if args.is_empty() {
+                    if let Some(&sub_ty) = self.type_subs.get(name.as_str()) {
+                        return Some(sub_ty);
                     }
-                    // Known unit enum → i8 discriminant
-                    if let Some(variants) = self.enum_variants.get(name.as_str()) {
-                        if Self::is_unit_enum_variants(variants) {
-                            return Some(self.context.i8_type().into());
-                        }
-                    }
-                    // Known payload enum → %EnumName
-                    if let Some(&st) = self.llvm_struct_types.get(name.as_str()) {
-                        return Some(st.into());
-                    }
-                    // Unknown: fall back to i64
-                    Some(self.context.i64_type().into())
                 }
-            },
+                match name.as_str() {
+                    "Int" => Some(self.context.i64_type().into()),
+                    "Float" => Some(self.context.f64_type().into()),
+                    "Bool" => Some(self.context.bool_type().into()),
+                    "Byte" => Some(self.context.i8_type().into()),
+                    "Char" => Some(self.context.i32_type().into()),
+                    "Unit" => None,
+                    "String" => Some(self.context.ptr_type(AddressSpace::default()).into()),
+                    _ => {
+                        // Known struct type → %StructName
+                        if let Some(&st) = self.llvm_struct_types.get(name.as_str()) {
+                            return Some(st.into());
+                        }
+                        // Known unit enum → i8 discriminant
+                        if let Some(variants) = self.enum_variants.get(name.as_str()) {
+                            if Self::is_unit_enum_variants(variants) {
+                                return Some(self.context.i8_type().into());
+                            }
+                        }
+                        // Known payload enum → %EnumName
+                        if let Some(&st) = self.llvm_struct_types.get(name.as_str()) {
+                            return Some(st.into());
+                        }
+                        // Unknown: fall back to i64
+                        Some(self.context.i64_type().into())
+                    }
+                }
+            }
             // Ref types fall back to ptr
             TypeExpr::Ref { .. } => Some(self.context.ptr_type(AddressSpace::default()).into()),
             // Security labels (Public[T], Secret[T], Tainted[T]) and refinements
@@ -160,12 +168,13 @@ impl<'ctx> LlvmBackend<'ctx> {
             TypeExpr::Labeled { inner, .. } | TypeExpr::Refined { inner, .. } => {
                 self.mvl_type_to_llvm(inner)
             }
-            // Result[T, E] and Option[T]: tagged union { i8, [8 x i8] }
+            // Result[T, E] and Option[T]: pointer-based tagged union { i8, ptr }.
+            // The payload is stored by pointer so any T size is supported (L5-08).
             TypeExpr::Result { .. } | TypeExpr::Option { .. } => {
-                let payload_ty = self.context.i8_type().array_type(8);
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
                 Some(
                     self.context
-                        .struct_type(&[self.context.i8_type().into(), payload_ty.into()], false)
+                        .struct_type(&[self.context.i8_type().into(), ptr_ty.into()], false)
                         .into(),
                 )
             }
@@ -191,20 +200,25 @@ impl<'ctx> LlvmBackend<'ctx> {
     /// Given an expression whose value is a `Result[T,E]` or `Option[T]`, return
     /// the LLVM type of the Ok/Some payload.  Falls back to `i64` if unknown.
     pub(crate) fn infer_result_ok_llvm_ty(&self, expr: &Expr) -> BasicTypeEnum<'ctx> {
-        if let Expr::FnCall { name, .. } = expr {
-            if let Some(ret_ty) = self.fn_return_types.get(name.as_str()) {
-                let inner = Self::strip_type_wrappers(ret_ty);
-                let payload_ty = match inner {
-                    TypeExpr::Result { ok, .. } => Some(ok.as_ref()),
-                    TypeExpr::Option {
-                        inner: opt_inner, ..
-                    } => Some(opt_inner.as_ref()),
-                    _ => None,
-                };
-                if let Some(pt) = payload_ty {
-                    if let Some(llvm_ty) = self.mvl_type_to_llvm(Self::strip_type_wrappers(pt)) {
-                        return llvm_ty;
-                    }
+        // Look up the MVL return/annotation type for this expression.
+        let mvl_ty: Option<&TypeExpr> = match expr {
+            Expr::FnCall { name, .. } => self.fn_return_types.get(name.as_str()),
+            // L5-08: for local variable scrutinees, use the annotation stored at let-binding.
+            Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()),
+            _ => None,
+        };
+        if let Some(ret_ty) = mvl_ty {
+            let inner = Self::strip_type_wrappers(ret_ty);
+            let payload_ty = match inner {
+                TypeExpr::Result { ok, .. } => Some(ok.as_ref()),
+                TypeExpr::Option {
+                    inner: opt_inner, ..
+                } => Some(opt_inner.as_ref()),
+                _ => None,
+            };
+            if let Some(pt) = payload_ty {
+                if let Some(llvm_ty) = self.mvl_type_to_llvm(Self::strip_type_wrappers(pt)) {
+                    return llvm_ty;
                 }
             }
         }

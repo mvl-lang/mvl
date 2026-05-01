@@ -45,7 +45,11 @@ impl<'ctx> LlvmBackend<'ctx> {
                 };
                 let alloca = self.builder.build_alloca(llvm_ty, &name).unwrap();
                 self.builder.build_store(alloca, val).unwrap();
-                self.locals.insert(name, (alloca, llvm_ty));
+                self.locals.insert(name.clone(), (alloca, llvm_ty));
+                // L5-08: record MVL type annotation for Ok/Some payload inference.
+                if let Some(type_expr) = ty {
+                    self.local_mvl_types.insert(name, type_expr.clone());
+                }
                 None
             }
             Stmt::Return { value, .. } => {
@@ -433,7 +437,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                 let BasicValueEnum::StructValue(sv) = scrutinee else {
                     return;
                 };
-                let payload = match self.builder.build_extract_value(sv, 1, "payload") {
+                // L5-08: layout is {i8, ptr} — field 1 is a pointer to the payload value.
+                let payload_ptr_val = match self.builder.build_extract_value(sv, 1, "payload_ptr") {
                     Ok(v) => v,
                     Err(_) => return,
                 };
@@ -442,13 +447,11 @@ impl<'ctx> LlvmBackend<'ctx> {
                 } else {
                     ok_llvm_ty
                 };
-                let payload_ty = payload.get_type();
-                let tmp = self
+                let payload_ptr = payload_ptr_val.into_pointer_value();
+                let loaded = self
                     .builder
-                    .build_alloca(payload_ty, "res_payload_tmp")
+                    .build_load(llvm_ty, payload_ptr, bind_name)
                     .unwrap();
-                self.builder.build_store(tmp, payload).unwrap();
-                let loaded = self.builder.build_load(llvm_ty, tmp, bind_name).unwrap();
                 let alloca = self.builder.build_alloca(llvm_ty, bind_name).unwrap();
                 self.builder.build_store(alloca, loaded).unwrap();
                 self.locals.insert(bind_name.clone(), (alloca, llvm_ty));
@@ -468,12 +471,13 @@ impl<'ctx> LlvmBackend<'ctx> {
             };
 
             // Built-in Result/Option variants: Ok(v), Some(v) → ok_llvm_ty; Err(e) → ptr.
+            // L5-08: layout is {i8, ptr} — field 1 is a pointer to the payload value.
             if matches!(name.as_str(), "Ok" | "Some" | "Err") {
                 let bind_name = match fields.first() {
                     Some(Pattern::Ident(n, _)) => n.clone(),
                     _ => return,
                 };
-                let payload_arr = match self.builder.build_extract_value(sv, 1, "payload") {
+                let payload_ptr_val = match self.builder.build_extract_value(sv, 1, "payload_ptr") {
                     Ok(v) => v,
                     Err(_) => return,
                 };
@@ -482,13 +486,11 @@ impl<'ctx> LlvmBackend<'ctx> {
                 } else {
                     ok_llvm_ty
                 };
-                let payload_arr_ty = payload_arr.get_type();
-                let tmp = self
+                let payload_ptr = payload_ptr_val.into_pointer_value();
+                let loaded = self
                     .builder
-                    .build_alloca(payload_arr_ty, "res_payload_tmp")
+                    .build_load(llvm_ty, payload_ptr, &bind_name)
                     .unwrap();
-                self.builder.build_store(tmp, payload_arr).unwrap();
-                let loaded = self.builder.build_load(llvm_ty, tmp, &bind_name).unwrap();
                 let alloca = self.builder.build_alloca(llvm_ty, &bind_name).unwrap();
                 self.builder.build_store(alloca, loaded).unwrap();
                 self.locals.insert(bind_name, (alloca, llvm_ty));

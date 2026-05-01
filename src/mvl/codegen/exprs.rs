@@ -99,6 +99,11 @@ impl<'ctx> LlvmBackend<'ctx> {
             return Some(val);
         }
 
+        // L5-08: None as an expression → { disc=1, payload=null_ptr }
+        if name == "None" {
+            return self.emit_none_val();
+        }
+
         // L5-06: unqualified unit enum variant (e.g. `Circle` without `Shape::`).
         let found = self.enum_variants.iter().find_map(|(etype, variants)| {
             variants
@@ -424,16 +429,19 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     // ── Result/Option construction ────────────────────────────────────────────
 
-    /// Emit `Ok(val)` (disc=0) or `Err(val)` (disc=1) as a tagged union `{i8, [8 x i8]}`.
+    /// Emit `Ok(val)` (disc=0), `Some(val)` (disc=0), or `Err(val)` (disc=1).
+    ///
+    /// Layout: `{ i8 disc, ptr payload }` where payload points to a stack alloca of the value.
+    /// This pointer-based approach supports any payload size (L5-08).
     pub(crate) fn emit_result_variant(
         &mut self,
         disc: u64,
         args: &[Expr],
     ) -> Option<BasicValueEnum<'ctx>> {
-        let payload_ty = self.context.i8_type().array_type(8);
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let result_ty = self
             .context
-            .struct_type(&[self.context.i8_type().into(), payload_ty.into()], false);
+            .struct_type(&[self.context.i8_type().into(), ptr_ty.into()], false);
         let alloca = self.builder.build_alloca(result_ty, "res_tmp").unwrap();
 
         // Store discriminant.
@@ -444,15 +452,25 @@ impl<'ctx> LlvmBackend<'ctx> {
             .unwrap();
         self.builder.build_store(disc_ptr, disc_val).unwrap();
 
-        // Store payload value.
+        // Store payload via pointer: alloca the value, store it, save ptr at field 1.
+        let payload_slot = self
+            .builder
+            .build_struct_gep(result_ty, alloca, 1, "res_payload_slot")
+            .unwrap();
         if let Some(arg) = args.first() {
             if let Some(val) = self.emit_expr(arg) {
-                let payload_ptr = self
+                let val_alloca = self
                     .builder
-                    .build_struct_gep(result_ty, alloca, 1, "res_payload")
+                    .build_alloca(val.get_type(), "payload_tmp")
                     .unwrap();
-                self.builder.build_store(payload_ptr, val).unwrap();
+                self.builder.build_store(val_alloca, val).unwrap();
+                self.builder.build_store(payload_slot, val_alloca).unwrap();
             }
+        } else {
+            // No payload (e.g. unit Err) — store null.
+            self.builder
+                .build_store(payload_slot, ptr_ty.const_null())
+                .unwrap();
         }
 
         Some(
@@ -496,16 +514,17 @@ impl<'ctx> LlvmBackend<'ctx> {
         self.builder.position_at_end(err_bb);
         self.builder.build_return(Some(&result_val)).unwrap();
 
-        // Ok branch: extract payload and yield with the correct type.
+        // Ok branch: extract payload ptr (field 1) and load the actual value.
         self.builder.position_at_end(ok_bb);
-        let payload = self
+        let payload_ptr_val = self
             .builder
-            .build_extract_value(sv, 1, "prop_payload")
+            .build_extract_value(sv, 1, "prop_payload_ptr")
             .ok()?;
-        let payload_ty = payload.get_type();
-        let tmp = self.builder.build_alloca(payload_ty, "prop_tmp").unwrap();
-        self.builder.build_store(tmp, payload).unwrap();
-        let ok_val = self.builder.build_load(ok_ty, tmp, "prop_ok_val").unwrap();
+        let payload_ptr = payload_ptr_val.into_pointer_value();
+        let ok_val = self
+            .builder
+            .build_load(ok_ty, payload_ptr, "prop_ok_val")
+            .unwrap();
         Some(ok_val)
     }
 
@@ -824,6 +843,26 @@ impl<'ctx> LlvmBackend<'ctx> {
                                 args,
                             );
                         }
+                    }
+                }
+                // L5-08: generic function → monomorphize JIT and call the mangled version.
+                if let Some(fd) = self.fn_decls.get(name).cloned() {
+                    if !fd.type_params.is_empty() {
+                        // Emit all arguments first to get their concrete LLVM types.
+                        let arg_vals: Vec<BasicValueEnum<'ctx>> =
+                            args.iter().filter_map(|a| self.emit_expr(a)).collect();
+                        if arg_vals.len() != args.len() {
+                            return None;
+                        }
+                        let type_subs = self.infer_type_subs(&fd, &arg_vals);
+                        let mangled = self.mangle_fn_name(&fd, &type_subs);
+                        self.ensure_monomorphized(fd, type_subs, &mangled.clone());
+                        let fn_val = self.module.get_function(&mangled)?;
+                        let meta_args: Vec<inkwell::values::BasicMetadataValueEnum> =
+                            arg_vals.iter().map(|v| (*v).into()).collect();
+                        let call = self.builder.build_call(fn_val, &meta_args, "call").unwrap();
+                        use inkwell::values::AnyValue;
+                        return BasicValueEnum::try_from(call.as_any_value_enum()).ok();
                     }
                 }
                 // Forward call to a user-defined function (already declared).
@@ -1222,15 +1261,15 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
     }
 
-    /// Build a `Some(val)` tagged union `{ i8 disc=0, [8 x i8] payload }`.
+    /// Build a `Some(val)` tagged union `{ i8 disc=0, ptr }` (L5-08 pointer layout).
     pub(crate) fn emit_some_from_val(
         &mut self,
         val: BasicValueEnum<'ctx>,
     ) -> Option<BasicValueEnum<'ctx>> {
-        let payload_ty = self.context.i8_type().array_type(8);
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let result_ty = self
             .context
-            .struct_type(&[self.context.i8_type().into(), payload_ty.into()], false);
+            .struct_type(&[self.context.i8_type().into(), ptr_ty.into()], false);
         let alloca = self.builder.build_alloca(result_ty, "some_tmp").unwrap();
         let disc_ptr = self
             .builder
@@ -1239,11 +1278,16 @@ impl<'ctx> LlvmBackend<'ctx> {
         self.builder
             .build_store(disc_ptr, self.context.i8_type().const_int(0, false))
             .unwrap();
-        let payload_ptr = self
+        let val_alloca = self
+            .builder
+            .build_alloca(val.get_type(), "some_payload_tmp")
+            .unwrap();
+        self.builder.build_store(val_alloca, val).unwrap();
+        let payload_slot = self
             .builder
             .build_struct_gep(result_ty, alloca, 1, "some_payload")
             .unwrap();
-        self.builder.build_store(payload_ptr, val).unwrap();
+        self.builder.build_store(payload_slot, val_alloca).unwrap();
         Some(
             self.builder
                 .build_load(result_ty, alloca, "some_val")
@@ -1251,12 +1295,12 @@ impl<'ctx> LlvmBackend<'ctx> {
         )
     }
 
-    /// Build a `None` tagged union `{ i8 disc=1, [8 x i8] payload=undef }`.
+    /// Build a `None` tagged union `{ i8 disc=1, ptr=null }` (L5-08 pointer layout).
     pub(crate) fn emit_none_val(&mut self) -> Option<BasicValueEnum<'ctx>> {
-        let payload_ty = self.context.i8_type().array_type(8);
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let result_ty = self
             .context
-            .struct_type(&[self.context.i8_type().into(), payload_ty.into()], false);
+            .struct_type(&[self.context.i8_type().into(), ptr_ty.into()], false);
         let alloca = self.builder.build_alloca(result_ty, "none_tmp").unwrap();
         let disc_ptr = self
             .builder
@@ -1264,6 +1308,13 @@ impl<'ctx> LlvmBackend<'ctx> {
             .unwrap();
         self.builder
             .build_store(disc_ptr, self.context.i8_type().const_int(1, false))
+            .unwrap();
+        let payload_slot = self
+            .builder
+            .build_struct_gep(result_ty, alloca, 1, "none_payload")
+            .unwrap();
+        self.builder
+            .build_store(payload_slot, ptr_ty.const_null())
             .unwrap();
         Some(
             self.builder

@@ -160,6 +160,9 @@ pub struct FnInfo {
     pub effects: Vec<Effect>,
     /// Totality annotation (Req 8): None = implicitly total, Some(Partial) = partial.
     pub totality: Option<Totality>,
+    /// Type parameter names declared on this function (e.g. `T` in `fn f[T](...)`).
+    /// Non-empty iff the function is generic; used to skip argument type checking at call sites.
+    pub type_params: HashSet<String>,
 }
 
 // ── Type environment ─────────────────────────────────────────────────────────
@@ -230,6 +233,7 @@ impl TypeEnv {
                 ret: Ty::Unit,
                 effects: vec![Effect::new("Console", Span::new(0, 0, 0, 0))],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         self.fns.insert(
@@ -239,6 +243,7 @@ impl TypeEnv {
                 ret: Ty::Unit,
                 effects: vec![Effect::new("Console", Span::new(0, 0, 0, 0))],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // assert_eq — pure, for testing.
@@ -252,6 +257,7 @@ impl TypeEnv {
                 ret: Ty::Unit,
                 effects: vec![],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // Standard math functions — pure, variadic (arity checked by special-case)
@@ -262,6 +268,7 @@ impl TypeEnv {
                 ret: Ty::Int,
                 effects: vec![],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         self.fns.insert(
@@ -271,6 +278,7 @@ impl TypeEnv {
                 ret: Ty::Int,
                 effects: vec![],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         self.fns.insert(
@@ -280,6 +288,7 @@ impl TypeEnv {
                 ret: Ty::Int,
                 effects: vec![],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // parse_int — converts String to Result<Int, String>; variadic-flagged to skip arity check
@@ -290,6 +299,7 @@ impl TypeEnv {
                 ret: Ty::Result(Box::new(Ty::Int), Box::new(Ty::String)),
                 effects: vec![],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // format — string interpolation, variadic (template + args), pure
@@ -300,6 +310,7 @@ impl TypeEnv {
                 ret: Ty::String,
                 effects: vec![],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // range(start, end) — generates [start, start+1, …, end-1] (exclusive upper bound)
@@ -310,6 +321,7 @@ impl TypeEnv {
                 ret: Ty::List(Box::new(Ty::Int)),
                 effects: vec![],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // Time — std.time: Instant, DateTime, Duration types + functions (#46)
@@ -330,6 +342,7 @@ impl TypeEnv {
                 ret: Ty::Named("Instant".into(), vec![]),
                 effects: vec![Effect::new("Clock", Span::new(0, 0, 0, 0))],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // sleep(d: Duration) -> Unit ! Clock
@@ -340,6 +353,7 @@ impl TypeEnv {
                 ret: Ty::Unit,
                 effects: vec![Effect::new("Clock", Span::new(0, 0, 0, 0))],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // format_instant(t: Instant, fmt: String) -> String — pure
@@ -350,6 +364,7 @@ impl TypeEnv {
                 ret: Ty::String,
                 effects: vec![],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // format_datetime(t: DateTime, fmt: String) -> String — pure
@@ -360,6 +375,7 @@ impl TypeEnv {
                 ret: Ty::String,
                 effects: vec![],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // parse(s: String, fmt: String) -> Option<DateTime> — pure
@@ -370,6 +386,7 @@ impl TypeEnv {
                 ret: Ty::Option(Box::new(Ty::Named("DateTime".into(), vec![]))),
                 effects: vec![],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // seconds(n: Int) -> Duration — pure
@@ -380,6 +397,7 @@ impl TypeEnv {
                 ret: Ty::Named("Duration".into(), vec![]),
                 effects: vec![],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // millis(n: Int) -> Duration — pure
@@ -390,6 +408,7 @@ impl TypeEnv {
                 ret: Ty::Named("Duration".into(), vec![]),
                 effects: vec![],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // Regex — std.regex: Regex, Match, Captures types + functions (#46)
@@ -414,6 +433,7 @@ impl TypeEnv {
                 ),
                 effects: vec![],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // find(re: Regex, s: String) -> Option<Match> — pure
@@ -424,6 +444,7 @@ impl TypeEnv {
                 ret: Ty::Option(Box::new(Ty::Named("Match".into(), vec![]))),
                 effects: vec![],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // find_all(re: Regex, s: String) -> List<Match> — pure
@@ -434,6 +455,7 @@ impl TypeEnv {
                 ret: Ty::List(Box::new(Ty::Named("Match".into(), vec![]))),
                 effects: vec![],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // replace(re: Regex, s: String, replacement: String) -> String — pure
@@ -444,6 +466,7 @@ impl TypeEnv {
                 ret: Ty::String,
                 effects: vec![],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // captures(re: Regex, s: String) -> Option<Captures> — pure
@@ -454,6 +477,7 @@ impl TypeEnv {
                 ret: Ty::Option(Box::new(Ty::Named("Captures".into(), vec![]))),
                 effects: vec![],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // JSON — std.json: Value enum, encode(), decode() (#46)
@@ -485,6 +509,7 @@ impl TypeEnv {
                 ret: Ty::String,
                 effects: vec![],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // decode(s: String) -> Result<Value, String> — pure
@@ -499,6 +524,7 @@ impl TypeEnv {
                 ),
                 effects: vec![],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // Random — std.random: int(), float(), bytes(), choice(), shuffle() (#46)
@@ -510,6 +536,7 @@ impl TypeEnv {
                 ret: Ty::Int,
                 effects: vec![Effect::new("Random", Span::new(0, 0, 0, 0))],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         self.fns.insert(
@@ -519,6 +546,7 @@ impl TypeEnv {
                 ret: Ty::Float,
                 effects: vec![Effect::new("Random", Span::new(0, 0, 0, 0))],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         self.fns.insert(
@@ -528,6 +556,7 @@ impl TypeEnv {
                 ret: Ty::List(Box::new(Ty::Int)),
                 effects: vec![Effect::new("Random", Span::new(0, 0, 0, 0))],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // choice(items: List<T>) -> Option<T> — variadic-flagged to skip arity/type check
@@ -538,6 +567,7 @@ impl TypeEnv {
                 ret: Ty::Option(Box::new(Ty::Unknown)),
                 effects: vec![Effect::new("Random", Span::new(0, 0, 0, 0))],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // shuffle(items: List<T>) -> List<T> — variadic-flagged to skip arity/type check
@@ -548,6 +578,7 @@ impl TypeEnv {
                 ret: Ty::List(Box::new(Ty::Unknown)),
                 effects: vec![Effect::new("Random", Span::new(0, 0, 0, 0))],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // Crypto — std.crypto (no import required at tier-1)
@@ -559,6 +590,7 @@ impl TypeEnv {
                 ret: Ty::String,
                 effects: vec![],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         self.fns.insert(
@@ -568,6 +600,7 @@ impl TypeEnv {
                 ret: Ty::String,
                 effects: vec![],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // crypto_random_bytes requires ! CryptoRandom; returns Secret<List<Int>>
@@ -578,6 +611,7 @@ impl TypeEnv {
                 ret: Ty::Labeled(SecurityLabel::Secret, Box::new(Ty::List(Box::new(Ty::Int)))),
                 effects: vec![Effect::new("CryptoRandom", Span::new(0, 0, 0, 0))],
                 totality: None,
+                type_params: HashSet::new(),
             },
         );
         // std.log — structured logging with ! Log effect (#54, 003-information-flow Req 6).
@@ -594,6 +628,7 @@ impl TypeEnv {
                     ret: Ty::Unit,
                     effects: vec![Effect::new("Log", Span::new(0, 0, 0, 0))],
                     totality: None,
+                    type_params: HashSet::new(),
                 },
             );
         }
