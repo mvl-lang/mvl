@@ -12,7 +12,7 @@ use crate::mvl::parser::ast::{
     BinaryOp, Block, Expr, LValue, Literal, TypeExpr, UnaryOp, VariantFields,
 };
 
-use super::LlvmBackend;
+use super::{stmts, LlvmBackend};
 
 impl<'ctx> LlvmBackend<'ctx> {
     // ── Expression emission ──────────────────────────────────────────────────
@@ -860,8 +860,29 @@ impl<'ctx> LlvmBackend<'ctx> {
                         }
                     }
                 }
-                // L5-08: generic function → monomorphize JIT and call the mangled version.
+                // L5-15 + L5-08: single lookup for user-defined function metadata.
                 if let Some(fd) = self.fn_decls.get(name).cloned() {
+                    // L5-15: mark heap-typed value arguments as moved (ownership
+                    // transfers to the callee). Borrow params (&T) are skipped.
+                    for (arg, param) in args.iter().zip(fd.params.iter()) {
+                        if matches!(&param.ty, crate::mvl::parser::ast::TypeExpr::Ref { .. }) {
+                            continue;
+                        }
+                        if stmts::heap_kind_of(&param.ty).is_some() {
+                            let src = match arg {
+                                Expr::Ident(s, _) => Some(s.as_str()),
+                                Expr::Move { expr, .. } => match expr.as_ref() {
+                                    Expr::Ident(s, _) => Some(s.as_str()),
+                                    _ => None,
+                                },
+                                _ => None,
+                            };
+                            if let Some(src) = src {
+                                self.heap_locals.remove(src);
+                            }
+                        }
+                    }
+                    // L5-08: generic function → monomorphize JIT and call the mangled version.
                     if !fd.type_params.is_empty() {
                         // Emit all arguments first to get their concrete LLVM types.
                         let arg_vals: Vec<BasicValueEnum<'ctx>> =

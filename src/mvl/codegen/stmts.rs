@@ -52,12 +52,27 @@ impl<'ctx> LlvmBackend<'ctx> {
                 // L5-08: record MVL type annotation for Ok/Some payload inference.
                 if let Some(type_expr) = ty {
                     self.local_mvl_types.insert(name.clone(), type_expr.clone());
-                    // L5-14: track heap-allocated collection locals for drop at function exit.
-                    if let Some(kind) = heap_kind_of(type_expr) {
-                        // Only register if the value is a pointer (heap collection).
-                        if matches!(llvm_ty, BasicTypeEnum::PointerType(_)) {
-                            self.heap_locals.insert(name, kind);
-                        }
+                }
+                // L5-15: ownership transfer for heap moves.
+                // If init is a bare identifier or move(ident), transfer ownership from
+                // the source variable — remove it from heap_locals so it is not dropped
+                // at the original scope exit (the new binding becomes the sole owner).
+                let move_src_kind = {
+                    let src = match init {
+                        Expr::Ident(src, _) => Some(src.as_str()),
+                        Expr::Move { expr, .. } => match expr.as_ref() {
+                            Expr::Ident(src, _) => Some(src.as_str()),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    src.and_then(|s| self.heap_locals.remove(s))
+                };
+                // Register new binding: prefer the transferred kind, fall back to type annotation.
+                let heap_kind = move_src_kind.or_else(|| ty.as_ref().and_then(heap_kind_of));
+                if let Some(kind) = heap_kind {
+                    if matches!(llvm_ty, BasicTypeEnum::PointerType(_)) {
+                        self.heap_locals.insert(name, kind);
                     }
                 }
                 None
@@ -111,6 +126,20 @@ impl<'ctx> LlvmBackend<'ctx> {
                                 }
                             }
                             self.builder.build_store(alloca, val).unwrap();
+                            // L5-15: if RHS is a heap variable being moved, transfer
+                            // ownership — remove it from heap_locals so it is not dropped
+                            // twice (the target n is already tracked and will drop it).
+                            let move_src = match value {
+                                Expr::Ident(src, _) => Some(src.as_str()),
+                                Expr::Move { expr, .. } => match expr.as_ref() {
+                                    Expr::Ident(src, _) => Some(src.as_str()),
+                                    _ => None,
+                                },
+                                _ => None,
+                            };
+                            if let Some(src) = move_src.filter(|&s| s != n.as_str()) {
+                                self.heap_locals.remove(src);
+                            }
                         }
                     }
                     LValue::Field { base, field, .. } => {

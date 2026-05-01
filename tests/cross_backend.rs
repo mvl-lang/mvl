@@ -147,3 +147,17 @@ fn llvm_string_heap() {
     let file = corpus_types("string_heap_llvm.mvl");
     assert_llvm_output(&file, "5\nhello world\n11");
 }
+
+// ── L5-15: ownership-based drop (LLVM-only) ───────────────────────────────────
+
+#[test]
+fn llvm_move_string() {
+    let file = corpus_types("move_string_llvm.mvl");
+    assert_llvm_output(&file, "hello\nworld");
+}
+
+#[test]
+fn llvm_fn_takes_string() {
+    let file = corpus_types("fn_takes_string_llvm.mvl");
+    assert_llvm_output(&file, "hello world");
+}
