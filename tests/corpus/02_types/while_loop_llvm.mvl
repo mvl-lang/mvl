@@ -6,7 +6,7 @@
 // expect: 3
 // expect: 4
 
-fn main() -> Unit ! Console {
+partial fn main() -> Unit ! Console {
     let mut i = 0;
     while i < 5 {
         println(i);
