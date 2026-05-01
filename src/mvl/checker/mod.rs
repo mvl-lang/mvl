@@ -245,6 +245,11 @@ impl TypeChecker {
     fn register_fn(&mut self, fd: &FnDecl) {
         let params: Vec<Ty> = fd.params.iter().map(|p| resolve(&p.ty)).collect();
         let ret = resolve(&fd.return_type);
+        let type_params = fd
+            .type_params
+            .iter()
+            .map(|p| p.name().to_string())
+            .collect();
         self.env.define_fn(
             fd.name.clone(),
             FnInfo {
@@ -252,6 +257,7 @@ impl TypeChecker {
                 ret,
                 effects: fd.effects.clone(),
                 totality: fd.totality.clone(),
+                type_params,
             },
         );
     }
@@ -270,7 +276,8 @@ impl TypeChecker {
                     params,
                     ret,
                     effects: f.effects.clone(),
-                    totality: None, // extern fns may or may not terminate
+                    totality: None,
+                    type_params: HashSet::new(), // extern fns may or may not terminate
                 },
             );
         }
@@ -1613,7 +1620,11 @@ impl TypeChecker {
                     | "log_warn"
                     | "log_error"
             );
-            if !is_variadic_builtin && fn_info.params.len() != arg_tys.len() {
+            // L5-08: Generic functions are monomorphized at the LLVM level.
+            // Skip arity and type checking at call sites; the LLVM backend handles
+            // concrete type dispatch.
+            let is_generic = !fn_info.type_params.is_empty();
+            if !is_variadic_builtin && !is_generic && fn_info.params.len() != arg_tys.len() {
                 self.emit(CheckError::WrongArgCount {
                     name: name.to_string(),
                     expected: fn_info.params.len(),
@@ -1622,7 +1633,7 @@ impl TypeChecker {
                 });
                 return fn_info.ret.clone();
             }
-            if !is_variadic_builtin {
+            if !is_variadic_builtin && !is_generic {
                 for (i, (expected, found)) in fn_info.params.iter().zip(arg_tys.iter()).enumerate()
                 {
                     if !types_compatible(expected, found) {
@@ -1680,6 +1691,12 @@ impl TypeChecker {
                     .iter()
                     .fold(None, |acc, ty| ifc::join_opt(acc, ifc::label_of(ty)));
                 return ifc::apply_label(arg_label, fn_info.ret.clone());
+            }
+            // L5-08: for generic functions the declared return type is a type-parameter
+            // name (e.g. `T`), not a concrete type.  Return Unknown so the call site
+            // unifies freely with any annotation or context type.
+            if is_generic {
+                return Ty::Unknown;
             }
             fn_info.ret.clone()
         } else {

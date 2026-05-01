@@ -29,7 +29,7 @@ use inkwell::{
     values::{BasicValueEnum, FunctionValue, PointerValue},
     AddressSpace,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::mvl::parser::ast::{Decl, ExternDecl, ExternFnDecl, FnDecl, Program, TypeExpr};
 
@@ -177,6 +177,19 @@ struct LlvmBackend<'ctx> {
     /// Return types of user-defined functions (name → MVL TypeExpr).
     /// Used to determine the Ok/Some payload type when extracting from Result/Option.
     fn_return_types: HashMap<String, TypeExpr>,
+
+    // ── L5-08: generic monomorphization ─────────────────────────────────────
+    /// All user function declarations (cloned), keyed by name.
+    /// Needed to emit monomorphized bodies on demand at call sites.
+    fn_decls: HashMap<String, FnDecl>,
+    /// Active type-parameter substitutions during monomorphized function emission.
+    /// Maps type-param name (e.g. "T") → concrete LLVM type.
+    type_subs: HashMap<String, BasicTypeEnum<'ctx>>,
+    /// Mangled names of already-emitted monomorphized functions (prevents duplicate emission).
+    emitted_monomorphs: HashSet<String>,
+    /// MVL TypeExpr for each local variable that has an explicit type annotation.
+    /// Used to infer the Ok/Some payload type when the scrutinee is a local variable.
+    local_mvl_types: HashMap<String, TypeExpr>,
 }
 
 impl<'ctx> LlvmBackend<'ctx> {
@@ -197,6 +210,10 @@ impl<'ctx> LlvmBackend<'ctx> {
             struct_fields: HashMap::new(),
             llvm_struct_types: HashMap::new(),
             fn_return_types: HashMap::new(),
+            fn_decls: HashMap::new(),
+            type_subs: HashMap::new(),
+            emitted_monomorphs: HashSet::new(),
+            local_mvl_types: HashMap::new(),
         }
     }
 
@@ -211,14 +228,18 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
         self.build_llvm_types();
 
-        // First pass: record return types, then declare all functions so forward calls resolve.
+        // First pass: record return types and declarations; pre-declare non-generic functions
+        // so forward calls resolve.  Generic functions are emitted on-demand at call sites.
         // Also pre-declare extern fn signatures so calls from fn bodies resolve correctly.
         for decl in &prog.declarations {
             if let Decl::Fn(fd) = decl {
                 if !fd.is_test {
                     self.fn_return_types
                         .insert(fd.name.clone(), *fd.return_type.clone());
-                    self.declare_fn(fd);
+                    self.fn_decls.insert(fd.name.clone(), fd.clone());
+                    if fd.type_params.is_empty() {
+                        self.declare_fn(fd);
+                    }
                 }
             }
             if let Decl::Extern(ext) = decl {
@@ -243,10 +264,11 @@ impl<'ctx> LlvmBackend<'ctx> {
                 }
             }
         }
-        // Second pass: emit bodies.
+        // Second pass: emit bodies for non-generic functions only.
+        // Generic functions are emitted on-demand when their call sites are reached.
         for decl in &prog.declarations {
             if let Decl::Fn(fd) = decl {
-                if !fd.is_test {
+                if !fd.is_test && fd.type_params.is_empty() {
                     self.emit_fn(fd);
                 }
             }
@@ -424,6 +446,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
         self.locals.clear();
+        self.local_mvl_types.clear();
         self.terminated = false;
         self.current_fn = Some(fn_val);
 
@@ -436,6 +459,9 @@ impl<'ctx> LlvmBackend<'ctx> {
                     self.builder.build_store(alloca, param_val).unwrap();
                     self.locals.insert(param.name.clone(), (alloca, ty));
                 }
+                // L5-08: record MVL type for Ok/Some payload inference in match arms.
+                self.local_mvl_types
+                    .insert(param.name.clone(), param.ty.clone());
             }
         }
 
@@ -457,6 +483,164 @@ impl<'ctx> LlvmBackend<'ctx> {
                 //   instead of relying on the IR verifier's opaque error message.
                 self.builder.build_return(None).unwrap();
             }
+        }
+    }
+
+    // ── L5-08: generic monomorphization ──────────────────────────────────────
+
+    /// Emit a function body using an explicit LLVM name (used for monomorphized instances).
+    ///
+    /// Identical to `emit_fn` but never treats the function as C `main`.
+    fn emit_fn_named(&mut self, fd: &FnDecl, name: &str) {
+        let fn_val = match self.module.get_function(name) {
+            Some(f) => f,
+            None => {
+                let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = fd
+                    .params
+                    .iter()
+                    .filter_map(|p| self.mvl_type_to_llvm(&p.ty))
+                    .map(|t| t.into())
+                    .collect();
+                let fn_ty = if self.is_unit_type(&fd.return_type) {
+                    self.context.void_type().fn_type(&param_types, false)
+                } else if let Some(ret) = self.mvl_type_to_llvm(&fd.return_type) {
+                    ret.fn_type(&param_types, false)
+                } else {
+                    self.context.void_type().fn_type(&param_types, false)
+                };
+                self.module.add_function(name, fn_ty, None)
+            }
+        };
+
+        let entry = self.context.append_basic_block(fn_val, "entry");
+        self.builder.position_at_end(entry);
+        self.locals.clear();
+        self.local_mvl_types.clear();
+        self.terminated = false;
+        self.current_fn = Some(fn_val);
+
+        for (i, param) in fd.params.iter().enumerate() {
+            if let Some(param_val) = fn_val.get_nth_param(i as u32) {
+                param_val.set_name(&param.name);
+                if let Some(ty) = self.mvl_type_to_llvm(&param.ty) {
+                    let alloca = self.builder.build_alloca(ty, &param.name).unwrap();
+                    self.builder.build_store(alloca, param_val).unwrap();
+                    self.locals.insert(param.name.clone(), (alloca, ty));
+                }
+                // L5-08: record MVL type for Ok/Some payload inference in match arms.
+                self.local_mvl_types
+                    .insert(param.name.clone(), param.ty.clone());
+            }
+        }
+
+        let body_val = self.emit_block(&fd.body);
+
+        if !self.terminated {
+            if self.is_unit_type(&fd.return_type) {
+                self.builder.build_return(None).unwrap();
+            } else if let Some(val) = body_val {
+                self.builder.build_return(Some(&val)).unwrap();
+            } else {
+                self.builder.build_return(None).unwrap();
+            }
+        }
+    }
+
+    /// Emit a monomorphized copy of `fd` with the given type-parameter substitutions,
+    /// using `mangled_name` as the LLVM symbol.  No-ops if already emitted.
+    fn ensure_monomorphized(
+        &mut self,
+        fd: FnDecl,
+        type_subs: HashMap<String, BasicTypeEnum<'ctx>>,
+        mangled_name: &str,
+    ) {
+        if self.emitted_monomorphs.contains(mangled_name) {
+            return;
+        }
+        self.emitted_monomorphs.insert(mangled_name.to_string());
+
+        // Save builder insert point and per-function state.
+        let saved_block = self.builder.get_insert_block();
+        let saved_subs = std::mem::replace(&mut self.type_subs, type_subs);
+        let saved_locals = std::mem::take(&mut self.locals);
+        let saved_mvl_types = std::mem::take(&mut self.local_mvl_types);
+        let saved_terminated = self.terminated;
+        let saved_fn = self.current_fn;
+
+        self.emit_fn_named(&fd, mangled_name);
+
+        // Restore state.
+        self.type_subs = saved_subs;
+        self.locals = saved_locals;
+        self.local_mvl_types = saved_mvl_types;
+        self.terminated = saved_terminated;
+        self.current_fn = saved_fn;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+    }
+
+    /// Infer type-parameter substitutions for `fd` from the LLVM types of `arg_vals`.
+    ///
+    /// For each parameter whose MVL type is a bare type-parameter name (e.g. `T`),
+    /// records the concrete LLVM type of the corresponding argument.
+    pub(crate) fn infer_type_subs(
+        &self,
+        fd: &FnDecl,
+        arg_vals: &[BasicValueEnum<'ctx>],
+    ) -> HashMap<String, BasicTypeEnum<'ctx>> {
+        let mut subs = HashMap::new();
+        for (param, val) in fd.params.iter().zip(arg_vals.iter()) {
+            if let TypeExpr::Base { name, args, .. } = &param.ty {
+                if args.is_empty() && fd.type_params.iter().any(|tp| tp.name() == name.as_str()) {
+                    subs.insert(name.clone(), val.get_type());
+                }
+            }
+        }
+        subs
+    }
+
+    /// Produce a mangled LLVM name for a generic function given its type substitutions.
+    ///
+    /// Example: `identity` with `T=i64` → `identity_Int`.
+    pub(crate) fn mangle_fn_name(
+        &self,
+        fd: &FnDecl,
+        type_subs: &HashMap<String, BasicTypeEnum<'ctx>>,
+    ) -> String {
+        let suffix: Vec<String> = fd
+            .type_params
+            .iter()
+            .filter_map(|tp| {
+                type_subs
+                    .get(tp.name())
+                    .map(|ty| self.llvm_type_mvl_name(*ty))
+            })
+            .collect();
+        if suffix.is_empty() {
+            fd.name.clone()
+        } else {
+            format!("{}_{}", fd.name, suffix.join("_"))
+        }
+    }
+
+    /// Human-readable MVL type name for an LLVM type, used in name mangling.
+    pub(crate) fn llvm_type_mvl_name(&self, ty: BasicTypeEnum<'ctx>) -> String {
+        match ty {
+            BasicTypeEnum::IntType(it) => match it.get_bit_width() {
+                1 => "Bool".into(),
+                8 => "Byte".into(),
+                32 => "Char".into(),
+                64 => "Int".into(),
+                _ => format!("i{}", it.get_bit_width()),
+            },
+            BasicTypeEnum::FloatType(_) => "Float".into(),
+            BasicTypeEnum::PointerType(_) => "Ptr".into(),
+            BasicTypeEnum::StructType(st) => st
+                .get_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Struct".into()),
+            _ => "Unknown".into(),
         }
     }
 
