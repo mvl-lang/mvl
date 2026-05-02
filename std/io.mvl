@@ -9,8 +9,6 @@
 //                          create_symlink, read_link,
 //                          stdin, stdin_read_line, stdin_read_to_string}
 //
-// Phase 2: function stubs with correct signatures and effects.
-// Types are opaque structs until Phase 3 compiles stdlib from source.
 //
 // Design: Four effect levels for I/O operations:
 //   - ! FileRead   — reading from files, directories, or metadata
@@ -24,7 +22,6 @@
 //
 // Raw/no-echo terminal input (single keypress) is out of scope here — see pkg.tui.
 //
-// Implementation: wraps `extern "rust" { std::fs, std::io, std::path }` (Phase 3).
 // See #44, ADR-0006.
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -32,8 +29,7 @@
 /// A handle to an open file.
 ///
 /// Returned by `open`. Pass to `buf_reader` or `buf_writer` for buffered I/O.
-/// Phase 3 will add RAII-style Drop to close on drop; in Phase 2 callers MUST
-/// call `close` explicitly to flush and release the file descriptor.
+/// Callers MUST call `close` explicitly to flush and release the file descriptor.
 pub type File = struct {}
 
 /// A filesystem path (absolute or relative).
@@ -87,8 +83,7 @@ pub fn path(s: String) -> Path { Path { inner: s } }
 
 /// Append a path segment to a base path.
 ///
-/// Inserts `/` between base and segment. Phase 2 stub: uses Unix separator
-/// unconditionally; Phase 3 will delegate to `std::path::Path::join`.
+/// Inserts `/` between base and segment (Unix separator).
 /// Pure — no filesystem access.
 pub fn join(base: Path, segment: Clean[String]) -> Path { Path { inner: str_concat(str_concat(base.inner, "/"), segment) } }
 
@@ -115,10 +110,8 @@ pub fn is_dir(p: Path) -> Bool ! FileRead { false }
 /// entry point that grants the File handle. Callers that read from the handle
 /// declare `! FileRead`.
 ///
-/// Phase 2 limitation: `open` has no mode parameter, so write-mode opens are
-/// also effect-free at the call site; `! FileWrite` becomes visible only when
-/// `write_line` or `write` is called. Phase 3 will introduce an `OpenMode`
-/// enum (Read | Write | Append) and annotate write-mode `open` with `! FileWrite`.
+/// Note: `open` has no mode parameter; `! FileWrite` becomes visible only when
+/// `write_line` or `write` is called, not at the `open` call site.
 pub fn open(p: Path) -> Result[File, String] { Err("") }
 
 /// Close a file handle and flush any pending writes.

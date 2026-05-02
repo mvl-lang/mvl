@@ -3,8 +3,7 @@
 // This file is the implicit prelude: loaded by the compiler before any user
 // source. Everything declared here is available without an explicit `use`.
 //
-// Phase 2: function stubs only. Type declarations (Int, String, Option, etc.)
-// are resolved by the type checker until Phase 3 compiles stdlib from source.
+// Type declarations (Int, String, Option, etc.) are resolved by the type checker.
 
 /// Print a value followed by a newline.
 pub fn println(value: String) -> Unit { }

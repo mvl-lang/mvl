@@ -6,9 +6,8 @@
 //                               spawn, stdin_write, stdout_read, stderr_read,
 //                               wait, kill, is_success, exit_code}
 //
-// Phase 2: real implementations backed by mvl_runtime::stdlib::process.
-// Stub bodies in this file are dead code — the transpiler emits calls to the
-// Rust prelude functions directly (via `use mvl_runtime::prelude::*`).
+// Backed by mvl_runtime::stdlib::process. Stub bodies in this file are dead code —
+// the transpiler emits calls to Rust prelude functions directly.
 //
 // Design: All process-spawn and process-communication operations require
 //   ! ProcessSpawn — spawning a child process or communicating with one.
@@ -18,7 +17,7 @@
 // before using output in security-sensitive contexts (paths, queries, etc.).
 //
 // Stdio configuration is set at spawn time via positional Stdio arguments.
-// A builder-style API is planned for Phase 3.
+// A builder-style API (working directory, env vars per-child) is not yet implemented.
 //
 // Lifecycle pattern:
 //   let child = spawn("git", ["status"], Stdio::Devnull, Stdio::Capture, Stdio::Capture)?;
@@ -49,7 +48,7 @@ pub type Stdio = enum {
 ///
 /// Obtained from `Child.stdin` when the child was spawned with `Stdio::Pipe`
 /// on stdin. Use `stdin_write` to send data to the child.
-/// Phase 3 will add RAII Drop to close the pipe on drop.
+/// Closing the pipe on drop is not yet implemented; callers should drop the handle explicitly.
 pub type ChildStdin = struct {}
 
 /// A handle to the stdout pipe of a child process.

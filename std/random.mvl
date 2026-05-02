@@ -4,7 +4,6 @@
 // NOT cryptographically secure — use std.crypto.crypto_random_bytes for that.
 // Import with: use std.random.{int, float, bytes, choice, shuffle}
 //
-// Phase 2: function stubs with correct signatures and effects.
 
 /// Returns a random integer in [min, max] (inclusive). Requires `! Random`.
 pub fn int(min: Int, max: Int) -> Int ! Random { 0 }
