@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-release test test-unit test-integration test-corpus test-stdlib test-transpiler test-llvm test-tree-sitter test-grammar-coverage coverage lint mvl-lint format format-check assurance assurance-summary assurance-gate docs docs-serve tree-sitter-build install install-nvim setup doctor clean
+.PHONY: help version build build-memory build-release test test-unit test-integration test-corpus test-stdlib test-transpiler test-llvm test-tree-sitter test-grammar-coverage coverage lint mvl-lint format format-check assurance assurance-summary assurance-gate docs docs-serve tree-sitter-build install install-nvim setup doctor clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -42,6 +42,9 @@ install: build-release ## Install mvl binary to ~/.local/bin
 build: ## Build the MVL compiler
 	@echo "Building MVL compiler..."
 	cargo build
+
+build-memory: ## Build mvl_memory cdylib (required by LLVM backend at runtime)
+	cargo build -p mvl_memory
 
 build-release: ## Build release binary
 	cargo build --release
@@ -121,7 +124,7 @@ test-stdlib: build ## Verify stdlib runtime correctness: transpile tests/stdlib/
 test-transpiler: build ## Run end-to-end transpiler tests: .mvl → parse → check → transpile → cargo → binary → assert output
 	cargo test --test compile_and_run
 
-test-llvm: build ## Run LLVM backend tests across full corpus
+test-llvm: build build-memory ## Run LLVM backend tests across full corpus
 	@echo "Running LLVM backend tests (full corpus)..."
 	$(MVL) test tests/corpus/ --backend=llvm
 
