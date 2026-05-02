@@ -4255,39 +4255,12 @@ fn let_mut_without_annotation_rejected() {
     );
 }
 
-/// `let` with annotation is accepted.
+/// `let` with annotation is accepted — no errors.
 #[test]
 fn let_with_annotation_accepted() {
     let errors = errors_for("fn f() -> Unit { let x: Int = 42; }");
     assert!(
-        !errors
-            .iter()
-            .any(|e| matches!(e, CheckError::MissingTypeAnnotation { .. })),
-        "annotated let should not emit MissingTypeAnnotation, got: {errors:?}"
-    );
-}
-
-/// Parser enforces annotation; downstream checker sees no unannotated lets.
-#[test]
-fn let_without_annotation_still_binds_for_downstream() {
-    use mvl::mvl::parser::Parser;
-    let (mut p, _) = Parser::new("fn f() -> Int { let x = 42; x }");
-    p.parse_program();
-    assert!(
-        !p.errors().is_empty(),
-        "parser should reject unannotated let"
-    );
-}
-
-/// MissingTypeAnnotation checker variant still exists but is only triggered
-/// when a ty:None AST node reaches the checker (e.g. via direct AST construction).
-#[test]
-fn let_without_annotation_maps_to_req1() {
-    use mvl::mvl::parser::Parser;
-    let (mut p, _) = Parser::new("fn f() -> Unit { let x = 42; }");
-    p.parse_program();
-    assert!(
-        !p.errors().is_empty(),
-        "parser should reject unannotated let before checker runs"
+        errors.is_empty(),
+        "annotated let should produce no errors, got: {errors:?}"
     );
 }

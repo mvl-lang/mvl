@@ -236,10 +236,7 @@ fn check_stmt_flows(
             // Extend the label env for simple identifier patterns.
             // Complex patterns (tuples, structs) are treated conservatively.
             if let crate::mvl::parser::ast::Pattern::Ident(name, _) = pattern {
-                let label = ty
-                    .as_ref()
-                    .and_then(label_of_type_expr)
-                    .or_else(|| infer_label(init, env));
+                let label = label_of_type_expr(ty).or_else(|| infer_label(init, env));
                 if let Some(l) = label {
                     env.insert(name.clone(), l);
                 }

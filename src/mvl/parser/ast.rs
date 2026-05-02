@@ -600,7 +600,7 @@ pub enum Stmt {
     Let {
         mutable: bool,
         pattern: Pattern,
-        ty: Option<TypeExpr>,
+        ty: TypeExpr,
         init: Expr,
         span: Span,
     },

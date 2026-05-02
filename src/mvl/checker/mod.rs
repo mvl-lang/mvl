@@ -743,33 +743,28 @@ impl TypeChecker {
                 pattern,
                 ty,
                 init,
-                span,
+                ..
             } => {
                 let init_ty = self.infer_expr(init);
-                if let Some(ann) = ty {
-                    let ann_ty = resolve(ann);
-                    // Phase C (#305, #363): scope-depth check for any reference assignment.
-                    // Covers both implicit borrow (`let r: &T = x` where x: T) and explicit
-                    // borrow / ref-copy (`let r: &T = &x` or `let r: &T = existing_ref`).
-                    let is_ref_assignment = if let Ty::Ref(_, inner_ty) = &ann_ty {
-                        types_compatible(inner_ty, &init_ty) || types_compatible(&ann_ty, &init_ty)
-                    } else {
-                        false
-                    };
-                    if is_ref_assignment {
-                        self.check_borrow_lifetime(pattern, init);
-                    } else if !types_compatible(&ann_ty, &init_ty) {
-                        self.emit(CheckError::TypeMismatch {
-                            expected: ann_ty.display(),
-                            found: init_ty.display(),
-                            span: init.span(),
-                        });
-                    }
-                    self.bind_pattern(pattern, &ann_ty, *mutable);
+                let ann_ty = resolve(ty);
+                // Phase C (#305, #363): scope-depth check for any reference assignment.
+                // Covers both implicit borrow (`let r: &T = x` where x: T) and explicit
+                // borrow / ref-copy (`let r: &T = &x` or `let r: &T = existing_ref`).
+                let is_ref_assignment = if let Ty::Ref(_, inner_ty) = &ann_ty {
+                    types_compatible(inner_ty, &init_ty) || types_compatible(&ann_ty, &init_ty)
                 } else {
-                    self.emit(CheckError::MissingTypeAnnotation { span: *span });
-                    self.bind_pattern(pattern, &init_ty, *mutable);
+                    false
+                };
+                if is_ref_assignment {
+                    self.check_borrow_lifetime(pattern, init);
+                } else if !types_compatible(&ann_ty, &init_ty) {
+                    self.emit(CheckError::TypeMismatch {
+                        expected: ann_ty.display(),
+                        found: init_ty.display(),
+                        span: init.span(),
+                    });
                 }
+                self.bind_pattern(pattern, &ann_ty, *mutable);
                 // Phase D (#362): record which variable the new binding borrows so that
                 // `pop_scope()` can release the borrow when the binding goes out of scope.
                 // Also update the referent's borrow_state here (not in Expr::Borrow) so
@@ -798,7 +793,6 @@ impl TypeChecker {
                 // #14: ResultIgnored — if the init expression is a Result and
                 // it's not being used at all, that would be caught at Stmt::Expr.
                 // Here the Result is being bound, which is acceptable.
-                let _ = span;
             }
 
             // #17: immutability enforcement
@@ -3506,6 +3500,12 @@ mod tests {
             span: dummy_span,
         };
 
+        let fn_int_int_ty = TypeExpr::Fn {
+            params: vec![int_ty.clone()],
+            ret: Box::new(int_ty.clone()),
+            effects: vec![],
+            span: dummy_span,
+        };
         let prog = Program {
             span: dummy_span,
             declarations: vec![Decl::Fn(FnDecl {
@@ -3524,14 +3524,14 @@ mod tests {
                         Stmt::Let {
                             mutable: true,
                             pattern: Pattern::Ident("x".into(), dummy_span),
-                            ty: None,
+                            ty: int_ty,
                             init: Expr::Literal(Literal::Integer(1), dummy_span),
                             span: dummy_span,
                         },
                         Stmt::Let {
                             mutable: false,
                             pattern: Pattern::Ident("g".into(), dummy_span),
-                            ty: None,
+                            ty: fn_int_int_ty,
                             init: lambda,
                             span: dummy_span,
                         },
@@ -3587,11 +3587,17 @@ mod tests {
                 refinement: None,
                 span: dummy_span,
             }],
-            ret_type: Some(Box::new(int_ty)),
+            ret_type: Some(Box::new(int_ty.clone())),
             body: Box::new(Expr::Ident("x".into(), dummy_span)),
             span: dummy_span,
         };
 
+        let fn_int_int_ty = TypeExpr::Fn {
+            params: vec![int_ty.clone()],
+            ret: Box::new(int_ty.clone()),
+            effects: vec![],
+            span: dummy_span,
+        };
         let prog = Program {
             span: dummy_span,
             declarations: vec![Decl::Fn(FnDecl {
@@ -3610,14 +3616,14 @@ mod tests {
                         Stmt::Let {
                             mutable: false, // immutable
                             pattern: Pattern::Ident("x".into(), dummy_span),
-                            ty: None,
+                            ty: int_ty,
                             init: Expr::Literal(Literal::Integer(1), dummy_span),
                             span: dummy_span,
                         },
                         Stmt::Let {
                             mutable: false,
                             pattern: Pattern::Ident("g".into(), dummy_span),
-                            ty: None,
+                            ty: fn_int_int_ty,
                             init: lambda,
                             span: dummy_span,
                         },

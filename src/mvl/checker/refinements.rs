@@ -706,10 +706,8 @@ fn analyze_stmt(
                 init, var_refs, fn_params, type_refs, fn_decls, errors, counts,
             );
             // Record refinement for the new variable, from its declared type or alias.
-            let mut pred = ty.as_ref().and_then(extract_type_refinement).or_else(|| {
-                ty.as_ref()
-                    .and_then(|t| resolve_type_alias_pred(t, type_refs))
-            });
+            let mut pred =
+                extract_type_refinement(ty).or_else(|| resolve_type_alias_pred(ty, type_refs));
             // If no explicit refinement, try to constant-fold the initialiser.
             // When successful, inject a `self == folded_value` hypothesis so that
             // the refinement solver can prove predicates on the bound name statically.

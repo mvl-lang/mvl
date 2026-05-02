@@ -240,16 +240,6 @@ pub enum CheckError {
         span: Span,
     },
 
-    // ── Explicit annotation requirement (#408) ───────────────────────────
-    /// `let` binding lacks a type annotation.
-    ///
-    /// MVL Design Principle #1 ("Explicit over implicit") forbids omitting the
-    /// type on a `let` binding.  The LLM, not the human, pays the annotation
-    /// cost; implicit types create audit gaps and break non-rustc back-ends.
-    MissingTypeAnnotation {
-        span: Span,
-    },
-
     // ── Information flow control (#23) ───────────────────────────────────
     /// `declassify()` applied to a non-`Secret<T>` type.
     InvalidDeclassify {
@@ -351,8 +341,6 @@ impl CheckError {
             CheckError::NotIterator { .. } => 1,
             // Req 9: Generics — constraint enforcement
             CheckError::MissingConstraint { .. } => 9,
-            // Req 1: Type Safety — explicit annotation requirement (#408)
-            CheckError::MissingTypeAnnotation { .. } => 1,
         }
     }
 
@@ -401,8 +389,7 @@ impl CheckError {
             | CheckError::PropagateIncompatibleError { span, .. }
             | CheckError::NotIterator { span, .. }
             | CheckError::ForLoopInPartialFn { span }
-            | CheckError::MissingConstraint { span, .. }
-            | CheckError::MissingTypeAnnotation { span } => *span,
+            | CheckError::MissingConstraint { span, .. } => *span,
         }
     }
 
@@ -556,9 +543,6 @@ impl CheckError {
             } => format!(
                 "type parameter `{type_param}` does not implement `{required_bound}` — add `where {type_param}: {required_bound}` to the function signature"
             ),
-            CheckError::MissingTypeAnnotation { .. } => {
-                "`let` binding requires an explicit type annotation — MVL forbids implicit types (add `: Type` after the binding name)".to_string()
-            }
         }
     }
 }

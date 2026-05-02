@@ -86,7 +86,7 @@ impl Parser {
 
         let colon = self.expect(&TokenKind::Colon);
         self.require(colon)?;
-        let ty = Some(self.parse_type_expr()?);
+        let ty = self.parse_type_expr()?;
 
         let eq = self.expect(&TokenKind::Eq);
         self.require(eq)?;
@@ -507,7 +507,7 @@ mod tests {
     #[test]
     fn parse_let_with_type() {
         // GIVEN: let x: Int = 42;
-        // THEN: LetStmt with mutable=false, pattern=Ident("x"), type=Some(Int), value=Literal(42)
+        // THEN: LetStmt with mutable=false, pattern=Ident("x"), type=Int, value=Literal(42)
         let s = one_stmt("{ let x: Int = 42; }");
         assert!(
             matches!(
@@ -515,10 +515,10 @@ mod tests {
                 Stmt::Let {
                     mutable: false,
                     pattern: Pattern::Ident(name, _),
-                    ty: Some(_),
+                    ty: TypeExpr::Base { name: ty_name, .. },
                     init: Expr::Literal(Literal::Integer(42), _),
                     ..
-                } if name == "x"
+                } if name == "x" && ty_name == "Int"
             ),
             "got: {:?}",
             s

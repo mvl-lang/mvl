@@ -133,7 +133,7 @@ The parser MUST parse function declarations including totality annotation, param
 
 ### Requirement 5: Parse Statements [MUST]
 
-The parser MUST parse all MVL statement forms: let bindings (with optional mut and type annotation), assignment, return, if/else, match, for, and expression statements.
+The parser MUST parse all MVL statement forms: let bindings (with optional mut and mandatory type annotation), assignment, return, if/else, match, for, and expression statements. A `let` binding without an explicit `: Type` annotation MUST be rejected with a parse error (#408).
 
 **Implementation:** `src/mvl/parser/statements.rs`
 

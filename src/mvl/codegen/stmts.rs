@@ -37,7 +37,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 // Determine the LLVM type: use the annotation type only when it matches the
                 // actual value type (annotation may fall back to i64 for unknown generics
                 // like List[T], Map[K,V] — in that case trust the value's own type).
-                let ann_ty = ty.as_ref().and_then(|t| self.mvl_type_to_llvm(t));
+                let ann_ty = self.mvl_type_to_llvm(ty);
                 let llvm_ty = ann_ty
                     .filter(|&t| t == val.get_type())
                     .unwrap_or_else(|| val.get_type());
@@ -50,9 +50,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 self.builder.build_store(alloca, val).unwrap();
                 self.locals.insert(name.clone(), (alloca, llvm_ty));
                 // L5-08: record MVL type annotation for Ok/Some payload inference.
-                if let Some(type_expr) = ty {
-                    self.local_mvl_types.insert(name.clone(), type_expr.clone());
-                }
+                self.local_mvl_types.insert(name.clone(), ty.clone());
                 // L5-15: ownership transfer for heap moves.
                 // If init is a bare identifier or move(ident), transfer ownership from
                 // the source variable — remove it from heap_locals so it is not dropped
@@ -69,7 +67,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                     src.and_then(|s| self.heap_locals.remove(s))
                 };
                 // Register new binding: prefer the transferred kind, fall back to type annotation.
-                let heap_kind = move_src_kind.or_else(|| ty.as_ref().and_then(heap_kind_of));
+                let heap_kind = move_src_kind.or_else(|| heap_kind_of(ty));
                 if let Some(kind) = heap_kind {
                     if matches!(llvm_ty, BasicTypeEnum::PointerType(_)) {
                         self.heap_locals.insert(name, kind);

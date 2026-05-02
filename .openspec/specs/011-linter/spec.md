@@ -121,30 +121,15 @@ warnings do not affect `is_ok`).
 
 ---
 
-### Requirement 4: Unnecessary Type Annotations [MUST]
+### Requirement 4: Unnecessary Type Annotations [REMOVED]
 
-The `unnecessary-annotation` rule MUST be emitted at **Warning** severity when a
-`let` binding carries a type annotation that is unambiguously inferable from the
-initialiser literal.
+The `unnecessary-annotation` rule has been removed (#408). All `let` bindings now
+**require** an explicit type annotation — a language-level invariant enforced at
+parse time. With annotations mandatory, no annotation can be "unnecessary"; the rule
+was contradictory and has been deleted along with its `LintConfig` field and helper
+functions.
 
-Applies to: `Int`, `Float`, `Bool`, `String` literals (not `Char`, `List[T]`,
-or struct constructors where the annotation aids disambiguation).
-
-**Implementation:** `src/mvl/linter/rules.rs::unnecessary_annotations`
-
-**Tests:** `src/mvl/linter/rules.rs` (inline tests)
-
-#### Scenario: Redundant Int annotation
-
-- GIVEN `let x: Int = 42;`
-- WHEN `unnecessary_annotations` runs
-- THEN a `Warning` diagnostic with rule `unnecessary-annotation` is emitted
-
-#### Scenario: Char annotation is not flagged
-
-- GIVEN `let c: Char = 'a';`
-- WHEN `unnecessary_annotations` runs
-- THEN no diagnostic is emitted
+**Removed in:** v0.66.1 (#408)
 
 ---
 

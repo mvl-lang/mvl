@@ -39,10 +39,8 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &Stmt) {
                 cg.push("let ");
             }
             emit_pattern(cg, pattern);
-            if let Some(t) = ty {
-                cg.push(": ");
-                cg.push(&emit_type_expr(t));
-            }
+            cg.push(": ");
+            cg.push(&emit_type_expr(ty));
             cg.push(" = ");
             emit_expr(cg, init);
             cg.push(";");
