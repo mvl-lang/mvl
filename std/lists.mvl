@@ -46,9 +46,9 @@ pub fn flatten[T](xs: List[List[T]]) -> List[T] where T: Clone {
 
 /// Reverse a list.
 pub fn reverse[T](xs: List[T]) -> List[T] where T: Clone {
-    let len = list_len(xs);
+    let len: Int = list_len(xs);
     let mut result: List[T] = [];
-    let mut i = len - 1;
+    let mut i: Int = len - 1;
     while i >= 0 {
         match list_get(xs, i) {
             Some(v) => { result.push(v) },
@@ -131,7 +131,7 @@ pub fn filter[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
 /// transpiled code needs `U: Clone` to re-bind after each iteration.  This
 /// is an implementation constraint, not a semantic requirement of fold itself.
 pub fn fold[T, U](xs: List[T], init: U, f: fn(U, T) -> U) -> U where T: Clone, U: Clone {
-    let mut acc = init;
+    let mut acc: U = init;
     for x in xs {
         acc = f(acc, x)
     };
@@ -156,9 +156,9 @@ pub fn partition[T](xs: List[T], f: fn(T) -> Bool) -> (List[T], List[T]) where T
 
 /// Retain leading elements while `f` returns true; stop at first false.
 pub fn take_while[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
-    let mut i = 0;
-    let len = list_len(xs);
-    let mut running = true;
+    let mut i: Int = 0;
+    let len: Int = list_len(xs);
+    let mut running: Bool = true;
     while running && i < len {
         match list_get(xs, i) {
             Some(x) => {
@@ -176,9 +176,9 @@ pub fn take_while[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
 
 /// Drop leading elements while `f` returns true; keep from first false onward.
 pub fn skip_while[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
-    let mut i = 0;
-    let len = list_len(xs);
-    let mut running = true;
+    let mut i: Int = 0;
+    let len: Int = list_len(xs);
+    let mut running: Bool = true;
     while running && i < len {
         match list_get(xs, i) {
             Some(x) => {
@@ -198,9 +198,9 @@ pub fn skip_while[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
 ///
 /// Short-circuits: stops at the first element where `f` returns true.
 pub fn any[T](xs: List[T], f: fn(T) -> Bool) -> Bool where T: Clone {
-    let mut i = 0;
-    let len = list_len(xs);
-    let mut found = false;
+    let mut i: Int = 0;
+    let len: Int = list_len(xs);
+    let mut found: Bool = false;
     while found == false && i < len {
         match list_get(xs, i) {
             Some(x) => {

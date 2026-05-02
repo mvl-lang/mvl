@@ -3,7 +3,7 @@
 
 // Correct: handle Option with match
 fn safe_head(xs: List[Int]) -> Option[Int] {
-    let _ = xs;
+    let _: List[Int] = xs;
     None
 }
 
@@ -20,7 +20,7 @@ fn parse_int(s: String) -> Result[Int, String] {
 }
 
 fn double_parsed(s: String) -> Result[Int, String] {
-    let n = parse_int(s)?;
+    let n: Int = parse_int(s)?;
     Ok(n * 2)
 }
 

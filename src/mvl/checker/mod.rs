@@ -3193,7 +3193,7 @@ mod tests {
 
     #[test]
     fn assign_to_immutable_rejected() {
-        let src = "fn f() -> Unit { let x = 1; x = 2; }";
+        let src = "fn f() -> Unit { let x: Int = 1; x = 2; }";
         let errors = errors_for(src);
         assert!(
             errors
@@ -3205,7 +3205,7 @@ mod tests {
 
     #[test]
     fn assign_to_mutable_allowed() {
-        let src = "fn f() -> Unit { let mut x = 1; x = 2; }";
+        let src = "fn f() -> Unit { let mut x: Int = 1; x = 2; }";
         let errors = errors_for(src);
         let assign_errors: Vec<_> = errors
             .iter()
@@ -3222,7 +3222,7 @@ mod tests {
     #[test]
     fn use_after_move_rejected() {
         // move(x) is the MVL syntax for explicit move
-        let src = "fn f() -> Int { let x = 1; let y = move(x); x }";
+        let src = "fn f() -> Int { let x: Int = 1; let y: Int = move(x); x }";
         let errors = errors_for(src);
         assert!(
             errors
@@ -3298,7 +3298,7 @@ mod tests {
 
     #[test]
     fn assign_type_mismatch_rejected() {
-        let src = "fn f() -> Unit { let mut x = 1; x = true; }";
+        let src = "fn f() -> Unit { let mut x: Int = 1; x = true; }";
         let errors = errors_for(src);
         assert!(
             errors
@@ -3644,7 +3644,7 @@ mod tests {
     #[test]
     fn if_expr_branch_type_mismatch_rejected() {
         // The `if` must be in expression position (init of `let`) to hit Expr::If.
-        let src = "fn f(b: Bool) -> Int { let x = if b { 1 } else { true }; x }";
+        let src = "fn f(b: Bool) -> Int { let x: Int = if b { 1 } else { true }; x }";
         let errors = errors_for(src);
         assert!(
             errors

@@ -84,11 +84,9 @@ impl Parser {
         let mutable = self.eat(&TokenKind::Mut);
         let pattern = self.parse_pattern()?;
 
-        let ty = if self.eat(&TokenKind::Colon) {
-            Some(self.parse_type_expr()?)
-        } else {
-            None
-        };
+        let colon = self.expect(&TokenKind::Colon);
+        self.require(colon)?;
+        let ty = Some(self.parse_type_expr()?);
 
         let eq = self.expect(&TokenKind::Eq);
         self.require(eq)?;
@@ -543,18 +541,13 @@ mod tests {
 
     #[test]
     fn parse_let_without_type() {
-        let s = one_stmt("{ let y = 99; }");
+        // MVL forbids implicit types (#408) — the parser must reject `let y = 99;`
+        let (mut p, lex_errs) = Parser::new("{ let y = 99; }");
+        assert!(lex_errs.is_empty());
+        let _block = p.parse_block();
         assert!(
-            matches!(
-                &s,
-                Stmt::Let {
-                    ty: None,
-                    init: Expr::Literal(Literal::Integer(99), _),
-                    ..
-                }
-            ),
-            "got: {:?}",
-            s
+            !p.errors.is_empty(),
+            "expected parse error for let without type annotation"
         );
     }
 

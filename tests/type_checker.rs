@@ -281,7 +281,7 @@ fn result_in_stmt_without_use_rejected() {
 fn propagate_on_non_result_rejected() {
     // GIVEN: `?` applied to Int
     // THEN: PropagateNotResult reported
-    let errors = errors_for("fn f() -> Result[Int, String] { let x = 1?; Ok(x) }");
+    let errors = errors_for("fn f() -> Result[Int, String] { let x: Int = 1?; Ok(x) }");
     assert!(
         errors
             .iter()
@@ -382,7 +382,7 @@ fn core_types_corpus_parses_and_checks() {
 fn immutable_binding_assignment_rejected() {
     // GIVEN: assignment to `let x` (no `mut`)
     // THEN: AssignToImmutable reported
-    let errors = errors_for("fn f() -> Int { let x = 1; x = 2; x }");
+    let errors = errors_for("fn f() -> Int { let x: Int = 1; x = 2; x }");
     assert!(
         errors
             .iter()
@@ -429,7 +429,7 @@ fn ownership_corpus_parses() {
 fn use_after_explicit_move_rejected() {
     // GIVEN: variable used after move(x)
     // THEN: UseAfterMove reported
-    let errors = errors_for("fn f() -> Int { let x = 1; let _y = move(x); x }");
+    let errors = errors_for("fn f() -> Int { let x: Int = 1; let _y: Int = move(x); x }");
     assert!(
         errors
             .iter()
@@ -1101,7 +1101,7 @@ fn iso_aliasing_without_consume_rejected() {
     // THEN: IsoAliasingViolation reported (two live references to isolated object)
     let src = r#"
         fn alias_iso(channel: Channel, iso x: Payload) -> Unit {
-            let y = x;
+            let y: Payload = x;
             channel.send(consume(y))
         }
     "#;
@@ -1156,7 +1156,7 @@ fn val_param_aliasing_not_checked() {
     // THEN: no IsoAliasingViolation (only iso is subject to aliasing checks)
     let src = r#"
         fn copy_val(val config: Config) -> Unit {
-            let copy = config;
+            let copy: Config = config;
             consume(copy)
         }
     "#;
@@ -1177,7 +1177,7 @@ fn iso_aliasing_via_assignment_rejected() {
     // THEN: IsoAliasingViolation reported for the assigned iso var
     let src = r#"
         fn assign_iso(iso x: Payload, iso z: Payload) -> Unit {
-            let mut y = consume(x);
+            let mut y: Payload = consume(x);
             y = z;
             consume(y)
         }
@@ -1198,7 +1198,7 @@ fn iso_aliasing_inside_if_branch_rejected() {
     let src = r#"
         fn conditional_alias(channel: Channel, iso x: Payload, flag: Bool) -> Unit {
             if flag {
-                let y = x;
+                let y: Payload = x;
                 channel.send(consume(y))
             }
         }
@@ -1245,8 +1245,8 @@ fn iso_rebound_after_consume_not_detected_l5() {
     // analysis (Phase 6).
     let src = r#"
         fn rebound_alias(iso x: Payload) -> Unit {
-            let a = consume(x);
-            let b = a;
+            let a: Payload = consume(x);
+            let b: Payload = a;
             consume(b)
         }
     "#;
@@ -1265,8 +1265,8 @@ fn iso_multiple_aliasing_all_sites_reported() {
     // Both `let a = x` and `let b = x` generate separate violations.
     let src = r#"
         fn double_alias(iso x: Payload) -> Unit {
-            let a = x;
-            let b = x;
+            let a: Payload = x;
+            let b: Payload = x;
             consume(b)
         }
     "#;
@@ -2009,7 +2009,7 @@ fn propagate_mismatched_error_type_rejected() {
     let src = r#"
 fn inner() -> Result[Int, String] { Ok(0) }
 fn outer() -> Result[Int, Bool] {
-    let x = inner()?;
+    let x: Int = inner()?;
     Ok(x)
 }
 "#;
@@ -2234,8 +2234,9 @@ fn io_effect_bucket_rejected() {
 /// Lambda capturing a mutable binding MUST be rejected (ADR-0002).
 #[test]
 fn lambda_mutable_capture_rejected() {
-    let errors =
-        errors_for(r#"fn f() -> Unit { let mut x = 1; let _g = |y: Int| -> Int { x + y }; }"#);
+    let errors = errors_for(
+        r#"fn f() -> Unit { let mut x: Int = 1; let _g: fn(Int) -> Int = |y: Int| -> Int { x + y }; }"#,
+    );
     assert!(
         errors.iter().any(
             |e| matches!(e, CheckError::CaptureMutabilityViolation { name, .. } if name == "x")
@@ -2247,7 +2248,9 @@ fn lambda_mutable_capture_rejected() {
 /// Lambda capturing an immutable binding MUST be accepted (ADR-0002).
 #[test]
 fn lambda_immutable_capture_accepted() {
-    let result = check_src(r#"fn f() -> Unit { let x = 1; let _g = |y: Int| -> Int { x + y }; }"#);
+    let result = check_src(
+        r#"fn f() -> Unit { let x: Int = 1; let _g: fn(Int) -> Int = |y: Int| -> Int { x + y }; }"#,
+    );
     let capture_errors: Vec<_> = result
         .errors
         .iter()
@@ -4227,27 +4230,28 @@ fn ref_binding_from_param_accepted() {
 
 // ── #408: Explicit type annotation required on let bindings ──────────────────
 
-/// `let` without annotation is rejected with MissingTypeAnnotation.
+/// `let` without annotation is now a parser error (#408).
+/// The parser rejects it before the checker runs.
 #[test]
 fn let_without_annotation_rejected() {
-    let errors = errors_for("fn f() -> Unit { let x = 42; }");
+    use mvl::mvl::parser::Parser;
+    let (mut p, _) = Parser::new("fn f() -> Unit { let x = 42; }");
+    p.parse_program();
     assert!(
-        errors
-            .iter()
-            .any(|e| matches!(e, CheckError::MissingTypeAnnotation { .. })),
-        "unannotated let should emit MissingTypeAnnotation, got: {errors:?}"
+        !p.errors().is_empty(),
+        "unannotated let should produce a parse error"
     );
 }
 
-/// `let mut` without annotation is also rejected.
+/// `let mut` without annotation is also a parser error (#408).
 #[test]
 fn let_mut_without_annotation_rejected() {
-    let errors = errors_for("fn f() -> Unit { let mut x = 42; }");
+    use mvl::mvl::parser::Parser;
+    let (mut p, _) = Parser::new("fn f() -> Unit { let mut x = 42; }");
+    p.parse_program();
     assert!(
-        errors
-            .iter()
-            .any(|e| matches!(e, CheckError::MissingTypeAnnotation { .. })),
-        "unannotated let mut should emit MissingTypeAnnotation, got: {errors:?}"
+        !p.errors().is_empty(),
+        "unannotated let mut should produce a parse error"
     );
 }
 
@@ -4263,32 +4267,27 @@ fn let_with_annotation_accepted() {
     );
 }
 
-/// Checker still binds the variable with inferred type after MissingTypeAnnotation,
-/// so downstream uses don't produce spurious type errors.
+/// Parser enforces annotation; downstream checker sees no unannotated lets.
 #[test]
 fn let_without_annotation_still_binds_for_downstream() {
-    let errors = errors_for("fn f() -> Int { let x = 42; x }");
-    // Only MissingTypeAnnotation, no TypeMismatch or UndefinedVariable
+    use mvl::mvl::parser::Parser;
+    let (mut p, _) = Parser::new("fn f() -> Int { let x = 42; x }");
+    p.parse_program();
     assert!(
-        errors
-            .iter()
-            .all(|e| matches!(e, CheckError::MissingTypeAnnotation { .. })),
-        "only MissingTypeAnnotation expected, got: {errors:?}"
+        !p.errors().is_empty(),
+        "parser should reject unannotated let"
     );
 }
 
-/// MissingTypeAnnotation is mapped to requirement 1 (type safety).
+/// MissingTypeAnnotation checker variant still exists but is only triggered
+/// when a ty:None AST node reaches the checker (e.g. via direct AST construction).
 #[test]
 fn let_without_annotation_maps_to_req1() {
-    use mvl::mvl::checker::check;
     use mvl::mvl::parser::Parser;
-    let src = "fn f() -> Unit { let x = 42; }";
-    let (mut p, _) = Parser::new(src);
-    let prog = p.parse_program();
-    let result = check(&prog);
+    let (mut p, _) = Parser::new("fn f() -> Unit { let x = 42; }");
+    p.parse_program();
     assert!(
-        result.req_errors[1] >= 1,
-        "MissingTypeAnnotation should increment req_errors[1], got: {:?}",
-        result.req_errors
+        !p.errors().is_empty(),
+        "parser should reject unannotated let before checker runs"
     );
 }

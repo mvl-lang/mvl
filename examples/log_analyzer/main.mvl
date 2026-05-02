@@ -70,18 +70,18 @@ type CliArgs = struct {
 //   - std.log structured calls replace raw println for operational events.
 //   - Effect list extended with ! Log.
 fn run() -> Result[Unit, RunError] ! FileRead, Console, Log {
-    let args_result = parse[CliArgs]();
+    let args_result: Result[CliArgs, String] = parse[CliArgs]();
     match args_result {
         Err(_) => Err(RunError::MissingArg),
         Ok(args) => {
             let file_path: Clean[String] = sanitize(args.file);
             // Option.map: sanitize each Some(v) without an explicit match ladder.
             let level_opt: Option[Clean[String]] = args.level.map(|v: Tainted[String]| sanitize(v));
-            let file_result = read_file(file_path);
+            let file_result: Result[Tainted[String], String] = read_file(file_path);
             match file_result {
                 Err(_) => Err(RunError::IOFailure),
                 Ok(content) => {
-                    let pipeline_result = analyze_and_format(content, level_opt);
+                    let pipeline_result: Result[String, PipelineError] = analyze_and_format(content, level_opt);
                     match pipeline_result {
                         Err(_) => Err(RunError::PipelineFailed),
                         Ok(json_report) => {
@@ -100,7 +100,7 @@ fn main() -> Unit ! FileRead, Console, Log {
     match run() {
         Ok(_)  => (),
         Err(e) => {
-            let msg = match e {
+            let msg: String = match e {
                 RunError::MissingArg     => "missing --file argument",
                 RunError::IOFailure      => "failed to read log file",
                 RunError::PipelineFailed => "analysis pipeline failed",
@@ -113,8 +113,8 @@ fn main() -> Unit ! FileRead, Console, Log {
 // ── Internal unit tests ────────────────────────────────────────────────────
 
 test fn check_run_error_missing_arg_variant() -> Unit {
-    let err = RunError::MissingArg;
-    let is_missing = match err {
+    let err: RunError = RunError::MissingArg;
+    let is_missing: Int = match err {
         RunError::MissingArg  => 1,
         RunError::IOFailure   => 0,
         RunError::PipelineFailed => 0,
@@ -123,8 +123,8 @@ test fn check_run_error_missing_arg_variant() -> Unit {
 }
 
 test fn check_run_error_io_failure_variant() -> Unit {
-    let err = RunError::IOFailure;
-    let is_io = match err {
+    let err: RunError = RunError::IOFailure;
+    let is_io: Int = match err {
         RunError::IOFailure      => 1,
         RunError::MissingArg     => 0,
         RunError::PipelineFailed => 0,
@@ -133,13 +133,13 @@ test fn check_run_error_io_failure_variant() -> Unit {
 }
 
 test fn check_cli_args_file_field() -> Unit {
-    let args = CliArgs { file: "logs.jsonl", level: None };
+    let args: CliArgs = CliArgs { file: "logs.jsonl", level: None };
     assert_eq(args.file, "logs.jsonl");
 }
 
 test fn check_cli_args_level_some() -> Unit {
-    let args = CliArgs { file: "logs.jsonl", level: Some("error") };
-    let has_level = match args.level {
+    let args: CliArgs = CliArgs { file: "logs.jsonl", level: Some("error") };
+    let has_level: Int = match args.level {
         Some(_) => 1,
         None    => 0,
     };
@@ -147,8 +147,8 @@ test fn check_cli_args_level_some() -> Unit {
 }
 
 test fn check_cli_args_level_none() -> Unit {
-    let args = CliArgs { file: "logs.jsonl", level: None };
-    let has_level = match args.level {
+    let args: CliArgs = CliArgs { file: "logs.jsonl", level: None };
+    let has_level: Int = match args.level {
         Some(_) => 1,
         None    => 0,
     };
@@ -159,7 +159,7 @@ test fn check_cli_args_level_none() -> Unit {
 test fn option_map_sanitize_none_stays_none() -> Unit {
     let level: Option[Tainted[String]] = None;
     let sanitized: Option[Clean[String]] = level.map(|v: Tainted[String]| sanitize(v));
-    let is_none = match sanitized {
+    let is_none: Int = match sanitized {
         None    => 1,
         Some(_) => 0,
     };
@@ -169,7 +169,7 @@ test fn option_map_sanitize_none_stays_none() -> Unit {
 test fn option_map_sanitize_some_maps_value() -> Unit {
     let level: Option[Tainted[String]] = Some("error");
     let sanitized: Option[Clean[String]] = level.map(|v: Tainted[String]| sanitize(v));
-    let is_some = match sanitized {
+    let is_some: Int = match sanitized {
         Some(_) => 1,
         None    => 0,
     };

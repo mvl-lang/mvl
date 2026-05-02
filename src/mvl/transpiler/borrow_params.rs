@@ -584,7 +584,7 @@ mod tests {
         // Iterating `&Vec<T>` gives `&T` elements — type error in the body.
         // Disqualify xs so it stays owned and the move/clone path handles it.
         let fd = parse_fn(
-            "fn sum(xs: List[Int]) -> Int { let mut acc = 0; for x in xs { acc = acc } acc }",
+            "fn sum(xs: List[Int]) -> Int { let mut acc: Int = 0; for x in xs { acc = acc } acc }",
         );
         assert_eq!(borrow_params_for_fn(&fd), vec![None]);
     }
@@ -640,7 +640,7 @@ mod tests {
 
     #[test]
     fn param_moved_into_let_binding_is_not_borrow() {
-        let fd = parse_fn("fn f(xs: List[Int]) -> Int { let ys = xs; 0 }");
+        let fd = parse_fn("fn f(xs: List[Int]) -> Int { let ys: List[Int] = xs; 0 }");
         assert_eq!(borrow_params_for_fn(&fd), vec![None]);
     }
 

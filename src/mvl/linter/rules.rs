@@ -1641,7 +1641,7 @@ mod tests {
 
     #[test]
     fn unreachable_after_return_detected() {
-        let src = "fn f() -> Int { return 1; let x = 2; x }\n";
+        let src = "fn f() -> Int { return 1; let x: Int = 2; x }\n";
         let prog = parse(src);
         let mut diags = vec![];
         unreachable_code(&prog, &cfg(), &mut diags);
@@ -1651,7 +1651,7 @@ mod tests {
 
     #[test]
     fn unreachable_code_disabled() {
-        let src = "fn f() -> Int { return 1; let x = 2; x }\n";
+        let src = "fn f() -> Int { return 1; let x: Int = 2; x }\n";
         let prog = parse(src);
         let mut diags = vec![];
         let mut c = cfg();
@@ -1662,7 +1662,7 @@ mod tests {
 
     #[test]
     fn reachable_code_clean() {
-        let src = "fn f() -> Int { let x = 1; return x }\n";
+        let src = "fn f() -> Int { let x: Int = 1; return x }\n";
         let prog = parse(src);
         let mut diags = vec![];
         unreachable_code(&prog, &cfg(), &mut diags);

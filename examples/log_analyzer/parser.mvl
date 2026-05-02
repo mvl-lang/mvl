@@ -60,8 +60,8 @@ pub type Report = struct {
 /// Parse a log level string, case-insensitively (uses `to_lower`).
 /// "ERROR", "Error", and "error" all resolve to `LogLevel::Error`.
 pub total fn parse_level(raw: Tainted[String]) -> Result[LogLevel, ParseError] {
-    let clean = sanitize(raw);
-    let lower = clean.to_lower();
+    let clean: Clean[String] = sanitize(raw);
+    let lower: String = clean.to_lower();
     match lower {
         "debug" => Ok(LogLevel::Debug),
         "info"  => Ok(LogLevel::Info),
@@ -140,8 +140,8 @@ pub fn is_error_level(entry: LogEntry) -> Bool {
 // unlabeled data flows freely into a Tainted context (Public ⊑ Tainted).
 
 test fn check_debug_level_is_ok() -> Unit {
-    let result = parse_level("debug");
-    let ok = match result {
+    let result: Result[LogLevel, ParseError] = parse_level("debug");
+    let ok: Int = match result {
         Ok(_)  => 1,
         Err(_) => 0,
     };
@@ -149,8 +149,8 @@ test fn check_debug_level_is_ok() -> Unit {
 }
 
 test fn check_error_level_is_ok() -> Unit {
-    let result = parse_level("error");
-    let ok = match result {
+    let result: Result[LogLevel, ParseError] = parse_level("error");
+    let ok: Int = match result {
         Ok(_)  => 1,
         Err(_) => 0,
     };
@@ -159,8 +159,8 @@ test fn check_error_level_is_ok() -> Unit {
 
 // to_lower() enables case-insensitive level parsing (Phase 4).
 test fn check_uppercase_error_level_is_ok() -> Unit {
-    let result = parse_level("ERROR");
-    let ok = match result {
+    let result: Result[LogLevel, ParseError] = parse_level("ERROR");
+    let ok: Int = match result {
         Ok(_)  => 1,
         Err(_) => 0,
     };
@@ -168,8 +168,8 @@ test fn check_uppercase_error_level_is_ok() -> Unit {
 }
 
 test fn check_unknown_level_is_err() -> Unit {
-    let result = parse_level("verbose");
-    let err = match result {
+    let result: Result[LogLevel, ParseError] = parse_level("verbose");
+    let err: Int = match result {
         Ok(_)  => 0,
         Err(_) => 1,
     };
@@ -177,8 +177,8 @@ test fn check_unknown_level_is_err() -> Unit {
 }
 
 test fn check_empty_level_is_err() -> Unit {
-    let result = parse_level("");
-    let err = match result {
+    let result: Result[LogLevel, ParseError] = parse_level("");
+    let err: Int = match result {
         Ok(_)  => 0,
         Err(_) => 1,
     };
@@ -189,7 +189,7 @@ test fn check_empty_level_is_err() -> Unit {
 
 test fn build_report_empty_list_is_zero() -> Unit {
     let entries: List[LogEntry] = [];
-    let report = build_report(entries);
+    let report: Report = build_report(entries);
     assert_eq(report.count, 0);
 }
 
@@ -199,7 +199,7 @@ test fn build_report_counts_total() -> Unit {
         LogEntry { level: LogLevel::Error, message: "msg2", timestamp: 2 },
         LogEntry { level: LogLevel::Warn,  message: "msg3", timestamp: 3 },
     ];
-    let report = build_report(entries);
+    let report: Report = build_report(entries);
     assert_eq(report.count, 3);
 }
 
@@ -209,7 +209,7 @@ test fn build_report_counts_errors() -> Unit {
         LogEntry { level: LogLevel::Error, message: "e2", timestamp: 2 },
         LogEntry { level: LogLevel::Info,  message: "i1", timestamp: 3 },
     ];
-    let report = build_report(entries);
+    let report: Report = build_report(entries);
     assert_eq(report.errors, 2);
 }
 
@@ -218,7 +218,7 @@ test fn build_report_counts_warnings() -> Unit {
         LogEntry { level: LogLevel::Warn, message: "w1", timestamp: 1 },
         LogEntry { level: LogLevel::Warn, message: "w2", timestamp: 2 },
     ];
-    let report = build_report(entries);
+    let report: Report = build_report(entries);
     assert_eq(report.warnings, 2);
 }
 
@@ -227,7 +227,7 @@ test fn build_report_counts_infos() -> Unit {
         LogEntry { level: LogLevel::Info,  message: "i1", timestamp: 1 },
         LogEntry { level: LogLevel::Debug, message: "d1", timestamp: 2 },
     ];
-    let report = build_report(entries);
+    let report: Report = build_report(entries);
     assert_eq(report.infos, 1);
 }
 
@@ -242,11 +242,11 @@ test fn pipeline_filter_map_fold_error_count() -> Unit {
         LogEntry { level: LogLevel::Warn,  message: "w1", timestamp: 4 },
     ];
     // fold observes the string values from entry_summary to verify the map step.
-    let error_count = entries
+    let error_count: Int = entries
         .filter(is_error_level)
         .map(entry_summary)
         .fold(0, |acc: Int, s: String| {
-            let is_error_str = match s { "ERROR" => 1, _ => 0 };
+            let is_error_str: Int = match s { "ERROR" => 1, _ => 0 };
             acc + is_error_str
         });
     assert_eq(error_count, 2);
@@ -255,48 +255,48 @@ test fn pipeline_filter_map_fold_error_count() -> Unit {
 // ── entry_summary tests ───────────────────────────────────────────────────
 
 test fn entry_summary_error() -> Unit {
-    let entry = LogEntry { level: LogLevel::Error, message: "e", timestamp: 0 };
-    let ok = match entry_summary(entry) { "ERROR" => 1, _ => 0 };
+    let entry: LogEntry = LogEntry { level: LogLevel::Error, message: "e", timestamp: 0 };
+    let ok: Int = match entry_summary(entry) { "ERROR" => 1, _ => 0 };
     assert_eq(ok, 1);
 }
 
 test fn entry_summary_warn() -> Unit {
-    let entry = LogEntry { level: LogLevel::Warn, message: "w", timestamp: 0 };
-    let ok = match entry_summary(entry) { "WARN" => 1, _ => 0 };
+    let entry: LogEntry = LogEntry { level: LogLevel::Warn, message: "w", timestamp: 0 };
+    let ok: Int = match entry_summary(entry) { "WARN" => 1, _ => 0 };
     assert_eq(ok, 1);
 }
 
 test fn entry_summary_info() -> Unit {
-    let entry = LogEntry { level: LogLevel::Info, message: "i", timestamp: 0 };
-    let ok = match entry_summary(entry) { "INFO" => 1, _ => 0 };
+    let entry: LogEntry = LogEntry { level: LogLevel::Info, message: "i", timestamp: 0 };
+    let ok: Int = match entry_summary(entry) { "INFO" => 1, _ => 0 };
     assert_eq(ok, 1);
 }
 
 test fn entry_summary_debug() -> Unit {
-    let entry = LogEntry { level: LogLevel::Debug, message: "d", timestamp: 0 };
-    let ok = match entry_summary(entry) { "DEBUG" => 1, _ => 0 };
+    let entry: LogEntry = LogEntry { level: LogLevel::Debug, message: "d", timestamp: 0 };
+    let ok: Int = match entry_summary(entry) { "DEBUG" => 1, _ => 0 };
     assert_eq(ok, 1);
 }
 
 // ── is_error_level tests ──────────────────────────────────────────────────
 
 test fn is_error_level_true_for_error() -> Unit {
-    let entry = LogEntry { level: LogLevel::Error, message: "e", timestamp: 0 };
+    let entry: LogEntry = LogEntry { level: LogLevel::Error, message: "e", timestamp: 0 };
     assert_eq(is_error_level(entry), true);
 }
 
 test fn is_error_level_false_for_warn() -> Unit {
-    let entry = LogEntry { level: LogLevel::Warn, message: "w", timestamp: 0 };
+    let entry: LogEntry = LogEntry { level: LogLevel::Warn, message: "w", timestamp: 0 };
     assert_eq(is_error_level(entry), false);
 }
 
 test fn is_error_level_false_for_info() -> Unit {
-    let entry = LogEntry { level: LogLevel::Info, message: "i", timestamp: 0 };
+    let entry: LogEntry = LogEntry { level: LogLevel::Info, message: "i", timestamp: 0 };
     assert_eq(is_error_level(entry), false);
 }
 
 test fn is_error_level_false_for_debug() -> Unit {
-    let entry = LogEntry { level: LogLevel::Debug, message: "d", timestamp: 0 };
+    let entry: LogEntry = LogEntry { level: LogLevel::Debug, message: "d", timestamp: 0 };
     assert_eq(is_error_level(entry), false);
 }
 
@@ -308,7 +308,7 @@ test fn build_report_debug_increments_count_only() -> Unit {
         LogEntry { level: LogLevel::Debug, message: "d1", timestamp: 1 },
         LogEntry { level: LogLevel::Debug, message: "d2", timestamp: 2 },
     ];
-    let report = build_report(entries);
+    let report: Report = build_report(entries);
     assert_eq(report.count,    2);
     assert_eq(report.errors,   0);
     assert_eq(report.warnings, 0);
