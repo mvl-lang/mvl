@@ -1,0 +1,12 @@
+// Cross-backend smoke test for std.env identity functions (#432).
+// Verifies getuid() and getgid() return the same value on both backends.
+// No expected annotation — test uses assert_backends_agree (both must match).
+
+use std.env.{getuid, getgid}
+
+fn main() -> Unit {
+    let uid: Int = getuid();
+    let gid: Int = getgid();
+    println("uid={}", uid);
+    println("gid={}", gid);
+}

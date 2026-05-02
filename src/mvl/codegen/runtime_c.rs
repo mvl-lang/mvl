@@ -28,20 +28,53 @@ impl<'ctx> LlvmBackend<'ctx> {
         )
     }
 
-    // ── std.env (#432 — declare helpers ready; implementations pending #414) ──
+    // ── std.env — wired (#432) ────────────────────────────────────────────────
 
-    /// `_mvl_env_get(key: ptr) -> ptr`  (MvlOption*)
+    /// `_mvl_env_getuid() -> i64`
+    pub(crate) fn get_mvl_env_getuid(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_env_getuid",
+            &[],
+            Some(self.context.i64_type().into()),
+            false,
+        )
+    }
+
+    /// `_mvl_env_getgid() -> i64`
+    pub(crate) fn get_mvl_env_getgid(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_env_getgid",
+            &[],
+            Some(self.context.i64_type().into()),
+            false,
+        )
+    }
+
+    /// `_mvl_env_exit(code: i64) -> void`  (diverging — caller emits `unreachable` after)
+    pub(crate) fn get_mvl_env_exit(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_env_exit",
+            &[self.context.i64_type().into()],
+            None,
+            false,
+        )
+    }
+
+    // ── std.env — pending LLVM codegen wiring ────────────────────────────────
+
+    /// `_mvl_env_get(key: ptr) -> ptr`  (heap C string, null = None)
     #[allow(dead_code)]
     pub(crate) fn get_mvl_env_get(&self) -> FunctionValue<'ctx> {
         let ptr: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
         self.get_or_declare_fn("_mvl_env_get", &[ptr], Some(ptr.try_into().unwrap()), false)
     }
 
-    /// `_mvl_env_set_var(key: ptr, val: ptr)`
+    /// `_mvl_env_set_var(key: ptr, val: ptr) -> i32`  (0=ok, 1=err)
     #[allow(dead_code)]
     pub(crate) fn get_mvl_env_set_var(&self) -> FunctionValue<'ctx> {
         let ptr: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
-        self.get_or_declare_fn("_mvl_env_set_var", &[ptr, ptr], None, false)
+        let i32_ty = self.context.i32_type().into();
+        self.get_or_declare_fn("_mvl_env_set_var", &[ptr, ptr], Some(i32_ty), false)
     }
 
     /// `_mvl_env_remove_var(key: ptr)`
@@ -51,73 +84,86 @@ impl<'ctx> LlvmBackend<'ctx> {
         self.get_or_declare_fn("_mvl_env_remove_var", &[ptr], None, false)
     }
 
-    /// `_mvl_env_args() -> ptr`  (MvlArray* of MvlString*)
-    #[allow(dead_code)]
-    pub(crate) fn get_mvl_env_args(&self) -> FunctionValue<'ctx> {
-        let ptr = self.context.ptr_type(AddressSpace::default());
-        self.get_or_declare_fn("_mvl_env_args", &[], Some(ptr.into()), false)
-    }
-
-    /// `_mvl_env_current_dir() -> ptr`  (MvlOption*)
+    /// `_mvl_env_current_dir() -> ptr`  (heap C string, null = error)
     #[allow(dead_code)]
     pub(crate) fn get_mvl_env_current_dir(&self) -> FunctionValue<'ctx> {
         let ptr = self.context.ptr_type(AddressSpace::default());
         self.get_or_declare_fn("_mvl_env_current_dir", &[], Some(ptr.into()), false)
     }
 
-    /// `_mvl_process_id() -> i64`
+    /// `_mvl_env_args_count() -> i64`
     #[allow(dead_code)]
-    pub(crate) fn get_mvl_process_id(&self) -> FunctionValue<'ctx> {
+    pub(crate) fn get_mvl_env_args_count(&self) -> FunctionValue<'ctx> {
         self.get_or_declare_fn(
-            "_mvl_process_id",
+            "_mvl_env_args_count",
             &[],
             Some(self.context.i64_type().into()),
             false,
         )
     }
 
-    // ── std.process (#432 — declare helpers ready; implementations pending #414) ─
-
-    /// `_mvl_process_command_new(prog: ptr) -> ptr`  (command handle)
+    /// `_mvl_env_args_get(i: i64) -> ptr`  (heap C string, null = out of bounds)
     #[allow(dead_code)]
-    pub(crate) fn get_mvl_process_command_new(&self) -> FunctionValue<'ctx> {
-        let ptr: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
+    pub(crate) fn get_mvl_env_args_get(&self) -> FunctionValue<'ctx> {
+        let ptr = self.context.ptr_type(AddressSpace::default());
         self.get_or_declare_fn(
-            "_mvl_process_command_new",
-            &[ptr],
+            "_mvl_env_args_get",
+            &[self.context.i64_type().into()],
+            Some(ptr.into()),
+            false,
+        )
+    }
+
+    /// `_mvl_env_free_cstr(s: ptr)`
+    #[allow(dead_code)]
+    pub(crate) fn get_mvl_env_free_cstr(&self) -> FunctionValue<'ctx> {
+        let ptr: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
+        self.get_or_declare_fn("_mvl_env_free_cstr", &[ptr], None, false)
+    }
+
+    // ── std.process — pending LLVM codegen wiring ─────────────────────────────
+
+    /// `_mvl_process_spawn(cmd: ptr, stdin: i8, stdout: i8, stderr: i8) -> ptr`  (Child*)
+    #[allow(dead_code)]
+    pub(crate) fn get_mvl_process_spawn(&self) -> FunctionValue<'ctx> {
+        let ptr: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
+        let i8_ty: BasicMetadataTypeEnum = self.context.i8_type().into();
+        self.get_or_declare_fn(
+            "_mvl_process_spawn",
+            &[ptr, i8_ty, i8_ty, i8_ty],
             Some(ptr.try_into().unwrap()),
             false,
         )
     }
 
-    /// `_mvl_process_command_arg(cmd: ptr, arg: ptr)`
+    /// `_mvl_process_wait(child: ptr) -> i64`  (exit code; -1 on error)
     #[allow(dead_code)]
-    pub(crate) fn get_mvl_process_command_arg(&self) -> FunctionValue<'ctx> {
-        let ptr: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
-        self.get_or_declare_fn("_mvl_process_command_arg", &[ptr, ptr], None, false)
-    }
-
-    /// `_mvl_process_command_spawn(cmd: ptr) -> ptr`  (MvlResult*)
-    #[allow(dead_code)]
-    pub(crate) fn get_mvl_process_command_spawn(&self) -> FunctionValue<'ctx> {
+    pub(crate) fn get_mvl_process_wait(&self) -> FunctionValue<'ctx> {
         let ptr: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
         self.get_or_declare_fn(
-            "_mvl_process_command_spawn",
+            "_mvl_process_wait",
             &[ptr],
-            Some(ptr.try_into().unwrap()),
+            Some(self.context.i64_type().into()),
             false,
         )
     }
 
-    /// `_mvl_process_handle_wait(handle: ptr) -> ptr`  (MvlResult*)
+    /// `_mvl_process_kill(child: ptr) -> i64`  (0=ok, -1=error)
     #[allow(dead_code)]
-    pub(crate) fn get_mvl_process_handle_wait(&self) -> FunctionValue<'ctx> {
+    pub(crate) fn get_mvl_process_kill(&self) -> FunctionValue<'ctx> {
         let ptr: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
         self.get_or_declare_fn(
-            "_mvl_process_handle_wait",
+            "_mvl_process_kill",
             &[ptr],
-            Some(ptr.try_into().unwrap()),
+            Some(self.context.i64_type().into()),
             false,
         )
+    }
+
+    /// `_mvl_process_drop_child(child: ptr)`
+    #[allow(dead_code)]
+    pub(crate) fn get_mvl_process_drop_child(&self) -> FunctionValue<'ctx> {
+        let ptr: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
+        self.get_or_declare_fn("_mvl_process_drop_child", &[ptr], None, false)
     }
 }

@@ -162,6 +162,42 @@ fn llvm_fn_takes_string() {
     assert_llvm_output(&file, "hello world");
 }
 
+// ── #432: std.env via C-ABI (getuid/getgid) ──────────────────────────────────
+
+fn corpus_basics(name: &str) -> String {
+    format!(
+        "{}/tests/corpus/01_basics/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+#[test]
+fn cross_backend_env_getuid_getgid() {
+    // Verifies that getuid() and getgid() return identical values through both
+    // backends: Rust path calls mvl_runtime::stdlib::env::getuid/getgid,
+    // LLVM path calls _mvl_env_getuid/_mvl_env_getgid via libmvl_runtime_c.
+    let file = corpus_basics("env_identity_llvm.mvl");
+    assert_backends_agree_file(&file);
+}
+
+/// Assert both backends agree on the given file path (not corpus-relative).
+fn assert_backends_agree_file(file: &str) {
+    let transpiler_out = run_transpiler(file);
+    match run_llvm(file) {
+        None => {
+            eprintln!("SKIP {file}: lli not found — install LLVM (brew install llvm)");
+        }
+        Some(llvm_out) => {
+            assert_eq!(
+                transpiler_out, llvm_out,
+                "{file}: LLVM and transpiler backends produced different output.\n\
+                 transpiler: {transpiler_out:?}\n\
+                 llvm:       {llvm_out:?}"
+            );
+        }
+    }
+}
+
 // ── ADR-0018: mvl_runtime_c cdylib smoke test ─────────────────────────────────
 
 #[test]
