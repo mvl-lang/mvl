@@ -8,12 +8,12 @@ type Point = struct {
 
 // Literals
 fn literals() -> Unit {
-    let a: Int = 42;
-    let b: Float = 3.14;
-    let c: String = "hello";
+    let a = 42;
+    let b = 3.14;
+    let c = "hello";
     let d: Char = 'x';
-    let e: Bool = true;
-    let f: Bool = false;
+    let e = true;
+    let f = false;
 }
 
 // Identifiers and field access
@@ -117,6 +117,6 @@ fn security_ops(raw: Tainted[String]) -> Clean[String] {
     clean
 }
 
-fn declassify_op(secret: Secret[Data]) -> Public[Data] {
+fn declassify_op(secret: Secret[Data]) -> Data {
     declassify(secret)
 }
