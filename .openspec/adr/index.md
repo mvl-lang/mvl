@@ -19,3 +19,4 @@
 | [0015](0015-mcdc-coverage-execution-model.md) | MC/DC coverage execution model — eager evaluation, Unique-Cause, u16 encoding | Accepted |
 | [0016](0016-llvm-memory-runtime.md) | LLVM memory runtime — Rust cdylib with reference counting for String, Array, Map | Accepted |
 | [0017](0017-linter-hint-severity-explicit-ifc-annotations.md) | Linter Hint severity — explicit IFC annotations as the preferred style | Accepted |
+| [0018](0018-llvm-runtime-c-abi.md) | Two-path stdlib architecture — Rust API vs C-ABI cdylib for LLVM backend | Accepted |

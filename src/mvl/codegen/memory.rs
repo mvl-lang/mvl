@@ -7,7 +7,7 @@
 //! returns the `FunctionValue`, declaring it on first use with External linkage
 //! so lli can resolve it via `--load=libmvl_memory.{dylib,so}`.
 
-use inkwell::{module::Linkage, types::BasicMetadataTypeEnum, values::FunctionValue, AddressSpace};
+use inkwell::{types::BasicMetadataTypeEnum, values::FunctionValue, AddressSpace};
 
 use super::LlvmBackend;
 
@@ -237,29 +237,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             Some(self.context.i64_type().into()),
             false,
         )
-    }
-
-    // ── Shared helper ─────────────────────────────────────────────────────────
-
-    fn get_or_declare_fn(
-        &self,
-        name: &str,
-        param_tys: &[BasicMetadataTypeEnum<'ctx>],
-        ret_ty: Option<inkwell::types::BasicTypeEnum<'ctx>>,
-        variadic: bool,
-    ) -> FunctionValue<'ctx> {
-        if let Some(f) = self.module.get_function(name) {
-            return f;
-        }
-        let fn_ty = match ret_ty {
-            Some(r) => {
-                use inkwell::types::BasicType;
-                r.fn_type(param_tys, variadic)
-            }
-            None => self.context.void_type().fn_type(param_tys, variadic),
-        };
-        self.module
-            .add_function(name, fn_ty, Some(Linkage::External))
     }
 
     // ── Drop emission (per-function heap cleanup) ─────────────────────────────

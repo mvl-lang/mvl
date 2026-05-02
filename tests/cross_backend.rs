@@ -161,3 +161,19 @@ fn llvm_fn_takes_string() {
     let file = corpus_types("fn_takes_string_llvm.mvl");
     assert_llvm_output(&file, "hello world");
 }
+
+// ── ADR-0018: mvl_runtime_c cdylib smoke test ─────────────────────────────────
+
+#[test]
+fn llvm_runtime_c_loads() {
+    // Verify that libmvl_runtime_c is findable and loads without errors.
+    // Build it first: `make build-llvm-runtime` (cargo build -p mvl_runtime_c).
+    let Some(_) = mvl::mvl::codegen::find_mvl_runtime_c_lib() else {
+        eprintln!(
+            "SKIP llvm_runtime_c_loads: libmvl_runtime_c not found — run `make build-llvm-runtime`"
+        );
+        return;
+    };
+    // Running any LLVM program now exercises runtime_c loading (both --load flags are passed).
+    assert_backends_agree("hello_world.mvl");
+}

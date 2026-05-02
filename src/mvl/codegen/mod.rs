@@ -19,6 +19,7 @@
 mod builtins;
 mod exprs;
 mod memory;
+mod runtime_c;
 mod stmts;
 mod types;
 
@@ -100,6 +101,38 @@ pub fn find_mvl_memory_lib() -> Option<std::path::PathBuf> {
                 }
                 // Cargo places cdylib artifacts under target/{profile}/deps/
                 let lib = dir.join(format!("deps/libmvl_memory.{ext}"));
+                if lib.exists() {
+                    return Some(lib);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Find the `libmvl_runtime_c` shared library for the `lli --load` flag (ADR-0018).
+///
+/// Search order:
+/// 1. `MVL_RUNTIME_C_LIB` environment variable (explicit override)
+/// 2. Sibling of the current executable in `target/{debug,release}/`
+/// 3. Returns `None` if not found — lli runs without it (programs not using C-ABI stdlib still work)
+pub fn find_mvl_runtime_c_lib() -> Option<std::path::PathBuf> {
+    if let Ok(path) = std::env::var("MVL_RUNTIME_C_LIB") {
+        let p = std::path::PathBuf::from(path);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            for ext in &["dylib", "so"] {
+                let lib = dir.join(format!("libmvl_runtime_c.{ext}"));
+                if lib.exists() {
+                    return Some(lib);
+                }
+                let lib = dir.join(format!("deps/libmvl_runtime_c.{ext}"));
                 if lib.exists() {
                     return Some(lib);
                 }
@@ -732,6 +765,33 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .unwrap_or_else(|| "Struct".into()),
             _ => "Unknown".into(),
         }
+    }
+
+    // ── External symbol declarations (shared by memory.rs and runtime_c.rs) ────
+
+    /// Declare (or return cached) an external C-ABI function in the LLVM module.
+    ///
+    /// Used by `memory.rs` and `runtime_c.rs` to lazily declare symbols from
+    /// `libmvl_memory` and `libmvl_runtime_c` respectively.
+    pub(super) fn get_or_declare_fn(
+        &self,
+        name: &str,
+        param_tys: &[BasicMetadataTypeEnum<'ctx>],
+        ret_ty: Option<inkwell::types::BasicTypeEnum<'ctx>>,
+        variadic: bool,
+    ) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function(name) {
+            return f;
+        }
+        let fn_ty = match ret_ty {
+            Some(r) => {
+                use inkwell::types::BasicType;
+                r.fn_type(param_tys, variadic)
+            }
+            None => self.context.void_type().fn_type(param_tys, variadic),
+        };
+        self.module
+            .add_function(name, fn_ty, Some(Linkage::External))
     }
 
     // ── Verification and IR output ───────────────────────────────────────────
