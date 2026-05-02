@@ -4,7 +4,7 @@
 // waiting for exit, capturing output, and sending signals.
 // Run with:  mvl test tests/stdlib/
 //
-// Phase 2 runtime coverage (real implementations):
+// Runtime coverage:
 //   spawn           — launch a child process (std::process::Command)
 //   wait            — block until child exits, collect output
 //   kill            — terminate a running child

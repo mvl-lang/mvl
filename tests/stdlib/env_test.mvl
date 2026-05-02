@@ -4,7 +4,7 @@
 // working directory, Unix identity, and signal constructors.
 // Run with:  mvl test tests/stdlib/
 //
-// Phase 2 runtime coverage (real implementations):
+// Runtime coverage:
 //   set         — write env var (std::env::set_var)
 //   remove_var  — unset env var (std::env::remove_var)
 //   args        — all process arguments
@@ -12,7 +12,7 @@
 //   getuid      — effective user ID (POSIX getuid)
 //   getgid      — effective group ID (POSIX getgid)
 //   sigint/sigterm/sighup/sigusr1/sigusr2 — pure signal constructors
-//   signal_on/signal_reset/signal_ignore  — Phase 2 no-ops
+//   signal_on/signal_reset/signal_ignore  — no-ops (signal callbacks not yet implemented)
 //
 // Not tested here (UFCS name collisions — covered by Rust unit tests):
 //   get  — conflicts with MVL's built-in list_get(xs, i) UFCS dispatch
@@ -126,13 +126,13 @@ test fn env_sigusr2_does_not_panic() -> Unit {
     assert_eq(true, true);
 }
 
-// ── Signal registration (Phase 2: no-ops) ────────────────────────────────
+// ── Signal registration (no-ops) ────────────────────────────────
 // Inline closures are not yet supported in MVL syntax; pass a named handler.
 
 fn noop_handler() -> Unit { }
 
 test fn env_signal_on_does_not_panic() -> Unit ! Env {
-    // Phase 2: no-op — verifies compilation and absence of panic.
+    // No-op — verifies compilation and absence of panic.
     signal_on(sigint(), noop_handler);
     assert_eq(true, true);
 }
