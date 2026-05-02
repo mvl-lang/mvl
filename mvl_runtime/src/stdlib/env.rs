@@ -208,35 +208,99 @@ mod tests {
 
     #[test]
     #[allow(deprecated)]
-    fn remove_var_is_idempotent() {
+    fn remove_var_actually_removes() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let name = Clean("MVL_ENV_TEST_REMOVE_IDEMPOTENT".to_string());
+        let name = Clean("MVL_ENV_TEST_REMOVE".to_string());
+        // Set the var, verify it's present, then remove and verify it's gone.
+        std::env::set_var(&**&name, "present");
+        assert!(get(name.clone()).is_some(), "var must exist before remove");
         remove_var(name.clone());
-        remove_var(name); // second call must not panic
+        assert!(
+            get(name.clone()).is_none(),
+            "var must be absent after remove"
+        );
+        // Second remove must also be a no-op (no panic).
+        remove_var(name);
     }
 
     #[test]
-    fn all_returns_non_empty_list() {
+    #[allow(deprecated)]
+    fn all_contains_known_variable() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("MVL_ENV_TEST_ALL_KEY", "mvl_all_value");
         let pairs = all();
-        assert!(!pairs.is_empty(), "at least one env var must be set");
+        let found = pairs
+            .iter()
+            .any(|(k, v)| k.0 == "MVL_ENV_TEST_ALL_KEY" && v.0 == "mvl_all_value");
+        std::env::remove_var("MVL_ENV_TEST_ALL_KEY");
+        assert!(found, "all() must include variables set in the process env");
     }
 
     #[test]
-    fn args_returns_vec_of_tainted() {
+    fn args_includes_binary_name() {
         let a = args();
-        // Test runner has at least the binary name.
-        assert!(!a.is_empty());
+        // The test runner binary name is always the first argument.
+        assert!(!a.is_empty(), "args() must return at least the binary name");
+        assert!(
+            !a[0].0.is_empty(),
+            "first arg (binary name) must not be empty"
+        );
     }
 
     #[test]
-    fn current_dir_returns_ok() {
-        let dir = current_dir();
-        assert!(dir.is_ok(), "current_dir must not fail in tests");
+    fn current_dir_matches_std_env() {
+        let expected = std::env::current_dir()
+            .expect("std::env::current_dir must work in tests")
+            .to_string_lossy()
+            .into_owned();
+        let got = current_dir().expect("current_dir must not fail in tests");
+        assert_eq!(
+            got.0, expected,
+            "current_dir() must match std::env::current_dir()"
+        );
     }
 
     #[test]
-    fn getuid_non_negative() {
-        assert!(getuid() >= 0);
+    fn chdir_changes_and_restores_directory() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let original = std::env::current_dir().expect("must have cwd");
+        let tmp = std::env::temp_dir().to_string_lossy().into_owned();
+
+        chdir(Clean(tmp.clone())).expect("chdir to temp_dir must succeed");
+        let after = current_dir().expect("current_dir after chdir");
+        // On macOS /tmp is a symlink to /private/tmp — compare canonical paths.
+        let canonical_tmp = std::fs::canonicalize(&tmp).unwrap_or_else(|_| tmp.into());
+        let canonical_after = std::fs::canonicalize(&after.0).unwrap_or_else(|_| after.0.into());
+        assert_eq!(canonical_after, canonical_tmp);
+
+        // Restore original directory so other tests are not affected.
+        std::env::set_current_dir(&original).expect("restore cwd");
+    }
+
+    #[test]
+    fn chdir_nonexistent_returns_err() {
+        let result = chdir(Clean("/mvl_nonexistent_dir_xyz_12345".to_string()));
+        assert!(result.is_err(), "chdir to nonexistent path must fail");
+    }
+
+    #[test]
+    fn getuid_matches_std_env_on_unix() {
+        let uid = getuid();
+        assert!(uid >= 0, "uid must be non-negative");
+        // On Unix, cross-check against the UID env var if the shell set it.
+        // This catches a stub returning a hardcoded 0 when the real UID differs.
+        #[cfg(unix)]
+        if let Ok(shell_uid) = std::env::var("UID") {
+            if let Ok(n) = shell_uid.parse::<i64>() {
+                assert_eq!(
+                    uid, n,
+                    "getuid() must match $UID from the shell environment"
+                );
+            }
+        }
+        // Fallback: on a typical CI system running as non-root, uid > 0.
+        // This is a hint rather than a hard assertion since root CI exists.
+        let _ = uid; // used above
     }
 
     #[test]
