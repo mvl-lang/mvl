@@ -16,7 +16,9 @@
 //! | [`refine`] | `mvl_refine!` macro — debug assert for refinement predicates |
 //! | [`prelude`] | Flat re-export of everything a generated file needs |
 
-#![forbid(unsafe_code)]
+// `deny` (not `forbid`) so individual functions can use `#[allow(unsafe_code)]`
+// for targeted POSIX C calls (e.g. getuid/getgid) where no safe std alternative exists.
+#![deny(unsafe_code)]
 #![warn(missing_docs)]
 
 pub mod effects;
