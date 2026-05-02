@@ -804,31 +804,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             "println" => self.emit_println(args),
             "print" => self.emit_print(args),
             "format" => self.emit_format(args),
-            // ADR-0018: std.env stdlib functions via libmvl_runtime_c
-            "getuid" => {
-                use inkwell::values::AnyValue;
-                let f = self.get_mvl_env_getuid();
-                let call = self.builder.build_call(f, &[], "getuid_result").ok()?;
-                BasicValueEnum::try_from(call.as_any_value_enum()).ok()
-            }
-            "getgid" => {
-                use inkwell::values::AnyValue;
-                let f = self.get_mvl_env_getgid();
-                let call = self.builder.build_call(f, &[], "getgid_result").ok()?;
-                BasicValueEnum::try_from(call.as_any_value_enum()).ok()
-            }
-            "exit" if args.len() == 1 => {
-                let code = match self.emit_expr(&args[0])? {
-                    BasicValueEnum::IntValue(v) => v,
-                    _ => return None,
-                };
-                let f = self.get_mvl_env_exit();
-                let _ = self.builder.build_call(f, &[code.into()], "exit_call");
-                // exit is `-> !`; emit unreachable so LLVM knows this is a terminator
-                let _ = self.builder.build_unreachable();
-                self.terminated = true;
-                None
-            }
             // range(start, end) as a value → { i64 start, i64 end } range struct
             "range" if args.len() == 2 => {
                 let start = match self.emit_expr(&args[0])? {
@@ -925,6 +900,14 @@ impl<'ctx> LlvmBackend<'ctx> {
                         use inkwell::values::AnyValue;
                         return BasicValueEnum::try_from(call.as_any_value_enum()).ok();
                     }
+                }
+                // ADR-0018: stdlib C-ABI dispatch — generic path, no per-function boilerplate.
+                if let Some(info) = self.stdlib_fns.get(name).map(|i| super::StdlibFnInfo {
+                    module: i.module.clone(),
+                    params: i.params.clone(),
+                    return_type: i.return_type.clone(),
+                }) {
+                    return self.emit_stdlib_call(name, &info, args);
                 }
                 // Forward call to a user-defined function (already declared).
                 let fn_val = self.module.get_function(name)?;

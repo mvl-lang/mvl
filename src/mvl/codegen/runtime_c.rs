@@ -1,169 +1,127 @@
-//! C-ABI runtime declarations for the LLVM backend (ADR-0018).
+//! Generic C-ABI stdlib dispatch for the LLVM backend (ADR-0018).
 //!
-//! Lazy-declares symbols from `libmvl_runtime_c.{so,dylib}`, using the same
-//! `get_or_declare_fn` pattern as `memory.rs`.  Add one `get_*` method per
-//! exported symbol; the LLVM backend calls these on first use.
+//! Replaces per-function getter boilerplate with a single `emit_stdlib_call`
+//! that derives the C symbol name and LLVM types from the typed stdlib `FnDecl`
+//! metadata passed into `compile_to_ir`.
 //!
-//! # Adding a new symbol (#432)
+//! # How to add a new stdlib function
 //!
-//! 1. Export the symbol in `mvl_runtime_c/src/stdlib/<module>.rs`
-//! 2. Add a `get_mvl_<name>()` method here mirroring the pattern below
-//! 3. Emit the `declare` + `call` in the relevant codegen file
+//! 1. Export the C-ABI wrapper in `mvl_runtime_c/src/stdlib/<module>.rs`
+//! 2. No changes needed here — `emit_stdlib_call` derives everything from the
+//!    `StdlibFnInfo` map built in `main.rs`.
 
-use inkwell::{types::BasicMetadataTypeEnum, values::FunctionValue, AddressSpace};
+use inkwell::{
+    types::{BasicMetadataTypeEnum, BasicTypeEnum},
+    values::{BasicMetadataValueEnum, BasicValueEnum},
+    AddressSpace,
+};
 
-use super::LlvmBackend;
+use crate::mvl::parser::ast::{Expr, TypeExpr};
+
+use super::{LlvmBackend, StdlibFnInfo};
 
 impl<'ctx> LlvmBackend<'ctx> {
-    // ── Bootstrap / version ───────────────────────────────────────────────────
+    /// Emit a call to a stdlib function via the C-ABI runtime (`libmvl_runtime_c`).
+    ///
+    /// Derives the C symbol name as `_mvl_{module}_{fn_name}`, looks up or
+    /// declares the function with types derived from the `StdlibFnInfo`, and
+    /// emits the call.
+    ///
+    /// For functions that return `Never` (e.g. `exit`), also emits `unreachable`
+    /// and sets `self.terminated = true`.
+    ///
+    /// Returns `None` for void/Never returns or if a type cannot be lowered.
+    pub(crate) fn emit_stdlib_call(
+        &mut self,
+        fn_name: &str,
+        info: &StdlibFnInfo,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let c_symbol = format!("_mvl_{}_{}", info.module, fn_name);
 
-    /// `_mvl_runtime_version() -> ptr`  (null-terminated C string)
-    #[allow(dead_code)]
-    pub(crate) fn get_mvl_runtime_version(&self) -> FunctionValue<'ctx> {
-        self.get_or_declare_fn(
-            "_mvl_runtime_version",
-            &[],
-            Some(self.context.ptr_type(AddressSpace::default()).into()),
-            false,
-        )
+        let param_tys: Vec<BasicMetadataTypeEnum<'ctx>> = info
+            .params
+            .iter()
+            .filter_map(|ty| self.stdlib_type_to_llvm_meta(ty))
+            .collect();
+
+        let ret_llvm = self.stdlib_return_type(&info.return_type);
+        let is_never = Self::is_never_type(&info.return_type);
+
+        let f = self.get_or_declare_fn(&c_symbol, &param_tys, ret_llvm, false);
+
+        let arg_vals: Vec<BasicValueEnum<'ctx>> =
+            args.iter().filter_map(|a| self.emit_expr(a)).collect();
+
+        let call_args: Vec<BasicMetadataValueEnum<'ctx>> =
+            arg_vals.iter().map(|v| (*v).into()).collect();
+
+        let call = self
+            .builder
+            .build_call(f, &call_args, &format!("{fn_name}_result"))
+            .ok()?;
+
+        if is_never {
+            let _ = self.builder.build_unreachable();
+            self.terminated = true;
+            return None;
+        }
+
+        ret_llvm?;
+
+        use inkwell::values::AnyValue;
+        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
     }
 
-    // ── std.env — wired (#432) ────────────────────────────────────────────────
-
-    /// `_mvl_env_getuid() -> i64`
-    pub(crate) fn get_mvl_env_getuid(&self) -> FunctionValue<'ctx> {
-        self.get_or_declare_fn(
-            "_mvl_env_getuid",
-            &[],
-            Some(self.context.i64_type().into()),
-            false,
-        )
+    /// Map a MVL `TypeExpr` to an LLVM metadata type for use as a C-ABI parameter.
+    ///
+    /// Only the primitive types that map cleanly to C scalar types are supported.
+    /// `Labeled`/`Refined` wrappers are unwrapped to their inner type.
+    /// Unsupported types (Option, Result, complex generics) return `None`.
+    fn stdlib_type_to_llvm_meta(&self, ty: &TypeExpr) -> Option<BasicMetadataTypeEnum<'ctx>> {
+        match ty {
+            TypeExpr::Base { name, .. } => match name.as_str() {
+                "Int" => Some(self.context.i64_type().into()),
+                "Float" => Some(self.context.f64_type().into()),
+                "Bool" => Some(self.context.bool_type().into()),
+                "Byte" => Some(self.context.i8_type().into()),
+                "Char" => Some(self.context.i32_type().into()),
+                "String" => Some(self.context.ptr_type(AddressSpace::default()).into()),
+                _ => None,
+            },
+            TypeExpr::Labeled { inner, .. } | TypeExpr::Refined { inner, .. } => {
+                self.stdlib_type_to_llvm_meta(inner)
+            }
+            TypeExpr::Ref { inner, .. } => self.stdlib_type_to_llvm_meta(inner),
+            _ => None,
+        }
     }
 
-    /// `_mvl_env_getgid() -> i64`
-    pub(crate) fn get_mvl_env_getgid(&self) -> FunctionValue<'ctx> {
-        self.get_or_declare_fn(
-            "_mvl_env_getgid",
-            &[],
-            Some(self.context.i64_type().into()),
-            false,
-        )
+    /// Map a MVL `TypeExpr` return type to an LLVM basic type.
+    ///
+    /// Returns `None` for `Unit`, `Never`, and unsupported types (void return).
+    fn stdlib_return_type(&self, ty: &TypeExpr) -> Option<BasicTypeEnum<'ctx>> {
+        match ty {
+            TypeExpr::Base { name, .. } => match name.as_str() {
+                "Int" => Some(self.context.i64_type().into()),
+                "Float" => Some(self.context.f64_type().into()),
+                "Bool" => Some(self.context.bool_type().into()),
+                "Byte" => Some(self.context.i8_type().into()),
+                "Char" => Some(self.context.i32_type().into()),
+                "String" => Some(self.context.ptr_type(AddressSpace::default()).into()),
+                "Unit" | "Never" => None,
+                _ => None,
+            },
+            TypeExpr::Labeled { inner, .. } | TypeExpr::Refined { inner, .. } => {
+                self.stdlib_return_type(inner)
+            }
+            TypeExpr::Ref { inner, .. } => self.stdlib_return_type(inner),
+            _ => None,
+        }
     }
 
-    /// `_mvl_env_exit(code: i64) -> void`  (diverging — caller emits `unreachable` after)
-    pub(crate) fn get_mvl_env_exit(&self) -> FunctionValue<'ctx> {
-        self.get_or_declare_fn(
-            "_mvl_env_exit",
-            &[self.context.i64_type().into()],
-            None,
-            false,
-        )
-    }
-
-    // ── std.env — pending LLVM codegen wiring ────────────────────────────────
-
-    /// `_mvl_env_get(key: ptr) -> ptr`  (heap C string, null = None)
-    #[allow(dead_code)]
-    pub(crate) fn get_mvl_env_get(&self) -> FunctionValue<'ctx> {
-        let ptr: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
-        self.get_or_declare_fn("_mvl_env_get", &[ptr], Some(ptr.try_into().unwrap()), false)
-    }
-
-    /// `_mvl_env_set_var(key: ptr, val: ptr) -> i32`  (0=ok, 1=err)
-    #[allow(dead_code)]
-    pub(crate) fn get_mvl_env_set_var(&self) -> FunctionValue<'ctx> {
-        let ptr: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
-        let i32_ty = self.context.i32_type().into();
-        self.get_or_declare_fn("_mvl_env_set_var", &[ptr, ptr], Some(i32_ty), false)
-    }
-
-    /// `_mvl_env_remove_var(key: ptr)`
-    #[allow(dead_code)]
-    pub(crate) fn get_mvl_env_remove_var(&self) -> FunctionValue<'ctx> {
-        let ptr: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
-        self.get_or_declare_fn("_mvl_env_remove_var", &[ptr], None, false)
-    }
-
-    /// `_mvl_env_current_dir() -> ptr`  (heap C string, null = error)
-    #[allow(dead_code)]
-    pub(crate) fn get_mvl_env_current_dir(&self) -> FunctionValue<'ctx> {
-        let ptr = self.context.ptr_type(AddressSpace::default());
-        self.get_or_declare_fn("_mvl_env_current_dir", &[], Some(ptr.into()), false)
-    }
-
-    /// `_mvl_env_args_count() -> i64`
-    #[allow(dead_code)]
-    pub(crate) fn get_mvl_env_args_count(&self) -> FunctionValue<'ctx> {
-        self.get_or_declare_fn(
-            "_mvl_env_args_count",
-            &[],
-            Some(self.context.i64_type().into()),
-            false,
-        )
-    }
-
-    /// `_mvl_env_args_get(i: i64) -> ptr`  (heap C string, null = out of bounds)
-    #[allow(dead_code)]
-    pub(crate) fn get_mvl_env_args_get(&self) -> FunctionValue<'ctx> {
-        let ptr = self.context.ptr_type(AddressSpace::default());
-        self.get_or_declare_fn(
-            "_mvl_env_args_get",
-            &[self.context.i64_type().into()],
-            Some(ptr.into()),
-            false,
-        )
-    }
-
-    /// `_mvl_env_free_cstr(s: ptr)`
-    #[allow(dead_code)]
-    pub(crate) fn get_mvl_env_free_cstr(&self) -> FunctionValue<'ctx> {
-        let ptr: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
-        self.get_or_declare_fn("_mvl_env_free_cstr", &[ptr], None, false)
-    }
-
-    // ── std.process — pending LLVM codegen wiring ─────────────────────────────
-
-    /// `_mvl_process_spawn(cmd: ptr, stdin: i8, stdout: i8, stderr: i8) -> ptr`  (Child*)
-    #[allow(dead_code)]
-    pub(crate) fn get_mvl_process_spawn(&self) -> FunctionValue<'ctx> {
-        let ptr: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
-        let i8_ty: BasicMetadataTypeEnum = self.context.i8_type().into();
-        self.get_or_declare_fn(
-            "_mvl_process_spawn",
-            &[ptr, i8_ty, i8_ty, i8_ty],
-            Some(ptr.try_into().unwrap()),
-            false,
-        )
-    }
-
-    /// `_mvl_process_wait(child: ptr) -> i64`  (exit code; -1 on error)
-    #[allow(dead_code)]
-    pub(crate) fn get_mvl_process_wait(&self) -> FunctionValue<'ctx> {
-        let ptr: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
-        self.get_or_declare_fn(
-            "_mvl_process_wait",
-            &[ptr],
-            Some(self.context.i64_type().into()),
-            false,
-        )
-    }
-
-    /// `_mvl_process_kill(child: ptr) -> i64`  (0=ok, -1=error)
-    #[allow(dead_code)]
-    pub(crate) fn get_mvl_process_kill(&self) -> FunctionValue<'ctx> {
-        let ptr: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
-        self.get_or_declare_fn(
-            "_mvl_process_kill",
-            &[ptr],
-            Some(self.context.i64_type().into()),
-            false,
-        )
-    }
-
-    /// `_mvl_process_drop_child(child: ptr)`
-    #[allow(dead_code)]
-    pub(crate) fn get_mvl_process_drop_child(&self) -> FunctionValue<'ctx> {
-        let ptr: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
-        self.get_or_declare_fn("_mvl_process_drop_child", &[ptr], None, false)
+    /// Check whether a MVL type is `Never` (diverging — no return value).
+    fn is_never_type(ty: &TypeExpr) -> bool {
+        matches!(ty, TypeExpr::Base { name, .. } if name == "Never")
     }
 }

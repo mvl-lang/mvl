@@ -2583,6 +2583,55 @@ fn load_stdlib_prelude<'a>(
     prelude
 }
 
+/// Build a map of stdlib function name → `StdlibFnInfo` for the LLVM generic dispatch path.
+///
+/// Scans the program's `use std.X.{...}` declarations, parses the corresponding
+/// stdlib modules from the embedded `STDLIB_FILES`, and extracts every `fn` signature.
+/// The map is passed into `compile_to_ir` so the LLVM backend can derive C-ABI symbol
+/// names and LLVM types without per-function boilerplate (ADR-0018).
+#[cfg(feature = "llvm")]
+fn build_stdlib_fn_map(
+    prog: &mvl::mvl::parser::ast::Program,
+) -> std::collections::HashMap<String, codegen::StdlibFnInfo> {
+    use mvl::mvl::parser::ast::Decl;
+    use std::collections::HashSet;
+    let mut result = std::collections::HashMap::new();
+    let mut loaded: HashSet<String> = HashSet::new();
+    for decl in &prog.declarations {
+        if let Decl::Use(ud) = decl {
+            if ud.path.first().map(|s| s == "std").unwrap_or(false) {
+                if let Some(module) = ud.path.get(1) {
+                    if loaded.insert(module.clone()) {
+                        let filename = format!("{module}.mvl");
+                        if let Some(content) = mvl::mvl::stdlib::STDLIB_FILES
+                            .iter()
+                            .find(|(n, _)| *n == filename.as_str())
+                            .map(|(_, c)| *c)
+                        {
+                            let (mut p, _) = Parser::new(content);
+                            let stdlib_prog = p.parse_program();
+                            for sd in &stdlib_prog.declarations {
+                                if let Decl::Fn(fd) = sd {
+                                    let params = fd.params.iter().map(|p| p.ty.clone()).collect();
+                                    result.insert(
+                                        fd.name.clone(),
+                                        codegen::StdlibFnInfo {
+                                            module: module.clone(),
+                                            params,
+                                            return_type: *fd.return_type.clone(),
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    result
+}
+
 fn collect_imported_module_names(prog: &mvl::mvl::parser::ast::Program) -> Vec<String> {
     use mvl::mvl::parser::ast::Decl;
     use std::collections::HashSet;
@@ -2853,7 +2902,8 @@ mod find_test_binary_tests {
 fn build_project_llvm(path: &str) {
     let (prog, _src) = parse_or_exit(path);
     let module_name = stem(path);
-    match codegen::compile_to_ir(&prog, &module_name) {
+    let stdlib_fns = build_stdlib_fn_map(&prog);
+    match codegen::compile_to_ir(&prog, &stdlib_fns, &module_name) {
         Ok(ir) => {
             let out_path = format!("{module_name}.ll");
             fs::write(&out_path, &ir).unwrap_or_else(|e| {
@@ -2880,7 +2930,8 @@ fn run_project_llvm(path: &str) {
 
     let (prog, _src) = parse_or_exit(path);
     let module_name = stem(path);
-    let ir = match codegen::compile_to_ir(&prog, &module_name) {
+    let stdlib_fns = build_stdlib_fn_map(&prog);
+    let ir = match codegen::compile_to_ir(&prog, &stdlib_fns, &module_name) {
         Ok(ir) => ir,
         Err(e) => {
             eprintln!("error: LLVM codegen failed: {e}");
@@ -2973,7 +3024,8 @@ fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
         let module_name = stem(&file_str);
 
         let (prog, _src) = parse_or_exit(&file_str);
-        let ir = match codegen::compile_to_ir(&prog, &module_name) {
+        let stdlib_fns = build_stdlib_fn_map(&prog);
+        let ir = match codegen::compile_to_ir(&prog, &stdlib_fns, &module_name) {
             Ok(ir) => ir,
             Err(e) => {
                 eprintln!("  FAIL (codegen): {file_str}");

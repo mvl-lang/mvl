@@ -53,8 +53,26 @@ The `mvl_c_export!` macro generates the boilerplate for mechanical wrappers.
 
 ## LLVM Backend Integration
 
-`src/mvl/codegen/runtime_c.rs` provides lazy-declaration helpers (same pattern as `memory.rs`).
-`main.rs` passes `--load=libmvl_runtime_c.{so,dylib}` to lli when the library is found (optional — programs not using C-ABI stdlib still run without it).
+### Generic dispatch (mandatory pattern)
+
+Adding a new stdlib function to the LLVM backend requires **no changes** to the codegen layer. The dispatch is fully generic:
+
+1. `main.rs::build_stdlib_fn_map()` scans the program's `use std.X.{...}` declarations,
+   parses the corresponding stdlib module from `STDLIB_FILES`, and extracts every `FnDecl`
+   signature into a `HashMap<String, StdlibFnInfo>`.
+2. `compile_to_ir` receives the map and stores it in `LlvmBackend::stdlib_fns`.
+3. In `emit_fn_call`, after user-defined functions are checked, unresolved names fall through
+   to `emit_stdlib_call`, which:
+   - Derives the C symbol as `_mvl_{module}_{fn_name}`
+   - Lowers MVL parameter/return types via `stdlib_type_to_llvm_meta` / `stdlib_return_type`
+   - Declares and calls the external symbol via `get_or_declare_fn`
+   - Emits `unreachable` + sets `terminated` for `Never`-return functions (e.g. `exit`)
+
+**Do NOT add per-function `get_mvl_*()` getter methods to `runtime_c.rs`** — the old pattern
+from issue #408 was explicitly rejected here. The `stdlib_type_to_llvm_meta` helper covers
+all scalar types; add new type mappings there as needed.
+
+`main.rs` passes `--load=libmvl_runtime_c.{so,dylib}` to lli when the library is found (optional — programs not using the wrapped stdlib functions run without it).
 
 ## Pilot Function
 

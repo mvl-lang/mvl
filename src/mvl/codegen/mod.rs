@@ -41,12 +41,35 @@ use crate::mvl::parser::ast::{
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+/// Metadata for a stdlib function needed by the generic LLVM dispatch path.
+///
+/// Built in `main.rs` from the stdlib `FnDecl`s (extracted from `STDLIB_FILES`)
+/// and passed into [`compile_to_ir`] so the LLVM backend can derive C-ABI symbol
+/// names and LLVM types without per-function boilerplate.
+pub struct StdlibFnInfo {
+    /// Stdlib module name, e.g. `"env"` for `std/env.mvl`.
+    /// The C symbol is `_mvl_{module}_{fn_name}`.
+    pub module: String,
+    /// MVL parameter types in declaration order.
+    pub params: Vec<crate::mvl::parser::ast::TypeExpr>,
+    /// MVL return type.
+    pub return_type: crate::mvl::parser::ast::TypeExpr,
+}
+
 /// Compile a MVL program AST to LLVM IR text.
 ///
+/// `stdlib_fns` maps bare function names (e.g. `"getuid"`) to their stdlib
+/// metadata, used by the generic C-ABI dispatch path.  Pass an empty map when
+/// the program imports no stdlib functions.
+///
 /// Returns the IR as a string on success, or an error message on failure.
-pub fn compile_to_ir(prog: &Program, module_name: &str) -> Result<String, String> {
+pub fn compile_to_ir(
+    prog: &Program,
+    stdlib_fns: &HashMap<String, StdlibFnInfo>,
+    module_name: &str,
+) -> Result<String, String> {
     let context = Context::create();
-    let mut backend = LlvmBackend::new(&context, module_name);
+    let mut backend = LlvmBackend::new(&context, module_name, stdlib_fns);
     backend.emit_program(prog);
     backend.verify()?;
     Ok(backend.to_ir_string())
@@ -272,15 +295,39 @@ struct LlvmBackend<'ctx> {
     /// Keyed by variable name → HeapKind.  Cleared at function entry.
     /// Used to emit `_drop` calls before `return` and at function end.
     pub(crate) heap_locals: HashMap<String, HeapKind>,
+
+    // ── ADR-0018: generic stdlib C-ABI dispatch ──────────────────────────────
+    /// Stdlib function metadata keyed by bare function name.
+    /// Used by `emit_stdlib_call` to derive C symbol names and LLVM types
+    /// without per-function boilerplate.
+    stdlib_fns: HashMap<String, StdlibFnInfo>,
 }
 
 impl<'ctx> LlvmBackend<'ctx> {
-    fn new(context: &'ctx Context, module_name: &str) -> Self {
+    fn new(
+        context: &'ctx Context,
+        module_name: &str,
+        stdlib_fns: &HashMap<String, StdlibFnInfo>,
+    ) -> Self {
         let module = context.create_module(module_name);
         // L5-02: set target triple from LLVM defaults.
         let triple = inkwell::targets::TargetMachine::get_default_triple();
         module.set_triple(&triple);
         let builder = context.create_builder();
+        // Move StdlibFnInfo into the backend — we re-create from &HashMap by extracting
+        // only the fields we need into a parallel HashMap<String, StdlibFnInfo>.
+        // Since StdlibFnInfo is not Clone, we copy the fields individually.
+        let mut stdlib_map: HashMap<String, StdlibFnInfo> = HashMap::new();
+        for (name, info) in stdlib_fns {
+            stdlib_map.insert(
+                name.clone(),
+                StdlibFnInfo {
+                    module: info.module.clone(),
+                    params: info.params.clone(),
+                    return_type: info.return_type.clone(),
+                },
+            );
+        }
         Self {
             context,
             module,
@@ -297,6 +344,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             emitted_monomorphs: HashSet::new(),
             local_mvl_types: HashMap::new(),
             heap_locals: HashMap::new(),
+            stdlib_fns: stdlib_map,
         }
     }
 
