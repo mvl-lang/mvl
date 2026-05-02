@@ -1,0 +1,6 @@
+// Corpus: y cpromtodule operations (#47)
+// Demonstrates std.crypto: sha256(), sha512() (pure), crypto_random_bytes() (! CryptoRandom).
+// Hash functions are pure; crypto_random_bytes requires ! CryptoRandom.
+
+fn crypto_hash_sha256(data: String) -> std.crypto: sha256(), sha512() (pure), crypto_random_bytes() (! CryptoRandom).
+// Hash functions are pure; crypto_random_bytes requirRNG, not reproducible — use for keys, tokens, nonces

@@ -229,6 +229,76 @@ impl<'a> Generator<'a> {
         let decls: Result<Vec<_>> = (0..n).map(|_| self.gen_decl()).collect();
         Ok(decls?.join("\n\n"))
     }
+
+    // ── Differential program (Phase 3) ────────────────────────────────────
+    //
+    // Produces a terminating program with a main that prints Int results so
+    // both backends can be run and their stdout compared.  Only uses constructs
+    // verified to work on both backends: Int arithmetic, if/else, total fns,
+    // println with a format string.
+
+    fn gen_int_expr(&mut self, params: &[String]) -> Result<String> {
+        if self.depth >= MAX_DEPTH {
+            return Ok(format!("{}", (self.u.arbitrary::<u8>()? % 20 + 1) as i64));
+        }
+        self.depth += 1;
+        let result = match self.small(5)? {
+            0 => format!("{}", (self.u.arbitrary::<u8>()? % 20 + 1) as i64),
+            1 if !params.is_empty() => self.u.choose(params)?.clone(),
+            2 => {
+                let left = self.gen_int_expr(params)?;
+                let right = self.gen_int_expr(params)?;
+                let op = self.pick(&["+", "-", "*"])?;
+                format!("({left} {op} {right})")
+            }
+            3 if params.len() >= 2 => {
+                let a = self.u.choose(params)?.clone();
+                let b = self.u.choose(params)?.clone();
+                let then_val = self.gen_int_expr(params)?;
+                let else_val = self.gen_int_expr(params)?;
+                format!("if {a} > {b} {{ {then_val} }} else {{ {else_val} }}")
+            }
+            _ => format!("{}", (self.u.arbitrary::<u8>()? % 20 + 1) as i64),
+        };
+        self.depth -= 1;
+        Ok(result)
+    }
+
+    pub fn gen_diff_program(&mut self) -> Result<String> {
+        let n_helpers = (self.small(3)? + 1) as usize;
+        let mut decls = Vec::new();
+
+        // Helper functions: total fns taking 1-2 Int params, returning Int.
+        // No loops, no recursion → guaranteed to terminate.
+        let mut calls = Vec::new();
+        for i in 0..n_helpers {
+            let name = format!("f{i}");
+            let n_params = (self.small(2)? + 1) as usize;
+            let params: Vec<String> = (0..n_params).map(|j| format!("p{j}: Int")).collect();
+            let param_names: Vec<String> = (0..n_params).map(|j| format!("p{j}")).collect();
+            let body = self.gen_int_expr(&param_names)?;
+            decls.push(format!("total fn {name}({}) -> Int {{ {body} }}", params.join(", ")));
+
+            // Concrete args main will pass — small positive values avoid overflow.
+            let args: Result<Vec<_>> = (0..n_params)
+                .map(|_| Ok(format!("{}", (self.u.arbitrary::<u8>()? % 20 + 1) as i64)))
+                .collect();
+            calls.push((format!("r{i}"), format!("{name}({})", args?.join(", "))));
+        }
+
+        // main: call each helper, println its result.
+        let mut main_body = Vec::new();
+        for (var, call) in &calls {
+            main_body.push(format!("    let {var}: Int = {call};"));
+            main_body.push(format!("    println(\"{{}}\", {var});"));
+        }
+        decls.push(format!(
+            "fn main() -> Unit ! Console {{\n{}\n}}",
+            main_body.join("\n")
+        ));
+
+        Ok(decls.join("\n\n"))
+    }
 }
 
 #[cfg(test)]

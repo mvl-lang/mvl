@@ -448,6 +448,7 @@ dependencies = [
  "arbitrary",
  "libfuzzer-sys",
  "mvl",
+ "tempfile",
 ]
 
 [[package]]

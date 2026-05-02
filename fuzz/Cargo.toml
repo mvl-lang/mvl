@@ -12,6 +12,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
+tempfile = "3"
 
 [dependencies.mvl]
 path = ".."
@@ -29,5 +30,11 @@ doc = false
 [[bin]]
 name = "transpile_llvm"
 path = "fuzz_targets/transpile_llvm.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "transpile_diff"
+path = "fuzz_targets/transpile_diff.rs"
 test = false
 doc = false
