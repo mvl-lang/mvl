@@ -6,8 +6,9 @@
 //                               spawn, stdin_write, stdout_read, stderr_read,
 //                               wait, kill, is_success, exit_code}
 //
-// Phase 2: function stubs with correct signatures and effects.
-// Types are opaque structs until Phase 3 compiles stdlib from source.
+// Phase 2: real implementations backed by mvl_runtime::stdlib::process.
+// Stub bodies in this file are dead code — the transpiler emits calls to the
+// Rust prelude functions directly (via `use mvl_runtime::prelude::*`).
 //
 // Design: All process-spawn and process-communication operations require
 //   ! ProcessSpawn — spawning a child process or communicating with one.
@@ -24,7 +25,7 @@
 //   let out = wait(child)?;   // consumes child, returns ProcessOutput
 //   // out.status, out.stdout (captured), out.stderr (captured)
 //
-// Implementation: wraps `extern "rust" { std::process::Command }` (Phase 3).
+// Implemented: mvl_runtime::stdlib::process — real std::process::Command.
 // See #45, ADR-0006.
 
 // ── Stdio configuration ────────────────────────────────────────────────────
