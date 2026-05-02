@@ -1,7 +1,7 @@
 //! Emit Rust expressions from MVL [`Expr`] nodes.
 
 use crate::mvl::parser::ast::{BinaryOp, Expr, Literal, MatchArm, MatchBody, Pattern, UnaryOp};
-use crate::mvl::transpiler::coverage::BranchKind;
+use crate::mvl::passes::coverage::BranchKind;
 use crate::mvl::transpiler::emit_types::emit_type_expr;
 use crate::mvl::transpiler::emitter::RustEmitter;
 

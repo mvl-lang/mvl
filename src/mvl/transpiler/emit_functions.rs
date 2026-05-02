@@ -10,7 +10,7 @@
 use crate::mvl::parser::ast::{
     Capability, Constraint, Expr, FnDecl, GenericParam, Param, Totality, TypeExpr,
 };
-use crate::mvl::transpiler::coverage::BranchKind;
+use crate::mvl::passes::coverage::BranchKind;
 use crate::mvl::transpiler::emit_exprs::{emit_block_stmts, emit_expr};
 use crate::mvl::transpiler::emit_stmts::emit_mcdc_return_expr;
 use crate::mvl::transpiler::emit_types::{emit_label, emit_ref_expr_for_assert, emit_type_expr};
