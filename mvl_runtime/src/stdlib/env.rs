@@ -123,51 +123,44 @@ pub fn chdir(path: Clean<String>) -> Result<(), String> {
 
 // ── Unix identity ──────────────────────────────────────────────────────────
 
-// `mvl_runtime` forbids unsafe_code (#![forbid(unsafe_code)]), so we cannot
-// call libc::getuid / libc::getgid directly. For Phase 2 we parse the UID/GID
-// from `/proc/self/status` on Linux, and return 0 on platforms where that file
-// is absent (macOS, Windows). A safe libc wrapper can replace this in Phase 3
-// once the crate-level lint is relaxed for this specific use.
+// POSIX guarantees getuid/getgid are always available on Unix and always succeed.
+// There is no safe-Rust alternative in std, so we call them via `extern "C"`.
+// The crate uses `#![deny(unsafe_code)]` (not `forbid`) precisely to allow these
+// targeted wrappers while keeping the rest of the crate unsafe-free.
+#[cfg(unix)]
+extern "C" {
+    #[link_name = "getuid"]
+    fn sys_getuid() -> u32;
+    #[link_name = "getgid"]
+    fn sys_getgid() -> u32;
+}
 
-/// Return the effective user ID of the current process.
-///
-/// Reads from `/proc/self/status` on Linux. Returns 0 on other platforms.
+/// Return the effective user ID of the current process (0 on non-Unix).
+#[allow(unsafe_code)]
 pub fn getuid() -> i64 {
-    read_id_from_proc_status("Uid:")
-}
-
-/// Return the effective group ID of the current process.
-///
-/// Reads from `/proc/self/status` on Linux. Returns 0 on other platforms.
-pub fn getgid() -> i64 {
-    read_id_from_proc_status("Gid:")
-}
-
-/// Parse the effective (second) ID from a `/proc/self/status` line.
-///
-/// The format is: `Uid:\t<real>\t<effective>\t<saved>\t<filesystem>`
-fn read_id_from_proc_status(key: &str) -> i64 {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     {
-        if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
-            for line in status.lines() {
-                if let Some(rest) = line.strip_prefix(key) {
-                    // Fields are tab-separated; the effective ID is the second field.
-                    let mut fields = rest.split_whitespace();
-                    let _real = fields.next();
-                    if let Some(effective) = fields.next() {
-                        if let Ok(id) = effective.parse::<i64>() {
-                            return id;
-                        }
-                    }
-                }
-            }
-        }
+        // Safety: getuid() is always safe to call — it never fails, has no
+        // preconditions, and is signal-safe per POSIX.
+        unsafe { sys_getuid() as i64 }
+    }
+    #[cfg(not(unix))]
+    {
         0
     }
-    #[cfg(not(target_os = "linux"))]
+}
+
+/// Return the effective group ID of the current process (0 on non-Unix).
+#[allow(unsafe_code)]
+pub fn getgid() -> i64 {
+    #[cfg(unix)]
     {
-        let _ = key;
+        // Safety: getgid() is always safe to call — it never fails, has no
+        // preconditions, and is signal-safe per POSIX.
+        unsafe { sys_getgid() as i64 }
+    }
+    #[cfg(not(unix))]
+    {
         0
     }
 }
