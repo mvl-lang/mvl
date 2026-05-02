@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-memory build-release test test-unit test-integration test-corpus test-stdlib test-transpiler test-llvm test-tree-sitter test-grammar-coverage coverage lint mvl-lint format format-check assurance assurance-summary assurance-gate docs docs-serve tree-sitter-build install install-nvim setup doctor clean
+.PHONY: help version build build-memory build-release test test-unit test-integration test-corpus test-stdlib test-transpiler test-llvm test-tree-sitter test-grammar-coverage coverage lint mvl-lint format format-check assurance assurance-summary assurance-gate docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -191,6 +191,23 @@ test-grammar-coverage: ## Cross-validate docs/grammar.ebnf against tree-sitter g
 
 install-nvim: ## Install nvim-mvl plugin + compile tree-sitter parser
 	etc/nvim-mvl/install.sh
+
+# === Fuzzing (long-running — not part of per-PR CI) ===
+# Requires: rustup toolchain install nightly && cargo install cargo-fuzz
+# See tests/fuzz/README.md for full documentation.
+
+FUZZ_TIMEOUT ?= 5  # default: smoke-test duration; override for real runs
+
+fuzz-rust: ## [Phase 1] Fuzz Rust transpiler pipeline (long-running; set FUZZ_TIMEOUT=86400 for overnight)
+	cargo +nightly fuzz run transpile_rust -- -max_total_time=$(FUZZ_TIMEOUT) -timeout=5
+
+fuzz-llvm: ## [Phase 2 — gated] Fuzz LLVM codegen pipeline (not yet implemented; see #422)
+	@echo "Phase 2 LLVM fuzzing not yet implemented. See #422 and tests/fuzz/README.md."
+	@exit 1
+
+fuzz-diff: ## [Phase 3 — gated] Differential fuzzing: Rust vs LLVM backends (not yet implemented; see #422)
+	@echo "Phase 3 differential fuzzing not yet implemented. Requires Phase 2. See #422."
+	@exit 1
 
 # === Clean ===
 

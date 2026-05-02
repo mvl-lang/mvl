@@ -1,0 +1,21 @@
+// LLVM Phase B — enum match returning String (char*) + multi-arg println (L5-06, L5-11, L5-17)
+//
+// expect: DivisionByZero
+// expect: Overflow
+// expect: MathError: DivisionByZero
+
+type MathError = enum { DivisionByZero, Overflow }
+
+fn describe(e: MathError) -> String {
+    match e {
+        MathError::DivisionByZero => "DivisionByZero",
+        MathError::Overflow       => "Overflow",
+    }
+}
+
+fn main() -> Unit ! Console {
+    println(describe(MathError::DivisionByZero));
+    println(describe(MathError::Overflow));
+    let err = MathError::DivisionByZero;
+    println("MathError: {}", describe(err));
+}

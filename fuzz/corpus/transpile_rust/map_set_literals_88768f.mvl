@@ -1,0 +1,30 @@
+// Corpus: map and set literal syntax (#58)
+// Demonstrates {"k": v} map literals and {"a", "b"} set literals.
+
+fn map_string_int() -> Map[String, Int] {
+    let scores = {"alice": 95, "bob": 87, "carol": 92};
+    scores
+}
+
+fn map_single_entry() -> Map[String, Bool] {
+    let flags = {"enabled": true};
+    flags
+}
+
+// Note: empty `{}` parses as Block (Unit), not Map. Empty maps require
+// explicit construction (e.g. HashMap::new()) — tracked in #58 for Phase 2.
+
+fn set_int() -> Set[Int] {
+    let primes = {2, 3, 5, 7, 11};
+    primes
+}
+
+fn set_string() -> Set[String] {
+    let tags = {"rust", "mvl", "compiler"};
+    tags
+}
+
+fn set_trailing_comma() -> Set[Int] {
+    let single = {42,};
+    single
+}

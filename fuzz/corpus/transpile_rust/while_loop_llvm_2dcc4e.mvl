@@ -1,0 +1,15 @@
+// LLVM Phase B — while loop (L5-12)
+//
+// expect: 0
+// expect: 1
+// expect: 2
+// expect: 3
+// expect: 4
+
+partial fn main() -> Unit ! Console {
+    let mut i = 0;
+    while i < 5 {
+        println(i);
+        i = i + 1;
+    }
+}

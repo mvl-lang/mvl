@@ -1,0 +1,42 @@
+// Corpus: Exhaustive match checking (Req 3)
+// Valid examples that cover all cases.
+
+type Color = enum { Red, Green, Blue }
+
+type MaybeInt = enum {
+    Some(Int),
+    None,
+}
+
+// All variants covered — exhaustive
+fn color_name(c: Color) -> String {
+    match c {
+        Red   => "red",
+        Green => "green",
+        Blue  => "blue",
+    }
+}
+
+// Wildcard covers all remaining variants
+fn is_red(c: Color) -> Bool {
+    match c {
+        Red => true,
+        _   => false,
+    }
+}
+
+// Option exhaustive match
+fn unwrap_or_zero(x: Option[Int]) -> Int {
+    match x {
+        Some(v) => v,
+        None    => 0,
+    }
+}
+
+// Result exhaustive match
+fn unwrap_result(r: Result[Int, String]) -> Int {
+    match r {
+        Ok(v)  => v,
+        Err(_) => -1,
+    }
+}

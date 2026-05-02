@@ -1,5 +1,6 @@
 [workspace]
 members = [".", "mvl_runtime", "mvl_memory"]
+exclude = ["fuzz"]
 
 [package]
 name = "mvl"
