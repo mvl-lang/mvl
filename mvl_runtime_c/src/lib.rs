@@ -31,6 +31,7 @@
 //! `mvl_memory` (`MvlString*`, `MvlArray*`, `MvlMap*`).
 
 pub mod abi;
+pub mod stdlib;
 pub mod version;
 
 /// Generate a `#[no_mangle] pub unsafe extern "C"` wrapper from a plain
