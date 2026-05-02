@@ -24,7 +24,6 @@
 pub mod borrow_params;
 pub mod boundary_gen;
 pub mod cargo;
-pub mod coverage;
 pub mod emit_exprs;
 pub mod emit_functions;
 pub mod emit_impls;
@@ -32,20 +31,19 @@ pub mod emit_stmts;
 pub mod emit_types;
 pub mod emitter;
 pub mod last_use;
-pub mod mcdc_instr;
-pub mod mutation;
 
 use crate::mvl::parser::ast::{Decl, Program};
-pub use boundary_gen::format_boundary_report;
-use cargo::CargoOptions;
-pub use coverage::{
+pub use crate::mvl::passes::coverage::{
     emit_cov_preamble, emit_cov_report_test, format_report, BranchInfo, CoverageMap,
 };
-use emitter::RustEmitter;
-pub use mcdc_instr::{
+use crate::mvl::passes::mcdc::transform as mcdc_instr;
+pub use crate::mvl::passes::mcdc::transform::{
     detect_coupled_pairs, emit_mcdc_preamble, emit_mcdc_report_test, MCDCDecision,
 };
-pub use mutation::{format_mutation_report, MutantInfo, MutationMap};
+pub use crate::mvl::passes::mutation::{format_mutation_report, MutantInfo, MutationMap};
+pub use boundary_gen::format_boundary_report;
+use cargo::CargoOptions;
+use emitter::RustEmitter;
 
 /// Output of a successful transpilation.
 pub struct TranspileOutput {

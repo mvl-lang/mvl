@@ -8,17 +8,17 @@ use crate::mvl::parser::ast::{
     VariantFields,
 };
 use crate::mvl::parser::lexer::Span;
+use crate::mvl::passes::coverage::{BranchKind, CoverageMap};
+use crate::mvl::passes::mcdc::transform::{DecisionKind, MCDCMap};
+use crate::mvl::passes::mutation::{
+    mutations_for_binary_op, mutations_for_int_literal, MutationMap,
+};
 use crate::mvl::transpiler::borrow_params::build_borrow_params_map;
-use crate::mvl::transpiler::coverage::{BranchKind, CoverageMap};
 use crate::mvl::transpiler::emit_functions::emit_fn_decl;
 use crate::mvl::transpiler::emit_impls::emit_impl_decl;
 use crate::mvl::transpiler::emit_types::emit_type_decl;
 use crate::mvl::transpiler::emit_types::{emit_security_preamble, emit_type_expr};
 use crate::mvl::transpiler::has_std_imports;
-use crate::mvl::transpiler::mcdc_instr::{DecisionKind, MCDCMap};
-use crate::mvl::transpiler::mutation::{
-    mutations_for_binary_op, mutations_for_int_literal, MutationMap,
-};
 
 ///// Code-generation context: accumulates Rust source text.
 #[derive(Default)]

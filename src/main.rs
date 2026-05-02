@@ -1,5 +1,4 @@
 use mvl::mvl::checker;
-use mvl::mvl::checker::mcdc::{analyze_mcdc, DecisionInfo};
 use mvl::mvl::checker::passes::{
     aggregate_verdicts, parse_req_filter, source_hash, PassRegistry, Verdict, VerdictCache,
 };
@@ -9,6 +8,7 @@ use mvl::mvl::linter::{self, config::LintConfig};
 use mvl::mvl::packages;
 use mvl::mvl::parser::ast::{Decl, Program, Totality, TypeBody};
 use mvl::mvl::parser::Parser;
+use mvl::mvl::passes::mcdc::analysis::{analyze_mcdc, DecisionInfo};
 use mvl::mvl::resolver;
 use mvl::mvl::stdlib;
 use mvl::mvl::toolchain;
@@ -638,7 +638,7 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
     // Build a (module, fn_name) → line map from source files and override
     // the line for any Return decision whose function exists in the source.
     {
-        use mvl::mvl::transpiler::mcdc_instr::DecisionKind;
+        use mvl::mvl::passes::mcdc::transform::DecisionKind;
         use std::collections::HashMap;
         let mut source_fn_lines: HashMap<(String, String), u32> = HashMap::new();
         for src_file in &source_files {
@@ -780,7 +780,7 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
         .collect();
 
     // Independence analysis.
-    use mvl::mvl::transpiler::mcdc_instr::is_clause_covered;
+    use mvl::mvl::passes::mcdc::transform::is_clause_covered;
     let mut covered = 0usize;
     let mut total_obligations = 0usize;
 

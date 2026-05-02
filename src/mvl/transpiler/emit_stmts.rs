@@ -12,9 +12,9 @@
 //!
 //! See ADR-0003 for the overall compilation strategy.
 
-use crate::mvl::checker::mcdc::collect_clauses;
 use crate::mvl::parser::ast::{BinaryOp, ElseBranch, Expr, LValue, MatchBody, Stmt, TypeExpr};
-use crate::mvl::transpiler::coverage::BranchKind;
+use crate::mvl::passes::coverage::BranchKind;
+use crate::mvl::passes::mcdc::analysis::collect_clauses;
 use crate::mvl::transpiler::emit_exprs::{
     arms_have_str_pattern, emit_block_as_value, emit_block_stmts, emit_expr, emit_pattern,
 };
