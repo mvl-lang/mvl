@@ -197,21 +197,21 @@ fn process_value(n: Int) -> Result[Int, String] ! Log {
 }
 
 test fn log_helper_via_result_ok_path_unchanged() -> Unit ! Log {
-    let result = process_value(5);
+    let result: Result[Int, String] = process_value(5);
     assert_eq(result.is_ok(), true);
     assert_eq(result.unwrap_or(0), 10);
 }
 
 test fn log_helper_via_result_err_path_logs_and_returns_err() -> Unit ! Log {
-    let result = process_value(-3);
+    let result: Result[Int, String] = process_value(-3);
     assert_eq(result.is_err(), true);
     assert_eq(result.unwrap_or(0), 0);
 }
 
 test fn log_in_branch_does_not_affect_return_value() -> Unit ! Log {
     // Two calls with different outcomes; log side-effects are invisible to caller
-    let r1 = process_value(10);
-    let r2 = process_value(-1);
+    let r1: Result[Int, String] = process_value(10);
+    let r2: Result[Int, String] = process_value(-1);
     assert_eq(r1.is_ok(), true);
     assert_eq(r2.is_err(), true);
 }
