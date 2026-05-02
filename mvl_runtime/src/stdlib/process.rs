@@ -318,6 +318,105 @@ mod tests {
     }
 
     #[test]
+    fn spawn_captures_stderr() {
+        let child = spawn(
+            Clean("sh".to_string()),
+            vec![
+                Clean("-c".to_string()),
+                Clean("echo errout >&2".to_string()),
+            ],
+            Stdio::Devnull,
+            Stdio::Devnull,
+            Stdio::Capture,
+        )
+        .expect("sh must spawn");
+
+        let out = wait(child).expect("wait must succeed");
+        let stderr = out.stderr.expect("stderr must be captured");
+        assert!(stderr.0.contains("errout"), "got: {:?}", stderr.0);
+        assert!(
+            out.stdout.is_none(),
+            "stdout must be None when mode is Devnull"
+        );
+    }
+
+    #[test]
+    fn stdout_pipe_mode_readable_via_stdout_read() {
+        let mut child = spawn(
+            Clean("echo".to_string()),
+            vec![Clean("piped output".to_string())],
+            Stdio::Devnull,
+            Stdio::Pipe,
+            Stdio::Devnull,
+        )
+        .expect("echo must spawn");
+
+        let handle = child.stdout.take().expect("stdout must be piped");
+        let data = stdout_read(handle).expect("stdout_read must succeed");
+        assert!(data.0.contains("piped output"), "got: {:?}", data.0);
+        // After reading the pipe, wait must still succeed.
+        let out = wait(child).expect("wait after stdout_read must succeed");
+        assert!(is_success(out.status));
+        // stdout was already consumed — ProcessOutput.stdout must be None.
+        assert!(out.stdout.is_none());
+    }
+
+    #[test]
+    fn kill_terminates_long_running_process() {
+        let child = spawn(
+            Clean("sleep".to_string()),
+            vec![Clean("60".to_string())],
+            Stdio::Devnull,
+            Stdio::Devnull,
+            Stdio::Devnull,
+        )
+        .expect("sleep must spawn");
+
+        let child = kill(child).expect("kill must succeed");
+        let out = wait(child).expect("wait after kill must succeed");
+        assert!(
+            !is_success(out.status.clone()),
+            "killed process must not exit successfully"
+        );
+    }
+
+    #[test]
+    fn wait_stdout_is_none_when_mode_is_devnull() {
+        let child = spawn(
+            Clean("echo".to_string()),
+            vec![Clean("ignored".to_string())],
+            Stdio::Devnull,
+            Stdio::Devnull,
+            Stdio::Devnull,
+        )
+        .expect("echo must spawn");
+
+        let out = wait(child).expect("wait must succeed");
+        assert!(out.stdout.is_none(), "stdout must be None for Devnull mode");
+        assert!(out.stderr.is_none(), "stderr must be None for Devnull mode");
+    }
+
+    #[test]
+    fn spawn_with_multiple_args() {
+        let child = spawn(
+            Clean("printf".to_string()),
+            vec![
+                Clean("%s %s".to_string()),
+                Clean("hello".to_string()),
+                Clean("world".to_string()),
+            ],
+            Stdio::Devnull,
+            Stdio::Capture,
+            Stdio::Devnull,
+        )
+        .expect("printf must spawn");
+
+        let out = wait(child).expect("wait must succeed");
+        let stdout = out.stdout.expect("stdout captured");
+        assert_eq!(stdout.0, "hello world");
+    }
+
+    #[test]
     fn is_success_and_exit_code_pure_helpers() {
         assert!(is_success(ExitStatus::Success));
         assert!(!is_success(ExitStatus::Failed(1)));
