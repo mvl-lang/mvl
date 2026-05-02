@@ -87,24 +87,32 @@ test-integration: ## Run integration tests
 	cargo test --test '*'
 
 test-corpus: ## Validate corpus examples parse and type-check
-	@printf "Validating corpus examples..."
-	@for f in tests/corpus/**/*.mvl; do \
+	@pass=0; fail=0; \
+	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
+	for f in tests/corpus/**/*.mvl; do \
+		short=$${f#tests/corpus/}; \
 		if grep -q "corpus:expect-fail" "$$f" 2>/dev/null; then \
 			cargo run --quiet -- check "$$f" >/dev/null 2>&1; rc=$$?; \
 			if [ $$rc -ne 0 ]; then \
-				printf "."; \
+				printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1)); \
 			else \
-				echo ""; echo "  ERROR: $$f expected violations but checker reported none"; exit 1; \
+				printf "  $$FAIL  %s  (expected violations but checker reported none)\n" "$$short"; fail=$$((fail + 1)); \
 			fi; \
 		else \
 			out=$$(cargo run --quiet -- check "$$f" 2>&1); rc=$$?; \
 			if [ $$rc -ne 0 ]; then \
-				echo ""; echo "  FAIL: $$f"; echo "$$out"; exit 1; \
+				printf "  $$FAIL  %s\n" "$$short"; printf "%s\n" "$$out" | sed 's/^/         /'; fail=$$((fail + 1)); \
+			else \
+				printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1)); \
 			fi; \
-			printf "."; \
 		fi; \
-	done
-	@echo " ok"
+	done; \
+	echo ""; \
+	if [ $$fail -eq 0 ]; then \
+		printf "  \033[32m✓  $$pass passed, 0 failed\033[0m\n\n"; \
+	else \
+		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
+	fi
 
 test-stdlib: build ## Verify stdlib runtime correctness: transpile tests/stdlib/ → cargo test
 	@echo "Running stdlib correctness tests..."
