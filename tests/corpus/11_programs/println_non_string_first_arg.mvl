@@ -6,9 +6,9 @@
 //   42 100
 //   42 100 hello
 fn main() -> Unit ! Console {
-    let x = 42;
-    let y = 100;
-    let msg = "hello";
+    let x: Int = 42;
+    let y: Int = 100;
+    let msg: String = "hello";
     println(msg, x);        // two args: String var + Int  → "{} {}", msg, x
     println(x);             // single non-string Int arg   → "{}", x
     println(x, y);          // two Int args                → "{} {}", x, y

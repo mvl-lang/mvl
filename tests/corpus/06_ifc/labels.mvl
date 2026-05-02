@@ -18,7 +18,7 @@ fn use_secret(data: Secret[String]) -> Public[String] {
 fn tainted_result(res: Result[Tainted[String], String]) -> String {
     match res {
         Ok(raw) => {
-            let clean = sanitize(raw);
+            let clean: Clean[String] = sanitize(raw);
             "ok"
         },
         Err(e) => "error",

@@ -24,6 +24,6 @@ fn declassify_int(secret: Secret[Int]) -> Public[Int] {
 // ── Chained: sanitize then use ────────────────────────────────────────────
 
 fn process_input(raw: Tainted[String]) -> Clean[String] {
-    let clean = sanitize(raw);
+    let clean: Clean[String] = sanitize(raw);
     clean
 }

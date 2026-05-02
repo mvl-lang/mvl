@@ -27,7 +27,6 @@
 //! |------------------------|---------|------------------------------------------------------|
 //! | `unreachable_code`     | `true`  | Flag statements after `return` in a block            |
 //! | `redundant_match`      | `true`  | Flag `match` with a single irrefutable arm           |
-//! | `unnecessary_annotations` | `true` | Flag literal `let` bindings with obvious types    |
 //! | `redundant_effects`    | `true`  | Flag effect declarations on call-free functions      |
 //! | `redundant_ifc_labels` | `true`  | Flag `Public<T>` annotations (redundant base label)  |
 //!
@@ -77,8 +76,6 @@ pub struct LintConfig {
     pub unreachable_code: bool,
     /// Flag `match` expressions/statements with a single irrefutable arm.
     pub redundant_match: bool,
-    /// Flag `let` bindings that annotate a literal with its obvious type.
-    pub unnecessary_annotations: bool,
     /// Flag functions that declare effects but contain no function calls.
     pub redundant_effects: bool,
     /// Flag `Public<T>` type annotations (the base IFC label, always redundant).
@@ -121,7 +118,6 @@ impl Default for LintConfig {
             unused_bindings: true,
             unreachable_code: true,
             redundant_match: true,
-            unnecessary_annotations: true,
             redundant_effects: true,
             redundant_ifc_labels: true,
             consistent_comment_style: true,
@@ -232,7 +228,6 @@ fn load_from(path: &Path) -> Option<LintConfig> {
             "unused_bindings" => cfg.unused_bindings = parse_bool(val),
             "unreachable_code" => cfg.unreachable_code = parse_bool(val),
             "redundant_match" => cfg.redundant_match = parse_bool(val),
-            "unnecessary_annotations" => cfg.unnecessary_annotations = parse_bool(val),
             "redundant_effects" => cfg.redundant_effects = parse_bool(val),
             "redundant_ifc_labels" => cfg.redundant_ifc_labels = parse_bool(val),
             "consistent_comment_style" => cfg.consistent_comment_style = parse_bool(val),

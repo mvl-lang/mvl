@@ -928,10 +928,6 @@ fn cmd_lint(path: &str, show_config: bool) {
         eprintln!("  [phase-2: semantic]");
         eprintln!("  unreachable_code     = {}", cfg.unreachable_code);
         eprintln!("  redundant_match      = {}", cfg.redundant_match);
-        eprintln!(
-            "  unnecessary_annotations = {}",
-            cfg.unnecessary_annotations
-        );
         eprintln!("  redundant_effects    = {}", cfg.redundant_effects);
         eprintln!("  redundant_ifc_labels = {}", cfg.redundant_ifc_labels);
         eprintln!("  [phase-3: llm corpus quality]");
@@ -2690,7 +2686,7 @@ mod assurance_tests {
     #[test]
     fn req_errors_populated_from_checker() {
         // UseAfterMove → requirement 2
-        let src = "fn f() -> Int { let x = 1; let _y = move(x); x }";
+        let src = "fn f() -> Int { let x: Int = 1; let _y: Int = move(x); x }";
         let prog = parse_prog(src);
         let result = checker::check(&prog);
         assert!(

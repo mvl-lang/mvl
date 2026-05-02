@@ -67,7 +67,7 @@ fn save_and_log(path: Path, content: String) -> Result[Unit, Error] ! FileWrite,
 
 // Caller with superset of effects (valid)
 fn full_pipeline(url: String, path: Path) -> Result[Unit, Error] ! Net, FileWrite, Console {
-    let data = fetch(url)?;
+    let data: Response = fetch(url)?;
     write_path(path, data.body)?;
     emit_console("done");
     Ok(())

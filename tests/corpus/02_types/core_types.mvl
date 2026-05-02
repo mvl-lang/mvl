@@ -227,7 +227,7 @@ fn option_map(x: Option[Int]) -> Option[Float] {
 // ── Result ────────────────────────────────────────────────────────────────────
 
 fn result_propagate(s: String) -> Result[Int, String] {
-    let n = s.parse_int()?;
+    let n: Int = s.parse_int()?;
     Ok(n * 2)
 }
 

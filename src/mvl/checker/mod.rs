@@ -767,6 +767,7 @@ impl TypeChecker {
                     }
                     self.bind_pattern(pattern, &ann_ty, *mutable);
                 } else {
+                    self.emit(CheckError::MissingTypeAnnotation { span: *span });
                     self.bind_pattern(pattern, &init_ty, *mutable);
                 }
                 // Phase D (#362): record which variable the new binding borrows so that

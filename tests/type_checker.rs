@@ -1992,7 +1992,7 @@ fn propagate_same_error_type_accepted() {
     let src = r#"
 fn inner() -> Result[Int, String] { Ok(0) }
 fn outer() -> Result[Int, String] {
-    let x = inner()?;
+    let x: Int = inner()?;
     Ok(x)
 }
 "#;
@@ -2074,7 +2074,7 @@ fn literals_corpus_with_multiline_raw_strings_checks() {
 
 #[test]
 fn map_literal_infers_named_map_type() {
-    let errors = errors_for(r#"fn f() -> Unit { let _m = {"a": 1, "b": 2}; }"#);
+    let errors = errors_for(r#"fn f() -> Unit { let _m: Map[String, Int] = {"a": 1, "b": 2}; }"#);
     assert!(
         errors.is_empty(),
         "map literal should type-check cleanly, got: {errors:?}"
@@ -2083,7 +2083,7 @@ fn map_literal_infers_named_map_type() {
 
 #[test]
 fn set_literal_infers_named_set_type() {
-    let errors = errors_for(r#"fn f() -> Unit { let _s = {1, 2, 3}; }"#);
+    let errors = errors_for(r#"fn f() -> Unit { let _s: Set[Int] = {1, 2, 3}; }"#);
     assert!(
         errors.is_empty(),
         "set literal should type-check cleanly, got: {errors:?}"
@@ -3675,7 +3675,7 @@ fn const_fold_pure_fn_satisfies_refinement() {
         fn double(x: Int) -> Int { x * 2 }
         fn require_positive(x: Int where self > 0) -> Int { x }
         fn main() -> Int {
-            let n = double(5);
+            let n: Int = double(5);
             require_positive(double(5))
         }
     "#;
@@ -3715,7 +3715,7 @@ fn const_fold_let_binding_propagates_to_refinement() {
         fn add(a: Int, b: Int) -> Int { a + b }
         fn require_gt_5(x: Int where self > 5) -> Int { x }
         fn main() -> Int {
-            let n = add(3, 4);
+            let n: Int = add(3, 4);
             require_gt_5(n)
         }
     "#;
@@ -4222,5 +4222,73 @@ fn ref_binding_from_param_accepted() {
             .iter()
             .any(|e| matches!(e, CheckError::ReferenceOutlivesOwner { .. })),
         "unexpected ReferenceOutlivesOwner for param-referent binding, got: {errors:?}"
+    );
+}
+
+// ── #408: Explicit type annotation required on let bindings ──────────────────
+
+/// `let` without annotation is rejected with MissingTypeAnnotation.
+#[test]
+fn let_without_annotation_rejected() {
+    let errors = errors_for("fn f() -> Unit { let x = 42; }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::MissingTypeAnnotation { .. })),
+        "unannotated let should emit MissingTypeAnnotation, got: {errors:?}"
+    );
+}
+
+/// `let mut` without annotation is also rejected.
+#[test]
+fn let_mut_without_annotation_rejected() {
+    let errors = errors_for("fn f() -> Unit { let mut x = 42; }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::MissingTypeAnnotation { .. })),
+        "unannotated let mut should emit MissingTypeAnnotation, got: {errors:?}"
+    );
+}
+
+/// `let` with annotation is accepted.
+#[test]
+fn let_with_annotation_accepted() {
+    let errors = errors_for("fn f() -> Unit { let x: Int = 42; }");
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::MissingTypeAnnotation { .. })),
+        "annotated let should not emit MissingTypeAnnotation, got: {errors:?}"
+    );
+}
+
+/// Checker still binds the variable with inferred type after MissingTypeAnnotation,
+/// so downstream uses don't produce spurious type errors.
+#[test]
+fn let_without_annotation_still_binds_for_downstream() {
+    let errors = errors_for("fn f() -> Int { let x = 42; x }");
+    // Only MissingTypeAnnotation, no TypeMismatch or UndefinedVariable
+    assert!(
+        errors
+            .iter()
+            .all(|e| matches!(e, CheckError::MissingTypeAnnotation { .. })),
+        "only MissingTypeAnnotation expected, got: {errors:?}"
+    );
+}
+
+/// MissingTypeAnnotation is mapped to requirement 1 (type safety).
+#[test]
+fn let_without_annotation_maps_to_req1() {
+    use mvl::mvl::checker::check;
+    use mvl::mvl::parser::Parser;
+    let src = "fn f() -> Unit { let x = 42; }";
+    let (mut p, _) = Parser::new(src);
+    let prog = p.parse_program();
+    let result = check(&prog);
+    assert!(
+        result.req_errors[1] >= 1,
+        "MissingTypeAnnotation should increment req_errors[1], got: {:?}",
+        result.req_errors
     );
 }

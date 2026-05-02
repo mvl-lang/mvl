@@ -29,13 +29,13 @@ fn describe_error(e: MathError) -> String {
 }
 
 fn main() -> Unit ! Console {
-    let a = double(21);
+    let a: Int = double(21);
     println("double(21) = {}", a);
 
-    let b = safe_add(10, 32);
+    let b: Int = safe_add(10, 32);
     println("safe_add(10, 32) = {}", b);
 
-    let err = MathError::DivisionByZero;
-    let msg = describe_error(err);
+    let err: MathError = MathError::DivisionByZero;
+    let msg: String = describe_error(err);
     println("MathError: {}", msg);
 }

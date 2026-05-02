@@ -29,28 +29,28 @@ fn safe_value(x: Int) -> Result[Int, AppError] {
 fn demo_primitives() -> Unit ! Console {
     // ── Int ──────────────────────────────────────────────────────────────────
     let n: Int = -5;
-    let na = n.abs();
+    let na: Int = n.abs();
     let a: Int = 3;
     let b: Int = 7;
-    let nm = a.min(b);
-    let mx = a.max(b);
+    let nm: Int = a.min(b);
+    let mx: Int = a.max(b);
     println("Int: abs={} min={} max={}", na, nm, mx);
 
     // ── Float ────────────────────────────────────────────────────────────────
     let f: Float = 3.7;
-    let fc = f.ceil();
-    let ff = f.floor();
+    let fc: Float = f.ceil();
+    let ff: Float = f.floor();
     let g: Float = 4.0;
-    let fs = g.sqrt();
+    let fs: Float = g.sqrt();
     println("Float: ceil={} floor={} sqrt={}", fc, ff, fs);
 
     // ── Bool ─────────────────────────────────────────────────────────────────
-    let b1 = true;
-    let b2 = false;
+    let b1: Bool = true;
+    let b2: Bool = false;
     println("Bool: and={} or={} not={}", b1 && b2, b1 || b2, !b1);
 
     // ── String ───────────────────────────────────────────────────────────────
-    let s = "hello";
+    let s: String = "hello";
     println("String: len={}", s.len());
 }
 
@@ -59,7 +59,7 @@ fn main() -> Unit ! Console {
 
     // ── List[T] ──────────────────────────────────────────────────────────────
     let xs: List[Int] = [1, 2, 3, 4, 5];
-    let xfirst = match xs.first() { Some(v) => v, None => 0 };
+    let xfirst: Int = match xs.first() { Some(v) => v, None => 0 };
     println("List: len={} first={}", xs.len(), xfirst);
 
     // ── Map[K,V] ─────────────────────────────────────────────────────────────
@@ -68,7 +68,7 @@ fn main() -> Unit ! Console {
 
     // ── Set[T] ───────────────────────────────────────────────────────────────
     let ss: Set[Int] = {1, 2, 3};
-    let has_two = ss.contains(2);
+    let has_two: Bool = ss.contains(2);
     println("Set: has_two={} len={}", has_two, ss.len());
 
     // ── Option[T] ────────────────────────────────────────────────────────────
