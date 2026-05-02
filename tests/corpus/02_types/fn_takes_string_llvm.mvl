@@ -9,6 +9,6 @@ fn greet(name: String) -> Unit ! Console {
 }
 
 fn main() -> Unit ! Console {
-    let s: String = "hello world";
+    let s = "hello world";
     greet(s);
 }

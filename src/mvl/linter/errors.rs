@@ -14,8 +14,13 @@ pub struct LintSpan {
 }
 
 /// How serious a lint finding is.
+///
+/// Ordered from least to most severe: `Hint < Warning < Error`.
+/// Hints are visible in output but do not count toward the warning total
+/// and do not fail `make mvl-lint`. See ADR-0017.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
+    Hint,
     Warning,
     Error,
 }
@@ -23,6 +28,7 @@ pub enum Severity {
 impl std::fmt::Display for Severity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Severity::Hint => write!(f, "hint"),
             Severity::Warning => write!(f, "warning"),
             Severity::Error => write!(f, "error"),
         }
@@ -39,6 +45,15 @@ pub struct LintDiag {
 }
 
 impl LintDiag {
+    pub fn hint(rule: &'static str, message: impl Into<String>, line: u32, col: u32) -> Self {
+        Self {
+            severity: Severity::Hint,
+            rule,
+            message: message.into(),
+            span: LintSpan { line, col },
+        }
+    }
+
     pub fn warning(rule: &'static str, message: impl Into<String>, line: u32, col: u32) -> Self {
         Self {
             severity: Severity::Warning,
@@ -73,6 +88,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn severity_display_hint() {
+        assert_eq!(format!("{}", Severity::Hint), "hint");
+    }
+
+    #[test]
     fn severity_display_warning() {
         assert_eq!(format!("{}", Severity::Warning), "warning");
     }
@@ -84,6 +104,7 @@ mod tests {
 
     #[test]
     fn severity_ordering() {
+        assert!(Severity::Hint < Severity::Warning);
         assert!(Severity::Warning < Severity::Error);
     }
 
@@ -112,6 +133,24 @@ mod tests {
         assert_eq!(
             rendered,
             "src/main.mvl:42:121: warning: [line-length] line too long"
+        );
+    }
+
+    #[test]
+    fn lint_diag_hint_constructor() {
+        let d = LintDiag::hint("redundant-ifc-label", "Public<Int> is explicit", 7, 23);
+        assert_eq!(d.severity, Severity::Hint);
+        assert_eq!(d.rule, "redundant-ifc-label");
+        assert_eq!(d.span.line, 7);
+        assert_eq!(d.span.col, 23);
+    }
+
+    #[test]
+    fn lint_diag_render_hint_format() {
+        let d = LintDiag::hint("redundant-ifc-label", "Public<Int> is explicit", 7, 23);
+        assert_eq!(
+            d.render("src/foo.mvl"),
+            "src/foo.mvl:7:23: hint: [redundant-ifc-label] Public<Int> is explicit"
         );
     }
 

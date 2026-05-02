@@ -806,12 +806,13 @@ fn check_type_expr_ifc(ty: &TypeExpr, out: &mut Vec<LintDiag>) {
             inner,
             span,
         } => {
-            out.push(LintDiag::warning(
+            // Hint, not Warning: explicit Public[T] is the preferred style for generated
+            // and IFC-focused code. See ADR-0017 and Spec 011 Req 2.
+            out.push(LintDiag::hint(
                 "redundant-ifc-label",
                 format!(
-                    "`Public<{}>` is redundant — unannotated types are implicitly public; \
-                     use `{}` instead",
-                    type_expr_name(inner),
+                    "`Public<{}>` is explicit — unannotated types are implicitly public; \
+                     consider dropping the label in non-IFC-focused code",
                     type_expr_name(inner),
                 ),
                 span.line,
@@ -1879,13 +1880,17 @@ mod tests {
     // -- redundant_ifc_labels --
 
     #[test]
-    fn public_label_on_param_detected() {
+    fn public_label_on_param_detected(/* Spec 011 Req 2 */) {
         let src = "fn f(x: Public[Int]) -> Int { x }\n";
         let prog = parse(src);
         let mut diags = vec![];
         redundant_ifc_labels(&prog, &cfg(), &mut diags);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].rule, "redundant-ifc-label");
+        assert_eq!(
+            diags[0].severity,
+            crate::mvl::linter::errors::Severity::Hint
+        );
         assert!(diags[0].message.contains("Public"));
     }
 
@@ -1899,13 +1904,17 @@ mod tests {
     }
 
     #[test]
-    fn public_label_on_return_type_detected() {
+    fn public_label_on_return_type_detected(/* Spec 011 Req 2 */) {
         let src = "fn f() -> Public[String] { \"hi\" }\n";
         let prog = parse(src);
         let mut diags = vec![];
         redundant_ifc_labels(&prog, &cfg(), &mut diags);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].rule, "redundant-ifc-label");
+        assert_eq!(
+            diags[0].severity,
+            crate::mvl::linter::errors::Severity::Hint
+        );
     }
 
     #[test]

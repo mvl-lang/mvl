@@ -35,7 +35,6 @@ total fn sum_array(arr: Array[Int]) -> Int {
     acc
 }
 
-// FileRead effect needed when accessing the filesystem
-fn read_config(path: String) -> String ! FileRead {
+fn read_config(path: String) -> String {
     path
 }

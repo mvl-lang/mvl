@@ -27,13 +27,22 @@ pub struct LintResult {
 
 impl LintResult {
     /// `true` if there are no error-severity diagnostics.
+    /// Hints and warnings do not affect this result.
     pub fn is_ok(&self) -> bool {
         self.diags
             .iter()
             .all(|d| d.severity < errors::Severity::Error)
     }
 
-    /// Total number of warnings.
+    /// Total number of hint-severity diagnostics (Spec 011 Req 3).
+    pub fn hint_count(&self) -> usize {
+        self.diags
+            .iter()
+            .filter(|d| d.severity == errors::Severity::Hint)
+            .count()
+    }
+
+    /// Total number of warnings (does not include hints).
     pub fn warning_count(&self) -> usize {
         self.diags
             .iter()
@@ -126,8 +135,35 @@ mod tests {
     fn lint_result_is_ok_no_diags() {
         let r = LintResult { diags: vec![] };
         assert!(r.is_ok());
+        assert_eq!(r.hint_count(), 0);
         assert_eq!(r.warning_count(), 0);
         assert_eq!(r.error_count(), 0);
+    }
+
+    #[test]
+    fn lint_result_hints_only_is_ok(/* Spec 011 Req 3 */) {
+        let r = LintResult {
+            diags: vec![
+                errors::LintDiag::hint("redundant-ifc-label", "hint msg", 1, 1),
+                errors::LintDiag::hint("redundant-ifc-label", "hint msg2", 2, 1),
+            ],
+        };
+        assert!(r.is_ok(), "hints alone must not make is_ok() false");
+        assert_eq!(r.hint_count(), 2);
+        assert_eq!(r.warning_count(), 0);
+        assert_eq!(r.error_count(), 0);
+    }
+
+    #[test]
+    fn lint_result_hints_not_counted_as_warnings(/* Spec 011 Req 3 */) {
+        let r = LintResult {
+            diags: vec![
+                errors::LintDiag::hint("redundant-ifc-label", "hint", 1, 1),
+                errors::LintDiag::warning("line-length", "warn", 2, 1),
+            ],
+        };
+        assert_eq!(r.hint_count(), 1);
+        assert_eq!(r.warning_count(), 1);
     }
 
     #[test]
