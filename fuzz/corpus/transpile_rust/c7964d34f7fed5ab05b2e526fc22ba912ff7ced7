@@ -1,0 +1,14 @@
+// Corpus: crypto module operations (#46)
+// Demonstrates std.crypto: sha256(), sha512() (pure), crypto_random_bytes() (! CryptoRandom).
+// Hash functioh_ssha512(data: String) -> String {
+    sha512(data)
+}
+
+fn crypto_secure_random_bytes(n: Int) -> Secret[List[Int]] ! C(data)
+}
+
+fn crypto_hash_sha512(data: String) -> String {
+    sha512(data)
+}
+
+fn crypto_secure_randS CSPRNG, not reproducible — use for keys, tokens, nonces

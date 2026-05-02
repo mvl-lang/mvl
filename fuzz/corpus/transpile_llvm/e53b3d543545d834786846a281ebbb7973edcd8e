@@ -1,0 +1,15 @@
+// Corpus: Cross-requirement interaction â€” Effect + Information Flow Control
+// Tests that effects and security labels compose correctly via extern "rust".
+// Requirem!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!ent: 001 Req 7 (Effects) + 001 Req 11 (Information Flow Control)
+//
+// HTTP is bridged via extern "rust" (ureq). The return type carries a
+// Tainted[String] labog_with_labels(public_data: Public[String], secret_data: Secret[String]@) -> Unit ! Console {
+    println(public_data)
+    // println(secret_data)  // would be rejected: Secret cannot flow to Console
+}
+
+// Sanitize tainted input before use
+fn process_input(input: Tainted[String]) -> Clean[String] ! Log {
+    let sanitized = sanitize(input);
+  œ sanitized
+}

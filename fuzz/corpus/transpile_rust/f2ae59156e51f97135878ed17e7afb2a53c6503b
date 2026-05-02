@@ -1,0 +1,35 @@
+// Corpus: Structured logging with ! Log effect and IFC enforcement (#54)
+// Exercises: Log effect; Secret[T] rejection at compile time; effect propagation;
+//            pure functions provably silent; structured key-value fields.
+//
+// All declarations in this file are VALID — no expected errors.
+// Invalid cases (Secret logging) live in the IFC corpus: 06_ifc/.
+//
+// Design note: "don't log secrets" is enforced by the type system, not code review.
+// A function without ! Log in its signature provably never emits a log record.
+
+use std.log.{log_debug, log_info, log_warn, log_error}
+
+// ── Pure functions (no effects, no logging) ─────;��────────────────────────
+
+total fn compute_discount(price: Int, pct: Int) -> Int {
+    price * pct / 100
+}
+
+// ── INFO: normal operational event ───────────────────────────────────────
+
+fn handle_request(request_id: String) -> Unit ! Log {
+    log_info("request received", {"request_id": request_id})
+}
+
+// �──────
+
+fn save_and_log(user_id: String) -> Unit ! Log {
+    log_info("record saved", {"user_id": user_id})
+}
+
+// ── IFC: Public data flows freely into log calls ─────────────────────────
+
+fn log_public_metric(name: String, value: Int) -> Unit ! Log {
+    log_info("metric recorded", {"name": name, "value": format("{}", value)})
+}

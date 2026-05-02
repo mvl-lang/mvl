@@ -1,0 +1,76 @@
+// Corpus: MVL statement forms
+
+fn example_let() -> Int {
+    let x = 42;
+    let mut count = 0;
+    let y = 99;
+    return x;
+}
+
+fn example_assign() -> Int {
+    let mut n = 0;
+    n = 5;
+    return n;
+}
+
+fn example_if_else(flag: Bool) -> Int {
+    if flag {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+fn example_if_else_if(n: Int) -> String {
+    if n > 0 {
+        return "positive";
+    } else if n < 0 {
+        return "negative";
+    } else {
+        return "zero";
+    }
+}
+
+fn example_match_option(opt: Option[Int]) -> Int {
+    match opt {
+        Some(v) => v,
+        None => 0,
+    }
+}
+
+fn example_match_result(res: Result[Int, String]) -> Int {
+    match res {
+        Ok(v) => v,
+        Err(e) => -1,
+    }
+}
+
+fn example_match_literal(n: Int) -> Bool {
+    match n {
+        0 => false,
+        _ => true,
+    }
+}
+
+fn example_for(items: List[Int]) -> Int {
+    let mut sum = 0;
+    for item in items {
+        sum = sum + item;
+    }
+    return sum;
+}
+
+partial fn example_while(mut n: Int) -> Int {
+    while n > 0 {
+        n = n - 1;
+    }
+    return n;
+}
+
+fn example_return_unit() -> Unit {
+    return;
+}
+
+fn example_expr_stmt(n: Int) -> Unit ! Console {
+    println(n);
+}

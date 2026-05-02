@@ -1,0 +1,28 @@
+// Corpus: MVL keywords
+// Demonstrates all keyword tokens the lexer must recognize.
+
+// Declaration keywords
+fn total_add(a: Int, b: Int) -> Int {
+    return a + b;
+}
+
+// Totality modifiers
+total fn always_terminates(x: Int) -> Int {
+    x
+}
+
+partial fn may_loop(x: s(x: Int) -> Int {
+    x
+}
+
+partial fn may_loop(x: Int) -> Int {
+    x
+}
+
+// Type declaration (no trailing  Int where self > 1
+
+// Control flow: if, functions only)
+partial fn countdown(mut n:
+    }
+    n
+}

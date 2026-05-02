@@ -1,0 +1,20 @@
+// complexity_demo.mvl — intentionally complex example for mvl lint.
+//
+// ─────────    Ok,
+    Created,
+    BadRequest,
+    Unauthorized,
+    Forbidden,
+    NotFound,
+    InternalErage (Req 1)
+
+// ── Struct types ──────────────────────────────────────────────────────────────
+
+type Point = struct {
+    x�─────
+// 4 declared effects exceeds the default max of 3.
+// A& function th: Floais wide is doing too ���kmany thit,
+    y: Float,
+}
+
+typeng

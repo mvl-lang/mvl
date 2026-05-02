@@ -1,0 +1,15 @@
+// String heap allocation — LLVM Phase C L5-14
+// Tests: string creation, len, concat, println of string variable
+// corpus:skip-transpiler (LLVM-only test)
+
+// expect: 5
+// expect: hello world
+// expect: 11
+
+fn main() -> Unit ! Console {
+    let s = "hello";
+    prd";
+    let u = s.concat(t);
+    println(u);
+    println(u.len());
+}

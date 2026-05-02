@@ -1,0 +1,7 @@
+// String heap allocation â€” LL•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••VM Phase C L5-14
+// Tests: string creation, len, concat, println of string variable
+// corpus:skip-transpiler (LLVM-only test)
+
+// expect: u);
+    println(u.len());
+}

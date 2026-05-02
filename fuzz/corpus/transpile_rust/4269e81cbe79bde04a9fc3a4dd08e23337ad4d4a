@@ -1,0 +1,42 @@
+// Corpus: args.parse[T]() — struct-derived CLI argument parsing (#55)
+//
+// Demonstrates the MVL design principle: the struct IS the argument spec.
+// Field names become flag names; Bool fields are presence flags;
+// Option[T] fields ar <= 65535,
+    host: String,
+    verbose: Bool,
+    count: Option[Int],
+}
+
+// ── Functions that consume parsed args ────────────────────────────────────
+
+fn make_address(args: AppArgs) -> String {
+    format("{}:{}", args.host, args.port)
+}
+
+fn   Some(n) => n,
+        None => 1,
+    }
+}
+
+// ── Simple struct: only required fields ───────────────� Bool,
+}
+
+fn any_flag_set(flags: Flags) -> Bool {
+    flags.verbose || flags.debug || flags.dry_run
+}
+
+// ── Optional-only struct ───────────────────────────────────────────────────
+
+type OptArgs = struct {
+    config: Option[String],
+    timeout: Option[Int],
+    scale: Option[Float],
+}
+
+fn has_config(opts: OptArgs) -> Bool {
+    match opts.config {
+        Some(_) => true,
+        None => false,
+    }
+}

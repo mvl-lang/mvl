@@ -1,0 +1,175 @@
+// Corpus: string and collection operations (#43)
+// Demonstrates stdlib string ops (split, join, trim, find, replace, format)
+// and collection ops (map, filter, fold, sort, enumerate, zip).
+// All methods that can fail return Option/Result — never panic.
+// Note: inline lambda syntax is not yet parsed; functions are passed by reference.
+
+// ── String operations ──────────────────────────────────────────────────────
+
+fn string_split() -> List[String] {
+    let csv = "alice,bob,charlie";
+    csv.split(",")
+}
+
+fn string_trim() -> String {
+    let raw = "  hello world  ";
+    raw.trim()
+}
+
+fn string_find() -> Option[Int] {
+    let haystack = "hello world";
+    haystack.find("world")
+}
+
+fn string_replace() -> String {
+    let s = "foo bar foo";
+    s.replace("foo", "baz")
+}
+
+fn string_to_upper() -> String {
+    let s = "hello";
+    s.to_upper()
+}
+
+fn string_to_lower() -> String {
+    let s = "HELLO";
+    s.to_lower()
+}
+
+fn string_len() -> Int {
+    let s = "hello";
+    s.len()
+}
+
+fn string_contains() -> Bool {
+    let s = "hello world";
+    s.contains("world")
+}
+
+fn string_starts_with() -> Bool {
+    let s = "hello world";
+    s.starts_with("hello")
+}
+
+fn string_ends_with() -> Bool {
+    let s = "hello world";
+    s.ends_with("world")
+}
+
+fn string_concat() -> String {
+    let a = "hello";
+    let b = " world";
+    a.concat(b)
+}
+
+fn string_concat_chain() -> String {
+    let prefix = "foo";
+    let middle = "-";
+    let suffix = "bar";
+    prefix.concat(middle).concat(suffix)
+}
+
+fn string_chars() -> List[String] {
+    let s = "abc";
+    s.chars()
+}
+
+fn format_greeting() -> String {
+    format("Hello, {|!", "world")
+}
+
+// ── List operations ────────────────────────────────────────────────────────
+
+fn double(x: Int) -> Int { x * 2 }
+fn is_even(x: Int) -> Bool { x % 2 == 0 }
+
+fn list_map() -> List[Int] {
+    let xs = [1, 2, 3, 4, 5];
+    xs.map(double)
+}
+
+fn list_filter() -> List[Int] {
+    let xs = [1, 2, 3, 4, 5, 6];
+    xs.filter(is_even)
+}
+
+fn list_sort() -> List[Int] {
+    let xs = [3, 1, 4, 1, 5, 9, 2, 6];
+    xs.sort()
+}
+
+fn list_rev() -> List[Int] {
+    let xs = [1, 2, 3];
+    xs.rev()
+}
+
+fn list_len() -> Int {
+    let xs = [1, 2, 3];
+    xs.len()
+}
+
+fn list_first() -> Option[Int] {
+    let xs = [10, 20, 30];
+    xs.first()
+}
+
+fn list_last() -> Option[Int] {
+    let xs = [10, 20, 30];
+    xs.last()
+}
+
+fn list_get() -> Option[Int] {
+    let xs = [10, 20, 30];
+    xs.get(1)
+}
+
+fn list_contains() -> Bool {
+    let xs = [1, 2, 3];
+    xs.contains(2)
+}
+
+fn list_join() -> String {
+    let parts = ["hello", "world"];
+    parts.join(", ")
+}
+
+fn list_enumerate() -> List[(Int, String)] {
+    let words = ["alpha", "beta", "gamma"];
+    words.enumerate()
+}
+
+fn list_zip() -> List[(String, Int)] {
+    let names = ["alice", "bob", "carol"];
+    let scores = [95, 87, 92];
+    names.zip(scores)
+}
+
+fn list_find() -> Option[Int] {
+    let xs = [1, 2, 3, 4];
+    xs.find(is_even)
+}
+
+fn list_any() -> Bool {
+    let xs = [1, 2, 3];
+    xs.any(is_even)
+}
+
+fn list_all() -> Bool {
+    let xs = [2, 4, 6];
+    xs.all(is_even)
+}
+
+fn list_min() -> Option[Int] {
+    let xs = [3, 1, 4, 1, 5];
+    xs.min()
+}
+
+fn list_max() -> Optio      Some(c) => c,
+        None => "?"
+    }
+}
+
+fn list_group_by() -> Map[String, List[String]] {
+    let words = ["ant", "bear", "ape"];
+    words.group_by(get_first_char)
+}

@@ -1,0 +1,5 @@
+// Corpus: MVL struct type declarations
+
+// Simple struct
+type Point = name: String where len(self)  bottom_right: Point,
+}

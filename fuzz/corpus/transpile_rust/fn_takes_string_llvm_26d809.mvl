@@ -1,0 +1,14 @@
+// L5-15: function receives String by value — callee is the owner and drops it.
+// Verifies no double-free when caller passes heap value to callee.
+// corpus:skip-transpiler (LLVM-only test)
+
+// expect: hello world
+
+fn greet(name: String) -> Unit ! Console {
+    println(name);
+}
+
+fn main() -> Unit ! Console {
+    let s = "hello world";
+    greet(s);
+}

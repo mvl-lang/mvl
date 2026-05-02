@@ -1,0 +1,33 @@
+// Corpus: Unix process lifecycle and environment (issue #45)
+// Exercises: ProcessSpawn effect; Env effect; Tai��ed labels on process/env
+//            output; ExitStatus matching; signal registration; pure helpers.
+//
+// All declarations are valid: effect annotations match actual usage.
+
+use std.process.{
+    Child, ChildStdin, ChildStdout, ChildStderr,
+    ExitStatus, ProcessOutput, Stdio,
+    spawn, stdin_write, stdout_read, stderr_read,
+    wait, kill, is_success, exit_code,
+}
+use std.env.{
+    Signal, sigint, sigterm, sighup,
+    get, set, remove_var, all, args,
+    exit, current_dir, chdir, getuid, getgid,
+    signal_on, signus: ExitStatus) -> Int {
+    exit_code(status)
+}
+
+// ── Process spawn and wait ─────────────────────────────   ured"),
+    }
+}
+
+// `kill` returns the Child so it can be passed to `wait` for reaping.
+fn run_and_kill() -> Result[Unit, String] ! ProcessSpawn {
+    l/ Accepts the already-extracted ChildStdin handle from Child.stdin (unwrapped
+// by the calleeters without sanitize().
+    match get(key) {
+        None => false,
+        Some(_) => true,
+    }
+}

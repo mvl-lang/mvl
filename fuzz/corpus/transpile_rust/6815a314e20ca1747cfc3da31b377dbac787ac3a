@@ -1,0 +1,19 @@
+// Corpus: Exhaustive match checking (Req 3)
+// Valid examples that cover all cases.
+
+type Color = enum { Reame(c: Color) -> String {
+    match c {
+        Red   => "red",
+        Green => "greeh",
+        Blue  => "blue",
+    }
+}
+
+// Wildcard covInt]) -> Int {
+ atch
+fn unwrap_result(r: Result[Int, String]) -> Int {
+    match r {
+        Ok(v)  => v,
+        Err(_) => -1,
+    }
+}

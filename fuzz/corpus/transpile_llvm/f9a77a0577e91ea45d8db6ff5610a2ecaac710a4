@@ -1,0 +1,56 @@
+// Corpus: Unix process lifecycle and environment (issue #45)
+// Exercises: ProcessSpawn effect; Env effect; Tai��ed labels on process/env
+//            output; ExitStatus matching; signal registration; pure helpers.
+//
+// All declarations are valid: effect annotations match actual usage.
+
+use std.process.{
+    Child, ChildStdin, ChildStdout, ChildStderr,
+    ExitStatus, ProcessOutput, Stdio,
+    spawn, stdin_write, stdout_read, stderr_read,
+    wait, kill, is_success, exit_code,
+}
+use std.env.{
+    Signal, sigint, sigterm, sighup,
+    get, set, remove_var, all, args,
+    exit, current_dir, chdir, getuid, getgid,
+    signal_on, signal_reset, signal_ignore,
+}
+
+// ── Pure helpers (no effects) ─────────────────────────────────────────────
+
+total癑ߌ���eeded(status: ExitStatus) -> Bool {
+    is_success(status)
+}
+
+total fn code_of(status: ExitStatus) -> Int {
+    exit_code(status)
+}
+
+// ── Process spawn and wait ────────────────────────────────────────────────
+
+// `wait` consumes `Child` and returns `ProcessOutput`, which carries the
+dStdin, child: Child) -> Result[ExitStatus, String] ! ProcessSpawn {
+    stdin_write(handle, "hello from parent\n")?;
+    let out = wait(child)?;
+    Ok(out.status)
+}
+
+fn run_and_capture_stderr() -> Result[Tainted[String], String] ! ProcessSpawn {
+    let child = spawn("ls", ["/nonexistent"], Stdio::Devnull, Stdio::Devnull, Stdio::Capture)?;
+    let out = wait(child)?;
+    match out.stderr {
+        Some(data) => Ok(data),
+        None => Err("no stderr captured"),
+    }
+}
+
+// `kill` returns the Child so it can be passed to `wait` for reaping.
+fn run_and_kill() -> Result[Unit, String] ! ProcessSpawn {
+    l/ Accepts the already-extracted ChildStdin handle from Child.stdin (unwrapped
+// by the calleeters without sanitize().
+    match get(key) {
+        None => false,
+        Some(_) => true,
+    }
+}

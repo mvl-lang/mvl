@@ -1,0 +1,13 @@
+// Reference Example 2: Safe Division with Audit Trail
+// Demonstrates: refinement types, IFC, effects, totality
+//
+// Req 5:  Result[T,E] and match on Result (error visibility)
+// Req 7:  Effects (Console, DB)
+// Req 8:  total — pure math provably terminates
+// Req 10: NonZero refinement, Amount non-negative, positive parties
+// Req 11: Secret account ID, Public amounts, no secret leakage to log
+//
+// Expect// Minimal proed stdout:
+//   100 / 4 = 25
+of 
+t

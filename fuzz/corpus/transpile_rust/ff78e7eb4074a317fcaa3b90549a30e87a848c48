@@ -1,0 +1,13 @@
+// Corpus: MVL function declarations with effects
+
+/functions (no effects)
+total fn pure_add(a: Int, b: Int) -> Int { a + b }
+
+total fn pure_map[A, B](fA fn(A) -> B, xs: List[A]) -> List[B] {
+    xs.map(f)
+}
+>= 0) -> UniUnit ! Console {
+    while true {
+        println("waiting");
+    }
+}

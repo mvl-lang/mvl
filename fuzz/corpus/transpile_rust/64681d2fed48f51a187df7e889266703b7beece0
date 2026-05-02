@@ -1,0 +1,84 @@
+// Corpus: Unix process lifecycle and environment (issue #45)
+// Exercises: ProcessSpawn effect; Env effect; Tainted labels on process/env
+//            output; ExitStatus matching; signal registration; pure helpers.
+//
+// All declarations are valid: effect annotations match actual usage.
+
+use std.process.{
+    Child, ChildStdin, ChildStdout, ChildStderr,
+    ExitStatus, ProcessOutput, Stdio,
+    spawn, stdin_write, stdout_read, stderr_read,
+    wait, kill, is_success, exit_code,
+}
+use std.env.{
+    Signal, sigint, sigterm, sighup,
+    get, set, remove_var, all, args,
+    exit, current_dir, chdir, getuid, getgid,
+    signal_on, signal_reset, signal_ignore,
+}
+
+// ── Pure helpers (no effects) ─────────────────────────────────────────────
+
+total fn succeeded(status: ExitStatus) -> Bool {
+    is_success(status)
+}
+
+total fn code_of(status: ExitStatus) -> Int {
+    exit_code(status)
+}
+
+// ── Process spawn and wait ────────────────────────────────────────────────
+
+// `wait` consumes `Child` and returns `ProcessOutput`, which carries the
+// captured stdout/stderr alongside the exit status. No access to `child`
+// after `wait` is needed.
+
+fn run_echo() -> Result[Tainted[String], String] ! ProcessSpawn {
+    let child = spawn("echo", ["hello, mvl"], Stdio::Inherit, Stdio::Capture, Stdio::Capture)?;
+    let out = wait(child)?;
+    match out.status {
+        ExitStatus::Success => match out.stdout {
+            Some(data) => Ok(data),
+            None => Err("no stdout captured"),
+        },
+        ExitStatus::Failed(_) => Err("echo failed"),
+    }
+}
+
+// Demonstrates spawn with Pipe stdin mode and wait.
+// child.stdin is Option[ChildStdin]; Phase 3 will require unwrapping before
+// passing to stdin_write. In Phase 2 the checker does not yet enforce this,
+// but using the Option directly is a type mismatch until then.
+fn run_with_stdin_pipe() -> Result[ExitStatus, String] ! ProcessSpawn {
+    let child = spawn("cat", [], Stdio::Pipe, Stdio::Capture, Stdio::Inherit)?;
+    let out = wait(child)?;
+    Ok(out.status)
+}
+
+// Shows stdin_write usage: spawns a process with Pipe stdin, writes to it.
+// Accepts the already-extracted ChildStdin handle from Child.stdin (unwrapped
+// by the caller); this avoids partial-move issues in Phase 2.
+fn write_stdin(handle: ChildStdin, child: Child) -> Result[ExitStatus, String] ! ProcessSpawn {
+    stdin_write(handle, "hello from parent\n")?;
+    let out = wait(child)?;
+    Ok(out.status)
+}
+
+fn run_and_capture_stderr() -> Result[Tainted[String], String] ! ProcessSpawn {
+    let child = spawn("ls", ["/nonexistent"], Stdio::Devnull, Stdio::Devnull, Stdio::Capture)?;
+    let out = wait(child)?;
+    match out.stderr {
+        Some(data) => Ok(data),
+        None => Err("no stot the data,
+    // so no sanitization is needed here.
+    Ok(is_success(out.status))
+}
+
+fn process_env_value(key: Clean[String]) -> Bool ! Env {
+    // Environment values are Tainted[String] — safe to inspect (return Bool)
+    // but must not be used as file paths or query parameters without sanitize().
+    match get(key) {
+        None => false,
+        Some(_) => true,
+    }
+}

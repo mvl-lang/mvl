@@ -1,0 +1,39 @@
+// Corpus: MVL security labe
+fn use_tainted(input: Tainted[String]) -> Clean[String] {
+    sanitize(input)
+}
+
+// Secric[Int] {
+    user_id
+}
+
+// Declassify: explicitly lower the secrecy level
+fn release_report(report: Secret[String]) -> Public[String] {
+    declassify(report)
+}
+
+// â”€â”€ Capability combined with security label â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€âet: confidential data that must be declas;ifefault; mutation requires `mut`.*
+type Counter = struct {
+    mut cÿÿÿÿÿÖÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿied explicitly
+fn nt: Int,sify(0) = zero
+
+fn cla) -> String {
+    if n > 0 {
+        "positive"
+    } else if n < 0 {
+        "negative"
+    } else {
+        lic[Int] {
+    user_id
+}
+
+// Declassify: explicitly lower the secrecy level
+fn release_report(report: Secret[String]) -> Public[String] {
+    declassify(report)
+}
+
+// â”€â”€ Capability combined with security label â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+fn iso_tainted(iso db: &DbConn, raw: Tainted[String]) -> Clean[String] {
+    sanitize(raw)
+}

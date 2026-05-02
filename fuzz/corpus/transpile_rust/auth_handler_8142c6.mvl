@@ -1,0 +1,66 @@
+// Reference Example 1: User Authentication
+// Demonstrates: all 11 requirements
+//
+// Req 1:  ADTs (AuthError enum, Session struct)
+// Req 2:  Memory safety (ownership, no raw pointers)
+// Req 3:  Exhaustive match on Option
+// Req 4:  Option[User] — no null
+// Req 5:  Result[Session, AuthError] — errors in signature
+// Req 6:  Ownership — token moved, not copied
+// Req 7:  Effects declared: ! Console
+// Req 8:  total — must terminate
+// Req 9:  iso store — isolated, no concurrent access
+// Req 10: UserId refinement (> 0)
+// Req 11: Tainted input, Secret password, Public output
+
+// Supporting types and stub functions (would be provided by a library in practice).
+// UserStore and sanitize are declared here as stubs; real implementations are injected at runtime.
+type UserId = Int where self > 0
+type User = struct { id: UserId, password_hash: Secret[String] }
+type UserStore = struct {}
+
+fn verify_hash(pwd: Clean[String], stored: Secret[String]) -> Bool { true }
+fn generate_token(id: UserId) -> Secret[String] { "token" }
+fn now_plus(secs: Int) -> Public[Int] { 0 }
+fn clean_input(s: Tainted[String]) -> Clean[String] { "" }
+
+type AuthError = enum {
+    NotFound,
+    InvalidPassword,
+    AccountLocked { attempts: Int where self >= 0 },
+}
+
+type Session = struct {
+    token: Secret[String],
+    user_id: Public[UserId],
+    expires_at: Public[Int],
+}
+
+total fn authenticate(
+    iso store: &UserStore,
+    input_password: Tainted[String],
+    user_id: Public[UserId],
+) -> Result[Session, AuthError] ! Console {
+
+    let user: Option[User] = store.find_user(user_id)?;
+
+    match user {
+        None => Err(AuthError::NotFound),
+        Some(u) => {
+            let clean_pwd: Clean[String] = clean_input(input_password);
+            let stored: Secret[String] = u.password_hash;
+            let valid: Bool = verify_hash(clean_pwd, stored);
+
+            if valid {
+                let token = generate_token(u.id);
+                Ok(Session {
+                    token: token,
+                    user_id: user_id,
+                    expires_at: now_plus(3600),
+                })
+            } else {
+                Err(AuthError::InvalidPassword)
+            }
+        }
+    }
+}

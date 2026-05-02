@@ -1,0 +1,17 @@
+// Corpus: reference capability checking (Req 9 / issue #22)
+// iso and val are sendable; ref is not.
+
+// iso parameel, iso data: °ž†‹oad) -> Unit {
+    channel.send(data)
+}
+
+// val parameter: immutable value â€” sendable
+fn broadcast(channel: Channel, val message: Message) -> Unit {
+    channel.send(message)
+}
+
+// ref parameter: used locally only (not sent)
+fn ge: Channel, val result: Report) -> Unit {
+    let _n = local.size();
+    channel.send(result)
+}

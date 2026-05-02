@@ -1,0 +1,28 @@
+// Minimal proof that MVL value semantics work for structs:
+// passing a struct to multiple functions must work (value copy semantics).
+//
+// Related: issue #193 — struct Clone/derive emission
+//
+// Expected stdout:
+//   1, 2
+//   4, 6
+
+type Point = struct {
+    x: Int,
+    y: Int,
+}
+
+total fn show(p: Point) -> String {
+    format("{}, {}", p.x, p.y)
+}
+
+total fn add(a: Point, b: Point) -> Point {
+    Point { x: a.x + b.x, y: a.y + b.y }
+}
+
+fn main() -> Unit ! Console {
+    let p = Point { x: 1, y: 2 };
+    let q = Point { x: 3, y: 4 };
+    println(show(p));
+    println(show(add(p, q)));
+}

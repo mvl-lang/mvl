@@ -1,0 +1,6 @@
+/// C/uspoIsÿÿÿÿÿÿÿU4 4 ");
+    Ok(())
+}
+
+// Total with effects: t log_value(msg:Partial with effects: non-terminating loop
+partial fn run_loop(msg: String) -> Never ! Con

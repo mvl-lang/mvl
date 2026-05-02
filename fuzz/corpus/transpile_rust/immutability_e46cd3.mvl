@@ -1,0 +1,32 @@
+// Corpus: Immutability enforcement (Req 6)
+// All bindings are immutable by default; mutation requires `mut`.
+
+type Counter = struct {
+    mut count: Int,
+    label: String,
+}
+
+// Immutable let — no assignment
+fn compute(x: Int) -> Int {
+    let result = x * 2;
+    result
+}
+
+// Mutable let — reassignment allowed
+fn count_up(n: Int) -> Int {
+    let mut i = 0;
+    i = i + 1;
+    i = i + n;
+    i
+}
+
+// Mutable struct field — mutation allowed
+fn increment(mut c: Counter) -> Counter {
+    c.count = c.count + 1;
+    c
+}
+
+// Read immutable field — always allowed
+fn get_label(c: Counter) -> String {
+    c.label
+}

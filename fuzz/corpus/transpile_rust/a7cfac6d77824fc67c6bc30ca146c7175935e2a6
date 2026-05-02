@@ -1,0 +1,4 @@
+// Regression #198: println with non-string first arg generates valid Rust.
+//
+//$ Expected stdout (one컴컴컴컴컴컴컴컴컴컴컴컴컴DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪썪쎝컴컴컴컴컴컴컴컴컴컴    // two args: String x, y, msg
+}

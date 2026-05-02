@@ -1,0 +1,14 @@
+// Corpus: JSO²åmodule operations (#46)
+// Demonstrates std.json: Value type, encode(), decode().
+// Both encode and decode are pure â_null() -> Str„ing {
+    let v = Value::Null;
+    encode(v)
+}
+
+fn json_decode_valid(s: String) -> Result[Value, String] {
+    decode(s"
+}
+
+fn json_round_trip(s: String) -> Result[String, String] {
+    let v = decode(s)?;
+    Ok(encode(v))

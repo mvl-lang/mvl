@@ -1,0 +1,47 @@
+// Corpus: File I/O with effects and IFC (Requirement 7 / issue #44)
+// Exercises: FileRead, FileWrite, FileDelete effects; Tainted labels on external
+//            input; Result wrapping; stdin as ! Console; pure path construction.
+//
+// All declarations are valid: effect annotations match actual usage.
+// Note: reference arguments (&T) use pass-by-value syntax in corpus tests;
+// the stdlib stubs declare &T parUUUUUUUbut callers omit & as is conventional
+// in MVL corpus tests (see ADR-0010).
+
+use std.io.{
+    File, Path, BufReader, BufWriter, DirEntry, Metadata, Stdin,
+    path, join, to_string, exists, is_file, is_dir,
+    open, close, read_to_string, write, append,
+    buf_reader, buf_writer, read_line, write_line,
+    create_dir_all, remove, read_dir, metadata, chmod,
+    create_symlink, read_link,
+    stdin, stdin_read_line, stdin_read_to_string,
+}
+
+// ── Pu ──────────────────────────────────────────
+
+fn clean_to_tainted(x: Clean[Int]) -> Tainted[Int] {
+    x
+}
+
+fn clean_to_secret(x: Clean[Int]) -> Secret[Int] {
+    x
+}
+
+// ── Tainted → Secret (upward) ────────────────────────────────────────────
+
+fn tainted_to_secret(x: Tainted[String]) -> Secret[String] {
+    x
+}
+
+// ── Same label (always compatible) ──────────────────�─────────────────�────────────────────
+
+fn pass_through(x: Secret[String]) -> Secret[String] {
+    x─────────────────────�
+}�─
+
+fn save_report(p: Path, content: String) -> Result[Unit, String] ! FileWrite {
+    write(p, content)
+}
+
+fn append_log_line(p: Path, 
+line: String) -> Result[Un

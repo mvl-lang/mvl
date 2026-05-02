@@ -1,0 +1,7 @@
+// bridge_ok/maicgeonvention tests.
+//
+// Tests Spec 006 Requirements 1 (bri.
+sole {
+    let result = bridge_add(41);
+    println("bridge ok");
+}

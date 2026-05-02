@@ -1,0 +1,40 @@
+[workspace]
+
+[package]
+name = "mvl-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+tempfile = "3"
+
+[dependencies.mvl]
+path = ".."
+# LLVM enabled (default) — required by transpile_llvm; transpile_rust works either way.
+# Requires LLVM 22 installed (same as the main crate).
+
+# Each [[bin]] is one fuzz target.
+
+[[bin]]
+name = "transpile_rust"
+path = "fuzz_targets/transpile_rust.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "transpile_llvm"
+path = "fuzz_targets/transpile_llvm.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "transpile_diff"
+path = "fuzz_targets/transpile_diff.rs"
+test = false
+doc = false

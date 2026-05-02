@@ -1,0 +1,8 @@
+// linked_list.mvl â€” recursive enum (linked list) end-to-end test
+//
+// Exercises:
+//   - Recursive enum definition with BoedList::Cons(3, Box::neÿÿÿÿÿÿÿÿList::Nil));
+    let tail1 = LinkedList::Cons(2, Box::new(tail2));
+    let list  = LinkedList::Cons(1, Box::new(tail1));
+    println(format("length: {}", length(list)));
+}

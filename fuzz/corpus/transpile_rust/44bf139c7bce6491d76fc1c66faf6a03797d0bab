@@ -1,0 +1,33 @@
+// password_checker.mvl â€” extern "rust" FFI trust bounpable, counted in assurance)
+//   2. IFC labels: Tainted input â†’ Clean (sanitized) â†’ Secret hash
+//   3. Refinement types constrain valid state (password length)
+//   4. Effects on MVL side; Rust side is unverified (that's the trust surface)
+//
+// Assurance note: this module has 1 extern tximises tRhe verified fraction.
+
+// â”€â”€ Trust boundary: Rust password hashing crate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//
+// `extern "rust"` = explicit trustÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿ boundary â€” like Rust's `unsafe`.
+// The compiler trusts these signatures but does NOT verify the bodies.
+// The assurance checker counts each extern block.
+extern "rust" {
+    fn hash_password(password: Clean[String]) -> Secret[String];
+    fn verify_password(candidate: Clea(n[String], stored_hash: Secret[Stri// Verify a candidate against a stored Secret hash.
+// The hash stays Secret throughout; only the Bool result is observable.
+fn verify_candidate(
+    candidate: Tainted[String],
+    stored_hash: Secret[String],
+) -> Result[Bool, PasswordError] {
+    let clean: Clean[String] = validate_password(candidate)?;
+    let result: Bool = verify_password(clean, stored_hash);
+    Ok(result)
+}
+
+// Full authentication flow:
+// raw tainted input â†’ validate â†’ compare â†’ session decision
+fn authenticate(
+    raw_password: Tainted[String],
+    stored_hash: Secret[String],
+) ->(Result[Bool, PasswordError] {
+    verify_candidate(raw_password, stored_hash)
+}

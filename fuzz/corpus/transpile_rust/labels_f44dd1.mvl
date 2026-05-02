@@ -1,0 +1,48 @@
+// Corpus: MVL security labels and information-flow control
+
+// ── Security-labeled types ────────────────────────────────────────────────
+
+// Tainted: untrusted external input that must be sanitized before use
+fn use_tainted(input: Tainted[String]) -> Clean[String] {
+    sanitize(input)
+}
+
+// Secret: confidential data that must be declassified explicitly
+fn use_secret(data: Secret[String]) -> Public[String] {
+    declassify(data)
+}
+
+// ── Nested labels ─────────────────────────────────────────────────────────
+
+// Tainted inside a Result
+fn tainted_result(res: Result[Tainted[String], String]) -> String {
+    match res {
+        Ok(raw) => {
+            let clean = sanitize(raw);
+            "ok"
+        },
+        Err(e) => "error",
+    }
+}
+
+// ── Labels in function signatures ─────────────────────────────────────────
+
+// Authentication: takes tainted password, returns public session token
+total fn authenticate(
+    iso db: &DbConn,
+    password: Tainted[String],
+    user_id: Public[Int],
+) -> Public[Int] {
+    user_id
+}
+
+// Declassify: explicitly lower the secrecy level
+fn release_report(report: Secret[String]) -> Public[String] {
+    declassify(report)
+}
+
+// ── Capability combined with security label ───────────────────────────────
+
+fn iso_tainted(iso db: &DbConn, raw: Tainted[String]) -> Clean[String] {
+    sanitize(raw)
+}

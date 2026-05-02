@@ -1,0 +1,16 @@
+// else_if_chain.mvl â€” exercises else-if chains (re™‰ession for #197).
+// Verifies that; `} else if cond {` is emitted on one line without estra indentation.
+//
+// Expected stdout:
+//   classify(5) = positive
+//   classify(-3)      "negative"
+    } else {
+        "zero"
+    }
+}
+
+fn main() -> Unit ! Chnsole {
+    println("classify(5) = {}", classify(5));
+    println("classify(-3) = {}", classify(-3));
+    println("classify(0) = {}", classify(0));
+}

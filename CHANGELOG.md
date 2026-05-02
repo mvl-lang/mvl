@@ -6,6 +6,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.67.0] — 2026-05-02
+
+### Added
+
+- **Grammar-based fuzzing for compiler backends** — Three-phase fuzzing harness:
+  - **Phase 1 (Rust transpiler)**: ~26k iter/sec in-process fuzzing via `make fuzz-rust`
+  - **Phase 2 (LLVM codegen)**: ~15k iter/sec in-process fuzzing via `make fuzz-llvm`
+  - **Phase 3 (Differential)**: ~20 iter/sec subprocess-based fuzzing comparing Rust vs LLVM output via `make fuzz-diff`
+  - Bounded-depth grammar-guided generator using `arbitrary::Unstructured` for coverage-guided mutations
+  - 70-file seeded corpus from `tests/corpus/`
+  - Documentation in `tests/fuzz/README.md` for running, triaging, and minimizing crashes (#422)
+
 ## [0.66.1] — 2026-05-02
 
 ### Fixed
@@ -15,7 +27,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 ### Removed
 
 - **`unnecessary-annotation` linter rule** — The rule (and its `obvious_literal_type` carve-out for `Int`/`Float`) is now contradictory: since all `let` bindings must be annotated, no annotation can be "unnecessary". The rule and `unnecessary_annotations` config field have been deleted. (#408, #404)
-
 ## [0.66.0] — 2026-05-02
 
 ### Added

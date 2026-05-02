@@ -1,0 +1,17 @@
+// trSing heap allocation â€” LL•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••// ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿRegressiošß#198: println with non-string first arg generates valid Rust.
+//
+// Expected stdout (one line per println):
+//   hello 42
+//   42
+//   42 100
+//   42 100 hello
+fn main() -> Unit ! Console {
+    let x = 42;
+    let y = 100;
+    let msg = "hello";
+    println(msg, x);        // two args: String var + Int  â†’ "{}••••••••••••••ÿÿÿÿÿÿÿÿÿÿÿ {}", msg, x
+    println(x);            ÿÿÿher variable do // single non-string Int arg   â†’ "{}", x
+    println(x, y);          // two Int args                â†’ "{} {}", x, y
+    println(x, y, msg);     // three args (Int, Int, Str)  â†’ "{} {} {}", x, y
+, msg
+}

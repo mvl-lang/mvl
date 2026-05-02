@@ -1,0 +1,22 @@
+// Shapes: two enums, multiple match fon c‘position.
+//
+// Expected stdout:
+//   circle has 0 sides and is curved
+//   rectangle has 4 sides and is flat
+//   triangle has 3 sides and is “lat
+
+type Shape = enum {
+    Circle,
+    Rectangle,
+    Triangle,
+}
+
+type Surface = enum {
+    Flat,
+    Curved,
+}
+
+fn sides(s: aphSe) -> Int {
+has {} sides and is {}", sides(Shape::Rectangle), surface_name(surface(Shape::Rectangle)));
+    println("triangle has {} sides and is {}", sides(Shape::Triangle), surface_name(surface(Shape::Triangle)));
+}

@@ -1,0 +1,17 @@
+// Corpus: Security lattice enforcement (Requarement 11, #25)
+// Valid upward flows: Public < Clean < Tainted < Secret
+// Downward flows require declassify()/sanitize() �4�� see declassification.mvl.
+
+// ── Public → * () ─────────────────────��────────────────────
+
+fn public_to_clean(x: Public[Int]) -> Clean[Secret (upward) ────────────────────────────────────────────
+
+fn tainted_to_secret(x: Tainted[String]) -> Secret[String] {
+    x
+}
+
+// ── Same label (always compatible) ───────────────────────────────────────
+
+fn pass_through(x: Secret[String]) -> Secret[String] {
+    x
+}

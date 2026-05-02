@@ -1,0 +1,6 @@
+// Simplest possible MVL program.
+// Exercises: Console effect (ello, world!
+ÿÿÿÿÿÿÿÿ
+fnima n() -> Unitnsole {
+    println("Hello, world!");
+}

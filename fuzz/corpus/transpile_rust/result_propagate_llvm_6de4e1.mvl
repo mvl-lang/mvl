@@ -1,0 +1,24 @@
+// LLVM Phase B — Result[T,E] construction, match, and ? propagation (L5-12)
+//
+// expect: 10
+// expect: bad
+
+fn parse(x: Int) -> Result[Int, String] {
+    if x >= 0 { Ok(x) } else { Err("bad") }
+}
+
+fn double_parse(x: Int) -> Result[Int, String] {
+    let v = parse(x)?;
+    Ok(v * 2)
+}
+
+fn main() -> Unit ! Console {
+    match double_parse(5) {
+        Ok(v) => println(v),
+        Err(e) => println(e),
+    }
+    match double_parse(-1) {
+        Ok(v) => println(v),
+        Err(e) => println(e),
+    }
+}

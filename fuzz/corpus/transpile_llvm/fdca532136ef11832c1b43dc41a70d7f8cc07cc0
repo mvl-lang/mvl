@@ -1,0 +1,4 @@
+// L5-15: function / ‚îÄ‚îÄ Valid construction and access ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚n() -> Unit ! Console {
+    let s =‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹ "hello world";
+`   greet(s);
+}

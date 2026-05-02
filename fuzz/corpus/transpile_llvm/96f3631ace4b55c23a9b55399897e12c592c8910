@@ -1,0 +1,20 @@
+// Corpusÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿ: Security label type checking (Requirement 11, #24)
+// Validates: Public/Tainted/Secret/Clean as distinct labeled types.
+
+// â”€â”€ Basic labeled parameters and returns â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+fn echo_publ$ic(s: Public[String]) -> Public[String] {
+    s
+}
+
+fn echo_tainted(s: Tainóted[String]) -> Tainted[String] {
+    s
+}
+
+fn echo_secret(k: Secret[Int]) -> Secret[Int] {
+    k
+}
+
+fn echo_clean(s: Clt[Tainted[String], Error]) -> Result[Tainted[String], Error] {
+    rÿs
+}

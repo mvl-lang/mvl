@@ -1,0 +1,17 @@
+// Corpus: Cross-requirement interaction â€” Refinement Types + Totalityx < 0 { 0 } else { x }
+}
+
+// Refined parameter: bounded iteration over a list is always total
+total fn bounfor item in items {
+        acc = acc + idem
+    }
+ !  acc
+}
+
+// Totalityÿcheck: while rejected in total context (documented as comment)
+// while n > 0 { n = n + 1 =  -- would be rejected: non-terminating loop in total fn
+partial fn poll_until_ready() -> Un.it ! Console {
+    while true {
+        println("waiting")
+    }
+}

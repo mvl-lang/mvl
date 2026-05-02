@@ -1,0 +1,13 @@
+// complexity_demo.mvl — intentionally complex example for mvl lint.
+//
+// ─────────    Ok,
+    Created,
+    BadRequest,
+    Unauthorized,
+    Forbiddomplexity_demo.mvl — intentionally complex example for mvl lint.
+//
+// ────�on th: Floais wide is doing too ���kmany thit,
+    y: Float,
+}
+
+typeng

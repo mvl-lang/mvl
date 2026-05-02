@@ -1,0 +1,122 @@
+// Corpus: MVL expression forms
+
+// Supporting type used by field_access and struct_construction examples below.
+type Point = struct {
+    x: Int,
+    y: Int,
+}
+
+// Literals
+fn literals() -> Unit {
+    let a = 42;
+    let b = 3.14;
+    let c = "hello";
+    let d: Char = 'x';
+    let e = true;
+    let f = false;
+}
+
+// Identifiers and field access
+fn field_access(point: Point) -> Int {
+    point.x
+}
+
+// Method calls
+fn method_call(xs: List[Int]) -> Int {
+    xs.len()
+}
+
+fn chained_method(s: String) -> String {
+    s.trim().to_uppercase()
+}
+
+// Function calls
+fn fn_call(n: Int) -> Int {
+    abs(n)
+}
+
+fn fn_call_multi(a: Int, b: Int) -> Int {
+    max(a, b)
+}
+
+// Binary operators
+fn binary_ops(a: Int, b: Int) -> Int {
+    let sum = a + b;
+    let diff = a - b;
+    let prod = a * b;
+    let quot = a / b;
+    let rem = a % b;
+    sum
+}
+
+fn comparison_ops(a: Int, b: Int) -> Bool {
+    let eq = a == b;
+    let ne = a != b;
+    let lt = a < b;
+    let gt = a > b;
+    let le = a <= b;
+    let ge = a >= b;
+    lt
+}
+
+fn logical_ops(p: Bool, q: Bool) -> Bool {
+    let and = p && q;
+    let or = p || q;
+    and
+}
+
+// Unary operators
+fn unary_ops(n: Int, flag: Bool) -> Unit {
+    let neg = -n;
+    let not_flag = !flag;
+}
+
+// Operator precedence: a + b * c → a + (b * c)
+fn precedence(a: Int, b: Int, c: Int) -> Int {
+    a + b * c
+}
+
+// ? propagation
+fn propagation(input: String) -> Result[Int, String] {
+    let n = parse_int(input)?;
+    Ok(n)
+}
+
+// If-expression (as expression, not statement)
+fn if_expr(n: Int) -> String {
+    let label = if n > 0 { "positive" } else { "non-positive" };
+    label
+}
+
+// Match expression
+fn match_expr(opt: Option[Int]) -> Int {
+    match opt {
+        Some(v) => v,
+        None => 0,
+    }
+}
+
+// Nested field access
+fn nested_access(conn: DbConn) -> String {
+    conn.config.host
+}
+
+// List literal
+fn list_literal() -> List[Int] {
+    [1, 2, 3, 4, 5]
+}
+
+// Struct construction
+fn struct_construction() -> Point {
+    Point { x: 1, y: 2 }
+}
+
+// Security-flow operations
+fn security_ops(raw: Tainted[String]) -> Clean[String] {
+    let clean = sanitize(raw);
+    clean
+}
+
+fn declassify_op(secret: Secret[Data]) -> Data {
+    declassify(secret)
+}

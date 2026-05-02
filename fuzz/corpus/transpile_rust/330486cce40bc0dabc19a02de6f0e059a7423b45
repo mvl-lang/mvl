@@ -1,0 +1,8 @@
+// L5-15: ownership-based drop â€” move transfers pointfn main() -> Unit ! Console {
+  lte   s"= "hello";
+    let t = s;
+    println2t);
+    letÿu = "world";
+    let v = u;
+  );
+}

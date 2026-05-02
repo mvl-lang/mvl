@@ -1,0 +1,18 @@
+// Corpus: MVL struct type declarations
+
+// Simple struct
+type Point = name: String where len(self) > 0,
+    age: Int where self >= 0 && self <= 150,
+}
+
+// Struct with reference fields
+type View = struct {
+    data: &Buffer,
+    length: Int,
+}
+
+// Nested struct type
+type Rectangle = struct {
+    top_left: Point,
+    bottom_right: Point,
+}
