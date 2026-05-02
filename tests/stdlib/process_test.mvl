@@ -25,20 +25,20 @@ use std.process.{spawn, wait, kill, stdin_write, stdout_read, is_success, exit_c
 // ── spawn error path ──────────────────────────────────────────────────────
 
 test fn process_spawn_nonexistent_command_is_err() -> Unit ! ProcessSpawn {
-    let r = spawn("mvl_nonexistent_cmd_xyz_12345", [], Stdio::Devnull, Stdio::Devnull, Stdio::Devnull);
+    let r: Result[Child, String] = spawn("mvl_nonexistent_cmd_xyz_12345", [], Stdio::Devnull, Stdio::Devnull, Stdio::Devnull);
     assert_eq(r.is_err(), true);
 }
 
 test fn process_spawn_nonexistent_is_not_ok() -> Unit ! ProcessSpawn {
-    let r = spawn("mvl_nonexistent_cmd_xyz_12345", [], Stdio::Devnull, Stdio::Devnull, Stdio::Devnull);
+    let r: Result[Child, String] = spawn("mvl_nonexistent_cmd_xyz_12345", [], Stdio::Devnull, Stdio::Devnull, Stdio::Devnull);
     assert_eq(r.is_ok(), false);
 }
 
 // ── spawn + wait: exit codes ───────────────────────────────────────────────
 
 fn run_true() -> Result[Bool, String] ! ProcessSpawn {
-    let child = spawn("true", [], Stdio::Devnull, Stdio::Devnull, Stdio::Devnull)?;
-    let out = wait(child)?;
+    let child: Child = spawn("true", [], Stdio::Devnull, Stdio::Devnull, Stdio::Devnull)?;
+    let out: ProcessOutput = wait(child)?;
     Ok(is_success(out.status))
 }
 
@@ -47,8 +47,8 @@ test fn process_true_exits_success() -> Unit ! ProcessSpawn {
 }
 
 fn run_false() -> Result[Bool, String] ! ProcessSpawn {
-    let child = spawn("false", [], Stdio::Devnull, Stdio::Devnull, Stdio::Devnull)?;
-    let out = wait(child)?;
+    let child: Child = spawn("false", [], Stdio::Devnull, Stdio::Devnull, Stdio::Devnull)?;
+    let out: ProcessOutput = wait(child)?;
     Ok(!is_success(out.status))
 }
 
@@ -57,8 +57,8 @@ test fn process_false_exits_failure() -> Unit ! ProcessSpawn {
 }
 
 fn run_false_exit_code() -> Result[Int, String] ! ProcessSpawn {
-    let child = spawn("false", [], Stdio::Devnull, Stdio::Devnull, Stdio::Devnull)?;
-    let out = wait(child)?;
+    let child: Child = spawn("false", [], Stdio::Devnull, Stdio::Devnull, Stdio::Devnull)?;
+    let out: ProcessOutput = wait(child)?;
     Ok(exit_code(out.status))
 }
 
@@ -69,8 +69,8 @@ test fn process_false_exit_code_nonzero() -> Unit ! ProcessSpawn {
 // ── stdout capture ─────────────────────────────────────────────────────────
 
 fn echo_stdout_is_some() -> Result[Bool, String] ! ProcessSpawn {
-    let child = spawn("echo", ["mvl_test_output"], Stdio::Devnull, Stdio::Capture, Stdio::Devnull)?;
-    let out = wait(child)?;
+    let child: Child = spawn("echo", ["mvl_test_output"], Stdio::Devnull, Stdio::Capture, Stdio::Devnull)?;
+    let out: ProcessOutput = wait(child)?;
     Ok(out.stdout.is_some())
 }
 
@@ -79,8 +79,8 @@ test fn process_echo_capture_stdout_is_some() -> Unit ! ProcessSpawn {
 }
 
 fn echo_stdout_nonempty() -> Result[Bool, String] ! ProcessSpawn {
-    let child = spawn("echo", ["mvl_test_output"], Stdio::Devnull, Stdio::Capture, Stdio::Devnull)?;
-    let out = wait(child)?;
+    let child: Child = spawn("echo", ["mvl_test_output"], Stdio::Devnull, Stdio::Capture, Stdio::Devnull)?;
+    let out: ProcessOutput = wait(child)?;
     Ok(out.stdout.unwrap_or("").is_empty() == false)
 }
 
@@ -89,8 +89,8 @@ test fn process_echo_captured_stdout_is_nonempty() -> Unit ! ProcessSpawn {
 }
 
 fn devnull_stdout_is_none() -> Result[Bool, String] ! ProcessSpawn {
-    let child = spawn("echo", ["ignored"], Stdio::Devnull, Stdio::Devnull, Stdio::Devnull)?;
-    let out = wait(child)?;
+    let child: Child = spawn("echo", ["ignored"], Stdio::Devnull, Stdio::Devnull, Stdio::Devnull)?;
+    let out: ProcessOutput = wait(child)?;
     Ok(out.stdout.is_none())
 }
 
@@ -101,8 +101,8 @@ test fn process_devnull_stdout_is_none() -> Unit ! ProcessSpawn {
 // ── stderr capture ─────────────────────────────────────────────────────────
 
 fn stderr_is_captured() -> Result[Bool, String] ! ProcessSpawn {
-    let child = spawn("sh", ["-c", "echo errline >&2"], Stdio::Devnull, Stdio::Devnull, Stdio::Capture)?;
-    let out = wait(child)?;
+    let child: Child = spawn("sh", ["-c", "echo errline >&2"], Stdio::Devnull, Stdio::Devnull, Stdio::Capture)?;
+    let out: ProcessOutput = wait(child)?;
     Ok(out.stderr.is_some())
 }
 
@@ -113,9 +113,9 @@ test fn process_stderr_capture_is_some() -> Unit ! ProcessSpawn {
 // ── kill ──────────────────────────────────────────────────────────────────
 
 fn kill_sleep_exits_failure() -> Result[Bool, String] ! ProcessSpawn {
-    let child = spawn("sleep", ["60"], Stdio::Devnull, Stdio::Devnull, Stdio::Devnull)?;
-    let killed = kill(child)?;
-    let out = wait(killed)?;
+    let child: Child = spawn("sleep", ["60"], Stdio::Devnull, Stdio::Devnull, Stdio::Devnull)?;
+    let killed: Child = kill(child)?;
+    let out: ProcessOutput = wait(killed)?;
     Ok(!is_success(out.status))
 }
 

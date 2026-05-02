@@ -29,7 +29,7 @@ use std.env.{set, remove_var, args, current_dir, getuid, getgid,
 // ── set + remove_var lifecycle ────────────────────────────────────────────
 
 fn env_set_succeeds() -> Result[Bool, String] ! Env {
-    let _ = set("MVL_ENV_TEST_SET_99992", "mvl_test_value")?;
+    let _: Unit = set("MVL_ENV_TEST_SET_99992", "mvl_test_value")?;
     remove_var("MVL_ENV_TEST_SET_99992");
     Ok(true)
 }
@@ -39,7 +39,7 @@ test fn env_set_and_remove_lifecycle() -> Unit ! Env {
 }
 
 fn env_set_rejects_invalid_name() -> Result[Bool, String] ! Env {
-    let r = set("INVALID=NAME", "value");
+    let r: Result[Unit, String] = set("INVALID=NAME", "value");
     Ok(r.is_err())
 }
 
@@ -48,7 +48,7 @@ test fn env_set_name_with_equals_is_err() -> Unit ! Env {
 }
 
 fn env_set_succeeds_returns_ok() -> Result[Bool, String] ! Env {
-    let r = set("MVL_ENV_TEST_OK_99993", "ok_value");
+    let r: Result[Unit, String] = set("MVL_ENV_TEST_OK_99993", "ok_value");
     remove_var("MVL_ENV_TEST_OK_99993");
     Ok(r.is_ok())
 }
@@ -73,7 +73,7 @@ test fn env_current_dir_returns_ok() -> Unit ! Env {
 }
 
 fn env_current_dir_nonempty() -> Result[Bool, String] ! Env {
-    let p = current_dir()?;
+    let p: Tainted[String] = current_dir()?;
     Ok(p.is_empty() == false)
 }
 
@@ -95,7 +95,7 @@ test fn env_getgid_is_nonnegative() -> Unit ! Env {
 // the result must be one or the other — distinguishes a real syscall
 // from a stub returning a sentinel like -1.
 test fn env_getuid_is_zero_or_positive() -> Unit ! Env {
-    let uid = getuid();
+    let uid: Int = getuid();
     assert_eq(uid == 0 || uid > 0, true);
 }
 

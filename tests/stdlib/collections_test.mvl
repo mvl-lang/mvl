@@ -63,7 +63,7 @@ test fn list_string_is_empty_false() -> Unit {
 // ── take / skip ────────────────────────────────────────────────────────────
 
 test fn list_take_returns_first_n() -> Unit {
-    let xs = [1, 2, 3, 4, 5];
+    let xs: List[Int] = [1, 2, 3, 4, 5];
     assert_eq(xs.take(3).len(), 3);
 }
 
@@ -73,19 +73,19 @@ test fn list_take_empty() -> Unit {
 }
 
 test fn list_take_more_than_len() -> Unit {
-    let xs = [1, 2];
+    let xs: List[Int] = [1, 2];
     assert_eq(xs.take(10).len(), 2);
 }
 
 test fn list_take_contains_first_elements() -> Unit {
-    let xs = [10, 20, 30, 40, 50];
-    let result = xs.take(2);
+    let xs: List[Int] = [10, 20, 30, 40, 50];
+    let result: List[Int] = xs.take(2);
     assert_eq(result.contains(10), true);
     assert_eq(result.contains(30), false);
 }
 
 test fn list_skip_returns_tail() -> Unit {
-    let xs = [1, 2, 3, 4, 5];
+    let xs: List[Int] = [1, 2, 3, 4, 5];
     assert_eq(xs.skip(2).len(), 3);
 }
 
@@ -95,13 +95,13 @@ test fn list_skip_empty() -> Unit {
 }
 
 test fn list_skip_all() -> Unit {
-    let xs = [1, 2, 3];
+    let xs: List[Int] = [1, 2, 3];
     assert_eq(xs.skip(10).len(), 0);
 }
 
 test fn list_skip_contains_tail_elements() -> Unit {
-    let xs = [10, 20, 30, 40, 50];
-    let result = xs.skip(2);
+    let xs: List[Int] = [10, 20, 30, 40, 50];
+    let result: List[Int] = xs.skip(2);
     assert_eq(result.contains(30), true);
     assert_eq(result.contains(10), false);
 }
@@ -158,7 +158,7 @@ test fn list_flatten_empty_inner() -> Unit {
 
 test fn list_flatten_preserves_elements() -> Unit {
     let xss: List[List[Int]] = [[1, 2], [3, 4], [5]];
-    let result = xss.flatten();
+    let result: List[Int] = xss.flatten();
     assert_eq(result.contains(3), true);
     assert_eq(result.contains(6), false);
 }
@@ -168,29 +168,29 @@ test fn list_flatten_preserves_elements() -> Unit {
 fn is_even_p(x: Int) -> Bool { x % 2 == 0 }
 
 test fn list_partition_splits_correctly() -> Unit {
-    let xs = [1, 2, 3, 4, 5, 6];
-    let (evens, odds) = xs.partition(is_even_p);
+    let xs: List[Int] = [1, 2, 3, 4, 5, 6];
+    let (evens, odds): (List[Int], List[Int]) = xs.partition(is_even_p);
     assert_eq(evens.len(), 3);
     assert_eq(odds.len(), 3);
 }
 
 test fn list_partition_all_match() -> Unit {
-    let xs = [2, 4, 6];
-    let (evens, odds) = xs.partition(is_even_p);
+    let xs: List[Int] = [2, 4, 6];
+    let (evens, odds): (List[Int], List[Int]) = xs.partition(is_even_p);
     assert_eq(evens.len(), 3);
     assert_eq(odds.len(), 0);
 }
 
 test fn list_partition_none_match() -> Unit {
-    let xs = [1, 3, 5];
-    let (evens, odds) = xs.partition(is_even_p);
+    let xs: List[Int] = [1, 3, 5];
+    let (evens, odds): (List[Int], List[Int]) = xs.partition(is_even_p);
     assert_eq(evens.len(), 0);
     assert_eq(odds.len(), 3);
 }
 
 test fn list_partition_correct_sides() -> Unit {
-    let xs = [1, 2, 3, 4];
-    let (evens, odds) = xs.partition(is_even_p);
+    let xs: List[Int] = [1, 2, 3, 4];
+    let (evens, odds): (List[Int], List[Int]) = xs.partition(is_even_p);
     assert_eq(evens.contains(2), true);
     assert_eq(evens.contains(1), false);
     assert_eq(odds.contains(1), true);
@@ -211,7 +211,7 @@ test fn range_non_zero_start() -> Unit {
 // ── take_while / skip_while ────────────────────────────────────────────────
 
 test fn list_take_while_stops_at_first_false() -> Unit {
-    let xs = [1, 2, 3, 4, 5];
+    let xs: List[Int] = [1, 2, 3, 4, 5];
     assert_eq(xs.take_while(is_small).len(), 2);
 }
 
@@ -221,17 +221,17 @@ test fn list_take_while_empty() -> Unit {
 }
 
 test fn list_take_while_all_match() -> Unit {
-    let xs = [1, 2];
+    let xs: List[Int] = [1, 2];
     assert_eq(xs.take_while(is_small).len(), 2);
 }
 
 test fn list_take_while_none_match() -> Unit {
-    let xs = [3, 4, 5];
+    let xs: List[Int] = [3, 4, 5];
     assert_eq(xs.take_while(is_small).len(), 0);
 }
 
 test fn list_skip_while_skips_until_false() -> Unit {
-    let xs = [1, 2, 3, 4, 5];
+    let xs: List[Int] = [1, 2, 3, 4, 5];
     assert_eq(xs.skip_while(is_small).len(), 3);
 }
 
@@ -241,18 +241,18 @@ test fn list_skip_while_empty() -> Unit {
 }
 
 test fn list_skip_while_all_match() -> Unit {
-    let xs = [1, 2];
+    let xs: List[Int] = [1, 2];
     assert_eq(xs.skip_while(is_small).len(), 0);
 }
 
 test fn list_skip_while_none_match() -> Unit {
-    let xs = [3, 4, 5];
+    let xs: List[Int] = [3, 4, 5];
     assert_eq(xs.skip_while(is_small).len(), 3);
 }
 
 test fn list_skip_while_contains_tail() -> Unit {
-    let xs = [1, 2, 3, 4, 5];
-    let result = xs.skip_while(is_small);
+    let xs: List[Int] = [1, 2, 3, 4, 5];
+    let result: List[Int] = xs.skip_while(is_small);
     assert_eq(result.contains(3), true);
     assert_eq(result.contains(1), false);
 }
@@ -260,7 +260,7 @@ test fn list_skip_while_contains_tail() -> Unit {
 // ── windows / chunks ───────────────────────────────────────────────────────
 
 test fn list_windows_count() -> Unit {
-    let xs = [1, 2, 3, 4];
+    let xs: List[Int] = [1, 2, 3, 4];
     assert_eq(xs.windows(2).len(), 3);
 }
 
@@ -270,22 +270,22 @@ test fn list_windows_empty() -> Unit {
 }
 
 test fn list_windows_full_width() -> Unit {
-    let xs = [1, 2, 3];
+    let xs: List[Int] = [1, 2, 3];
     assert_eq(xs.windows(3).len(), 1);
 }
 
 test fn list_windows_larger_than_list() -> Unit {
-    let xs = [1, 2];
+    let xs: List[Int] = [1, 2];
     assert_eq(xs.windows(5).len(), 0);
 }
 
 test fn list_chunks_count_even() -> Unit {
-    let xs = [1, 2, 3, 4];
+    let xs: List[Int] = [1, 2, 3, 4];
     assert_eq(xs.chunks(2).len(), 2);
 }
 
 test fn list_chunks_count_with_remainder() -> Unit {
-    let xs = [1, 2, 3, 4, 5];
+    let xs: List[Int] = [1, 2, 3, 4, 5];
     assert_eq(xs.chunks(2).len(), 3);
 }
 
@@ -295,7 +295,7 @@ test fn list_chunks_empty() -> Unit {
 }
 
 test fn list_chunks_single_chunk() -> Unit {
-    let xs = [1, 2, 3];
+    let xs: List[Int] = [1, 2, 3];
     assert_eq(xs.chunks(10).len(), 1);
 }
 
@@ -303,31 +303,31 @@ test fn list_chunks_single_chunk() -> Unit {
 
 test fn list_group_by_empty() -> Unit {
     let xs: List[Int] = [];
-    let g = xs.group_by(is_even_key);
+    let g: Map[Bool, List[Int]] = xs.group_by(is_even_key);
     assert_eq(g.len(), 0);
 }
 
 test fn list_group_by_two_groups() -> Unit {
-    let xs = [1, 2, 3, 4, 5, 6];
-    let g = xs.group_by(is_even_key);
+    let xs: List[Int] = [1, 2, 3, 4, 5, 6];
+    let g: Map[Bool, List[Int]] = xs.group_by(is_even_key);
     assert_eq(g.len(), 2);
 }
 
 test fn list_group_by_all_same_key() -> Unit {
-    let xs = [2, 4, 6];
-    let g = xs.group_by(is_even_key);
+    let xs: List[Int] = [2, 4, 6];
+    let g: Map[Bool, List[Int]] = xs.group_by(is_even_key);
     assert_eq(g.len(), 1);
 }
 
 test fn list_group_by_all_distinct_keys() -> Unit {
-    let xs = [1, 2, 3];
-    let g = xs.group_by(is_even_key);
+    let xs: List[Int] = [1, 2, 3];
+    let g: Map[Bool, List[Int]] = xs.group_by(is_even_key);
     assert_eq(g.len(), 2);
 }
 
 test fn list_group_by_string_key() -> Unit {
     let words: List[String] = ["ant", "bear", "ape"];
-    let g = words.group_by(first_char);
+    let g: Map[String, List[String]] = words.group_by(first_char);
     assert_eq(g.len(), 2);
 }
 
@@ -335,7 +335,7 @@ test fn list_group_by_string_key() -> Unit {
 
 test fn list_map_doubles_elements() -> Unit {
     let xs: List[Int] = [1, 2, 3];
-    let ys = xs.map(|x: Int| x * 2);
+    let ys: List[Int] = xs.map(|x: Int| x * 2);
     assert_eq(ys.len(), 3);
     assert_eq(ys.contains(2), true);
     assert_eq(ys.contains(6), true);
@@ -348,13 +348,13 @@ test fn list_map_empty_is_empty() -> Unit {
 
 test fn list_map_with_fn_ref() -> Unit {
     let xs: List[Int] = [1, 2, 3];
-    let ys = xs.map(double);
+    let ys: List[Int] = xs.map(double);
     assert_eq(ys.contains(4), true);
 }
 
 test fn list_map_string_transform() -> Unit {
     let xs: List[Int] = [1, 2, 3];
-    let ys = xs.map(|x: Int| x + 10);
+    let ys: List[Int] = xs.map(|x: Int| x + 10);
     assert_eq(ys.len(), 3);
     assert_eq(ys.contains(11), true);
     assert_eq(ys.contains(13), true);
@@ -364,7 +364,7 @@ test fn list_map_string_transform() -> Unit {
 
 test fn list_filter_keeps_matching() -> Unit {
     let xs: List[Int] = [1, -2, 3, -4, 5];
-    let ys = xs.filter(|x: Int| x > 0);
+    let ys: List[Int] = xs.filter(|x: Int| x > 0);
     assert_eq(ys.len(), 3);
 }
 
@@ -375,7 +375,7 @@ test fn list_filter_empty() -> Unit {
 
 test fn list_filter_with_fn_ref() -> Unit {
     let xs: List[Int] = [-1, 2, -3, 4];
-    let ys = xs.filter(is_positive);
+    let ys: List[Int] = xs.filter(is_positive);
     assert_eq(ys.len(), 2);
 }
 
@@ -388,7 +388,7 @@ test fn list_filter_none_match() -> Unit {
 
 test fn list_fold_sum() -> Unit {
     let xs: List[Int] = [1, 2, 3, 4, 5];
-    let sum = xs.fold(0, |acc: Int, x: Int| acc + x);
+    let sum: Int = xs.fold(0, |acc: Int, x: Int| acc + x);
     assert_eq(sum, 15);
 }
 
@@ -399,13 +399,13 @@ test fn list_fold_empty() -> Unit {
 
 test fn list_fold_product() -> Unit {
     let xs: List[Int] = [1, 2, 3, 4];
-    let prod = xs.fold(1, |acc: Int, x: Int| acc * x);
+    let prod: Int = xs.fold(1, |acc: Int, x: Int| acc * x);
     assert_eq(prod, 24);
 }
 
 test fn list_fold_count_positives() -> Unit {
     let xs: List[Int] = [1, -2, 3, -4, 5];
-    let count = xs.fold(0, |acc: Int, x: Int| if x > 0 { acc + 1 } else { acc });
+    let count: Int = xs.fold(0, |acc: Int, x: Int| if x > 0 { acc + 1 } else { acc });
     assert_eq(count, 3);
 }
 
@@ -423,7 +423,7 @@ test fn list_reverse_empty() -> Unit {
 
 test fn list_reverse_contains_all_elements() -> Unit {
     let xs: List[Int] = [10, 20, 30];
-    let ys = xs.reverse();
+    let ys: List[Int] = xs.reverse();
     assert_eq(ys.contains(10), true);
     assert_eq(ys.contains(30), true);
 }
@@ -442,7 +442,7 @@ test fn list_sort_empty() -> Unit {
 
 test fn list_sort_contains_all_elements() -> Unit {
     let xs: List[Int] = [3, 1, 4, 1, 5];
-    let ys = xs.sort();
+    let ys: List[Int] = xs.sort();
     assert_eq(ys.contains(3), true);
     assert_eq(ys.contains(5), true);
     assert_eq(ys.is_empty(), false);
@@ -493,8 +493,8 @@ test fn list_all_partial_match_returns_false() -> Unit {
 // ── HOF chaining (filter → map → fold pipelines) ──────────────────────────
 
 test fn collections_filter_map_fold_pipeline() -> Unit {
-    let xs = [1, 2, 3, 4, 5, 6];
-    let result = xs
+    let xs: List[Int] = [1, 2, 3, 4, 5, 6];
+    let result: Int = xs
         .filter(|x: Int| x > 2)
         .map(|x: Int| x * 2)
         .fold(0, |acc: Int, x: Int| acc + x);
@@ -503,8 +503,8 @@ test fn collections_filter_map_fold_pipeline() -> Unit {
 }
 
 test fn collections_filter_map_pipeline_len() -> Unit {
-    let xs = [1, 2, 3, 4, 5, 6];
-    let result = xs
+    let xs: List[Int] = [1, 2, 3, 4, 5, 6];
+    let result: List[Int] = xs
         .filter(|x: Int| x % 2 == 0)
         .map(|x: Int| x * 3);
     assert_eq(result.len(), 3);
@@ -513,8 +513,8 @@ test fn collections_filter_map_pipeline_len() -> Unit {
 }
 
 test fn collections_filter_map_fold_empty_result() -> Unit {
-    let xs = [1, 2, 3];
-    let result = xs
+    let xs: List[Int] = [1, 2, 3];
+    let result: Int = xs
         .filter(|x: Int| x > 10)
         .map(|x: Int| x * 2)
         .fold(0, |acc: Int, x: Int| acc + x);
@@ -522,8 +522,8 @@ test fn collections_filter_map_fold_empty_result() -> Unit {
 }
 
 test fn collections_map_filter_fold_pipeline() -> Unit {
-    let xs = [1, 2, 3, 4, 5];
-    let result = xs
+    let xs: List[Int] = [1, 2, 3, 4, 5];
+    let result: Int = xs
         .map(|x: Int| x * 2)
         .filter(|x: Int| x > 4)
         .fold(0, |acc: Int, x: Int| acc + x);
@@ -537,17 +537,17 @@ fn is_even_chain(x: Int) -> Bool { x % 2 == 0 }
 fn is_gt_3(x: Int) -> Bool { x > 3 }
 
 test fn collections_partition_destructure_len_ops() -> Unit {
-    let xs = [1, 2, 3, 4, 5, 6];
-    let (evens, odds) = xs.partition(is_even_chain);
+    let xs: List[Int] = [1, 2, 3, 4, 5, 6];
+    let (evens, odds): (List[Int], List[Int]) = xs.partition(is_even_chain);
     assert_eq(evens.len(), 3);
     assert_eq(odds.len(), 3);
     assert_eq(evens.len() + odds.len(), 6);
 }
 
 test fn collections_partition_evens_further_mapped() -> Unit {
-    let xs = [1, 2, 3, 4, 5, 6];
-    let (evens, odds) = xs.partition(is_even_chain);
-    let doubled_evens = evens.map(|x: Int| x * 2);
+    let xs: List[Int] = [1, 2, 3, 4, 5, 6];
+    let (evens, odds): (List[Int], List[Int]) = xs.partition(is_even_chain);
+    let doubled_evens: List[Int] = evens.map(|x: Int| x * 2);
     // evens = [2,4,6] → doubled = [4,8,12]
     assert_eq(doubled_evens.contains(4), true);
     assert_eq(doubled_evens.contains(8), true);
@@ -556,17 +556,17 @@ test fn collections_partition_evens_further_mapped() -> Unit {
 }
 
 test fn collections_partition_odds_filtered_and_summed() -> Unit {
-    let xs = [1, 2, 3, 4, 5, 6, 7];
-    let (evens, odds) = xs.partition(is_even_chain);
-    let odd_sum = odds.fold(0, |acc: Int, x: Int| acc + x);
+    let xs: List[Int] = [1, 2, 3, 4, 5, 6, 7];
+    let (evens, odds): (List[Int], List[Int]) = xs.partition(is_even_chain);
+    let odd_sum: Int = odds.fold(0, |acc: Int, x: Int| acc + x);
     // odds: [1,3,5,7] → sum = 16
     assert_eq(odd_sum, 16);
 }
 
 test fn collections_partition_then_filter_on_part() -> Unit {
-    let xs = [1, 2, 3, 4, 5, 6];
-    let (evens, odds) = xs.partition(is_even_chain);
-    let large_odds = odds.filter(is_gt_3);
+    let xs: List[Int] = [1, 2, 3, 4, 5, 6];
+    let (evens, odds): (List[Int], List[Int]) = xs.partition(is_even_chain);
+    let large_odds: List[Int] = odds.filter(is_gt_3);
     assert_eq(large_odds.len(), 1);
     assert_eq(large_odds.contains(5), true);
 }

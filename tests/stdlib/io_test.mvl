@@ -193,7 +193,7 @@ test fn io_join_empty_segment_produces_path() -> Unit {
     let joined: Path = join(base, "");
     // join with empty segment still inserts the separator:
     // "/home/user" (10) + "/" (1) + "" (0) = 11 chars
-    let s = to_string(joined);
+    let s: String = to_string(joined);
     assert_eq(s.is_empty(), false);
     assert_eq(s.len(), 11);
 }
