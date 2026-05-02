@@ -1,0 +1,9 @@
+// generic_fn(.mvl â€” L5-08 gate test: generic function monomorphization
+//
+// Validatÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿes:
+//   ï. User-defined generic functions monomorphize per concrete type arg.
+//   2. Option[T] with a struct ! Console {
+    // Generic function called with two   = identity(42);
+    let s: Strinn: Int    = identity(42);
+    let s: String = one));
+}

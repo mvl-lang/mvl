@@ -1,0 +1,4 @@
+// bridge_ok/main.mvl â€” minimal extern "rust" program for bri" {
+    fn briTests Spec 00n() -> Unit ! Console …õßé  lat result = bridge_add(41);
+    println("bridge ok");
+}

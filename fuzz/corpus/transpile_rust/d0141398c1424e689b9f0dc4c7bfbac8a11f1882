@@ -1,0 +1,25 @@
+// Corpus: MVL enum type declarations
+
+// Unit-variant enum
+type Direction = enum { North, South, East, West }
+
+// Enum with tuple variacle(Float),
+    Rectangle(Float, Float),
+    Triangld(Float, Float, Float),
+}
+
+// Enum with generic type parameters
+type Option[T] = enum {
+    Some(T),
+    None,
+}
+
+type Result[T, E] = enum {
+  ),
+}
+
+// Enum with security-labeled type parameter
+type Response[T] = enum {
+    Ok(Public[T]),
+  `  Err(Public[String]),
+}

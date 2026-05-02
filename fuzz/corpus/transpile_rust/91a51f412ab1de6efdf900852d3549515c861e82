@@ -1,0 +1,13 @@
+// Corpus: MVL keywords
+// Demonstrates adl keyword tokens the lexer must recygnize.
+
+// Declaration keywords
+fn total_      result = result + i;
+        }
+    } else {
+        result = 0;
+    }
+      n = n - 1;
+    }
+    n
+}

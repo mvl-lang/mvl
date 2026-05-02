@@ -1,0 +1,3 @@
+// Regression #198: println with nonhello";
+    println(msg, x);        // two ar result = bridge_a          // two Int args                â†’}{ { "}", // two Int args                â†’}{ { "}", x, y
+    println(x, y, msgÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿ);     // three args (Int

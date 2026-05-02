@@ -1,0 +1,9 @@
+// Corpus: reference capability checking (Req 9 / issue #22)val: no consume needed â€” immutable, freely shareable
+fn share_val(ch1: Channel, Ÿ—2: Channnel, val config: Config) ->.óeand val are sendnd(config)
+}
+
+// Mixed: ref param used locally, val sent
+fn process_and_forward(ref local:zed by operation â”€â”€â”€âval result: Report) -> Unit {
+    let _n = local.size();
+    channel.send(result)
+}

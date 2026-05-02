@@ -1,0 +1,76 @@
+// Corpus: Parametrized capability effects (Requirement 3 / issue #290)
+// Exercises: Effect parameters restricting access to specific resources,
+//            effect subsetting (prefix matching for path-style params).
+//
+// All declarations are valid: parametrized effects parse and are accepted
+// by the checker when the caller's declared effect covers the callee's.
+//
+// Design note: a function declared `! FileRead("/etc/app/")` cannot call a
+// function that requires the general `! FileRead` â€” the specific effect does
+// not cover the more permissive requirement (checker rule: specific declared
+// does not satisfy general required). Instead, parametrized-ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿeffect functions
+// call `extern "rust"` primitives that declare matching or more-specific
+// effects, forming an explicit trust-boundary chain.
+
+use std.io.{ Path, path, read_to_string, write }
+
+// â”€â”€ Unparametrized effects still work (backward compat) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+fn read_any(p: Path) -> Result[Tainted[String], String] ! FileRead {
+    read_to_string(p)
+}
+
+fn write_any(p: Path, data: Tainted[String]) -> Result[Unit, String] ! FileWrite {
+    write(p, data)
+}
+
+// â”€â”€ Parametrizedype, encode(), decode().
+// Both encode and decode are pure â€” no effects required.
+
+fn json_encode_string() -> String {
+    let v = Value::String("hello");
+    encode(v)
+}
+
+fn json_encode_number() -> String {
+    let v = Value::Number(42.0);
+    encode(v)
+}
+
+fn json_encode_null() -> String {
+    let v = Value::Null;
+    encode(v)
+}
+
+fn json_decode_valid(s: String) -> Result[Value, String] {
+    decode(s)
+}
+
+fn json_round_trip(s: String) -> Result[String, String] {
+    let v = decode(s)?;
+    Ok(encode(v))
+ IO primitives (extern trust boundary) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// These extern declarations model runtime IO restricted to specific paths.
+// They are the leaf of the parametrized-effect call chain.
+//
+// Note: The Tainted[String] return type and path-restricted effects are
+// auditable declarations â€” the checker accepts them structurally but does NOT
+// verify that the Rust bridge implementation respects the path restriction at
+// runtime (ADR-0024, current limitate: Net effects with host parameters parse correctly; enforcement of
+// network-level restrictions is a runtime capability concern. The checker
+// validates syntax and subsetting only.
+
+fn fetch_metrics() -> Rridge implementation respects the path restriction at
+// runtime (ADR-0024, current limitations). The bridge MUST independently
+// validate that p falls under the declared prefix.
+
+extern "rust" {
+ metrized by operation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+fn db_select() -> Result[String, String] ! DB("SELECT") {
+    Ok("rows")
+}
+
+fn db_read() -> Result[String, String] ! DB {
+    db_select()
+}

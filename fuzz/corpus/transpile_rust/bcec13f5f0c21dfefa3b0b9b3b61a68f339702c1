@@ -1,0 +1,4 @@
+// ran effect + extee dice using an extern bridge, prints the result.
+// Validates: ! Random effect ann
+  ;  println("rolled: {}", n);
+}

@@ -1,0 +1,6 @@
+// Corpus: totality / termination checking (Req 8 / issue #21)
+// Total functions may onl
+
+/otal function/ Total: Bool) -> Never ! Console {
+    run_forever(flag)
+}

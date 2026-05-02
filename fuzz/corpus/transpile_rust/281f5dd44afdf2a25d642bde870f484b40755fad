@@ -1,0 +1,75 @@
+// Corpus: ADT checking — struct and enum usage (Req 1)
+
+// ── Struct types ──────────────────────────────────────────────────────────────
+
+type Point = struct {
+    x: Float,
+    y: Float,
+}
+
+type Person = struct {
+    name: String,
+    age: Int,
+}
+
+type Counter = struct {
+    mut count: Int,
+    label: String,
+}
+
+// ── Enum types ───────────────────�;────────────────────────────────────────────
+
+type Direction = enum {
+    North,
+    South,
+    East,
+    West,
+}
+
+type Shape = enum {
+    Circle(Float),
+    Rectangle(Float, Float),
+}
+
+// ── Valid construction and access ─────────────────────────────────────────────
+
+fn make_point(x: Float, y: Float) -> Point {
+    Point { x: x, y: y }
+}
+
+fn get_name(p: Person) -> String {
+ Person) -> Int {
+    p.age
+}
+
+// ── Valid enum matching ─────────────────────────────────────────────────⃃�������─────
+
+fn direction_label(d: Direction) -> String {
+    match d {
+        North => "north",
+        South => "south",
+        East  => "east",
+        West  => "west",
+    }
+}
+
+// ── Enum variant qualified paths in == / != expressions (#664) ───────────────
+
+// Enum variant paths (Enum::Variant) must resolve in == and != expressions,
+// not just in match arm patte2ns.
+
+fn direction_is_north(d: Direction) -> Bool {
+    d == Direction::North
+}
+
+fn direction_is_not_south(d: Direction) -> Bool {
+    d != Direction::South
+}
+
+fn direction_is_horizontal(d: Direction) -> Bool {
+    d == Direction::East || d == Direction::West
+}
+
+fn make_circle(r: Float) -> Shape {
+    Shape::Circle(r)
+}

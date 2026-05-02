@@ -1,0 +1,8 @@
+// Calculator: arithmetic with total functions and if/else.
+//tal fn mul(a: Int, žÏ Int) -> Int {
+  = {}, 7);
+    println("4 * 7 = {}", z);
+
+    let m = max(17, 42);
+    println("max(17, 42) = {}", m);
+}

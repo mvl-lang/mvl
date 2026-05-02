@@ -1,0 +1,82 @@
+// Corpus: bitwise operations on Int and Byte (#233)
+// Demonstrates bit_and, bit_or, bit_xor, bit_not, shift_left, shift_right
+// on Int (i64) and Byte (u8), plus to_int/from_int conversions.
+// All examples must parse, type-check, and transpile without errors.
+
+// ── Int bitwise ───────────────────────────────────────────────────────────────
+
+fn int_bit_and(a: Int, b: Int) -> Int {
+    a.bit_and(b)
+}
+
+fn int_bit_or(a: Int, b: Int) -> Int {
+    a.bit_or(b)
+}
+
+fn int_bit_xor(a: Int, b: Int) -> Int {
+    a.bit_xor(b)
+}
+
+fn int_bit_not(a: Int) -> Int {
+    a.bit_not()
+}
+
+fn int_shift_left(a: Int, n: Int) -> Int {
+    a.shift_left(n)
+}
+
+fn int_shift_right(a: Int, n: Int) -> Int {
+    a.shift_right(n)
+}
+
+// Composition: mask the lower 8 bits
+fn lower_byte(n: Int) -> Int {
+    n.bit_and(255)
+}
+
+// ── Byte bitwise ──────────────────────────────────────────────────────────────
+
+fn byte_bit_and(a: Byte, b: Byte) -> Byte {
+    a.bit_and(b)
+}
+
+fn byte_bit_or(a: Byte, b: Byte) -> Byte {
+    a.bit_or(b)
+}
+
+fn byte_bit_xor(a: Byte, b: Byte) -> Byte {
+    a.bit_xor(b)
+}
+
+fn byte_bit_not(a: Byte) -> Byte {
+    a.bit_not()
+}
+
+fn byte_shift_left(a: Byte, n: Byte) -> Byte {
+    a.shift_left(n)
+}
+
+fn byte_shift_right(a: Byte, n: Byte) -> Byte {
+    a.shift_right(n)
+}
+
+// ── Conversions ───────────────────────────────────────────────────────────────
+
+fn byte_to_int(b: Byte) -> Int {
+    b.to_int()
+}
+
+fn int_to_byte(n: Int) -> Byte {
+    from_int(n)
+}
+
+// ── CRC32 building block: XOR table lookup ────────────────────────────────────
+
+// Demonstrates bitwise ops composed for a typical algorithm step:
+// poly XOR with a shifted accumulator.
+fn crc_step(acc: Int, poly: Int) -> Int {
+    let shifted = acc.shift_right(1);
+    let bit = acc.bit_and(1);
+    let mask = bit.bit_xor(1).bit_not().bit_and(poly);
+    shifted.bit_xor(mask)
+}

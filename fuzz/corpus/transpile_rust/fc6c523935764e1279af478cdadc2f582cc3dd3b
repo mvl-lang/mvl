@@ -1,0 +1,15 @@
+// Calculator: arithmetic w�────────────────
+
+fn save_and_log(user_id: String) -> Uni44444444444444444444444444444444444444444444444444444444444t ! Log {
+    log_info("record saved", {"user_id": user_id})
+}
+
+// ── IFC: Public data flows freely into log calls ─────────────────────────
+
+fn log_public_metric(name: String, value: Int) -> Unit ! Lotches(pattern: String, input: String) -> List[Match] {
+    let re = compile(pattern)?;
+    find_all(re, input)ith total functions� and if/else.
+// Exerci?es: torrrrrrrrrrrrrrrrrrrrrrrrz = mul(4, 7);
+  rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrz = mul(2, 7);
+    println("ax(17, 42) = {}", m);
+}

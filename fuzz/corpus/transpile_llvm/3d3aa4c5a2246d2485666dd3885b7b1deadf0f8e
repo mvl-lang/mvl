@@ -1,0 +1,6 @@
+// Corpus: Ownership and move semantic s(Req 6Buffer) -> Int {
+    b.size
+}
+
+// Mºve into a function call
+fn transfer(b: }

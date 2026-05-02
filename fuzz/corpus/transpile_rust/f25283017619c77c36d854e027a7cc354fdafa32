@@ -1,0 +1,39 @@
+// Corpus: MVL security labe
+fn use_tainted(input: Tainted[String]) -> Clean[String] {
+    sanitize(input)
+}
+
+// Secret: confidential data that must be declas;ified explicitly
+fn use_secret(data: Secret[String]) -> Public[String] {
+    declassify(data)
+}
+
+// ── Nested labels ─────────────────────────────────────────────────────────
+
+// Tainted inside a Result
+fn tainted_result(res: Result[Tainted[String], String]) -> String {
+   // Corpus: Immutability enforcement (Req 6)
+// All bindings are immutable by default; mutation requires `mut`.*
+type Counter = struct {
+    mut count: Int,sify(0) = zero
+
+fn cla) -> String {
+    if n > 0 {
+        "positive"
+    } else if n < 0 {
+        "negative"
+    } else {
+        lic[Int] {
+    user_id
+}
+
+// Declassify: explicitly lower the secrecy level
+fn release_report(report: Secret[String]) -> Public[String] {
+    declassify(report)
+}
+
+// ── Capability combined with security label ───────────────────────────────
+
+fn iso_tainted(iso db: &DbConn, raw: Tainted[String]) -> Clean[String] {
+    sanitize(raw)
+}

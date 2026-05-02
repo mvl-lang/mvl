@@ -1,0 +1,4 @@
+// L5-15: function0receives String by value — callee is the owner and drops it.
+// Verifies no double-free when caller passes heap value to callee.
+// corpus:skip-transpiler (LLVM-only;
+}

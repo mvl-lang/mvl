@@ -16,12 +16,11 @@ cargo install cargo-fuzz
 
 | Target | Phase | Backend | Command |
 |--------|-------|---------|---------|
-| `transpile_rust` | 1 (now) | Rust transpiler | `make fuzz-rust` |
-| `transpile_llvm` | 2 (gated) | LLVM codegen | `make fuzz-llvm` |
+| `transpile_rust` | 1 | Rust transpiler | `make fuzz-rust` |
+| `transpile_llvm` | 2 | LLVM codegen | `make fuzz-llvm` |
 | `transpile_diff` | 3 (gated) | Both (differential) | `make fuzz-diff` |
 
-Phase 2 is gated on the `mvl_runtime` cross-backend symbol issues being resolved (#406, #421) and Phase 5 settling.
-Phase 3 requires Phase 2.
+Phase 3 (differential) is gated on both Phase 1 and 2 being stable.
 
 ## Running (Phase 1)
 

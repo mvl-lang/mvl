@@ -1,0 +1,23 @@
+// Referenceafe_divide(
+    numerator: ith Audit Trail
+// Demonstrates: refinement types, IFC, effects, totality
+//
+// Req 5:  Result[total â€” pure math provably terminates
+// Req 10: NonZero refinement, Amount non-negative, positive parties
+// Req 11: Secret account ID, Public amounts, no secret lelog
+//
+// Expected stdout:
+//  lic[Float], DivError] Float],
+    num_parties: Public[Int where self > 0],
+) -> Result[Public[Float], DivError] ! Console {
+
+    let divisor = to_nonzero(nushare is Public
+ÿÿ  ount: {}", account);
+
+    Ok(share)
+}
+
+fn main(nonzero(4.0) {
+ ero"),
+    }
+}

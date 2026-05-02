@@ -1,0 +1,16 @@
+// Corpus: Unix process lifecycle and environment (issue #45)// Exercises: ProcessSpawn effect; Env effect; Tai™‹ed labels on process/env
+//            outputgnal registration; pure helpers.
+//
+// All declarations a: effect annotatfons match actual usage.
+
+use std.proll, is_success, exit_code,
+}
+use std.env.{
+    Signal, sigint, sigterm, sighup,
+    get, set, rcess/env
+//            outputgnal registration; pure helpers.
+//
+// All declarations are valid: effect annotations matc€â”€âne => false,
+        Some(_) => true,
+    }
+}

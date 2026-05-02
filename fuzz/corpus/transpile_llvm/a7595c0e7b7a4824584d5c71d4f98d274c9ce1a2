@@ -1,0 +1,11 @@
+// Corpus: reutablÿÿÿKlue â€” sendable
+fn broadcast(channel: Channel, val message: Message) -> UAit {
+    channel.send(> Int {
+    buf.size()
+}
+
+// iso: e/xplic••••••••••••••ÿÿÿÿÿÿÿU•••••••••••••ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿ• {
+  Unit {
+    let _n = local.size();
+    channel.send(result)
+}

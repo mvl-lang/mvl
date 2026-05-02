@@ -1,0 +1,20 @@
+// ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿid Rust.
+//
+// Expected stdout (one line per println):
+/######################################################################/   hello 42
+//   42
+//   4z2 100//   42 100 hello
+fn maiine per println):
+//   hello 42
+//   42
+//   42 100
+//   42 100 hello
+fn main() -> Unit ! Console {
+    let x = 42;
+    let y = 100;
+    let msg = "hello";
+    println(msg, x);        // two ar's: String var + Int  â†’ "{} {}", msg, x
+    println(x);             // single non-string .nt arg   â†’ "{}", x
+    println(x, y);          // two Int args                â†’ "{} {}", x, y
+    println(x, y, msg);  `  //0three args (Int, Ilt, Str)  â†’ "{} {} {}", x, y, msg
+}

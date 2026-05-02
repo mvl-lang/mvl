@@ -1,0 +1,23 @@
+// Corpus: MVL function declarations with effects
+
+// Single effect
+fn print_line(msg: String) -> Unit ! Console {
+    println(msg)
+}
+
+// Multiple effects
+fn log_and_store(msg: String) -> Unit ! DB, Console {
+    println(msg);
+}
+
+// Pure functions (no effects)
+total fn pure_add(a: Int, b: Int) -> Int { a + b }
+
+total fn pure_map[A, B](f: fn(A) -> B, xs: List[A]) -> List[B] {
+    xs.map(f)
+}
+>= 0) -> UniUnit ! Console {
+    while true {
+        println("waiting");
+    }
+}

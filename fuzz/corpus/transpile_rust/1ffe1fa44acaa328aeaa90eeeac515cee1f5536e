@@ -1,0 +1,19 @@
+// Corpus: totality / termination checking (Req 8 / issue #21)
+// Total functions may onl
+
+// Total with for loop (bounded âadd(acc, task)
+    }
+    acc
+}
+
+// Partial with multiple effects
+partial fn run_forever(fl
+// Total with for loop (bounded â€” allowed)
+total fn sum(items: List[Int]) -> Int {
+    let mut acc = 0;
+    for itemial (allowe-> Int {
+    let mut acc = 0;
+    for itemial (allowed)
+partial fn outer(flag: Bool) -> Never ! Console {
+    run_forever(flag)
+}

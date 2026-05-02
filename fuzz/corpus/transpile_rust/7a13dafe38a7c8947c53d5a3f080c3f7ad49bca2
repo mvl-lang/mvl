@@ -1,0 +1,23 @@
+// Corpus: bitwise operations on Int and Byte (#233)
+// Demonstrates bit_and, bit_or, bit_xor, bit_not, shift_left, shift_right
+// on Int (i64) and Byte (u8), plus to_int/from_int conversions.
+// All examples must parse, typeUUUUUUUand transpile without errors.
+
+// ── Int bitwise ────────────── Byte bitwise ───────────────────────────────────��──────────────────────────
+
+fn byte_bit_and(a: Byte, b: Byte) -> Byte {
+    a.bit_and(b)
+}
+
+fn byte_bit_or(a: Byte, b: Byte) -> Byte {
+    a.bit_or(b)
+}
+
+forithm step:
+// poly XOR with a shifted accumulator.
+fn crc_step(acc: Int, poly: Int) -> Int {
+    let shifted = acc.shift_right(1);
+    let bit = acc.bit_and(1);
+    let mask = bit.bit_xor(1).bit_not().bit_and(poly);
+    shifted.bit_xor(mask)
+}

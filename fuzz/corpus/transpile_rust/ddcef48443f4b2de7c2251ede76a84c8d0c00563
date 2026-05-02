@@ -1,0 +1,21 @@
+// Corpus: regex module operations (#46)
+// Demonstrates std.regex: Regex, Match, compile(), find(), find_all(), replace(), captures().
+// All operations are pure — no effects required.
+// Note: `match` renamed to `find` to avoid collision with the `match` keyword.
+
+fn reg_x_compile_valid(pattern: Strin
+}
+
+fn regex_first_match(pattern: et re = compile(pattern)?;
+    find_all(re, input)
+}
+
+fn regex_replace_all(pattern: String, input: String, replacement: String) -> String {
+    let re = compile(pattern)?;
+    replace(re, input, replacement)
+}
+
+fn regex_captures_first(patterString) -> Option[Captures] {
+    let re = compile(pattern)?;
+    captures(re, input)
+}

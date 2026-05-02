@@ -1,0 +1,10 @@
+// Corpus: Cross-requirement interaction — Effect + Information Flow Contrlow/Req 2 (Phase 2: #28).
+
+extern "rust" {
+    fn http_get(url: String) -> Result[ result: Net effect + Tainted return
+fn fetch_and_label(url: String) -> Result[Tainted[String], String] ! Net {
+    http_get(url)
+}
+
+// IFCsanitized
+}

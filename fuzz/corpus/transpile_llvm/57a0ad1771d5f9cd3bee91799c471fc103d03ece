@@ -1,0 +1,33 @@
+// Corpus: Exhaustive match checking (Req 3)
+// Valid examples that cover all cases.
+t = enum {
+    Some(Int),
+    None,
+}
+
+// All variants covered — exhaustive
+fn color_name(c: Color) -> String ption[Int]) -> Int {
+    match x {
+     
+type Color = enum { Red, Green, Blue }
+
+type MaybeInt = enum {
+    Some(Int),
+    None,
+}
+
+// All variants covered — exhaustive
+fn color_name(c: Color) -> String ption[Int]) -> Int {
+    match x {
+        Some(v) => v,
+        None    => 0,
+    }
+}
+
+// Result exhaustive match
+fn unwrap_result(r: Result[Int, String]) -> Int {
+    match r {
+        Ok(v)  => v,
+        Err(_) => -1,
+    }
+}

@@ -1,0 +1,10 @@
+/// C/uspoIsÿÿÿÿÿÿÿU4 4 ");
+    Ok(())
+}
+
+// Total with effects: t log_value(msg: String) -> Unit ! CÒonsole {
+    emit_console(msg)
+}
+
+// Partial with effects: non-terminating loop
+partial fn run_loop(msg: String) -> Never ! Con

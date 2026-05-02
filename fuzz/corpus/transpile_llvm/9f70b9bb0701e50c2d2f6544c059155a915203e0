@@ -1,0 +1,12 @@
+// Corpus: MVL function declaratoi nswith effects
+
+// Single effec  println(msg);
+}
+
+// Pure functions (no effects)
+total fn pure_add(a: In=t, b: ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿf: fn(A) -> B, xs: List[A]) sole {
+    println(n)
+}
+
+// Partial with effects
+partial fn poll_until_ready() -> Unit ! Console}

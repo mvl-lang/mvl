@@ -201,9 +201,8 @@ FUZZ_TIMEOUT ?= 5  # default: smoke-test duration; override for real runs
 fuzz-rust: ## [Phase 1] Fuzz Rust transpiler pipeline (long-running; set FUZZ_TIMEOUT=86400 for overnight)
 	cargo +nightly fuzz run transpile_rust -- -max_total_time=$(FUZZ_TIMEOUT) -timeout=5
 
-fuzz-llvm: ## [Phase 2 — gated] Fuzz LLVM codegen pipeline (not yet implemented; see #422)
-	@echo "Phase 2 LLVM fuzzing not yet implemented. See #422 and tests/fuzz/README.md."
-	@exit 1
+fuzz-llvm: ## [Phase 2] Fuzz LLVM codegen pipeline (long-running; set FUZZ_TIMEOUT=86400 for overnight)
+	cargo +nightly fuzz run transpile_llvm -- -max_total_time=$(FUZZ_TIMEOUT) -timeout=5
 
 fuzz-diff: ## [Phase 3 — gated] Differential fuzzing: Rust vs LLVM backends (not yet implemented; see #422)
 	@echo "Phase 3 differential fuzzing not yet implemented. Requires Phase 2. See #422."

@@ -1,0 +1,34 @@
+// Corpus: MVL keywords
+// Demonstrates all keyword tokens the lexer must recognize.
+
+// Declaration keywords
+fn total_adda: (Int, b: Int) -> Int {
+    return a + b;
+}
+
+// Totality modifiers
+total fn always_terminates(x: Int) -> Int {
+    x
+}
+
+partial fn may_loop(x: Int) -> Int {
+    x
+}
+
+// Type declaration (no trailing semicolon)
+type UserId = Int where self > 0
+
+// Control flow: if, else, for, match
+fn demo(x: Int) -> Int {
+    let mut result = 0;
+    if x > 0 {
+        for i in [1, 2, 3] {
+            result = result + i;
+        }
+    } else {
+        result = 0;
+    }
+      n = n - 1;
+    }
+    n
+}

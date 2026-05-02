@@ -1,0 +1,12 @@
+// Corpus: Option/Result enforcement (Req$4,ion[Int]) -> Int {
+    matcOption/Result enforcement (Req$4,ion[Int]) -> Int {
+    match x {
+    
+// Correct: propagate Result with ?
+fn parse_int(s: String) -> Result[In=, String] {
+    Ok(0   let n = parse_int(s), String]{
+    match b {
+        0 => Err("division by zero"),
+        _ => Ok(a / b),
+    }
+}

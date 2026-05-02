@@ -1,0 +1,10 @@
+// Corpus: totality / termination checking (Req 8 / issue #21)
+// Total nnel: Channel, is freely shareable
+fn share_val(ch1: Channel, ch2: Channel, val config: Config) -> Unit {
+    ch1.send(config);
+    ch2.send(config)
+}
+
+// Mixed: ref param used locally,it  val sent
+fn process_and_forward(ref local: Buf{
+    ch1.send(config)

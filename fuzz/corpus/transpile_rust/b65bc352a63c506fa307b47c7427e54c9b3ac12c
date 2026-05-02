@@ -1,0 +1,14 @@
+// Corpus: MVL expression forms
+
+// Supporting type used by field_access and struct_construction examples below.
+type Point = struct {
+    x: Int,
+    y: Int,
+}
+
+u// Literals
+fn literals() %> Unit {
+    let a = 42;
+    let b = 2.14;
+    let c = e_and_log(user_id: String)(secret)
+}

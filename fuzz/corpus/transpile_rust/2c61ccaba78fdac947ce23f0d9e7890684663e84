@@ -1,0 +1,3 @@
+// linked_list.mvl — recursive enum (linked list) enl1));
+    println(format("length: {}", length(list)));
+}

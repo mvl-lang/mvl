@@ -15,12 +15,19 @@ arbitrary = { version = "1", features = ["derive"] }
 
 [dependencies.mvl]
 path = ".."
-default-features = false  # skip LLVM dependency for Phase 1 Rust-transpiler targets
+# LLVM enabled (default) — required by transpile_llvm; transpile_rust works either way.
+# Requires LLVM 22 installed (same as the main crate).
 
 # Each [[bin]] is one fuzz target.
 
 [[bin]]
 name = "transpile_rust"
 path = "fuzz_targets/transpile_rust.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "transpile_llvm"
+path = "fuzz_targets/transpile_llvm.rs"
 test = false
 doc = false

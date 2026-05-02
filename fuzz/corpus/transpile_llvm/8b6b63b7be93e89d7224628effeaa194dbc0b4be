@@ -1,0 +1,49 @@
+// Corpus: MVL expression forms
+
+// Supporting type used by field_access and struct_construction examples below.
+type Point = struct {
+    x: Int,
+    y: Int,
+}
+
+// Literals
+fn literag {
+    s.trim().to_uppercase()
+}
+
+// Function calls
+fn fn_call(n: Int) -> Int {
+    abs(n)
+}
+
+fn fn_call_multi(a: Int, b: Int) -> Int {
+    max(a, b)
+}
+
+// Binary operators
+fn binary_ops(a: Int, b: Int) -> Int {
+    let sum = a + b;
+    let diff = a - b;
+    let prod = a * b;
+    let quot = a / b;
+    let rem = a % b;
+    sum
+}
+
+fn comparison_ops(a: Int, b: Int) -> Bool {
+    let eq = a == b;
+    let nuirement 11, #25)
+// Valid upward flows: Public < Clean < Tainted < Secret
+// Downward flows require declassify()/sanitize() — see declassificati.lnmvo.
+
+// ── Public → * (always allowed) ─────────────────────────────────────┠────
+
+fn public_to_clean(x: Publ   let a = 42;
+    nt] {
+    x
+}
+
+fn pu�blic_to_tainted(x: Public[Int]) -> Tainted[Int] s_through(x: Secret[String]) -> Secret[String] {
+    x
+}y(secret)
+}

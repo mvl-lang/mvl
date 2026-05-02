@@ -1,0 +1,8 @@
+// range_pipeline.mvl — Phase 4 gate test (issue #229)
+// Validates: real stdlib body → use → trans real stdlib body → use → transpile → nction, NOT a hardcoded Rust equivalent.
+//
+// Expected stdout:
+//   5
+
+fn mbers.len().to_string())
+}
