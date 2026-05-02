@@ -1,0 +1,218 @@
+---
+domain: roadmap
+version: 0.1.0
+status: draft
+date: 2026-05-02
+---
+
+# 012 — Language Completeness Phases
+
+This spec defines the **completeness model** of the MVL language: the eight pillars
+that together describe what makes a language "done", and the phases (5–9) that
+deliver each pillar to a verifiable state. It supersedes the README's earlier
+three-phase narrative (Prototype / Production / Ecosystem) with a higher-fidelity
+model that better matches the project as it has actually been built.
+
+## Philosophy
+
+A language is not "complete" because the parser works. It is complete when:
+the type checker proves the requirements, the stdlib is real, the testing
+discipline catches regressions, the package supply chain is trustworthy, the
+backend is independent of any host compiler, the toolchain supports day-to-day
+work, and the verification reaches into concurrency. Each of these is a
+*pillar* — independently buildable, independently shippable, independently
+testable.
+
+The **phases** are an ordering of pillars: a sequence in which to deliver them
+so that the project at every step has a coherent story to tell ("MVL compiles",
+"MVL works", "MVL ships", "MVL proves"). Phases do not parallelize freely —
+they have a natural dependency order, but pillars within a phase often can.
+
+**Origin:** April 2026 reorganization — the 1/2/3 phases in the README had
+collapsed (Phase 1 Rust transpiler done, Phase 2 LLVM ~80% done, Phase 3 vague
+and overloaded). The pillar/phase split makes the remaining work visible.
+
+---
+
+## Requirements
+
+### Requirement 1: Eight Pillars [MUST]
+
+The language completeness model MUST consist of exactly eight pillars,
+covering every aspect of language readiness from grammar through formal
+verification. Each pillar is independently scoped, independently testable, and
+mapped to a phase that delivers it.
+
+| # | Pillar | What it covers |
+|---|--------|---------------|
+| 1 | **Requirements** | The 11 compile-time guarantees (ADR-0001) |
+| 2 | **Language constructs** | Grammar, semantics, type system (~25 constructs) |
+| 3 | **Stdlib** | Core types, standard library, extern bridges |
+| 4 | **Testing** | Unit, mutation, property, MC/DC, integration |
+| 5 | **Packaging** | Registry, dependencies, signing, SBOM, supply chain |
+| 6 | **Backends** | Rust transpiler, LLVM compiler, future WASM/interpreter |
+| 7 | **Toolchain** | Linter, formatter, LSP, architecture tools, assurance pipeline |
+| 8 | **Verification** | Model checker, actors, session types, formal proofs |
+
+**Implementation:** `README.md`, label set `phase-N` (issue tracker)
+
+#### Scenario: Pillar coverage check
+
+- GIVEN any open MVL issue
+- WHEN it is triaged
+- THEN it MUST map cleanly onto exactly one of the eight pillars (or be marked `meta`)
+
+### Requirement 2: Phase Sequence [MUST]
+
+The completeness phases MUST be numbered 1 through 9, with phases 1–4
+delivering the foundation (already complete), and phases 5–9 delivering the
+remaining pillars in dependency order. Each phase carries a one-word identity
+so its purpose is unambiguous.
+
+| Phase | Identity | What it proves | Pillars delivered |
+|-------|----------|----------------|-------------------|
+| 1–4 | **Foundation** | MVL verifies its 11 requirements at compile time | 1 (Requirements), 2 (Constructs partial) |
+| 5 | **Compiles** | MVL owns the full compilation chain (LLVM, no host compiler dependency) | 6 (Backends) |
+| 6 | **Works** | Real programs run — stdlib complete, testing matures | 3 (Stdlib), 4 (Testing) |
+| 7 | **Ships** | Packages distribute and are trustworthy | 5 (Packaging), 7 (Toolchain) |
+| 8 | **Proves** | Concurrent programs verified — actors and model checking | 8 (Verification, applied) |
+| 9 | **Proven** | Language formally verified — Lean/Coq metatheory | 8 (Verification, formal) |
+
+**Implementation:** Issue labels `phase-1` through `phase-9` (LAB271/mvl_language)
+
+#### Scenario: Every issue carries a phase label
+
+- GIVEN an open issue in the `enhancement` or `feat` category
+- WHEN it is triaged
+- THEN it MUST carry exactly one `phase-N` label corresponding to the pillar it advances
+
+#### Scenario: Phase 5 is closed when its pillar is delivered
+
+- GIVEN all `phase-5` issues are closed
+- AND the LLVM backend compiles the corpus end-to-end without rustc dependency
+- THEN Phase 5 is considered complete and the label is retained for historical reference only
+
+### Requirement 3: Phase 5 — Compiles [MUST]
+
+Phase 5 MUST deliver the **Backends** pillar to the point where MVL has its
+own compilation chain: LLVM IR codegen, runtime, ownership-based drop, and
+cross-backend regression testing.
+
+**Implementation:** `src/mvl/codegen/` (LLVM backend), `mvl_memory/`, `mvl_runtime/`
+
+#### Scenario: Phase 5 completion criteria
+
+- GIVEN the LLVM backend module
+- WHEN the corpus is compiled end-to-end via `--backend=llvm`
+- THEN every program in `tests/corpus/` produces stdout identical to the Rust transpiler backend
+- AND `tests/cross_backend.rs` passes
+
+**Status (2026-05-02):** All 43 phase-5 issues closed. Released as v0.60–v0.65 on May 1, 2026. Cross-backend regression coverage exists for hello_world, calculator, shapes; full-corpus parity is the remaining tail (tracked separately, see follow-up to #406).
+
+### Requirement 4: Phase 6 — Works [MUST]
+
+Phase 6 MUST deliver the **Stdlib** and **Testing** pillars to the point where
+real programs (not just toy corpus) run reliably and have meaningful test
+coverage including mutation, property-based, and MC/DC discipline.
+
+**Implementation:** `std/`, `tests/corpus/11_programs/`, `tools/mcdc/`
+
+#### Scenario: Stdlib completeness
+
+- GIVEN a fresh MVL project depending on `std`
+- WHEN it imports `pkg.collections`, `pkg.io`, `pkg.string`, `pkg.math`, `pkg.crypto`
+- THEN every public function MUST be a real implementation (no `extern stub` placeholder)
+
+#### Scenario: Testing discipline
+
+- GIVEN any pull request that adds or modifies a function
+- WHEN CI runs
+- THEN unit tests MUST exist, MC/DC coverage SHOULD be reported, and mutation testing SHOULD pass with score ≥ 0.85
+
+**Tracked issues:** #314 (epic: stdlib real implementations), #180, #179, #40, #39, #206, #326, #175, #171, #170
+
+### Requirement 5: Phase 7 — Ships [MUST]
+
+Phase 7 MUST deliver the **Packaging** and **Toolchain** pillars: a registry
+that signs, an SBOM that audits, an LSP that supports day-to-day editing, and
+an assurance pipeline that connects compile-time evidence to AAE-3 artifacts.
+
+**Implementation:** `src/mvl/packages/`, `tools/lsp/` (planned), `etc/registry/` (planned)
+
+#### Scenario: Package distribution
+
+- GIVEN a package authored in MVL
+- WHEN it is published to the registry
+- THEN the registry MUST verify the signature, attach an SBOM, and reject any package whose declared API does not match its compiled surface
+
+#### Scenario: LSP support
+
+- GIVEN an editor with the MVL LSP installed
+- WHEN a developer hovers a `let` binding
+- THEN the LSP MUST display the inferred (or annotated) type, security label, and effect set
+
+**Tracked issues:** #56, #151, #252, #251, #185, #320, #261, #259, #333, #286, #187
+
+### Requirement 6: Phase 8 — Proves [MUST]
+
+Phase 8 MUST deliver the **Verification** pillar applied to concurrency: actor
+runtime, session types, and model checking for protocol correctness. This is
+where MVL achieves its 11/11 requirement coverage at runtime.
+
+**Implementation:** `src/mvl/checker/data_race.rs` (foundation), planned actor/model-checker modules
+
+#### Scenario: Actor isolation
+
+- GIVEN two MVL actors communicating via typed channels
+- WHEN one actor attempts to access the other's mutable state directly
+- THEN the type checker MUST reject it at compile time
+
+#### Scenario: Model-checked protocol
+
+- GIVEN a protocol expressed as a session type
+- WHEN the model checker analyzes it
+- THEN deadlock and unreachable-state conditions MUST be reported as errors
+
+**Tracked issues:** #134, #63, #69, #260, #37, #262, #295, #306, #362
+
+### Requirement 7: Phase 9 — Proven [SHOULD]
+
+Phase 9 SHOULD deliver formal metatheory of the MVL type system in a proof
+assistant (Lean 4 or Coq), establishing soundness of the eleven requirements
+not just by implementation but by mechanized proof.
+
+**Implementation:** Out of repository (planned `mvl_metatheory` companion repo)
+
+#### Scenario: Soundness theorem
+
+- GIVEN the MVL type system formalized in Lean 4
+- WHEN the soundness theorem is proven
+- THEN every well-typed MVL program is shown to satisfy each of the eleven requirements
+
+**Status:** Not yet started. Target: post-1.0 release. Out of scope for current roadmap.
+
+### Requirement 8: README Alignment [MUST]
+
+The `README.md` "How — Three Phases" section MUST be replaced with the 5–9
+phase model defined in this spec. The README MUST link to this spec for the
+detailed pillar mapping.
+
+**Implementation:** `README.md` (top-level)
+
+#### Scenario: README reflects the model
+
+- GIVEN a fresh visitor reading `README.md`
+- WHEN they reach the roadmap section
+- THEN they MUST see the 1–9 phase structure, current phase status, and a link to spec 012
+
+---
+
+## Out of Scope
+
+- The eleven requirements themselves are specified in ADR-0001 and per-feature specs (000–011). This spec governs *delivery*, not *requirements*.
+- Per-pillar epic decomposition lives in individual issues, not here. This spec is the index, not the implementation.
+- The cross-backend test gap noted in #406 (4 failing `mvl_runtime` link tests) is a separate fix, not part of this spec.
+
+## Changelog
+
+- **2026-05-02** — initial draft (closes #406)

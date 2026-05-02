@@ -32,40 +32,22 @@ Eleven compiler-verified requirements. No existing language enforces all of them
 
 Code that compiles is **well-formed** (internal quality proven). Tests handle **validation** (external quality — does it do the right thing).
 
-## How — Three Phases
+## How — Eight Pillars, Nine Phases
 
-### Phase 1: Prototype (MVL → Rust)
+A language is "complete" along eight independent pillars: requirements, language constructs, stdlib, testing, packaging, backends, toolchain, verification. The roadmap delivers them in nine phases. Phases 1–4 are the foundation (done). Phases 5–9 are the path forward.
 
-Transpile MVL to Rust. Fast iteration, proof of concept. Rust scores 7/11 — the highest of any mainstream language. The transpilation adds the remaining 4 requirements (termination, race freedom, refinements, IFC) as a layer on top of Rust's existing guarantees.
+| Phase | Identity | What it proves |
+|-------|----------|----------------|
+| 1–4 | **Foundation** | MVL verifies its 11 requirements at compile time |
+| 5 | **Compiles** | MVL owns the full compilation chain (LLVM, no host compiler) |
+| 6 | **Works** | Real programs run — stdlib complete, testing matures |
+| 7 | **Ships** | Packages distribute and are trustworthy |
+| 8 | **Proves** | Concurrent programs verified — actors and model checking |
+| 9 | **Proven** | Language formally verified — Lean/Coq metatheory |
 
-- Define the EBNF grammar
-- Build a parser and type checker in Rust
-- Transpile to Rust source, compile with `rustc`
-- Borrow Rust's ecosystem (crates.io, cargo)
-- Accept the two-compiler friction (MVL checker + Rust compiler)
+**Status (May 2026):** Foundation complete. Phase 5 shipped May 1 (LLVM Phases A–E + ownership-based drop, v0.60–v0.65). Phase 6 in progress.
 
-**Milestone:** Compile the two reference examples (authentication handler, safe division with audit trail) and demonstrate all 11 requirements.
-
-### Phase 2: Production (MVL → LLVM IR)
-
-One compiler, one trust boundary, one proof chain. The MVL compiler verifies all 11 requirements and emits LLVM IR directly. No intermediate language with its own opinions.
-
-- Build LLVM IR codegen (replaces Rust transpilation)
-- All LLVM targets: ARM, x86, WASM, RISC-V
-- Build the MVL stdlib natively (core: ~30 types, standard: ~200 functions)
-- WASM target enables sandboxed execution (The Cog, edge, browser)
-
-**Milestone:** Self-hosting — the MVL compiler compiles itself.
-
-### Phase 3: Ecosystem
-
-- MVL package manager
-- Extended packages: HTTP, TLS, databases, YAML, advanced crypto
-- Transpilation corpus for LLM training (MVL ↔ Rust/Haskell/Koka)
-- IDE/CLI tooling (language server, formatter, test runner)
-- Integration with OpenSpec for spec-driven development
-
-**Milestone:** A real project built end-to-end in MVL with AAE-4 evidence generated automatically.
+Full pillar/phase mapping and per-phase acceptance criteria: [spec 012](.openspec/specs/012-phases/spec.md). Architectural rationale: [ADR-0003](.openspec/adr/0003-compilation-strategy.md).
 
 ## Design Principles
 
