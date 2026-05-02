@@ -1,0 +1,16 @@
+[package]
+name = "mvl_runtime_c"
+version = "0.1.0"
+edition = "2021"
+description = "MVL C-ABI stdlib runtime — cdylib loaded by lli at runtime via --load"
+license = "MIT"
+
+# cdylib: loaded by lli at runtime via --load=libmvl_runtime_c.{dylib,so}
+# rlib: allows Rust tests to call the functions directly with cargo test
+[lib]
+name = "mvl_runtime_c"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+mvl_runtime = { path = "../mvl_runtime" }
+libc = "0.2"

@@ -2902,6 +2902,10 @@ fn run_project_llvm(path: &str) {
     if let Some(lib) = codegen::find_mvl_memory_lib() {
         cmd.arg(format!("--load={}", lib.display()));
     }
+    // ADR-0018: load the C-ABI stdlib runtime if present (needed for stdlib calls).
+    if let Some(lib) = codegen::find_mvl_runtime_c_lib() {
+        cmd.arg(format!("--load={}", lib.display()));
+    }
     let status = cmd.arg(tmp.path()).status().unwrap_or_else(|e| {
         eprintln!("error: failed to run lli: {e}");
         process::exit(1);
@@ -2998,6 +3002,10 @@ fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
         // L5-16: load the MVL memory runtime if present (needed for Phase C heap types).
         let mut lli_cmd = process::Command::new(&lli);
         if let Some(lib) = codegen::find_mvl_memory_lib() {
+            lli_cmd.arg(format!("--load={}", lib.display()));
+        }
+        // ADR-0018: load the C-ABI stdlib runtime if present.
+        if let Some(lib) = codegen::find_mvl_runtime_c_lib() {
             lli_cmd.arg(format!("--load={}", lib.display()));
         }
         let output = lli_cmd.arg(tmp.path()).output().unwrap_or_else(|e| {

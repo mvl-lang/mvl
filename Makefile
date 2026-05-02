@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-memory build-release test test-unit test-integration test-corpus test-stdlib test-transpiler test-llvm test-tree-sitter test-grammar-coverage coverage lint mvl-lint format format-check assurance assurance-summary assurance-gate docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff
+.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-corpus test-stdlib test-transpiler test-llvm test-tree-sitter test-grammar-coverage coverage lint mvl-lint format format-check assurance assurance-summary assurance-gate docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -45,6 +45,9 @@ build: ## Build the MVL compiler
 
 build-memory: ## Build mvl_memory cdylib (required by LLVM backend at runtime)
 	cargo build -p mvl_memory
+
+build-llvm-runtime: build-memory ## Build both LLVM runtime cdylibs: mvl_memory + mvl_runtime_c
+	cargo build -p mvl_runtime_c
 
 build-release: ## Build release binary
 	cargo build --release

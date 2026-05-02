@@ -458,6 +458,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mvl_runtime_c"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "mvl_runtime",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
