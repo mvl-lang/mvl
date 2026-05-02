@@ -36,7 +36,7 @@ type ParseError = enum {
 // behaviour so the standalone tests stay in sync.
 
 total fn parse_level(raw: String) -> Result[LogLevel, ParseError] {
-    let lower = raw.to_lower();
+    let lower: String = raw.to_lower();
     match lower {
         "debug" => Ok(LogLevel::Debug),
         "info"  => Ok(LogLevel::Info),
@@ -49,8 +49,8 @@ total fn parse_level(raw: String) -> Result[LogLevel, ParseError] {
 // ── Test cases ─────────────────────────────────────────────────────────────
 
 test fn debug_level_parses_ok() -> Unit {
-    let result = parse_level("debug");
-    let ok = match result {
+    let result: Result[LogLevel, ParseError] = parse_level("debug");
+    let ok: Int = match result {
         Ok(_)  => 1,
         Err(_) => 0,
     };
@@ -58,8 +58,8 @@ test fn debug_level_parses_ok() -> Unit {
 }
 
 test fn info_level_parses_ok() -> Unit {
-    let result = parse_level("info");
-    let ok = match result {
+    let result: Result[LogLevel, ParseError] = parse_level("info");
+    let ok: Int = match result {
         Ok(_)  => 1,
         Err(_) => 0,
     };
@@ -67,8 +67,8 @@ test fn info_level_parses_ok() -> Unit {
 }
 
 test fn warn_level_parses_ok() -> Unit {
-    let result = parse_level("warn");
-    let ok = match result {
+    let result: Result[LogLevel, ParseError] = parse_level("warn");
+    let ok: Int = match result {
         Ok(_)  => 1,
         Err(_) => 0,
     };
@@ -76,8 +76,8 @@ test fn warn_level_parses_ok() -> Unit {
 }
 
 test fn error_level_parses_ok() -> Unit {
-    let result = parse_level("error");
-    let ok = match result {
+    let result: Result[LogLevel, ParseError] = parse_level("error");
+    let ok: Int = match result {
         Ok(_)  => 1,
         Err(_) => 0,
     };
@@ -85,8 +85,8 @@ test fn error_level_parses_ok() -> Unit {
 }
 
 test fn unknown_level_returns_err() -> Unit {
-    let result = parse_level("verbose");
-    let err = match result {
+    let result: Result[LogLevel, ParseError] = parse_level("verbose");
+    let err: Int = match result {
         Ok(_)  => 0,
         Err(_) => 1,
     };
@@ -94,8 +94,8 @@ test fn unknown_level_returns_err() -> Unit {
 }
 
 test fn empty_level_returns_err() -> Unit {
-    let result = parse_level("");
-    let err = match result {
+    let result: Result[LogLevel, ParseError] = parse_level("");
+    let err: Int = match result {
         Ok(_)  => 0,
         Err(_) => 1,
     };
@@ -104,8 +104,8 @@ test fn empty_level_returns_err() -> Unit {
 
 // Phase 4: to_lower() makes matching case-insensitive — "ERROR" now parses ok.
 test fn uppercase_level_parses_ok() -> Unit {
-    let result = parse_level("ERROR");
-    let ok = match result {
+    let result: Result[LogLevel, ParseError] = parse_level("ERROR");
+    let ok: Int = match result {
         Ok(_)  => 1,
         Err(_) => 0,
     };

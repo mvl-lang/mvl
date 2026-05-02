@@ -8,21 +8,21 @@ fn regex_compile_valid(pattern: String) -> Result[Regex, String] {
 }
 
 fn regex_first_match(pattern: String, input: String) -> Option[Match] {
-    let re = compile(pattern)?;
+    let re: Regex = compile(pattern)?;
     find(re, input)
 }
 
 fn regex_find_all_matches(pattern: String, input: String) -> List[Match] {
-    let re = compile(pattern)?;
+    let re: Regex = compile(pattern)?;
     find_all(re, input)
 }
 
 fn regex_replace_all(pattern: String, input: String, replacement: String) -> String {
-    let re = compile(pattern)?;
+    let re: Regex = compile(pattern)?;
     replace(re, input, replacement)
 }
 
 fn regex_captures_first(pattern: String, input: String) -> Option[Captures] {
-    let re = compile(pattern)?;
+    let re: Regex = compile(pattern)?;
     captures(re, input)
 }

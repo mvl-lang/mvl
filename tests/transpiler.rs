@@ -570,7 +570,7 @@ impl From[ParseError] for MyError {}
 /// Map literal emits HashMap::from([…]).
 #[test]
 fn map_literal_transpiles_to_hashmap_from() {
-    let src = r#"fn f() -> Unit { let _m = {"a": 1}; }"#;
+    let src = r#"fn f() -> Unit { let _m: Map[String, Int] = {"a": 1}; }"#;
     let rust = transpile_src(src);
     assert_contains(&rust, "std::collections::HashMap::from([");
     assert_contains(&rust, "\"a\".to_string()");
@@ -579,7 +579,7 @@ fn map_literal_transpiles_to_hashmap_from() {
 /// Set literal emits HashSet::from([…]).
 #[test]
 fn set_literal_transpiles_to_hashset_from() {
-    let src = r#"fn f() -> Unit { let _s = {1, 2, 3}; }"#;
+    let src = r#"fn f() -> Unit { let _s: Set[Int] = {1, 2, 3}; }"#;
     let rust = transpile_src(src);
     assert_contains(&rust, "std::collections::HashSet::from([");
 }
@@ -717,8 +717,8 @@ fn show(p: Point) -> Int { p.x }
 fn g(p: Point) -> Int { show(p) }
 fn f(p: Point) -> Int { g(p) }
 fn double_show(p: Point) -> Int {
-    let a = show(p);
-    let b = show(p);
+    let a: Int = show(p);
+    let b: Int = show(p);
     a
 }
 "#;
@@ -1040,7 +1040,7 @@ fn parse_prog(src: &str) -> mvl::mvl::parser::ast::Program {
 fn prelude_fn_with_body_is_emitted() {
     let prelude_src = r#"
 pub partial fn greet(n: Int) -> String {
-    let x = n;
+    let x: Int = n;
     x.to_string()
 }
 "#;
@@ -1086,7 +1086,7 @@ fn prelude_stub_with_empty_body_is_skipped() {
 /// when they have non-empty bodies.
 #[test]
 fn macro_handled_names_are_excluded_from_prelude() {
-    let prelude_src = r#"pub fn println(value: String) -> Unit { let _x = value; }"#;
+    let prelude_src = r#"pub fn println(value: String) -> Unit { let _x: String = value; }"#;
     let user_src = "fn f() -> Unit { }";
     let prelude = vec![parse_prog(prelude_src)];
     let user_prog = parse_prog(user_src);
@@ -1118,7 +1118,7 @@ fn empty_prelude_progs_emits_no_prelude_section() {
 fn user_fn_shadows_prelude_fn_no_duplicate() {
     let prelude_src = r#"
 pub partial fn my_fn(x: Int) -> Int {
-    let a = x;
+    let a: Int = x;
     a
 }
 "#;
@@ -1153,7 +1153,7 @@ fn string_concat_method_emits_clone_plus_borrow() {
 /// Regression: before #229 the transpiler emitted (start..end).collect::<Vec<i64>>()
 #[test]
 fn range_call_emits_as_plain_fn_call_not_inline_rust_range() {
-    let src = "fn f() -> Unit { let xs = range(0, 5); }";
+    let src = "fn f() -> Unit { let xs: List[Int] = range(0, 5); }";
     let rust = transpile_src(src);
     assert!(
         !rust.contains("collect::<Vec<i64>>()"),
@@ -1215,14 +1215,14 @@ fn method_flatten_emits_iterator_flatten() {
 #[test]
 fn method_partition_emits_turbofish() {
     let src =
-        "fn f(xs: List[Int], p: fn(Int) -> Bool) -> List[Int] { let (a, b) = xs.partition(p); a }";
+        "fn f(xs: List[Int], p: fn(Int) -> Bool) -> List[Int] { let (a, b): (List[Int], List[Int]) = xs.partition(p); a }";
     let rust = transpile_src(src);
     assert_contains(&rust, ".into_iter().partition::<Vec<_>, _>(|__x|");
 }
 
 #[test]
 fn method_group_by_emits_hashmap_fold() {
-    let src = "fn f(xs: List[Int], k: fn(Int) -> Int) -> Unit { let m = xs.group_by(k); }";
+    let src = "fn f(xs: List[Int], k: fn(Int) -> Int) -> Unit { let m: Map[Int, List[Int]] = xs.group_by(k); }";
     let rust = transpile_src(src);
     assert_contains(&rust, "std::collections::HashMap");
     assert_contains(&rust, "__m.entry(");
@@ -1610,7 +1610,7 @@ fn emit_args_for_macro_non_literal_first_arg_generates_placeholder() {
 #[test]
 fn propagate_expr_emits_question_mark() {
     let src = r#"fn f(r: Result[Int, String]) -> Result[Int, String] {
-    let x = r?;
+    let x: Int = r?;
     Ok(x)
 }"#;
     let rust = transpile_src(src);
@@ -1782,7 +1782,7 @@ fn transpile_mutated_with_prelude_mixed_file_non_test_fn_produces_mutants() {
     // TODO: issue #330 also lists "mutate test fn bodies" as a requirement; that
     // half is deferred — when implemented, flip the assertion below.
     let src =
-        "fn f(a: Int, b: Int) -> Int { a + b }\ntest fn check_f() -> Unit { let _x = 1 + 2; }";
+        "fn f(a: Int, b: Int) -> Int { a + b }\ntest fn check_f() -> Unit { let _x: Int = 1 + 2; }";
     let prog = parse_prog(src);
     let (_out, mutants) = transpile_mutated_with_prelude(&prog, "my_crate", "my_test_file", &[]);
     let non_test_mutants: Vec<_> = mutants.iter().filter(|m| m.fn_name == "f").collect();
@@ -1869,7 +1869,7 @@ fn borrow_expr_mutable_emits_ampersand_mut() {
 /// group_by correctly wraps the loop variable in `&__v.clone()`.
 #[test]
 fn group_by_with_ref_string_key_emits_borrow_on_clone() {
-    let src = "fn key(s: &String) -> String { s }  fn f(xs: List[String]) -> Unit { let m = xs.group_by(key); }";
+    let src = "fn key(s: &String) -> String { s }  fn f(xs: List[String]) -> Unit { let m: Map[String, List[String]] = xs.group_by(key); }";
     let rust = transpile_src(src);
     assert_contains(&rust, "&__v.clone()");
 }

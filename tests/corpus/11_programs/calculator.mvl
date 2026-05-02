@@ -24,15 +24,15 @@ total fn max(a: Int, b: Int) -> Int {
 }
 
 fn main() -> Unit ! Console {
-    let x = add(10, 5);
+    let x: Int = add(10, 5);
     println("10 + 5 = {}", x);
 
-    let y = sub(10, 5);
+    let y: Int = sub(10, 5);
     println("10 - 5 = {}", y);
 
-    let z = mul(4, 7);
+    let z: Int = mul(4, 7);
     println("4 * 7 = {}", z);
 
-    let m = max(17, 42);
+    let m: Int = max(17, 42);
     println("max(17, 42) = {}", m);
 }

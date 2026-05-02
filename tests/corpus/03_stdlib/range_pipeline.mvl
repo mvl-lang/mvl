@@ -8,6 +8,6 @@
 //   5
 
 fn main() -> Unit ! Console {
-    let numbers = range(0, 5);
+    let numbers: List[Int] = range(0, 5);
     println(numbers.len().to_string())
 }

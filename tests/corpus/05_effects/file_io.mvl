@@ -38,8 +38,8 @@ fn load_config() -> Result[Tainted[String], String] ! FileRead {
 }
 
 fn first_line_of(p: Path) -> Result[Tainted[String], String] ! FileRead {
-    let f = open(p)?;
-    let r = buf_reader(f);
+    let f: File = open(p)?;
+    let r: BufReader = buf_reader(f);
     // Note: buf_reader consumes f, so close is called on the BufReader's underlying
     // handle in Phase 3 via RAII Drop. In Phase 2 we accept the fd leak here.
     read_line(r)
@@ -56,8 +56,8 @@ fn append_log_line(p: Path, line: String) -> Result[Unit, String] ! FileWrite {
 }
 
 fn write_lines(p: Path) -> Result[Unit, String] ! FileWrite {
-    let f = open(p)?;
-    let w = buf_writer(f);
+    let f: File = open(p)?;
+    let w: BufWriter = buf_writer(f);
     write_line(w, "header")
 }
 
@@ -76,7 +76,7 @@ fn list_configs(dir: Path) -> Result[List[DirEntry], String] ! FileRead {
 }
 
 fn file_size(p: Path) -> Result[Int, String] ! FileRead {
-    let m = metadata(p)?;
+    let m: Metadata = metadata(p)?;
     Ok(m.len)
 }
 
@@ -97,7 +97,7 @@ fn resolve_link(p: Path) -> Result[Tainted[String], String] ! FileRead {
 // ── Mixed effects (callers declare superset) ──────────────────────────────
 
 fn rotate_log(src: Path, dst: Path, new_content: String) -> Result[Unit, String] ! FileRead, FileWrite, FileDelete {
-    let old = read_to_string(src)?;
+    let old: Tainted[String] = read_to_string(src)?;
     write(dst, old)?;
     remove(src)?;
     write(src, new_content)
@@ -136,7 +136,7 @@ fn process_file_contents(data: Tainted[String]) -> Bool {
 }
 
 fn read_and_process(p: Path) -> Result[Bool, String] ! FileRead {
-    let contents = read_to_string(p)?;
+    let contents: Tainted[String] = read_to_string(p)?;
     Ok(process_file_contents(contents))
 }
 
@@ -144,20 +144,20 @@ fn read_and_process(p: Path) -> Result[Bool, String] ! FileRead {
 
 fn prompt(msg: String) -> Result[Tainted[String], String] ! Console {
     println(msg);
-    let s = stdin();
+    let s: Stdin = stdin();
     stdin_read_line(s)
 }
 
 fn read_all_stdin() -> Result[Tainted[String], String] ! Console {
-    let s = stdin();
+    let s: Stdin = stdin();
     stdin_read_to_string(s)
 }
 
 // ── Combined I/O and Console ──────────────────────────────────────────────
 
 fn interactive_save(output_path: Path) -> Result[Unit, String] ! Console, FileWrite {
-    let s = stdin();
-    let _ = stdin_read_to_string(s)?;
+    let s: Stdin = stdin();
+    let _: Tainted[String] = stdin_read_to_string(s)?;
     // Write user input to a known, trusted output_path (not derived from stdin input).
     write(output_path, "received input")
 }

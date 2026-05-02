@@ -52,7 +52,7 @@ total fn authenticate(
             let valid: Bool = verify_hash(clean_pwd, stored);
 
             if valid {
-                let token = generate_token(u.id);
+                let token: Secret[String] = generate_token(u.id);
                 Ok(Session {
                     token: token,
                     user_id: user_id,

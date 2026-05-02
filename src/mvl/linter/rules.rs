@@ -10,8 +10,8 @@
 
 use crate::mvl::linter::{config::LintConfig, errors::LintDiag};
 use crate::mvl::parser::ast::{
-    BinaryOp, Block, Decl, ElseBranch, Expr, Literal, MatchArm, MatchBody, Pattern, Program,
-    SecurityLabel, Stmt, TypeBody, TypeExpr, VariantFields,
+    BinaryOp, Block, Decl, ElseBranch, Expr, MatchArm, MatchBody, Pattern, Program, SecurityLabel,
+    Stmt, TypeBody, TypeExpr, VariantFields,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -523,118 +523,6 @@ fn expr_display(expr: &Expr) -> &str {
         Expr::Ident(name, _) => name.as_str(),
         _ => "<expr>",
     }
-}
-
-/// Flag `let` bindings that carry an explicit type annotation when the type
-/// is obvious from the literal initialiser.
-///
-/// Rule id: `unnecessary-annotation`
-///
-/// Examples that are flagged:
-/// ```text
-/// let s: String = "hello"  -- inferred as String
-/// let b: Bool   = true     -- inferred as Bool
-/// ```
-///
-/// Note: `Int` and `Float` annotations are NOT flagged even when the initialiser
-/// is a numeric literal. The transpiler needs them to emit the correct Rust type
-/// (`i64` / `f64`); without them Rust infers `{integer}` / `{float}` which
-/// causes ambiguous method dispatch (e.g., `.abs()`, `.ceil()`).
-pub fn unnecessary_annotations(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
-    if !cfg.unnecessary_annotations {
-        return;
-    }
-    for decl in &prog.declarations {
-        if let Decl::Fn(f) = decl {
-            check_block_annotations(&f.body, out);
-        }
-    }
-}
-
-fn check_block_annotations(block: &Block, out: &mut Vec<LintDiag>) {
-    for stmt in &block.stmts {
-        if let Stmt::Let {
-            ty: Some(ty_expr),
-            init,
-            span: _,
-            ..
-        } = stmt
-        {
-            if let Some(obvious_ty) = obvious_literal_type(init) {
-                if type_expr_matches_name(ty_expr, obvious_ty) {
-                    let ty_span = ty_expr.span();
-                    out.push(LintDiag::warning(
-                        "unnecessary-annotation",
-                        format!(
-                            "type annotation `{obvious_ty}` is redundant — \
-                             the initialiser type is unambiguous"
-                        ),
-                        ty_span.line,
-                        ty_span.col,
-                    ));
-                }
-            }
-        }
-        // Recurse
-        match stmt {
-            Stmt::If { then, else_, .. } => {
-                check_block_annotations(then, out);
-                match else_ {
-                    Some(ElseBranch::Block(eb)) => check_block_annotations(eb, out),
-                    Some(ElseBranch::If(inner)) => check_block_annotations(
-                        &Block {
-                            stmts: vec![*inner.clone()],
-                            span: inner.span(),
-                        },
-                        out,
-                    ),
-                    None => {}
-                }
-            }
-            Stmt::For { body, .. } | Stmt::While { body, .. } => {
-                check_block_annotations(body, out);
-            }
-            Stmt::Match { arms, .. } => {
-                for arm in arms {
-                    if let MatchBody::Block(b) = &arm.body {
-                        check_block_annotations(b, out);
-                    }
-                }
-            }
-            Stmt::Expr {
-                expr: Expr::Block(b),
-                ..
-            } => {
-                check_block_annotations(b, out);
-            }
-            _ => {}
-        }
-    }
-}
-
-/// If `expr` is a literal whose type is always unambiguous, return the
-/// canonical MVL type name; otherwise `None`.
-fn obvious_literal_type(expr: &Expr) -> Option<&'static str> {
-    match expr {
-        Expr::Literal(lit, _) => match lit {
-            // Int and Float annotations are intentionally excluded: the transpiler
-            // needs explicit Int/Float annotations to emit the correct Rust numeric
-            // type (i64/f64). Without them, Rust infers {integer}/{float} which
-            // causes ambiguous method dispatch (e.g., .abs(), .ceil(), .sqrt()).
-            Literal::Integer(_) => None,
-            Literal::Float(_) => None,
-            Literal::Str(_) => Some("String"),
-            Literal::Bool(_) => Some("Bool"),
-            Literal::Unit => Some("Unit"),
-            Literal::Char(_) => None, // Char type exists but uncommon — skip
-        },
-        _ => None,
-    }
-}
-
-/// Return `true` if `ty_expr` is a bare base type with the given name.
-fn type_expr_matches_name(ty_expr: &TypeExpr, name: &str) -> bool {
-    matches!(ty_expr, TypeExpr::Base { name: n, args, .. } if n == name && args.is_empty())
 }
 
 /// Flag functions that declare effects but whose body contains no function
@@ -1753,7 +1641,7 @@ mod tests {
 
     #[test]
     fn unreachable_after_return_detected() {
-        let src = "fn f() -> Int { return 1; let x = 2; x }\n";
+        let src = "fn f() -> Int { return 1; let x: Int = 2; x }\n";
         let prog = parse(src);
         let mut diags = vec![];
         unreachable_code(&prog, &cfg(), &mut diags);
@@ -1763,7 +1651,7 @@ mod tests {
 
     #[test]
     fn unreachable_code_disabled() {
-        let src = "fn f() -> Int { return 1; let x = 2; x }\n";
+        let src = "fn f() -> Int { return 1; let x: Int = 2; x }\n";
         let prog = parse(src);
         let mut diags = vec![];
         let mut c = cfg();
@@ -1774,7 +1662,7 @@ mod tests {
 
     #[test]
     fn reachable_code_clean() {
-        let src = "fn f() -> Int { let x = 1; return x }\n";
+        let src = "fn f() -> Int { let x: Int = 1; return x }\n";
         let prog = parse(src);
         let mut diags = vec![];
         unreachable_code(&prog, &cfg(), &mut diags);
@@ -1809,51 +1697,6 @@ mod tests {
         let prog = parse(src);
         let mut diags = vec![];
         redundant_match(&prog, &cfg(), &mut diags);
-        assert!(diags.is_empty());
-    }
-
-    // -- unnecessary_annotations --
-
-    #[test]
-    fn int_annotation_on_int_literal_not_flagged() {
-        // Int annotations are intentionally NOT flagged: the transpiler needs
-        // explicit Int annotations so Rust emits i64 rather than {integer},
-        // which would cause ambiguous method dispatch (.abs(), .min(), etc.).
-        let src = "fn f() -> Unit { let x: Int = 42; x }\n";
-        let prog = parse(src);
-        let mut diags = vec![];
-        unnecessary_annotations(&prog, &cfg(), &mut diags);
-        assert!(diags.is_empty());
-    }
-
-    #[test]
-    fn bool_annotation_on_bool_literal_detected() {
-        let src = "fn f() -> Unit { let b: Bool = true; b }\n";
-        let prog = parse(src);
-        let mut diags = vec![];
-        unnecessary_annotations(&prog, &cfg(), &mut diags);
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].rule, "unnecessary-annotation");
-    }
-
-    #[test]
-    fn annotation_on_non_literal_clean() {
-        let src = "fn f(x: Int) -> Unit { let y: Int = x; y }\n";
-        let prog = parse(src);
-        let mut diags = vec![];
-        unnecessary_annotations(&prog, &cfg(), &mut diags);
-        assert!(
-            diags.is_empty(),
-            "binding to variable, not literal — should be clean"
-        );
-    }
-
-    #[test]
-    fn no_annotation_clean() {
-        let src = "fn f() -> Unit { let x = 42; x }\n";
-        let prog = parse(src);
-        let mut diags = vec![];
-        unnecessary_annotations(&prog, &cfg(), &mut diags);
         assert!(diags.is_empty());
     }
 
@@ -1969,42 +1812,6 @@ mod tests {
         let mut c = cfg();
         c.redundant_match = false;
         redundant_match(&prog, &c, &mut diags);
-        assert!(diags.is_empty());
-    }
-
-    // -- unnecessary_annotations: missing literal types and config-disable --
-
-    #[test]
-    fn string_annotation_on_str_literal_detected() {
-        let src = "fn f() -> Unit { let s: String = \"hello\"; s }\n";
-        let prog = parse(src);
-        let mut diags = vec![];
-        unnecessary_annotations(&prog, &cfg(), &mut diags);
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].rule, "unnecessary-annotation");
-        assert!(diags[0].message.contains("String"));
-    }
-
-    #[test]
-    fn float_annotation_on_float_literal_not_flagged() {
-        // Float annotations are intentionally NOT flagged: the transpiler needs
-        // explicit Float annotations so Rust emits f64 rather than {float},
-        // which would cause ambiguous method dispatch (.ceil(), .floor(), .sqrt()).
-        let src = "fn f() -> Unit { let x: Float = 3.14; x }\n";
-        let prog = parse(src);
-        let mut diags = vec![];
-        unnecessary_annotations(&prog, &cfg(), &mut diags);
-        assert!(diags.is_empty());
-    }
-
-    #[test]
-    fn unnecessary_annotations_disabled() {
-        let src = "fn f() -> Unit { let x: Int = 42; x }\n";
-        let prog = parse(src);
-        let mut diags = vec![];
-        let mut c = cfg();
-        c.unnecessary_annotations = false;
-        unnecessary_annotations(&prog, &c, &mut diags);
         assert!(diags.is_empty());
     }
 

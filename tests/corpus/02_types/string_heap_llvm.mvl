@@ -7,10 +7,10 @@
 // expect: 11
 
 fn main() -> Unit ! Console {
-    let s = "hello";
+    let s: String = "hello";
     println(s.len());
-    let t = " world";
-    let u = s.concat(t);
+    let t: String = " world";
+    let u: String = s.concat(t);
     println(u);
     println(u.len());
 }

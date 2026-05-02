@@ -88,7 +88,6 @@ pub fn lint(prog: &Program, src: &str, cfg: &LintConfig) -> LintResult {
     // Phase 2: semantic rules
     rules::unreachable_code(prog, cfg, &mut diags);
     rules::redundant_match(prog, cfg, &mut diags);
-    rules::unnecessary_annotations(prog, cfg, &mut diags);
     rules::redundant_effects(prog, cfg, &mut diags);
     rules::redundant_ifc_labels(prog, cfg, &mut diags);
 

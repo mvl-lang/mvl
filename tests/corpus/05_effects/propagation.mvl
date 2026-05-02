@@ -33,20 +33,20 @@ fn fetch_data(url: String) -> Result[String, NetError] ! Net {
 
 // Caller declares FileRead (correct propagation)
 fn load_app_config(path: Path) -> Result[String, Error] ! FileRead {
-    let raw = read_config(path)?;
+    let raw: String = read_config(path)?;
     Ok(raw)
 }
 
 // Transitive caller also declares FileRead + Console
 fn bootstrap(path: Path) -> Result[Unit, Error] ! FileRead, Console {
-    let cfg = load_app_config(path)?;
+    let cfg: String = load_app_config(path)?;
     cfg.print();
     Ok(())
 }
 
 // Effect union: caller declares union of all callees
 fn fetch_and_write(url: String, path: Path) -> Result[Unit, Error] ! Net, FileWrite {
-    let data = fetch_data(url)?;
+    let data: String = fetch_data(url)?;
     write_output(path, data)?;
     Ok(())
 }
@@ -61,7 +61,7 @@ total fn multiply(a: Int, b: Int) -> Int {
 }
 
 total fn sum_of_squares(a: Int, b: Int) -> Int {
-    let sq_a = multiply(a, a);
-    let sq_b = multiply(b, b);
+    let sq_a: Int = multiply(a, a);
+    let sq_b: Int = multiply(b, b);
     sq_a + sq_b
 }

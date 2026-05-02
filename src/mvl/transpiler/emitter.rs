@@ -741,9 +741,7 @@ fn collect_method_stubs_for_type(
 
         for stmt in &fd.body.stmts {
             if let Stmt::Let {
-                ty: Some(let_ty),
-                init,
-                ..
+                ty: let_ty, init, ..
             } = stmt
             {
                 let (method_call, has_prop) = match init {

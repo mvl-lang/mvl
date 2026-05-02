@@ -310,7 +310,7 @@ module.exports = grammar({
         "let",
         optional("mut"),
         $.pattern,
-        optional(seq(":", $.type_expr)),
+        seq(":", $.type_expr),
         "=",
         $.expr,
         ";"

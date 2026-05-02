@@ -6,10 +6,10 @@
 // expect: world
 
 fn main() -> Unit ! Console {
-    let s = "hello";
-    let t = s;
+    let s: String = "hello";
+    let t: String = s;
     println(t);
-    let u = "world";
-    let v = u;
+    let u: String = "world";
+    let v: String = u;
     println(v);
 }

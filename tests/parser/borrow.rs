@@ -65,7 +65,7 @@ fn borrow_single_use_let_binding() {
 type Buf = struct { data: String }
 fn use_buf(b: Buf) -> String { b.data }
 fn process(s: String) -> String {
-    let b = Buf { data: s };
+    let b: Buf = Buf { data: s };
     use_buf(b)
 }
 "#;
@@ -81,8 +81,8 @@ fn borrow_multi_use_param_no_clone_needed() {
 type Buf = struct { data: String }
 fn peek(b: Buf) -> String { b.data }
 fn double(b: Buf) -> String {
-    let a = peek(b);
-    let c = peek(b);
+    let a: String = peek(b);
+    let c: String = peek(b);
     a
 }
 "#;
@@ -100,7 +100,7 @@ type Buf = struct { data: String }
 fn peek(b: Buf) -> String { b.data }
 fn take_buf(b: Buf) -> String { b.data }
 fn pipeline(b: Buf) -> String {
-    let _ = peek(b);
+    let _: String = peek(b);
     take_buf(b)
 }
 "#;
@@ -139,7 +139,7 @@ type Buf = struct { data: String }
 fn size_of(b: Buf) -> Int { 0 }
 fn inspect(b: Buf) -> String { b.data }
 fn process(b: Buf) -> Unit {
-    let n = size_of(b);
+    let n: Int = size_of(b);
     for _ in range(0, n) {
         inspect(b);
         ()
@@ -253,8 +253,8 @@ fn borrow_multi_use_field_access_no_clone() {
 type Counter = struct { value: Int }
 fn get(c: Counter) -> Int { c.value }
 fn twice(c: Counter) -> Int {
-    let a = get(c);
-    let b = get(c);
+    let a: Int = get(c);
+    let b: Int = get(c);
     a
 }
 "#;
@@ -336,7 +336,7 @@ fn clone_multi_use_when_callee_disqualified() {
 type Buf = struct { data: String }
 fn take(b: Buf) -> Buf { b }
 fn caller(b: Buf) -> Buf {
-    let _x = take(b);
+    let _x: Buf = take(b);
     take(b)
 }
 "#;
@@ -357,7 +357,7 @@ fn caller(b: Buf) -> Buf {
 fn param_as_direct_for_iterable_not_inferred_as_borrow() {
     let src = r#"
 fn process(xs: List[Int]) -> Int {
-    let mut s = 0;
+    let mut s: Int = 0;
     for x in xs {
         s = s + x
     }

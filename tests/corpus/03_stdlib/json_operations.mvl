@@ -3,17 +3,17 @@
 // Both encode and decode are pure — no effects required.
 
 fn json_encode_string() -> String {
-    let v = Value::String("hello");
+    let v: Value = Value::String("hello");
     encode(v)
 }
 
 fn json_encode_number() -> String {
-    let v = Value::Number(42.0);
+    let v: Value = Value::Number(42.0);
     encode(v)
 }
 
 fn json_encode_null() -> String {
-    let v = Value::Null;
+    let v: Value = Value::Null;
     encode(v)
 }
 
@@ -22,6 +22,6 @@ fn json_decode_valid(s: String) -> Result[Value, String] {
 }
 
 fn json_round_trip(s: String) -> Result[String, String] {
-    let v = decode(s)?;
+    let v: Value = decode(s)?;
     Ok(encode(v))
 }

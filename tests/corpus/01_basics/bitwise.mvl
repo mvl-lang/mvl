@@ -75,8 +75,8 @@ fn int_to_byte(n: Int) -> Byte {
 // Demonstrates bitwise ops composed for a typical algorithm step:
 // poly XOR with a shifted accumulator.
 fn crc_step(acc: Int, poly: Int) -> Int {
-    let shifted = acc.shift_right(1);
-    let bit = acc.bit_and(1);
-    let mask = bit.bit_xor(1).bit_not().bit_and(poly);
+    let shifted: Int = acc.shift_right(1);
+    let bit: Int = acc.bit_and(1);
+    let mask: Int = bit.bit_xor(1).bit_not().bit_and(poly);
     shifted.bit_xor(mask)
 }
