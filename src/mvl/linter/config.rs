@@ -49,6 +49,7 @@
 //! | `max_trait_impl_count`       | `5`     | Max number of trait impls per type (0 = disabled)                  |
 //! | `max_module_fanout`          | `15`    | Max number of distinct modules imported (0 = disabled)             |
 //! | `max_extern_ratio`           | `0.2`   | Max ratio of extern fns to total fns (0.0 = disabled)              |
+//! | `min_fns_for_extern_ratio`   | `10`    | Min total fns before extern-ratio check fires (0 = always)         |
 
 use std::path::{Path, PathBuf};
 use std::{env, fs};
@@ -104,6 +105,8 @@ pub struct LintConfig {
     pub max_module_fanout: usize,
     /// Maximum ratio of extern fns to total fns (0.0..=1.0). `0.0` disables the check.
     pub max_extern_ratio: f64,
+    /// Minimum total fn count before `max_extern_ratio` fires. `0` disables the guard.
+    pub min_fns_for_extern_ratio: usize,
 }
 
 impl Default for LintConfig {
@@ -130,6 +133,7 @@ impl Default for LintConfig {
             max_trait_impl_count: 5,
             max_module_fanout: 15,
             max_extern_ratio: 0.2,
+            min_fns_for_extern_ratio: 10,
         }
     }
 }
@@ -266,6 +270,11 @@ fn load_from(path: &Path) -> Option<LintConfig> {
                     if f.is_finite() && (0.0..=1.0).contains(&f) {
                         cfg.max_extern_ratio = f;
                     }
+                }
+            }
+            "min_fns_for_extern_ratio" => {
+                if let Ok(n) = val.parse::<usize>() {
+                    cfg.min_fns_for_extern_ratio = n;
                 }
             }
             _ => {} // unknown keys are silently ignored (forward-compat)

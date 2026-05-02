@@ -10,6 +10,7 @@
 
 // ── Triage priority (Manchester Triage System) ───────────────────────────
 
+/// Triage priority level (Manchester Triage System). Determines order of treatment.
 pub type Priority = enum {
     Red,        // Immediate — life-threatening, seen within 0 min
     Orange,     // Very urgent — serious risk, seen within 10 min
@@ -20,6 +21,7 @@ pub type Priority = enum {
 
 // ── Vital signs ──────────────────────────────────────────────────────────
 
+/// Level of consciousness using the AVPU scale.
 pub type Consciousness = enum {
     Alert,          // A — fully alert and oriented
     VoiceResponse,  // V — responds to voice
@@ -27,18 +29,21 @@ pub type Consciousness = enum {
     Unresponsive,   // U — no response (AVPU scale)
 }
 
+/// Observed breathing quality at triage assessment.
 pub type BreathingStatus = enum {
     Normal,         // 12-20 breaths/min
     Labored,        // accessory muscle use, increased rate
     Absent,         // apnea — immediate intervention
 }
 
+/// Palpated pulse strength at triage assessment.
 pub type PulseStrength = enum {
     Strong,         // normal, palpable
     Weak,           // thready, hard to find
     Absent,         // no pulse detected
 }
 
+/// Measured physiological parameters recorded at triage.
 pub type Vitals = struct {
     heart_rate:     Int,    // bpm
     systolic_bp:    Int,    // mmHg
@@ -51,6 +56,7 @@ pub type Vitals = struct {
 
 // ── Patient context ──────────────────────────────────────────────────────
 
+/// Patient age bracket, used to adjust triage thresholds for vulnerable groups.
 pub type AgeGroup = enum {
     Infant,     // 0-1 year
     Child,      // 1-12 years
@@ -58,6 +64,7 @@ pub type AgeGroup = enum {
     Elderly,    // 65+ years
 }
 
+/// Primary presenting complaint, determines escalation pathways.
 pub type ChiefComplaint = enum {
     ChestPain,
     Breathing,
@@ -68,6 +75,7 @@ pub type ChiefComplaint = enum {
     Minor,
 }
 
+/// Complete patient snapshot presented to the triage decision engine.
 pub type Patient = struct {
     age_group:  AgeGroup,
     complaint:  ChiefComplaint,
@@ -78,6 +86,7 @@ pub type Patient = struct {
 
 // ── Clinical assessment ──────────────────────────────────────────────────
 
+/// Output of the triage engine: priority, flags, and reassessment schedule.
 pub type Assessment = struct {
     priority:       Priority,
     resuscitate:    Bool,   // needs immediate resuscitation team
@@ -85,6 +94,7 @@ pub type Assessment = struct {
     reassess_mins:  Int,    // minutes until reassessment
 }
 
+/// Validation errors for out-of-range vital signs.
 pub type TriageError = enum {
     InvalidHeartRate,
     InvalidBloodPressure,

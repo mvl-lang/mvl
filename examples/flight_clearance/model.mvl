@@ -9,18 +9,21 @@
 
 // ── Weather conditions ───────────────────────────────────────────────────
 
+/// Observed horizontal visibility at the departure aerodrome.
 pub type Visibility = enum {
     Good,       // > 5000m
     Reduced,    // 1500-5000m
     Poor,       // < 1500m
 }
 
+/// Surface wind category at the departure aerodrome.
 pub type WindCondition = enum {
     Calm,       // < 15 kt
     Moderate,   // 15-30 kt
     Strong,     // > 30 kt
 }
 
+/// Snapshot of meteorological conditions relevant to departure clearance.
 pub type Weather = struct {
     visibility: Visibility,
     wind:       WindCondition,
@@ -30,18 +33,21 @@ pub type Weather = struct {
 
 // ── Aircraft status ──────────────────────────────────────────────────────
 
+/// Aircraft airworthiness status at time of departure request.
 pub type MaintenanceStatus = enum {
     Cleared,
     DeferredItem,   // MEL item — may still fly with restrictions
     Grounded,       // AOG — no flight permitted
 }
 
+/// On-board fuel level relative to planned consumption and reserve requirements.
 pub type FuelStatus = enum {
     Sufficient,     // fuel >= required + reserve
     Marginal,       // fuel >= required, < reserve
     Insufficient,   // fuel < required
 }
 
+/// Aircraft readiness snapshot at time of departure request.
 pub type Aircraft = struct {
     maintenance: MaintenanceStatus,
     fuel:        FuelStatus,
@@ -51,11 +57,13 @@ pub type Aircraft = struct {
 
 // ── Clearance decision ───────────────────────────────────────────────────
 
+/// Departure clearance decision issued by the clearance logic.
 pub type Clearance = enum {
     Cleared,
     Rejected,
 }
 
+/// All reasons a departure clearance can be rejected.
 pub type RejectionReason = enum {
     WeatherBelowMinima,
     AircraftGrounded,
@@ -69,6 +77,7 @@ pub type RejectionReason = enum {
 
 // ── Route type ───────────────────────────────────────────────────────────
 
+/// Classification of flight route by range and certification requirements.
 pub type RouteType = enum {
     Domestic,
     International,

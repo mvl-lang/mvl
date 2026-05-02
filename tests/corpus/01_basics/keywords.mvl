@@ -42,7 +42,7 @@ fn check_tainted(input: Tainted[String]) -> Clean[String] {
     sanitize(input)
 }
 
-fn reveal(s: Secret[String]) -> Public[String] {
+fn reveal(s: Secret[String]) -> String {
     declassify(s)
 }
 

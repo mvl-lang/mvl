@@ -26,7 +26,7 @@ fn safe_value(x: Int) -> Result[Int, AppError] {
     Ok(x)
 }
 
-fn main() -> Unit ! Console {
+fn demo_primitives() -> Unit ! Console {
     // ── Int ──────────────────────────────────────────────────────────────────
     let n: Int = -5;
     let na = n.abs();
@@ -45,13 +45,17 @@ fn main() -> Unit ! Console {
     println("Float: ceil={} floor={} sqrt={}", fc, ff, fs);
 
     // ── Bool ─────────────────────────────────────────────────────────────────
-    let b1: Bool = true;
-    let b2: Bool = false;
+    let b1 = true;
+    let b2 = false;
     println("Bool: and={} or={} not={}", b1 && b2, b1 || b2, !b1);
 
     // ── String ───────────────────────────────────────────────────────────────
-    let s: String = "hello";
+    let s = "hello";
     println("String: len={}", s.len());
+}
+
+fn main() -> Unit ! Console {
+    demo_primitives();
 
     // ── List[T] ──────────────────────────────────────────────────────────────
     let xs: List[Int] = [1, 2, 3, 4, 5];

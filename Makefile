@@ -135,6 +135,7 @@ mvl-lint: build ## Run MVL linter on corpus and examples
 	@failed=0; \
 	for f in tests/corpus/**/*.mvl examples/**/*.mvl; do \
 		[ -f "$$f" ] || continue; \
+		case "$$f" in tests/corpus/04_linting/*) continue;; esac; \
 		out=$$(cargo run --quiet -- lint "$$f" 2>&1); \
 		if [ -n "$$out" ] && echo "$$out" | grep -q "warning\|error"; then \
 			echo "$$out"; failed=1; \

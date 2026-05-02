@@ -24,50 +24,68 @@ fn pri_str(p: Priority) -> String {
     }
 }
 
+fn s1_stable_adult() -> String {
+    let v = Vitals { heart_rate: 72, systolic_bp: 118, oxygen_sat: 98, temperature: 368,
+        consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal,
+        pulse: PulseStrength::Strong };
+    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Minor,
+        vitals: v, allergies: false, pregnant: false };
+    pri_str(assess(p).priority)
+}
+
+fn s2_unresponsive() -> String {
+    let v = Vitals { heart_rate: 45, systolic_bp: 80, oxygen_sat: 88, temperature: 365,
+        consciousness: Consciousness::Unresponsive, breathing: BreathingStatus::Labored,
+        pulse: PulseStrength::Weak };
+    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Neurological,
+        vitals: v, allergies: false, pregnant: false };
+    pri_str(assess(p).priority)
+}
+
+fn s3_elderly_chest_pain() -> String {
+    let v = Vitals { heart_rate: 88, systolic_bp: 145, oxygen_sat: 96, temperature: 370,
+        consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal,
+        pulse: PulseStrength::Strong };
+    let p = Patient { age_group: AgeGroup::Elderly, complaint: ChiefComplaint::ChestPain,
+        vitals: v, allergies: true, pregnant: false };
+    pri_str(assess(p).priority)
+}
+
+// Note: hr and bp must not trigger circulation_failure (hr>130 && bp<100)
+fn s4_febrile_infant() -> String {
+    let v = Vitals { heart_rate: 120, systolic_bp: 100, oxygen_sat: 97, temperature: 396,
+        consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal,
+        pulse: PulseStrength::Strong };
+    let p = Patient { age_group: AgeGroup::Infant, complaint: ChiefComplaint::Fever,
+        vitals: v, allergies: false, pregnant: false };
+    pri_str(assess(p).priority)
+}
+
+fn s5_pregnant_abdominal() -> String {
+    let v = Vitals { heart_rate: 90, systolic_bp: 110, oxygen_sat: 99, temperature: 372,
+        consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal,
+        pulse: PulseStrength::Strong };
+    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Abdominal,
+        vitals: v, allergies: false, pregnant: true };
+    pri_str(assess(p).priority)
+}
+
+fn s6_fever_breathing() -> String {
+    let v = Vitals { heart_rate: 95, systolic_bp: 115, oxygen_sat: 96, temperature: 393,
+        consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal,
+        pulse: PulseStrength::Strong };
+    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Breathing,
+        vitals: v, allergies: false, pregnant: false };
+    let a = assess(p);
+    let iso_str = match a.isolate { true => " [ISOLATE]", false => "" };
+    pri_str(a.priority) + iso_str
+}
+
 fn main() -> Unit {
-    // Scenario 1: stable adult, minor complaint → Blue
-    let v1 = Vitals { heart_rate: 72, systolic_bp: 118, oxygen_sat: 98, temperature: 368,
-                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p1 = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Minor, vitals: v1, allergies: false, pregnant: false };
-    let r1 = pri_str(assess(p1).priority);
-    println("1. Stable adult/minor:     " + r1);
-
-    // Scenario 2: unresponsive patient → Red + resuscitation
-    let v2 = Vitals { heart_rate: 45, systolic_bp: 80, oxygen_sat: 88, temperature: 365,
-                      consciousness: Consciousness::Unresponsive, breathing: BreathingStatus::Labored, pulse: PulseStrength::Weak };
-    let p2 = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Neurological, vitals: v2, allergies: false, pregnant: false };
-    let r2 = pri_str(assess(p2).priority);
-    println("2. Unresponsive/neuro:     " + r2);
-
-    // Scenario 3: elderly chest pain → Orange
-    let v3 = Vitals { heart_rate: 88, systolic_bp: 145, oxygen_sat: 96, temperature: 370,
-                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p3 = Patient { age_group: AgeGroup::Elderly, complaint: ChiefComplaint::ChestPain, vitals: v3, allergies: true, pregnant: false };
-    let r3 = pri_str(assess(p3).priority);
-    println("3. Elderly/chest pain:     " + r3);
-
-    // Scenario 4: febrile infant → Orange (fever_risk)
-    // Note: hr and bp must not trigger circulation_failure (hr>130 && bp<100)
-    let v4 = Vitals { heart_rate: 120, systolic_bp: 100, oxygen_sat: 97, temperature: 396,
-                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p4 = Patient { age_group: AgeGroup::Infant, complaint: ChiefComplaint::Fever, vitals: v4, allergies: false, pregnant: false };
-    let r4 = pri_str(assess(p4).priority);
-    println("4. Febrile infant:         " + r4);
-
-    // Scenario 5: pregnant with abdominal pain → Orange (pregnancy_escalate)
-    let v5 = Vitals { heart_rate: 90, systolic_bp: 110, oxygen_sat: 99, temperature: 372,
-                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p5 = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Abdominal, vitals: v5, allergies: false, pregnant: true };
-    let r5 = pri_str(assess(p5).priority);
-    println("5. Pregnant/abdominal:     " + r5);
-
-    // Scenario 6: high fever + breathing complaint → Yellow (isolation)
-    let v6 = Vitals { heart_rate: 95, systolic_bp: 115, oxygen_sat: 96, temperature: 393,
-                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p6 = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Breathing, vitals: v6, allergies: false, pregnant: false };
-    let a6 = assess(p6);
-    let r6 = pri_str(a6.priority);
-    let isolate = a6.isolate;
-    let iso_str = match isolate { true => " [ISOLATE]", false => "" };
-    println("6. Fever/breathing:        " + r6 + iso_str);
+    println("1. Stable adult/minor:     " + s1_stable_adult());
+    println("2. Unresponsive/neuro:     " + s2_unresponsive());
+    println("3. Elderly/chest pain:     " + s3_elderly_chest_pain());
+    println("4. Febrile infant:         " + s4_febrile_infant());
+    println("5. Pregnant/abdominal:     " + s5_pregnant_abdominal());
+    println("6. Fever/breathing:        " + s6_fever_breathing());
 }

@@ -32,7 +32,7 @@ total fn authenticate(
     iso db: &DbConn,
     password: Tainted[String],
     user_id: Public[Int],
-) -> Public[Int] ! DB {
+) -> Public[Int] {
     user_id
 }
 
@@ -43,6 +43,6 @@ fn release_report(report: Secret[String]) -> Public[String] {
 
 // ── Capability combined with security label ───────────────────────────────
 
-fn iso_tainted(iso db: &DbConn, raw: Tainted[String]) -> Clean[String] ! DB {
+fn iso_tainted(iso db: &DbConn, raw: Tainted[String]) -> Clean[String] {
     sanitize(raw)
 }

@@ -25,6 +25,7 @@ type ParseError = enum {
     MissingField,
 }
 
+/// Log severity level for a parsed log entry.
 pub type LogLevel = enum {
     Debug,
     Info,
@@ -39,14 +40,14 @@ type RawEntry = struct {
     timestamp: Int,
 }
 
-// Validated log entry with sanitized message text.
+/// Validated log entry with sanitized message text.
 pub type LogEntry = struct {
     level:     LogLevel,
     message:   Clean[String],
     timestamp: Int,
 }
 
-// Aggregated report — field 'count' (not 'total': reserved keyword).
+/// Aggregated report — field 'count' (not 'total': reserved keyword).
 pub type Report = struct {
     count:    Int,
     errors:   Int,
@@ -56,8 +57,8 @@ pub type Report = struct {
 
 // ── MVL-verified parsing logic ─────────────────────────────────────────────
 
-// parse_level uses std.string.to_lower for case-insensitive matching.
-// "ERROR", "Error", and "error" all resolve to LogLevel::Error.
+/// Parse a log level string, case-insensitively (uses `to_lower`).
+/// "ERROR", "Error", and "error" all resolve to `LogLevel::Error`.
 pub total fn parse_level(raw: Tainted[String]) -> Result[LogLevel, ParseError] {
     let clean = sanitize(raw);
     let lower = clean.to_lower();
@@ -70,8 +71,8 @@ pub total fn parse_level(raw: Tainted[String]) -> Result[LogLevel, ParseError] {
     }
 }
 
-// Parse a single JSON log line — external input stays Tainted until sanitized.
-// The ? operator short-circuits on Err, equivalent to .and_then() chaining.
+/// Parse a single JSON log line — external input stays Tainted until sanitized.
+/// The `?` operator short-circuits on `Err`, equivalent to `.and_then()` chaining.
 pub total fn parse_line(raw: Tainted[String]) -> Result[LogEntry, ParseError] {
     let entry: RawEntry = serde_json_parse_entry(raw)?;
     let level: LogLevel = parse_level(entry.level)?;
@@ -82,29 +83,40 @@ pub total fn parse_line(raw: Tainted[String]) -> Result[LogEntry, ParseError] {
     })
 }
 
-// Serialise a Report to a JSON string for output.
+/// Serialise a `Report` to a JSON string for output.
 pub fn report_to_json(report: Report) -> String {
     serde_json_to_json_string(report)
 }
 
 // ── Phase 4 List[LogEntry] pipeline ───────────────────────────────────────
 
-// Build an aggregated Report from a list of parsed log entries.
-// Pipeline: entries → fold → Report
-// Each entry increments the appropriate counter by level.
+/// Build an aggregated `Report` from a list of parsed log entries.
+/// Each entry increments the appropriate counter by level.
 pub fn build_report(entries: List[LogEntry]) -> Report {
     entries.fold(
         Report { count: 0, errors: 0, warnings: 0, infos: 0 },
         |acc: Report, entry: LogEntry| match entry.level {
-            LogLevel::Error => Report { count: acc.count + 1, errors: acc.errors + 1, warnings: acc.warnings, infos: acc.infos },
-            LogLevel::Warn  => Report { count: acc.count + 1, errors: acc.errors, warnings: acc.warnings + 1, infos: acc.infos },
-            LogLevel::Info  => Report { count: acc.count + 1, errors: acc.errors, warnings: acc.warnings, infos: acc.infos + 1 },
-            LogLevel::Debug => Report { count: acc.count + 1, errors: acc.errors, warnings: acc.warnings, infos: acc.infos },
+            LogLevel::Error => Report {
+                count: acc.count + 1, errors: acc.errors + 1,
+                warnings: acc.warnings, infos: acc.infos
+            },
+            LogLevel::Warn  => Report {
+                count: acc.count + 1, errors: acc.errors,
+                warnings: acc.warnings + 1, infos: acc.infos
+            },
+            LogLevel::Info  => Report {
+                count: acc.count + 1, errors: acc.errors,
+                warnings: acc.warnings, infos: acc.infos + 1
+            },
+            LogLevel::Debug => Report {
+                count: acc.count + 1, errors: acc.errors,
+                warnings: acc.warnings, infos: acc.infos
+            },
         }
     )
 }
 
-// Summarize a log entry as a human-readable string for map → display pipeline.
+/// Summarize a log entry as a human-readable string for map → display pipeline.
 pub fn entry_summary(entry: LogEntry) -> String {
     match entry.level {
         LogLevel::Error => "ERROR",
@@ -114,8 +126,8 @@ pub fn entry_summary(entry: LogEntry) -> String {
     }
 }
 
-// Predicate: true iff the entry is an error-level log entry.
-// Used as a named filter argument: entries.filter(is_error_level)
+/// Predicate: true iff the entry is an error-level log entry.
+/// Used as a named filter argument: `entries.filter(is_error_level)`.
 pub fn is_error_level(entry: LogEntry) -> Bool {
     match entry.level {
         LogLevel::Error => true,

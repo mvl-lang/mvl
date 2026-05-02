@@ -18,3 +18,4 @@
 | [0014](0014-mutation-testing-execution-model.md) | Mutation testing execution model — single compile, parallel runs | Accepted |
 | [0015](0015-mcdc-coverage-execution-model.md) | MC/DC coverage execution model — eager evaluation, Unique-Cause, u16 encoding | Accepted |
 | [0016](0016-llvm-memory-runtime.md) | LLVM memory runtime — Rust cdylib with reference counting for String, Array, Map | Accepted |
+| [0017](0017-linter-hint-severity-explicit-ifc-annotations.md) | Linter Hint severity — explicit IFC annotations as the preferred style | Accepted |

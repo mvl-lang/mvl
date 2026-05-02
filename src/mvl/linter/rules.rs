@@ -532,11 +532,14 @@ fn expr_display(expr: &Expr) -> &str {
 ///
 /// Examples that are flagged:
 /// ```text
-/// let x: Int    = 42       -- inferred as Int
 /// let s: String = "hello"  -- inferred as String
 /// let b: Bool   = true     -- inferred as Bool
-/// let f: Float  = 3.14     -- inferred as Float
 /// ```
+///
+/// Note: `Int` and `Float` annotations are NOT flagged even when the initialiser
+/// is a numeric literal. The transpiler needs them to emit the correct Rust type
+/// (`i64` / `f64`); without them Rust infers `{integer}` / `{float}` which
+/// causes ambiguous method dispatch (e.g., `.abs()`, `.ceil()`).
 pub fn unnecessary_annotations(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
     if !cfg.unnecessary_annotations {
         return;
@@ -614,8 +617,12 @@ fn check_block_annotations(block: &Block, out: &mut Vec<LintDiag>) {
 fn obvious_literal_type(expr: &Expr) -> Option<&'static str> {
     match expr {
         Expr::Literal(lit, _) => match lit {
-            Literal::Integer(_) => Some("Int"),
-            Literal::Float(_) => Some("Float"),
+            // Int and Float annotations are intentionally excluded: the transpiler
+            // needs explicit Int/Float annotations to emit the correct Rust numeric
+            // type (i64/f64). Without them, Rust infers {integer}/{float} which
+            // causes ambiguous method dispatch (e.g., .abs(), .ceil(), .sqrt()).
+            Literal::Integer(_) => None,
+            Literal::Float(_) => None,
             Literal::Str(_) => Some("String"),
             Literal::Bool(_) => Some("Bool"),
             Literal::Unit => Some("Unit"),
@@ -806,12 +813,13 @@ fn check_type_expr_ifc(ty: &TypeExpr, out: &mut Vec<LintDiag>) {
             inner,
             span,
         } => {
-            out.push(LintDiag::warning(
+            // Hint, not Warning: explicit Public[T] is the preferred style for generated
+            // and IFC-focused code. See ADR-0017 and Spec 011 Req 2.
+            out.push(LintDiag::hint(
                 "redundant-ifc-label",
                 format!(
-                    "`Public<{}>` is redundant — unannotated types are implicitly public; \
-                     use `{}` instead",
-                    type_expr_name(inner),
+                    "`Public<{}>` is explicit — unannotated types are implicitly public; \
+                     consider dropping the label in non-IFC-focused code",
                     type_expr_name(inner),
                 ),
                 span.line,
@@ -1573,6 +1581,9 @@ pub fn complexity_extern_ratio(prog: &Program, cfg: &LintConfig, out: &mut Vec<L
     if total_fns == 0 {
         return;
     }
+    if cfg.min_fns_for_extern_ratio > 0 && total_fns < cfg.min_fns_for_extern_ratio {
+        return;
+    }
     let ratio = extern_fns as f64 / total_fns as f64;
     if ratio > cfg.max_extern_ratio {
         let span = first_extern_span.unwrap_or(prog.span);
@@ -1804,14 +1815,15 @@ mod tests {
     // -- unnecessary_annotations --
 
     #[test]
-    fn int_annotation_on_int_literal_detected() {
+    fn int_annotation_on_int_literal_not_flagged() {
+        // Int annotations are intentionally NOT flagged: the transpiler needs
+        // explicit Int annotations so Rust emits i64 rather than {integer},
+        // which would cause ambiguous method dispatch (.abs(), .min(), etc.).
         let src = "fn f() -> Unit { let x: Int = 42; x }\n";
         let prog = parse(src);
         let mut diags = vec![];
         unnecessary_annotations(&prog, &cfg(), &mut diags);
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].rule, "unnecessary-annotation");
-        assert!(diags[0].message.contains("Int"));
+        assert!(diags.is_empty());
     }
 
     #[test]
@@ -1879,13 +1891,17 @@ mod tests {
     // -- redundant_ifc_labels --
 
     #[test]
-    fn public_label_on_param_detected() {
+    fn public_label_on_param_detected(/* Spec 011 Req 2 */) {
         let src = "fn f(x: Public[Int]) -> Int { x }\n";
         let prog = parse(src);
         let mut diags = vec![];
         redundant_ifc_labels(&prog, &cfg(), &mut diags);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].rule, "redundant-ifc-label");
+        assert_eq!(
+            diags[0].severity,
+            crate::mvl::linter::errors::Severity::Hint
+        );
         assert!(diags[0].message.contains("Public"));
     }
 
@@ -1899,13 +1915,17 @@ mod tests {
     }
 
     #[test]
-    fn public_label_on_return_type_detected() {
+    fn public_label_on_return_type_detected(/* Spec 011 Req 2 */) {
         let src = "fn f() -> Public[String] { \"hi\" }\n";
         let prog = parse(src);
         let mut diags = vec![];
         redundant_ifc_labels(&prog, &cfg(), &mut diags);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].rule, "redundant-ifc-label");
+        assert_eq!(
+            diags[0].severity,
+            crate::mvl::linter::errors::Severity::Hint
+        );
     }
 
     #[test]
@@ -1966,14 +1986,15 @@ mod tests {
     }
 
     #[test]
-    fn float_annotation_on_float_literal_detected() {
+    fn float_annotation_on_float_literal_not_flagged() {
+        // Float annotations are intentionally NOT flagged: the transpiler needs
+        // explicit Float annotations so Rust emits f64 rather than {float},
+        // which would cause ambiguous method dispatch (.ceil(), .floor(), .sqrt()).
         let src = "fn f() -> Unit { let x: Float = 3.14; x }\n";
         let prog = parse(src);
         let mut diags = vec![];
         unnecessary_annotations(&prog, &cfg(), &mut diags);
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].rule, "unnecessary-annotation");
-        assert!(diags[0].message.contains("Float"));
+        assert!(diags.is_empty());
     }
 
     #[test]
@@ -2540,10 +2561,12 @@ mod tests {
 
     #[test]
     fn extern_ratio_exceeds_threshold() {
-        // 3 extern fns / 4 total = 75% > 20%
+        // 3 extern fns / 12 total = 25% > 20%; min_fns_for_extern_ratio = 0 to isolate ratio logic
         let src = concat!(
             "extern \"rust\" { fn e1() -> Int fn e2() -> Int fn e3() -> Int }\n",
-            "fn native() -> Int { 1 }\n",
+            "fn n1() -> Int { 1 }\nfn n2() -> Int { 1 }\nfn n3() -> Int { 1 }\n",
+            "fn n4() -> Int { 1 }\nfn n5() -> Int { 1 }\nfn n6() -> Int { 1 }\n",
+            "fn n7() -> Int { 1 }\nfn n8() -> Int { 1 }\nfn n9() -> Int { 1 }\n",
         );
         let prog = parse(src);
         let mut diags = vec![];

@@ -9,6 +9,7 @@
 
 // ── Principals ─────────────────────────────────────────────────────────────
 
+/// Principal role determining access level in the RBAC policy.
 pub type Role = enum {
     Admin,
     Moderator,
@@ -18,6 +19,7 @@ pub type Role = enum {
 
 // ── Resources and actions ──────────────────────────────────────────────────
 
+/// Protected resource that access-control decisions are made for.
 pub type Resource = enum {
     UserProfile,
     AdminPanel,
@@ -25,6 +27,7 @@ pub type Resource = enum {
     AuditLog,
 }
 
+/// Operation requested on a resource.
 pub type Action = enum {
     Read,
     Write,
@@ -33,6 +36,7 @@ pub type Action = enum {
 
 // ── Policy outcome ─────────────────────────────────────────────────────────
 
+/// Policy decision for a principal attempting an action on a resource.
 pub type Permission = enum {
     Allow,
     Deny,
@@ -40,12 +44,14 @@ pub type Permission = enum {
 
 // ── Error catalogue ────────────────────────────────────────────────────────
 
+/// Structured authentication failure reasons.
 pub type AuthError = enum {
     InvalidCredentials,
     SessionExpired,
     InvalidToken,
 }
 
+/// Application-level error variants for the access control module.
 pub type AppError = enum {
     AuthFailed,
     UserNotFound,

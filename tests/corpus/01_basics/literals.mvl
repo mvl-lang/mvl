@@ -2,28 +2,28 @@
 // Demonstrates all literal forms the lexer must recognize.
 
 fn integer_literals() -> Int {
-    let zero: Int = 0;
-    let small: Int = 42;
-    let large: Int = 1000000;
+    let zero = 0;
+    let small = 42;
+    let large = 1000000;
     large
 }
 
 fn float_literals() -> Float {
-    let pi: Float = 3.14159;
-    let e: Float = 2.71828;
-    let half: Float = 0.5;
+    let pi = 3.14159;
+    let e = 2.71828;
+    let half = 0.5;
     pi
 }
 
 fn bool_literals() -> Bool {
-    let yes: Bool = true;
-    let no: Bool = false;
+    let yes = true;
+    let no = false;
     yes
 }
 
 fn string_literals() -> String {
-    let greeting: String = "hello, world";
-    let escaped: String = "tab:\there\nnewline";
+    let greeting = "hello, world";
+    let escaped = "tab:\there\nnewline";
     greeting
 }
 

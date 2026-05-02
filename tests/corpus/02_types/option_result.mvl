@@ -3,9 +3,8 @@
 
 // Correct: handle Option with match
 fn safe_head(xs: List[Int]) -> Option[Int] {
-    match xs {
-        _ => None,
-    }
+    let _ = xs;
+    None
 }
 
 fn unwrap_option(x: Option[Int]) -> Int {
