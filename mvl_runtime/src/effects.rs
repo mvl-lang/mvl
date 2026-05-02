@@ -72,6 +72,27 @@ pub struct Terminal;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Log;
 
+/// Marks a function that reads or modifies process environment variables,
+/// the working directory, or Unix signal disposition.
+/// See `std.env` and issue #414.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Env;
+
+/// Marks a function that spawns child processes or communicates with them.
+/// See `std.process` and issue #414.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProcessSpawn;
+
+/// Marks a function that reads the wall clock or sleeps the current thread.
+/// See `std.time` and issue #415.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Clock;
+
+/// Marks a function that produces non-deterministic random values.
+/// See `std.random` and issue #415.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Random;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +109,9 @@ mod tests {
         assert_eq!(std::mem::size_of::<Panic>(), 0);
         assert_eq!(std::mem::size_of::<Terminal>(), 0);
         assert_eq!(std::mem::size_of::<Log>(), 0);
+        assert_eq!(std::mem::size_of::<Env>(), 0);
+        assert_eq!(std::mem::size_of::<ProcessSpawn>(), 0);
+        assert_eq!(std::mem::size_of::<Clock>(), 0);
+        assert_eq!(std::mem::size_of::<Random>(), 0);
     }
 }

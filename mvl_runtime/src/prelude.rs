@@ -6,7 +6,8 @@
 //! ```
 
 pub use crate::effects::{
-    Alloc, Concurrent, Console, Db, FileDelete, FileRead, FileWrite, Log, Net, Panic, Terminal,
+    Alloc, Clock, Concurrent, Console, Db, Env, FileDelete, FileRead, FileWrite, Log, Net, Panic,
+    ProcessSpawn, Random, Terminal,
 };
 pub use crate::ifc::{declassify, sanitize, Clean, Public, Secret, Tainted};
 pub use crate::mvl_refine;
@@ -28,6 +29,18 @@ pub use crate::stdlib::crypto::{crypto_random_bytes, sha256, sha512};
 
 /// `std.log` — structured logging (Phase 2: no-op stubs).
 pub use crate::stdlib::log::{log_debug, log_error, log_info, log_warn};
+
+/// `std.env` — environment variables, working directory, Unix identity, signals.
+pub use crate::stdlib::env::{
+    all, args, chdir, current_dir, exit, get, getgid, getuid, remove_var, set, sighup, sigint,
+    signal_ignore, signal_on, signal_reset, sigterm, sigusr1, sigusr2, Signal,
+};
+
+/// `std.process` — child process spawning and lifecycle.
+pub use crate::stdlib::process::{
+    exit_code, is_success, kill, spawn, stderr_read, stdin_write, stdout_read, wait, Child,
+    ChildStderr, ChildStdin, ChildStdout, ExitStatus, ProcessOutput, Stdio,
+};
 
 // ── Extern kernel primitives ───────────────────────────────────────────────
 //

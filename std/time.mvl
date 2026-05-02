@@ -3,8 +3,6 @@
 // Provides wall-clock time (! Clock) and sleep (! Clock).
 // Import with: use std.time.{Instant, DateTime, Duration, now, sleep, format_instant, format_datetime}
 //
-// Phase 2: function stubs with correct signatures and effects.
-// Types are opaque structs until Phase 3 compiles stdlib from source.
 
 /// An opaque point in time (monotonic or wall-clock, implementation-defined).
 pub type Instant = struct {}

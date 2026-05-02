@@ -4,7 +4,7 @@
 // log_warn, log_error — all four severity levels.
 // Run with:  mvl test tests/stdlib/
 //
-// Phase 2: log functions are no-op stubs (correct signatures, no output).
+// Log functions are no-op stubs (correct signatures, no output).
 // Tests verify:
 //   - All severity levels accept public String data without panic
 //   - Structured key-value fields (Map[String, String]) are accepted
@@ -41,9 +41,9 @@ fn call_log_error(msg: String) -> Bool ! Log {
 }
 
 // ── log_debug (! Log) ─────────────────────────────────────────────────────
-// STUB: update when implemented — Phase 2 log functions are no-ops.
+// STUB: update when implemented — log functions are no-ops.
 // assert_eq(true, true) is intentional: log output is not observable at runtime.
-// Phase 3 positive-path target: capture log sink output and assert message/field values.
+// TODO: capture log sink output and assert message/field values once a log sink is injectable.
 
 test fn log_debug_single_field_does_not_panic() -> Unit ! Log {
     // STUB: update when implemented
@@ -63,7 +63,7 @@ test fn log_debug_returns_unit_via_helper() -> Unit ! Log {
 }
 
 // ── log_info (! Log) ──────────────────────────────────────────────────────
-// STUB: update when implemented — Phase 2 log functions are no-ops.
+// STUB: update when implemented — log functions are no-ops.
 
 test fn log_info_single_field_does_not_panic() -> Unit ! Log {
     // STUB: update when implemented
@@ -89,7 +89,7 @@ test fn log_info_returns_unit_via_helper() -> Unit ! Log {
 }
 
 // ── log_warn (! Log) ──────────────────────────────────────────────────────
-// STUB: update when implemented — Phase 2 log functions are no-ops.
+// STUB: update when implemented — log functions are no-ops.
 
 test fn log_warn_single_field_does_not_panic() -> Unit ! Log {
     // STUB: update when implemented
@@ -109,7 +109,7 @@ test fn log_warn_returns_unit_via_helper() -> Unit ! Log {
 }
 
 // ── log_error (! Log) ─────────────────────────────────────────────────────
-// STUB: update when implemented — Phase 2 log functions are no-ops.
+// STUB: update when implemented — log functions are no-ops.
 
 test fn log_error_single_field_does_not_panic() -> Unit ! Log {
     // STUB: update when implemented
@@ -164,7 +164,7 @@ test fn log_all_severity_levels_in_sequence() -> Unit ! Log {
 }
 
 // ── Structured field format ───────────────────────────────────────────────
-// STUB: update when implemented — output not observable until Phase 3 log sink.
+// STUB: update when implemented — output not observable (no log sink in tests).
 
 test fn log_structured_fields_three_pairs() -> Unit ! Log {
     // STUB: update when implemented
@@ -217,7 +217,7 @@ test fn log_in_branch_does_not_affect_return_value() -> Unit ! Log {
 }
 
 // ── multiple fields map completeness ──────────────────────────────────────
-// STUB: update when implemented — output not observable until Phase 3 log sink.
+// STUB: update when implemented — output not observable (no log sink in tests).
 
 test fn log_info_four_fields_map() -> Unit ! Log {
     // STUB: update when implemented

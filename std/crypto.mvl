@@ -3,7 +3,7 @@
 // Hash functions (pure) and cryptographically secure random (! CryptoRandom).
 // Import with: use std.crypto.{sha256, sha512, crypto_random_bytes}
 //
-// Phase 3: Rust backing in `mvl_runtime/src/stdlib/crypto.rs` (sha2 + hex crates).
+// Backed by mvl_runtime::stdlib::crypto (sha2 + hex crates).
 
 /// Returns the SHA-256 digest of the input bytes as a hex string.
 /// Pure — hashing is deterministic.

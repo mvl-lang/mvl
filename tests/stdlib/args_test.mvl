@@ -3,7 +3,7 @@
 // Verifies runtime behavior of the args stdlib: get_arg, get_args, get_env.
 // Run with:  mvl test tests/stdlib/
 //
-// Runtime behavior (Phase 2 — real process environment access):
+// Runtime behavior (real process environment access):
 //   get_arg(name)  — scan for --[name] flag; returns None when absent
 //   get_args()     — return all args (empty in test runner context)
 //   get_env(name)  — read env var; returns None for unknown variables
@@ -19,7 +19,7 @@ use std.args.{get_arg, get_args, get_env}
 // ── get_arg (! Console) ───────────────────────────────────────────────────
 // NOTE: get_arg is a real implementation that scans std::env::args() for --<name>.
 // Tests pass because flag names use unique suffixes never passed by the test runner.
-// Phase 3 positive-path target: inject a known flag via test harness and assert Some(value).
+// TODO: inject a known flag via test harness and assert Some(value).
 
 test fn args_get_arg_unknown_flag_is_none() -> Unit ! Console {
     // The test runner does not pass --mvl-nonexistent-flag-xyz
@@ -34,7 +34,7 @@ test fn args_get_arg_none_unwrap_or_uses_default() -> Unit ! Console {
 
 // ── get_args (! Console) ──────────────────────────────────────────────────
 // NOTE: get_args is a real implementation that returns std::env::args().skip(1).
-// Phase 3 positive-path target: inject known arg values via test harness and assert their presence.
+// TODO: inject known arg values via test harness and assert their presence.
 
 test fn args_get_args_result_is_list() -> Unit ! Console {
     let args: List[Tainted[String]] = get_args();
@@ -46,7 +46,7 @@ test fn args_get_args_result_is_list() -> Unit ! Console {
 // ── get_env (! Console) ───────────────────────────────────────────────────
 // NOTE: get_env is a real implementation that calls std::env::var(name).
 // Tests pass because var names use unique suffixes never set in CI or local environments.
-// Phase 3 positive-path target: inject a known sentinel (e.g. MVL_TEST_KNOWN_VAR=sentinel)
+// TODO: inject a known sentinel (e.g. MVL_TEST_KNOWN_VAR=sentinel)
 // via test harness and assert Some(value).
 
 test fn args_get_env_unknown_var_is_none() -> Unit ! Console {

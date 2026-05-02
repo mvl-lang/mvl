@@ -1,16 +1,16 @@
 // tests/stdlib/io_test.mvl — std.io module correctness
 //
-// Verifies runtime behavior of io stdlib functions available in Phase 2.
+// Verifies runtime behavior of io stdlib functions.
 // Run with:  mvl test tests/stdlib/
 //
-// Phase 2 runtime coverage:
+// Runtime coverage:
 //   path        — construct a Path from a String (pure)
 //   join        — append a segment to a Path (pure)
 //   to_string   — convert a Path back to String (pure)
 //   read_to_string — read entire file contents (real filesystem call)
 //   read_file   — read file from a Clean[String] path (real filesystem call)
 //
-// Phase 3 / future runtime additions (not yet in runtime):
+// Not yet implemented in runtime:
 //   exists, is_file, is_dir, open, close, write, append,
 //   buf_reader, buf_writer, read_line, write_line,
 //   create_dir_all, remove, read_dir, metadata, chmod,
@@ -127,9 +127,9 @@ test fn io_join_dotfile_exact_len() -> Unit {
 }
 
 // ── read_to_string (real filesystem) ─────────────────────────────────────
-// STUB: update when implemented — Phase 2 read_to_string always returns Err("").
+// STUB: update when implemented — read_to_string always returns Err("").
 // All tests below verify only the error path (nonexistent files).
-// Phase 3 positive-path target: read an existing file and assert Ok(content).
+// TODO: read an existing file and assert Ok(content).
 
 test fn io_read_to_string_nonexistent_is_err() -> Unit ! FileRead {
     // STUB: update when implemented
@@ -152,9 +152,9 @@ test fn io_read_to_string_missing_file_err_not_ok() -> Unit ! FileRead {
 }
 
 // ── read_file (real filesystem, Clean[String] path) ───────────────────────
-// STUB: update when implemented — Phase 2 read_file always returns Err("").
+// STUB: update when implemented — read_file always returns Err("").
 // All tests below verify only the error path (nonexistent files).
-// Phase 3 positive-path target: read an existing file and assert Ok(Tainted[content]).
+// TODO: read an existing file and assert Ok(Tainted[content]).
 
 test fn io_read_file_nonexistent_is_err() -> Unit ! FileRead {
     // STUB: update when implemented
@@ -174,14 +174,14 @@ test fn io_read_file_returns_tainted_content_type() -> Unit ! FileRead {
     // File content from disk is always Tainted[String] (untrusted external source).
     // Compile-time: the type annotation enforces the Ok branch carries Tainted[String].
     // Runtime: Err result on missing file confirms read_file was called with correct signature.
-    // STUB: update when implemented — add Ok-path assertion once Phase 3 lands.
+    // STUB: update when implemented — add Ok-path assertion once implemented.
     let result: Result[Tainted[String], String] = read_file("/tmp/mvl_nonexistent_tainted_test");
     assert_eq(result.is_err(), true);
 }
 
 test fn io_read_to_string_result_carries_tainted_type() -> Unit ! FileRead {
     // Compile-time: type annotation enforces Ok branch carries Tainted[String].
-    // STUB: update when implemented — add Ok-path assertion once Phase 3 lands.
+    // STUB: update when implemented — add Ok-path assertion once implemented.
     let result: Result[Tainted[String], String] = read_to_string(path("/tmp/mvl_nonexistent_tainted2"));
     assert_eq(result.is_ok(), false);
 }
@@ -204,7 +204,7 @@ test fn io_join_empty_base_with_segment() -> Unit {
     // Rust runtime (PathBuf::push) elides the separator for an empty base:
     // "" + "file.txt" = "file.txt" (8 chars).
     // NOTE: the MVL source join (str_concat) would produce "/file.txt" (9 chars) —
-    // the two implementations diverge for empty-base inputs. Phase 3 should resolve this.
+    // the two implementations diverge for empty-base inputs.
     assert_eq(to_string(joined).len(), 8);
 }
 

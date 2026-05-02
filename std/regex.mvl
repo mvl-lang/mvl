@@ -4,7 +4,6 @@
 // Import with: use std.regex.{Regex, Match, Captures, compile, find, find_all, replace, captures}
 // Note: the match function is named `find` to avoid collision with the `match` keyword.
 //
-// Phase 2: function stubs with correct signatures.
 
 /// A compiled regular expression pattern.
 pub type Regex = struct {}
