@@ -65,7 +65,8 @@ fn main() {
         "check" => {
             let path = require_path_arg(&args, "check");
             let req_filter = parse_req_filter_or_exit(&args);
-            cmd_check(&path, req_filter);
+            let error_limit = parse_error_limit(&args);
+            cmd_check(&path, req_filter, error_limit);
         }
         "build" => {
             let path = require_path_arg(&args, "build");
@@ -192,7 +193,10 @@ fn print_usage() {
     eprintln!("  mvl --version, -V                  — show version");
     eprintln!("  mvl --help, -h                     — show this help");
     eprintln!("  mvl check <file|dir>               — parse and type-check");
-    eprintln!("  mvl check <file|dir> --req <N>     — run only the Req N verification pass");
+    eprintln!(
+        "  mvl check <file|dir> --req <N>     — run only the Req N verification pass
+  mvl check <file|dir> --error-limit=N — stop after N errors (default 10; 0 = show all)"
+    );
     eprintln!("  mvl build <file|dir>               — transpile to Rust and run cargo build");
     eprintln!("  mvl run   [--] <file.mvl>          — transpile, build, and execute");
     eprintln!("  mvl run   [--] <file.mvl> -- ...   — pass args to the compiled binary");
@@ -232,6 +236,14 @@ fn print_usage() {
     eprintln!("  mvl install                        — fetch all deps from mvl.lock, verify hashes");
     eprintln!("  mvl update                         — re-resolve versions, update mvl.lock");
     eprintln!("  mvl pin [<version>]                — pin project to compiler version (writes .mvl-version)");
+}
+
+/// Parse `--error-limit=N` from args; 0 means unlimited, default is 10.
+fn parse_error_limit(args: &[String]) -> usize {
+    args.iter()
+        .find_map(|a| a.strip_prefix("--error-limit="))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10)
 }
 
 /// Parse `--backend=<name>` from args; defaults to `"rust"`.
@@ -373,7 +385,7 @@ fn validate_module_name(name: &str, source_path: &str) {
 ///
 /// When `req_filter` is `Some(N)`, only the verification pass for Req N is run
 /// and its verdict is printed; errors for other requirements are suppressed.
-fn cmd_check(path: &str, req_filter: Option<u8>) {
+fn cmd_check(path: &str, req_filter: Option<u8>, error_limit: usize) {
     let files = mvl_files(path, false);
     if files.is_empty() {
         eprintln!("No .mvl files found at: {path}");
@@ -469,7 +481,13 @@ fn cmd_check(path: &str, req_filter: Option<u8>) {
                 println!("{file_str}: OK  ({proven}/11 requirements proven)");
             } else {
                 had_errors = true;
-                for err in &result.errors {
+                let errors = &result.errors;
+                let display_count = if error_limit == 0 {
+                    errors.len()
+                } else {
+                    error_limit.min(errors.len())
+                };
+                for err in errors.iter().take(display_count) {
                     eprintln!(
                         "{}:{}:{}: error[req{}]: {}",
                         file_str,
@@ -477,6 +495,12 @@ fn cmd_check(path: &str, req_filter: Option<u8>) {
                         err.span().col,
                         err.requirement_number(),
                         err.message()
+                    );
+                }
+                if error_limit > 0 && errors.len() > error_limit {
+                    eprintln!(
+                        "... and {} more errors (use --error-limit=0 to show all)",
+                        errors.len() - error_limit
                     );
                 }
                 let failed = (1u8..=11)
