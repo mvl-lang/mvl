@@ -100,7 +100,7 @@ ref_atom       = IDENT | INTEGER | "len" "(" IDENT ")"
 block          = "{" { statement } "}" ;
 statement      = let_stmt | assign_stmt | return_stmt | if_stmt
                | match_stmt | for_stmt | while_stmt | expr_stmt ;
-let_stmt       = "let" [ "mut" ] pattern [ ":" type_expr ] "=" expr ";" ;
+let_stmt       = "let" [ "mut" ] pattern ":" type_expr "=" expr ";" ;
 assign_stmt    = lvalue "=" expr ";" ;
 return_stmt    = "return" [ expr ] ";" ;
 if_stmt        = "if" expr block [ "else" ( if_stmt | block ) ] ;
