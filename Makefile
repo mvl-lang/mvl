@@ -155,6 +155,7 @@ format-check: ## Check formatting without changing files
 # === Assurance ===
 
 coverage: ## Run Rust line coverage via cargo-llvm-cov (cached in target/llvm-cov.json)
+	@cargo build --manifest-path mvl_memory/Cargo.toml --target-dir target/llvm-cov-target 2>/dev/null
 	@cargo llvm-cov --json > target/llvm-cov.json 2>/dev/null
 	@python3 -c "import json; d=json.load(open('target/llvm-cov.json')); t=d['data'][0]['totals']; l=t['lines']; f=t['functions']; print(f\"Lines: {l['covered']}/{l['count']} ({l['percent']:.1f}%)\"); print(f\"Functions: {f['covered']}/{f['count']} ({f['percent']:.1f}%)\")"
 
