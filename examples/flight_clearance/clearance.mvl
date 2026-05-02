@@ -33,6 +33,7 @@ use model::RouteType;
 // visibility_ok AND wind_ok AND NOT icing AND NOT thunderstorm
 // MC/DC: 4 conditions → 5 test cases (1 baseline + 4 toggles)
 
+/// True iff visibility is sufficient for departure (Good or Reduced).
 pub fn visibility_ok(v: Visibility) -> Bool {
     match v {
         Visibility::Good    => true,
@@ -41,6 +42,7 @@ pub fn visibility_ok(v: Visibility) -> Bool {
     }
 }
 
+/// True iff wind is within departure limits (Calm or Moderate).
 pub fn wind_ok(w: WindCondition) -> Bool {
     match w {
         WindCondition::Calm     => true,
@@ -49,6 +51,7 @@ pub fn wind_ok(w: WindCondition) -> Bool {
     }
 }
 
+/// True iff all weather conditions are acceptable for departure.
 pub fn weather_clear(wx: Weather) -> Bool {
     visibility_ok(wx.visibility) && wind_ok(wx.wind) && !wx.icing && !wx.thunderstorm
 }
@@ -57,6 +60,7 @@ pub fn weather_clear(wx: Weather) -> Bool {
 // maintenance_ok AND fuel_ok AND crew_valid
 // MC/DC: 3 conditions → 4 test cases
 
+/// True iff the maintenance status permits flight (Cleared or DeferredItem).
 pub fn maintenance_ok(m: MaintenanceStatus) -> Bool {
     match m {
         MaintenanceStatus::Cleared      => true,
@@ -65,6 +69,7 @@ pub fn maintenance_ok(m: MaintenanceStatus) -> Bool {
     }
 }
 
+/// True iff fuel is adequate for basic departure (Sufficient or Marginal).
 pub fn fuel_ok(f: FuelStatus) -> Bool {
     match f {
         FuelStatus::Sufficient   => true,
@@ -73,6 +78,7 @@ pub fn fuel_ok(f: FuelStatus) -> Bool {
     }
 }
 
+/// True iff all aircraft systems permit departure.
 pub fn aircraft_ready(ac: Aircraft) -> Bool {
     maintenance_ok(ac.maintenance) && fuel_ok(ac.fuel) && ac.crew_valid
 }
@@ -102,6 +108,7 @@ fn is_international(route: RouteType) -> Bool {
     }
 }
 
+/// True iff the aircraft is certified to fly the requested route type.
 pub fn route_permitted(route: RouteType, ac: Aircraft) -> Bool {
     !(is_oceanic(route) && !ac.etops_cert) && !(is_international(route) && !ac.crew_valid)
 }
@@ -111,6 +118,7 @@ pub fn route_permitted(route: RouteType, ac: Aircraft) -> Bool {
 // Rewritten: visibility_ok AND wind_ok AND fuel_ok
 // MC/DC: 3 conditions → 4 test cases
 
+/// True iff conditions allow a safe landing at the destination.
 pub fn can_land(wx: Weather, ac: Aircraft) -> Bool {
     visibility_ok(wx.visibility) && wind_ok(wx.wind) && fuel_ok(ac.fuel)
 }
@@ -120,6 +128,7 @@ pub fn can_land(wx: Weather, ac: Aircraft) -> Bool {
 // MC/DC: 3 top-level conditions → 4 test cases
 // The (icing AND poor) is a nested sub-decision with 2 conditions → 3 tests
 
+/// True iff en-route conditions require diversion to an alternate airport.
 pub fn needs_diversion(wx: Weather, ac: Aircraft) -> Bool {
     wx.thunderstorm || (wx.icing && !visibility_ok(wx.visibility)) || !fuel_ok(ac.fuel)
 }
@@ -128,6 +137,7 @@ pub fn needs_diversion(wx: Weather, ac: Aircraft) -> Bool {
 // Top-level: weather_clear AND aircraft_ready AND route_permitted
 // MC/DC: 3 conditions → 4 test cases
 
+/// Issue a clearance based on weather, aircraft readiness, and route certification.
 pub fn can_dispatch(wx: Weather, ac: Aircraft, route: RouteType) -> Clearance {
     if weather_clear(wx) && aircraft_ready(ac) && route_permitted(route, ac) {
         Clearance::Cleared
@@ -151,6 +161,7 @@ fn is_domestic(route: RouteType) -> Bool {
     }
 }
 
+/// True iff the crew is within duty-time limits for the route.
 pub fn crew_duty_ok(ac: Aircraft, route: RouteType) -> Bool {
     ac.crew_valid && (is_domestic(route) || fuel_ok(ac.fuel))
 }
@@ -176,6 +187,7 @@ fn fuel_marginal(f: FuelStatus) -> Bool {
     }
 }
 
+/// True iff fuel is sufficient for the route: either fully adequate, or marginal on domestic with no icing.
 pub fn fuel_planning_ok(ac: Aircraft, route: RouteType, wx: Weather) -> Bool {
     fuel_sufficient(ac.fuel) || (fuel_marginal(ac.fuel) && is_domestic(route) && !wx.icing)
 }
@@ -185,6 +197,7 @@ pub fn fuel_planning_ok(ac: Aircraft, route: RouteType, wx: Weather) -> Bool {
 // weather_clear AND aircraft_ready AND crew_duty_ok AND fuel_planning_ok
 // MC/DC: 4 conditions → 5 test cases
 
+/// Final pre-departure gate check: all four subsystems must pass for clearance.
 pub fn departure_gate(wx: Weather, ac: Aircraft, route: RouteType) -> Clearance {
     if weather_clear(wx) && aircraft_ready(ac) && crew_duty_ok(ac, route) && fuel_planning_ok(ac, route, wx) {
         Clearance::Cleared

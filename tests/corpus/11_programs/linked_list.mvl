@@ -22,6 +22,8 @@ total fn length(list: LinkedList) -> Int {
 }
 
 fn main() -> Unit ! Console {
-    let list = LinkedList::Cons(1, Box::new(LinkedList::Cons(2, Box::new(LinkedList::Cons(3, Box::new(LinkedList::Nil))))));
+    let tail2 = LinkedList::Cons(3, Box::new(LinkedList::Nil));
+    let tail1 = LinkedList::Cons(2, Box::new(tail2));
+    let list  = LinkedList::Cons(1, Box::new(tail1));
     println(format("length: {}", length(list)));
 }

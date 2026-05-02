@@ -88,6 +88,7 @@ fn log_level_for_decision(decision: Permission) -> String {
 // Grant decisions are logged at INFO; deny decisions at WARN.
 // username is Clean[String] (IFC-safe for output) and is included in every
 // audit record so that access decisions are attributable to a principal.
+/// Log an access decision to the structured audit trail with IFC-safe fields.
 pub fn log_access(
     username: Clean[String],
     resource: Resource,
@@ -97,9 +98,10 @@ pub fn log_access(
     let resource_str = resource_name(resource);
     let action_str   = action_name(action);
     let decision_str = permission_name(decision);
+    let fields = {"user": username, "resource": resource_str, "action": action_str, "decision": decision_str};
     match decision {
-        Permission::Allow => log_info("access granted", {"user": username, "resource": resource_str, "action": action_str, "decision": decision_str}),
-        Permission::Deny  => log_warn("access denied",  {"user": username, "resource": resource_str, "action": action_str, "decision": decision_str}),
+        Permission::Allow => log_info("access granted", fields),
+        Permission::Deny  => log_warn("access denied",  fields),
     }
 }
 

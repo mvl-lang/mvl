@@ -44,7 +44,8 @@ extern "rust" {
 //   stored_hash  : Secret[String]   — confidential, cannot reach println
 //   return value : Clean[String]    — session token produced after successful auth
 //
-// Effect: ! CryptoRandom — generate_token uses secure randomness for the token.
+/// Verify credentials and return a session token on success.
+/// Uses CryptoRandom for token generation; the stored hash stays Secret throughout.
 pub fn authenticate(
     raw_username: Tainted[String],
     raw_password: Tainted[String],
