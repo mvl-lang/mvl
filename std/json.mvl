@@ -3,7 +3,6 @@
 // Pure JSON encode/decode. No I/O effects — JSON is a data transformation.
 // Import with: use std.json.{Value, encode, decode}
 //
-// Phase 2: function stubs with correct signatures.
 
 /// A dynamically-typed JSON value.
 pub type Value = enum {

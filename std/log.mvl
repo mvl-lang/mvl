@@ -3,7 +3,6 @@
 // Structured logging with compile-time IFC enforcement.
 // Import with: use std.log.{log_debug, log_info, log_warn, log_error}
 //
-// Phase 2: function stubs with correct signatures and effects.
 //
 // Design: one effect, four severity levels.
 //   - ! Log   — required by all logging functions
@@ -21,7 +20,6 @@
 // Output format (JSON, text, etc.) is configurable at runtime via the
 // log sink injected by the host — the module itself is format-agnostic.
 //
-// Implementation: wraps `extern "rust" { tracing }` (Phase 3).
 // See #54, ADR-0006.
 
 // ── Functions ──────────────────────────────────────────────────────────────

@@ -3,7 +3,6 @@
 // Command-line argument and environment variable access.
 // Import with: use std.args.{get_arg, get_args, get_env}
 //
-// Phase 2: function stubs with correct signatures and effects.
 //
 // Design: CLI argument access is a Console effect — it reads from the
 // process environment, which is externally controlled (untrusted) input.
@@ -12,7 +11,6 @@
 // IFC: CLI and environment values are Tainted[String]. Callers must
 // sanitize (validate) before use in security-sensitive contexts.
 //
-// Implementation: wraps `extern "rust" { std::env::args, std::env::var }` (Phase 3).
 // See ADR-0006.
 
 /// Scan command-line arguments for `--<name> <value>` and return the value.
@@ -32,10 +30,9 @@ pub fn get_args() -> List[Tainted[String]] ! Console { [] }
 /// Returns `None` if the variable is not set.
 /// Returns `Tainted[String]` because environment variables are externally controlled.
 ///
-/// NOTE: The `! Console` effect is a Phase 2 placeholder. Environment variable
-/// access is process-environment I/O, which is semantically distinct from
-/// console (stdin/stdout) access. A dedicated `Env` effect will be introduced
-/// in a future phase. See ADR-0007.
+/// NOTE: The `! Console` effect here is a placeholder — environment variable
+/// access is semantically distinct from console I/O. A dedicated `Env` effect
+/// exists in std.env; this function predates that split. See ADR-0007.
 pub fn get_env(name: Clean[String]) -> Option[Tainted[String]] ! Console { None }
 
 /// Parse command-line arguments into a struct `T`.
