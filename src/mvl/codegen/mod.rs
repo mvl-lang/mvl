@@ -110,7 +110,7 @@ pub fn find_mvl_memory_lib() -> Option<std::path::PathBuf> {
     None
 }
 
-/// Find the `libmvl_runtime_c` shared library for the `lli --load` flag (ADR-0018).
+/// Find the `libmvl_runtime_c` shared library for the `lli --load` flag (ADR-0019).
 ///
 /// Search order:
 /// 1. `MVL_RUNTIME_C_LIB` environment variable (explicit override)
@@ -270,7 +270,7 @@ struct LlvmBackend<'ctx> {
     /// Used to emit `_drop` calls before `return` and at function end.
     pub(crate) heap_locals: HashMap<String, HeapKind>,
 
-    // ── ADR-0018: stdlib import tracking ─────────────────────────────────────
+    // ── ADR-0019: stdlib import tracking ─────────────────────────────────────
     /// Maps a MVL function name (imported via `use std.*`) to its C-ABI symbol
     /// in `libmvl_runtime_c`.  Populated from `Decl::Use` nodes in emit_program.
     /// Used by emit_fn_call to dispatch to the correct `_mvl_*` extern.
@@ -307,7 +307,7 @@ impl<'ctx> LlvmBackend<'ctx> {
     // ── Program emission ─────────────────────────────────────────────────────
 
     fn emit_program(&mut self, prog: &Program) {
-        // ADR-0018: scan `use std.*` imports and build the stdlib dispatch table.
+        // ADR-0019: scan `use std.*` imports and build the stdlib dispatch table.
         // Maps each imported MVL function name to its `_mvl_*` C-ABI symbol.
         self.collect_stdlib_imports(prog);
 
@@ -424,7 +424,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
     }
 
-    // ── ADR-0018: stdlib import dispatch ─────────────────────────────────────
+    // ── ADR-0019: stdlib import dispatch ─────────────────────────────────────
 
     /// Scan `Decl::Use` nodes for `use std.*` imports and populate `stdlib_imports`.
     ///
@@ -435,20 +435,17 @@ impl<'ctx> LlvmBackend<'ctx> {
     /// and register only that symbol.
     fn collect_stdlib_imports(&mut self, prog: &Program) {
         // Table of all C-ABI dispatching symbols: (module, mvl_name) → symbol.
-        // Only functions with a primitive (i64/void) return and no arguments are listed;
-        // complex marshalled functions require dedicated codegen and are not auto-dispatched.
+        // Only no-arg, i64-returning functions are listed here — dispatched via
+        // emit_stdlib_call_i64.
+        //
+        // Excluded (pending follow-up with non-i64 / argument-passing dispatch):
+        //   - sigint/sigterm/sighup/sigusr1/sigusr2: return i8, not i64
+        //   - signal_reset / signal_ignore: take an i8 argument
+        //   - process.is_success: takes an i8 argument
         let known: &[(&str, &str, &str)] = &[
             ("env", "getuid", "_mvl_env_getuid"),
             ("env", "getgid", "_mvl_env_getgid"),
             ("env", "args_len", "_mvl_env_args_len"),
-            ("env", "sigint", "_mvl_env_sigint"),
-            ("env", "sigterm", "_mvl_env_sigterm"),
-            ("env", "sighup", "_mvl_env_sighup"),
-            ("env", "sigusr1", "_mvl_env_sigusr1"),
-            ("env", "sigusr2", "_mvl_env_sigusr2"),
-            ("env", "signal_reset", "_mvl_env_signal_reset"),
-            ("env", "signal_ignore", "_mvl_env_signal_ignore"),
-            ("process", "is_success", "_mvl_process_is_success"),
         ];
 
         for decl in &prog.declarations {
@@ -462,8 +459,10 @@ impl<'ctx> LlvmBackend<'ctx> {
             let module = &ud.path[1];
 
             if ud.path.len() == 2 {
-                // Brace import: `use std.env.{...}` — parser stored only ["std", "env"].
-                // Register all known functions for this module.
+                // Brace import: `use std.env.{getuid, getgid}` — the parser discards the
+                // item list and stores only ["std", "env"] (parser limitation).
+                // We register all known symbols for the module as a conservative approximation.
+                // Single-item imports always have path.len() == 3 (e.g. ["std", "env", "getuid"]).
                 for (m, fn_name, symbol) in known {
                     if *m == module.as_str() {
                         self.stdlib_imports
@@ -482,42 +481,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                 }
             }
         }
-    }
-
-    /// Declare `_mvl_env_getuid() -> i64` on first use and return the FunctionValue.
-    #[allow(dead_code)]
-    pub(crate) fn get_mvl_env_getuid(&self) -> inkwell::values::FunctionValue<'ctx> {
-        if let Some(f) = self.module.get_function("_mvl_env_getuid") {
-            return f;
-        }
-        let fn_ty = self.context.i64_type().fn_type(&[], false);
-        self.module
-            .add_function("_mvl_env_getuid", fn_ty, Some(Linkage::External))
-    }
-
-    /// Declare `_mvl_env_getgid() -> i64` on first use.
-    #[allow(dead_code)]
-    pub(crate) fn get_mvl_env_getgid(&self) -> inkwell::values::FunctionValue<'ctx> {
-        if let Some(f) = self.module.get_function("_mvl_env_getgid") {
-            return f;
-        }
-        let fn_ty = self.context.i64_type().fn_type(&[], false);
-        self.module
-            .add_function("_mvl_env_getgid", fn_ty, Some(Linkage::External))
-    }
-
-    /// Declare `_mvl_runtime_version() -> ptr` on first use.
-    #[allow(dead_code)]
-    pub(crate) fn get_mvl_runtime_version(&self) -> inkwell::values::FunctionValue<'ctx> {
-        if let Some(f) = self.module.get_function("_mvl_runtime_version") {
-            return f;
-        }
-        let fn_ty = self
-            .context
-            .ptr_type(AddressSpace::default())
-            .fn_type(&[], false);
-        self.module
-            .add_function("_mvl_runtime_version", fn_ty, Some(Linkage::External))
     }
 
     /// Emit a call to a stdlib C-ABI function with no arguments, returning i64.

@@ -117,6 +117,9 @@ pub extern "C" fn _mvl_env_args_len() -> i64 {
 /// Returns null if `i` is out of range. Caller frees with `libc::free`.
 #[no_mangle]
 pub extern "C" fn _mvl_env_args_get(i: i64) -> *mut c_char {
+    if i < 0 {
+        return std::ptr::null_mut();
+    }
     let args = mvl_runtime::stdlib::env::args();
     match args.into_iter().nth(i as usize) {
         Some(Tainted(s)) => string_to_c(&s),
@@ -258,6 +261,12 @@ mod tests {
     fn args_get_out_of_range_returns_null() {
         let ptr = _mvl_env_args_get(i64::MAX);
         assert!(ptr.is_null());
+    }
+
+    #[test]
+    fn args_get_negative_returns_null() {
+        let ptr = _mvl_env_args_get(-1);
+        assert!(ptr.is_null(), "negative index must return null");
     }
 
     #[test]

@@ -2902,7 +2902,7 @@ fn run_project_llvm(path: &str) {
     if let Some(lib) = codegen::find_mvl_memory_lib() {
         cmd.arg(format!("--load={}", lib.display()));
     }
-    // ADR-0018: load the C-ABI stdlib runtime if present (needed for stdlib calls).
+    // ADR-0019: load the C-ABI stdlib runtime if present (needed for stdlib calls).
     if let Some(lib) = codegen::find_mvl_runtime_c_lib() {
         cmd.arg(format!("--load={}", lib.display()));
     }
@@ -3004,7 +3004,7 @@ fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
         if let Some(lib) = codegen::find_mvl_memory_lib() {
             lli_cmd.arg(format!("--load={}", lib.display()));
         }
-        // ADR-0018: load the C-ABI stdlib runtime if present.
+        // ADR-0019: load the C-ABI stdlib runtime if present.
         if let Some(lib) = codegen::find_mvl_runtime_c_lib() {
             lli_cmd.arg(format!("--load={}", lib.display()));
         }

@@ -1,4 +1,4 @@
-# ADR-0018: Two-Path Stdlib Architecture — Rust Crate + C-ABI cdylib
+# ADR-0019: Two-Path Stdlib Architecture — Rust Crate + C-ABI cdylib
 
 **Status:** Accepted
 **Date:** 2026-05-02

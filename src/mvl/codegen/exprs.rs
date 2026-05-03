@@ -860,7 +860,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                         }
                     }
                 }
-                // ADR-0018: dispatch to libmvl_runtime_c C-ABI for stdlib imports.
+                // ADR-0019: dispatch to libmvl_runtime_c C-ABI for stdlib imports.
                 // Only functions with a primitive (i64) return and no arguments are
                 // auto-dispatched here.  Complex marshalled functions are out of scope.
                 if let Some(symbol) = self.stdlib_imports.get(name).cloned() {

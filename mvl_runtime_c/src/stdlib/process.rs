@@ -116,15 +116,25 @@ pub extern "C" fn _mvl_process_wait(child_ptr: *mut libc::c_void) -> MvlResult {
 
 // ── Kill ─────────────────────────────────────────────────────────────────────
 
-/// Send kill signal to the child. Returns the child handle so it can be passed
-/// to `_mvl_process_wait` for reaping.
+/// Send kill signal to the child.
+///
+/// The child handle (`child_ptr`) is **unconditionally consumed** by this call
+/// regardless of success or failure.  The caller must NOT use `child_ptr` again
+/// after calling this function.
+///
+/// On success (`tag=0`): `payload` is a new `*mut Child` handle — pass it to
+/// `_mvl_process_wait` to reap the process.
+///
+/// On error (`tag=1`): the child has been dropped (no recovered handle exists),
+/// `err` holds an error message (caller frees with `libc::free`).
 #[no_mangle]
 #[allow(unsafe_code)]
 pub extern "C" fn _mvl_process_kill(child_ptr: *mut libc::c_void) -> MvlResult {
     if child_ptr.is_null() {
         return MvlResult::err_str("null child handle");
     }
-    // Safety: child_ptr was allocated by _mvl_process_spawn or _mvl_process_kill.
+    // Safety: child_ptr was allocated by _mvl_process_spawn or a prior _mvl_process_kill.
+    // The child is unconditionally moved out here; child_ptr must not be used after this call.
     let child: Child = unsafe { *Box::from_raw(child_ptr as *mut Child) };
     match process::kill(child) {
         Ok(child) => {
@@ -135,6 +145,7 @@ pub extern "C" fn _mvl_process_kill(child_ptr: *mut libc::c_void) -> MvlResult {
                 err: std::ptr::null_mut(),
             }
         }
+        // child was moved into process::kill and dropped on error — no handle to return.
         Err(e) => MvlResult::err_str(&e),
     }
 }
@@ -309,5 +320,31 @@ mod tests {
         let status = _mvl_process_output_status(wait_r.payload);
         assert_ne!(status, 0, "killed process must not exit successfully");
         _mvl_process_output_free(wait_r.payload);
+    }
+
+    #[test]
+    fn wait_null_returns_err() {
+        let r = _mvl_process_wait(std::ptr::null_mut());
+        assert_eq!(r.tag, 1, "wait(null) must return Err");
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::free(r.err as *mut libc::c_void)
+        };
+    }
+
+    #[test]
+    fn kill_null_returns_err() {
+        let r = _mvl_process_kill(std::ptr::null_mut());
+        assert_eq!(r.tag, 1, "kill(null) must return Err");
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::free(r.err as *mut libc::c_void)
+        };
+    }
+
+    #[test]
+    fn output_free_null_is_safe() {
+        // Must not crash or panic.
+        _mvl_process_output_free(std::ptr::null_mut());
     }
 }

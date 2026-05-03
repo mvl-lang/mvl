@@ -22,7 +22,7 @@
 //!
 //! # Architecture
 //!
-//! See ADR-0018 for the two-path design rationale.
+//! See ADR-0019 for the two-path design rationale.
 //!
 //! ```text
 //! Path 1 (Rust transpiler):  MVL → Rust source → cargo/rustc

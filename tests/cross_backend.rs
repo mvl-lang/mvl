@@ -8,8 +8,10 @@
 //!   2. calculator.mvl   — total fns, if/else, arithmetic
 //!   3. shapes.mvl       — enums, match dispatch, function composition
 //!
-//! ADR-0018 (C-ABI stdlib) parity tests:
+//! ADR-0019 (C-ABI stdlib) parity tests:
 //!   4. env_basic.mvl    — getuid + getgid via libmvl_runtime_c
+//!                         also serves as the cdylib load smoke test (#431 AC):
+//!                         proves libmvl_runtime_c loads and symbols resolve via lli
 
 #![cfg(feature = "llvm")]
 
@@ -172,7 +174,7 @@ fn llvm_fn_takes_string() {
     assert_llvm_output(&file, "hello world");
 }
 
-// ── ADR-0018: C-ABI stdlib parity tests ──────────────────────────────────────
+// ── ADR-0019: C-ABI stdlib parity tests ──────────────────────────────────────
 
 /// Both backends call `getuid()` and `getgid()` and must produce identical output.
 /// Both ultimately call the same POSIX syscalls, so UID and GID are the same.

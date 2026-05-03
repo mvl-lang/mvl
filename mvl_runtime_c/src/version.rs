@@ -1,7 +1,10 @@
 //! Pilot export: `_mvl_runtime_version`.
 //!
-//! Proves the cdylib loads and resolves correctly from the LLVM backend.
-//! Used as a smoke test by `tests/cross_backend.rs`.
+//! Proves the cdylib loads and resolves correctly at the Rust unit-test level.
+//! Cross-backend parity for this symbol requires a MVL stdlib binding for the
+//! LLVM IR path to call it; until that binding exists, the cdylib load smoke
+//! test is covered by `cross_backend_env_basic` in `tests/cross_backend.rs`
+//! (which calls `_mvl_env_getuid`/`_mvl_env_getgid` from the same library).
 
 use std::ffi::CStr;
 
