@@ -1,6 +1,6 @@
 # Spec 008: Extended Package Model
 
-**ADR:** [0012 — Extended Package Model](../../adr/0012-extended-package-model.md)
+**ADR:** [0012 — Extended Package Model](../adr/0012-extended-package-model.md)
 
 ---
 

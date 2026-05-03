@@ -1,0 +1,1 @@
+../../.openspec/specs/010-mcdc/spec.md
