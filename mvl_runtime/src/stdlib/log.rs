@@ -1,49 +1,52 @@
 //! Rust implementations of `std.log` stdlib functions.
 //!
-//! Provides Phase 2 backing for the structured logging stubs declared in
-//! `std/log.mvl`. Re-exported via `mvl_runtime::prelude::*`.
+//! Provides Phase A backing for structured logging declared in `std/log.mvl`.
+//! Re-exported via `mvl_runtime::prelude::*`.
 //!
-//! # Phase 2 behaviour
+//! Format: `[{LEVEL} {ISO_8601_TIMESTAMP}] {msg} {field=value ...}`
 //!
-//! All functions are no-ops: they accept arguments with the correct types and
-//! return `()`. No output is produced. The purpose of Phase 2 stubs is to
-//! satisfy the type checker and linker so that MVL programs and tests that
-//! call `log_*` functions compile and run correctly.
-//!
-//! # Phase 3
-//!
-//! The real implementation will wrap `tracing` (see issue #54 and ADR-0006).
-//! The log sink (JSON, text, etc.) will be runtime-configurable.
+//! Output goes to stderr via `eprintln!`. Field keys are sorted for
+//! deterministic test output. No configurable sink (Phase 3 / issue #54).
 
 use std::collections::HashMap;
 
+use crate::stdlib::time::{format_instant, now};
+
+fn log_internal(level: &str, msg: String, fields: HashMap<String, String>) {
+    let timestamp = format_instant(now(), "%Y-%m-%dT%H:%M:%SZ".to_string());
+    let mut keys: Vec<&String> = fields.keys().collect();
+    keys.sort();
+    let field_str = keys
+        .iter()
+        .map(|k| format!("{}={}", k, fields[*k]))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if field_str.is_empty() {
+        eprintln!("[{} {}] {}", level, timestamp, msg);
+    } else {
+        eprintln!("[{} {}] {} {}", level, timestamp, msg, field_str);
+    }
+}
+
 /// Emit a DEBUG-level structured log record.
-///
-/// Phase 2: no-op stub. Phase 3 will forward to the configured tracing sink.
-///
-/// Implements the Rust backing for `std/log.mvl::log_debug`.
-pub fn log_debug(_msg: String, _fields: HashMap<String, String>) {}
+pub fn log_debug(msg: String, fields: HashMap<String, String>) {
+    log_internal("DEBUG", msg, fields);
+}
 
 /// Emit an INFO-level structured log record.
-///
-/// Phase 2: no-op stub. Phase 3 will forward to the configured tracing sink.
-///
-/// Implements the Rust backing for `std/log.mvl::log_info`.
-pub fn log_info(_msg: String, _fields: HashMap<String, String>) {}
+pub fn log_info(msg: String, fields: HashMap<String, String>) {
+    log_internal("INFO", msg, fields);
+}
 
 /// Emit a WARN-level structured log record.
-///
-/// Phase 2: no-op stub. Phase 3 will forward to the configured tracing sink.
-///
-/// Implements the Rust backing for `std/log.mvl::log_warn`.
-pub fn log_warn(_msg: String, _fields: HashMap<String, String>) {}
+pub fn log_warn(msg: String, fields: HashMap<String, String>) {
+    log_internal("WARN", msg, fields);
+}
 
 /// Emit an ERROR-level structured log record.
-///
-/// Phase 2: no-op stub. Phase 3 will forward to the configured tracing sink.
-///
-/// Implements the Rust backing for `std/log.mvl::log_error`.
-pub fn log_error(_msg: String, _fields: HashMap<String, String>) {}
+pub fn log_error(msg: String, fields: HashMap<String, String>) {
+    log_internal("ERROR", msg, fields);
+}
 
 #[cfg(test)]
 mod tests {
@@ -74,5 +77,14 @@ mod tests {
         let mut fields = HashMap::new();
         fields.insert("key".to_string(), "value".to_string());
         log_info("event".to_string(), fields);
+    }
+
+    #[test]
+    fn fields_are_sorted() {
+        let mut fields = HashMap::new();
+        fields.insert("z".to_string(), "last".to_string());
+        fields.insert("a".to_string(), "first".to_string());
+        fields.insert("m".to_string(), "mid".to_string());
+        log_info("ordering".to_string(), fields);
     }
 }

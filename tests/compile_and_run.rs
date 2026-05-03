@@ -561,3 +561,83 @@ fn println_non_string_first_arg_runs() {
         ],
     );
 }
+
+// ── log stdlib (#416) ─────────────────────────────────────────────────────
+
+fn corpus_effects(name: &str) -> String {
+    format!(
+        "{}/tests/corpus/05_effects/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+/// Issue #416: real log implementation — eprintln backend.
+///
+/// Verifies that all four log levels write to stderr in the format:
+///   [LEVEL ISO_8601_TIMESTAMP] msg field=value ...
+/// and that fields are sorted deterministically.
+#[test]
+fn log_output_formats_correctly() {
+    let out = Command::new(mvl_bin())
+        .args(["run", &corpus_effects("log_output.mvl")])
+        .output()
+        .expect("failed to run mvl run");
+    assert!(
+        out.status.success(),
+        "log_output: mvl run failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    assert!(
+        stderr.contains("[DEBUG "),
+        "expected [DEBUG in stderr:\n{stderr}"
+    );
+    assert!(stderr.contains("v=1"), "expected v=1 in stderr:\n{stderr}");
+    assert!(
+        stderr.contains("[INFO "),
+        "expected [INFO in stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("[WARN "),
+        "expected [WARN in stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("[ERROR "),
+        "expected [ERROR in stderr:\n{stderr}"
+    );
+
+    // ISO 8601 timestamp separator present
+    assert!(
+        stderr.contains('T'),
+        "expected ISO 8601 T separator in stderr:\n{stderr}"
+    );
+
+    // Field key=value pairs present
+    assert!(
+        stderr.contains("port=8080"),
+        "expected port=8080 in stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("usage=85%"),
+        "expected usage=85% in stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("error=timeout"),
+        "expected error=timeout in stderr:\n{stderr}"
+    );
+
+    // Sorted field order: a=first m=mid z=last on the same line
+    let ordering_line = stderr
+        .lines()
+        .find(|l| l.contains("ordering"))
+        .expect("expected a line containing 'ordering' in stderr");
+    let a_pos = ordering_line.find("a=first").expect("a=first not found");
+    let m_pos = ordering_line.find("m=mid").expect("m=mid not found");
+    let z_pos = ordering_line.find("z=last").expect("z=last not found");
+    assert!(
+        a_pos < m_pos && m_pos < z_pos,
+        "fields not sorted: {ordering_line}"
+    );
+}
