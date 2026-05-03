@@ -108,7 +108,7 @@ fn reassess_interval(pri: Priority) -> Int {
 }
 
 fn assess(p: Patient) -> Assessment {
-    let pri = assign_priority(p);
+    let pri: Priority = assign_priority(p);
     Assessment { priority: pri, resuscitate: needs_resuscitation(p.vitals, p.complaint), isolate: needs_isolation(p), reassess_mins: reassess_interval(pri) }
 }
 
@@ -132,25 +132,25 @@ test fn d2_baseline() -> Unit {
 }
 
 test fn d2_toggle_breathing_absent() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Absent, pulse: PulseStrength::Strong };
     assert_eq(airway_compromise(v), true);
 }
 
 test fn d2_toggle_labored_low_o2() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 85, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 85, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Labored, pulse: PulseStrength::Strong };
     assert_eq(airway_compromise(v), true);
 }
 
 test fn d2_labored_good_o2() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Labored, pulse: PulseStrength::Strong };
     assert_eq(airway_compromise(v), false);
 }
 
 test fn d2_toggle_pulse_absent() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Absent };
     assert_eq(airway_compromise(v), true);
 }
@@ -164,19 +164,19 @@ test fn d3_baseline() -> Unit {
 }
 
 test fn d3_toggle_low_bp_weak() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 85, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 85, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Weak };
     assert_eq(circulation_failure(v), true);
 }
 
 test fn d3_toggle_tachy_low_bp() -> Unit {
-    let v = Vitals { heart_rate: 140, systolic_bp: 95, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 140, systolic_bp: 95, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
     assert_eq(circulation_failure(v), true);
 }
 
 test fn d3_low_bp_strong_pulse() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 85, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 85, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
     assert_eq(circulation_failure(v), false);
 }
@@ -190,31 +190,31 @@ test fn d4_baseline() -> Unit {
 }
 
 test fn d4_toggle_unresponsive() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Unresponsive, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
     assert_eq(neuro_critical(v, ChiefComplaint::Minor), true);
 }
 
 test fn d4_toggle_pain_neuro() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::PainResponse, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
     assert_eq(neuro_critical(v, ChiefComplaint::Neurological), true);
 }
 
 test fn d4_toggle_voice_low_o2() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 85, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 85, temperature: 370,
                      consciousness: Consciousness::VoiceResponse, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
     assert_eq(neuro_critical(v, ChiefComplaint::Minor), true);
 }
 
 test fn d4_voice_normal_o2() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::VoiceResponse, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
     assert_eq(neuro_critical(v, ChiefComplaint::Minor), false);
 }
 
 test fn d4_pain_non_neuro() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::PainResponse, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
     assert_eq(neuro_critical(v, ChiefComplaint::Minor), false);
 }
@@ -228,19 +228,19 @@ test fn d5_baseline() -> Unit {
 }
 
 test fn d5_toggle_airway() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Absent, pulse: PulseStrength::Strong };
     assert_eq(is_red(v, ChiefComplaint::Minor), true);
 }
 
 test fn d5_toggle_circulation() -> Unit {
-    let v = Vitals { heart_rate: 140, systolic_bp: 95, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 140, systolic_bp: 95, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
     assert_eq(is_red(v, ChiefComplaint::Minor), true);
 }
 
 test fn d5_toggle_neuro() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Unresponsive, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
     assert_eq(is_red(v, ChiefComplaint::Minor), true);
 }
@@ -254,33 +254,33 @@ test fn d6_baseline() -> Unit {
 }
 
 test fn d6_toggle_chest_elderly() -> Unit {
-    let p = Patient { age_group: AgeGroup::Elderly, complaint: ChiefComplaint::ChestPain, vitals: normal_vitals(), allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Elderly, complaint: ChiefComplaint::ChestPain, vitals: normal_vitals(), allergies: false, pregnant: false };
     assert_eq(is_orange(p), true);
 }
 
 test fn d6_toggle_borderline_labored() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 93, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 93, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Labored, pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Breathing, vitals: v, allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Breathing, vitals: v, allergies: false, pregnant: false };
     assert_eq(is_orange(p), true);
 }
 
 test fn d6_toggle_hypertension() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 210, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 210, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Minor, vitals: v, allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Minor, vitals: v, allergies: false, pregnant: false };
     assert_eq(is_orange(p), true);
 }
 
 test fn d6_borderline_normal_breathing() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 93, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 93, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Breathing, vitals: v, allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Breathing, vitals: v, allergies: false, pregnant: false };
     assert_eq(is_orange(p), false);
 }
 
 test fn d6_chest_adult_not_orange() -> Unit {
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::ChestPain, vitals: normal_vitals(), allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::ChestPain, vitals: normal_vitals(), allergies: false, pregnant: false };
     assert_eq(is_orange(p), false);
 }
 
@@ -293,28 +293,28 @@ test fn d7_baseline_no_fever() -> Unit {
 }
 
 test fn d7_all_true() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 395,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 395,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Infant, complaint: ChiefComplaint::Fever, vitals: v, allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Infant, complaint: ChiefComplaint::Fever, vitals: v, allergies: false, pregnant: false };
     assert_eq(fever_risk(p), true);
 }
 
 test fn d7_toggle_fever() -> Unit {
-    let p = Patient { age_group: AgeGroup::Infant, complaint: ChiefComplaint::Fever, vitals: normal_vitals(), allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Infant, complaint: ChiefComplaint::Fever, vitals: normal_vitals(), allergies: false, pregnant: false };
     assert_eq(fever_risk(p), false);
 }
 
 test fn d7_toggle_age() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 395,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 395,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Fever, vitals: v, allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Fever, vitals: v, allergies: false, pregnant: false };
     assert_eq(fever_risk(p), false);
 }
 
 test fn d7_toggle_complaint() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 395,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 395,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Infant, complaint: ChiefComplaint::Minor, vitals: v, allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Infant, complaint: ChiefComplaint::Minor, vitals: v, allergies: false, pregnant: false };
     assert_eq(fever_risk(p), false);
 }
 
@@ -327,44 +327,44 @@ test fn d8_baseline() -> Unit {
 }
 
 test fn d8_all_true() -> Unit {
-    let v = Vitals { heart_rate: 100, systolic_bp: 105, oxygen_sat: 96, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 100, systolic_bp: 105, oxygen_sat: 96, temperature: 370,
                      consciousness: Consciousness::VoiceResponse, breathing: BreathingStatus::Normal, pulse: PulseStrength::Weak };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Trauma, vitals: v, allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Trauma, vitals: v, allergies: false, pregnant: false };
     assert_eq(trauma_urgent(p), true);
 }
 
 test fn d8_toggle_trauma() -> Unit {
-    let v = Vitals { heart_rate: 100, systolic_bp: 105, oxygen_sat: 96, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 100, systolic_bp: 105, oxygen_sat: 96, temperature: 370,
                      consciousness: Consciousness::VoiceResponse, breathing: BreathingStatus::Normal, pulse: PulseStrength::Weak };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Minor, vitals: v, allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Minor, vitals: v, allergies: false, pregnant: false };
     assert_eq(trauma_urgent(p), false);
 }
 
 test fn d8_toggle_alert() -> Unit {
-    let v = Vitals { heart_rate: 100, systolic_bp: 105, oxygen_sat: 96, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 100, systolic_bp: 105, oxygen_sat: 96, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Weak };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Trauma, vitals: v, allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Trauma, vitals: v, allergies: false, pregnant: false };
     assert_eq(trauma_urgent(p), false);
 }
 
 test fn d8_toggle_pulse_only() -> Unit {
-    let v = Vitals { heart_rate: 100, systolic_bp: 105, oxygen_sat: 96, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 100, systolic_bp: 105, oxygen_sat: 96, temperature: 370,
                      consciousness: Consciousness::VoiceResponse, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Trauma, vitals: v, allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Trauma, vitals: v, allergies: false, pregnant: false };
     assert_eq(trauma_urgent(p), true);
 }
 
 test fn d8_toggle_systolic_only() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 96, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 96, temperature: 370,
                      consciousness: Consciousness::VoiceResponse, breathing: BreathingStatus::Normal, pulse: PulseStrength::Weak };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Trauma, vitals: v, allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Trauma, vitals: v, allergies: false, pregnant: false };
     assert_eq(trauma_urgent(p), true);
 }
 
 test fn d8_toggle_pulse_and_bp() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 96, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 96, temperature: 370,
                      consciousness: Consciousness::VoiceResponse, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Trauma, vitals: v, allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Trauma, vitals: v, allergies: false, pregnant: false };
     assert_eq(trauma_urgent(p), false);
 }
 
@@ -377,28 +377,28 @@ test fn d9_baseline() -> Unit {
 }
 
 test fn d9_all_true() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 395,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 395,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Fever, vitals: v, allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Fever, vitals: v, allergies: false, pregnant: false };
     assert_eq(needs_isolation(p), true);
 }
 
 test fn d9_toggle_fever() -> Unit {
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Fever, vitals: normal_vitals(), allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Fever, vitals: normal_vitals(), allergies: false, pregnant: false };
     assert_eq(needs_isolation(p), false);
 }
 
 test fn d9_toggle_complaint() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 395,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 395,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Minor, vitals: v, allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Minor, vitals: v, allergies: false, pregnant: false };
     assert_eq(needs_isolation(p), false);
 }
 
 test fn d9_breathing_complaint_also_isolates() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 395,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 395,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Breathing, vitals: v, allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Breathing, vitals: v, allergies: false, pregnant: false };
     assert_eq(needs_isolation(p), true);
 }
 
@@ -411,35 +411,35 @@ test fn d10_baseline() -> Unit {
 }
 
 test fn d10_all_true_low_bp() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 95, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 95, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Elderly, complaint: ChiefComplaint::Abdominal, vitals: v, allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Elderly, complaint: ChiefComplaint::Abdominal, vitals: v, allergies: false, pregnant: false };
     assert_eq(elderly_risk(p), true);
 }
 
 test fn d10_all_true_low_o2() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 85, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 85, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Elderly, complaint: ChiefComplaint::Abdominal, vitals: v, allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Elderly, complaint: ChiefComplaint::Abdominal, vitals: v, allergies: false, pregnant: false };
     assert_eq(elderly_risk(p), true);
 }
 
 test fn d10_toggle_age() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 95, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 95, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Abdominal, vitals: v, allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Abdominal, vitals: v, allergies: false, pregnant: false };
     assert_eq(elderly_risk(p), false);
 }
 
 test fn d10_toggle_vitals() -> Unit {
-    let p = Patient { age_group: AgeGroup::Elderly, complaint: ChiefComplaint::Abdominal, vitals: normal_vitals(), allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Elderly, complaint: ChiefComplaint::Abdominal, vitals: normal_vitals(), allergies: false, pregnant: false };
     assert_eq(elderly_risk(p), false);
 }
 
 test fn d10_toggle_minor() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 95, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 95, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Elderly, complaint: ChiefComplaint::Minor, vitals: v, allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Elderly, complaint: ChiefComplaint::Minor, vitals: v, allergies: false, pregnant: false };
     assert_eq(elderly_risk(p), false);
 }
 
@@ -452,31 +452,31 @@ test fn d11_baseline() -> Unit {
 }
 
 test fn d11_pregnant_abdominal() -> Unit {
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Abdominal, vitals: normal_vitals(), allergies: false, pregnant: true };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Abdominal, vitals: normal_vitals(), allergies: false, pregnant: true };
     assert_eq(pregnancy_escalate(p), true);
 }
 
 test fn d11_pregnant_fever() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 395,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 395,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Minor, vitals: v, allergies: false, pregnant: true };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Minor, vitals: v, allergies: false, pregnant: true };
     assert_eq(pregnancy_escalate(p), true);
 }
 
 test fn d11_pregnant_low_bp() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 85, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 85, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Minor, vitals: v, allergies: false, pregnant: true };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Minor, vitals: v, allergies: false, pregnant: true };
     assert_eq(pregnancy_escalate(p), true);
 }
 
 test fn d11_toggle_pregnant() -> Unit {
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Abdominal, vitals: normal_vitals(), allergies: false, pregnant: false };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Abdominal, vitals: normal_vitals(), allergies: false, pregnant: false };
     assert_eq(pregnancy_escalate(p), false);
 }
 
 test fn d11_pregnant_no_trigger() -> Unit {
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Minor, vitals: normal_vitals(), allergies: false, pregnant: true };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Minor, vitals: normal_vitals(), allergies: false, pregnant: true };
     assert_eq(pregnancy_escalate(p), false);
 }
 
@@ -489,31 +489,31 @@ test fn d12_baseline() -> Unit {
 }
 
 test fn d12_toggle_breathing() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Absent, pulse: PulseStrength::Strong };
     assert_eq(needs_resuscitation(v, ChiefComplaint::Minor), true);
 }
 
 test fn d12_toggle_pulse() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Absent };
     assert_eq(needs_resuscitation(v, ChiefComplaint::Minor), true);
 }
 
 test fn d12_toggle_unresponsive() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Unresponsive, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
     assert_eq(needs_resuscitation(v, ChiefComplaint::Minor), true);
 }
 
 test fn d12_toggle_circ_and_airway() -> Unit {
-    let v = Vitals { heart_rate: 140, systolic_bp: 85, oxygen_sat: 85, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 140, systolic_bp: 85, oxygen_sat: 85, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Labored, pulse: PulseStrength::Weak };
     assert_eq(needs_resuscitation(v, ChiefComplaint::Minor), true);
 }
 
 test fn d12_circ_only_no_resus() -> Unit {
-    let v = Vitals { heart_rate: 140, systolic_bp: 95, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 140, systolic_bp: 95, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
     assert_eq(needs_resuscitation(v, ChiefComplaint::Minor), false);
 }
@@ -523,27 +523,27 @@ test fn d12_circ_only_no_resus() -> Unit {
 // ════════════════════════════════════════════════════════════════════════
 
 test fn priority_stable_minor_is_blue() -> Unit {
-    let pri = assign_priority(stable_adult());
+    let pri: Priority = assign_priority(stable_adult());
     assert_eq(pri == Priority::Blue, true);
 }
 
 test fn priority_red_for_absent_breathing() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Absent, pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Breathing, vitals: v, allergies: false, pregnant: false };
-    let pri = assign_priority(p);
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Breathing, vitals: v, allergies: false, pregnant: false };
+    let pri: Priority = assign_priority(p);
     assert_eq(pri == Priority::Red, true);
 }
 
 test fn priority_orange_for_elderly_chest_pain() -> Unit {
-    let p = Patient { age_group: AgeGroup::Elderly, complaint: ChiefComplaint::ChestPain, vitals: normal_vitals(), allergies: false, pregnant: false };
-    let pri = assign_priority(p);
+    let p: Patient = Patient { age_group: AgeGroup::Elderly, complaint: ChiefComplaint::ChestPain, vitals: normal_vitals(), allergies: false, pregnant: false };
+    let pri: Priority = assign_priority(p);
     assert_eq(pri == Priority::Orange, true);
 }
 
 test fn priority_green_for_adult_abdominal() -> Unit {
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Abdominal, vitals: normal_vitals(), allergies: false, pregnant: false };
-    let pri = assign_priority(p);
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Abdominal, vitals: normal_vitals(), allergies: false, pregnant: false };
+    let pri: Priority = assign_priority(p);
     assert_eq(pri == Priority::Green, true);
 }
 
@@ -552,30 +552,30 @@ test fn priority_green_for_adult_abdominal() -> Unit {
 // ════════════════════════════════════════════════════════════════════════
 
 test fn assess_stable_adult_is_blue() -> Unit {
-    let a = assess(stable_adult());
+    let a: Assessment = assess(stable_adult());
     assert_eq(a.priority == Priority::Blue, true);
 }
 
 test fn assess_red_gets_resuscitation() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Unresponsive, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Neurological, vitals: v, allergies: false, pregnant: false };
-    let a = assess(p);
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Neurological, vitals: v, allergies: false, pregnant: false };
+    let a: Assessment = assess(p);
     assert_eq(a.resuscitate, true);
 }
 
 test fn assess_reassess_interval_red() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Unresponsive, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Neurological, vitals: v, allergies: false, pregnant: false };
-    let a = assess(p);
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Neurological, vitals: v, allergies: false, pregnant: false };
+    let a: Assessment = assess(p);
     assert_eq(a.reassess_mins, 0);
 }
 
 test fn assess_fever_isolates() -> Unit {
-    let v = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 395,
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 395,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Fever, vitals: v, allergies: false, pregnant: false };
-    let a = assess(p);
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Fever, vitals: v, allergies: false, pregnant: false };
+    let a: Assessment = assess(p);
     assert_eq(a.isolate, true);
 }
