@@ -36,6 +36,17 @@ pub use crate::stdlib::env::{
     signal_ignore, signal_on, signal_reset, sigterm, sigusr1, sigusr2, Signal,
 };
 
+/// `std.time` — wall-clock time and sleep (UTC-only, Phase A).
+pub use crate::stdlib::time::{
+    format_datetime, format_instant, millis, now, parse as time_parse, seconds, sleep, DateTime,
+    Duration, Instant,
+};
+
+/// `std.random` — non-deterministic pseudo-random generation (xorshift64, not cryptographically secure).
+pub use crate::stdlib::random::{
+    bytes as random_bytes, choice, float as random_float, int as random_int, shuffle,
+};
+
 /// `std.process` — child process spawning and lifecycle.
 pub use crate::stdlib::process::{
     exit_code, is_success, kill, spawn, stderr_read, stdin_write, stdout_read, wait, Child,
