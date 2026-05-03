@@ -31,6 +31,7 @@ theme:
 
 nav:
   - Home: index.md
+  - README: readme.md
   - Introduction: introduction.md
   - Rationale: mvl_rationale.md
   - The Eleven Requirements: requirements.md
@@ -99,6 +100,7 @@ nav:
     - 011 Linter: specs/011-linter.md
     - 012 Phases & Pipeline: specs/012-phases.md
   - References: references.md
+  - Changelog: changelog.md
 
 markdown_extensions:
   - tables
