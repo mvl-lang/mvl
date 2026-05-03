@@ -571,6 +571,16 @@ fn corpus_effects(name: &str) -> String {
     )
 }
 
+#[test]
+fn log_output_check_passes() {
+    let out = run_check(&corpus_effects("log_output.mvl"));
+    assert!(
+        out.status.success(),
+        "log_output: mvl check failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 /// Issue #416: real log implementation — eprintln backend.
 ///
 /// Verifies that all four log levels write to stderr in the format:
@@ -608,10 +618,14 @@ fn log_output_formats_correctly() {
         "expected [ERROR in stderr:\n{stderr}"
     );
 
-    // ISO 8601 timestamp separator present
+    // ISO 8601 timestamp — T separator and Z UTC suffix
     assert!(
         stderr.contains('T'),
         "expected ISO 8601 T separator in stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains('Z'),
+        "expected ISO 8601 Z UTC suffix in stderr:\n{stderr}"
     );
 
     // Field key=value pairs present

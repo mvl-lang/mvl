@@ -7,25 +7,46 @@
 //!
 //! Output goes to stderr via `eprintln!`. Field keys are sorted for
 //! deterministic test output. No configurable sink (Phase 3 / issue #54).
+//!
+//! # Effect note
+//!
+//! `log_internal` calls `time::now()` (a wall-clock read) even though the MVL
+//! functions only declare `! Log`. The timestamp is an internal implementation
+//! detail of the log format — it is not separately observable by the caller
+//! and is intentionally exempt from the `! Clock` effect declaration for
+//! Phase A. Phase 3 may revisit this when a configurable sink is introduced.
 
 use std::collections::HashMap;
 
 use crate::stdlib::time::{format_instant, now};
 
-fn log_internal(level: &str, msg: String, fields: HashMap<String, String>) {
-    let timestamp = format_instant(now(), "%Y-%m-%dT%H:%M:%SZ".to_string());
+fn sanitize(s: &str) -> String {
+    s.replace('\n', "\\n").replace('\r', "\\r")
+}
+
+pub(crate) fn format_log_line(
+    level: &str,
+    timestamp: &str,
+    msg: &str,
+    fields: &HashMap<String, String>,
+) -> String {
     let mut keys: Vec<&String> = fields.keys().collect();
     keys.sort();
     let field_str = keys
         .iter()
-        .map(|k| format!("{}={}", k, fields[*k]))
+        .map(|k| format!("{}={}", k, sanitize(&fields[*k])))
         .collect::<Vec<_>>()
         .join(" ");
     if field_str.is_empty() {
-        eprintln!("[{} {}] {}", level, timestamp, msg);
+        format!("[{} {}] {}", level, timestamp, sanitize(msg))
     } else {
-        eprintln!("[{} {}] {} {}", level, timestamp, msg, field_str);
+        format!("[{} {}] {} {}", level, timestamp, sanitize(msg), field_str)
     }
+}
+
+fn log_internal(level: &str, msg: String, fields: HashMap<String, String>) {
+    let timestamp = format_instant(now(), "%Y-%m-%dT%H:%M:%SZ".to_string());
+    eprintln!("{}", format_log_line(level, &timestamp, &msg, &fields));
 }
 
 /// Emit a DEBUG-level structured log record.
@@ -73,18 +94,32 @@ mod tests {
     }
 
     #[test]
-    fn log_info_with_fields_does_not_panic() {
-        let mut fields = HashMap::new();
-        fields.insert("key".to_string(), "value".to_string());
-        log_info("event".to_string(), fields);
+    fn format_log_line_no_fields() {
+        let line = format_log_line("INFO", "2024-03-15T12:30:45Z", "hello", &HashMap::new());
+        assert_eq!(line, "[INFO 2024-03-15T12:30:45Z] hello");
     }
 
     #[test]
-    fn fields_are_sorted() {
+    fn format_log_line_fields_sorted() {
         let mut fields = HashMap::new();
         fields.insert("z".to_string(), "last".to_string());
         fields.insert("a".to_string(), "first".to_string());
         fields.insert("m".to_string(), "mid".to_string());
-        log_info("ordering".to_string(), fields);
+        let line = format_log_line("DEBUG", "T", "msg", &fields);
+        assert_eq!(line, "[DEBUG T] msg a=first m=mid z=last");
+    }
+
+    #[test]
+    fn format_log_line_sanitizes_newlines_in_msg() {
+        let line = format_log_line("WARN", "T", "line1\nline2", &HashMap::new());
+        assert_eq!(line, "[WARN T] line1\\nline2");
+    }
+
+    #[test]
+    fn format_log_line_sanitizes_newlines_in_field_value() {
+        let mut fields = HashMap::new();
+        fields.insert("k".to_string(), "v1\nv2".to_string());
+        let line = format_log_line("ERROR", "T", "msg", &fields);
+        assert_eq!(line, "[ERROR T] msg k=v1\\nv2");
     }
 }
