@@ -5,6 +5,7 @@
 //! `_mvl_*` export here that is callable from LLVM-generated code.
 
 pub mod env;
+pub mod log;
 pub mod process;
 pub mod random;
 pub mod time;

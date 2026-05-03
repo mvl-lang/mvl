@@ -881,6 +881,12 @@ impl<'ctx> LlvmBackend<'ctx> {
                             let d = self.emit_expr(&args[0])?;
                             return self.emit_stdlib_call_void_duration_arg(&sym, d);
                         }
+                        StdlibSig::VoidStringMapArg(sym) if args.len() == 2 => {
+                            let sym = sym.clone();
+                            let msg = self.emit_expr(&args[0])?;
+                            let fields = self.emit_expr(&args[1])?;
+                            return self.emit_stdlib_call_void_string_map(&sym, msg, fields);
+                        }
                         _ => {}
                     }
                 }
