@@ -70,13 +70,13 @@ impl<'ctx> LlvmBackend<'ctx> {
                 ..
             } => self.emit_method_call(receiver, method, args),
 
-            other => {
+            _other => {
                 // Unhandled Expr variant: return None so the caller can propagate failure.
                 // In debug builds, print a notice to help catch missing codegen arms early.
                 #[cfg(debug_assertions)]
                 eprintln!(
                     "[llvm-backend] unhandled Expr variant in emit_expr: {:?}",
-                    std::mem::discriminant(other)
+                    std::mem::discriminant(_other)
                 );
                 None
             }
