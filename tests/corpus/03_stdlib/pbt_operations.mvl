@@ -1,13 +1,14 @@
 // Corpus: property-based testing stdlib (#40, #425)
-// Demonstrates std.pbt Phase A: generators, combinators, property_check, shrinking.
+// Demonstrates std.pbt Phase A: generators, combinators, property_check.
 // Phase B: mutation operators and targeted property checking.
+// Shrinking is a runtime behaviour of property_check — not demonstrable via stubs.
 // All functions require ! Random — enforced by the effect system.
 
 use std.pbt.{
     gen_int, gen_bool, gen_string, gen_list_int,
     gen_filter_int, gen_one_of_int,
     property_check_int, property_check_bool, property_check_string, property_check_list_int,
-    mutate_int, mutate_string, mutate_list_int,
+    mutate_int, mutate_float, mutate_string, mutate_list_int,
     property_check_targeted_int, property_check_with_mutation_int,
 }
 
@@ -22,33 +23,42 @@ fn test_divide_never_fails() -> Unit ! Random {
     property_check_int("divide_never_fails", gen_int(1, 1000), fn_divide_never_fails, 1000)
 }
 
-// Property: reversing a list twice yields the original.
-// Simulated with Int lists: reverse(reverse(xs)) == xs is modelled as length
-// being preserved (the full property would require list equality).
-fn fn_list_reverse_length(xs: List[Int]) -> Bool {
+// Property: Bool generator covers both values; tautology always holds.
+fn fn_bool_tautology(b: Bool) -> Bool {
+    true
+}
+
+fn test_bool_property() -> Unit ! Random {
+    property_check_bool("bool_tautology", gen_bool(), fn_bool_tautology, 100)
+}
+
+// Property: list length is always non-negative.
+// (sort_idempotent requires list equality; deferred until that op is available.)
+fn fn_list_len_nonneg(xs: List[Int]) -> Bool {
     let n: Int = list_len(xs);
     n >= 0
 }
 
-fn test_sort_idempotent() -> Unit ! Random {
+fn test_list_len_nonneg() -> Unit ! Random {
     property_check_list_int(
-        "sort_idempotent",
+        "list_len_nonneg",
         gen_list_int(0, 100, 20),
-        fn_list_reverse_length,
+        fn_list_len_nonneg,
         500
     )
 }
 
-// Property: a non-empty string always has positive length.
-fn fn_string_nonempty(s: String) -> Bool {
+// Property: string length is always non-negative.
+// (map_roundtrip requires string equality; deferred until that op is available.)
+fn fn_string_len_nonneg(s: String) -> Bool {
     string_len(s) >= 0
 }
 
-fn test_map_roundtrip() -> Unit ! Random {
+fn test_string_len_nonneg() -> Unit ! Random {
     property_check_string(
-        "map_roundtrip",
+        "string_len_nonneg",
         gen_string(0, 50),
-        fn_string_nonempty,
+        fn_string_len_nonneg,
         500
     )
 }
@@ -57,7 +67,7 @@ fn test_map_roundtrip() -> Unit ! Random {
 
 // gen_filter_int: only generate even numbers.
 fn is_even(x: Int) -> Bool {
-    x >= 0
+    x % 2 == 0
 }
 
 fn test_filtered_generator() -> Unit ! Random {
@@ -79,6 +89,10 @@ fn test_one_of_generator() -> Unit ! Random {
 
 fn demo_mutate_int(x: Int) -> Int ! Random {
     mutate_int(x)
+}
+
+fn demo_mutate_float(x: Float) -> Float ! Random {
+    mutate_float(x)
 }
 
 fn demo_mutate_string(s: String) -> String ! Random {

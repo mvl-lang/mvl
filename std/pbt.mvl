@@ -3,14 +3,22 @@
 // Phase A (#40): generators, combinators, property_check, shrinking, statistics.
 // Phase B (#425): mutation operators, targeted property checking.
 //
-// Import with: use std.pbt.{gen_int, gen_bool, property_check, ...}
+// Import with: use std.pbt.{gen_int, gen_bool, property_check_int, ...}
 //
 // Design: refinement types express the property contract; this library
 // generates values satisfying them. No `forall` keyword — pure stdlib.
 //
+// Range conventions: integer ranges are inclusive [min, max]; float ranges are
+// half-open [min, max). This mirrors Rust's rand crate conventions.
+//
+// TODO (#40): gen_pair, gen_struct_of, gen_weighted — deferred until generics land
+// TODO (#40): compile-time codegen for generators from refinement-typed params
+// TODO (#40): counterexample persistence (tests/.proptest-regressions/)
+// TODO (#40/#425): statistics output (cases, shrink steps, value distribution)
+//
 // Usage:
 //   test fn test_divide_safe() {
-//       property_check("divide_safe", gen_int(1, 1000), fn_divide_never_fails, 1000)
+//       property_check_int("divide_safe", gen_int(1, 1000), fn_divide_never_fails, 1000)
 //   }
 //   fn fn_divide_never_fails(x: Int) -> Bool {
 //       divide(100, x).is_ok()
@@ -31,8 +39,8 @@ pub fn gen_bool() -> Generator[Bool] ! Random { panic("stub") }
 /// Characters are drawn from printable ASCII (32–126).
 pub fn gen_string(min_len: Int, max_len: Int) -> Generator[String] ! Random { panic("stub") }
 
-/// Generator for lists whose elements are produced by `elem_gen`,
-/// with length in [0, max_len].
+/// Generator for List[Int] with length in [0, max_len], where each
+/// element is uniformly distributed in [min_val, max_val] (inclusive).
 pub fn gen_list_int(min_val: Int, max_val: Int, max_len: Int) -> Generator[List[Int]] ! Random { panic("stub") }
 
 // ── Phase A: combinators ───────────────────────────────────────────────────
@@ -59,7 +67,7 @@ pub fn property_check_int(
     gen: Generator[Int],
     prop: fn(Int) -> Bool,
     iterations: Int
-) -> Unit ! Random { }
+) -> Unit ! Random { panic("stub") }
 
 /// Same as property_check_int but for Bool generators.
 pub fn property_check_bool(
@@ -67,7 +75,7 @@ pub fn property_check_bool(
     gen: Generator[Bool],
     prop: fn(Bool) -> Bool,
     iterations: Int
-) -> Unit ! Random { }
+) -> Unit ! Random { panic("stub") }
 
 /// Same as property_check_int but for String generators.
 pub fn property_check_string(
@@ -75,7 +83,7 @@ pub fn property_check_string(
     gen: Generator[String],
     prop: fn(String) -> Bool,
     iterations: Int
-) -> Unit ! Random { }
+) -> Unit ! Random { panic("stub") }
 
 /// Same as property_check_int but for List[Int] generators.
 pub fn property_check_list_int(
@@ -83,21 +91,21 @@ pub fn property_check_list_int(
     gen: Generator[List[Int]],
     prop: fn(List[Int]) -> Bool,
     iterations: Int
-) -> Unit ! Random { }
+) -> Unit ! Random { panic("stub") }
 
 // ── Phase B: mutation operators ────────────────────────────────────────────
 
 /// Produce a mutated variant of `x` (bit-flip, ±1, ×2, boundary values).
-pub fn mutate_int(x: Int) -> Int ! Random { 0 }
+pub fn mutate_int(x: Int) -> Int ! Random { panic("stub") }
 
 /// Produce a mutated variant of `x` (nearby float, 0.0, NaN, Infinity, sign flip).
-pub fn mutate_float(x: Float) -> Float ! Random { 0.0 }
+pub fn mutate_float(x: Float) -> Float ! Random { panic("stub") }
 
 /// Produce a mutated variant of `s` (drop char, duplicate char, swap chars).
-pub fn mutate_string(s: String) -> String ! Random { "" }
+pub fn mutate_string(s: String) -> String ! Random { panic("stub") }
 
 /// Produce a mutated variant of `xs` (drop element, duplicate element, swap two).
-pub fn mutate_list_int(xs: List[Int]) -> List[Int] ! Random { [] }
+pub fn mutate_list_int(xs: List[Int]) -> List[Int] ! Random { panic("stub") }
 
 // ── Phase B: targeted property checking ────────────────────────────────────
 
@@ -110,7 +118,7 @@ pub fn property_check_targeted_int(
     prop: fn(Int) -> Bool,
     distance: fn(Int) -> Float,
     iterations: Int
-) -> Unit ! Random { }
+) -> Unit ! Random { panic("stub") }
 
 /// Variant of property_check_int that mixes fresh generation with mutation
 /// of a corpus of previously interesting values.
@@ -121,4 +129,4 @@ pub fn property_check_with_mutation_int(
     prop: fn(Int) -> Bool,
     mutation_ratio: Float,
     iterations: Int
-) -> Unit ! Random { }
+) -> Unit ! Random { panic("stub") }

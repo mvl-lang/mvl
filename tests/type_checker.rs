@@ -2876,7 +2876,8 @@ fn stdlib_crypto_corpus_parses_and_checks() {
 #[test]
 fn stdlib_pbt_corpus_parses_and_checks() {
     // GIVEN: the PBT stdlib corpus (valid programs using std.pbt, #40 Phase A + #425 Phase B)
-    // THEN: no type errors (UndefinedFunction for stdlib symbols is OK without stdlib loaded)
+    // THEN: no serious type errors; UndefinedFunction/UndefinedVariable are expected (stdlib not
+    //       loaded); UndefinedType is expected because Generator[T] is not yet a built-in type
     let src = include_str!("corpus/03_stdlib/pbt_operations.mvl");
     let result = check_src(src);
     let serious: Vec<_> = result
