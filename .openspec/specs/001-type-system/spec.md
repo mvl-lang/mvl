@@ -528,3 +528,99 @@ for item in collection.iter() { … }
 - GIVEN `partial fn f(items: Array[Int]) { for x in items { println(x.to_string()); } }`
 - WHEN the function is type-checked
 - THEN the type checker MUST reject with: "`for` is not permitted in `partial` functions; use `while` instead"
+
+---
+
+### Requirement 12: Explicit Type Annotations [MUST]
+
+Every `let` and `let mut` binding MUST declare its type explicitly using the `: T` annotation. The parser MUST reject any `let` binding that omits the type annotation. Type inference from the initializer expression MUST NOT substitute for an explicit annotation.
+
+This is the enforcement of Design Principle 1 ("Explicit over implicit") at the binding level. It is also the reason Spec 011 Requirement 4 (`unnecessary-annotation` rule) was removed (#408): with annotations mandatory, no annotation can be "unnecessary".
+
+**Implementation:** `src/mvl/parser/statements.rs::parse_let_stmt`
+
+**Tests:** `src/mvl/parser/statements.rs::parse_let_without_type`, `tests/type_checker.rs::let_without_annotation_rejected`, `tests/type_checker.rs::let_mut_without_annotation_rejected`, `tests/type_checker.rs::let_with_annotation_accepted`
+
+#### Scenario: Unannotated let binding rejected
+
+- GIVEN `let y = 99`
+- WHEN the parser processes the statement
+- THEN the parser MUST reject with a parse error (missing type annotation)
+
+#### Scenario: Unannotated let mut binding rejected
+
+- GIVEN `let mut count = 0`
+- WHEN the parser processes the statement
+- THEN the parser MUST reject with a parse error (missing type annotation)
+
+#### Scenario: Annotated binding accepted
+
+- GIVEN `let x: Int = 42`
+- WHEN the parser processes the statement
+- THEN the parser MUST accept: the type annotation is present
+
+---
+
+### Requirement 13: Minimal Control-Flow Surface [MUST]
+
+The language MUST provide exactly one construct for each control-flow category:
+
+- **Bounded iteration:** `for x in expr { }` — available in `total` functions only
+- **Unbounded iteration:** `while condition { }` — available in `partial` functions only
+- **Conditional:** `if`/`else if`/`else`
+- **Pattern dispatch:** `match`
+- **Error propagation:** `Result[T, E]` with `?` propagation (see Requirement 3)
+
+No other iteration, conditional, or error-propagation constructs are permitted. The parser MUST reject `throw`, `try`, `catch`, and `goto`. The type checker MUST reject `while` in `total` functions.
+
+This is Design Principle 2 ("One way to do each thing"). Cross-references: Requirement 3 (Result), Requirement 8 (no throw/catch/try), Spec 002 Requirement 5 (total/partial distinction).
+
+**Implementation:** `src/mvl/parser/statements.rs`, `src/mvl/checker/mod.rs`
+
+**Tests:** `tests/type_checker.rs::while_loop_in_total_function_rejected`, `tests/type_checker.rs::while_loop_in_implicit_total_function_rejected`, `src/mvl/parser/statements.rs::throw_is_rejected`, `src/mvl/parser/statements.rs::try_is_rejected`, `src/mvl/parser/statements.rs::catch_is_rejected`
+
+#### Scenario: while in total function rejected
+
+- GIVEN `total fn f() -> Int { let mut i: Int = 0; while i < 10 { i = i + 1; } return i; }`
+- WHEN the type checker processes the function
+- THEN it MUST reject: "`while` is not permitted in `total` functions; use `for` instead"
+
+#### Scenario: throw rejected
+
+- GIVEN `throw SomeError`
+- WHEN the parser processes the statement
+- THEN it MUST reject: `throw` is not valid MVL syntax
+
+#### Scenario: try/catch rejected
+
+- GIVEN `try { risky() } catch (e) { handle(e) }`
+- WHEN the parser processes the statement
+- THEN it MUST reject: `try` and `catch` are not valid MVL syntax
+
+---
+
+### Requirement 14: Vocabulary over Syntax [MUST]
+
+The language MUST NOT provide a macro facility accessible in user source code. Common language-level operations (string formatting, I/O, collection construction) SHALL be expressed as stdlib function calls, not as special syntax or macros.
+
+The transpiler MAY internally map specific stdlib functions (e.g., `println`, `format`) to Rust macros for implementation efficiency, but from the MVL source perspective these are ordinary function calls. No MVL source file ever contains macro invocation syntax.
+
+This is Design Principle 3 ("Vocabulary over syntax").
+
+**Implementation:** `src/mvl/transpiler/emit_exprs.rs` (MACRO_HANDLED list), `src/mvl/stdlib/`
+
+**Tests:** `tests/transpiler.rs::format_call_emits_format_macro`, `tests/transpiler.rs::macro_handled_names_are_excluded_from_prelude`
+
+#### Scenario: format() is a function call in MVL source
+
+- GIVEN `fn greeting(name: String) -> String { format("{} world", name) }`
+- WHEN the transpiler processes the function
+- THEN the Rust output MUST contain `format!(` — the macro invocation is an internal transpiler detail
+- AND the MVL source contains a plain function call `format(...)`, not macro syntax `format!(...)`
+
+#### Scenario: println is a stdlib function, not a macro
+
+- GIVEN `pub fn println(value: String) -> Unit { ... }` defined in the stdlib prelude
+- WHEN the transpiler processes a program that calls `println("hello")`
+- THEN `println` MUST NOT appear as a regular Rust function definition in the output (it is macro-handled)
+- AND the call site emits `println!("hello")` in Rust, transparently to the MVL programmer
