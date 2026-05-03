@@ -110,6 +110,36 @@ pub fn find_mvl_memory_lib() -> Option<std::path::PathBuf> {
     None
 }
 
+/// Find the `libmvl_runtime_c` shared library for the `lli --load` flag (ADR-0019).
+///
+/// Search order:
+/// 1. `MVL_RUNTIME_C_LIB` environment variable (explicit override)
+/// 2. Sibling of the current executable in `target/{debug,release}/` and `deps/`
+/// 3. Returns `None` if not found — programs not using C-ABI stdlib still work without it
+pub fn find_mvl_runtime_c_lib() -> Option<std::path::PathBuf> {
+    if let Ok(path) = std::env::var("MVL_RUNTIME_C_LIB") {
+        let p = std::path::PathBuf::from(path);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            for ext in &["dylib", "so"] {
+                let lib = dir.join(format!("libmvl_runtime_c.{ext}"));
+                if lib.exists() {
+                    return Some(lib);
+                }
+                let lib = dir.join(format!("deps/libmvl_runtime_c.{ext}"));
+                if lib.exists() {
+                    return Some(lib);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn which_lli() -> Result<std::path::PathBuf, ()> {
     let output = std::process::Command::new("which")
         .arg("lli")
@@ -239,6 +269,12 @@ struct LlvmBackend<'ctx> {
     /// Keyed by variable name → HeapKind.  Cleared at function entry.
     /// Used to emit `_drop` calls before `return` and at function end.
     pub(crate) heap_locals: HashMap<String, HeapKind>,
+
+    // ── ADR-0019: stdlib import tracking ─────────────────────────────────────
+    /// Maps a MVL function name (imported via `use std.*`) to its C-ABI symbol
+    /// in `libmvl_runtime_c`.  Populated from `Decl::Use` nodes in emit_program.
+    /// Used by emit_fn_call to dispatch to the correct `_mvl_*` extern.
+    stdlib_imports: HashMap<String, String>,
 }
 
 impl<'ctx> LlvmBackend<'ctx> {
@@ -264,12 +300,17 @@ impl<'ctx> LlvmBackend<'ctx> {
             emitted_monomorphs: HashSet::new(),
             local_mvl_types: HashMap::new(),
             heap_locals: HashMap::new(),
+            stdlib_imports: HashMap::new(),
         }
     }
 
     // ── Program emission ─────────────────────────────────────────────────────
 
     fn emit_program(&mut self, prog: &Program) {
+        // ADR-0019: scan `use std.*` imports and build the stdlib dispatch table.
+        // Maps each imported MVL function name to its `_mvl_*` C-ABI symbol.
+        self.collect_stdlib_imports(prog);
+
         // Phase B: collect type declarations first.
         for decl in &prog.declarations {
             if let Decl::Type(td) = decl {
@@ -381,6 +422,83 @@ impl<'ctx> LlvmBackend<'ctx> {
                 }
             }
         }
+    }
+
+    // ── ADR-0019: stdlib import dispatch ─────────────────────────────────────
+
+    /// Scan `Decl::Use` nodes for `use std.*` imports and populate `stdlib_imports`.
+    ///
+    /// The MVL parser discards individual items from brace imports
+    /// (`use std.env.{getuid, getgid}` → `path = ["std", "env"]`), so we register
+    /// *all* known symbols for a module when a brace import is detected.
+    /// Single-item imports (`use std.env.getuid`) produce `path = ["std", "env", "getuid"]`
+    /// and register only that symbol.
+    fn collect_stdlib_imports(&mut self, prog: &Program) {
+        // Table of all C-ABI dispatching symbols: (module, mvl_name) → symbol.
+        // Only no-arg, i64-returning functions are listed here — dispatched via
+        // emit_stdlib_call_i64.
+        //
+        // Excluded (pending follow-up with non-i64 / argument-passing dispatch):
+        //   - sigint/sigterm/sighup/sigusr1/sigusr2: return i8, not i64
+        //   - signal_reset / signal_ignore: take an i8 argument
+        //   - process.is_success: takes an i8 argument
+        let known: &[(&str, &str, &str)] = &[
+            ("env", "getuid", "_mvl_env_getuid"),
+            ("env", "getgid", "_mvl_env_getgid"),
+            ("env", "args_len", "_mvl_env_args_len"),
+        ];
+
+        for decl in &prog.declarations {
+            let Decl::Use(ud) = decl else { continue };
+            if ud.path.is_empty() || ud.path[0] != "std" {
+                continue;
+            }
+            if ud.path.len() < 2 {
+                continue;
+            }
+            let module = &ud.path[1];
+
+            if ud.path.len() == 2 {
+                // Brace import: `use std.env.{getuid, getgid}` — the parser discards the
+                // item list and stores only ["std", "env"] (parser limitation).
+                // We register all known symbols for the module as a conservative approximation.
+                // Single-item imports always have path.len() == 3 (e.g. ["std", "env", "getuid"]).
+                for (m, fn_name, symbol) in known {
+                    if *m == module.as_str() {
+                        self.stdlib_imports
+                            .insert((*fn_name).to_string(), (*symbol).to_string());
+                    }
+                }
+            } else {
+                // Single import: `use std.env.getuid` → path = ["std", "env", "getuid"].
+                let fn_name = &ud.path[ud.path.len() - 1];
+                for (m, kfn, symbol) in known {
+                    if *m == module.as_str() && *kfn == fn_name.as_str() {
+                        self.stdlib_imports
+                            .insert(fn_name.clone(), (*symbol).to_string());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Emit a call to a stdlib C-ABI function with no arguments, returning i64.
+    /// Returns `None` if the symbol is unknown.
+    pub(crate) fn emit_stdlib_call_i64(
+        &mut self,
+        symbol: &str,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        let fn_val = if let Some(f) = self.module.get_function(symbol) {
+            f
+        } else {
+            let fn_ty = self.context.i64_type().fn_type(&[], false);
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        };
+        let call = self.builder.build_call(fn_val, &[], "stdlib_i64").ok()?;
+        use inkwell::values::AnyValue;
+        inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()
     }
 
     /// Emit an LLVM IR function body for a single `extern "rust"` declaration.

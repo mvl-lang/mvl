@@ -860,6 +860,15 @@ impl<'ctx> LlvmBackend<'ctx> {
                         }
                     }
                 }
+                // ADR-0019: dispatch to libmvl_runtime_c C-ABI for stdlib imports.
+                // Only functions with a primitive (i64) return and no arguments are
+                // auto-dispatched here.  Complex marshalled functions are out of scope.
+                if let Some(symbol) = self.stdlib_imports.get(name).cloned() {
+                    if args.is_empty() {
+                        return self.emit_stdlib_call_i64(&symbol);
+                    }
+                }
+
                 // L5-15 + L5-08: single lookup for user-defined function metadata.
                 if let Some(fd) = self.fn_decls.get(name).cloned() {
                     // L5-15: mark heap-typed value arguments as moved (ownership

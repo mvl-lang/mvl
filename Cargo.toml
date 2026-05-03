@@ -1,10 +1,10 @@
 [workspace]
-members = [".", "mvl_runtime", "mvl_memory"]
+members = [".", "mvl_runtime", "mvl_memory", "mvl_runtime_c"]
 exclude = ["fuzz"]
 
 [package]
 name = "mvl"
-version = "0.68.2"
+version = "0.69.0"
 edition = "2021"
 description = "MVL — Minimum Verification Language compiler"
 license = "Apache-2.0"

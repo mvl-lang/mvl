@@ -20,3 +20,4 @@
 | [0016](0016-llvm-memory-runtime.md) | LLVM memory runtime — Rust cdylib with reference counting for String, Array, Map | Accepted |
 | [0017](0017-linter-hint-severity-explicit-ifc-annotations.md) | Linter Hint severity — explicit IFC annotations as the preferred style | Accepted |
 | [0018](0018-five-stage-pipeline-passes-module.md) | Five-stage pipeline — introduce `src/mvl/passes/` | Accepted |
+| [0019](0019-llvm-stdlib-two-path.md) | Two-Path Stdlib Architecture — Rust Crate + C-ABI cdylib | Accepted |

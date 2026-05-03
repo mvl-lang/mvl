@@ -7,6 +7,11 @@
 //!   1. hello_world.mvl  — minimal fn main + println
 //!   2. calculator.mvl   — total fns, if/else, arithmetic
 //!   3. shapes.mvl       — enums, match dispatch, function composition
+//!
+//! ADR-0019 (C-ABI stdlib) parity tests:
+//!   4. env_basic.mvl    — getuid + getgid via libmvl_runtime_c
+//!                         also serves as the cdylib load smoke test (#431 AC):
+//!                         proves libmvl_runtime_c loads and symbols resolve via lli
 
 #![cfg(feature = "llvm")]
 
@@ -28,6 +33,13 @@ fn corpus(name: &str) -> String {
 fn corpus_types(name: &str) -> String {
     format!(
         "{}/tests/corpus/02_types/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+fn corpus_effects(name: &str) -> String {
+    format!(
+        "{}/tests/corpus/05_effects/{name}",
         env!("CARGO_MANIFEST_DIR")
     )
 }
@@ -160,4 +172,60 @@ fn llvm_move_string() {
 fn llvm_fn_takes_string() {
     let file = corpus_types("fn_takes_string_llvm.mvl");
     assert_llvm_output(&file, "hello world");
+}
+
+// ── ADR-0019: C-ABI stdlib parity tests ──────────────────────────────────────
+
+/// Both backends call `getuid()` and `getgid()` and must produce identical output.
+/// Both ultimately call the same POSIX syscalls, so UID and GID are the same.
+#[test]
+fn cross_backend_env_basic() {
+    let file = corpus_effects("env_basic.mvl");
+    if let Some(llvm_out) = run_llvm(&file) {
+        let transpiler_out = run_transpiler(&file);
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "env_basic.mvl: LLVM and transpiler backends must produce identical output"
+        );
+        // Sanity: output is two non-empty lines (uid and gid as integers).
+        let lines: Vec<&str> = llvm_out.lines().collect();
+        assert_eq!(lines.len(), 2, "expected two lines (uid, gid)");
+        assert!(
+            lines[0].parse::<i64>().is_ok(),
+            "first line must be an integer (uid): {:?}",
+            lines[0]
+        );
+        assert!(
+            lines[1].parse::<i64>().is_ok(),
+            "second line must be an integer (gid): {:?}",
+            lines[1]
+        );
+    }
+}
+
+/// Both backends call `getuid()` — result must be non-negative.
+#[test]
+fn cross_backend_env_getuid_nonnegative() {
+    let file = corpus_effects("env_basic.mvl");
+    if let Some(out) = run_llvm(&file) {
+        let uid: i64 = out.lines().next().unwrap_or("0").parse().unwrap_or(-1);
+        assert!(
+            uid >= 0,
+            "LLVM backend: getuid() must be non-negative, got {uid}"
+        );
+    }
+}
+
+/// Both backends call `getgid()` — result must be non-negative.
+#[test]
+fn cross_backend_env_getgid_nonnegative() {
+    let file = corpus_effects("env_basic.mvl");
+    if let Some(out) = run_llvm(&file) {
+        let lines: Vec<&str> = out.lines().collect();
+        let gid: i64 = lines.get(1).unwrap_or(&"0").parse().unwrap_or(-1);
+        assert!(
+            gid >= 0,
+            "LLVM backend: getgid() must be non-negative, got {gid}"
+        );
+    }
 }
