@@ -519,19 +519,20 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
         Expr::Construct { name, fields, .. } => {
             cg.push(name);
             cg.push(" { ");
-            let parts: Vec<String> = fields
-                .iter()
-                .map(|(fname, fexpr)| {
-                    let mut tmp = RustEmitter::new();
-                    tmp.push(&format!("{fname}: "));
-                    // Clone field values: placing a value into a struct field is a move
-                    // in Rust. MVL value semantics require the source binding to remain
-                    // valid. Spec 009 Req 2: clone ALL non-Copy arguments.
-                    emit_expr_as_arg(&mut tmp, fexpr);
-                    tmp.finish()
-                })
-                .collect();
-            cg.push(&parts.join(", "));
+            // Emit directly into cg so nested FnCall expressions can look up
+            // borrow_params_map. A fresh RustEmitter::new() would have an empty
+            // map, causing borrow-inferred parameters inside field values to be
+            // emitted as .clone() instead of &x (#465).
+            for (i, (fname, fexpr)) in fields.iter().enumerate() {
+                if i > 0 {
+                    cg.push(", ");
+                }
+                cg.push(&format!("{fname}: "));
+                // Clone field values: placing a value into a struct field is a
+                // move in Rust. MVL value semantics require the source binding to
+                // remain valid. Spec 009 Req 2: clone ALL non-Copy arguments.
+                emit_expr_as_arg(cg, fexpr);
+            }
             cg.push(" }");
         }
         Expr::List { elems, .. } => {
@@ -541,23 +542,21 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
         }
         Expr::Map { pairs, .. } => {
             cg.push("std::collections::HashMap::from([");
-            let pair_strs: Vec<String> = pairs
-                .iter()
-                .map(|(k, v)| {
-                    let mut tmp = RustEmitter::new();
-                    tmp.push("(");
-                    emit_expr(&mut tmp, k);
-                    tmp.push(", ");
-                    emit_expr(&mut tmp, v);
-                    // `.into()` coerces IFC-label wrappers (Clean<String>, etc.) to
-                    // their plain inner type so map values match HashMap<String, String>
-                    // signatures in stdlib functions like log_info / log_warn.
-                    tmp.push(".into()");
-                    tmp.push(")");
-                    tmp.finish()
-                })
-                .collect();
-            cg.push(&pair_strs.join(", "));
+            // Emit directly into cg for the same reason as Expr::Construct above.
+            for (i, (k, v)) in pairs.iter().enumerate() {
+                if i > 0 {
+                    cg.push(", ");
+                }
+                cg.push("(");
+                emit_expr(cg, k);
+                cg.push(", ");
+                emit_expr(cg, v);
+                // `.into()` coerces IFC-label wrappers (Clean<String>, etc.) to
+                // their plain inner type so map values match HashMap<String, String>
+                // signatures in stdlib functions like log_info / log_warn.
+                cg.push(".into()");
+                cg.push(")");
+            }
             cg.push("])");
         }
         Expr::Set { elems, .. } => {

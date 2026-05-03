@@ -731,6 +731,51 @@ fn double_show(p: Point) -> Int {
     );
 }
 
+/// Regression #465: borrow-inferred ident param inside a struct-literal field value.
+/// Previously a fresh RustEmitter with empty borrow_params_map was used for struct
+/// fields, so nested FnCalls always fell back to .clone().
+#[test]
+fn borrow_inferred_param_in_struct_literal_field() {
+    let src = r#"
+type Point = struct { x: Int, y: Int }
+type Pair = struct { a: Int, b: Int }
+fn get_x(p: Point) -> Int { p.x }
+fn make_pair(p: Point) -> Pair {
+    Pair { a: get_x(p), b: 0 }
+}
+"#;
+    let rust = transpile_src(src);
+    // get_x only accesses p.x → inferred as &Point.
+    // The call inside the struct literal must emit &p, not p.clone().
+    assert_contains(&rust, "get_x(&p)");
+    assert!(
+        !rust.contains("get_x(p.clone())"),
+        "borrow-inferred param inside struct literal field must use &x, not .clone() (#465)"
+    );
+}
+
+/// Regression #465: borrow-inferred field-access param inside a struct-literal field value.
+#[test]
+fn borrow_inferred_field_access_in_struct_literal_field() {
+    let src = r#"
+type Inner = struct { n: Int }
+type Outer = struct { inner: Inner }
+type Wrap = struct { out: Int }
+fn use_inner(i: Inner) -> Int { i.n }
+fn make_wrap(o: Outer) -> Wrap {
+    Wrap { out: use_inner(o.inner) }
+}
+"#;
+    let rust = transpile_src(src);
+    // use_inner reads i.n only → inferred as &Inner.
+    // Field-access arg inside struct literal must emit &o.inner, not o.inner.clone().
+    assert_contains(&rust, "use_inner(&o.inner)");
+    assert!(
+        !rust.contains("use_inner(o.inner.clone())"),
+        "borrow-inferred field access inside struct literal field must use &x (#465)"
+    );
+}
+
 /// Phase 1: Int idents are also cloned at call sites. Redundant for Copy types
 /// but harmless — LLVM removes it. The transpiler has no type info at emit time.
 /// Spec 009 Req 2 "Copy types not cloned" is a Phase 3 goal; this documents
