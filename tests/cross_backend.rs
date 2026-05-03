@@ -229,3 +229,64 @@ fn cross_backend_env_getgid_nonnegative() {
         );
     }
 }
+
+// ── #433: time + random C-ABI parity tests ───────────────────────────────────
+
+/// `random.int(n, n)` with a single-element range is deterministic.
+/// Both backends must produce identical output: "42\n0\n".
+#[test]
+fn cross_backend_random_int() {
+    let file = corpus_effects("random_int.mvl");
+    if let Some(llvm_out) = run_llvm(&file) {
+        let transpiler_out = run_transpiler(&file);
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "random_int.mvl: LLVM and transpiler backends must produce identical output"
+        );
+        let lines: Vec<&str> = llvm_out.lines().collect();
+        assert_eq!(lines.len(), 2, "expected two lines");
+        assert_eq!(lines[0], "42", "int(42,42) must return 42");
+        assert_eq!(lines[1], "0", "int(0,0) must return 0");
+    }
+}
+
+/// `random.float()` returns a value in [0.0, 1.0). Non-deterministic; only
+/// validates output shape, not exact equality across backends.
+#[test]
+fn cross_backend_random_float_shape() {
+    // Build a small inline program rather than a corpus file since the value
+    // is non-deterministic.  We only check that the LLVM backend produces a
+    // valid float in range.
+    let tmp = tempfile::NamedTempFile::with_suffix(".mvl").expect("tempfile");
+    std::fs::write(
+        tmp.path(),
+        "use std.random.{float}\nfn main() -> Unit ! Random {\n  let v: Float = float();\n  println(\"{}\", v);\n}\n",
+    )
+    .expect("write");
+    if let Some(out) = run_llvm(&tmp.path().to_string_lossy()) {
+        let v: f64 = out
+            .trim()
+            .parse()
+            .unwrap_or_else(|_| panic!("LLVM random.float output must be a float, got: {out:?}"));
+        assert!((0.0..1.0).contains(&v), "random.float out of range: {v}");
+    }
+}
+
+/// `time.sleep(seconds(0))` — zero-duration sleep — must complete without
+/// error and both backends must print "ok".
+#[test]
+fn cross_backend_time_sleep() {
+    let file = corpus_effects("time_sleep.mvl");
+    if let Some(llvm_out) = run_llvm(&file) {
+        let transpiler_out = run_transpiler(&file);
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "time_sleep.mvl: LLVM and transpiler backends must produce identical output"
+        );
+        assert_eq!(
+            llvm_out.trim(),
+            "ok",
+            "expected 'ok' after zero-duration sleep"
+        );
+    }
+}

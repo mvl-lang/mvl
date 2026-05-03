@@ -861,11 +861,27 @@ impl<'ctx> LlvmBackend<'ctx> {
                     }
                 }
                 // ADR-0019: dispatch to libmvl_runtime_c C-ABI for stdlib imports.
-                // Only functions with a primitive (i64) return and no arguments are
-                // auto-dispatched here.  Complex marshalled functions are out of scope.
-                if let Some(symbol) = self.stdlib_imports.get(name).cloned() {
-                    if args.is_empty() {
-                        return self.emit_stdlib_call_i64(&symbol);
+                if let Some(sig) = self.stdlib_imports.get(name).cloned() {
+                    use crate::mvl::codegen::StdlibSig;
+                    match &sig {
+                        StdlibSig::I64NoArg(sym) if args.is_empty() => {
+                            return self.emit_stdlib_call_i64(sym);
+                        }
+                        StdlibSig::F64NoArg(sym) if args.is_empty() => {
+                            return self.emit_stdlib_call_f64(sym);
+                        }
+                        StdlibSig::I64TwoI64Args(sym) if args.len() == 2 => {
+                            let sym = sym.clone();
+                            let a = self.emit_expr(&args[0])?;
+                            let b = self.emit_expr(&args[1])?;
+                            return self.emit_stdlib_call_i64_two_args(&sym, a, b);
+                        }
+                        StdlibSig::VoidDurationArg(sym) if args.len() == 1 => {
+                            let sym = sym.clone();
+                            let d = self.emit_expr(&args[0])?;
+                            return self.emit_stdlib_call_void_duration_arg(&sym, d);
+                        }
+                        _ => {}
                     }
                 }
 

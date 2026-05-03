@@ -197,6 +197,24 @@ pub fn parse_expect_annotation(source: &str) -> Option<String> {
     None
 }
 
+// ── ADR-0019: stdlib call signature ──────────────────────────────────────────
+
+/// Describes the calling convention of a C-ABI stdlib symbol.
+/// Used by the dispatch table so the codegen emitter can select the right LLVM IR pattern.
+#[derive(Clone, Debug)]
+pub(crate) enum StdlibSig {
+    /// No arguments, returns i64.  e.g. `_mvl_env_getuid`.
+    I64NoArg(String),
+    /// No arguments, returns f64.  e.g. `_mvl_random_float`.
+    F64NoArg(String),
+    /// Two i64 arguments, returns i64.  e.g. `_mvl_random_int(min, max)`.
+    I64TwoI64Args(String),
+    /// One Duration struct argument `{secs: i64, nanos: i64}`, returns void.
+    /// The struct is flattened to two i64 parameters at the C-ABI boundary.
+    /// e.g. `sleep(d: Duration)` → `_mvl_time_thread_sleep(secs, nanos)`.
+    VoidDurationArg(String),
+}
+
 // ── Backend struct ────────────────────────────────────────────────────────────
 
 /// Tracks alloca pointer + element type for each local variable.
@@ -245,9 +263,10 @@ struct LlvmBackend<'ctx> {
 
     // ── ADR-0019: stdlib import tracking ─────────────────────────────────────
     /// Maps a MVL function name (imported via `use std.*`) to its C-ABI symbol
-    /// in `libmvl_runtime_c`.  Populated from `Decl::Use` nodes in emit_program.
-    /// Used by emit_fn_call to dispatch to the correct `_mvl_*` extern.
-    stdlib_imports: HashMap<String, String>,
+    /// and calling convention in `libmvl_runtime_c`.  Populated from `Decl::Use`
+    /// nodes in emit_program.  Used by emit_fn_call to dispatch to the correct
+    /// `_mvl_*` extern via the appropriate emission helper.
+    stdlib_imports: HashMap<String, StdlibSig>,
 }
 
 impl<'ctx> LlvmBackend<'ctx> {
@@ -407,18 +426,39 @@ impl<'ctx> LlvmBackend<'ctx> {
     /// Single-item imports (`use std.env.getuid`) produce `path = ["std", "env", "getuid"]`
     /// and register only that symbol.
     fn collect_stdlib_imports(&mut self, prog: &Program) {
-        // Table of all C-ABI dispatching symbols: (module, mvl_name) → symbol.
-        // Only no-arg, i64-returning functions are listed here — dispatched via
-        // emit_stdlib_call_i64.
+        // Dispatch table: (module, mvl_name) → StdlibSig.
         //
-        // Excluded (pending follow-up with non-i64 / argument-passing dispatch):
-        //   - sigint/sigterm/sighup/sigusr1/sigusr2: return i8, not i64
-        //   - signal_reset / signal_ignore: take an i8 argument
-        //   - process.is_success: takes an i8 argument
-        let known: &[(&str, &str, &str)] = &[
-            ("env", "getuid", "_mvl_env_getuid"),
-            ("env", "getgid", "_mvl_env_getgid"),
-            ("env", "args_len", "_mvl_env_args_len"),
+        // I64NoArg     — no arguments, returns i64.
+        // F64NoArg     — no arguments, returns f64.
+        // I64TwoI64Args — (i64, i64) → i64.
+        // VoidTwoI64Args — (i64, i64) → void.
+        //
+        // Excluded (pending MvlArray*/MvlOption* marshalling):
+        //   - random.bytes, random.choice, random.shuffle
+        //   - time.iso8601_format (returns *mut c_char, needs string dispatch)
+        //   - env.get, env.set, env.remove_var, env.cwd, …
+        //   - sigint/sigterm/…: return i8, not i64
+        //   - signal_reset/signal_ignore: take i8 argument
+        //   - process.is_success: takes i8 argument
+        type Sig = StdlibSig;
+        let known: &[(&str, &str, Sig)] = &[
+            // std.env
+            ("env", "getuid", Sig::I64NoArg("_mvl_env_getuid".into())),
+            ("env", "getgid", Sig::I64NoArg("_mvl_env_getgid".into())),
+            ("env", "args_len", Sig::I64NoArg("_mvl_env_args_len".into())),
+            // std.time
+            (
+                "time",
+                "sleep",
+                Sig::VoidDurationArg("_mvl_time_thread_sleep".into()),
+            ),
+            // std.random
+            (
+                "random",
+                "int",
+                Sig::I64TwoI64Args("_mvl_random_int".into()),
+            ),
+            ("random", "float", Sig::F64NoArg("_mvl_random_float".into())),
         ];
 
         for decl in &prog.declarations {
@@ -436,19 +476,18 @@ impl<'ctx> LlvmBackend<'ctx> {
                 // item list and stores only ["std", "env"] (parser limitation).
                 // We register all known symbols for the module as a conservative approximation.
                 // Single-item imports always have path.len() == 3 (e.g. ["std", "env", "getuid"]).
-                for (m, fn_name, symbol) in known {
+                for (m, fn_name, sig) in known {
                     if *m == module.as_str() {
                         self.stdlib_imports
-                            .insert((*fn_name).to_string(), (*symbol).to_string());
+                            .insert((*fn_name).to_string(), sig.clone());
                     }
                 }
             } else {
                 // Single import: `use std.env.getuid` → path = ["std", "env", "getuid"].
                 let fn_name = &ud.path[ud.path.len() - 1];
-                for (m, kfn, symbol) in known {
+                for (m, kfn, sig) in known {
                     if *m == module.as_str() && *kfn == fn_name.as_str() {
-                        self.stdlib_imports
-                            .insert(fn_name.clone(), (*symbol).to_string());
+                        self.stdlib_imports.insert(fn_name.clone(), sig.clone());
                         break;
                     }
                 }
@@ -457,7 +496,6 @@ impl<'ctx> LlvmBackend<'ctx> {
     }
 
     /// Emit a call to a stdlib C-ABI function with no arguments, returning i64.
-    /// Returns `None` if the symbol is unknown.
     pub(crate) fn emit_stdlib_call_i64(
         &mut self,
         symbol: &str,
@@ -472,6 +510,119 @@ impl<'ctx> LlvmBackend<'ctx> {
         let call = self.builder.build_call(fn_val, &[], "stdlib_i64").ok()?;
         use inkwell::values::AnyValue;
         inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+    }
+
+    /// Emit a call to a stdlib C-ABI function with no arguments, returning f64.
+    pub(crate) fn emit_stdlib_call_f64(
+        &mut self,
+        symbol: &str,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        let fn_val = if let Some(f) = self.module.get_function(symbol) {
+            f
+        } else {
+            let fn_ty = self.context.f64_type().fn_type(&[], false);
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        };
+        let call = self.builder.build_call(fn_val, &[], "stdlib_f64").ok()?;
+        use inkwell::values::AnyValue;
+        inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+    }
+
+    /// Emit a call to a stdlib C-ABI function `(i64, i64) → i64`.
+    pub(crate) fn emit_stdlib_call_i64_two_args(
+        &mut self,
+        symbol: &str,
+        a: inkwell::values::BasicValueEnum<'ctx>,
+        b: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        use inkwell::types::BasicMetadataTypeEnum;
+        use inkwell::values::BasicMetadataValueEnum;
+        let i64_ty = self.context.i64_type();
+        let fn_val = if let Some(f) = self.module.get_function(symbol) {
+            f
+        } else {
+            let fn_ty = i64_ty.fn_type(
+                &[
+                    BasicMetadataTypeEnum::from(i64_ty),
+                    BasicMetadataTypeEnum::from(i64_ty),
+                ],
+                false,
+            );
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        };
+        let call = self
+            .builder
+            .build_call(
+                fn_val,
+                &[
+                    BasicMetadataValueEnum::from(a),
+                    BasicMetadataValueEnum::from(b),
+                ],
+                "stdlib_i64_2a",
+            )
+            .ok()?;
+        use inkwell::values::AnyValue;
+        inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+    }
+
+    /// Emit a call to a stdlib C-ABI function `(i64, i64) → void`.
+    /// Returns a constant i64 zero as a stand-in Unit value for the expression result.
+    pub(crate) fn emit_stdlib_call_void_two_args(
+        &mut self,
+        symbol: &str,
+        a: inkwell::values::BasicValueEnum<'ctx>,
+        b: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        use inkwell::types::BasicMetadataTypeEnum;
+        use inkwell::values::BasicMetadataValueEnum;
+        let i64_ty = self.context.i64_type();
+        let fn_val = if let Some(f) = self.module.get_function(symbol) {
+            f
+        } else {
+            let fn_ty = self.context.void_type().fn_type(
+                &[
+                    BasicMetadataTypeEnum::from(i64_ty),
+                    BasicMetadataTypeEnum::from(i64_ty),
+                ],
+                false,
+            );
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        };
+        self.builder
+            .build_call(
+                fn_val,
+                &[
+                    BasicMetadataValueEnum::from(a),
+                    BasicMetadataValueEnum::from(b),
+                ],
+                "",
+            )
+            .ok()?;
+        // Return i64 0 as the Unit value.
+        Some(i64_ty.const_zero().into())
+    }
+
+    /// Emit a call to `_mvl_time_thread_sleep` from a `Duration` struct argument.
+    /// Flattens `Duration {secs: i64, nanos: i64}` into two i64 parameters.
+    /// Returns i64 zero as the Unit value.
+    pub(crate) fn emit_stdlib_call_void_duration_arg(
+        &mut self,
+        symbol: &str,
+        duration: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        let dur_struct = duration.into_struct_value();
+        let secs = self
+            .builder
+            .build_extract_value(dur_struct, 0, "dur_secs")
+            .ok()?;
+        let nanos = self
+            .builder
+            .build_extract_value(dur_struct, 1, "dur_nanos")
+            .ok()?;
+        self.emit_stdlib_call_void_two_args(symbol, secs, nanos)
     }
 
     /// Emit an LLVM IR function body for a single `extern "rust"` declaration.
