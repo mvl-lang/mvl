@@ -4,47 +4,36 @@
 //! first use. NOT cryptographically secure — use `std.crypto.crypto_random_bytes`
 //! for that. Re-exported via `mvl_runtime::prelude::*`.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
+use std::cell::Cell;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // ── PRNG state ─────────────────────────────────────────────────────────────
 
-static PRNG_STATE: OnceLock<AtomicU64> = OnceLock::new();
-
-fn prng_state() -> &'static AtomicU64 {
-    PRNG_STATE.get_or_init(|| {
-        let seed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.subsec_nanos() as u64 ^ (d.as_secs().wrapping_mul(0x9e37_79b9_7f4a_7c15)))
-            .unwrap_or(0xdeadbeef_cafebabe);
-        // xorshift64 must not start with 0.
-        AtomicU64::new(if seed == 0 { 1 } else { seed })
-    })
-}
-
-/// xorshift64 — one step, returns the new state as the output value.
-fn xorshift64(state: u64) -> u64 {
-    let mut x = state;
-    x ^= x << 13;
-    x ^= x >> 7;
-    x ^= x << 17;
-    x
+thread_local! {
+    static STATE: Cell<u64> = const { Cell::new(0) };
 }
 
 fn next_u64() -> u64 {
-    let state = prng_state();
-    // CAS loop to make concurrent callers safe without a mutex.
-    loop {
-        let old = state.load(Ordering::Relaxed);
-        let new = xorshift64(old);
-        if state
-            .compare_exchange_weak(old, new, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
-        {
-            return new;
+    STATE.with(|s| {
+        let mut x = s.get();
+        if x == 0 {
+            // Seed from wall-clock nanos mixed with Fibonacci-hashed seconds to
+            // reduce correlation between threads seeded at similar instants.
+            x = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.subsec_nanos() as u64 ^ d.as_secs().wrapping_mul(0x9e37_79b9_7f4a_7c15))
+                .unwrap_or(0xdeadbeef_cafebabe);
+            if x == 0 {
+                x = 1;
+            }
         }
-    }
+        // xorshift64
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        s.set(x);
+        x
+    })
 }
 
 // ── Public stdlib functions ────────────────────────────────────────────────
@@ -197,10 +186,12 @@ mod tests {
     #[test]
     fn xorshift64_not_zero() {
         // xorshift64 must never produce 0 from a non-zero seed.
-        let mut state = 1u64;
+        let mut x = 1u64;
         for _ in 0..10_000 {
-            state = xorshift64(state);
-            assert_ne!(state, 0);
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            assert_ne!(x, 0);
         }
     }
 
