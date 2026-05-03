@@ -1,49 +1,77 @@
 //! Rust implementations of `std.log` stdlib functions.
 //!
-//! Provides Phase 2 backing for the structured logging stubs declared in
-//! `std/log.mvl`. Re-exported via `mvl_runtime::prelude::*`.
+//! Provides Phase A backing for structured logging declared in `std/log.mvl`.
+//! Re-exported via `mvl_runtime::prelude::*`.
 //!
-//! # Phase 2 behaviour
+//! Format: `[{LEVEL} {ISO_8601_TIMESTAMP}] {msg} {field=value ...}`
 //!
-//! All functions are no-ops: they accept arguments with the correct types and
-//! return `()`. No output is produced. The purpose of Phase 2 stubs is to
-//! satisfy the type checker and linker so that MVL programs and tests that
-//! call `log_*` functions compile and run correctly.
+//! Output goes to stderr via `eprintln!`. Field keys are sorted for
+//! deterministic test output. No configurable sink (Phase 3 / issue #54).
 //!
-//! # Phase 3
+//! # Effect note
 //!
-//! The real implementation will wrap `tracing` (see issue #54 and ADR-0006).
-//! The log sink (JSON, text, etc.) will be runtime-configurable.
+//! `log_internal` calls `time::now()` (a wall-clock read) even though the MVL
+//! functions only declare `! Log`. The timestamp is an internal implementation
+//! detail of the log format — it is not separately observable by the caller
+//! and is intentionally exempt from the `! Clock` effect declaration for
+//! Phase A. Phase 3 may revisit this when a configurable sink is introduced.
 
 use std::collections::HashMap;
 
+use crate::stdlib::time::{format_instant, now};
+
+fn sanitize(s: &str) -> String {
+    s.replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+        .replace('\0', "\\0")
+}
+
+pub(crate) fn format_log_line(
+    level: &str,
+    timestamp: &str,
+    msg: &str,
+    fields: &HashMap<String, String>,
+) -> String {
+    let mut keys: Vec<&String> = fields.keys().collect();
+    keys.sort();
+    let field_str = keys
+        .iter()
+        .map(|k| format!("{}={}", sanitize(k), sanitize(&fields[*k])))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let safe_msg = sanitize(msg);
+    if field_str.is_empty() {
+        format!("[{} {}] {}", level, timestamp, safe_msg)
+    } else {
+        format!("[{} {}] {} {}", level, timestamp, safe_msg, field_str)
+    }
+}
+
+fn log_internal(level: &str, msg: String, fields: HashMap<String, String>) {
+    let timestamp = format_instant(now(), "%Y-%m-%dT%H:%M:%SZ");
+    eprintln!("{}", format_log_line(level, &timestamp, &msg, &fields));
+}
+
 /// Emit a DEBUG-level structured log record.
-///
-/// Phase 2: no-op stub. Phase 3 will forward to the configured tracing sink.
-///
-/// Implements the Rust backing for `std/log.mvl::log_debug`.
-pub fn log_debug(_msg: String, _fields: HashMap<String, String>) {}
+pub fn log_debug(msg: String, fields: HashMap<String, String>) {
+    log_internal("DEBUG", msg, fields);
+}
 
 /// Emit an INFO-level structured log record.
-///
-/// Phase 2: no-op stub. Phase 3 will forward to the configured tracing sink.
-///
-/// Implements the Rust backing for `std/log.mvl::log_info`.
-pub fn log_info(_msg: String, _fields: HashMap<String, String>) {}
+pub fn log_info(msg: String, fields: HashMap<String, String>) {
+    log_internal("INFO", msg, fields);
+}
 
 /// Emit a WARN-level structured log record.
-///
-/// Phase 2: no-op stub. Phase 3 will forward to the configured tracing sink.
-///
-/// Implements the Rust backing for `std/log.mvl::log_warn`.
-pub fn log_warn(_msg: String, _fields: HashMap<String, String>) {}
+pub fn log_warn(msg: String, fields: HashMap<String, String>) {
+    log_internal("WARN", msg, fields);
+}
 
 /// Emit an ERROR-level structured log record.
-///
-/// Phase 2: no-op stub. Phase 3 will forward to the configured tracing sink.
-///
-/// Implements the Rust backing for `std/log.mvl::log_error`.
-pub fn log_error(_msg: String, _fields: HashMap<String, String>) {}
+pub fn log_error(msg: String, fields: HashMap<String, String>) {
+    log_internal("ERROR", msg, fields);
+}
 
 #[cfg(test)]
 mod tests {
@@ -70,9 +98,75 @@ mod tests {
     }
 
     #[test]
-    fn log_info_with_fields_does_not_panic() {
+    fn format_log_line_no_fields() {
+        let line = format_log_line("INFO", "2024-03-15T12:30:45Z", "hello", &HashMap::new());
+        assert_eq!(line, "[INFO 2024-03-15T12:30:45Z] hello");
+    }
+
+    #[test]
+    fn format_log_line_fields_sorted() {
         let mut fields = HashMap::new();
-        fields.insert("key".to_string(), "value".to_string());
-        log_info("event".to_string(), fields);
+        fields.insert("z".to_string(), "last".to_string());
+        fields.insert("a".to_string(), "first".to_string());
+        fields.insert("m".to_string(), "mid".to_string());
+        let line = format_log_line("DEBUG", "T", "msg", &fields);
+        assert_eq!(line, "[DEBUG T] msg a=first m=mid z=last");
+    }
+
+    #[test]
+    fn format_log_line_sanitizes_newlines_in_msg() {
+        let line = format_log_line("WARN", "T", "line1\nline2", &HashMap::new());
+        assert_eq!(line, "[WARN T] line1\\nline2");
+    }
+
+    #[test]
+    fn format_log_line_sanitizes_newlines_in_field_value() {
+        let mut fields = HashMap::new();
+        fields.insert("k".to_string(), "v1\nv2".to_string());
+        let line = format_log_line("ERROR", "T", "msg", &fields);
+        assert_eq!(line, "[ERROR T] msg k=v1\\nv2");
+    }
+
+    #[test]
+    fn format_log_line_sanitizes_carriage_return_in_msg() {
+        let line = format_log_line("INFO", "T", "line1\rline2", &HashMap::new());
+        assert_eq!(line, "[INFO T] line1\\rline2");
+    }
+
+    #[test]
+    fn format_log_line_sanitizes_carriage_return_in_field_value() {
+        let mut fields = HashMap::new();
+        fields.insert("k".to_string(), "v1\rv2".to_string());
+        let line = format_log_line("WARN", "T", "msg", &fields);
+        assert_eq!(line, "[WARN T] msg k=v1\\rv2");
+    }
+
+    #[test]
+    fn format_log_line_sanitizes_tab_in_msg() {
+        let line = format_log_line("DEBUG", "T", "a\tb", &HashMap::new());
+        assert_eq!(line, "[DEBUG T] a\\tb");
+    }
+
+    #[test]
+    fn format_log_line_sanitizes_nul_in_field_value() {
+        let mut fields = HashMap::new();
+        fields.insert("k".to_string(), "v\0x".to_string());
+        let line = format_log_line("ERROR", "T", "msg", &fields);
+        assert_eq!(line, "[ERROR T] msg k=v\\0x");
+    }
+
+    #[test]
+    fn format_log_line_sanitizes_newlines_in_field_key() {
+        let mut fields = HashMap::new();
+        fields.insert("k\ney".to_string(), "val".to_string());
+        let line = format_log_line("INFO", "T", "msg", &fields);
+        assert!(
+            !line.contains('\n'),
+            "raw newline must not appear: {line:?}"
+        );
+        assert!(
+            line.contains("k\\ney=val"),
+            "sanitized key must appear: {line:?}"
+        );
     }
 }

@@ -409,11 +409,11 @@ pub unsafe extern "C" fn mvl_array_len(a: *const MvlArray) -> u64 {
 
 #[repr(C)]
 pub struct MvlMapSlot {
-    occupied: u8,
-    key_ptr: *mut u8,
-    key_len: u64,
-    val_ptr: *mut u8,
-    val_len: u64,
+    pub occupied: u8,
+    pub key_ptr: *mut u8,
+    pub key_len: u64,
+    pub val_ptr: *mut u8,
+    pub val_len: u64,
 }
 
 #[repr(C)]

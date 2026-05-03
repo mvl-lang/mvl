@@ -272,6 +272,101 @@ fn cross_backend_random_float_shape() {
     }
 }
 
+// ── #434: log C-ABI parity tests ─────────────────────────────────────────────
+
+/// Both backends must emit identical log records to stderr.
+///
+/// Checks that `_mvl_log_*` wrappers produce the same `[LEVEL TIMESTAMP] msg field=value`
+/// format as the Rust-path implementation, including deterministic field sort order.
+#[test]
+fn cross_backend_log_stderr() {
+    let file = corpus_effects("log_output.mvl");
+
+    // Always assert the transpiler path regardless of LLVM availability.
+    let transpiler = Command::new(mvl_bin())
+        .args(["run", &file])
+        .output()
+        .expect("failed to run mvl run (transpiler)");
+    assert!(
+        transpiler.status.success(),
+        "transpiler failed:\n{}",
+        String::from_utf8_lossy(&transpiler.stderr)
+    );
+    let t_stderr = String::from_utf8_lossy(&transpiler.stderr);
+    for level in &["[DEBUG ", "[INFO ", "[WARN ", "[ERROR "] {
+        assert!(
+            t_stderr.contains(level),
+            "transpiler stderr missing {level}:\n{t_stderr}"
+        );
+    }
+
+    if mvl::mvl::codegen::find_lli().is_none() {
+        eprintln!("SKIP cross_backend_log_stderr LLVM half: lli not found");
+        return;
+    }
+
+    let llvm = Command::new(mvl_bin())
+        .args(["run", &file, "--backend=llvm"])
+        .output()
+        .expect("failed to run mvl run --backend=llvm");
+    assert!(
+        llvm.status.success(),
+        "LLVM backend failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&llvm.stdout),
+        String::from_utf8_lossy(&llvm.stderr)
+    );
+
+    let l_stderr = String::from_utf8_lossy(&llvm.stderr);
+
+    // Both backends must emit all four level tags.
+    for level in &["[DEBUG ", "[INFO ", "[WARN ", "[ERROR "] {
+        assert!(
+            l_stderr.contains(level),
+            "LLVM stderr missing {level}:\n{l_stderr}"
+        );
+    }
+
+    // ISO 8601 shape: T separator and Z UTC suffix.
+    assert!(l_stderr.contains('T'), "LLVM stderr: missing ISO 8601 T");
+    assert!(l_stderr.contains('Z'), "LLVM stderr: missing ISO 8601 Z");
+
+    // Field key=value pairs.
+    assert!(l_stderr.contains("v=1"), "LLVM stderr: missing v=1");
+    assert!(
+        l_stderr.contains("port=8080"),
+        "LLVM stderr: missing port=8080"
+    );
+
+    // Sorted field order on the ordering line.
+    let ordering = l_stderr
+        .lines()
+        .find(|l| l.contains("ordering"))
+        .expect("LLVM stderr: no line containing 'ordering'");
+    let a = ordering.find("a=first").expect("a=first not found");
+    let m = ordering.find("m=mid").expect("m=mid not found");
+    let z = ordering.find("z=last").expect("z=last not found");
+    assert!(a < m && m < z, "LLVM fields not sorted: {ordering}");
+
+    // Both backends must emit the same number of log lines.
+    let log_lines = |s: &str| -> usize {
+        s.lines()
+            .filter(|l| {
+                l.contains("[DEBUG ")
+                    || l.contains("[INFO ")
+                    || l.contains("[WARN ")
+                    || l.contains("[ERROR ")
+            })
+            .count()
+    };
+    assert_eq!(
+        log_lines(&t_stderr),
+        log_lines(&l_stderr),
+        "transpiler emitted {} log lines, LLVM emitted {}",
+        log_lines(&t_stderr),
+        log_lines(&l_stderr),
+    );
+}
+
 /// `time.sleep(seconds(0))` — zero-duration sleep — must complete without
 /// error and both backends must print "ok".
 #[test]

@@ -13,4 +13,5 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 mvl_runtime = { path = "../mvl_runtime" }
+mvl_memory = { path = "../mvl_memory" }
 libc = "0.2"

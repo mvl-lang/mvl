@@ -213,6 +213,10 @@ pub(crate) enum StdlibSig {
     /// The struct is flattened to two i64 parameters at the C-ABI boundary.
     /// e.g. `sleep(d: Duration)` → `_mvl_time_thread_sleep(secs, nanos)`.
     VoidDurationArg(String),
+    /// `(MvlString*, MvlMap*) → void` — for log functions.
+    /// Both arguments are opaque pointer-typed at the LLVM IR level.
+    /// e.g. `log_debug(msg, fields)` → `_mvl_log_debug(ptr, ptr)`.
+    VoidStringMapArg(String),
 }
 
 // ── Backend struct ────────────────────────────────────────────────────────────
@@ -459,6 +463,27 @@ impl<'ctx> LlvmBackend<'ctx> {
                 Sig::I64TwoI64Args("_mvl_random_int".into()),
             ),
             ("random", "float", Sig::F64NoArg("_mvl_random_float".into())),
+            // std.log — (MvlString*, MvlMap*) → void
+            (
+                "log",
+                "log_debug",
+                Sig::VoidStringMapArg("_mvl_log_debug".into()),
+            ),
+            (
+                "log",
+                "log_info",
+                Sig::VoidStringMapArg("_mvl_log_info".into()),
+            ),
+            (
+                "log",
+                "log_warn",
+                Sig::VoidStringMapArg("_mvl_log_warn".into()),
+            ),
+            (
+                "log",
+                "log_error",
+                Sig::VoidStringMapArg("_mvl_log_error".into()),
+            ),
         ];
 
         for decl in &prog.declarations {
@@ -603,6 +628,44 @@ impl<'ctx> LlvmBackend<'ctx> {
             .ok()?;
         // Return i64 0 as the Unit value.
         Some(i64_ty.const_zero().into())
+    }
+
+    /// Emit a call to a stdlib C-ABI function `(ptr, ptr) → void`.
+    /// Used for log functions: `_mvl_log_*(MvlString*, MvlMap*)`.
+    /// Returns i64 zero as the Unit value.
+    pub(crate) fn emit_stdlib_call_void_string_map(
+        &mut self,
+        symbol: &str,
+        msg: inkwell::values::BasicValueEnum<'ctx>,
+        fields: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        use inkwell::types::BasicMetadataTypeEnum;
+        use inkwell::values::BasicMetadataValueEnum;
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let fn_val = if let Some(f) = self.module.get_function(symbol) {
+            f
+        } else {
+            let fn_ty = self.context.void_type().fn_type(
+                &[
+                    BasicMetadataTypeEnum::from(ptr_ty),
+                    BasicMetadataTypeEnum::from(ptr_ty),
+                ],
+                false,
+            );
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        };
+        self.builder
+            .build_call(
+                fn_val,
+                &[
+                    BasicMetadataValueEnum::from(msg),
+                    BasicMetadataValueEnum::from(fields),
+                ],
+                "",
+            )
+            .ok()?;
+        Some(self.context.i64_type().const_zero().into())
     }
 
     /// Emit a call to `_mvl_time_thread_sleep` from a `Duration` struct argument.

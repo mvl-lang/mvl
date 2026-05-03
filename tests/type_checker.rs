@@ -3112,6 +3112,31 @@ fn log_info_rejects_secret_value_in_fields_map() {
     );
 }
 
+#[test]
+fn log_warn_rejects_tainted_value_in_fields_map() {
+    let errors = errors_for(
+        r#"fn f(raw: Tainted[String]) -> Unit ! Log { log_warn("req", {"body": raw}); }"#,
+    );
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Tainted")
+        ),
+        "log_warn with Tainted value in fields map should emit LoggingLabelViolation, got: {errors:?}"
+    );
+}
+
+#[test]
+fn log_debug_rejects_clean_value_in_fields_map() {
+    let errors =
+        errors_for(r#"fn f(s: Clean[String]) -> Unit ! Log { log_debug("req", {"body": s}); }"#);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Clean")
+        ),
+        "log_debug with Clean value in fields map should emit LoggingLabelViolation, got: {errors:?}"
+    );
+}
+
 // ── #219: Iterator trait (001-type-system Req 11) ─────────────────────────────
 
 /// Spec 001 Req 11 / Scenario: For loop over array accepted.

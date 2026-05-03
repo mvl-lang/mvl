@@ -63,7 +63,7 @@ pub extern "C" fn _mvl_time_thread_sleep(secs: i64, nanos: i64) {
 pub extern "C" fn _mvl_time_iso8601_format(secs: i64) -> *mut c_char {
     let systime = UNIX_EPOCH + StdDuration::from_secs(secs.max(0) as u64);
     let instant = Instant(systime);
-    let s = mvl_runtime::stdlib::time::format_instant(instant, "%Y-%m-%dT%H:%M:%SZ".to_string());
+    let s = mvl_runtime::stdlib::time::format_instant(instant, "%Y-%m-%dT%H:%M:%SZ");
     string_to_c(&s)
 }
 
