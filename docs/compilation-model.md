@@ -4,7 +4,57 @@ This page explains what happens to each of the eleven requirements as MVL
 source travels through the compilation pipeline.  The answer differs by
 target and phase.
 
-## The pipeline
+## Five-Stage Compiler Pipeline
+
+Every MVL program passes through exactly five stages before any code is emitted:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  MVL source                                                         │
+│       │                                                             │
+│  1. Parse    source → AST  (recursive descent, LL(1))              │
+│       │                                                             │
+│  2. Resolve  imports, modules, stdlib linking → scoped AST         │
+│       │                                                             │
+│  3. Check    type checking + all 11 compile-time guarantees        │
+│       │                                                             │
+│  4. Passes   coverage · MC/DC · mutation testing · linting         │
+│       │                                                             │
+│  5. Emit     ──► Rust source  (backend 1, production today)        │
+│              └─► LLVM IR      (backend 2, strategic target)        │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+Stages 1–4 are backend-agnostic.  The MVL compiler is the sole proof gate —
+all eleven requirements are fully verified before emit touches a single byte
+of target code.  `mvl check` stops after stage 3; `mvl lint` through stage 4;
+`mvl build` runs all five.
+
+## Two Backends — Why Both Exist
+
+```
+Backend 1 (Rust transpiler):
+  MVL compiler ─► Rust source ─► rustc ─► binary
+  • Production backend today
+  • Rust's borrow checker re-verifies reqs 1–6 independently
+  • Full access to the Rust/Cargo ecosystem via extern "rust"
+  • Two compilers in the chain — edge-case disagreements are possible
+
+Backend 2 (LLVM):
+  MVL compiler ─► LLVM IR ─► LLVM ─► binary
+  • Strategic target — one compiler, one trust chain
+  • Effects, totality, refinements become IR-generation errors (not doc-comments)
+  • SMT-verified refinements (Z3/CVC5) replace debug_assert! — zero runtime cost
+  • No Rust dependency; full optimization control
+```
+
+Both backends compile the same MVL source.  The test suite differentially fuzzes
+them against each other — if the two backends produce different output for the
+same program, that is a compiler bug, not a language ambiguity.  The LLVM backend
+is the long-term home; the Rust backend is the bridge that keeps the project
+shipping while the LLVM backend matures.
+
+## The Proof Gate
 
 ```
 MVL source
@@ -12,9 +62,9 @@ MVL source
     ▼
 MVL compiler  ◄── single trust anchor: all 11 requirements verified here
     │
-    ├── Phase 1 ──► Rust source ──► rustc ──► binary
+    ├── Backend 1 ──► Rust source ──► rustc ──► binary
     │
-    └── Phase 2 ──► LLVM IR ──────► LLVM  ──► binary
+    └── Backend 2 ──► LLVM IR ──────► LLVM  ──► binary
 ```
 
 The MVL compiler is the **proof gate**.  Code that passes it is
