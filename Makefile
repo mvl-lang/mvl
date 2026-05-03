@@ -134,7 +134,7 @@ test-transpiler: build ## Run end-to-end transpiler tests: .mvl → parse → ch
 
 test-llvm: build build-memory ## Run LLVM backend tests across full corpus
 	@echo "Running LLVM backend tests (full corpus)..."
-	$(MVL) test tests/corpus/ --backend=llvm
+	$(MVL) test tests/corpus/ --backend=llvm --verbose
 
 # === Quality ===
 
