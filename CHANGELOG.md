@@ -6,6 +6,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.69.1] — 2026-05-03
+
+### Fixed
+
+- **Corpus files updated for mandatory explicit `let` type annotations** — Commits #408 made explicit type annotations required in all `let` bindings; 11 corpus files were not updated. Adds `: Type` annotations throughout, also adds `Console` to `env_basic.mvl` effect set and relaxes `bounded_sum` return type to `Int` (arithmetic on refinement types yields `Int`). Resolves `make test-corpus` going from 57 passed / 11 failed to 68 passed / 0 failed.
+
+- **`make test-llvm` now shows individual test names** — Added `--verbose` flag so each test file path is printed as it runs.
+
 ## [0.69.0] — 2026-05-03
 
 ### Added
