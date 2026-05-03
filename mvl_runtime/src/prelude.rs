@@ -43,8 +43,11 @@ pub use crate::stdlib::time::{
 };
 
 /// `std.random` — non-deterministic pseudo-random generation (xorshift64, not cryptographically secure).
+/// Aliased names (`random_int`, `random_float`, `random_bytes`) are provided to avoid potential
+/// conflicts; the unaliased names match the MVL function names used by the transpiler.
 pub use crate::stdlib::random::{
-    bytes as random_bytes, choice, float as random_float, int as random_int, shuffle,
+    bytes, bytes as random_bytes, choice, float, float as random_float, int, int as random_int,
+    shuffle,
 };
 
 /// `std.process` — child process spawning and lifecycle.
