@@ -59,9 +59,9 @@ pub fn sleep(d: Duration) {
 /// Supported tokens (strftime subset): `%Y %m %d %H %M %S`. All other
 /// characters are passed through verbatim. UTC-only; timezone offsets are
 /// not implemented in Phase A.
-pub fn format_instant(t: Instant, pattern: String) -> String {
+pub fn format_instant(t: Instant, pattern: &str) -> String {
     let dt = instant_to_datetime(t);
-    apply_format(&dt, &pattern)
+    apply_format(&dt, pattern)
 }
 
 /// Formats a `DateTime` as a string using the given format pattern.
@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn format_instant_iso8601() {
         let t = Instant(UNIX_EPOCH + StdDuration::from_secs(1_710_505_845));
-        let s = format_instant(t, "%Y-%m-%dT%H:%M:%S".to_string());
+        let s = format_instant(t, "%Y-%m-%dT%H:%M:%S");
         assert_eq!(s, "2024-03-15T12:30:45");
     }
 

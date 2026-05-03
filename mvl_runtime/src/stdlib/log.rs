@@ -21,7 +21,10 @@ use std::collections::HashMap;
 use crate::stdlib::time::{format_instant, now};
 
 fn sanitize(s: &str) -> String {
-    s.replace('\n', "\\n").replace('\r', "\\r")
+    s.replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+        .replace('\0', "\\0")
 }
 
 pub(crate) fn format_log_line(
@@ -34,18 +37,19 @@ pub(crate) fn format_log_line(
     keys.sort();
     let field_str = keys
         .iter()
-        .map(|k| format!("{}={}", k, sanitize(&fields[*k])))
+        .map(|k| format!("{}={}", sanitize(k), sanitize(&fields[*k])))
         .collect::<Vec<_>>()
         .join(" ");
+    let safe_msg = sanitize(msg);
     if field_str.is_empty() {
-        format!("[{} {}] {}", level, timestamp, sanitize(msg))
+        format!("[{} {}] {}", level, timestamp, safe_msg)
     } else {
-        format!("[{} {}] {} {}", level, timestamp, sanitize(msg), field_str)
+        format!("[{} {}] {} {}", level, timestamp, safe_msg, field_str)
     }
 }
 
 fn log_internal(level: &str, msg: String, fields: HashMap<String, String>) {
-    let timestamp = format_instant(now(), "%Y-%m-%dT%H:%M:%SZ".to_string());
+    let timestamp = format_instant(now(), "%Y-%m-%dT%H:%M:%SZ");
     eprintln!("{}", format_log_line(level, &timestamp, &msg, &fields));
 }
 
@@ -121,5 +125,48 @@ mod tests {
         fields.insert("k".to_string(), "v1\nv2".to_string());
         let line = format_log_line("ERROR", "T", "msg", &fields);
         assert_eq!(line, "[ERROR T] msg k=v1\\nv2");
+    }
+
+    #[test]
+    fn format_log_line_sanitizes_carriage_return_in_msg() {
+        let line = format_log_line("INFO", "T", "line1\rline2", &HashMap::new());
+        assert_eq!(line, "[INFO T] line1\\rline2");
+    }
+
+    #[test]
+    fn format_log_line_sanitizes_carriage_return_in_field_value() {
+        let mut fields = HashMap::new();
+        fields.insert("k".to_string(), "v1\rv2".to_string());
+        let line = format_log_line("WARN", "T", "msg", &fields);
+        assert_eq!(line, "[WARN T] msg k=v1\\rv2");
+    }
+
+    #[test]
+    fn format_log_line_sanitizes_tab_in_msg() {
+        let line = format_log_line("DEBUG", "T", "a\tb", &HashMap::new());
+        assert_eq!(line, "[DEBUG T] a\\tb");
+    }
+
+    #[test]
+    fn format_log_line_sanitizes_nul_in_field_value() {
+        let mut fields = HashMap::new();
+        fields.insert("k".to_string(), "v\0x".to_string());
+        let line = format_log_line("ERROR", "T", "msg", &fields);
+        assert_eq!(line, "[ERROR T] msg k=v\\0x");
+    }
+
+    #[test]
+    fn format_log_line_sanitizes_newlines_in_field_key() {
+        let mut fields = HashMap::new();
+        fields.insert("k\ney".to_string(), "val".to_string());
+        let line = format_log_line("INFO", "T", "msg", &fields);
+        assert!(
+            !line.contains('\n'),
+            "raw newline must not appear: {line:?}"
+        );
+        assert!(
+            line.contains("k\\ney=val"),
+            "sanitized key must appear: {line:?}"
+        );
     }
 }

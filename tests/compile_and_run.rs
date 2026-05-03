@@ -618,14 +618,12 @@ fn log_output_formats_correctly() {
         "expected [ERROR in stderr:\n{stderr}"
     );
 
-    // ISO 8601 timestamp — T separator and Z UTC suffix
+    // ISO 8601 timestamp — at least one log line must contain NNNNThh:mm:ssZ shape
     assert!(
-        stderr.contains('T'),
-        "expected ISO 8601 T separator in stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains('Z'),
-        "expected ISO 8601 Z UTC suffix in stderr:\n{stderr}"
+        stderr.lines().any(|l| {
+            l.contains('T') && l.contains("Z]") && l.chars().any(|c| c.is_ascii_digit())
+        }),
+        "expected ISO 8601 timestamp (T...Z]) on a log line in stderr:\n{stderr}"
     );
 
     // Field key=value pairs present

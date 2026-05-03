@@ -462,6 +462,7 @@ name = "mvl_runtime_c"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "mvl_memory",
  "mvl_runtime",
 ]
 

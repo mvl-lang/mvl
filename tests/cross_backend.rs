@@ -280,12 +280,9 @@ fn cross_backend_random_float_shape() {
 /// format as the Rust-path implementation, including deterministic field sort order.
 #[test]
 fn cross_backend_log_stderr() {
-    if mvl::mvl::codegen::find_lli().is_none() {
-        eprintln!("SKIP cross_backend_log_stderr: lli not found");
-        return;
-    }
     let file = corpus_effects("log_output.mvl");
 
+    // Always assert the transpiler path regardless of LLVM availability.
     let transpiler = Command::new(mvl_bin())
         .args(["run", &file])
         .output()
@@ -295,6 +292,18 @@ fn cross_backend_log_stderr() {
         "transpiler failed:\n{}",
         String::from_utf8_lossy(&transpiler.stderr)
     );
+    let t_stderr = String::from_utf8_lossy(&transpiler.stderr);
+    for level in &["[DEBUG ", "[INFO ", "[WARN ", "[ERROR "] {
+        assert!(
+            t_stderr.contains(level),
+            "transpiler stderr missing {level}:\n{t_stderr}"
+        );
+    }
+
+    if mvl::mvl::codegen::find_lli().is_none() {
+        eprintln!("SKIP cross_backend_log_stderr LLVM half: lli not found");
+        return;
+    }
 
     let llvm = Command::new(mvl_bin())
         .args(["run", &file, "--backend=llvm"])
@@ -307,7 +316,6 @@ fn cross_backend_log_stderr() {
         String::from_utf8_lossy(&llvm.stderr)
     );
 
-    let t_stderr = String::from_utf8_lossy(&transpiler.stderr);
     let l_stderr = String::from_utf8_lossy(&llvm.stderr);
 
     // Both backends must emit all four level tags.
@@ -340,32 +348,22 @@ fn cross_backend_log_stderr() {
     assert!(a < m && m < z, "LLVM fields not sorted: {ordering}");
 
     // Both backends must emit the same number of log lines.
-    let t_lines: Vec<&str> = t_stderr
-        .lines()
-        .filter(|l| {
-            l.starts_with('[')
-                || l.contains("[DEBUG")
-                || l.contains("[INFO")
-                || l.contains("[WARN")
-                || l.contains("[ERROR")
-        })
-        .collect();
-    let l_lines: Vec<&str> = l_stderr
-        .lines()
-        .filter(|l| {
-            l.starts_with('[')
-                || l.contains("[DEBUG")
-                || l.contains("[INFO")
-                || l.contains("[WARN")
-                || l.contains("[ERROR")
-        })
-        .collect();
+    let log_lines = |s: &str| -> usize {
+        s.lines()
+            .filter(|l| {
+                l.contains("[DEBUG ")
+                    || l.contains("[INFO ")
+                    || l.contains("[WARN ")
+                    || l.contains("[ERROR ")
+            })
+            .count()
+    };
     assert_eq!(
-        t_lines.len(),
-        l_lines.len(),
+        log_lines(&t_stderr),
+        log_lines(&l_stderr),
         "transpiler emitted {} log lines, LLVM emitted {}",
-        t_lines.len(),
-        l_lines.len()
+        log_lines(&t_stderr),
+        log_lines(&l_stderr),
     );
 }
 
