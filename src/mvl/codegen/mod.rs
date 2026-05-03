@@ -72,72 +72,45 @@ pub fn find_lli() -> Option<std::path::PathBuf> {
     None
 }
 
-/// Find the `libmvl_memory` shared library for the `lli --load` flag (ADR-0016).
+/// Locate a cdylib by env-var override then by proximity to the current executable.
 ///
 /// Search order:
-/// 1. `MVL_MEMORY_LIB` environment variable (explicit override)
-/// 2. Sibling of the current executable in `target/{debug,release}/`
-/// 3. Returns `None` if not found — lli runs without it (Phase B programs still work)
-pub fn find_mvl_memory_lib() -> Option<std::path::PathBuf> {
-    // 1. Explicit override
-    if let Ok(path) = std::env::var("MVL_MEMORY_LIB") {
+/// 1. `env_var` environment variable (explicit override)
+/// 2. `target/{profile}/{lib_name}.{dylib,so}` — sibling of the current executable
+/// 3. `target/{profile}/deps/{lib_name}.{dylib,so}` — Cargo cdylib output location
+/// 4. Returns `None` if not found
+fn find_cdylib(env_var: &str, lib_name: &str) -> Option<std::path::PathBuf> {
+    if let Ok(path) = std::env::var(env_var) {
         let p = std::path::PathBuf::from(path);
         if p.exists() {
             return Some(p);
         }
     }
-
-    // 2. Relative to the current executable.
-    //    In development: target/debug/mvl → target/debug/libmvl_memory.{dylib,so}
-    //                                    or target/debug/deps/libmvl_memory.{dylib,so}
-    //    In release:     target/release/mvl → target/release/libmvl_memory.{dylib,so}
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             for ext in &["dylib", "so"] {
-                let lib = dir.join(format!("libmvl_memory.{ext}"));
+                let lib = dir.join(format!("{lib_name}.{ext}"));
                 if lib.exists() {
                     return Some(lib);
                 }
-                // Cargo places cdylib artifacts under target/{profile}/deps/
-                let lib = dir.join(format!("deps/libmvl_memory.{ext}"));
+                let lib = dir.join(format!("deps/{lib_name}.{ext}"));
                 if lib.exists() {
                     return Some(lib);
                 }
             }
         }
     }
-
     None
 }
 
-/// Find the `libmvl_runtime_c` shared library for the `lli --load` flag (ADR-0019).
-///
-/// Search order:
-/// 1. `MVL_RUNTIME_C_LIB` environment variable (explicit override)
-/// 2. Sibling of the current executable in `target/{debug,release}/` and `deps/`
-/// 3. Returns `None` if not found — programs not using C-ABI stdlib still work without it
+/// Find the `libmvl_memory` shared library for the `lli --load` flag (ADR-0016).
+pub fn find_mvl_memory_lib() -> Option<std::path::PathBuf> {
+    find_cdylib("MVL_MEMORY_LIB", "libmvl_memory")
+}
+
+/// Find the `libmvl_runtime_c` shared library for the `lli --load` flag (ADR-0018).
 pub fn find_mvl_runtime_c_lib() -> Option<std::path::PathBuf> {
-    if let Ok(path) = std::env::var("MVL_RUNTIME_C_LIB") {
-        let p = std::path::PathBuf::from(path);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            for ext in &["dylib", "so"] {
-                let lib = dir.join(format!("libmvl_runtime_c.{ext}"));
-                if lib.exists() {
-                    return Some(lib);
-                }
-                let lib = dir.join(format!("deps/libmvl_runtime_c.{ext}"));
-                if lib.exists() {
-                    return Some(lib);
-                }
-            }
-        }
-    }
-    None
+    find_cdylib("MVL_RUNTIME_C_LIB", "libmvl_runtime_c")
 }
 
 fn which_lli() -> Result<std::path::PathBuf, ()> {
