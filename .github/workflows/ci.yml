@@ -105,5 +105,8 @@ jobs:
       - name: Build
         run: cargo build
 
+      - name: Build mvl_runtime_c cdylib
+        run: cargo build -p mvl_runtime_c
+
       - name: Test
         run: cargo test
