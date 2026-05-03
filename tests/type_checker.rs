@@ -2874,6 +2874,30 @@ fn stdlib_crypto_corpus_parses_and_checks() {
 }
 
 #[test]
+fn stdlib_pbt_corpus_parses_and_checks() {
+    // GIVEN: the PBT stdlib corpus (valid programs using std.pbt, #40 Phase A + #425 Phase B)
+    // THEN: no type errors (UndefinedFunction for stdlib symbols is OK without stdlib loaded)
+    let src = include_str!("corpus/03_stdlib/pbt_operations.mvl");
+    let result = check_src(src);
+    let serious: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            !matches!(
+                e,
+                CheckError::UndefinedFunction { .. }
+                    | CheckError::UndefinedVariable { .. }
+                    | CheckError::UndefinedType { .. }
+            )
+        })
+        .collect();
+    assert!(
+        serious.is_empty(),
+        "pbt_operations corpus should have no serious errors, got: {serious:?}"
+    );
+}
+
+#[test]
 fn file_io_corpus_parses_and_checks() {
     // GIVEN: the file I/O effects corpus (valid programs using std.io, #44)
     // THEN: no serious type errors; UndefinedFunction/UndefinedVariable/UndefinedType

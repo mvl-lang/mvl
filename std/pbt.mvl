@@ -1,0 +1,124 @@
+// MVL standard library — property-based testing (PBT)
+//
+// Phase A (#40): generators, combinators, property_check, shrinking, statistics.
+// Phase B (#425): mutation operators, targeted property checking.
+//
+// Import with: use std.pbt.{gen_int, gen_bool, property_check, ...}
+//
+// Design: refinement types express the property contract; this library
+// generates values satisfying them. No `forall` keyword — pure stdlib.
+//
+// Usage:
+//   test fn test_divide_safe() {
+//       property_check("divide_safe", gen_int(1, 1000), fn_divide_never_fails, 1000)
+//   }
+//   fn fn_divide_never_fails(x: Int) -> Bool {
+//       divide(100, x).is_ok()
+//   }
+
+// ── Phase A: generators ────────────────────────────────────────────────────
+
+/// Generator for integers uniformly distributed in [min, max] (inclusive).
+pub fn gen_int(min: Int, max: Int) -> Generator[Int] ! Random { panic("stub") }
+
+/// Generator for floats uniformly distributed in [min, max).
+pub fn gen_float(min: Float, max: Float) -> Generator[Float] ! Random { panic("stub") }
+
+/// Generator for Bool (50/50 true/false).
+pub fn gen_bool() -> Generator[Bool] ! Random { panic("stub") }
+
+/// Generator for strings with byte length in [min_len, max_len].
+/// Characters are drawn from printable ASCII (32–126).
+pub fn gen_string(min_len: Int, max_len: Int) -> Generator[String] ! Random { panic("stub") }
+
+/// Generator for lists whose elements are produced by `elem_gen`,
+/// with length in [0, max_len].
+pub fn gen_list_int(min_val: Int, max_val: Int, max_len: Int) -> Generator[List[Int]] ! Random { panic("stub") }
+
+// ── Phase A: combinators ───────────────────────────────────────────────────
+
+/// Transform generator output: `gen_map(gen, f)` produces `f(x)` for each
+/// value `x` drawn from `gen`. Shrinking is inherited from `gen`.
+pub fn gen_map_int_bool(gen: Generator[Int], f: fn(Int) -> Bool) -> Generator[Bool] ! Random { panic("stub") }
+
+/// Filter: only yield values from `gen` that satisfy `pred`.
+/// Retries up to 100× per sample; panics if no satisfying value found.
+pub fn gen_filter_int(gen: Generator[Int], pred: fn(Int) -> Bool) -> Generator[Int] ! Random { panic("stub") }
+
+/// Choose uniformly among `options`; panics if list is empty.
+pub fn gen_one_of_int(options: List[Int]) -> Generator[Int] ! Random { panic("stub") }
+
+// ── Phase A: property checking ─────────────────────────────────────────────
+
+/// Run `prop` on `iterations` values drawn from `gen`.
+/// On failure, shrinks the counterexample before reporting.
+/// Panics with the minimal failing case if any iteration fails.
+/// Prints statistics (cases, shrink steps, value distribution) to stdout.
+pub fn property_check_int(
+    name: String,
+    gen: Generator[Int],
+    prop: fn(Int) -> Bool,
+    iterations: Int
+) -> Unit ! Random { }
+
+/// Same as property_check_int but for Bool generators.
+pub fn property_check_bool(
+    name: String,
+    gen: Generator[Bool],
+    prop: fn(Bool) -> Bool,
+    iterations: Int
+) -> Unit ! Random { }
+
+/// Same as property_check_int but for String generators.
+pub fn property_check_string(
+    name: String,
+    gen: Generator[String],
+    prop: fn(String) -> Bool,
+    iterations: Int
+) -> Unit ! Random { }
+
+/// Same as property_check_int but for List[Int] generators.
+pub fn property_check_list_int(
+    name: String,
+    gen: Generator[List[Int]],
+    prop: fn(List[Int]) -> Bool,
+    iterations: Int
+) -> Unit ! Random { }
+
+// ── Phase B: mutation operators ────────────────────────────────────────────
+
+/// Produce a mutated variant of `x` (bit-flip, ±1, ×2, boundary values).
+pub fn mutate_int(x: Int) -> Int ! Random { 0 }
+
+/// Produce a mutated variant of `x` (nearby float, 0.0, NaN, Infinity, sign flip).
+pub fn mutate_float(x: Float) -> Float ! Random { 0.0 }
+
+/// Produce a mutated variant of `s` (drop char, duplicate char, swap chars).
+pub fn mutate_string(s: String) -> String ! Random { "" }
+
+/// Produce a mutated variant of `xs` (drop element, duplicate element, swap two).
+pub fn mutate_list_int(xs: List[Int]) -> List[Int] ! Random { [] }
+
+// ── Phase B: targeted property checking ────────────────────────────────────
+
+/// Like property_check_int but biases generation toward inputs where
+/// `distance(x)` is small — i.e., closest to violating the property.
+/// Uses the Löscher & Sagonas (2017) targeted-PBT technique.
+pub fn property_check_targeted_int(
+    name: String,
+    gen: Generator[Int],
+    prop: fn(Int) -> Bool,
+    distance: fn(Int) -> Float,
+    iterations: Int
+) -> Unit ! Random { }
+
+/// Variant of property_check_int that mixes fresh generation with mutation
+/// of a corpus of previously interesting values.
+/// `mutation_ratio` in [0.0, 1.0] controls the fraction that are mutations.
+pub fn property_check_with_mutation_int(
+    name: String,
+    gen: Generator[Int],
+    prop: fn(Int) -> Bool,
+    mutation_ratio: Float,
+    iterations: Int
+) -> Unit ! Random { }
