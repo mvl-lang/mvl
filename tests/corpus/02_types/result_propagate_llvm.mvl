@@ -8,7 +8,7 @@ fn parse(x: Int) -> Result[Int, String] {
 }
 
 fn double_parse(x: Int) -> Result[Int, String] {
-    let v = parse(x)?;
+    let v: Int = parse(x)?;
     Ok(v * 2)
 }
 

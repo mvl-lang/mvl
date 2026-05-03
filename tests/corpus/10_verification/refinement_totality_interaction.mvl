@@ -24,8 +24,8 @@ total fn clamp_positive(x: Int) -> NonNegative {
 }
 
 // Refined parameter: bounded iteration over a list is always total
-total fn bounded_sum(items: List[NonNegative]) -> NonNegative {
-    let mut acc = 0;
+total fn bounded_sum(items: List[NonNegative]) -> Int {
+    let mut acc: Int = 0;
     for item in items {
         acc = acc + item
     }

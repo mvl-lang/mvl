@@ -7,7 +7,7 @@
 // expect: 4
 
 partial fn main() -> Unit ! Console {
-    let mut i = 0;
+    let mut i: Int = 0;
     while i < 5 {
         println(i);
         i = i + 1;

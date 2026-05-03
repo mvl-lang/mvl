@@ -9,14 +9,14 @@ fn consume_and_log(x: Int) -> Unit ! Console {
 
 // Mutable local with effect
 fn mutate_and_log(x: Int) -> Unit ! Console, DB {
-    let mut y = x;
+    let mut y: Int = x;
     y = y + 1;
     println(y)
 }
 
 // Clone-on-pass: Array is passed by value; original remains accessible
 total fn move_prevention(vec: Array[Int]) -> Int ! Console {
-    let first = match vec.first() { Some(v) => v, None => 0 };
+    let first: Int = match vec.first() { Some(v) => v, None => 0 };
     println(first);
     vec.len()
 }
@@ -28,7 +28,7 @@ fn log_and_store(msg: String) -> Unit ! Console, DB {
 
 // Iteration is pure — no effect needed for reading a local array
 total fn sum_array(arr: Array[Int]) -> Int {
-    let mut acc = 0;
+    let mut acc: Int = 0;
     for item in arr {
         acc = acc + item
     }
