@@ -6,6 +6,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+### Added
+
+- **`missing-annotation` linter rule** — Opt-in Warning-severity rule that fires when a
+  function body contains calls but no effect annotation is declared. The inverse of
+  `unnecessary-annotation` (removed in v0.66.1), implementing MVL's "Explicit over implicit"
+  principle (#428). Disabled by default (`missing_annotations = false`); enable in
+  `.mvllintrc`. `test fn` declarations are excluded. See Spec 011 Req 4 and ADR-0017
+  amendment.
+
 ## [0.72.2] — 2026-05-04
 
 ### Added
