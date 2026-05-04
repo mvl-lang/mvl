@@ -95,10 +95,10 @@ pub fn log_access(
     action: Action,
     decision: Permission,
 ) -> Unit ! Log {
-    let resource_str = resource_name(resource);
-    let action_str   = action_name(action);
-    let decision_str = permission_name(decision);
-    let fields = {"user": username, "resource": resource_str, "action": action_str, "decision": decision_str};
+    let resource_str: String = resource_name(resource);
+    let action_str: String   = action_name(action);
+    let decision_str: String = permission_name(decision);
+    let fields: Map[String, String] = {"user": username, "resource": resource_str, "action": action_str, "decision": decision_str};
     match decision {
         Permission::Allow => log_info("access granted", fields),
         Permission::Deny  => log_warn("access denied",  fields),
@@ -108,8 +108,8 @@ pub fn log_access(
 // ── Internal unit tests ────────────────────────────────────────────────────
 
 test fn resource_name_returns_user_profile() -> Unit {
-    let name = resource_name(Resource::UserProfile);
-    let ok = match name {
+    let name: String = resource_name(Resource::UserProfile);
+    let ok: Int = match name {
         "UserProfile" => 1,
         _             => 0,
     };
@@ -117,8 +117,8 @@ test fn resource_name_returns_user_profile() -> Unit {
 }
 
 test fn resource_name_returns_admin_panel() -> Unit {
-    let name = resource_name(Resource::AdminPanel);
-    let ok = match name {
+    let name: String = resource_name(Resource::AdminPanel);
+    let ok: Int = match name {
         "AdminPanel" => 1,
         _            => 0,
     };
@@ -126,8 +126,8 @@ test fn resource_name_returns_admin_panel() -> Unit {
 }
 
 test fn permission_allow_maps_to_allow_string() -> Unit {
-    let name = permission_name(Permission::Allow);
-    let ok = match name {
+    let name: String = permission_name(Permission::Allow);
+    let ok: Int = match name {
         "ALLOW" => 1,
         _       => 0,
     };
@@ -135,8 +135,8 @@ test fn permission_allow_maps_to_allow_string() -> Unit {
 }
 
 test fn permission_deny_maps_to_deny_string() -> Unit {
-    let name = permission_name(Permission::Deny);
-    let ok = match name {
+    let name: String = permission_name(Permission::Deny);
+    let ok: Int = match name {
         "DENY" => 1,
         _      => 0,
     };
@@ -144,8 +144,8 @@ test fn permission_deny_maps_to_deny_string() -> Unit {
 }
 
 test fn action_name_returns_delete() -> Unit {
-    let name = action_name(Action::Delete);
-    let ok = match name {
+    let name: String = action_name(Action::Delete);
+    let ok: Int = match name {
         "Delete" => 1,
         _        => 0,
     };
@@ -158,8 +158,8 @@ test fn action_name_returns_delete() -> Unit {
 // verifies that Allow → log_info path and Deny → log_warn path are distinct.
 
 test fn allow_decision_routes_to_info_level() -> Unit {
-    let level = log_level_for_decision(Permission::Allow);
-    let ok = match level {
+    let level: String = log_level_for_decision(Permission::Allow);
+    let ok: Int = match level {
         "info" => 1,
         _      => 0,
     };
@@ -167,8 +167,8 @@ test fn allow_decision_routes_to_info_level() -> Unit {
 }
 
 test fn deny_decision_routes_to_warn_level() -> Unit {
-    let level = log_level_for_decision(Permission::Deny);
-    let ok = match level {
+    let level: String = log_level_for_decision(Permission::Deny);
+    let ok: Int = match level {
         "warn" => 1,
         _      => 0,
     };

@@ -130,7 +130,7 @@ pub fn reassess_interval(pri: Priority) -> Int {
 
 /// Full triage assessment: compute priority, resuscitation flag, isolation flag, and reassess time.
 pub fn assess(p: Patient) -> Assessment {
-    let pri = assign_priority(p);
+    let pri: Priority = assign_priority(p);
     Assessment {
         priority:      pri,
         resuscitate:   needs_resuscitation(p.vitals, p.complaint),

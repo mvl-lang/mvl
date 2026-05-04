@@ -58,8 +58,8 @@ pub fn authenticate(
 // ── Internal unit tests ────────────────────────────────────────────────────
 
 test fn auth_error_invalid_credentials_variant() -> Unit {
-    let err = AuthError::InvalidCredentials;
-    let code = match err {
+    let err: AuthError = AuthError::InvalidCredentials;
+    let code: Int = match err {
         AuthError::InvalidCredentials => 1,
         AuthError::SessionExpired     => 2,
         AuthError::InvalidToken       => 3,
@@ -68,8 +68,8 @@ test fn auth_error_invalid_credentials_variant() -> Unit {
 }
 
 test fn auth_error_session_expired_variant() -> Unit {
-    let err = AuthError::SessionExpired;
-    let code = match err {
+    let err: AuthError = AuthError::SessionExpired;
+    let code: Int = match err {
         AuthError::InvalidCredentials => 1,
         AuthError::SessionExpired     => 2,
         AuthError::InvalidToken       => 3,
@@ -78,8 +78,8 @@ test fn auth_error_session_expired_variant() -> Unit {
 }
 
 test fn auth_error_invalid_token_variant() -> Unit {
-    let err = AuthError::InvalidToken;
-    let code = match err {
+    let err: AuthError = AuthError::InvalidToken;
+    let code: Int = match err {
         AuthError::InvalidCredentials => 1,
         AuthError::SessionExpired     => 2,
         AuthError::InvalidToken       => 3,
@@ -95,8 +95,8 @@ fn auth_failure_result() -> Result[Clean[String], AuthError] {
 }
 
 test fn wrong_password_yields_invalid_credentials() -> Unit {
-    let result = auth_failure_result();
-    let got_err = match result {
+    let result: Result[Clean[String], AuthError] = auth_failure_result();
+    let got_err: Int = match result {
         Err(AuthError::InvalidCredentials) => 1,
         Err(AuthError::SessionExpired)     => 0,
         Err(AuthError::InvalidToken)       => 0,
