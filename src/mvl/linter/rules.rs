@@ -565,6 +565,47 @@ pub fn redundant_effects(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDia
     }
 }
 
+/// Warn when a function has calls in its body but no declared effects.
+///
+/// Rule id: `missing-annotation`
+///
+/// This is the inverse of `redundant-effects`: where that rule flags declared
+/// effects with no calls, this rule flags calls with no declared effects.
+/// The rule is **opt-in** (disabled by default) because the linter cannot
+/// distinguish calls to pure MVL helpers from calls to effectful stdlib
+/// functions without a full symbol table.  Enable with
+/// `missing_annotations = true` in `.mvllintrc` for code that should
+/// be explicit-everywhere.
+///
+/// `test fn` declarations are excluded — test bodies call the system under
+/// test and do not need to declare effects themselves.
+///
+/// See: Spec 011 Req 4, ADR-0017 amendment.
+pub fn missing_annotations(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if !cfg.missing_annotations {
+        return;
+    }
+    for decl in &prog.declarations {
+        if let Decl::Fn(f) = decl {
+            if f.is_test || !f.effects.is_empty() {
+                continue;
+            }
+            if block_has_calls(&f.body) {
+                out.push(LintDiag::warning(
+                    "missing-annotation",
+                    format!(
+                        "function `{}` has calls but no effect declaration \
+                         — add `! Effects` or verify all calls are pure",
+                        f.name,
+                    ),
+                    f.span.line,
+                    f.span.col,
+                ));
+            }
+        }
+    }
+}
+
 /// Return `true` if `block` (or any nested block/expression) contains at
 /// least one function or method call.
 fn block_has_calls(block: &Block) -> bool {
@@ -2503,6 +2544,82 @@ mod tests {
                 .any(|d| d.rule == "complexity-effect-width"
                     && d.message.contains("impl Bar for Foo")),
             "impl method effect width must be flagged; got: {diags:?}"
+        );
+    }
+
+    // -- missing_annotations --
+
+    fn cfg_missing_annotations_on() -> LintConfig {
+        LintConfig {
+            missing_annotations: true,
+            ..LintConfig::default()
+        }
+    }
+
+    #[test]
+    fn missing_annotations_fires_on_call_without_effects() {
+        // fn has a call but no declared effects — must warn when rule is enabled
+        let src = "fn foo() -> Unit {\n    bar()\n}\nfn bar() -> Unit { 1 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        missing_annotations(&prog, &cfg_missing_annotations_on(), &mut diags);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.rule == "missing-annotation" && d.message.contains("foo")),
+            "expected missing-annotation for `foo`; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn missing_annotations_off_by_default() {
+        // default config has missing_annotations = false — rule must be silent
+        let src = "fn foo() -> Unit {\n    bar()\n}\nfn bar() -> Unit { 1 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        missing_annotations(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "missing-annotation"),
+            "missing-annotation must not fire with default config; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn missing_annotations_no_fire_on_effects_declared() {
+        // fn has calls AND declared effects — must not warn
+        let src = "fn foo() -> Unit ! Console {\n    bar()\n}\nfn bar() -> Unit { 1 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        missing_annotations(&prog, &cfg_missing_annotations_on(), &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "missing-annotation"),
+            "must not warn when effects are declared; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn missing_annotations_no_fire_on_callless_fn() {
+        // pure arithmetic fn — no calls, no effects — must not warn
+        let src = "fn add(x: Int, y: Int) -> Int {\n    x + y\n}\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        missing_annotations(&prog, &cfg_missing_annotations_on(), &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "missing-annotation"),
+            "must not warn on call-free function; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn missing_annotations_no_fire_on_test_fn() {
+        // test fn is excluded from the rule
+        let src = "test fn check_add() -> Unit {\n    bar()\n}\nfn bar() -> Unit { 1 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        missing_annotations(&prog, &cfg_missing_annotations_on(), &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "missing-annotation"),
+            "test fn must be excluded; got: {diags:?}"
         );
     }
 }

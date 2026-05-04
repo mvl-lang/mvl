@@ -64,8 +64,8 @@ impl LintResult {
 /// Phase 1 — style rules: trailing whitespace, line length, indentation,
 /// final newline, naming conventions, function body length.
 ///
-/// Phase 2 — semantic rules: unreachable code, redundant match, unnecessary
-/// type annotations, redundant effect declarations, redundant IFC labels.
+/// Phase 2 — semantic rules: unreachable code, redundant match, redundant
+/// effect declarations, redundant IFC labels, missing annotations (opt-in).
 ///
 /// Phase 3 — LLM corpus quality: consistent comment style, doc-comment
 /// coverage, doc-comment example sections.
@@ -90,6 +90,7 @@ pub fn lint(prog: &Program, src: &str, cfg: &LintConfig) -> LintResult {
     rules::redundant_match(prog, cfg, &mut diags);
     rules::redundant_effects(prog, cfg, &mut diags);
     rules::redundant_ifc_labels(prog, cfg, &mut diags);
+    rules::missing_annotations(prog, cfg, &mut diags);
 
     // Phase 3: LLM corpus quality rules
     rules::consistent_comment_style(src, cfg, &mut diags);

@@ -121,15 +121,62 @@ warnings do not affect `is_ok`).
 
 ---
 
-### Requirement 4: Unnecessary Type Annotations [REMOVED]
+### Requirement 4: Missing Annotations [SHOULD]
 
-The `unnecessary-annotation` rule has been removed (#408). All `let` bindings now
-**require** an explicit type annotation — a language-level invariant enforced at
-parse time. With annotations mandatory, no annotation can be "unnecessary"; the rule
-was contradictory and has been deleted along with its `LintConfig` field and helper
-functions.
+The `missing-annotation` rule SHOULD warn (at **Warning** severity) when a function body
+contains calls but no effect annotation is declared. This is the inverse complement of
+`redundant-effects`: where that rule flags declared effects with no calls, this rule
+flags calls with no declared effects.
 
-**Removed in:** v0.66.1 (#408)
+The rule embodies MVL's "Explicit over implicit" principle (#428). It is **opt-in**
+(`missing_annotations = false` by default) because the linter cannot distinguish calls
+to pure MVL helpers from calls to effectful stdlib functions without a full symbol table.
+Enable with `missing_annotations = true` in `.mvllintrc` for code bases that enforce
+explicit-everywhere annotation density.
+
+`test fn` declarations are excluded — test bodies call the system under test and need
+not declare effects themselves.
+
+**Implementation:** `src/mvl/linter/rules.rs::missing_annotations` → `LintDiag::warning`
+
+**Config field:** `LintConfig::missing_annotations` (default: `false`)
+
+**ADR:** ADR-0017 (amendment, #428)
+
+**Tests:** `src/mvl/linter/rules.rs` (inline tests for `missing_annotations`)
+
+#### Scenario: Rule fires when enabled and effects are missing
+
+- GIVEN `missing_annotations = true` in config
+- AND a function `fn foo() -> Unit { bar() }` with no declared effects
+- WHEN `missing_annotations` runs
+- THEN exactly one diagnostic is emitted with severity `Warning` and rule `missing-annotation`
+
+#### Scenario: Rule is silent by default
+
+- GIVEN default `LintConfig` (missing_annotations = false)
+- AND a function with calls but no effects
+- WHEN `missing_annotations` runs
+- THEN no `missing-annotation` diagnostic is emitted
+
+#### Scenario: No warning when effects are declared
+
+- GIVEN `missing_annotations = true`
+- AND `fn foo() -> Unit ! Console { bar() }`
+- WHEN `missing_annotations` runs
+- THEN no `missing-annotation` diagnostic is emitted
+
+#### Scenario: No warning on call-free function
+
+- GIVEN `missing_annotations = true`
+- AND `fn add(x: Int, y: Int) -> Int { x + y }` (no calls, only arithmetic)
+- WHEN `missing_annotations` runs
+- THEN no `missing-annotation` diagnostic is emitted
+
+**Historical note:** The predecessor rule `unnecessary-annotation` was removed in
+v0.66.1 (#408) when `let` bindings became parser-enforced to require explicit types.
+`missing-annotation` is its directional inverse — warning on absent annotations
+rather than present ones.
 
 ---
 
