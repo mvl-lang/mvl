@@ -425,3 +425,106 @@ test fn io_chmod_err_on_nonexistent() -> Unit ! FileWrite {
     let result: Result[Unit, String] = chmod(path("/tmp/mvl_nonexistent_chmod_417.txt"), 420);
     assert_eq(result.is_err(), true);
 }
+
+// ── close ─────────────────────────────────────────────────────────────────
+
+test fn io_close_open_file() -> Unit ! FileRead, FileWrite, FileDelete {
+    let p: Path = path("/tmp/mvl_io_close_417.txt");
+    let _: Result[Unit, String] = write(p, "close me");
+    match open(p) {
+        Ok(f) => { close(f); }
+        Err(_) => { assert_eq(true, false); }
+    }
+    let _: Result[Unit, String] = remove(p);
+}
+
+// ── buf_reader / read_line ────────────────────────────────────────────────
+
+test fn io_read_line_ok() -> Unit ! FileRead, FileWrite, FileDelete {
+    let p: Path = path("/tmp/mvl_io_readline_417.txt");
+    let _: Result[Unit, String] = write(p, "hello\nworld\n");
+    match open(p) {
+        Ok(f) => {
+            let r: BufReader = buf_reader(f);
+            let result: Result[Tainted[String], String] = read_line(r);
+            assert_eq(result.is_ok(), true);
+        }
+        Err(_) => { assert_eq(true, false); }
+    }
+    let _: Result[Unit, String] = remove(p);
+}
+
+test fn io_read_line_eof_is_ok() -> Unit ! FileRead, FileWrite, FileDelete {
+    // Empty file — read_line at EOF returns Ok("").
+    let p: Path = path("/tmp/mvl_io_readline_eof_417.txt");
+    let _: Result[Unit, String] = write(p, "");
+    match open(p) {
+        Ok(f) => {
+            let r: BufReader = buf_reader(f);
+            let result: Result[Tainted[String], String] = read_line(r);
+            assert_eq(result.is_ok(), true);
+        }
+        Err(_) => { assert_eq(true, false); }
+    }
+    let _: Result[Unit, String] = remove(p);
+}
+
+// ── buf_writer / write_line ───────────────────────────────────────────────
+
+test fn io_write_line_ok() -> Unit ! FileRead, FileWrite, FileDelete {
+    let p: Path = path("/tmp/mvl_io_writeline_417.txt");
+    match open(p) {
+        Ok(f) => {
+            let w: BufWriter = buf_writer(f);
+            let result: Result[Unit, String] = write_line(w, "hello writeline");
+            assert_eq(result.is_ok(), true);
+        }
+        Err(_) => { assert_eq(true, false); }
+    }
+    let _: Result[Unit, String] = remove(p);
+}
+
+// ── create_symlink / read_link ────────────────────────────────────────────
+
+test fn io_create_symlink_ok() -> Unit ! FileRead, FileWrite, FileDelete {
+    let target: Path = path("/tmp/mvl_io_symtarget_417.txt");
+    let link: Path = path("/tmp/mvl_io_symlink_417.txt");
+    let _: Result[Unit, String] = write(target, "symlink target");
+    let result: Result[Unit, String] = create_symlink(target, link);
+    assert_eq(result.is_ok(), true);
+    let _: Result[Unit, String] = remove(link);
+    let _: Result[Unit, String] = remove(target);
+}
+
+test fn io_create_symlink_err_on_existing_link() -> Unit ! FileRead, FileWrite, FileDelete {
+    let target: Path = path("/tmp/mvl_io_symtarget2_417.txt");
+    let link: Path = path("/tmp/mvl_io_symlink2_417.txt");
+    let _: Result[Unit, String] = write(target, "x");
+    let _: Result[Unit, String] = create_symlink(target, link);
+    // Creating the same symlink again must fail (already exists).
+    let result: Result[Unit, String] = create_symlink(target, link);
+    assert_eq(result.is_err(), true);
+    let _: Result[Unit, String] = remove(link);
+    let _: Result[Unit, String] = remove(target);
+}
+
+test fn io_read_link_ok() -> Unit ! FileRead, FileWrite, FileDelete {
+    let target: Path = path("/tmp/mvl_io_readlink_target_417.txt");
+    let link: Path = path("/tmp/mvl_io_readlink_link_417.txt");
+    let _: Result[Unit, String] = write(target, "readlink target");
+    let _: Result[Unit, String] = create_symlink(target, link);
+    let result: Result[Tainted[String], String] = read_link(link);
+    assert_eq(result.is_ok(), true);
+    let _: Result[Unit, String] = remove(link);
+    let _: Result[Unit, String] = remove(target);
+}
+
+test fn io_read_link_err_on_nonexistent() -> Unit ! FileRead {
+    let result: Result[Tainted[String], String] = read_link(path("/tmp/mvl_nonexistent_link_417"));
+    assert_eq(result.is_err(), true);
+}
+
+// ── stdin ─────────────────────────────────────────────────────────────────
+// stdin_read_line and stdin_read_to_string are not tested here: they would
+// block waiting for input in an automated test runner. Both are implemented
+// by mvl_runtime::stdlib::io via std::io::stdin().lock().read_line / read_to_string.
