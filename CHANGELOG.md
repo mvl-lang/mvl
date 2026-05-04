@@ -10,6 +10,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 - **Design Principles are now executable OpenSpec Requirements (Spec 001 Reqs 12–14)** — All 10 README Design Principles and all 11 ADR-0001 requirements are now pinned to spec requirements with GIVEN/WHEN/THEN scenarios and `**Tests:**` pointers. Three previously undocumented principles were added to Spec 001: Req 12 (Explicit Type Annotations — Principle 1), Req 13 (Minimal Control-Flow Surface — Principle 2), Req 14 (Vocabulary over Syntax — Principle 3). Drift from the language definition now produces a `make assurance` failure rather than a silent gap (#427).
 
+## [0.72.0] — 2026-05-04
+
+### Added
+
+- **MC/DC coverage analysis now outputs machine-readable JSON** — `mvl mcdc <file|dir> --json` produces structured JSON with test counts, decision/obligation metrics, and per-clause coverage detail. `--json --quiet` emits summary only. Enables CI integration, coverage dashboards, and qualification evidence packages (DO-178C, IEC 62304). `independence_pair` is `null` pending test trace integration (#319); `coupled_with` is populated from coupled condition analysis (#325) (#326).
+
 ## [0.71.1] — 2026-05-03
 
 ### Fixed
