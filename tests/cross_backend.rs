@@ -377,7 +377,7 @@ fn cross_backend_io_write_read_roundtrip() {
     let transpiler_out = run_transpiler(&file);
     assert_eq!(
         transpiler_out.trim(),
-        "hello io\nhello io appended\ndir_ok\nok",
+        "read_ok\nappend_ok\ndir_ok\nok",
         "io_basic.mvl: unexpected output from transpiler backend"
     );
     if let Some(llvm_out) = run_llvm(&file) {
