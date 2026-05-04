@@ -143,7 +143,9 @@ impl<'ctx> LlvmBackend<'ctx> {
                     // L5-13: heap-allocated collection types are uniform `ptr` values.
                     // Phase B used i64 stubs for List/Array/Map/Set; Phase C uses
                     // pointers to runtime-managed heap structs (ADR-0016).
-                    "String" | "List" | "Array" | "Map" | "Set" => {
+                    // `Path` is an opaque stdlib struct backed by a String; at the
+                    // LLVM level it is represented as a `MvlString*` (ptr).
+                    "String" | "List" | "Array" | "Map" | "Set" | "Path" => {
                         Some(self.context.ptr_type(AddressSpace::default()).into())
                     }
                     _ => {
@@ -203,8 +205,12 @@ impl<'ctx> LlvmBackend<'ctx> {
     }
 
     /// Given an expression whose value is a `Result[T,E]` or `Option[T]`, return
-    /// the LLVM type of the Ok/Some payload.  Falls back to `i64` if unknown.
-    pub(crate) fn infer_result_ok_llvm_ty(&self, expr: &Expr) -> BasicTypeEnum<'ctx> {
+    /// the LLVM type of the Ok/Some payload.
+    ///
+    /// Returns `None` when the Ok type is `Unit` (no payload — callers must not
+    /// dereference the payload pointer).  Falls back to `Some(i64)` when the
+    /// type cannot be determined statically.
+    pub(crate) fn infer_result_ok_llvm_ty(&self, expr: &Expr) -> Option<BasicTypeEnum<'ctx>> {
         // Look up the MVL return/annotation type for this expression.
         let mvl_ty: Option<&TypeExpr> = match expr {
             Expr::FnCall { name, .. } => self.fn_return_types.get(name.as_str()),
@@ -222,11 +228,12 @@ impl<'ctx> LlvmBackend<'ctx> {
                 _ => None,
             };
             if let Some(pt) = payload_ty {
-                if let Some(llvm_ty) = self.mvl_type_to_llvm(Self::strip_type_wrappers(pt)) {
-                    return llvm_ty;
-                }
+                // mvl_type_to_llvm returns None for Unit — propagate that as None
+                // so callers know there is no payload to load.
+                return self.mvl_type_to_llvm(Self::strip_type_wrappers(pt));
             }
         }
-        self.context.i64_type().into()
+        // Unknown payload type — fall back to i64.
+        Some(self.context.i64_type().into())
     }
 }

@@ -309,7 +309,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         scrutinee: &Expr,
         arms: &[MatchArm],
     ) -> Option<BasicValueEnum<'ctx>> {
-        let ok_ty = self.infer_result_ok_llvm_ty(scrutinee);
+        let ok_ty_opt = self.infer_result_ok_llvm_ty(scrutinee);
         let scrutinee_val = self.emit_expr(scrutinee)?;
 
         // Extract i8 discriminant from the scrutinee value.
@@ -363,7 +363,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             self.terminated = false;
 
             // Bind pattern variables if needed (Phase B: simple cases only).
-            self.bind_pattern_vars(&arm.pattern, scrutinee_val, Some(ok_ty));
+            self.bind_pattern_vars(&arm.pattern, scrutinee_val, ok_ty_opt);
 
             let arm_val = match &arm.body {
                 MatchBody::Expr(e) => self.emit_expr(e),

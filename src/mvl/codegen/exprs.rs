@@ -487,8 +487,12 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     /// Emit `expr?` — evaluate expr (must return `Result[T, E]` tagged union),
     /// branch to ok/err: on Err, return early; on Ok, yield the payload value.
+    ///
+    /// When the Ok type is `Unit` (`infer_result_ok_llvm_ty` returns `None`) the
+    /// payload pointer is null and must not be dereferenced; we return `i64 0`
+    /// as the unit sentinel instead.
     pub(crate) fn emit_propagate(&mut self, expr: &Expr) -> Option<BasicValueEnum<'ctx>> {
-        let ok_ty = self.infer_result_ok_llvm_ty(expr);
+        let ok_ty_opt = self.infer_result_ok_llvm_ty(expr);
         let result_val = self.emit_expr(expr)?;
         let BasicValueEnum::StructValue(sv) = result_val else {
             return None;
@@ -523,11 +527,18 @@ impl<'ctx> LlvmBackend<'ctx> {
             .builder
             .build_extract_value(sv, 1, "prop_payload_ptr")
             .ok()?;
-        let payload_ptr = payload_ptr_val.into_pointer_value();
-        let ok_val = self
-            .builder
-            .build_load(ok_ty, payload_ptr, "prop_ok_val")
-            .unwrap();
+
+        // Unit-result guard: when ok_ty is None the Ok payload is null (no value).
+        // Return i64 0 as the unit sentinel without dereferencing the pointer.
+        let ok_val = match ok_ty_opt {
+            None => self.context.i64_type().const_zero().into(),
+            Some(ok_ty) => {
+                let payload_ptr = payload_ptr_val.into_pointer_value();
+                self.builder
+                    .build_load(ok_ty, payload_ptr, "prop_ok_val")
+                    .unwrap()
+            }
+        };
         Some(ok_val)
     }
 
@@ -886,6 +897,28 @@ impl<'ctx> LlvmBackend<'ctx> {
                             let msg = self.emit_expr(&args[0])?;
                             let fields = self.emit_expr(&args[1])?;
                             return self.emit_stdlib_call_void_string_map(&sym, msg, fields);
+                        }
+                        // #435: io stdlib
+                        StdlibSig::PtrIdentArg(sym) if args.len() == 1 => {
+                            let sym = sym.clone();
+                            let arg = self.emit_expr(&args[0])?;
+                            return self.emit_stdlib_call_ptr_identity(&sym, arg);
+                        }
+                        StdlibSig::ResultUnitOnePtrArg(sym) if args.len() == 1 => {
+                            let sym = sym.clone();
+                            let arg = self.emit_expr(&args[0])?;
+                            return self.emit_stdlib_call_result_one_ptr_arg(&sym, arg);
+                        }
+                        StdlibSig::ResultUnitTwoPtrArgs(sym) if args.len() == 2 => {
+                            let sym = sym.clone();
+                            let a = self.emit_expr(&args[0])?;
+                            let b = self.emit_expr(&args[1])?;
+                            return self.emit_stdlib_call_result_two_ptr_args(&sym, a, b);
+                        }
+                        StdlibSig::ResultStringOnePtrArg(sym) if args.len() == 1 => {
+                            let sym = sym.clone();
+                            let arg = self.emit_expr(&args[0])?;
+                            return self.emit_stdlib_call_result_one_ptr_arg(&sym, arg);
                         }
                         _ => {}
                     }

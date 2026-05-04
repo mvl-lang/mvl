@@ -23,6 +23,70 @@ impl Path {
     }
 }
 
+/// An open file handle — mirrors the `File` struct declared in `std/io.mvl`.
+///
+/// Returned by [`open`]. Pass to [`buf_reader`] or [`buf_writer`] for
+/// buffered I/O. Dropped automatically when it goes out of scope (Rust Drop).
+pub struct File {
+    inner: std::fs::File,
+}
+
+/// A buffered reader wrapping a [`File`] handle.
+///
+/// Single-use in Phase 2 (move semantics). Pass to [`read_line`] to read one
+/// line; after the call the reader is consumed. Phase 3 will add loop-friendly
+/// iteration via borrow inference.
+pub struct BufReader {
+    inner: std::io::BufReader<std::fs::File>,
+}
+
+/// A buffered writer wrapping a [`File`] handle.
+///
+/// Single-use in Phase 2 (move semantics). Pass to [`write_line`] to write one
+/// line; after the call the writer is consumed and the buffer is flushed.
+pub struct BufWriter {
+    inner: std::io::BufWriter<std::fs::File>,
+}
+
+/// A single directory entry — mirrors `DirEntry` in `std/io.mvl`.
+#[derive(Debug, Clone)]
+pub struct DirEntry {
+    /// Path to this entry.
+    pub path: Path,
+    /// True if this entry is a regular file.
+    pub is_file: bool,
+    /// True if this entry is a directory.
+    pub is_dir: bool,
+    /// True if this entry is a symbolic link.
+    pub is_symlink: bool,
+}
+
+/// File or directory metadata — mirrors `Metadata` in `std/io.mvl`.
+///
+/// Does not follow symbolic links (`lstat` semantics).
+#[derive(Debug, Clone)]
+pub struct Metadata {
+    /// File size in bytes.
+    pub len: i64,
+    /// True if this is a regular file.
+    pub is_file: bool,
+    /// True if this is a directory.
+    pub is_dir: bool,
+    /// True if this is a symbolic link.
+    pub is_symlink: bool,
+    /// Unix permission bits (e.g. 0o644). Zero on non-Unix platforms.
+    pub permissions: i64,
+}
+
+/// Standard input handle — mirrors `Stdin` in `std/io.mvl`.
+///
+/// Obtained via [`stdin`]. Single-use in Phase 2 (move semantics).
+pub struct Stdin {
+    inner: std::io::Stdin,
+}
+
+// ── Path construction (pure) ───────────────────────────────────────────────
+
 /// Construct a [`Path`] from a `String`.
 ///
 /// Pure — no filesystem access.
@@ -33,7 +97,6 @@ pub fn path(s: String) -> Path {
 /// Append a path segment to a base path, inserting the platform separator.
 ///
 /// Pure — no filesystem access.
-/// Implements the Rust backing for `std/io.mvl::join`.
 pub fn join(base: Path, segment: String) -> Path {
     let mut p = std::path::PathBuf::from(&base.inner);
     p.push(&segment);
@@ -45,17 +108,59 @@ pub fn join(base: Path, segment: String) -> Path {
 /// Return the string representation of a path.
 ///
 /// Pure — no filesystem access.
-/// Implements the Rust backing for `std/io.mvl::to_string`.
 pub fn to_string(p: Path) -> String {
     p.inner
 }
 
+// ── Path queries (! FileRead) ──────────────────────────────────────────────
+
+/// Return true if the path exists on the filesystem.
+pub fn exists(p: Path) -> bool {
+    std::fs::metadata(&p.inner).is_ok()
+}
+
+/// Return true if the path refers to a regular file.
+pub fn is_file(p: Path) -> bool {
+    std::fs::metadata(&p.inner)
+        .map(|m| m.is_file())
+        .unwrap_or(false)
+}
+
+/// Return true if the path refers to a directory.
+pub fn is_dir(p: Path) -> bool {
+    std::fs::metadata(&p.inner)
+        .map(|m| m.is_dir())
+        .unwrap_or(false)
+}
+
+// ── File handle functions ──────────────────────────────────────────────────
+
+/// Open a file for reading and writing, creating it if it does not exist.
+///
+/// Returns a [`File`] handle on success, or a sanitized error string on failure.
+pub fn open(p: Path) -> Result<File, String> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&p.inner)
+        .map(|f| File { inner: f })
+        .map_err(|e| sanitize_io_error(e.kind()))
+}
+
+/// Close a file handle and release the file descriptor.
+///
+/// Takes [`File`] by value; the file descriptor is released when `f` is dropped.
+pub fn close(_f: File) -> () {
+    // Drop is called on `_f` here, which closes the underlying std::fs::File.
+}
+
+// ── File I/O ───────────────────────────────────────────────────────────────
+
 /// Read the entire contents of a file into a string.
 ///
-/// Returns `Ok(Tainted<String>)` on success (file contents are external input).
-/// Returns `Err(String)` with a sanitized error category on failure (no path leaked).
-///
-/// Implements the Rust backing for `std/io.mvl::read_to_string`.
+/// Returns `Ok(Tainted<String>)` on success.
+/// Returns `Err(String)` with a sanitized error category on failure.
 pub fn read_to_string(p: Path) -> Result<Tainted<String>, String> {
     std::fs::read_to_string(p.as_str())
         .map(Tainted)
@@ -65,22 +170,217 @@ pub fn read_to_string(p: Path) -> Result<Tainted<String>, String> {
 /// Read the entire contents of a file given a validated (Clean) path string.
 ///
 /// Convenience variant of [`read_to_string`] that accepts a `Clean<String>`
-/// path directly. Use this when the caller already holds a validated path string.
-///
-/// Returns `Ok(Tainted<String>)` on success.
-/// Returns `Err(String)` with a sanitized error category on failure (no path leaked).
-///
-/// Implements the Rust backing for `std/io.mvl::read_file`.
+/// path directly.
 pub fn read_file(p: Clean<String>) -> Result<Tainted<String>, String> {
     std::fs::read_to_string(&*p)
         .map(Tainted)
         .map_err(|e| sanitize_io_error(e.kind()))
 }
 
+/// Write a string to a file, truncating it if it already exists.
+pub fn write(p: Path, content: Tainted<String>) -> Result<(), String> {
+    std::fs::write(&p.inner, content.0.as_bytes()).map_err(|e| sanitize_io_error(e.kind()))
+}
+
+/// Append a string to a file, creating it if it does not exist.
+pub fn append(p: Path, content: Tainted<String>) -> Result<(), String> {
+    use std::io::Write as _;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&p.inner)
+        .and_then(|mut f| f.write_all(content.0.as_bytes()))
+        .map_err(|e| sanitize_io_error(e.kind()))
+}
+
+/// Wrap a [`File`] handle in a [`BufReader`] for line-oriented reading.
+pub fn buf_reader(f: File) -> BufReader {
+    BufReader {
+        inner: std::io::BufReader::new(f.inner),
+    }
+}
+
+/// Wrap a [`File`] handle in a [`BufWriter`] for line-oriented writing.
+pub fn buf_writer(f: File) -> BufWriter {
+    BufWriter {
+        inner: std::io::BufWriter::new(f.inner),
+    }
+}
+
+/// Read the next line from a [`BufReader`] (up to and including `\n`).
+///
+/// Returns `Ok(Tainted<String>)` on success.
+/// Returns `Ok(Tainted(""))` at end-of-file.
+/// Returns `Err(String)` on I/O failure.
+///
+/// Single-use in Phase 2 — the reader is consumed after this call.
+pub fn read_line(r: BufReader) -> Result<Tainted<String>, String> {
+    use std::io::BufRead as _;
+    let mut inner = r.inner;
+    let mut line = String::new();
+    match inner.read_line(&mut line) {
+        Ok(_) => Ok(Tainted(line)),
+        Err(e) => Err(sanitize_io_error(e.kind())),
+    }
+}
+
+/// Write a line (followed by `\n`) to a [`BufWriter`].
+///
+/// Flushes the buffer before returning.
+/// Single-use in Phase 2 — the writer is consumed after this call.
+pub fn write_line(w: BufWriter, line: String) -> Result<(), String> {
+    use std::io::Write as _;
+    let mut inner = w.inner;
+    writeln!(inner, "{}", line)
+        .and_then(|_| inner.flush())
+        .map_err(|e| sanitize_io_error(e.kind()))
+}
+
+// ── Filesystem operations ──────────────────────────────────────────────────
+
+/// Create a directory and all its missing parents.
+///
+/// No-op if the directory already exists.
+pub fn create_dir_all(p: Path) -> Result<(), String> {
+    std::fs::create_dir_all(&p.inner).map_err(|e| sanitize_io_error(e.kind()))
+}
+
+/// Remove a file or empty directory.
+pub fn remove(p: Path) -> Result<(), String> {
+    let is_dir = std::fs::symlink_metadata(&p.inner)
+        .map(|m| m.is_dir())
+        .unwrap_or(false);
+    if is_dir {
+        std::fs::remove_dir(&p.inner)
+    } else {
+        std::fs::remove_file(&p.inner)
+    }
+    .map_err(|e| sanitize_io_error(e.kind()))
+}
+
+/// List the entries in a directory.
+pub fn read_dir(p: Path) -> Result<Vec<DirEntry>, String> {
+    let entries = std::fs::read_dir(&p.inner).map_err(|e| sanitize_io_error(e.kind()))?;
+    entries
+        .map(|entry| {
+            let entry = entry.map_err(|e| sanitize_io_error(e.kind()))?;
+            let meta = entry.metadata().map_err(|e| sanitize_io_error(e.kind()))?;
+            Ok(DirEntry {
+                path: Path {
+                    inner: entry.path().to_string_lossy().into_owned(),
+                },
+                is_file: meta.is_file(),
+                is_dir: meta.is_dir(),
+                is_symlink: meta.file_type().is_symlink(),
+            })
+        })
+        .collect()
+}
+
+/// Return metadata for a path without following symbolic links (`lstat` semantics).
+pub fn metadata(p: Path) -> Result<Metadata, String> {
+    let m = std::fs::symlink_metadata(&p.inner).map_err(|e| sanitize_io_error(e.kind()))?;
+    #[cfg(unix)]
+    let permissions = {
+        use std::os::unix::fs::PermissionsExt as _;
+        m.permissions().mode() as i64
+    };
+    #[cfg(not(unix))]
+    let permissions = 0i64;
+    Ok(Metadata {
+        len: m.len() as i64,
+        is_file: m.is_file(),
+        is_dir: m.is_dir(),
+        is_symlink: m.file_type().is_symlink(),
+        permissions,
+    })
+}
+
+/// Set the Unix permission bits of a file or directory.
+///
+/// No-op (returns `Ok(())`) on non-Unix platforms.
+pub fn chmod(p: Path, mode: i64) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let perms = std::fs::Permissions::from_mode(mode as u32);
+        std::fs::set_permissions(&p.inner, perms).map_err(|e| sanitize_io_error(e.kind()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (p, mode);
+        Ok(())
+    }
+}
+
+/// Create a symbolic link: `link` will point to `target`.
+///
+/// Returns an error on non-Unix platforms.
+pub fn create_symlink(target: Path, link: Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&target.inner, &link.inner)
+            .map_err(|e| sanitize_io_error(e.kind()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (target, link);
+        Err("symlinks not supported on this platform".to_string())
+    }
+}
+
+/// Read the target path of a symbolic link.
+///
+/// Returns `Tainted<String>` — symlink targets are external data.
+pub fn read_link(p: Path) -> Result<Tainted<String>, String> {
+    std::fs::read_link(&p.inner)
+        .map(|pb| Tainted(pb.to_string_lossy().into_owned()))
+        .map_err(|e| sanitize_io_error(e.kind()))
+}
+
+// ── Standard input (! Console) ─────────────────────────────────────────────
+
+/// Return the standard input handle.
+///
+/// Single-use in Phase 2 — pass to [`stdin_read_line`] or [`stdin_read_to_string`].
+pub fn stdin() -> Stdin {
+    Stdin {
+        inner: std::io::stdin(),
+    }
+}
+
+/// Read one line from stdin (up to and including `\n`).
+///
+/// Returns `Ok(Tainted<String>)` on success.
+/// Returns `Ok(Tainted(""))` at end-of-file.
+pub fn stdin_read_line(s: Stdin) -> Result<Tainted<String>, String> {
+    use std::io::BufRead as _;
+    let mut line = String::new();
+    match s.inner.lock().read_line(&mut line) {
+        Ok(_) => Ok(Tainted(line)),
+        Err(e) => Err(sanitize_io_error(e.kind())),
+    }
+}
+
+/// Read all of stdin into a string.
+///
+/// Returns `Ok(Tainted<String>)` on success.
+pub fn stdin_read_to_string(s: Stdin) -> Result<Tainted<String>, String> {
+    use std::io::Read as _;
+    let mut buf = String::new();
+    s.inner
+        .lock()
+        .read_to_string(&mut buf)
+        .map(|_| Tainted(buf))
+        .map_err(|e| sanitize_io_error(e.kind()))
+}
+
+// ── Internal helpers ───────────────────────────────────────────────────────
+
 /// Convert an I/O error to a sanitized category string.
 ///
-/// Returns a fixed string that does not include the file path or OS-level details,
-/// preventing information disclosure when error values are surfaced to callers.
+/// Returns a fixed string that does not include the file path or OS-level
+/// details, preventing information disclosure.
 fn sanitize_io_error(kind: std::io::ErrorKind) -> String {
     match kind {
         std::io::ErrorKind::NotFound => "file not found".to_string(),
@@ -89,15 +389,40 @@ fn sanitize_io_error(kind: std::io::ErrorKind) -> String {
     }
 }
 
+// ── Tests ──────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tmp(name: &str) -> String {
+        std::env::temp_dir()
+            .join(name)
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    // ── Path construction ──────────────────────────────────────────────────
 
     #[test]
     fn path_stores_inner_string() {
         let p = path("foo/bar.txt".to_string());
         assert_eq!(p.as_str(), "foo/bar.txt");
     }
+
+    #[test]
+    fn join_appends_segment() {
+        let p = join(path("/etc/app".to_string()), "config.toml".to_string());
+        assert_eq!(p.as_str(), "/etc/app/config.toml");
+    }
+
+    #[test]
+    fn to_string_returns_inner() {
+        let p = path("/tmp/test".to_string());
+        assert_eq!(to_string(p), "/tmp/test");
+    }
+
+    // ── read_to_string / read_file ─────────────────────────────────────────
 
     #[test]
     fn read_to_string_missing_file_returns_err() {
@@ -107,10 +432,9 @@ mod tests {
 
     #[test]
     fn read_to_string_real_file() {
-        // Write a temp file using only std
-        let path_str = std::env::temp_dir().join("mvl_test_read_to_string.txt");
+        let path_str = tmp("mvl_test_read_to_string.txt");
         std::fs::write(&path_str, "hello mvl").unwrap();
-        let p = path(path_str.to_string_lossy().into_owned());
+        let p = path(path_str.clone());
         let result = read_to_string(p);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().0, "hello mvl");
@@ -125,12 +449,208 @@ mod tests {
 
     #[test]
     fn read_file_real_file() {
-        let path_str = std::env::temp_dir().join("mvl_test_read_file.txt");
+        let path_str = tmp("mvl_test_read_file.txt");
         std::fs::write(&path_str, "world mvl").unwrap();
-        let p = Clean(path_str.to_string_lossy().into_owned());
+        let p = Clean(path_str.clone());
         let result = read_file(p);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().0, "world mvl");
         std::fs::remove_file(&path_str).ok();
+    }
+
+    // ── Path queries ───────────────────────────────────────────────────────
+
+    #[test]
+    fn exists_returns_true_for_existing_file() {
+        let path_str = tmp("mvl_test_exists.txt");
+        std::fs::write(&path_str, "").unwrap();
+        assert!(exists(path(path_str.clone())));
+        std::fs::remove_file(&path_str).ok();
+    }
+
+    #[test]
+    fn exists_returns_false_for_missing_file() {
+        assert!(!exists(path("/tmp/mvl_no_such_file_xyz".to_string())));
+    }
+
+    #[test]
+    fn is_file_and_is_dir() {
+        let path_str = tmp("mvl_test_is_file.txt");
+        std::fs::write(&path_str, "").unwrap();
+        assert!(is_file(path(path_str.clone())));
+        assert!(!is_dir(path(path_str.clone())));
+        std::fs::remove_file(&path_str).ok();
+    }
+
+    // ── write / append / read roundtrip ───────────────────────────────────
+
+    #[test]
+    fn write_creates_file_with_content() {
+        let path_str = tmp("mvl_test_write.txt");
+        let p = path(path_str.clone());
+        write(p.clone(), Tainted("hello".to_string())).unwrap();
+        let got = std::fs::read_to_string(&path_str).unwrap();
+        assert_eq!(got, "hello");
+        std::fs::remove_file(&path_str).ok();
+    }
+
+    #[test]
+    fn write_truncates_existing_file() {
+        let path_str = tmp("mvl_test_write_trunc.txt");
+        std::fs::write(&path_str, "old content with more bytes").unwrap();
+        let p = path(path_str.clone());
+        write(p, Tainted("new".to_string())).unwrap();
+        let got = std::fs::read_to_string(&path_str).unwrap();
+        assert_eq!(got, "new");
+        std::fs::remove_file(&path_str).ok();
+    }
+
+    #[test]
+    fn append_adds_to_existing_content() {
+        let path_str = tmp("mvl_test_append.txt");
+        std::fs::write(&path_str, "line1\n").unwrap();
+        let p = path(path_str.clone());
+        append(p, Tainted("line2\n".to_string())).unwrap();
+        let got = std::fs::read_to_string(&path_str).unwrap();
+        assert_eq!(got, "line1\nline2\n");
+        std::fs::remove_file(&path_str).ok();
+    }
+
+    #[test]
+    fn write_read_roundtrip() {
+        let path_str = tmp("mvl_test_roundtrip.txt");
+        let p = path(path_str.clone());
+        write(p.clone(), Tainted("roundtrip content".to_string())).unwrap();
+        let result = read_to_string(p);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().0, "roundtrip content");
+        std::fs::remove_file(&path_str).ok();
+    }
+
+    // ── open / close / buf_reader / read_line ─────────────────────────────
+
+    #[test]
+    fn open_missing_file_returns_err() {
+        let p = path("/tmp/mvl_no_such_file_to_open_xyz".to_string());
+        // open() creates the file if it doesn't exist, so use a dir path to force error
+        let p_dir = path("/tmp/mvl_no_such_dir_xyz/file.txt".to_string());
+        assert!(open(p_dir).is_err());
+        // Clean up if open() created the file
+        std::fs::remove_file("/tmp/mvl_no_such_file_to_open_xyz").ok();
+        let _ = p;
+    }
+
+    #[test]
+    fn buf_reader_read_line_returns_content() {
+        let path_str = tmp("mvl_test_buf_reader.txt");
+        std::fs::write(&path_str, "first line\nsecond line\n").unwrap();
+        let p = path(path_str.clone());
+        let f = open(p).unwrap();
+        let r = buf_reader(f);
+        let line = read_line(r).unwrap();
+        assert_eq!(line.0, "first line\n");
+        std::fs::remove_file(&path_str).ok();
+    }
+
+    #[test]
+    fn read_line_eof_returns_empty_string() {
+        let path_str = tmp("mvl_test_read_line_eof.txt");
+        std::fs::write(&path_str, "").unwrap();
+        let p = path(path_str.clone());
+        let f = open(p).unwrap();
+        let r = buf_reader(f);
+        let line = read_line(r).unwrap();
+        assert_eq!(line.0, "", "EOF should return empty string");
+        std::fs::remove_file(&path_str).ok();
+    }
+
+    // ── write_line ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn write_line_creates_file_with_newline() {
+        let path_str = tmp("mvl_test_write_line.txt");
+        // Remove if exists from prior run
+        std::fs::remove_file(&path_str).ok();
+        let p = path(path_str.clone());
+        let f = open(p).unwrap();
+        let w = buf_writer(f);
+        write_line(w, "header".to_string()).unwrap();
+        let got = std::fs::read_to_string(&path_str).unwrap();
+        assert_eq!(got, "header\n");
+        std::fs::remove_file(&path_str).ok();
+    }
+
+    // ── Filesystem operations ──────────────────────────────────────────────
+
+    #[test]
+    fn create_dir_all_and_remove() {
+        let dir_str = tmp("mvl_test_dir_xyz/nested");
+        let dir_p = path(dir_str.clone());
+        create_dir_all(dir_p).unwrap();
+        assert!(std::path::Path::new(&dir_str).is_dir());
+        // Remove nested first, then parent
+        remove(path(dir_str.clone())).unwrap();
+        remove(path(tmp("mvl_test_dir_xyz"))).unwrap();
+    }
+
+    #[test]
+    fn remove_file_works() {
+        let path_str = tmp("mvl_test_remove.txt");
+        std::fs::write(&path_str, "").unwrap();
+        let p = path(path_str.clone());
+        remove(p).unwrap();
+        assert!(!std::path::Path::new(&path_str).exists());
+    }
+
+    #[test]
+    fn remove_missing_file_returns_err() {
+        let p = path("/tmp/mvl_no_such_file_to_remove_xyz".to_string());
+        assert!(remove(p).is_err());
+    }
+
+    #[test]
+    fn read_dir_lists_entries() {
+        let dir_str = tmp("mvl_test_read_dir");
+        std::fs::create_dir_all(&dir_str).unwrap();
+        std::fs::write(format!("{dir_str}/a.txt"), "").unwrap();
+        std::fs::write(format!("{dir_str}/b.txt"), "").unwrap();
+        let entries = read_dir(path(dir_str.clone())).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().all(|e| e.is_file));
+        std::fs::remove_dir_all(&dir_str).ok();
+    }
+
+    #[test]
+    fn metadata_returns_file_info() {
+        let path_str = tmp("mvl_test_metadata.txt");
+        std::fs::write(&path_str, "hello").unwrap();
+        let m = metadata(path(path_str.clone())).unwrap();
+        assert_eq!(m.len, 5);
+        assert!(m.is_file);
+        assert!(!m.is_dir);
+        std::fs::remove_file(&path_str).ok();
+    }
+
+    #[test]
+    fn chmod_does_not_error_on_valid_path() {
+        let path_str = tmp("mvl_test_chmod.txt");
+        std::fs::write(&path_str, "").unwrap();
+        let result = chmod(path(path_str.clone()), 0o644);
+        assert!(result.is_ok());
+        std::fs::remove_file(&path_str).ok();
+    }
+
+    #[test]
+    fn create_symlink_and_read_link() {
+        let target_str = tmp("mvl_test_symlink_target.txt");
+        let link_str = tmp("mvl_test_symlink_link.txt");
+        std::fs::write(&target_str, "target content").unwrap();
+        std::fs::remove_file(&link_str).ok();
+        let result = create_symlink(path(target_str.clone()), path(link_str.clone()));
+        assert!(result.is_ok());
+        let link_target = read_link(path(link_str.clone())).unwrap();
+        assert!(link_target.0.ends_with("mvl_test_symlink_target.txt"));
+        std::fs::remove_file(&link_str).ok();
+        std::fs::remove_file(&target_str).ok();
     }
 }

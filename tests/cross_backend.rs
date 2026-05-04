@@ -367,6 +367,27 @@ fn cross_backend_log_stderr() {
     );
 }
 
+// ── #417 + #435: io stdlib — both backends ────────────────────────────────────
+
+/// Write+read roundtrip, append, create_dir, remove.
+/// Both backends must produce identical output: the file round-trips correctly.
+#[test]
+fn cross_backend_io_write_read_roundtrip() {
+    let file = corpus_effects("io_basic.mvl");
+    let transpiler_out = run_transpiler(&file);
+    assert_eq!(
+        transpiler_out.trim(),
+        "read_ok\nappend_ok\ndir_ok\nok",
+        "io_basic.mvl: unexpected output from transpiler backend"
+    );
+    if let Some(llvm_out) = run_llvm(&file) {
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "io_basic.mvl: LLVM and transpiler backends must produce identical output"
+        );
+    }
+}
+
 /// `time.sleep(seconds(0))` — zero-duration sleep — must complete without
 /// error and both backends must print "ok".
 #[test]
