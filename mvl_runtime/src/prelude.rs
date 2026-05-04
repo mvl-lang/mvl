@@ -19,7 +19,12 @@ pub use crate::mvl_refine;
 // call these directly — no per-program `bridge.rs` is needed for generic I/O.
 
 /// `std.io` — file I/O operations.
-pub use crate::stdlib::io::{join, path, read_file, read_to_string, to_string, Path};
+pub use crate::stdlib::io::{
+    append, buf_reader, buf_writer, chmod, close, create_dir_all, create_symlink, exists, is_dir,
+    is_file, join, metadata, open, path, read_dir, read_file, read_line, read_link, read_to_string,
+    remove, stdin, stdin_read_line, stdin_read_to_string, to_string, write, write_line, BufReader,
+    BufWriter, DirEntry, File, Metadata, Path, Stdin,
+};
 
 /// `std.args` — CLI argument and environment access.
 pub use crate::stdlib::args::{get_arg, get_args, get_env, parse, ParseFromArgs};

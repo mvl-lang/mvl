@@ -1,0 +1,43 @@
+// Corpus: io stdlib basics — write+read roundtrip, append, create/remove (#417)
+//
+// Exercises the Rust transpiler path (mvl_runtime::stdlib::io) for real file I/O.
+// LLVM-pending: #435 (C-ABI exports for the LLVM backend)
+//
+// Used by: tests/cross_backend.rs::transpiler_io_write_read_roundtrip
+
+use std.io.{
+    Path, path,
+    write, append, read_to_string,
+    create_dir_all, remove,
+}
+
+fn run_io() -> Result[Unit, String] ! FileRead, FileWrite, FileDelete {
+    let p: Path = path("/tmp/mvl_io_test_417.txt");
+    let dir: Path = path("/tmp/mvl_io_test_dir_417");
+
+    // write + read roundtrip
+    write(p, "hello io")?;
+    let contents: Tainted[String] = read_to_string(p)?;
+    println("{}", contents);
+
+    // append
+    append(p, " appended")?;
+    let contents2: Tainted[String] = read_to_string(p)?;
+    println("{}", contents2);
+
+    // create_dir_all
+    create_dir_all(dir)?;
+    println("dir_ok");
+
+    // cleanup
+    remove(p)?;
+    remove(dir)?;
+    Ok(())
+}
+
+fn main() -> Unit ! FileRead, FileWrite, FileDelete, Console {
+    match run_io() {
+        Ok(_) => println("ok"),
+        Err(e) => println("error: {}", e),
+    }
+}

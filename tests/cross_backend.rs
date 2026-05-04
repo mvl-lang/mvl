@@ -367,6 +367,22 @@ fn cross_backend_log_stderr() {
     );
 }
 
+// ── #417: io stdlib (Rust transpiler path) ────────────────────────────────────
+
+/// Write+read roundtrip, path queries, append, create_dir, remove.
+/// Transpiler-only until #435 (LLVM C-ABI exports for io).
+/// LLVM-pending: #435
+#[test]
+fn transpiler_io_write_read_roundtrip() {
+    let file = corpus_effects("io_basic.mvl");
+    let out = run_transpiler(&file);
+    assert_eq!(
+        out.trim(),
+        "hello io\nhello io appended\ndir_ok\nok",
+        "io_basic.mvl: unexpected output from transpiler backend"
+    );
+}
+
 /// `time.sleep(seconds(0))` — zero-duration sleep — must complete without
 /// error and both backends must print "ok".
 #[test]
