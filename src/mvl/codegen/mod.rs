@@ -40,15 +40,46 @@ use crate::mvl::parser::ast::{
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+/// A reusable LLVM compiler that owns its `Context`.
+///
+/// Construct once and call [`LlvmCompiler::compile_to_ir`] repeatedly to avoid
+/// the overhead of allocating a new LLVM context on every compilation.
+pub struct LlvmCompiler {
+    context: Context,
+}
+
+impl LlvmCompiler {
+    /// Create a new compiler with a fresh LLVM context.
+    pub fn new() -> Self {
+        Self {
+            context: Context::create(),
+        }
+    }
+
+    /// Compile a MVL program AST to LLVM IR text.
+    ///
+    /// Returns the IR as a string on success, or an error message on failure.
+    pub fn compile_to_ir(&self, prog: &Program, module_name: &str) -> Result<String, String> {
+        let mut backend = LlvmBackend::new(&self.context, module_name);
+        backend.emit_program(prog);
+        backend.verify()?;
+        Ok(backend.to_ir_string())
+    }
+}
+
+impl Default for LlvmCompiler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Compile a MVL program AST to LLVM IR text.
 ///
-/// Returns the IR as a string on success, or an error message on failure.
+/// Convenience one-shot wrapper — creates an [`LlvmCompiler`], compiles, then
+/// drops it. For hot loops prefer constructing [`LlvmCompiler`] once and
+/// reusing it across calls.
 pub fn compile_to_ir(prog: &Program, module_name: &str) -> Result<String, String> {
-    let context = Context::create();
-    let mut backend = LlvmBackend::new(&context, module_name);
-    backend.emit_program(prog);
-    backend.verify()?;
-    Ok(backend.to_ir_string())
+    LlvmCompiler::new().compile_to_ir(prog, module_name)
 }
 
 /// Find the `lli` interpreter binary.

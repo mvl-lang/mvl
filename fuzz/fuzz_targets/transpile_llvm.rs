@@ -12,9 +12,14 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use mvl::mvl::codegen::compile_to_ir;
+use mvl::mvl::codegen::LlvmCompiler;
 use mvl::mvl::parser::Parser;
 use mvl_fuzz::generator::Generator;
+
+// One context for the lifetime of the fuzz process — amortises Context::create() cost.
+std::thread_local! {
+    static COMPILER: LlvmCompiler = LlvmCompiler::new();
+}
 
 fuzz_target!(|data: &[u8]| {
     let mut gen = Generator::new(data);
@@ -26,8 +31,10 @@ fuzz_target!(|data: &[u8]| {
     let prog = parser.parse_program();
 
     // compile_to_ir returns Result<String, String> — never panics by contract.
-    if let Ok(ir) = compile_to_ir(&prog, "fuzz_target") {
-        assert!(!ir.is_empty());
-    }
-    // Err variant means unsupported/invalid construct — not a bug, skip silently.
+    COMPILER.with(|compiler| {
+        if let Ok(ir) = compiler.compile_to_ir(&prog, "fuzz_target") {
+            assert!(!ir.is_empty());
+        }
+        // Err variant means unsupported/invalid construct — not a bug, skip silently.
+    });
 });
