@@ -1918,3 +1918,251 @@ fn group_by_with_ref_string_key_emits_borrow_on_clone() {
     let rust = transpile_src(src);
     assert_contains(&rust, "&__v.clone()");
 }
+
+// ── Mutation regression: emit_binary_op operator table (#206) ─────────────
+//
+// Each test pins exactly one operator string so that a mutation of the table
+// entry (e.g. "+" → "-") produces a test failure.  Without these tests every
+// entry in `emit_binary_op` is a surviving mutant.
+
+/// Addition operator emits `+`.
+#[test]
+fn binary_add_emits_plus() {
+    let src = "fn f(a: Int, b: Int) -> Int { a + b }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "a + b");
+}
+
+/// Subtraction operator emits `-`.
+#[test]
+fn binary_sub_emits_minus() {
+    let src = "fn f(a: Int, b: Int) -> Int { a - b }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "a - b");
+}
+
+/// Multiplication operator emits `*`.
+#[test]
+fn binary_mul_emits_star() {
+    let src = "fn f(a: Int, b: Int) -> Int { a * b }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "a * b");
+}
+
+/// Division operator emits `/`.
+#[test]
+fn binary_div_emits_slash() {
+    let src = "fn f(a: Int, b: Int) -> Int { a / b }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "a / b");
+}
+
+/// Remainder operator emits `%`.
+#[test]
+fn binary_rem_emits_percent() {
+    let src = "fn f(a: Int, b: Int) -> Int { a % b }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "a % b");
+}
+
+/// Equality operator emits `==`.
+#[test]
+fn binary_eq_emits_double_eq() {
+    let src = "fn f(a: Int, b: Int) -> Bool { a == b }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "a == b");
+}
+
+/// Inequality operator emits `!=`.
+#[test]
+fn binary_ne_emits_bang_eq() {
+    let src = "fn f(a: Int, b: Int) -> Bool { a != b }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "a != b");
+}
+
+/// Less-than operator emits `<`.
+#[test]
+fn binary_lt_emits_less_than() {
+    let src = "fn f(a: Int, b: Int) -> Bool { a < b }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "a < b");
+}
+
+/// Greater-than operator emits `>`.
+#[test]
+fn binary_gt_emits_greater_than() {
+    let src = "fn f(a: Int, b: Int) -> Bool { a > b }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "a > b");
+}
+
+/// Less-or-equal operator emits `<=`.
+#[test]
+fn binary_le_emits_le() {
+    let src = "fn f(a: Int, b: Int) -> Bool { a <= b }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "a <= b");
+}
+
+/// Greater-or-equal operator emits `>=`.
+#[test]
+fn binary_ge_emits_ge() {
+    let src = "fn f(a: Int, b: Int) -> Bool { a >= b }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "a >= b");
+}
+
+/// Logical and emits `&&`.
+#[test]
+fn binary_and_emits_double_ampersand() {
+    let src = "fn f(a: Bool, b: Bool) -> Bool { a && b }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "a && b");
+}
+
+/// Logical or emits `||`.
+#[test]
+fn binary_or_emits_double_pipe() {
+    let src = "fn f(a: Bool, b: Bool) -> Bool { a || b }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "a || b");
+}
+
+// ── Mutation regression: emit_literal dispatch (#206) ────────────────────
+
+/// `true` literal emits `true`, not `false`.
+#[test]
+fn bool_true_literal_emits_true() {
+    let src = "fn f() -> Bool { true }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "true");
+    assert!(
+        !rust.contains("false"),
+        "true literal must not emit false:\n{rust}"
+    );
+}
+
+/// `false` literal emits `false`, not `true`.
+#[test]
+fn bool_false_literal_emits_false() {
+    let src = "fn f() -> Bool { false }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "false");
+    assert!(
+        !rust.contains("true"),
+        "false literal must not emit true:\n{rust}"
+    );
+}
+
+/// Whole-number float literal always gets a `.0` suffix so it stays a float.
+/// The guard `s.contains('.') || s.contains('e')` must remain an `||` not `&&`.
+#[test]
+fn whole_number_float_gets_decimal_suffix() {
+    let src = "fn f() -> Float { 2.0 }";
+    let rust = transpile_src(src);
+    assert!(
+        rust.contains("2.0") || rust.contains("2."),
+        "whole-number float must have decimal suffix:\n{rust}"
+    );
+}
+
+// ── Mutation regression: emit_stmt let-mutability (#206) ─────────────────
+
+/// Immutable let-binding emits `let ` (not `let mut `).
+#[test]
+fn immutable_let_emits_let_not_let_mut() {
+    let src = "fn f() -> Int { let x: Int = 1; x }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "let x:");
+    assert!(
+        !rust.contains("let mut x:"),
+        "immutable binding must not emit `let mut`:\n{rust}"
+    );
+}
+
+/// Mutable let-binding emits `let mut ` (not just `let `).
+#[test]
+fn mutable_let_emits_let_mut() {
+    let src = "fn f() -> Int { let mut x: Int = 1; x = 2; x }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "let mut x:");
+}
+
+// ── Mutation regression: string match pattern (.as_str() coercion) (#206) ─
+
+/// Match on a String value with string literal arms must coerce via `.as_str()`.
+/// `arms_have_str_pattern` returning the wrong value would break this.
+#[test]
+fn match_string_scrutinee_with_literal_arm_emits_as_str() {
+    let src = r#"fn f(s: String) -> Int { match s { "hello" => 1, _ => 0 } }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".as_str()");
+}
+
+/// Match on an Int scrutinee must NOT emit `.as_str()` after the matched variable.
+/// Guards against `arms_have_str_pattern` returning `true` unconditionally.
+#[test]
+fn match_int_scrutinee_does_not_coerce_to_str() {
+    let src = "fn f(n: Int) -> Int { match n { 0 => 1, _ => 0 } }";
+    let rust = transpile_src(src);
+    // The match expression must be `match n {`, not `match n.as_str() {`
+    assert_contains(&rust, "match n {");
+    assert!(
+        !rust.contains("match n.as_str()"),
+        "integer match must not coerce scrutinee to &str:\n{rust}"
+    );
+}
+
+/// String literal in pattern position must be a bare `"s"`, not `"s".to_string()`.
+/// `emit_literal_in_pattern` has a separate path from `emit_literal`.
+#[test]
+fn string_literal_in_match_arm_is_bare_not_to_string() {
+    let src = r#"fn f(s: String) -> Int { match s { "hello" => 1, _ => 0 } }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "\"hello\"");
+    assert!(
+        !rust.contains("\"hello\".to_string()"),
+        "pattern string must not call .to_string():\n{rust}"
+    );
+}
+
+// ── Mutation regression: else-if chaining (#206, related to #197) ─────────
+
+/// `else if` chains must emit as inline `else if`, not as `else { if ... }`.
+/// A mutation that skips the `ElseBranch::If` inline path would emit a nested block.
+#[test]
+fn else_if_emits_inline_not_nested_block() {
+    let src = "fn f(n: Int) -> Int { if n > 0 { 1 } else if n < 0 { -1 } else { 0 } }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "} else if");
+}
+
+// ── Mutation regression: field access clone in arg position (#206) ────────
+
+/// A field access passed as a function argument must emit `.clone()`.
+/// `emit_expr_as_arg` handles `Expr::FieldAccess` via the conservative clone path.
+#[test]
+fn field_access_arg_emits_clone() {
+    let src = "type P = struct { x: Int }  fn use_int(n: Int) -> Int { n }  fn f(p: P) -> Int { use_int(p.x) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "p.x.clone()");
+}
+
+/// Block used as a value (e.g., if expression) emits the block body correctly.
+/// Guards against `emit_block_as_value` being replaced with a no-op.
+#[test]
+fn if_expr_as_value_emits_block_body() {
+    let src = "fn f(b: Bool) -> Int { let x: Int = if b { 1 } else { 2 }; x }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "1");
+    assert_contains(&rust, "2");
+}
+
+/// An identifier passed as a function argument emits `.clone()` when not the last use.
+#[test]
+fn ident_arg_non_last_use_emits_clone() {
+    let src = "fn double(n: Int) -> Int { n }  fn f(x: Int) -> Int { let _a: Int = double(x); double(x) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "double(x.clone())");
+}

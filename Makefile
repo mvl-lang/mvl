@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-corpus test-stdlib test-transpiler test-llvm test-tree-sitter test-grammar-coverage coverage lint mvl-lint format format-check assurance assurance-summary assurance-gate docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff
+.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-corpus test-stdlib test-transpiler test-llvm test-tree-sitter test-grammar-coverage coverage lint mvl-lint format format-check assurance assurance-summary assurance-gate docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants
 
 help: ## Show this help
 	@echo ""
@@ -219,6 +219,27 @@ fuzz-diff: ## [Phase 3] Differential fuzzing: Rust vs LLVM backends (subprocess 
 	@command -v cargo >/dev/null && test -f target/debug/mvl || { echo "Run 'make build' first — fuzz-diff needs the mvl binary."; exit 1; }
 	cargo +nightly fuzz run transpile_diff -- -max_total_time=$(FUZZ_TIMEOUT) -timeout=30
 	@echo "All clear — no divergences found."
+
+# === Mutation testing (long-running — not part of per-PR CI) ===
+# Requires: cargo install cargo-mutants
+# Scores transpiler emit_*.rs modules; target: ≥80% mutation score.
+# Results written to mutants.out/ — see mutants.out/outcomes.json for triage.
+# Ref: #206
+
+MUTANTS_TIMEOUT ?= 120  # seconds per mutant; raise for slow machines
+
+mutants: ## Run cargo-mutants on transpiler emit modules (long-running; ~1-2 h)
+	@command -v cargo-mutants >/dev/null 2>&1 || { echo "Install first: cargo install cargo-mutants"; exit 1; }
+	cargo mutants \
+	  --file 'src/mvl/transpiler/emit_exprs.rs' \
+	  --file 'src/mvl/transpiler/emit_stmts.rs' \
+	  --file 'src/mvl/transpiler/emit_types.rs' \
+	  --timeout $(MUTANTS_TIMEOUT) \
+	  --jobs 4 \
+	  --cargo-test-arg '--test' \
+	  --cargo-test-arg 'transpiler'
+	@echo ""
+	@echo "Results in mutants.out/  — run 'cat mutants.out/caught.txt' and 'cat mutants.out/missed.txt'"
 
 # === Clean ===
 
