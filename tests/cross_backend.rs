@@ -367,20 +367,25 @@ fn cross_backend_log_stderr() {
     );
 }
 
-// ── #417: io stdlib (Rust transpiler path) ────────────────────────────────────
+// ── #417 + #435: io stdlib — both backends ────────────────────────────────────
 
-/// Write+read roundtrip, path queries, append, create_dir, remove.
-/// Transpiler-only until #435 (LLVM C-ABI exports for io).
-/// LLVM-pending: #435
+/// Write+read roundtrip, append, create_dir, remove.
+/// Both backends must produce identical output: the file round-trips correctly.
 #[test]
-fn transpiler_io_write_read_roundtrip() {
+fn cross_backend_io_write_read_roundtrip() {
     let file = corpus_effects("io_basic.mvl");
-    let out = run_transpiler(&file);
+    let transpiler_out = run_transpiler(&file);
     assert_eq!(
-        out.trim(),
+        transpiler_out.trim(),
         "hello io\nhello io appended\ndir_ok\nok",
         "io_basic.mvl: unexpected output from transpiler backend"
     );
+    if let Some(llvm_out) = run_llvm(&file) {
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "io_basic.mvl: LLVM and transpiler backends must produce identical output"
+        );
+    }
 }
 
 /// `time.sleep(seconds(0))` — zero-duration sleep — must complete without

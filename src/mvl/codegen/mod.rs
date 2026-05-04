@@ -217,6 +217,24 @@ pub(crate) enum StdlibSig {
     /// Both arguments are opaque pointer-typed at the LLVM IR level.
     /// e.g. `log_debug(msg, fields)` → `_mvl_log_debug(ptr, ptr)`.
     VoidStringMapArg(String),
+
+    // ── #435: io stdlib (ptr-based Result returns) ────────────────────────────
+    /// `ptr → ptr` — identity pass-through (e.g. `path(s)`: String → Path).
+    /// Both types are represented as `MvlString*` at the LLVM IR level.
+    PtrIdentArg(String),
+    /// `(ptr) → {i8, ptr}` — one-ptr-arg C function returning Result[Unit, String].
+    /// The C function returns `{tag, direct_payload}` where direct_payload is a
+    /// direct value (null for Ok(Unit), MvlString* for Err).  The emission helper
+    /// wraps the payload with a stack alloca to produce the internal `{i8, ptr}`
+    /// double-indirected format that `emit_propagate` and `bind_pattern_vars` expect.
+    ResultUnitOnePtrArg(String),
+    /// `(ptr, ptr) → {i8, ptr}` — two-ptr-arg variant of `ResultUnitOnePtrArg`.
+    /// e.g. `write(path, content)` and `append(path, content)`.
+    ResultUnitTwoPtrArgs(String),
+    /// `(ptr) → {i8, ptr}` — one-ptr-arg C function returning Result[String, String].
+    /// The C function returns `{tag, direct_payload}` where direct_payload is a
+    /// MvlString* for Ok and Err.  Wrapping is the same as ResultUnitOnePtrArg.
+    ResultStringOnePtrArg(String),
 }
 
 // ── Backend struct ────────────────────────────────────────────────────────────
@@ -432,10 +450,15 @@ impl<'ctx> LlvmBackend<'ctx> {
     fn collect_stdlib_imports(&mut self, prog: &Program) {
         // Dispatch table: (module, mvl_name) → StdlibSig.
         //
-        // I64NoArg     — no arguments, returns i64.
-        // F64NoArg     — no arguments, returns f64.
-        // I64TwoI64Args — (i64, i64) → i64.
-        // VoidTwoI64Args — (i64, i64) → void.
+        // I64NoArg          — no arguments, returns i64.
+        // F64NoArg          — no arguments, returns f64.
+        // I64TwoI64Args     — (i64, i64) → i64.
+        // VoidDurationArg   — (Duration) → void.
+        // VoidStringMapArg  — (ptr, ptr) → void.
+        // PtrIdentArg       — ptr → ptr (identity, e.g. path()).
+        // ResultUnitOnePtrArg  — ptr → {i8,ptr} Result[Unit,String].
+        // ResultUnitTwoPtrArgs — (ptr,ptr) → {i8,ptr} Result[Unit,String].
+        // ResultStringOnePtrArg — ptr → {i8,ptr} Result[String,String].
         //
         // Excluded (pending MvlArray*/MvlOption* marshalling):
         //   - random.bytes, random.choice, random.shuffle
@@ -484,6 +507,33 @@ impl<'ctx> LlvmBackend<'ctx> {
                 "log_error",
                 Sig::VoidStringMapArg("_mvl_log_error".into()),
             ),
+            // std.io — #435: C-ABI ptr-based Result returns
+            ("io", "path", Sig::PtrIdentArg("_mvl_io_path".into())),
+            (
+                "io",
+                "write",
+                Sig::ResultUnitTwoPtrArgs("_mvl_io_write".into()),
+            ),
+            (
+                "io",
+                "append",
+                Sig::ResultUnitTwoPtrArgs("_mvl_io_append".into()),
+            ),
+            (
+                "io",
+                "read_to_string",
+                Sig::ResultStringOnePtrArg("_mvl_io_read_to_string".into()),
+            ),
+            (
+                "io",
+                "create_dir_all",
+                Sig::ResultUnitOnePtrArg("_mvl_io_create_dir_all".into()),
+            ),
+            (
+                "io",
+                "remove",
+                Sig::ResultUnitOnePtrArg("_mvl_io_remove".into()),
+            ),
         ];
 
         for decl in &prog.declarations {
@@ -517,6 +567,64 @@ impl<'ctx> LlvmBackend<'ctx> {
                     }
                 }
             }
+        }
+
+        // #435: Register return types for io stdlib functions so that
+        // `infer_result_ok_llvm_ty` can distinguish `Result[Unit,String]` (ok=None)
+        // from `Result[String,String]` (ok=Some(ptr)) at emit_propagate time.
+        // Only registered when the program imports from std.io.
+        let imports_io = prog.declarations.iter().any(|d| {
+            if let Decl::Use(ud) = d {
+                ud.path.len() >= 2 && ud.path[0] == "std" && ud.path[1] == "io"
+            } else {
+                false
+            }
+        });
+        if imports_io {
+            use crate::mvl::parser::lexer::Span;
+            let s = Span {
+                line: 0,
+                col: 0,
+                offset: 0,
+                len: 0,
+            };
+            let unit = TypeExpr::Base {
+                name: "Unit".into(),
+                args: vec![],
+                span: s,
+            };
+            let string = TypeExpr::Base {
+                name: "String".into(),
+                args: vec![],
+                span: s,
+            };
+            let path = TypeExpr::Base {
+                name: "Path".into(),
+                args: vec![],
+                span: s,
+            };
+            let result_unit_str = || TypeExpr::Result {
+                ok: Box::new(unit.clone()),
+                err: Box::new(string.clone()),
+                span: s,
+            };
+            let result_str_str = || TypeExpr::Result {
+                ok: Box::new(string.clone()),
+                err: Box::new(string.clone()),
+                span: s,
+            };
+            // path(s: String) → Path
+            self.fn_return_types.entry("path".into()).or_insert(path);
+            // Result[Unit, String] functions
+            for name in &["write", "append", "create_dir_all", "remove"] {
+                self.fn_return_types
+                    .entry((*name).to_string())
+                    .or_insert_with(result_unit_str);
+            }
+            // Result[String, String] functions
+            self.fn_return_types
+                .entry("read_to_string".to_string())
+                .or_insert_with(result_str_str);
         }
     }
 
@@ -686,6 +794,151 @@ impl<'ctx> LlvmBackend<'ctx> {
             .build_extract_value(dur_struct, 1, "dur_nanos")
             .ok()?;
         self.emit_stdlib_call_void_two_args(symbol, secs, nanos)
+    }
+
+    // ── #435: io C-ABI emission helpers ──────────────────────────────────────
+
+    /// Emit a call to a C-ABI io function `(ptr) → {i8, ptr}`.
+    ///
+    /// The C function returns `{ tag: i8, direct_payload: ptr }` where `direct_payload`
+    /// is the raw value (null for Ok(Unit), MvlString* for Ok(String) or Err).
+    /// This helper wraps the payload with a stack alloca to produce the internal
+    /// double-indirected `{i8, ptr}` format expected by `emit_propagate`.
+    pub(crate) fn emit_stdlib_call_result_one_ptr_arg(
+        &mut self,
+        symbol: &str,
+        arg: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let result_ty = self
+            .context
+            .struct_type(&[self.context.i8_type().into(), ptr_ty.into()], false);
+
+        let fn_val = if let Some(f) = self.module.get_function(symbol) {
+            f
+        } else {
+            let fn_ty = result_ty.fn_type(&[ptr_ty.into()], false);
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        };
+        let call = self
+            .builder
+            .build_call(fn_val, &[arg.into()], "io_c_call")
+            .ok()?;
+        use inkwell::values::AnyValue;
+        let c_val = BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
+        self.wrap_c_result_with_slot(c_val, result_ty)
+    }
+
+    /// Emit a call to a C-ABI io function `(ptr, ptr) → {i8, ptr}`.
+    /// Same wrapping as `emit_stdlib_call_result_one_ptr_arg`.
+    pub(crate) fn emit_stdlib_call_result_two_ptr_args(
+        &mut self,
+        symbol: &str,
+        a: inkwell::values::BasicValueEnum<'ctx>,
+        b: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        use inkwell::types::BasicMetadataTypeEnum;
+        use inkwell::values::BasicMetadataValueEnum;
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let result_ty = self
+            .context
+            .struct_type(&[self.context.i8_type().into(), ptr_ty.into()], false);
+
+        let fn_val = if let Some(f) = self.module.get_function(symbol) {
+            f
+        } else {
+            let fn_ty = result_ty.fn_type(
+                &[
+                    BasicMetadataTypeEnum::from(ptr_ty),
+                    BasicMetadataTypeEnum::from(ptr_ty),
+                ],
+                false,
+            );
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        };
+        let call = self
+            .builder
+            .build_call(
+                fn_val,
+                &[
+                    BasicMetadataValueEnum::from(a),
+                    BasicMetadataValueEnum::from(b),
+                ],
+                "io_c_call",
+            )
+            .ok()?;
+        use inkwell::values::AnyValue;
+        let c_val = BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
+        self.wrap_c_result_with_slot(c_val, result_ty)
+    }
+
+    /// Emit a call to a C-ABI `ptr → ptr` function (e.g. `_mvl_io_path`).
+    pub(crate) fn emit_stdlib_call_ptr_identity(
+        &mut self,
+        symbol: &str,
+        arg: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let fn_val = if let Some(f) = self.module.get_function(symbol) {
+            f
+        } else {
+            let fn_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        };
+        let call = self
+            .builder
+            .build_call(fn_val, &[arg.into()], "io_path")
+            .ok()?;
+        use inkwell::values::AnyValue;
+        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+    }
+
+    /// Wrap a C-ABI `{i8, ptr}` result into the internal double-indirected format.
+    ///
+    /// The C function returns `{ disc: i8, direct_payload: ptr }`.  This helper:
+    /// 1. Extracts `disc` and `direct_payload` from the C result.
+    /// 2. Creates a stack alloca `slot` and stores `direct_payload` in it.
+    /// 3. Returns a new `{i8, ptr}` struct where field 1 = `slot`.
+    ///
+    /// This matches the internal format produced by `emit_result_variant` where
+    /// field 1 is always a pointer TO the payload value, not the value itself.
+    fn wrap_c_result_with_slot(
+        &mut self,
+        c_val: inkwell::values::BasicValueEnum<'ctx>,
+        result_ty: inkwell::types::StructType<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        let BasicValueEnum::StructValue(sv) = c_val else {
+            return None;
+        };
+        let disc = self.builder.build_extract_value(sv, 0, "c_disc").ok()?;
+        let direct = self.builder.build_extract_value(sv, 1, "c_direct").ok()?;
+
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        // Stack alloca to hold the direct payload — this becomes the pointer
+        // that `emit_propagate`/`bind_pattern_vars` will dereference.
+        let slot = self.builder.build_alloca(ptr_ty, "c_slot").unwrap();
+        self.builder.build_store(slot, direct).unwrap();
+
+        // Build wrapped {disc, slot} using GEP + store (mirrors emit_result_variant).
+        let wrapped_alloca = self.builder.build_alloca(result_ty, "c_wrapped").unwrap();
+        let disc_ptr = self
+            .builder
+            .build_struct_gep(result_ty, wrapped_alloca, 0, "c_disc_ptr")
+            .unwrap();
+        self.builder.build_store(disc_ptr, disc).unwrap();
+        let payload_ptr = self
+            .builder
+            .build_struct_gep(result_ty, wrapped_alloca, 1, "c_payload_ptr")
+            .unwrap();
+        self.builder.build_store(payload_ptr, slot).unwrap();
+        Some(
+            self.builder
+                .build_load(result_ty, wrapped_alloca, "c_result")
+                .unwrap(),
+        )
     }
 
     /// Emit an LLVM IR function body for a single `extern "rust"` declaration.
