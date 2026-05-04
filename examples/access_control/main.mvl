@@ -89,7 +89,7 @@ fn check_and_audit(
     resource: Resource,
     action: Action,
 ) -> Unit ! Log {
-    let decision = check_permission(role, resource, action);
+    let decision: Permission = check_permission(role, resource, action);
     log_access(username, resource, action, decision)
 }
 
@@ -98,10 +98,10 @@ fn check_and_audit(
 // RBAC demo: each call produces a structured audit record (INFO or WARN).
 // String literals are Clean[String]-compatible (compile-time constants at Public level).
 fn demo_rbac() -> Unit ! Log {
-    let u1 = check_and_audit("admin_demo", Role::Admin,     Resource::AdminPanel,  Action::Read);
-    let u2 = check_and_audit("mod_demo",   Role::Moderator, Resource::AdminPanel,  Action::Write);
-    let u3 = check_and_audit("user_demo",  Role::User,      Resource::Post,        Action::Delete);
-    let u4 = check_and_audit("guest_demo", Role::Guest,     Resource::Post,        Action::Read);
+    let u1: Unit = check_and_audit("admin_demo", Role::Admin,     Resource::AdminPanel,  Action::Read);
+    let u2: Unit = check_and_audit("mod_demo",   Role::Moderator, Resource::AdminPanel,  Action::Write);
+    let u3: Unit = check_and_audit("user_demo",  Role::User,      Resource::Post,        Action::Delete);
+    let u4: Unit = check_and_audit("guest_demo", Role::Guest,     Resource::Post,        Action::Read);
     check_and_audit("guest_demo", Role::Guest, Resource::AuditLog, Action::Read)
 }
 
@@ -109,11 +109,11 @@ fn demo_rbac() -> Unit ! Log {
 // It flows directly into hash_verify at the extern boundary inside auth module.
 // Phase 4: std.log replaces raw println; ! CryptoRandom propagated from authenticate().
 fn demo_auth() -> Unit ! Log, CryptoRandom {
-    let hash_opt = get_demo_hash("alice");
+    let hash_opt: Option[Secret[String]] = get_demo_hash("alice");
     match hash_opt {
         None => log_warn("auth attempt: user not found", {"user": "alice"}),
         Some(stored_hash) => {
-            let auth_result = authenticate("alice", "hunter2", stored_hash);
+            let auth_result: Result[Clean[String], AuthError] = authenticate("alice", "hunter2", stored_hash);
             match auth_result {
                 Ok(_)  => log_info("auth attempt: pass", {"user": "alice"}),
                 Err(_) => log_warn("auth attempt: fail", {"user": "alice"}),
@@ -123,7 +123,7 @@ fn demo_auth() -> Unit ! Log, CryptoRandom {
 }
 
 fn main() -> Unit ! Log, CryptoRandom {
-    let rbac_done = demo_rbac();
+    let rbac_done: Unit = demo_rbac();
     demo_auth()
 }
 

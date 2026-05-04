@@ -25,59 +25,59 @@ fn pri_str(p: Priority) -> String {
 }
 
 fn s1_stable_adult() -> String {
-    let v = Vitals { heart_rate: 72, systolic_bp: 118, oxygen_sat: 98, temperature: 368,
+    let v: Vitals = Vitals { heart_rate: 72, systolic_bp: 118, oxygen_sat: 98, temperature: 368,
         consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal,
         pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Minor,
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Minor,
         vitals: v, allergies: false, pregnant: false };
     pri_str(assess(p).priority)
 }
 
 fn s2_unresponsive() -> String {
-    let v = Vitals { heart_rate: 45, systolic_bp: 80, oxygen_sat: 88, temperature: 365,
+    let v: Vitals = Vitals { heart_rate: 45, systolic_bp: 80, oxygen_sat: 88, temperature: 365,
         consciousness: Consciousness::Unresponsive, breathing: BreathingStatus::Labored,
         pulse: PulseStrength::Weak };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Neurological,
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Neurological,
         vitals: v, allergies: false, pregnant: false };
     pri_str(assess(p).priority)
 }
 
 fn s3_elderly_chest_pain() -> String {
-    let v = Vitals { heart_rate: 88, systolic_bp: 145, oxygen_sat: 96, temperature: 370,
+    let v: Vitals = Vitals { heart_rate: 88, systolic_bp: 145, oxygen_sat: 96, temperature: 370,
         consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal,
         pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Elderly, complaint: ChiefComplaint::ChestPain,
+    let p: Patient = Patient { age_group: AgeGroup::Elderly, complaint: ChiefComplaint::ChestPain,
         vitals: v, allergies: true, pregnant: false };
     pri_str(assess(p).priority)
 }
 
 // Note: hr and bp must not trigger circulation_failure (hr>130 && bp<100)
 fn s4_febrile_infant() -> String {
-    let v = Vitals { heart_rate: 120, systolic_bp: 100, oxygen_sat: 97, temperature: 396,
+    let v: Vitals = Vitals { heart_rate: 120, systolic_bp: 100, oxygen_sat: 97, temperature: 396,
         consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal,
         pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Infant, complaint: ChiefComplaint::Fever,
+    let p: Patient = Patient { age_group: AgeGroup::Infant, complaint: ChiefComplaint::Fever,
         vitals: v, allergies: false, pregnant: false };
     pri_str(assess(p).priority)
 }
 
 fn s5_pregnant_abdominal() -> String {
-    let v = Vitals { heart_rate: 90, systolic_bp: 110, oxygen_sat: 99, temperature: 372,
+    let v: Vitals = Vitals { heart_rate: 90, systolic_bp: 110, oxygen_sat: 99, temperature: 372,
         consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal,
         pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Abdominal,
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Abdominal,
         vitals: v, allergies: false, pregnant: true };
     pri_str(assess(p).priority)
 }
 
 fn s6_fever_breathing() -> String {
-    let v = Vitals { heart_rate: 95, systolic_bp: 115, oxygen_sat: 96, temperature: 393,
+    let v: Vitals = Vitals { heart_rate: 95, systolic_bp: 115, oxygen_sat: 96, temperature: 393,
         consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal,
         pulse: PulseStrength::Strong };
-    let p = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Breathing,
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Breathing,
         vitals: v, allergies: false, pregnant: false };
-    let a = assess(p);
-    let iso_str = match a.isolate { true => " [ISOLATE]", false => "" };
+    let a: Assessment = assess(p);
+    let iso_str: String = match a.isolate { true => " [ISOLATE]", false => "" };
     pri_str(a.priority) + iso_str
 }
 
