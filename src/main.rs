@@ -561,17 +561,50 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
     // mvl_runtime is always required for MC/DC instrumented builds.
     let need_mvl_runtime = transpiler::prelude_requires_runtime(&stdlib_prelude_progs);
 
+    // Build a fn_name → prelude_stem map and preload prelude source lines so
+    // that JSON source-fragment lookup works for decisions in stdlib functions.
+    // IMPLICIT_STEMS must mirror load_implicit_prelude().
+    const IMPLICIT_STEMS: &[&str] = &["core", "primitives", "strings", "lists"];
+    const IMPLICIT_FILES: &[&str] = &["core.mvl", "primitives.mvl", "strings.mvl", "lists.mvl"];
+    let mut prelude_fn_to_stem: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut prelude_sources: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for ((stem, file), prog) in IMPLICIT_STEMS
+        .iter()
+        .zip(IMPLICIT_FILES.iter())
+        .zip(stdlib_prelude_progs.iter())
+    {
+        if let Some(content) = stdlib::stdlib_content(file) {
+            prelude_sources.insert(
+                stem.to_string(),
+                content.lines().map(String::from).collect(),
+            );
+        }
+        for d in &prog.declarations {
+            if let Decl::Fn(fd) = d {
+                prelude_fn_to_stem
+                    .entry(fd.name.clone())
+                    .or_insert_with(|| stem.to_string());
+            }
+        }
+    }
+
     // Transpile all test files with MC/DC instrumentation.
     let mut modules: Vec<(String, String, String)> = Vec::new();
     let mut all_decisions: Vec<MCDCDecision> = Vec::new();
     let mut all_static_decisions: Vec<DecisionInfo> = Vec::new();
     let mut file_stems: Vec<String> = Vec::new();
+    // Map module_name → source lines for JSON source fragment lookup.
+    let mut module_sources: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
 
     for test_file in &test_files {
         let file_str = test_file.display().to_string();
-        let (prog, _src) = parse_or_exit(&file_str);
+        let (prog, src) = parse_or_exit(&file_str);
         let s = stem(&file_str);
         let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
+        module_sources.insert(module_name.clone(), src.lines().map(String::from).collect());
         validate_module_name(&module_name, &file_str);
         let start_id = all_decisions.len();
         let static_d = analyze_mcdc(&prog, &module_name, start_id);
@@ -606,7 +639,7 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
         if covered_stems.contains(&module_name) {
             continue;
         }
-        let (prog, _src) = parse_or_exit(&file_str);
+        let (prog, src) = parse_or_exit(&file_str);
         let has_tests = prog
             .declarations
             .iter()
@@ -614,6 +647,7 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
         if !has_tests {
             continue;
         }
+        module_sources.insert(module_name.clone(), src.lines().map(String::from).collect());
         validate_module_name(&module_name, &file_str);
         let start_id = all_decisions.len();
         let static_d = analyze_mcdc(&prog, &module_name, start_id);
@@ -670,6 +704,17 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
             }
         }
     }
+
+    // Fix decision.file for prelude functions: they are emitted under the test
+    // module's file stem but their line numbers reference the stdlib source.
+    for decision in &mut all_decisions {
+        if let Some(prelude_stem) = prelude_fn_to_stem.get(&decision.fn_name) {
+            decision.file = prelude_stem.clone();
+        }
+    }
+    // Add prelude sources to module_sources so the JSON source-fragment lookup
+    // finds the correct line for stdlib decisions.
+    module_sources.extend(prelude_sources);
 
     let total_decisions = all_decisions.len();
 
@@ -977,6 +1022,11 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
                 let d_met: usize = clause_results.iter().filter(|&&ok| ok).count();
                 let d_total = decision.clause_count;
                 let d_covered = d_met == d_total;
+                let source_frag = module_sources
+                    .get(&decision.file)
+                    .and_then(|lines| lines.get(decision.line as usize - 1))
+                    .map(|l| l.trim().to_string())
+                    .unwrap_or_default();
                 out.push_str("\n    {\n");
                 out.push_str(&format!(
                     "      \"file\": \"{}\",\n",
@@ -984,6 +1034,10 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
                 ));
                 out.push_str(&format!("      \"line\": {},\n", decision.line));
                 out.push_str(&format!("      \"kind\": \"{kind_label}\",\n"));
+                out.push_str(&format!(
+                    "      \"source\": \"{}\",\n",
+                    json_escape(&source_frag)
+                ));
                 out.push_str(&format!("      \"clauses\": {d_total},\n"));
                 out.push_str(&format!("      \"obligations_met\": {d_met},\n"));
                 out.push_str(&format!("      \"obligations_total\": {d_total},\n"));

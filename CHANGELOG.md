@@ -12,6 +12,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 - **Design Principles are now executable OpenSpec Requirements (Spec 001 Reqs 12–14)** — All 10 README Design Principles and all 11 ADR-0001 requirements are now pinned to spec requirements with GIVEN/WHEN/THEN scenarios and `**Tests:**` pointers. Three previously undocumented principles were added to Spec 001: Req 12 (Explicit Type Annotations — Principle 1), Req 13 (Minimal Control-Flow Surface — Principle 2), Req 14 (Vocabulary over Syntax — Principle 3). Drift from the language definition now produces a `make assurance` failure rather than a silent gap (#427).
 
+## [0.72.1] — 2026-05-04
+
+### Fixed
+
+- **`mvl mcdc --json` source field now shows correct stdlib lines** — Decisions in stdlib functions (`take_while`, `skip_while`, `find_index` while loops from `lists.mvl`) were attributed to the test module's file stem, causing the `"source"` field to show unrelated lines from the test file. Fix: post-process decisions to reassign `file` to the correct prelude stem and load prelude source texts into the lookup map (#472).
+- **Example files updated to require explicit type annotations** — All 190+ bare `let x = expr` bindings across `examples/access_control/`, `examples/flight_clearance/`, and `examples/medical_triage/` now include `: Type` annotations as required since #408 (#470, #471).
+
 ## [0.72.0] — 2026-05-04
 
 ### Added
