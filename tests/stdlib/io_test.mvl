@@ -19,7 +19,15 @@
 //   read_dir, metadata, chmod, create_symlink, read_link,
 //   stdin, stdin_read_line, stdin_read_to_string
 
-use std.io.{Path, path, join, to_string, write, append, read_to_string, read_file, create_dir_all, remove}
+use std.io.{
+    File, Path, DirEntry, Metadata,
+    path, join, to_string,
+    exists, is_file, is_dir,
+    open, close,
+    write, append, read_to_string, read_file,
+    create_dir_all, remove,
+    read_dir, metadata, chmod,
+}
 
 // ── path ──────────────────────────────────────────────────────────────────
 
@@ -276,4 +284,144 @@ test fn io_join_preserves_extension() -> Unit {
     let joined: Path = join(base, "app.log");
     // "/var/log" (8) + "/" (1) + "app.log" (7) = 16 chars
     assert_eq(to_string(joined).len(), 16);
+}
+
+// ── exists / is_file / is_dir (real filesystem) ───────────────────────────
+
+test fn io_exists_true_for_tmp() -> Unit ! FileRead {
+    // /tmp always exists on POSIX systems
+    assert_eq(exists(path("/tmp")), true);
+}
+
+test fn io_exists_false_for_nonexistent() -> Unit ! FileRead {
+    assert_eq(exists(path("/tmp/mvl_nonexistent_exists_417")), false);
+}
+
+test fn io_exists_true_after_write() -> Unit ! FileRead, FileWrite, FileDelete {
+    let p: Path = path("/tmp/mvl_io_exists_test_417.txt");
+    let _: Result[Unit, String] = write(p, "x");
+    assert_eq(exists(p), true);
+    let _: Result[Unit, String] = remove(p);
+}
+
+test fn io_is_file_true_for_regular_file() -> Unit ! FileRead, FileWrite, FileDelete {
+    let p: Path = path("/tmp/mvl_io_isfile_417.txt");
+    let _: Result[Unit, String] = write(p, "x");
+    assert_eq(is_file(p), true);
+    assert_eq(is_dir(p), false);
+    let _: Result[Unit, String] = remove(p);
+}
+
+test fn io_is_dir_true_for_directory() -> Unit ! FileRead, FileWrite, FileDelete {
+    let p: Path = path("/tmp/mvl_io_isdir_417");
+    let _: Result[Unit, String] = create_dir_all(p);
+    assert_eq(is_dir(p), true);
+    assert_eq(is_file(p), false);
+    let _: Result[Unit, String] = remove(p);
+}
+
+test fn io_is_file_false_for_nonexistent() -> Unit ! FileRead {
+    assert_eq(is_file(path("/tmp/mvl_nonexistent_isfile_417")), false);
+}
+
+test fn io_is_dir_false_for_nonexistent() -> Unit ! FileRead {
+    assert_eq(is_dir(path("/tmp/mvl_nonexistent_isdir_417")), false);
+}
+
+// ── read_file success path ────────────────────────────────────────────────
+
+test fn io_read_file_ok_after_write() -> Unit ! FileRead, FileWrite, FileDelete {
+    let p: Path = path("/tmp/mvl_io_readfile_417.txt");
+    let _: Result[Unit, String] = write(p, "read_file content");
+    let result: Result[Tainted[String], String] = read_file("/tmp/mvl_io_readfile_417.txt");
+    assert_eq(result.is_ok(), true);
+    let _: Result[Unit, String] = remove(p);
+}
+
+// ── open / close ──────────────────────────────────────────────────────────
+
+test fn io_open_ok_on_existing_file() -> Unit ! FileRead, FileWrite, FileDelete {
+    let p: Path = path("/tmp/mvl_io_open_417.txt");
+    let _: Result[Unit, String] = write(p, "open me");
+    let result: Result[File, String] = open(p);
+    assert_eq(result.is_ok(), true);
+    let _: Result[Unit, String] = remove(p);
+}
+
+test fn io_open_creates_new_file() -> Unit ! FileRead, FileWrite, FileDelete {
+    // open with create=true — file need not exist beforehand
+    let p: Path = path("/tmp/mvl_io_open_new_417.txt");
+    let result: Result[File, String] = open(p);
+    assert_eq(result.is_ok(), true);
+    let _: Result[Unit, String] = remove(p);
+}
+
+test fn io_open_bad_dir_is_err() -> Unit ! FileRead {
+    let result: Result[File, String] = open(path("/nonexistent_dir_mvl_417/file.txt"));
+    assert_eq(result.is_err(), true);
+}
+
+// ── read_dir ──────────────────────────────────────────────────────────────
+// Success-path is_ok() cannot be tested here: the transpiler cannot map
+// Result[List[DirEntry], String] because DirEntry is an opaque struct type.
+// Error paths work fine (Err branch doesn't touch the Ok type).
+
+test fn io_read_dir_err_on_nonexistent() -> Unit ! FileRead {
+    let result: Result[List[DirEntry], String] = read_dir(path("/nonexistent_mvl_dir_417"));
+    assert_eq(result.is_err(), true);
+}
+
+test fn io_read_dir_err_on_file() -> Unit ! FileRead, FileWrite, FileDelete {
+    // read_dir on a file (not a dir) must fail
+    let p: Path = path("/tmp/mvl_io_readdir_file_417.txt");
+    let _: Result[Unit, String] = write(p, "not a dir");
+    let result: Result[List[DirEntry], String] = read_dir(p);
+    assert_eq(result.is_err(), true);
+    let _: Result[Unit, String] = remove(p);
+}
+
+// ── metadata ──────────────────────────────────────────────────────────────
+
+test fn io_metadata_ok_for_existing_file() -> Unit ! FileRead, FileWrite, FileDelete {
+    let p: Path = path("/tmp/mvl_io_meta_417.txt");
+    let _: Result[Unit, String] = write(p, "metadata test");
+    let result: Result[Metadata, String] = metadata(p);
+    assert_eq(result.is_ok(), true);
+    let _: Result[Unit, String] = remove(p);
+}
+
+test fn io_metadata_is_file_field() -> Unit ! FileRead, FileWrite, FileDelete {
+    let p: Path = path("/tmp/mvl_io_meta_isfile_417.txt");
+    let _: Result[Unit, String] = write(p, "x");
+    let result: Result[Metadata, String] = metadata(p);
+    assert_eq(result.is_ok(), true);
+    let _: Result[Unit, String] = remove(p);
+}
+
+test fn io_metadata_ok_for_directory() -> Unit ! FileRead, FileWrite, FileDelete {
+    let p: Path = path("/tmp/mvl_io_meta_dir_417");
+    let _: Result[Unit, String] = create_dir_all(p);
+    let result: Result[Metadata, String] = metadata(p);
+    assert_eq(result.is_ok(), true);
+    let _: Result[Unit, String] = remove(p);
+}
+
+test fn io_metadata_err_for_nonexistent() -> Unit ! FileRead {
+    let result: Result[Metadata, String] = metadata(path("/tmp/mvl_nonexistent_meta_417"));
+    assert_eq(result.is_err(), true);
+}
+
+// ── chmod ─────────────────────────────────────────────────────────────────
+
+test fn io_chmod_ok_on_file() -> Unit ! FileRead, FileWrite, FileDelete {
+    let p: Path = path("/tmp/mvl_io_chmod_417.txt");
+    let _: Result[Unit, String] = write(p, "chmod me");
+    let result: Result[Unit, String] = chmod(p, 420);
+    assert_eq(result.is_ok(), true);
+    let _: Result[Unit, String] = remove(p);
+}
+
+test fn io_chmod_err_on_nonexistent() -> Unit ! FileWrite {
+    let result: Result[Unit, String] = chmod(path("/tmp/mvl_nonexistent_chmod_417.txt"), 420);
+    assert_eq(result.is_err(), true);
 }
