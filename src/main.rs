@@ -142,7 +142,8 @@ fn main() {
             let quiet = args.iter().any(|a| a == "--quiet" || a == "-q");
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
             let masking = args.iter().any(|a| a == "--masking");
-            cmd_mcdc(&path, quiet, verbose, masking);
+            let json = args.iter().any(|a| a == "--json");
+            cmd_mcdc(&path, quiet, verbose, masking, json);
         }
         "lint" => {
             let path = require_path_arg(&args, "lint");
@@ -221,6 +222,10 @@ fn print_usage() {
     eprintln!("  mvl mcdc   <file|dir> -q            — quiet: only show MC/DC score");
     eprintln!("  mvl mcdc   <file|dir> --verbose     — full covered/missed clause report");
     eprintln!("  mvl mcdc   <file|dir> --masking     — masking MC/DC (DO-178C): exempt coupled obligations");
+    eprintln!(
+        "  mvl mcdc   <file|dir> --json        — machine-readable JSON output for CI integration"
+    );
+    eprintln!("  mvl mcdc   <file|dir> --json -q     — JSON summary only (no per-clause detail)");
     eprintln!("  mvl lint  <file|dir>               — check style rules");
     eprintln!("  mvl lint  <file|dir> --show-config — show active linter configuration");
     eprintln!("  mvl assurance <file|dir>           — emit assurance report");
@@ -524,7 +529,7 @@ fn cmd_check(path: &str, req_filter: Option<u8>, error_limit: usize) {
 ///   3. Compile + run tests — collect observations via `MVL_MCDC_OUT`
 ///   4. Independence check — for each clause, verify it independently toggles outcome
 ///   5. Report — score + optional verbose covered/missed table
-fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
+fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
     use mvl::mvl::transpiler::{
         emit_mcdc_preamble, emit_mcdc_report_test, transpile_mcdc_source_with_prelude,
         transpile_mcdc_with_prelude, MCDCDecision,
@@ -669,11 +674,20 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
     let total_decisions = all_decisions.len();
 
     if total_decisions == 0 {
-        println!("No compound boolean conditions found — no MC/DC obligations.");
+        if json {
+            println!(
+                "{{\n  \"version\": \"1.0\",\n  \"mode\": \"{}\",\n  \"summary\": {{\n    \"files_analyzed\": {},\n    \"test_files\": {},\n    \"tests_run\": 0,\n    \"tests_passed\": 0,\n    \"tests_failed\": 0,\n    \"decisions\": 0,\n    \"obligations_total\": 0,\n    \"obligations_met\": 0,\n    \"obligations_missed\": 0,\n    \"obligations_coupled\": 0,\n    \"coverage_percent\": 100.00,\n    \"pass\": true\n  }},\n  \"decisions\": []\n}}",
+                if masking { "masking" } else { "unique-cause" },
+                modules.len(),
+                test_files.len(),
+            );
+        } else {
+            println!("No compound boolean conditions found — no MC/DC obligations.");
+        }
         return;
     }
 
-    if !quiet {
+    if !quiet && !json {
         // all_decisions contains only compound decisions (clause_count > 1)
         let total_obligations: usize = all_decisions.iter().map(|d| d.clause_count).sum();
         println!(
@@ -757,10 +771,14 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
             process::exit(1);
         });
 
+    let test_stdout = String::from_utf8_lossy(&test_output.stdout).into_owned();
+
     // Filter out the internal report test from stdout.
-    for line in String::from_utf8_lossy(&test_output.stdout).lines() {
-        if !line.contains("zzz_mvl_mcdc_report") {
-            println!("{line}");
+    if !json {
+        for line in test_stdout.lines() {
+            if !line.contains("zzz_mvl_mcdc_report") {
+                println!("{line}");
+            }
         }
     }
 
@@ -819,7 +837,7 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
     let effective_missed = (total_obligations - covered) - if masking { coupled_missed } else { 0 };
 
     // Report.
-    if !quiet {
+    if !quiet && !json {
         let pct = (covered * 100)
             .checked_div(total_obligations)
             .unwrap_or(100);
@@ -834,7 +852,7 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
         }
     }
 
-    if verbose {
+    if verbose && !json {
         println!("\nDETAILED RESULTS");
         println!("{}", "─".repeat(60));
         for (decision, (_, clause_results)) in all_decisions.iter().zip(decision_results.iter()) {
@@ -879,12 +897,131 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
     }
 
     let all_covered = effective_missed == 0;
-    if !quiet {
+    if !quiet && !json {
         if all_covered {
             println!("PASS");
         } else {
             println!("FAIL");
         }
+    }
+
+    if json {
+        // Parse test counts from cargo test output.
+        let (tests_run, tests_passed, tests_failed) = {
+            let mut passed = 0usize;
+            let mut failed = 0usize;
+            for line in test_stdout.lines() {
+                if let Some(rest) = line.strip_prefix("test result:") {
+                    if let Some(p) = rest
+                        .split("passed")
+                        .next()
+                        .and_then(|s| s.trim().rsplit(' ').next())
+                        .and_then(|s| s.parse::<usize>().ok())
+                    {
+                        passed = p;
+                    }
+                    if let Some(f) = rest
+                        .split("failed")
+                        .next()
+                        .and_then(|s| s.trim().rsplit(' ').next())
+                        .and_then(|s| s.parse::<usize>().ok())
+                    {
+                        failed = f;
+                    }
+                }
+            }
+            (passed + failed, passed, failed)
+        };
+
+        let mode_str = if masking { "masking" } else { "unique-cause" };
+        let pct = if total_obligations == 0 {
+            100.0f64
+        } else {
+            (covered as f64 / total_obligations as f64) * 100.0
+        };
+
+        let mut out = String::new();
+        out.push_str("{\n");
+        out.push_str("  \"version\": \"1.0\",\n");
+        out.push_str(&format!("  \"mode\": \"{mode_str}\",\n"));
+        out.push_str("  \"summary\": {\n");
+        out.push_str(&format!("    \"files_analyzed\": {},\n", modules.len()));
+        out.push_str(&format!("    \"test_files\": {},\n", test_files.len()));
+        out.push_str(&format!("    \"tests_run\": {tests_run},\n"));
+        out.push_str(&format!("    \"tests_passed\": {tests_passed},\n"));
+        out.push_str(&format!("    \"tests_failed\": {tests_failed},\n"));
+        out.push_str(&format!("    \"decisions\": {},\n", all_decisions.len()));
+        out.push_str(&format!(
+            "    \"obligations_total\": {total_obligations},\n"
+        ));
+        out.push_str(&format!("    \"obligations_met\": {covered},\n"));
+        out.push_str(&format!(
+            "    \"obligations_missed\": {},\n",
+            total_obligations - covered
+        ));
+        out.push_str(&format!("    \"obligations_coupled\": {coupled_missed},\n"));
+        out.push_str(&format!("    \"coverage_percent\": {pct:.2},\n"));
+        out.push_str(&format!("    \"pass\": {all_covered}\n"));
+        out.push_str("  }");
+
+        if !quiet {
+            out.push_str(",\n  \"decisions\": [");
+            let mut first_d = true;
+            for (decision, (_, clause_results)) in all_decisions.iter().zip(decision_results.iter())
+            {
+                if !first_d {
+                    out.push(',');
+                }
+                first_d = false;
+                let kind_label = decision.kind.label();
+                let d_met: usize = clause_results.iter().filter(|&&ok| ok).count();
+                let d_total = decision.clause_count;
+                let d_covered = d_met == d_total;
+                out.push_str("\n    {\n");
+                out.push_str(&format!(
+                    "      \"file\": \"{}\",\n",
+                    json_escape(&decision.file)
+                ));
+                out.push_str(&format!("      \"line\": {},\n", decision.line));
+                out.push_str(&format!("      \"kind\": \"{kind_label}\",\n"));
+                out.push_str(&format!("      \"clauses\": {d_total},\n"));
+                out.push_str(&format!("      \"obligations_met\": {d_met},\n"));
+                out.push_str(&format!("      \"obligations_total\": {d_total},\n"));
+                out.push_str(&format!("      \"covered\": {d_covered},\n"));
+                out.push_str("      \"clauses_detail\": [");
+                let mut first_c = true;
+                for (clause_bit, ok) in clause_results.iter().enumerate() {
+                    if !first_c {
+                        out.push(',');
+                    }
+                    first_c = false;
+                    let coupled_with = if !ok {
+                        decision
+                            .coupled_pairs
+                            .iter()
+                            .find(|(ci, cj, _)| *ci == clause_bit || *cj == clause_bit)
+                            .map(|(ci, cj, shared)| {
+                                let other = if *ci == clause_bit { *cj } else { *ci };
+                                let dep = json_escape(&shared.join(", "));
+                                format!(
+                                    "{{ \"clause_index\": {other}, \"shared_dependency\": \"{dep}\" }}"
+                                )
+                            })
+                    } else {
+                        None
+                    };
+                    let coupled_json = coupled_with.as_deref().unwrap_or("null");
+                    out.push_str(&format!(
+                        "\n        {{ \"index\": {clause_bit}, \"covered\": {ok}, \"independence_pair\": null, \"coupled_with\": {coupled_json} }}"
+                    ));
+                }
+                out.push_str("\n      ]\n    }");
+            }
+            out.push_str("\n  ]");
+        }
+
+        out.push_str("\n}\n");
+        print!("{out}");
     }
 
     if !all_covered {
