@@ -362,9 +362,14 @@ test fn io_open_bad_dir_is_err() -> Unit ! FileRead {
 }
 
 // ── read_dir ──────────────────────────────────────────────────────────────
-// Success-path is_ok() cannot be tested here: the transpiler cannot map
-// Result[List[DirEntry], String] because DirEntry is an opaque struct type.
-// Error paths work fine (Err branch doesn't touch the Ok type).
+
+test fn io_read_dir_ok_on_existing_dir() -> Unit ! FileRead, FileWrite, FileDelete {
+    let d: Path = path("/tmp/mvl_io_readdir_ok_417");
+    let _: Result[Unit, String] = create_dir_all(d);
+    let result: Result[List[DirEntry], String] = read_dir(d);
+    assert_eq(result.is_ok(), true);
+    let _: Result[Unit, String] = remove(d);
+}
 
 test fn io_read_dir_err_on_nonexistent() -> Unit ! FileRead {
     let result: Result[List[DirEntry], String] = read_dir(path("/nonexistent_mvl_dir_417"));
