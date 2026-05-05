@@ -65,12 +65,12 @@ fn given_a_zero_divisor(a: Int) -> CalcCtx {
 // ---------------------------------------------------------------------------
 
 fn when_added(ctx: CalcCtx) -> CalcCtx {
-    let r: Int = add(ctx.a, ctx.b)
+    let r: Int = add(ctx.a, ctx.b);
     CalcCtx { a: ctx.a, b: ctx.b, result: r, error: "", ok: true }
 }
 
 fn when_subtracted(ctx: CalcCtx) -> CalcCtx {
-    let r: Int = sub(ctx.a, ctx.b)
+    let r: Int = sub(ctx.a, ctx.b);
     CalcCtx { a: ctx.a, b: ctx.b, result: r, error: "", ok: true }
 }
 
@@ -86,15 +86,15 @@ fn when_divided(ctx: CalcCtx) -> CalcCtx {
 // ---------------------------------------------------------------------------
 
 fn then_result_equals(ctx: CalcCtx, expected: Int) -> Unit {
-    assert_eq(ctx.result, expected)
+    assert_eq(ctx.result, expected);
 }
 
 fn then_operation_failed(ctx: CalcCtx) -> Unit {
-    assert(!ctx.ok)
+    assert(!ctx.ok);
 }
 
 fn then_error_is(ctx: CalcCtx, expected: String) -> Unit {
-    assert_eq(ctx.error, expected)
+    assert_eq(ctx.error, expected);
 }
 
 // ---------------------------------------------------------------------------
@@ -104,36 +104,36 @@ fn then_error_is(ctx: CalcCtx, expected: String) -> Unit {
 
 // Scenario: adding two positive numbers
 test fn scenario_adding_two_positive_numbers() -> Unit {
-    let ctx = given_two_numbers(2, 3)
-    let ctx = when_added(ctx)
-    then_result_equals(ctx, 5)
+    let ctx: CalcCtx = given_two_numbers(2, 3);
+    let ctx: CalcCtx = when_added(ctx);
+    then_result_equals(ctx, 5);
 }
 
 // Scenario: adding a positive and negative number
 test fn scenario_adding_positive_and_negative() -> Unit {
-    let ctx = given_two_numbers(10, -4)
-    let ctx = when_added(ctx)
-    then_result_equals(ctx, 6)
+    let ctx: CalcCtx = given_two_numbers(10, -4);
+    let ctx: CalcCtx = when_added(ctx);
+    then_result_equals(ctx, 6);
 }
 
 // Scenario: subtracting gives correct difference
 test fn scenario_subtracting_numbers() -> Unit {
-    let ctx = given_two_numbers(10, 3)
-    let ctx = when_subtracted(ctx)
-    then_result_equals(ctx, 7)
+    let ctx: CalcCtx = given_two_numbers(10, 3);
+    let ctx: CalcCtx = when_subtracted(ctx);
+    then_result_equals(ctx, 7);
 }
 
 // Scenario: dividing two numbers evenly
 test fn scenario_dividing_evenly() -> Unit {
-    let ctx = given_two_numbers(12, 4)
-    let ctx = when_divided(ctx)
-    then_result_equals(ctx, 3)
+    let ctx: CalcCtx = given_two_numbers(12, 4);
+    let ctx: CalcCtx = when_divided(ctx);
+    then_result_equals(ctx, 3);
 }
 
 // Scenario: dividing by zero returns an error
 test fn scenario_dividing_by_zero_returns_error() -> Unit {
-    let ctx = given_a_zero_divisor(10)
-    let ctx = when_divided(ctx)
-    then_operation_failed(ctx)
-    then_error_is(ctx, "division by zero")
+    let ctx: CalcCtx = given_a_zero_divisor(10);
+    let ctx: CalcCtx = when_divided(ctx);
+    then_operation_failed(ctx);
+    then_error_is(ctx, "division by zero");
 }

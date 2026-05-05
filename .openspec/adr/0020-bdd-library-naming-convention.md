@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-05-05
 **Issue:** #39
+**Related:** ADR-0002 (language contraction), ADR-0004 (language size), ADR-0010 (corpus structure)
 
 ---
 
@@ -64,14 +65,14 @@ fn when_added(ctx: CalcCtx) -> CalcCtx {
 
 // Then: assert on context
 fn then_result_equals(ctx: CalcCtx, expected: Int) -> Unit {
-    assert_eq(ctx.result, expected)
+    assert_eq(ctx.result, expected);
 }
 
 // Scenario: chains steps — this is the test entry point
 test fn scenario_adding_two_numbers() -> Unit {
-    let ctx = given_two_numbers(2, 3)
-    let ctx = when_added(ctx)
-    then_result_equals(ctx, 5)
+    let ctx: CalcCtx = given_two_numbers(2, 3);
+    let ctx: CalcCtx = when_added(ctx);
+    then_result_equals(ctx, 5);
 }
 ```
 
@@ -89,7 +90,8 @@ test fn scenario_adding_two_numbers() -> Unit {
 **Bad / trade-offs:**
 - More verbose than Python `pytest-bdd` (no decorators, no fixture injection)
 - Context struct must be defined per domain — but this is idiomatic MVL (no hidden state)
-- Shadowing `let ctx` in a scenario body requires the checker to support re-binding of the same name (standard in most languages; MVL should support this)
+- `let ctx: T = ...; let ctx: T = ...;` re-binding of the same name is valid MVL (confirmed)
+- A scenario MAY call multiple `then_*` functions on the same context — each assertion is independent
 
 ---
 

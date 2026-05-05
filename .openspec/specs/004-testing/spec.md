@@ -1,6 +1,6 @@
 ---
 domain: language
-version: 0.1.0
+version: 0.2.0
 status: draft
 date: 2026-04-15
 ---
@@ -139,13 +139,13 @@ fn when_added(ctx: CalcCtx) -> CalcCtx {
 }
 
 fn then_result_equals(ctx: CalcCtx, expected: Int) -> Unit {
-    assert_eq(ctx.result, expected)
+    assert_eq(ctx.result, expected);
 }
 
 test fn scenario_adding_two_numbers() -> Unit {
-    let ctx = given_two_numbers(2, 3)
-    let ctx = when_added(ctx)
-    then_result_equals(ctx, 5)
+    let ctx: CalcCtx = given_two_numbers(2, 3);
+    let ctx: CalcCtx = when_added(ctx);
+    then_result_equals(ctx, 5);
 }
 ```
 
@@ -155,12 +155,12 @@ test fn scenario_adding_two_numbers() -> Unit {
 - `scenario_*` names map 1:1 to `Scenario:` entries in `.openspec/specs/`
 - `mvl test --bdd` MAY emit Gherkin-style reports derived from function names
 
-**Implementation:** `src/main.rs` (test runner BDD report)
+**Implementation:** `src/main.rs` (test runner — `mvl test --bdd` BDD report, not yet implemented)
 
 #### Scenario: BDD scenario chains given/when/then
 
 - GIVEN a `_test.mvl` file with `given_*`, `when_*`, `then_*`, and `test fn scenario_*`
-- WHEN transpiled and run via `mvl test`
-- THEN all scenario tests pass and the runner identifies them as scenarios
+- WHEN compiled and run via `mvl test`
+- THEN all `test fn scenario_*` functions pass
 
-**Tests:** `tests/corpus/12_bdd/`
+**Tests:** `tests/compile_and_run.rs::bdd_scenarios_run_and_pass`
