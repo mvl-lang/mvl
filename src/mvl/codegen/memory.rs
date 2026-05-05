@@ -18,6 +18,9 @@ pub(crate) enum HeapKind {
     String,
     Array,
     Map,
+    /// Set is backed by MvlArray (ADR-0016). If Set ever gets its own layout,
+    /// update `heap_kind_of` in stmts.rs and the dispatch arms below.
+    Set,
 }
 
 impl<'ctx> LlvmBackend<'ctx> {
@@ -288,7 +291,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             };
             let drop_fn = match kind {
                 HeapKind::String => self.get_mvl_string_drop(),
-                HeapKind::Array => self.get_mvl_array_drop(),
+                HeapKind::Array | HeapKind::Set => self.get_mvl_array_drop(),
                 HeapKind::Map => self.get_mvl_map_drop(),
             };
             let _ = self

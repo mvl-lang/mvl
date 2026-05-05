@@ -79,6 +79,20 @@ pub fn emit_security_preamble(cg: &mut RustEmitter) {
     cg.line("pub trait MvlPow { fn mvl_pow(self, exp: Self) -> Self; }");
     cg.line("impl MvlPow for i64 { fn mvl_pow(self, exp: i64) -> i64 { self.pow(exp as u32) } }");
     cg.line("impl MvlPow for f64 { fn mvl_pow(self, exp: f64) -> f64 { self.powf(exp) } }");
+    cg.blank();
+    // MvlGet: uniform `.get(key)` returning Option<V> for Vec<T> (index) and HashMap<K,V> (key).
+    // Fixes the i64→usize index cast for lists and the &-borrow + cloned() for maps.
+    cg.line("pub trait MvlGet<K, V> { fn mvl_get(&self, key: K) -> Option<V>; }");
+    cg.line("impl<T: Clone> MvlGet<i64, T> for Vec<T> { fn mvl_get(&self, i: i64) -> Option<T> { if i < 0 { return None; } self.get(i as usize).cloned() } }");
+    cg.line("impl<K: std::hash::Hash + Eq, V: Clone> MvlGet<K, V> for std::collections::HashMap<K, V> { fn mvl_get(&self, key: K) -> Option<V> { self.get(&key).cloned() } }");
+    cg.blank();
+    // MvlLen: uniform `.len()` returning i64 for all MVL collection types and String.
+    // Fixes usize→i64 cast and provides unicode char-count for String.
+    cg.line("pub trait MvlLen { fn mvl_len(&self) -> i64; }");
+    cg.line("impl<T> MvlLen for Vec<T> { fn mvl_len(&self) -> i64 { self.len() as i64 } }");
+    cg.line("impl<K, V> MvlLen for std::collections::HashMap<K, V> { fn mvl_len(&self) -> i64 { self.len() as i64 } }");
+    cg.line("impl<T> MvlLen for std::collections::HashSet<T> { fn mvl_len(&self) -> i64 { self.len() as i64 } }");
+    cg.line("impl MvlLen for String { fn mvl_len(&self) -> i64 { self.chars().count() as i64 } }");
 }
 
 fn emit_label_newtype(cg: &mut RustEmitter, label: &str) {

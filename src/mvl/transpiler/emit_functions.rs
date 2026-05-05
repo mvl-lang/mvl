@@ -56,7 +56,7 @@ pub fn emit_fn_decl(cg: &mut RustEmitter, fd: &FnDecl) {
 
     if fd.is_test {
         cg.line("#[test]");
-        let generics = emit_generics(&fd.type_params, &fd.constraints);
+        let generics = emit_generics_with_params(&fd.type_params, &fd.constraints, &fd.params);
         let params_str = emit_params(&fd.params, &borrows);
         let ret_str = emit_type_expr(&fd.return_type);
         cg.line(&format!(
@@ -88,7 +88,7 @@ pub fn emit_fn_decl(cg: &mut RustEmitter, fd: &FnDecl) {
     }
 
     // Function signature
-    let generics = emit_generics(&fd.type_params, &fd.constraints);
+    let generics = emit_generics_with_params(&fd.type_params, &fd.constraints, &fd.params);
     let params_str = emit_params(&fd.params, &borrows);
     let ret_str = emit_type_expr(&fd.return_type);
 
@@ -152,17 +152,36 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
 
 // ── Generics ─────────────────────────────────────────────────────────────
 
-fn emit_generics(type_params: &[GenericParam], constraints: &[Constraint]) -> String {
+/// Like `emit_generics` but also scans `params` to auto-add `Hash + Eq` for
+/// type params used as Map/Set keys and `Clone` for Map value params.
+///
+/// This lets `std/collections.mvl` functions have real MVL bodies (using
+/// method calls like `m.get(key)`) without requiring verbose where-clauses
+/// that the MVL parser cannot fully express (e.g. `std::hash::Hash`).
+fn emit_generics_with_params(
+    type_params: &[GenericParam],
+    constraints: &[Constraint],
+    params: &[Param],
+) -> String {
     if type_params.is_empty() {
         return String::new();
     }
-    // Build bounds map from constraints (applies to type params only)
-    let mut bounds: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
+    // Build bounds map from explicit MVL where-clause constraints.
+    let mut bounds: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
     for c in constraints {
-        bounds.entry(&c.name).or_default().push(&c.bound);
+        bounds
+            .entry(c.name.clone())
+            .or_default()
+            .push(c.bound.clone());
     }
 
-    let params: Vec<String> = type_params
+    // Auto-add Hash+Eq for Map/Set key type params and Clone for Map value params.
+    // This ensures the generated Rust compiles when collection methods are called
+    // (MvlGet, HashMap::insert, etc. all require these bounds on K/V).
+    collect_map_set_bounds(params, &mut bounds);
+
+    let params_out: Vec<String> = type_params
         .iter()
         .map(|p| match p {
             GenericParam::Const(name, _ty) => format!("const {name}: usize"),
@@ -176,7 +195,90 @@ fn emit_generics(type_params: &[GenericParam], constraints: &[Constraint]) -> St
             }
         })
         .collect();
-    format!("<{}>", params.join(", "))
+    format!("<{}>", params_out.join(", "))
+}
+
+/// Scan function parameters for `Map[K, V]` and `Set[T]` types and add the
+/// Rust trait bounds needed for HashMap/HashSet to function correctly.
+fn collect_map_set_bounds(
+    params: &[Param],
+    bounds: &mut std::collections::HashMap<String, Vec<String>>,
+) {
+    for p in params {
+        collect_type_bounds(&p.ty, bounds);
+    }
+}
+
+fn collect_type_bounds(ty: &TypeExpr, bounds: &mut std::collections::HashMap<String, Vec<String>>) {
+    match ty {
+        TypeExpr::Base { name, args, .. } => {
+            match name.as_str() {
+                "Map" if args.len() == 2 => {
+                    // Map[K, V]: K must be Hash+Eq+Clone (Clone required because
+                    // the transpiler emits `.mvl_get(key.clone())` at call sites),
+                    // V must be Clone.
+                    add_bound_if_type_param(&args[0], "std::hash::Hash", bounds);
+                    add_bound_if_type_param(&args[0], "std::cmp::Eq", bounds);
+                    add_bound_if_type_param(&args[0], "Clone", bounds);
+                    add_bound_if_type_param(&args[1], "Clone", bounds);
+                    // Recurse in case args are themselves generic types.
+                    for a in args {
+                        collect_type_bounds(a, bounds);
+                    }
+                }
+                "Set" if args.len() == 1 => {
+                    // Set[T]: T must be Hash+Eq+Clone.
+                    add_bound_if_type_param(&args[0], "std::hash::Hash", bounds);
+                    add_bound_if_type_param(&args[0], "std::cmp::Eq", bounds);
+                    add_bound_if_type_param(&args[0], "Clone", bounds);
+                }
+                _ => {
+                    for a in args {
+                        collect_type_bounds(a, bounds);
+                    }
+                }
+            }
+        }
+        TypeExpr::Ref { inner, .. } => collect_type_bounds(inner, bounds),
+        _ => {}
+    }
+}
+
+/// If `ty` is a bare type-parameter name (single uppercase letter or camel-case
+/// ident with no args), add the given bound for that name.
+fn add_bound_if_type_param(
+    ty: &TypeExpr,
+    bound: &str,
+    bounds: &mut std::collections::HashMap<String, Vec<String>>,
+) {
+    if let TypeExpr::Base { name, args, .. } = ty {
+        if args.is_empty() && !is_concrete_type(name) {
+            let entry = bounds.entry(name.clone()).or_default();
+            if !entry.iter().any(|b| b == bound) {
+                entry.push(bound.to_string());
+            }
+        }
+    }
+}
+
+/// Concrete MVL built-in types that are never generic type parameters.
+fn is_concrete_type(name: &str) -> bool {
+    matches!(
+        name,
+        "Int"
+            | "Float"
+            | "Bool"
+            | "String"
+            | "Char"
+            | "Byte"
+            | "Unit"
+            | "Never"
+            | "List"
+            | "Map"
+            | "Set"
+            | "Option"
+            | "Result"
+    )
 }
 
 // ── Parameters ───────────────────────────────────────────────────────────

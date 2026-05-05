@@ -8,7 +8,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ### Added
 
-- **`missing-annotation` linter rule** — Opt-in Warning-severity rule that fires when a
+- **`missing-annotation` linter rule**
+
+## [0.74.0] — 2026-05-05
+
+### Added
+
+- **Native Map/Set implementations** — `std/collections.mvl` stubs replaced with real MVL
+  method bodies that work on both the Rust transpiler and LLVM backends. The transpiler
+  dispatches via `MvlGet<K,V>` and `MvlLen` traits; the LLVM backend dispatches via explicit
+  codegen arms in `exprs.rs`. Closes #418.
+  - Map: `get`, `insert`, `remove`, `contains_key`, `keys`, `values`, `len`, `is_empty`
+  - Set: `contains`, `insert`, `remove`, `to_list`, `len`, `is_empty`, `intersection`,
+    `union`, `difference` (LLVM-side for `remove`, `keys`, `values`, set-algebra deferred to #436)
+  - `MvlGet<K,V>` and `MvlLen` traits added to `mvl_runtime::prelude` and transpiler preamble
+  - Auto-injects `Hash + Eq + Clone` bounds for Map/Set type parameters in generic functions — Opt-in Warning-severity rule that fires when a
   function body contains calls but no effect annotation is declared. The inverse of
   `unnecessary-annotation` (removed in v0.66.1), implementing MVL's "Explicit over implicit"
   principle (#428). Disabled by default (`missing_annotations = false`); enable in

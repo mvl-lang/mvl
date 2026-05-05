@@ -654,6 +654,33 @@ fn log_output_formats_correctly() {
     );
 }
 
+// ── collections_basic.mvl — Map/Set native MVL (#418) ─────────────────────
+
+/// Gate test: Map.len, Map.contains_key, Set.len, Set.contains
+/// all produce correct deterministic output via real MVL bodies in std/collections.mvl.
+///
+/// Expected stdout:
+///   map_len=2
+///   has_alice=true
+///   has_carol=false
+///   set_len=4
+///   has_five=true
+///   has_nine=false
+#[test]
+fn collections_basic_runs_and_produces_expected_output() {
+    assert_run_output(
+        "collections_basic.mvl",
+        &[
+            "map_len=2",
+            "has_alice=true",
+            "has_carol=false",
+            "set_len=4",
+            "has_five=true",
+            "has_nine=false",
+        ],
+    );
+}
+
 fn corpus_bdd(name: &str) -> String {
     format!("{}/tests/corpus/12_bdd/{name}", env!("CARGO_MANIFEST_DIR"))
 }
