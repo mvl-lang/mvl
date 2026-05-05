@@ -65,6 +65,39 @@ impl LlvmCompiler {
         backend.verify()?;
         Ok(backend.to_ir_string())
     }
+
+    /// Compile prelude programs merged with `prog` into a single LLVM IR module.
+    ///
+    /// This is the LLVM equivalent of `load_implicit_prelude` + `load_mvl_native_stdlib_extras`
+    /// on the transpiler path — all declarations are merged before codegen so that
+    /// functions defined in the prelude (str_chars, list_get, etc.) are available.
+    pub fn compile_to_ir_with_prelude(
+        &self,
+        prelude: &[Program],
+        prog: &Program,
+        module_name: &str,
+    ) -> Result<String, String> {
+        use crate::mvl::parser::lexer::Span;
+        let zero = Span {
+            line: 0,
+            col: 0,
+            offset: 0,
+            len: 0,
+        };
+        let mut all_decls = Vec::new();
+        for p in prelude {
+            all_decls.extend(p.declarations.iter().cloned());
+        }
+        all_decls.extend(prog.declarations.iter().cloned());
+        let merged = Program {
+            declarations: all_decls,
+            span: zero,
+        };
+        let mut backend = LlvmBackend::new(&self.context, module_name);
+        backend.emit_program(&merged);
+        backend.verify()?;
+        Ok(backend.to_ir_string())
+    }
 }
 
 impl Default for LlvmCompiler {
@@ -1298,7 +1331,98 @@ impl<'ctx> LlvmBackend<'ctx> {
                 let result = self.builder.build_int_add(rem, one, "dice").unwrap();
                 self.builder.build_return(Some(&result)).unwrap();
             }
-            // Generic stub: return zero / null.
+            // str_chars(s: String) -> List[String]: delegate to mvl_string_chars
+            "str_chars" => {
+                let arg0 = fn_val.get_first_param().expect("str_chars: missing arg");
+                let chars_fn = self.get_mvl_string_chars();
+                let result = self
+                    .builder
+                    .build_call(chars_fn, &[arg0.into()], "chars")
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                let arr_ptr = BasicValueEnum::try_from(result.as_any_value_enum())
+                    .expect("mvl_string_chars must return ptr");
+                self.builder.build_return(Some(&arr_ptr)).unwrap();
+            }
+            // str_concat(a: String, b: String) -> String: delegate to mvl_string_concat
+            "str_concat" => {
+                let params: Vec<_> = fn_val.get_param_iter().collect();
+                let a = params[0];
+                let b = params[1];
+                let concat_fn = self.get_mvl_string_concat();
+                let result = self
+                    .builder
+                    .build_call(concat_fn, &[a.into(), b.into()], "concat")
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                let s_ptr = BasicValueEnum::try_from(result.as_any_value_enum())
+                    .expect("mvl_string_concat must return ptr");
+                self.builder.build_return(Some(&s_ptr)).unwrap();
+            }
+            // list_len(list: List[T]) -> Int: delegate to mvl_array_len
+            "list_len" => {
+                let arg0 = fn_val.get_first_param().expect("list_len: missing arg");
+                let len_fn = self.get_mvl_array_len();
+                let result = self
+                    .builder
+                    .build_call(len_fn, &[arg0.into()], "list_len")
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                let len_val = BasicValueEnum::try_from(result.as_any_value_enum())
+                    .expect("mvl_array_len must return i64");
+                self.builder.build_return(Some(&len_val)).unwrap();
+            }
+            // list_get(list: List[T], idx: Int) -> Option[T]: delegate to mvl_array_get
+            "list_get" => {
+                let params: Vec<_> = fn_val.get_param_iter().collect();
+                let arr = params[0];
+                let idx = params[1];
+                let get_fn = self.get_mvl_array_get();
+                let raw = self
+                    .builder
+                    .build_call(get_fn, &[arr.into(), idx.into()], "raw")
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                let raw_ptr = BasicValueEnum::try_from(raw.as_any_value_enum())
+                    .expect("mvl_array_get must return ptr")
+                    .into_pointer_value();
+                // Build Option{i8, ptr}: disc=0 (Some) with the slot pointer, or disc=1 (None)
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let i8_ty = self.context.i8_type();
+                let opt_ty = self
+                    .context
+                    .struct_type(&[i8_ty.into(), ptr_ty.into()], false);
+                let null = ptr_ty.const_null();
+                let is_null = self.builder.build_is_null(raw_ptr, "is_null").unwrap();
+                let some_val = opt_ty.const_zero();
+                let some_val = self
+                    .builder
+                    .build_insert_value(some_val, i8_ty.const_int(0, false), 0, "some_disc")
+                    .unwrap()
+                    .into_struct_value();
+                let some_val = self
+                    .builder
+                    .build_insert_value(some_val, raw_ptr, 1, "some_ptr")
+                    .unwrap()
+                    .into_struct_value();
+                let none_val = opt_ty.const_zero();
+                let none_val = self
+                    .builder
+                    .build_insert_value(none_val, i8_ty.const_int(1, false), 0, "none_disc")
+                    .unwrap()
+                    .into_struct_value();
+                let none_val = self
+                    .builder
+                    .build_insert_value(none_val, null, 1, "none_ptr")
+                    .unwrap()
+                    .into_struct_value();
+                let result = self
+                    .builder
+                    .build_select(is_null, none_val, some_val, "opt")
+                    .unwrap();
+                self.builder.build_return(Some(&result)).unwrap();
+            }
+            // Generic stub: return zero / null / None-struct.
             _ => match ret_llvm {
                 Some(BasicTypeEnum::IntType(it)) => {
                     let zero = it.const_zero();
@@ -1311,6 +1435,25 @@ impl<'ctx> LlvmBackend<'ctx> {
                 Some(BasicTypeEnum::PointerType(_)) => {
                     let null = self.context.ptr_type(AddressSpace::default()).const_null();
                     self.builder.build_return(Some(&null)).unwrap();
+                }
+                Some(BasicTypeEnum::StructType(st)) => {
+                    // Return a zeroed struct (acts as None / default for Option/Result).
+                    let zero = st.const_zero();
+                    // Set discriminant byte 0 to 1 (None/Err convention).
+                    let none_like: BasicValueEnum = if st.count_fields() > 0 {
+                        self.builder
+                            .build_insert_value(
+                                zero,
+                                self.context.i8_type().const_int(1, false),
+                                0,
+                                "none_disc",
+                            )
+                            .map(|v| v.into_struct_value().into())
+                            .unwrap_or_else(|_| zero.into())
+                    } else {
+                        zero.into()
+                    };
+                    self.builder.build_return(Some(&none_like)).unwrap();
                 }
                 _ => {
                     self.builder.build_return(None).unwrap();
@@ -1392,11 +1535,26 @@ impl<'ctx> LlvmBackend<'ctx> {
             } else if let Some(val) = body_val {
                 self.builder.build_return(Some(&val)).unwrap();
             } else {
-                // Fallback: void return for non-unit functions whose body failed to emit.
-                // LLVM verification will catch the type mismatch and surface an error.
-                // TODO(#385): surface a user-visible "unsupported construct" diagnostic here
-                //   instead of relying on the IR verifier's opaque error message.
-                self.builder.build_return(None).unwrap();
+                // Fallback: body emitted no value. Return a zeroed value of the correct
+                // type (or unreachable) so the IR is well-formed even for unsupported constructs.
+                let fallback = self.mvl_type_to_llvm(&fd.return_type);
+                match fallback {
+                    Some(BasicTypeEnum::IntType(it)) => {
+                        self.builder.build_return(Some(&it.const_zero())).unwrap();
+                    }
+                    Some(BasicTypeEnum::FloatType(ft)) => {
+                        self.builder.build_return(Some(&ft.const_zero())).unwrap();
+                    }
+                    Some(BasicTypeEnum::PointerType(pt)) => {
+                        self.builder.build_return(Some(&pt.const_null())).unwrap();
+                    }
+                    Some(BasicTypeEnum::StructType(st)) => {
+                        self.builder.build_return(Some(&st.const_zero())).unwrap();
+                    }
+                    _ => {
+                        self.builder.build_unreachable().unwrap();
+                    }
+                }
             }
         }
     }

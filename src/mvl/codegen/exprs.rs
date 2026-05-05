@@ -401,6 +401,12 @@ impl<'ctx> LlvmBackend<'ctx> {
                 let mut offset = 0usize;
                 for (arg, fty) in payload_args.iter().zip(field_types.iter()) {
                     if let Some(fval) = self.emit_expr(arg) {
+                        // Heap move: when a heap-allocated identifier is stored into an enum
+                        // variant, ownership transfers — remove it from heap_locals so the
+                        // original alloca is not dropped at function exit (double-free).
+                        if let Expr::Ident(src, _) = arg {
+                            self.heap_locals.remove(src.as_str());
+                        }
                         let field_ptr = if offset == 0 {
                             payload_ptr
                         } else {
@@ -890,6 +896,25 @@ impl<'ctx> LlvmBackend<'ctx> {
                         }
                     }
                 }
+                // list_push[T](arr, elem) → call mvl_array_push(arr, &elem), return arr.
+                // Handles the generic case where T may be a struct (e.g. Value), avoiding
+                // the type mismatch from the i64-defaulted pre-declaration.
+                if name == "list_push" && args.len() == 2 {
+                    let arr_val = self.emit_expr(&args[0])?;
+                    let elem_val = self.emit_expr(&args[1])?;
+                    let arr_ptr = arr_val.into_pointer_value();
+                    let slot = self
+                        .builder
+                        .build_alloca(elem_val.get_type(), "push_slot")
+                        .unwrap();
+                    self.builder.build_store(slot, elem_val).unwrap();
+                    let push_fn = self.get_mvl_array_push();
+                    self.builder
+                        .build_call(push_fn, &[arr_ptr.into(), slot.into()], "list_push")
+                        .unwrap();
+                    return Some(arr_ptr.into());
+                }
+
                 // ADR-0019: dispatch to libmvl_runtime_c C-ABI for stdlib imports.
                 if let Some(sig) = self.stdlib_imports.get(name).cloned() {
                     use crate::mvl::codegen::StdlibSig;
@@ -1015,6 +1040,34 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     // ── Collection literals ──────────────────────────────────────────────────
 
+    /// Return the byte size of an LLVM basic type on a 64-bit platform.
+    fn llvm_type_byte_size(&self, ty: BasicTypeEnum<'ctx>) -> usize {
+        match ty {
+            BasicTypeEnum::IntType(it) => it.get_bit_width().div_ceil(8) as usize,
+            BasicTypeEnum::FloatType(ft) => {
+                // inkwell exposes bit-width via get_bit_width (not available directly);
+                // distinguish f32 vs f64 by comparing to the known types.
+                if ft == self.context.f64_type() {
+                    8
+                } else {
+                    4
+                }
+            }
+            BasicTypeEnum::PointerType(_) => 8, // 64-bit pointer
+            BasicTypeEnum::StructType(st) => {
+                // Sum field sizes — good enough for the fixed {i8, [N x i8]} patterns used here.
+                st.get_field_types()
+                    .iter()
+                    .map(|f| self.llvm_type_byte_size(*f))
+                    .sum()
+            }
+            BasicTypeEnum::ArrayType(at) => {
+                at.len() as usize * self.llvm_type_byte_size(at.get_element_type())
+            }
+            BasicTypeEnum::VectorType(_) | BasicTypeEnum::ScalableVectorType(_) => 8,
+        }
+    }
+
     /// Emit `[e1, ..., eN]` → `ptr` to a heap-allocated `MvlArray` via `mvl_array_new`.
     ///
     /// L5-14: replaces the stack-allocated stub with proper heap allocation.
@@ -1027,8 +1080,16 @@ impl<'ctx> LlvmBackend<'ctx> {
         let elem_vals: Vec<BasicValueEnum<'ctx>> =
             elems.iter().filter_map(|e| self.emit_expr(e)).collect();
 
-        // elem_size: 8 bytes covers i64, f64, and ptr on all supported platforms.
-        let elem_size = i64_ty.const_int(8, false);
+        // elem_size: derive from the first element's LLVM type if available;
+        // default to 8 (covers i64/f64/ptr). Struct types (e.g. Option) may be larger.
+        let elem_size = {
+            let sz = elem_vals
+                .first()
+                .map(|v| self.llvm_type_byte_size(v.get_type()))
+                .unwrap_or(8)
+                .max(1) as u64;
+            i64_ty.const_int(sz, false)
+        };
         let initial_cap = i64_ty.const_int(n.max(4) as u64, false);
         let new_fn = self.get_mvl_array_new();
         let call = self
@@ -1141,7 +1202,14 @@ impl<'ctx> LlvmBackend<'ctx> {
         let elem_vals: Vec<BasicValueEnum<'ctx>> =
             elems.iter().filter_map(|e| self.emit_expr(e)).collect();
 
-        let elem_size = i64_ty.const_int(8, false);
+        let elem_size = {
+            let sz = elem_vals
+                .first()
+                .map(|v| self.llvm_type_byte_size(v.get_type()))
+                .unwrap_or(8)
+                .max(1) as u64;
+            i64_ty.const_int(sz, false)
+        };
         let initial_cap = i64_ty.const_int(n.max(4) as u64, false);
         let new_fn = self.get_mvl_array_new();
         let call = self
@@ -1426,6 +1494,61 @@ impl<'ctx> LlvmBackend<'ctx> {
                                 .unwrap()
                                 .into(),
                         )
+                    }
+                    _ => None,
+                }
+            }
+
+            // ── Map.keys() ───────────────────────────────────────────────────
+            "keys" if args.is_empty() => match recv_val {
+                BasicValueEnum::PointerValue(map) => {
+                    let keys_fn = self.get_mvl_map_keys();
+                    use inkwell::values::AnyValue;
+                    BasicValueEnum::try_from(
+                        self.builder
+                            .build_call(keys_fn, &[map.into()], "map_keys")
+                            .unwrap()
+                            .as_any_value_enum(),
+                    )
+                    .ok()
+                }
+                _ => None,
+            },
+
+            // ── Map.remove(key) ──────────────────────────────────────────────
+            "remove" if args.len() == 1 => {
+                let key_val = self.emit_expr(args.first()?)?;
+                match (recv_val, key_val) {
+                    (BasicValueEnum::PointerValue(map), BasicValueEnum::PointerValue(key_str)) => {
+                        let sp = self.get_mvl_string_ptr();
+                        let sl = self.get_mvl_string_len();
+                        use inkwell::values::AnyValue;
+                        let key_data = BasicValueEnum::try_from(
+                            self.builder
+                                .build_call(sp, &[key_str.into()], "rm_kp")
+                                .unwrap()
+                                .as_any_value_enum(),
+                        )
+                        .ok()?
+                        .into_pointer_value();
+                        let key_len_val = BasicValueEnum::try_from(
+                            self.builder
+                                .build_call(sl, &[key_str.into()], "rm_kl")
+                                .unwrap()
+                                .as_any_value_enum(),
+                        )
+                        .ok()?
+                        .into_int_value();
+                        let remove_fn = self.get_mvl_map_remove();
+                        self.builder
+                            .build_call(
+                                remove_fn,
+                                &[map.into(), key_data.into(), key_len_val.into()],
+                                "map_remove",
+                            )
+                            .unwrap();
+                        // remove() returns Unit; yield a dummy i64 0
+                        Some(self.context.i64_type().const_int(0, false).into())
                     }
                     _ => None,
                 }

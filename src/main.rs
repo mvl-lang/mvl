@@ -3146,7 +3146,10 @@ mod find_test_binary_tests {
 fn build_project_llvm(path: &str) {
     let (prog, _src) = parse_or_exit(path);
     let module_name = stem(path);
-    match codegen::compile_to_ir(&prog, &module_name) {
+    let mut prelude = load_implicit_prelude();
+    prelude.extend(load_mvl_native_stdlib_extras(std::slice::from_ref(&prog)));
+    let compiler = codegen::LlvmCompiler::new();
+    match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
         Ok(ir) => {
             let out_path = format!("{module_name}.ll");
             fs::write(&out_path, &ir).unwrap_or_else(|e| {
@@ -3173,7 +3176,10 @@ fn run_project_llvm(path: &str) {
 
     let (prog, _src) = parse_or_exit(path);
     let module_name = stem(path);
-    let ir = match codegen::compile_to_ir(&prog, &module_name) {
+    let mut prelude = load_implicit_prelude();
+    prelude.extend(load_mvl_native_stdlib_extras(std::slice::from_ref(&prog)));
+    let compiler = codegen::LlvmCompiler::new();
+    let ir = match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
         Ok(ir) => ir,
         Err(e) => {
             eprintln!("error: LLVM codegen failed: {e}");
@@ -3262,7 +3268,10 @@ fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
         let module_name = stem(&file_str);
 
         let (prog, _src) = parse_or_exit(&file_str);
-        let ir = match codegen::compile_to_ir(&prog, &module_name) {
+        let mut prelude = load_implicit_prelude();
+        prelude.extend(load_mvl_native_stdlib_extras(std::slice::from_ref(&prog)));
+        let compiler = codegen::LlvmCompiler::new();
+        let ir = match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
             Ok(ir) => ir,
             Err(e) => {
                 eprintln!("  FAIL (codegen): {file_str}");
