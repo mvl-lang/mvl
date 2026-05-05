@@ -212,7 +212,14 @@
   "||"
   "!"
   "&"
+  "|"
+  "^"
+  "~"
+  "<<"
+  ">>"
 ] @operator
+
+; Remove | from punctuation.delimiter (now classified as operator above)
 
 ; ============================================================
 ; Punctuation
@@ -232,5 +239,4 @@
   ";"
   ":"
   "."
-  "|"
 ] @punctuation.delimiter

@@ -506,6 +506,11 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                 emit_expr(cg, expr);
                 cg.push(")");
             }
+            UnaryOp::BitNot => {
+                // Rust uses `!` for bitwise NOT on integer types.
+                cg.push("!");
+                emit_expr(cg, expr);
+            }
         },
         Expr::Binary {
             op,
@@ -948,6 +953,12 @@ fn emit_binary_op(op: BinaryOp) -> &'static str {
         BinaryOp::Ge => ">=",
         BinaryOp::And => "&&",
         BinaryOp::Or => "||",
+        BinaryOp::BitAnd => "&",
+        BinaryOp::BitOr => "|",
+        BinaryOp::BitXor => "^",
+        BinaryOp::Shl => "<<",
+        // Rust's >> is sign-aware based on type (u8 → logical, i64 → arithmetic).
+        BinaryOp::Shr => ">>",
     }
 }
 

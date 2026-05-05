@@ -1,0 +1,41 @@
+// Corpus: bitwise operators (#483 #484)
+// Demonstrates &, |, ^, ~, <<, >> on Int types.
+// All examples must parse and type-check without errors.
+
+fn bitwise_and(a: Int, b: Int) -> Int {
+    a & b
+}
+
+fn bitwise_or(a: Int, b: Int) -> Int {
+    a | b
+}
+
+fn bitwise_xor(a: Int, b: Int) -> Int {
+    a ^ b
+}
+
+fn bitwise_not(a: Int) -> Int {
+    ~a
+}
+
+fn shift_left(a: Int, n: Int) -> Int {
+    a << n
+}
+
+fn shift_right(a: Int, n: Int) -> Int {
+    a >> n
+}
+
+// NOTE: The LLVM backend currently emits arithmetic right-shift (ashr) for all
+// integer types, including UByte and UInt. This matches signed semantics (sign-
+// extends) but differs from the Rust transpiler, which uses Rust's native >>
+// (logical/zero-extending for u8/u64). Unsigned right-shift divergence is a
+// known follow-up tracked in ADR-0021 and issue #484.
+
+fn flags_demo(flags: Int) -> Bool {
+    let read_bit: Int = 4;
+    let write_bit: Int = 2;
+    let has_read: Int = flags & read_bit;
+    let has_write: Int = flags & write_bit;
+    has_read > 0 && has_write > 0
+}

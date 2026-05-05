@@ -1288,7 +1288,7 @@ impl TypeChecker {
                     let vt = self.infer_expr(v);
                     joined_label = ifc::join_opt(joined_label, ifc::label_of(&vt));
                 }
-                let map_ty = Ty::Named("Map".into(), vec![key_ty, val_ty]);
+                let map_ty = Ty::Map(Box::new(key_ty), Box::new(val_ty));
                 ifc::apply_label(joined_label, map_ty)
             }
 
@@ -1300,7 +1300,7 @@ impl TypeChecker {
                 for e in elems.iter().skip(1) {
                     self.infer_expr(e);
                 }
-                Ty::Named("Set".into(), vec![elem_ty])
+                Ty::Set(Box::new(elem_ty))
             }
 
             // #14: `?` propagation
@@ -1541,6 +1541,33 @@ impl TypeChecker {
                 Ty::Bool
             }
 
+            // Bitwise: both operands must be integer types (not Float); result is same type.
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr => {
+                let lt_inner = lt.unlabeled().clone();
+                let rt_inner = rt.unlabeled().clone();
+                for (ty, span) in [(&lt, left.span()), (&rt, right.span())] {
+                    if !matches!(ty.unlabeled(), Ty::Unknown) && !ty.is_integer() {
+                        self.emit(CheckError::TypeMismatch {
+                            expected: "integer type (Int, Byte, UByte, UInt)".to_string(),
+                            found: ty.display(),
+                            span,
+                        });
+                        return Ty::Unknown;
+                    }
+                }
+                let label = ifc::join_opt(ifc::label_of(&lt), ifc::label_of(&rt));
+                let base = if matches!(lt_inner, Ty::Unknown) {
+                    rt_inner
+                } else {
+                    lt_inner
+                };
+                ifc::apply_label(label, base)
+            }
+
             // Logic: both must be Bool (labels stripped — Bool logic yields Bool)
             BinaryOp::And | BinaryOp::Or => {
                 let op_str = format!("{op:?}").to_lowercase();
@@ -1602,6 +1629,18 @@ impl TypeChecker {
                         });
                         Ty::Unknown
                     }
+                }
+            }
+            UnaryOp::BitNot => {
+                if !matches!(ty.unlabeled(), Ty::Unknown) && !ty.is_integer() {
+                    self.emit(CheckError::TypeMismatch {
+                        expected: "integer type (Int, Byte, UByte, UInt)".to_string(),
+                        found: ty.display(),
+                        span,
+                    });
+                    Ty::Unknown
+                } else {
+                    ty
                 }
             }
         }
@@ -1861,16 +1900,15 @@ impl TypeChecker {
         let result = match base {
             Ty::Int => Self::int_method_ty(method),
             Ty::Byte => Self::byte_method_ty(method),
+            Ty::UByte => Self::ubyte_method_ty(method),
+            Ty::UInt => Self::uint_method_ty(method),
             Ty::Float => Self::float_method_ty(method),
             Ty::String => Self::string_method_ty(method, arg_tys),
             Ty::List(elem_ty) => Self::list_method_ty(elem_ty.as_ref(), method, arg_tys),
             Ty::Option(inner) => Self::option_method_ty(inner.as_ref(), method, arg_tys),
             Ty::Result(ok_ty, _) => Self::result_method_ty(ok_ty.as_ref(), method, arg_tys),
-            Ty::Named(name, type_args) => match name.as_str() {
-                "Map" => Self::map_method_ty(type_args, method),
-                "Set" => Self::set_method_ty(type_args, method),
-                _ => Ty::Unknown,
-            },
+            Ty::Map(k_ty, v_ty) => Self::map_method_ty(k_ty.as_ref(), v_ty.as_ref(), method),
+            Ty::Set(t_ty) => Self::set_method_ty(t_ty.as_ref(), method),
             _ => Ty::Unknown,
         };
         // Only apply label when we resolved a concrete type.
@@ -1893,6 +1931,12 @@ impl TypeChecker {
             "abs" | "pow" | "min" | "max" | "clamp" => Ty::Int,
             // Bitwise
             "bit_and" | "bit_or" | "bit_xor" | "bit_not" | "shift_left" | "shift_right" => Ty::Int,
+            // Overflow-checking (return Option[Int])
+            "checked_add" | "checked_sub" | "checked_mul" | "checked_div" => {
+                Ty::Option(Box::new(Ty::Int))
+            }
+            // Explicit wrapping (document intent)
+            "wrapping_add" | "wrapping_sub" | "wrapping_mul" => Ty::Int,
             // Predicates
             "is_positive" | "is_negative" | "is_zero" => Ty::Bool,
             _ => Ty::Unknown,
@@ -1911,6 +1955,35 @@ impl TypeChecker {
             // generic method-call fallthrough emits `receiver.wrapping_add(arg)`
             // which is valid Rust.  No dedicated emit arm is required.
             "wrapping_add" | "wrapping_sub" | "wrapping_mul" => Ty::Byte,
+            "checked_add" | "checked_sub" | "checked_mul" => Ty::Option(Box::new(Ty::Byte)),
+            _ => Ty::Unknown,
+        }
+    }
+
+    /// Return type for methods on `UByte`.
+    fn ubyte_method_ty(method: &str) -> Ty {
+        match method {
+            "to_int" => Ty::Int,
+            "to_string" => Ty::String,
+            "bit_and" | "bit_or" | "bit_xor" | "bit_not" | "shift_left" | "shift_right" => {
+                Ty::UByte
+            }
+            "wrapping_add" | "wrapping_sub" | "wrapping_mul" => Ty::UByte,
+            "checked_add" | "checked_sub" | "checked_mul" => Ty::Option(Box::new(Ty::UByte)),
+            _ => Ty::Unknown,
+        }
+    }
+
+    /// Return type for methods on `UInt`.
+    fn uint_method_ty(method: &str) -> Ty {
+        match method {
+            "to_float" => Ty::Float,
+            "to_string" => Ty::String,
+            "abs" | "pow" | "min" | "max" | "clamp" => Ty::UInt,
+            "bit_and" | "bit_or" | "bit_xor" | "bit_not" | "shift_left" | "shift_right" => Ty::UInt,
+            "is_zero" => Ty::Bool,
+            "wrapping_add" | "wrapping_sub" | "wrapping_mul" => Ty::UInt,
+            "checked_add" | "checked_sub" | "checked_mul" => Ty::Option(Box::new(Ty::UInt)),
             _ => Ty::Unknown,
         }
     }
@@ -2116,9 +2189,9 @@ impl TypeChecker {
                 } else {
                     Ty::Unknown
                 };
-                Ty::Named(
-                    "Map".into(),
-                    vec![k_ty, Ty::List(Box::new(elem_ty.clone()))],
+                Ty::Map(
+                    Box::new(k_ty),
+                    Box::new(Ty::List(Box::new(elem_ty.clone()))),
                 )
             }
             _ => Ty::Unknown,
@@ -2126,15 +2199,10 @@ impl TypeChecker {
     }
 
     /// Return type for methods on `Map<K, V>`.
-    fn map_method_ty(type_args: &[Ty], method: &str) -> Ty {
-        let (k_ty, v_ty) = match type_args {
-            [k, v] => (k.clone(), v.clone()),
-            [k] => (k.clone(), Ty::Unknown),
-            _ => (Ty::Unknown, Ty::Unknown),
-        };
+    fn map_method_ty(k_ty: &Ty, v_ty: &Ty, method: &str) -> Ty {
         match method {
             // Safe access — Option<V>, never panic
-            "get" => Ty::Option(Box::new(v_ty)),
+            "get" => Ty::Option(Box::new(v_ty.clone())),
             // Predicates
             "contains_key" | "is_empty" => Ty::Bool,
             // Numeric
@@ -2142,24 +2210,23 @@ impl TypeChecker {
             // Mutation
             "insert" | "remove_entry" => Ty::Unit,
             // remove returns old value if present
-            "remove" => Ty::Option(Box::new(v_ty)),
+            "remove" => Ty::Option(Box::new(v_ty.clone())),
             // Iteration views
-            "keys" => Ty::List(Box::new(k_ty)),
+            "keys" => Ty::List(Box::new(k_ty.clone())),
             "values" => Ty::List(Box::new(v_ty.clone())),
-            "entries" => Ty::List(Box::new(Ty::Tuple(vec![k_ty, v_ty]))),
+            "entries" => Ty::List(Box::new(Ty::Tuple(vec![k_ty.clone(), v_ty.clone()]))),
             _ => Ty::Unknown,
         }
     }
 
     /// Return type for methods on `Set<T>`.
-    fn set_method_ty(type_args: &[Ty], method: &str) -> Ty {
-        let t_ty = type_args.first().cloned().unwrap_or(Ty::Unknown);
+    fn set_method_ty(t_ty: &Ty, method: &str) -> Ty {
         match method {
             "contains" | "is_empty" | "is_subset" | "is_superset" => Ty::Bool,
             "len" => Ty::Int,
             "insert" | "remove" => Ty::Unit,
             "iter" | "to_list" => Ty::List(Box::new(t_ty.clone())),
-            "union" | "intersection" | "difference" => Ty::Named("Set".to_string(), vec![t_ty]),
+            "union" | "intersection" | "difference" => Ty::Set(Box::new(t_ty.clone())),
             _ => Ty::Unknown,
         }
     }

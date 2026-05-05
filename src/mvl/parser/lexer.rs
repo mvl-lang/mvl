@@ -132,6 +132,10 @@ pub enum TokenKind {
     FatArrow,   // =>
     Pipe,       // |
     Amp,        // &
+    Caret,      // ^
+    Tilde,      // ~
+    LtLt,       // <<
+    GtGt,       // >>
     Colon,      // :
     Semicolon,  // ;
     Comma,      // ,
@@ -218,6 +222,10 @@ impl fmt::Display for TokenKind {
             TokenKind::FatArrow => write!(f, "=>"),
             TokenKind::Pipe => write!(f, "|"),
             TokenKind::Amp => write!(f, "&"),
+            TokenKind::Caret => write!(f, "^"),
+            TokenKind::Tilde => write!(f, "~"),
+            TokenKind::LtLt => write!(f, "<<"),
+            TokenKind::GtGt => write!(f, ">>"),
             TokenKind::Colon => write!(f, ":"),
             TokenKind::Semicolon => write!(f, ";"),
             TokenKind::Comma => write!(f, ","),
@@ -452,7 +460,10 @@ impl<'src> Lexer<'src> {
                     }
                 }
                 '<' => {
-                    if self.peek_char() == Some('=') {
+                    if self.peek_char() == Some('<') {
+                        self.advance();
+                        TokenKind::LtLt
+                    } else if self.peek_char() == Some('=') {
                         self.advance();
                         TokenKind::LtEq
                     } else {
@@ -460,13 +471,18 @@ impl<'src> Lexer<'src> {
                     }
                 }
                 '>' => {
-                    if self.peek_char() == Some('=') {
+                    if self.peek_char() == Some('>') {
+                        self.advance();
+                        TokenKind::GtGt
+                    } else if self.peek_char() == Some('=') {
                         self.advance();
                         TokenKind::GtEq
                     } else {
                         TokenKind::Gt
                     }
                 }
+                '^' => TokenKind::Caret,
+                '~' => TokenKind::Tilde,
                 '-' => {
                     if self.peek_char() == Some('>') {
                         self.advance();

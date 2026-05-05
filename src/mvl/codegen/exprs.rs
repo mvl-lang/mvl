@@ -658,6 +658,17 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .into(),
             BinaryOp::And => self.builder.build_and(l, r, "and").unwrap().into(),
             BinaryOp::Or => self.builder.build_or(l, r, "or").unwrap().into(),
+            BinaryOp::BitAnd => self.builder.build_and(l, r, "bitand").unwrap().into(),
+            BinaryOp::BitOr => self.builder.build_or(l, r, "bitor").unwrap().into(),
+            BinaryOp::BitXor => self.builder.build_xor(l, r, "bitxor").unwrap().into(),
+            BinaryOp::Shl => self.builder.build_left_shift(l, r, "shl").unwrap().into(),
+            // Default to arithmetic (signed) right shift; logical shift for unsigned
+            // types requires type-level signedness tracking (follow-up: #484).
+            BinaryOp::Shr => self
+                .builder
+                .build_right_shift(l, r, true, "shr")
+                .unwrap()
+                .into(),
         };
         Some(result)
     }
@@ -801,6 +812,14 @@ impl<'ctx> LlvmBackend<'ctx> {
                 _ => None,
             },
             UnaryOp::Deref => Some(val),
+            UnaryOp::BitNot => match val {
+                // LLVM bitwise NOT = XOR with all-ones (-1).
+                BasicValueEnum::IntValue(v) => {
+                    let ones = v.get_type().const_all_ones();
+                    Some(self.builder.build_xor(v, ones, "bitnot").unwrap().into())
+                }
+                _ => None,
+            },
         }
     }
 

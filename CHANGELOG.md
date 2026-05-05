@@ -10,6 +10,55 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 - **`missing-annotation` linter rule**
 
+## [0.75.0] — 2026-05-05
+
+### Added
+
+- **Unsigned integer types** — `UByte` (u8) and `UInt` (u64) as first-class `Ty` variants in
+  the checker and transpiler. Both types support all standard arithmetic and comparison
+  operations. Closes #481.
+
+- **First-class Map and Set types** — `Ty::Map<K,V>` and `Ty::Set<T>` replace string-based
+  `Named("Map", ...)` and `Named("Set", ...)`. Full structural type checking with key/value
+  constraints. Map keys must be `Hashable`, Set elements must be `Hashable`. Closes #482.
+
+- **Bitwise operators** — `&` (and), `|` (or), `^` (xor), `~` (not), `<<` (shl), `>>` (shr)
+  for integer types (Int, Byte, UByte, UInt). Pratt precedence 60 (same as arithmetic).
+  Full IFC label propagation: mixing Secret and Public operands produces Secret result.
+  Closes #483, #484.
+
+- **Overflow-checking arithmetic methods** — `checked_add`, `checked_sub`, `checked_mul`,
+  `checked_div` and `wrapping_add`, `wrapping_sub`, `wrapping_mul` methods on Int, Byte,
+  UByte, UInt. Checked methods return `Option<T>` (None on overflow); wrapping methods
+  return the wrapping result directly. Closes #485.
+
+- **Slimmed prelude** — `mvl_runtime::prelude` now exports only language fundamentals:
+  `ParseFromArgs`, `get_arg`, `parse` (struct-parsing infra), and type trait bounds. All
+  module re-exports (env, io, fs, process, etc.) removed in favor of targeted imports
+  via `use std.X.*` declarations. Closes #488.
+
+- **Targeted stdlib imports** — Compiler now emits `use mvl_runtime::stdlib::X::*` for each
+  `use std.X.*` declaration in MVL source. Previously, all stdlib modules were imported
+  unconditionally via the prelude. Closes #489.
+
+- **Memory architecture refactoring** — Heap-collection operations (`mvl_string_*`,
+  `mvl_array_*`, `mvl_map_*`) moved from `mvl_memory` to `mvl_runtime_c::memory_ops`.
+  `mvl_memory` now contains only lifecycle (alloc/drop) and core types. Clarifies division:
+  `mvl_memory` = types + lifecycle (Miri-safe), `mvl_runtime_c` = C-ABI operations. Closes #490.
+
+### Fixed
+
+- **Security issues in Map operations** — Added zero-length key guard in `mvl_map_insert`;
+  prevented dangling pointer storage for zero-length values by using `ptr::null_mut()`.
+  Added invariant assertion in `mvl_map_get`.
+
+- **Type inference for UInt wrapping methods** — `wrapping_add`, `wrapping_sub`, `wrapping_mul`
+  on `UInt` now correctly resolve to `Ty::UInt` instead of `Ty::Unknown`.
+
+- **Bitwise operators on invalid types** — Bitwise operations on Float (or other non-integer
+  types) now correctly produce `TypeMismatch` errors. Fixed label-checking to use
+  `.unlabeled()` for type dispatch.
+
 ## [0.74.0] — 2026-05-05
 
 ### Added

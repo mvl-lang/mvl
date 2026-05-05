@@ -1,4 +1,4 @@
-# ADR-0015: MC/DC Coverage Execution Model — Eager Evaluation, Unique-Cause, u16 Encoding
+# ADR-0015: MC/DC Coverage Execution Model — Eager Evaluation, Unique-Cause, u32 Encoding
 
 **Status:** Accepted
 **Date:** 2026-04-28

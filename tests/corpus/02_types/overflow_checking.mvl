@@ -1,0 +1,23 @@
+// Corpus: overflow-checking arithmetic (#485)
+// Demonstrates checked_add/sub/mul on Int and Byte types.
+// All examples must parse and type-check without errors.
+
+fn int_checked_add(a: Int, b: Int) -> Option[Int] {
+    a.checked_add(b)
+}
+
+fn int_checked_sub(a: Int, b: Int) -> Option[Int] {
+    a.checked_sub(b)
+}
+
+fn int_checked_mul(a: Int, b: Int) -> Option[Int] {
+    a.checked_mul(b)
+}
+
+fn byte_checked_add(a: Byte, b: Byte) -> Option[Byte] {
+    a.checked_add(b)
+}
+
+fn int_wrapping_add(a: Int, b: Int) -> Int {
+    a.wrapping_add(b)
+}

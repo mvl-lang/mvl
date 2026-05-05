@@ -85,7 +85,8 @@ unsafe fn read_mvl_map(m: *const MvlMap) -> HashMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mvl_memory::{mvl_map_drop, mvl_map_insert, mvl_map_new, mvl_string_drop, mvl_string_new};
+    use crate::memory_ops::mvl_map_insert;
+    use mvl_memory::{mvl_map_drop, mvl_map_new, mvl_string_drop, mvl_string_new};
 
     #[test]
     fn read_mvl_string_null_returns_empty() {

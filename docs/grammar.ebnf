@@ -116,6 +116,14 @@ expr           = literal | IDENT | field_access | fn_call | method_call
                | lambda | block_expr | propagate | construct
                | "move" expr | "consume" expr
                | "declassify" "(" expr ")" | "sanitize" "(" expr ")" ;
+unary_expr     = unary_op expr ;
+binary_expr    = expr binary_op expr ;
+unary_op       = "-" | "!" | "~" | "*" ;          (* neg, logical-not, bitwise-not, deref *)
+binary_op      = "+" | "-" | "*" | "/" | "%"      (* arithmetic *)
+               | "==" | "!=" | "<" | ">" | "<=" | ">="   (* comparison *)
+               | "&&" | "||"                       (* logical *)
+               | "&" | "|" | "^"                  (* bitwise AND / OR / XOR *)
+               | "<<" | ">>" ;                    (* left / right shift *)
 borrow_expr    = "&" [ "mut" ] expr ;              (* take shared or mutable borrow *)
 propagate      = expr "?" ;                       (* Result/Option propagation *)
 fn_call        = IDENT [ "[" type_list "]" ] "(" [ arg_list ] ")" ;

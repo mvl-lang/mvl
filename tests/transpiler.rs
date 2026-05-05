@@ -2166,3 +2166,35 @@ fn ident_arg_non_last_use_emits_clone() {
     let rust = transpile_src(src);
     assert_contains(&rust, "double(x.clone())");
 }
+
+// ── Epic #480: Primitives and runtime architecture redesign ──────────────────
+
+/// Bit operators corpus transpiles without errors (#483 #484).
+#[test]
+fn corpus_bit_operators_transpiles() {
+    let src = include_str!("corpus/02_types/bit_operators.mvl");
+    let rust = transpile_src(src);
+    assert_contains(&rust, "&");
+    assert_contains(&rust, "|");
+    assert_contains(&rust, "^");
+    assert_contains(&rust, "<<");
+    assert_contains(&rust, ">>");
+}
+
+/// Overflow-checking arithmetic corpus transpiles correctly (#485).
+#[test]
+fn corpus_overflow_checking_transpiles() {
+    let src = include_str!("corpus/02_types/overflow_checking.mvl");
+    let rust = transpile_src(src);
+    assert_contains(&rust, "checked_add");
+    assert_contains(&rust, "wrapping_add");
+}
+
+/// Unsigned types corpus transpiles: UByte → u8, UInt → u64 (#481).
+#[test]
+fn corpus_unsigned_types_transpiles() {
+    let src = include_str!("corpus/02_types/unsigned_types.mvl");
+    let rust = transpile_src(src);
+    assert_contains(&rust, "u8");
+    assert_contains(&rust, "u64");
+}

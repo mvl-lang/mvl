@@ -18,7 +18,7 @@ use crate::mvl::transpiler::emit_functions::emit_fn_decl;
 use crate::mvl::transpiler::emit_impls::emit_impl_decl;
 use crate::mvl::transpiler::emit_types::emit_type_decl;
 use crate::mvl::transpiler::emit_types::{emit_security_preamble, emit_type_expr};
-use crate::mvl::transpiler::has_std_imports;
+use crate::mvl::transpiler::{collect_stdlib_modules, has_std_imports};
 
 ///// Code-generation context: accumulates Rust source text.
 #[derive(Default)]
@@ -312,6 +312,11 @@ impl RustEmitter {
         if has_runtime {
             self.use_mvl_runtime = true;
             self.line("use mvl_runtime::prelude::*;");
+            // Emit targeted stdlib imports for each `use std.X.*` in the MVL source (#488/#489).
+            // The prelude no longer re-exports OS modules; each module is imported explicitly.
+            for module in collect_stdlib_modules(prog) {
+                self.line(&format!("use mvl_runtime::stdlib::{}::*;", module));
+            }
         } else {
             emit_security_preamble(self);
         }
@@ -419,7 +424,8 @@ impl RustEmitter {
                 }
                 Decl::Use(ud) => {
                     // Emit Rust `use` for local module imports (non-std).
-                    // std imports are provided via mvl_runtime::prelude::* — no explicit use needed.
+                    // std imports are handled in the preamble via targeted
+                    // `use mvl_runtime::stdlib::X::*;` lines (#488/#489).
                     // Use `crate::` prefix for Rust 2018 edition path clarity.
                     if ud.path.len() > 1 {
                         let source_mod = ud.path[..ud.path.len() - 1].join("::");

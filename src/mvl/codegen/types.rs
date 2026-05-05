@@ -138,6 +138,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                     "Float" => Some(self.context.f64_type().into()),
                     "Bool" => Some(self.context.bool_type().into()),
                     "Byte" => Some(self.context.i8_type().into()),
+                    "UByte" => Some(self.context.i8_type().into()),
+                    "UInt" => Some(self.context.i64_type().into()),
                     "Char" => Some(self.context.i32_type().into()),
                     "Unit" => None,
                     // L5-13: heap-allocated collection types are uniform `ptr` values.

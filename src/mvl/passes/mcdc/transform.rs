@@ -170,10 +170,10 @@ impl MCDCMap {
     /// Register a new decision and return its unique counter index.
     ///
     /// # Panics
-    /// Panics if `clause_count > 15`: the u16 encoding reserves one bit for
-    /// the outcome, leaving 15 bits for clauses.  Conditions with 16+ clauses
-    /// are pathological and the assertion catches silent data corruption that
-    /// would produce false COVERED results.
+    /// Panics if `clause_count > 15`: the u32 encoding uses 2N+1 bits (N clause
+    /// values, N eval flags, 1 outcome), so N ≤ 15 → 31 bits ≤ u32.  Conditions
+    /// with 16+ clauses are pathological; this assertion catches silent data
+    /// corruption that would produce false COVERED results.  See ADR-0015.
     pub fn alloc(
         &mut self,
         fn_name: String,
@@ -185,7 +185,7 @@ impl MCDCMap {
     ) -> usize {
         assert!(
             clause_count <= 15,
-            "MC/DC: decision at line {line} has {clause_count} clauses; max supported is 15 (u16 encoding)"
+            "MC/DC: decision at line {line} has {clause_count} clauses; max supported is 15 (u32 encoding, 2N+1 bits, see ADR-0015)"
         );
         let id = self.next_id;
         self.next_id += 1;
