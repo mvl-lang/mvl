@@ -1288,7 +1288,7 @@ impl TypeChecker {
                     let vt = self.infer_expr(v);
                     joined_label = ifc::join_opt(joined_label, ifc::label_of(&vt));
                 }
-                let map_ty = Ty::Named("Map".into(), vec![key_ty, val_ty]);
+                let map_ty = Ty::Map(Box::new(key_ty), Box::new(val_ty));
                 ifc::apply_label(joined_label, map_ty)
             }
 
@@ -1300,7 +1300,7 @@ impl TypeChecker {
                 for e in elems.iter().skip(1) {
                     self.infer_expr(e);
                 }
-                Ty::Named("Set".into(), vec![elem_ty])
+                Ty::Set(Box::new(elem_ty))
             }
 
             // #14: `?` propagation
@@ -1868,11 +1868,8 @@ impl TypeChecker {
             Ty::List(elem_ty) => Self::list_method_ty(elem_ty.as_ref(), method, arg_tys),
             Ty::Option(inner) => Self::option_method_ty(inner.as_ref(), method, arg_tys),
             Ty::Result(ok_ty, _) => Self::result_method_ty(ok_ty.as_ref(), method, arg_tys),
-            Ty::Named(name, type_args) => match name.as_str() {
-                "Map" => Self::map_method_ty(type_args, method),
-                "Set" => Self::set_method_ty(type_args, method),
-                _ => Ty::Unknown,
-            },
+            Ty::Map(k_ty, v_ty) => Self::map_method_ty(k_ty.as_ref(), v_ty.as_ref(), method),
+            Ty::Set(t_ty) => Self::set_method_ty(t_ty.as_ref(), method),
             _ => Ty::Unknown,
         };
         // Only apply label when we resolved a concrete type.
@@ -2145,9 +2142,9 @@ impl TypeChecker {
                 } else {
                     Ty::Unknown
                 };
-                Ty::Named(
-                    "Map".into(),
-                    vec![k_ty, Ty::List(Box::new(elem_ty.clone()))],
+                Ty::Map(
+                    Box::new(k_ty),
+                    Box::new(Ty::List(Box::new(elem_ty.clone()))),
                 )
             }
             _ => Ty::Unknown,
@@ -2155,15 +2152,10 @@ impl TypeChecker {
     }
 
     /// Return type for methods on `Map<K, V>`.
-    fn map_method_ty(type_args: &[Ty], method: &str) -> Ty {
-        let (k_ty, v_ty) = match type_args {
-            [k, v] => (k.clone(), v.clone()),
-            [k] => (k.clone(), Ty::Unknown),
-            _ => (Ty::Unknown, Ty::Unknown),
-        };
+    fn map_method_ty(k_ty: &Ty, v_ty: &Ty, method: &str) -> Ty {
         match method {
             // Safe access — Option<V>, never panic
-            "get" => Ty::Option(Box::new(v_ty)),
+            "get" => Ty::Option(Box::new(v_ty.clone())),
             // Predicates
             "contains_key" | "is_empty" => Ty::Bool,
             // Numeric
@@ -2171,24 +2163,23 @@ impl TypeChecker {
             // Mutation
             "insert" | "remove_entry" => Ty::Unit,
             // remove returns old value if present
-            "remove" => Ty::Option(Box::new(v_ty)),
+            "remove" => Ty::Option(Box::new(v_ty.clone())),
             // Iteration views
-            "keys" => Ty::List(Box::new(k_ty)),
+            "keys" => Ty::List(Box::new(k_ty.clone())),
             "values" => Ty::List(Box::new(v_ty.clone())),
-            "entries" => Ty::List(Box::new(Ty::Tuple(vec![k_ty, v_ty]))),
+            "entries" => Ty::List(Box::new(Ty::Tuple(vec![k_ty.clone(), v_ty.clone()]))),
             _ => Ty::Unknown,
         }
     }
 
     /// Return type for methods on `Set<T>`.
-    fn set_method_ty(type_args: &[Ty], method: &str) -> Ty {
-        let t_ty = type_args.first().cloned().unwrap_or(Ty::Unknown);
+    fn set_method_ty(t_ty: &Ty, method: &str) -> Ty {
         match method {
             "contains" | "is_empty" | "is_subset" | "is_superset" => Ty::Bool,
             "len" => Ty::Int,
             "insert" | "remove" => Ty::Unit,
             "iter" | "to_list" => Ty::List(Box::new(t_ty.clone())),
-            "union" | "intersection" | "difference" => Ty::Named("Set".to_string(), vec![t_ty]),
+            "union" | "intersection" | "difference" => Ty::Set(Box::new(t_ty.clone())),
             _ => Ty::Unknown,
         }
     }
