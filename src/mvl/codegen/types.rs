@@ -214,6 +214,88 @@ impl<'ctx> LlvmBackend<'ctx> {
     /// dereference the payload pointer).  Falls back to `Some(i64)` when the
     /// type cannot be determined statically.
     pub(crate) fn infer_result_ok_llvm_ty(&self, expr: &Expr) -> Option<BasicTypeEnum<'ctx>> {
+        // Special case: list_get[T](list, idx) — infer T from the list argument's local type.
+        if let Expr::FnCall { name, args, .. } = expr {
+            if name == "list_get" {
+                if let Some(Expr::Ident(var_name, _)) = args.first() {
+                    if let Some(list_ty) = self.local_mvl_types.get(var_name.as_str()) {
+                        let stripped = Self::strip_type_wrappers(list_ty);
+                        // TypeExpr for List is Base { name: "List", args: [T] }.
+                        if let TypeExpr::Base {
+                            name: tname,
+                            args: targs,
+                            ..
+                        } = stripped
+                        {
+                            if tname == "List" {
+                                if let Some(elem_ty) = targs.first() {
+                                    let elem_ty = Self::strip_type_wrappers(elem_ty);
+                                    if !matches!(elem_ty, TypeExpr::Base { name, .. } if name == "Unit")
+                                    {
+                                        return self.mvl_type_to_llvm(elem_ty);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // map_get[V](map, key) — infer V from the map argument's local type.
+            // TypeExpr for Map is Base { name: "Map", args: [K, V] }.
+            if name == "map_get" {
+                if let Some(Expr::Ident(var_name, _)) = args.first() {
+                    if let Some(map_ty) = self.local_mvl_types.get(var_name.as_str()) {
+                        let stripped = Self::strip_type_wrappers(map_ty);
+                        if let TypeExpr::Base {
+                            name: tname,
+                            args: targs,
+                            ..
+                        } = stripped
+                        {
+                            if tname == "Map" {
+                                if let Some(val_ty) = targs.get(1) {
+                                    let val_ty = Self::strip_type_wrappers(val_ty);
+                                    if !matches!(val_ty, TypeExpr::Base { name, .. } if name == "Unit")
+                                    {
+                                        return self.mvl_type_to_llvm(val_ty);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // MethodCall scrutinee: obj.get(k) on a Map[K, V] → infer V.
+        if let Expr::MethodCall {
+            receiver, method, ..
+        } = expr
+        {
+            if method == "get" {
+                if let Expr::Ident(var_name, _) = receiver.as_ref() {
+                    if let Some(map_ty) = self.local_mvl_types.get(var_name.as_str()) {
+                        let stripped = Self::strip_type_wrappers(map_ty);
+                        if let TypeExpr::Base {
+                            name: tname,
+                            args: targs,
+                            ..
+                        } = stripped
+                        {
+                            if tname == "Map" {
+                                if let Some(val_ty) = targs.get(1) {
+                                    let val_ty = Self::strip_type_wrappers(val_ty);
+                                    if !matches!(val_ty, TypeExpr::Base { name, .. } if name == "Unit")
+                                    {
+                                        return self.mvl_type_to_llvm(val_ty);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Look up the MVL return/annotation type for this expression.
         let mvl_ty: Option<&TypeExpr> = match expr {
             Expr::FnCall { name, .. } => self.fn_return_types.get(name.as_str()),

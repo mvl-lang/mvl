@@ -242,6 +242,33 @@ impl<'ctx> LlvmBackend<'ctx> {
         )
     }
 
+    /// `mvl_string_chars(ptr) -> ptr`  — returns MvlArray* of MvlString* per char
+    pub(crate) fn get_mvl_string_chars(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "mvl_string_chars",
+            &[self.context.ptr_type(AddressSpace::default()).into()],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
+    /// `mvl_map_keys(ptr) -> ptr`  — returns MvlArray* of MvlString* keys
+    pub(crate) fn get_mvl_map_keys(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "mvl_map_keys",
+            &[self.context.ptr_type(AddressSpace::default()).into()],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
+    /// `mvl_map_remove(ptr map, ptr key, i64 key_len)`
+    pub(crate) fn get_mvl_map_remove(&self) -> FunctionValue<'ctx> {
+        let ptr: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
+        let i64: BasicMetadataTypeEnum = self.context.i64_type().into();
+        self.get_or_declare_fn("mvl_map_remove", &[ptr, ptr, i64], None, false)
+    }
+
     fn get_or_declare_fn(
         &self,
         name: &str,
@@ -296,5 +323,18 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .builder
                 .build_call(drop_fn, &[heap_ptr.into()], "drop_call");
         }
+    }
+
+    /// Return true if the builder is currently positioned in the entry block of the
+    /// current function.  Used to decide whether a heap local's alloca will dominate
+    /// the function exit (where drop calls are emitted).
+    pub(crate) fn in_entry_block(&self) -> bool {
+        let Some(fn_val) = self.current_fn else {
+            return false;
+        };
+        let Some(entry) = fn_val.get_first_basic_block() else {
+            return false;
+        };
+        self.builder.get_insert_block() == Some(entry)
     }
 }
