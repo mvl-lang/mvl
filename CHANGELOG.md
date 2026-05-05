@@ -15,6 +15,35 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
   `.mvllintrc`. `test fn` declarations are excluded. See Spec 011 Req 4 and ADR-0017
   amendment.
 
+## [0.73.0] — 2026-05-05
+
+### Added
+
+- **BDD naming convention** — Test functions with `given_*`, `when_*`, `then_*` prefixes and
+  `test fn scenario_*` entry points follow the BDD pattern (ADR-0020). No language changes;
+  purely a library-style testing approach with explicit state threading via context structs.
+  Spec 004 Req 5, Issue #39 (#477).
+
+- **`mvl test --bdd` Gherkin reporter** — Emits a `BDD scenarios:` block after test runs,
+  listing each `scenario_*` function as `Scenario: <name> ... ok`. Extracts scenario names
+  from function declarations; no parser changes. Implemented in `src/main.rs::cmd_test`.
+
+### Fixed
+
+- **BDD corpus syntax errors** — Added missing semicolons and type annotations to `let`
+  bindings in calculator_bdd_test.mvl; all 5 scenarios now parse and pass.
+
+### Changed
+
+- **`make assurance` interface** — Changed from verbose-by-default to summary-by-default;
+  use `make assurance VERBOSE=true` for full output with legend. Dropped `make assurance-summary`.
+
+### Docs
+
+- **BDD documentation** — ADR-0020 formalizes the decision (Option B+A hybrid); Spec 004 Req 5
+  defines the pattern; tests link to concrete scenarios. Two Gherkin test scenarios verify both
+  the naming convention and the `--bdd` reporter output.
+
 ## [0.72.2] — 2026-05-04
 
 ### Added

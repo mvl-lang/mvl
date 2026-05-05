@@ -653,3 +653,55 @@ fn log_output_formats_correctly() {
         "fields not sorted: {ordering_line}"
     );
 }
+
+fn corpus_bdd(name: &str) -> String {
+    format!("{}/tests/corpus/12_bdd/{name}", env!("CARGO_MANIFEST_DIR"))
+}
+
+/// Spec 004 Req 5 (ADR-0020): BDD naming convention — given_*/when_*/then_*/scenario_*
+/// functions in a _test.mvl file are valid MVL and all five scenarios pass.
+#[test]
+fn bdd_scenarios_run_and_pass() {
+    let out = Command::new(mvl_bin())
+        .args(["test", &corpus_bdd("calculator_bdd_test.mvl")])
+        .output()
+        .expect("failed to run mvl test");
+    assert!(
+        out.status.success(),
+        "bdd scenarios failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("5 passed"),
+        "expected 5 passed, got:\n{stdout}"
+    );
+}
+
+/// Spec 004 Req 5 (ADR-0020): `mvl test --bdd` emits a Gherkin-style scenario report
+/// derived from `scenario_*` function names, after all tests pass.
+#[test]
+fn bdd_report_emits_gherkin_scenarios() {
+    let out = Command::new(mvl_bin())
+        .args(["test", &corpus_bdd("calculator_bdd_test.mvl"), "--bdd"])
+        .output()
+        .expect("failed to run mvl test --bdd");
+    assert!(
+        out.status.success(),
+        "mvl test --bdd failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("BDD scenarios:"),
+        "expected 'BDD scenarios:' header, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Scenario: adding two positive numbers ... ok"),
+        "expected scenario line, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Scenario: dividing by zero returns error ... ok"),
+        "expected scenario line, got:\n{stdout}"
+    );
+}
