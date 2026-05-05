@@ -4314,3 +4314,41 @@ fn let_with_annotation_accepted() {
         "annotated let should produce no errors, got: {errors:?}"
     );
 }
+
+// ── Epic #480: Primitives and runtime architecture redesign ──────────────────
+
+/// Unsigned types corpus must parse and type-check without errors (#481).
+#[test]
+fn unsigned_types_corpus_parses_and_checks() {
+    let src = include_str!("corpus/02_types/unsigned_types.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "unsigned_types corpus must type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+/// Bit-operator corpus must parse and type-check without errors (#483 #484).
+#[test]
+fn bit_operators_corpus_parses_and_checks() {
+    let src = include_str!("corpus/02_types/bit_operators.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "bit_operators corpus must type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+/// Overflow-checking arithmetic corpus must parse and type-check without errors (#485).
+#[test]
+fn overflow_checking_corpus_parses_and_checks() {
+    let src = include_str!("corpus/02_types/overflow_checking.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "overflow_checking corpus must type-check cleanly, got: {:?}",
+        result.errors
+    );
+}

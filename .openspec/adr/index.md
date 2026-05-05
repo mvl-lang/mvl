@@ -22,3 +22,4 @@
 | [0018](0018-five-stage-pipeline-passes-module.md) | Five-stage pipeline — introduce `src/mvl/passes/` | Accepted |
 | [0019](0019-llvm-stdlib-two-path.md) | Two-Path Stdlib Architecture — Rust Crate + C-ABI cdylib | Accepted |
 | [0020](0020-bdd-library-naming-convention.md) | BDD as library naming convention, not language syntax | Accepted |
+| [0021](0021-primitives-runtime-redesign.md) | Primitives and runtime architecture redesign — unsigned types, bit ops, prelude slim, mvl_memory scope | Accepted |
