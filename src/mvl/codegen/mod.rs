@@ -600,6 +600,19 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
         }
 
+        // #180/#438: crypto tier-1 builtins — always available, no `use` import required.
+        // sha256/sha512 are pure String→String hash functions backed by `_mvl_crypto_*`
+        // C-ABI exports in `libmvl_runtime_c`.  The LLVM IR pattern is ptr→ptr (same
+        // as PtrIdentArg) — the C function takes a MvlString*, returns a new MvlString*.
+        // Use `entry().or_insert()` so an explicit `use std.crypto.*` import doesn't
+        // conflict (import-registered entries take priority via insert, not or_insert).
+        self.stdlib_imports
+            .entry("sha256".into())
+            .or_insert_with(|| StdlibSig::PtrIdentArg("_mvl_crypto_sha256".into()));
+        self.stdlib_imports
+            .entry("sha512".into())
+            .or_insert_with(|| StdlibSig::PtrIdentArg("_mvl_crypto_sha512".into()));
+
         // #435: Register return types for io stdlib functions so that
         // `infer_result_ok_llvm_ty` can distinguish `Result[Unit,String]` (ok=None)
         // from `Result[String,String]` (ok=Some(ptr)) at emit_propagate time.

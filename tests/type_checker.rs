@@ -2873,6 +2873,119 @@ fn stdlib_crypto_corpus_parses_and_checks() {
     );
 }
 
+// ── IFC tests for crypto functions (#180) ─────────────────────────────────────
+
+#[test]
+fn sha256_rejects_secret_input() {
+    // GIVEN: sha256 expects String (unlabeled); Secret cannot flow to unlabeled
+    // THEN: TypeMismatch — Secret[String] cannot be passed to sha256(String)
+    // This is the interim IFC protection until label polymorphism lands (#179).
+    let errors = errors_for(
+        r#"fn hash_secret(pwd: Secret[String]) -> String {
+    sha256(pwd)
+}"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "sha256(Secret[String]) must be a TypeMismatch, got: {errors:?}"
+    );
+}
+
+#[test]
+fn sha512_rejects_secret_input() {
+    let errors = errors_for(
+        r#"fn hash_secret(pwd: Secret[String]) -> String {
+    sha512(pwd)
+}"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "sha512(Secret[String]) must be a TypeMismatch, got: {errors:?}"
+    );
+}
+
+#[test]
+fn sha256_accepts_plain_string() {
+    // GIVEN: sha256(String) -> String — plain String input is valid
+    // THEN: no type errors
+    let errors = errors_for(
+        r#"fn checksum(data: String) -> String {
+    sha256(data)
+}"#,
+    );
+    assert!(
+        errors.is_empty(),
+        "sha256(String) must type-check without errors, got: {errors:?}"
+    );
+}
+
+#[test]
+fn crypto_random_bytes_returns_secret_list_int() {
+    // GIVEN: crypto_random_bytes returns Secret[List[Int]]
+    // THEN: the result can be bound to Secret[List[Int]] and cannot be logged
+    let errors = errors_for(
+        r#"fn gen_key(n: Int) -> Secret[List[Int]] ! CryptoRandom {
+    crypto_random_bytes(n)
+}"#,
+    );
+    assert!(
+        errors.is_empty(),
+        "crypto_random_bytes must return Secret[List[Int]], got: {errors:?}"
+    );
+}
+
+#[test]
+fn sha512_accepts_plain_string() {
+    let errors = errors_for(
+        r#"fn checksum(data: String) -> String {
+    sha512(data)
+}"#,
+    );
+    assert!(
+        errors.is_empty(),
+        "sha512(String) must type-check without errors, got: {errors:?}"
+    );
+}
+
+#[test]
+fn crypto_random_bytes_result_rejected_by_log_info() {
+    // GIVEN: crypto_random_bytes returns Secret[List[Int]]
+    // THEN: passing the result to log_info is a LoggingLabelViolation
+    let errors = errors_for(
+        r#"fn leak_attempt(n: Int) -> Unit ! CryptoRandom, Log {
+    let bytes: Secret[List[Int]] = crypto_random_bytes(n);
+    log_info("{}", bytes);
+}"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::LoggingLabelViolation { .. })),
+        "logging Secret[List[Int]] must produce LoggingLabelViolation, got: {errors:?}"
+    );
+}
+
+#[test]
+fn caller_missing_crypto_random_effect_rejected() {
+    let src = r#"
+        fn gen_bytes(n: Int) -> Secret[List[Int]] ! CryptoRandom { crypto_random_bytes(n) }
+        fn caller(n: Int) -> Secret[List[Int]] { gen_bytes(n) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            CheckError::UndeclaredEffect { callee, effect, .. }
+            if callee == "gen_bytes" && effect == "CryptoRandom"
+        )),
+        "expected UndeclaredEffect(gen_bytes, CryptoRandom), got: {errors:?}"
+    );
+}
+
 #[test]
 fn stdlib_pbt_corpus_parses_and_checks() {
     // GIVEN: the PBT stdlib corpus (valid programs using std.pbt, #40 Phase A + #425 Phase B)

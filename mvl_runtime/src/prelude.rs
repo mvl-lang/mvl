@@ -10,8 +10,8 @@
 //! imports for each `use std.X.*` declaration in the MVL source (#488 / #489).
 
 pub use crate::effects::{
-    Alloc, Clock, Concurrent, Console, Db, Env, FileDelete, FileRead, FileWrite, Log, Net, Panic,
-    ProcessSpawn, Random, Terminal,
+    Alloc, Clock, Concurrent, Console, CryptoRandom, Db, Env, FileDelete, FileRead, FileWrite, Log,
+    Net, Panic, ProcessSpawn, Random, Terminal,
 };
 pub use crate::ifc::{declassify, sanitize, Clean, Public, Secret, Tainted};
 pub use crate::mvl_refine;
@@ -47,6 +47,16 @@ pub use crate::stdlib::primitives::{
 pub use crate::stdlib::primitives::{
     list_concat, list_contains, list_get, list_len, list_push, list_slice,
 };
+
+// ── Crypto tier-1 builtins ─────────────────────────────────────────────────
+//
+// sha256/sha512 are pure hash functions available without an explicit
+// `use std.crypto.*` import (tier-1, same as format/range).
+// crypto_random_bytes requires `! CryptoRandom` in the caller's signature but
+// is available in scope without an explicit import, consistent with how the
+// checker registers these as tier-1 builtins.
+
+pub use crate::stdlib::crypto::{crypto_random_bytes, sha256, sha512};
 
 // ── Higher-order method traits ─────────────────────────────────────────────
 //
