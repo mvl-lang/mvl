@@ -7,17 +7,8 @@
         {
           "type": "REPEAT",
           "content": {
-            "type": "CHOICE",
-            "members": [
-              {
-                "type": "SYMBOL",
-                "name": "use_decl"
-              },
-              {
-                "type": "SYMBOL",
-                "name": "reexport_decl"
-              }
-            ]
+            "type": "SYMBOL",
+            "name": "use_decl"
           }
         },
         {
@@ -30,44 +21,53 @@
       ]
     },
     "declaration": {
-      "type": "SEQ",
+      "type": "CHOICE",
       "members": [
         {
-          "type": "CHOICE",
+          "type": "SEQ",
           "members": [
             {
-              "type": "STRING",
-              "value": "pub"
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "pub"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
             },
             {
-              "type": "BLANK"
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "type_decl"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "fn_decl"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "const_decl"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "extern_decl"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "impl_decl"
+                }
+              ]
             }
           ]
         },
         {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "SYMBOL",
-              "name": "type_decl"
-            },
-            {
-              "type": "SYMBOL",
-              "name": "fn_decl"
-            },
-            {
-              "type": "SYMBOL",
-              "name": "const_decl"
-            },
-            {
-              "type": "SYMBOL",
-              "name": "extern_decl"
-            },
-            {
-              "type": "SYMBOL",
-              "name": "impl_decl"
-            }
-          ]
+          "type": "SYMBOL",
+          "name": "reexport_decl"
         }
       ]
     },

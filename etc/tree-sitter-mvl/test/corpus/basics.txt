@@ -642,10 +642,11 @@ pub use geometry::Point;
 -------------------------------------------------------------------------------
 
 (program
-  (reexport_decl
-    (module_path
-      (identifier)
-      (identifier))))
+  (declaration
+    (reexport_decl
+      (module_path
+        (identifier)
+        (identifier)))))
 
 ===============================================================================
 Extern block — rust ABI
