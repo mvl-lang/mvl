@@ -4,7 +4,7 @@
 
 use std.env.{getuid, getgid}
 
-fn main() -> Unit {
+fn main() -> Unit ! Env, Console {
     let uid: Int = getuid();
     let gid: Int = getgid();
     println("uid={}", uid);

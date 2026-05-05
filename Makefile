@@ -67,10 +67,10 @@ test: ## Run all test suites and print a one-line PASS/FAIL summary for each
 		label="$$1"; target="$$2"; \
 		out=$$($(MAKE) --no-print-directory "$$target" 2>&1); rc=$$?; \
 		if [ $$rc -eq 0 ]; then \
-			printf "  \033[32m✓  PASS\033[0m  %s\n" "$$label"; \
+			printf "  %-20s  \033[32m✓  PASS\033[0m\n" "$$label"; \
 			pass=$$((pass + 1)); \
 		else \
-			printf "  \033[31m✗  FAIL\033[0m  %s\n" "$$label"; \
+			printf "  %-20s  \033[31m✗  FAIL\033[0m\n" "$$label"; \
 			printf "%s\n" "$$out" | sed 's/^/         /'; \
 			fail=$$((fail + 1)); \
 		fi; \
@@ -82,9 +82,9 @@ test: ## Run all test suites and print a one-line PASS/FAIL summary for each
 	run_suite "BDD"               test-bdd; \
 	run_suite "Transpiler"        test-transpiler; \
 	run_suite "LLVM backend"      test-llvm; \
+	run_suite "Examples"          test-examples; \
 	run_suite "Tree-sitter"       test-tree-sitter; \
 	run_suite "Grammar coverage"  test-grammar-coverage; \
-	run_suite "Examples"          test-examples; \
 	echo ""; \
 	if [ $$fail -eq 0 ]; then \
 		printf "  \033[32m✓  All $$((pass)) suites passed\033[0m\n\n"; \
@@ -141,6 +141,9 @@ test-transpiler: build ## Run end-to-end transpiler tests: .mvl → parse → ch
 test-llvm: build build-memory ## Run LLVM backend tests across full corpus
 	@echo "Running LLVM backend tests (full corpus)..."
 	$(MVL) test tests/corpus/ --backend=llvm --verbose
+
+test-examples: build build-llvm-runtime ## Run `make test` for every example subdirectory (BACKEND=llvm for LLVM backend)
+	@examples/test-all.sh $(if $(filter llvm,$(BACKEND)),--llvm)
 
 # === Quality ===
 
@@ -200,9 +203,6 @@ test-tree-sitter: ## Run tree-sitter corpus tests (grammar derived from docs/gra
 
 test-grammar-coverage: ## Cross-validate docs/grammar.ebnf against tree-sitter grammar.js
 	@python3 tools/check_grammar_coverage.py
-
-test-examples: build build-llvm-runtime ## Run `make test` for every example subdirectory
-	@examples/test-all.sh
 
 install-nvim: ## Install nvim-mvl plugin + compile tree-sitter parser
 	etc/nvim-mvl/install.sh

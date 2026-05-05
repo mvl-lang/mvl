@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
-# Run `make test` for every example subdirectory.
+# Run `make test` (or `make test-llvm` with --llvm) for every example subdirectory.
 # The MVL compiler is NOT recompiled here — it must be pre-built by the caller
 # (root `make test-examples` depends on `build build-llvm-runtime`).
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# ── Parse arguments ───────────────────────────────────────────────────────────
+TEST_TARGET="test"
+for arg in "$@"; do
+    case "$arg" in
+        --llvm) TEST_TARGET="test-llvm" ;;
+        *) echo "Unknown argument: $arg"; exit 1 ;;
+    esac
+done
 
 # ── Validate: MVL binary must exist and respond to --version ─────────────────
 MVL_BIN="$REPO_ROOT/target/debug/mvl"
@@ -32,7 +41,7 @@ for dir in "$SCRIPT_DIR"/*/; do
     [ -f "$dir/Makefile" ] || continue
     name="$(basename "$dir")"
     printf "  %-20s  " "$name"
-    if out=$(make -C "$dir" --no-print-directory test 2>&1); then
+    if out=$(make -C "$dir" --no-print-directory "$TEST_TARGET" 2>&1); then
         printf "\033[32m✓  PASS\033[0m\n"
         pass=$((pass + 1))
     else
