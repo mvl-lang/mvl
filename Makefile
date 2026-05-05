@@ -138,7 +138,7 @@ test-bdd: build ## Run BDD corpus scenarios with Gherkin report (mvl test --bdd)
 test-transpiler: build ## Run end-to-end transpiler tests: .mvl → parse → check → transpile → cargo → binary → assert output
 	cargo test --test compile_and_run
 
-test-llvm: build build-memory ## Run LLVM backend tests across full corpus
+test-llvm: build build-llvm-runtime ## Run LLVM backend tests across full corpus
 	@echo "Running LLVM backend tests (full corpus)..."
 	$(MVL) test tests/corpus/ --backend=llvm --verbose
 

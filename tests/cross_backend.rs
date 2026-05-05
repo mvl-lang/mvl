@@ -306,10 +306,7 @@ fn cross_backend_random_float_shape() {
 ///
 /// Checks that `_mvl_log_*` wrappers produce the same `[LEVEL TIMESTAMP] msg field=value`
 /// format as the Rust-path implementation, including deterministic field sort order.
-///
-/// LLVM-pending: symbols not found after chore/llvm-switch (#502). Re-enable when fixed.
 #[test]
-#[ignore = "LLVM-pending: __mvl_log_* symbols not resolving after llvm-switch (#502)"]
 fn cross_backend_log_stderr() {
     let file = corpus_effects("log_output.mvl");
 
@@ -402,10 +399,7 @@ fn cross_backend_log_stderr() {
 
 /// Write+read roundtrip, append, create_dir, remove.
 /// Both backends must produce identical output: the file round-trips correctly.
-///
-/// LLVM-pending: symbols not found after chore/llvm-switch (#502). Re-enable when fixed.
 #[test]
-#[ignore = "LLVM-pending: __mvl_io_* symbols not resolving after llvm-switch (#502)"]
 fn cross_backend_io_write_read_roundtrip() {
     let file = corpus_effects("io_basic.mvl");
     let transpiler_out = run_transpiler(&file);
