@@ -214,9 +214,12 @@ fn collect_type_bounds(ty: &TypeExpr, bounds: &mut std::collections::HashMap<Str
         TypeExpr::Base { name, args, .. } => {
             match name.as_str() {
                 "Map" if args.len() == 2 => {
-                    // Map[K, V]: K must be Hash+Eq, V must be Clone.
+                    // Map[K, V]: K must be Hash+Eq+Clone (Clone required because
+                    // the transpiler emits `.mvl_get(key.clone())` at call sites),
+                    // V must be Clone.
                     add_bound_if_type_param(&args[0], "std::hash::Hash", bounds);
                     add_bound_if_type_param(&args[0], "std::cmp::Eq", bounds);
+                    add_bound_if_type_param(&args[0], "Clone", bounds);
                     add_bound_if_type_param(&args[1], "Clone", bounds);
                     // Recurse in case args are themselves generic types.
                     for a in args {

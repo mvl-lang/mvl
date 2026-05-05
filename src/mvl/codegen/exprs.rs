@@ -1918,6 +1918,9 @@ impl<'ctx> LlvmBackend<'ctx> {
             phi.add_incoming(&[(&some_val, some_end), (&none_val, none_end)]);
             Some(phi.as_basic_value())
         } else {
+            // Should not happen: Some/None layouts must match (both use {i8, ptr}).
+            // Emit unreachable so merge_bb has a terminator and the IR stays valid.
+            self.builder.build_unreachable().unwrap();
             None
         }
     }

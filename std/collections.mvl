@@ -26,6 +26,7 @@ pub fn map_insert[K, V](m: Map[K, V], key: K, value: V) -> Unit {
 }
 
 /// Remove `key` from `m`, returning the old value if present.
+// LLVM: deferred to #436 — no codegen arm for `remove` in exprs.rs yet.
 pub fn map_remove[K, V](m: Map[K, V], key: K) -> Option[V] {
     m.remove(key)
 }
@@ -36,11 +37,13 @@ pub fn map_contains_key[K, V](m: Map[K, V], key: K) -> Bool {
 }
 
 /// Return all keys of `m` as a list (order unspecified).
+// LLVM: deferred to #436 — no codegen arm for `keys` in exprs.rs yet.
 pub fn map_keys[K, V](m: Map[K, V]) -> List[K] {
     m.keys()
 }
 
 /// Return all values of `m` as a list (order unspecified).
+// LLVM: deferred to #436 — no codegen arm for `values` in exprs.rs yet.
 pub fn map_values[K, V](m: Map[K, V]) -> List[V] {
     m.values()
 }
@@ -88,16 +91,19 @@ pub fn set_is_empty[T](s: Set[T]) -> Bool {
 }
 
 /// Elements present in both `a` and `b`.
+// LLVM: deferred to #436 — no codegen arm for `intersection` in exprs.rs yet.
 pub fn set_intersection[T](a: Set[T], b: Set[T]) -> Set[T] {
     a.intersection(b)
 }
 
 /// Elements present in `a` but not `b`.
+// LLVM: deferred to #436 — no codegen arm for `difference` in exprs.rs yet.
 pub fn set_difference[T](a: Set[T], b: Set[T]) -> Set[T] {
     a.difference(b)
 }
 
 /// Elements present in either `a` or `b`.
+// LLVM: deferred to #436 — no codegen arm for `union` in exprs.rs yet.
 pub fn set_union[T](a: Set[T], b: Set[T]) -> Set[T] {
     a.union(b)
 }
