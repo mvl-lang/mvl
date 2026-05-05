@@ -93,6 +93,13 @@ pub struct Clock;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Random;
 
+/// Marks a function that reads from the OS CSPRNG (getrandom / /dev/urandom).
+/// Distinct from `! Random` (PRNG, seeded, reproducible) — `! CryptoRandom`
+/// sources are non-reproducible and suitable for keys, nonces, and tokens.
+/// See `std.crypto` and issue #180.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CryptoRandom;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,5 +120,6 @@ mod tests {
         assert_eq!(std::mem::size_of::<ProcessSpawn>(), 0);
         assert_eq!(std::mem::size_of::<Clock>(), 0);
         assert_eq!(std::mem::size_of::<Random>(), 0);
+        assert_eq!(std::mem::size_of::<CryptoRandom>(), 0);
     }
 }
