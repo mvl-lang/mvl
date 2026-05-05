@@ -1,11 +1,33 @@
 #!/usr/bin/env bash
 # Run `make test` for every example subdirectory.
+# The MVL compiler is NOT recompiled here — it must be pre-built by the caller
+# (root `make test-examples` depends on `build build-llvm-runtime`).
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# ── Validate: MVL binary must exist and respond to --version ─────────────────
+MVL_BIN="$REPO_ROOT/target/debug/mvl"
+if [ ! -x "$MVL_BIN" ]; then
+    echo ""
+    echo "  ERROR: MVL compiler not found at $MVL_BIN"
+    echo "  Run \`make build\` from the repo root first."
+    echo ""
+    exit 1
+fi
+MVL_VERSION=$("$MVL_BIN" --version 2>&1) || {
+    echo ""
+    echo "  ERROR: $MVL_BIN exists but \`--version\` failed"
+    echo ""
+    exit 1
+}
+echo ""
+echo "  Using: $MVL_BIN  ($MVL_VERSION)"
+echo ""
+
 pass=0; fail=0
 
-echo ""
 for dir in "$SCRIPT_DIR"/*/; do
     [ -f "$dir/Makefile" ] || continue
     name="$(basename "$dir")"
