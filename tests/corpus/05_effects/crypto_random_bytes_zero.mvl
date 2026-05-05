@@ -5,5 +5,5 @@
 
 fn main() -> Unit ! CryptoRandom, Console {
     let bs: Secret[List[Int]] = crypto_random_bytes(0);
-    println("{}", bs.len());
+    println("{}", declassify(bs.len()));
 }
