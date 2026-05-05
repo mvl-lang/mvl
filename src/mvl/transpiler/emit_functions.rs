@@ -308,7 +308,18 @@ fn emit_params(params: &[Param], borrows: &[Option<bool>]) -> String {
                 Some(Capability::Tag) => "/* tag */ ",
                 None => "",
             };
-            let mut_prefix = if p.mutable { "mut " } else { "" };
+            // Map/Set value parameters need `mut` in Rust so mutable methods
+            // (insert, remove) can be called on the owned value.
+            let is_value_map_or_set = borrows.get(i).copied().flatten().is_none()
+                && matches!(
+                    &p.ty,
+                    TypeExpr::Base { name, .. } if name == "Map" || name == "Set"
+                );
+            let mut_prefix = if p.mutable || is_value_map_or_set {
+                "mut "
+            } else {
+                ""
+            };
             format!("{cap_comment}{mut_prefix}{}: {ty_str}", p.name)
         })
         .collect::<Vec<_>>()
@@ -333,6 +344,14 @@ fn emit_expr_tail_with_return_type(
     return_type: &TypeExpr,
     params: &[Param],
 ) {
+    // Unit-returning functions: tail expression must be discarded (semicolon) so
+    // that collection mutators like `m.insert()` or `s.remove()` — which return
+    // non-unit values in Rust — don't cause type mismatches.
+    if matches!(return_type, TypeExpr::Base { name, .. } if name == "Unit") {
+        emit_expr(cg, expr);
+        cg.push(";");
+        return;
+    }
     match return_type {
         TypeExpr::Labeled { label, .. } if is_raw_value(expr, params) => {
             // Wrap only when the expression is a raw (unlabeled) value:

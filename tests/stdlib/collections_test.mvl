@@ -570,3 +570,35 @@ test fn collections_partition_then_filter_on_part() -> Unit {
     assert_eq(large_odds.len(), 1);
     assert_eq(large_odds.contains(5), true);
 }
+
+// ── map_put / map_without ─────────────────────────────────────────────────────
+
+use std.collections.{map_put, map_without, map_get, map_len}
+
+test fn map_put_adds_entry() -> Unit {
+    let m: Map[String, Int] = {"seed": 0};
+    let m2: Map[String, Int] = map_put(m, "a", 1);
+    assert_eq(map_len(m2), 2);
+}
+
+test fn map_put_replaces_existing() -> Unit {
+    let m: Map[String, Int] = {"x": 10};
+    let m2: Map[String, Int] = map_put(m, "x", 99);
+    assert_eq(map_len(m2), 1);
+    match map_get(m2, "x") {
+        Some(v) => assert_eq(v, 99),
+        None    => assert(false),
+    }
+}
+
+test fn map_without_removes_key() -> Unit {
+    let m: Map[String, Int] = {"a": 1, "b": 2};
+    let m2: Map[String, Int] = map_without(m, "a");
+    assert_eq(map_len(m2), 1);
+}
+
+test fn map_without_absent_key_is_noop() -> Unit {
+    let m: Map[String, Int] = {"a": 1};
+    let m2: Map[String, Int] = map_without(m, "z");
+    assert_eq(map_len(m2), 1);
+}

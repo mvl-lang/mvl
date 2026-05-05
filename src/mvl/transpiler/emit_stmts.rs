@@ -43,6 +43,17 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &Stmt) {
             cg.push(&emit_type_expr(ty));
             cg.push(" = ");
             emit_expr(cg, init);
+            // When the declared type is a security label (e.g. Tainted<String>) and the
+            // init is a plain string/value, `.into()` converts it to the labeled type.
+            // The explicit type annotation makes this unambiguous (unlike assert_eq! context).
+            let needs_into = matches!(ty, TypeExpr::Labeled { .. })
+                && matches!(
+                    init,
+                    Expr::Literal(crate::mvl::parser::ast::Literal::Str(_), _)
+                );
+            if needs_into {
+                cg.push(".into()");
+            }
             cg.push(";");
             cg.nl();
         }

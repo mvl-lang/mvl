@@ -1,0 +1,234 @@
+// tests/stdlib/json_test.mvl — std.json encode/decode correctness (#419)
+//
+// Verifies the native-MVL JSON implementation: encode produces well-formed
+// JSON strings; decode round-trips them back; error cases return Err.
+
+use std.json.{Value, encode, decode}
+use std.collections.{map_len, map_get, list_len}
+
+// ── encode: primitives ────────────────────────────────────────────────────────
+
+test fn encode_null() -> Unit {
+    assert_eq(encode(Value::Null), "null")
+}
+
+test fn encode_true() -> Unit {
+    assert_eq(encode(Value::Bool(true)), "true")
+}
+
+test fn encode_false() -> Unit {
+    assert_eq(encode(Value::Bool(false)), "false")
+}
+
+test fn encode_integer_float() -> Unit {
+    assert_eq(encode(Value::Number(42.0)), "42")
+}
+
+test fn encode_decimal_float() -> Unit {
+    assert_eq(encode(Value::Number(1.5)), "1.5")
+}
+
+test fn encode_string_plain() -> Unit {
+    assert_eq(encode(Value::String("hello")), "\"hello\"")
+}
+
+test fn encode_string_with_quote() -> Unit {
+    assert_eq(encode(Value::String("say \"hi\"")), "\"say \\\"hi\\\"\"")
+}
+
+test fn encode_string_with_backslash() -> Unit {
+    assert_eq(encode(Value::String("a\\b")), "\"a\\\\b\"")
+}
+
+test fn encode_empty_array() -> Unit {
+    assert_eq(encode(Value::Array([])), "[]")
+}
+
+test fn encode_array_mixed() -> Unit {
+    let arr: List[Value] = [Value::Null, Value::Bool(true), Value::Number(1.0)];
+    assert_eq(encode(Value::Array(arr)), "[null,true,1]")
+}
+
+test fn encode_nested_array() -> Unit {
+    let inner: List[Value] = [Value::Number(1.0), Value::Number(2.0)];
+    let outer: List[Value] = [Value::Array(inner), Value::Null];
+    assert_eq(encode(Value::Array(outer)), "[[1,2],null]")
+}
+
+// ── decode: primitives ────────────────────────────────────────────────────────
+
+test fn decode_null() -> Unit {
+    match decode("null") {
+        Err(_)              => assert(false),
+        Ok(Value::Null)     => assert(true),
+        Ok(_)               => assert(false),
+    }
+}
+
+test fn decode_true() -> Unit {
+    match decode("true") {
+        Ok(Value::Bool(b)) => assert_eq(b, true),
+        _                  => assert(false),
+    }
+}
+
+test fn decode_false() -> Unit {
+    match decode("false") {
+        Ok(Value::Bool(b)) => assert_eq(b, false),
+        _                  => assert(false),
+    }
+}
+
+test fn decode_integer() -> Unit {
+    match decode("42") {
+        Ok(Value::Number(n)) => assert_eq(n, 42.0),
+        _                    => assert(false),
+    }
+}
+
+test fn decode_decimal() -> Unit {
+    match decode("1.5") {
+        Ok(Value::Number(n)) => assert_eq(n, 1.5),
+        _                    => assert(false),
+    }
+}
+
+test fn decode_negative() -> Unit {
+    match decode("-7") {
+        Ok(Value::Number(n)) => assert_eq(n, -7.0),
+        _                    => assert(false),
+    }
+}
+
+test fn decode_string_plain() -> Unit {
+    match decode("\"hello\"") {
+        Ok(Value::String(s)) => assert_eq(s, "hello"),
+        _                    => assert(false),
+    }
+}
+
+test fn decode_string_escape_quote() -> Unit {
+    match decode("\"say \\\"hi\\\"\"") {
+        Ok(Value::String(s)) => assert_eq(s, "say \"hi\""),
+        _                    => assert(false),
+    }
+}
+
+test fn decode_empty_array() -> Unit {
+    match decode("[]") {
+        Ok(Value::Array(a)) => assert_eq(list_len(a), 0),
+        _                   => assert(false),
+    }
+}
+
+test fn decode_array_numbers() -> Unit {
+    match decode("[1,2,3]") {
+        Ok(Value::Array(a)) => assert_eq(list_len(a), 3),
+        _                   => assert(false),
+    }
+}
+
+test fn decode_empty_object() -> Unit {
+    match decode("{}") {
+        Ok(Value::Object(o)) => assert_eq(map_len(o), 0),
+        _                    => assert(false),
+    }
+}
+
+test fn decode_object_single_key() -> Unit {
+    match decode("{\"x\":1}") {
+        Ok(Value::Object(o)) => {
+            assert_eq(map_len(o), 1);
+            match map_get(o, "x") {
+                Some(Value::Number(n)) => assert_eq(n, 1.0),
+                _                      => assert(false),
+            }
+        },
+        _ => assert(false),
+    }
+}
+
+test fn decode_whitespace() -> Unit {
+    match decode("  null  ") {
+        Ok(Value::Null) => assert(true),
+        _               => assert(false),
+    }
+}
+
+// ── round-trip ────────────────────────────────────────────────────────────────
+
+test fn roundtrip_null() -> Unit {
+    match decode(encode(Value::Null)) {
+        Ok(Value::Null) => assert(true),
+        _               => assert(false),
+    }
+}
+
+test fn roundtrip_bool() -> Unit {
+    match decode(encode(Value::Bool(true))) {
+        Ok(Value::Bool(b)) => assert_eq(b, true),
+        _                  => assert(false),
+    }
+}
+
+test fn roundtrip_number() -> Unit {
+    match decode(encode(Value::Number(3.14))) {
+        Ok(Value::Number(n)) => assert_eq(n, 3.14),
+        _                    => assert(false),
+    }
+}
+
+test fn roundtrip_string() -> Unit {
+    let s: String = "hello \"world\"";
+    match decode(encode(Value::String(s))) {
+        Ok(Value::String(r)) => assert_eq(r, s),
+        _                    => assert(false),
+    }
+}
+
+test fn roundtrip_nested_array() -> Unit {
+    let inner: List[Value] = [Value::Number(1.0), Value::String("a")];
+    let v: Value = Value::Array([Value::Null, Value::Array(inner)]);
+    let encoded: String = encode(v);
+    match decode(encoded) {
+        Ok(Value::Array(a)) => assert_eq(list_len(a), 2),
+        _                   => assert(false),
+    }
+}
+
+// ── error cases ───────────────────────────────────────────────────────────────
+
+test fn decode_empty_input() -> Unit {
+    match decode("") {
+        Err(_) => assert(true),
+        Ok(_)  => assert(false),
+    }
+}
+
+test fn decode_malformed_not_json() -> Unit {
+    match decode("hello") {
+        Err(_) => assert(true),
+        Ok(_)  => assert(false),
+    }
+}
+
+test fn decode_unterminated_string() -> Unit {
+    match decode("\"oops") {
+        Err(_) => assert(true),
+        Ok(_)  => assert(false),
+    }
+}
+
+test fn decode_malformed_array() -> Unit {
+    match decode("[1,2,") {
+        Err(_) => assert(true),
+        Ok(_)  => assert(false),
+    }
+}
+
+test fn decode_exponent() -> Unit {
+    match decode("1e2") {
+        Ok(Value::Number(n)) => assert_eq(n, 100.0),
+        _                    => assert(false),
+    }
+}
