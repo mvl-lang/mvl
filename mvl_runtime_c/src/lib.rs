@@ -20,6 +20,9 @@
 //! so LLVM-generated code can call them.  The Rust transpiler path is
 //! unaffected and continues to use `mvl_runtime` natively via the prelude.
 //!
+//! Collection operations (mvl_string_len, mvl_array_push, mvl_map_get, …)
+//! live in [`memory_ops`]; `mvl_memory` retains only types + lifecycle (#490).
+//!
 //! # Architecture
 //!
 //! See ADR-0019 for the two-path design rationale.
@@ -35,6 +38,7 @@
 #[macro_use]
 pub mod macros;
 pub mod abi;
+pub mod memory_ops;
 pub mod stdlib;
 pub mod version;
 
