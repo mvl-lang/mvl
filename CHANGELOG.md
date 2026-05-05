@@ -6,10 +6,23 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.78.1] — 2026-05-05
+
 ### Added
 
 - **`missing-annotation` linter rule**
 - **LLVM primitives for JSON encode** — C-ABI functions `mvl_string_chars`, `mvl_map_keys`, `mvl_map_remove` in `mvl_runtime_c`. LLVM backend can now call `std/json.mvl` encode path. `compile_to_ir` delegates to `compile_to_ir_with_prelude`. `RUST_BACKED_STDLIB` made public and `regex` added to the list. Closes #437.
+- **stdlib json_test** — 35+ tests for JSON encode/decode primitives, arrays, objects, round-trips, and error cases.
+- **stdlib collections_test** — 4 new Map operation tests (`map_put`, `map_without`, `map_get`, `map_len`).
+- **corpus json_decode** — cross-backend corpus test for JSON decoding.
+
+### Fixed
+
+- **`assert_eq`/`assert_ne` E0283** — string literal args no longer get `.into()` in macro context; eliminates type-ambiguity errors across 29 stdlib tests.
+- **Labeled type coercion E0308** — `let x: Labeled[String] = "..."` now emits `.into()` at binding site where the annotation makes the target type unambiguous.
+- **Map/Set param mutability** — transpiler now scans function bodies for `.insert()`/`.remove()`/`.retain()` calls and adds `mut` only to parameters that actually need it; eliminates 216 spurious "variable does not need to be mutable" warnings.
+- **Secret label declassify in corpus** — `crypto_random_bytes_shape.mvl` and `crypto_random_bytes_zero.mvl` now correctly declassify `Secret` values before passing to `println`.
+- **`test-llvm` Makefile target** — now depends on `build-llvm-runtime` (was `build-memory`); ensures `mvl_runtime_c` C-ABI symbols (`_mvl_io_*`, `_mvl_log_*`) are available when running LLVM cross-backend tests. Re-enables `cross_backend_io_write_read_roundtrip` and `cross_backend_log_stderr` tests.
 
 ## [0.79.0] — 2026-05-05
 

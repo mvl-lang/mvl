@@ -445,6 +445,15 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                 cg.push("(");
                 emit_args_for_macro(cg, args);
                 cg.push(")");
+            } else if matches!(name.as_str(), "assert_eq" | "assert_ne") {
+                // assert_eq!/assert_ne! compare same-typed values.  String literal args
+                // must NOT get `.into()` — it makes the type ambiguous in assert macros
+                // because `String` has many cross-type `PartialEq` impls (PathBuf, Box<str>,
+                // Arc<str>…) so Rust can't determine which `From<String>` to use.
+                cg.push(&format!("{}!", name));
+                cg.push("(");
+                emit_args_no_into(cg, args);
+                cg.push(")");
             } else if name.as_str() == "from_int" {
                 // from_int(n: Int) -> Byte — wrapping cast i64 → u8.
                 // The checker enforces exactly 1 Int argument; assert here as a
@@ -815,6 +824,25 @@ fn emit_args(cg: &mut RustEmitter, args: &[Expr]) {
             cg.push(", ");
         }
         emit_expr_as_arg(cg, arg);
+    }
+}
+
+/// Emit arguments without `.into()` on string literals.
+///
+/// Used for `assert_eq!`/`assert_ne!` where `.into()` causes E0283: `String`
+/// has many cross-type `PartialEq<X>` impls so Rust can't determine which
+/// `From<String>` conversion to use.  Emitting `.to_string()` (no `.into()`)
+/// makes the concrete `String` type visible to the type checker.
+fn emit_args_no_into(cg: &mut RustEmitter, args: &[Expr]) {
+    for (i, arg) in args.iter().enumerate() {
+        if i > 0 {
+            cg.push(", ");
+        }
+        if let Expr::Literal(crate::mvl::parser::ast::Literal::Str(s), _) = arg {
+            cg.push(&format!("\"{}\".to_string()", escape_str(s)));
+        } else {
+            emit_expr_as_arg(cg, arg);
+        }
     }
 }
 

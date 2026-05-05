@@ -134,7 +134,8 @@ test fn check_run_error_io_failure_variant() -> Unit {
 
 test fn check_cli_args_file_field() -> Unit {
     let args: CliArgs = CliArgs { file: "logs.jsonl", level: None };
-    assert_eq(args.file, "logs.jsonl");
+    let expected: Tainted[String] = "logs.jsonl";
+    assert_eq(args.file, expected);
 }
 
 test fn check_cli_args_level_some() -> Unit {

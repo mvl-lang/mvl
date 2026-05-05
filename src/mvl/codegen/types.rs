@@ -318,7 +318,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 return self.mvl_type_to_llvm(Self::strip_type_wrappers(pt));
             }
         }
-        // Unknown payload type — fall back to i64.
-        Some(self.context.i64_type().into())
+        // Unknown payload type — return None so callers treat it as Unit (no payload load).
+        None
     }
 }

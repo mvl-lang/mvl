@@ -1137,15 +1137,25 @@ impl<'ctx> LlvmBackend<'ctx> {
         let elem_vals: Vec<BasicValueEnum<'ctx>> =
             elems.iter().filter_map(|e| self.emit_expr(e)).collect();
 
-        // elem_size: derive from the first element's LLVM type if available;
-        // default to 8 (covers i64/f64/ptr). Struct types (e.g. Option) may be larger.
+        // elem_size: derive from the first element's LLVM type if available.
+        // For empty literals, fall back to the let-binding annotation (pending_let_ty)
+        // so that List[Value] (9-byte elements) gets the correct size instead of 8.
         let elem_size = {
-            let sz = elem_vals
-                .first()
-                .map(|v| self.llvm_type_byte_size(v.get_type()))
-                .unwrap_or(8)
-                .max(1) as u64;
-            i64_ty.const_int(sz, false)
+            let sz = if let Some(first) = elem_vals.first() {
+                self.llvm_type_byte_size(first.get_type())
+            } else if let Some(crate::mvl::parser::ast::TypeExpr::Base { args, .. }) =
+                self.pending_let_ty.as_ref()
+            {
+                // Extract element type from List[T] / Array[T] annotation so that
+                // empty literals use the correct size (e.g. List[Value] = 9 bytes).
+                args.first()
+                    .and_then(|elem_ty| self.mvl_type_to_llvm(elem_ty))
+                    .map(|t| self.llvm_type_byte_size(t))
+                    .unwrap_or(8)
+            } else {
+                8
+            };
+            i64_ty.const_int(sz.max(1) as u64, false)
         };
         let initial_cap = i64_ty.const_int(n.max(4) as u64, false);
         let new_fn = self.get_mvl_array_new();

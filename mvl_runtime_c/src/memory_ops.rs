@@ -14,7 +14,8 @@
 use std::ptr;
 
 use mvl_memory::{
-    mvl_alloc, mvl_array_new, mvl_free, mvl_string_new, MvlArray, MvlMap, MvlMapSlot, MvlString,
+    mvl_alloc, mvl_array_new, mvl_free, mvl_string_drop, mvl_string_new, MvlArray, MvlMap,
+    MvlMapSlot, MvlString,
 };
 
 // ── Internal helpers ───────────────────────────────────────────────────────────
@@ -50,14 +51,23 @@ unsafe fn fnv1a(key: *const u8, len: usize) -> u64 {
 }
 
 /// Probe for the slot matching `key` (or the first empty slot if absent).
+///
+/// Slot states: 0 = empty, 1 = live, 2 = tombstone (deleted).
+/// Tombstones are skipped during lookup so that collision chains remain intact
+/// after removal. The first empty slot (occupied == 0) terminates the probe.
 unsafe fn map_find_slot(slots: *mut MvlMapSlot, cap: u64, key: *const u8, key_len: usize) -> usize {
     let h = fnv1a(key, key_len);
     let mut idx = (h % cap) as usize;
     loop {
         let slot = &*slots.add(idx);
         if slot.occupied == 0 {
-            return idx; // empty — insertion point
+            return idx; // empty — insertion point / not-found sentinel
         }
+        if slot.occupied == 2 {
+            idx = (idx + 1) % cap as usize;
+            continue; // tombstone — keep probing
+        }
+        // occupied == 1: live entry
         if slot.key_len == key_len as u64
             && libc::memcmp(slot.key_ptr.cast(), key.cast(), key_len) == 0
         {
@@ -282,7 +292,7 @@ pub unsafe extern "C" fn mvl_map_insert(
         ptr::write_bytes(new_slots as *mut u8, 0, new_slot_bytes);
         for i in 0..old_cap {
             let old = &*(*m).slots.add(i);
-            if old.occupied != 0 {
+            if old.occupied == 1 {
                 let idx =
                     map_find_slot(new_slots, new_cap as u64, old.key_ptr, old.key_len as usize);
                 ptr::copy_nonoverlapping(old, new_slots.add(idx), 1);
@@ -406,12 +416,52 @@ pub unsafe extern "C" fn mvl_map_keys(m: *const MvlMap) -> *mut MvlArray {
     let cap = (*m).cap as usize;
     for i in 0..cap {
         let slot = &*(*m).slots.add(i);
-        if slot.occupied != 0 {
+        if slot.occupied == 1 {
             let key_s = mvl_string_new(slot.key_ptr, slot.key_len as usize);
             mvl_array_push(arr, (&key_s as *const *mut MvlString).cast());
         }
     }
     arr
+}
+
+/// Drop an array whose elements are owned `*mut MvlString` pointers.
+///
+/// Decrements the array's refcount.  When refcount reaches zero, each element
+/// string is freed via `mvl_string_drop` before the array itself is freed.
+/// Use this instead of `mvl_array_drop` for arrays returned by `mvl_string_chars`
+/// or `mvl_map_keys`, which own their element strings.
+///
+/// # Safety
+/// `arr` must be a valid non-null `MvlArray` pointer whose elements are
+/// `*mut MvlString` pointers produced by `mvl_string_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mvl_string_ptr_array_drop(arr: *mut MvlArray) {
+    if arr.is_null() {
+        return;
+    }
+    (*arr).refcount = (*arr)
+        .refcount
+        .checked_sub(1)
+        .unwrap_or_else(|| std::process::abort());
+    if (*arr).refcount == 0 {
+        let len = (*arr).len as usize;
+        let es = (*arr).elem_size as usize;
+        for i in 0..len {
+            let elem_ptr = (*arr).ptr.add(i * es) as *mut *mut MvlString;
+            let s = *elem_ptr;
+            if !s.is_null() {
+                mvl_string_drop(s);
+            }
+        }
+        // Free the array buffer and struct (same logic as mvl_array_drop).
+        let data_size = ((*arr).cap as usize)
+            .checked_mul(es)
+            .unwrap_or_else(|| std::process::abort());
+        if data_size > 0 && !(*arr).ptr.is_null() {
+            mvl_free((*arr).ptr, data_size);
+        }
+        mvl_free(arr as *mut u8, std::mem::size_of::<MvlArray>());
+    }
 }
 
 /// Remove the entry with the given key from the map (no-op if absent).
@@ -432,8 +482,8 @@ pub unsafe extern "C" fn mvl_map_remove(m: *mut MvlMap, key: *const u8, key_len:
     );
     let idx = map_find_slot((*m).slots, (*m).cap, key, key_len);
     let slot = &mut *(*m).slots.add(idx);
-    if slot.occupied == 0 {
-        return;
+    if slot.occupied != 1 {
+        return; // empty (0) or tombstone (2) — key not present
     }
     if slot.key_len > 0 && !slot.key_ptr.is_null() {
         mvl_free(slot.key_ptr, slot.key_len as usize);
@@ -441,7 +491,8 @@ pub unsafe extern "C" fn mvl_map_remove(m: *mut MvlMap, key: *const u8, key_len:
     if slot.val_len > 0 && !slot.val_ptr.is_null() {
         mvl_free(slot.val_ptr, slot.val_len as usize);
     }
-    slot.occupied = 0;
+    // Mark as tombstone (2) so collision chains remain intact for subsequent lookups.
+    slot.occupied = 2;
     slot.key_ptr = ptr::null_mut();
     slot.key_len = 0;
     slot.val_ptr = ptr::null_mut();
@@ -628,6 +679,187 @@ mod tests {
             assert_eq!((*m).refcount, 2);
             mvl_map_drop(m2);
             assert_eq!((*m).refcount, 1);
+            mvl_map_drop(m);
+        }
+    }
+
+    // ── map_remove + tombstone ─────────────────────────────────────────────────
+
+    #[test]
+    fn map_remove_simple() {
+        unsafe {
+            let m = mvl_map_new(0);
+            let k = b"foo";
+            let v: i64 = 42;
+            mvl_map_insert(m, k.as_ptr(), 3, (&v as *const i64).cast(), 8);
+            assert_eq!(mvl_map_len(m), 1);
+            mvl_map_remove(m, k.as_ptr(), 3);
+            assert_eq!(mvl_map_len(m), 0);
+            assert!(
+                mvl_map_get(m, k.as_ptr(), 3).is_null(),
+                "removed key should be absent"
+            );
+            mvl_map_drop(m);
+        }
+    }
+
+    #[test]
+    fn map_remove_absent_noop() {
+        unsafe {
+            let m = mvl_map_new(0);
+            let k = b"x";
+            let v: i64 = 1;
+            mvl_map_insert(m, k.as_ptr(), 1, (&v as *const i64).cast(), 8);
+            mvl_map_remove(m, b"y".as_ptr(), 1); // absent key — no-op
+            assert_eq!(mvl_map_len(m), 1);
+            let got = *(mvl_map_get(m, k.as_ptr(), 1) as *const i64);
+            assert_eq!(got, 1);
+            mvl_map_drop(m);
+        }
+    }
+
+    #[test]
+    fn map_remove_tombstone_collision_chain() {
+        // Verify that removing a key does not break lookup for keys that probed
+        // past the removed slot (the classic tombstone correctness test).
+        unsafe {
+            let m = mvl_map_new(0);
+            // Insert enough entries that at least some will collide on a cap=8 table.
+            // Use single-byte numeric keys to maximise collision probability.
+            let mut inserted: Vec<(Vec<u8>, i64)> = Vec::new();
+            for i in 0i64..6 {
+                let key = i.to_le_bytes().to_vec();
+                mvl_map_insert(m, key.as_ptr(), 8, (&i as *const i64).cast(), 8);
+                inserted.push((key, i));
+            }
+            assert_eq!(mvl_map_len(m), 6);
+
+            // Remove the first three; they become tombstones.
+            for (key, _) in &inserted[..3] {
+                mvl_map_remove(m, key.as_ptr(), 8);
+            }
+            assert_eq!(mvl_map_len(m), 3);
+
+            // The remaining three must still be reachable through tombstone chains.
+            for (key, val) in &inserted[3..] {
+                let got = mvl_map_get(m, key.as_ptr(), 8) as *const i64;
+                assert!(!got.is_null(), "key {val} should survive tombstone removal");
+                assert_eq!(*got, *val);
+            }
+
+            // Re-insert the removed keys — must land correctly.
+            for (key, val) in &inserted[..3] {
+                mvl_map_insert(m, key.as_ptr(), 8, (val as *const i64).cast(), 8);
+            }
+            assert_eq!(mvl_map_len(m), 6);
+            for (key, val) in &inserted {
+                let got = *(mvl_map_get(m, key.as_ptr(), 8) as *const i64);
+                assert_eq!(got, *val);
+            }
+            mvl_map_drop(m);
+        }
+    }
+
+    // ── mvl_string_chars ──────────────────────────────────────────────────────
+
+    #[test]
+    fn string_chars_ascii() {
+        unsafe {
+            let s = mvl_string_new(b"abc".as_ptr(), 3);
+            let arr = mvl_string_chars(s);
+            assert_eq!(mvl_array_len(arr), 3);
+            let expected = [b"a" as &[u8], b"b", b"c"];
+            for (i, exp) in expected.iter().enumerate() {
+                let elem_ptr = mvl_array_get(arr, i) as *const *mut MvlString;
+                let cs = *elem_ptr;
+                assert_eq!(mvl_string_len(cs), 1);
+                let slice = std::slice::from_raw_parts(mvl_string_ptr(cs), 1);
+                assert_eq!(slice, *exp);
+            }
+            mvl_string_ptr_array_drop(arr);
+            mvl_string_drop(s);
+        }
+    }
+
+    #[test]
+    fn string_chars_empty() {
+        unsafe {
+            let s = mvl_string_new(b"".as_ptr(), 0);
+            let arr = mvl_string_chars(s);
+            assert_eq!(mvl_array_len(arr), 0);
+            mvl_string_ptr_array_drop(arr);
+            mvl_string_drop(s);
+        }
+    }
+
+    #[test]
+    fn string_chars_utf8_multibyte() {
+        // "é" is 2 bytes in UTF-8 (0xC3 0xA9); should produce one char element.
+        unsafe {
+            let text = "aé"; // 3 bytes: 'a' + 0xC3 + 0xA9
+            let s = mvl_string_new(text.as_ptr(), text.len());
+            let arr = mvl_string_chars(s);
+            assert_eq!(mvl_array_len(arr), 2, "expected 2 chars: 'a' and 'é'");
+            // First char: 'a' (1 byte)
+            let p0 = *(mvl_array_get(arr, 0) as *const *mut MvlString);
+            assert_eq!(mvl_string_len(p0), 1);
+            let s0 = std::slice::from_raw_parts(mvl_string_ptr(p0), 1);
+            assert_eq!(s0, b"a");
+            // Second char: 'é' (2 bytes)
+            let p1 = *(mvl_array_get(arr, 1) as *const *mut MvlString);
+            assert_eq!(mvl_string_len(p1), 2);
+            let s1 = std::slice::from_raw_parts(mvl_string_ptr(p1), 2);
+            assert_eq!(s1, "é".as_bytes());
+            mvl_string_ptr_array_drop(arr);
+            mvl_string_drop(s);
+        }
+    }
+
+    // ── mvl_map_keys ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn map_keys_basic() {
+        unsafe {
+            let m = mvl_map_new(0);
+            let v: i64 = 0;
+            mvl_map_insert(m, b"alpha".as_ptr(), 5, (&v as *const i64).cast(), 8);
+            mvl_map_insert(m, b"beta".as_ptr(), 4, (&v as *const i64).cast(), 8);
+            let arr = mvl_map_keys(m);
+            assert_eq!(mvl_array_len(arr), 2);
+            // Collect returned key strings into a set for order-independent check.
+            let mut found = std::collections::HashSet::new();
+            for i in 0..2usize {
+                let elem_ptr = mvl_array_get(arr, i) as *const *mut MvlString;
+                let ks = *elem_ptr;
+                let len = mvl_string_len(ks) as usize;
+                let slice = std::slice::from_raw_parts(mvl_string_ptr(ks), len);
+                found.insert(std::str::from_utf8(slice).unwrap().to_string());
+            }
+            assert!(found.contains("alpha"));
+            assert!(found.contains("beta"));
+            mvl_string_ptr_array_drop(arr);
+            mvl_map_drop(m);
+        }
+    }
+
+    #[test]
+    fn map_keys_excludes_tombstones() {
+        unsafe {
+            let m = mvl_map_new(0);
+            let v: i64 = 0;
+            mvl_map_insert(m, b"a".as_ptr(), 1, (&v as *const i64).cast(), 8);
+            mvl_map_insert(m, b"b".as_ptr(), 1, (&v as *const i64).cast(), 8);
+            mvl_map_remove(m, b"a".as_ptr(), 1);
+            let arr = mvl_map_keys(m);
+            assert_eq!(
+                mvl_array_len(arr),
+                1,
+                "tombstone key must not appear in keys()"
+            );
+            let ks = *(mvl_array_get(arr, 0) as *const *mut MvlString);
+            let slice = std::slice::from_raw_parts(mvl_string_ptr(ks), mvl_string_len(ks) as usize);
+            assert_eq!(slice, b"b");
+            mvl_string_ptr_array_drop(arr);
             mvl_map_drop(m);
         }
     }
