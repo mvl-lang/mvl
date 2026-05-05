@@ -56,7 +56,7 @@ The `transpiler/` and `codegen/` modules are now both backends in this model.
 `passes/` is the backend-agnostic instrumentation layer between them and the
 checker.
 
-### Rust-emission decoupling (ADR-0018b, issue #444)
+### Rust-emission decoupling (issue #444)
 
 Coverage and MC/DC preamble/report helpers currently emit Rust syntax strings.
 These have been extracted to `transpiler/coverage_emit.rs` and
