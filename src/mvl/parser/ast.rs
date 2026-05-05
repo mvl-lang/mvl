@@ -295,7 +295,7 @@ pub enum TypeExpr {
         err: Box<TypeExpr>,
         span: Span,
     },
-    /// `&T` or `&mut T`
+    /// `val T` (immutable reference) or `ref T` (mutable reference)
     Ref {
         mutable: bool,
         inner: Box<TypeExpr>,
@@ -520,7 +520,7 @@ pub enum Expr {
         expr: Box<Expr>,
         span: Span,
     },
-    /// Expression-level borrow: `&expr` (shared) or `&mut expr` (mutable).
+    /// Expression-level borrow: `val expr` (shared) or `ref expr` (mutable).
     Borrow {
         mutable: bool,
         expr: Box<Expr>,

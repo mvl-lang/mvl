@@ -79,7 +79,7 @@ Functions that can fail MUST return `Result[T, E]`. Error types MUST be visible 
 
 ### Requirement 4: Ownership and Linearity [MUST]
 
-Every value MUST have exactly one owner. Transfer of ownership MUST be explicit (`move` semantics). Borrowing MUST be either shared-immutable (`&T`) or exclusive-mutable (`&mut T`), never both simultaneously.
+Every value MUST have exactly one owner. Transfer of ownership MUST be explicit (`move` semantics). Borrowing MUST be either read-only (`val T`) or mutable (`ref T`), never both simultaneously.
 
 **Implementation:** `src/mvl/checker/mod.rs`
 
@@ -412,7 +412,7 @@ The type checker MUST verify that the expression after `in` implements `Iterator
 
 ```mvl
 fn map[T, U](self: Iterator[T], f: fn(T) -> U) -> Iterator[U]
-fn filter[T](self: Iterator[T], pred: fn(&T) -> Bool) -> Iterator[T]
+fn filter[T](self: Iterator[T], pred: fn(val T) -> Bool) -> Iterator[T]
 fn flat_map[T, U](self: Iterator[T], f: fn(T) -> Iterator[U]) -> Iterator[U]
 fn enumerate[T](self: Iterator[T]) -> Iterator[(UInt, T)]
 fn zip[T, U](self: Iterator[T], other: Iterator[U]) -> Iterator[(T, U)]
@@ -423,9 +423,9 @@ Terminal operations that force evaluation:
 ```mvl
 fn fold[T, U](self: Iterator[T], init: U, f: fn(U, T) -> U) -> U
 fn collect[T](self: Iterator[T]) -> Array[T]
-fn any[T](self: Iterator[T], pred: fn(&T) -> Bool) -> Bool
-fn all[T](self: Iterator[T], pred: fn(&T) -> Bool) -> Bool
-fn find[T](self: Iterator[T], pred: fn(&T) -> Bool) -> Option[T]
+fn any[T](self: Iterator[T], pred: fn(val T) -> Bool) -> Bool
+fn all[T](self: Iterator[T], pred: fn(val T) -> Bool) -> Bool
+fn find[T](self: Iterator[T], pred: fn(val T) -> Bool) -> Option[T]
 fn sum[T](self: Iterator[T]) -> T  where T: Add, T: Default
 fn min[T](self: Iterator[T]) -> Option[T]  where T: Ord
 fn max[T](self: Iterator[T]) -> Option[T]  where T: Ord

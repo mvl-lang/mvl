@@ -134,16 +134,45 @@ impl Parser {
                     span,
                 })
             }
-            TokenKind::Amp => {
+            // val expr (immutable borrow — replaces &expr)
+            TokenKind::Val => {
                 self.advance();
-                let mutable = self.eat(&TokenKind::Mut);
                 let expr = self.parse_unary()?;
                 let span = self.span_from(start);
                 Ok(Expr::Borrow {
-                    mutable,
+                    mutable: false,
                     expr: Box::new(expr),
                     span,
                 })
+            }
+            // ref expr (mutable borrow — replaces &mut expr)
+            TokenKind::Ref => {
+                self.advance();
+                let expr = self.parse_unary()?;
+                let span = self.span_from(start);
+                Ok(Expr::Borrow {
+                    mutable: true,
+                    expr: Box::new(expr),
+                    span,
+                })
+            }
+            // Reject Rust-style borrow syntax with helpful error
+            TokenKind::Amp => {
+                self.advance();
+                let mutable = self.eat(&TokenKind::Mut);
+                let _ = self.parse_unary();
+                let span = self.span_from(start);
+                let hint = if mutable {
+                    "use `ref expr` instead of `&mut expr`"
+                } else {
+                    "use `val expr` instead of `&expr`"
+                };
+                let err = ParseError {
+                    message: hint.to_string(),
+                    span,
+                };
+                self.push_recover(err);
+                Err(())
             }
             TokenKind::Tilde => {
                 self.advance();

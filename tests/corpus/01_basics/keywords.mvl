@@ -32,7 +32,7 @@ fn demo(x: Int) -> Int {
 }
 
 // Ownership capability keywords: iso, val, ref, tag
-fn iso_fn(iso db: &DbConn) -> Int { 0 }
+fn iso_fn(iso db: val DbConn) -> Int { 0 }
 fn val_fn(val x: Int) -> Int { x }
 fn ref_fn(ref x: Int) -> Int { x }
 fn tag_fn(tag x: Int) -> Int { 0 }

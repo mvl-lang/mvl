@@ -3963,9 +3963,9 @@ fn stdlib_args_mvl_parses_without_errors() {
 
 #[test]
 fn function_returning_ref_without_ref_params_rejected() {
-    // GIVEN: a function that declares &T return type but has no &T parameters
+    // GIVEN: a function that declares val T return type but has no val T parameters
     // THEN: checker rejects — reference can only point to a local (would escape)
-    let result = check_src("fn bad() -> &Int { 42 }");
+    let result = check_src("fn bad() -> val Int { 42 }");
     assert!(
         result
             .errors
@@ -3978,9 +3978,9 @@ fn function_returning_ref_without_ref_params_rejected() {
 
 #[test]
 fn function_returning_ref_with_ref_param_accepted() {
-    // GIVEN: a function that declares &T return type AND has a &T parameter
+    // GIVEN: a function that declares val T return type AND has a val T parameter
     // THEN: checker accepts — the reference can legally point to the parameter
-    let result = check_src("fn ok(x: &Int) -> &Int { x }");
+    let result = check_src("fn ok(x: val Int) -> val Int { x }");
     assert!(
         !result
             .errors
@@ -3993,9 +3993,9 @@ fn function_returning_ref_with_ref_param_accepted() {
 
 #[test]
 fn two_mut_ref_params_of_same_type_rejected() {
-    // GIVEN: a function with two &mut T params of the same inner type
+    // GIVEN: a function with two ref T params of the same inner type
     // THEN: checker rejects — they could alias at the call site (Phase D)
-    let result = check_src("fn bad(a: &mut Int, b: &mut Int) -> Unit { }");
+    let result = check_src("fn bad(a: ref Int, b: ref Int) -> Unit { }");
     assert!(
         result
             .errors
@@ -4008,9 +4008,9 @@ fn two_mut_ref_params_of_same_type_rejected() {
 
 #[test]
 fn two_mut_ref_params_of_different_types_accepted() {
-    // GIVEN: a function with two &mut T params of DIFFERENT inner types
+    // GIVEN: a function with two ref T params of DIFFERENT inner types
     // THEN: checker accepts — they cannot alias (different types)
-    let result = check_src("fn ok(a: &mut Int, b: &mut Bool) -> Unit { }");
+    let result = check_src("fn ok(a: ref Int, b: ref Bool) -> Unit { }");
     assert!(
         !result
             .errors
@@ -4021,13 +4021,13 @@ fn two_mut_ref_params_of_different_types_accepted() {
     );
 }
 
-// ── Phase C: return expression flows from &T param (#364) ────────────────────
+// ── Phase C: return expression flows from val T param (#364) ────────────────────
 
 #[test]
 fn function_returning_ref_literal_with_ref_param_rejected() {
-    // GIVEN: a function with a &T param but the body returns a literal
+    // GIVEN: a function with a val T param but the body returns a literal
     // THEN: checker rejects — the literal does not flow from the parameter
-    let result = check_src("fn bad(x: &Int) -> &Int { 42 }");
+    let result = check_src("fn bad(x: val Int) -> val Int { 42 }");
     assert!(
         result
             .errors
@@ -4040,10 +4040,11 @@ fn function_returning_ref_literal_with_ref_param_rejected() {
 
 #[test]
 fn function_returning_ref_from_if_branches_accepted() {
-    // GIVEN: a function that returns a &T from both branches of an if/else
+    // GIVEN: a function that returns a val T from both branches of an if/else
     // THEN: checker accepts — both branches flow from reference parameters
-    let result =
-        check_src("fn ok(cond: Bool, x: &Int, y: &Int) -> &Int { if cond { x } else { y } }");
+    let result = check_src(
+        "fn ok(cond: Bool, x: val Int, y: val Int) -> val Int { if cond { x } else { y } }",
+    );
     assert!(
         result.errors.is_empty(),
         "expected no errors, got: {:?}",
@@ -4053,9 +4054,9 @@ fn function_returning_ref_from_if_branches_accepted() {
 
 #[test]
 fn function_explicit_return_ref_param_accepted() {
-    // GIVEN: function uses explicit `return x` where x: &Int
+    // GIVEN: function uses explicit `return x` where x: val Int
     // THEN: checker accepts — the reference flows from the parameter
-    let result = check_src("fn ok(x: &Int) -> &Int { return x; }");
+    let result = check_src("fn ok(x: val Int) -> val Int { return x; }");
     assert!(
         result.errors.is_empty(),
         "expected no errors for explicit return of ref param, got: {:?}",
@@ -4067,7 +4068,7 @@ fn function_explicit_return_ref_param_accepted() {
 fn function_explicit_return_local_rejected() {
     // GIVEN: function uses explicit `return y` where y is a local Int (not a ref param)
     // THEN: checker rejects — the return value does not flow from a reference parameter
-    let result = check_src("fn bad(x: &Int) -> &Int { return 42; }");
+    let result = check_src("fn bad(x: val Int) -> val Int { return 42; }");
     assert!(
         result
             .errors
@@ -4082,7 +4083,7 @@ fn function_explicit_return_local_rejected() {
 fn function_bare_return_in_ref_returning_fn_rejected() {
     // GIVEN: `return;` (no value) in a function returning &Int
     // THEN: checker rejects — bare return cannot produce a reference
-    let result = check_src("fn bad(x: &Int) -> &Int { return; }");
+    let result = check_src("fn bad(x: val Int) -> val Int { return; }");
     assert!(
         result
             .errors
@@ -4097,7 +4098,8 @@ fn function_bare_return_in_ref_returning_fn_rejected() {
 fn function_early_return_non_ref_rejected() {
     // GIVEN: function has a guard `if cond { return 42; }` before a valid tail
     // THEN: checker rejects — the early return does not flow from a reference parameter
-    let result = check_src("fn bad(cond: Bool, x: &Int) -> &Int { if cond { return 42; } x }");
+    let result =
+        check_src("fn bad(cond: Bool, x: val Int) -> val Int { if cond { return 42; } x }");
     assert!(
         result
             .errors
@@ -4110,10 +4112,10 @@ fn function_early_return_non_ref_rejected() {
 
 #[test]
 fn function_returning_match_with_all_ref_arms_accepted() {
-    // GIVEN: match where every arm returns one of the &T params
+    // GIVEN: match where every arm returns one of the val T params
     // THEN: checker accepts — all paths flow from reference parameters
     let result = check_src(
-        "fn ok(flag: Bool, x: &Int, y: &Int) -> &Int { match flag { true => x, false => y } }",
+        "fn ok(flag: Bool, x: val Int, y: val Int) -> val Int { match flag { true => x, false => y } }",
     );
     assert!(
         result.errors.is_empty(),
@@ -4126,8 +4128,9 @@ fn function_returning_match_with_all_ref_arms_accepted() {
 fn function_returning_match_with_non_ref_arm_rejected() {
     // GIVEN: match where one arm returns a literal (not a ref param)
     // THEN: checker rejects — the literal arm does not flow from a reference parameter
-    let result =
-        check_src("fn bad(flag: Bool, x: &Int) -> &Int { match flag { true => x, false => 42 } }");
+    let result = check_src(
+        "fn bad(flag: Bool, x: val Int) -> val Int { match flag { true => x, false => 42 } }",
+    );
     assert!(
         result
             .errors
@@ -4142,7 +4145,7 @@ fn function_returning_match_with_non_ref_arm_rejected() {
 fn function_returning_if_without_else_rejected() {
     // GIVEN: body's last statement is an if without an else branch
     // THEN: checker rejects — the else path cannot return a reference
-    let result = check_src("fn bad(cond: Bool, x: &Int) -> &Int { if cond { x } }");
+    let result = check_src("fn bad(cond: Bool, x: val Int) -> val Int { if cond { x } }");
     assert!(
         result
             .errors
@@ -4157,9 +4160,9 @@ fn function_returning_if_without_else_rejected() {
 
 #[test]
 fn borrow_expr_shared_type_checks() {
-    // GIVEN: `let r: &Int = &x` where x: Int
+    // GIVEN: `let r: val Int = val x` where x: Int
     // THEN: checker accepts and r has type &Int
-    let result = check_src("fn f(x: Int) -> Unit { let r: &Int = &x; }");
+    let result = check_src("fn f(x: Int) -> Unit { let r: val Int = val x; }");
     assert!(
         result.errors.is_empty(),
         "expected no errors, got: {:?}",
@@ -4169,9 +4172,9 @@ fn borrow_expr_shared_type_checks() {
 
 #[test]
 fn borrow_expr_mutable_type_checks() {
-    // GIVEN: `let r: &mut Int = &mut x` where x: mut Int
+    // GIVEN: `let r: ref Int = ref x` where x: mut Int
     // THEN: checker accepts and r has type &mut Int
-    let result = check_src("fn f(mut x: Int) -> Unit { let r: &mut Int = &mut x; }");
+    let result = check_src("fn f(mut x: Int) -> Unit { let r: ref Int = ref x; }");
     assert!(
         result.errors.is_empty(),
         "expected no errors, got: {:?}",
@@ -4185,11 +4188,11 @@ fn borrow_expr_mutable_type_checks() {
 // yet implemented.  They document known gaps and will pass once the feature is
 // complete.  Do NOT remove them — they are the acceptance criteria.
 
-/// Phase D (#306): AliasingMutableBorrow — creating `&mut T` while a shared `&T`
+/// Phase D (#306): AliasingMutableBorrow — creating `ref T` while a shared `val T`
 /// borrow of the same inner type is also present in the signature.
 #[test]
 fn shared_and_mut_ref_params_of_same_type_rejected() {
-    let result = check_src("fn bad(a: &Int, b: &mut Int) -> Unit { }");
+    let result = check_src("fn bad(a: val Int, b: ref Int) -> Unit { }");
     assert!(
         result
             .errors
@@ -4201,13 +4204,12 @@ fn shared_and_mut_ref_params_of_same_type_rejected() {
 }
 
 /// Phase D (#362): BorrowState transitions — `Expr::Borrow` emits `AliasingMutableBorrow`
-/// when `&mut x` is created while `x` is already borrowed.
+/// when `ref x` is created while `x` is already borrowed.
 #[test]
 fn borrow_expr_transitions_borrow_state_rejected_on_double_mut() {
-    // Two simultaneous `&mut x` borrows must be rejected via BorrowState tracking.
-    let result = check_src(
-        "fn f(mut x: Int) -> Unit { let r1: &mut Int = &mut x; let r2: &mut Int = &mut x; }",
-    );
+    // Two simultaneous `ref x` borrows must be rejected via BorrowState tracking.
+    let result =
+        check_src("fn f(mut x: Int) -> Unit { let r1: ref Int = ref x; let r2: ref Int = ref x; }");
     assert!(
         result.errors.iter().any(|e| matches!(
             e,
@@ -4218,11 +4220,11 @@ fn borrow_expr_transitions_borrow_state_rejected_on_double_mut() {
     );
 }
 
-/// Phase D (#362): `&mut T` before `&T` in params — order-independent alias check.
-/// Ensures `fn bad(b: &mut Int, a: &Int)` is rejected even when `&mut T` comes first.
+/// Phase D (#362): `ref T` before `val T` in params — order-independent alias check.
+/// Ensures `fn bad(b: ref Int, a: val Int)` is rejected even when `ref T` comes first.
 #[test]
 fn shared_and_mut_ref_params_reversed_order_rejected() {
-    let result = check_src("fn bad(b: &mut Int, a: &Int) -> Unit { }");
+    let result = check_src("fn bad(b: ref Int, a: val Int) -> Unit { }");
     assert!(
         result
             .errors
@@ -4233,11 +4235,11 @@ fn shared_and_mut_ref_params_reversed_order_rejected() {
     );
 }
 
-/// Phase D (#362): shared borrow `&x` while `x` is mutably borrowed is rejected.
+/// Phase D (#362): shared borrow `val x` while `x` is mutably borrowed is rejected.
 #[test]
 fn borrow_expr_shared_of_mutably_borrowed_rejected() {
     let result =
-        check_src("fn f(mut x: Int) -> Unit { let r1: &mut Int = &mut x; let r2: &Int = &x; }");
+        check_src("fn f(mut x: Int) -> Unit { let r1: ref Int = ref x; let r2: val Int = val x; }");
     assert!(
         result
             .errors
@@ -4248,14 +4250,14 @@ fn borrow_expr_shared_of_mutably_borrowed_rejected() {
     );
 }
 
-/// Phase C (#305, #363): ReferenceOutlivesOwner — assigning a `&T` reference to a
+/// Phase C (#305, #363): ReferenceOutlivesOwner — assigning a `val T` reference to a
 /// binding at a shallower scope depth than the referent.
 /// Also verifies that `ref_name` and `owner_name` fields are correctly populated.
 #[test]
 fn ref_binding_outliving_owner_rejected() {
     let result = check_src(
         "fn bad() -> Unit {
-            let r: &Int = {
+            let r: val Int = {
                 let x: Int = 42;
                 x
             };
@@ -4272,12 +4274,12 @@ fn ref_binding_outliving_owner_rejected() {
     );
 }
 
-/// Phase C (#363): `&mut T` implicit borrow from deeper scope is also rejected.
+/// Phase C (#363): `ref T` implicit borrow from deeper scope is also rejected.
 #[test]
 fn ref_mut_binding_outliving_owner_rejected() {
     let result = check_src(
         "fn bad() -> Unit {
-            let r: &mut Int = {
+            let r: ref Int = {
                 let mut x: Int = 42;
                 x
             };
@@ -4293,14 +4295,14 @@ fn ref_mut_binding_outliving_owner_rejected() {
     );
 }
 
-/// Phase C (#363): explicit `&x` borrow from deeper scope is rejected.
+/// Phase C (#363): explicit `val x` borrow from deeper scope is rejected.
 #[test]
 fn ref_explicit_borrow_outliving_owner_rejected() {
     let result = check_src(
         "fn bad() -> Unit {
-            let r: &Int = {
+            let r: val Int = {
                 let x: Int = 42;
-                &x
+                val x
             };
         }",
     );
@@ -4309,7 +4311,7 @@ fn ref_explicit_borrow_outliving_owner_rejected() {
             .errors
             .iter()
             .any(|e| matches!(e, CheckError::ReferenceOutlivesOwner { .. })),
-        "expected ReferenceOutlivesOwner for explicit &x borrow, got: {:?}",
+        "expected ReferenceOutlivesOwner for explicit val x borrow, got: {:?}",
         result.errors
     );
 }
@@ -4319,7 +4321,7 @@ fn ref_explicit_borrow_outliving_owner_rejected() {
 fn ref_binding_doubly_nested_rejected() {
     let result = check_src(
         "fn bad() -> Unit {
-            let r: &Int = {
+            let r: val Int = {
                 {
                     let x: Int = 42;
                     x
@@ -4344,7 +4346,7 @@ fn ref_binding_inner_borrows_outer_accepted() {
     let x_depth_outer = errors_for(
         "fn ok() -> Unit {
             let x: Int = 42;
-            let r: &Int = {
+            let r: val Int = {
                 x
             };
         }",
@@ -4357,13 +4359,13 @@ fn ref_binding_inner_borrows_outer_accepted() {
     );
 }
 
-/// Phase C (#363): same-scope `&T` binding is accepted — no ReferenceOutlivesOwner.
+/// Phase C (#363): same-scope `val T` binding is accepted — no ReferenceOutlivesOwner.
 #[test]
 fn ref_binding_same_scope_accepted() {
     let errors = errors_for(
         "fn ok() -> Unit {
             let x: Int = 42;
-            let r: &Int = x;
+            let r: val Int = x;
         }",
     );
     assert!(
@@ -4380,7 +4382,7 @@ fn ref_binding_same_scope_accepted() {
 fn ref_binding_from_param_accepted() {
     let errors = errors_for(
         "fn ok(x: Int) -> Unit {
-            let r: &Int = x;
+            let r: val Int = x;
         }",
     );
     assert!(

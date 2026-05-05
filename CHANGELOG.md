@@ -18,6 +18,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 - **`mvl_runtime_c` C-ABI cdylib** — bootstraps the two-path stdlib architecture (ADR-0018/ADR-0019): the LLVM backend now loads `libmvl_runtime_c` via `lli --load` to access `std.env`, `std.process`, and `std.regex` symbols at runtime. Closes #431, #432.
 - **Cross-backend corpus test** — `tests/corpus/01_basics/env_identity_llvm.mvl` verifies `getuid()`/`getgid()` produce identical output on both backends. Extended with regex/crypto cross-backend verification.
 
+## [0.76.0] — 2026-05-05
+
+### Changed
+
+- **Reference syntax: `&T`/`&mut T` → `val T`/`ref T`** — Replaced Rust-style borrow syntax with capability-based terminology. `val T` denotes deeply immutable (shareable) references; `ref T` denotes exclusive (mutable) references. Phase 6 of capability system (Phase 8 adds `iso`/`tag` for actor safety). Closes #503.
+  - `&T` in type position now produces parse error: "use `val T` instead"
+  - `&mut T` in type position now produces parse error: "use `ref T` instead"
+  - Expression-level: `&expr` → `val expr`, `&mut expr` → `ref expr`
+  - Transpiler output to Rust (`&T`/`&mut T`) remains unchanged
+  - All parser, checker, and transpiler logic preserved — only surface syntax changed
+  - Fixed fuzzer to generate `Option[T]` and `Result[T, E]` with square brackets (MVL syntax, not Rust)
+
 ## [0.75.0] — 2026-05-05
 
 ### Added

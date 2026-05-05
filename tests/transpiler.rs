@@ -151,7 +151,7 @@ fn effectful_fn_emits_effects_doc() {
 /// Requirement 9 / Scenario: Capability parameter → comment
 #[test]
 fn capability_param_emits_comment() {
-    let src = "fn use_conn(iso conn: &Int) -> Int { 0 }";
+    let src = "fn use_conn(iso conn: val Int) -> Int { 0 }";
     let rust = transpile_src(src);
     assert_contains(&rust, "/* iso */");
     assert_contains(&rust, "conn: &i64");
@@ -1848,7 +1848,7 @@ fn transpile_mutated_with_prelude_mixed_file_non_test_fn_produces_mutants() {
 /// Shared ref param: call site emits `&y`, signature emits `&i64`.
 #[test]
 fn ref_param_fn_call_emits_ampersand() {
-    let src = "fn f(x: &Int) -> Unit { }  fn g(y: Int) -> Unit { f(y) }";
+    let src = "fn f(x: val Int) -> Unit { }  fn g(y: Int) -> Unit { f(y) }";
     let rust = transpile_src(src);
     assert_contains(&rust, "f(&y)");
     assert_contains(&rust, "x: &i64");
@@ -1857,16 +1857,16 @@ fn ref_param_fn_call_emits_ampersand() {
 /// Mutable ref param: call site emits `&mut y`, signature emits `&mut i64`.
 #[test]
 fn mut_ref_param_fn_call_emits_ampersand_mut() {
-    let src = "fn f(x: &mut Int) -> Unit { }  fn g(y: Int) -> Unit { f(y) }";
+    let src = "fn f(x: ref Int) -> Unit { }  fn g(y: Int) -> Unit { f(y) }";
     let rust = transpile_src(src);
     assert_contains(&rust, "f(&mut y)");
     assert_contains(&rust, "x: &mut i64");
 }
 
-/// Mixed params: only the ref-annotated argument gets `&`; owned stays as-is.
+/// Mixed params: only the val-annotated argument gets `&`; owned stays as-is.
 #[test]
 fn mixed_params_selective_borrow_emission() {
-    let src = "fn f(a: Int, b: &Int) -> Unit { }  fn g(x: Int, y: Int) -> Unit { f(x, y) }";
+    let src = "fn f(a: Int, b: val Int) -> Unit { }  fn g(x: Int, y: Int) -> Unit { f(x, y) }";
     let rust = transpile_src(src);
     assert_contains(&rust, "&y");
     // First arg must NOT receive a & prefix
@@ -1876,45 +1876,45 @@ fn mixed_params_selective_borrow_emission() {
     );
 }
 
-/// Literal argument to ref param: wrapped as `&(42)`.
+/// Literal argument to val param: wrapped as `&(42)`.
 #[test]
 fn literal_arg_to_ref_param_wrapped_in_ampersand_paren() {
-    let src = "fn f(x: &Int) -> Unit { }  fn g() -> Unit { f(42) }";
+    let src = "fn f(x: val Int) -> Unit { }  fn g() -> Unit { f(42) }";
     let rust = transpile_src(src);
     assert_contains(&rust, "&(42)");
 }
 
-/// Multiple call sites to the same ref fn both emit `&`.
+/// Multiple call sites to the same val fn both emit `&`.
 #[test]
 fn multiple_call_sites_both_emit_ampersand() {
-    let src = "fn f(x: &Int) -> Unit { }  fn g(a: Int, b: Int) -> Unit { f(a)  f(b) }";
+    let src = "fn f(x: val Int) -> Unit { }  fn g(a: Int, b: Int) -> Unit { f(a)  f(b) }";
     let rust = transpile_src(src);
     assert_contains(&rust, "f(&a)");
     assert_contains(&rust, "f(&b)");
 }
 
-/// Expression-level borrow `&x` emits `&x` in Rust. (#366)
+/// Expression-level borrow `val x` emits `&x` in Rust. (#366)
 #[test]
 fn borrow_expr_shared_emits_ampersand() {
-    let src = "fn f(x: Int) -> Unit { let r: &Int = &x; }";
+    let src = "fn f(x: Int) -> Unit { let r: val Int = val x; }";
     let rust = transpile_src(src);
     assert_contains(&rust, "&x");
 }
 
-/// Expression-level mutable borrow `&mut x` emits `&mut x` in Rust. (#366)
+/// Expression-level mutable borrow `ref x` emits `&mut x` in Rust. (#366)
 #[test]
 fn borrow_expr_mutable_emits_ampersand_mut() {
-    let src = "fn f(mut x: Int) -> Unit { let r: &mut Int = &mut x; }";
+    let src = "fn f(mut x: Int) -> Unit { let r: ref Int = ref x; }";
     let rust = transpile_src(src);
     assert_contains(&rust, "&mut x");
 }
 
-/// Fix 5: group_by with a declared &String key function emits `&__v.clone()`. (#366)
-/// Phase B borrow inference maps declared functions with explicit &T params so
+/// Fix 5: group_by with a declared `val String` key function emits `&__v.clone()`. (#366)
+/// Phase B borrow inference maps declared functions with explicit val T params so
 /// group_by correctly wraps the loop variable in `&__v.clone()`.
 #[test]
 fn group_by_with_ref_string_key_emits_borrow_on_clone() {
-    let src = "fn key(s: &String) -> String { s }  fn f(xs: List[String]) -> Unit { let m: Map[String, List[String]] = xs.group_by(key); }";
+    let src = "fn key(s: val String) -> String { s }  fn f(xs: List[String]) -> Unit { let m: Map[String, List[String]] = xs.group_by(key); }";
     let rust = transpile_src(src);
     assert_contains(&rust, "&__v.clone()");
 }

@@ -56,13 +56,13 @@ impl<'a> Generator<'a> {
         self.depth += 1;
         let result = match self.small(6)? {
             0 => self.gen_base_type()?.to_string(),
-            1 => format!("Option<{}>", self.gen_base_type()?),
+            1 => format!("Option[{}]", self.gen_base_type()?),
             2 => {
                 let ok = self.gen_base_type()?;
                 let err = self.gen_base_type()?;
-                format!("Result<{ok}, {err}>")
+                format!("Result[{ok}, {err}]")
             }
-            3 => format!("&{}", self.gen_base_type()?),
+            3 => format!("val {}", self.gen_base_type()?),
             4 => {
                 let a = self.gen_base_type()?;
                 let b = self.gen_base_type()?;

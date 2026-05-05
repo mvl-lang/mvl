@@ -31,13 +31,13 @@ fn save_and_log(data: String, path: Path) -> Result[Unit, IOError] ! FileWrite, 
 }
 
 // Function with capability parameter
-fn process(iso db: &DbConn) -> Result[Data, Error] ! DB {
+fn process(iso db: val DbConn) -> Result[Data, Error] ! DB {
     db.query("SELECT * FROM data")
 }
 
 // Function with all capability types
 fn demo_caps(
-    iso exclusive: &Resource,
+    iso exclusive: val Resource,
     val readonly: Config,
     ref borrow: State,
     tag opaque: Handle,
@@ -58,7 +58,7 @@ fn map[A, B](f: fn(A) -> B, xs: List[A]) -> List[B] {
 
 // Function with security labels
 total fn authenticate(
-    iso db: &DbConn,
+    iso db: val DbConn,
     input_password: Tainted[String],
     user_id: UserId,
 ) -> Result[Session, AuthError] ! DB, Console {
@@ -94,10 +94,10 @@ fn divide(
 }
 
 // Reference types in parameters
-fn read_buffer(buf: &Buffer) -> Int {
+fn read_buffer(buf: val Buffer) -> Int {
     buf.len()
 }
 
-fn write_buffer(buf: &mut Buffer, data: Byte) -> Unit {
+fn write_buffer(buf: ref Buffer, data: Byte) -> Unit {
     buf.push(data)
 }

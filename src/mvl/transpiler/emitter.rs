@@ -69,14 +69,14 @@ pub struct RustEmitter {
     /// Per-function borrow kinds (Phase B, Spec 009 Req 2).
     ///
     /// Maps function name → `Vec<Option<bool>>` where:
-    /// * `Some(false)` at index `i` — parameter `i` is `&T`; emit `&x` at call sites.
-    /// * `Some(true)`  at index `i` — parameter `i` is `&mut T`; emit `&mut x`.
+    /// * `Some(false)` at index `i` — parameter `i` is `val T` (read-only borrow); emit `&x` at call sites.
+    /// * `Some(true)`  at index `i` — parameter `i` is `ref T` (mutable borrow); emit `&mut x`.
     /// * `None`        at index `i` — pass by value (clone / move as normal).
     ///
     /// Built once before emission from all [`FnDecl`] nodes in the program.
     ///
     /// Used in two places:
-    /// * `emit_params` — wraps inferred-borrow param types in `&` / `&mut `.
+    /// * `emit_params` — wraps inferred-borrow param types in `&` / `&mut ` (Rust output).
     /// * `emit_args` at call sites — emits `&x` / `&mut x` instead of `x.clone()`.
     pub borrow_params_map: std::collections::HashMap<String, Vec<Option<bool>>>,
     /// Fully-qualified Rust paths for stdlib function names that would shadow

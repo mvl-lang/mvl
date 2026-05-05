@@ -127,7 +127,7 @@ In most languages, mocking is hard because dependencies are hidden — globals, 
 
 ```mvl
 // Production
-fn get_user(db: &DbConn, id: UserId) -> Result[User, DbError] ! DB {
+fn get_user(db: val DbConn, id: UserId) -> Result[User, DbError] ! DB {
     db.query("SELECT ...", id)?
 }
 
@@ -135,7 +135,7 @@ fn get_user(db: &DbConn, id: UserId) -> Result[User, DbError] ! DB {
 #[test]
 fn test_get_user() {
     let db = in_memory_db([test_user]);
-    let result = get_user(&db, test_user.id);
+    let result = get_user(val db, test_user.id);
     assert_eq(result, Ok(test_user));
 }
 ```

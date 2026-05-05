@@ -258,7 +258,7 @@ module.exports = grammar({
     result_type: ($) =>
       seq("Result", "<", $.type_expr, ",", $.type_expr, ">"),
 
-    ref_type: ($) => seq("&", optional("mut"), $.type_expr),
+    ref_type: ($) => seq(choice("val", "ref"), $.type_expr),
 
     labeled_type: ($) => seq($.security_label, "<", $.type_expr, ">"),
 
@@ -431,9 +431,9 @@ module.exports = grammar({
         $._atom_expr
       ),
 
-    // Borrow expression: `&expr` or `&mut expr`
+    // Borrow expression: `val expr` or `ref expr`
     borrow_expr: ($) =>
-      prec.right(PREC.UNARY, seq("&", optional("mut"), $.expr)),
+      prec.right(PREC.UNARY, seq(choice("val", "ref"), $.expr)),
 
     // Atomic (non-recursive) expression forms
     _atom_expr: ($) =>

@@ -130,8 +130,8 @@ T where predicate                     // refinement type
 Public[T], Tainted[T],                // security labels
 Clean[T], Secret[T]
 
-&T, &mut T                            // shared / exclusive borrow
-iso T, val T, ref T, tag T           // reference capabilities
+val T, ref T                          // shared (immutable) / exclusive (mutable) reference
+iso T, tag T                         // reference capabilities (Phase 8)
 
 fn(A) -> B                            // pure function type
 fn(A) -> B ! Effect                   // effectful function type
@@ -174,7 +174,7 @@ In most languages, mocking is hard because dependencies are hidden — globals, 
 
 ```
 // Production
-fn get_user(db: &DbConn, id: UserId) -> Result[User, DbError] ! DB {
+fn get_user(db: val DbConn, id: UserId) -> Result[User, DbError] ! DB {
     db.query("SELECT ...", id)?
 }
 
