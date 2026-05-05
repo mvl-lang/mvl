@@ -610,10 +610,14 @@ impl<'ctx> LlvmBackend<'ctx> {
         &self,
         name: &str,
     ) -> Option<inkwell::values::IntValue<'ctx>> {
-        // Built-in Result/Option variants.
+        // Built-in Result/Option variants — both unqualified and qualified forms.
         match name {
-            "Ok" | "Some" => return Some(self.context.i8_type().const_int(0, false)),
-            "Err" | "None" => return Some(self.context.i8_type().const_int(1, false)),
+            "Ok" | "Some" | "Result::Ok" | "Option::Some" => {
+                return Some(self.context.i8_type().const_int(0, false))
+            }
+            "Err" | "None" | "Result::Err" | "Option::None" => {
+                return Some(self.context.i8_type().const_int(1, false))
+            }
             _ => {}
         }
         // Qualified: "Shape::Circle"
@@ -694,9 +698,17 @@ impl<'ctx> LlvmBackend<'ctx> {
                 Err(_) => return,
             };
 
-            // Built-in Result/Option variants: Ok(v), Some(v) → ok_llvm_ty; Err(e) → ptr.
+            // Built-in Result/Option variants — both unqualified and qualified forms.
             // L5-08: layout is {i8, ptr} — field 1 is a pointer to the payload value.
-            if matches!(name.as_str(), "Ok" | "Some" | "Err") {
+            if matches!(
+                name.as_str(),
+                "Ok" | "Some"
+                    | "Err"
+                    | "Result::Ok"
+                    | "Option::Some"
+                    | "Result::Err"
+                    | "Option::None"
+            ) {
                 let bind_name = match fields.first() {
                     Some(Pattern::Ident(n, _)) => n.clone(),
                     _ => return,
@@ -705,7 +717,9 @@ impl<'ctx> LlvmBackend<'ctx> {
                     Ok(v) => v,
                     Err(_) => return,
                 };
-                let llvm_ty: BasicTypeEnum = if name == "Err" {
+                let is_err_variant =
+                    matches!(name.as_str(), "Err" | "Result::Err" | "Option::None");
+                let llvm_ty: BasicTypeEnum = if is_err_variant {
                     self.context.ptr_type(AddressSpace::default()).into()
                 } else {
                     ok_llvm_ty
