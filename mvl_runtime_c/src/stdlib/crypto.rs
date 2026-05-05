@@ -92,12 +92,21 @@ pub extern "C" fn _mvl_crypto_sha512(data: *const MvlString) -> *mut MvlString {
 /// Reads from the OS CSPRNG via `getrandom`. The array is owned by the LLVM
 /// heap-drop system; callers must not free it with `libc::free`.
 /// The `Secret` wrapper is a Rust compile-time label; the C-ABI returns a raw ptr.
+/// Returns null if `n > 131_072` (1 MiB cap) or if allocation fails.
 #[no_mangle]
 #[allow(unsafe_code)]
 pub extern "C" fn _mvl_crypto_random_bytes(n: i64) -> *mut MvlArray {
+    // Cap to 1 MiB (131 072 bytes) to prevent unbounded allocation on adversarial input.
+    const MAX_RANDOM_BYTES: i64 = 131_072;
+    if n > MAX_RANDOM_BYTES {
+        return std::ptr::null_mut();
+    }
     let Secret(vals) = mvl_runtime::stdlib::crypto::crypto_random_bytes(n);
     unsafe {
         let arr = mvl_array_new(std::mem::size_of::<i64>(), vals.len());
+        if arr.is_null() {
+            return std::ptr::null_mut();
+        }
         for v in &vals {
             crate::memory_ops::mvl_array_push(arr, (v as *const i64).cast());
         }

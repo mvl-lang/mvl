@@ -41,7 +41,7 @@ pub fn crypto_random_bytes(n: i64) -> Secret<Vec<i64>> {
 /// Read `n` random bytes from the OS CSPRNG.
 fn os_random_bytes(n: usize) -> Vec<u8> {
     let mut buf = vec![0u8; n];
-    getrandom::getrandom(&mut buf).expect("OS CSPRNG unavailable");
+    getrandom::getrandom(&mut buf).unwrap_or_else(|_| std::process::abort());
     buf
 }
 

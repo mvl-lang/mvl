@@ -532,3 +532,24 @@ fn cross_backend_crypto_random_bytes_llvm_shape() {
         );
     }
 }
+
+/// crypto_random_bytes(0) — both backends must return an empty list.
+///
+/// Edge-case for the I64ReturnsPtrArg dispatch and MvlArray zero-length allocation (#507).
+#[test]
+fn cross_backend_crypto_random_bytes_zero_llvm() {
+    let file = corpus_effects("crypto_random_bytes_zero.mvl");
+    let transpiler_out = run_transpiler(&file);
+    assert_eq!(
+        transpiler_out.trim(),
+        "0",
+        "Rust transpiler: expected length 0, got: {transpiler_out:?}"
+    );
+    if let Some(llvm_out) = run_llvm(&file) {
+        assert_eq!(
+            llvm_out.trim(),
+            "0",
+            "LLVM backend: expected length 0, got: {llvm_out:?}"
+        );
+    }
+}

@@ -656,15 +656,10 @@ impl<'ctx> LlvmBackend<'ctx> {
 
         // #508: Register return type for crypto_random_bytes so local_mvl_types tracks
         // it as Secret[List[Int]] when used in let-bindings — enables the codegen-level
-        // debug_assert that guards public-sink emitters against Secret leaks.
+        // assert that guards public-sink emitters against Secret leaks.
         {
             use crate::mvl::parser::lexer::Span;
-            let s = Span {
-                line: 0,
-                col: 0,
-                offset: 0,
-                len: 0,
-            };
+            let s = Span::default();
             let int_ty = TypeExpr::Base {
                 name: "Int".into(),
                 args: vec![],
@@ -698,12 +693,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         });
         if imports_io {
             use crate::mvl::parser::lexer::Span;
-            let s = Span {
-                line: 0,
-                col: 0,
-                offset: 0,
-                len: 0,
-            };
+            let s = Span::default();
             let unit = TypeExpr::Base {
                 name: "Unit".into(),
                 args: vec![],
@@ -1241,6 +1231,10 @@ impl<'ctx> LlvmBackend<'ctx> {
         symbol: &str,
         arg: inkwell::values::BasicValueEnum<'ctx>,
     ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        let i64_val = match arg {
+            inkwell::values::BasicValueEnum::IntValue(v) => v,
+            _ => return None,
+        };
         let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
         let i64_ty = self.context.i64_type();
         let fn_val = if let Some(f) = self.module.get_function(symbol) {
@@ -1252,7 +1246,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         };
         let call = self
             .builder
-            .build_call(fn_val, &[arg.into()], "i64_to_ptr")
+            .build_call(fn_val, &[i64_val.into()], symbol)
             .ok()?;
         use inkwell::values::AnyValue;
         inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()

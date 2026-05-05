@@ -827,8 +827,8 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     /// Returns true if `expr` names a local variable labeled `Secret[_]`.
     ///
-    /// Used in debug_asserts to catch codegen bugs that would route a Secret
-    /// value to a public sink (println, log_*) without a `declassify` node.
+    /// Used in asserts to catch codegen bugs that would route a Secret
+    /// value to a public sink (print, println, log_*) without a `declassify` node.
     /// The MVL static checker enforces this before codegen runs; this is
     /// defense-in-depth against future codegen regressions.
     fn is_secret_labeled(&self, expr: &Expr) -> bool {
@@ -856,13 +856,20 @@ impl<'ctx> LlvmBackend<'ctx> {
         match name {
             "println" => {
                 // #508: IFC invariant — static checker guarantees no Secret arg reaches println.
-                debug_assert!(
+                assert!(
                     args.iter().all(|a| !self.is_secret_labeled(a)),
                     "codegen bug: Secret-labeled value routed to println without declassify"
                 );
                 self.emit_println(args)
             }
-            "print" => self.emit_print(args),
+            "print" => {
+                // #508: IFC invariant — same guard as println (both are public sinks).
+                assert!(
+                    args.iter().all(|a| !self.is_secret_labeled(a)),
+                    "codegen bug: Secret-labeled value routed to print without declassify"
+                );
+                self.emit_print(args)
+            }
             "format" => self.emit_format(args),
             // range(start, end) as a value → { i64 start, i64 end } range struct
             "range" if args.len() == 2 => {
@@ -945,7 +952,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                             let sym = sym.clone();
                             // #508: IFC invariant — static checker guarantees no Secret arg
                             // reaches log sinks (log_debug/info/warn/error) without declassify.
-                            debug_assert!(
+                            assert!(
                                 !self.is_secret_labeled(&args[0])
                                     && !self.is_secret_labeled(&args[1]),
                                 "codegen bug: Secret-labeled value routed to log sink without declassify"
