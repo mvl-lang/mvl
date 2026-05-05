@@ -12,6 +12,16 @@ impl Regex {
     pub fn replace_all_borrowed(&self, s: &str, replacement: &str) -> String {
         self.0.replace_all(s, replacement).into_owned()
     }
+
+    /// Return the first match of this pattern in `s`, or `None`.
+    /// Provided for C-ABI callers that borrow the handle without consuming it.
+    pub fn find_borrowed(&self, s: &str) -> Option<Match> {
+        self.0.find(s).map(|m| Match {
+            text: m.as_str().to_owned(),
+            start: m.start() as i64,
+            end: m.end() as i64,
+        })
+    }
 }
 
 /// A single match — the matched text and its byte offsets in the input.

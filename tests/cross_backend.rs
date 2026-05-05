@@ -474,8 +474,6 @@ fn cross_backend_crypto_sha256_llvm() {
 // ── #420/#439: regex C-ABI parity tests ──────────────────────────────────────
 
 /// Both backends must produce identical output for `regex.compile` + `regex.replace`.
-/// `find`, `find_all`, `captures` LLVM codegen is deferred — they have C-ABI
-/// symbols but no LLVM dispatch yet (pending Option[Struct]/List marshalling).
 #[test]
 fn cross_backend_regex_replace() {
     let file = corpus_stdlib("regex_replace.mvl");
@@ -490,5 +488,24 @@ fn cross_backend_regex_replace() {
         assert_eq!(lines[0], "abc N def N", "digits must be redacted");
         assert_eq!(lines[1], "no digits here", "no-digit input unchanged");
         assert_eq!(lines[2], "N N N", "all three digit groups redacted");
+    }
+}
+
+/// Both backends must produce identical output for `regex.find` returning `Option[Match]`.
+/// Verifies that text extraction and None handling are consistent.
+#[test]
+fn cross_backend_regex_find() {
+    let file = corpus_stdlib("regex_find.mvl");
+    if let Some(llvm_out) = run_llvm(&file) {
+        let transpiler_out = run_transpiler(&file);
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "regex_find.mvl: LLVM and transpiler backends must produce identical output"
+        );
+        let lines: Vec<&str> = llvm_out.lines().collect();
+        assert_eq!(lines.len(), 3, "expected three output lines");
+        assert_eq!(lines[0], "123", "first digit run extracted");
+        assert_eq!(lines[1], "(none)", "no-digits input returns None");
+        assert_eq!(lines[2], "42", "leading digit run extracted");
     }
 }

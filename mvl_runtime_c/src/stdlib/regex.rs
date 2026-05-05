@@ -107,12 +107,76 @@ pub unsafe extern "C" fn _mvl_regex_replace(
     new_mvl_str(&result)
 }
 
-// ── Deferred (pending Option[Struct] / List marshalling) ──────────────────────
+// ── Find (Option[Match]) ──────────────────────────────────────────────────────
+
+/// C repr of `Match` — the payload returned by `_mvl_regex_find`.
+///
+/// Layout mirrors `type Match = struct { text: String, start: Int, end: Int }` in
+/// `std/regex.mvl`.  Fields are ordered to match the MVL struct definition so that
+/// the LLVM codegen can GEP into this layout using field indices.
+///
+/// # Safety
+/// Heap-allocated by `_mvl_regex_find`; caller must free with `_mvl_match_drop`.
+#[repr(C)]
+pub struct MvlMatch {
+    /// The matched text (heap-allocated MvlString).
+    pub text: *mut MvlString,
+    /// Byte offset of the start of the match.
+    pub start: i64,
+    /// Byte offset one past the end of the match.
+    pub end: i64,
+}
+
+/// Free a `MvlMatch` previously allocated by `_mvl_regex_find`.
+///
+/// # Safety
+/// `m` must be a non-null pointer from `_mvl_regex_find` and must not be used after this call.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn _mvl_match_drop(m: *mut MvlMatch) {
+    if !m.is_null() {
+        drop(Box::from_raw(m));
+    }
+}
+
+/// Return the first match of `handle` in `input`, or `None`.
+///
+/// Returns `LlvmResult { tag=0, payload=*mut MvlMatch }` on a match (caller owns the
+/// allocation; free with `_mvl_match_drop`).
+/// Returns `LlvmResult { tag=1, payload=null }` when there is no match.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn _mvl_regex_find(
+    handle: *mut c_void,
+    input: *const MvlString,
+) -> LlvmResult {
+    if handle.is_null() {
+        return LlvmResult::err_mvl(new_mvl_str("null regex handle"));
+    }
+    let s = read_mvl_string(input);
+    let re: &rt::Regex = &*(handle as *const rt::Regex);
+    match re.find_borrowed(&s) {
+        Some(m) => {
+            let heap = Box::new(MvlMatch {
+                text: mvl_string_new(m.text.as_ptr(), m.text.len()),
+                start: m.start,
+                end: m.end,
+            });
+            LlvmResult::ok_ptr(Box::into_raw(heap) as *mut c_void)
+        }
+        None => LlvmResult {
+            tag: 1,
+            payload: std::ptr::null_mut(),
+        },
+    }
+}
+
+// ── Deferred: find_all (List[Match]), captures (Option[Captures]) ─────────────
 //
-// `_mvl_regex_find`, `_mvl_regex_find_all`, `_mvl_regex_captures` have
-// complex return types (Option[Match], List[Match], Option[Captures]) that
-// require MvlArray*/MvlStruct* marshalling not yet in place.
-// Their C-ABI symbols will be added in the follow-up ticket.
+// `_mvl_regex_find_all` and `_mvl_regex_captures` have complex return types
+// (List[Match] requires MvlArray element-copy marshalling; Option[Captures] requires
+// nested List[Option[String]] and Map[String, Option[String]]).
+// LLVM codegen dispatch for these is deferred until that infrastructure is in place.
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 

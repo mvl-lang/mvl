@@ -952,6 +952,13 @@ impl<'ctx> LlvmBackend<'ctx> {
                             let c = self.emit_expr(&args[2])?;
                             return self.emit_stdlib_call_string_three_ptr_args(&sym, a, b, c);
                         }
+                        StdlibSig::OptionMatchTwoPtrArgs(sym) if args.len() == 2 => {
+                            let sym = sym.clone();
+                            let handle = self.emit_expr(&args[0])?;
+                            let input = self.emit_expr(&args[1])?;
+                            return self
+                                .emit_stdlib_call_option_match_two_ptr_args(&sym, handle, input);
+                        }
                         _ => {}
                     }
                 }
