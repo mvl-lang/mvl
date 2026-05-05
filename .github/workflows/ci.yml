@@ -71,6 +71,16 @@ jobs:
               });
             }
 
+  adr-check:
+    name: ADR structure check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Check ADR structure
+        run: python3 tools/check_adr.py --verbose
+
   check:
     name: Check, lint, test
     runs-on: ubuntu-latest
