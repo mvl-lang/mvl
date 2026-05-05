@@ -1,0 +1,210 @@
+// bitstream.mvl — Bit-stream packing and unpacking
+//
+// Demonstrates native bit operators: val   |  ^  ~  <<  >>
+// These are the language-level operators added in #483/#484 (epic #480).
+//
+// Byte values are stored as Int (0-255). A BitWriter accumulates bits into
+// bytes; a BitReader extracts them. Both are purely functional — every
+// operation returns an updated value, keeping the API composable.
+//
+// R1  (types):    BitWriter and BitReader structs
+// R10 (refinements): n_bits constrained to prevent shift overflow
+// R7  (effects):  pure — no file or console access
+
+pub type BitWriter = struct {
+    bytes:   List[Int],  // fully-packed output bytes so far (values 0-255)
+    current: Int,        // accumulator for the byte being built
+    bit_pos: Int,        // bits already written into current (0-7)
+}
+
+pub type BitReader = struct {
+    bytes:   List[Int],
+    pos:     Int,        // current byte index
+    bit_pos: Int,        // next bit to read within current byte (0-7)
+}
+
+// Result type for read operations (pure function — returns new reader)
+pub type ReadResult = struct {
+    rval:   Int,        // the bits read (named rval to avoid 'val' keyword)
+    reader: BitReader,
+}
+
+// Create a fresh, empty BitWriter.
+pub fn new_writer() -> BitWriter {
+    BitWriter { bytes: [], current: 0, bit_pos: 0 }
+}
+
+// Flush any remaining bits and return the packed byte sequence.
+pub fn flush_writer(w: BitWriter) -> List[Int] {
+    // Bind to local to signal ownership transfer (prevents auto-borrow inference).
+    let owned: BitWriter = w;
+    if owned.bit_pos == 0 {
+        owned.bytes
+    } else {
+        // Pad the final partial byte with zeros on the high bits
+        let mut out: List[Int] = owned.bytes;
+        out.push(owned.current);
+        out
+    }
+}
+
+// Write the low n_bits of value into the stream.
+// R10: n_bits must be 1–24 to prevent shift overflow.
+pub fn write_bits(w: BitWriter, value: Int, n_bits: Int where self >= 1 && self <= 24) -> BitWriter {
+    write_bits_loop(w, value, n_bits)
+}
+
+fn write_bits_loop(w: BitWriter, value: Int, remaining: Int) -> BitWriter {
+    if remaining <= 0 {
+        w
+    } else {
+        // Extract the lowest bit and place it at the current bit_pos
+        let bit: Int = value & 1;
+        let next_value: Int = value >> 1;
+        let new_current: Int = w.current | (bit << w.bit_pos);
+        let new_bit_pos: Int = w.bit_pos + 1;
+        if new_bit_pos == 8 {
+            // Current byte is full — flush it and start the next byte
+            let mut new_bytes: List[Int] = w.bytes;
+            new_bytes.push(new_current);
+            let next_w: BitWriter = BitWriter {
+                bytes:   new_bytes,
+                current: 0,
+                bit_pos: 0,
+            };
+            write_bits_loop(next_w, next_value, remaining - 1)
+        } else {
+            let next_w: BitWriter = BitWriter {
+                bytes:   w.bytes,
+                current: new_current,
+                bit_pos: new_bit_pos,
+            };
+            write_bits_loop(next_w, next_value, remaining - 1)
+        }
+    }
+}
+
+// Create a BitReader over a packed byte array.
+pub fn new_reader(bytes: List[Int]) -> BitReader {
+    BitReader { bytes: bytes, pos: 0, bit_pos: 0 }
+}
+
+// Read n_bits from the stream; returns value + advanced reader.
+// R10: n_bits must be 1–24 to prevent shift overflow.
+pub fn read_bits(r: BitReader, n_bits: Int where self >= 1 && self <= 24) -> ReadResult {
+    read_bits_loop(r, n_bits, 0, 0)
+}
+
+fn read_bits_loop(r: BitReader, remaining: Int, acc: Int, shift: Int) -> ReadResult {
+    if remaining <= 0 {
+        ReadResult { rval: acc, reader: r }
+    } else if r.pos >= r.bytes.len() {
+        ReadResult { rval: acc, reader: r }
+    } else {
+        let byte_v: Int = r.bytes.get(r.pos).unwrap();
+        // Extract the bit at bit_pos, accumulate into result
+        let bit: Int = (byte_v >> r.bit_pos) & 1;
+        let new_acc: Int = acc | (bit << shift);
+        let new_bit_pos: Int = r.bit_pos + 1;
+        if new_bit_pos == 8 {
+            let next_r: BitReader = BitReader {
+                bytes:   r.bytes,
+                pos:     r.pos + 1,
+                bit_pos: 0,
+            };
+            read_bits_loop(next_r, remaining - 1, new_acc, shift + 1)
+        } else {
+            let next_r: BitReader = BitReader {
+                bytes:   r.bytes,
+                pos:     r.pos,
+                bit_pos: new_bit_pos,
+            };
+            read_bits_loop(next_r, remaining - 1, new_acc, shift + 1)
+        }
+    }
+}
+
+// ── Bit manipulation utilities ────────────────────────────────────────────────
+// These standalone functions showcase the native bit operators directly.
+
+// Pack a Huffman code (list of 0/1 bits) into a BitWriter.
+pub fn write_code(w: BitWriter, bits: List[Int]) -> BitWriter {
+    let mut writer: BitWriter = w;
+    for bit in bits {
+        writer = write_bits(writer, bit, 1)
+    }
+    writer
+}
+
+// Compute a CRC32-style table entry.
+// Demonstrates: val  (mask), ^ (XOR), >> (shift right), ~ (bitwise NOT).
+pub fn crc32_step(crc: Int, byte_in: Int) -> Int {
+    let combined: Int = crc ^ byte_in;
+    let masked: Int = combined & 0xFF;
+    crc32_byte(crc >> 8, masked)
+}
+
+type Crc32ByteState = struct { crc: Int, byte_in: Int }
+
+fn crc32_byte(crc: Int, byte_in: Int) -> Int {
+    let poly: Int = 0xEDB88320;
+    let mut st: Crc32ByteState = Crc32ByteState { crc: crc, byte_in: byte_in };
+    for _ in range(0, 8) {
+        st = crc32_bit_step(st, poly)
+    }
+    st.crc
+}
+
+fn crc32_bit_step(st: Crc32ByteState, poly: Int) -> Crc32ByteState {
+    let tapped: Int = st.byte_in & 1;
+    let next_byte: Int = st.byte_in >> 1;
+    let next_crc: Int = if tapped == 1 {
+        (st.crc >> 1) ^ poly
+    } else {
+        st.crc >> 1
+    };
+    Crc32ByteState { crc: next_crc, byte_in: next_byte }
+}
+
+// Extract a bit field: bits [lo, lo+len) of v.
+// Demonstrates: << (align mask), & (apply mask), >> (shift result down).
+pub fn bit_field(v: Int, lo: Int, len: Int where self >= 1 && self <= 24) -> Int {
+    let mask: Int = (1 << len) - 1;
+    (v >> lo) & mask
+}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+test fn write_then_read_8bits() -> Unit {
+    let w0: BitWriter = new_writer();
+    let w1: BitWriter = write_bits(w0, 0xA5, 8);
+    let packed: List[Int] = flush_writer(w1);
+    assert_eq(packed.len(), 1);
+    let r0: BitReader = new_reader(packed);
+    let res: ReadResult = read_bits(r0, 8);
+    assert_eq(res.rval, 0xA5)
+}
+
+test fn write_then_read_across_boundary() -> Unit {
+    let w0: BitWriter = new_writer();
+    let w1: BitWriter = write_bits(w0, 3, 4);
+    let w2: BitWriter = write_bits(w1, 12, 4);
+    let packed: List[Int] = flush_writer(w2);
+    assert_eq(packed.len(), 1);
+    let r0: BitReader = new_reader(packed);
+    let res1: ReadResult = read_bits(r0, 4);
+    assert_eq(res1.rval, 3);
+    let res2: ReadResult = read_bits(res1.reader, 4);
+    assert_eq(res2.rval, 12)
+}
+
+test fn bit_field_extracts_correctly() -> Unit {
+    let b2: Int = bit_field(180, 2, 1);
+    assert_eq(b2, 1)
+}
+
+test fn crc32_step_deterministic() -> Unit {
+    let a: Int = crc32_step(0xFFFFFFFF, 72);
+    let b: Int = crc32_step(0xFFFFFFFF, 72);
+    assert_eq(a, b)
+}
