@@ -1931,6 +1931,12 @@ impl TypeChecker {
             "abs" | "pow" | "min" | "max" | "clamp" => Ty::Int,
             // Bitwise
             "bit_and" | "bit_or" | "bit_xor" | "bit_not" | "shift_left" | "shift_right" => Ty::Int,
+            // Overflow-checking (return Option[Int])
+            "checked_add" | "checked_sub" | "checked_mul" | "checked_div" => {
+                Ty::Option(Box::new(Ty::Int))
+            }
+            // Explicit wrapping (document intent)
+            "wrapping_add" | "wrapping_sub" | "wrapping_mul" => Ty::Int,
             // Predicates
             "is_positive" | "is_negative" | "is_zero" => Ty::Bool,
             _ => Ty::Unknown,
@@ -1949,6 +1955,7 @@ impl TypeChecker {
             // generic method-call fallthrough emits `receiver.wrapping_add(arg)`
             // which is valid Rust.  No dedicated emit arm is required.
             "wrapping_add" | "wrapping_sub" | "wrapping_mul" => Ty::Byte,
+            "checked_add" | "checked_sub" | "checked_mul" => Ty::Option(Box::new(Ty::Byte)),
             _ => Ty::Unknown,
         }
     }
