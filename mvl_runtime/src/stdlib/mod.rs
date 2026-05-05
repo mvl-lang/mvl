@@ -1,9 +1,9 @@
 //! Rust implementations of MVL standard library functions.
 //!
 //! These are the real Rust-backed implementations for the stubs declared in
-//! `std/*.mvl`. They are re-exported via `mvl_runtime::prelude::*` so that
-//! any generated MVL program that imports `use std.*` can call them without
-//! needing a per-program `bridge.rs`.
+//! `std/*.mvl`. They are imported via explicit `use mvl_runtime::stdlib::X::*`
+//! lines emitted by the transpiler for each `use std.X.*` declaration in the
+//! MVL source (#488/#489). OS modules are NOT re-exported from `prelude`.
 //!
 //! # Design
 //!

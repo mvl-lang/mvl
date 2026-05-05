@@ -101,8 +101,8 @@ pub fn has_extern_rust_decls(prog: &Program) -> bool {
 /// Returns true if the program imports any `use std.*` stdlib modules.
 ///
 /// When a program uses stdlib functions (e.g. `use std.io.{read_file}`), the
-/// generated code calls implementations from `mvl_runtime::prelude::*`, so
-/// `mvl_runtime` must be linked even when no `extern "rust"` block is present.
+/// generated code needs explicit `use mvl_runtime::stdlib::X::*` imports (#488/#489),
+/// so `mvl_runtime` must be linked even when no `extern "rust"` block is present.
 pub fn has_std_imports(prog: &Program) -> bool {
     prog.declarations.iter().any(|d| {
         if let Decl::Use(ud) = d {
@@ -111,6 +111,25 @@ pub fn has_std_imports(prog: &Program) -> bool {
             false
         }
     })
+}
+
+/// Returns the deduplicated list of `std.*` sub-module names used in this program.
+///
+/// For example, `use std.io.*;` and `use std.env.*;` produce `["io", "env"]`.
+/// Used by the emitter to emit `use mvl_runtime::stdlib::X::*;` for each module.
+pub fn collect_stdlib_modules(prog: &Program) -> Vec<String> {
+    let mut modules: Vec<String> = Vec::new();
+    for decl in &prog.declarations {
+        if let Decl::Use(ud) = decl {
+            if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
+                let module = ud.path[1].clone();
+                if !modules.contains(&module) {
+                    modules.push(module);
+                }
+            }
+        }
+    }
+    modules
 }
 
 /// Output of a successful multi-file project transpilation.

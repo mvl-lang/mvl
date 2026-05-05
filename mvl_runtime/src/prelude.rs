@@ -1,9 +1,13 @@
-//! Prelude — everything a generated MVL file needs in one `use` line.
+//! Prelude — language fundamentals needed in every generated MVL file.
 //!
 //! Every file emitted by the MVL transpiler starts with:
 //! ```rust
 //! use mvl_runtime::prelude::*;
 //! ```
+//!
+//! OS-specific modules (`std.io`, `std.env`, `std.process`, etc.) are NOT
+//! re-exported here. The transpiler emits explicit `use mvl_runtime::stdlib::X::*`
+//! imports for each `use std.X.*` declaration in the MVL source (#488 / #489).
 
 pub use crate::effects::{
     Alloc, Clock, Concurrent, Console, Db, Env, FileDelete, FileRead, FileWrite, Log, Net, Panic,
@@ -12,54 +16,18 @@ pub use crate::effects::{
 pub use crate::ifc::{declassify, sanitize, Clean, Public, Secret, Tainted};
 pub use crate::mvl_refine;
 
-// ── Standard library implementations ──────────────────────────────────────
+// ── Struct parsing infrastructure ─────────────────────────────────────────
 //
-// These re-exports provide the Rust backing for stdlib functions declared as
-// stubs in `std/*.mvl`. Programs that import `use std.io.*` or `use std.args.*`
-// call these directly — no per-program `bridge.rs` is needed for generic I/O.
+// ParseFromArgs is a transpiler-generated trait: the emitter synthesises
+// `impl ParseFromArgs for T` for every concrete struct with parseable fields,
+// and the generated `parse_from_args()` body calls `get_arg` and `parse`.
+// These are language infrastructure (not OS-specific) so they live in the
+// prelude rather than being gated behind `use std.args.*`. ADR-0012.
+//
+// The remaining `args` functions (get_args, get_env) are OS-level and are
+// only available after an explicit `use std.args.*` declaration (#488/#489).
 
-/// `std.io` — file I/O operations.
-pub use crate::stdlib::io::{
-    append, buf_reader, buf_writer, chmod, close, create_dir_all, create_symlink, exists, is_dir,
-    is_file, join, metadata, open, path, read_dir, read_file, read_line, read_link, read_to_string,
-    remove, stdin, stdin_read_line, stdin_read_to_string, to_string, write, write_line, BufReader,
-    BufWriter, DirEntry, File, Metadata, Path, Stdin,
-};
-
-/// `std.args` — CLI argument and environment access.
-pub use crate::stdlib::args::{get_arg, get_args, get_env, parse, ParseFromArgs};
-
-/// `std.crypto` — hashing and CSPRNG (Phase 3: real Rust backing).
-pub use crate::stdlib::crypto::{crypto_random_bytes, sha256, sha512};
-
-/// `std.log` — structured logging (Phase 2: no-op stubs).
-pub use crate::stdlib::log::{log_debug, log_error, log_info, log_warn};
-
-/// `std.env` — environment variables, working directory, Unix identity, signals.
-pub use crate::stdlib::env::{
-    all, args, chdir, current_dir, exit, get, getgid, getuid, remove_var, set, sighup, sigint,
-    signal_ignore, signal_on, signal_reset, sigterm, sigusr1, sigusr2, Signal,
-};
-
-/// `std.time` — wall-clock time and sleep (UTC-only, Phase A).
-pub use crate::stdlib::time::{
-    format_datetime, format_instant, millis, now, parse as time_parse, seconds, sleep, DateTime,
-    Duration, Instant,
-};
-
-/// `std.random` — non-deterministic pseudo-random generation (xorshift64, not cryptographically secure).
-/// Aliased names (`random_int`, `random_float`, `random_bytes`) are provided to avoid potential
-/// conflicts; the unaliased names match the MVL function names used by the transpiler.
-pub use crate::stdlib::random::{
-    bytes, bytes as random_bytes, choice, float, float as random_float, int, int as random_int,
-    shuffle,
-};
-
-/// `std.process` — child process spawning and lifecycle.
-pub use crate::stdlib::process::{
-    exit_code, is_success, kill, spawn, stderr_read, stdin_write, stdout_read, wait, Child,
-    ChildStderr, ChildStdin, ChildStdout, ExitStatus, ProcessOutput, Stdio,
-};
+pub use crate::stdlib::args::{get_arg, parse, ParseFromArgs};
 
 // ── Extern kernel primitives ───────────────────────────────────────────────
 //
