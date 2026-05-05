@@ -10,6 +10,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 - **`missing-annotation` linter rule**
 
+## [0.77.0] — 2026-05-05
+
+### Added
+
+- **`crypto_random_bytes` LLVM dispatch** — wires `crypto_random_bytes(n)` as a tier-1 LLVM builtin via new `StdlibSig::I64ReturnsPtrArg` variant and `emit_stdlib_call_i64_returns_ptr` emitter. Previously the function fell through to a no-op on the LLVM path. Closes #507.
+- **`_mvl_crypto_random_bytes` returns `*mut MvlArray`** — replaces the custom length-prefixed heap layout with the standard `MvlArray` type, making the result compatible with all list stdlib operations (`list_len`, `list_get`, etc.).
+- **Codegen-level IFC defense** — `is_secret_labeled` helper and `assert!` guards on `println`, `print`, and `log_*` sinks catch Secret-labeled values routed to public sinks without declassify. Guard is active in both debug and release builds. Closes #508.
+- **Secret IFC label stripping in `.len()` dispatch** — `Secret[List[T]].len()` now correctly routes to `mvl_array_len` instead of `mvl_string_len` on the LLVM path.
+- **Cross-backend shape tests** — `crypto_random_bytes_shape.mvl` and `crypto_random_bytes_zero.mvl` verify correct list length on both transpiler and LLVM backends (#507).
+
+### Security
+
+- **`_mvl_crypto_random_bytes` size cap** — input `n` is now capped at 131,072 bytes (1 MiB); returns null for larger values, preventing unbounded allocation on adversarial input.
+- **`getrandom` failure is now an abort** — replaced `.expect()` (which unwinds across the `extern "C"` boundary, UB) with `.unwrap_or_else(|_| std::process::abort())` for clean termination when the OS CSPRNG is unavailable.
+
 ## [0.76.0] — 2026-05-05
 
 ### Added
