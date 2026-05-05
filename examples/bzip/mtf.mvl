@@ -1,0 +1,85 @@
+// mtf.mvl — Move-to-Front Transform
+// After BWT, similar bytes cluster together, producing many repeated symbols.
+// MTF converts these to small integers (typically 0 and 1), which Huffman
+// coding then compresses very efficiently.
+//
+// Byte values are stored as Int (0-255).
+//
+// R2 (memory safety): input borrowed via val List[Int] — no clone of block.
+// R7 (effects): pure — no file or console access.
+
+// Encode: replace each byte with its current position in the alphabet,
+// then move it to the front. Input borrowed — large BWT output must not clone.
+pub fn mtf_encode(data: val List[Int]) -> List[Int] {
+    // Alphabet: all 256 byte values in initial order [0, 1, 2, ..., 255]
+    let mut alphabet: List[Int] = range(0, 256);
+    let mut out: List[Int] = [];
+    for i in range(0, data.len()) {
+        let sym: Int = data.get(i).unwrap();
+        let pos: Int = find_in_alphabet(val alphabet, sym);
+        out.push(pos);
+        alphabet = move_to_front(alphabet, sym, pos)
+    }
+    out
+}
+
+// Decode: reconstruct original bytes from MTF-encoded indices.
+pub fn mtf_decode(encoded: val List[Int]) -> List[Int] {
+    let mut alphabet: List[Int] = range(0, 256);
+    let mut out: List[Int] = [];
+    for i in range(0, encoded.len()) {
+        let pos: Int = encoded.get(i).unwrap();
+        let sym: Int = alphabet.get(pos).unwrap();
+        out.push(sym);
+        alphabet = move_to_front(alphabet, sym, pos)
+    }
+    out
+}
+
+// Find the current position of sym in the alphabet.
+// Alphabet always contains all 256 unique values; scan is always O(256).
+// Uses a for loop (bounded, provably terminating) instead of recursion.
+fn find_in_alphabet(alphabet: val List[Int], sym: Int) -> Int {
+    let mut found: Int = 0;
+    for i in range(0, alphabet.len()) {
+        if alphabet.get(i).unwrap() == sym {
+            found = i
+        }
+    }
+    found
+}
+
+// Return a new alphabet with sym moved to the front.
+// Equivalent to: [sym] ++ alphabet[0..pos] ++ alphabet[pos+1..]
+fn move_to_front(alphabet: List[Int], sym: Int, pos: Int) -> List[Int] {
+    let before: List[Int] = alphabet.slice(0, pos);
+    let after: List[Int]  = alphabet.slice(pos + 1, alphabet.len());
+    let mut result: List[Int] = [sym];
+    result.extend(before);
+    result.extend(after);
+    result
+}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+test fn mtf_single_byte() -> Unit {
+    let data: List[Int] = [65];
+    let encoded: List[Int] = mtf_encode(val data);
+    assert_eq(encoded.get(0).unwrap(), 65)
+}
+
+test fn mtf_repeated_byte_gives_zeros() -> Unit {
+    let data: List[Int] = [65, 65, 65];
+    let encoded: List[Int] = mtf_encode(val data);
+    assert_eq(encoded.get(0).unwrap(), 65);
+    assert_eq(encoded.get(1).unwrap(), 0);
+    assert_eq(encoded.get(2).unwrap(), 0)
+}
+
+test fn mtf_roundtrip() -> Unit {
+    let data: List[Int] = [72, 101, 108, 108, 111];
+    let encoded: List[Int] = mtf_encode(val data);
+    let decoded: List[Int] = mtf_decode(val encoded);
+    assert_eq(decoded, data)
+}
+
