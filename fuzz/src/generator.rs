@@ -62,7 +62,7 @@ impl<'a> Generator<'a> {
                 let err = self.gen_base_type()?;
                 format!("Result<{ok}, {err}>")
             }
-            3 => format!("&{}", self.gen_base_type()?),
+            3 => format!("val {}", self.gen_base_type()?),
             4 => {
                 let a = self.gen_base_type()?;
                 let b = self.gen_base_type()?;

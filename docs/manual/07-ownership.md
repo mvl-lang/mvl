@@ -19,31 +19,31 @@ let b = move a;                      // ownership transferred
 
 Borrowing allows temporary access without transferring ownership.
 
-### Shared borrows (`&T`)
+### Read-only borrows (`val T`)
 
 ```mvl
-fn length(s: &String) -> UInt {
+fn length(s: val String) -> UInt {
     s.len()
 }
 
 let name = "Alice".to_string();
-let len = length(&name);            // borrow — name still valid
+let len = length(val name);            // borrow — name still valid
 ```
 
-Multiple shared borrows can coexist. Shared borrows are immutable.
+Multiple read-only borrows can coexist. `val` borrows are immutable.
 
-### Exclusive borrows (`&mut T`)
+### Mutable borrows (`ref T`)
 
 ```mvl
-fn push_item(list: &mut Array[Int], item: Int) -> () {
+fn push_item(list: ref Array[Int], item: Int) -> () {
     list.push(item);
 }
 
 let mut items = [1, 2, 3];
-push_item(&mut items, 4);
+push_item(ref items, 4);
 ```
 
-Only one exclusive borrow can exist at a time. No shared borrows can coexist with an exclusive borrow.
+Only one mutable borrow can exist at a time. No read-only borrows can coexist with a mutable borrow.
 
 ## 7.3 Borrow Rules
 
@@ -52,8 +52,8 @@ Only one exclusive borrow can exist at a time. No shared borrows can coexist wit
 | No use-after-move | Compile time |
 | No use-after-free | Compile time |
 | Borrow cannot outlive owner | Compile time |
-| At most one `&mut` at a time | Compile time |
-| No `&mut` while `&` exists | Compile time |
+| At most one `ref` at a time | Compile time |
+| No `ref` while `val` exists | Compile time |
 | No double-free | Compile time (ownership) |
 
 ## 7.4 Linear Resources
@@ -78,4 +78,4 @@ Small, stack-allocated types implement `Copy` and are implicitly duplicated inst
 - Tuples of copy types
 - User types can opt in: `type Point = struct { ... } derives Copy`
 
-Non-copy types (strings, collections, resources) must be explicitly moved or borrowed.
+Non-copy types (strings, collections, resources) must be explicitly moved or borrowed (`val`/`ref`).

@@ -127,7 +127,7 @@ The LLVM backend is gated on the `llvm` Cargo feature (default-on). `mvl build/r
 ### Phase 5D — Borrow Analysis (planned)
 
 - Move elision and borrow tracking in LLVM backend (currently only in Rust transpiler)
-- `&T` / `&mut T` as LLVM pointer types with compiler-enforced aliasing rules
+- `val T` / `ref T` as LLVM pointer types with compiler-enforced aliasing rules
 
 ### Phase 5E — WASM & Targets (planned)
 

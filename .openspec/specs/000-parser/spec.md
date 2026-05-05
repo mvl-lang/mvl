@@ -119,7 +119,7 @@ The parser MUST parse function declarations including totality annotation, param
 
 #### Scenario: Parse function with capability parameter
 
-- GIVEN `fn process(iso db: &DbConn) -> Result[Data, Error] ! DB { ... }`
+- GIVEN `fn process(iso db: val DbConn) -> Result[Data, Error] ! DB { ... }`
 - WHEN parsed
 - THEN parameter has capability=Iso, type=Ref(DbConn)
 

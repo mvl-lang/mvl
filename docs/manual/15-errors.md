@@ -59,9 +59,9 @@ impl Error for AppError {
         }
     }
 
-    fn source(self) -> Option[&Error] {
+    fn source(self) -> Option[val Error] {
         match self {
-            DatabaseError(e) => Some(&e),
+            DatabaseError(e) => Some(val e),
             _ => None,
         }
     }

@@ -46,7 +46,7 @@ Derived from cross-language analysis of Rust std, Go std, Python stdlib, and C l
 ```mvl
 // Lazy — returns Iterator[Int], no allocation yet
 fn map[T, U](self: Iterator[T], f: fn(T) -> U) -> Iterator[U]
-fn filter[T](self: Iterator[T], pred: fn(&T) -> Bool) -> Iterator[T]
+fn filter[T](self: Iterator[T], pred: fn(val T) -> Bool) -> Iterator[T]
 fn flat_map[T, U](self: Iterator[T], f: fn(T) -> Iterator[U]) -> Iterator[U]
 fn enumerate[T](self: Iterator[T]) -> Iterator[(UInt, T)]
 fn zip[T, U](self: Iterator[T], other: Iterator[U]) -> Iterator[(T, U)]
@@ -54,9 +54,9 @@ fn zip[T, U](self: Iterator[T], other: Iterator[U]) -> Iterator[(T, U)]
 // Terminal — forces evaluation
 fn fold[T, U](self: Iterator[T], init: U, f: fn(U, T) -> U) -> U
 fn collect[T](self: Iterator[T]) -> Array[T]
-fn any[T](self: Iterator[T], pred: fn(&T) -> Bool) -> Bool
-fn all[T](self: Iterator[T], pred: fn(&T) -> Bool) -> Bool
-fn find[T](self: Iterator[T], pred: fn(&T) -> Bool) -> Option[T]
+fn any[T](self: Iterator[T], pred: fn(val T) -> Bool) -> Bool
+fn all[T](self: Iterator[T], pred: fn(val T) -> Bool) -> Bool
+fn find[T](self: Iterator[T], pred: fn(val T) -> Bool) -> Option[T]
 fn sum[T](self: Iterator[T]) -> T  where T: Add, T: Default
 fn min[T](self: Iterator[T]) -> Option[T]  where T: Ord
 fn max[T](self: Iterator[T]) -> Option[T]  where T: Ord

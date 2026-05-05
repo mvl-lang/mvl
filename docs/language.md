@@ -174,7 +174,7 @@ In most languages, mocking is hard because dependencies are hidden — globals, 
 
 ```
 // Production
-fn get_user(db: &DbConn, id: UserId) -> Result[User, DbError] ! DB {
+fn get_user(db: val DbConn, id: UserId) -> Result[User, DbError] ! DB {
     db.query("SELECT ...", id)?
 }
 

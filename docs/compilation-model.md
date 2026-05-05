@@ -128,7 +128,7 @@ pub fn authenticate(…) -> Result<Session, AuthError> {
 |-----|---------------|---------------|
 | 7 — Effect tracking | `! IO, Console` | `/// # Effects: IO, Console` |
 | 8 — Termination | `total fn` | `/// # Totality` |
-| 9 — Data race freedom | `iso store: &UserStore` | `/* iso */` comment on parameter |
+| 9 — Data race freedom | `iso store: val UserStore` | `/* iso */` comment on parameter |
 
 ### Requirements preserved as runtime assertions
 
@@ -176,7 +176,7 @@ placeholder structs.  Method calls on those types are also stubbed using return-
 information inferred from the call-site let-binding:
 
 ```rust
-// MVL: iso store: &UserStore  (UserStore not defined in this module)
+// MVL: iso store: val UserStore  (UserStore not defined in this module)
 /// Placeholder for external type `UserStore` (not defined in this module).
 pub struct UserStore;
 
