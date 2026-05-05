@@ -1541,6 +1541,33 @@ impl TypeChecker {
                 Ty::Bool
             }
 
+            // Bitwise: both operands must be integer types (not Float); result is same type.
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr => {
+                let lt_inner = lt.unlabeled().clone();
+                let rt_inner = rt.unlabeled().clone();
+                for (ty, span) in [(&lt, left.span()), (&rt, right.span())] {
+                    if !matches!(ty, Ty::Unknown) && !ty.is_integer() {
+                        self.emit(CheckError::TypeMismatch {
+                            expected: "integer type (Int, Byte, UByte, UInt)".to_string(),
+                            found: ty.display(),
+                            span,
+                        });
+                        return Ty::Unknown;
+                    }
+                }
+                let label = ifc::join_opt(ifc::label_of(&lt), ifc::label_of(&rt));
+                let base = if matches!(lt_inner, Ty::Unknown) {
+                    rt_inner
+                } else {
+                    lt_inner
+                };
+                ifc::apply_label(label, base)
+            }
+
             // Logic: both must be Bool (labels stripped — Bool logic yields Bool)
             BinaryOp::And | BinaryOp::Or => {
                 let op_str = format!("{op:?}").to_lowercase();
@@ -1602,6 +1629,18 @@ impl TypeChecker {
                         });
                         Ty::Unknown
                     }
+                }
+            }
+            UnaryOp::BitNot => {
+                if !matches!(ty, Ty::Unknown) && !ty.is_integer() {
+                    self.emit(CheckError::TypeMismatch {
+                        expected: "integer type (Int, Byte, UByte, UInt)".to_string(),
+                        found: ty.display(),
+                        span,
+                    });
+                    Ty::Unknown
+                } else {
+                    ty
                 }
             }
         }

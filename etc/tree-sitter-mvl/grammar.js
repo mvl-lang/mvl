@@ -9,22 +9,30 @@
 // Precedence levels (higher number = tighter binding):
 //   1  OR        ||
 //   2  AND       &&
-//   3  COMPARE   == != < > <= >=
-//   4  ADD       + -
-//   5  MUL       * / %
-//   6  UNARY     ! - move consume  (right-assoc)
-//   7  CALL      . ()              (left-assoc — method/field access)
-//   8  POSTFIX   ?                 (left-assoc — Result propagation)
+//   3  BITOR     |
+//   4  BITXOR    ^
+//   5  BITAND    & (binary)
+//   6  COMPARE   == != < > <= >=
+//   7  SHIFT     << >>
+//   8  ADD       + -
+//   9  MUL       * / %
+//  10  UNARY     ! ~ - move consume  (right-assoc)
+//  11  CALL      . ()                (left-assoc — method/field access)
+//  12  POSTFIX   ?                   (left-assoc — Result propagation)
 
 const PREC = {
   OR: 1,
   AND: 2,
-  COMPARE: 3,
-  ADD: 4,
-  MUL: 5,
-  UNARY: 6,
-  CALL: 7,
-  POSTFIX: 8,
+  BITOR: 3,
+  BITXOR: 4,
+  BITAND: 5,
+  COMPARE: 6,
+  SHIFT: 7,
+  ADD: 8,
+  MUL: 9,
+  UNARY: 10,
+  CALL: 11,
+  POSTFIX: 12,
 };
 
 module.exports = grammar({
@@ -402,16 +410,21 @@ module.exports = grammar({
         ),
         // Unary operators (right-associative)
         prec.right(PREC.UNARY, seq("!", $.expr)),
+        prec.right(PREC.UNARY, seq("~", $.expr)),
         prec.right(PREC.UNARY, seq("-", $.expr)),
         prec.right(PREC.UNARY, seq("move", $.expr)),
         prec.right(PREC.UNARY, seq("consume", $.expr)),
         // Binary operators
         prec.left(PREC.MUL, seq($.expr, choice("*", "/", "%"), $.expr)),
         prec.left(PREC.ADD, seq($.expr, choice("+", "-"), $.expr)),
+        prec.left(PREC.SHIFT, seq($.expr, choice("<<", ">>"), $.expr)),
         prec.left(
           PREC.COMPARE,
           seq($.expr, choice("==", "!=", "<", ">", "<=", ">="), $.expr)
         ),
+        prec.left(PREC.BITAND, seq($.expr, "&", $.expr)),
+        prec.left(PREC.BITXOR, seq($.expr, "^", $.expr)),
+        prec.left(PREC.BITOR, seq($.expr, "|", $.expr)),
         prec.left(PREC.AND, seq($.expr, "&&", $.expr)),
         prec.left(PREC.OR, seq($.expr, "||", $.expr)),
         // Atoms

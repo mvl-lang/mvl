@@ -574,6 +574,7 @@ pub enum UnaryOp {
     Neg,
     Not,
     Deref,
+    BitNot, // ~
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -591,6 +592,12 @@ pub enum BinaryOp {
     Ge,
     And,
     Or,
+    // Bitwise
+    BitAnd, // &
+    BitOr,  // |
+    BitXor, // ^
+    Shl,    // <<
+    Shr,    // >>
 }
 
 // ── Statements ─────────────────────────────────────────────────────────────

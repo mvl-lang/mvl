@@ -53,6 +53,11 @@ pub fn mutations_for_binary_op(op: BinaryOp) -> &'static [(&'static str, &'stati
         BinaryOp::Ge => &[(">", ">= → >"), ("<=", ">= → <=")],
         BinaryOp::And => &[("||", "&& → ||")],
         BinaryOp::Or => &[("&&", "|| → &&")],
+        BinaryOp::BitAnd => &[("|", "& → |"), ("^", "& → ^")],
+        BinaryOp::BitOr => &[("&", "| → &"), ("^", "| → ^")],
+        BinaryOp::BitXor => &[("&", "^ → &"), ("|", "^ → |")],
+        BinaryOp::Shl => &[(">>", "<< → >>")],
+        BinaryOp::Shr => &[("<<", ">> → <<")],
     }
 }
 

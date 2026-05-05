@@ -98,6 +98,12 @@ impl Ty {
         matches!(self.unlabeled(), Ty::UByte | Ty::UInt)
     }
 
+    /// True if this is an integer type (valid target for bit operators).
+    /// Excludes Float.
+    pub fn is_integer(&self) -> bool {
+        matches!(self.unlabeled(), Ty::Int | Ty::Byte | Ty::UByte | Ty::UInt)
+    }
+
     pub fn is_bool(&self) -> bool {
         matches!(self.unlabeled(), Ty::Bool)
     }

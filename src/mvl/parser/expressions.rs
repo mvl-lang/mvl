@@ -54,20 +54,30 @@ impl Parser {
         let mut left = self.parse_unary()?;
 
         loop {
+            // Precedences (higher = tighter binding), C-inspired ordering:
+            //  10 = ||,  20 = &&,  30 = |,  40 = ^,  50 = & (binary),
+            //  60 = comparisons,  70 = << >>,  80 = + -,  90 = * / %
             let (op, prec): (BinaryOp, u8) = match self.peek_kind() {
-                TokenKind::PipePipe => (BinaryOp::Or, 2),
-                TokenKind::AmpAmp => (BinaryOp::And, 3),
-                TokenKind::EqEq => (BinaryOp::Eq, 4),
-                TokenKind::BangEq => (BinaryOp::Ne, 4),
-                TokenKind::Lt => (BinaryOp::Lt, 4),
-                TokenKind::Gt => (BinaryOp::Gt, 4),
-                TokenKind::LtEq => (BinaryOp::Le, 4),
-                TokenKind::GtEq => (BinaryOp::Ge, 4),
-                TokenKind::Plus => (BinaryOp::Add, 5),
-                TokenKind::Minus => (BinaryOp::Sub, 5),
-                TokenKind::Star => (BinaryOp::Mul, 6),
-                TokenKind::Slash => (BinaryOp::Div, 6),
-                TokenKind::Percent => (BinaryOp::Rem, 6),
+                TokenKind::PipePipe => (BinaryOp::Or, 10),
+                TokenKind::AmpAmp => (BinaryOp::And, 20),
+                TokenKind::Pipe => (BinaryOp::BitOr, 30),
+                TokenKind::Caret => (BinaryOp::BitXor, 40),
+                // Amp in binary position (after an expr) → bitwise AND.
+                // Amp in unary position → borrow (handled by parse_unary).
+                TokenKind::Amp => (BinaryOp::BitAnd, 50),
+                TokenKind::EqEq => (BinaryOp::Eq, 60),
+                TokenKind::BangEq => (BinaryOp::Ne, 60),
+                TokenKind::Lt => (BinaryOp::Lt, 60),
+                TokenKind::Gt => (BinaryOp::Gt, 60),
+                TokenKind::LtEq => (BinaryOp::Le, 60),
+                TokenKind::GtEq => (BinaryOp::Ge, 60),
+                TokenKind::LtLt => (BinaryOp::Shl, 70),
+                TokenKind::GtGt => (BinaryOp::Shr, 70),
+                TokenKind::Plus => (BinaryOp::Add, 80),
+                TokenKind::Minus => (BinaryOp::Sub, 80),
+                TokenKind::Star => (BinaryOp::Mul, 90),
+                TokenKind::Slash => (BinaryOp::Div, 90),
+                TokenKind::Percent => (BinaryOp::Rem, 90),
                 _ => break,
             };
 
@@ -131,6 +141,16 @@ impl Parser {
                 let span = self.span_from(start);
                 Ok(Expr::Borrow {
                     mutable,
+                    expr: Box::new(expr),
+                    span,
+                })
+            }
+            TokenKind::Tilde => {
+                self.advance();
+                let expr = self.parse_unary()?;
+                let span = self.span_from(start);
+                Ok(Expr::Unary {
+                    op: UnaryOp::BitNot,
                     expr: Box::new(expr),
                     span,
                 })

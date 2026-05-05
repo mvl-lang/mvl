@@ -261,6 +261,10 @@ fn eval_expr(
                     _ => None,
                 },
                 UnaryOp::Deref => None,
+                UnaryOp::BitNot => match val {
+                    ConstValue::Integer(n) => Some(ConstValue::Integer(!n)),
+                    _ => None,
+                },
             }
         }
 
