@@ -939,12 +939,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                             let arg = self.emit_expr(&args[0])?;
                             return self.emit_stdlib_call_result_one_ptr_arg(&sym, arg);
                         }
-                        // #420/#439: regex
-                        StdlibSig::ResultOpaquePtrArg(sym) if args.len() == 1 => {
-                            let sym = sym.clone();
-                            let arg = self.emit_expr(&args[0])?;
-                            return self.emit_stdlib_call_result_opaque_ptr_arg(&sym, arg);
-                        }
                         StdlibSig::StringThreePtrArgs(sym) if args.len() == 3 => {
                             let sym = sym.clone();
                             let a = self.emit_expr(&args[0])?;

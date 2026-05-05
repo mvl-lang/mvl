@@ -88,17 +88,6 @@ impl MvlResult {
         }
     }
 
-    /// Construct an `Ok` wrapping an opaque heap-allocated pointer (e.g. a boxed Regex handle).
-    /// Ownership of the allocation transfers to the C-ABI caller.
-    #[inline]
-    pub fn ok_ptr(ptr: *mut c_void) -> Self {
-        MvlResult {
-            tag: 0,
-            payload: ptr,
-            err: std::ptr::null_mut(),
-        }
-    }
-
     /// Construct an `Err` wrapping a heap-allocated `*mut c_char` error message.
     #[inline]
     pub fn err_str(msg: &str) -> Self {
@@ -127,11 +116,11 @@ pub struct LlvmResult {
 }
 
 impl LlvmResult {
-    /// Construct an `Ok(unit)` — no payload.
+    /// Construct a `None` / missing-value result — tag=1, null payload.
     #[inline]
-    pub fn ok_unit() -> Self {
+    pub fn none() -> Self {
         LlvmResult {
-            tag: 0,
+            tag: 1,
             payload: std::ptr::null_mut(),
         }
     }

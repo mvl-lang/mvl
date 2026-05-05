@@ -20,6 +20,13 @@ use crate::mvl::transpiler::emit_types::emit_type_decl;
 use crate::mvl::transpiler::emit_types::{emit_security_preamble, emit_type_expr};
 use crate::mvl::transpiler::{collect_stdlib_modules, has_std_imports};
 
+/// Stdlib function names that shadow Rust built-ins or prelude items and must be
+/// emitted as fully-qualified paths to avoid silent name resolution to the wrong symbol (#420).
+const STDLIB_CONFLICTS: &[(&str, &[&str])] = &[(
+    "regex",
+    &["compile", "find", "find_all", "replace", "captures"],
+)];
+
 ///// Code-generation context: accumulates Rust source text.
 #[derive(Default)]
 pub struct RustEmitter {
@@ -321,13 +328,6 @@ impl RustEmitter {
             self.line("use mvl_runtime::prelude::*;");
             // Emit targeted stdlib imports for each `use std.X.*` in the MVL source (#488/#489).
             // The prelude no longer re-exports OS modules; each module is imported explicitly.
-            // Function names from stdlib modules that shadow built-in primitives.
-            // Calls to these must be emitted as fully-qualified paths so the
-            // local built-in definition doesn't shadow the import (#420).
-            const STDLIB_CONFLICTS: &[(&str, &[&str])] = &[(
-                "regex",
-                &["compile", "find", "find_all", "replace", "captures"],
-            )];
             for module in collect_stdlib_modules(prog) {
                 self.line(&format!("use mvl_runtime::stdlib::{}::*;", module));
                 for (m, fns) in STDLIB_CONFLICTS {

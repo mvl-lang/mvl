@@ -20,7 +20,7 @@
 use std::slice;
 
 use libc::c_void;
-use mvl_memory::{mvl_string_new, MvlString};
+use mvl_memory::{mvl_string_drop, mvl_string_new, MvlString};
 use mvl_runtime::stdlib::regex as rt;
 
 use crate::abi::LlvmResult;
@@ -135,6 +135,10 @@ pub struct MvlMatch {
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn _mvl_match_drop(m: *mut MvlMatch) {
     if !m.is_null() {
+        // Free the inner MvlString before dropping the struct itself.
+        if !(*m).text.is_null() {
+            mvl_string_drop((*m).text);
+        }
         drop(Box::from_raw(m));
     }
 }
@@ -151,7 +155,7 @@ pub unsafe extern "C" fn _mvl_regex_find(
     input: *const MvlString,
 ) -> LlvmResult {
     if handle.is_null() {
-        return LlvmResult::err_mvl(new_mvl_str("null regex handle"));
+        return LlvmResult::none();
     }
     let s = read_mvl_string(input);
     let re: &rt::Regex = &*(handle as *const rt::Regex);
@@ -164,10 +168,7 @@ pub unsafe extern "C" fn _mvl_regex_find(
             });
             LlvmResult::ok_ptr(Box::into_raw(heap) as *mut c_void)
         }
-        None => LlvmResult {
-            tag: 1,
-            payload: std::ptr::null_mut(),
-        },
+        None => LlvmResult::none(),
     }
 }
 
@@ -203,7 +204,8 @@ mod tests {
         let r = unsafe { _mvl_regex_compile(mvl_str(r"[unclosed")) };
         assert_eq!(r.tag, 1, "invalid pattern must return Err");
         assert!(!r.payload.is_null());
-        // Don't free the MvlString* — it's owned by the GC/arena in tests
+        // Free the error MvlString payload to avoid leaking in tests.
+        unsafe { mvl_string_drop(r.payload as *mut MvlString) };
     }
 
     #[test]
@@ -225,5 +227,42 @@ mod tests {
         let out =
             unsafe { _mvl_regex_replace(std::ptr::null_mut(), mvl_str("hello"), mvl_str("x")) };
         assert!(out.is_null());
+    }
+
+    #[test]
+    fn find_some_match_returns_ok_with_correct_fields() {
+        let r = unsafe { _mvl_regex_compile(mvl_str(r"\d+")) };
+        assert_eq!(r.tag, 0);
+
+        let result = unsafe { _mvl_regex_find(r.payload, mvl_str("abc 123 def")) };
+        assert_eq!(result.tag, 0, "expected Some (tag=0)");
+        assert!(!result.payload.is_null());
+
+        let m = result.payload as *mut MvlMatch;
+        let text = unsafe { read_mvl_string((*m).text as *const MvlString) };
+        assert_eq!(text, "123");
+        assert_eq!(unsafe { (*m).start }, 4);
+        assert_eq!(unsafe { (*m).end }, 7);
+
+        unsafe { _mvl_match_drop(m) };
+        _mvl_regex_drop(r.payload);
+    }
+
+    #[test]
+    fn find_no_match_returns_none() {
+        let r = unsafe { _mvl_regex_compile(mvl_str(r"\d+")) };
+        assert_eq!(r.tag, 0);
+
+        let result = unsafe { _mvl_regex_find(r.payload, mvl_str("no digits here")) };
+        assert_eq!(result.tag, 1, "expected None (tag=1)");
+        assert!(result.payload.is_null(), "None payload must be null");
+
+        _mvl_regex_drop(r.payload);
+    }
+
+    #[test]
+    fn match_drop_null_is_safe() {
+        // _mvl_match_drop(null) must not panic or segfault.
+        unsafe { _mvl_match_drop(std::ptr::null_mut()) };
     }
 }
