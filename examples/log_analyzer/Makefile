@@ -1,6 +1,6 @@
 # log_analyzer example — MVL Phase 4 demonstration
 # Run from this directory: make build, make test, etc.
-.PHONY: help build check test generate run clean
+.PHONY: help build check test test-llvm generate run run-llvm clean
 
 MVL  := $(shell test -x ../../target/debug/mvl && echo ../../target/debug/mvl || echo mvl)
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
@@ -19,11 +19,17 @@ check: ## Type-check all three source files
 test: ## Run all standalone _test.mvl files (18 tests)
 	$(MVL) test $(DIR)
 
+test-llvm: ## Run tests via LLVM backend
+	$(MVL) test $(DIR) --backend=llvm
+
 generate: ## Generate sample log data (logs.jsonl, 200 entries)
 	python3 $(DIR)log_generator.py -o logs.jsonl
 
 run: logs.jsonl ## Analyze logs.jsonl (requires: make generate)
 	$(MVL) run $(DIR)main.mvl -- --file logs.jsonl
+
+run-llvm: logs.jsonl ## Analyze logs.jsonl via LLVM backend (requires: make generate)
+	$(MVL) run $(DIR)main.mvl --backend=llvm -- --file logs.jsonl
 
 logs.jsonl:
 	$(MAKE) generate

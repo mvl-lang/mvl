@@ -1,6 +1,6 @@
 # access_control example — MVL Phase 4 security demonstration
 # Run from this directory or from the repo root.
-.PHONY: help build check test run clean
+.PHONY: help build check test test-llvm run run-llvm clean
 
 MVL  := $(shell test -x ../../target/debug/mvl && echo ../../target/debug/mvl || echo mvl)
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
@@ -21,8 +21,14 @@ check: ## Type-check all five source files
 test: ## Run all standalone _test.mvl files
 	$(MVL) test $(DIR)
 
+test-llvm: ## Run tests via LLVM backend
+	$(MVL) test $(DIR) --backend=llvm
+
 run: ## Execute the demo scenario (RBAC decisions + auth flow)
 	$(MVL) run $(DIR)main.mvl
+
+run-llvm: ## Execute via LLVM backend
+	$(MVL) run $(DIR)main.mvl --backend=llvm
 
 clean: ## Remove build artifacts
 	rm -rf $(TMPDIR)mvl_build_access_control

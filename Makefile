@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-corpus test-stdlib test-bdd test-transpiler test-llvm test-tree-sitter test-grammar-coverage coverage lint mvl-lint format format-check assurance assurance-gate docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants
+.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-corpus test-stdlib test-bdd test-transpiler test-llvm test-tree-sitter test-grammar-coverage test-examples coverage lint mvl-lint format format-check assurance assurance-gate docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants
 
 help: ## Show this help
 	@echo ""
@@ -84,6 +84,7 @@ test: ## Run all test suites and print a one-line PASS/FAIL summary for each
 	run_suite "LLVM backend"      test-llvm; \
 	run_suite "Tree-sitter"       test-tree-sitter; \
 	run_suite "Grammar coverage"  test-grammar-coverage; \
+	run_suite "Examples"          test-examples; \
 	echo ""; \
 	if [ $$fail -eq 0 ]; then \
 		printf "  \033[32m✓  All $$((pass)) suites passed\033[0m\n\n"; \
@@ -199,6 +200,9 @@ test-tree-sitter: ## Run tree-sitter corpus tests (grammar derived from docs/gra
 
 test-grammar-coverage: ## Cross-validate docs/grammar.ebnf against tree-sitter grammar.js
 	@python3 tools/check_grammar_coverage.py
+
+test-examples: build build-llvm-runtime ## Run `make test` for every example subdirectory
+	@examples/test-all.sh
 
 install-nvim: ## Install nvim-mvl plugin + compile tree-sitter parser
 	etc/nvim-mvl/install.sh
