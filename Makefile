@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-corpus test-stdlib test-bdd test-transpiler test-llvm test-tree-sitter test-grammar-coverage test-examples coverage lint mvl-lint format format-check assurance assurance-gate docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants
+.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-corpus test-stdlib test-bdd test-transpiler test-llvm test-tree-sitter test-grammar-coverage test-examples coverage lint mvl-lint format format-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants
 
 help: ## Show this help
 	@echo ""
@@ -181,6 +181,9 @@ assurance: ## Assurance dashboard (add VERBOSE=true for full output with legend)
 
 assurance-gate: ## CI gate: fail if below 75% completeness/coverage
 	@python3 tools/assurance.py --min 0.75
+
+check-adr: ## Check ADR structure (required sections, no duplicate numbers)
+	@python3 tools/check_adr.py --verbose
 
 # === Documentation ===
 

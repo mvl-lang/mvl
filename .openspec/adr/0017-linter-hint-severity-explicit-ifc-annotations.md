@@ -114,3 +114,44 @@ explicit-everywhere annotation density to use it without imposing the requiremen
 entire corpus.
 
 **Spec:** Spec 011 Req 4
+
+---
+
+## Relation to language definition
+
+### Eleven Requirements (ADR-0001)
+
+**Requirement 7 — Information flow control:** strengthens. Retaining explicit
+`Public[T]` annotations in IFC corpus files preserves the security lattice as
+visible, machine-readable information rather than relying on the implicit default.
+Code generation pipelines and analysis tools benefit from annotations that are
+spelled out.
+
+Requirements 1–6 and 8–11 are not directly affected by this decision.
+
+### Design Principles (README)
+
+**Principle 1 — Explicit over implicit:** strengthens. The core decision demotes
+`redundant-ifc-label` from Warning to Hint precisely to *preserve* explicit
+annotations rather than silently elide them. Explicit `Public[T]` is preferred
+over relying on the implicit public default.
+
+**Principle 7 — Security labels on all data:** strengthens. IFC corpus files
+retain their full label vocabulary (`Public[T]`, `Secret[T]`, `Tainted[T]`),
+making the security lattice visible to readers and toolchains.
+
+**Principle 1 — tension in the Amendment:** The `missing-annotation` rule
+(Amendment, #428) is disabled by default, which means the *absence* of effect
+annotations is the default enforcement stance. This leans implicit, in tension
+with Principle 1. The tension is accepted because the linter currently lacks a
+symbol table and cannot reliably distinguish calls to pure MVL helpers from
+effectful stdlib functions; enabling the rule globally would produce too many
+false positives. The rule should be re-evaluated for opt-out (rather than opt-in)
+once symbol resolution is complete.
+
+Principles 2–6, 8–10 are not directly affected.
+
+### Specifications
+
+**Spec 011 (linter):** updated — Requirement 4 covers the Hint severity level
+and `hint_count()` method. No other specs are affected by this decision.

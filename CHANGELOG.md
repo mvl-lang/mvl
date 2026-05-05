@@ -10,6 +10,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 - **`missing-annotation` linter rule**
 
+## [0.78.0] — 2026-05-05
+
+### Added
+
+- **ADR template and CI enforcement** (#429) — New `## Relation to language definition` section required in all ADRs numbered >= 0017 forces every architectural decision to explicitly confront the eleven requirements and design principles. Prevents silent drift (see #408). Includes `tools/check_adr.py` CLI check and CI job.
+- **`.openspec/adr/README.md`** — Comprehensive ADR conventions guide covering file naming, template usage, exemption policy, and CI enforcement.
+
+### Fixed
+
+- **Orphaned ADR-0018 draft removed** — `.openspec/adr/0018-llvm-runtime-c-abi.md` was superseded by ADR-0019 but never cleaned up, causing spurious duplicate-number CI failures. Removed.
+
 ## [0.77.0] — 2026-05-05
 
 ### Added
