@@ -3221,6 +3221,9 @@ fn run_project_llvm(path: &str) {
 /// `// Expected stdout:` annotations, compiles each via the LLVM backend,
 /// runs the IR with `lli`, and asserts that stdout matches the annotation.
 ///
+/// Also handles `*_test.mvl` files with `test fn` declarations by synthesizing
+/// a `fn main()` harness that calls each test function in sequence (#500).
+///
 /// `mvl test --backend=llvm <path>`
 #[cfg(feature = "llvm")]
 fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
@@ -3233,32 +3236,41 @@ fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
     // Each entry: (file, expected_text, is_pattern)
     let all_mvl = mvl_files_all(path);
     let mut test_cases: Vec<(PathBuf, String, bool)> = Vec::new();
+    // *_test.mvl files with `test fn` declarations — harness synthesized at run time.
+    let mut harness_cases: Vec<PathBuf> = Vec::new();
     for file in &all_mvl {
         let src = match fs::read_to_string(file) {
             Ok(s) => s,
             Err(_) => continue,
         };
-        // Only test files that have a fn main.
         let has_main = src.contains("fn main(");
-        if !has_main {
-            continue;
-        }
-        if let Some(pat) = codegen::parse_expect_pattern_annotation(&src) {
-            test_cases.push((file.clone(), pat, true));
-        } else if let Some(expected) = codegen::parse_expect_annotation(&src) {
-            test_cases.push((file.clone(), expected, false));
+        let is_test_file = file
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.ends_with("_test.mvl"))
+            .unwrap_or(false);
+
+        if has_main {
+            if let Some(pat) = codegen::parse_expect_pattern_annotation(&src) {
+                test_cases.push((file.clone(), pat, true));
+            } else if let Some(expected) = codegen::parse_expect_annotation(&src) {
+                test_cases.push((file.clone(), expected, false));
+            }
+        } else if is_test_file && src.contains("test fn ") {
+            harness_cases.push(file.clone());
         }
     }
 
-    if test_cases.is_empty() {
+    if test_cases.is_empty() && harness_cases.is_empty() {
         if !quiet {
-            println!("No LLVM test cases found (files with `fn main` + `// expect:` annotations).");
+            println!("No LLVM test cases found (files with `fn main` + `// expect:` annotations, or `*_test.mvl` with `test fn`).");
         }
         return;
     }
 
     if !quiet {
-        println!("LLVM backend: {} test file(s)", test_cases.len());
+        let total = test_cases.len() + harness_cases.len();
+        println!("LLVM backend: {} test file(s)", total);
     }
 
     let mut passed = 0usize;
@@ -3269,82 +3281,73 @@ fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
         let module_name = stem(&file_str);
 
         let (prog, _src) = parse_or_exit(&file_str);
-        let (prelude, compiler) = prepare_llvm(&prog);
-        let ir = match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
-            Ok(ir) => ir,
+        let ok = run_llvm_prog(
+            &lli,
+            &prog,
+            &module_name,
+            &file_str,
+            expected,
+            *is_pattern,
+            quiet,
+            verbose,
+        );
+        if ok {
+            passed += 1;
+        } else {
+            failed += 1;
+        }
+    }
+
+    for file in &harness_cases {
+        let file_str = file.display().to_string();
+        let module_name = stem(&file_str);
+
+        let src = match fs::read_to_string(file) {
+            Ok(s) => s,
+
             Err(e) => {
-                eprintln!("  FAIL (codegen): {file_str}");
-                eprintln!("    {e}");
+                eprintln!("  FAIL (read): {file_str}: {e}");
                 failed += 1;
                 continue;
             }
         };
 
-        // Write IR to a temp file.
-        let tmp = match tempfile::NamedTempFile::with_suffix(".ll") {
-            Ok(t) => t,
-            Err(e) => {
-                eprintln!("  FAIL (tempfile): {file_str}: {e}");
-                failed += 1;
-                continue;
+        let test_fns = collect_test_fn_names(&src);
+        if test_fns.is_empty() {
+            continue;
+        }
+
+        let harness_src = synthesize_test_harness(&src, &test_fns);
+        let (mut parser, lex_errors) = Parser::new(&harness_src);
+        if !lex_errors.is_empty() {
+            eprintln!("  FAIL (lex): {file_str}");
+            failed += 1;
+            continue;
+        }
+        let prog = parser.parse_program();
+        if !parser.errors().is_empty() {
+            eprintln!("  FAIL (parse): {file_str}");
+            for err in parser.errors() {
+                eprintln!("    {err:?}");
             }
-        };
-        if let Err(e) = fs::write(tmp.path(), &ir) {
-            eprintln!("  FAIL (write IR): {file_str}: {e}");
             failed += 1;
             continue;
         }
 
-        // Run via lli and capture stdout.
-        // L5-16: load the MVL memory runtime if present (needed for Phase C heap types).
-        let mut lli_cmd = process::Command::new(&lli);
-        if let Some(lib) = codegen::find_mvl_memory_lib() {
-            lli_cmd.arg(format!("--load={}", lib.display()));
-        }
-        // ADR-0019: load the C-ABI stdlib runtime if present.
-        if let Some(lib) = codegen::find_mvl_runtime_c_lib() {
-            lli_cmd.arg(format!("--load={}", lib.display()));
-        }
-        let output = lli_cmd.arg(tmp.path()).output().unwrap_or_else(|e| {
-            eprintln!("error: failed to run lli: {e}");
-            process::exit(1);
-        });
-
-        let actual = String::from_utf8_lossy(&output.stdout);
-        let actual_trimmed = actual.trim_end_matches('\n');
-        let expected_trimmed = expected.trim_end_matches('\n');
-
-        let matched = if *is_pattern {
-            codegen::glob_match(expected_trimmed, actual_trimmed)
-        } else {
-            actual_trimmed == expected_trimmed
-        };
-
-        if matched {
+        let ok = run_llvm_prog(
+            &lli,
+            &prog,
+            &module_name,
+            &file_str,
+            "ok",
+            false,
+            quiet,
+            verbose,
+        );
+        if ok {
             passed += 1;
-            if verbose {
-                println!("  PASS: {file_str}");
-            } else if !quiet {
-                print!(".");
-                let _ = std::io::Write::flush(&mut std::io::stdout());
-            }
         } else {
             failed += 1;
-            if !quiet {
-                println!("\n  FAIL: {file_str}");
-                if *is_pattern {
-                    println!("    pattern:  {:?}", expected_trimmed);
-                } else {
-                    println!("    expected: {:?}", expected_trimmed);
-                }
-                println!("    got:      {:?}", actual_trimmed);
-                if verbose && !ir.is_empty() {
-                    println!("    --- IR ---");
-                    for line in ir.lines().take(40) {
-                        println!("    {line}");
-                    }
-                }
-            }
         }
     }
 
@@ -3355,6 +3358,118 @@ fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
     if failed > 0 {
         process::exit(1);
     }
+}
+
+/// Compile `prog` to LLVM IR, run via `lli`, and compare stdout to `expected`.
+/// Returns `true` if the output matches.
+#[cfg(feature = "llvm")]
+#[allow(clippy::too_many_arguments)]
+fn run_llvm_prog(
+    lli: &std::path::Path,
+    prog: &mvl::mvl::parser::ast::Program,
+    module_name: &str,
+    file_str: &str,
+    expected: &str,
+    is_pattern: bool,
+    quiet: bool,
+    verbose: bool,
+) -> bool {
+    let (prelude, compiler) = prepare_llvm(prog);
+    let ir = match compiler.compile_to_ir_with_prelude(&prelude, prog, module_name) {
+        Ok(ir) => ir,
+        Err(e) => {
+            eprintln!("  FAIL (codegen): {file_str}");
+            eprintln!("    {e}");
+            return false;
+        }
+    };
+
+    let tmp = match tempfile::NamedTempFile::with_suffix(".ll") {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("  FAIL (tempfile): {file_str}: {e}");
+            return false;
+        }
+    };
+    if let Err(e) = fs::write(tmp.path(), &ir) {
+        eprintln!("  FAIL (write IR): {file_str}: {e}");
+        return false;
+    }
+
+    // L5-16: load the MVL memory runtime if present (needed for Phase C heap types).
+    let mut lli_cmd = process::Command::new(lli);
+    if let Some(lib) = codegen::find_mvl_memory_lib() {
+        lli_cmd.arg(format!("--load={}", lib.display()));
+    }
+    // ADR-0019: load the C-ABI stdlib runtime if present.
+    if let Some(lib) = codegen::find_mvl_runtime_c_lib() {
+        lli_cmd.arg(format!("--load={}", lib.display()));
+    }
+    let output = lli_cmd.arg(tmp.path()).output().unwrap_or_else(|e| {
+        eprintln!("error: failed to run lli: {e}");
+        process::exit(1);
+    });
+
+    let actual = String::from_utf8_lossy(&output.stdout);
+    let actual_trimmed = actual.trim_end_matches('\n');
+    let expected_trimmed = expected.trim_end_matches('\n');
+
+    let matched = if is_pattern {
+        codegen::glob_match(expected_trimmed, actual_trimmed)
+    } else {
+        actual_trimmed == expected_trimmed
+    };
+
+    if matched {
+        if verbose {
+            println!("  PASS: {file_str}");
+        } else if !quiet {
+            print!(".");
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+        }
+    } else {
+        if !quiet {
+            println!("\n  FAIL: {file_str}");
+            if is_pattern {
+                println!("    pattern:  {:?}", expected_trimmed);
+            } else {
+                println!("    expected: {:?}", expected_trimmed);
+            }
+            println!("    got:      {:?}", actual_trimmed);
+            if verbose && !ir.is_empty() {
+                println!("    --- IR ---");
+                for line in ir.lines().take(40) {
+                    println!("    {line}");
+                }
+            }
+        }
+    }
+    matched
+}
+
+/// Extract names of all `test fn` declarations from MVL source text.
+#[cfg(feature = "llvm")]
+fn collect_test_fn_names(src: &str) -> Vec<String> {
+    src.lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            trimmed
+                .strip_prefix("test fn ")
+                .and_then(|rest| rest.split('(').next().map(|name| name.trim().to_string()))
+        })
+        .collect()
+}
+
+/// Build a runnable MVL source by stripping `test ` from `test fn` declarations
+/// and appending a `fn main()` harness that calls each test function.
+#[cfg(feature = "llvm")]
+fn synthesize_test_harness(src: &str, test_fns: &[String]) -> String {
+    let body = src.replace("test fn ", "fn ");
+    let calls: String = test_fns
+        .iter()
+        .map(|name| format!("    {name}();\n"))
+        .collect();
+    format!("{body}\nfn main() -> Unit ! Console {{\n{calls}    println(\"ok\")\n}}\n")
 }
 
 /// Recursively find all `.mvl` files under `path` (both test and non-test).

@@ -153,6 +153,52 @@ pub unsafe extern "C" fn mvl_string_eq(a: *const MvlString, b: *const MvlString)
     }
 }
 
+/// Return a new `MvlString` with all ASCII bytes converted to lowercase.
+///
+/// # Safety
+/// `s` must be a valid non-null `MvlString` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_str_to_lower(s: *const MvlString) -> *mut MvlString {
+    let len = (*s).len as usize;
+    let cap = len + 1;
+    let data = mvl_alloc(cap);
+    for i in 0..len {
+        *data.add(i) = (*(*s).ptr.add(i) as char).to_ascii_lowercase() as u8;
+    }
+    *data.add(len) = 0;
+    let out = mvl_alloc(std::mem::size_of::<MvlString>()) as *mut MvlString;
+    out.write(MvlString {
+        ptr: data,
+        len: len as u64,
+        cap: cap as u64,
+        refcount: 1,
+    });
+    out
+}
+
+/// Return a new `MvlString` with all ASCII bytes converted to uppercase.
+///
+/// # Safety
+/// `s` must be a valid non-null `MvlString` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_str_to_upper(s: *const MvlString) -> *mut MvlString {
+    let len = (*s).len as usize;
+    let cap = len + 1;
+    let data = mvl_alloc(cap);
+    for i in 0..len {
+        *data.add(i) = (*(*s).ptr.add(i) as char).to_ascii_uppercase() as u8;
+    }
+    *data.add(len) = 0;
+    let out = mvl_alloc(std::mem::size_of::<MvlString>()) as *mut MvlString;
+    out.write(MvlString {
+        ptr: data,
+        len: len as u64,
+        cap: cap as u64,
+        refcount: 1,
+    });
+    out
+}
+
 // ── MvlArray operations ────────────────────────────────────────────────────────
 
 /// Append one element of `elem_size` bytes to the array, growing 2× if needed.

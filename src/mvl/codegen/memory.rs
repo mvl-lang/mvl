@@ -107,6 +107,26 @@ impl<'ctx> LlvmBackend<'ctx> {
         )
     }
 
+    /// `_mvl_str_to_lower(ptr) -> ptr`
+    pub(crate) fn get_mvl_str_to_lower(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_str_to_lower",
+            &[self.context.ptr_type(AddressSpace::default()).into()],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_to_upper(ptr) -> ptr`
+    pub(crate) fn get_mvl_str_to_upper(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_str_to_upper",
+            &[self.context.ptr_type(AddressSpace::default()).into()],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
     // ── Array runtime declarations ────────────────────────────────────────────
 
     /// `mvl_array_new(i64 elem_size, i64 initial_cap) -> ptr`

@@ -924,6 +924,13 @@ impl<'ctx> LlvmBackend<'ctx> {
                     if let Some(pos) = name.find("::") {
                         let type_name = name[..pos].to_string();
                         let variant_name = name[pos + 2..].to_string();
+                        // Qualified Result/Option constructors: Result::Ok, Result::Err, Option::Some.
+                        if matches!(variant_name.as_str(), "Ok" | "Some") && args.len() == 1 {
+                            return self.emit_result_variant(0, args);
+                        }
+                        if variant_name == "Err" && args.len() == 1 {
+                            return self.emit_result_variant(1, args);
+                        }
                         if self.enum_variants.contains_key(&type_name) {
                             return self.emit_enum_variant_construct(
                                 &type_name,
@@ -1368,6 +1375,63 @@ impl<'ctx> LlvmBackend<'ctx> {
                             .unwrap();
                         use inkwell::values::AnyValue;
                         BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+                    }
+                    _ => None,
+                }
+            }
+
+            // ── to_lower / to_upper (String) ─────────────────────────────────
+            "to_lower" => match recv_val {
+                BasicValueEnum::PointerValue(ptr) => {
+                    let f = self.get_mvl_str_to_lower();
+                    let call = self
+                        .builder
+                        .build_call(f, &[ptr.into()], "to_lower")
+                        .unwrap();
+                    use inkwell::values::AnyValue;
+                    BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+                }
+                _ => None,
+            },
+
+            "to_upper" => match recv_val {
+                BasicValueEnum::PointerValue(ptr) => {
+                    let f = self.get_mvl_str_to_upper();
+                    let call = self
+                        .builder
+                        .build_call(f, &[ptr.into()], "to_upper")
+                        .unwrap();
+                    use inkwell::values::AnyValue;
+                    BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+                }
+                _ => None,
+            },
+
+            // ── clamp (Int) ───────────────────────────────────────────────────
+            "clamp" if args.len() == 2 => {
+                let lo = self.emit_expr(&args[0])?.into_int_value();
+                let hi = self.emit_expr(&args[1])?.into_int_value();
+                match recv_val {
+                    BasicValueEnum::IntValue(n) => {
+                        use inkwell::IntPredicate;
+                        let gt_hi = self
+                            .builder
+                            .build_int_compare(IntPredicate::SGT, n, hi, "gt_hi")
+                            .unwrap();
+                        let after_hi = self
+                            .builder
+                            .build_select(gt_hi, hi, n, "min_hi")
+                            .unwrap()
+                            .into_int_value();
+                        let lt_lo = self
+                            .builder
+                            .build_int_compare(IntPredicate::SLT, after_hi, lo, "lt_lo")
+                            .unwrap();
+                        let result = self
+                            .builder
+                            .build_select(lt_lo, lo, after_hi, "clamped")
+                            .unwrap();
+                        Some(result)
                     }
                     _ => None,
                 }
