@@ -371,6 +371,17 @@ impl RustEmitter {
                 }
             })
             .collect();
+        let user_type_names: std::collections::HashSet<&str> = prog
+            .declarations
+            .iter()
+            .filter_map(|d| {
+                if let Decl::Type(td) = d {
+                    Some(td.name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
         let prelude_fns: Vec<&FnDecl> = prelude_progs
             .iter()
             .flat_map(|p| p.declarations.iter())
@@ -380,19 +391,37 @@ impl RustEmitter {
             .filter(|fd| !fd.is_test)
             .filter(|fd| !user_fn_names.contains(fd.name.as_str()))
             .collect();
+        // Pure-MVL stdlib modules (no extern "rust") may define types (e.g. json.mvl's Value).
+        // Emit those type declarations before the functions that use them.
+        // Rust-backed modules (io, env, …) are excluded: their types come from mvl_runtime.
+        let prelude_types: Vec<&TypeDecl> = prelude_progs
+            .iter()
+            .filter(|p| !p.declarations.iter().any(|d| matches!(d, Decl::Extern(_))))
+            .flat_map(|p| p.declarations.iter())
+            .filter_map(|d| {
+                if let Decl::Type(td) = d {
+                    Some(td)
+                } else {
+                    None
+                }
+            })
+            .filter(|td| !user_type_names.contains(td.name.as_str()))
+            .collect();
 
         // Phase B: build the borrow-params map from all known functions so that
         // call sites can emit `&x` instead of `x.clone()` for reference params.
         self.borrow_params_map = build_borrow_params_map(prog, &prelude_fns);
 
-        if !prelude_fns.is_empty() {
+        if !prelude_types.is_empty() || !prelude_fns.is_empty() {
             self.line(
                 "// ── stdlib prelude (transpiled from MVL source) ──────────────────────────",
             );
-            // Suspend coverage and mutation tracking for prelude functions — they are
-            // shared stdlib code and must not be attributed to the current module's file.
             let saved_coverage = self.coverage.take();
             let saved_mutation = self.mutation.take();
+            for td in prelude_types {
+                emit_type_decl(self, td);
+                self.blank();
+            }
             for fd in prelude_fns {
                 emit_fn_decl(self, fd);
                 self.blank();
