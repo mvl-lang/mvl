@@ -62,18 +62,24 @@ module.exports = grammar({
     // starts with a distinct keyword — preserves LL(1) (mirrors grammar.ebnf).
 
     program: ($) =>
-      seq(repeat(choice($.use_decl, $.reexport_decl)), repeat($.declaration)),
+      seq(repeat($.use_decl), repeat($.declaration)),
 
+    // Two structural forms:
+    //   1. optional "pub" + non-import decl body (type/fn/const/extern/impl)
+    //   2. reexport_decl — carries its own "pub" to stay unambiguous vs use_decl
     declaration: ($) =>
-      seq(
-        optional("pub"),
-        choice(
-          $.type_decl,
-          $.fn_decl,
-          $.const_decl,
-          $.extern_decl,
-          $.impl_decl
-        )
+      choice(
+        seq(
+          optional("pub"),
+          choice(
+            $.type_decl,
+            $.fn_decl,
+            $.const_decl,
+            $.extern_decl,
+            $.impl_decl
+          )
+        ),
+        $.reexport_decl
       ),
 
     // === Modules and imports ===
@@ -83,7 +89,8 @@ module.exports = grammar({
     // `use path::to::Item;` — private import (top of file only)
     use_decl: ($) => seq("use", $.module_path, ";"),
 
-    // `pub use path::to::Item;` — re-export
+    // `pub use path::to::Item;` — re-export; "pub" is part of the rule so it
+    // remains unambiguous with use_decl (which never has "pub").
     reexport_decl: ($) => seq("pub", "use", $.module_path, ";"),
 
     module_path: ($) =>

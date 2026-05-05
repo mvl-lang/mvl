@@ -249,6 +249,10 @@
           "named": true
         },
         {
+          "type": "reexport_decl",
+          "named": true
+        },
+        {
           "type": "type_decl",
           "named": true
         }
@@ -1136,10 +1140,6 @@
       "types": [
         {
           "type": "declaration",
-          "named": true
-        },
-        {
-          "type": "reexport_decl",
           "named": true
         },
         {
