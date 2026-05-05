@@ -124,7 +124,7 @@ impl MvlString {
 #[no_mangle]
 pub unsafe extern "C" fn mvl_string_new(bytes: *const u8, len: usize) -> *mut MvlString {
     let cap = checked_add_size(len, 1); // +1 for null terminator
-    let data = MvlString::alloc_bytes(cap);
+    let data = mvl_alloc(cap) as *mut u8;
     if len > 0 {
         ptr::copy_nonoverlapping(bytes, data, len);
     }

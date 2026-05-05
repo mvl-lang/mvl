@@ -37,7 +37,9 @@ EBNF_KNOWN_ABSENT = {
     # Inlined as prec.left branches inside expr
     "propagate": "inlined into expr (postfix ?)",
     "unary_expr": "inlined into expr (prec.right branches)",
+    "unary_op": "inlined into expr (unary operator literals)",
     "binary_expr": "inlined into expr (prec.left branches)",
+    "binary_op": "inlined into expr (binary operator literals)",
     "method_call": "inlined into expr (method call branch)",
     "field_access": "inlined into expr (field access branch)",
     # Renamed with _expr suffix for clarity
