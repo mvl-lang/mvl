@@ -515,7 +515,7 @@ Lambda expression
 ===============================================================================
 
 total fn apply(f: fn(Int) -> Int, x: Int) -> Int {
-  let result = f(x);
+  let result: Int = f(x);
   return result;
 }
 
@@ -552,6 +552,9 @@ total fn apply(f: fn(Int) -> Int, x: Int) -> Int {
           (let_stmt
             (pattern
               (identifier))
+            (type_expr
+              (base_type
+                (identifier)))
             (expr
               (fn_call_expr
                 (identifier)
@@ -568,7 +571,7 @@ sanitize and declassify
 ===============================================================================
 
 total fn process(raw: Tainted<String>) -> Clean<String> {
-  let clean = sanitize(raw);
+  let clean: Clean<String> = sanitize(raw);
   return clean;
 }
 
@@ -600,6 +603,12 @@ total fn process(raw: Tainted<String>) -> Clean<String> {
           (let_stmt
             (pattern
               (identifier))
+            (type_expr
+              (labeled_type
+                (security_label)
+                (type_expr
+                  (base_type
+                    (identifier)))))
             (expr
               (sanitize_expr
                 (expr
@@ -821,3 +830,124 @@ const PRIMES: Set<Int> = {2, 3, 5};
             (expr
               (literal
                 (integer_literal)))))))))
+
+===============================================================================
+Impl declaration
+===============================================================================
+
+impl Show for Int {
+  total fn show(x: Int) -> String {
+    return "ok";
+  }
+}
+
+-------------------------------------------------------------------------------
+
+(program
+  (declaration
+    (impl_decl
+      (identifier)
+      (identifier)
+      (fn_decl
+        (totality)
+        (identifier)
+        (param_list
+          (param
+            (identifier)
+            (type_expr
+              (base_type
+                (identifier)))))
+        (return_type
+          (type_expr
+            (base_type
+              (identifier))))
+        (block
+          (statement
+            (return_stmt
+              (expr
+                (literal
+                  (string_literal))))))))))
+
+===============================================================================
+Borrow expression — shared
+===============================================================================
+
+total fn take_ref(x: Int) -> Int {
+  let n: Int = ref_id(&x);
+  return n;
+}
+
+-------------------------------------------------------------------------------
+
+(program
+  (declaration
+    (fn_decl
+      (totality)
+      (identifier)
+      (param_list
+        (param
+          (identifier)
+          (type_expr
+            (base_type
+              (identifier)))))
+      (return_type
+        (type_expr
+          (base_type
+            (identifier))))
+      (block
+        (statement
+          (let_stmt
+            (pattern
+              (identifier))
+            (type_expr
+              (base_type
+                (identifier)))
+            (expr
+              (fn_call_expr
+                (identifier)
+                (arg_list
+                  (expr
+                    (borrow_expr
+                      (expr
+                        (identifier)))))))))
+        (statement
+          (return_stmt
+            (expr
+              (identifier))))))))
+
+===============================================================================
+Borrow expression — mutable
+===============================================================================
+
+total fn mutate(x: Int) -> Unit {
+  update(&mut x);
+}
+
+-------------------------------------------------------------------------------
+
+(program
+  (declaration
+    (fn_decl
+      (totality)
+      (identifier)
+      (param_list
+        (param
+          (identifier)
+          (type_expr
+            (base_type
+              (identifier)))))
+      (return_type
+        (type_expr
+          (base_type
+            (identifier))))
+      (block
+        (statement
+          (expr_stmt
+            (expr
+              (fn_call_expr
+                (identifier)
+                (arg_list
+                  (expr
+                    (borrow_expr
+                      (expr
+                        (identifier)))))))))))))

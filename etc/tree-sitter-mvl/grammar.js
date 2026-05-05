@@ -32,8 +32,6 @@ module.exports = grammar({
 
   extras: ($) => [/\s/, $.line_comment],
 
-  word: ($) => $.identifier,
-
   // GLR conflicts: `where` after a type_expr is ambiguous between
   // a refined_type and an outer `where constraints` clause.
   // `construct_expr` (identifier '{') vs block after if/while is also ambiguous.
@@ -48,6 +46,8 @@ module.exports = grammar({
     [$.if_stmt, $.if_expr],
     // effect_list: `effect ,` — continue list vs end list (outer comma)
     [$.effect_list],
+    // effect: `identifier (` — parameterized effect string vs outer expression
+    [$.effect],
     // `>` inside `Public<Int where self > 0>`: could be comparison or close generic.
     // GLR explores both; only the one that closes the generic succeeds.
     [$.ref_expr, $.labeled_type],
@@ -71,7 +71,8 @@ module.exports = grammar({
           $.type_decl,
           $.fn_decl,
           $.const_decl,
-          $.extern_decl
+          $.extern_decl,
+          $.impl_decl
         )
       ),
 
@@ -87,6 +88,19 @@ module.exports = grammar({
 
     module_path: ($) =>
       seq($.identifier, repeat(seq("::", $.identifier))),
+
+    // Impl block: `impl Trait [ TypeParams ] for Type { fn_decls }`
+    impl_decl: ($) =>
+      seq(
+        "impl",
+        $.identifier,
+        optional(seq("[", $.type_list, "]")),
+        "for",
+        $.identifier,
+        "{",
+        repeat($.fn_decl),
+        "}"
+      ),
 
     // Extern trust boundary: `extern "rust" { fn foo(...) -> T; }`
     extern_decl: ($) =>
@@ -196,8 +210,8 @@ module.exports = grammar({
 
     effect: ($) =>
       seq(
-        $.identifier,
-        optional(seq("(", $.string, ")"))
+        /[a-zA-Z_][a-zA-Z0-9_]*/,
+        optional(seq("(", $.string_literal, ")"))
       ),
 
     constraints: ($) => seq($.constraint, repeat(seq(",", $.constraint))),
@@ -397,6 +411,10 @@ module.exports = grammar({
         $._atom_expr
       ),
 
+    // Borrow expression: `&expr` or `&mut expr`
+    borrow_expr: ($) =>
+      prec.right(PREC.UNARY, seq("&", optional("mut"), $.expr)),
+
     // Atomic (non-recursive) expression forms
     _atom_expr: ($) =>
       choice(
@@ -411,6 +429,7 @@ module.exports = grammar({
         $.fn_call_expr,
         $.grouped_expr,
         $.path_expr,
+        $.borrow_expr,
         $.identifier
       ),
 
