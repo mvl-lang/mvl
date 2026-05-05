@@ -3038,18 +3038,40 @@ fn expr_early_return_violation(expr: &Expr, ref_params: &HashSet<&str>) -> Optio
 fn is_wildcard_pattern(pattern: &Pattern, variant_names: &[String]) -> bool {
     match pattern {
         Pattern::Wildcard(_) => true,
-        Pattern::Ident(name, _) => !variant_names.contains(name),
+        Pattern::Ident(name, _) => {
+            // Qualified names like "Enum::Variant" are never wildcards
+            if name.contains("::") {
+                return false;
+            }
+            let short = name.rsplit("::").next().unwrap_or(name.as_str());
+            !variant_names.contains(&short.to_string())
+        }
         _ => false,
     }
 }
 
 /// Extract the variant name that a pattern explicitly covers, given the set of
 /// known variant names.  Returns `None` for non-variant or wildcard patterns.
+/// Handles qualified names like `Enum::Variant(...)` by extracting the short name.
 fn covered_variant_name(pattern: &Pattern, variant_names: &[String]) -> Option<String> {
     match pattern {
-        Pattern::TupleStruct { name, .. } | Pattern::Struct { name, .. } => Some(name.clone()),
-        // A bare ident that IS a known variant name counts as that variant
-        Pattern::Ident(name, _) if variant_names.contains(name) => Some(name.clone()),
+        Pattern::TupleStruct { name, .. } | Pattern::Struct { name, .. } => {
+            let short = name.rsplit("::").next().unwrap_or(name.as_str());
+            if variant_names.contains(&short.to_string()) {
+                Some(short.to_string())
+            } else {
+                Some(name.clone())
+            }
+        }
+        // A bare ident (qualified or not) that IS a known variant name counts as that variant
+        Pattern::Ident(name, _) => {
+            let short = name.rsplit("::").next().unwrap_or(name.as_str());
+            if variant_names.contains(&short.to_string()) {
+                Some(short.to_string())
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }

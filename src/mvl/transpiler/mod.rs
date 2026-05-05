@@ -113,18 +113,28 @@ pub fn has_std_imports(prog: &Program) -> bool {
     })
 }
 
-/// Returns the deduplicated list of `std.*` sub-module names used in this program.
+/// Modules that have a Rust implementation in `mvl_runtime::stdlib`.
+/// Pure-MVL modules (json, collections, strings, lists, math, …) are excluded:
+/// their symbols arrive via the prelude and need no `use mvl_runtime::stdlib::X::*` import.
+const RUST_BACKED_STDLIB: &[&str] = &[
+    "args", "crypto", "env", "io", "log", "process", "random", "time",
+];
+
+/// Returns the deduplicated list of `std.*` sub-module names used in this program
+/// that have a Rust implementation in `mvl_runtime::stdlib`.
 ///
 /// For example, `use std.io.*;` and `use std.env.*;` produce `["io", "env"]`.
 /// Used by the emitter to emit `use mvl_runtime::stdlib::X::*;` for each module.
+/// Pure-MVL stdlib modules (json, collections, …) are excluded — their symbols
+/// reach the generated code via the prelude, not via `mvl_runtime::stdlib`.
 pub fn collect_stdlib_modules(prog: &Program) -> Vec<String> {
     let mut modules: Vec<String> = Vec::new();
     for decl in &prog.declarations {
         if let Decl::Use(ud) = decl {
             if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
-                let module = ud.path[1].clone();
-                if !modules.contains(&module) {
-                    modules.push(module);
+                let module = ud.path[1].as_str();
+                if RUST_BACKED_STDLIB.contains(&module) && !modules.contains(&module.to_string()) {
+                    modules.push(module.to_string());
                 }
             }
         }

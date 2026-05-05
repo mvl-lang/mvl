@@ -259,6 +259,12 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     emit_expr(cg, receiver);
                     cg.push(" as i64)");
                 }
+                // to_float() on Int (i64→f64); i64::from() unwraps IFC labels transparently
+                "to_float" if args.is_empty() => {
+                    cg.push("(i64::from(");
+                    emit_expr(cg, receiver);
+                    cg.push(".clone()) as f64)");
+                }
                 // pow(e) — MvlPow trait; works for both i64 and f64
                 "pow" if args.len() == 1 => {
                     emit_expr(cg, receiver);

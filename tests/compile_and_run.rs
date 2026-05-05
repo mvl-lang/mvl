@@ -681,6 +681,26 @@ fn collections_basic_runs_and_produces_expected_output() {
     );
 }
 
+// ── json_encode.mvl — native MVL JSON (#419) ─────────────────────────────────
+
+/// Gate test: encode(Null/Bool/Number/Array) via pure MVL std/json.mvl.
+///
+/// Expected stdout:
+///   null
+///   true
+///   false
+///   42
+///   1.5
+///   []
+///   [null,true,42]
+#[test]
+fn json_encode_runs_and_produces_expected_output() {
+    assert_run_output(
+        "json_encode.mvl",
+        &["null", "true", "false", "42", "1.5", "[]", "[null,true,42]"],
+    );
+}
+
 fn corpus_bdd(name: &str) -> String {
     format!("{}/tests/corpus/12_bdd/{name}", env!("CARGO_MANIFEST_DIR"))
 }
