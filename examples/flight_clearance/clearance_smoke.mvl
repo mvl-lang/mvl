@@ -1,0 +1,60 @@
+// LLVM smoke test: flight_clearance core dispatch decision.
+// expect: CLEARED
+// expect: REJECTED
+
+type Visibility = enum { Good, Reduced, Poor }
+type WindCondition = enum { Calm, Moderate, Strong }
+type Weather = struct { visibility: Visibility, wind: WindCondition, icing: Bool, thunderstorm: Bool }
+type MaintenanceStatus = enum { Cleared, DeferredItem, Grounded }
+type FuelStatus = enum { Sufficient, Marginal, Insufficient }
+type Aircraft = struct { maintenance: MaintenanceStatus, fuel: FuelStatus, crew_valid: Bool }
+type RouteType = enum { Domestic, International, Oceanic }
+type Clearance = enum { Cleared, Rejected }
+
+fn visibility_ok(v: Visibility) -> Bool {
+    match v { Visibility::Good => true, Visibility::Reduced => true, Visibility::Poor => false }
+}
+fn wind_ok(w: WindCondition) -> Bool {
+    match w { WindCondition::Calm => true, WindCondition::Moderate => true, WindCondition::Strong => false }
+}
+fn weather_clear(wx: Weather) -> Bool {
+    visibility_ok(wx.visibility) && wind_ok(wx.wind) && !wx.icing && !wx.thunderstorm
+}
+fn maintenance_ok(m: MaintenanceStatus) -> Bool {
+    match m {
+        MaintenanceStatus::Cleared => true, MaintenanceStatus::DeferredItem => true,
+        MaintenanceStatus::Grounded => false,
+    }
+}
+fn fuel_ok(f: FuelStatus) -> Bool {
+    match f {
+        FuelStatus::Sufficient => true, FuelStatus::Marginal => true,
+        FuelStatus::Insufficient => false,
+    }
+}
+fn aircraft_ready(ac: Aircraft) -> Bool {
+    maintenance_ok(ac.maintenance) && fuel_ok(ac.fuel) && ac.crew_valid
+}
+fn route_permitted(route: RouteType, ac: Aircraft) -> Bool {
+    let is_oceanic: Bool = match route { RouteType::Oceanic => true, _ => false };
+    let is_intl: Bool = match route { RouteType::International => true, _ => false };
+    !is_oceanic && !(is_intl && !ac.crew_valid)
+}
+fn can_dispatch(wx: Weather, ac: Aircraft, route: RouteType) -> Clearance {
+    if weather_clear(wx) && aircraft_ready(ac) && route_permitted(route, ac) {
+        Clearance::Cleared
+    } else {
+        Clearance::Rejected
+    }
+}
+fn print_clearance(c: Clearance) -> Unit ! Console {
+    match c { Clearance::Cleared => println("CLEARED"), Clearance::Rejected => println("REJECTED") }
+}
+
+fn main() -> Unit ! Console {
+    let good_wx: Weather = Weather { visibility: Visibility::Good, wind: WindCondition::Calm, icing: false, thunderstorm: false };
+    let bad_wx: Weather = Weather { visibility: Visibility::Poor, wind: WindCondition::Strong, icing: true, thunderstorm: true };
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: true };
+    print_clearance(can_dispatch(good_wx, ac, RouteType::Domestic));
+    print_clearance(can_dispatch(bad_wx, ac, RouteType::Domestic))
+}

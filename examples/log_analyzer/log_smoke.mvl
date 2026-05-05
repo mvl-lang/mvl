@@ -1,0 +1,33 @@
+// LLVM smoke test: log_analyzer severity classification.
+// expect: ERROR
+// expect: INFO
+// expect: WARN
+
+type Severity = enum { Debug, Info, Warn, Error }
+
+fn parse_severity(level: Int) -> Severity {
+    if level >= 40 {
+        Severity::Error
+    } else if level >= 30 {
+        Severity::Warn
+    } else if level >= 20 {
+        Severity::Info
+    } else {
+        Severity::Debug
+    }
+}
+
+fn print_severity(s: Severity) -> Unit ! Console {
+    match s {
+        Severity::Error => println("ERROR"),
+        Severity::Warn  => println("WARN"),
+        Severity::Info  => println("INFO"),
+        Severity::Debug => println("DEBUG"),
+    }
+}
+
+fn main() -> Unit ! Console {
+    print_severity(parse_severity(50));
+    print_severity(parse_severity(20));
+    print_severity(parse_severity(30))
+}
