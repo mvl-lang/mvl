@@ -6,7 +6,7 @@
 //! This is Phase 1 (IntLiteral survivors) + Phase 2 (comparison-op survivors) of
 //! the boundary value analysis described in issue #331.
 
-use crate::mvl::transpiler::mutation::MutantInfo;
+use crate::mvl::passes::mutation::MutantInfo;
 use std::collections::HashMap;
 
 /// Produce a boundary value analysis report for surviving mutants.

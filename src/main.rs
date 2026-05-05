@@ -1,5 +1,4 @@
 use mvl::mvl::checker;
-use mvl::mvl::checker::mcdc::{analyze_mcdc, DecisionInfo};
 use mvl::mvl::checker::passes::{
     aggregate_verdicts, parse_req_filter, source_hash, PassRegistry, Verdict, VerdictCache,
 };
@@ -9,6 +8,7 @@ use mvl::mvl::linter::{self, config::LintConfig};
 use mvl::mvl::packages;
 use mvl::mvl::parser::ast::{Decl, Program, Totality, TypeBody};
 use mvl::mvl::parser::Parser;
+use mvl::mvl::passes::mcdc::analysis::{analyze_mcdc, DecisionInfo};
 use mvl::mvl::resolver;
 use mvl::mvl::stdlib;
 use mvl::mvl::toolchain;
@@ -115,6 +115,7 @@ fn main() {
             let quiet = args.iter().any(|a| a == "--quiet" || a == "-q");
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
             let coverage = args.iter().any(|a| a == "--coverage");
+            let bdd = args.iter().any(|a| a == "--bdd");
             if backend == "llvm" {
                 #[cfg(feature = "llvm")]
                 cmd_test_llvm(&path, quiet, verbose);
@@ -124,7 +125,7 @@ fn main() {
                     process::exit(1);
                 }
             } else {
-                cmd_test(&path, quiet, verbose, coverage);
+                cmd_test(&path, quiet, verbose, coverage, bdd);
             }
         }
         "mutate" => {
@@ -142,7 +143,8 @@ fn main() {
             let quiet = args.iter().any(|a| a == "--quiet" || a == "-q");
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
             let masking = args.iter().any(|a| a == "--masking");
-            cmd_mcdc(&path, quiet, verbose, masking);
+            let json = args.iter().any(|a| a == "--json");
+            cmd_mcdc(&path, quiet, verbose, masking, json);
         }
         "lint" => {
             let path = require_path_arg(&args, "lint");
@@ -221,6 +223,10 @@ fn print_usage() {
     eprintln!("  mvl mcdc   <file|dir> -q            — quiet: only show MC/DC score");
     eprintln!("  mvl mcdc   <file|dir> --verbose     — full covered/missed clause report");
     eprintln!("  mvl mcdc   <file|dir> --masking     — masking MC/DC (DO-178C): exempt coupled obligations");
+    eprintln!(
+        "  mvl mcdc   <file|dir> --json        — machine-readable JSON output for CI integration"
+    );
+    eprintln!("  mvl mcdc   <file|dir> --json -q     — JSON summary only (no per-clause detail)");
     eprintln!("  mvl lint  <file|dir>               — check style rules");
     eprintln!("  mvl lint  <file|dir> --show-config — show active linter configuration");
     eprintln!("  mvl assurance <file|dir>           — emit assurance report");
@@ -524,7 +530,7 @@ fn cmd_check(path: &str, req_filter: Option<u8>, error_limit: usize) {
 ///   3. Compile + run tests — collect observations via `MVL_MCDC_OUT`
 ///   4. Independence check — for each clause, verify it independently toggles outcome
 ///   5. Report — score + optional verbose covered/missed table
-fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
+fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
     use mvl::mvl::transpiler::{
         emit_mcdc_preamble, emit_mcdc_report_test, transpile_mcdc_source_with_prelude,
         transpile_mcdc_with_prelude, MCDCDecision,
@@ -556,17 +562,50 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
     // mvl_runtime is always required for MC/DC instrumented builds.
     let need_mvl_runtime = transpiler::prelude_requires_runtime(&stdlib_prelude_progs);
 
+    // Build a fn_name → prelude_stem map and preload prelude source lines so
+    // that JSON source-fragment lookup works for decisions in stdlib functions.
+    // IMPLICIT_STEMS must mirror load_implicit_prelude().
+    const IMPLICIT_STEMS: &[&str] = &["core", "primitives", "strings", "lists"];
+    const IMPLICIT_FILES: &[&str] = &["core.mvl", "primitives.mvl", "strings.mvl", "lists.mvl"];
+    let mut prelude_fn_to_stem: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut prelude_sources: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for ((stem, file), prog) in IMPLICIT_STEMS
+        .iter()
+        .zip(IMPLICIT_FILES.iter())
+        .zip(stdlib_prelude_progs.iter())
+    {
+        if let Some(content) = stdlib::stdlib_content(file) {
+            prelude_sources.insert(
+                stem.to_string(),
+                content.lines().map(String::from).collect(),
+            );
+        }
+        for d in &prog.declarations {
+            if let Decl::Fn(fd) = d {
+                prelude_fn_to_stem
+                    .entry(fd.name.clone())
+                    .or_insert_with(|| stem.to_string());
+            }
+        }
+    }
+
     // Transpile all test files with MC/DC instrumentation.
     let mut modules: Vec<(String, String, String)> = Vec::new();
     let mut all_decisions: Vec<MCDCDecision> = Vec::new();
     let mut all_static_decisions: Vec<DecisionInfo> = Vec::new();
     let mut file_stems: Vec<String> = Vec::new();
+    // Map module_name → source lines for JSON source fragment lookup.
+    let mut module_sources: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
 
     for test_file in &test_files {
         let file_str = test_file.display().to_string();
-        let (prog, _src) = parse_or_exit(&file_str);
+        let (prog, src) = parse_or_exit(&file_str);
         let s = stem(&file_str);
         let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
+        module_sources.insert(module_name.clone(), src.lines().map(String::from).collect());
         validate_module_name(&module_name, &file_str);
         let start_id = all_decisions.len();
         let static_d = analyze_mcdc(&prog, &module_name, start_id);
@@ -601,7 +640,7 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
         if covered_stems.contains(&module_name) {
             continue;
         }
-        let (prog, _src) = parse_or_exit(&file_str);
+        let (prog, src) = parse_or_exit(&file_str);
         let has_tests = prog
             .declarations
             .iter()
@@ -609,6 +648,7 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
         if !has_tests {
             continue;
         }
+        module_sources.insert(module_name.clone(), src.lines().map(String::from).collect());
         validate_module_name(&module_name, &file_str);
         let start_id = all_decisions.len();
         let static_d = analyze_mcdc(&prog, &module_name, start_id);
@@ -638,7 +678,7 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
     // Build a (module, fn_name) → line map from source files and override
     // the line for any Return decision whose function exists in the source.
     {
-        use mvl::mvl::transpiler::mcdc_instr::DecisionKind;
+        use mvl::mvl::passes::mcdc::transform::DecisionKind;
         use std::collections::HashMap;
         let mut source_fn_lines: HashMap<(String, String), u32> = HashMap::new();
         for src_file in &source_files {
@@ -666,14 +706,34 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
         }
     }
 
+    // Fix decision.file for prelude functions: they are emitted under the test
+    // module's file stem but their line numbers reference the stdlib source.
+    for decision in &mut all_decisions {
+        if let Some(prelude_stem) = prelude_fn_to_stem.get(&decision.fn_name) {
+            decision.file = prelude_stem.clone();
+        }
+    }
+    // Add prelude sources to module_sources so the JSON source-fragment lookup
+    // finds the correct line for stdlib decisions.
+    module_sources.extend(prelude_sources);
+
     let total_decisions = all_decisions.len();
 
     if total_decisions == 0 {
-        println!("No compound boolean conditions found — no MC/DC obligations.");
+        if json {
+            println!(
+                "{{\n  \"version\": \"1.0\",\n  \"mode\": \"{}\",\n  \"summary\": {{\n    \"files_analyzed\": {},\n    \"test_files\": {},\n    \"tests_run\": 0,\n    \"tests_passed\": 0,\n    \"tests_failed\": 0,\n    \"decisions\": 0,\n    \"obligations_total\": 0,\n    \"obligations_met\": 0,\n    \"obligations_missed\": 0,\n    \"obligations_coupled\": 0,\n    \"coverage_percent\": 100.00,\n    \"pass\": true\n  }},\n  \"decisions\": []\n}}",
+                if masking { "masking" } else { "unique-cause" },
+                modules.len(),
+                test_files.len(),
+            );
+        } else {
+            println!("No compound boolean conditions found — no MC/DC obligations.");
+        }
         return;
     }
 
-    if !quiet {
+    if !quiet && !json {
         // all_decisions contains only compound decisions (clause_count > 1)
         let total_obligations: usize = all_decisions.iter().map(|d| d.clause_count).sum();
         println!(
@@ -757,10 +817,14 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
             process::exit(1);
         });
 
+    let test_stdout = String::from_utf8_lossy(&test_output.stdout).into_owned();
+
     // Filter out the internal report test from stdout.
-    for line in String::from_utf8_lossy(&test_output.stdout).lines() {
-        if !line.contains("zzz_mvl_mcdc_report") {
-            println!("{line}");
+    if !json {
+        for line in test_stdout.lines() {
+            if !line.contains("zzz_mvl_mcdc_report") {
+                println!("{line}");
+            }
         }
     }
 
@@ -780,7 +844,7 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
         .collect();
 
     // Independence analysis.
-    use mvl::mvl::transpiler::mcdc_instr::is_clause_covered;
+    use mvl::mvl::passes::mcdc::transform::is_clause_covered;
     let mut covered = 0usize;
     let mut total_obligations = 0usize;
 
@@ -819,7 +883,7 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
     let effective_missed = (total_obligations - covered) - if masking { coupled_missed } else { 0 };
 
     // Report.
-    if !quiet {
+    if !quiet && !json {
         let pct = (covered * 100)
             .checked_div(total_obligations)
             .unwrap_or(100);
@@ -834,7 +898,7 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
         }
     }
 
-    if verbose {
+    if verbose && !json {
         println!("\nDETAILED RESULTS");
         println!("{}", "─".repeat(60));
         for (decision, (_, clause_results)) in all_decisions.iter().zip(decision_results.iter()) {
@@ -879,12 +943,140 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool) {
     }
 
     let all_covered = effective_missed == 0;
-    if !quiet {
+    if !quiet && !json {
         if all_covered {
             println!("PASS");
         } else {
             println!("FAIL");
         }
+    }
+
+    if json {
+        // Parse test counts from cargo test output.
+        let (tests_run, tests_passed, tests_failed) = {
+            let mut passed = 0usize;
+            let mut failed = 0usize;
+            for line in test_stdout.lines() {
+                if let Some(rest) = line.strip_prefix("test result:") {
+                    if let Some(p) = rest
+                        .split("passed")
+                        .next()
+                        .and_then(|s| s.trim().rsplit(' ').next())
+                        .and_then(|s| s.parse::<usize>().ok())
+                    {
+                        passed = p;
+                    }
+                    if let Some(f) = rest
+                        .split("failed")
+                        .next()
+                        .and_then(|s| s.trim().rsplit(' ').next())
+                        .and_then(|s| s.parse::<usize>().ok())
+                    {
+                        failed = f;
+                    }
+                }
+            }
+            (passed + failed, passed, failed)
+        };
+
+        let mode_str = if masking { "masking" } else { "unique-cause" };
+        let pct = if total_obligations == 0 {
+            100.0f64
+        } else {
+            (covered as f64 / total_obligations as f64) * 100.0
+        };
+
+        let mut out = String::new();
+        out.push_str("{\n");
+        out.push_str("  \"version\": \"1.0\",\n");
+        out.push_str(&format!("  \"mode\": \"{mode_str}\",\n"));
+        out.push_str("  \"summary\": {\n");
+        out.push_str(&format!("    \"files_analyzed\": {},\n", modules.len()));
+        out.push_str(&format!("    \"test_files\": {},\n", test_files.len()));
+        out.push_str(&format!("    \"tests_run\": {tests_run},\n"));
+        out.push_str(&format!("    \"tests_passed\": {tests_passed},\n"));
+        out.push_str(&format!("    \"tests_failed\": {tests_failed},\n"));
+        out.push_str(&format!("    \"decisions\": {},\n", all_decisions.len()));
+        out.push_str(&format!(
+            "    \"obligations_total\": {total_obligations},\n"
+        ));
+        out.push_str(&format!("    \"obligations_met\": {covered},\n"));
+        out.push_str(&format!(
+            "    \"obligations_missed\": {},\n",
+            total_obligations - covered
+        ));
+        out.push_str(&format!("    \"obligations_coupled\": {coupled_missed},\n"));
+        out.push_str(&format!("    \"coverage_percent\": {pct:.2},\n"));
+        out.push_str(&format!("    \"pass\": {all_covered}\n"));
+        out.push_str("  }");
+
+        if !quiet {
+            out.push_str(",\n  \"decisions\": [");
+            let mut first_d = true;
+            for (decision, (_, clause_results)) in all_decisions.iter().zip(decision_results.iter())
+            {
+                if !first_d {
+                    out.push(',');
+                }
+                first_d = false;
+                let kind_label = decision.kind.label();
+                let d_met: usize = clause_results.iter().filter(|&&ok| ok).count();
+                let d_total = decision.clause_count;
+                let d_covered = d_met == d_total;
+                let source_frag = module_sources
+                    .get(&decision.file)
+                    .and_then(|lines| lines.get(decision.line as usize - 1))
+                    .map(|l| l.trim().to_string())
+                    .unwrap_or_default();
+                out.push_str("\n    {\n");
+                out.push_str(&format!(
+                    "      \"file\": \"{}\",\n",
+                    json_escape(&decision.file)
+                ));
+                out.push_str(&format!("      \"line\": {},\n", decision.line));
+                out.push_str(&format!("      \"kind\": \"{kind_label}\",\n"));
+                out.push_str(&format!(
+                    "      \"source\": \"{}\",\n",
+                    json_escape(&source_frag)
+                ));
+                out.push_str(&format!("      \"clauses\": {d_total},\n"));
+                out.push_str(&format!("      \"obligations_met\": {d_met},\n"));
+                out.push_str(&format!("      \"obligations_total\": {d_total},\n"));
+                out.push_str(&format!("      \"covered\": {d_covered},\n"));
+                out.push_str("      \"clauses_detail\": [");
+                let mut first_c = true;
+                for (clause_bit, ok) in clause_results.iter().enumerate() {
+                    if !first_c {
+                        out.push(',');
+                    }
+                    first_c = false;
+                    let coupled_with = if !ok {
+                        decision
+                            .coupled_pairs
+                            .iter()
+                            .find(|(ci, cj, _)| *ci == clause_bit || *cj == clause_bit)
+                            .map(|(ci, cj, shared)| {
+                                let other = if *ci == clause_bit { *cj } else { *ci };
+                                let dep = json_escape(&shared.join(", "));
+                                format!(
+                                    "{{ \"clause_index\": {other}, \"shared_dependency\": \"{dep}\" }}"
+                                )
+                            })
+                    } else {
+                        None
+                    };
+                    let coupled_json = coupled_with.as_deref().unwrap_or("null");
+                    out.push_str(&format!(
+                        "\n        {{ \"index\": {clause_bit}, \"covered\": {ok}, \"independence_pair\": null, \"coupled_with\": {coupled_json} }}"
+                    ));
+                }
+                out.push_str("\n      ]\n    }");
+            }
+            out.push_str("\n  ]");
+        }
+
+        out.push_str("\n}\n");
+        print!("{out}");
     }
 
     if !all_covered {
@@ -1296,7 +1488,7 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
 }
 
 /// Find all `*_test.mvl` files, transpile to Rust test crates, and run `cargo test`.
-fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool) {
+fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     if quiet && verbose {
         eprintln!(
             "warning: --quiet and --verbose are mutually exclusive; --verbose takes precedence"
@@ -1360,8 +1552,10 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool) {
     let mut all_branches: Vec<transpiler::BranchInfo> = Vec::new();
     let mut next_branch_id = 0usize;
     let mut file_stems: Vec<String> = Vec::new(); // ordered list for the coverage report
-                                                  // The stdlib prelude (strings.mvl, lists.mvl, …) uses extern "rust" blocks,
-                                                  // so the runtime crate is always needed when the prelude is loaded.
+                                                  // BDD: collect scenario names (fn names starting with "scenario_") for Gherkin report.
+    let mut scenarios: Vec<String> = Vec::new();
+    // The stdlib prelude (strings.mvl, lists.mvl, …) uses extern "rust" blocks,
+    // so the runtime crate is always needed when the prelude is loaded.
     let mut need_mvl_runtime = transpiler::prelude_requires_runtime(&stdlib_prelude_progs);
 
     for test_file in &test_files {
@@ -1369,6 +1563,15 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool) {
         let (prog, _src) = parse_or_exit(&file_str);
         let s = stem(&file_str);
         let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
+        if bdd {
+            for decl in &prog.declarations {
+                if let Decl::Fn(fd) = decl {
+                    if fd.is_test && fd.name.starts_with("scenario_") {
+                        scenarios.push(fd.name.clone());
+                    }
+                }
+            }
+        }
         let (out, branches) = if coverage {
             transpiler::transpile_covered_with_prelude(
                 &prog,
@@ -1598,6 +1801,19 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool) {
 
     if !quiet {
         println!("All tests passed.");
+    }
+
+    // ── BDD report ────────────────────────────────────────────────────────
+    if bdd && !scenarios.is_empty() {
+        println!();
+        println!("BDD scenarios:");
+        for name in &scenarios {
+            let label = name
+                .strip_prefix("scenario_")
+                .unwrap_or(name)
+                .replace('_', " ");
+            println!("  Scenario: {label} ... ok");
+        }
     }
 
     // ── Coverage report ───────────────────────────────────────────────────
@@ -2583,55 +2799,6 @@ fn load_stdlib_prelude<'a>(
     prelude
 }
 
-/// Build a map of stdlib function name → `StdlibFnInfo` for the LLVM generic dispatch path.
-///
-/// Scans the program's `use std.X.{...}` declarations, parses the corresponding
-/// stdlib modules from the embedded `STDLIB_FILES`, and extracts every `fn` signature.
-/// The map is passed into `compile_to_ir` so the LLVM backend can derive C-ABI symbol
-/// names and LLVM types without per-function boilerplate (ADR-0018).
-#[cfg(feature = "llvm")]
-fn build_stdlib_fn_map(
-    prog: &mvl::mvl::parser::ast::Program,
-) -> std::collections::HashMap<String, codegen::StdlibFnInfo> {
-    use mvl::mvl::parser::ast::Decl;
-    use std::collections::HashSet;
-    let mut result = std::collections::HashMap::new();
-    let mut loaded: HashSet<String> = HashSet::new();
-    for decl in &prog.declarations {
-        if let Decl::Use(ud) = decl {
-            if ud.path.first().map(|s| s == "std").unwrap_or(false) {
-                if let Some(module) = ud.path.get(1) {
-                    if loaded.insert(module.clone()) {
-                        let filename = format!("{module}.mvl");
-                        if let Some(content) = mvl::mvl::stdlib::STDLIB_FILES
-                            .iter()
-                            .find(|(n, _)| *n == filename.as_str())
-                            .map(|(_, c)| *c)
-                        {
-                            let (mut p, _) = Parser::new(content);
-                            let stdlib_prog = p.parse_program();
-                            for sd in &stdlib_prog.declarations {
-                                if let Decl::Fn(fd) = sd {
-                                    let params = fd.params.iter().map(|p| p.ty.clone()).collect();
-                                    result.insert(
-                                        fd.name.clone(),
-                                        codegen::StdlibFnInfo {
-                                            module: module.clone(),
-                                            params,
-                                            return_type: *fd.return_type.clone(),
-                                        },
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    result
-}
-
 fn collect_imported_module_names(prog: &mvl::mvl::parser::ast::Program) -> Vec<String> {
     use mvl::mvl::parser::ast::Decl;
     use std::collections::HashSet;
@@ -2902,8 +3069,7 @@ mod find_test_binary_tests {
 fn build_project_llvm(path: &str) {
     let (prog, _src) = parse_or_exit(path);
     let module_name = stem(path);
-    let stdlib_fns = build_stdlib_fn_map(&prog);
-    match codegen::compile_to_ir(&prog, &stdlib_fns, &module_name) {
+    match codegen::compile_to_ir(&prog, &module_name) {
         Ok(ir) => {
             let out_path = format!("{module_name}.ll");
             fs::write(&out_path, &ir).unwrap_or_else(|e| {
@@ -2930,8 +3096,7 @@ fn run_project_llvm(path: &str) {
 
     let (prog, _src) = parse_or_exit(path);
     let module_name = stem(path);
-    let stdlib_fns = build_stdlib_fn_map(&prog);
-    let ir = match codegen::compile_to_ir(&prog, &stdlib_fns, &module_name) {
+    let ir = match codegen::compile_to_ir(&prog, &module_name) {
         Ok(ir) => ir,
         Err(e) => {
             eprintln!("error: LLVM codegen failed: {e}");
@@ -2953,7 +3118,7 @@ fn run_project_llvm(path: &str) {
     if let Some(lib) = codegen::find_mvl_memory_lib() {
         cmd.arg(format!("--load={}", lib.display()));
     }
-    // ADR-0018: load the C-ABI stdlib runtime if present (needed for stdlib functions).
+    // ADR-0019: load the C-ABI stdlib runtime if present (needed for stdlib calls).
     if let Some(lib) = codegen::find_mvl_runtime_c_lib() {
         cmd.arg(format!("--load={}", lib.display()));
     }
@@ -3024,8 +3189,7 @@ fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
         let module_name = stem(&file_str);
 
         let (prog, _src) = parse_or_exit(&file_str);
-        let stdlib_fns = build_stdlib_fn_map(&prog);
-        let ir = match codegen::compile_to_ir(&prog, &stdlib_fns, &module_name) {
+        let ir = match codegen::compile_to_ir(&prog, &module_name) {
             Ok(ir) => ir,
             Err(e) => {
                 eprintln!("  FAIL (codegen): {file_str}");
@@ -3052,11 +3216,11 @@ fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
 
         // Run via lli and capture stdout.
         // L5-16: load the MVL memory runtime if present (needed for Phase C heap types).
-        // ADR-0018: also load the C-ABI stdlib runtime if present.
         let mut lli_cmd = process::Command::new(&lli);
         if let Some(lib) = codegen::find_mvl_memory_lib() {
             lli_cmd.arg(format!("--load={}", lib.display()));
         }
+        // ADR-0019: load the C-ABI stdlib runtime if present.
         if let Some(lib) = codegen::find_mvl_runtime_c_lib() {
             lli_cmd.arg(format!("--load={}", lib.display()));
         }

@@ -24,7 +24,7 @@
 pub mod borrow_params;
 pub mod boundary_gen;
 pub mod cargo;
-pub mod coverage;
+pub mod coverage_emit;
 pub mod emit_exprs;
 pub mod emit_functions;
 pub mod emit_impls;
@@ -32,20 +32,19 @@ pub mod emit_stmts;
 pub mod emit_types;
 pub mod emitter;
 pub mod last_use;
-pub mod mcdc_instr;
-pub mod mutation;
+pub mod mcdc_emit;
+pub mod mutation_emit;
 
 use crate::mvl::parser::ast::{Decl, Program};
+pub use crate::mvl::passes::coverage::{format_report, BranchInfo, CoverageMap};
+use crate::mvl::passes::mcdc::transform as mcdc_instr;
+pub use crate::mvl::passes::mcdc::transform::{detect_coupled_pairs, MCDCDecision};
+pub use crate::mvl::passes::mutation::{format_mutation_report, MutantInfo, MutationMap};
 pub use boundary_gen::format_boundary_report;
 use cargo::CargoOptions;
-pub use coverage::{
-    emit_cov_preamble, emit_cov_report_test, format_report, BranchInfo, CoverageMap,
-};
+pub use coverage_emit::{emit_cov_preamble, emit_cov_report_test};
 use emitter::RustEmitter;
-pub use mcdc_instr::{
-    detect_coupled_pairs, emit_mcdc_preamble, emit_mcdc_report_test, MCDCDecision,
-};
-pub use mutation::{format_mutation_report, MutantInfo, MutationMap};
+pub use mcdc_emit::{emit_mcdc_preamble, emit_mcdc_report_test};
 
 /// Output of a successful transpilation.
 pub struct TranspileOutput {
@@ -102,8 +101,8 @@ pub fn has_extern_rust_decls(prog: &Program) -> bool {
 /// Returns true if the program imports any `use std.*` stdlib modules.
 ///
 /// When a program uses stdlib functions (e.g. `use std.io.{read_file}`), the
-/// generated code calls implementations from `mvl_runtime::prelude::*`, so
-/// `mvl_runtime` must be linked even when no `extern "rust"` block is present.
+/// generated code needs explicit `use mvl_runtime::stdlib::X::*` imports (#488/#489),
+/// so `mvl_runtime` must be linked even when no `extern "rust"` block is present.
 pub fn has_std_imports(prog: &Program) -> bool {
     prog.declarations.iter().any(|d| {
         if let Decl::Use(ud) = d {
@@ -112,6 +111,25 @@ pub fn has_std_imports(prog: &Program) -> bool {
             false
         }
     })
+}
+
+/// Returns the deduplicated list of `std.*` sub-module names used in this program.
+///
+/// For example, `use std.io.*;` and `use std.env.*;` produce `["io", "env"]`.
+/// Used by the emitter to emit `use mvl_runtime::stdlib::X::*;` for each module.
+pub fn collect_stdlib_modules(prog: &Program) -> Vec<String> {
+    let mut modules: Vec<String> = Vec::new();
+    for decl in &prog.declarations {
+        if let Decl::Use(ud) = decl {
+            if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
+                let module = ud.path[1].clone();
+                if !modules.contains(&module) {
+                    modules.push(module);
+                }
+            }
+        }
+    }
+    modules
 }
 
 /// Output of a successful multi-file project transpilation.
@@ -707,6 +725,62 @@ mod tests {
         let prog = p.parse_program();
         assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
         prog
+    }
+
+    // ── collect_stdlib_modules tests (#488 #489) ───────────────────────────
+
+    #[test]
+    fn collect_stdlib_modules_single_import() {
+        let prog = parse("use std.io.{read_file}");
+        let modules = collect_stdlib_modules(&prog);
+        assert_eq!(modules, vec!["io".to_string()]);
+    }
+
+    #[test]
+    fn collect_stdlib_modules_deduplicates() {
+        let prog = parse("use std.io.{read_file}\nuse std.io.{write_file}");
+        let modules = collect_stdlib_modules(&prog);
+        assert_eq!(
+            modules,
+            vec!["io".to_string()],
+            "duplicates should be removed"
+        );
+    }
+
+    #[test]
+    fn collect_stdlib_modules_multiple_modules() {
+        let prog = parse("use std.io.{read_file}\nuse std.env.{getuid}");
+        let mut modules = collect_stdlib_modules(&prog);
+        modules.sort();
+        assert_eq!(modules, vec!["env".to_string(), "io".to_string()]);
+    }
+
+    #[test]
+    fn collect_stdlib_modules_non_std_ignored() {
+        let prog = parse("use mylib.utils.{helper}");
+        let modules = collect_stdlib_modules(&prog);
+        assert!(
+            modules.is_empty(),
+            "non-std imports must not appear: {modules:?}"
+        );
+    }
+
+    #[test]
+    fn collect_stdlib_modules_empty_program() {
+        let prog = parse("fn f() -> Int { 1 }");
+        let modules = collect_stdlib_modules(&prog);
+        assert!(modules.is_empty());
+    }
+
+    #[test]
+    fn transpile_emits_stdlib_use_for_std_import() {
+        let prog = parse("use std.env.{getuid}\nfn main() -> Unit ! Env { }");
+        let out = transpile(&prog, "crate");
+        assert!(
+            out.lib_rs.contains("use mvl_runtime::stdlib::env::*"),
+            "emitted Rust must contain targeted stdlib import, got:\n{}",
+            out.lib_rs
+        );
     }
 
     // ── MC/DC codegen structural tests ────────────────────────────────────

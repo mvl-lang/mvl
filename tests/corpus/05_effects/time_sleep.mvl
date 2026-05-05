@@ -1,0 +1,14 @@
+// Corpus: time.sleep cross-backend parity (#433)
+//
+// Calls sleep(seconds(0)) — a zero-duration sleep — which exercises the
+// C-ABI path (`_mvl_time_thread_sleep(0, 0)`) without blocking.
+// Both backends must complete without error and print "ok".
+//
+// Used by: tests/cross_backend.rs::cross_backend_time_sleep
+
+use std.time.{sleep, seconds}
+
+fn main() -> Unit ! Clock, Console {
+    sleep(seconds(0));
+    println("ok");
+}

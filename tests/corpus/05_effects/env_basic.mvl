@@ -1,0 +1,16 @@
+// Corpus: env stdlib basics — getuid and getgid cross-backend parity (#432)
+//
+// Exercises the C-ABI path (libmvl_runtime_c) for the LLVM backend and the
+// native mvl_runtime path for the Rust transpiler.  Both backends must produce
+// identical output (same process UID and GID).
+//
+// Used by: tests/cross_backend.rs::cross_backend_env_basic
+
+use std.env.{getuid, getgid}
+
+fn main() -> Unit ! Env, Console {
+    let uid: Int = getuid();
+    let gid: Int = getgid();
+    println("{}", uid);
+    println("{}", gid);
+}

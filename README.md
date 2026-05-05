@@ -32,7 +32,21 @@ Eleven compiler-verified requirements. No existing language enforces all of them
 
 Code that compiles is **well-formed** (internal quality proven). Tests handle **validation** (external quality — does it do the right thing).
 
-## How — Eight Pillars, Nine Phases
+## How — Compiler Pipeline
+
+Every MVL program passes through five stages before any code is emitted:
+
+```
+1. Parse   — source → AST (recursive descent, LL(1))
+2. Resolve — imports, modules, stdlib linking
+3. Check   — type checking + all 11 compile-time guarantees
+4. Passes  — coverage, MC/DC, mutation testing, linting
+5. Emit    — Rust source (backend 1) or LLVM IR (backend 2)
+```
+
+The MVL compiler is the single proof gate — all eleven requirements are fully verified before emit touches any target code.
+
+## Roadmap — Eight Pillars, Nine Phases
 
 A language is "complete" along eight independent pillars: requirements, language constructs, stdlib, testing, packaging, backends, toolchain, verification. The roadmap delivers them in nine phases. Phases 1–4 are the foundation (done). Phases 5–9 are the path forward.
 
@@ -94,10 +108,11 @@ No Python dependencies — hooks are plain bash scripts.
 ### Build and test
 
 ```bash
-make build    # cargo build
-make test     # cargo test (unit + integration)
+make build    # build the MVL compiler
+make test     # run all 7 suites: unit, corpus, stdlib, transpiler, LLVM, tree-sitter, grammar
 make lint     # cargo clippy
 make format   # cargo fmt
+make help     # show all targets grouped by section
 ```
 
 ### Documentation
@@ -124,9 +139,11 @@ mvl_language/
 │   ├── adr/                # architectural decision records
 │   └── specs/              # behavioral specifications
 ├── src/mvl/
-│   ├── parser/             # MVL source → AST (Rust)
-│   ├── checker/            # AST → typed AST, 11 requirements (Rust)
-│   └── transpiler/         # typed AST → Rust source (Rust)
+│   ├── parser/             # stage 1: MVL source → AST
+│   ├── checker/            # stage 3: typed AST, 11 requirements
+│   ├── passes/             # stage 4: coverage, MC/DC, mutation, linting
+│   ├── transpiler/         # stage 5a: typed AST → Rust source
+│   └── codegen/            # stage 5b: typed AST → LLVM IR
 ├── tests/
 │   ├── corpus/             # MVL example programs (LLM training seed)
 │   ├── integration/        # end-to-end: .mvl → compile → run → verify

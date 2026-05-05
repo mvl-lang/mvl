@@ -88,6 +88,21 @@
     "fields": {}
   },
   {
+    "type": "borrow_expr",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "expr",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "capability",
     "named": true,
     "fields": {}
@@ -230,6 +245,14 @@
           "named": true
         },
         {
+          "type": "impl_decl",
+          "named": true
+        },
+        {
+          "type": "reexport_decl",
+          "named": true
+        },
+        {
           "type": "type_decl",
           "named": true
         }
@@ -260,7 +283,7 @@
       "required": false,
       "types": [
         {
-          "type": "identifier",
+          "type": "string_literal",
           "named": true
         }
       ]
@@ -372,6 +395,10 @@
       "types": [
         {
           "type": "block_expr",
+          "named": true
+        },
+        {
+          "type": "borrow_expr",
           "named": true
         },
         {
@@ -659,6 +686,11 @@
     }
   },
   {
+    "type": "identifier",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "if_expr",
     "named": true,
     "fields": {},
@@ -695,6 +727,29 @@
         },
         {
           "type": "if_stmt",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "impl_decl",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "fn_decl",
+          "named": true
+        },
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "type_list",
           "named": true
         }
       ]
@@ -1085,10 +1140,6 @@
       "types": [
         {
           "type": "declaration",
-          "named": true
-        },
-        {
-          "type": "reexport_decl",
           "named": true
         },
         {
@@ -1714,6 +1765,10 @@
     "named": false
   },
   {
+    "type": "<<",
+    "named": false
+  },
+  {
     "type": "<=",
     "named": false
   },
@@ -1738,6 +1793,10 @@
     "named": false
   },
   {
+    "type": ">>",
+    "named": false
+  },
+  {
     "type": "?",
     "named": false
   },
@@ -1746,31 +1805,7 @@
     "named": false
   },
   {
-    "type": "Console",
-    "named": false
-  },
-  {
-    "type": "DB",
-    "named": false
-  },
-  {
     "type": "Err",
-    "named": false
-  },
-  {
-    "type": "FileRead",
-    "named": false
-  },
-  {
-    "type": "FileWrite",
-    "named": false
-  },
-  {
-    "type": "IO",
-    "named": false
-  },
-  {
-    "type": "Net",
     "named": false
   },
   {
@@ -1807,6 +1842,10 @@
   },
   {
     "type": "]",
+    "named": false
+  },
+  {
+    "type": "^",
     "named": false
   },
   {
@@ -1854,11 +1893,11 @@
     "named": false
   },
   {
-    "type": "identifier",
-    "named": true
+    "type": "if",
+    "named": false
   },
   {
-    "type": "if",
+    "type": "impl",
     "named": false
   },
   {
@@ -1995,6 +2034,10 @@
   },
   {
     "type": "}",
+    "named": false
+  },
+  {
+    "type": "~",
     "named": false
   }
 ]

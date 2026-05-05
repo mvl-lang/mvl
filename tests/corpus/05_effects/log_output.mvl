@@ -1,0 +1,16 @@
+// Corpus: structured log output format (#416)
+//
+// Exercises all four log levels with and without fields.
+// Field ordering test uses z/a/m keys — sorted output must be a=first m=mid z=last.
+//
+// Used by: tests/compile_and_run.rs::log_output_formats_correctly
+
+use std.log.{log_debug, log_info, log_warn, log_error}
+
+fn main() -> Unit ! Log {
+    log_debug("startup", {"v": "1"});
+    log_info("ready", {"port": "8080"});
+    log_warn("memory high", {"usage": "85%"});
+    log_error("failed", {"error": "timeout"});
+    log_info("ordering", {"z": "last", "a": "first", "m": "mid"});
+}

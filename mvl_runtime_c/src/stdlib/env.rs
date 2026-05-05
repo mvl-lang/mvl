@@ -1,139 +1,291 @@
-//! C-ABI exports for `std.env` — wraps `mvl_runtime::stdlib::env` (#432).
+//! C-ABI exports for `std.env` stdlib functions.
+//!
+//! Mirrors `mvl_runtime::stdlib::env`. Every public function in that module
+//! has a corresponding `_mvl_env_*` symbol here, callable from LLVM IR via
+//! `lli --load=libmvl_runtime_c.{dylib,so}`.
 //!
 //! # String ownership
 //!
-//! Functions that return strings (`_mvl_env_get`, `_mvl_env_current_dir`) return
-//! a heap-allocated null-terminated C string. The caller is responsible for
-//! freeing it with `_mvl_env_free_cstr`. `None` / error is indicated by a null
-//! return.
-//!
-//! # LLVM codegen integration status
-//!
-//! | Symbol                  | Codegen wired? |
-//! |-------------------------|----------------|
-//! | `_mvl_env_getuid`       | yes (#432)     |
-//! | `_mvl_env_getgid`       | yes (#432)     |
-//! | `_mvl_env_exit`         | yes (#432)     |
-//! | `_mvl_env_get`          | pending        |
-//! | `_mvl_env_set_var`      | pending        |
-//! | `_mvl_env_remove_var`   | pending        |
-//! | `_mvl_env_current_dir`  | pending        |
-//! | `_mvl_env_args_count`   | pending        |
-//! | `_mvl_env_args_get`     | pending        |
-//! | `_mvl_env_free_cstr`    | pending        |
+//! - Input strings (`*const c_char`): owned by the caller, not freed here.
+//! - Output strings inside `MvlOption`/`MvlResult`: heap-allocated by this
+//!   crate. The LLVM caller is responsible for freeing the inner `*mut c_char`
+//!   with `libc::free` after use.
 
 use libc::c_char;
-use mvl_runtime::{ifc::Clean, stdlib::env};
-use std::ffi::{CStr, CString};
+use mvl_runtime::ifc::{Clean, Tainted};
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+use crate::abi::{c_to_string, string_to_c, MvlOption, MvlResult};
 
-unsafe fn cstr_to_string(s: *const c_char) -> String {
-    if s.is_null() {
-        return String::new();
-    }
-    CStr::from_ptr(s).to_string_lossy().into_owned()
-}
+// ── Primitive returns (no marshalling) ─────────────────────────────────────
 
-fn string_to_cstr(s: String) -> *mut c_char {
-    match CString::new(s) {
-        Ok(cs) => cs.into_raw(),
-        Err(_) => std::ptr::null_mut(),
-    }
-}
-
-// ── Identity (no FFI conversion needed) ──────────────────────────────────────
-
-/// Returns the effective user ID of the current process.
+/// Return the effective user ID of the current process.
+/// `Int` return — no marshalling required.
 #[no_mangle]
 pub extern "C" fn _mvl_env_getuid() -> i64 {
-    env::getuid()
+    mvl_runtime::stdlib::env::getuid()
 }
 
-/// Returns the effective group ID of the current process.
+/// Return the effective group ID of the current process.
+/// `Int` return — no marshalling required.
 #[no_mangle]
 pub extern "C" fn _mvl_env_getgid() -> i64 {
-    env::getgid()
+    mvl_runtime::stdlib::env::getgid()
 }
 
-// ── Process control ───────────────────────────────────────────────────────────
+// ── Environment variable access ─────────────────────────────────────────────
 
-/// Terminate the process with the given exit code.
+/// Read an environment variable by name.
+///
+/// Returns `MvlOption { tag=1, payload=*mut c_char }` on success (caller frees),
+/// or `MvlOption { tag=0, payload=null }` when the variable is not set.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub extern "C" fn _mvl_env_get(name: *const c_char) -> MvlOption {
+    let key = unsafe { c_to_string(name) };
+    match mvl_runtime::stdlib::env::get(Clean(key)) {
+        Some(Tainted(s)) => MvlOption::some_str(string_to_c(&s)),
+        None => MvlOption::none(),
+    }
+}
+
+/// Set an environment variable.
+///
+/// Returns `MvlResult { tag=0 }` on success, `MvlResult { tag=1, err=msg }`
+/// on failure (e.g. name contains `=` or is empty).
+#[no_mangle]
+#[allow(unsafe_code)]
+pub extern "C" fn _mvl_env_set(name: *const c_char, value: *const c_char) -> MvlResult {
+    let n = unsafe { c_to_string(name) };
+    let v = unsafe { c_to_string(value) };
+    match mvl_runtime::stdlib::env::set(Clean(n), Tainted(v)) {
+        Ok(()) => MvlResult::ok_unit(),
+        Err(e) => MvlResult::err_str(&e),
+    }
+}
+
+/// Unset an environment variable. No-op if not set.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub extern "C" fn _mvl_env_remove_var(name: *const c_char) {
+    let n = unsafe { c_to_string(name) };
+    mvl_runtime::stdlib::env::remove_var(Clean(n));
+}
+
+// ── Working directory ───────────────────────────────────────────────────────
+
+/// Return the current working directory.
+///
+/// Returns `MvlResult { tag=0, payload=*mut c_char }` on success (caller frees),
+/// or `MvlResult { tag=1, err=msg }` on failure.
+#[no_mangle]
+pub extern "C" fn _mvl_env_current_dir() -> MvlResult {
+    match mvl_runtime::stdlib::env::current_dir() {
+        Ok(Tainted(s)) => MvlResult::ok_str(string_to_c(&s)),
+        Err(e) => MvlResult::err_str(&e),
+    }
+}
+
+/// Change the current working directory.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub extern "C" fn _mvl_env_chdir(path: *const c_char) -> MvlResult {
+    let p = unsafe { c_to_string(path) };
+    match mvl_runtime::stdlib::env::chdir(Clean(p)) {
+        Ok(()) => MvlResult::ok_unit(),
+        Err(e) => MvlResult::err_str(&e),
+    }
+}
+
+// ── Process control ─────────────────────────────────────────────────────────
+
+/// Terminate the current process with the given exit code.
+/// This function does not return.
 #[no_mangle]
 pub extern "C" fn _mvl_env_exit(code: i64) -> ! {
-    env::exit(code)
+    mvl_runtime::stdlib::env::exit(code)
 }
 
-// ── Environment variables ─────────────────────────────────────────────────────
+// ── Program arguments ────────────────────────────────────────────────────────
 
-/// Read an environment variable. Returns a heap-allocated C string (caller must
-/// free with `_mvl_env_free_cstr`), or null if the variable is not set.
+/// Return the number of command-line arguments (including the program name).
 #[no_mangle]
-pub unsafe extern "C" fn _mvl_env_get(key: *const c_char) -> *mut c_char {
-    let name = cstr_to_string(key);
-    match env::get(Clean(name)) {
-        None => std::ptr::null_mut(),
-        Some(val) => string_to_cstr(val.0),
-    }
+pub extern "C" fn _mvl_env_args_len() -> i64 {
+    mvl_runtime::stdlib::env::args().len() as i64
 }
 
-/// Set an environment variable. Returns 0 on success, 1 on error.
-#[no_mangle]
-pub unsafe extern "C" fn _mvl_env_set_var(key: *const c_char, val: *const c_char) -> i32 {
-    let name = cstr_to_string(key);
-    let value = cstr_to_string(val);
-    match env::set(Clean(name), mvl_runtime::ifc::Tainted(value)) {
-        Ok(()) => 0,
-        Err(_) => 1,
-    }
-}
-
-/// Remove an environment variable. No-op if not set.
-#[no_mangle]
-pub unsafe extern "C" fn _mvl_env_remove_var(key: *const c_char) {
-    let name = cstr_to_string(key);
-    env::remove_var(Clean(name));
-}
-
-/// Return the current working directory as a heap-allocated C string
-/// (caller must free with `_mvl_env_free_cstr`), or null on error.
-#[no_mangle]
-pub extern "C" fn _mvl_env_current_dir() -> *mut c_char {
-    match env::current_dir() {
-        Ok(path) => string_to_cstr(path.0),
-        Err(_) => std::ptr::null_mut(),
-    }
-}
-
-// ── Arguments (split into count + indexed access to avoid MvlArray) ──────────
-
-/// Return the number of command-line arguments (including program name).
-#[no_mangle]
-pub extern "C" fn _mvl_env_args_count() -> i64 {
-    env::args().len() as i64
-}
-
-/// Return the i-th command-line argument as a heap-allocated C string
-/// (caller must free with `_mvl_env_free_cstr`), or null if out of bounds.
+/// Return the command-line argument at index `i` as a heap-allocated C string.
+/// Returns null if `i` is out of range. Caller frees with `libc::free`.
 #[no_mangle]
 pub extern "C" fn _mvl_env_args_get(i: i64) -> *mut c_char {
-    let args = env::args();
-    if i < 0 || i as usize >= args.len() {
+    if i < 0 {
         return std::ptr::null_mut();
     }
-    string_to_cstr(args[i as usize].0.clone())
+    let args = mvl_runtime::stdlib::env::args();
+    match args.into_iter().nth(i as usize) {
+        Some(Tainted(s)) => string_to_c(&s),
+        None => std::ptr::null_mut(),
+    }
 }
 
-// ── Memory ────────────────────────────────────────────────────────────────────
+// ── Signal constructors (pure) ───────────────────────────────────────────────
 
-/// Free a C string returned by any `_mvl_env_*` function.
-///
-/// # Safety
-/// `s` must be a pointer previously returned by an `_mvl_env_*` function and
-/// must not have been freed already.
+// Signal values are encoded as i8 integers at the C boundary:
+//   0 = SIGINT, 1 = SIGTERM, 2 = SIGHUP, 3 = SIGUSR1, 4 = SIGUSR2
+
+/// Construct the SIGINT signal value (0).
 #[no_mangle]
-pub unsafe extern "C" fn _mvl_env_free_cstr(s: *mut c_char) {
-    if !s.is_null() {
-        drop(CString::from_raw(s));
+pub extern "C" fn _mvl_env_sigint() -> i8 {
+    0
+}
+
+/// Construct the SIGTERM signal value (1).
+#[no_mangle]
+pub extern "C" fn _mvl_env_sigterm() -> i8 {
+    1
+}
+
+/// Construct the SIGHUP signal value (2).
+#[no_mangle]
+pub extern "C" fn _mvl_env_sighup() -> i8 {
+    2
+}
+
+/// Construct the SIGUSR1 signal value (3).
+#[no_mangle]
+pub extern "C" fn _mvl_env_sigusr1() -> i8 {
+    3
+}
+
+/// Construct the SIGUSR2 signal value (4).
+#[no_mangle]
+pub extern "C" fn _mvl_env_sigusr2() -> i8 {
+    4
+}
+
+/// No-op signal registration (Phase 2: callbacks not yet implemented).
+#[no_mangle]
+pub extern "C" fn _mvl_env_signal_reset(_sig: i8) {}
+
+/// No-op signal ignore (Phase 2: callbacks not yet implemented).
+#[no_mangle]
+pub extern "C" fn _mvl_env_signal_ignore(_sig: i8) {}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::{CStr, CString};
+    use std::sync::{LazyLock, Mutex};
+
+    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    #[test]
+    fn getuid_non_negative() {
+        assert!(_mvl_env_getuid() >= 0);
+    }
+
+    #[test]
+    fn getgid_non_negative() {
+        assert!(_mvl_env_getgid() >= 0);
+    }
+
+    #[test]
+    fn env_get_missing_returns_none() {
+        let key = CString::new("MVL_RC_TEST_MISSING_XYZ").unwrap();
+        let opt = _mvl_env_get(key.as_ptr());
+        assert_eq!(opt.tag, 0);
+        assert!(opt.payload.is_null());
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn env_get_set_roundtrip() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let name = CString::new("MVL_RC_TEST_GET_SET").unwrap();
+        let val = CString::new("mvl_runtime_c_test").unwrap();
+
+        let set_result = _mvl_env_set(name.as_ptr(), val.as_ptr());
+        assert_eq!(set_result.tag, 0, "set must succeed");
+
+        let opt = _mvl_env_get(name.as_ptr());
+        assert_eq!(opt.tag, 1, "get must return Some after set");
+
+        #[allow(unsafe_code)]
+        let got = unsafe { CStr::from_ptr(opt.payload as *const libc::c_char) }
+            .to_str()
+            .unwrap();
+        assert_eq!(got, "mvl_runtime_c_test");
+
+        // Free the returned string.
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::free(opt.payload)
+        };
+
+        std::env::remove_var("MVL_RC_TEST_GET_SET");
+    }
+
+    #[test]
+    fn env_set_invalid_name_returns_err() {
+        let name = CString::new("INVALID=NAME").unwrap();
+        let val = CString::new("v").unwrap();
+        let r = _mvl_env_set(name.as_ptr(), val.as_ptr());
+        assert_eq!(r.tag, 1, "set with = in name must return Err");
+        // Free the error string.
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::free(r.err as *mut libc::c_void)
+        };
+    }
+
+    #[test]
+    fn args_len_positive() {
+        assert!(_mvl_env_args_len() > 0);
+    }
+
+    #[test]
+    fn args_get_zero_returns_binary_name() {
+        let ptr = _mvl_env_args_get(0);
+        assert!(!ptr.is_null());
+        #[allow(unsafe_code)]
+        let s = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap();
+        assert!(!s.is_empty());
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::free(ptr as *mut libc::c_void)
+        };
+    }
+
+    #[test]
+    fn args_get_out_of_range_returns_null() {
+        let ptr = _mvl_env_args_get(i64::MAX);
+        assert!(ptr.is_null());
+    }
+
+    #[test]
+    fn args_get_negative_returns_null() {
+        let ptr = _mvl_env_args_get(-1);
+        assert!(ptr.is_null(), "negative index must return null");
+    }
+
+    #[test]
+    fn current_dir_returns_ok() {
+        let r = _mvl_env_current_dir();
+        assert_eq!(r.tag, 0, "current_dir must succeed");
+        assert!(!r.payload.is_null());
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::free(r.payload)
+        };
+    }
+
+    #[test]
+    fn signal_constructors_return_correct_values() {
+        assert_eq!(_mvl_env_sigint(), 0);
+        assert_eq!(_mvl_env_sigterm(), 1);
+        assert_eq!(_mvl_env_sighup(), 2);
+        assert_eq!(_mvl_env_sigusr1(), 3);
+        assert_eq!(_mvl_env_sigusr2(), 4);
     }
 }

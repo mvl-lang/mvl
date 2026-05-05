@@ -93,3 +93,24 @@ at the wrong severity.
 **Keep `Warning`, update corpus** — removes explicit security annotations from IFC
 demonstration files, making them less useful as teaching material and for code generation
 pipelines. Rejected.
+
+---
+
+## Amendment: `missing-annotation` rule (#428)
+
+**Added in:** v0.71.0 (#428)
+
+The `missing-annotation` rule is the directional inverse of `redundant-ifc-label`: where
+that rule hints when explicit `Public[T]` annotations are present (redundant but preferred),
+`missing-annotation` warns when effect annotations are *absent* on functions that make calls.
+
+This aligns with ADR-0017's stated principle — "explicit annotations are never wrong; they
+are the preferred default" — applied to the effect dimension rather than the IFC dimension.
+
+The rule is **disabled by default** (`missing_annotations = false` in `LintConfig`) because
+the linter lacks a symbol table and cannot distinguish calls to pure MVL helpers from calls
+to effectful stdlib functions. Enabling it opt-in allows teams that enforce
+explicit-everywhere annotation density to use it without imposing the requirement on the
+entire corpus.
+
+**Spec:** Spec 011 Req 4

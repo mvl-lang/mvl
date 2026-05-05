@@ -20,7 +20,7 @@ type UserId = Int where self > 0
 
 // Control flow: if, else, for, match
 fn demo(x: Int) -> Int {
-    let mut result = 0;
+    let mut result: Int = 0;
     if x > 0 {
         for i in [1, 2, 3] {
             result = result + i;

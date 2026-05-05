@@ -207,6 +207,53 @@ detailed pillar mapping.
 
 ---
 
+## Compiler Architecture — Five-Stage Pipeline
+
+The pillars in Requirement 1 describe *what is delivered*. The pipeline below describes *how the compiler is organized* to deliver them. Each stage has a distinct character (granularity, optionality, output shape) and corresponds to a top-level directory under `src/mvl/`.
+
+```
+parser     ─►  per-file:        text → AST                     (parallelizable)
+resolver   ─►  whole-project:   ASTs → module graph            (sequential — Spec 005)
+checker    ─►  per-program:     graph → typed AST              (Specs 001–003, 011, ADR-0001 Reqs 1–11)
+passes     ─►  per-program:     typed AST → instrumented AST   (optional, composable)
+backends   ─►  per-program:     AST → Rust source / LLVM IR    (transpiler / codegen)
+```
+
+| Stage | Directory | Granularity | Optional? | Examples |
+|-------|-----------|-------------|-----------|----------|
+| Parser | `src/mvl/parser/` | Per-file | No | Lexer + recursive-descent parser (ADR-0005) |
+| Resolver | `src/mvl/resolver/` | Whole-project | No | Visibility, imports, cycle detection (Spec 005) |
+| Checker | `src/mvl/checker/` | Per-program | No | Type, effect, IFC, termination, refinement, data-race |
+| Passes | `src/mvl/passes/` | Per-program | Yes (each pass) | Coverage, MC/DC, mutation (ADR-0014, ADR-0015) |
+| Backends | `src/mvl/transpiler/`, `src/mvl/codegen/` | Per-program | One required | Rust source emission, LLVM IR emission |
+
+Sibling concerns that are not pipeline stages:
+
+- `src/mvl/linter/` — Spec 011. Lint-flavored analysis over the typed AST. Produces diagnostics, does not transform. Distinct from passes.
+- `src/mvl/stdlib/`, `src/mvl/packages/`, `src/mvl/toolchain/` — supporting infrastructure, not pipeline stages.
+
+### Requirement 9: Pipeline Stage Discipline [MUST]
+
+Each pipeline stage MUST live in its own top-level directory under `src/mvl/`. AST-level instrumentation transformations (coverage, MC/DC instrumentation, mutation injection) MUST live under `src/mvl/passes/`, not under `src/mvl/transpiler/` or `src/mvl/codegen/`. The transpiler and LLVM codegen MUST consume the same instrumented AST produced by the passes — instrumentation is written once per concern, not per backend.
+
+**Implementation:** `src/mvl/{parser,resolver,checker,passes,transpiler,codegen,linter}/`
+
+#### Scenario: New AST instrumentation lands in passes/
+
+- GIVEN a new instrumentation concern (e.g., complexity counting, fuzzer harness injection)
+- WHEN the implementation lands
+- THEN it MUST live under `src/mvl/passes/<name>/`, not under any backend directory
+
+#### Scenario: Both backends consume the same instrumented AST
+
+- GIVEN a typed AST instrumented for coverage (or MC/DC, or mutation)
+- WHEN compiled through both `--backend=rust` and `--backend=llvm`
+- THEN both backends MUST honor the instrumentation, producing executables that emit equivalent coverage / MC/DC / mutation evidence
+
+**Tracked refactor:** #443 (introduce `src/mvl/passes/`), #444 (decouple passes from Rust-specific emission)
+
+---
+
 ## Out of Scope
 
 - The eleven requirements themselves are specified in ADR-0001 and per-feature specs (000–011). This spec governs *delivery*, not *requirements*.
@@ -216,3 +263,4 @@ detailed pillar mapping.
 ## Changelog
 
 - **2026-05-02** — initial draft (closes #406)
+- **2026-05-02** — added "Compiler Architecture — Five-Stage Pipeline" section + Requirement 9 (pipeline stage discipline) to formalize parser/resolver/checker/passes/backends layout. Tracks #443, #444.

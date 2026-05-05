@@ -9,30 +9,36 @@
 // Precedence levels (higher number = tighter binding):
 //   1  OR        ||
 //   2  AND       &&
-//   3  COMPARE   == != < > <= >=
-//   4  ADD       + -
-//   5  MUL       * / %
-//   6  UNARY     ! - move consume  (right-assoc)
-//   7  CALL      . ()              (left-assoc — method/field access)
-//   8  POSTFIX   ?                 (left-assoc — Result propagation)
+//   3  BITOR     |
+//   4  BITXOR    ^
+//   5  BITAND    & (binary)
+//   6  COMPARE   == != < > <= >=
+//   7  SHIFT     << >>
+//   8  ADD       + -
+//   9  MUL       * / %
+//  10  UNARY     ! ~ - move consume  (right-assoc)
+//  11  CALL      . ()                (left-assoc — method/field access)
+//  12  POSTFIX   ?                   (left-assoc — Result propagation)
 
 const PREC = {
   OR: 1,
   AND: 2,
-  COMPARE: 3,
-  ADD: 4,
-  MUL: 5,
-  UNARY: 6,
-  CALL: 7,
-  POSTFIX: 8,
+  BITOR: 3,
+  BITXOR: 4,
+  BITAND: 5,
+  COMPARE: 6,
+  SHIFT: 7,
+  ADD: 8,
+  MUL: 9,
+  UNARY: 10,
+  CALL: 11,
+  POSTFIX: 12,
 };
 
 module.exports = grammar({
   name: "mvl",
 
   extras: ($) => [/\s/, $.line_comment],
-
-  word: ($) => $.identifier,
 
   // GLR conflicts: `where` after a type_expr is ambiguous between
   // a refined_type and an outer `where constraints` clause.
@@ -48,6 +54,8 @@ module.exports = grammar({
     [$.if_stmt, $.if_expr],
     // effect_list: `effect ,` — continue list vs end list (outer comma)
     [$.effect_list],
+    // effect: `identifier (` — parameterized effect string vs outer expression
+    [$.effect],
     // `>` inside `Public<Int where self > 0>`: could be comparison or close generic.
     // GLR explores both; only the one that closes the generic succeeds.
     [$.ref_expr, $.labeled_type],
@@ -62,17 +70,24 @@ module.exports = grammar({
     // starts with a distinct keyword — preserves LL(1) (mirrors grammar.ebnf).
 
     program: ($) =>
-      seq(repeat(choice($.use_decl, $.reexport_decl)), repeat($.declaration)),
+      seq(repeat($.use_decl), repeat($.declaration)),
 
+    // Two structural forms:
+    //   1. optional "pub" + non-import decl body (type/fn/const/extern/impl)
+    //   2. reexport_decl — carries its own "pub" to stay unambiguous vs use_decl
     declaration: ($) =>
-      seq(
-        optional("pub"),
-        choice(
-          $.type_decl,
-          $.fn_decl,
-          $.const_decl,
-          $.extern_decl
-        )
+      choice(
+        seq(
+          optional("pub"),
+          choice(
+            $.type_decl,
+            $.fn_decl,
+            $.const_decl,
+            $.extern_decl,
+            $.impl_decl
+          )
+        ),
+        $.reexport_decl
       ),
 
     // === Modules and imports ===
@@ -82,11 +97,25 @@ module.exports = grammar({
     // `use path::to::Item;` — private import (top of file only)
     use_decl: ($) => seq("use", $.module_path, ";"),
 
-    // `pub use path::to::Item;` — re-export
+    // `pub use path::to::Item;` — re-export; "pub" is part of the rule so it
+    // remains unambiguous with use_decl (which never has "pub").
     reexport_decl: ($) => seq("pub", "use", $.module_path, ";"),
 
     module_path: ($) =>
       seq($.identifier, repeat(seq("::", $.identifier))),
+
+    // Impl block: `impl Trait [ TypeParams ] for Type { fn_decls }`
+    impl_decl: ($) =>
+      seq(
+        "impl",
+        $.identifier,
+        optional(seq("[", $.type_list, "]")),
+        "for",
+        $.identifier,
+        "{",
+        repeat($.fn_decl),
+        "}"
+      ),
 
     // Extern trust boundary: `extern "rust" { fn foo(...) -> T; }`
     extern_decl: ($) =>
@@ -196,8 +225,8 @@ module.exports = grammar({
 
     effect: ($) =>
       seq(
-        $.identifier,
-        optional(seq("(", $.string, ")"))
+        /[a-zA-Z_][a-zA-Z0-9_]*/,
+        optional(seq("(", $.string_literal, ")"))
       ),
 
     constraints: ($) => seq($.constraint, repeat(seq(",", $.constraint))),
@@ -381,21 +410,30 @@ module.exports = grammar({
         ),
         // Unary operators (right-associative)
         prec.right(PREC.UNARY, seq("!", $.expr)),
+        prec.right(PREC.UNARY, seq("~", $.expr)),
         prec.right(PREC.UNARY, seq("-", $.expr)),
         prec.right(PREC.UNARY, seq("move", $.expr)),
         prec.right(PREC.UNARY, seq("consume", $.expr)),
         // Binary operators
         prec.left(PREC.MUL, seq($.expr, choice("*", "/", "%"), $.expr)),
         prec.left(PREC.ADD, seq($.expr, choice("+", "-"), $.expr)),
+        prec.left(PREC.SHIFT, seq($.expr, choice("<<", ">>"), $.expr)),
         prec.left(
           PREC.COMPARE,
           seq($.expr, choice("==", "!=", "<", ">", "<=", ">="), $.expr)
         ),
+        prec.left(PREC.BITAND, seq($.expr, "&", $.expr)),
+        prec.left(PREC.BITXOR, seq($.expr, "^", $.expr)),
+        prec.left(PREC.BITOR, seq($.expr, "|", $.expr)),
         prec.left(PREC.AND, seq($.expr, "&&", $.expr)),
         prec.left(PREC.OR, seq($.expr, "||", $.expr)),
         // Atoms
         $._atom_expr
       ),
+
+    // Borrow expression: `&expr` or `&mut expr`
+    borrow_expr: ($) =>
+      prec.right(PREC.UNARY, seq("&", optional("mut"), $.expr)),
 
     // Atomic (non-recursive) expression forms
     _atom_expr: ($) =>
@@ -411,6 +449,7 @@ module.exports = grammar({
         $.fn_call_expr,
         $.grouped_expr,
         $.path_expr,
+        $.borrow_expr,
         $.identifier
       ),
 

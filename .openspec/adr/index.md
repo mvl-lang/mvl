@@ -16,7 +16,10 @@
 | [0012](0012-extended-package-model.md) | Extended package model — extern inside, verified API outside | Accepted |
 | [0013](0013-transpiler-mediated-codegen.md) | Transpiler-mediated type-directed code generation — no macros, no reflection | Accepted |
 | [0014](0014-mutation-testing-execution-model.md) | Mutation testing execution model — single compile, parallel runs | Accepted |
-| [0015](0015-mcdc-coverage-execution-model.md) | MC/DC coverage execution model — eager evaluation, Unique-Cause, u16 encoding | Accepted |
+| [0015](0015-mcdc-coverage-execution-model.md) | MC/DC coverage execution model — eager evaluation, Unique-Cause, u32 encoding | Accepted |
 | [0016](0016-llvm-memory-runtime.md) | LLVM memory runtime — Rust cdylib with reference counting for String, Array, Map | Accepted |
 | [0017](0017-linter-hint-severity-explicit-ifc-annotations.md) | Linter Hint severity — explicit IFC annotations as the preferred style | Accepted |
-| [0018](0018-llvm-runtime-c-abi.md) | Two-path stdlib architecture — Rust API vs C-ABI cdylib for LLVM backend | Accepted |
+| [0018](0018-five-stage-pipeline-passes-module.md) | Five-stage pipeline — introduce `src/mvl/passes/` | Accepted |
+| [0019](0019-llvm-stdlib-two-path.md) | Two-Path Stdlib Architecture — Rust Crate + C-ABI cdylib | Accepted |
+| [0020](0020-bdd-library-naming-convention.md) | BDD as library naming convention, not language syntax | Accepted |
+| [0021](0021-primitives-runtime-redesign.md) | Primitives and runtime architecture redesign — unsigned types, bit ops, prelude slim, mvl_memory scope | Accepted |

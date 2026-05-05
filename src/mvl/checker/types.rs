@@ -16,6 +16,8 @@ pub enum Ty {
     Bool,
     Char,
     Byte,
+    UByte,
+    UInt,
     Unit,
     Never,
     // Compound
@@ -28,6 +30,8 @@ pub enum Ty {
     List(Box<Ty>),
     /// Fixed-size array: element type + compile-time size constant.
     Array(Box<Ty>, u64),
+    Map(Box<Ty>, Box<Ty>),
+    Set(Box<Ty>),
     // Refined type wrapper: underlying type + predicate source text
     Refined(Box<Ty>, String),
     // Security label wrapper: label + inner type (Requirement 11)
@@ -45,6 +49,8 @@ impl Ty {
             Ty::Bool => "Bool".to_string(),
             Ty::Char => "Char".to_string(),
             Ty::Byte => "Byte".to_string(),
+            Ty::UByte => "UByte".to_string(),
+            Ty::UInt => "UInt".to_string(),
             Ty::Unit => "Unit".to_string(),
             Ty::Never => "Never".to_string(),
             Ty::Named(name, args) if args.is_empty() => name.clone(),
@@ -70,6 +76,8 @@ impl Ty {
             }
             Ty::List(inner) => format!("List<{}>", inner.display()),
             Ty::Array(inner, size) => format!("Array<{}, {}>", inner.display(), size),
+            Ty::Map(k, v) => format!("Map<{}, {}>", k.display(), v.display()),
+            Ty::Set(t) => format!("Set<{}>", t.display()),
             Ty::Refined(inner, _pred) => inner.display(),
             Ty::Labeled(label, inner) => {
                 format!("{}<{}>", ifc::label_name(*label), inner.display())
@@ -79,7 +87,21 @@ impl Ty {
     }
 
     pub fn is_numeric(&self) -> bool {
-        matches!(self.unlabeled(), Ty::Int | Ty::Float)
+        matches!(
+            self.unlabeled(),
+            Ty::Int | Ty::Float | Ty::Byte | Ty::UByte | Ty::UInt
+        )
+    }
+
+    /// True if this type has unsigned integer semantics (affects shift direction).
+    pub fn is_unsigned_int(&self) -> bool {
+        matches!(self.unlabeled(), Ty::UByte | Ty::UInt)
+    }
+
+    /// True if this is an integer type (valid target for bit operators).
+    /// Excludes Float.
+    pub fn is_integer(&self) -> bool {
+        matches!(self.unlabeled(), Ty::Int | Ty::Byte | Ty::UByte | Ty::UInt)
     }
 
     pub fn is_bool(&self) -> bool {
@@ -138,6 +160,8 @@ pub fn resolve(expr: &TypeExpr) -> Ty {
             "Bool" => Ty::Bool,
             "Char" => Ty::Char,
             "Byte" => Ty::Byte,
+            "UByte" => Ty::UByte,
+            "UInt" => Ty::UInt,
             "Unit" => Ty::Unit,
             "Never" => Ty::Never,
             "List" if args.len() == 1 => Ty::List(Box::new(resolve(&args[0]))),
@@ -156,6 +180,12 @@ pub fn resolve(expr: &TypeExpr) -> Ty {
             }
             // Array with wrong argument count — always an error.
             "Array" => Ty::Unknown,
+            "Map" if args.len() == 2 => {
+                Ty::Map(Box::new(resolve(&args[0])), Box::new(resolve(&args[1])))
+            }
+            "Map" => Ty::Unknown,
+            "Set" if args.len() == 1 => Ty::Set(Box::new(resolve(&args[0]))),
+            "Set" => Ty::Unknown,
             _ => Ty::Named(name.clone(), args.iter().map(resolve).collect()),
         },
         TypeExpr::Option { inner, .. } => Ty::Option(Box::new(resolve(inner))),
@@ -217,6 +247,8 @@ pub fn types_compatible(a: &Ty, b: &Ty) -> bool {
         }
         (Ty::List(ai), Ty::List(bi)) => types_compatible(ai, bi),
         (Ty::Array(ae, an), Ty::Array(be, bn)) => an == bn && types_compatible(ae, be),
+        (Ty::Map(ak, av), Ty::Map(bk, bv)) => types_compatible(ak, bk) && types_compatible(av, bv),
+        (Ty::Set(ai), Ty::Set(bi)) => types_compatible(ai, bi),
         (Ty::Ref(am, ai), Ty::Ref(bm, bi)) => am == bm && types_compatible(ai, bi),
         (Ty::Tuple(aes), Ty::Tuple(bes)) => {
             aes.len() == bes.len()
@@ -256,6 +288,8 @@ mod tests {
             ("Bool", Ty::Bool),
             ("Char", Ty::Char),
             ("Byte", Ty::Byte),
+            ("UByte", Ty::UByte),
+            ("UInt", Ty::UInt),
         ] {
             let expr = TypeExpr::Base {
                 name: name.to_string(),
@@ -481,5 +515,128 @@ mod tests {
             span,
         };
         assert_eq!(resolve(&expr), Ty::Array(Box::new(Ty::Int), 0));
+    }
+
+    #[test]
+    fn resolve_map_two_args() {
+        let span = s();
+        let expr = TypeExpr::Base {
+            name: "Map".to_string(),
+            args: vec![
+                TypeExpr::Base {
+                    name: "String".to_string(),
+                    args: vec![],
+                    span,
+                },
+                TypeExpr::Base {
+                    name: "Int".to_string(),
+                    args: vec![],
+                    span,
+                },
+            ],
+            span,
+        };
+        assert_eq!(
+            resolve(&expr),
+            Ty::Map(Box::new(Ty::String), Box::new(Ty::Int))
+        );
+    }
+
+    #[test]
+    fn resolve_map_wrong_arity_is_unknown() {
+        let span = s();
+        let expr = TypeExpr::Base {
+            name: "Map".to_string(),
+            args: vec![TypeExpr::Base {
+                name: "Int".to_string(),
+                args: vec![],
+                span,
+            }],
+            span,
+        };
+        assert_eq!(resolve(&expr), Ty::Unknown);
+    }
+
+    #[test]
+    fn resolve_set_one_arg() {
+        let span = s();
+        let expr = TypeExpr::Base {
+            name: "Set".to_string(),
+            args: vec![TypeExpr::Base {
+                name: "Int".to_string(),
+                args: vec![],
+                span,
+            }],
+            span,
+        };
+        assert_eq!(resolve(&expr), Ty::Set(Box::new(Ty::Int)));
+    }
+
+    #[test]
+    fn resolve_set_wrong_arity_is_unknown() {
+        let span = s();
+        let expr = TypeExpr::Base {
+            name: "Set".to_string(),
+            args: vec![],
+            span,
+        };
+        assert_eq!(resolve(&expr), Ty::Unknown);
+    }
+
+    #[test]
+    fn map_display() {
+        let ty = Ty::Map(Box::new(Ty::String), Box::new(Ty::Int));
+        assert_eq!(ty.display(), "Map<String, Int>");
+    }
+
+    #[test]
+    fn set_display() {
+        let ty = Ty::Set(Box::new(Ty::Int));
+        assert_eq!(ty.display(), "Set<Int>");
+    }
+
+    #[test]
+    fn map_types_compatible() {
+        let a = Ty::Map(Box::new(Ty::String), Box::new(Ty::Int));
+        let b = Ty::Map(Box::new(Ty::String), Box::new(Ty::Int));
+        assert!(types_compatible(&a, &b));
+        let c = Ty::Map(Box::new(Ty::Int), Box::new(Ty::Int));
+        assert!(!types_compatible(&a, &c));
+    }
+
+    #[test]
+    fn set_types_compatible() {
+        let a = Ty::Set(Box::new(Ty::Int));
+        let b = Ty::Set(Box::new(Ty::Int));
+        assert!(types_compatible(&a, &b));
+        let c = Ty::Set(Box::new(Ty::String));
+        assert!(!types_compatible(&a, &c));
+    }
+
+    #[test]
+    fn ubyte_and_uint_are_unsigned() {
+        assert!(Ty::UByte.is_unsigned_int());
+        assert!(Ty::UInt.is_unsigned_int());
+        assert!(!Ty::Byte.is_unsigned_int());
+        assert!(!Ty::Int.is_unsigned_int());
+    }
+
+    #[test]
+    fn ubyte_and_uint_are_numeric() {
+        assert!(Ty::UByte.is_numeric());
+        assert!(Ty::UInt.is_numeric());
+    }
+
+    #[test]
+    fn ubyte_uint_display() {
+        assert_eq!(Ty::UByte.display(), "UByte");
+        assert_eq!(Ty::UInt.display(), "UInt");
+    }
+
+    #[test]
+    fn ubyte_uint_incompatible_with_signed() {
+        assert!(!types_compatible(&Ty::Int, &Ty::UInt));
+        assert!(!types_compatible(&Ty::Byte, &Ty::UByte));
+        assert!(!types_compatible(&Ty::UInt, &Ty::Int));
     }
 }

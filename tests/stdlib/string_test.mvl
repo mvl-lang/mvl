@@ -257,7 +257,7 @@ test fn string_replace_changes_content() -> Unit {
     let s: String = "hello world";
     let from: String = "world";
     let to: String = "Rust";
-    let r = s.replace(from, to);
+    let r: String = s.replace(from, to);
     assert_eq(r.len(), 10);
     assert_eq(r.is_empty(), false);
 }
@@ -274,14 +274,14 @@ test fn string_replace_not_found_unchanged_len() -> Unit {
 test fn string_split_basic_count() -> Unit {
     let s: String = "a,b,c";
     let sep: String = ",";
-    let parts = s.split(sep);
+    let parts: List[String] = s.split(sep);
     assert_eq(parts.len(), 3);
 }
 
 test fn string_split_no_sep_single_element() -> Unit {
     let s: String = "hello";
     let sep: String = ",";
-    let parts = s.split(sep);
+    let parts: List[String] = s.split(sep);
     assert_eq(parts.len(), 1);
 }
 

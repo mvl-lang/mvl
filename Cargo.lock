@@ -433,7 +433,7 @@ dependencies = [
 
 [[package]]
 name = "mvl"
-version = "0.68.0"
+version = "0.75.0"
 dependencies = [
  "inkwell",
  "libc",
@@ -462,6 +462,7 @@ name = "mvl_runtime_c"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "mvl_memory",
  "mvl_runtime",
 ]
 

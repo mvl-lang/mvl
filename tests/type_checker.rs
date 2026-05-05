@@ -2874,6 +2874,31 @@ fn stdlib_crypto_corpus_parses_and_checks() {
 }
 
 #[test]
+fn stdlib_pbt_corpus_parses_and_checks() {
+    // GIVEN: the PBT stdlib corpus (valid programs using std.pbt, #40 Phase A + #425 Phase B)
+    // THEN: no serious type errors; UndefinedFunction/UndefinedVariable are expected (stdlib not
+    //       loaded); UndefinedType is expected because Generator[T] is not yet a built-in type
+    let src = include_str!("corpus/03_stdlib/pbt_operations.mvl");
+    let result = check_src(src);
+    let serious: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            !matches!(
+                e,
+                CheckError::UndefinedFunction { .. }
+                    | CheckError::UndefinedVariable { .. }
+                    | CheckError::UndefinedType { .. }
+            )
+        })
+        .collect();
+    assert!(
+        serious.is_empty(),
+        "pbt_operations corpus should have no serious errors, got: {serious:?}"
+    );
+}
+
+#[test]
 fn file_io_corpus_parses_and_checks() {
     // GIVEN: the file I/O effects corpus (valid programs using std.io, #44)
     // THEN: no serious type errors; UndefinedFunction/UndefinedVariable/UndefinedType
@@ -3084,6 +3109,31 @@ fn log_info_rejects_secret_value_in_fields_map() {
             |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Secret")
         ),
         "log_info with Secret value in fields map should emit LoggingLabelViolation, got: {errors:?}"
+    );
+}
+
+#[test]
+fn log_warn_rejects_tainted_value_in_fields_map() {
+    let errors = errors_for(
+        r#"fn f(raw: Tainted[String]) -> Unit ! Log { log_warn("req", {"body": raw}); }"#,
+    );
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Tainted")
+        ),
+        "log_warn with Tainted value in fields map should emit LoggingLabelViolation, got: {errors:?}"
+    );
+}
+
+#[test]
+fn log_debug_rejects_clean_value_in_fields_map() {
+    let errors =
+        errors_for(r#"fn f(s: Clean[String]) -> Unit ! Log { log_debug("req", {"body": s}); }"#);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Clean")
+        ),
+        "log_debug with Clean value in fields map should emit LoggingLabelViolation, got: {errors:?}"
     );
 }
 
@@ -4262,5 +4312,112 @@ fn let_with_annotation_accepted() {
     assert!(
         errors.is_empty(),
         "annotated let should produce no errors, got: {errors:?}"
+    );
+}
+
+// ── Epic #480: Primitives and runtime architecture redesign ──────────────────
+
+/// Unsigned types corpus must parse and type-check without errors (#481).
+#[test]
+fn unsigned_types_corpus_parses_and_checks() {
+    let src = include_str!("corpus/02_types/unsigned_types.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "unsigned_types corpus must type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+/// Bit-operator corpus must parse and type-check without errors (#483 #484).
+#[test]
+fn bit_operators_corpus_parses_and_checks() {
+    let src = include_str!("corpus/02_types/bit_operators.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "bit_operators corpus must type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+/// Overflow-checking arithmetic corpus must parse and type-check without errors (#485).
+#[test]
+fn overflow_checking_corpus_parses_and_checks() {
+    let src = include_str!("corpus/02_types/overflow_checking.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "overflow_checking corpus must type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+/// UInt.wrapping_add/sub/mul must resolve to UInt, not Unknown (#493 fix).
+#[test]
+fn uint_wrapping_methods_resolve_correctly() {
+    let result = check_src("fn f(x: UInt, y: UInt) -> UInt { x.wrapping_add(y) }");
+    assert!(
+        result.is_ok(),
+        "UInt.wrapping_add must type-check cleanly, got: {:?}",
+        result.errors
+    );
+    let result2 = check_src("fn f(x: UInt, y: UInt) -> UInt { x.wrapping_sub(y) }");
+    assert!(
+        result2.is_ok(),
+        "UInt.wrapping_sub must type-check cleanly, got: {:?}",
+        result2.errors
+    );
+    let result3 = check_src("fn f(x: UInt, y: UInt) -> UInt { x.wrapping_mul(y) }");
+    assert!(
+        result3.is_ok(),
+        "UInt.wrapping_mul must type-check cleanly, got: {:?}",
+        result3.errors
+    );
+}
+
+/// Bitwise operators on non-integer types must produce TypeMismatch (#483).
+#[test]
+fn bitwise_op_on_float_is_rejected() {
+    let errors = errors_for("fn f(x: Float, y: Float) -> Float { x & y }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "Float & Float should produce TypeMismatch, got: {errors:?}"
+    );
+}
+
+#[test]
+fn bitwise_not_on_float_is_rejected() {
+    let errors = errors_for("fn f(x: Float) -> Float { ~x }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "~Float should produce TypeMismatch, got: {errors:?}"
+    );
+}
+
+/// IFC label propagation through bitwise operators (#483).
+#[test]
+fn bitwise_and_propagates_ifc_label() {
+    // Secret[Int] & Int → Secret[Int]; assigning to Secret[Int] is fine.
+    let errors = errors_for("fn f(a: Secret[Int], b: Public[Int]) -> Secret[Int] { a & b }");
+    assert!(
+        errors.is_empty(),
+        "Secret[Int] & Public[Int] should yield Secret[Int], got: {errors:?}"
+    );
+}
+
+#[test]
+fn bitwise_and_label_downgrade_rejected() {
+    // Secret[Int] & Int → Secret[Int]; assigning to Public[Int] must fail.
+    let errors = errors_for("fn f(a: Secret[Int], b: Public[Int]) -> Public[Int] { a & b }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "Secret[Int] & Public[Int] result cannot flow to Public[Int], got: {errors:?}"
     );
 }

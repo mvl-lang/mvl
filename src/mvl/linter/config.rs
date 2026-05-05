@@ -29,6 +29,7 @@
 //! | `redundant_match`      | `true`  | Flag `match` with a single irrefutable arm           |
 //! | `redundant_effects`    | `true`  | Flag effect declarations on call-free functions      |
 //! | `redundant_ifc_labels` | `true`  | Flag `Public<T>` annotations (redundant base label)  |
+//! | `missing_annotations`  | `false` | Warn on functions with calls but no effect annotation (opt-in) |
 //!
 //! ### Phase 3 — LLM corpus quality rules
 //!
@@ -80,6 +81,9 @@ pub struct LintConfig {
     pub redundant_effects: bool,
     /// Flag `Public<T>` type annotations (the base IFC label, always redundant).
     pub redundant_ifc_labels: bool,
+    /// Warn on functions that have calls but no declared effects (opt-in; default off).
+    /// Enable with `missing_annotations = true` in `.mvllintrc`.
+    pub missing_annotations: bool,
 
     // ── Phase 3: LLM corpus quality rules ────────────────────────────────
     /// Flag block comments `/* */`; only `//` line comments are allowed.
@@ -120,6 +124,7 @@ impl Default for LintConfig {
             redundant_match: true,
             redundant_effects: true,
             redundant_ifc_labels: true,
+            missing_annotations: false,
             consistent_comment_style: true,
             require_doc_comments: true,
             doc_comment_examples: false,
@@ -230,6 +235,7 @@ fn load_from(path: &Path) -> Option<LintConfig> {
             "redundant_match" => cfg.redundant_match = parse_bool(val),
             "redundant_effects" => cfg.redundant_effects = parse_bool(val),
             "redundant_ifc_labels" => cfg.redundant_ifc_labels = parse_bool(val),
+            "missing_annotations" => cfg.missing_annotations = parse_bool(val),
             "consistent_comment_style" => cfg.consistent_comment_style = parse_bool(val),
             "require_doc_comments" => cfg.require_doc_comments = parse_bool(val),
             "doc_comment_examples" => cfg.doc_comment_examples = parse_bool(val),

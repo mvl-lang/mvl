@@ -7,7 +7,7 @@
 //! returns the `FunctionValue`, declaring it on first use with External linkage
 //! so lli can resolve it via `--load=libmvl_memory.{dylib,so}`.
 
-use inkwell::{types::BasicMetadataTypeEnum, values::FunctionValue, AddressSpace};
+use inkwell::{module::Linkage, types::BasicMetadataTypeEnum, values::FunctionValue, AddressSpace};
 
 use super::LlvmBackend;
 
@@ -18,6 +18,9 @@ pub(crate) enum HeapKind {
     String,
     Array,
     Map,
+    /// Set is backed by MvlArray (ADR-0016). If Set ever gets its own layout,
+    /// update `heap_kind_of` in stmts.rs and the dispatch arms below.
+    Set,
 }
 
 impl<'ctx> LlvmBackend<'ctx> {
@@ -239,6 +242,27 @@ impl<'ctx> LlvmBackend<'ctx> {
         )
     }
 
+    fn get_or_declare_fn(
+        &self,
+        name: &str,
+        param_tys: &[BasicMetadataTypeEnum<'ctx>],
+        ret_ty: Option<inkwell::types::BasicTypeEnum<'ctx>>,
+        variadic: bool,
+    ) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function(name) {
+            return f;
+        }
+        let fn_ty = match ret_ty {
+            Some(r) => {
+                use inkwell::types::BasicType;
+                r.fn_type(param_tys, variadic)
+            }
+            None => self.context.void_type().fn_type(param_tys, variadic),
+        };
+        self.module
+            .add_function(name, fn_ty, Some(Linkage::External))
+    }
+
     // ── Drop emission (per-function heap cleanup) ─────────────────────────────
 
     /// Emit `_drop` calls for all tracked heap locals in the current function.
@@ -265,7 +289,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             };
             let drop_fn = match kind {
                 HeapKind::String => self.get_mvl_string_drop(),
-                HeapKind::Array => self.get_mvl_array_drop(),
+                HeapKind::Array | HeapKind::Set => self.get_mvl_array_drop(),
                 HeapKind::Map => self.get_mvl_map_drop(),
             };
             let _ = self

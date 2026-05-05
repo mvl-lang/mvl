@@ -1,9 +1,13 @@
-//! Prelude — everything a generated MVL file needs in one `use` line.
+//! Prelude — language fundamentals needed in every generated MVL file.
 //!
 //! Every file emitted by the MVL transpiler starts with:
 //! ```rust
 //! use mvl_runtime::prelude::*;
 //! ```
+//!
+//! OS-specific modules (`std.io`, `std.env`, `std.process`, etc.) are NOT
+//! re-exported here. The transpiler emits explicit `use mvl_runtime::stdlib::X::*`
+//! imports for each `use std.X.*` declaration in the MVL source (#488 / #489).
 
 pub use crate::effects::{
     Alloc, Clock, Concurrent, Console, Db, Env, FileDelete, FileRead, FileWrite, Log, Net, Panic,
@@ -12,35 +16,18 @@ pub use crate::effects::{
 pub use crate::ifc::{declassify, sanitize, Clean, Public, Secret, Tainted};
 pub use crate::mvl_refine;
 
-// ── Standard library implementations ──────────────────────────────────────
+// ── Struct parsing infrastructure ─────────────────────────────────────────
 //
-// These re-exports provide the Rust backing for stdlib functions declared as
-// stubs in `std/*.mvl`. Programs that import `use std.io.*` or `use std.args.*`
-// call these directly — no per-program `bridge.rs` is needed for generic I/O.
+// ParseFromArgs is a transpiler-generated trait: the emitter synthesises
+// `impl ParseFromArgs for T` for every concrete struct with parseable fields,
+// and the generated `parse_from_args()` body calls `get_arg` and `parse`.
+// These are language infrastructure (not OS-specific) so they live in the
+// prelude rather than being gated behind `use std.args.*`. ADR-0012.
+//
+// The remaining `args` functions (get_args, get_env) are OS-level and are
+// only available after an explicit `use std.args.*` declaration (#488/#489).
 
-/// `std.io` — file I/O operations.
-pub use crate::stdlib::io::{join, path, read_file, read_to_string, to_string, Path};
-
-/// `std.args` — CLI argument and environment access.
-pub use crate::stdlib::args::{get_arg, get_args, get_env, parse, ParseFromArgs};
-
-/// `std.crypto` — hashing and CSPRNG (Phase 3: real Rust backing).
-pub use crate::stdlib::crypto::{crypto_random_bytes, sha256, sha512};
-
-/// `std.log` — structured logging (Phase 2: no-op stubs).
-pub use crate::stdlib::log::{log_debug, log_error, log_info, log_warn};
-
-/// `std.env` — environment variables, working directory, Unix identity, signals.
-pub use crate::stdlib::env::{
-    all, args, chdir, current_dir, exit, get, getgid, getuid, remove_var, set, sighup, sigint,
-    signal_ignore, signal_on, signal_reset, sigterm, sigusr1, sigusr2, Signal,
-};
-
-/// `std.process` — child process spawning and lifecycle.
-pub use crate::stdlib::process::{
-    exit_code, is_success, kill, spawn, stderr_read, stdin_write, stdout_read, wait, Child,
-    ChildStderr, ChildStdin, ChildStdout, ExitStatus, ProcessOutput, Stdio,
-};
+pub use crate::stdlib::args::{get_arg, parse, ParseFromArgs};
 
 // ── Extern kernel primitives ───────────────────────────────────────────────
 //
@@ -143,6 +130,69 @@ impl MvlContains<str> for String {
 impl<T: Eq + std::hash::Hash> MvlContains<T> for std::collections::HashSet<T> {
     fn mvl_contains(&self, x: &T) -> bool {
         self.contains(x)
+    }
+}
+
+/// Uniform `.get(key)` returning `Option<V>` for `Vec<T>` (integer index) and
+/// `HashMap<K, V>` (key lookup).
+///
+/// The transpiler emits `receiver.mvl_get(key.clone())` for all MVL `.get(k)`
+/// calls on List and Map types.
+///
+/// Keep in sync with the inline strings in `src/mvl/transpiler/emit_types.rs`.
+pub trait MvlGet<K, V> {
+    /// Look up `key`, returning `Some(value)` or `None`.
+    fn mvl_get(&self, key: K) -> Option<V>;
+}
+
+impl<T: Clone> MvlGet<i64, T> for Vec<T> {
+    fn mvl_get(&self, i: i64) -> Option<T> {
+        if i < 0 {
+            return None;
+        }
+        self.get(i as usize).cloned()
+    }
+}
+
+impl<K: std::hash::Hash + Eq, V: Clone> MvlGet<K, V> for std::collections::HashMap<K, V> {
+    fn mvl_get(&self, key: K) -> Option<V> {
+        self.get(&key).cloned()
+    }
+}
+
+/// Uniform `.len()` returning `i64` for all MVL collection types and `String`.
+///
+/// The transpiler emits `receiver.mvl_len()` for all MVL `.len()` calls.
+/// MVL's `Int` is `i64`; Rust collections return `usize`, so this trait
+/// handles the cast uniformly.
+///
+/// Keep in sync with the inline strings in `src/mvl/transpiler/emit_types.rs`.
+pub trait MvlLen {
+    /// Return the number of elements as `i64`.
+    fn mvl_len(&self) -> i64;
+}
+
+impl<T> MvlLen for Vec<T> {
+    fn mvl_len(&self) -> i64 {
+        self.len() as i64
+    }
+}
+
+impl<K, V> MvlLen for std::collections::HashMap<K, V> {
+    fn mvl_len(&self) -> i64 {
+        self.len() as i64
+    }
+}
+
+impl<T> MvlLen for std::collections::HashSet<T> {
+    fn mvl_len(&self) -> i64 {
+        self.len() as i64
+    }
+}
+
+impl MvlLen for String {
+    fn mvl_len(&self) -> i64 {
+        self.chars().count() as i64
     }
 }
 

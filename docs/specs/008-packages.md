@@ -1,0 +1,1 @@
+../../.openspec/specs/008-packages/spec.md

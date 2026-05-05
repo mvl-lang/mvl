@@ -1,64 +1,46 @@
-//! MVL C-ABI runtime — cdylib for the LLVM backend (ADR-0018).
+// All public `extern "C"` functions accept raw pointer parameters from C/LLVM
+// callers.  The unsafety is documented per-function via the Safety contract in
+// their doc comments.  Clippy's `not_unsafe_ptr_arg_deref` is suppressed
+// crate-wide because marking every `#[no_mangle] extern "C"` as `unsafe` would
+// require unsafe blocks in all Rust unit tests without adding safety at the C
+// call site (C has no notion of `unsafe`).
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+
+//! `mvl_runtime_c` — C-ABI stdlib for the MVL LLVM backend.
 //!
-//! Loaded by `lli` at runtime via `--load=libmvl_runtime_c.{so,dylib}`.
-//! Wraps `mvl_runtime` Rust APIs behind C-ABI symbols so LLVM IR can call
-//! them with `declare` + `Linkage::External`.
-//!
-//! # Two-path architecture
+//! This crate is a `cdylib` loaded by `lli` at runtime alongside `mvl_memory`:
 //!
 //! ```text
-//! Rust transpiler:  MVL → Rust source → cargo
-//!                   stdlib via `use mvl_runtime::prelude::*`  (Rust API)
-//!
-//! LLVM backend:     MVL → LLVM IR → lli
-//!                   stdlib via libmvl_runtime_c.so (C-ABI exports, this crate)
+//! lli --load=libmvl_memory.{dylib,so} \
+//!     --load=libmvl_runtime_c.{dylib,so} \
+//!     program.ll
 //! ```
 //!
-//! # Adding a new export
+//! It wraps `mvl_runtime` Rust APIs with `#[no_mangle] extern "C"` symbols
+//! so LLVM-generated code can call them.  The Rust transpiler path is
+//! unaffected and continues to use `mvl_runtime` natively via the prelude.
 //!
-//! Use the `mvl_c_export!` macro for mechanical wrappers:
+//! Collection operations (mvl_string_len, mvl_array_push, mvl_map_get, …)
+//! live in [`memory_ops`]; `mvl_memory` retains only types + lifecycle (#490).
 //!
-//! ```rust,ignore
-//! mvl_c_export! {
-//!     pub fn _mvl_my_fn(x: i64) -> i64 {
-//!         mvl_runtime::my_module::my_fn(x)
-//!     }
-//! }
+//! # Architecture
+//!
+//! See ADR-0019 for the two-path design rationale.
+//!
+//! ```text
+//! Path 1 (Rust transpiler):  MVL → Rust source → cargo/rustc
+//!                             stdlib via `use mvl_runtime::prelude::*`
+//!
+//! Path 2 (LLVM backend):     MVL → LLVM IR → lli
+//!                             stdlib via libmvl_runtime_c (this crate)
 //! ```
-//!
-//! For functions that take or return heap types, use the marshalling types
-//! from [`abi`] (`MvlOption`, `MvlResult`) and the pointer types from
-//! `mvl_memory` (`MvlString*`, `MvlArray*`, `MvlMap*`).
 
+#[macro_use]
+pub mod macros;
 pub mod abi;
+pub mod memory_ops;
 pub mod stdlib;
 pub mod version;
 
-/// Generate a `#[no_mangle] pub unsafe extern "C"` wrapper from a plain
-/// function definition.  The function body may call into `mvl_runtime` APIs.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// mvl_c_export! {
-///     pub fn _mvl_env_get(key: *const libc::c_char) -> *mut abi::MvlOption {
-///         // ... marshal and call mvl_runtime::stdlib::env::get(...)
-///         std::ptr::null_mut()
-///     }
-/// }
-/// ```
-#[macro_export]
-macro_rules! mvl_c_export {
-    (
-        pub fn $name:ident ( $($arg:ident : $ty:ty),* $(,)? ) -> $ret:ty $body:block
-    ) => {
-        #[no_mangle]
-        pub unsafe extern "C" fn $name( $($arg: $ty),* ) -> $ret $body
-    };
-    (
-        pub fn $name:ident ( $($arg:ident : $ty:ty),* $(,)? ) $body:block
-    ) => {
-        #[no_mangle]
-        pub unsafe extern "C" fn $name( $($arg: $ty),* ) $body
-    };
-}
+// Re-export the pilot symbol at crate root for visibility in tests.
+pub use version::_mvl_runtime_version;

@@ -1,0 +1,22 @@
+//! AST transformation passes — backend-agnostic instrumentation.
+//!
+//! Passes operate on the typed AST produced by the checker and produce an
+//! instrumented AST (with markers / metadata) consumed by backends.
+//!
+//! # Pipeline position
+//!
+//! ```text
+//! parser → resolver → checker → passes → backends (transpiler / codegen)
+//! ```
+//!
+//! # Passes
+//!
+//! | Pass       | Analysis module          | Transform module           |
+//! |------------|--------------------------|----------------------------|
+//! | coverage   | —                        | `coverage::transform`      |
+//! | mcdc       | `mcdc::analysis`         | `mcdc::transform`          |
+//! | mutation   | —                        | `mutation::transform`      |
+
+pub mod coverage;
+pub mod mcdc;
+pub mod mutation;

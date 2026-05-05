@@ -1,0 +1,1 @@
+../../.openspec/specs/011-linter/spec.md

@@ -1,4 +1,35 @@
-# Standard Library: Three Tiers
+# Standard Library
+
+## Implementation Status
+
+The stdlib has 16 modules.  We are actively implementing them for both the Rust
+transpiler backend and the LLVM backend.
+
+| Module      | MVL fns | Rust impl | Status                    |
+|-------------|---------|-----------|---------------------------|
+| args        | 4       | yes       | Real (1 stub)             |
+| collections | 17      | no        | MVL-only stubs            |
+| core        | 11      | no        | MVL-only stubs            |
+| crypto      | 3       | yes       | Real (1 stub)             |
+| env         | 18      | yes       | Real (shipped, #414)      |
+| io          | 26      | yes       | Partial (1 stub)          |
+| json        | 2       | no        | MVL-only stubs            |
+| lists       | 25      | no        | MVL-only stubs            |
+| log         | 4       | yes       | Partial (6 stubs)         |
+| math        | 26      | no        | MVL-only stubs            |
+| primitives  | mixed   | yes       | Real                      |
+| process     | 8       | yes       | Real (shipped, #414)      |
+| random      | 5       | no        | MVL-only stubs            |
+| regex       | 5       | no        | MVL-only stubs            |
+| strings     | 14      | no        | MVL-only stubs            |
+| time        | 7       | no        | MVL-only stubs            |
+
+**Rust impl** means the module has a real Rust runtime implementation (via `mvl_runtime` or `mvl_runtime_c`).
+Modules marked "MVL-only stubs" have type signatures and specs but no backend implementation yet.
+
+---
+
+## Three Tiers
 
 Derived from cross-language analysis of Rust std, Go std, Python stdlib, and C libc. Principle: **core is tiny (~30 types/functions), standard is complete (~200), everything else is packages.**
 

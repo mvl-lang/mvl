@@ -1,11 +1,12 @@
-//! C-ABI wrappers for MVL stdlib modules (ADR-0018).
+//! C-ABI wrappers for MVL stdlib modules.
 //!
-//! Each submodule mirrors a `mvl_runtime::stdlib` module, exposing the same
-//! surface area as C-ABI symbols callable from LLVM IR.
-//!
-//! Status:
-//! - `env`     — scaffolded; implements when `mvl_runtime::stdlib::env` lands (#414)
-//! - `process` — scaffolded; implements when `mvl_runtime::stdlib::process` lands (#414)
+//! Each sub-module mirrors a stdlib module from `mvl_runtime::stdlib::*`.
+//! Every public function in the Rust implementation has a corresponding
+//! `_mvl_*` export here that is callable from LLVM-generated code.
 
 pub mod env;
+pub mod io;
+pub mod log;
 pub mod process;
+pub mod random;
+pub mod time;

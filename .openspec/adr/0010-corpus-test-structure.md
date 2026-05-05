@@ -26,6 +26,9 @@ tests/corpus/
 │                       refinement+totality, ownership+effects. Adversarial cases.
 ├── 11_programs/        Full programs: progressive complexity from hello_world to
 │                       auth_handler. Each uses more requirements than the last.
+├── 12_bdd/             BDD naming convention examples: given_*/when_*/then_*/scenario_*
+│                       pattern (ADR-0020, spec 004 Req 5). Files are _test.mvl,
+│                       run via `mvl test` not `mvl run`.
 
 examples/               Multi-file real projects (access_control, log_analyzer).
                         Not compiler tests — showcases.
@@ -46,6 +49,7 @@ examples/               Multi-file real projects (access_control, log_analyzer).
 | 09_concurrency | R9 | Data race freedom in isolation |
 | 10_verification | R1-R11 combined | Cross-requirement interaction |
 | 11_programs | All applicable | Realistic programs, progressive |
+| 12_bdd | Spec 004 Req 5 | BDD naming convention (_test.mvl, `mvl test`) |
 
 ### Distinction from examples/
 

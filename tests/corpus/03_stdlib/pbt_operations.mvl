@@ -1,0 +1,135 @@
+// Corpus: property-based testing stdlib (#40, #425)
+// Demonstrates std.pbt Phase A: generators, combinators, property_check.
+// Phase B: mutation operators and targeted property checking.
+// Shrinking is a runtime behaviour of property_check — not demonstrable via stubs.
+// All functions require ! Random — enforced by the effect system.
+
+use std.pbt.{
+    gen_int, gen_bool, gen_string, gen_list_int,
+    gen_filter_int, gen_one_of_int,
+    property_check_int, property_check_bool, property_check_string, property_check_list_int,
+    mutate_int, mutate_float, mutate_string, mutate_list_int,
+    property_check_targeted_int, property_check_with_mutation_int,
+}
+
+// ── Phase A demos ─────────────────────────────────────────────────────────────
+
+// Property: dividing 100 by any positive Int never fails.
+fn fn_divide_never_fails(x: Int) -> Bool {
+    x > 0
+}
+
+fn test_divide_never_fails() -> Unit ! Random {
+    property_check_int("divide_never_fails", gen_int(1, 1000), fn_divide_never_fails, 1000)
+}
+
+// Property: Bool generator covers both values; tautology always holds.
+fn fn_bool_tautology(b: Bool) -> Bool {
+    true
+}
+
+fn test_bool_property() -> Unit ! Random {
+    property_check_bool("bool_tautology", gen_bool(), fn_bool_tautology, 100)
+}
+
+// Property: list length is always non-negative.
+// (sort_idempotent requires list equality; deferred until that op is available.)
+fn fn_list_len_nonneg(xs: List[Int]) -> Bool {
+    let n: Int = xs.len();
+    n >= 0
+}
+
+fn test_list_len_nonneg() -> Unit ! Random {
+    property_check_list_int(
+        "list_len_nonneg",
+        gen_list_int(0, 100, 20),
+        fn_list_len_nonneg,
+        500
+    )
+}
+
+// Property: string length is always non-negative.
+// (map_roundtrip requires string equality; deferred until that op is available.)
+fn fn_string_len_nonneg(s: String) -> Bool {
+    s.len() >= 0
+}
+
+fn test_string_len_nonneg() -> Unit ! Random {
+    property_check_string(
+        "string_len_nonneg",
+        gen_string(0, 50),
+        fn_string_len_nonneg,
+        500
+    )
+}
+
+// ── Combinators demo ──────────────────────────────────────────────────────────
+
+// gen_filter_int: only generate even numbers.
+fn is_even(x: Int) -> Bool {
+    x % 2 == 0
+}
+
+fn test_filtered_generator() -> Unit ! Random {
+    let even_gen: Generator[Int] = gen_filter_int(gen_int(0, 200), is_even);
+    property_check_int("filtered_gen", even_gen, is_even, 200)
+}
+
+// gen_one_of_int: pick from a fixed set.
+fn is_small(x: Int) -> Bool {
+    x < 10
+}
+
+fn test_one_of_generator() -> Unit ! Random {
+    let g: Generator[Int] = gen_one_of_int([1, 2, 3, 5, 7]);
+    property_check_int("one_of_gen", g, is_small, 100)
+}
+
+// ── Phase B: mutation operators ───────────────────────────────────────────────
+
+fn demo_mutate_int(x: Int) -> Int ! Random {
+    mutate_int(x)
+}
+
+fn demo_mutate_float(x: Float) -> Float ! Random {
+    mutate_float(x)
+}
+
+fn demo_mutate_string(s: String) -> String ! Random {
+    mutate_string(s)
+}
+
+fn demo_mutate_list(xs: List[Int]) -> List[Int] ! Random {
+    mutate_list_int(xs)
+}
+
+// ── Phase B: targeted and mutation-based property checking ────────────────────
+
+// Distance function: how close is x to violating x > 0?
+fn distance_to_zero(x: Int) -> Float {
+    x.to_float()
+}
+
+fn fn_positive(x: Int) -> Bool {
+    x > 0
+}
+
+fn test_targeted_pbt() -> Unit ! Random {
+    property_check_targeted_int(
+        "targeted_positive",
+        gen_int(1, 1000),
+        fn_positive,
+        distance_to_zero,
+        500
+    )
+}
+
+fn test_mutation_based_pbt() -> Unit ! Random {
+    property_check_with_mutation_int(
+        "mutation_positive",
+        gen_int(1, 1000),
+        fn_positive,
+        0.5,
+        500
+    )
+}

@@ -24,8 +24,8 @@ type AppError = enum {
 // ── AuthError variant tests ────────────────────────────────────────────────
 
 test fn auth_error_invalid_credentials() -> Unit {
-    let err = AuthError::InvalidCredentials;
-    let v = match err {
+    let err: AuthError = AuthError::InvalidCredentials;
+    let v: Int = match err {
         AuthError::InvalidCredentials => 1,
         AuthError::SessionExpired     => 2,
         AuthError::InvalidToken       => 3,
@@ -34,8 +34,8 @@ test fn auth_error_invalid_credentials() -> Unit {
 }
 
 test fn auth_error_session_expired() -> Unit {
-    let err = AuthError::SessionExpired;
-    let v = match err {
+    let err: AuthError = AuthError::SessionExpired;
+    let v: Int = match err {
         AuthError::InvalidCredentials => 1,
         AuthError::SessionExpired     => 2,
         AuthError::InvalidToken       => 3,
@@ -44,8 +44,8 @@ test fn auth_error_session_expired() -> Unit {
 }
 
 test fn auth_error_invalid_token() -> Unit {
-    let err = AuthError::InvalidToken;
-    let v = match err {
+    let err: AuthError = AuthError::InvalidToken;
+    let v: Int = match err {
         AuthError::InvalidCredentials => 1,
         AuthError::SessionExpired     => 2,
         AuthError::InvalidToken       => 3,
@@ -56,8 +56,8 @@ test fn auth_error_invalid_token() -> Unit {
 // ── AppError variant tests ─────────────────────────────────────────────────
 
 test fn app_error_auth_failed() -> Unit {
-    let err = AppError::AuthFailed;
-    let v = match err {
+    let err: AppError = AppError::AuthFailed;
+    let v: Int = match err {
         AppError::AuthFailed   => 1,
         AppError::UserNotFound => 2,
         AppError::MissingArg   => 3,
@@ -66,8 +66,8 @@ test fn app_error_auth_failed() -> Unit {
 }
 
 test fn app_error_user_not_found() -> Unit {
-    let err = AppError::UserNotFound;
-    let v = match err {
+    let err: AppError = AppError::UserNotFound;
+    let v: Int = match err {
         AppError::AuthFailed   => 1,
         AppError::UserNotFound => 2,
         AppError::MissingArg   => 3,
@@ -76,8 +76,8 @@ test fn app_error_user_not_found() -> Unit {
 }
 
 test fn app_error_missing_arg() -> Unit {
-    let err = AppError::MissingArg;
-    let v = match err {
+    let err: AppError = AppError::MissingArg;
+    let v: Int = match err {
         AppError::AuthFailed   => 1,
         AppError::UserNotFound => 2,
         AppError::MissingArg   => 3,

@@ -8,12 +8,12 @@ type Point = struct {
 
 // Literals
 fn literals() -> Unit {
-    let a = 42;
-    let b = 3.14;
-    let c = "hello";
-    let d: Char = 'x';
-    let e = true;
-    let f = false;
+    let a: Int    = 42;
+    let b: Float  = 3.14;
+    let c: String = "hello";
+    let d: Char   = 'x';
+    let e: Bool   = true;
+    let f: Bool   = false;
 }
 
 // Identifiers and field access
@@ -41,34 +41,34 @@ fn fn_call_multi(a: Int, b: Int) -> Int {
 
 // Binary operators
 fn binary_ops(a: Int, b: Int) -> Int {
-    let sum = a + b;
-    let diff = a - b;
-    let prod = a * b;
-    let quot = a / b;
-    let rem = a % b;
+    let sum: Int  = a + b;
+    let diff: Int = a - b;
+    let prod: Int = a * b;
+    let quot: Int = a / b;
+    let rem: Int  = a % b;
     sum
 }
 
 fn comparison_ops(a: Int, b: Int) -> Bool {
-    let eq = a == b;
-    let ne = a != b;
-    let lt = a < b;
-    let gt = a > b;
-    let le = a <= b;
-    let ge = a >= b;
+    let eq: Bool = a == b;
+    let ne: Bool = a != b;
+    let lt: Bool = a < b;
+    let gt: Bool = a > b;
+    let le: Bool = a <= b;
+    let ge: Bool = a >= b;
     lt
 }
 
 fn logical_ops(p: Bool, q: Bool) -> Bool {
-    let and = p && q;
-    let or = p || q;
+    let and: Bool = p && q;
+    let or: Bool  = p || q;
     and
 }
 
 // Unary operators
 fn unary_ops(n: Int, flag: Bool) -> Unit {
-    let neg = -n;
-    let not_flag = !flag;
+    let neg: Int      = -n;
+    let not_flag: Bool = !flag;
 }
 
 // Operator precedence: a + b * c → a + (b * c)
@@ -78,13 +78,13 @@ fn precedence(a: Int, b: Int, c: Int) -> Int {
 
 // ? propagation
 fn propagation(input: String) -> Result[Int, String] {
-    let n = parse_int(input)?;
+    let n: Int = parse_int(input)?;
     Ok(n)
 }
 
 // If-expression (as expression, not statement)
 fn if_expr(n: Int) -> String {
-    let label = if n > 0 { "positive" } else { "non-positive" };
+    let label: String = if n > 0 { "positive" } else { "non-positive" };
     label
 }
 
@@ -113,7 +113,7 @@ fn struct_construction() -> Point {
 
 // Security-flow operations
 fn security_ops(raw: Tainted[String]) -> Clean[String] {
-    let clean = sanitize(raw);
+    let clean: Clean[String] = sanitize(raw);
     clean
 }
 

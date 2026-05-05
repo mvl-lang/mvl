@@ -22,7 +22,7 @@ MVL is a verification language that transpiles to Rust (Phase 1). The transpiler
 
 **Design principle:** When in doubt, emit more code. A redundant `.clone()` is correct; a missing one is a compiler bug. Rust's optimiser (LLVM) removes redundant clones. The transpiler does not need to be clever.
 
-**ADR:** [0003 — Compilation Strategy](../../adr/0003-compilation-strategy.md)
+**ADR:** [0003 — Compilation Strategy](../adr/0003-compilation-strategy.md)
 
 ## Requirements
 

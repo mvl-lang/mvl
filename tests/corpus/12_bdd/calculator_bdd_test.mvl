@@ -1,0 +1,139 @@
+// BDD-style integration tests for the calculator module.
+//
+// Demonstrates the MVL BDD naming convention (ADR-0020, spec 004 Req 5):
+//
+//   given_*          — set up preconditions, return a context struct
+//   when_*           — pure transform on context, return updated context
+//   then_*           — assert on context, return Unit
+//   test fn scenario_* — chains the steps; this is the test entry point
+//
+// No new language features. The convention mirrors Python's native-language BDD
+// approach (e.g. pytest-bdd with @given/@when/@then) without decorators or lambdas.
+// State is threaded explicitly through a context struct — consistent with MVL's
+// ownership model.
+//
+// Spec: .openspec/specs/004-testing/spec.md#requirement-5
+
+// ---------------------------------------------------------------------------
+// Domain functions under test
+// ---------------------------------------------------------------------------
+
+total fn add(a: Int, b: Int) -> Int {
+    a + b
+}
+
+total fn sub(a: Int, b: Int) -> Int {
+    a - b
+}
+
+partial fn divide(a: Int, b: Int) -> Result[Int, String] {
+    if b == 0 {
+        Result::Err("division by zero")
+    } else {
+        Result::Ok(a / b)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// BDD context struct
+// ---------------------------------------------------------------------------
+
+// CalcCtx carries the scenario state between steps.
+// Fields are immutable — each step returns a new context.
+type CalcCtx = struct {
+    a: Int,
+    b: Int,
+    result: Int,
+    error: String,
+    ok: Bool,
+}
+
+// ---------------------------------------------------------------------------
+// Given — set up preconditions
+// ---------------------------------------------------------------------------
+
+fn given_two_numbers(a: Int, b: Int) -> CalcCtx {
+    CalcCtx { a: a, b: b, result: 0, error: "", ok: true }
+}
+
+fn given_a_zero_divisor(a: Int) -> CalcCtx {
+    CalcCtx { a: a, b: 0, result: 0, error: "", ok: true }
+}
+
+// ---------------------------------------------------------------------------
+// When — apply the action (pure transform, returns updated context)
+// ---------------------------------------------------------------------------
+
+fn when_added(ctx: CalcCtx) -> CalcCtx {
+    let r: Int = add(ctx.a, ctx.b);
+    CalcCtx { a: ctx.a, b: ctx.b, result: r, error: "", ok: true }
+}
+
+fn when_subtracted(ctx: CalcCtx) -> CalcCtx {
+    let r: Int = sub(ctx.a, ctx.b);
+    CalcCtx { a: ctx.a, b: ctx.b, result: r, error: "", ok: true }
+}
+
+fn when_divided(ctx: CalcCtx) -> CalcCtx {
+    match divide(ctx.a, ctx.b) {
+        Result::Ok(r) => CalcCtx { a: ctx.a, b: ctx.b, result: r, error: "", ok: true },
+        Result::Err(e) => CalcCtx { a: ctx.a, b: ctx.b, result: 0, error: e, ok: false },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Then — assertions (return Unit)
+// ---------------------------------------------------------------------------
+
+fn then_result_equals(ctx: CalcCtx, expected: Int) -> Unit {
+    assert_eq(ctx.result, expected);
+}
+
+fn then_operation_failed(ctx: CalcCtx) -> Unit {
+    assert(!ctx.ok);
+}
+
+fn then_error_is(ctx: CalcCtx, expected: String) -> Unit {
+    assert_eq(ctx.error, expected);
+}
+
+// ---------------------------------------------------------------------------
+// Scenarios — each `test fn scenario_*` is one BDD scenario.
+// Name maps 1:1 to a Scenario: entry in .openspec/specs/.
+// ---------------------------------------------------------------------------
+
+// Scenario: adding two positive numbers
+test fn scenario_adding_two_positive_numbers() -> Unit {
+    let ctx: CalcCtx = given_two_numbers(2, 3);
+    let ctx: CalcCtx = when_added(ctx);
+    then_result_equals(ctx, 5);
+}
+
+// Scenario: adding a positive and negative number
+test fn scenario_adding_positive_and_negative() -> Unit {
+    let ctx: CalcCtx = given_two_numbers(10, -4);
+    let ctx: CalcCtx = when_added(ctx);
+    then_result_equals(ctx, 6);
+}
+
+// Scenario: subtracting gives correct difference
+test fn scenario_subtracting_numbers() -> Unit {
+    let ctx: CalcCtx = given_two_numbers(10, 3);
+    let ctx: CalcCtx = when_subtracted(ctx);
+    then_result_equals(ctx, 7);
+}
+
+// Scenario: dividing two numbers evenly
+test fn scenario_dividing_evenly() -> Unit {
+    let ctx: CalcCtx = given_two_numbers(12, 4);
+    let ctx: CalcCtx = when_divided(ctx);
+    then_result_equals(ctx, 3);
+}
+
+// Scenario: dividing by zero returns an error
+test fn scenario_dividing_by_zero_returns_error() -> Unit {
+    let ctx: CalcCtx = given_a_zero_divisor(10);
+    let ctx: CalcCtx = when_divided(ctx);
+    then_operation_failed(ctx);
+    then_error_is(ctx, "division by zero");
+}

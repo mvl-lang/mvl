@@ -561,3 +561,174 @@ fn println_non_string_first_arg_runs() {
         ],
     );
 }
+
+// ── log stdlib (#416) ─────────────────────────────────────────────────────
+
+fn corpus_effects(name: &str) -> String {
+    format!(
+        "{}/tests/corpus/05_effects/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+#[test]
+fn log_output_check_passes() {
+    let out = run_check(&corpus_effects("log_output.mvl"));
+    assert!(
+        out.status.success(),
+        "log_output: mvl check failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Issue #416: real log implementation — eprintln backend.
+///
+/// Verifies that all four log levels write to stderr in the format:
+///   [LEVEL ISO_8601_TIMESTAMP] msg field=value ...
+/// and that fields are sorted deterministically.
+#[test]
+fn log_output_formats_correctly() {
+    let out = Command::new(mvl_bin())
+        .args(["run", &corpus_effects("log_output.mvl")])
+        .output()
+        .expect("failed to run mvl run");
+    assert!(
+        out.status.success(),
+        "log_output: mvl run failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    assert!(
+        stderr.contains("[DEBUG "),
+        "expected [DEBUG in stderr:\n{stderr}"
+    );
+    assert!(stderr.contains("v=1"), "expected v=1 in stderr:\n{stderr}");
+    assert!(
+        stderr.contains("[INFO "),
+        "expected [INFO in stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("[WARN "),
+        "expected [WARN in stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("[ERROR "),
+        "expected [ERROR in stderr:\n{stderr}"
+    );
+
+    // ISO 8601 timestamp — at least one log line must contain NNNNThh:mm:ssZ shape
+    assert!(
+        stderr.lines().any(|l| {
+            l.contains('T') && l.contains("Z]") && l.chars().any(|c| c.is_ascii_digit())
+        }),
+        "expected ISO 8601 timestamp (T...Z]) on a log line in stderr:\n{stderr}"
+    );
+
+    // Field key=value pairs present
+    assert!(
+        stderr.contains("port=8080"),
+        "expected port=8080 in stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("usage=85%"),
+        "expected usage=85% in stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("error=timeout"),
+        "expected error=timeout in stderr:\n{stderr}"
+    );
+
+    // Sorted field order: a=first m=mid z=last on the same line
+    let ordering_line = stderr
+        .lines()
+        .find(|l| l.contains("ordering"))
+        .expect("expected a line containing 'ordering' in stderr");
+    let a_pos = ordering_line.find("a=first").expect("a=first not found");
+    let m_pos = ordering_line.find("m=mid").expect("m=mid not found");
+    let z_pos = ordering_line.find("z=last").expect("z=last not found");
+    assert!(
+        a_pos < m_pos && m_pos < z_pos,
+        "fields not sorted: {ordering_line}"
+    );
+}
+
+// ── collections_basic.mvl — Map/Set native MVL (#418) ─────────────────────
+
+/// Gate test: Map.len, Map.contains_key, Set.len, Set.contains
+/// all produce correct deterministic output via real MVL bodies in std/collections.mvl.
+///
+/// Expected stdout:
+///   map_len=2
+///   has_alice=true
+///   has_carol=false
+///   set_len=4
+///   has_five=true
+///   has_nine=false
+#[test]
+fn collections_basic_runs_and_produces_expected_output() {
+    assert_run_output(
+        "collections_basic.mvl",
+        &[
+            "map_len=2",
+            "has_alice=true",
+            "has_carol=false",
+            "set_len=4",
+            "has_five=true",
+            "has_nine=false",
+        ],
+    );
+}
+
+fn corpus_bdd(name: &str) -> String {
+    format!("{}/tests/corpus/12_bdd/{name}", env!("CARGO_MANIFEST_DIR"))
+}
+
+/// Spec 004 Req 5 (ADR-0020): BDD naming convention — given_*/when_*/then_*/scenario_*
+/// functions in a _test.mvl file are valid MVL and all five scenarios pass.
+#[test]
+fn bdd_scenarios_run_and_pass() {
+    let out = Command::new(mvl_bin())
+        .args(["test", &corpus_bdd("calculator_bdd_test.mvl")])
+        .output()
+        .expect("failed to run mvl test");
+    assert!(
+        out.status.success(),
+        "bdd scenarios failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("5 passed"),
+        "expected 5 passed, got:\n{stdout}"
+    );
+}
+
+/// Spec 004 Req 5 (ADR-0020): `mvl test --bdd` emits a Gherkin-style scenario report
+/// derived from `scenario_*` function names, after all tests pass.
+#[test]
+fn bdd_report_emits_gherkin_scenarios() {
+    let out = Command::new(mvl_bin())
+        .args(["test", &corpus_bdd("calculator_bdd_test.mvl"), "--bdd"])
+        .output()
+        .expect("failed to run mvl test --bdd");
+    assert!(
+        out.status.success(),
+        "mvl test --bdd failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("BDD scenarios:"),
+        "expected 'BDD scenarios:' header, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Scenario: adding two positive numbers ... ok"),
+        "expected scenario line, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Scenario: dividing by zero returns error ... ok"),
+        "expected scenario line, got:\n{stdout}"
+    );
+}

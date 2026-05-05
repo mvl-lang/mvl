@@ -1,8 +1,5 @@
 # MVL Language Manual
 
-**Version:** 0.1.0 (draft)
-**Date:** 2026-04-11
-
 This is the complete language manual for the Minimum Verification Language. It defines the language as implemented by the MVL compiler.
 
 For design rationale, see the [ADRs](../adr/0001-eleven-requirements.md). For formal specifications, see the [Specs](../specs/001-type-system.md). For the research behind the language, see the [Introduction](../introduction.md).

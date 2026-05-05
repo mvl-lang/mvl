@@ -113,7 +113,9 @@ impl<'ctx> LlvmBackend<'ctx> {
                                 {
                                     let drop_fn = match kind {
                                         HeapKind::String => self.get_mvl_string_drop(),
-                                        HeapKind::Array => self.get_mvl_array_drop(),
+                                        HeapKind::Array | HeapKind::Set => {
+                                            self.get_mvl_array_drop()
+                                        }
                                         HeapKind::Map => self.get_mvl_map_drop(),
                                     };
                                     let _ = self.builder.build_call(
@@ -309,7 +311,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         scrutinee: &Expr,
         arms: &[MatchArm],
     ) -> Option<BasicValueEnum<'ctx>> {
-        let ok_ty = self.infer_result_ok_llvm_ty(scrutinee);
+        let ok_ty_opt = self.infer_result_ok_llvm_ty(scrutinee);
         let scrutinee_val = self.emit_expr(scrutinee)?;
 
         // Extract i8 discriminant from the scrutinee value.
@@ -363,7 +365,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             self.terminated = false;
 
             // Bind pattern variables if needed (Phase B: simple cases only).
-            self.bind_pattern_vars(&arm.pattern, scrutinee_val, Some(ok_ty));
+            self.bind_pattern_vars(&arm.pattern, scrutinee_val, ok_ty_opt);
 
             let arm_val = match &arm.body {
                 MatchBody::Expr(e) => self.emit_expr(e),
@@ -740,7 +742,7 @@ pub(crate) fn heap_kind_of(ty: &TypeExpr) -> Option<HeapKind> {
         "String" => Some(HeapKind::String),
         "List" | "Array" => Some(HeapKind::Array),
         "Map" => Some(HeapKind::Map),
-        "Set" => Some(HeapKind::Array), // Set uses the array backend
+        "Set" => Some(HeapKind::Set),
         _ => None,
     }
 }

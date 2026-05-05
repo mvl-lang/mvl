@@ -4,6 +4,7 @@ pub mod codegen;
 pub mod linter;
 pub mod packages;
 pub mod parser;
+pub mod passes;
 pub mod resolver;
 pub mod stdlib;
 pub mod toolchain;

@@ -70,13 +70,13 @@ impl<'ctx> LlvmBackend<'ctx> {
                 ..
             } => self.emit_method_call(receiver, method, args),
 
-            other => {
+            _other => {
                 // Unhandled Expr variant: return None so the caller can propagate failure.
                 // In debug builds, print a notice to help catch missing codegen arms early.
                 #[cfg(debug_assertions)]
                 eprintln!(
                     "[llvm-backend] unhandled Expr variant in emit_expr: {:?}",
-                    std::mem::discriminant(other)
+                    std::mem::discriminant(_other)
                 );
                 None
             }
@@ -487,8 +487,12 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     /// Emit `expr?` — evaluate expr (must return `Result[T, E]` tagged union),
     /// branch to ok/err: on Err, return early; on Ok, yield the payload value.
+    ///
+    /// When the Ok type is `Unit` (`infer_result_ok_llvm_ty` returns `None`) the
+    /// payload pointer is null and must not be dereferenced; we return `i64 0`
+    /// as the unit sentinel instead.
     pub(crate) fn emit_propagate(&mut self, expr: &Expr) -> Option<BasicValueEnum<'ctx>> {
-        let ok_ty = self.infer_result_ok_llvm_ty(expr);
+        let ok_ty_opt = self.infer_result_ok_llvm_ty(expr);
         let result_val = self.emit_expr(expr)?;
         let BasicValueEnum::StructValue(sv) = result_val else {
             return None;
@@ -523,11 +527,18 @@ impl<'ctx> LlvmBackend<'ctx> {
             .builder
             .build_extract_value(sv, 1, "prop_payload_ptr")
             .ok()?;
-        let payload_ptr = payload_ptr_val.into_pointer_value();
-        let ok_val = self
-            .builder
-            .build_load(ok_ty, payload_ptr, "prop_ok_val")
-            .unwrap();
+
+        // Unit-result guard: when ok_ty is None the Ok payload is null (no value).
+        // Return i64 0 as the unit sentinel without dereferencing the pointer.
+        let ok_val = match ok_ty_opt {
+            None => self.context.i64_type().const_zero().into(),
+            Some(ok_ty) => {
+                let payload_ptr = payload_ptr_val.into_pointer_value();
+                self.builder
+                    .build_load(ok_ty, payload_ptr, "prop_ok_val")
+                    .unwrap()
+            }
+        };
         Some(ok_val)
     }
 
@@ -647,6 +658,17 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .into(),
             BinaryOp::And => self.builder.build_and(l, r, "and").unwrap().into(),
             BinaryOp::Or => self.builder.build_or(l, r, "or").unwrap().into(),
+            BinaryOp::BitAnd => self.builder.build_and(l, r, "bitand").unwrap().into(),
+            BinaryOp::BitOr => self.builder.build_or(l, r, "bitor").unwrap().into(),
+            BinaryOp::BitXor => self.builder.build_xor(l, r, "bitxor").unwrap().into(),
+            BinaryOp::Shl => self.builder.build_left_shift(l, r, "shl").unwrap().into(),
+            // Default to arithmetic (signed) right shift; logical shift for unsigned
+            // types requires type-level signedness tracking (follow-up: #484).
+            BinaryOp::Shr => self
+                .builder
+                .build_right_shift(l, r, true, "shr")
+                .unwrap()
+                .into(),
         };
         Some(result)
     }
@@ -790,6 +812,14 @@ impl<'ctx> LlvmBackend<'ctx> {
                 _ => None,
             },
             UnaryOp::Deref => Some(val),
+            UnaryOp::BitNot => match val {
+                // LLVM bitwise NOT = XOR with all-ones (-1).
+                BasicValueEnum::IntValue(v) => {
+                    let ones = v.get_type().const_all_ones();
+                    Some(self.builder.build_xor(v, ones, "bitnot").unwrap().into())
+                }
+                _ => None,
+            },
         }
     }
 
@@ -860,6 +890,59 @@ impl<'ctx> LlvmBackend<'ctx> {
                         }
                     }
                 }
+                // ADR-0019: dispatch to libmvl_runtime_c C-ABI for stdlib imports.
+                if let Some(sig) = self.stdlib_imports.get(name).cloned() {
+                    use crate::mvl::codegen::StdlibSig;
+                    match &sig {
+                        StdlibSig::I64NoArg(sym) if args.is_empty() => {
+                            return self.emit_stdlib_call_i64(sym);
+                        }
+                        StdlibSig::F64NoArg(sym) if args.is_empty() => {
+                            return self.emit_stdlib_call_f64(sym);
+                        }
+                        StdlibSig::I64TwoI64Args(sym) if args.len() == 2 => {
+                            let sym = sym.clone();
+                            let a = self.emit_expr(&args[0])?;
+                            let b = self.emit_expr(&args[1])?;
+                            return self.emit_stdlib_call_i64_two_args(&sym, a, b);
+                        }
+                        StdlibSig::VoidDurationArg(sym) if args.len() == 1 => {
+                            let sym = sym.clone();
+                            let d = self.emit_expr(&args[0])?;
+                            return self.emit_stdlib_call_void_duration_arg(&sym, d);
+                        }
+                        StdlibSig::VoidStringMapArg(sym) if args.len() == 2 => {
+                            let sym = sym.clone();
+                            let msg = self.emit_expr(&args[0])?;
+                            let fields = self.emit_expr(&args[1])?;
+                            return self.emit_stdlib_call_void_string_map(&sym, msg, fields);
+                        }
+                        // #435: io stdlib
+                        StdlibSig::PtrIdentArg(sym) if args.len() == 1 => {
+                            let sym = sym.clone();
+                            let arg = self.emit_expr(&args[0])?;
+                            return self.emit_stdlib_call_ptr_identity(&sym, arg);
+                        }
+                        StdlibSig::ResultUnitOnePtrArg(sym) if args.len() == 1 => {
+                            let sym = sym.clone();
+                            let arg = self.emit_expr(&args[0])?;
+                            return self.emit_stdlib_call_result_one_ptr_arg(&sym, arg);
+                        }
+                        StdlibSig::ResultUnitTwoPtrArgs(sym) if args.len() == 2 => {
+                            let sym = sym.clone();
+                            let a = self.emit_expr(&args[0])?;
+                            let b = self.emit_expr(&args[1])?;
+                            return self.emit_stdlib_call_result_two_ptr_args(&sym, a, b);
+                        }
+                        StdlibSig::ResultStringOnePtrArg(sym) if args.len() == 1 => {
+                            let sym = sym.clone();
+                            let arg = self.emit_expr(&args[0])?;
+                            return self.emit_stdlib_call_result_one_ptr_arg(&sym, arg);
+                        }
+                        _ => {}
+                    }
+                }
+
                 // L5-15 + L5-08: single lookup for user-defined function metadata.
                 if let Some(fd) = self.fn_decls.get(name).cloned() {
                     // L5-15: mark heap-typed value arguments as moved (ownership
@@ -900,14 +983,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                         use inkwell::values::AnyValue;
                         return BasicValueEnum::try_from(call.as_any_value_enum()).ok();
                     }
-                }
-                // ADR-0018: stdlib C-ABI dispatch — generic path, no per-function boilerplate.
-                if let Some(info) = self.stdlib_fns.get(name).map(|i| super::StdlibFnInfo {
-                    module: i.module.clone(),
-                    params: i.params.clone(),
-                    return_type: i.return_type.clone(),
-                }) {
-                    return self.emit_stdlib_call(name, &info, args);
                 }
                 // Forward call to a user-defined function (already declared).
                 let fn_val = self.module.get_function(name)?;
@@ -1181,8 +1256,9 @@ impl<'ctx> LlvmBackend<'ctx> {
 
             // ── get (Array / List) ────────────────────────────────────────────
             "get" => {
-                let idx = self.emit_expr(args.first()?)?;
-                match (recv_val, idx) {
+                let key_val = self.emit_expr(args.first()?)?;
+                match (recv_val, key_val) {
+                    // List/Array.get(i: i64) → mvl_array_get returns raw ptr (Option<T>)
                     (BasicValueEnum::PointerValue(arr), BasicValueEnum::IntValue(i)) => {
                         let get_fn = self.get_mvl_array_get();
                         let call = self
@@ -1192,9 +1268,189 @@ impl<'ctx> LlvmBackend<'ctx> {
                         use inkwell::values::AnyValue;
                         BasicValueEnum::try_from(call.as_any_value_enum()).ok()
                     }
+                    // Map.get(key: String) → mvl_map_get + build Option<V>
+                    (BasicValueEnum::PointerValue(map), BasicValueEnum::PointerValue(key_ptr)) => {
+                        self.emit_map_get(receiver, map, key_ptr, args)
+                    }
                     _ => None,
                 }
             }
+
+            // ── Map.insert(k, v) ─────────────────────────────────────────────
+            "insert" if args.len() == 2 => {
+                let k_val = self.emit_expr(&args[0])?;
+                let v_val = self.emit_expr(&args[1])?;
+                match recv_val {
+                    BasicValueEnum::PointerValue(map) => {
+                        // Map.insert(k: String, v) — store key as string bytes, value as 8-byte slot
+                        let i64_ty = self.context.i64_type();
+                        let insert_fn = self.get_mvl_map_insert();
+                        let (key_ptr, key_len) = match k_val {
+                            BasicValueEnum::PointerValue(p) => {
+                                let sp = self.get_mvl_string_ptr();
+                                let sl = self.get_mvl_string_len();
+                                use inkwell::values::AnyValue;
+                                let cp = BasicValueEnum::try_from(
+                                    self.builder
+                                        .build_call(sp, &[p.into()], "ins_kp")
+                                        .unwrap()
+                                        .as_any_value_enum(),
+                                )
+                                .ok()?
+                                .into_pointer_value();
+                                let cl = BasicValueEnum::try_from(
+                                    self.builder
+                                        .build_call(sl, &[p.into()], "ins_kl")
+                                        .unwrap()
+                                        .as_any_value_enum(),
+                                )
+                                .ok()?;
+                                (cp, cl)
+                            }
+                            other => {
+                                let slot = self
+                                    .builder
+                                    .build_alloca(other.get_type(), "ins_k_slot")
+                                    .unwrap();
+                                self.builder.build_store(slot, other).unwrap();
+                                (slot, i64_ty.const_int(8, false).into())
+                            }
+                        };
+                        let val_slot = self
+                            .builder
+                            .build_alloca(v_val.get_type(), "ins_v_slot")
+                            .unwrap();
+                        self.builder.build_store(val_slot, v_val).unwrap();
+                        let val_size = i64_ty.const_int(8, false);
+                        self.builder
+                            .build_call(
+                                insert_fn,
+                                &[
+                                    map.into(),
+                                    key_ptr.into(),
+                                    key_len.into(),
+                                    val_slot.into(),
+                                    val_size.into(),
+                                ],
+                                "map_insert",
+                            )
+                            .unwrap();
+                        None // Unit return
+                    }
+                    _ => None,
+                }
+            }
+
+            // ── Set.insert(x) ────────────────────────────────────────────────
+            "insert" if args.len() == 1 => {
+                let elem = self.emit_expr(args.first()?)?;
+                match recv_val {
+                    BasicValueEnum::PointerValue(arr) => {
+                        let slot = self
+                            .builder
+                            .build_alloca(elem.get_type(), "set_ins_slot")
+                            .unwrap();
+                        self.builder.build_store(slot, elem).unwrap();
+                        let push_fn = self.get_mvl_array_push();
+                        self.builder
+                            .build_call(push_fn, &[arr.into(), slot.into()], "set_ins")
+                            .unwrap();
+                        None // Unit return
+                    }
+                    _ => None,
+                }
+            }
+
+            // ── Map.contains_key(key) ─────────────────────────────────────────
+            "contains_key" if args.len() == 1 => {
+                let key_val = self.emit_expr(args.first()?)?;
+                match (recv_val, key_val) {
+                    (BasicValueEnum::PointerValue(map), BasicValueEnum::PointerValue(key_str)) => {
+                        let sp = self.get_mvl_string_ptr();
+                        let sl = self.get_mvl_string_len();
+                        use inkwell::values::AnyValue;
+                        let key_data = BasicValueEnum::try_from(
+                            self.builder
+                                .build_call(sp, &[key_str.into()], "ck_kp")
+                                .unwrap()
+                                .as_any_value_enum(),
+                        )
+                        .ok()?
+                        .into_pointer_value();
+                        let key_len_val = BasicValueEnum::try_from(
+                            self.builder
+                                .build_call(sl, &[key_str.into()], "ck_kl")
+                                .unwrap()
+                                .as_any_value_enum(),
+                        )
+                        .ok()?
+                        .into_int_value();
+                        let get_fn = self.get_mvl_map_get();
+                        let raw_ptr_call = self
+                            .builder
+                            .build_call(
+                                get_fn,
+                                &[map.into(), key_data.into(), key_len_val.into()],
+                                "ck_raw",
+                            )
+                            .unwrap();
+                        let raw_ptr = BasicValueEnum::try_from(raw_ptr_call.as_any_value_enum())
+                            .ok()?
+                            .into_pointer_value();
+                        let null = self
+                            .context
+                            .ptr_type(inkwell::AddressSpace::default())
+                            .const_null();
+                        Some(
+                            self.builder
+                                .build_int_compare(
+                                    IntPredicate::NE,
+                                    raw_ptr,
+                                    null,
+                                    "contains_key_res",
+                                )
+                                .unwrap()
+                                .into(),
+                        )
+                    }
+                    _ => None,
+                }
+            }
+
+            // ── is_empty() ───────────────────────────────────────────────────
+            // Reuse the len arm result and compare to zero.
+            "is_empty" if args.is_empty() => {
+                let len_val = self.emit_method_call(receiver, "len", &[])?;
+                match len_val {
+                    BasicValueEnum::IntValue(n) => {
+                        let zero = self.context.i64_type().const_int(0, false);
+                        Some(
+                            self.builder
+                                .build_int_compare(IntPredicate::EQ, n, zero, "is_empty_res")
+                                .unwrap()
+                                .into(),
+                        )
+                    }
+                    _ => None,
+                }
+            }
+
+            // ── Set.to_list() ────────────────────────────────────────────────
+            // Set is backed by MvlArray; clone it and return as List.
+            "to_list" if args.is_empty() => match recv_val {
+                BasicValueEnum::PointerValue(arr) => {
+                    let clone_fn = self.get_mvl_array_clone();
+                    use inkwell::values::AnyValue;
+                    BasicValueEnum::try_from(
+                        self.builder
+                            .build_call(clone_fn, &[arr.into()], "set_to_list")
+                            .unwrap()
+                            .as_any_value_enum(),
+                    )
+                    .ok()
+                }
+                _ => None,
+            },
 
             // ── Int math ─────────────────────────────────────────────────────
             "abs" => match recv_val {
@@ -1563,6 +1819,128 @@ impl<'ctx> LlvmBackend<'ctx> {
             },
 
             _ => None,
+        }
+    }
+
+    /// Emit `Map[K, V].get(key)` → `Option[V]` via `mvl_map_get`.
+    ///
+    /// Returns a tagged-union `{ i8 disc, ptr payload }` (L5-08 layout):
+    ///   disc=0 → Some, disc=1 → None.
+    /// The value type is inferred from the receiver's tracked MVL type; falls
+    /// back to pointer (String/opaque) when unknown.
+    fn emit_map_get(
+        &mut self,
+        receiver: &Expr,
+        map: inkwell::values::PointerValue<'ctx>,
+        key_str: inkwell::values::PointerValue<'ctx>,
+        _args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        use inkwell::values::AnyValue;
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        // Extract key bytes from MvlString.
+        let sp = self.get_mvl_string_ptr();
+        let sl = self.get_mvl_string_len();
+        let key_data = BasicValueEnum::try_from(
+            self.builder
+                .build_call(sp, &[key_str.into()], "mg_kp")
+                .unwrap()
+                .as_any_value_enum(),
+        )
+        .ok()?
+        .into_pointer_value();
+        let key_len = BasicValueEnum::try_from(
+            self.builder
+                .build_call(sl, &[key_str.into()], "mg_kl")
+                .unwrap()
+                .as_any_value_enum(),
+        )
+        .ok()?
+        .into_int_value();
+
+        // Call mvl_map_get → *const u8 (null if absent).
+        let get_fn = self.get_mvl_map_get();
+        let raw_ptr_call = self
+            .builder
+            .build_call(
+                get_fn,
+                &[map.into(), key_data.into(), key_len.into()],
+                "mg_raw",
+            )
+            .unwrap();
+        let raw_ptr = BasicValueEnum::try_from(raw_ptr_call.as_any_value_enum())
+            .ok()?
+            .into_pointer_value();
+
+        // Determine the value LLVM type from the receiver's tracked MVL type.
+        let recv_mvl_ty = match receiver {
+            Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
+            _ => None,
+        };
+        let val_llvm_ty: Option<inkwell::types::BasicTypeEnum<'ctx>> =
+            recv_mvl_ty.as_ref().and_then(|t| {
+                if let TypeExpr::Base { args, .. } = t {
+                    args.get(1).and_then(|vty| self.mvl_type_to_llvm(vty))
+                } else {
+                    None
+                }
+            });
+
+        // Branch: null → None, non-null → Some(load value).
+        // Uses the same { i8 disc, ptr payload } Option layout as emit_some_from_val.
+        let null = ptr_ty.const_null();
+        let is_null = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, raw_ptr, null, "mg_isnull")
+            .unwrap();
+
+        let parent_fn = self.builder.get_insert_block()?.get_parent()?;
+        let some_bb = self.context.append_basic_block(parent_fn, "mg_some");
+        let none_bb = self.context.append_basic_block(parent_fn, "mg_none");
+        let merge_bb = self.context.append_basic_block(parent_fn, "mg_merge");
+
+        self.builder
+            .build_conditional_branch(is_null, none_bb, some_bb)
+            .unwrap();
+
+        // Some branch: load the value bytes, wrap in Some{disc=0}.
+        self.builder.position_at_end(some_bb);
+        let loaded: BasicValueEnum<'ctx> = match val_llvm_ty {
+            Some(inkwell::types::BasicTypeEnum::IntType(it)) => {
+                self.builder.build_load(it, raw_ptr, "mg_load").unwrap()
+            }
+            Some(inkwell::types::BasicTypeEnum::FloatType(ft)) => {
+                self.builder.build_load(ft, raw_ptr, "mg_load").unwrap()
+            }
+            _ => {
+                // Default: pointer value (String or opaque struct).
+                self.builder.build_load(ptr_ty, raw_ptr, "mg_load").unwrap()
+            }
+        };
+        let some_val = self.emit_some_from_val(loaded)?;
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        let some_end = self.builder.get_insert_block()?;
+
+        // None branch: emit None{disc=1}.
+        self.builder.position_at_end(none_bb);
+        let none_val = self.emit_none_val()?;
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        let none_end = self.builder.get_insert_block()?;
+
+        // Merge: phi over the same Option struct type ({i8, ptr}).
+        self.builder.position_at_end(merge_bb);
+        if some_val.get_type() == none_val.get_type() {
+            let phi = self
+                .builder
+                .build_phi(some_val.get_type(), "mg_opt")
+                .unwrap();
+            phi.add_incoming(&[(&some_val, some_end), (&none_val, none_end)]);
+            Some(phi.as_basic_value())
+        } else {
+            // Should not happen: Some/None layouts must match (both use {i8, ptr}).
+            // Emit unreachable so merge_bb has a terminator and the IR stays valid.
+            self.builder.build_unreachable().unwrap();
+            None
         }
     }
 

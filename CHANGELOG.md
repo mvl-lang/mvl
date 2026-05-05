@@ -6,6 +6,247 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+### Added
+
+- **`missing-annotation` linter rule**
+
+## [0.75.0] — 2026-05-05
+
+### Added
+
+- **Unsigned integer types** — `UByte` (u8) and `UInt` (u64) as first-class `Ty` variants in
+  the checker and transpiler. Both types support all standard arithmetic and comparison
+  operations. Closes #481.
+
+- **First-class Map and Set types** — `Ty::Map<K,V>` and `Ty::Set<T>` replace string-based
+  `Named("Map", ...)` and `Named("Set", ...)`. Full structural type checking with key/value
+  constraints. Map keys must be `Hashable`, Set elements must be `Hashable`. Closes #482.
+
+- **Bitwise operators** — `&` (and), `|` (or), `^` (xor), `~` (not), `<<` (shl), `>>` (shr)
+  for integer types (Int, Byte, UByte, UInt). Pratt precedence 60 (same as arithmetic).
+  Full IFC label propagation: mixing Secret and Public operands produces Secret result.
+  Closes #483, #484.
+
+- **Overflow-checking arithmetic methods** — `checked_add`, `checked_sub`, `checked_mul`,
+  `checked_div` and `wrapping_add`, `wrapping_sub`, `wrapping_mul` methods on Int, Byte,
+  UByte, UInt. Checked methods return `Option<T>` (None on overflow); wrapping methods
+  return the wrapping result directly. Closes #485.
+
+- **Slimmed prelude** — `mvl_runtime::prelude` now exports only language fundamentals:
+  `ParseFromArgs`, `get_arg`, `parse` (struct-parsing infra), and type trait bounds. All
+  module re-exports (env, io, fs, process, etc.) removed in favor of targeted imports
+  via `use std.X.*` declarations. Closes #488.
+
+- **Targeted stdlib imports** — Compiler now emits `use mvl_runtime::stdlib::X::*` for each
+  `use std.X.*` declaration in MVL source. Previously, all stdlib modules were imported
+  unconditionally via the prelude. Closes #489.
+
+- **Memory architecture refactoring** — Heap-collection operations (`mvl_string_*`,
+  `mvl_array_*`, `mvl_map_*`) moved from `mvl_memory` to `mvl_runtime_c::memory_ops`.
+  `mvl_memory` now contains only lifecycle (alloc/drop) and core types. Clarifies division:
+  `mvl_memory` = types + lifecycle (Miri-safe), `mvl_runtime_c` = C-ABI operations. Closes #490.
+
+### Fixed
+
+- **Security issues in Map operations** — Added zero-length key guard in `mvl_map_insert`;
+  prevented dangling pointer storage for zero-length values by using `ptr::null_mut()`.
+  Added invariant assertion in `mvl_map_get`.
+
+- **Type inference for UInt wrapping methods** — `wrapping_add`, `wrapping_sub`, `wrapping_mul`
+  on `UInt` now correctly resolve to `Ty::UInt` instead of `Ty::Unknown`.
+
+- **Bitwise operators on invalid types** — Bitwise operations on Float (or other non-integer
+  types) now correctly produce `TypeMismatch` errors. Fixed label-checking to use
+  `.unlabeled()` for type dispatch.
+
+## [0.74.0] — 2026-05-05
+
+### Added
+
+- **Native Map/Set implementations** — `std/collections.mvl` stubs replaced with real MVL
+  method bodies that work on both the Rust transpiler and LLVM backends. The transpiler
+  dispatches via `MvlGet<K,V>` and `MvlLen` traits; the LLVM backend dispatches via explicit
+  codegen arms in `exprs.rs`. Closes #418.
+  - Map: `get`, `insert`, `remove`, `contains_key`, `keys`, `values`, `len`, `is_empty`
+  - Set: `contains`, `insert`, `remove`, `to_list`, `len`, `is_empty`, `intersection`,
+    `union`, `difference` (LLVM-side for `remove`, `keys`, `values`, set-algebra deferred to #436)
+  - `MvlGet<K,V>` and `MvlLen` traits added to `mvl_runtime::prelude` and transpiler preamble
+  - Auto-injects `Hash + Eq + Clone` bounds for Map/Set type parameters in generic functions — Opt-in Warning-severity rule that fires when a
+  function body contains calls but no effect annotation is declared. The inverse of
+  `unnecessary-annotation` (removed in v0.66.1), implementing MVL's "Explicit over implicit"
+  principle (#428). Disabled by default (`missing_annotations = false`); enable in
+  `.mvllintrc`. `test fn` declarations are excluded. See Spec 011 Req 4 and ADR-0017
+  amendment.
+
+## [0.73.0] — 2026-05-05
+
+### Added
+
+- **BDD naming convention** — Test functions with `given_*`, `when_*`, `then_*` prefixes and
+  `test fn scenario_*` entry points follow the BDD pattern (ADR-0020). No language changes;
+  purely a library-style testing approach with explicit state threading via context structs.
+  Spec 004 Req 5, Issue #39 (#477).
+
+- **`mvl test --bdd` Gherkin reporter** — Emits a `BDD scenarios:` block after test runs,
+  listing each `scenario_*` function as `Scenario: <name> ... ok`. Extracts scenario names
+  from function declarations; no parser changes. Implemented in `src/main.rs::cmd_test`.
+
+### Fixed
+
+- **BDD corpus syntax errors** — Added missing semicolons and type annotations to `let`
+  bindings in calculator_bdd_test.mvl; all 5 scenarios now parse and pass.
+
+### Changed
+
+- **`make assurance` interface** — Changed from verbose-by-default to summary-by-default;
+  use `make assurance VERBOSE=true` for full output with legend. Dropped `make assurance-summary`.
+
+### Docs
+
+- **BDD documentation** — ADR-0020 formalizes the decision (Option B+A hybrid); Spec 004 Req 5
+  defines the pattern; tests link to concrete scenarios. Two Gherkin test scenarios verify both
+  the naming convention and the `--bdd` reporter output.
+
+## [0.72.2] — 2026-05-04
+
+### Added
+
+- **`std.io` real implementation (Rust transpiler path)** — Replaces stubs in `std/io.mvl` with real `std::fs` backing in `mvl_runtime::stdlib::io`. Provides `path(s: String) → Path` (identity), `write(p: Path, content: Tainted[String]) → Result[Unit, String]`, `append(p: Path, content: Tainted[String]) → Result[Unit, String]`, `read_to_string(p: Path) → Result[Tainted[String], String]`, `create_dir_all(p: Path) → Result[Unit, String]`, `remove(p: Path) → Result[Unit, String]`. Path type is a transparent wrapper around String; errors are mapped to IFC-safe categories ("file not found", "permission denied", "I/O error") (#417).
+
+- **IO C-ABI exports for LLVM backend** — `mvl_runtime_c::stdlib::io` exports `_mvl_io_path`, `_mvl_io_write`, `_mvl_io_append`, `_mvl_io_read_to_string`, `_mvl_io_create_dir_all`, `_mvl_io_remove` with matching signatures. Returns wrapped `LlvmResult {tag, payload}` using stack allocation pattern for payload indirection. LLVM codegen gains four new `StdlibSig` variants (`PtrIdentArg`, `ResultUnitOnePtrArg`, `ResultUnitTwoPtrArgs`, `ResultStringOnePtrArg`) and `wrap_c_result_with_slot` helper for C → LLVM result layout conversion. Cross-backend tests verify identical I/O behavior on both transpiler and LLVM backends (#435).
+
+- **Fix for `Result[Unit, String]` in LLVM backend** — Changed `infer_result_ok_llvm_ty` to return `Option<BasicTypeEnum>` (None = Unit, Some = other types) to avoid segfault from loading null payload pointers. `emit_propagate` and `emit_match` now skip load when ok_ty is None (#435).
+
+### Changed
+
+- **Corpus test `io_basic.mvl` restructured for IFC compliance** — Added `Console` effect to `run_io()` and avoided printing `Tainted[String]` file contents directly (violates Req 11: `println` only accepts `Public[T]`). Test now prints fixed confirmation strings instead of tainted data, verifying I/O operations succeed via error propagation (#417).
+
+## [0.72.1] — 2026-05-04
+
+### Fixed
+
+- **`mvl mcdc --json` source field now shows correct stdlib lines** — Decisions in stdlib functions (`take_while`, `skip_while`, `find_index` while loops from `lists.mvl`) were attributed to the test module's file stem, causing the `"source"` field to show unrelated lines from the test file. Fix: post-process decisions to reassign `file` to the correct prelude stem and load prelude source texts into the lookup map (#472).
+- **Example files updated to require explicit type annotations** — All 190+ bare `let x = expr` bindings across `examples/access_control/`, `examples/flight_clearance/`, and `examples/medical_triage/` now include `: Type` annotations as required since #408 (#470, #471).
+
+## [0.72.0] — 2026-05-04
+
+### Added
+
+- **MC/DC coverage analysis now outputs machine-readable JSON** — `mvl mcdc <file|dir> --json` produces structured JSON with test counts, decision/obligation metrics, and per-clause coverage detail. `--json --quiet` emits summary only. Enables CI integration, coverage dashboards, and qualification evidence packages (DO-178C, IEC 62304). `independence_pair` is `null` pending test trace integration (#319); `coupled_with` is populated from coupled condition analysis (#325) (#326).
+- **`make mutants` — cargo-mutants infrastructure for transpiler codegen** — `cargo-mutants` is now wired to the three transpiler emit modules (`emit_exprs.rs`, `emit_stmts.rs`, `emit_types.rs`) via `make mutants` (long-running, not per-PR CI). Target mutation score: ≥80%. 26 regression tests added to `tests/transpiler.rs` covering the most mutation-prone paths: the full binary-operator table (13 operators), bool/float literal dispatch, let-mutability dispatch, string-match `.as_str()` coercion, `else if` inline emission, and field-access/ident clone-on-pass. These tests kill mutants that previously survived undetected (#206).
+
+## [0.71.1] — 2026-05-03
+
+### Fixed
+- **Design Principles are now executable OpenSpec Requirements (Spec 001 Reqs 12–14)** — All 10 README Design Principles and all 11 ADR-0001 requirements are now pinned to spec requirements with GIVEN/WHEN/THEN scenarios and `**Tests:**` pointers. Three previously undocumented principles were added to Spec 001: Req 12 (Explicit Type Annotations — Principle 1), Req 13 (Minimal Control-Flow Surface — Principle 2), Req 14 (Vocabulary over Syntax — Principle 3). Drift from the language definition now produces a `make assurance` failure rather than a silent gap (#427).
+
+## [0.72.1] — 2026-05-04
+
+### Fixed
+
+- **`mvl mcdc --json` source field now shows correct stdlib lines** — Decisions in stdlib functions (`take_while`, `skip_while`, `find_index` while loops from `lists.mvl`) were attributed to the test module's file stem, causing the `"source"` field to show unrelated lines from the test file. Fix: post-process decisions to reassign `file` to the correct prelude stem and load prelude source texts into the lookup map (#472).
+- **Example files updated to require explicit type annotations** — All 190+ bare `let x = expr` bindings across `examples/access_control/`, `examples/flight_clearance/`, and `examples/medical_triage/` now include `: Type` annotations as required since #408 (#470, #471).
+
+## [0.72.0] — 2026-05-04
+
+### Added
+
+- **MC/DC coverage analysis now outputs machine-readable JSON** — `mvl mcdc <file|dir> --json` produces structured JSON with test counts, decision/obligation metrics, and per-clause coverage detail. `--json --quiet` emits summary only. Enables CI integration, coverage dashboards, and qualification evidence packages (DO-178C, IEC 62304). `independence_pair` is `null` pending test trace integration (#319); `coupled_with` is populated from coupled condition analysis (#325) (#326).
+
+## [0.71.1] — 2026-05-03
+
+### Fixed
+
+- **Borrow-inferred params in struct literals and map expressions now emit `&x` correctly** — `Expr::Construct` and `Expr::Map` were creating a fresh `RustEmitter::new()` (empty `borrow_params_map`) for each field/value expression, so borrow-inferred function arguments inside struct literals emitted `x.clone()` instead of `&x`. Fixed by emitting directly into the parent `cg` emitter, which carries the real `borrow_params_map`. Regression tests added (#465).
+
+- **Medical triage example now type-checks under the Rust transpiler** — ~89 bare `let` bindings in `examples/medical_triage/triage_test.mvl` lacked the explicit type annotations required since #408. Added `: Vitals`, `: Patient`, `: Priority`, `: Assessment` annotations. The example now compiles and runs end-to-end with `mvl test`.
+
+- **Release build no longer warns about unused variable `other`** — `_other` prefix applied in `src/mvl/codegen/exprs.rs` where the variable is only referenced inside a `#[cfg(debug_assertions)]` block invisible in release mode.
+
+## [0.71.0] — 2026-05-03
+
+### Added
+
+- **`std.pbt` — property-based testing stdlib (Phase A + B)** — New `std/pbt.mvl` declares the full PBT API surface: generators (`gen_int`, `gen_float`, `gen_bool`, `gen_string`, `gen_list_int`), combinators (`gen_filter_int`, `gen_one_of_int`, `gen_map_int_bool`), property runners (`property_check_int/bool/string/list_int`), Phase B mutation operators (`mutate_int/float/string/list_int`), and targeted + mutation-based property checkers (`property_check_targeted_int`, `property_check_with_mutation_int`). All stubs use `panic("stub")`. Import via `use std.pbt.{...}` (#40, #425).
+
+- **`tests/corpus/03_stdlib/pbt_operations.mvl`** — Corpus file exercising the full PBT API: `test_divide_never_fails`, `test_list_len_nonneg`, `test_string_len_nonneg`, `test_bool_property`, combinator demos (`test_filtered_generator`, `test_one_of_generator`), Phase B mutation demos, and targeted + mutation-based property check demos (#40, #425).
+
+- **`stdlib_pbt_corpus_parses_and_checks` type-checker test** — Integration test asserting the PBT corpus parses and type-checks with no serious errors (filters expected `UndefinedFunction`, `UndefinedVariable`, and `UndefinedType` — the latter because `Generator[T]` is not yet a built-in type) (#40, #425).
+
+- **`std.log` real implementation (Rust transpiler path)** — Replaces no-op stubs in `std/log.mvl` with real `eprintln!`-backed implementation. Format: `[LEVEL ISO_8601_TIMESTAMP] msg field=value ...`. Field keys are sorted for deterministic test output. Timestamp from `time::now()` + `format_instant()`. Passes `Secret[T]` and `Tainted[T]` label checks in the type system (IFC symmetry with `! Log` effect). No configurable sink in Phase A (follow-up for Phase 3 / #54).
+
+- **Log C-ABI exports for LLVM backend** — `mvl_runtime_c::stdlib::log` exports `_mvl_log_debug`, `_mvl_log_info`, `_mvl_log_warn`, `_mvl_log_error` with `(MvlString*, MvlMap*) → void` signature. Handles null pointers robustly and reconstructs field map iteration from open-addressing hash storage. LLVM codegen gains `VoidStringMapArg` dispatch variant. Cross-backend tests verify identical log output on both transpiler and LLVM backends (#434).
+
+- **Log safety fixes and extended test coverage** — Field key names now sanitized (was value-only; keys with newlines or `=` would corrupt the format). `read_mvl_string` and `read_mvl_map` in the C-ABI bridge include guards against corrupt sizes and null pointers. Extended `sanitize()` to cover `\t` and `\0` in addition to `\n` and `\r`. Added 5 unit tests to `mvl_runtime_c/src/stdlib/log.rs` including double-pointer roundtrip test for value reconstruction. Added IFC test for `Clean[String]` in map field value position.
+
+### Changed
+
+- **`format_instant` signature: `String` → `&str`** — Eliminates per-call `String` allocation for a constant format pattern. Reduces allocation pressure in hot path (every log call).
+
+- **Cross-backend log test robustness** — `cross_backend_log_stderr` now always runs transpiler path assertions regardless of LLVM availability; only the LLVM parity half is conditional. Line-count filter tightened to exact `[LEVEL space]` patterns to avoid false matches on LLVM diagnostics.
+## [0.70.0] — 2026-05-03
+
+### Added
+
+- **`std.time` real implementation (Rust transpiler path)** — Replaces stubs in `std/time.mvl` with real Rust backing in `mvl_runtime::stdlib::time`. Provides `Instant`, `DateTime`, `Duration` types; `now()`, `sleep()`, `format_instant()`, `format_datetime()`, `parse()`, `seconds()`, `millis()`. UTC-only (Phase A); epoch-to-date via Hinnant civil-from-days algorithm, no external crates (#415).
+
+- **`std.random` real implementation (Rust transpiler path)** — Replaces stubs in `std/random.mvl` with xorshift64 PRNG backed by `thread_local! { Cell<u64> }`, seeded from `SystemTime` with Fibonacci-mixed nanos. Provides `int(min,max)`, `float()`, `bytes(n)`, `choice[T]`, `shuffle[T]` (Fisher-Yates). No `rand` crate (#415).
+
+- **`time` and `random` C-ABI exports for LLVM backend** — `mvl_runtime_c::stdlib::time` exports `_mvl_time_now_systemtime`, `_mvl_time_now_instant`, `_mvl_time_thread_sleep`, and `_mvl_time_iso8601_format`. `mvl_runtime_c::stdlib::random` exports `_mvl_random_int`, `_mvl_random_float`, `_mvl_random_bytes`, `_mvl_random_choice_index`, and `_mvl_random_shuffle_i64`. `Duration` is flattened to `(secs: i64, nanos: i64)` at the C boundary (#433).
+
+- **LLVM codegen dispatch for `time.sleep`, `random.int`, `random.float`** — Extended `StdlibSig` enum with `VoidDurationArg`, `I64TwoI64Args`, and `F64NoArg` variants. `VoidDurationArg` uses LLVM `build_extract_value` to flatten the Duration struct into two i64 arguments before calling `_mvl_time_thread_sleep` (#433).
+
+- **Cross-backend parity tests for `time` and `random`** — `cross_backend_random_int`, `cross_backend_random_float_shape`, and `cross_backend_time_sleep` verify that both backends agree on deterministic random and zero-duration sleep output (#433).
+
+## [0.69.1] — 2026-05-03
+
+### Fixed
+
+- **Corpus files updated for mandatory explicit `let` type annotations** — Commits #408 made explicit type annotations required in all `let` bindings; 11 corpus files were not updated. Adds `: Type` annotations throughout, also adds `Console` to `env_basic.mvl` effect set and relaxes `bounded_sum` return type to `Int` (arithmetic on refinement types yields `Int`). Resolves `make test-corpus` going from 57 passed / 11 failed to 68 passed / 0 failed.
+
+- **`make test-llvm` now shows individual test names** — Added `--verbose` flag so each test file path is printed as it runs.
+## [0.69.0] — 2026-05-03
+
+### Added
+
+- **`mvl_runtime_c` cdylib — C-ABI stdlib for LLVM backend** — New crate wraps `mvl_runtime` Rust APIs with `#[no_mangle] extern "C"` symbols for LLVM-compiled programs. Implements the two-path stdlib architecture: Path 1 (Rust transpiler) uses native Rust APIs; Path 2 (LLVM backend) calls C-ABI exports via `lli --load`. Includes marshalling types (`MvlOption`, `MvlResult`), `string_to_c`/`c_to_string` helpers, and declarative `mvl_c_export!` macro (#431).
+
+- **`env` and `process` stdlib bindings for LLVM backend** — All public functions from `mvl_runtime::stdlib::env` and `mvl_runtime::stdlib::process` exported as `_mvl_env_*` and `_mvl_process_*` C-ABI symbols. Includes getuid/getgid, environment variable access, working directory management, and process spawning with deterministic output capture. Process handles use opaque `Box` pointers to prevent use-after-free. LLVM codegen auto-discovers and loads the library via `find_mvl_runtime_c_lib()`, wired into `run_project_llvm` and `cmd_test_llvm` (#432).
+
+- **Cross-backend stdlib parity tests** — `cross_backend_env_basic` verifies identical output from both transpiler and LLVM backends when calling `env.getuid()` and `env.getgid()`. Serves as smoke test that `libmvl_runtime_c` loads and symbols resolve correctly via `lli`.
+
+- **ADR-0019: Two-Path Stdlib Architecture** — Documents the rationale for Rust crate + C-ABI cdylib split, ABI marshalling types, symbol naming convention, and build integration.
+
+- **`make build-llvm-runtime` target** — Builds both `mvl_memory` and `mvl_runtime_c` cdylibs needed for LLVM backend at runtime.
+
+### Fixed
+
+- **Signal constructor / argument-passing ABI mismatch** — Removed `sigint`, `sigterm`, `sighup`, `sigusr1`, `sigusr2` (return `i8`, not `i64`) and `signal_reset`/`signal_ignore` (take `i8` argument) from auto-dispatch table. These require a follow-up with non-i64 / argument-passing dispatch (#450).
+
+- **Use-after-free in `_mvl_process_kill` on error** — Clarified ownership contract: the child handle is unconditionally consumed whether `kill()` succeeds or fails. Callers must not use the original pointer after calling this function (#450).
+
+- **Negative index handling in `_mvl_env_args_get`** — Added guard to prevent negative `i64` indices from wrapping to `usize::MAX` and causing O(n) CPU spin (#450).
+
+### Testing
+
+- **19 unit tests in `mvl_runtime_c`** (up from 15 pre-fix): added tests for null-handle guards (`wait_null`, `kill_null`, `output_free_null`) and negative array index handling.
+
+## [0.68.2] — 2026-05-03
+
+### Changed
+
+- **refactor(arch): relocate AST transformations under `src/mvl/passes/`** — coverage, MC/DC, and mutation instrumentation modules moved out of `transpiler/` and `checker/` into a new backend-agnostic `passes/` layer. MC/DC analysis and instrumentation are now co-located under `passes/mcdc/`. Rust-specific emission helpers extracted to `transpiler/coverage_emit.rs` and `transpiler/mcdc_emit.rs`. No behaviour change; all existing tests pass (#443, #444, ADR-0018).
+
+### Fixed
+
+- **Coverage measurement via `make coverage`** — Pre-build `mvl_memory` cdylib into `cargo-llvm-cov`'s isolated target directory (`target/llvm-cov-target/`) before running the coverage tool. Resolves symbol resolution errors when LLVM backend tests run under coverage (#451).
+
+## [0.68.1] — 2026-05-02
+
+### Fixed
+
+- **Stdlib test type annotations** — 94 bare `let` bindings across 8 stdlib test files now carry explicit type annotations, satisfying the parser requirement from #408. Fixes `make test-stdlib` parse errors (#447).
+
 ## [0.68.0] — 2026-05-02
 
 ### Added

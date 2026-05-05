@@ -88,15 +88,7 @@
 ; Built-in effects (effect list)
 ; ============================================================
 
-(effect
-  [
-    "IO"
-    "Console"
-    "FileRead"
-    "FileWrite"
-    "Net"
-    "DB"
-  ] @keyword.effect)
+(effect) @keyword.effect
 
 ; ============================================================
 ; Pattern keywords
