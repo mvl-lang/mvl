@@ -2939,6 +2939,19 @@ fn crypto_random_bytes_returns_secret_list_int() {
 }
 
 #[test]
+fn sha512_accepts_plain_string() {
+    let errors = errors_for(
+        r#"fn checksum(data: String) -> String {
+    sha512(data)
+}"#,
+    );
+    assert!(
+        errors.is_empty(),
+        "sha512(String) must type-check without errors, got: {errors:?}"
+    );
+}
+
+#[test]
 fn crypto_random_bytes_result_rejected_by_log_info() {
     // GIVEN: crypto_random_bytes returns Secret[List[Int]]
     // THEN: passing the result to log_info is a LoggingLabelViolation
@@ -2953,6 +2966,23 @@ fn crypto_random_bytes_result_rejected_by_log_info() {
             .iter()
             .any(|e| matches!(e, CheckError::LoggingLabelViolation { .. })),
         "logging Secret[List[Int]] must produce LoggingLabelViolation, got: {errors:?}"
+    );
+}
+
+#[test]
+fn caller_missing_crypto_random_effect_rejected() {
+    let src = r#"
+        fn gen_bytes(n: Int) -> Secret[List[Int]] ! CryptoRandom { crypto_random_bytes(n) }
+        fn caller(n: Int) -> Secret[List[Int]] { gen_bytes(n) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            CheckError::UndeclaredEffect { callee, effect, .. }
+            if callee == "gen_bytes" && effect == "CryptoRandom"
+        )),
+        "expected UndeclaredEffect(gen_bytes, CryptoRandom), got: {errors:?}"
     );
 }
 

@@ -47,7 +47,9 @@ pub extern "C" fn _mvl_random_float() -> f64 {
 pub extern "C" fn _mvl_random_bytes(n: i64) -> *mut c_void {
     let vals = random::bytes(n);
     let len = vals.len();
-    let total = (1 + len) * std::mem::size_of::<i64>();
+    let total = (1usize.checked_add(len))
+        .and_then(|v| v.checked_mul(std::mem::size_of::<i64>()))
+        .unwrap_or_else(|| std::process::abort());
     let ptr = unsafe { libc::malloc(total) } as *mut i64;
     if ptr.is_null() {
         return std::ptr::null_mut();

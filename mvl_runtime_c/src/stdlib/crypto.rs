@@ -16,6 +16,19 @@
 //!   `[len: i64][val0: i64][val1: i64]...`
 //! Each value is in `[0, 255]` (byte range stored as i64).
 //! Caller frees with `libc::free`. This matches `_mvl_random_bytes` in random.rs.
+//!
+//! # LLVM dispatch coverage
+//!
+//! `sha256` and `sha512` are wired as tier-1 builtins (PtrIdentArg) in codegen.
+//! `crypto_random_bytes` C-ABI export exists but LLVM dispatch is pending a new
+//! StdlibSig variant for `i64 → *mut c_void` array returns — tracked in #507.
+//!
+//! # IFC at the C-ABI boundary
+//!
+//! The `Secret` label from `crypto_random_bytes` is a Rust compile-time wrapper;
+//! it is stripped at the C-ABI boundary. IFC enforcement on the LLVM path is the
+//! codegen's responsibility (no direct path from the result to a print/log without
+//! a declassify AST node). Tracked in #508.
 
 use std::slice;
 
@@ -31,7 +44,8 @@ unsafe fn read_mvl_string(s: *const MvlString) -> String {
     if s.is_null() {
         return String::new();
     }
-    let len = (*s).len as usize;
+    // Bound len against cap to guard against corrupted MvlString fields.
+    let len = ((*s).len as usize).min((*s).cap as usize);
     if len == 0 || (*s).ptr.is_null() {
         return String::new();
     }
@@ -83,7 +97,9 @@ pub extern "C" fn _mvl_crypto_sha512(data: *const MvlString) -> *mut MvlString {
 pub extern "C" fn _mvl_crypto_random_bytes(n: i64) -> *mut c_void {
     let Secret(vals) = mvl_runtime::stdlib::crypto::crypto_random_bytes(n);
     let len = vals.len();
-    let total = (1 + len) * std::mem::size_of::<i64>();
+    let total = (1usize.checked_add(len))
+        .and_then(|v| v.checked_mul(std::mem::size_of::<i64>()))
+        .unwrap_or_else(|| std::process::abort());
     let ptr = unsafe { libc::malloc(total) } as *mut i64;
     if ptr.is_null() {
         return std::ptr::null_mut();
@@ -106,6 +122,10 @@ mod tests {
     const SHA512_EMPTY: &str = concat!(
         "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce",
         "47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"
+    );
+    const SHA512_ABC: &str = concat!(
+        "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a",
+        "2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"
     );
 
     fn mvl_str(s: &str) -> *mut MvlString {
@@ -188,5 +208,50 @@ mod tests {
             assert!((0..=255).contains(&v), "byte value {v} out of range");
         }
         unsafe { libc::free(ptr) };
+    }
+
+    #[test]
+    fn sha512_abc_nist_vector() {
+        let input = mvl_str("abc");
+        let out = _mvl_crypto_sha512(input);
+        unsafe { mvl_memory::mvl_string_drop(input) };
+        assert!(!out.is_null());
+        assert_eq!(from_mvl_str(out), SHA512_ABC);
+    }
+
+    #[test]
+    fn sha512_output_is_128_hex_chars() {
+        let input = mvl_str("hello world");
+        let out = _mvl_crypto_sha512(input);
+        unsafe { mvl_memory::mvl_string_drop(input) };
+        assert!(!out.is_null());
+        let result = from_mvl_str(out);
+        assert_eq!(result.len(), 128);
+        assert!(result
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+    }
+
+    #[test]
+    fn random_bytes_negative_n_returns_empty() {
+        let ptr = _mvl_crypto_random_bytes(-1);
+        assert!(!ptr.is_null());
+        let len = unsafe { (ptr as *const i64).read() };
+        assert_eq!(len, 0, "negative n must produce 0 bytes");
+        unsafe { libc::free(ptr) };
+    }
+
+    #[test]
+    fn sha256_null_ptr_returns_hash_of_empty() {
+        let out = _mvl_crypto_sha256(std::ptr::null());
+        assert!(!out.is_null());
+        assert_eq!(from_mvl_str(out), SHA256_EMPTY);
+    }
+
+    #[test]
+    fn sha512_null_ptr_returns_hash_of_empty() {
+        let out = _mvl_crypto_sha512(std::ptr::null());
+        assert!(!out.is_null());
+        assert_eq!(from_mvl_str(out), SHA512_EMPTY);
     }
 }
