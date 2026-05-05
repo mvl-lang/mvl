@@ -327,8 +327,7 @@ pub unsafe extern "C" fn mvl_map_len(m: *const MvlMap) -> u64 {
 /// `s` must be a valid non-null `MvlString` pointer.
 #[no_mangle]
 pub unsafe extern "C" fn mvl_string_chars(s: *const MvlString) -> *mut MvlArray {
-    // elem_size = 8 (pointer width on 64-bit)
-    let arr = mvl_array_new(8, 0);
+    let arr = mvl_array_new(std::mem::size_of::<*mut MvlString>(), 0);
     if s.is_null() {
         return arr;
     }
@@ -337,7 +336,8 @@ pub unsafe extern "C" fn mvl_string_chars(s: *const MvlString) -> *mut MvlArray 
         return arr;
     }
     let bytes = std::slice::from_raw_parts((*s).ptr, len);
-    let text = std::str::from_utf8(bytes).unwrap_or("");
+    let text =
+        std::str::from_utf8(bytes).expect("mvl_string_chars: MvlString contains invalid UTF-8");
     for ch in text.chars() {
         let mut buf = [0u8; 4];
         let encoded = ch.encode_utf8(&mut buf);
@@ -353,7 +353,7 @@ pub unsafe extern "C" fn mvl_string_chars(s: *const MvlString) -> *mut MvlArray 
 /// `m` must be a valid non-null `MvlMap` pointer.
 #[no_mangle]
 pub unsafe extern "C" fn mvl_map_keys(m: *const MvlMap) -> *mut MvlArray {
-    let arr = mvl_array_new(8, 0);
+    let arr = mvl_array_new(std::mem::size_of::<*mut MvlString>(), 0);
     if m.is_null() || (*m).cap == 0 {
         return arr;
     }
@@ -377,6 +377,13 @@ pub unsafe extern "C" fn mvl_map_remove(m: *mut MvlMap, key: *const u8, key_len:
     if m.is_null() || key.is_null() || key_len == 0 || (*m).cap == 0 {
         return;
     }
+    if (*m).len == 0 {
+        return;
+    }
+    debug_assert!(
+        (*m).len < (*m).cap,
+        "mvl_map_remove: map invariant violated (len >= cap)"
+    );
     let idx = map_find_slot((*m).slots, (*m).cap, key, key_len);
     let slot = &mut *(*m).slots.add(idx);
     if slot.occupied == 0 {
@@ -393,7 +400,10 @@ pub unsafe extern "C" fn mvl_map_remove(m: *mut MvlMap, key: *const u8, key_len:
     slot.key_len = 0;
     slot.val_ptr = ptr::null_mut();
     slot.val_len = 0;
-    (*m).len -= 1;
+    (*m).len = (*m)
+        .len
+        .checked_sub(1)
+        .unwrap_or_else(|| std::process::abort());
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────

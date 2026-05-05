@@ -116,8 +116,8 @@ pub fn has_std_imports(prog: &Program) -> bool {
 /// Modules that have a Rust implementation in `mvl_runtime::stdlib`.
 /// Pure-MVL modules (json, collections, strings, lists, math, …) are excluded:
 /// their symbols arrive via the prelude and need no `use mvl_runtime::stdlib::X::*` import.
-const RUST_BACKED_STDLIB: &[&str] = &[
-    "args", "crypto", "env", "io", "log", "process", "random", "time",
+pub const RUST_BACKED_STDLIB: &[&str] = &[
+    "args", "crypto", "env", "io", "log", "process", "random", "regex", "time",
 ];
 
 /// Returns the deduplicated list of `std.*` sub-module names used in this program

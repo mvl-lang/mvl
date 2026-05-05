@@ -35,10 +35,8 @@ pub fn map_put[K, V](m: Map[K, V], key: K, value: V) -> Map[K, V] {
 /// Remove `key` from `m` and return the updated map (value semantics).
 /// If `key` is absent the map is returned unchanged.
 pub fn map_without[K, V](m: Map[K, V], key: K) -> Map[K, V] {
-    match m.remove(key) {
-        Some(_) => m,
-        None => m,
-    }
+    m.remove(key);
+    m
 }
 
 /// Remove `key` from `m`, returning the old value if present.
