@@ -1818,6 +1818,21 @@ impl<'ctx> LlvmBackend<'ctx> {
                 _ => None,
             },
 
+            // ── to_float (Int → f64, needed by json decode number parser) ────
+            "to_float" => match recv_val {
+                BasicValueEnum::IntValue(v) => {
+                    let f64_ty = self.context.f64_type();
+                    Some(
+                        self.builder
+                            .build_signed_int_to_float(v, f64_ty, "itof")
+                            .unwrap()
+                            .into(),
+                    )
+                }
+                BasicValueEnum::FloatValue(v) => Some(v.into()),
+                _ => None,
+            },
+
             _ => None,
         }
     }

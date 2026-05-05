@@ -152,6 +152,11 @@ fn cross_backend_shapes() {
     assert_backends_agree("shapes.mvl");
 }
 
+// ── #419: native MVL JSON ─────────────────────────────────────────────────────
+
+// json_encode cross-backend parity is blocked by #437 (str_chars on LLVM).
+// The transpiler path is verified in tests/compile_and_run.rs.
+
 // ── #418: Map/Set native MVL collections ──────────────────────────────────────
 
 /// Both backends must produce identical deterministic output for Map.len,
