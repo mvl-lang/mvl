@@ -165,6 +165,69 @@ impl<T: Eq + std::hash::Hash> MvlContains<T> for std::collections::HashSet<T> {
     }
 }
 
+/// Uniform `.get(key)` returning `Option<V>` for `Vec<T>` (integer index) and
+/// `HashMap<K, V>` (key lookup).
+///
+/// The transpiler emits `receiver.mvl_get(key.clone())` for all MVL `.get(k)`
+/// calls on List and Map types.
+///
+/// Keep in sync with the inline strings in `src/mvl/transpiler/emit_types.rs`.
+pub trait MvlGet<K, V> {
+    /// Look up `key`, returning `Some(value)` or `None`.
+    fn mvl_get(&self, key: K) -> Option<V>;
+}
+
+impl<T: Clone> MvlGet<i64, T> for Vec<T> {
+    fn mvl_get(&self, i: i64) -> Option<T> {
+        if i < 0 {
+            return None;
+        }
+        self.get(i as usize).cloned()
+    }
+}
+
+impl<K: std::hash::Hash + Eq, V: Clone> MvlGet<K, V> for std::collections::HashMap<K, V> {
+    fn mvl_get(&self, key: K) -> Option<V> {
+        self.get(&key).cloned()
+    }
+}
+
+/// Uniform `.len()` returning `i64` for all MVL collection types and `String`.
+///
+/// The transpiler emits `receiver.mvl_len()` for all MVL `.len()` calls.
+/// MVL's `Int` is `i64`; Rust collections return `usize`, so this trait
+/// handles the cast uniformly.
+///
+/// Keep in sync with the inline strings in `src/mvl/transpiler/emit_types.rs`.
+pub trait MvlLen {
+    /// Return the number of elements as `i64`.
+    fn mvl_len(&self) -> i64;
+}
+
+impl<T> MvlLen for Vec<T> {
+    fn mvl_len(&self) -> i64 {
+        self.len() as i64
+    }
+}
+
+impl<K, V> MvlLen for std::collections::HashMap<K, V> {
+    fn mvl_len(&self) -> i64 {
+        self.len() as i64
+    }
+}
+
+impl<T> MvlLen for std::collections::HashSet<T> {
+    fn mvl_len(&self) -> i64 {
+        self.len() as i64
+    }
+}
+
+impl MvlLen for String {
+    fn mvl_len(&self) -> i64 {
+        self.chars().count() as i64
+    }
+}
+
 /// Uniform `pow` for `i64` (uses `u32` exponent cast) and `f64` (uses `powf`).
 ///
 /// The transpiler emits `receiver.mvl_pow(arg.clone())` for all MVL `.pow(e)`
