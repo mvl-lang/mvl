@@ -115,6 +115,7 @@ fn main() {
             let quiet = args.iter().any(|a| a == "--quiet" || a == "-q");
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
             let coverage = args.iter().any(|a| a == "--coverage");
+            let bdd = args.iter().any(|a| a == "--bdd");
             if backend == "llvm" {
                 #[cfg(feature = "llvm")]
                 cmd_test_llvm(&path, quiet, verbose);
@@ -124,7 +125,7 @@ fn main() {
                     process::exit(1);
                 }
             } else {
-                cmd_test(&path, quiet, verbose, coverage);
+                cmd_test(&path, quiet, verbose, coverage, bdd);
             }
         }
         "mutate" => {
@@ -1487,7 +1488,7 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
 }
 
 /// Find all `*_test.mvl` files, transpile to Rust test crates, and run `cargo test`.
-fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool) {
+fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     if quiet && verbose {
         eprintln!(
             "warning: --quiet and --verbose are mutually exclusive; --verbose takes precedence"
@@ -1551,8 +1552,10 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool) {
     let mut all_branches: Vec<transpiler::BranchInfo> = Vec::new();
     let mut next_branch_id = 0usize;
     let mut file_stems: Vec<String> = Vec::new(); // ordered list for the coverage report
-                                                  // The stdlib prelude (strings.mvl, lists.mvl, …) uses extern "rust" blocks,
-                                                  // so the runtime crate is always needed when the prelude is loaded.
+                                                  // BDD: collect scenario names (fn names starting with "scenario_") for Gherkin report.
+    let mut scenarios: Vec<String> = Vec::new();
+    // The stdlib prelude (strings.mvl, lists.mvl, …) uses extern "rust" blocks,
+    // so the runtime crate is always needed when the prelude is loaded.
     let mut need_mvl_runtime = transpiler::prelude_requires_runtime(&stdlib_prelude_progs);
 
     for test_file in &test_files {
@@ -1560,6 +1563,15 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool) {
         let (prog, _src) = parse_or_exit(&file_str);
         let s = stem(&file_str);
         let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
+        if bdd {
+            for decl in &prog.declarations {
+                if let Decl::Fn(fd) = decl {
+                    if fd.is_test && fd.name.starts_with("scenario_") {
+                        scenarios.push(fd.name.clone());
+                    }
+                }
+            }
+        }
         let (out, branches) = if coverage {
             transpiler::transpile_covered_with_prelude(
                 &prog,
@@ -1789,6 +1801,19 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool) {
 
     if !quiet {
         println!("All tests passed.");
+    }
+
+    // ── BDD report ────────────────────────────────────────────────────────
+    if bdd && !scenarios.is_empty() {
+        println!();
+        println!("BDD scenarios:");
+        for name in &scenarios {
+            let label = name
+                .strip_prefix("scenario_")
+                .unwrap_or(name)
+                .replace('_', " ");
+            println!("  Scenario: {label} ... ok");
+        }
     }
 
     // ── Coverage report ───────────────────────────────────────────────────

@@ -155,7 +155,7 @@ test fn scenario_adding_two_numbers() -> Unit {
 - `scenario_*` names map 1:1 to `Scenario:` entries in `.openspec/specs/`
 - `mvl test --bdd` MAY emit Gherkin-style reports derived from function names
 
-**Implementation:** `src/main.rs` (test runner — `mvl test --bdd` BDD report, not yet implemented)
+**Implementation:** `src/main.rs::cmd_test`
 
 #### Scenario: BDD scenario chains given/when/then
 
@@ -163,4 +163,10 @@ test fn scenario_adding_two_numbers() -> Unit {
 - WHEN compiled and run via `mvl test`
 - THEN all `test fn scenario_*` functions pass
 
-**Tests:** `tests/compile_and_run.rs::bdd_scenarios_run_and_pass`
+#### Scenario: --bdd flag emits Gherkin-style report
+
+- GIVEN a `_test.mvl` file with `test fn scenario_*` functions
+- WHEN run via `mvl test --bdd`
+- THEN a `BDD scenarios:` block is printed listing each scenario as `Scenario: <name> ... ok`
+
+**Tests:** `tests/compile_and_run.rs::bdd_scenarios_run_and_pass`, `tests/compile_and_run.rs::bdd_report_emits_gherkin_scenarios`

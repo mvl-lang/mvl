@@ -37,7 +37,7 @@ BDD in MVL is **Option B (naming convention) implemented as Option A (library pa
 
 3. **No new keywords** — `given`, `when`, `then` remain identifiers, not reserved words.
 
-4. **BDD report** — `mvl test --bdd` can extract scenario names from `scenario_*` test functions and emit Gherkin-style output based on naming conventions. This is purely a runner concern.
+4. **BDD report** — `mvl test --bdd` extracts scenario names from `scenario_*` test functions and emits a Gherkin-style `BDD scenarios:` block after the test run. Implemented in `src/main.rs::cmd_test`. This is purely a runner concern — no parser or transpiler changes.
 
 5. **Connection to openspec** — `.openspec/specs/` scenarios (Given-When-Then in English) are the authoritative BDD spec. `_test.mvl` files are the executable evidence. The naming convention creates traceable links: a spec scenario `Scenario: user adds two numbers` maps to `test fn scenario_user_adds_two_numbers`.
 
