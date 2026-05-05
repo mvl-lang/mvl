@@ -1,0 +1,36 @@
+// LLVM smoke test: access_control RBAC decision logic.
+// expect: ALLOWED
+// expect: DENIED
+
+type Role = enum { Admin, Moderator, User, Guest }
+type Resource = enum { Article, UserProfile, AdminPanel, AuditLog }
+type Action = enum { Read, Write, Delete, Manage }
+type Permission = struct { role: Role, resource: Resource, action: Action }
+
+fn allowed(p: Permission) -> Bool {
+    match p.role {
+        Role::Admin => true,
+        Role::Moderator => match p.resource {
+            Resource::AdminPanel => false,
+            Resource::AuditLog   => false,
+            _                    => true,
+        },
+        Role::User => match p.action {
+            Action::Read  => true,
+            Action::Write => match p.resource { Resource::Article => true, Resource::UserProfile => true, _ => false },
+            _             => false,
+        },
+        Role::Guest => match p.action { Action::Read => true, _ => false },
+    }
+}
+
+fn print_decision(ok: Bool) -> Unit ! Console {
+    if ok { println("ALLOWED") } else { println("DENIED") }
+}
+
+fn main() -> Unit ! Console {
+    let p1: Permission = Permission { role: Role::Admin, resource: Resource::AdminPanel, action: Action::Manage };
+    let p2: Permission = Permission { role: Role::Guest, resource: Resource::AdminPanel, action: Action::Write };
+    print_decision(allowed(p1));
+    print_decision(allowed(p2))
+}

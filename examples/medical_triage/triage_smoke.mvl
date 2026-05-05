@@ -1,0 +1,77 @@
+// LLVM smoke test: medical_triage core decisions.
+// expect: RED
+// expect: GREEN
+
+type Priority = enum { Red, Orange, Yellow, Green, Blue }
+type Consciousness = enum { Alert, VoiceResponse, PainResponse, Unresponsive }
+type BreathingStatus = enum { Normal, Labored, Absent }
+type PulseStrength = enum { Strong, Weak, Absent }
+type Vitals = struct {
+    heart_rate: Int, systolic_bp: Int, oxygen_sat: Int, temperature: Int,
+    consciousness: Consciousness, breathing: BreathingStatus, pulse: PulseStrength,
+}
+type AgeGroup = enum { Infant, Child, Adult, Elderly }
+type ChiefComplaint = enum { ChestPain, Breathing, Trauma, Abdominal, Neurological, Fever, Minor }
+type Patient = struct {
+    age_group: AgeGroup, complaint: ChiefComplaint, vitals: Vitals,
+    allergies: Bool, pregnant: Bool,
+}
+type Assessment = struct { priority: Priority, resuscitate: Bool, isolate: Bool, reassess_mins: Int }
+
+fn airway_compromise(v: Vitals) -> Bool {
+    v.breathing == BreathingStatus::Absent
+    || (v.breathing == BreathingStatus::Labored && v.oxygen_sat < 92)
+    || v.pulse == PulseStrength::Absent
+}
+
+fn circulation_failure(v: Vitals) -> Bool {
+    (v.heart_rate > 130 && v.systolic_bp < 100)
+    || v.systolic_bp < 80
+    || (v.oxygen_sat < 90 && v.breathing != BreathingStatus::Absent)
+}
+
+fn neuro_critical(v: Vitals) -> Bool {
+    v.consciousness == Consciousness::Unresponsive
+    || v.consciousness == Consciousness::PainResponse
+}
+
+fn assess(p: Patient) -> Assessment {
+    if airway_compromise(p.vitals) || circulation_failure(p.vitals) || neuro_critical(p.vitals) {
+        Assessment { priority: Priority::Red, resuscitate: true, isolate: false, reassess_mins: 0 }
+    } else {
+        Assessment { priority: Priority::Green, resuscitate: false, isolate: false, reassess_mins: 60 }
+    }
+}
+
+fn print_priority(p: Priority) -> Unit ! Console {
+    match p {
+        Priority::Red    => println("RED"),
+        Priority::Orange => println("ORANGE"),
+        Priority::Yellow => println("YELLOW"),
+        Priority::Green  => println("GREEN"),
+        Priority::Blue   => println("BLUE"),
+    }
+}
+
+fn main() -> Unit ! Console {
+    let cv: Vitals = Vitals {
+        heart_rate: 45, systolic_bp: 80, oxygen_sat: 88, temperature: 365,
+        consciousness: Consciousness::Unresponsive, breathing: BreathingStatus::Labored,
+        pulse: PulseStrength::Weak
+    };
+    let sv: Vitals = Vitals {
+        heart_rate: 72, systolic_bp: 118, oxygen_sat: 98, temperature: 368,
+        consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal,
+        pulse: PulseStrength::Strong
+    };
+    let cp: Patient = Patient {
+        age_group: AgeGroup::Adult, complaint: ChiefComplaint::Neurological,
+        vitals: cv, allergies: false, pregnant: false
+    };
+    let sp: Patient = Patient {
+        age_group: AgeGroup::Adult, complaint: ChiefComplaint::Minor,
+        vitals: sv, allergies: false, pregnant: false
+    };
+    print_priority(assess(cp).priority);
+    print_priority(assess(sp).priority)
+}
