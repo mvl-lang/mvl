@@ -283,6 +283,9 @@ pub(crate) enum StdlibSig {
     /// `bind_pattern_vars` expects for `Some(m)` pattern binding.
     /// e.g. `_mvl_regex_find(handle, input)`.
     OptionMatchTwoPtrArgs(String),
+    /// `i64 → ptr` — one i64 argument, returns an opaque pointer (e.g. `MvlArray*`).
+    /// Used for `_mvl_crypto_random_bytes(n)` → `*mut MvlArray` (#507).
+    I64ReturnsPtrArg(String),
 }
 
 // ── Backend struct ────────────────────────────────────────────────────────────
@@ -504,12 +507,14 @@ impl<'ctx> LlvmBackend<'ctx> {
         // VoidDurationArg   — (Duration) → void.
         // VoidStringMapArg  — (ptr, ptr) → void.
         // PtrIdentArg       — ptr → ptr (identity, e.g. path()).
+        // I64ReturnsPtrArg  — i64 → ptr (e.g. crypto_random_bytes(n) → MvlArray*).
         // ResultUnitOnePtrArg  — ptr → {i8,ptr} Result[Unit,String].
         // ResultUnitTwoPtrArgs — (ptr,ptr) → {i8,ptr} Result[Unit,String].
         // ResultStringOnePtrArg — ptr → {i8,ptr} Result[String,String].
         //
         // Excluded (pending MvlArray*/MvlOption* marshalling):
-        //   - random.bytes, random.choice, random.shuffle
+        //   - random.bytes, random.choice, random.shuffle (same pattern as crypto_random_bytes;
+        //     deferred until random module gets the same MvlArray* treatment — #507 followup)
         //   - time.iso8601_format (returns *mut c_char, needs string dispatch)
         //   - env.get, env.set, env.remove_var, env.cwd, …
         //   - sigint/sigterm/…: return i8, not i64
@@ -636,18 +641,49 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
         }
 
-        // #180/#438: crypto tier-1 builtins — always available, no `use` import required.
-        // sha256/sha512 are pure String→String hash functions backed by `_mvl_crypto_*`
-        // C-ABI exports in `libmvl_runtime_c`.  The LLVM IR pattern is ptr→ptr (same
-        // as PtrIdentArg) — the C function takes a MvlString*, returns a new MvlString*.
-        // Use `entry().or_insert()` so an explicit `use std.crypto.*` import doesn't
-        // conflict (import-registered entries take priority via insert, not or_insert).
+        // #180/#438/#507: crypto tier-1 builtins — always available, no `use` import required.
+        // sha256/sha512: ptr→ptr (PtrIdentArg). crypto_random_bytes: i64→ptr (I64ReturnsPtrArg).
+        // Use `entry().or_insert()` so an explicit `use std.crypto.*` import doesn't conflict.
         self.stdlib_imports
             .entry("sha256".into())
             .or_insert_with(|| StdlibSig::PtrIdentArg("_mvl_crypto_sha256".into()));
         self.stdlib_imports
             .entry("sha512".into())
             .or_insert_with(|| StdlibSig::PtrIdentArg("_mvl_crypto_sha512".into()));
+        self.stdlib_imports
+            .entry("crypto_random_bytes".into())
+            .or_insert_with(|| StdlibSig::I64ReturnsPtrArg("_mvl_crypto_random_bytes".into()));
+
+        // #508: Register return type for crypto_random_bytes so local_mvl_types tracks
+        // it as Secret[List[Int]] when used in let-bindings — enables the codegen-level
+        // debug_assert that guards public-sink emitters against Secret leaks.
+        {
+            use crate::mvl::parser::lexer::Span;
+            let s = Span {
+                line: 0,
+                col: 0,
+                offset: 0,
+                len: 0,
+            };
+            let int_ty = TypeExpr::Base {
+                name: "Int".into(),
+                args: vec![],
+                span: s,
+            };
+            let list_int = TypeExpr::Base {
+                name: "List".into(),
+                args: vec![int_ty],
+                span: s,
+            };
+            let secret_list_int = TypeExpr::Labeled {
+                label: crate::mvl::parser::ast::SecurityLabel::Secret,
+                inner: Box::new(list_int),
+                span: s,
+            };
+            self.fn_return_types
+                .entry("crypto_random_bytes".into())
+                .or_insert(secret_list_int);
+        }
 
         // #435: Register return types for io stdlib functions so that
         // `infer_result_ok_llvm_ty` can distinguish `Result[Unit,String]` (ok=None)
@@ -1195,6 +1231,31 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .build_load(opt_ty, wrapped, "find_result")
                 .unwrap(),
         )
+    }
+
+    /// Emit a call to a C-ABI `i64 → ptr` function (e.g. `_mvl_crypto_random_bytes`).
+    ///
+    /// The C function takes one i64 argument and returns an opaque pointer (e.g. `*mut MvlArray`).
+    pub(crate) fn emit_stdlib_call_i64_returns_ptr(
+        &mut self,
+        symbol: &str,
+        arg: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let fn_val = if let Some(f) = self.module.get_function(symbol) {
+            f
+        } else {
+            let fn_ty = ptr_ty.fn_type(&[i64_ty.into()], false);
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        };
+        let call = self
+            .builder
+            .build_call(fn_val, &[arg.into()], "i64_to_ptr")
+            .ok()?;
+        use inkwell::values::AnyValue;
+        inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()
     }
 
     /// Wrap a C-ABI `{i8, ptr}` result into the internal double-indirected format.

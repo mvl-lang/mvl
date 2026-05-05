@@ -10,30 +10,30 @@
 //! - Output strings (`*mut MvlString`): heap-allocated via `mvl_string_new`.
 //!   LLVM heap-drop tracking frees them at scope exit.
 //!
-//! # Array layout for `_mvl_crypto_random_bytes`
+//! # Array return for `_mvl_crypto_random_bytes`
 //!
-//! Returns a length-prefixed i64 array on the heap:
-//!   `[len: i64][val0: i64][val1: i64]...`
-//! Each value is in `[0, 255]` (byte range stored as i64).
-//! Caller frees with `libc::free`. This matches `_mvl_random_bytes` in random.rs.
+//! Returns a heap-allocated `*mut MvlArray` (element size 8, one i64 per byte).
+//! Each element is in `[0, 255]` (byte range stored as i64).
+//! The array is owned by the LLVM heap-drop system and freed via `mvl_array_drop`.
+//! This is compatible with all list stdlib operations (`list_len`, `list_get`, …).
 //!
 //! # LLVM dispatch coverage
 //!
-//! `sha256` and `sha512` are wired as tier-1 builtins (PtrIdentArg) in codegen.
-//! `crypto_random_bytes` C-ABI export exists but LLVM dispatch is pending a new
-//! StdlibSig variant for `i64 → *mut c_void` array returns — tracked in #507.
+//! `sha256` and `sha512` are wired as tier-1 builtins (`PtrIdentArg`) in codegen.
+//! `crypto_random_bytes` is wired as a tier-1 builtin (`I64ReturnsPtrArg`) — see
+//! `collect_stdlib_imports` in `src/mvl/codegen/mod.rs` (#507).
 //!
 //! # IFC at the C-ABI boundary
 //!
 //! The `Secret` label from `crypto_random_bytes` is a Rust compile-time wrapper;
-//! it is stripped at the C-ABI boundary. IFC enforcement on the LLVM path is the
-//! codegen's responsibility (no direct path from the result to a print/log without
-//! a declassify AST node). Tracked in #508.
+//! it is stripped at the C-ABI boundary. IFC enforcement on the LLVM path relies on
+//! the MVL static checker (which runs before codegen) and codegen-level debug_asserts.
+//! The codegen registers the return type as `Secret[List[Int]]` in `fn_return_types`
+//! and tracks it through let-binding types to catch routing bugs. Tracked in #508.
 
 use std::slice;
 
-use libc::c_void;
-use mvl_memory::{mvl_string_new, MvlString};
+use mvl_memory::{mvl_array_new, mvl_string_new, MvlArray, MvlString};
 use mvl_runtime::ifc::Secret;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -86,31 +86,23 @@ pub extern "C" fn _mvl_crypto_sha512(data: *const MvlString) -> *mut MvlString {
 
 // ── CSPRNG (non-deterministic, ! CryptoRandom) ───────────────────────────────
 
-/// Return `n` cryptographically secure random bytes as a heap-allocated
-/// length-prefixed i64 array.
+/// Return `n` cryptographically secure random bytes as a heap-allocated `*mut MvlArray`.
 ///
-/// Layout: `[len: i64][val0: i64]...` where each value is in `[0, 255]`.
-/// Reads from the OS CSPRNG via `getrandom`. Caller frees with `libc::free`.
-/// The `Secret` wrapper is a Rust compile-time label; the C-ABI returns raw bytes.
+/// Each element is an i64 in `[0, 255]` (element size 8 bytes).
+/// Reads from the OS CSPRNG via `getrandom`. The array is owned by the LLVM
+/// heap-drop system; callers must not free it with `libc::free`.
+/// The `Secret` wrapper is a Rust compile-time label; the C-ABI returns a raw ptr.
 #[no_mangle]
 #[allow(unsafe_code)]
-pub extern "C" fn _mvl_crypto_random_bytes(n: i64) -> *mut c_void {
+pub extern "C" fn _mvl_crypto_random_bytes(n: i64) -> *mut MvlArray {
     let Secret(vals) = mvl_runtime::stdlib::crypto::crypto_random_bytes(n);
-    let len = vals.len();
-    let total = (1usize.checked_add(len))
-        .and_then(|v| v.checked_mul(std::mem::size_of::<i64>()))
-        .unwrap_or_else(|| std::process::abort());
-    let ptr = unsafe { libc::malloc(total) } as *mut i64;
-    if ptr.is_null() {
-        return std::ptr::null_mut();
-    }
     unsafe {
-        ptr.write(len as i64);
-        for (i, v) in vals.iter().enumerate() {
-            ptr.add(1 + i).write(*v);
+        let arr = mvl_array_new(std::mem::size_of::<i64>(), vals.len());
+        for v in &vals {
+            crate::memory_ops::mvl_array_push(arr, (v as *const i64).cast());
         }
+        arr
     }
-    ptr as *mut c_void
 }
 
 #[cfg(test)]
@@ -181,33 +173,33 @@ mod tests {
 
     #[test]
     fn random_bytes_correct_length() {
-        let ptr = _mvl_crypto_random_bytes(16);
-        assert!(!ptr.is_null());
-        let len = unsafe { (ptr as *const i64).read() };
+        let arr = _mvl_crypto_random_bytes(16);
+        assert!(!arr.is_null());
+        let len = unsafe { crate::memory_ops::mvl_array_len(arr) };
         assert_eq!(len, 16);
-        unsafe { libc::free(ptr) };
+        unsafe { mvl_memory::mvl_array_drop(arr) };
     }
 
     #[test]
     fn random_bytes_zero_length() {
-        let ptr = _mvl_crypto_random_bytes(0);
-        assert!(!ptr.is_null());
-        let len = unsafe { (ptr as *const i64).read() };
+        let arr = _mvl_crypto_random_bytes(0);
+        assert!(!arr.is_null());
+        let len = unsafe { crate::memory_ops::mvl_array_len(arr) };
         assert_eq!(len, 0);
-        unsafe { libc::free(ptr) };
+        unsafe { mvl_memory::mvl_array_drop(arr) };
     }
 
     #[test]
     fn random_bytes_values_in_byte_range() {
-        let ptr = _mvl_crypto_random_bytes(32);
-        assert!(!ptr.is_null());
-        let base = ptr as *const i64;
-        let len = unsafe { base.read() } as usize;
+        let arr = _mvl_crypto_random_bytes(32);
+        assert!(!arr.is_null());
+        let len = unsafe { crate::memory_ops::mvl_array_len(arr) } as usize;
         for i in 0..len {
-            let v = unsafe { base.add(1 + i).read() };
+            let elem_ptr = unsafe { crate::memory_ops::mvl_array_get(arr, i) as *const i64 };
+            let v = unsafe { elem_ptr.read() };
             assert!((0..=255).contains(&v), "byte value {v} out of range");
         }
-        unsafe { libc::free(ptr) };
+        unsafe { mvl_memory::mvl_array_drop(arr) };
     }
 
     #[test]
@@ -234,11 +226,11 @@ mod tests {
 
     #[test]
     fn random_bytes_negative_n_returns_empty() {
-        let ptr = _mvl_crypto_random_bytes(-1);
-        assert!(!ptr.is_null());
-        let len = unsafe { (ptr as *const i64).read() };
+        let arr = _mvl_crypto_random_bytes(-1);
+        assert!(!arr.is_null());
+        let len = unsafe { crate::memory_ops::mvl_array_len(arr) };
         assert_eq!(len, 0, "negative n must produce 0 bytes");
-        unsafe { libc::free(ptr) };
+        unsafe { mvl_memory::mvl_array_drop(arr) };
     }
 
     #[test]
