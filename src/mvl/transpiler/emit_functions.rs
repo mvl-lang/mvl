@@ -8,7 +8,7 @@
 //! - Return refinement → `debug_assert!` at end of body
 
 use crate::mvl::parser::ast::{
-    Capability, Constraint, Expr, FnDecl, GenericParam, Param, Totality, TypeExpr,
+    Block, Capability, Constraint, Expr, FnDecl, GenericParam, Param, Stmt, Totality, TypeExpr,
 };
 use crate::mvl::passes::coverage::BranchKind;
 use crate::mvl::transpiler::emit_exprs::{emit_block_stmts, emit_expr};
@@ -54,10 +54,12 @@ pub fn emit_fn_decl(cg: &mut RustEmitter, fd: &FnDecl) {
         .cloned()
         .unwrap_or_default();
 
+    let mutated_params = collect_mutated_map_params(&fd.body);
+
     if fd.is_test {
         cg.line("#[test]");
         let generics = emit_generics_with_params(&fd.type_params, &fd.constraints, &fd.params);
-        let params_str = emit_params(&fd.params, &borrows);
+        let params_str = emit_params(&fd.params, &borrows, &mutated_params);
         let ret_str = emit_type_expr(&fd.return_type);
         cg.line(&format!(
             "fn {}{generics}({params_str}) -> {ret_str} {{",
@@ -89,7 +91,7 @@ pub fn emit_fn_decl(cg: &mut RustEmitter, fd: &FnDecl) {
 
     // Function signature
     let generics = emit_generics_with_params(&fd.type_params, &fd.constraints, &fd.params);
-    let params_str = emit_params(&fd.params, &borrows);
+    let params_str = emit_params(&fd.params, &borrows, &mutated_params);
     let ret_str = emit_type_expr(&fd.return_type);
 
     cg.line(&format!(
@@ -283,7 +285,82 @@ fn is_concrete_type(name: &str) -> bool {
 
 // ── Parameters ───────────────────────────────────────────────────────────
 
-fn emit_params(params: &[Param], borrows: &[Option<bool>]) -> String {
+/// Collect names of Map/Set parameters that are mutated in the body (i.e. have
+/// `.insert(…)` or `.remove(…)` called on them).  Only these need `mut` in the
+/// Rust signature; read-only Map/Set params must not get `mut` to avoid Rust's
+/// "variable does not need to be mutable" warning.
+fn collect_mutated_map_params(body: &Block) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    scan_stmts_for_mut_calls(&body.stmts, &mut out);
+    out
+}
+
+fn scan_stmts_for_mut_calls(stmts: &[Stmt], out: &mut std::collections::HashSet<String>) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Expr { expr, .. }
+            | Stmt::Return {
+                value: Some(expr), ..
+            } => {
+                scan_expr_for_mut_calls(expr, out);
+            }
+            Stmt::Let { init, .. } => scan_expr_for_mut_calls(init, out),
+            Stmt::Assign { value, .. } => scan_expr_for_mut_calls(value, out),
+            Stmt::If {
+                cond, then, else_, ..
+            } => {
+                scan_expr_for_mut_calls(cond, out);
+                scan_stmts_for_mut_calls(&then.stmts, out);
+                if let Some(crate::mvl::parser::ast::ElseBranch::Block(b)) = else_ {
+                    scan_stmts_for_mut_calls(&b.stmts, out);
+                }
+            }
+            Stmt::For { body, iter, .. } => {
+                scan_expr_for_mut_calls(iter, out);
+                scan_stmts_for_mut_calls(&body.stmts, out);
+            }
+            Stmt::While { cond, body, .. } => {
+                scan_expr_for_mut_calls(cond, out);
+                scan_stmts_for_mut_calls(&body.stmts, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn scan_expr_for_mut_calls(expr: &Expr, out: &mut std::collections::HashSet<String>) {
+    match expr {
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            // insert/remove/retain are mutating Map/Set methods
+            if matches!(method.as_str(), "insert" | "remove" | "retain") {
+                if let Expr::Ident(name, _) = receiver.as_ref() {
+                    out.insert(name.clone());
+                }
+            }
+            scan_expr_for_mut_calls(receiver, out);
+            for a in args {
+                scan_expr_for_mut_calls(a, out);
+            }
+        }
+        Expr::FnCall { args, .. } => {
+            for a in args {
+                scan_expr_for_mut_calls(a, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn emit_params(
+    params: &[Param],
+    borrows: &[Option<bool>],
+    mutated_params: &std::collections::HashSet<String>,
+) -> String {
     params
         .iter()
         .enumerate()
@@ -308,14 +385,15 @@ fn emit_params(params: &[Param], borrows: &[Option<bool>]) -> String {
                 Some(Capability::Tag) => "/* tag */ ",
                 None => "",
             };
-            // Map/Set value parameters need `mut` in Rust so mutable methods
-            // (insert, remove) can be called on the owned value.
-            let is_value_map_or_set = borrows.get(i).copied().flatten().is_none()
+            // Map/Set value parameters need `mut` in Rust only when the body
+            // actually calls mutating methods (insert/remove) on them.
+            let is_mutated_map_or_set = borrows.get(i).copied().flatten().is_none()
                 && matches!(
                     &p.ty,
                     TypeExpr::Base { name, .. } if name == "Map" || name == "Set"
-                );
-            let mut_prefix = if p.mutable || is_value_map_or_set {
+                )
+                && mutated_params.contains(&p.name);
+            let mut_prefix = if p.mutable || is_mutated_map_or_set {
                 "mut "
             } else {
                 ""
