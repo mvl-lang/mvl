@@ -35,7 +35,7 @@ fn test_bool_property() -> Unit ! Random {
 // Property: list length is always non-negative.
 // (sort_idempotent requires list equality; deferred until that op is available.)
 fn fn_list_len_nonneg(xs: List[Int]) -> Bool {
-    let n: Int = list_len(xs);
+    let n: Int = xs.len();
     n >= 0
 }
 
@@ -51,7 +51,7 @@ fn test_list_len_nonneg() -> Unit ! Random {
 // Property: string length is always non-negative.
 // (map_roundtrip requires string equality; deferred until that op is available.)
 fn fn_string_len_nonneg(s: String) -> Bool {
-    string_len(s) >= 0
+    s.len() >= 0
 }
 
 fn test_string_len_nonneg() -> Unit ! Random {
