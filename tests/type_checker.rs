@@ -4352,3 +4352,72 @@ fn overflow_checking_corpus_parses_and_checks() {
         result.errors
     );
 }
+
+/// UInt.wrapping_add/sub/mul must resolve to UInt, not Unknown (#493 fix).
+#[test]
+fn uint_wrapping_methods_resolve_correctly() {
+    let result = check_src("fn f(x: UInt, y: UInt) -> UInt { x.wrapping_add(y) }");
+    assert!(
+        result.is_ok(),
+        "UInt.wrapping_add must type-check cleanly, got: {:?}",
+        result.errors
+    );
+    let result2 = check_src("fn f(x: UInt, y: UInt) -> UInt { x.wrapping_sub(y) }");
+    assert!(
+        result2.is_ok(),
+        "UInt.wrapping_sub must type-check cleanly, got: {:?}",
+        result2.errors
+    );
+    let result3 = check_src("fn f(x: UInt, y: UInt) -> UInt { x.wrapping_mul(y) }");
+    assert!(
+        result3.is_ok(),
+        "UInt.wrapping_mul must type-check cleanly, got: {:?}",
+        result3.errors
+    );
+}
+
+/// Bitwise operators on non-integer types must produce TypeMismatch (#483).
+#[test]
+fn bitwise_op_on_float_is_rejected() {
+    let errors = errors_for("fn f(x: Float, y: Float) -> Float { x & y }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "Float & Float should produce TypeMismatch, got: {errors:?}"
+    );
+}
+
+#[test]
+fn bitwise_not_on_float_is_rejected() {
+    let errors = errors_for("fn f(x: Float) -> Float { ~x }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "~Float should produce TypeMismatch, got: {errors:?}"
+    );
+}
+
+/// IFC label propagation through bitwise operators (#483).
+#[test]
+fn bitwise_and_propagates_ifc_label() {
+    // Secret[Int] & Int → Secret[Int]; assigning to Secret[Int] is fine.
+    let errors = errors_for("fn f(a: Secret[Int], b: Public[Int]) -> Secret[Int] { a & b }");
+    assert!(
+        errors.is_empty(),
+        "Secret[Int] & Public[Int] should yield Secret[Int], got: {errors:?}"
+    );
+}
+
+#[test]
+fn bitwise_and_label_downgrade_rejected() {
+    // Secret[Int] & Int → Secret[Int]; assigning to Public[Int] must fail.
+    let errors = errors_for("fn f(a: Secret[Int], b: Public[Int]) -> Public[Int] { a & b }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "Secret[Int] & Public[Int] result cannot flow to Public[Int], got: {errors:?}"
+    );
+}

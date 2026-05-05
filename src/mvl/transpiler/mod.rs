@@ -727,6 +727,62 @@ mod tests {
         prog
     }
 
+    // ── collect_stdlib_modules tests (#488 #489) ───────────────────────────
+
+    #[test]
+    fn collect_stdlib_modules_single_import() {
+        let prog = parse("use std.io.{read_file}");
+        let modules = collect_stdlib_modules(&prog);
+        assert_eq!(modules, vec!["io".to_string()]);
+    }
+
+    #[test]
+    fn collect_stdlib_modules_deduplicates() {
+        let prog = parse("use std.io.{read_file}\nuse std.io.{write_file}");
+        let modules = collect_stdlib_modules(&prog);
+        assert_eq!(
+            modules,
+            vec!["io".to_string()],
+            "duplicates should be removed"
+        );
+    }
+
+    #[test]
+    fn collect_stdlib_modules_multiple_modules() {
+        let prog = parse("use std.io.{read_file}\nuse std.env.{getuid}");
+        let mut modules = collect_stdlib_modules(&prog);
+        modules.sort();
+        assert_eq!(modules, vec!["env".to_string(), "io".to_string()]);
+    }
+
+    #[test]
+    fn collect_stdlib_modules_non_std_ignored() {
+        let prog = parse("use mylib.utils.{helper}");
+        let modules = collect_stdlib_modules(&prog);
+        assert!(
+            modules.is_empty(),
+            "non-std imports must not appear: {modules:?}"
+        );
+    }
+
+    #[test]
+    fn collect_stdlib_modules_empty_program() {
+        let prog = parse("fn f() -> Int { 1 }");
+        let modules = collect_stdlib_modules(&prog);
+        assert!(modules.is_empty());
+    }
+
+    #[test]
+    fn transpile_emits_stdlib_use_for_std_import() {
+        let prog = parse("use std.env.{getuid}\nfn main() -> Unit ! Env { }");
+        let out = transpile(&prog, "crate");
+        assert!(
+            out.lib_rs.contains("use mvl_runtime::stdlib::env::*"),
+            "emitted Rust must contain targeted stdlib import, got:\n{}",
+            out.lib_rs
+        );
+    }
+
     // ── MC/DC codegen structural tests ────────────────────────────────────
 
     /// Compound `if (A && B)` emits clause arrays, outcome var, and record call.

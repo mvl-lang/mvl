@@ -26,6 +26,12 @@ fn shift_right(a: Int, n: Int) -> Int {
     a >> n
 }
 
+// NOTE: The LLVM backend currently emits arithmetic right-shift (ashr) for all
+// integer types, including UByte and UInt. This matches signed semantics (sign-
+// extends) but differs from the Rust transpiler, which uses Rust's native >>
+// (logical/zero-extending for u8/u64). Unsigned right-shift divergence is a
+// known follow-up tracked in ADR-0021 and issue #484.
+
 fn flags_demo(flags: Int) -> Bool {
     let read_bit: Int = 4;
     let write_bit: Int = 2;

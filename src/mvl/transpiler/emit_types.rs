@@ -624,6 +624,11 @@ fn map_base_type(name: &str) -> &str {
         "Bool" => "bool",
         "String" => "String",
         "Char" => "char",
+        // Both Byte and UByte map to u8. Rust's u8 is unsigned; the signed/unsigned
+        // distinction is tracked at the checker level (Ty::Byte vs Ty::UByte) and
+        // affects method dispatch (e.g. Byte has `abs`, UByte does not). At the Rust
+        // emission level both compile to u8 with wrapping semantics. If Byte needs i8
+        // semantics, this mapping would need revisiting (tracked as a follow-up).
         "Byte" => "u8",
         "UByte" => "u8",
         "UInt" => "u64",

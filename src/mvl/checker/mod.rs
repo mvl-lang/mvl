@@ -1550,7 +1550,7 @@ impl TypeChecker {
                 let lt_inner = lt.unlabeled().clone();
                 let rt_inner = rt.unlabeled().clone();
                 for (ty, span) in [(&lt, left.span()), (&rt, right.span())] {
-                    if !matches!(ty, Ty::Unknown) && !ty.is_integer() {
+                    if !matches!(ty.unlabeled(), Ty::Unknown) && !ty.is_integer() {
                         self.emit(CheckError::TypeMismatch {
                             expected: "integer type (Int, Byte, UByte, UInt)".to_string(),
                             found: ty.display(),
@@ -1632,7 +1632,7 @@ impl TypeChecker {
                 }
             }
             UnaryOp::BitNot => {
-                if !matches!(ty, Ty::Unknown) && !ty.is_integer() {
+                if !matches!(ty.unlabeled(), Ty::Unknown) && !ty.is_integer() {
                     self.emit(CheckError::TypeMismatch {
                         expected: "integer type (Int, Byte, UByte, UInt)".to_string(),
                         found: ty.display(),
@@ -1982,6 +1982,7 @@ impl TypeChecker {
             "abs" | "pow" | "min" | "max" | "clamp" => Ty::UInt,
             "bit_and" | "bit_or" | "bit_xor" | "bit_not" | "shift_left" | "shift_right" => Ty::UInt,
             "is_zero" => Ty::Bool,
+            "wrapping_add" | "wrapping_sub" | "wrapping_mul" => Ty::UInt,
             "checked_add" | "checked_sub" | "checked_mul" => Ty::Option(Box::new(Ty::UInt)),
             _ => Ty::Unknown,
         }

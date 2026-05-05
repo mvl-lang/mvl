@@ -222,7 +222,7 @@ pub unsafe extern "C" fn mvl_map_insert(
     val: *const u8,
     val_len: usize,
 ) {
-    if m.is_null() || key.is_null() {
+    if m.is_null() || key.is_null() || key_len == 0 {
         return;
     }
     // Grow if load factor > 50%.
@@ -249,17 +249,28 @@ pub unsafe extern "C" fn mvl_map_insert(
     let slot = &mut *(*m).slots.add(idx);
     if slot.occupied != 0 {
         // Replace existing value.
-        mvl_free(slot.val_ptr, slot.val_len as usize);
-        let new_val = mvl_alloc(val_len);
-        ptr::copy_nonoverlapping(val, new_val, val_len);
-        slot.val_ptr = new_val;
+        if slot.val_len > 0 {
+            mvl_free(slot.val_ptr, slot.val_len as usize);
+        }
+        if val_len > 0 {
+            let new_val = mvl_alloc(val_len);
+            ptr::copy_nonoverlapping(val, new_val, val_len);
+            slot.val_ptr = new_val;
+        } else {
+            slot.val_ptr = ptr::null_mut();
+        }
         slot.val_len = val_len as u64;
     } else {
         // New entry.
         let kp = mvl_alloc(key_len);
         ptr::copy_nonoverlapping(key, kp, key_len);
-        let vp = mvl_alloc(val_len);
-        ptr::copy_nonoverlapping(val, vp, val_len);
+        let vp = if val_len > 0 {
+            let p = mvl_alloc(val_len);
+            ptr::copy_nonoverlapping(val, p, val_len);
+            p
+        } else {
+            ptr::null_mut()
+        };
         slot.occupied = 1;
         slot.key_ptr = kp;
         slot.key_len = key_len as u64;
@@ -283,6 +294,10 @@ pub unsafe extern "C" fn mvl_map_get(
     if m.is_null() || key.is_null() {
         return ptr::null();
     }
+    // Growth invariant: len < cap is maintained by mvl_map_insert (grows at >50% load).
+    // map_find_slot loops until it finds an empty slot; a 100% full map with an absent
+    // key would loop forever.
+    debug_assert!((*m).len < (*m).cap, "map invariant violated: len >= cap");
     let idx = map_find_slot((*m).slots, (*m).cap, key, key_len);
     let slot = &*(*m).slots.add(idx);
     if slot.occupied == 0 {
@@ -359,10 +374,10 @@ mod tests {
             let c = mvl_string_new(b"xyz".as_ptr(), 3);
             assert_eq!(mvl_string_eq(a, b), 1);
             assert_eq!(mvl_string_eq(a, c), 0);
-            let _ = mvl_string_clone(a); // bump refcount to test equality of same pointer
-            assert_eq!(mvl_string_eq(a, a), 1); // same pointer → eq
-            mvl_string_drop(a); // drop the clone
-            mvl_string_drop(a);
+            let _ = mvl_string_clone(a); // refcount → 2 (same ptr; raw ptr, no Rust Drop)
+            assert_eq!(mvl_string_eq(a, a), 1); // pointer-equality short-circuit
+            mvl_string_drop(a); // refcount → 1
+            mvl_string_drop(a); // refcount → 0, freed
             mvl_string_drop(b);
             mvl_string_drop(c);
         }

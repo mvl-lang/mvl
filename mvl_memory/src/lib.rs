@@ -108,9 +108,8 @@ pub struct MvlString {
 }
 
 impl MvlString {
-    unsafe fn alloc_bytes(cap: usize) -> *mut u8 {
-        mvl_alloc(cap)
-    }
+    // alloc_bytes removed: mvl_string_concat moved to mvl_runtime_c::memory_ops (#490),
+    // so alloc_bytes had no callers. Use mvl_alloc directly.
 
     unsafe fn free_bytes(ptr: *mut u8, cap: usize) {
         mvl_free(ptr, cap);
