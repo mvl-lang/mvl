@@ -3159,10 +3159,6 @@ fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
         if !has_main {
             continue;
         }
-        // Skip files explicitly excluded from LLVM testing.
-        if src.contains("corpus:skip-llvm") {
-            continue;
-        }
         if let Some(pat) = codegen::parse_expect_pattern_annotation(&src) {
             test_cases.push((file.clone(), pat, true));
         } else if let Some(expected) = codegen::parse_expect_annotation(&src) {
