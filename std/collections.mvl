@@ -25,6 +25,20 @@ pub fn map_insert[K, V](m: Map[K, V], key: K, value: V) -> Unit {
     m.insert(key, value)
 }
 
+/// Insert `key → value` and return the updated map (value semantics).
+/// Ownership of `m` is transferred in; the modified map is returned.
+pub fn map_put[K, V](m: Map[K, V], key: K, value: V) -> Map[K, V] {
+    m.insert(key, value);
+    m
+}
+
+/// Remove `key` from `m` and return the updated map (value semantics).
+/// If `key` is absent the map is returned unchanged.
+pub fn map_without[K, V](m: Map[K, V], key: K) -> Map[K, V] {
+    m.remove(key);
+    m
+}
+
 /// Remove `key` from `m`, returning the old value if present.
 // LLVM: deferred to #436 — no codegen arm for `remove` in exprs.rs yet.
 pub fn map_remove[K, V](m: Map[K, V], key: K) -> Option[V] {

@@ -1308,7 +1308,13 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
     // (primitives.mvl, strings.mvl, lists.mvl). Non-stub MVL functions
     // (e.g. range(), trim()) are transpiled from source rather than relying
     // on hardcoded Rust mappings in the transpiler. Embedded at compile time.
-    let stdlib_prelude_progs = load_implicit_prelude();
+    let mut stdlib_prelude_progs = load_implicit_prelude();
+    // Extend with any pure-MVL stdlib modules imported by this program (e.g. json.mvl).
+    let all_progs: Vec<_> = std::iter::once(&prog)
+        .chain(sibling_modules.iter().map(|(_, p)| p))
+        .cloned()
+        .collect();
+    stdlib_prelude_progs.extend(load_mvl_native_stdlib_extras(&all_progs));
 
     let out =
         transpiler::transpile_project(&crate_name, &prog, &sibling_modules, &stdlib_prelude_progs);
@@ -1544,7 +1550,16 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     });
 
     // Load the implicit stdlib prelude (core + Phase 4 stdlib files).
-    let stdlib_prelude_progs = load_implicit_prelude();
+    let mut stdlib_prelude_progs = load_implicit_prelude();
+    // Pre-scan all test files to discover pure-MVL stdlib imports (e.g. json) and
+    // extend the prelude so their types/functions are available during transpilation.
+    {
+        let all_test_progs: Vec<_> = test_files
+            .iter()
+            .map(|f| parse_or_exit(&f.display().to_string()).0)
+            .collect();
+        stdlib_prelude_progs.extend(load_mvl_native_stdlib_extras(&all_test_progs));
+    }
 
     // Build a combined Rust test file from all test modules.
     // Each entry: (module_name, display_label, content)
@@ -2757,6 +2772,64 @@ fn load_implicit_prelude() -> Vec<mvl::mvl::parser::ast::Program> {
     progs
 }
 
+use transpiler::RUST_BACKED_STDLIB;
+
+/// Modules already in the implicit prelude — never loaded twice.
+const IMPLICIT_PRELUDE_STEMS: &[&str] = &["core", "primitives", "strings", "lists"];
+
+/// Load pure-MVL stdlib modules (e.g. json, collections) imported by `progs`
+/// into the prelude so the emitter can inline their types and functions.
+///
+/// Resolves transitive dependencies: if a loaded module itself imports another
+/// pure-MVL stdlib module, that module is loaded too.
+///
+/// Rust-backed modules (io, env, …) and the four always-implicit modules are
+/// excluded: the former come from `mvl_runtime::stdlib`, the latter are already
+/// in the base prelude returned by `load_implicit_prelude`.
+fn load_mvl_native_stdlib_extras(
+    progs: &[mvl::mvl::parser::ast::Program],
+) -> Vec<mvl::mvl::parser::ast::Program> {
+    use mvl::mvl::parser::ast::Decl;
+    use std::collections::HashSet;
+    let mut loaded: HashSet<String> = HashSet::new();
+    let mut extras: Vec<mvl::mvl::parser::ast::Program> = Vec::new();
+
+    // seed work queue with user programs
+    let mut pending: Vec<mvl::mvl::parser::ast::Program> = progs.to_vec();
+
+    while !pending.is_empty() {
+        let mut next_pending = Vec::new();
+        for prog in &pending {
+            for decl in &prog.declarations {
+                if let Decl::Use(ud) = decl {
+                    if ud.path.first().map(|s| s == "std").unwrap_or(false) {
+                        if let Some(module) = ud.path.get(1) {
+                            let m = module.as_str();
+                            if RUST_BACKED_STDLIB.contains(&m)
+                                || IMPLICIT_PRELUDE_STEMS.contains(&m)
+                            {
+                                continue;
+                            }
+                            if loaded.insert(module.clone()) {
+                                let filename = format!("{m}.mvl");
+                                if let Some(content) = stdlib::stdlib_content(&filename) {
+                                    let (mut p, _) = Parser::new(content);
+                                    let loaded_prog = p.parse_program();
+                                    next_pending.push(loaded_prog.clone());
+                                    extras.push(loaded_prog);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        pending = next_pending;
+    }
+
+    extras
+}
+
 /// is `["std", "io"]`, so we look for `<stdlib_dir>/io.mvl`.
 /// Errors (missing file, parse failure) are silently ignored — the checker
 /// will surface "undefined function" errors for any symbol that wasn't loaded.
@@ -3063,13 +3136,23 @@ mod find_test_binary_tests {
 
 // ── LLVM backend commands (feature = "llvm") ──────────────────────────────────
 
+#[cfg(feature = "llvm")]
+fn prepare_llvm(
+    prog: &mvl::mvl::parser::ast::Program,
+) -> (Vec<mvl::mvl::parser::ast::Program>, codegen::LlvmCompiler) {
+    let mut prelude = load_implicit_prelude();
+    prelude.extend(load_mvl_native_stdlib_extras(std::slice::from_ref(prog)));
+    (prelude, codegen::LlvmCompiler::new())
+}
+
 /// Compile an MVL file to LLVM IR and write the .ll file to the current directory.
 /// `mvl build --backend=llvm <file>`
 #[cfg(feature = "llvm")]
 fn build_project_llvm(path: &str) {
     let (prog, _src) = parse_or_exit(path);
     let module_name = stem(path);
-    match codegen::compile_to_ir(&prog, &module_name) {
+    let (prelude, compiler) = prepare_llvm(&prog);
+    match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
         Ok(ir) => {
             let out_path = format!("{module_name}.ll");
             fs::write(&out_path, &ir).unwrap_or_else(|e| {
@@ -3096,7 +3179,8 @@ fn run_project_llvm(path: &str) {
 
     let (prog, _src) = parse_or_exit(path);
     let module_name = stem(path);
-    let ir = match codegen::compile_to_ir(&prog, &module_name) {
+    let (prelude, compiler) = prepare_llvm(&prog);
+    let ir = match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
         Ok(ir) => ir,
         Err(e) => {
             eprintln!("error: LLVM codegen failed: {e}");
@@ -3185,7 +3269,8 @@ fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
         let module_name = stem(&file_str);
 
         let (prog, _src) = parse_or_exit(&file_str);
-        let ir = match codegen::compile_to_ir(&prog, &module_name) {
+        let (prelude, compiler) = prepare_llvm(&prog);
+        let ir = match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
             Ok(ir) => ir,
             Err(e) => {
                 eprintln!("  FAIL (codegen): {file_str}");

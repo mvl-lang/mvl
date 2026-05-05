@@ -13,7 +13,9 @@
 
 use std::ptr;
 
-use mvl_memory::{mvl_alloc, mvl_free, MvlArray, MvlMap, MvlMapSlot, MvlString};
+use mvl_memory::{
+    mvl_alloc, mvl_array_new, mvl_free, mvl_string_new, MvlArray, MvlMap, MvlMapSlot, MvlString,
+};
 
 // ── Internal helpers ───────────────────────────────────────────────────────────
 
@@ -317,6 +319,91 @@ pub unsafe extern "C" fn mvl_map_len(m: *const MvlMap) -> u64 {
         return 0;
     }
     (*m).len
+}
+
+/// Decompose a UTF-8 string into a `MvlArray` of `*mut MvlString` pointers (one per char).
+///
+/// # Safety
+/// `s` must be a valid non-null `MvlString` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn mvl_string_chars(s: *const MvlString) -> *mut MvlArray {
+    let arr = mvl_array_new(std::mem::size_of::<*mut MvlString>(), 0);
+    if s.is_null() {
+        return arr;
+    }
+    let len = (*s).len as usize;
+    if len == 0 {
+        return arr;
+    }
+    let bytes = std::slice::from_raw_parts((*s).ptr, len);
+    let text =
+        std::str::from_utf8(bytes).expect("mvl_string_chars: MvlString contains invalid UTF-8");
+    for ch in text.chars() {
+        let mut buf = [0u8; 4];
+        let encoded = ch.encode_utf8(&mut buf);
+        let char_s = mvl_string_new(encoded.as_ptr(), encoded.len());
+        mvl_array_push(arr, (&char_s as *const *mut MvlString).cast());
+    }
+    arr
+}
+
+/// Return all keys in the map as a `MvlArray` of `*mut MvlString` pointers.
+///
+/// # Safety
+/// `m` must be a valid non-null `MvlMap` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn mvl_map_keys(m: *const MvlMap) -> *mut MvlArray {
+    let arr = mvl_array_new(std::mem::size_of::<*mut MvlString>(), 0);
+    if m.is_null() || (*m).cap == 0 {
+        return arr;
+    }
+    let cap = (*m).cap as usize;
+    for i in 0..cap {
+        let slot = &*(*m).slots.add(i);
+        if slot.occupied != 0 {
+            let key_s = mvl_string_new(slot.key_ptr, slot.key_len as usize);
+            mvl_array_push(arr, (&key_s as *const *mut MvlString).cast());
+        }
+    }
+    arr
+}
+
+/// Remove the entry with the given key from the map (no-op if absent).
+///
+/// # Safety
+/// `m` and `key` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn mvl_map_remove(m: *mut MvlMap, key: *const u8, key_len: usize) {
+    if m.is_null() || key.is_null() || key_len == 0 || (*m).cap == 0 {
+        return;
+    }
+    if (*m).len == 0 {
+        return;
+    }
+    debug_assert!(
+        (*m).len < (*m).cap,
+        "mvl_map_remove: map invariant violated (len >= cap)"
+    );
+    let idx = map_find_slot((*m).slots, (*m).cap, key, key_len);
+    let slot = &mut *(*m).slots.add(idx);
+    if slot.occupied == 0 {
+        return;
+    }
+    if slot.key_len > 0 && !slot.key_ptr.is_null() {
+        mvl_free(slot.key_ptr, slot.key_len as usize);
+    }
+    if slot.val_len > 0 && !slot.val_ptr.is_null() {
+        mvl_free(slot.val_ptr, slot.val_len as usize);
+    }
+    slot.occupied = 0;
+    slot.key_ptr = ptr::null_mut();
+    slot.key_len = 0;
+    slot.val_ptr = ptr::null_mut();
+    slot.val_len = 0;
+    (*m).len = (*m)
+        .len
+        .checked_sub(1)
+        .unwrap_or_else(|| std::process::abort());
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────

@@ -160,6 +160,15 @@ fn cross_backend_shapes() {
     assert_backends_agree("shapes.mvl");
 }
 
+// ── #419 + #437: native MVL JSON ─────────────────────────────────────────────
+
+/// Both backends must produce identical output for JSON encoding of Null, Bool,
+/// Number, Array, String (str_chars LLVM support implemented in #437).
+#[test]
+fn cross_backend_json_encode() {
+    assert_backends_agree("json_encode.mvl");
+}
+
 // ── #418: Map/Set native MVL collections ──────────────────────────────────────
 
 /// Both backends must produce identical deterministic output for Map.len,

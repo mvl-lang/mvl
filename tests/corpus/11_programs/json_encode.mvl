@@ -1,0 +1,27 @@
+// json_encode.mvl — cross-backend parity test for std.json.encode (#419)
+//
+// Exercises Value::Null, Bool, Number, Array; excludes Object (needs #436
+// for map_keys LLVM support) and String escaping (needs str_chars LLVM
+// support, tracked in #437).
+//
+// Expected output (both backends must agree):
+//   null
+//   true
+//   false
+//   42
+//   1.5
+//   []
+//   [null,true,42]
+
+use std.json.{Value, encode}
+
+fn main() -> Unit {
+    println(encode(Value::Null));
+    println(encode(Value::Bool(true)));
+    println(encode(Value::Bool(false)));
+    println(encode(Value::Number(42.0)));
+    println(encode(Value::Number(1.5)));
+    println(encode(Value::Array([])));
+    let arr: List[Value] = [Value::Null, Value::Bool(true), Value::Number(42.0)];
+    println(encode(Value::Array(arr)));
+}

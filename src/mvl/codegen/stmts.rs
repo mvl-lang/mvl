@@ -67,9 +67,12 @@ impl<'ctx> LlvmBackend<'ctx> {
                     src.and_then(|s| self.heap_locals.remove(s))
                 };
                 // Register new binding: prefer the transferred kind, fall back to type annotation.
+                // Only register for drop if the alloca is in the entry block — allocas in branch
+                // blocks (match arms, loops) don't dominate the function exit and would produce
+                // invalid IR ("Instruction does not dominate all uses").
                 let heap_kind = move_src_kind.or_else(|| heap_kind_of(ty));
                 if let Some(kind) = heap_kind {
-                    if matches!(llvm_ty, BasicTypeEnum::PointerType(_)) {
+                    if matches!(llvm_ty, BasicTypeEnum::PointerType(_)) && self.in_entry_block() {
                         self.heap_locals.insert(name, kind);
                     }
                 }
