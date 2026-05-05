@@ -103,6 +103,7 @@ test-corpus: ## Validate corpus examples parse and type-check
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
 	for f in tests/corpus/**/*.mvl; do \
 		short=$${f#tests/corpus/}; \
+		[[ "$$f" == *_test.mvl ]] && continue; \
 		if grep -q "corpus:expect-fail" "$$f" 2>/dev/null; then \
 			cargo run --quiet -- check "$$f" >/dev/null 2>&1; rc=$$?; \
 			if [ $$rc -ne 0 ]; then \
