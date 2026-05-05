@@ -266,6 +266,23 @@ pub(crate) enum StdlibSig {
     /// The C function returns `{tag, direct_payload}` where direct_payload is a
     /// MvlString* for Ok and Err.  Wrapping is the same as ResultUnitOnePtrArg.
     ResultStringOnePtrArg(String),
+
+    // ── #420/#439: regex stdlib ───────────────────────────────────────────────
+    /// `(ptr, ptr, ptr) → *mut c_char` — three-ptr-arg C function returning a heap string.
+    /// Caller frees the returned pointer with `libc::free`.
+    /// e.g. `_mvl_regex_replace(handle, input, replacement)`.
+    StringThreePtrArgs(String),
+    /// `(ptr, ptr) → {i8, ptr}` — two-ptr-arg C function returning `Option[Match]`.
+    ///
+    /// The C function returns `{i8, ptr}` where:
+    ///   tag=0 (Some) — payload is a heap-allocated `*mut MvlMatch { text: ptr, start: i64, end: i64 }`
+    ///   tag=1 (None) — payload is null
+    ///
+    /// The emission helper conditionally loads the `%Match` struct from the heap pointer into a
+    /// stack slot, then wraps in the double-indirected `{i8, ptr}` format that
+    /// `bind_pattern_vars` expects for `Some(m)` pattern binding.
+    /// e.g. `_mvl_regex_find(handle, input)`.
+    OptionMatchTwoPtrArgs(String),
 }
 
 // ── Backend struct ────────────────────────────────────────────────────────────
@@ -565,6 +582,25 @@ impl<'ctx> LlvmBackend<'ctx> {
                 "remove",
                 Sig::ResultUnitOnePtrArg("_mvl_io_remove".into()),
             ),
+            // std.regex — #420/#439
+            (
+                "regex",
+                "compile",
+                Sig::ResultStringOnePtrArg("_mvl_regex_compile".into()),
+            ),
+            (
+                "regex",
+                "replace",
+                Sig::StringThreePtrArgs("_mvl_regex_replace".into()),
+            ),
+            (
+                "regex",
+                "find",
+                Sig::OptionMatchTwoPtrArgs("_mvl_regex_find".into()),
+            ),
+            // find_all, captures: C-ABI symbols planned; LLVM codegen deferred —
+            // find_all requires List[Struct] element-copy marshalling;
+            // captures requires nested List[Option[String]] + Map marshalling.
         ];
 
         for decl in &prog.declarations {
@@ -669,6 +705,63 @@ impl<'ctx> LlvmBackend<'ctx> {
             self.fn_return_types
                 .entry("read_to_string".to_string())
                 .or_insert_with(result_str_str);
+        }
+
+        // #420: Register return type for regex.compile so that `?` propagation
+        // can infer the Ok payload type (Regex = opaque ptr).
+        let imports_regex = prog.declarations.iter().any(|d| {
+            if let Decl::Use(ud) = d {
+                ud.path.len() >= 2 && ud.path[0] == "std" && ud.path[1] == "regex"
+            } else {
+                false
+            }
+        });
+        if imports_regex {
+            use crate::mvl::parser::lexer::Span;
+            let s = Span {
+                line: 0,
+                col: 0,
+                offset: 0,
+                len: 0,
+            };
+            let mk_base = |name: &str| TypeExpr::Base {
+                name: name.to_string(),
+                args: vec![],
+                span: s,
+            };
+            let string_ty = mk_base("String");
+            let int_ty = mk_base("Int");
+
+            // Register `Match = struct { text: String, start: Int, end: Int }` into
+            // struct_fields so build_llvm_types can create the LLVM struct type.
+            // (std/regex.mvl type declarations are not in the user program's AST so
+            //  register_type_decl never sees them.)
+            self.struct_fields.entry("Match".into()).or_insert_with(|| {
+                vec![
+                    ("text".into(), string_ty.clone()),
+                    ("start".into(), int_ty.clone()),
+                    ("end".into(), int_ty.clone()),
+                ]
+            });
+
+            let regex_ty = mk_base("Regex");
+            let match_ty = mk_base("Match");
+
+            // compile(pattern: String) → Result[Regex, String]
+            self.fn_return_types
+                .entry("compile".into())
+                .or_insert(TypeExpr::Result {
+                    ok: Box::new(regex_ty),
+                    err: Box::new(string_ty),
+                    span: s,
+                });
+            // find(re: Regex, s: String) → Option[Match]
+            self.fn_return_types
+                .entry("find".into())
+                .or_insert(TypeExpr::Option {
+                    inner: Box::new(match_ty),
+                    span: s,
+                });
         }
     }
 
@@ -938,6 +1031,170 @@ impl<'ctx> LlvmBackend<'ctx> {
             .ok()?;
         use inkwell::values::AnyValue;
         BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+    }
+
+    // ── #420/#439: regex emission helpers ────────────────────────────────────────
+
+    /// Emit a call to `_mvl_regex_replace`: `(ptr, ptr, ptr) → *mut c_char`.
+    ///
+    /// Returns the heap-allocated result string as a ptr value.
+    pub(crate) fn emit_stdlib_call_string_three_ptr_args(
+        &mut self,
+        symbol: &str,
+        a: inkwell::values::BasicValueEnum<'ctx>,
+        b: inkwell::values::BasicValueEnum<'ctx>,
+        c: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        use inkwell::types::BasicMetadataTypeEnum;
+        use inkwell::values::BasicMetadataValueEnum;
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let fn_val = if let Some(f) = self.module.get_function(symbol) {
+            f
+        } else {
+            let fn_ty = ptr_ty.fn_type(
+                &[
+                    BasicMetadataTypeEnum::from(ptr_ty),
+                    BasicMetadataTypeEnum::from(ptr_ty),
+                    BasicMetadataTypeEnum::from(ptr_ty),
+                ],
+                false,
+            );
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        };
+        let call = self
+            .builder
+            .build_call(
+                fn_val,
+                &[
+                    BasicMetadataValueEnum::from(a),
+                    BasicMetadataValueEnum::from(b),
+                    BasicMetadataValueEnum::from(c),
+                ],
+                "regex_replace",
+            )
+            .ok()?;
+        use inkwell::values::AnyValue;
+        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+    }
+
+    /// Emit a call to `_mvl_regex_find`: `(ptr, ptr) → {i8, ptr}` returning `Option[Match]`.
+    ///
+    /// The C function returns `{i8, ptr}` where tag=0 (Some) carries a heap `*mut MvlMatch`
+    /// and tag=1 (None) carries null.  This helper:
+    /// 1. Calls the C function.
+    /// 2. Conditionally (tag=0) loads the `%Match` struct from the heap pointer into a
+    ///    stack-allocated `%Match` slot so that `bind_pattern_vars` can load it by value.
+    /// 3. Returns a wrapped `{i8, ptr}` where field 1 is a pointer to the `%Match` slot.
+    pub(crate) fn emit_stdlib_call_option_match_two_ptr_args(
+        &mut self,
+        symbol: &str,
+        handle: inkwell::values::BasicValueEnum<'ctx>,
+        input: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        use inkwell::types::BasicMetadataTypeEnum;
+        use inkwell::values::{AnyValue, BasicMetadataValueEnum};
+        use inkwell::IntPredicate;
+
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let c_result_ty = self
+            .context
+            .struct_type(&[self.context.i8_type().into(), ptr_ty.into()], false);
+
+        // Get/declare `_mvl_regex_find(ptr, ptr) → {i8, ptr}`.
+        let fn_val = if let Some(f) = self.module.get_function(symbol) {
+            f
+        } else {
+            let fn_ty = c_result_ty.fn_type(
+                &[
+                    BasicMetadataTypeEnum::from(ptr_ty),
+                    BasicMetadataTypeEnum::from(ptr_ty),
+                ],
+                false,
+            );
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        };
+
+        // Call the C function.
+        let call = self
+            .builder
+            .build_call(
+                fn_val,
+                &[
+                    BasicMetadataValueEnum::from(handle),
+                    BasicMetadataValueEnum::from(input),
+                ],
+                "regex_find_c",
+            )
+            .ok()?;
+        let c_val = BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
+        let BasicValueEnum::StructValue(c_sv) = c_val else {
+            return None;
+        };
+
+        // Extract tag and the heap MvlMatch* from the C return value.
+        let tag = self.builder.build_extract_value(c_sv, 0, "find_tag").ok()?;
+        let match_ptr = self.builder.build_extract_value(c_sv, 1, "find_ptr").ok()?;
+        let match_ptr_pv = match_ptr.into_pointer_value();
+
+        // Look up the %Match LLVM struct type (registered when std/regex.mvl is parsed).
+        let match_llvm_ty = self.llvm_struct_types.get("Match").copied()?;
+
+        // Allocate a stack slot for the Match struct — sized for the full struct.
+        let match_slot = self
+            .builder
+            .build_alloca(match_llvm_ty, "find_match_slot")
+            .unwrap();
+
+        // Emit a conditional branch: only dereference match_ptr when tag == 0 (Some).
+        let parent_fn = self.builder.get_insert_block()?.get_parent()?;
+        let then_bb = self.context.append_basic_block(parent_fn, "find_some");
+        let merge_bb = self.context.append_basic_block(parent_fn, "find_merge");
+
+        let tag_i8 = tag.into_int_value();
+        let is_some = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag_i8,
+                self.context.i8_type().const_zero(),
+                "find_is_some",
+            )
+            .ok()?;
+        self.builder
+            .build_conditional_branch(is_some, then_bb, merge_bb)
+            .ok()?;
+
+        // then_bb: dereference the heap MvlMatch* and store the struct into our slot.
+        self.builder.position_at_end(then_bb);
+        let match_val = self
+            .builder
+            .build_load(match_llvm_ty, match_ptr_pv, "find_match_val")
+            .ok()?;
+        self.builder.build_store(match_slot, match_val).ok()?;
+        self.builder.build_unconditional_branch(merge_bb).ok()?;
+
+        // merge_bb: build the wrapped {tag, &match_slot} in the internal format.
+        self.builder.position_at_end(merge_bb);
+        let opt_ty = c_result_ty; // same {i8, ptr} layout
+        let wrapped = self.builder.build_alloca(opt_ty, "find_wrapped").unwrap();
+        let tag_gep = self
+            .builder
+            .build_struct_gep(opt_ty, wrapped, 0, "find_tag_ptr")
+            .unwrap();
+        self.builder.build_store(tag_gep, tag_i8).unwrap();
+        let payload_gep = self
+            .builder
+            .build_struct_gep(opt_ty, wrapped, 1, "find_payload_ptr")
+            .unwrap();
+        self.builder.build_store(payload_gep, match_slot).unwrap();
+
+        Some(
+            self.builder
+                .build_load(opt_ty, wrapped, "find_result")
+                .unwrap(),
+        )
     }
 
     /// Wrap a C-ABI `{i8, ptr}` result into the internal double-indirected format.

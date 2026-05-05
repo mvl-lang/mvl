@@ -455,7 +455,13 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                 if is_extern {
                     cg.push("unsafe { ");
                 }
-                cg.push(&map_fn_name(name));
+                // #420: Use fully-qualified path for stdlib functions that would
+                // otherwise be shadowed by a locally-defined built-in of the same name.
+                if let Some(qualified) = cg.stdlib_fn_qualified.get(name.as_str()).cloned() {
+                    cg.push(&qualified);
+                } else {
+                    cg.push(&map_fn_name(name));
+                }
                 if !type_args.is_empty() {
                     cg.push("::<");
                     let strs: Vec<String> = type_args.iter().map(emit_type_expr).collect();

@@ -10,4 +10,5 @@ pub mod io;
 pub mod log;
 pub mod process;
 pub mod random;
+pub mod regex;
 pub mod time;

@@ -99,6 +99,51 @@ impl MvlResult {
     }
 }
 
+// ── LLVM-path Result ───────────────────────────────────────────────────────
+
+/// `{i8, ptr}` — the 2-field Result layout used by the LLVM backend.
+///
+/// Distinct from [`MvlResult`] (3 fields, used by the C-ABI env/time/random
+/// path). The LLVM codegen emits `{i8, ptr}` struct types; functions called
+/// via `emit_stdlib_call_result_*` must return this layout.
+///
+/// `tag = 0` → Ok  — `payload` is null (Unit) or `*mut MvlString` (String or opaque).
+/// `tag = 1` → Err — `payload` is `*mut MvlString` (error message).
+#[repr(C)]
+pub struct LlvmResult {
+    pub tag: u8,
+    pub payload: *mut c_void,
+}
+
+impl LlvmResult {
+    /// Construct a `None` / missing-value result — tag=1, null payload.
+    #[inline]
+    pub fn none() -> Self {
+        LlvmResult {
+            tag: 1,
+            payload: std::ptr::null_mut(),
+        }
+    }
+
+    /// Construct an `Ok(ptr)` — opaque heap pointer (e.g. boxed Regex handle or MvlString*).
+    #[inline]
+    pub fn ok_ptr(ptr: *mut c_void) -> Self {
+        LlvmResult {
+            tag: 0,
+            payload: ptr,
+        }
+    }
+
+    /// Construct an `Err` with a `*mut MvlString` error message.
+    #[inline]
+    pub fn err_mvl(msg: *mut c_void) -> Self {
+        LlvmResult {
+            tag: 1,
+            payload: msg,
+        }
+    }
+}
+
 // ── String conversion helpers ───────────────────────────────────────────────
 
 /// Convert a Rust `&str` to a heap-allocated `*mut c_char`.

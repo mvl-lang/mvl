@@ -9,8 +9,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 ### Added
 
 - **`missing-annotation` linter rule**
-- **`mvl_runtime_c` C-ABI cdylib** — bootstraps the two-path stdlib architecture (ADR-0018/ADR-0019): the LLVM backend now loads `libmvl_runtime_c` via `lli --load` to access `std.env` and `std.process` symbols at runtime. Closes #431, #432.
-- **Cross-backend corpus test** — `tests/corpus/01_basics/env_identity_llvm.mvl` verifies `getuid()`/`getgid()` produce identical output on both backends.
+
+## [0.76.0] — 2026-05-05
+
+### Added
+
+- **Real `std.regex` stdlib implementation** — Rust and LLVM backends. All 5 stdlib functions (compile, find, find_all, replace, captures) backed by the regex crate. C-ABI exports in `libmvl_runtime_c` for compile/replace. LLVM codegen for compile/replace verified via cross-backend tests. find_all/captures C-ABI symbols deferred (requires List[Struct]/nested Option marshalling). Closes #420, #439.
+- **`mvl_runtime_c` C-ABI cdylib** — bootstraps the two-path stdlib architecture (ADR-0018/ADR-0019): the LLVM backend now loads `libmvl_runtime_c` via `lli --load` to access `std.env`, `std.process`, and `std.regex` symbols at runtime. Closes #431, #432.
+- **Cross-backend corpus test** — `tests/corpus/01_basics/env_identity_llvm.mvl` verifies `getuid()`/`getgid()` produce identical output on both backends. Extended with regex/crypto cross-backend verification.
 
 ## [0.75.0] — 2026-05-05
 

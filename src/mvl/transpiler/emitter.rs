@@ -20,6 +20,13 @@ use crate::mvl::transpiler::emit_types::emit_type_decl;
 use crate::mvl::transpiler::emit_types::{emit_security_preamble, emit_type_expr};
 use crate::mvl::transpiler::{collect_stdlib_modules, has_std_imports};
 
+/// Stdlib function names that shadow Rust built-ins or prelude items and must be
+/// emitted as fully-qualified paths to avoid silent name resolution to the wrong symbol (#420).
+const STDLIB_CONFLICTS: &[(&str, &[&str])] = &[(
+    "regex",
+    &["compile", "find", "find_all", "replace", "captures"],
+)];
+
 ///// Code-generation context: accumulates Rust source text.
 #[derive(Default)]
 pub struct RustEmitter {
@@ -72,6 +79,13 @@ pub struct RustEmitter {
     /// * `emit_params` — wraps inferred-borrow param types in `&` / `&mut `.
     /// * `emit_args` at call sites — emits `&x` / `&mut x` instead of `x.clone()`.
     pub borrow_params_map: std::collections::HashMap<String, Vec<Option<bool>>>,
+    /// Fully-qualified Rust paths for stdlib function names that would shadow
+    /// built-in primitives in the generated file (#420: regex.replace / regex.find).
+    ///
+    /// Populated during preamble emission for each `use std.MODULE.*` import.
+    /// At FnCall emission time, a hit in this map causes the call to be emitted
+    /// as `mvl_runtime::stdlib::MODULE::fn_name(...)` instead of `fn_name(...)`.
+    pub stdlib_fn_qualified: std::collections::HashMap<String, String>,
 }
 
 impl RustEmitter {
@@ -316,6 +330,16 @@ impl RustEmitter {
             // The prelude no longer re-exports OS modules; each module is imported explicitly.
             for module in collect_stdlib_modules(prog) {
                 self.line(&format!("use mvl_runtime::stdlib::{}::*;", module));
+                for (m, fns) in STDLIB_CONFLICTS {
+                    if *m == module.as_str() {
+                        for fn_name in *fns {
+                            self.stdlib_fn_qualified.insert(
+                                (*fn_name).to_string(),
+                                format!("mvl_runtime::stdlib::{module}::{fn_name}"),
+                            );
+                        }
+                    }
+                }
             }
         } else {
             emit_security_preamble(self);

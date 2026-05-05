@@ -45,6 +45,13 @@ fn corpus_effects(name: &str) -> String {
     )
 }
 
+fn corpus_stdlib(name: &str) -> String {
+    format!(
+        "{}/tests/corpus/03_stdlib/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
 /// Run a program via the Rust transpiler backend; return stdout.
 fn run_transpiler(file: &str) -> String {
     let out = Command::new(mvl_bin())
@@ -461,5 +468,44 @@ fn cross_backend_crypto_sha256_llvm() {
             llvm_out, transpiler_out,
             "crypto_sha256.mvl: LLVM and transpiler backends must produce identical output"
         );
+    }
+}
+
+// ── #420/#439: regex C-ABI parity tests ──────────────────────────────────────
+
+/// Both backends must produce identical output for `regex.compile` + `regex.replace`.
+#[test]
+fn cross_backend_regex_replace() {
+    let file = corpus_stdlib("regex_replace.mvl");
+    if let Some(llvm_out) = run_llvm(&file) {
+        let transpiler_out = run_transpiler(&file);
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "regex_replace.mvl: LLVM and transpiler backends must produce identical output"
+        );
+        let lines: Vec<&str> = llvm_out.lines().collect();
+        assert_eq!(lines.len(), 3, "expected three output lines");
+        assert_eq!(lines[0], "abc N def N", "digits must be redacted");
+        assert_eq!(lines[1], "no digits here", "no-digit input unchanged");
+        assert_eq!(lines[2], "N N N", "all three digit groups redacted");
+    }
+}
+
+/// Both backends must produce identical output for `regex.find` returning `Option[Match]`.
+/// Verifies that text extraction and None handling are consistent.
+#[test]
+fn cross_backend_regex_find() {
+    let file = corpus_stdlib("regex_find.mvl");
+    if let Some(llvm_out) = run_llvm(&file) {
+        let transpiler_out = run_transpiler(&file);
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "regex_find.mvl: LLVM and transpiler backends must produce identical output"
+        );
+        let lines: Vec<&str> = llvm_out.lines().collect();
+        assert_eq!(lines.len(), 3, "expected three output lines");
+        assert_eq!(lines[0], "123", "first digit run extracted");
+        assert_eq!(lines[1], "(none)", "no-digits input returns None");
+        assert_eq!(lines[2], "42", "leading digit run extracted");
     }
 }

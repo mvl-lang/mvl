@@ -1,0 +1,15 @@
+use std.regex.{Regex, Match, compile, find}
+
+fn first_digit_run(input: String) -> Result[String, String] {
+    let re: Regex = compile(r"\d+")?;
+    match find(re, input) {
+        Some(m) => Ok(m.text),
+        None => Ok("(none)"),
+    }
+}
+
+fn main() -> Unit ! Console {
+    match first_digit_run("abc 123 def") { Ok(s) => println("{}", s), Err(e) => println("err: {}", e) }
+    match first_digit_run("no digits") { Ok(s) => println("{}", s), Err(e) => println("err: {}", e) }
+    match first_digit_run("42 is the answer") { Ok(s) => println("{}", s), Err(e) => println("err: {}", e) }
+}
