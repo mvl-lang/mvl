@@ -206,6 +206,14 @@ impl MvlLen for String {
     }
 }
 
+impl<T: MvlLen> crate::ifc::Secret<T> {
+    /// Return the length of the inner collection as a `Secret<i64>`,
+    /// propagating the IFC label so callers must `declassify` before logging.
+    pub fn mvl_len(&self) -> crate::ifc::Secret<i64> {
+        crate::ifc::Secret(self.0.mvl_len())
+    }
+}
+
 /// Uniform `pow` for `i64` (uses `u32` exponent cast) and `f64` (uses `powf`).
 ///
 /// The transpiler emits `receiver.mvl_pow(arg.clone())` for all MVL `.pow(e)`

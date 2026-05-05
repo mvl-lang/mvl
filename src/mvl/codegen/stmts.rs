@@ -9,7 +9,7 @@ use crate::mvl::codegen::HeapKind;
 use crate::mvl::parser::ast::TypeExpr;
 
 use crate::mvl::parser::ast::{
-    Block, ElseBranch, Expr, LValue, MatchArm, MatchBody, Pattern, Stmt, VariantFields,
+    Block, ElseBranch, Expr, LValue, Literal, MatchArm, MatchBody, Pattern, Stmt, VariantFields,
 };
 
 use super::LlvmBackend;
@@ -323,6 +323,16 @@ impl<'ctx> LlvmBackend<'ctx> {
         let ok_ty_opt = self.infer_result_ok_llvm_ty(scrutinee);
         let scrutinee_val = self.emit_expr(scrutinee)?;
 
+        // String literal match: arms contain Pattern::Literal(Str) patterns.
+        if let BasicValueEnum::PointerValue(scrutinee_ptr) = scrutinee_val {
+            let has_str_arm = arms
+                .iter()
+                .any(|a| matches!(&a.pattern, Pattern::Literal(Literal::Str(_), _)));
+            if has_str_arm {
+                return self.emit_string_match(scrutinee_ptr, arms);
+            }
+        }
+
         // Extract i8 discriminant from the scrutinee value.
         let disc_val = self.extract_discriminant(scrutinee_val)?;
 
@@ -408,6 +418,140 @@ impl<'ctx> LlvmBackend<'ctx> {
         let first_ty = phi_incoming[0].0.get_type();
         if phi_incoming.iter().all(|(v, _)| v.get_type() == first_ty) {
             let phi = self.builder.build_phi(first_ty, "match_val").unwrap();
+            for (val, bb) in &phi_incoming {
+                phi.add_incoming(&[(val, *bb)]);
+            }
+            Some(phi.as_basic_value())
+        } else {
+            None
+        }
+    }
+
+    /// Match a String scrutinee against literal string arms using `mvl_string_eq`.
+    ///
+    /// Emits an if-else chain: each arm with a `Pattern::Literal(Str)` gets a
+    /// comparison; wildcard / ident arms become the final else branch.
+    fn emit_string_match(
+        &mut self,
+        scrutinee_ptr: inkwell::values::PointerValue<'ctx>,
+        arms: &[MatchArm],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let parent_fn = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
+        let merge_bb = self
+            .context
+            .append_basic_block(parent_fn, "str_match_merge");
+
+        let prev_terminated = self.terminated;
+        let mut phi_incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
+            Vec::new();
+        let mut arms_reaching_merge = 0usize;
+
+        // Each comparison lives in its own block; start with the current one.
+        let mut check_bb = self.builder.get_insert_block().unwrap();
+
+        for (i, arm) in arms.iter().enumerate() {
+            let arm_bb = self
+                .context
+                .append_basic_block(parent_fn, &format!("str_arm{i}"));
+
+            match &arm.pattern {
+                Pattern::Literal(Literal::Str(s), _) => {
+                    // Build the literal string for comparison.
+                    self.builder.position_at_end(check_bb);
+                    let global = self
+                        .builder
+                        .build_global_string_ptr(s, "match_lit")
+                        .unwrap();
+                    let len_val = self.context.i64_type().const_int(s.len() as u64, false);
+                    let new_fn = self.get_mvl_string_new();
+                    let lit_ptr = {
+                        use inkwell::values::AnyValue;
+                        let call = self
+                            .builder
+                            .build_call(
+                                new_fn,
+                                &[global.as_pointer_value().into(), len_val.into()],
+                                "lit_str",
+                            )
+                            .unwrap();
+                        BasicValueEnum::try_from(call.as_any_value_enum())
+                            .ok()?
+                            .into_pointer_value()
+                    };
+
+                    let eq_fn = self.get_mvl_string_eq();
+                    let eq_call = self
+                        .builder
+                        .build_call(eq_fn, &[scrutinee_ptr.into(), lit_ptr.into()], "str_eq")
+                        .unwrap();
+                    use inkwell::values::AnyValue;
+                    let eq_i32 = BasicValueEnum::try_from(eq_call.as_any_value_enum())
+                        .ok()?
+                        .into_int_value();
+                    let cond = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            eq_i32,
+                            self.context.i32_type().const_zero(),
+                            "str_cond",
+                        )
+                        .unwrap();
+
+                    // Branch to arm_bb or the next check block.
+                    let next_check = self
+                        .context
+                        .append_basic_block(parent_fn, &format!("str_check{}", i + 1));
+                    self.builder
+                        .build_conditional_branch(cond, arm_bb, next_check)
+                        .unwrap();
+                    check_bb = next_check;
+                }
+                // Wildcard / binding / default: emit without a guard.
+                _ => {
+                    // Jump from last check block into this arm unconditionally.
+                    self.builder.position_at_end(check_bb);
+                    self.builder.build_unconditional_branch(arm_bb).unwrap();
+                }
+            }
+
+            // Emit arm body.
+            self.builder.position_at_end(arm_bb);
+            self.terminated = false;
+            let arm_val = match &arm.body {
+                MatchBody::Expr(e) => self.emit_expr(e),
+                MatchBody::Block(b) => self.emit_block(b),
+            };
+            let arm_end = self.builder.get_insert_block().unwrap();
+            if !self.terminated {
+                arms_reaching_merge += 1;
+                if let Some(val) = arm_val {
+                    phi_incoming.push((val, arm_end));
+                }
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+            }
+        }
+
+        // Any remaining check block (no default arm) → unreachable.
+        if self.builder.get_insert_block() == Some(check_bb) && check_bb != merge_bb {
+            self.builder.position_at_end(check_bb);
+            self.builder.build_unreachable().unwrap();
+        }
+
+        self.terminated = prev_terminated;
+        self.builder.position_at_end(merge_bb);
+
+        if phi_incoming.is_empty() || phi_incoming.len() < arms_reaching_merge {
+            return None;
+        }
+        let first_ty = phi_incoming[0].0.get_type();
+        if phi_incoming.iter().all(|(v, _)| v.get_type() == first_ty) {
+            let phi = self.builder.build_phi(first_ty, "str_match_val").unwrap();
             for (val, bb) in &phi_incoming {
                 phi.add_incoming(&[(val, *bb)]);
             }
