@@ -281,6 +281,118 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     cg.push("))");
                 }
 
+                // ── Map / Set / List unified method traits ────────────────────────
+                //
+                // These methods share a name across multiple collection types (Map,
+                // List) or need special Rust handling (cloned(), as i64 cast, etc.).
+                // Trait-dispatch lets Rust pick the right impl at compile time without
+                // the transpiler needing type information about the receiver.
+
+                // get(key) — MvlGet trait: Vec.mvl_get(i64)→Option<T>,
+                //            HashMap.mvl_get(K)→Option<V>.
+                "get" if args.len() == 1 => {
+                    emit_expr(cg, receiver);
+                    cg.push(".mvl_get(");
+                    emit_expr(cg, &args[0]);
+                    cg.push(".clone())");
+                }
+
+                // len() — MvlLen trait: returns i64 for Vec, HashMap, HashSet, String.
+                // Fixes usize→i64 mismatch in generated Rust.
+                "len" if args.is_empty() => {
+                    emit_expr(cg, receiver);
+                    cg.push(".mvl_len()");
+                }
+
+                // insert(k, v) — Map: emit HashMap::insert (returns Option, discarded).
+                "insert" if args.len() == 2 => {
+                    cg.push("{ let _ = ");
+                    emit_expr(cg, receiver);
+                    cg.push(".insert(");
+                    emit_expr_as_arg(cg, &args[0]);
+                    cg.push(", ");
+                    emit_expr_as_arg(cg, &args[1]);
+                    cg.push("); }");
+                }
+
+                // insert(x) — Set: emit HashSet::insert (returns bool, discarded).
+                "insert" if args.len() == 1 => {
+                    cg.push("{ let _ = ");
+                    emit_expr(cg, receiver);
+                    cg.push(".insert(");
+                    emit_expr_as_arg(cg, &args[0]);
+                    cg.push("); }");
+                }
+
+                // remove(key) — Map: HashMap::remove returns Option<V> (correct for MVL).
+                //               Set: HashSet::remove returns bool (discarded as stmt).
+                "remove" if args.len() == 1 => {
+                    emit_expr(cg, receiver);
+                    cg.push(".remove(&(");
+                    emit_expr(cg, &args[0]);
+                    cg.push(").clone())");
+                }
+
+                // contains_key(k) — Map-only. Borrows key for HashMap::contains_key.
+                "contains_key" if args.len() == 1 => {
+                    emit_expr(cg, receiver);
+                    cg.push(".contains_key(&(");
+                    emit_expr(cg, &args[0]);
+                    cg.push(").clone())");
+                }
+
+                // keys() — Map: collect HashMap::keys() iterator into Vec.
+                "keys" if args.is_empty() => {
+                    emit_expr(cg, receiver);
+                    cg.push(".keys().cloned().collect::<Vec<_>>()");
+                }
+
+                // values() — Map: collect HashMap::values() iterator into Vec.
+                "values" if args.is_empty() => {
+                    emit_expr(cg, receiver);
+                    cg.push(".values().cloned().collect::<Vec<_>>()");
+                }
+
+                // to_list() — Set: collect HashSet::iter() into Vec.
+                "to_list" if args.is_empty() => {
+                    emit_expr(cg, receiver);
+                    cg.push(".iter().cloned().collect::<Vec<_>>()");
+                }
+
+                // is_empty() — Vec, HashMap, HashSet all have is_empty() → bool. ✓
+                // Falls through to generic dispatch below (no special handling needed).
+
+                // intersection(b) / union(b) / difference(b) — Set operations.
+                // These return iterators; collect into HashSet.
+                "intersection" if args.len() == 1 => {
+                    let b = &args[0];
+                    cg.push("{ let __b = ");
+                    emit_expr(cg, b);
+                    cg.push("; ");
+                    emit_expr(cg, receiver);
+                    cg.push(
+                        ".intersection(&__b).cloned().collect::<std::collections::HashSet<_>>() }",
+                    );
+                }
+                "union" if args.len() == 1 => {
+                    let b = &args[0];
+                    cg.push("{ let __b = ");
+                    emit_expr(cg, b);
+                    cg.push("; ");
+                    emit_expr(cg, receiver);
+                    cg.push(".union(&__b).cloned().collect::<std::collections::HashSet<_>>() }");
+                }
+                "difference" if args.len() == 1 => {
+                    let b = &args[0];
+                    cg.push("{ let __b = ");
+                    emit_expr(cg, b);
+                    cg.push("; ");
+                    emit_expr(cg, receiver);
+                    cg.push(
+                        ".difference(&__b).cloned().collect::<std::collections::HashSet<_>>() }",
+                    );
+                }
+
                 // ── UFCS dispatch for pure MVL stdlib methods ─────────────────────
                 //
                 // Methods implemented in std/strings.mvl and std/lists.mvl are

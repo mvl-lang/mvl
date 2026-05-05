@@ -1,0 +1,34 @@
+// collections_basic.mvl — Map and Set stdlib end-to-end (#418)
+//
+// Exercises Map and Set method calls via native MVL dispatch so both the
+// Rust transpiler and LLVM backends are covered by the same source program.
+//
+// Expected stdout (deterministic — no iteration over unordered collections):
+//   map_len=2
+//   has_alice=true
+//   has_carol=false
+//   set_len=4
+//   has_five=true
+//   has_nine=false
+
+fn main() -> Unit ! Console {
+    // ── Map ─────────────────────────────────────────────────────────────────
+    let scores: Map[String, Int] = {"alice": 95, "bob": 87};
+
+    let map_len: Int    = scores.len();
+    let has_alice: Bool = scores.contains_key("alice");
+    let has_carol: Bool = scores.contains_key("carol");
+    println("map_len={}", map_len);
+    println("has_alice={}", has_alice);
+    println("has_carol={}", has_carol);
+
+    // ── Set ─────────────────────────────────────────────────────────────────
+    let primes: Set[Int] = {2, 3, 5, 7};
+
+    let set_len: Int   = primes.len();
+    let has_five: Bool = primes.contains(5);
+    let has_nine: Bool = primes.contains(9);
+    println("set_len={}", set_len);
+    println("has_five={}", has_five);
+    println("has_nine={}", has_nine);
+}

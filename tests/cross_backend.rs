@@ -152,6 +152,17 @@ fn cross_backend_shapes() {
     assert_backends_agree("shapes.mvl");
 }
 
+// ── #418: Map/Set native MVL collections ──────────────────────────────────────
+
+/// Both backends must produce identical deterministic output for Map.len,
+/// Map.contains_key, Set.len, and Set.contains — all implemented as native
+/// MVL bodies in std/collections.mvl dispatched by each backend's method
+/// call machinery.
+#[test]
+fn cross_backend_collections_basic() {
+    assert_backends_agree("collections_basic.mvl");
+}
+
 // ── Phase C: heap allocation tests (LLVM-only) ────────────────────────────────
 
 #[test]
