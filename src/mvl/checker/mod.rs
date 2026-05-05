@@ -363,11 +363,11 @@ impl TypeChecker {
         let prev_ret = self.current_return_ty.replace(ret_ty.clone());
 
         // Phase C (Spec 009 Req 2): scope-based lifetime check.
-        // If the return type is &T (immutable or mutable reference) and the function has
-        // no &T parameters, the reference can only point to a local variable — which would
-        // be deallocated when the function returns.  Reject this statically.
+        // If the return type is val T / ref T and the function has no val/ref parameters,
+        // the reference can only point to a local variable — which would be deallocated
+        // when the function returns.  Reject this statically.
         // Additionally verify that the tail expression actually flows from one of those
-        // &T parameters (not from a local variable or literal).
+        // val/ref parameters (not from a local variable or literal).
         if matches!(ret_ty, Ty::Ref(_, _)) {
             let ref_param_names: HashSet<&str> = fd
                 .params
@@ -422,10 +422,10 @@ impl TypeChecker {
         let prev_type_constraints =
             std::mem::replace(&mut self.current_type_constraints, type_constraints);
 
-        // Phase D (Spec 009 Req 2): mutable-borrow alias check.
-        // Two `&mut T` parameters of the same inner type, or a `&T` + `&mut T` pair,
+        // Phase D (Spec 009 Req 2): mutable-reference alias check.
+        // Two `ref T` parameters of the same inner type, or a `val T` + `ref T` pair,
         // could be aliased at a call site.  Reject both statically.
-        // Two-pass: collect all `&T` inner types first so the check is order-independent.
+        // Two-pass: collect all `val T` inner types first so the check is order-independent.
         {
             let mut seen_shared_ref_types: HashSet<String> = HashSet::new();
             let mut seen_mut_ref_types: HashSet<String> = HashSet::new();
@@ -747,8 +747,8 @@ impl TypeChecker {
                 let init_ty = self.infer_expr(init);
                 let ann_ty = resolve(ty);
                 // Phase C (#305, #363): scope-depth check for any reference assignment.
-                // Covers both implicit borrow (`let r: &T = x` where x: T) and explicit
-                // borrow / ref-copy (`let r: &T = &x` or `let r: &T = existing_ref`).
+                // Covers both implicit borrow (`let r: val T = x` where x: T) and explicit
+                // borrow / ref-copy (`let r: val T = val x` or `let r: val T = existing_ref`).
                 let is_ref_assignment = if let Ty::Ref(_, inner_ty) = &ann_ty {
                     types_compatible(inner_ty, &init_ty) || types_compatible(&ann_ty, &init_ty)
                 } else {
@@ -1114,11 +1114,11 @@ impl TypeChecker {
                         }
                     }
                 }
-                // Fix 4: reject `&&x` — borrowing an already-borrowed value (#366)
+                // Fix 4: reject double-borrow — referencing an already-referenced value (#366)
                 if let Ty::Ref(_, _) = &inner {
                     self.emit(CheckError::TypeMismatch {
                         expected: inner.display(),
-                        found: format!("&{}", inner.display()),
+                        found: format!("val {}", inner.display()),
                         span: *span,
                     });
                     return Ty::Unknown;
@@ -2653,8 +2653,8 @@ impl TypeChecker {
     /// deeper (shorter-lived) scope than the reference binding, or when the referent
     /// is block-local and leaves scope before the binding is made.
     ///
-    /// Handles both implicit borrow (`let r: &T = x`) and explicit borrow
-    /// (`let r: &T = &x`) via `referent_ident`'s `Expr::Borrow` unwrapping.
+    /// Handles both implicit borrow (`let r: val T = x`) and explicit borrow
+    /// (`let r: val T = val x`) via `referent_ident`'s `Expr::Borrow` unwrapping.
     fn check_borrow_lifetime(&mut self, pattern: &Pattern, init: &Expr) {
         let Pattern::Ident(ref_name, _) = pattern else {
             return;
@@ -2825,17 +2825,17 @@ fn collect_refs_block(block: &Block, params: &[&str], out: &mut Vec<(String, Spa
     }
 }
 
-/// Extract the "root identifier" from an expression used as a `&T` init.
+/// Extract the "root identifier" from an expression used as a `val`/`ref` init.
 ///
-/// For `let r: &T = x`, returns `Some("x")`.
-/// For `let r: &T = { ...; x }`, returns `Some("x")` (the block's tail ident).
+/// For `let r: val T = x`, returns `Some("x")`.
+/// For `let r: val T = { ...; x }`, returns `Some("x")` (the block's tail ident).
 /// Returns `None` for complex expressions where the referent cannot be named.
 ///
 /// Used by Phase C scope-depth checking (#305, #363).
 fn referent_ident(expr: &Expr) -> Option<&str> {
     match expr {
         Expr::Ident(name, _) => Some(name),
-        // `&x` and `&mut x` — unwrap to the inner expression.
+        // `val x` and `ref x` — unwrap to the inner expression.
         Expr::Borrow { expr, .. } => referent_ident(expr),
         Expr::Block(block) => block.stmts.last().and_then(|s| match s {
             Stmt::Expr { expr, .. } => referent_ident(expr),

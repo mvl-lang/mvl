@@ -60,8 +60,8 @@ impl Ty {
             }
             Ty::Option(inner) => format!("Option<{}>", inner.display()),
             Ty::Result(ok, err) => format!("Result<{}, {}>", ok.display(), err.display()),
-            Ty::Ref(true, inner) => format!("&mut {}", inner.display()),
-            Ty::Ref(false, inner) => format!("&{}", inner.display()),
+            Ty::Ref(true, inner) => format!("ref {}", inner.display()),
+            Ty::Ref(false, inner) => format!("val {}", inner.display()),
             Ty::Fn(params, ret) => {
                 let params_str = params
                     .iter()

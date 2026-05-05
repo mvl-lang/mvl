@@ -112,7 +112,7 @@ type Display = trait {
 
 type Error = trait {
     fn message(self) -> String
-    fn source(self) -> Option[&Error]
+    fn source(self) -> Option[val Error]
 }
 ```
 
@@ -197,16 +197,16 @@ See [Chapter 10: Information Flow Control](10-ifc.md).
 ## 2.9 Reference Types ([Req 2](../requirements.md#req-2), 6)
 
 ```mvl
-&T                  // shared (immutable) borrow
-&mut T              // exclusive (mutable) borrow
+val T               // shared (deeply immutable) reference
+ref T               // exclusive (mutable) reference
 ```
 
 Ownership rules:
 - Values have exactly one owner
 - Ownership transfers via `move`
-- Shared borrows (`&T`) allow multiple readers
-- Exclusive borrows (`&mut T`) allow one writer and no readers
-- Borrows cannot outlive the owner
+- Shared references (`val T`) allow multiple readers — data is deeply immutable
+- Exclusive references (`ref T`) allow one writer and no readers
+- References cannot outlive the owner
 
 ## 2.10 Reference Capabilities ([Req 9](../requirements.md#req-9))
 

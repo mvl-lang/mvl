@@ -37,7 +37,7 @@ type Session = struct {
 }
 
 total fn authenticate(
-    iso store: &UserStore,
+    iso store: val UserStore,
     input_password: Tainted[String],
     user_id: Public[UserId],
 ) -> Result[Session, AuthError] ! Console {

@@ -80,7 +80,7 @@ type_expr      = base_type | option_type | result_type | ref_type
 base_type      = IDENT [ "<" type_list ">" ] ;
 option_type    = "Option" "<" type_expr ">" ;
 result_type    = "Result" "<" type_expr "," type_expr ">" ;
-ref_type       = "&" [ "mut" ] type_expr ;
+ref_type       = ( "val" | "ref" ) type_expr ;
 labeled_type   = security_label "<" type_expr ">" ;
 security_label = "Public" | "Tainted" | "Secret" ;
 refined_type   = type_expr "where" refinement ;
@@ -124,7 +124,7 @@ binary_op      = "+" | "-" | "*" | "/" | "%"      (* arithmetic *)
                | "&&" | "||"                       (* logical *)
                | "&" | "|" | "^"                  (* bitwise AND / OR / XOR *)
                | "<<" | ">>" ;                    (* left / right shift *)
-borrow_expr    = "&" [ "mut" ] expr ;              (* take shared or mutable borrow *)
+borrow_expr    = ( "val" | "ref" ) expr ;           (* take shared or mutable reference *)
 propagate      = expr "?" ;                       (* Result/Option propagation *)
 fn_call        = IDENT [ "[" type_list "]" ] "(" [ arg_list ] ")" ;
 method_call    = expr "." IDENT "(" [ arg_list ] ")" ;

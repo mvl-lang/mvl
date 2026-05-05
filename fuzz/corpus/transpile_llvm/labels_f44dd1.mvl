@@ -29,7 +29,7 @@ fn tainted_result(res: Result[Tainted[String], String]) -> String {
 
 // Authentication: takes tainted password, returns public session token
 total fn authenticate(
-    iso db: &DbConn,
+    iso db: val DbConn,
     password: Tainted[String],
     user_id: Public[Int],
 ) -> Public[Int] {
@@ -43,6 +43,6 @@ fn release_report(report: Secret[String]) -> Public[String] {
 
 // ── Capability combined with security label ───────────────────────────────
 
-fn iso_tainted(iso db: &DbConn, raw: Tainted[String]) -> Clean[String] {
+fn iso_tainted(iso db: val DbConn, raw: Tainted[String]) -> Clean[String] {
     sanitize(raw)
 }

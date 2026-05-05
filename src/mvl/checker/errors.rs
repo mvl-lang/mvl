@@ -119,17 +119,17 @@ pub enum CheckError {
     },
 
     // ── Lifetime safety (Phase C, #305) ──────────────────────────────────
-    /// A `&T` reference to a local variable escapes its owner's scope.
+    /// A `val`/`ref` reference to a local variable escapes its owner's scope.
     ///
-    /// This happens when a function's return type is `&T` but the referenced
-    /// value is a local binding that would be deallocated on return.
+    /// This happens when a function's return type is `val T` or `ref T` but
+    /// the referenced value is a local binding that would be deallocated on return.
     ReferenceEscapesScope {
         /// Name of the referenced variable (if known).
         name: String,
         span: Span,
     },
-    /// A `&T` reference is assigned to a binding with a shallower scope depth
-    /// than the referent, meaning the reference would outlive the owner.
+    /// A `val`/`ref` reference is assigned to a binding with a shallower scope
+    /// depth than the referent, meaning the reference would outlive the owner.
     ///
     /// Emitted by Phase C scope-depth comparison in `check_stmt` (#305, #363).
     ReferenceOutlivesOwner {
@@ -140,15 +140,14 @@ pub enum CheckError {
         span: Span,
     },
 
-    // ── Mutable borrow alias checking (Phase D, #306) ────────────────────
-    /// A mutable borrow `&mut x` was requested while `x` is already borrowed
+    // ── Mutable reference alias checking (Phase D, #306) ─────────────────
+    /// A mutable reference `ref x` was requested while `x` is already borrowed
     /// (either shared or mutably).
-    ///
     AliasingMutableBorrow {
         name: String,
         span: Span,
     },
-    /// Two mutable borrows `&mut x` were created for the same variable.
+    /// Two mutable references `ref x` were created for the same variable.
     DoubleMutableBorrow {
         name: String,
         span: Span,
@@ -471,10 +470,10 @@ impl CheckError {
                 "binding `{ref_name}` of reference type outlives `{owner_name}` — the reference would be dangling when `{owner_name}` is dropped"
             ),
             CheckError::AliasingMutableBorrow { name, .. } => format!(
-                "cannot borrow `{name}` mutably: it is already borrowed — release existing borrows before creating a mutable borrow"
+                "cannot create `ref` to `{name}`: it is already borrowed — release existing references before creating a mutable reference"
             ),
             CheckError::DoubleMutableBorrow { name, .. } => format!(
-                "cannot borrow `{name}` mutably more than once at a time — only one mutable borrow is allowed"
+                "cannot create `ref` to `{name}` more than once at a time — only one mutable reference is allowed"
             ),
             CheckError::RefinementViolated { pred, .. } => {
                 format!("refinement predicate violated: `{pred}`")

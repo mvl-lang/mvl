@@ -300,17 +300,48 @@ impl Parser {
         let kind = self.peek_kind().clone();
 
         match kind {
-            // &T  or  &mut T
-            TokenKind::Amp => {
+            // val T (immutable reference — replaces &T)
+            TokenKind::Val => {
                 self.advance();
-                let mutable = self.eat(&TokenKind::Mut);
                 let inner = self.parse_type_expr()?;
                 let span = self.span_from(start);
                 Ok(TypeExpr::Ref {
-                    mutable,
+                    mutable: false,
                     inner: Box::new(inner),
                     span,
                 })
+            }
+
+            // ref T (mutable reference — replaces &mut T)
+            TokenKind::Ref => {
+                self.advance();
+                let inner = self.parse_type_expr()?;
+                let span = self.span_from(start);
+                Ok(TypeExpr::Ref {
+                    mutable: true,
+                    inner: Box::new(inner),
+                    span,
+                })
+            }
+
+            // Reject Rust-style borrow syntax with helpful error
+            TokenKind::Amp => {
+                self.advance();
+                let mutable = self.eat(&TokenKind::Mut);
+                // Try to parse the inner type so we can give a better error
+                let _ = self.parse_type_expr();
+                let span = self.span_from(start);
+                let hint = if mutable {
+                    "use `ref T` instead of `&mut T`"
+                } else {
+                    "use `val T` instead of `&T`"
+                };
+                let err = ParseError {
+                    message: hint.to_string(),
+                    span,
+                };
+                self.push_recover(err);
+                Err(())
             }
 
             // fn(A, B) -> C  [! Effects]
@@ -1004,15 +1035,37 @@ mod tests {
     }
 
     #[test]
-    fn parse_ref_type() {
-        let ty = type_expr("&DbConn");
+    fn parse_val_type() {
+        let ty = type_expr("val DbConn");
         assert!(matches!(ty, TypeExpr::Ref { mutable: false, .. }));
     }
 
     #[test]
-    fn parse_mut_ref_type() {
-        let ty = type_expr("&mut Vec");
+    fn parse_ref_cap_type() {
+        let ty = type_expr("ref Vec");
         assert!(matches!(ty, TypeExpr::Ref { mutable: true, .. }));
+    }
+
+    #[test]
+    fn parse_ampersand_type_rejected() {
+        let (mut p, _) = crate::mvl::parser::Parser::new("&DbConn");
+        let result = p.parse_type_expr();
+        assert!(result.is_err());
+        assert!(
+            p.errors().iter().any(|e| e.message.contains("use `val T`")),
+            "expected helpful error about val T"
+        );
+    }
+
+    #[test]
+    fn parse_ampersand_mut_type_rejected() {
+        let (mut p, _) = crate::mvl::parser::Parser::new("&mut Vec");
+        let result = p.parse_type_expr();
+        assert!(result.is_err());
+        assert!(
+            p.errors().iter().any(|e| e.message.contains("use `ref T`")),
+            "expected helpful error about ref T"
+        );
     }
 
     #[test]

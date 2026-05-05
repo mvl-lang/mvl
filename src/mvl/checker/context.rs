@@ -52,25 +52,25 @@ use crate::mvl::parser::lexer::Span;
 /// Borrow state of a variable (Phase D, Spec 009 Req 2).
 ///
 /// Tracks whether a variable currently has any outstanding references,
-/// enforcing the Rust borrow rules at the checker level.
+/// enforcing capability-based reference rules at the checker level.
 ///
 /// # State machine (not yet driven — TODO #306)
 ///
 /// The transitions below are the intended semantics for the full Phase D
 /// implementation.
 ///
-/// * `Owned` → `SharedBorrowed(n)` when `&x` is created.
-/// * `Owned` → `MutablyBorrowed` when `&mut x` is created.
-/// * `SharedBorrowed(n)` → `SharedBorrowed(n-1)` when a shared borrow goes out of scope.
+/// * `Owned` → `SharedBorrowed(n)` when `val x` is created.
+/// * `Owned` → `MutablyBorrowed` when `ref x` is created.
+/// * `SharedBorrowed(n)` → `SharedBorrowed(n-1)` when a `val` reference goes out of scope.
 /// * `SharedBorrowed(0)` == `Owned`.
-/// * `MutablyBorrowed` → `Owned` when the mutable borrow goes out of scope.
+/// * `MutablyBorrowed` → `Owned` when the `ref` reference goes out of scope.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BorrowState {
     /// No outstanding borrows — value is exclusively owned.
     Owned,
-    /// `n` shared (`&T`) borrows are live.  Value may still be read but not mutably borrowed.
+    /// `n` shared (`val T`) references are live.  Value may still be read but not mutably referenced.
     SharedBorrowed(usize),
-    /// Exactly one exclusive (`&mut T`) borrow is live.  Value may not be read or re-borrowed.
+    /// Exactly one exclusive (`ref T`) reference is live.  Value may not be read or re-referenced.
     MutablyBorrowed,
 }
 
@@ -83,8 +83,8 @@ pub struct VarInfo {
     pub capability: Option<Capability>,
     /// Scope depth at which this variable was defined (Phase C, Spec 009 Req 2).
     ///
-    /// Used for scope-based lifetime checking: a `&T` reference to this variable
-    /// must not be assigned to a binding at a shallower scope depth.
+    /// Used for scope-based lifetime checking: a `val`/`ref` reference to this
+    /// variable must not be assigned to a binding at a shallower scope depth.
     pub scope_depth: usize,
     /// Active borrow state (Phase D, Spec 009 Req 2).
     ///
@@ -92,8 +92,8 @@ pub struct VarInfo {
     pub borrow_state: BorrowState,
     /// Name of the variable this reference borrows, if any (Phase D).
     ///
-    /// Set when `let r = &x` or `let r = &mut x` is bound.  Used by `pop_scope()`
-    /// to release the borrow on `x` when `r` goes out of scope.
+    /// Set when `let r = val x` or `let r = ref x` is bound.  Used by `pop_scope()`
+    /// to release the reference on `x` when `r` goes out of scope.
     pub borrows_var: Option<String>,
 }
 

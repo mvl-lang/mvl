@@ -647,9 +647,9 @@ mod tests {
 
     #[test]
     fn parse_fn_with_iso_param() {
-        // GIVEN: fn process(iso db: &DbConn) -> Result[Data, Error] ! DB { }
+        // GIVEN: fn process(iso db: val DbConn) -> Result[Data, Error] ! DB { }
         // THEN: parameter has capability=Iso, type=Ref(DbConn)
-        let d = fn_decl("fn process(iso db: &DbConn) -> Result[Data, Error] ! DB { }");
+        let d = fn_decl("fn process(iso db: val DbConn) -> Result[Data, Error] ! DB { }");
         assert_eq!(d.params[0].capability, Some(Capability::Iso));
         assert_eq!(d.params[0].name, "db");
         assert!(matches!(
@@ -769,7 +769,7 @@ mod tests {
     fn parse_authenticate_from_corpus() {
         // From tests/corpus/11_programs/auth_handler.mvl
         let src = r#"total fn authenticate(
-    iso db: &DbConn,
+    iso db: val DbConn,
     input_password: Tainted[String],
     user_id: Public[UserId]
 ) -> Result[Session, AuthError] ! DB, Console { }"#;
@@ -823,7 +823,7 @@ mod tests {
     fn parse_extern_rust_single_fn() {
         let ed = extern_decl(
             r#"extern "rust" {
-    fn sha256(data: &String) -> String;
+    fn sha256(data: val String) -> String;
 }"#,
         );
         assert_eq!(ed.abi, "rust");

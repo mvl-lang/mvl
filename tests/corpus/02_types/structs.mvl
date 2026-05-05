@@ -34,7 +34,7 @@ type ValidUser = struct {
 
 // Struct with reference fields
 type View = struct {
-    data: &Buffer,
+    data: val Buffer,
     length: Int,
 }
 

@@ -518,14 +518,14 @@ mod tests {
 
     #[test]
     fn explicit_ref_param_is_shared_borrow() {
-        let fd = parse_fn("fn f(x: &Int) -> Unit { }");
+        let fd = parse_fn("fn f(x: val Int) -> Unit { }");
         let flags = borrow_params_for_fn(&fd);
         assert_eq!(flags, vec![Some(false)]);
     }
 
     #[test]
     fn explicit_mut_ref_param_is_mutable_borrow() {
-        let fd = parse_fn("fn f(x: &mut Int) -> Unit { }");
+        let fd = parse_fn("fn f(x: ref Int) -> Unit { }");
         let flags = borrow_params_for_fn(&fd);
         assert_eq!(flags, vec![Some(true)]);
     }
@@ -548,15 +548,15 @@ mod tests {
 
     #[test]
     fn mixed_explicit_and_owned_params() {
-        // Only the explicitly &-annotated param is a borrow.
-        let fd = parse_fn("fn f(a: Int, b: &Int) -> Int { a }");
+        // Only the explicitly val-annotated param is a borrow.
+        let fd = parse_fn("fn f(a: Int, b: val Int) -> Int { a }");
         let flags = borrow_params_for_fn(&fd);
         assert_eq!(flags, vec![None, Some(false)]);
     }
 
     #[test]
     fn all_ref_params_flags_correct() {
-        let fd = parse_fn("fn f(a: &Int, b: &mut Bool) -> Unit { }");
+        let fd = parse_fn("fn f(a: val Int, b: ref Bool) -> Unit { }");
         let flags = borrow_params_for_fn(&fd);
         assert_eq!(flags, vec![Some(false), Some(true)]);
     }
@@ -677,7 +677,7 @@ mod tests {
 
     #[test]
     fn prelude_fn_with_ref_param_appears_in_map() {
-        let prelude_fn = parse_fn("fn print_ref(x: &Int) -> Unit { }");
+        let prelude_fn = parse_fn("fn print_ref(x: val Int) -> Unit { }");
         let prog = parse_prog("");
         let map = build_borrow_params_map(&prog, &[&prelude_fn]);
         assert_eq!(map.get("print_ref"), Some(&vec![Some(false)]));
@@ -715,11 +715,11 @@ mod tests {
 
     #[test]
     fn deref_unary_on_explicit_ref_param_does_not_disqualify() {
-        // A parameter already declared as `&T` won't go through inference
+        // A parameter already declared as `val T` won't go through inference
         // (explicit annotation takes priority), but verify that Deref on a
         // non-Copy param in the body doesn't disqualify inference for OTHER params.
         // Here `b` is field-accessed only → still inferred as borrow.
-        let fd = parse_fn("fn f(b: Point, r: &Int) -> Int { b.x }");
+        let fd = parse_fn("fn f(b: Point, r: val Int) -> Int { b.x }");
         // b: Point — field access only → Some(false); r: &Int — explicit → Some(false).
         assert_eq!(borrow_params_for_fn(&fd), vec![Some(false), Some(false)]);
     }

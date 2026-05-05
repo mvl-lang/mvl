@@ -3,8 +3,8 @@
 //            input; Result wrapping; stdin as ! Console; pure path construction.
 //
 // All declarations are valid: effect annotations match actual usage.
-// Note: reference arguments (&T) use pass-by-value syntax in corpus tests;
-// the stdlib stubs declare &T parameters but callers omit & as is conventional
+// Note: reference arguments (val T) use pass-by-value syntax in corpus tests;
+// the stdlib stubs declare val T parameters but callers omit val as is conventional
 // in MVL corpus tests (see ADR-0010).
 
 use std.io.{
