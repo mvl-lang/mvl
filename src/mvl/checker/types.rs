@@ -16,6 +16,8 @@ pub enum Ty {
     Bool,
     Char,
     Byte,
+    UByte,
+    UInt,
     Unit,
     Never,
     // Compound
@@ -45,6 +47,8 @@ impl Ty {
             Ty::Bool => "Bool".to_string(),
             Ty::Char => "Char".to_string(),
             Ty::Byte => "Byte".to_string(),
+            Ty::UByte => "UByte".to_string(),
+            Ty::UInt => "UInt".to_string(),
             Ty::Unit => "Unit".to_string(),
             Ty::Never => "Never".to_string(),
             Ty::Named(name, args) if args.is_empty() => name.clone(),
@@ -79,7 +83,15 @@ impl Ty {
     }
 
     pub fn is_numeric(&self) -> bool {
-        matches!(self.unlabeled(), Ty::Int | Ty::Float)
+        matches!(
+            self.unlabeled(),
+            Ty::Int | Ty::Float | Ty::Byte | Ty::UByte | Ty::UInt
+        )
+    }
+
+    /// True if this type has unsigned integer semantics (affects shift direction).
+    pub fn is_unsigned_int(&self) -> bool {
+        matches!(self.unlabeled(), Ty::UByte | Ty::UInt)
     }
 
     pub fn is_bool(&self) -> bool {
@@ -138,6 +150,8 @@ pub fn resolve(expr: &TypeExpr) -> Ty {
             "Bool" => Ty::Bool,
             "Char" => Ty::Char,
             "Byte" => Ty::Byte,
+            "UByte" => Ty::UByte,
+            "UInt" => Ty::UInt,
             "Unit" => Ty::Unit,
             "Never" => Ty::Never,
             "List" if args.len() == 1 => Ty::List(Box::new(resolve(&args[0]))),
@@ -256,6 +270,8 @@ mod tests {
             ("Bool", Ty::Bool),
             ("Char", Ty::Char),
             ("Byte", Ty::Byte),
+            ("UByte", Ty::UByte),
+            ("UInt", Ty::UInt),
         ] {
             let expr = TypeExpr::Base {
                 name: name.to_string(),
@@ -481,5 +497,32 @@ mod tests {
             span,
         };
         assert_eq!(resolve(&expr), Ty::Array(Box::new(Ty::Int), 0));
+    }
+
+    #[test]
+    fn ubyte_and_uint_are_unsigned() {
+        assert!(Ty::UByte.is_unsigned_int());
+        assert!(Ty::UInt.is_unsigned_int());
+        assert!(!Ty::Byte.is_unsigned_int());
+        assert!(!Ty::Int.is_unsigned_int());
+    }
+
+    #[test]
+    fn ubyte_and_uint_are_numeric() {
+        assert!(Ty::UByte.is_numeric());
+        assert!(Ty::UInt.is_numeric());
+    }
+
+    #[test]
+    fn ubyte_uint_display() {
+        assert_eq!(Ty::UByte.display(), "UByte");
+        assert_eq!(Ty::UInt.display(), "UInt");
+    }
+
+    #[test]
+    fn ubyte_uint_incompatible_with_signed() {
+        assert!(!types_compatible(&Ty::Int, &Ty::UInt));
+        assert!(!types_compatible(&Ty::Byte, &Ty::UByte));
+        assert!(!types_compatible(&Ty::UInt, &Ty::Int));
     }
 }

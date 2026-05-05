@@ -625,6 +625,8 @@ fn map_base_type(name: &str) -> &str {
         "String" => "String",
         "Char" => "char",
         "Byte" => "u8",
+        "UByte" => "u8",
+        "UInt" => "u64",
         "Unit" => "()",
         "Never" => "!",
         "List" => "Vec",

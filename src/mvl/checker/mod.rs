@@ -1861,6 +1861,8 @@ impl TypeChecker {
         let result = match base {
             Ty::Int => Self::int_method_ty(method),
             Ty::Byte => Self::byte_method_ty(method),
+            Ty::UByte => Self::ubyte_method_ty(method),
+            Ty::UInt => Self::uint_method_ty(method),
             Ty::Float => Self::float_method_ty(method),
             Ty::String => Self::string_method_ty(method, arg_tys),
             Ty::List(elem_ty) => Self::list_method_ty(elem_ty.as_ref(), method, arg_tys),
@@ -1911,6 +1913,33 @@ impl TypeChecker {
             // generic method-call fallthrough emits `receiver.wrapping_add(arg)`
             // which is valid Rust.  No dedicated emit arm is required.
             "wrapping_add" | "wrapping_sub" | "wrapping_mul" => Ty::Byte,
+            _ => Ty::Unknown,
+        }
+    }
+
+    /// Return type for methods on `UByte`.
+    fn ubyte_method_ty(method: &str) -> Ty {
+        match method {
+            "to_int" => Ty::Int,
+            "to_string" => Ty::String,
+            "bit_and" | "bit_or" | "bit_xor" | "bit_not" | "shift_left" | "shift_right" => {
+                Ty::UByte
+            }
+            "wrapping_add" | "wrapping_sub" | "wrapping_mul" => Ty::UByte,
+            "checked_add" | "checked_sub" | "checked_mul" => Ty::Option(Box::new(Ty::UByte)),
+            _ => Ty::Unknown,
+        }
+    }
+
+    /// Return type for methods on `UInt`.
+    fn uint_method_ty(method: &str) -> Ty {
+        match method {
+            "to_float" => Ty::Float,
+            "to_string" => Ty::String,
+            "abs" | "pow" | "min" | "max" | "clamp" => Ty::UInt,
+            "bit_and" | "bit_or" | "bit_xor" | "bit_not" | "shift_left" | "shift_right" => Ty::UInt,
+            "is_zero" => Ty::Bool,
+            "checked_add" | "checked_sub" | "checked_mul" => Ty::Option(Box::new(Ty::UInt)),
             _ => Ty::Unknown,
         }
     }
