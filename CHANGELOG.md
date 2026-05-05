@@ -11,6 +11,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 - **`missing-annotation` linter rule**
 - **LLVM primitives for JSON encode** — C-ABI functions `mvl_string_chars`, `mvl_map_keys`, `mvl_map_remove` in `mvl_runtime_c`. LLVM backend can now call `std/json.mvl` encode path. `compile_to_ir` delegates to `compile_to_ir_with_prelude`. `RUST_BACKED_STDLIB` made public and `regex` added to the list. Closes #437.
 
+## [0.79.0] — 2026-05-05
+
+### Added
+
+- **`mvl test --backend=llvm` harness for `*_test.mvl` files** — detects `test fn` declarations, synthesises a `fn main()` caller, and runs each file as an LLVM test case. Closes #500.
+- **String literal `match` in LLVM backend** — `emit_string_match` emits an if-else chain using `mvl_string_eq` when any match arm is a `Pattern::Literal(Str)`.
+- **`String.to_lower` / `String.to_upper`** — new C-ABI functions `_mvl_str_to_lower` / `_mvl_str_to_upper` in `mvl_runtime_c`; wired into LLVM method dispatch.
+- **`Int.clamp(lo, hi)`** — inline `build_select` chain in LLVM codegen.
+- **Qualified constructors** — `Result::Ok`, `Result::Err`, `Option::Some` now resolve before the general enum dispatch path in LLVM.
+- **`Secret<T: MvlLen>::mvl_len()`** — propagates the IFC label so `Secret[List[T]].len()` yields `Secret<i64>`; callers must `declassify` before logging (req11).
+
+### Fixed
+
+- **`crypto_random_bytes` corpus tests** — used `bs.len()` (Secret) directly in `println`, violating IFC req11. Fixed with `declassify(bs.len())`.
+
 ## [0.78.0] — 2026-05-05
 
 ### Added
