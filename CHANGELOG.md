@@ -19,12 +19,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 - **Codegen-level IFC defense** — `is_secret_labeled` helper and `assert!` guards on `println`, `print`, and `log_*` sinks catch Secret-labeled values routed to public sinks without declassify. Guard is active in both debug and release builds. Closes #508.
 - **Secret IFC label stripping in `.len()` dispatch** — `Secret[List[T]].len()` now correctly routes to `mvl_array_len` instead of `mvl_string_len` on the LLVM path.
 - **Cross-backend shape tests** — `crypto_random_bytes_shape.mvl` and `crypto_random_bytes_zero.mvl` verify correct list length on both transpiler and LLVM backends (#507).
+- **Complete bzip2 compression example** — `examples/bzip/` demonstrates native bit operators, borrowed references for large-buffer efficiency, recursive ADTs (HuffmanTree), and a pure algorithmic core with sharp effect boundary. Implements RLE, BWT, MTF, Huffman entropy coding, and bitstream layers. Includes 8 roundtrip property tests validating compress→decompress fidelity. Closes #498.
 
 ### Security
 
 - **`_mvl_crypto_random_bytes` size cap** — input `n` is now capped at 131,072 bytes (1 MiB); returns null for larger values, preventing unbounded allocation on adversarial input.
 - **`getrandom` failure is now an abort** — replaced `.expect()` (which unwinds across the `extern "C"` boundary, UB) with `.unwrap_or_else(|_| std::process::abort())` for clean termination when the OS CSPRNG is unavailable.
-
 ## [0.76.0] — 2026-05-05
 
 ### Added
