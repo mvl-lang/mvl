@@ -449,12 +449,10 @@ fn cross_backend_crypto_sha256_transpiler() {
 
 /// sha256/sha512 cross-backend parity — LLVM backend vs Rust transpiler.
 ///
-/// LLVM-pending: #438 — LLVM codegen String-return dispatch not yet wired for
-/// crypto. The C-ABI exports exist in mvl_runtime_c/src/stdlib/crypto.rs but
-/// the LLVM IR emission for String-returning stdlib calls is blocked on #438.
-/// Un-ignore and remove the `LLVM-pending` marker when #438 lands.
+/// Verifies that the LLVM path (via _mvl_crypto_sha256 / _mvl_crypto_sha512 in
+/// libmvl_runtime_c) produces the same NIST vectors as the Rust transpiler path.
+/// Implemented by #438.
 #[test]
-#[ignore = "LLVM-pending: #438 — String-return dispatch not wired in LLVM codegen"]
 fn cross_backend_crypto_sha256_llvm() {
     let file = corpus_effects("crypto_sha256.mvl");
     let transpiler_out = run_transpiler(&file);
