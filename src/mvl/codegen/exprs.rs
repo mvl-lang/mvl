@@ -823,6 +823,29 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
     }
 
+    // ── #508: IFC codegen invariant helpers ──────────────────────────────────
+
+    /// Returns true if `expr` names a local variable labeled `Secret[_]`.
+    ///
+    /// Used in asserts to catch codegen bugs that would route a Secret
+    /// value to a public sink (print, println, log_*) without a `declassify` node.
+    /// The MVL static checker enforces this before codegen runs; this is
+    /// defense-in-depth against future codegen regressions.
+    fn is_secret_labeled(&self, expr: &Expr) -> bool {
+        if let Expr::Ident(name, _) = expr {
+            if let Some(ty) = self.local_mvl_types.get(name.as_str()) {
+                return matches!(
+                    ty,
+                    TypeExpr::Labeled {
+                        label: crate::mvl::parser::ast::SecurityLabel::Secret,
+                        ..
+                    }
+                );
+            }
+        }
+        false
+    }
+
     // ── Function call emission (L5-07 + L5-17) ──────────────────────────────
 
     pub(crate) fn emit_fn_call(
@@ -831,8 +854,22 @@ impl<'ctx> LlvmBackend<'ctx> {
         args: &[Expr],
     ) -> Option<BasicValueEnum<'ctx>> {
         match name {
-            "println" => self.emit_println(args),
-            "print" => self.emit_print(args),
+            "println" => {
+                // #508: IFC invariant — static checker guarantees no Secret arg reaches println.
+                assert!(
+                    args.iter().all(|a| !self.is_secret_labeled(a)),
+                    "codegen bug: Secret-labeled value routed to println without declassify"
+                );
+                self.emit_println(args)
+            }
+            "print" => {
+                // #508: IFC invariant — same guard as println (both are public sinks).
+                assert!(
+                    args.iter().all(|a| !self.is_secret_labeled(a)),
+                    "codegen bug: Secret-labeled value routed to print without declassify"
+                );
+                self.emit_print(args)
+            }
             "format" => self.emit_format(args),
             // range(start, end) as a value → { i64 start, i64 end } range struct
             "range" if args.len() == 2 => {
@@ -913,6 +950,13 @@ impl<'ctx> LlvmBackend<'ctx> {
                         }
                         StdlibSig::VoidStringMapArg(sym) if args.len() == 2 => {
                             let sym = sym.clone();
+                            // #508: IFC invariant — static checker guarantees no Secret arg
+                            // reaches log sinks (log_debug/info/warn/error) without declassify.
+                            assert!(
+                                !self.is_secret_labeled(&args[0])
+                                    && !self.is_secret_labeled(&args[1]),
+                                "codegen bug: Secret-labeled value routed to log sink without declassify"
+                            );
                             let msg = self.emit_expr(&args[0])?;
                             let fields = self.emit_expr(&args[1])?;
                             return self.emit_stdlib_call_void_string_map(&sym, msg, fields);
@@ -952,6 +996,12 @@ impl<'ctx> LlvmBackend<'ctx> {
                             let input = self.emit_expr(&args[1])?;
                             return self
                                 .emit_stdlib_call_option_match_two_ptr_args(&sym, handle, input);
+                        }
+                        // #507: i64 → ptr (e.g. crypto_random_bytes(n) → *mut MvlArray)
+                        StdlibSig::I64ReturnsPtrArg(sym) if args.len() == 1 => {
+                            let sym = sym.clone();
+                            let arg = self.emit_expr(&args[0])?;
+                            return self.emit_stdlib_call_i64_returns_ptr(&sym, arg);
                         }
                         _ => {}
                     }
@@ -1186,9 +1236,16 @@ impl<'ctx> LlvmBackend<'ctx> {
                         Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
                         _ => None,
                     };
-                    let base_name = recv_mvl_ty.as_ref().and_then(|t| match t {
-                        TypeExpr::Base { name, .. } => Some(name.as_str()),
-                        _ => None,
+                    // Strip IFC labels (Secret[List[T]] → List[T]) before dispatching.
+                    let base_name = recv_mvl_ty.as_ref().and_then(|t| {
+                        let inner = match t {
+                            TypeExpr::Labeled { inner, .. } => inner.as_ref(),
+                            other => other,
+                        };
+                        match inner {
+                            TypeExpr::Base { name, .. } => Some(name.as_str()),
+                            _ => None,
+                        }
                     });
                     let len_fn = match base_name {
                         Some("List") | Some("Array") | Some("Set") => self.get_mvl_array_len(),

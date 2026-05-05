@@ -509,3 +509,47 @@ fn cross_backend_regex_find() {
         assert_eq!(lines[2], "42", "leading digit run extracted");
     }
 }
+
+/// crypto_random_bytes shape test — both backends must print the correct list length.
+///
+/// Non-deterministic values are not compared; only the length (always == n) is checked.
+/// This exercises the I64ReturnsPtrArg dispatch (#507) and Secret[List[Int]] label
+/// handling in the LLVM codegen (#508).
+#[test]
+fn cross_backend_crypto_random_bytes_llvm_shape() {
+    let file = corpus_effects("crypto_random_bytes_shape.mvl");
+    let transpiler_out = run_transpiler(&file);
+    assert_eq!(
+        transpiler_out.trim(),
+        "16",
+        "Rust transpiler: expected length 16, got: {transpiler_out:?}"
+    );
+    if let Some(llvm_out) = run_llvm(&file) {
+        assert_eq!(
+            llvm_out.trim(),
+            "16",
+            "LLVM backend: expected length 16, got: {llvm_out:?}"
+        );
+    }
+}
+
+/// crypto_random_bytes(0) — both backends must return an empty list.
+///
+/// Edge-case for the I64ReturnsPtrArg dispatch and MvlArray zero-length allocation (#507).
+#[test]
+fn cross_backend_crypto_random_bytes_zero_llvm() {
+    let file = corpus_effects("crypto_random_bytes_zero.mvl");
+    let transpiler_out = run_transpiler(&file);
+    assert_eq!(
+        transpiler_out.trim(),
+        "0",
+        "Rust transpiler: expected length 0, got: {transpiler_out:?}"
+    );
+    if let Some(llvm_out) = run_llvm(&file) {
+        assert_eq!(
+            llvm_out.trim(),
+            "0",
+            "LLVM backend: expected length 0, got: {llvm_out:?}"
+        );
+    }
+}
