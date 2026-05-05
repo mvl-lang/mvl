@@ -33,7 +33,10 @@ impl<'ctx> LlvmBackend<'ctx> {
             Stmt::Let {
                 pattern, init, ty, ..
             } => {
-                let val = self.emit_expr(init)?;
+                self.pending_let_ty = Some(ty.clone());
+                let val = self.emit_expr(init);
+                self.pending_let_ty = None;
+                let val = val?;
                 // Determine the LLVM type: use the annotation type only when it matches the
                 // actual value type (annotation may fall back to i64 for unknown generics
                 // like List[T], Map[K,V] — in that case trust the value's own type).
@@ -120,6 +123,9 @@ impl<'ctx> LlvmBackend<'ctx> {
                                             self.get_mvl_array_drop()
                                         }
                                         HeapKind::Map => self.get_mvl_map_drop(),
+                                        HeapKind::StringPtrArray => {
+                                            self.get_mvl_string_ptr_array_drop()
+                                        }
                                     };
                                     let _ = self.builder.build_call(
                                         drop_fn,
@@ -743,7 +749,19 @@ pub(crate) fn heap_kind_of(ty: &TypeExpr) -> Option<HeapKind> {
     };
     match base {
         "String" => Some(HeapKind::String),
-        "List" | "Array" => Some(HeapKind::Array),
+        "List" | "Array" => {
+            // List[String] owns its elements (each is an mvl_string_new allocation);
+            // use the deep-drop variant so element strings are freed with the array.
+            if let TypeExpr::Base { args, .. } = ty {
+                if matches!(
+                    args.first(),
+                    Some(TypeExpr::Base { name, .. }) if name == "String"
+                ) {
+                    return Some(HeapKind::StringPtrArray);
+                }
+            }
+            Some(HeapKind::Array)
+        }
         "Map" => Some(HeapKind::Map),
         "Set" => Some(HeapKind::Set),
         _ => None,

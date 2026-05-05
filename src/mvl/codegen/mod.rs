@@ -357,6 +357,10 @@ struct LlvmBackend<'ctx> {
     /// MVL TypeExpr for each local variable that has an explicit type annotation.
     /// Used to infer the Ok/Some payload type when the scrutinee is a local variable.
     local_mvl_types: HashMap<String, TypeExpr>,
+    /// Type annotation of the let-binding currently being initialised, if any.
+    /// Set by Stmt::Let before calling emit_expr so that emit_list_literal can
+    /// derive the correct element size for empty list literals (fixes #520).
+    pending_let_ty: Option<TypeExpr>,
 
     // ── L5-14: heap drop tracking ────────────────────────────────────────────
     /// Locals that hold heap-allocated collection values (String, Array, Map).
@@ -394,6 +398,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             type_subs: HashMap::new(),
             emitted_monomorphs: HashSet::new(),
             local_mvl_types: HashMap::new(),
+            pending_let_ty: None,
             heap_locals: HashMap::new(),
             stdlib_imports: HashMap::new(),
         }

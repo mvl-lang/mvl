@@ -21,6 +21,9 @@ pub(crate) enum HeapKind {
     /// Set is backed by MvlArray (ADR-0016). If Set ever gets its own layout,
     /// update `heap_kind_of` in stmts.rs and the dispatch arms below.
     Set,
+    /// MvlArray whose elements are owned `*mut MvlString` pointers.
+    /// Requires `mvl_string_ptr_array_drop` to free element strings before the array.
+    StringPtrArray,
 }
 
 impl<'ctx> LlvmBackend<'ctx> {
@@ -137,6 +140,16 @@ impl<'ctx> LlvmBackend<'ctx> {
     pub(crate) fn get_mvl_array_drop(&self) -> FunctionValue<'ctx> {
         self.get_or_declare_fn(
             "mvl_array_drop",
+            &[self.context.ptr_type(AddressSpace::default()).into()],
+            None,
+            false,
+        )
+    }
+
+    /// `mvl_string_ptr_array_drop(ptr)` — drops each owned element string, then the array.
+    pub(crate) fn get_mvl_string_ptr_array_drop(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "mvl_string_ptr_array_drop",
             &[self.context.ptr_type(AddressSpace::default()).into()],
             None,
             false,
@@ -318,6 +331,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 HeapKind::String => self.get_mvl_string_drop(),
                 HeapKind::Array | HeapKind::Set => self.get_mvl_array_drop(),
                 HeapKind::Map => self.get_mvl_map_drop(),
+                HeapKind::StringPtrArray => self.get_mvl_string_ptr_array_drop(),
             };
             let _ = self
                 .builder
