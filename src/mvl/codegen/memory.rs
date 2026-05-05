@@ -242,8 +242,6 @@ impl<'ctx> LlvmBackend<'ctx> {
         )
     }
 
-    // ── Shared helper ─────────────────────────────────────────────────────────
-
     fn get_or_declare_fn(
         &self,
         name: &str,
