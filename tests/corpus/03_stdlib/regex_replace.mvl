@@ -1,0 +1,29 @@
+// Corpus: regex.compile + regex.replace cross-backend parity (#420/#439)
+//
+// Both backends must produce identical output.
+// Uses only compile and replace — the two functions wired through LLVM codegen.
+// find/find_all/captures LLVM codegen is deferred to a follow-up ticket.
+//
+// Used by: tests/cross_backend.rs::cross_backend_regex_replace
+
+use std.regex.{Regex, compile, replace}
+
+fn redact_digits(input: String) -> Result[String, String] {
+    let re: Regex = compile(r"\d+")?;
+    Ok(replace(re, input, "N"))
+}
+
+fn main() -> Unit ! Console {
+    match redact_digits("abc 123 def 456") {
+        Ok(s) => println("{}", s),
+        Err(e) => println("err: {}", e),
+    }
+    match redact_digits("no digits here") {
+        Ok(s) => println("{}", s),
+        Err(e) => println("err: {}", e),
+    }
+    match redact_digits("1 22 333") {
+        Ok(s) => println("{}", s),
+        Err(e) => println("err: {}", e),
+    }
+}

@@ -19,4 +19,5 @@ pub mod log;
 pub mod primitives;
 pub mod process;
 pub mod random;
+pub mod regex;
 pub mod time;

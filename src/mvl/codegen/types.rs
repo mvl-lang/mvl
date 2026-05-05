@@ -147,7 +147,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                     // pointers to runtime-managed heap structs (ADR-0016).
                     // `Path` is an opaque stdlib struct backed by a String; at the
                     // LLVM level it is represented as a `MvlString*` (ptr).
-                    "String" | "List" | "Array" | "Map" | "Set" | "Path" => {
+                    // #420: Regex is an opaque heap handle (Box<regex::Regex> cast to *mut c_void).
+                    "String" | "List" | "Array" | "Map" | "Set" | "Path" | "Regex" => {
                         Some(self.context.ptr_type(AddressSpace::default()).into())
                     }
                     _ => {

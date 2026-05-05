@@ -266,6 +266,17 @@ pub(crate) enum StdlibSig {
     /// The C function returns `{tag, direct_payload}` where direct_payload is a
     /// MvlString* for Ok and Err.  Wrapping is the same as ResultUnitOnePtrArg.
     ResultStringOnePtrArg(String),
+
+    // ── #420/#439: regex stdlib ───────────────────────────────────────────────
+    /// `(ptr) → {i8, ptr}` — one-ptr-arg C function returning Result[OpaqueHandle, String].
+    /// Ok payload is an opaque heap pointer (e.g. `Box<Regex>` cast to `*mut c_void`).
+    /// Same ABI layout as ResultStringOnePtrArg; the payload is stored as a ptr.
+    /// e.g. `_mvl_regex_compile(pattern_ptr)`.
+    ResultOpaquePtrArg(String),
+    /// `(ptr, ptr, ptr) → *mut c_char` — three-ptr-arg C function returning a heap string.
+    /// Caller frees the returned pointer with `libc::free`.
+    /// e.g. `_mvl_regex_replace(handle, input, replacement)`.
+    StringThreePtrArgs(String),
 }
 
 // ── Backend struct ────────────────────────────────────────────────────────────
@@ -565,6 +576,19 @@ impl<'ctx> LlvmBackend<'ctx> {
                 "remove",
                 Sig::ResultUnitOnePtrArg("_mvl_io_remove".into()),
             ),
+            // std.regex — #420/#439
+            (
+                "regex",
+                "compile",
+                Sig::ResultOpaquePtrArg("_mvl_regex_compile".into()),
+            ),
+            (
+                "regex",
+                "replace",
+                Sig::StringThreePtrArgs("_mvl_regex_replace".into()),
+            ),
+            // find, find_all, captures: C-ABI symbols exist but LLVM codegen
+            // deferred — requires Option[Struct]/List marshalling infrastructure.
         ];
 
         for decl in &prog.declarations {
@@ -669,6 +693,43 @@ impl<'ctx> LlvmBackend<'ctx> {
             self.fn_return_types
                 .entry("read_to_string".to_string())
                 .or_insert_with(result_str_str);
+        }
+
+        // #420: Register return type for regex.compile so that `?` propagation
+        // can infer the Ok payload type (Regex = opaque ptr).
+        let imports_regex = prog.declarations.iter().any(|d| {
+            if let Decl::Use(ud) = d {
+                ud.path.len() >= 2 && ud.path[0] == "std" && ud.path[1] == "regex"
+            } else {
+                false
+            }
+        });
+        if imports_regex {
+            use crate::mvl::parser::lexer::Span;
+            let s = Span {
+                line: 0,
+                col: 0,
+                offset: 0,
+                len: 0,
+            };
+            let regex_ty = TypeExpr::Base {
+                name: "Regex".into(),
+                args: vec![],
+                span: s,
+            };
+            let string_ty = TypeExpr::Base {
+                name: "String".into(),
+                args: vec![],
+                span: s,
+            };
+            // compile(pattern: String) → Result[Regex, String]
+            self.fn_return_types
+                .entry("compile".into())
+                .or_insert(TypeExpr::Result {
+                    ok: Box::new(regex_ty),
+                    err: Box::new(string_ty),
+                    span: s,
+                });
         }
     }
 
@@ -935,6 +996,80 @@ impl<'ctx> LlvmBackend<'ctx> {
         let call = self
             .builder
             .build_call(fn_val, &[arg.into()], "io_path")
+            .ok()?;
+        use inkwell::values::AnyValue;
+        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+    }
+
+    // ── #420/#439: regex emission helpers ────────────────────────────────────────
+
+    /// Emit a call to `_mvl_regex_compile`: `(ptr) → {i8, ptr}`.
+    ///
+    /// The Ok payload is an opaque heap pointer (boxed Regex handle).
+    /// Uses the same `{i8, ptr}` ABI layout as other Result-returning stdlib calls.
+    pub(crate) fn emit_stdlib_call_result_opaque_ptr_arg(
+        &mut self,
+        symbol: &str,
+        arg: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let result_ty = self
+            .context
+            .struct_type(&[self.context.i8_type().into(), ptr_ty.into()], false);
+        let fn_val = if let Some(f) = self.module.get_function(symbol) {
+            f
+        } else {
+            let fn_ty = result_ty.fn_type(&[ptr_ty.into()], false);
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        };
+        let call = self
+            .builder
+            .build_call(fn_val, &[arg.into()], "regex_compile")
+            .ok()?;
+        use inkwell::values::AnyValue;
+        let c_val = BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
+        self.wrap_c_result_with_slot(c_val, result_ty)
+    }
+
+    /// Emit a call to `_mvl_regex_replace`: `(ptr, ptr, ptr) → *mut c_char`.
+    ///
+    /// Returns the heap-allocated result string as a ptr value.
+    pub(crate) fn emit_stdlib_call_string_three_ptr_args(
+        &mut self,
+        symbol: &str,
+        a: inkwell::values::BasicValueEnum<'ctx>,
+        b: inkwell::values::BasicValueEnum<'ctx>,
+        c: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        use inkwell::types::BasicMetadataTypeEnum;
+        use inkwell::values::BasicMetadataValueEnum;
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let fn_val = if let Some(f) = self.module.get_function(symbol) {
+            f
+        } else {
+            let fn_ty = ptr_ty.fn_type(
+                &[
+                    BasicMetadataTypeEnum::from(ptr_ty),
+                    BasicMetadataTypeEnum::from(ptr_ty),
+                    BasicMetadataTypeEnum::from(ptr_ty),
+                ],
+                false,
+            );
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        };
+        let call = self
+            .builder
+            .build_call(
+                fn_val,
+                &[
+                    BasicMetadataValueEnum::from(a),
+                    BasicMetadataValueEnum::from(b),
+                    BasicMetadataValueEnum::from(c),
+                ],
+                "regex_replace",
+            )
             .ok()?;
         use inkwell::values::AnyValue;
         BasicValueEnum::try_from(call.as_any_value_enum()).ok()
