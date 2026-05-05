@@ -60,10 +60,7 @@ impl LlvmCompiler {
     ///
     /// Returns the IR as a string on success, or an error message on failure.
     pub fn compile_to_ir(&self, prog: &Program, module_name: &str) -> Result<String, String> {
-        let mut backend = LlvmBackend::new(&self.context, module_name);
-        backend.emit_program(prog);
-        backend.verify()?;
-        Ok(backend.to_ir_string())
+        self.compile_to_ir_with_prelude(&[], prog, module_name)
     }
 
     /// Compile prelude programs merged with `prog` into a single LLVM IR module.

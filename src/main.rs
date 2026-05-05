@@ -2772,11 +2772,7 @@ fn load_implicit_prelude() -> Vec<mvl::mvl::parser::ast::Program> {
     progs
 }
 
-/// Rust-backed stdlib modules that have implementations in `mvl_runtime::stdlib`.
-/// Pure-MVL modules (json, math, collections, …) are NOT in this list.
-const RUST_BACKED_STDLIB: &[&str] = &[
-    "args", "crypto", "env", "io", "log", "process", "random", "time",
-];
+use transpiler::RUST_BACKED_STDLIB;
 
 /// Modules already in the implicit prelude — never loaded twice.
 const IMPLICIT_PRELUDE_STEMS: &[&str] = &["core", "primitives", "strings", "lists"];
@@ -3140,15 +3136,22 @@ mod find_test_binary_tests {
 
 // ── LLVM backend commands (feature = "llvm") ──────────────────────────────────
 
+#[cfg(feature = "llvm")]
+fn prepare_llvm(
+    prog: &mvl::mvl::parser::ast::Program,
+) -> (Vec<mvl::mvl::parser::ast::Program>, codegen::LlvmCompiler) {
+    let mut prelude = load_implicit_prelude();
+    prelude.extend(load_mvl_native_stdlib_extras(std::slice::from_ref(prog)));
+    (prelude, codegen::LlvmCompiler::new())
+}
+
 /// Compile an MVL file to LLVM IR and write the .ll file to the current directory.
 /// `mvl build --backend=llvm <file>`
 #[cfg(feature = "llvm")]
 fn build_project_llvm(path: &str) {
     let (prog, _src) = parse_or_exit(path);
     let module_name = stem(path);
-    let mut prelude = load_implicit_prelude();
-    prelude.extend(load_mvl_native_stdlib_extras(std::slice::from_ref(&prog)));
-    let compiler = codegen::LlvmCompiler::new();
+    let (prelude, compiler) = prepare_llvm(&prog);
     match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
         Ok(ir) => {
             let out_path = format!("{module_name}.ll");
@@ -3176,9 +3179,7 @@ fn run_project_llvm(path: &str) {
 
     let (prog, _src) = parse_or_exit(path);
     let module_name = stem(path);
-    let mut prelude = load_implicit_prelude();
-    prelude.extend(load_mvl_native_stdlib_extras(std::slice::from_ref(&prog)));
-    let compiler = codegen::LlvmCompiler::new();
+    let (prelude, compiler) = prepare_llvm(&prog);
     let ir = match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
         Ok(ir) => ir,
         Err(e) => {
@@ -3268,9 +3269,7 @@ fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
         let module_name = stem(&file_str);
 
         let (prog, _src) = parse_or_exit(&file_str);
-        let mut prelude = load_implicit_prelude();
-        prelude.extend(load_mvl_native_stdlib_extras(std::slice::from_ref(&prog)));
-        let compiler = codegen::LlvmCompiler::new();
+        let (prelude, compiler) = prepare_llvm(&prog);
         let ir = match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
             Ok(ir) => ir,
             Err(e) => {

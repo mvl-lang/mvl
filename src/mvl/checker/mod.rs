@@ -3043,8 +3043,7 @@ fn is_wildcard_pattern(pattern: &Pattern, variant_names: &[String]) -> bool {
             if name.contains("::") {
                 return false;
             }
-            let short = name.rsplit("::").next().unwrap_or(name.as_str());
-            !variant_names.contains(&short.to_string())
+            !variant_names.contains(name)
         }
         _ => false,
     }
