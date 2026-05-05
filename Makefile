@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-corpus test-stdlib test-bdd test-transpiler test-llvm test-tree-sitter test-grammar-coverage coverage lint mvl-lint format format-check assurance assurance-summary assurance-gate docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants
+.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-corpus test-stdlib test-bdd test-transpiler test-llvm test-tree-sitter test-grammar-coverage coverage lint mvl-lint format format-check assurance assurance-gate docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants
 
 help: ## Show this help
 	@echo ""
@@ -171,11 +171,8 @@ coverage: ## Run Rust line coverage via cargo-llvm-cov (cached in target/llvm-co
 	@cargo llvm-cov --json > target/llvm-cov.json 2>/dev/null
 	@python3 -c "import json; d=json.load(open('target/llvm-cov.json')); t=d['data'][0]['totals']; l=t['lines']; f=t['functions']; print(f\"Lines: {l['covered']}/{l['count']} ({l['percent']:.1f}%)\"); print(f\"Functions: {f['covered']}/{f['count']} ({f['percent']:.1f}%)\")"
 
-assurance: ## Check ISPE traceability: spec → implementation → tests (verbose with legend)
-	@python3 tools/assurance.py --verbose
-
-assurance-summary: ## Assurance dashboard summary only (used by CI)
-	@python3 tools/assurance.py
+assurance: ## Assurance dashboard (add VERBOSE=true for full output with legend)
+	@python3 tools/assurance.py $(if $(VERBOSE),--verbose)
 
 assurance-gate: ## CI gate: fail if below 75% completeness/coverage
 	@python3 tools/assurance.py --min 0.75
