@@ -153,7 +153,7 @@ test fn scenario_adding_two_numbers() -> Unit {
 - Zero new language features — `given`, `when`, `then` are identifiers, not keywords
 - State flows explicitly through a context struct (consistent with MVL ownership model)
 - `scenario_*` names map 1:1 to `Scenario:` entries in `.openspec/specs/`
-- `mvl test --bdd` MAY emit Gherkin-style reports derived from function names
+- `mvl test --bdd` emits a Gherkin-style `BDD scenarios:` report derived from `scenario_*` function names
 
 **Implementation:** `src/main.rs::cmd_test`
 

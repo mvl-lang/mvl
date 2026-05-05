@@ -84,7 +84,7 @@ test fn scenario_adding_two_numbers() -> Unit {
 - Zero language changes — fully consistent with ADR-0002 and ADR-0004
 - Pure functions with explicit state threading — consistent with MVL's ownership model
 - Spec-to-test traceability via naming convention (`scenario_*` ↔ `Scenario:` in openspec)
-- `mvl test --bdd` can produce Gherkin-style reports purely from function names — no parser changes needed
+- `mvl test --bdd` produces a Gherkin-style `BDD scenarios:` report from function names — no parser changes needed
 - Readable: the scenario body reads like a narrative
 
 **Bad / trade-offs:**
