@@ -1698,7 +1698,7 @@ impl<'ctx> LlvmBackend<'ctx> {
     /// tracked as a heap local.  Used to exclude the implicit return value from drops
     /// (returning a heap pointer transfers ownership to the caller).
     /// L5-15: register a value parameter in `heap_locals` if it is a heap type.
-    /// Borrow params (`&T`) are skipped — the caller retains ownership.
+    /// Borrow params (`val T`/`ref T`) are skipped — the caller retains ownership.
     fn maybe_register_heap_param(&mut self, param: &Param, llvm_ty: BasicTypeEnum) {
         if !matches!(&param.ty, TypeExpr::Ref { .. }) {
             if let Some(kind) = stmts::heap_kind_of(&param.ty) {

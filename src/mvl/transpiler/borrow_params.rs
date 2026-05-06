@@ -12,9 +12,9 @@
 //!
 //! # Explicit vs inferred borrows
 //!
-//! * **Explicit**: the MVL programmer wrote `fn f(x: &T)`.  The parameter's
+//! * **Explicit**: the MVL programmer wrote `fn f(x: val T)`.  The parameter's
 //!   [`TypeExpr`] is `TypeExpr::Ref { mutable: false }`.  Always a borrow.
-//! * **Explicit mutable**: `fn f(x: &mut T)`.  `TypeExpr::Ref { mutable: true }`.
+//! * **Explicit mutable**: `fn f(x: ref T)`.  `TypeExpr::Ref { mutable: true }`.
 //!   Also a borrow (call site emits `&mut x`).
 //! * **Inferred immutable borrow**: the parameter is declared as owned (`T`)
 //!   but analysis proves the function body never mutates it, never stores it
@@ -75,9 +75,9 @@ pub fn build_borrow_params_map(
 /// Borrow kinds for a single function declaration.
 ///
 /// The returned `Vec` has the same length as `fd.params`.
-/// Explicit `&T` / `&mut T` annotations are detected first; for remaining
+/// Explicit `val T` / `ref T` annotations are detected first; for remaining
 /// non-Copy owned parameters, conservative read-only body analysis infers
-/// whether they can be passed as `&T`.
+/// whether they can be passed as `&T` (Rust borrow).
 pub fn borrow_params_for_fn(fd: &FnDecl) -> Vec<Option<bool>> {
     fd.params
         .iter()
@@ -568,11 +568,11 @@ mod tests {
         assert!(flags.is_empty());
     }
 
-    // ── Borrow inference: inferred as &T ─────────────────────────────────
+    // ── Borrow inference: inferred as borrow (Rust &T) ───────────────────
 
     #[test]
     fn list_param_unused_in_body_inferred_as_borrow() {
-        // xs is never used → trivially read-only → &T.
+        // xs is never used → trivially read-only → borrow (Rust &T).
         let fd = parse_fn("fn f(xs: List[Int]) -> Int { 0 }");
         assert_eq!(borrow_params_for_fn(&fd), vec![Some(false)]);
     }
