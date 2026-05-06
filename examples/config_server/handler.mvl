@@ -1,0 +1,222 @@
+// handler.mvl — HTTP request/response types and pure dispatch logic.
+//
+// Demonstrates:
+//   1. Req 11 (IFC): Request.body is Tainted[String] — network input, must sanitize before use.
+//   2. Req 11 (IFC): verify_request_auth consumes the stored Secret[String] key internally;
+//      it CANNOT appear in any Response.body (body requires Clean[String]).
+//   3. Req 5  (Errors): Result[Response, HandlerError] for all failure paths.
+//   4. Req 7  (Effects): handlers are pure (no effects); effects confined to main.mvl.
+//
+// Effect boundary: all I/O effects live in main.mvl. This module is pure.
+// Assurance note: 1 extern block (trust boundary: auth verification + config storage).
+
+// ── Request / Response types ──────────────────────────────────────────────
+
+// HTTP method.
+pub type Method = enum {
+    Get,
+    Put,
+    Delete,
+    Unknown,
+}
+
+// Incoming HTTP request.
+// body:           Tainted[String] — from the network; untrusted until sanitized.
+// api_key_header: Tainted[String] — Authorization header value; untrusted.
+pub type Request = struct {
+    method: Method,
+    path: String,
+    body: Tainted[String],
+    api_key_header: Tainted[String],
+}
+
+// Outgoing HTTP response.
+// status: refined to valid HTTP status code range [100, 600).
+// body:   Clean[String] — only sanitized/validated content may appear here.
+//
+// IFC note: Secret[String] CANNOT be assigned to body — compile-time type error.
+// The api_key loaded in main.mvl can never reach this field.
+pub type Response = struct {
+    status: Int where self >= 100 && self < 600,
+    body: Clean[String],
+}
+
+// Named failure reasons for all handler paths.
+pub type HandlerError = enum {
+    Unauthorized,
+    NotFound,
+    BadRequest,
+    ServerError,
+}
+
+// ── Trust boundary ────────────────────────────────────────────────────────
+
+extern "rust" {
+    // Constant-time comparison of the Authorization header against the stored Secret key.
+    // The stored Secret[String] never crosses back into MVL code — it lives entirely
+    // in Rust state (see bridge.rs init_auth_store). This prevents any accidental
+    // log or response inclusion.
+    fn verify_request_auth(provided: Tainted[String]) -> Result[Unit, HandlerError];
+
+    // Read a stored config value. Returns JSON-formatted Clean[String].
+    fn get_config_value(path: String) -> Result[Clean[String], HandlerError];
+
+    // Update a stored config value; value is Clean[String] (caller sanitizes).
+    fn put_config_value(path: String, value: Clean[String]) -> Result[Clean[String], HandlerError];
+
+    // Reset a stored config key to its default value.
+    fn reset_config_value(path: String) -> Result[Clean[String], HandlerError];
+}
+
+// ── Dispatch ──────────────────────────────────────────────────────────────
+
+// Route an authenticated request to the appropriate handler.
+// Every request is authenticated first; only verified requests proceed to routing.
+// Pure: no effect annotations — all I/O effects are confined to main.mvl.
+pub fn dispatch(req: Request) -> Result[Response, HandlerError] {
+    let auth: Result[Unit, HandlerError] = verify_request_auth(req.api_key_header);
+    match auth {
+        Err(e) => Err(e),
+        Ok(_)  => route(req),
+    }
+}
+
+// Route a verified request to the appropriate sub-handler.
+fn route(req: Request) -> Result[Response, HandlerError] {
+    match req.method {
+        Method::Get     => handle_get(req.path),
+        Method::Put     => handle_put(req.path, req.body),
+        Method::Delete  => handle_delete(req.path),
+        Method::Unknown => Err(HandlerError::BadRequest),
+    }
+}
+
+// GET /config/<key> — return the current value.
+fn handle_get(path: String) -> Result[Response, HandlerError] {
+    let body_result: Result[Clean[String], HandlerError] = get_config_value(path);
+    match body_result {
+        Err(e)   => Err(e),
+        Ok(body) => Ok(Response { status: 200, body: body }),
+    }
+}
+
+// PUT /config/<key> — update the value with a sanitized body.
+// IFC: body is Tainted[String] from the network; sanitize() is required before storage.
+// The compiler rejects storing the raw Tainted value — only Clean[String] is accepted.
+fn handle_put(path: String, body: Tainted[String]) -> Result[Response, HandlerError] {
+    let clean: Clean[String] = sanitize(body);
+    let result: Result[Clean[String], HandlerError] = put_config_value(path, clean);
+    match result {
+        Err(e)   => Err(e),
+        Ok(body) => Ok(Response { status: 200, body: body }),
+    }
+}
+
+// DELETE /config/<key> — reset the value to its default.
+fn handle_delete(path: String) -> Result[Response, HandlerError] {
+    let result: Result[Clean[String], HandlerError] = reset_config_value(path);
+    match result {
+        Err(e)   => Err(e),
+        Ok(body) => Ok(Response { status: 200, body: body }),
+    }
+}
+
+// ── Internal unit tests ───────────────────────────────────────────────────
+
+test fn method_get_maps_to_code_1() -> Unit {
+    let m: Method = Method::Get;
+    let code: Int = match m {
+        Method::Get     => 1,
+        Method::Put     => 2,
+        Method::Delete  => 3,
+        Method::Unknown => 0,
+    };
+    assert_eq(code, 1);
+}
+
+test fn method_put_maps_to_code_2() -> Unit {
+    let m: Method = Method::Put;
+    let code: Int = match m {
+        Method::Get     => 1,
+        Method::Put     => 2,
+        Method::Delete  => 3,
+        Method::Unknown => 0,
+    };
+    assert_eq(code, 2);
+}
+
+test fn method_delete_maps_to_code_3() -> Unit {
+    let m: Method = Method::Delete;
+    let code: Int = match m {
+        Method::Get     => 1,
+        Method::Put     => 2,
+        Method::Delete  => 3,
+        Method::Unknown => 0,
+    };
+    assert_eq(code, 3);
+}
+
+test fn method_unknown_maps_to_code_0() -> Unit {
+    let m: Method = Method::Unknown;
+    let code: Int = match m {
+        Method::Unknown => 0,
+        Method::Get     => 1,
+        Method::Put     => 2,
+        Method::Delete  => 3,
+    };
+    assert_eq(code, 0);
+}
+
+test fn handler_error_unauthorized_is_code_1() -> Unit {
+    let e: HandlerError = HandlerError::Unauthorized;
+    let code: Int = match e {
+        HandlerError::Unauthorized => 1,
+        HandlerError::NotFound     => 2,
+        HandlerError::BadRequest   => 3,
+        HandlerError::ServerError  => 4,
+    };
+    assert_eq(code, 1);
+}
+
+test fn handler_error_not_found_is_code_2() -> Unit {
+    let e: HandlerError = HandlerError::NotFound;
+    let code: Int = match e {
+        HandlerError::Unauthorized => 1,
+        HandlerError::NotFound     => 2,
+        HandlerError::BadRequest   => 3,
+        HandlerError::ServerError  => 4,
+    };
+    assert_eq(code, 2);
+}
+
+test fn handler_error_bad_request_is_code_3() -> Unit {
+    let e: HandlerError = HandlerError::BadRequest;
+    let code: Int = match e {
+        HandlerError::Unauthorized => 1,
+        HandlerError::NotFound     => 2,
+        HandlerError::BadRequest   => 3,
+        HandlerError::ServerError  => 4,
+    };
+    assert_eq(code, 3);
+}
+
+test fn handler_error_server_error_is_code_4() -> Unit {
+    let e: HandlerError = HandlerError::ServerError;
+    let code: Int = match e {
+        HandlerError::Unauthorized => 1,
+        HandlerError::NotFound     => 2,
+        HandlerError::BadRequest   => 3,
+        HandlerError::ServerError  => 4,
+    };
+    assert_eq(code, 4);
+}
+
+test fn response_200_body_is_clean_string() -> Unit {
+    let resp: Response = Response { status: 200, body: "ok" };
+    assert_eq(resp.status, 200);
+}
+
+test fn response_401_body_is_clean_string() -> Unit {
+    let resp: Response = Response { status: 401, body: "unauthorized" };
+    assert_eq(resp.status, 401);
+}

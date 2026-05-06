@@ -1,0 +1,7 @@
+{
+    "port": 8080,
+    "timeout": 30,
+    "max_connections": 100,
+    "api_key": "config-server-demo-key",
+    "debug_mode": false
+}

@@ -1,0 +1,120 @@
+// storage.mvl — In-memory configuration store with IFC-labeled sensitive entries.
+//
+// Demonstrates:
+//   1. Req 11 (IFC): Secret[String] api_key is consumed once by init_auth_store() —
+//      after that call, it cannot be retrieved as a plain or Clean String from MVL.
+//      It lives entirely in Rust-side state and is only ever verified, never returned.
+//   2. Req 7  (Effects): store mutations happen in Rust state; no MVL effect annotation
+//      is required here because the store is owned by the extern trust boundary.
+//
+// The store maps config keys (port, timeout, max_connections, debug_mode) to
+// Clean[String] values. The api_key is NOT a store key — it lives in a separate
+// Rust Mutex and can only be verified, never retrieved.
+//
+// Assurance note: 1 extern block (trust boundary: auth store init + key-value CRUD).
+
+// ── Type re-declarations (workaround: #96 — cross-module type resolution) ─
+
+type HandlerError = enum {
+    Unauthorized,
+    NotFound,
+    BadRequest,
+    ServerError,
+}
+
+// ── Trust boundary ────────────────────────────────────────────────────────
+
+extern "rust" {
+    // Consume the api_key and store it securely inside Rust state.
+    //
+    // IFC invariant: after this call, the Secret[String] is gone from MVL.
+    // It CANNOT be retrieved or passed to any output function.
+    // Attempting to log it before this call:
+    //   log_info("key", {"api_key": api_key})   ← COMPILE ERROR (Secret[String])
+    //   println(api_key)                          ← COMPILE ERROR (Secret[String])
+    fn init_auth_store(api_key: Secret[String]) -> Unit;
+
+    // Verify a request's Authorization header against the stored api_key.
+    // The stored Secret[String] is consumed entirely within Rust — it never
+    // crosses back into MVL code, preventing any accidental leak.
+    fn verify_request_auth(provided: Tainted[String]) -> Result[Unit, HandlerError];
+
+    // Read a non-secret config value by key.
+    fn store_get(key: String) -> Result[Clean[String], HandlerError];
+
+    // Write a validated config value; value must be Clean[String] (caller sanitizes).
+    fn store_put(key: String, value: Clean[String]) -> Result[Clean[String], HandlerError];
+
+    // Reset a config key to its default value.
+    fn store_reset(key: String) -> Result[Clean[String], HandlerError];
+}
+
+// ── Store access API ──────────────────────────────────────────────────────
+
+// Initialise the auth store with the api_key loaded from config.
+// This is called once at server startup; the Secret[String] is consumed here.
+pub fn setup_auth(api_key: Secret[String]) -> Unit {
+    init_auth_store(api_key)
+}
+
+// Read a config value (non-secret keys only).
+// Returns Err(NotFound) if the key does not exist.
+pub fn read_config(key: String) -> Result[Clean[String], HandlerError] {
+    store_get(key)
+}
+
+// Write a validated config value (non-secret keys only).
+pub fn write_config(key: String, value: Clean[String]) -> Result[Clean[String], HandlerError] {
+    store_put(key, value)
+}
+
+// Reset a config key to its default value.
+pub fn reset_config(key: String) -> Result[Clean[String], HandlerError] {
+    store_reset(key)
+}
+
+// ── Internal unit tests ───────────────────────────────────────────────────
+
+test fn handler_error_unauthorized_is_first_variant() -> Unit {
+    let e: HandlerError = HandlerError::Unauthorized;
+    let is_unauth: Int = match e {
+        HandlerError::Unauthorized => 1,
+        HandlerError::NotFound     => 0,
+        HandlerError::BadRequest   => 0,
+        HandlerError::ServerError  => 0,
+    };
+    assert_eq(is_unauth, 1);
+}
+
+test fn handler_error_not_found_is_second_variant() -> Unit {
+    let e: HandlerError = HandlerError::NotFound;
+    let is_nf: Int = match e {
+        HandlerError::Unauthorized => 0,
+        HandlerError::NotFound     => 1,
+        HandlerError::BadRequest   => 0,
+        HandlerError::ServerError  => 0,
+    };
+    assert_eq(is_nf, 1);
+}
+
+test fn handler_error_bad_request_is_third_variant() -> Unit {
+    let e: HandlerError = HandlerError::BadRequest;
+    let is_br: Int = match e {
+        HandlerError::Unauthorized => 0,
+        HandlerError::NotFound     => 0,
+        HandlerError::BadRequest   => 1,
+        HandlerError::ServerError  => 0,
+    };
+    assert_eq(is_br, 1);
+}
+
+test fn handler_error_server_error_is_fourth_variant() -> Unit {
+    let e: HandlerError = HandlerError::ServerError;
+    let is_se: Int = match e {
+        HandlerError::Unauthorized => 0,
+        HandlerError::NotFound     => 0,
+        HandlerError::BadRequest   => 0,
+        HandlerError::ServerError  => 1,
+    };
+    assert_eq(is_se, 1);
+}
