@@ -622,6 +622,31 @@ fn collect_undefined_types(prog: &Program) -> Vec<String> {
         }
     }
 
+    // Types from Rust-backed stdlib modules (e.g. Path/File from std.io) are
+    // provided by the emitted `use mvl_runtime::stdlib::X::*;` wildcard import.
+    // Load each imported Rust-backed module and add its type names to `defined`
+    // so they are never emitted as placeholder stubs.
+    for decl in &prog.declarations {
+        if let Decl::Use(ud) = decl {
+            if ud.path.first().map(|s| s == "std").unwrap_or(false) {
+                if let Some(module) = ud.path.get(1) {
+                    if crate::mvl::transpiler::RUST_BACKED_STDLIB.contains(&module.as_str()) {
+                        let filename = format!("{module}.mvl");
+                        if let Some(content) = crate::mvl::stdlib::stdlib_content(&filename) {
+                            let (mut p, _) = crate::mvl::parser::Parser::new(content);
+                            let stdlib_prog = p.parse_program();
+                            for d in &stdlib_prog.declarations {
+                                if let Decl::Type(td) = d {
+                                    defined.insert(td.name.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // MVL built-in primitive types (already mapped in emit_type_expr)
     let builtins: std::collections::HashSet<&str> = [
         "Int", "Float", "Bool", "String", "Char", "Byte", "Unit", "Never", "List",
