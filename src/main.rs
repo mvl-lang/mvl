@@ -868,7 +868,9 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
         .collect();
 
     // Independence analysis.
-    use mvl::mvl::passes::mcdc::transform::is_clause_covered;
+    use mvl::mvl::passes::mcdc::transform::{
+        is_clause_covered, is_match_arm_covered, DecisionKind as TransformKind,
+    };
     let mut covered = 0usize;
     let mut total_obligations = 0usize;
 
@@ -883,20 +885,34 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
         let mut clause_results = Vec::new();
-        for clause_bit in 0..decision.clause_count {
-            let ok = is_clause_covered(decision.clause_count, clause_bit, obs);
-            clause_results.push(ok);
-            total_obligations += 1;
-            if ok {
-                covered += 1;
-            } else {
-                // Count as coupled-missed if this clause appears in any coupled pair.
-                let is_coupled = decision
-                    .coupled_pairs
-                    .iter()
-                    .any(|(i, j, _)| *i == clause_bit || *j == clause_bit);
-                if is_coupled {
-                    coupled_missed += 1;
+        if matches!(decision.kind, TransformKind::Match) {
+            // Match arm coverage: each arm must be taken at least once.
+            // Observations are arm indices (plain u32), not the 2N+1 bit encoding.
+            for arm_idx in 0..decision.clause_count {
+                let ok = is_match_arm_covered(arm_idx, obs);
+                clause_results.push(ok);
+                total_obligations += 1;
+                if ok {
+                    covered += 1;
+                }
+                // Match arms are never "coupled" in the boolean-condition sense.
+            }
+        } else {
+            for clause_bit in 0..decision.clause_count {
+                let ok = is_clause_covered(decision.clause_count, clause_bit, obs);
+                clause_results.push(ok);
+                total_obligations += 1;
+                if ok {
+                    covered += 1;
+                } else {
+                    // Count as coupled-missed if this clause appears in any coupled pair.
+                    let is_coupled = decision
+                        .coupled_pairs
+                        .iter()
+                        .any(|(i, j, _)| *i == clause_bit || *j == clause_bit);
+                    if is_coupled {
+                        coupled_missed += 1;
+                    }
                 }
             }
         }
@@ -932,8 +948,13 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
                 .map(|ok| if *ok { "✓" } else { "✗" })
                 .collect();
             let all_ok = clause_results.iter().all(|ok| *ok);
+            let unit = if matches!(decision.kind, TransformKind::Match) {
+                "arms"
+            } else {
+                "clauses"
+            };
             println!(
-                "  {}:{:<4} {} ({} clauses) [{}] {}",
+                "  {}:{:<4} {} ({} {unit}) [{}] {}",
                 decision.file,
                 decision.line,
                 kind_label,

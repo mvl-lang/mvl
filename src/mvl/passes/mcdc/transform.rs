@@ -119,6 +119,12 @@ pub enum DecisionKind {
     While,
     /// The return expression of a `Bool`-valued function body.
     Return,
+    /// A `match` statement/expression — each arm is an independent outcome.
+    /// Observations are encoded as the arm index (u32), not the 2N+1 bit scheme.
+    Match,
+    /// A compound guard condition (`if cond` with `&&`/`||`) on a match arm.
+    /// Uses the standard 2N+1 bit observation encoding like `If`/`While`.
+    MatchGuard,
 }
 
 impl DecisionKind {
@@ -128,6 +134,8 @@ impl DecisionKind {
             DecisionKind::If => "if",
             DecisionKind::While => "while",
             DecisionKind::Return => "fn",
+            DecisionKind::Match => "match",
+            DecisionKind::MatchGuard => "guard",
         }
     }
 }
@@ -183,10 +191,15 @@ impl MCDCMap {
         kind: DecisionKind,
         coupled_pairs: Vec<(usize, usize, Vec<String>)>,
     ) -> usize {
-        assert!(
-            clause_count <= 15,
-            "MC/DC: decision at line {line} has {clause_count} clauses; max supported is 15 (u32 encoding, 2N+1 bits, see ADR-0015)"
-        );
+        // Match arm decisions use arm-index encoding (not 2N+1 bits), so they
+        // are not subject to the 15-clause limit.  All other kinds (If, While,
+        // Return, MatchGuard) use the 2N+1 bit u32 encoding — limit enforced.
+        if !matches!(kind, DecisionKind::Match) {
+            assert!(
+                clause_count <= 15,
+                "MC/DC: decision at line {line} has {clause_count} clauses; max supported is 15 (u32 encoding, 2N+1 bits, see ADR-0015)"
+            );
+        }
         let id = self.next_id;
         self.next_id += 1;
         self.decisions.push(MCDCDecision {
@@ -268,6 +281,15 @@ pub fn is_clause_covered(clause_count: usize, clause_bit: usize, observations: &
         }
     }
     false
+}
+
+/// Check whether match arm `arm_index` was exercised in at least one test.
+///
+/// Match observations are encoded as the plain arm index (u32), unlike the
+/// 2N+1 bit scheme used for `If`/`While`/`MatchGuard` decisions.  Coverage
+/// is satisfied when any recorded observation equals the arm index.
+pub fn is_match_arm_covered(arm_index: usize, observations: &[u32]) -> bool {
+    observations.contains(&(arm_index as u32))
 }
 
 /// Helper: encode a u32 observation from components.
