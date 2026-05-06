@@ -25,7 +25,7 @@
 
 use mvl_runtime::prelude::*;
 
-use crate::{Config, ConfigError, HandlerError, Method, Request, Response};
+use crate::{Config, ConfigError, HandlerError, MaxConns, Method, Port, Request, Response, Timeout};
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -93,9 +93,9 @@ pub extern "Rust" fn load_config(path: String) -> Result<Config, ConfigError> {
     }
 
     Ok(Config {
-        port,
-        timeout,
-        max_connections,
+        port: Port(port),
+        timeout: Timeout(timeout),
+        max_connections: MaxConns(max_connections),
         api_key: Secret(api_key),
         debug_mode,
     })

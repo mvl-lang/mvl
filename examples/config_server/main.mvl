@@ -25,7 +25,6 @@
 //
 // Assurance note: 1 extern block (trust boundary: config loading + server simulation).
 
-use handler::dispatch;
 use std.log.{log_info, log_warn, log_error}
 
 // ── Type re-declarations (workaround: #96) ────────────────────────────────
@@ -157,13 +156,13 @@ fn main() -> Unit ! FileRead, Net, Console, Log {
     match load_result {
         Err(_) => log_error("startup failed", {"reason": "config load error"}),
         Ok(config) => {
-            log_info("config loaded", {});
+            log_info("config loaded", {"status": "ok"});
             // IFC: config.api_key is Secret[String].
             // WOULD NOT COMPILE: log_info("key", {"value": config.api_key})
             // WOULD NOT COMPILE: println(config.api_key)
             // The only valid use: pass it to the extern trust boundary.
             let _: Unit = init_auth_store(config.api_key);
-            log_info("auth store initialised", {});
+            log_info("auth store initialised", {"status": "ok"});
             run_demo()
         }
     }
@@ -189,7 +188,7 @@ fn run_demo() -> Unit ! Net, Console, Log {
 fn handle_demo_request(index: Int) -> Unit ! Net, Console, Log {
     let req_opt: Option[Request] = server_recv(index);
     match req_opt {
-        None      => log_info("demo complete", {}),
+        None      => log_info("demo complete", {"requests": "3"}),
         Some(req) => {
             let resp: Result[Response, HandlerError] = dispatch(req);
             match resp {
