@@ -13,12 +13,12 @@
 
 /// Returns the SHA-256 digest of the input bytes as a hex string.
 /// Pure — hashing is deterministic.
-pub fn sha256(data: String) -> String { "" }
+pub builtin fn sha256(data: String) -> String
 
 /// Returns the SHA-512 digest of the input bytes as a hex string.
 /// Pure — hashing is deterministic.
-pub fn sha512(data: String) -> String { "" }
+pub builtin fn sha512(data: String) -> String
 
 /// Returns n cryptographically secure random bytes. Requires `! CryptoRandom`.
 /// Distinct from std.random.bytes — uses the OS CSPRNG, not a PRNG.
-pub fn crypto_random_bytes(n: Int) -> Secret[List[Int]] ! CryptoRandom { [] }
+pub builtin fn crypto_random_bytes(n: Int) -> Secret[List[Int]] ! CryptoRandom

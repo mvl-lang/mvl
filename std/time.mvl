@@ -24,23 +24,20 @@ pub type Duration = struct {
 }
 
 /// Returns the current wall-clock time. Requires `! Clock`.
-pub fn now() -> Instant ! Clock { Instant {} }
+pub builtin fn now() -> Instant ! Clock
 
 /// Suspends execution for the given duration. Requires `! Clock`.
-pub fn sleep(d: Duration) -> Unit ! Clock { }
+pub builtin fn sleep(d: Duration) -> Unit ! Clock
 
 /// Formats an Instant as a string using the given format pattern.
-/// Pure — formatting is a pure transformation.
-pub fn format_instant(t: Instant, pattern: String) -> String { "" }
+pub builtin fn format_instant(t: Instant, pattern: String) -> String
 
 /// Formats a DateTime as a string using the given format pattern.
-/// Pure — formatting is a pure transformation.
-pub fn format_datetime(t: DateTime, pattern: String) -> String { "" }
+pub builtin fn format_datetime(t: DateTime, pattern: String) -> String
 
 /// Parses a datetime string using the given format pattern.
 /// Returns None if the string does not match the pattern.
-/// Pure — parsing is a pure transformation.
-pub fn parse(s: String, pattern: String) -> Option[DateTime] { None }
+pub builtin fn parse(s: String, pattern: String) -> Option[DateTime]
 
 /// Constructs a Duration from whole seconds.
 pub fn seconds(n: Int) -> Duration { Duration { secs: n, nanos: 0 } }
