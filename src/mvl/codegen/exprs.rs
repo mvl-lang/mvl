@@ -1115,6 +1115,25 @@ impl<'ctx> LlvmBackend<'ctx> {
                             let arg = self.emit_expr(&args[0])?;
                             return self.emit_stdlib_call_i64_returns_ptr(&sym, arg);
                         }
+                        // #536: ptr → i64 (exists, is_file, is_dir)
+                        StdlibSig::I64OnePtrArg(sym) if args.len() == 1 => {
+                            let sym = sym.clone();
+                            let arg = self.emit_expr(&args[0])?;
+                            return self.emit_stdlib_call_i64_one_ptr_arg(&sym, arg);
+                        }
+                        // #536: (ptr, i64) → Result[Unit, String] (chmod)
+                        StdlibSig::ResultUnitPtrI64Args(sym) if args.len() == 2 => {
+                            let sym = sym.clone();
+                            let a = self.emit_expr(&args[0])?;
+                            let b = self.emit_expr(&args[1])?;
+                            return self.emit_stdlib_call_result_unit_ptr_i64_args(&sym, a, b);
+                        }
+                        // #536: i64 → void/noreturn (exit)
+                        StdlibSig::VoidI64Arg(sym) if args.len() == 1 => {
+                            let sym = sym.clone();
+                            let arg = self.emit_expr(&args[0])?;
+                            return self.emit_stdlib_call_void_i64_arg(&sym, arg);
+                        }
                         _ => {}
                     }
                 }

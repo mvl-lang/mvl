@@ -752,3 +752,51 @@ fn bdd_report_emits_gherkin_scenarios() {
         "expected scenario line, got:\n{stdout}"
     );
 }
+
+// ── stdlib profile flag tests (#537) ─────────────────────────────────────
+
+/// `--stdlib=trusted` is the default profile and must be accepted explicitly.
+#[test]
+fn stdlib_trusted_flag_accepted_on_check() {
+    let out = Command::new(mvl_bin())
+        .args(["check", &corpus("hello_world.mvl"), "--stdlib=trusted"])
+        .output()
+        .expect("failed to run mvl check --stdlib=trusted");
+    assert!(
+        out.status.success(),
+        "mvl check --stdlib=trusted failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// `--stdlib=trusted` must also be accepted on `mvl build`.
+#[test]
+fn stdlib_trusted_flag_accepted_on_build() {
+    let out = Command::new(mvl_bin())
+        .args(["build", &corpus("hello_world.mvl"), "--stdlib=trusted"])
+        .output()
+        .expect("failed to run mvl build --stdlib=trusted");
+    assert!(
+        out.status.success(),
+        "mvl build --stdlib=trusted failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// An unknown stdlib profile must be rejected with a clear error message.
+#[test]
+fn stdlib_unknown_profile_rejected() {
+    let out = Command::new(mvl_bin())
+        .args(["check", &corpus("hello_world.mvl"), "--stdlib=unknown"])
+        .output()
+        .expect("failed to run mvl check --stdlib=unknown");
+    assert!(
+        !out.status.success(),
+        "mvl check --stdlib=unknown should have failed"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unknown stdlib profile 'unknown'"),
+        "expected profile error, got:\n{stderr}"
+    );
+}

@@ -386,6 +386,7 @@ impl RustEmitter {
             .iter()
             .flat_map(|p| p.declarations.iter())
             .filter_map(|d| if let Decl::Fn(fd) = d { Some(fd) } else { None })
+            .filter(|fd| !fd.is_builtin) // builtin fns have no body; runtime provides them
             .filter(|fd| !fd.body.stmts.is_empty())
             .filter(|fd| !MACRO_HANDLED.contains(&fd.name.as_str()))
             .filter(|fd| !fd.is_test)

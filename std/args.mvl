@@ -18,12 +18,12 @@
 /// Looks for the flag `--<name>` followed by a value argument.
 /// Returns `None` if the flag is absent or has no value.
 /// Returns `Tainted[String]` because CLI arguments are untrusted external input.
-pub fn get_arg(name: Clean[String]) -> Option[Tainted[String]] ! Console { None }
+pub builtin fn get_arg(name: Clean[String]) -> Option[Tainted[String]] ! Console
 
 /// Return all command-line arguments (excluding the program name).
 ///
 /// Returns `Tainted[String]` values — callers must validate each argument.
-pub fn get_args() -> List[Tainted[String]] ! Console { [] }
+pub builtin fn get_args() -> List[Tainted[String]] ! Console
 
 /// Read an environment variable by name.
 ///
@@ -33,7 +33,7 @@ pub fn get_args() -> List[Tainted[String]] ! Console { [] }
 /// NOTE: The `! Console` effect here is a placeholder — environment variable
 /// access is semantically distinct from console I/O. A dedicated `Env` effect
 /// exists in std.env; this function predates that split. See ADR-0007.
-pub fn get_env(name: Clean[String]) -> Option[Tainted[String]] ! Console { None }
+pub builtin fn get_env(name: Clean[String]) -> Option[Tainted[String]] ! Console
 
 /// Parse command-line arguments into a struct `T`.
 ///
@@ -48,4 +48,4 @@ pub fn get_env(name: Clean[String]) -> Option[Tainted[String]] ! Console { None 
 /// No DSL, no builder, no macros — the type is the spec.
 ///
 /// Requires `! Console` effect (reads process arguments).
-pub fn parse[T]() -> Result[T, String] ! Console { Err("") }
+pub builtin fn parse[T]() -> Result[T, String] ! Console

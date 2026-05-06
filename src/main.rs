@@ -66,11 +66,13 @@ fn main() {
             let path = require_path_arg(&args, "check");
             let req_filter = parse_req_filter_or_exit(&args);
             let error_limit = parse_error_limit(&args);
+            let _stdlib_profile = parse_stdlib_profile(&args);
             cmd_check(&path, req_filter, error_limit);
         }
         "build" => {
             let path = require_path_arg(&args, "build");
             let backend = parse_backend(&args);
+            let _stdlib_profile = parse_stdlib_profile(&args);
             if backend == "llvm" {
                 #[cfg(feature = "llvm")]
                 build_project_llvm(&path);
@@ -86,6 +88,7 @@ fn main() {
         "run" => {
             let path = require_path_arg(&args, "run");
             let backend = parse_backend(&args);
+            let _stdlib_profile = parse_stdlib_profile(&args);
             let path_idx = path_arg_index(&args);
             let run_args: Vec<String> = args[path_idx + 1..]
                 .iter()
@@ -112,6 +115,7 @@ fn main() {
         "test" => {
             let path = require_path_arg(&args, "test");
             let backend = parse_backend(&args);
+            let _stdlib_profile = parse_stdlib_profile(&args);
             let quiet = args.iter().any(|a| a == "--quiet" || a == "-q");
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
             let coverage = args.iter().any(|a| a == "--coverage");
@@ -209,7 +213,8 @@ fn print_usage() {
         "  mvl test  <file|dir> --coverage    — run with native behavioral branch coverage report
   mvl test  <file|dir> --backend=llvm  — compile + run via LLVM/lli, check // expect: annotations
   mvl build <file|dir> --backend=llvm  — compile to LLVM IR and invoke lli (requires --features llvm)
-  mvl run   <file|dir> --backend=llvm  — compile and run via LLVM lli (requires --features llvm)"
+  mvl run   <file|dir> --backend=llvm  — compile and run via LLVM lli (requires --features llvm)
+  mvl build <file|dir> --stdlib=trusted — stdlib profile: trusted (default) or proven (upcoming #538)"
     );
     eprintln!("  mvl mutate <file|dir>               — behavioral mutation testing (ADR-0014)");
     eprintln!("  mvl mutate <file|dir> -q            — quiet: only show mutation score");
@@ -257,6 +262,25 @@ fn parse_backend(args: &[String]) -> &str {
     args.iter()
         .find_map(|a| a.strip_prefix("--backend="))
         .unwrap_or("rust")
+}
+
+/// Parse `--stdlib=<profile>` from args; defaults to `"trusted"`.
+///
+/// The trusted profile uses `pub builtin fn` declarations backed directly by
+/// the runtime (mvl_runtime / mvl_runtime_c).  It is the only supported profile
+/// for now; `--stdlib=proven` will be introduced in #538.
+fn parse_stdlib_profile(args: &[String]) -> &str {
+    let profile = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--stdlib="))
+        .unwrap_or("trusted");
+    if profile != "trusted" {
+        eprintln!(
+            "error: unknown stdlib profile '{profile}' (supported: trusted; proven coming in #538)"
+        );
+        process::exit(1);
+    }
+    profile
 }
 
 fn cmd_self(args: &[String]) {

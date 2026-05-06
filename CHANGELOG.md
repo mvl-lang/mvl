@@ -6,12 +6,24 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.80.0] — 2026-05-06
+
+### Added
+
+- **`builtin` keyword for stdlib functions** — establishes explicit trust boundary: `pub builtin fn` declarations delegate directly to runtime (mvl_runtime/mvl_runtime_c) without MVL implementation. Parser, type checker, transpiler, and LLVM backend updated. Closes #534.
+- **Stdlib builtin annotations** — mark 55 Rust-backed stdlib functions as `pub builtin fn` across args, crypto, env, io, log, process, random, regex, time modules. Closes #535.
+- **LLVM backend stdlib parity** — add 15+ string/list/io C-ABI operations (len, trim, starts_with, ends_with, contains, find, replace, split, substring, char_at, from_chars, byte_at, from_bytes, slice, concat, exists, is_file, is_dir, read_file, create_symlink, read_link, chmod). Closes #536.
+- **`--stdlib=trusted` CLI flag** — accept and validate profile selection; default is trusted (current behavior). Lays groundwork for proven profile in #538. Closes #537.
+
+### Fixed
+
+- **LLVM type mismatches** — add `trunc_int_to_ret()` helper to handle i64→i1/i8 return type narrowing for Bool/Byte functions.
+
 ## [0.79.2] — 2026-05-06
 
 ### Added
 
 - **`config_server` example** — Multi-file example demonstrating network effects (`! Net`, `! FileRead`, `! Console`, `! Log`), IFC labels (`Tainted[String]`, `Secret[String]`), and refinement types (`Port = Int where self > 0 && self <= 65535`) working together. Features a pure dispatch layer (`handler.mvl`) separated from effectful edges (`main.mvl`), constant-time auth verification at the trust boundary, and property test suite for `Secret[String]` compile-time invariant. `mvl test handler_test.mvl --backend=llvm` demonstrates LLVM cross-backend support for pure types. Closes #170.
-
 ## [0.79.1] — 2026-05-06
 
 ### Fixed

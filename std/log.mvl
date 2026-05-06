@@ -33,25 +33,25 @@
 /// in its own signature is a compile error.
 ///
 /// IFC: Secret[T] or Tainted[T] arguments are rejected at compile time.
-pub fn log_debug(msg: String, fields: Map[String, String]) -> Unit ! Log { () }
+pub builtin fn log_debug(msg: String, fields: Map[String, String]) -> Unit ! Log
 
 /// Emit an INFO-level structured log record.
 ///
 /// Use for normal operational events (server started, request handled, etc.).
 ///
 /// Requires `! Log`. IFC: Secret[T] or Tainted[T] arguments cause a compile error.
-pub fn log_info(msg: String, fields: Map[String, String]) -> Unit ! Log { () }
+pub builtin fn log_info(msg: String, fields: Map[String, String]) -> Unit ! Log
 
 /// Emit a WARN-level structured log record.
 ///
 /// Use for recoverable anomalies that may need attention.
 ///
 /// Requires `! Log`. IFC: Secret[T] or Tainted[T] arguments cause a compile error.
-pub fn log_warn(msg: String, fields: Map[String, String]) -> Unit ! Log { () }
+pub builtin fn log_warn(msg: String, fields: Map[String, String]) -> Unit ! Log
 
 /// Emit an ERROR-level structured log record.
 ///
 /// Use for failures that affect a specific operation but not the whole process.
 ///
 /// Requires `! Log`. IFC: Secret[T] or Tainted[T] arguments cause a compile error.
-pub fn log_error(msg: String, fields: Map[String, String]) -> Unit ! Log { () }
+pub builtin fn log_error(msg: String, fields: Map[String, String]) -> Unit ! Log

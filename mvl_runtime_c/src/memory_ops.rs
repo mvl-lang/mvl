@@ -18,6 +18,32 @@ use mvl_memory::{
     MvlMapSlot, MvlString,
 };
 
+// ── String helper (shared by string primitives) ────────────────────────────────
+
+/// Borrow the bytes of a `MvlString` as a Rust `str`.  Returns `""` for null/empty.
+///
+/// # Safety
+/// `s` must be a valid `MvlString` pointer or null.  The returned `str` is only
+/// valid while `s` is alive.
+#[inline(always)]
+unsafe fn as_str<'a>(s: *const MvlString) -> &'a str {
+    if s.is_null() {
+        return "";
+    }
+    let len = (*s).len as usize;
+    if len == 0 || (*s).ptr.is_null() {
+        return "";
+    }
+    let bytes = std::slice::from_raw_parts((*s).ptr, len);
+    std::str::from_utf8(bytes).unwrap_or("")
+}
+
+/// Allocate a new `MvlString` from a Rust `&str`.
+#[inline(always)]
+unsafe fn str_to_mvl(s: &str) -> *mut MvlString {
+    mvl_string_new(s.as_ptr(), s.len())
+}
+
 // ── Internal helpers ───────────────────────────────────────────────────────────
 
 #[inline(always)]
@@ -209,6 +235,210 @@ pub unsafe extern "C" fn _mvl_str_to_upper(s: *const MvlString) -> *mut MvlStrin
     out
 }
 
+/// Return the Unicode scalar-value count of the string (char count, not byte count).
+///
+/// # Safety
+/// `s` must be a valid non-null `MvlString` pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_str_len(s: *const MvlString) -> i64 {
+    as_str(s).chars().count() as i64
+}
+
+/// Return a new `MvlString` with leading and trailing ASCII whitespace removed.
+///
+/// # Safety
+/// `s` must be a valid non-null `MvlString` pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_str_trim(s: *const MvlString) -> *mut MvlString {
+    str_to_mvl(as_str(s).trim())
+}
+
+/// Return 1 if `s` starts with `prefix`, 0 otherwise.
+///
+/// # Safety
+/// Both pointers must be valid `MvlString` pointers or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_str_starts_with(
+    s: *const MvlString,
+    prefix: *const MvlString,
+) -> i64 {
+    as_str(s).starts_with(as_str(prefix)) as i64
+}
+
+/// Return 1 if `s` ends with `suffix`, 0 otherwise.
+///
+/// # Safety
+/// Both pointers must be valid `MvlString` pointers or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_str_ends_with(s: *const MvlString, suffix: *const MvlString) -> i64 {
+    as_str(s).ends_with(as_str(suffix)) as i64
+}
+
+/// Return 1 if `s` contains `sub`, 0 otherwise.
+///
+/// # Safety
+/// Both pointers must be valid `MvlString` pointers or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_str_contains(s: *const MvlString, sub: *const MvlString) -> i64 {
+    as_str(s).contains(as_str(sub)) as i64
+}
+
+/// Return the char-index of the first occurrence of `sub` in `s`, or -1 if not found.
+///
+/// # Safety
+/// Both pointers must be valid `MvlString` pointers or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_str_find(s: *const MvlString, sub: *const MvlString) -> i64 {
+    let haystack = as_str(s);
+    let needle = as_str(sub);
+    if needle.is_empty() {
+        return 0;
+    }
+    match haystack.find(needle) {
+        Some(byte_idx) => haystack[..byte_idx].chars().count() as i64,
+        None => -1,
+    }
+}
+
+/// Replace all occurrences of `from` with `to` in `s`, returning a new `MvlString`.
+///
+/// # Safety
+/// All pointers must be valid `MvlString` pointers or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_str_replace(
+    s: *const MvlString,
+    from: *const MvlString,
+    to: *const MvlString,
+) -> *mut MvlString {
+    let result = as_str(s).replace(as_str(from), as_str(to));
+    str_to_mvl(&result)
+}
+
+/// Split `s` on `sep`, returning a `MvlArray*` of `*mut MvlString` elements.
+///
+/// The returned array owns its element strings; use `mvl_string_ptr_array_drop`
+/// to free.
+///
+/// # Safety
+/// Both pointers must be valid `MvlString` pointers or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_str_split(
+    s: *const MvlString,
+    sep: *const MvlString,
+) -> *mut MvlArray {
+    let arr = mvl_array_new(std::mem::size_of::<*mut MvlString>(), 0);
+    let text = as_str(s);
+    let delimiter = as_str(sep);
+    for part in text.split(delimiter) {
+        let part_s = str_to_mvl(part);
+        mvl_array_push(arr, (&part_s as *const *mut MvlString).cast());
+    }
+    arr
+}
+
+/// Return the char-indexed substring `s[start..end]` (safe clamping).
+///
+/// # Safety
+/// `s` must be a valid `MvlString` pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_str_substring(
+    s: *const MvlString,
+    start: i64,
+    end: i64,
+) -> *mut MvlString {
+    let text = as_str(s);
+    let char_count = text.chars().count() as i64;
+    let lo = start.max(0).min(char_count) as usize;
+    let hi = end.max(0).min(char_count) as usize;
+    let result: String = text.chars().skip(lo).take(hi.saturating_sub(lo)).collect();
+    str_to_mvl(&result)
+}
+
+/// Return a one-character `MvlString` at char-index `i`, or `""` if out of range.
+///
+/// # Safety
+/// `s` must be a valid `MvlString` pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_str_char_at(s: *const MvlString, i: i64) -> *mut MvlString {
+    let text = as_str(s);
+    if i < 0 {
+        return str_to_mvl("");
+    }
+    match text.chars().nth(i as usize) {
+        Some(ch) => {
+            let mut buf = [0u8; 4];
+            let encoded = ch.encode_utf8(&mut buf);
+            str_to_mvl(encoded)
+        }
+        None => str_to_mvl(""),
+    }
+}
+
+/// Reconstruct a `MvlString` from a `MvlArray*` of `*mut MvlString` char elements.
+///
+/// The input array is as produced by `mvl_string_chars`: each element is a
+/// `*mut MvlString` pointer (one Unicode scalar value per element).
+///
+/// # Safety
+/// `arr` must be a valid `MvlArray*` or null.  Each element must be a valid
+/// `*mut MvlString` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_str_from_chars(arr: *const MvlArray) -> *mut MvlString {
+    if arr.is_null() {
+        return str_to_mvl("");
+    }
+    let len = (*arr).len as usize;
+    let mut result = String::new();
+    let es = (*arr).elem_size as usize;
+    for i in 0..len {
+        let elem_ptr = (*arr).ptr.add(i * es) as *const *const MvlString;
+        let cs = *elem_ptr;
+        if !cs.is_null() {
+            result.push_str(as_str(cs));
+        }
+    }
+    str_to_mvl(&result)
+}
+
+/// Return the raw byte at byte-index `i`, or 0 if out of range.
+///
+/// # Safety
+/// `s` must be a valid `MvlString` pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_str_byte_at(s: *const MvlString, i: i64) -> i64 {
+    if s.is_null() || i < 0 {
+        return 0;
+    }
+    let idx = i as usize;
+    let len = (*s).len as usize;
+    if idx >= len || (*s).ptr.is_null() {
+        return 0;
+    }
+    *(*s).ptr.add(idx) as i64
+}
+
+/// Reconstruct a `MvlString` from a `MvlArray*` of i64 byte values (UTF-8, lossy).
+///
+/// Each element in the array is an i64 representing one byte (0–255).
+///
+/// # Safety
+/// `arr` must be a valid `MvlArray*` or null.  Each element is an i64.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_str_from_bytes(arr: *const MvlArray) -> *mut MvlString {
+    if arr.is_null() {
+        return str_to_mvl("");
+    }
+    let len = (*arr).len as usize;
+    let es = (*arr).elem_size as usize;
+    let mut bytes: Vec<u8> = Vec::with_capacity(len);
+    for i in 0..len {
+        let elem_ptr = (*arr).ptr.add(i * es) as *const i64;
+        bytes.push((*elem_ptr & 0xFF) as u8);
+    }
+    let s = String::from_utf8_lossy(&bytes).into_owned();
+    str_to_mvl(&s)
+}
+
 // ── MvlArray operations ────────────────────────────────────────────────────────
 
 /// Append one element of `elem_size` bytes to the array, growing 2× if needed.
@@ -262,6 +492,62 @@ pub unsafe extern "C" fn mvl_array_len(a: *const MvlArray) -> u64 {
         return 0;
     }
     (*a).len
+}
+
+/// Return a new `MvlArray` containing elements `[start, end)` from `arr` (safe clamping).
+///
+/// # Safety
+/// `arr` must be a valid non-null `MvlArray` pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_slice(
+    arr: *const MvlArray,
+    start: i64,
+    end: i64,
+) -> *mut MvlArray {
+    if arr.is_null() {
+        let dummy = mvl_array_new(8, 0);
+        return dummy;
+    }
+    let es = (*arr).elem_size as usize;
+    let len = (*arr).len as i64;
+    let lo = start.max(0).min(len) as usize;
+    let hi = end.max(0).min(len) as usize;
+    let count = hi.saturating_sub(lo);
+    let out = mvl_array_new(es, count.max(1));
+    for i in lo..hi {
+        let src = (*arr).ptr.add(i * es);
+        mvl_array_push(out, src);
+    }
+    out
+}
+
+/// Concatenate `a` and `b`, returning a new `MvlArray` with all elements of `a`
+/// followed by all elements of `b`.  `a` and `b` must have the same `elem_size`.
+///
+/// # Safety
+/// `a` and `b` must be valid non-null `MvlArray` pointers or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_concat(a: *const MvlArray, b: *const MvlArray) -> *mut MvlArray {
+    let (es, la, lb) = match (a.is_null(), b.is_null()) {
+        (true, true) => return mvl_array_new(8, 0),
+        (false, true) => ((*a).elem_size as usize, (*a).len as usize, 0usize),
+        (true, false) => ((*b).elem_size as usize, 0usize, (*b).len as usize),
+        (false, false) => (
+            (*a).elem_size as usize,
+            (*a).len as usize,
+            (*b).len as usize,
+        ),
+    };
+    let out = mvl_array_new(es, (la + lb).max(1));
+    for i in 0..la {
+        let src = (*a).ptr.add(i * es);
+        mvl_array_push(out, src);
+    }
+    for i in 0..lb {
+        let src = (*b).ptr.add(i * es);
+        mvl_array_push(out, src);
+    }
+    out
 }
 
 // ── MvlMap operations ──────────────────────────────────────────────────────────

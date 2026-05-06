@@ -77,6 +77,9 @@ pub enum TokenKind {
     Test,
     /// `impl` — introduces a trait implementation block (`impl Trait for Type { … }`)
     Impl,
+    /// `builtin` — marks a function as having a runtime-provided implementation.
+    /// `builtin fn` declarations have no body; the compiler trusts the runtime.
+    Builtin,
 
     // ── Security labels ───────────────────────────────────────────────────
     Public,
@@ -182,6 +185,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Use => write!(f, "use"),
             TokenKind::Test => write!(f, "test"),
             TokenKind::Impl => write!(f, "impl"),
+            TokenKind::Builtin => write!(f, "builtin"),
             TokenKind::Public => write!(f, "Public"),
             TokenKind::Tainted => write!(f, "Tainted"),
             TokenKind::Secret => write!(f, "Secret"),
@@ -905,6 +909,7 @@ fn keyword_or_ident(s: String) -> TokenKind {
         "use" => TokenKind::Use,
         "test" => TokenKind::Test,
         "impl" => TokenKind::Impl,
+        "builtin" => TokenKind::Builtin,
         // Boolean literals
         "true" => TokenKind::True,
         "false" => TokenKind::False,

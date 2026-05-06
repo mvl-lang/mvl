@@ -132,13 +132,13 @@ pub type ProcessOutput = struct {
 /// Example:
 ///   let child = spawn("git", ["status"], Stdio::Inherit, Stdio::Capture, Stdio::Capture)?;
 ///   let out = wait(child)?;
-pub fn spawn(
+pub builtin fn spawn(
     cmd: Clean[String],
     args: List[Clean[String]],
     stdin_mode: Stdio,
     stdout_mode: Stdio,
     stderr_mode: Stdio,
-) -> Result[Child, String] ! ProcessSpawn { Err("") }
+) -> Result[Child, String] ! ProcessSpawn
 
 // ── Pipe I/O ────────────────────────────────────────────────────────────────
 
@@ -147,7 +147,7 @@ pub fn spawn(
 /// `handle` must have been obtained from `Child.stdin` when the child was
 /// spawned with `Stdio::Pipe` on stdin. Returns an error if the pipe is
 /// closed or broken.
-pub fn stdin_write(handle: ChildStdin, data: String) -> Result[Unit, String] ! ProcessSpawn { Err("") }
+pub builtin fn stdin_write(handle: ChildStdin, data: String) -> Result[Unit, String] ! ProcessSpawn
 
 /// Read available output from the child's stdout pipe.
 ///
@@ -157,7 +157,7 @@ pub fn stdin_write(handle: ChildStdin, data: String) -> Result[Unit, String] ! P
 ///
 /// Returns Tainted[String] because process output is external (untrusted) data.
 /// For buffered output use `Stdio::Capture` and read `ProcessOutput.stdout` after `wait`.
-pub fn stdout_read(handle: ChildStdout) -> Result[Tainted[String], String] ! ProcessSpawn { Err("") }
+pub builtin fn stdout_read(handle: ChildStdout) -> Result[Tainted[String], String] ! ProcessSpawn
 
 /// Read available output from the child's stderr pipe.
 ///
@@ -166,7 +166,7 @@ pub fn stdout_read(handle: ChildStdout) -> Result[Tainted[String], String] ! Pro
 ///
 /// Returns Tainted[String] because process output is external (untrusted) data.
 /// For buffered output use `Stdio::Capture` and read `ProcessOutput.stderr` after `wait`.
-pub fn stderr_read(handle: ChildStderr) -> Result[Tainted[String], String] ! ProcessSpawn { Err("") }
+pub builtin fn stderr_read(handle: ChildStderr) -> Result[Tainted[String], String] ! ProcessSpawn
 
 // ── Process lifecycle ───────────────────────────────────────────────────────
 
@@ -179,7 +179,7 @@ pub fn stderr_read(handle: ChildStderr) -> Result[Tainted[String], String] ! Pro
 /// Returns a `ProcessOutput` containing the exit status and any output
 /// buffered via `Stdio::Capture`. `ProcessOutput.stdout` and `.stderr` are
 /// `Some` when the corresponding mode was `Capture`, `None` otherwise.
-pub fn wait(child: Child) -> Result[ProcessOutput, String] ! ProcessSpawn { Err("") }
+pub builtin fn wait(child: Child) -> Result[ProcessOutput, String] ! ProcessSpawn
 
 /// Send SIGKILL to a child process (Unix) or call TerminateProcess (Windows).
 ///
@@ -189,7 +189,7 @@ pub fn wait(child: Child) -> Result[ProcessOutput, String] ! ProcessSpawn { Err(
 ///   let out = wait(child)?;
 ///
 /// Returns an error if the process has already exited or the kill fails.
-pub fn kill(child: Child) -> Result[Child, String] ! ProcessSpawn { Err("") }
+pub builtin fn kill(child: Child) -> Result[Child, String] ! ProcessSpawn
 
 // ── ExitStatus helpers (pure) ──────────────────────────────────────────────
 
