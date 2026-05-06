@@ -877,6 +877,86 @@ impl<'ctx> LlvmBackend<'ctx> {
                 self.emit_print(args)
             }
             "format" => self.emit_format(args),
+            // assert_eq / assert_ne — polymorphic comparisons.
+            // core.mvl declares assert_eq(String, String) but call sites may pass Int or Bool.
+            // Emit a type-appropriate comparison and trap on failure.
+            "assert_eq" | "assert_ne" if args.len() == 2 => {
+                let expect_eq = name == "assert_eq";
+                let left = self.emit_expr(&args[0])?;
+                let right = self.emit_expr(&args[1])?;
+                let fail_cond: Option<inkwell::values::IntValue<'ctx>> = match (left, right) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => {
+                        let pred = if expect_eq {
+                            inkwell::IntPredicate::NE
+                        } else {
+                            inkwell::IntPredicate::EQ
+                        };
+                        Some(
+                            self.builder
+                                .build_int_compare(pred, l, r, "assert_cmp")
+                                .unwrap(),
+                        )
+                    }
+                    (BasicValueEnum::PointerValue(l), BasicValueEnum::PointerValue(r)) => {
+                        let eq_fn = self.get_mvl_string_eq();
+                        let call = self
+                            .builder
+                            .build_call(eq_fn, &[l.into(), r.into()], "str_eq")
+                            .unwrap();
+                        use inkwell::values::AnyValue;
+                        let eq_i32 = BasicValueEnum::try_from(call.as_any_value_enum())
+                            .ok()
+                            .and_then(|v| {
+                                if let BasicValueEnum::IntValue(i) = v {
+                                    Some(i)
+                                } else {
+                                    None
+                                }
+                            })?;
+                        let zero = self.context.i32_type().const_int(0, false);
+                        let is_eq = self
+                            .builder
+                            .build_int_compare(
+                                inkwell::IntPredicate::NE,
+                                eq_i32,
+                                zero,
+                                "str_eq_bool",
+                            )
+                            .unwrap();
+                        let pred = if expect_eq {
+                            // fail when not equal → invert is_eq
+                            self.builder.build_not(is_eq, "assert_cmp").unwrap()
+                        } else {
+                            // fail when equal → is_eq itself is the fail condition
+                            is_eq
+                        };
+                        Some(pred)
+                    }
+                    _ => None,
+                };
+                if let Some(cond) = fail_cond {
+                    let trap_fn = self.module.get_function("llvm.trap").unwrap_or_else(|| {
+                        let trap_ty = self.context.void_type().fn_type(&[], false);
+                        self.module.add_function("llvm.trap", trap_ty, None)
+                    });
+                    let parent = self
+                        .builder
+                        .get_insert_block()
+                        .unwrap()
+                        .get_parent()
+                        .unwrap();
+                    let fail_bb = self.context.append_basic_block(parent, "assert_fail");
+                    let ok_bb = self.context.append_basic_block(parent, "assert_ok");
+                    self.builder
+                        .build_conditional_branch(cond, fail_bb, ok_bb)
+                        .unwrap();
+                    self.builder.position_at_end(fail_bb);
+                    self.builder.build_call(trap_fn, &[], "trap").unwrap();
+                    self.builder.build_unreachable().unwrap();
+                    self.builder.position_at_end(ok_bb);
+                }
+                None
+            }
             // range(start, end) as a value → { i64 start, i64 end } range struct
             "range" if args.len() == 2 => {
                 let start = match self.emit_expr(&args[0])? {

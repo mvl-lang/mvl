@@ -3427,20 +3427,18 @@ fn run_llvm_prog(
             print!(".");
             let _ = std::io::Write::flush(&mut std::io::stdout());
         }
-    } else {
-        if !quiet {
-            println!("\n  FAIL: {file_str}");
-            if is_pattern {
-                println!("    pattern:  {:?}", expected_trimmed);
-            } else {
-                println!("    expected: {:?}", expected_trimmed);
-            }
-            println!("    got:      {:?}", actual_trimmed);
-            if verbose && !ir.is_empty() {
-                println!("    --- IR ---");
-                for line in ir.lines().take(40) {
-                    println!("    {line}");
-                }
+    } else if !quiet {
+        println!("\n  FAIL: {file_str}");
+        if is_pattern {
+            println!("    pattern:  {:?}", expected_trimmed);
+        } else {
+            println!("    expected: {:?}", expected_trimmed);
+        }
+        println!("    got:      {:?}", actual_trimmed);
+        if verbose && !ir.is_empty() {
+            println!("    --- IR ---");
+            for line in ir.lines().take(40) {
+                println!("    {line}");
             }
         }
     }

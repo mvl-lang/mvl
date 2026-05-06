@@ -334,7 +334,7 @@ total fn greet(name: String) -> Unit ! Console {
 Function — capability annotation
 ===============================================================================
 
-total fn use_db(iso db: &DbConn) -> Unit {
+total fn use_db(iso db: val DbConn) -> Unit {
   return;
 }
 
@@ -874,7 +874,7 @@ Borrow expression — shared
 ===============================================================================
 
 total fn take_ref(x: Int) -> Int {
-  let n: Int = ref_id(&x);
+  let n: Int = ref_id(val x);
   return n;
 }
 
@@ -921,7 +921,7 @@ Borrow expression — mutable
 ===============================================================================
 
 total fn mutate(x: Int) -> Unit {
-  update(&mut x);
+  update(ref x);
 }
 
 -------------------------------------------------------------------------------
