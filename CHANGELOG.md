@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.79.1] — 2026-05-06
+
+### Fixed
+
+- **Stdlib type stubs suppression** — LLVM backend now correctly suppresses type stubs for types imported from Rust-backed stdlib modules, preventing spurious duplicate symbol errors. Closes #530.
+
 ## [0.78.1] — 2026-05-05
 
 ### Added
