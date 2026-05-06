@@ -1112,18 +1112,15 @@
       "type": "SEQ",
       "members": [
         {
-          "type": "STRING",
-          "value": "&"
-        },
-        {
           "type": "CHOICE",
           "members": [
             {
               "type": "STRING",
-              "value": "mut"
+              "value": "val"
             },
             {
-              "type": "BLANK"
+              "type": "STRING",
+              "value": "ref"
             }
           ]
         },
@@ -2343,18 +2340,15 @@
         "type": "SEQ",
         "members": [
           {
-            "type": "STRING",
-            "value": "&"
-          },
-          {
             "type": "CHOICE",
             "members": [
               {
                 "type": "STRING",
-                "value": "mut"
+                "value": "val"
               },
               {
-                "type": "BLANK"
+                "type": "STRING",
+                "value": "ref"
               }
             ]
           },

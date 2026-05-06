@@ -15,7 +15,7 @@
 
 use std.json.{Value, encode}
 
-fn main() -> Unit ! Console {
+partial fn main() -> Unit ! Console {
     println(encode(Value::Null));
     println(encode(Value::Bool(true)));
     println(encode(Value::Bool(false)));
