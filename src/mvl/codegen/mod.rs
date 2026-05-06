@@ -40,6 +40,16 @@ use crate::mvl::parser::ast::{
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+/// Returns true for prelude functions whose call sites are inlined by the LLVM
+/// backend (e.g. `println` → `printf`). Their empty prelude stubs must not be
+/// emitted, as they would produce dead code that shadows the inline paths.
+fn is_inlined_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        "println" | "eprintln" | "print" | "format" | "assert" | "assert_eq" | "panic"
+    )
+}
+
 /// A reusable LLVM compiler that owns its `Context`.
 ///
 /// Construct once and call [`LlvmCompiler::compile_to_ir`] repeatedly to avoid
@@ -457,9 +467,11 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
         // Second pass: emit bodies for non-generic functions only.
         // Generic functions are emitted on-demand when their call sites are reached.
+        // Prelude stubs for inlined builtins are skipped — their call sites emit
+        // inline IR directly (e.g. printf for println), so the stub would be dead code.
         for decl in &prog.declarations {
             if let Decl::Fn(fd) = decl {
-                if !fd.is_test && fd.type_params.is_empty() {
+                if !fd.is_test && fd.type_params.is_empty() && !is_inlined_builtin(&fd.name) {
                     self.emit_fn(fd);
                 }
             }
