@@ -4536,3 +4536,28 @@ fn bitwise_and_label_downgrade_rejected() {
         "Secret[Int] & Public[Int] result cannot flow to Public[Int], got: {errors:?}"
     );
 }
+
+// ── builtin fn checker tests (#534) ──────────────────────────────────────
+
+#[test]
+fn builtin_fn_with_non_unit_return_accepted() {
+    // GIVEN: pub builtin fn len(s: String) -> Int  (no body)
+    // THEN: no type errors — checker skips body checking for builtin functions
+    let errors = errors_for("pub builtin fn len(s: String) -> Int");
+    assert!(
+        errors.is_empty(),
+        "builtin fn with non-Unit return should produce no errors, got: {errors:?}"
+    );
+}
+
+#[test]
+fn builtin_fn_callable_from_user_code() {
+    // GIVEN: a builtin fn declared and called in user code
+    // THEN: call site resolves without type errors
+    let src = "pub builtin fn len(s: String) -> Int\nfn use_len(s: String) -> Int { len(s) }";
+    let errors = errors_for(src);
+    assert!(
+        errors.is_empty(),
+        "call to builtin fn should type-check cleanly, got: {errors:?}"
+    );
+}

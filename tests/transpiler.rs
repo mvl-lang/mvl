@@ -2246,3 +2246,39 @@ fn stdlib_stub_suppression_works_for_brace_import_syntax() {
         "Path must not be stubbed when imported via brace syntax:\n{rust}"
     );
 }
+
+/// A `builtin fn` in the prelude is NOT emitted as Rust code — the runtime
+/// provides the implementation.  Emitting it would produce dead code or a
+/// `todo!()` stub that shadows the real runtime function.
+#[test]
+fn prelude_builtin_fn_is_not_emitted() {
+    let prelude_src = "pub builtin fn len(s: String) -> Int";
+    let user_src = "fn main() -> Unit { }";
+    let prelude = vec![parse_prog(prelude_src)];
+    let user_prog = parse_prog(user_src);
+
+    let out = transpile_project("crate", &user_prog, &[], &prelude);
+    assert!(
+        !out.main_rs.contains("fn len("),
+        "builtin fn must not be emitted into Rust output:\n{}",
+        out.main_rs
+    );
+}
+
+/// A `builtin fn` with a non-Unit return type must not produce a `todo!()` stub.
+/// This would previously happen because an empty body + non-Unit return was
+/// treated as a missing implementation.
+#[test]
+fn prelude_builtin_fn_does_not_produce_todo_stub() {
+    let prelude_src = "pub builtin fn len(s: String) -> Int";
+    let user_src = "fn main() -> Unit { }";
+    let prelude = vec![parse_prog(prelude_src)];
+    let user_prog = parse_prog(user_src);
+
+    let out = transpile_project("crate", &user_prog, &[], &prelude);
+    assert!(
+        !out.main_rs.contains("todo!"),
+        "builtin fn must not produce a todo! stub:\n{}",
+        out.main_rs
+    );
+}
