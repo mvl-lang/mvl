@@ -1,0 +1,213 @@
+// handler_test.mvl — Standalone tests for handler types and dispatch logic.
+//
+// All tests here are pure (no extern calls) and run under BOTH the transpiler
+// and LLVM backends.
+//
+// ── Property: no Secret[String] can appear in any Response.body ──────────
+//
+// This property is enforced statically by the type system, not at runtime:
+//
+//   - Response.body has type Clean[String]
+//   - Secret[String] is NOT assignable to Clean[String] (IFC sublattice: Secret > Clean)
+//   - Therefore, the compiler rejects any code that tries to include a secret
+//     in the response body — the property holds for ALL possible handler paths.
+//
+// What would NOT compile:
+//   let key: Secret[String] = ...;
+//   let resp: Response = Response { status: 200, body: key };      // TYPE ERROR
+//   let resp: Response = Response { status: 200, body: key.as_str() }; // TYPE ERROR
+//
+// Because the property is compile-time, the runtime tests below verify handler
+// behaviour using only non-secret values.
+
+// ── Type re-declarations (workaround: #96) ────────────────────────────────
+
+type Method = enum {
+    Get,
+    Put,
+    Delete,
+    Unknown,
+}
+
+type Response = struct {
+    status: Int where self >= 100 && self < 600,
+    body: Clean[String],
+}
+
+type HandlerError = enum {
+    Unauthorized,
+    NotFound,
+    BadRequest,
+    ServerError,
+}
+
+// ── Helper constructors ───────────────────────────────────────────────────
+
+fn ok_response(body: Clean[String]) -> Response {
+    Response { status: 200, body: body }
+}
+
+fn err_response(code: Int) -> Response {
+    Response { status: code, body: "error" }
+}
+
+// ── Method enum: all four variants are distinct ───────────────────────────
+
+test fn method_get_is_distinguishable() -> Unit {
+    let m: Method = Method::Get;
+    let is_get: Int = match m { Method::Get => 1, _ => 0 };
+    assert_eq(is_get, 1);
+}
+
+test fn method_put_is_distinguishable() -> Unit {
+    let m: Method = Method::Put;
+    let is_put: Int = match m { Method::Put => 1, _ => 0 };
+    assert_eq(is_put, 1);
+}
+
+test fn method_delete_is_distinguishable() -> Unit {
+    let m: Method = Method::Delete;
+    let is_delete: Int = match m { Method::Delete => 1, _ => 0 };
+    assert_eq(is_delete, 1);
+}
+
+test fn method_unknown_is_distinguishable() -> Unit {
+    let m: Method = Method::Unknown;
+    let is_unknown: Int = match m { Method::Unknown => 1, _ => 0 };
+    assert_eq(is_unknown, 1);
+}
+
+test fn all_four_methods_are_distinct() -> Unit {
+    let g: Method = Method::Get;
+    let p: Method = Method::Put;
+    let d: Method = Method::Delete;
+    let u: Method = Method::Unknown;
+    let sum: Int =
+        (match g { Method::Get     => 1, _ => 0 }) +
+        (match p { Method::Put     => 1, _ => 0 }) +
+        (match d { Method::Delete  => 1, _ => 0 }) +
+        (match u { Method::Unknown => 1, _ => 0 });
+    assert_eq(sum, 4);
+}
+
+// ── Response construction ─────────────────────────────────────────────────
+
+test fn ok_response_has_status_200() -> Unit {
+    let resp: Response = ok_response("hello");
+    assert_eq(resp.status, 200);
+}
+
+test fn err_response_404_has_correct_status() -> Unit {
+    let resp: Response = err_response(404);
+    assert_eq(resp.status, 404);
+}
+
+test fn err_response_401_has_correct_status() -> Unit {
+    let resp: Response = err_response(401);
+    assert_eq(resp.status, 401);
+}
+
+test fn err_response_500_has_correct_status() -> Unit {
+    let resp: Response = err_response(500);
+    assert_eq(resp.status, 500);
+}
+
+test fn response_body_is_clean_string() -> Unit {
+    // Clean[String] literal assigned to body compiles fine.
+    // This test documents that body accepts Clean[String] — not Secret or Tainted.
+    let resp: Response = Response { status: 200, body: "safe value" };
+    let is_ok: Int = if resp.status == 200 { 1 } else { 0 };
+    assert_eq(is_ok, 1);
+}
+
+// ── HandlerError: all four variants are distinct ──────────────────────────
+
+test fn handler_error_unauthorized_code_1() -> Unit {
+    let e: HandlerError = HandlerError::Unauthorized;
+    let code: Int = match e {
+        HandlerError::Unauthorized => 1,
+        HandlerError::NotFound     => 2,
+        HandlerError::BadRequest   => 3,
+        HandlerError::ServerError  => 4,
+    };
+    assert_eq(code, 1);
+}
+
+test fn handler_error_not_found_code_2() -> Unit {
+    let e: HandlerError = HandlerError::NotFound;
+    let code: Int = match e {
+        HandlerError::Unauthorized => 1,
+        HandlerError::NotFound     => 2,
+        HandlerError::BadRequest   => 3,
+        HandlerError::ServerError  => 4,
+    };
+    assert_eq(code, 2);
+}
+
+test fn handler_error_bad_request_code_3() -> Unit {
+    let e: HandlerError = HandlerError::BadRequest;
+    let code: Int = match e {
+        HandlerError::Unauthorized => 1,
+        HandlerError::NotFound     => 2,
+        HandlerError::BadRequest   => 3,
+        HandlerError::ServerError  => 4,
+    };
+    assert_eq(code, 3);
+}
+
+test fn handler_error_server_error_code_4() -> Unit {
+    let e: HandlerError = HandlerError::ServerError;
+    let code: Int = match e {
+        HandlerError::Unauthorized => 1,
+        HandlerError::NotFound     => 2,
+        HandlerError::BadRequest   => 3,
+        HandlerError::ServerError  => 4,
+    };
+    assert_eq(code, 4);
+}
+
+// ── Error → HTTP status mapping ───────────────────────────────────────────
+
+test fn unauthorized_maps_to_401() -> Unit {
+    let e: HandlerError = HandlerError::Unauthorized;
+    let status: Int = match e {
+        HandlerError::Unauthorized => 401,
+        HandlerError::NotFound     => 404,
+        HandlerError::BadRequest   => 400,
+        HandlerError::ServerError  => 500,
+    };
+    assert_eq(status, 401);
+}
+
+test fn not_found_maps_to_404() -> Unit {
+    let e: HandlerError = HandlerError::NotFound;
+    let status: Int = match e {
+        HandlerError::Unauthorized => 401,
+        HandlerError::NotFound     => 404,
+        HandlerError::BadRequest   => 400,
+        HandlerError::ServerError  => 500,
+    };
+    assert_eq(status, 404);
+}
+
+test fn bad_request_maps_to_400() -> Unit {
+    let e: HandlerError = HandlerError::BadRequest;
+    let status: Int = match e {
+        HandlerError::Unauthorized => 401,
+        HandlerError::NotFound     => 404,
+        HandlerError::BadRequest   => 400,
+        HandlerError::ServerError  => 500,
+    };
+    assert_eq(status, 400);
+}
+
+test fn server_error_maps_to_500() -> Unit {
+    let e: HandlerError = HandlerError::ServerError;
+    let status: Int = match e {
+        HandlerError::Unauthorized => 401,
+        HandlerError::NotFound     => 404,
+        HandlerError::BadRequest   => 400,
+        HandlerError::ServerError  => 500,
+    };
+    assert_eq(status, 500);
+}

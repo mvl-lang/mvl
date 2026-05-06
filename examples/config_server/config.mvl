@@ -1,0 +1,45 @@
+// config.mvl — Application configuration types with refinement constraints.
+//
+// Demonstrates:
+//   1. Req 10 (Refinements): port, timeout, max_connections carry compile-time bounds.
+//   2. Req 1  (Types): Config struct with typed fields; ConfigError named failure catalogue.
+//   3. Req 11 (IFC): api_key field is Secret[String] — the type checker prevents it
+//      from appearing in any Response body, println() call, or log_*() argument.
+//
+// No effects, no extern — pure type declarations.
+// Assurance note: 0 extern blocks.
+
+// Valid TCP port: excludes port 0 (reserved) and values above 65535.
+pub type Port = Int where self > 0 && self <= 65535
+
+// Request timeout in seconds: bounded to [0, 300].
+pub type Timeout = Int where self >= 0 && self <= 300
+
+// Maximum concurrent connections: positive and bounded to 10 000.
+pub type MaxConns = Int where self > 0 && self <= 10000
+
+// Application configuration.
+//
+// IFC invariant: api_key is Secret[String]. The compiler rejects any attempt to:
+//   - pass api_key to println() or log_info() / log_warn() / log_error()
+//   - assign api_key to a Response.body field (which requires Clean[String])
+//   - return api_key from a function with non-Secret return type
+//
+// api_key may only flow to extern "rust" trust boundary functions (see storage.mvl).
+pub type Config = struct {
+    port: Port,
+    timeout: Timeout,
+    max_connections: MaxConns,
+    api_key: Secret[String],
+    debug_mode: Bool,
+}
+
+// All ways configuration loading can fail.
+pub type ConfigError = enum {
+    FileNotFound,
+    ParseError,
+    InvalidPort,
+    InvalidTimeout,
+    InvalidMaxConns,
+    MissingApiKey,
+}
