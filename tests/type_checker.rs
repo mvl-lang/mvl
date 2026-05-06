@@ -4245,7 +4245,7 @@ fn borrow_expr_shared_of_mutably_borrowed_rejected() {
             .errors
             .iter()
             .any(|e| matches!(e, CheckError::AliasingMutableBorrow { .. })),
-        "expected AliasingMutableBorrow for &x while x is mutably borrowed, got: {:?}",
+        "expected AliasingMutableBorrow for val x while x is mutably borrowed, got: {:?}",
         result.errors
     );
 }

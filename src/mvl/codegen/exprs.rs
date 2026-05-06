@@ -1122,7 +1122,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 // L5-15 + L5-08: single lookup for user-defined function metadata.
                 if let Some(fd) = self.fn_decls.get(name).cloned() {
                     // L5-15: mark heap-typed value arguments as moved (ownership
-                    // transfers to the callee). Borrow params (&T) are skipped.
+                    // transfers to the callee). Borrow params (val T/ref T) are skipped.
                     for (arg, param) in args.iter().zip(fd.params.iter()) {
                         if matches!(&param.ty, crate::mvl::parser::ast::TypeExpr::Ref { .. }) {
                             continue;

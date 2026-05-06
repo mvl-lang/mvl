@@ -2,11 +2,11 @@
 //! (Spec 009 Req 2, issues #234 and #365/#304).
 //!
 //! Phase A elides `.clone()` when a variable is used for the last time.
-//! Phase B infers `&T` for read-only parameters, eliminating clones entirely
-//! at call sites by emitting `&x` instead of `x` or `x.clone()`.
+//! Phase B infers borrow params (`val T`) for read-only parameters, eliminating
+//! clones entirely at call sites by emitting `&x` instead of `x` or `x.clone()`.
 //!
 //! Test taxonomy:
-//! - `borrow_*`  — Phase B: callee param read-only → inferred as &T → call site emits &x
+//! - `borrow_*`  — Phase B: callee param read-only → inferred as `val T` → call site emits &x
 //! - `move_*`    — Phase A: callee NOT inferred (returned, etc.) → last use is a move
 //! - `clone_*`   — cases where Phase B cannot infer a borrow, so Phase A still applies
 
@@ -41,7 +41,7 @@ fn assert_not_contains(src: &str, snippet: &str) {
 
 // ── Phase B: read-only param → inferred borrow → &x at call sites ────────────
 
-/// Phase B: single-use function param — callee only reads field → inferred &T.
+/// Phase B: single-use function param — callee only reads field → inferred as borrow.
 /// Call site emits &b, not a move.
 #[test]
 fn borrow_single_use_param() {
@@ -58,7 +58,7 @@ fn process(b: Buf) -> String { use_buf(b) }
     assert_not_contains(&rust, "use_buf(b)");
 }
 
-/// Phase B: single-use local variable — callee inferred as &T → call emits &b.
+/// Phase B: single-use local variable — callee inferred as borrow → call emits &b.
 #[test]
 fn borrow_single_use_let_binding() {
     let src = r#"
@@ -74,7 +74,7 @@ fn process(s: String) -> String {
     assert_not_contains(&rust, "use_buf(b.clone())");
 }
 
-/// Phase B: multiple uses — callee inferred as &T → all call sites use &b, no clones.
+/// Phase B: multiple uses — callee inferred as borrow → all call sites use &b, no clones.
 #[test]
 fn borrow_multi_use_param_no_clone_needed() {
     let src = r#"
@@ -92,7 +92,7 @@ fn double(b: Buf) -> String {
     assert_not_contains(&rust, "peek(b.clone())");
 }
 
-/// Phase B: sequence of calls — callee inferred as &T → no clone on any call.
+/// Phase B: sequence of calls — callee inferred as borrow → no clone on any call.
 #[test]
 fn borrow_sequence_no_clone_needed() {
     let src = r#"
@@ -112,7 +112,7 @@ fn pipeline(b: Buf) -> String {
     assert_not_contains(&rust, "take_buf(b.clone())");
 }
 
-/// Phase B: param used inside a for-loop — callee inferred as &T → &b at every call.
+/// Phase B: param used inside a for-loop — callee inferred as borrow → &b at every call.
 #[test]
 fn borrow_var_used_in_loop_no_clone_needed() {
     let src = r#"
@@ -173,7 +173,7 @@ partial fn repeat_while(b: Buf, mut n: Int) -> Unit {
     assert_not_contains(&rust, "inspect(b.clone())");
 }
 
-/// Phase B: param used only in while condition — callee inferred as &T → &b.
+/// Phase B: param used only in while condition — callee inferred as borrow → &b.
 #[test]
 fn borrow_var_used_only_in_while_condition_no_clone_needed() {
     let src = r#"
@@ -224,7 +224,7 @@ fn process(b: Buf, flag: Bool) -> String {
     assert_not_contains(&rust, "take(b)");
 }
 
-/// Phase B: param passed to functions in a match expression — inferred &T at call sites.
+/// Phase B: param passed to functions in a match expression — inferred as borrow at call sites.
 #[test]
 fn borrow_scrutinee_call_and_arm_call_no_clone() {
     let src = r#"
@@ -374,8 +374,8 @@ fn caller(xs: List[Int]) -> Int { process(xs) }
 
 // ── Fix: callee signature emits &T for inferred-borrow params (AC #1) ─────────
 
-/// Issue #365 AC #1: a read-only struct param is emitted as &T in the
-/// callee's Rust function signature.
+/// Issue #365 AC #1: a read-only struct param is emitted as `&T` in the
+/// callee's Rust function signature (MVL `val T` → Rust `&T`).
 #[test]
 fn inferred_borrow_emits_ref_in_callee_signature() {
     let src = r#"

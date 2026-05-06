@@ -686,7 +686,7 @@ fn process(c: Container) -> Unit ! Console {
 
 // ── Spec 009 Req 2: Clone-on-pass ─────────────────────────────────────────
 
-/// Phase B (borrow inference): read-only struct params are inferred as &T.
+/// Phase B (borrow inference): read-only struct params (`val T`) are emitted as `&T` in Rust.
 /// Call sites emit &p (borrow) rather than move or clone.
 /// Spec 009 Req 2.
 #[test]
