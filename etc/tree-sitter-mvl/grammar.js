@@ -184,7 +184,7 @@ module.exports = grammar({
 
     fn_decl: ($) =>
       seq(
-        optional($.totality),
+        optional(choice($.totality, "builtin")),
         optional($.security_modifier),
         "fn",
         $.identifier,
@@ -196,7 +196,7 @@ module.exports = grammar({
         $.return_type,
         optional(seq("!", $.effect_list)),
         optional(seq("where", $.constraints)),
-        $.block
+        optional($.block) // builtin fns have no body; required for non-builtin
       ),
 
     totality: ($) => choice("total", "partial"),

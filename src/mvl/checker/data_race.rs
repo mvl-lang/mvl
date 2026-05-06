@@ -332,6 +332,7 @@ mod tests {
         Decl::Fn(FnDecl {
             visible: false,
             is_test: false,
+            is_builtin: false,
             totality: None,
             name: name.into(),
             type_params: vec![],

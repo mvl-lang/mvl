@@ -173,6 +173,9 @@ pub struct FnDecl {
     pub visible: bool,
     /// Whether the function is a test (`test fn`).
     pub is_test: bool,
+    /// Whether the function has a runtime-provided implementation (`builtin fn`).
+    /// Builtin functions have no body; the compiler trusts the runtime to supply one.
+    pub is_builtin: bool,
     pub totality: Option<Totality>,
     pub name: String,
     pub type_params: Vec<GenericParam>,
@@ -813,6 +816,7 @@ mod tests {
         let decl = FnDecl {
             visible: false,
             is_test: false,
+            is_builtin: false,
             totality: Some(Totality::Total),
             name: "add".into(),
             type_params: vec![],

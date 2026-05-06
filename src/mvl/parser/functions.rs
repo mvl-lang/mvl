@@ -2,6 +2,7 @@
 //!
 //! Parses:
 //! - `[total|partial] fn Name [[TypeParams]] (params) -> ReturnType [! Effects] [where Constraints] { body }`
+//! - `builtin fn Name [[TypeParams]] (params) -> ReturnType [! Effects]` — runtime-provided, no body
 //! - `test fn Name() -> Unit { body }` — unit test function
 //! - Parameters with optional capability (`iso`/`val`/`ref`/`tag`), `mut`, type, and refinement
 //! - Totality annotations, effect lists, and where-clause constraints
@@ -15,8 +16,8 @@ use crate::mvl::parser::{ParseError, Parser};
 impl Parser {
     // ── Function declarations ─────────────────────────────────────────────
 
-    /// Parse `[test] [total|partial] fn Name …`.
-    /// Pre-condition: current token is `test`, `total`, `partial`, or `fn`.
+    /// Parse `[test] [total|partial|builtin] fn Name …`.
+    /// Pre-condition: current token is `test`, `total`, `partial`, `builtin`, or `fn`.
     pub fn parse_fn_decl(&mut self) -> Result<FnDecl, ()> {
         let start = self.peek_span();
 
@@ -39,6 +40,30 @@ impl Parser {
                 Some(Totality::Partial)
             }
             _ => None,
+        };
+
+        // Optional `builtin` marker — mutually exclusive with totality and test
+        let is_builtin = if *self.peek_kind() == TokenKind::Builtin {
+            if totality.is_some() {
+                let err = ParseError {
+                    message: "`builtin` cannot be combined with `total` or `partial`".into(),
+                    span: self.peek_span(),
+                };
+                self.push_recover(err);
+                return Err(());
+            }
+            if is_test {
+                let err = ParseError {
+                    message: "`builtin` cannot be combined with `test`".into(),
+                    span: self.peek_span(),
+                };
+                self.push_recover(err);
+                return Err(());
+            }
+            self.advance();
+            true
+        } else {
+            false
         };
 
         // `fn` keyword
@@ -71,13 +96,30 @@ impl Parser {
         // Optional where-clause constraints: `where T: Trait, U: Trait`
         let constraints = self.parse_where_constraints();
 
-        // Body block
-        let body = self.parse_block()?;
+        // Body block: required for normal functions, forbidden for builtin functions.
+        let body = if is_builtin {
+            if matches!(self.peek_kind(), TokenKind::LBrace) {
+                let err = ParseError {
+                    message: "`builtin` functions may not have a body".into(),
+                    span: self.peek_span(),
+                };
+                self.push_recover(err);
+                return Err(());
+            }
+            // Use an empty block to represent the absent body.
+            crate::mvl::parser::ast::Block {
+                stmts: vec![],
+                span: self.peek_span(),
+            }
+        } else {
+            self.parse_block()?
+        };
 
         let span = self.span_from(start);
         Ok(FnDecl {
             visible: false, // set by parse_decl when `pub` prefix is present
             is_test,
+            is_builtin,
             totality,
             name,
             type_params,
@@ -281,7 +323,11 @@ impl Parser {
                 d.visible = visible;
                 Ok(Decl::Type(d))
             }
-            TokenKind::Fn | TokenKind::Total | TokenKind::Partial | TokenKind::Test => {
+            TokenKind::Fn
+            | TokenKind::Total
+            | TokenKind::Partial
+            | TokenKind::Test
+            | TokenKind::Builtin => {
                 let mut d = self.parse_fn_decl()?;
                 d.visible = visible;
                 if d.is_test && d.visible {
@@ -985,5 +1031,92 @@ fn main() -> String { greet(String::new()) }"#;
             "expected helpful error message, got: {}",
             p.errors[0].message
         );
+    }
+
+    // ── builtin keyword tests ─────────────────────────────────────────────
+
+    #[test]
+    fn parse_builtin_fn_simple() {
+        // GIVEN: builtin fn len(s: String) -> Int
+        // THEN: FnDecl with is_builtin=true, no body stmts
+        let d = fn_decl("builtin fn len(s: String) -> Int");
+        assert!(d.is_builtin);
+        assert!(!d.is_test);
+        assert_eq!(d.totality, None);
+        assert_eq!(d.name, "len");
+        assert_eq!(d.params.len(), 1);
+        assert!(d.body.stmts.is_empty());
+    }
+
+    #[test]
+    fn parse_pub_builtin_fn() {
+        // GIVEN: pub builtin fn len(s: String) -> Int
+        // THEN: FnDecl with visible=true, is_builtin=true
+        let src = "pub builtin fn len(s: String) -> Int";
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        assert!(p.errors.is_empty(), "parse errors: {:?}", p.errors);
+        assert_eq!(prog.declarations.len(), 1);
+        if let Decl::Fn(fd) = &prog.declarations[0] {
+            assert!(fd.visible);
+            assert!(fd.is_builtin);
+            assert_eq!(fd.name, "len");
+        } else {
+            panic!("expected FnDecl");
+        }
+    }
+
+    #[test]
+    fn parse_builtin_fn_with_effects() {
+        // GIVEN: builtin fn read(path: Path) -> Result[String, IOError] ! FileRead
+        // THEN: is_builtin=true, effects=[FileRead]
+        let d = fn_decl("builtin fn read(path: Path) -> Result[String, IOError] ! FileRead");
+        assert!(d.is_builtin);
+        assert_eq!(d.effects.len(), 1);
+        assert_eq!(d.effects[0].name, "FileRead");
+    }
+
+    #[test]
+    fn builtin_fn_with_body_is_rejected() {
+        // GIVEN: builtin fn len(s: String) -> Int { 0 }
+        // THEN: parse error — builtin functions may not have a body
+        let src = "builtin fn len(s: String) -> Int { 0 }";
+        let (mut p, _) = Parser::new(src);
+        p.parse_program();
+        assert!(
+            !p.errors.is_empty(),
+            "expected parse error for builtin with body"
+        );
+        assert!(
+            p.errors[0].message.contains("builtin"),
+            "expected builtin error, got: {}",
+            p.errors[0].message
+        );
+    }
+
+    #[test]
+    fn builtin_and_total_combined_is_rejected() {
+        // GIVEN: total builtin fn len(s: String) -> Int
+        // THEN: parse error — builtin cannot combine with total
+        let src = "total builtin fn len(s: String) -> Int";
+        let (mut p, _) = Parser::new(src);
+        p.parse_program();
+        assert!(
+            !p.errors.is_empty(),
+            "expected parse error for total builtin"
+        );
+        assert!(
+            p.errors[0].message.contains("builtin"),
+            "expected builtin error, got: {}",
+            p.errors[0].message
+        );
+    }
+
+    #[test]
+    fn normal_fn_is_not_builtin() {
+        // GIVEN: fn greet(name: String) -> String { }
+        // THEN: is_builtin=false
+        let d = fn_decl("fn greet(name: String) -> String { }");
+        assert!(!d.is_builtin);
     }
 }

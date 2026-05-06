@@ -471,7 +471,11 @@ impl<'ctx> LlvmBackend<'ctx> {
         // inline IR directly (e.g. printf for println), so the stub would be dead code.
         for decl in &prog.declarations {
             if let Decl::Fn(fd) = decl {
-                if !fd.is_test && fd.type_params.is_empty() && !is_inlined_builtin(&fd.name) {
+                if !fd.is_test
+                    && !fd.is_builtin
+                    && fd.type_params.is_empty()
+                    && !is_inlined_builtin(&fd.name)
+                {
                     self.emit_fn(fd);
                 }
             }

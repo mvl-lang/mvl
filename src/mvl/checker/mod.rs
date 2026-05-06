@@ -359,6 +359,12 @@ impl TypeChecker {
     }
 
     fn check_fn_decl(&mut self, fd: &FnDecl) {
+        // Builtin functions have no body — skip body checking entirely.
+        // Their signatures are registered (in collect_declarations) and trusted.
+        if fd.is_builtin {
+            return;
+        }
+
         let ret_ty = resolve(&fd.return_type);
         let prev_ret = self.current_return_ty.replace(ret_ty.clone());
 
@@ -3598,6 +3604,7 @@ mod tests {
             declarations: vec![Decl::Fn(FnDecl {
                 visible: false,
                 is_test: false,
+                is_builtin: false,
                 totality: None,
                 name: "f".into(),
                 type_params: vec![],
@@ -3690,6 +3697,7 @@ mod tests {
             declarations: vec![Decl::Fn(FnDecl {
                 visible: false,
                 is_test: false,
+                is_builtin: false,
                 totality: None,
                 name: "f".into(),
                 type_params: vec![],
