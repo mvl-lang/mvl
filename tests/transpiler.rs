@@ -2198,3 +2198,51 @@ fn corpus_unsigned_types_transpiles() {
     assert_contains(&rust, "u8");
     assert_contains(&rust, "u64");
 }
+
+// ── Stdlib type stub suppression (#530) ──────────────────────────────────
+
+/// Types declared in Rust-backed stdlib modules (e.g. Path from std.io) must
+/// NOT be emitted as placeholder `pub struct` stubs — they are already defined
+/// in mvl_runtime via the `use mvl_runtime::stdlib::io::*` wildcard import.
+#[test]
+fn stdlib_types_not_emitted_as_stubs() {
+    let src = "use std.io.{open}\nfn f(p: Path) -> Unit { }";
+    let rust = transpile_src(src);
+    assert!(
+        !rust.contains("pub struct Path;"),
+        "Path is provided by mvl_runtime::stdlib::io — must not appear as a stub:\n{rust}"
+    );
+    assert!(
+        !rust.contains("pub struct File;"),
+        "File is provided by mvl_runtime::stdlib::io — must not appear as a stub:\n{rust}"
+    );
+}
+
+/// Non-stdlib external types must still get placeholder stubs even when a
+/// Rust-backed stdlib module is also imported (#530 regression guard).
+#[test]
+fn non_stdlib_types_still_get_stubs_alongside_stdlib_import() {
+    let src = "use std.io.{open}\nfn f(p: Path, db: DbConn) -> Unit { }";
+    let rust = transpile_src(src);
+    assert!(
+        rust.contains("pub struct DbConn;"),
+        "DbConn is not in any stdlib — must still be emitted as a stub:\n{rust}"
+    );
+    assert!(
+        !rust.contains("pub struct Path;"),
+        "Path is provided by mvl_runtime::stdlib::io — must not appear as a stub:\n{rust}"
+    );
+}
+
+/// Brace-import syntax (`use std.io.{File}`) must also trigger stub suppression
+/// — the parser discards brace items, leaving path = ["std", "io"], so both
+/// import forms should produce the same suppression behaviour.
+#[test]
+fn stdlib_stub_suppression_works_for_brace_import_syntax() {
+    let src = "use std.io.{open, read_to_string}\nfn f(p: Path) -> Unit { }";
+    let rust = transpile_src(src);
+    assert!(
+        !rust.contains("pub struct Path;"),
+        "Path must not be stubbed when imported via brace syntax:\n{rust}"
+    );
+}
