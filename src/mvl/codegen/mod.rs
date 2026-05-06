@@ -46,7 +46,7 @@ use crate::mvl::parser::ast::{
 fn is_inlined_builtin(name: &str) -> bool {
     matches!(
         name,
-        "println" | "eprintln" | "print" | "format" | "assert" | "assert_eq" | "panic"
+        "println" | "print" | "format" | "assert_eq" | "assert_ne"
     )
 }
 
