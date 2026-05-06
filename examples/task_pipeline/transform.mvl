@@ -1,0 +1,206 @@
+// transform.mvl — Pure data transformation functions.
+//
+// Demonstrates:
+//   1. Req 7  (Effects):      ZERO effect annotations — all functions are provably pure.
+//                             The compiler enforces this: adding any ! here is a type error.
+//                             These functions are safe to parallelize, memoize, or regenerate.
+//   2. Req 3  (Totality):     exhaustive match on Option variants inside closures
+//   3. Collection ops:        filter, map, fold exercising the full pure core
+//
+// Assurance note: 0 extern blocks.
+// Effect boundary check:
+//   grep '!' examples/task_pipeline/transform.mvl   →   (no output — zero effects)
+
+use model::Record;
+use model::Summary;
+
+// ── Filtering ─────────────────────────────────────────────────────────────
+
+/// Keep only records whose amount is at or above `min_amount`.
+///
+/// Pure predicate — no side effects, safe to call on any subset.
+pub fn filter_by_amount(records: List[Record], min_amount: Float) -> List[Record] {
+    records.filter(|r: Record| r.amount >= min_amount)
+}
+
+/// Keep only records belonging to a specific category.
+///
+/// Records with no category (None) are excluded. Exhaustive match on
+/// Option enforces handling of the missing-field case (Req 3, Req 4).
+pub fn filter_by_category(records: List[Record], cat: String) -> List[Record] {
+    records.filter(|r: Record| {
+        match r.category {
+            Some(c) => c == cat,
+            None    => false,
+        }
+    })
+}
+
+// ── Aggregation ───────────────────────────────────────────────────────────
+
+/// Compute aggregate statistics over a list of records.
+///
+/// Uses fold — the canonical pure reduction (Req 7).
+/// An empty list yields count=0, total_amount=0.0.
+pub fn summarize(records: List[Record]) -> Summary {
+    records.fold(
+        Summary { count: 0, total_amount: 0.0 },
+        |acc: Summary, r: Record| Summary {
+            count:        acc.count + 1,
+            total_amount: acc.total_amount + r.amount,
+        }
+    )
+}
+
+// ── Enrichment ────────────────────────────────────────────────────────────
+
+/// Enrich records: override category to "high-value" for records whose
+/// amount is at or above `threshold`.
+///
+/// Returns a new list — the original is unchanged (pure function, Req 7).
+/// Demonstrates fold + conditional struct construction.
+pub fn enrich_high_value(records: List[Record], threshold: Float) -> List[Record] {
+    records.fold(
+        [],
+        |acc: List[Record], r: Record| {
+            let out: Record = if r.amount >= threshold {
+                Record {
+                    name:     r.name,
+                    age:      r.age,
+                    amount:   r.amount,
+                    category: Some("high-value"),
+                }
+            } else {
+                r
+            };
+            list_concat(acc, [out])
+        }
+    )
+}
+
+/// Format a record as a single display line (pure map helper).
+///
+/// Used by main.mvl to produce output without mixing formatting into
+/// business logic. Demonstrates map over records for display (Req 7).
+pub fn record_line(r: Record) -> String {
+    let cat_str: String = match r.category {
+        Some(c) => c,
+        None    => "(none)",
+    };
+    r.name + "  age=" + r.age.to_string()
+           + "  amount=" + r.amount.to_string()
+           + "  cat=" + cat_str
+}
+
+// ── Internal unit tests ───────────────────────────────────────────────────
+
+test fn filter_by_amount_keeps_equal() -> Unit {
+    let records: List[Record] = [
+        Record { name: "A", age: 30, amount: 10.0, category: None },
+        Record { name: "B", age: 25, amount: 5.0,  category: None },
+    ];
+    let out: List[Record] = filter_by_amount(records, 10.0);
+    assert_eq(out.len(), 1);
+}
+
+test fn filter_by_amount_all_below_threshold() -> Unit {
+    let records: List[Record] = [
+        Record { name: "A", age: 30, amount: 1.0, category: None },
+        Record { name: "B", age: 25, amount: 2.0, category: None },
+    ];
+    let out: List[Record] = filter_by_amount(records, 100.0);
+    assert_eq(out.len(), 0);
+}
+
+test fn filter_by_category_matches_some() -> Unit {
+    let records: List[Record] = [
+        Record { name: "A", age: 30, amount: 10.0, category: Some("food") },
+        Record { name: "B", age: 25, amount: 5.0,  category: Some("transport") },
+        Record { name: "C", age: 40, amount: 8.0,  category: None },
+    ];
+    let out: List[Record] = filter_by_category(records, "food");
+    assert_eq(out.len(), 1);
+}
+
+test fn filter_by_category_none_excluded() -> Unit {
+    let records: List[Record] = [
+        Record { name: "A", age: 30, amount: 10.0, category: None },
+    ];
+    let out: List[Record] = filter_by_category(records, "food");
+    assert_eq(out.len(), 0);
+}
+
+test fn summarize_empty_list() -> Unit {
+    let records: List[Record] = [];
+    let s: Summary = summarize(records);
+    assert_eq(s.count, 0);
+}
+
+test fn summarize_count() -> Unit {
+    let records: List[Record] = [
+        Record { name: "A", age: 30, amount: 10.0, category: None },
+        Record { name: "B", age: 25, amount: 20.0, category: None },
+    ];
+    let s: Summary = summarize(records);
+    assert_eq(s.count, 2);
+}
+
+test fn summarize_total_amount() -> Unit {
+    let records: List[Record] = [
+        Record { name: "A", age: 30, amount: 10.0, category: None },
+        Record { name: "B", age: 25, amount: 20.0, category: None },
+    ];
+    let s: Summary = summarize(records);
+    // total_amount == 30.0
+    let is_thirty: Int = if s.total_amount == 30.0 { 1 } else { 0 };
+    assert_eq(is_thirty, 1);
+}
+
+test fn enrich_high_value_marks_above_threshold() -> Unit {
+    let records: List[Record] = [
+        Record { name: "A", age: 30, amount: 100.0, category: Some("food") },
+        Record { name: "B", age: 25, amount: 10.0,  category: None },
+    ];
+    let enriched: List[Record] = enrich_high_value(records, 50.0);
+    match enriched.get(0) {
+        None    => assert_eq(0, 1),
+        Some(r) => {
+            let is_hv: Int = match r.category {
+                Some(c) => match c { "high-value" => 1, _ => 0 },
+                None    => 0,
+            };
+            assert_eq(is_hv, 1);
+        }
+    }
+}
+
+test fn enrich_high_value_leaves_below_threshold() -> Unit {
+    let records: List[Record] = [
+        Record { name: "A", age: 30, amount: 10.0, category: Some("food") },
+    ];
+    let enriched: List[Record] = enrich_high_value(records, 50.0);
+    match enriched.get(0) {
+        None    => assert_eq(0, 1),
+        Some(r) => {
+            let still_food: Int = match r.category {
+                Some(c) => match c { "food" => 1, _ => 0 },
+                None    => 0,
+            };
+            assert_eq(still_food, 1);
+        }
+    }
+}
+
+test fn record_line_with_category() -> Unit {
+    let r: Record = Record { name: "Alice", age: 30, amount: 10.0, category: Some("food") };
+    let line: String = record_line(r);
+    let has_name: Int = match line.contains("Alice") { true => 1, false => 0 };
+    assert_eq(has_name, 1);
+}
+
+test fn record_line_without_category() -> Unit {
+    let r: Record = Record { name: "Bob", age: 25, amount: 5.0, category: None };
+    let line: String = record_line(r);
+    let has_none_label: Int = match line.contains("(none)") { true => 1, false => 0 };
+    assert_eq(has_none_label, 1);
+}

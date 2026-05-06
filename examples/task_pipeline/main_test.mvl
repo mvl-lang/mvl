@@ -1,0 +1,78 @@
+// main_test.mvl — Unit tests for main.mvl helpers.
+//
+// Demonstrates:
+//   1. Req 3 (Totality):  exhaustive match on all RunError variants
+//   2. Req 5 (Errors):    threshold_or_default returns 0.0 for invalid input
+//
+// NOTE: type and function declarations below duplicate main.mvl because
+// cross-file type resolution is not yet wired into the per-file checker
+// (issue #96). When #96 lands these can be replaced with:
+//   use main::RunError;
+//   use main::threshold_or_default;
+//
+// IFC note: threshold_or_default is re-declared here with plain String
+// (not Tainted[String]) because test files cannot demonstrate IFC boundaries
+// in isolation. The full IFC version lives in main.mvl.
+// Assurance note: 0 extern blocks.
+
+// ── Type re-declarations (workaround: #96) ────────────────────────────────
+
+type RunError = enum {
+    MissingArg,
+    IOFailure,
+    ParseFailed,
+}
+
+// ── Function re-declarations (workaround: #96) ────────────────────────────
+// Simplified: plain String instead of Tainted[String] (no IFC in test context).
+
+fn threshold_or_default(opt: Option[String]) -> Float {
+    match opt {
+        None    => 0.0,
+        Some(s) => {
+            let result: Result[Float, String] = s.parse_float();
+            match result {
+                Err(_) => 0.0,
+                Ok(v)  => if v >= 0.0 { v } else { 0.0 },
+            }
+        }
+    }
+}
+
+// ── threshold_or_default tests ────────────────────────────────────────────
+
+test fn threshold_or_default_none_is_zero() -> Unit {
+    let t: Float = threshold_or_default(None);
+    let is_zero: Int = if t == 0.0 { 1 } else { 0 };
+    assert_eq(is_zero, 1);
+}
+
+test fn threshold_or_default_valid_value() -> Unit {
+    let t: Float = threshold_or_default(Some("25.0"));
+    let is_25: Int = if t == 25.0 { 1 } else { 0 };
+    assert_eq(is_25, 1);
+}
+
+test fn threshold_or_default_invalid_string_is_zero() -> Unit {
+    let t: Float = threshold_or_default(Some("notanumber"));
+    let is_zero: Int = if t == 0.0 { 1 } else { 0 };
+    assert_eq(is_zero, 1);
+}
+
+test fn threshold_or_default_negative_is_zero() -> Unit {
+    let t: Float = threshold_or_default(Some("-5.0"));
+    let is_zero: Int = if t == 0.0 { 1 } else { 0 };
+    assert_eq(is_zero, 1);
+}
+
+// ── RunError exhaustiveness test ──────────────────────────────────────────
+
+test fn run_error_variants_are_exhaustive() -> Unit {
+    let e: RunError = RunError::MissingArg;
+    let n: Int = match e {
+        RunError::MissingArg  => 1,
+        RunError::IOFailure   => 2,
+        RunError::ParseFailed => 3,
+    };
+    assert_eq(n, 1);
+}

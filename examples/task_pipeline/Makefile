@@ -1,0 +1,46 @@
+# task_pipeline example — pure MVL CSV data processor (issue #171)
+#
+# Demonstrates zero-extern pure MVL for a complete data transformation pipeline.
+# Effect boundary: only main.mvl carries ! FileRead, ! Console.
+# All transform functions in transform.mvl are provably pure.
+#
+# Run from this directory or from the repo root.
+.PHONY: help guard-mvl check test run all clean
+
+MVL  := $(shell test -x ../../target/debug/mvl && echo ../../target/debug/mvl || echo mvl)
+DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+
+help: ## Show this help
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
+
+guard-mvl: ## Validate MVL binary is present and working (does NOT recompile)
+	@$(MVL) --version > /dev/null 2>&1 || { \
+		echo ""; \
+		echo "  ERROR: MVL compiler not found at: $(MVL)"; \
+		echo "  Run 'make build' from the repo root first."; \
+		echo ""; \
+		exit 1; \
+	}
+
+check: guard-mvl ## Type-check all source files
+	$(MVL) check $(DIR)model.mvl
+	$(MVL) check $(DIR)parser.mvl
+	$(MVL) check $(DIR)transform.mvl
+	$(MVL) check $(DIR)main.mvl
+
+test: guard-mvl ## Run all unit tests (parser + transform + main)
+	$(MVL) test $(DIR)
+
+run: guard-mvl ## Run the pipeline with the bundled sample CSV
+	$(MVL) run $(DIR)main.mvl -- --input $(DIR)sample.csv
+
+run-threshold: guard-mvl ## Run with a 50.0 amount threshold
+	$(MVL) run $(DIR)main.mvl -- --input $(DIR)sample.csv --threshold 50.0
+
+all: check test ## Run full quality pipeline: check + test
+	@echo ""
+	@echo "Effect boundary check (should produce no output):"
+	@grep -n '!' $(DIR)transform.mvl | grep -v '//' || true
+
+clean: ## Remove build artifacts
+	rm -rf $(TMPDIR)mvl_build_task_pipeline

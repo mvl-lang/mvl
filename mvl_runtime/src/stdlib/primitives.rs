@@ -168,3 +168,21 @@ pub fn list_concat<T>(mut xs: Vec<T>, ys: Vec<T>) -> Vec<T> {
 pub fn list_contains<T: PartialEq>(xs: Vec<T>, x: T) -> bool {
     xs.contains(&x)
 }
+
+// ── String parsing ────────────────────────────────────────────────────────────
+
+/// Parse `s` as a signed 64-bit integer.
+///
+/// Returns `Ok(n)` on success, `Err(msg)` with a human-readable message on failure.
+/// MVL method syntax: `s.parse_int()`.
+pub fn str_parse_int(s: String) -> Result<i64, String> {
+    s.trim().parse::<i64>().map_err(|e| e.to_string())
+}
+
+/// Parse `s` as a 64-bit float.
+///
+/// Returns `Ok(x)` on success, `Err(msg)` with a human-readable message on failure.
+/// MVL method syntax: `s.parse_float()`.
+pub fn str_parse_float(s: String) -> Result<f64, String> {
+    s.trim().parse::<f64>().map_err(|e| e.to_string())
+}

@@ -66,6 +66,14 @@ extern "rust" {
     /// True if `sub` is found anywhere in `s`.
     fn str_contains(s: String, sub: String) -> Bool
 
+    // ── String parsing (2 functions) ──────────────────────────────────────
+
+    /// Parse `s` as a signed 64-bit integer; Err on failure.
+    fn str_parse_int(s: String) -> Result[Int, String]
+
+    /// Parse `s` as a 64-bit float; Err on failure.
+    fn str_parse_float(s: String) -> Result[Float, String]
+
     // ── List kernel (6 functions) ─────────────────────────────────────────
 
     /// Number of elements.

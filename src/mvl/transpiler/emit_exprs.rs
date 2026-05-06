@@ -37,6 +37,8 @@ const STDLIB_UFCS_METHODS: &[&str] = &[
     "replace",
     "split",
     "substring",
+    "parse_int",
+    "parse_float",
     // std/lists.mvl
     "slice",
     "take",

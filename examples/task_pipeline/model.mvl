@@ -1,0 +1,62 @@
+// model.mvl — Domain types for the task pipeline CSV processor.
+//
+// Demonstrates:
+//   1. Req 1  (ADTs):        struct types model a real-world CSV record
+//   2. Req 4  (Null elim):   Option[String] for optional CSV field (category)
+//   3. Req 5  (Errors):      named error variants for all parse failures
+//   4. Req 10 (Refinements): type aliases with predicate constraints on domain values
+//
+// No extern, no effects — pure type declarations.
+// Assurance note: 0 extern blocks.
+
+// ── Refinement type aliases ───────────────────────────────────────────────
+
+/// Record name: must not be empty.
+pub type PersonName = String where len(self) > 0
+
+/// Age in years: biologically valid range (1–150).
+pub type ValidAge = Int where self > 0 && self <= 150
+
+/// Monetary amount: non-negative (no debts in this dataset).
+pub type NonNegAmount = Float where self >= 0.0
+
+// ── Core record type ──────────────────────────────────────────────────────
+
+/// A single data record parsed from a CSV row.
+///
+/// CSV format: name,age,amount,category
+///   - name     required, non-empty string
+///   - age      required, integer 1–150
+///   - amount   required, non-negative float (e.g., 42.50)
+///   - category optional — empty cell becomes None (Req 4)
+pub type Record = struct {
+    name:     PersonName,
+    age:      ValidAge,
+    amount:   NonNegAmount,
+    category: Option[String],
+}
+
+// ── Parse errors ──────────────────────────────────────────────────────────
+
+/// Errors that can occur when parsing a CSV row (Req 5).
+///
+/// Named variants let callers respond differently to each failure mode
+/// rather than inspecting an opaque error string.
+pub type ParseError = enum {
+    EmptyInput,       // the entire CSV content was blank
+    MissingField,     // fewer than 3 comma-separated fields on a row
+    EmptyName,        // name field was present but blank
+    InvalidAge,       // age field is non-numeric or outside 1–150
+    InvalidAmount,    // amount field is non-numeric or negative
+}
+
+// ── Summary types ─────────────────────────────────────────────────────────
+
+/// Aggregated statistics computed by transform.mvl over a list of records.
+///
+/// Kept minimal: count + total so the fold stays readable.
+/// extend with min/max/avg as the language grows.
+pub type Summary = struct {
+    count:        Int,
+    total_amount: Float,
+}

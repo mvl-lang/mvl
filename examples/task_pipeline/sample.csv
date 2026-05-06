@@ -1,0 +1,10 @@
+name,age,amount,category
+Alice,30,125.50,food
+Bob,25,42.00,transport
+Carol,40,980.00,food
+Dave,35,15.75,
+Eve,28,200.00,utilities
+Frank,55,0.50,transport
+# part-time contractors
+Grace,22,350.00,food
+Hank,60,88.00,

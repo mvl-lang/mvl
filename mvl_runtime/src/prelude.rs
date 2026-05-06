@@ -39,8 +39,8 @@ pub use crate::stdlib::args::{get_arg, parse, ParseFromArgs};
 /// String kernel (17 primitives — trust boundary for string stdlib methods).
 pub use crate::stdlib::primitives::{
     str_byte_at, str_char_at, str_chars, str_concat, str_contains, str_ends_with, str_find,
-    str_from_bytes, str_from_chars, str_len, str_replace, str_split, str_starts_with,
-    str_substring, str_to_lower, str_to_upper, str_trim,
+    str_from_bytes, str_from_chars, str_len, str_parse_float, str_parse_int, str_replace,
+    str_split, str_starts_with, str_substring, str_to_lower, str_to_upper, str_trim,
 };
 
 /// List kernel (6 primitives — trust boundary for list stdlib methods).
