@@ -199,6 +199,123 @@ pub unsafe extern "C" fn _mvl_io_remove(path: *const MvlString) -> LlvmResult {
     }
 }
 
+/// `exists(p: Path) → Bool` — return 1 if the path exists, 0 otherwise.
+///
+/// # Safety
+/// `path` must be a valid `MvlString*` for the duration of the call.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn _mvl_io_exists(path: *const MvlString) -> i64 {
+    let p = read_mvl_string(path);
+    std::path::Path::new(&p).exists() as i64
+}
+
+/// `is_file(p: Path) → Bool` — return 1 if the path is a regular file, 0 otherwise.
+///
+/// # Safety
+/// `path` must be a valid `MvlString*` for the duration of the call.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn _mvl_io_is_file(path: *const MvlString) -> i64 {
+    let p = read_mvl_string(path);
+    std::path::Path::new(&p).is_file() as i64
+}
+
+/// `is_dir(p: Path) → Bool` — return 1 if the path is a directory, 0 otherwise.
+///
+/// # Safety
+/// `path` must be a valid `MvlString*` for the duration of the call.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn _mvl_io_is_dir(path: *const MvlString) -> i64 {
+    let p = read_mvl_string(path);
+    std::path::Path::new(&p).is_dir() as i64
+}
+
+/// `read_file(p: Clean[String]) → Result[Tainted[String], String]`
+///
+/// Convenience variant of `read_to_string` accepting a raw string path directly.
+///
+/// # Safety
+/// `path` must be a valid `MvlString*` for the duration of the call.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn _mvl_io_read_file(path: *const MvlString) -> LlvmResult {
+    let p = read_mvl_string(path);
+    match std::fs::read_to_string(&p) {
+        Ok(contents) => LlvmResult::ok_str(&contents),
+        Err(e) => LlvmResult::err(&e),
+    }
+}
+
+/// `create_symlink(target: Path, link: Path) → Result[Unit, String]`
+///
+/// # Safety
+/// Both pointers must be valid `MvlString*` for the duration of the call.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn _mvl_io_create_symlink(
+    target: *const MvlString,
+    link: *const MvlString,
+) -> LlvmResult {
+    let t = read_mvl_string(target);
+    let l = read_mvl_string(link);
+    #[cfg(unix)]
+    {
+        match std::os::unix::fs::symlink(&t, &l) {
+            Ok(()) => LlvmResult::ok_unit(),
+            Err(e) => LlvmResult::err(&e),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (t, l);
+        LlvmResult {
+            tag: 1,
+            payload: new_mvl_str("symlinks not supported on this platform"),
+        }
+    }
+}
+
+/// `read_link(p: Path) → Result[Tainted[String], String]`
+///
+/// # Safety
+/// `path` must be a valid `MvlString*` for the duration of the call.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn _mvl_io_read_link(path: *const MvlString) -> LlvmResult {
+    let p = read_mvl_string(path);
+    match std::fs::read_link(&p) {
+        Ok(target) => LlvmResult::ok_str(&target.to_string_lossy()),
+        Err(e) => LlvmResult::err(&e),
+    }
+}
+
+/// `chmod(p: Path, mode: Int) → Result[Unit, String]`
+///
+/// Sets Unix permission bits.  No-op on non-Unix platforms.
+///
+/// # Safety
+/// `path` must be a valid `MvlString*` for the duration of the call.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn _mvl_io_chmod(path: *const MvlString, mode: i64) -> LlvmResult {
+    let p = read_mvl_string(path);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        match std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode as u32)) {
+            Ok(()) => LlvmResult::ok_unit(),
+            Err(e) => LlvmResult::err(&e),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (p, mode);
+        LlvmResult::ok_unit()
+    }
+}
+
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

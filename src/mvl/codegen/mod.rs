@@ -326,6 +326,17 @@ pub(crate) enum StdlibSig {
     /// `i64 → ptr` — one i64 argument, returns an opaque pointer (e.g. `MvlArray*`).
     /// Used for `_mvl_crypto_random_bytes(n)` → `*mut MvlArray` (#507).
     I64ReturnsPtrArg(String),
+
+    // ── #536: parity additions ────────────────────────────────────────────────
+    /// `(ptr) → i64` — one-ptr-arg C function returning i64 (e.g. Bool 0/1).
+    /// Used for `exists`, `is_file`, `is_dir`.
+    I64OnePtrArg(String),
+    /// `(ptr, i64) → {i8, ptr}` — ptr+int args returning Result[Unit, String].
+    /// Used for `chmod(path, mode)`.
+    ResultUnitPtrI64Args(String),
+    /// `(i64) → void / noreturn` — one i64 arg, no return.
+    /// Used for `exit(code)`.
+    VoidI64Arg(String),
 }
 
 // ── Backend struct ────────────────────────────────────────────────────────────
@@ -638,6 +649,32 @@ impl<'ctx> LlvmBackend<'ctx> {
                 "remove",
                 Sig::ResultUnitOnePtrArg("_mvl_io_remove".into()),
             ),
+            // std.io — #536: path queries and additional file ops
+            ("io", "exists", Sig::I64OnePtrArg("_mvl_io_exists".into())),
+            ("io", "is_file", Sig::I64OnePtrArg("_mvl_io_is_file".into())),
+            ("io", "is_dir", Sig::I64OnePtrArg("_mvl_io_is_dir".into())),
+            (
+                "io",
+                "read_file",
+                Sig::ResultStringOnePtrArg("_mvl_io_read_file".into()),
+            ),
+            (
+                "io",
+                "create_symlink",
+                Sig::ResultUnitTwoPtrArgs("_mvl_io_create_symlink".into()),
+            ),
+            (
+                "io",
+                "read_link",
+                Sig::ResultStringOnePtrArg("_mvl_io_read_link".into()),
+            ),
+            (
+                "io",
+                "chmod",
+                Sig::ResultUnitPtrI64Args("_mvl_io_chmod".into()),
+            ),
+            // std.env — #536: exit
+            ("env", "exit", Sig::VoidI64Arg("_mvl_env_exit".into())),
             // std.regex — #420/#439
             (
                 "regex",
@@ -773,15 +810,26 @@ impl<'ctx> LlvmBackend<'ctx> {
             // path(s: String) → Path
             self.fn_return_types.entry("path".into()).or_insert(path);
             // Result[Unit, String] functions
-            for name in &["write", "append", "create_dir_all", "remove"] {
+            for name in &[
+                "write",
+                "append",
+                "create_dir_all",
+                "remove",
+                "create_symlink",
+                "chmod",
+            ] {
                 self.fn_return_types
                     .entry((*name).to_string())
                     .or_insert_with(result_unit_str);
             }
             // Result[String, String] functions
-            self.fn_return_types
-                .entry("read_to_string".to_string())
-                .or_insert_with(result_str_str);
+            for name in &["read_to_string", "read_file", "read_link"] {
+                self.fn_return_types
+                    .entry((*name).to_string())
+                    .or_insert_with(result_str_str);
+            }
+            // Bool (i64) functions — exists, is_file, is_dir have plain i64 return
+            // (no fn_return_types entry needed; emitter uses i64 directly)
         }
 
         // #420: Register return type for regex.compile so that `?` propagation
@@ -1303,6 +1351,98 @@ impl<'ctx> LlvmBackend<'ctx> {
         inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()
     }
 
+    /// `#536`: `(ptr) → i64` — e.g. `exists(path)`, `is_file(path)`, `is_dir(path)`.
+    pub(crate) fn emit_stdlib_call_i64_one_ptr_arg(
+        &mut self,
+        symbol: &str,
+        arg: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let fn_val = self.module.get_function(symbol).unwrap_or_else(|| {
+            let fn_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        });
+        let call = self
+            .builder
+            .build_call(fn_val, &[arg.into()], symbol)
+            .ok()?;
+        use inkwell::values::AnyValue;
+        inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+    }
+
+    /// `#536`: `(ptr, i64) → {i8, ptr}` Result[Unit, String] — e.g. `chmod(path, mode)`.
+    pub(crate) fn emit_stdlib_call_result_unit_ptr_i64_args(
+        &mut self,
+        symbol: &str,
+        path: inkwell::values::BasicValueEnum<'ctx>,
+        mode: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let i8_ty = self.context.i8_type();
+        let result_ty = self
+            .context
+            .struct_type(&[i8_ty.into(), ptr_ty.into()], false);
+        let fn_val = self.module.get_function(symbol).unwrap_or_else(|| {
+            let fn_ty = result_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        });
+        let call = self
+            .builder
+            .build_call(fn_val, &[path.into(), mode.into()], symbol)
+            .ok()?;
+        use inkwell::values::AnyValue;
+        let c_val = inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
+        self.wrap_c_result_with_slot(c_val, result_ty)
+    }
+
+    /// `#536`: `(i64) → void / noreturn` — `exit(code)`.
+    ///
+    /// The call never returns; we follow it with `unreachable` to satisfy the LLVM
+    /// verifier without emitting a second terminator.
+    pub(crate) fn emit_stdlib_call_void_i64_arg(
+        &mut self,
+        symbol: &str,
+        arg: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        let i64_ty = self.context.i64_type();
+        let fn_val = self.module.get_function(symbol).unwrap_or_else(|| {
+            let fn_ty = self.context.void_type().fn_type(&[i64_ty.into()], false);
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        });
+        self.builder
+            .build_call(fn_val, &[arg.into()], symbol)
+            .ok()?;
+        // exit() never returns — emit unreachable and mark block terminated.
+        self.builder.build_unreachable().ok()?;
+        self.terminated = true;
+        None // caller sees None → no value produced, which is correct for Never
+    }
+
+    /// Truncate an i64 IntValue to the target LLVM type if narrower (e.g. i64→i1 for Bool).
+    /// Used by `extern "rust"` bridges where the C helper always returns i64.
+    fn trunc_int_to_ret(
+        &self,
+        raw: inkwell::values::IntValue<'ctx>,
+        ret_llvm: Option<BasicTypeEnum<'ctx>>,
+    ) -> BasicValueEnum<'ctx> {
+        match ret_llvm {
+            Some(BasicTypeEnum::IntType(it))
+                if it.get_bit_width() < raw.get_type().get_bit_width() =>
+            {
+                self.builder
+                    .build_int_truncate(raw, it, "trunc")
+                    .unwrap()
+                    .into()
+            }
+            _ => raw.into(),
+        }
+    }
+
     /// Wrap a C-ABI `{i8, ptr}` result into the internal double-indirected format.
     ///
     /// The C function returns `{ disc: i8, direct_payload: ptr }`.  This helper:
@@ -1354,6 +1494,7 @@ impl<'ctx> LlvmBackend<'ctx> {
     ///   `roll_dice() -> Int`  →  `rand() % 6 + 1`  (libc rand, seeded by OS)
     ///
     /// All other functions get a stub that returns 0 / null.
+    #[allow(clippy::too_many_lines)]
     fn emit_extern_rust_fn_body(
         &mut self,
         efn: &ExternFnDecl,
@@ -1494,6 +1635,313 @@ impl<'ctx> LlvmBackend<'ctx> {
                     .build_select(is_null, none_val, some_val, "opt")
                     .unwrap();
                 self.builder.build_return(Some(&result)).unwrap();
+            }
+            // ── str_* primitives (#536) ────────────────────────────────────────
+            // str_len(s: String) -> Int: Unicode char count via _mvl_str_len
+            "str_len" => {
+                let arg = fn_val.get_first_param().expect("str_len: missing arg");
+                let f = self.get_mvl_str_len();
+                let result = self
+                    .builder
+                    .build_call(f, &[arg.into()], "str_len")
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                let v = BasicValueEnum::try_from(result.as_any_value_enum())
+                    .expect("_mvl_str_len returns i64");
+                self.builder.build_return(Some(&v)).unwrap();
+            }
+            // str_trim(s: String) -> String
+            "str_trim" => {
+                let arg = fn_val.get_first_param().expect("str_trim: missing arg");
+                let f = self.get_mvl_str_trim();
+                let result = self
+                    .builder
+                    .build_call(f, &[arg.into()], "str_trim")
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                let v = BasicValueEnum::try_from(result.as_any_value_enum())
+                    .expect("_mvl_str_trim returns ptr");
+                self.builder.build_return(Some(&v)).unwrap();
+            }
+            // str_to_lower(s: String) -> String: delegate to _mvl_str_to_lower
+            "str_to_lower" => {
+                let arg = fn_val.get_first_param().expect("str_to_lower: missing arg");
+                let f = self.get_mvl_str_to_lower();
+                let result = self
+                    .builder
+                    .build_call(f, &[arg.into()], "to_lower")
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                let v = BasicValueEnum::try_from(result.as_any_value_enum())
+                    .expect("_mvl_str_to_lower returns ptr");
+                self.builder.build_return(Some(&v)).unwrap();
+            }
+            // str_to_upper(s: String) -> String
+            "str_to_upper" => {
+                let arg = fn_val.get_first_param().expect("str_to_upper: missing arg");
+                let f = self.get_mvl_str_to_upper();
+                let result = self
+                    .builder
+                    .build_call(f, &[arg.into()], "to_upper")
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                let v = BasicValueEnum::try_from(result.as_any_value_enum())
+                    .expect("_mvl_str_to_upper returns ptr");
+                self.builder.build_return(Some(&v)).unwrap();
+            }
+            // str_starts_with(s, prefix: String) -> Bool
+            // C returns i64; truncate to actual LLVM return type (Bool = i1).
+            "str_starts_with" => {
+                let params: Vec<_> = fn_val.get_param_iter().collect();
+                let f = self.get_mvl_str_starts_with();
+                let result = self
+                    .builder
+                    .build_call(f, &[params[0].into(), params[1].into()], "sw")
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                let raw = BasicValueEnum::try_from(result.as_any_value_enum())
+                    .expect("_mvl_str_starts_with returns i64")
+                    .into_int_value();
+                let v = self.trunc_int_to_ret(raw, ret_llvm);
+                self.builder.build_return(Some(&v)).unwrap();
+            }
+            // str_ends_with(s, suffix: String) -> Bool
+            "str_ends_with" => {
+                let params: Vec<_> = fn_val.get_param_iter().collect();
+                let f = self.get_mvl_str_ends_with();
+                let result = self
+                    .builder
+                    .build_call(f, &[params[0].into(), params[1].into()], "ew")
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                let raw = BasicValueEnum::try_from(result.as_any_value_enum())
+                    .expect("_mvl_str_ends_with returns i64")
+                    .into_int_value();
+                let v = self.trunc_int_to_ret(raw, ret_llvm);
+                self.builder.build_return(Some(&v)).unwrap();
+            }
+            // str_contains(s, sub: String) -> Bool
+            "str_contains" => {
+                let params: Vec<_> = fn_val.get_param_iter().collect();
+                let f = self.get_mvl_str_contains();
+                let result = self
+                    .builder
+                    .build_call(f, &[params[0].into(), params[1].into()], "sc")
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                let raw = BasicValueEnum::try_from(result.as_any_value_enum())
+                    .expect("_mvl_str_contains returns i64")
+                    .into_int_value();
+                let v = self.trunc_int_to_ret(raw, ret_llvm);
+                self.builder.build_return(Some(&v)).unwrap();
+            }
+            // str_find(s, sub: String) -> Option[Int]
+            // C returns i64: -1 = None, ≥0 = char index.  Convert to {i8, ptr}.
+            "str_find" => {
+                let params: Vec<_> = fn_val.get_param_iter().collect();
+                let f = self.get_mvl_str_find();
+                let raw = self
+                    .builder
+                    .build_call(f, &[params[0].into(), params[1].into()], "find_raw")
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                let idx = BasicValueEnum::try_from(raw.as_any_value_enum())
+                    .expect("_mvl_str_find returns i64")
+                    .into_int_value();
+                let i64_ty = self.context.i64_type();
+                let i8_ty = self.context.i8_type();
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let opt_ty = self
+                    .context
+                    .struct_type(&[i8_ty.into(), ptr_ty.into()], false);
+                let neg_one = i64_ty.const_int(u64::MAX, true); // -1 in two's complement
+                let is_none = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::EQ, idx, neg_one, "is_none")
+                    .unwrap();
+                let slot = self.builder.build_alloca(i64_ty, "find_slot").unwrap();
+                self.builder.build_store(slot, idx).unwrap();
+                let some_v = opt_ty.const_zero();
+                let some_v = self
+                    .builder
+                    .build_insert_value(some_v, i8_ty.const_int(0, false), 0, "sd")
+                    .unwrap()
+                    .into_struct_value();
+                let some_v = self
+                    .builder
+                    .build_insert_value(some_v, slot, 1, "sp")
+                    .unwrap()
+                    .into_struct_value();
+                let none_v = opt_ty.const_zero();
+                let none_v = self
+                    .builder
+                    .build_insert_value(none_v, i8_ty.const_int(1, false), 0, "nd")
+                    .unwrap()
+                    .into_struct_value();
+                let none_v = self
+                    .builder
+                    .build_insert_value(none_v, ptr_ty.const_null(), 1, "np")
+                    .unwrap()
+                    .into_struct_value();
+                let result = self
+                    .builder
+                    .build_select(is_none, none_v, some_v, "opt")
+                    .unwrap();
+                self.builder.build_return(Some(&result)).unwrap();
+            }
+            // str_replace(s, from, to: String) -> String
+            "str_replace" => {
+                let params: Vec<_> = fn_val.get_param_iter().collect();
+                let f = self.get_mvl_str_replace();
+                let result = self
+                    .builder
+                    .build_call(
+                        f,
+                        &[params[0].into(), params[1].into(), params[2].into()],
+                        "replace",
+                    )
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                let v = BasicValueEnum::try_from(result.as_any_value_enum())
+                    .expect("_mvl_str_replace returns ptr");
+                self.builder.build_return(Some(&v)).unwrap();
+            }
+            // str_split(s, sep: String) -> List[String]
+            "str_split" => {
+                let params: Vec<_> = fn_val.get_param_iter().collect();
+                let f = self.get_mvl_str_split();
+                let result = self
+                    .builder
+                    .build_call(f, &[params[0].into(), params[1].into()], "split")
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                let v = BasicValueEnum::try_from(result.as_any_value_enum())
+                    .expect("_mvl_str_split returns ptr");
+                self.builder.build_return(Some(&v)).unwrap();
+            }
+            // str_substring(s: String, start: Int, end: Int) -> String
+            "str_substring" => {
+                let params: Vec<_> = fn_val.get_param_iter().collect();
+                let f = self.get_mvl_str_substring();
+                let result = self
+                    .builder
+                    .build_call(
+                        f,
+                        &[params[0].into(), params[1].into(), params[2].into()],
+                        "substr",
+                    )
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                let v = BasicValueEnum::try_from(result.as_any_value_enum())
+                    .expect("_mvl_str_substring returns ptr");
+                self.builder.build_return(Some(&v)).unwrap();
+            }
+            // str_char_at(s: String, i: Int) -> String
+            "str_char_at" => {
+                let params: Vec<_> = fn_val.get_param_iter().collect();
+                let f = self.get_mvl_str_char_at();
+                let result = self
+                    .builder
+                    .build_call(f, &[params[0].into(), params[1].into()], "char_at")
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                let v = BasicValueEnum::try_from(result.as_any_value_enum())
+                    .expect("_mvl_str_char_at returns ptr");
+                self.builder.build_return(Some(&v)).unwrap();
+            }
+            // str_from_chars(chars: List[String]) -> String
+            "str_from_chars" => {
+                let arg = fn_val
+                    .get_first_param()
+                    .expect("str_from_chars: missing arg");
+                let f = self.get_mvl_str_from_chars();
+                let result = self
+                    .builder
+                    .build_call(f, &[arg.into()], "from_chars")
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                let v = BasicValueEnum::try_from(result.as_any_value_enum())
+                    .expect("_mvl_str_from_chars returns ptr");
+                self.builder.build_return(Some(&v)).unwrap();
+            }
+            // str_byte_at(s: String, i: Int) -> Byte
+            // C returns i64; truncate to actual LLVM return type (Byte = i8).
+            "str_byte_at" => {
+                let params: Vec<_> = fn_val.get_param_iter().collect();
+                let f = self.get_mvl_str_byte_at();
+                let result = self
+                    .builder
+                    .build_call(f, &[params[0].into(), params[1].into()], "byte_at")
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                let raw = BasicValueEnum::try_from(result.as_any_value_enum())
+                    .expect("_mvl_str_byte_at returns i64")
+                    .into_int_value();
+                let v = self.trunc_int_to_ret(raw, ret_llvm);
+                self.builder.build_return(Some(&v)).unwrap();
+            }
+            // str_from_bytes(bytes: List[Byte]) -> String
+            "str_from_bytes" => {
+                let arg = fn_val
+                    .get_first_param()
+                    .expect("str_from_bytes: missing arg");
+                let f = self.get_mvl_str_from_bytes();
+                let result = self
+                    .builder
+                    .build_call(f, &[arg.into()], "from_bytes")
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                let v = BasicValueEnum::try_from(result.as_any_value_enum())
+                    .expect("_mvl_str_from_bytes returns ptr");
+                self.builder.build_return(Some(&v)).unwrap();
+            }
+            // ── list_* primitives (#536) ───────────────────────────────────────
+            // list_push[T](xs: List[T], x: T) -> List[T]: call mvl_array_push inline
+            "list_push" => {
+                let params: Vec<_> = fn_val.get_param_iter().collect();
+                let arr = params[0];
+                let elem = params[1];
+                let push_fn = self.get_mvl_array_push();
+                // Store elem to a stack slot so we can pass its address.
+                let slot = self
+                    .builder
+                    .build_alloca(elem.get_type(), "elem_slot")
+                    .unwrap();
+                self.builder.build_store(slot, elem).unwrap();
+                self.builder
+                    .build_call(push_fn, &[arr.into(), slot.into()], "push")
+                    .unwrap();
+                self.builder.build_return(Some(&arr)).unwrap();
+            }
+            // list_slice[T](xs: List[T], start: Int, end: Int) -> List[T]
+            "list_slice" => {
+                let params: Vec<_> = fn_val.get_param_iter().collect();
+                let f = self.get_mvl_list_slice();
+                let result = self
+                    .builder
+                    .build_call(
+                        f,
+                        &[params[0].into(), params[1].into(), params[2].into()],
+                        "slice",
+                    )
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                let v = BasicValueEnum::try_from(result.as_any_value_enum())
+                    .expect("_mvl_list_slice returns ptr");
+                self.builder.build_return(Some(&v)).unwrap();
+            }
+            // list_concat[T](xs: List[T], ys: List[T]) -> List[T]
+            "list_concat" => {
+                let params: Vec<_> = fn_val.get_param_iter().collect();
+                let f = self.get_mvl_list_concat();
+                let result = self
+                    .builder
+                    .build_call(f, &[params[0].into(), params[1].into()], "lconcat")
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                let v = BasicValueEnum::try_from(result.as_any_value_enum())
+                    .expect("_mvl_list_concat returns ptr");
+                self.builder.build_return(Some(&v)).unwrap();
             }
             // Generic stub: return zero / null / None-struct.
             _ => match ret_llvm {

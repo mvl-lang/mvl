@@ -130,6 +130,172 @@ impl<'ctx> LlvmBackend<'ctx> {
         )
     }
 
+    /// `_mvl_str_len(ptr) -> i64`
+    pub(crate) fn get_mvl_str_len(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_str_len",
+            &[self.context.ptr_type(AddressSpace::default()).into()],
+            Some(self.context.i64_type().into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_trim(ptr) -> ptr`
+    pub(crate) fn get_mvl_str_trim(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_str_trim",
+            &[self.context.ptr_type(AddressSpace::default()).into()],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_starts_with(ptr, ptr) -> i64`
+    pub(crate) fn get_mvl_str_starts_with(&self) -> FunctionValue<'ctx> {
+        let ptr = self.context.ptr_type(AddressSpace::default()).into();
+        self.get_or_declare_fn(
+            "_mvl_str_starts_with",
+            &[ptr, ptr],
+            Some(self.context.i64_type().into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_ends_with(ptr, ptr) -> i64`
+    pub(crate) fn get_mvl_str_ends_with(&self) -> FunctionValue<'ctx> {
+        let ptr = self.context.ptr_type(AddressSpace::default()).into();
+        self.get_or_declare_fn(
+            "_mvl_str_ends_with",
+            &[ptr, ptr],
+            Some(self.context.i64_type().into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_contains(ptr, ptr) -> i64`
+    pub(crate) fn get_mvl_str_contains(&self) -> FunctionValue<'ctx> {
+        let ptr = self.context.ptr_type(AddressSpace::default()).into();
+        self.get_or_declare_fn(
+            "_mvl_str_contains",
+            &[ptr, ptr],
+            Some(self.context.i64_type().into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_find(ptr, ptr) -> i64`  (-1 = None, ≥0 = char index)
+    pub(crate) fn get_mvl_str_find(&self) -> FunctionValue<'ctx> {
+        let ptr = self.context.ptr_type(AddressSpace::default()).into();
+        self.get_or_declare_fn(
+            "_mvl_str_find",
+            &[ptr, ptr],
+            Some(self.context.i64_type().into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_replace(ptr, ptr, ptr) -> ptr`
+    pub(crate) fn get_mvl_str_replace(&self) -> FunctionValue<'ctx> {
+        let ptr = self.context.ptr_type(AddressSpace::default());
+        let ptr_meta: BasicMetadataTypeEnum = ptr.into();
+        self.get_or_declare_fn(
+            "_mvl_str_replace",
+            &[ptr_meta, ptr_meta, ptr_meta],
+            Some(ptr.into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_split(ptr, ptr) -> ptr` (MvlArray* of MvlString*)
+    pub(crate) fn get_mvl_str_split(&self) -> FunctionValue<'ctx> {
+        let ptr = self.context.ptr_type(AddressSpace::default()).into();
+        self.get_or_declare_fn(
+            "_mvl_str_split",
+            &[ptr, ptr],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_substring(ptr, i64, i64) -> ptr`
+    pub(crate) fn get_mvl_str_substring(&self) -> FunctionValue<'ctx> {
+        let ptr = self.context.ptr_type(AddressSpace::default()).into();
+        let i64 = self.context.i64_type().into();
+        self.get_or_declare_fn(
+            "_mvl_str_substring",
+            &[ptr, i64, i64],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_char_at(ptr, i64) -> ptr`
+    pub(crate) fn get_mvl_str_char_at(&self) -> FunctionValue<'ctx> {
+        let ptr = self.context.ptr_type(AddressSpace::default()).into();
+        let i64 = self.context.i64_type().into();
+        self.get_or_declare_fn(
+            "_mvl_str_char_at",
+            &[ptr, i64],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_from_chars(ptr) -> ptr`
+    pub(crate) fn get_mvl_str_from_chars(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_str_from_chars",
+            &[self.context.ptr_type(AddressSpace::default()).into()],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_byte_at(ptr, i64) -> i64`
+    pub(crate) fn get_mvl_str_byte_at(&self) -> FunctionValue<'ctx> {
+        let ptr = self.context.ptr_type(AddressSpace::default()).into();
+        let i64 = self.context.i64_type().into();
+        self.get_or_declare_fn(
+            "_mvl_str_byte_at",
+            &[ptr, i64],
+            Some(self.context.i64_type().into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_from_bytes(ptr) -> ptr`
+    pub(crate) fn get_mvl_str_from_bytes(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_str_from_bytes",
+            &[self.context.ptr_type(AddressSpace::default()).into()],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
+    /// `_mvl_list_slice(ptr, i64, i64) -> ptr`
+    pub(crate) fn get_mvl_list_slice(&self) -> FunctionValue<'ctx> {
+        let ptr = self.context.ptr_type(AddressSpace::default()).into();
+        let i64 = self.context.i64_type().into();
+        self.get_or_declare_fn(
+            "_mvl_list_slice",
+            &[ptr, i64, i64],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
+    /// `_mvl_list_concat(ptr, ptr) -> ptr`
+    pub(crate) fn get_mvl_list_concat(&self) -> FunctionValue<'ctx> {
+        let ptr = self.context.ptr_type(AddressSpace::default()).into();
+        self.get_or_declare_fn(
+            "_mvl_list_concat",
+            &[ptr, ptr],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
     // ── Array runtime declarations ────────────────────────────────────────────
 
     /// `mvl_array_new(i64 elem_size, i64 initial_cap) -> ptr`
