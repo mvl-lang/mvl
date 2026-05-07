@@ -419,6 +419,7 @@ impl RustEmitter {
             );
             let saved_coverage = self.coverage.take();
             let saved_mutation = self.mutation.take();
+            let saved_mcdc = self.mcdc.take(); // don't instrument stdlib prelude
             for td in prelude_types {
                 emit_type_decl(self, td);
                 self.blank();
@@ -429,6 +430,7 @@ impl RustEmitter {
             }
             self.coverage = saved_coverage;
             self.mutation = saved_mutation;
+            self.mcdc = saved_mcdc;
         }
 
         // Emit placeholder structs for external types referenced but not defined
