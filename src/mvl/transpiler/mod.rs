@@ -79,16 +79,20 @@ pub fn count_extern_decls(prog: &Program) -> usize {
         .count()
 }
 
-/// True when any prelude program has `extern "rust"` declarations.
+/// True when any prelude program has `extern "rust"` or `pub builtin fn` declarations.
 ///
-/// Phase 4: `std/primitives.mvl` is always in the prelude and declares the
-/// kernel trust boundary via `extern "rust" { … }`. Any program that loads
-/// this prelude needs `mvl_runtime` as a Cargo dependency so that the kernel
-/// primitives (re-exported via `mvl_runtime::prelude::*`) are in scope.
+/// The string/list kernel is declared as `pub builtin fn` in std/strings.mvl and
+/// std/lists.mvl. These are implemented in `mvl_runtime::stdlib::primitives` and
+/// re-exported via `mvl_runtime::prelude::*`, so any program loading the implicit
+/// prelude needs `mvl_runtime` as a Cargo dependency.
 pub fn prelude_requires_runtime(prelude_progs: &[Program]) -> bool {
-    prelude_progs
-        .iter()
-        .any(|p| p.declarations.iter().any(|d| matches!(d, Decl::Extern(_))))
+    prelude_progs.iter().any(|p| {
+        p.declarations.iter().any(|d| match d {
+            Decl::Extern(_) => true,
+            Decl::Fn(fd) => fd.is_builtin,
+            _ => false,
+        })
+    })
 }
 
 /// Returns true if the program declares at least one `extern "rust"` block.

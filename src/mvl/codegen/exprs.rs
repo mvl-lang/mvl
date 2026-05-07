@@ -1161,7 +1161,10 @@ impl<'ctx> LlvmBackend<'ctx> {
                         }
                     }
                     // L5-08: generic function → monomorphize JIT and call the mangled version.
-                    if !fd.type_params.is_empty() {
+                    // Builtin generic functions (e.g. list_get[T], list_len[T]) already have a
+                    // concrete body emitted by the fourth pass of emit_program using pointer-typed
+                    // parameters, so no monomorphization is needed — just call the base symbol.
+                    if !fd.type_params.is_empty() && !fd.is_builtin {
                         // Emit all arguments first to get their concrete LLVM types.
                         let arg_vals: Vec<BasicValueEnum<'ctx>> =
                             args.iter().filter_map(|a| self.emit_expr(a)).collect();

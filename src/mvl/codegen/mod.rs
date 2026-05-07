@@ -443,13 +443,16 @@ impl<'ctx> LlvmBackend<'ctx> {
         // First pass: record return types and declarations; pre-declare non-generic functions
         // so forward calls resolve.  Generic functions are emitted on-demand at call sites.
         // Also pre-declare extern fn signatures so calls from fn bodies resolve correctly.
+        // Builtin generic functions (e.g. list_len[T], list_get[T]) are also pre-declared
+        // here because they are NOT monomorphized at call sites — the fourth pass supplies
+        // a single pointer-typed body that works for all element types.
         for decl in &prog.declarations {
             if let Decl::Fn(fd) = decl {
                 if !fd.is_test {
                     self.fn_return_types
                         .insert(fd.name.clone(), *fd.return_type.clone());
                     self.fn_decls.insert(fd.name.clone(), fd.clone());
-                    if fd.type_params.is_empty() {
+                    if fd.type_params.is_empty() || fd.is_builtin {
                         self.declare_fn(fd);
                     }
                 }
@@ -495,6 +498,25 @@ impl<'ctx> LlvmBackend<'ctx> {
         for decl in &prog.declarations {
             if let Decl::Extern(ext) = decl {
                 self.emit_extern_decl(ext);
+            }
+        }
+        // Fourth pass: emit LLVM IR bodies for `pub builtin fn` declarations.
+        // These are the type-operation kernel (string/list primitives) declared in the
+        // implicit prelude; treated identically to `extern "rust"` functions.
+        let i64_ty = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        for decl in &prog.declarations.clone() {
+            if let Decl::Fn(fd) = decl {
+                if fd.is_builtin && !is_inlined_builtin(&fd.name) {
+                    let efn = ExternFnDecl {
+                        name: fd.name.clone(),
+                        params: fd.params.clone(),
+                        return_type: fd.return_type.clone(),
+                        effects: fd.effects.clone(),
+                        span: fd.span,
+                    };
+                    self.emit_extern_rust_fn_body(&efn, i64_ty, ptr_ty);
+                }
             }
         }
     }

@@ -310,12 +310,17 @@ impl RustEmitter {
         // otherwise fall back to the inlined preamble for standalone files.
         // `force_runtime` is set for sibling modules in a project that uses mvl_runtime,
         // so all modules share the same type definitions.
-        // Also check prelude programs for extern declarations: std/primitives.mvl
-        // has `extern "rust"` blocks, so any program that loads the Phase 4 prelude
-        // needs `use mvl_runtime::prelude::*;` to resolve the kernel primitives.
-        let prelude_has_extern = prelude_progs
-            .iter()
-            .any(|p| p.declarations.iter().any(|d| matches!(d, Decl::Extern(_))));
+        // Also check prelude programs for builtin declarations: std/strings.mvl and
+        // std/lists.mvl have `pub builtin fn` declarations for the kernel primitives,
+        // so any program that loads the Phase 4 prelude needs `use mvl_runtime::prelude::*;`
+        // to resolve them (implemented in mvl_runtime::stdlib::primitives).
+        let prelude_has_extern = prelude_progs.iter().any(|p| {
+            p.declarations.iter().any(|d| match d {
+                Decl::Extern(_) => true,
+                Decl::Fn(fd) => fd.is_builtin,
+                _ => false,
+            })
+        });
         let has_runtime = force_runtime
             || prelude_has_extern
             || prog

@@ -16,7 +16,7 @@ use crate::mvl::transpiler::mcdc_instr::DecisionKind;
 /// generated file via the implicit prelude.
 ///
 /// Phase 4 (ADR-0003): this replaces per-method hardcoded Rust emission with
-/// an explicit trust boundary declared in std/primitives.mvl.
+/// an explicit trust boundary declared as `pub builtin fn` in std/strings.mvl and std/lists.mvl.
 /// Methods implemented as pure MVL functions in std/strings.mvl and std/lists.mvl.
 ///
 /// When the transpiler sees `receiver.method(args)` for one of these names it
@@ -26,7 +26,7 @@ use crate::mvl::transpiler::mcdc_instr::DecisionKind;
 /// implemented in `mvl_runtime::ifc`.
 ///
 /// Phase 4 (ADR-0003): replaces per-method hardcoded Rust emission with an explicit
-/// trust boundary declared in std/primitives.mvl.
+/// trust boundary declared as `pub builtin fn` in std/strings.mvl and std/lists.mvl.
 const STDLIB_UFCS_METHODS: &[&str] = &[
     // std/strings.mvl
     "trim",
@@ -282,7 +282,7 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     emit_safe_clamp(cg, receiver, &args[0], &args[1]);
                 }
                 // contains(x) — MvlContains trait handles both Vec<T> and String.
-                // Corresponds to list_contains / str_contains in std/primitives.mvl.
+                // Corresponds to list_contains / str_contains (pub builtin fn in std/lists.mvl, std/strings.mvl).
                 // Uses a trait (not UFCS) because both List and String use the same
                 // method name but require different free-function signatures.
                 "contains" if args.len() == 1 => {
