@@ -179,6 +179,10 @@ pub fn transpile_project(
     entry_prog: &Program,
     siblings: &[(String, Program)],
     prelude_progs: &[Program],
+    expr_types: std::collections::HashMap<
+        crate::mvl::parser::lexer::Span,
+        crate::mvl::checker::types::Ty,
+    >,
 ) -> ProjectOutput {
     let has_main = has_main_fn(entry_prog);
     let extern_count = count_extern_decls(entry_prog);
@@ -193,6 +197,7 @@ pub fn transpile_project(
 
     let sibling_names: Vec<&str> = siblings.iter().map(|(n, _)| n.as_str()).collect();
     let mut cg = RustEmitter::new();
+    cg.expr_types = expr_types;
     cg.emit_program_with_mods(entry_prog, &sibling_names, prelude_progs);
     let main_rs = cg.finish();
 
@@ -241,6 +246,7 @@ pub fn transpile_with_prelude(
     crate_name: &str,
     prelude_progs: &[Program],
 ) -> TranspileOutput {
+    let check_result = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
     let has_main = has_main_fn(prog);
     let extern_count = count_extern_decls(prog);
     let has_extern_rust = has_extern_rust_decls(prog);
@@ -248,6 +254,7 @@ pub fn transpile_with_prelude(
         extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
     let mut cg = RustEmitter::new();
+    cg.expr_types = check_result.expr_types;
     cg.emit_program_with_mods(prog, &[], prelude_progs);
     let lib_rs = cg.finish();
 
@@ -315,6 +322,7 @@ pub fn transpile_source_with_prelude(
 ///
 /// Always succeeds in Phase 1 — unknown constructs fall back to `todo!()`.
 pub fn transpile(prog: &Program, crate_name: &str) -> TranspileOutput {
+    let check_result = crate::mvl::checker::check(prog);
     let has_main = has_main_fn(prog);
     let extern_count = count_extern_decls(prog);
     let has_extern_rust = has_extern_rust_decls(prog);
@@ -322,6 +330,7 @@ pub fn transpile(prog: &Program, crate_name: &str) -> TranspileOutput {
     let use_runtime = extern_count > 0 || has_std_imports(prog);
 
     let mut cg = RustEmitter::new();
+    cg.expr_types = check_result.expr_types;
     cg.emit_program(prog);
     let lib_rs = cg.finish();
 

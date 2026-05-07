@@ -1,10 +1,11 @@
 //! Emit Rust expressions from MVL [`Expr`] nodes.
 
+use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{BinaryOp, Expr, Literal, MatchArm, MatchBody, Pattern, UnaryOp};
 use crate::mvl::passes::coverage::BranchKind;
 use crate::mvl::passes::mcdc::analysis::count_clauses_ref;
 use crate::mvl::transpiler::emit_stmts::emit_mcdc_guard_block;
-use crate::mvl::transpiler::emit_types::emit_type_expr;
+use crate::mvl::transpiler::emit_types::{emit_label, emit_type_expr};
 use crate::mvl::transpiler::emitter::RustEmitter;
 use crate::mvl::transpiler::mcdc_instr::DecisionKind;
 
@@ -109,14 +110,24 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
             match method.as_str() {
                 // ── Higher-order collection methods ──────────────────────────────
 
-                // map(f) — works for List<T>, Option<T>, and Result<T,E> via the
-                // MvlMap trait (the transpiler cannot distinguish receiver types at
-                // emit time, so we keep the trait-dispatch path for polymorphism).
+                // map(f) — direct Rust dispatch using checker type info (#554).
+                // Option/Result use .map(); List and unknown types use into_iter().collect().
                 "map" if args.len() == 1 => {
-                    emit_expr(cg, receiver);
-                    cg.push(".mvl_map(|__x| (");
-                    emit_expr(cg, &args[0]);
-                    cg.push(")(__x.clone()))");
+                    let receiver_ty = cg.expr_types.get(&receiver.span()).cloned();
+                    match receiver_ty.as_ref() {
+                        Some(Ty::Option(_)) | Some(Ty::Result(_, _)) => {
+                            emit_expr(cg, receiver);
+                            cg.push(".map(|__x| (");
+                            emit_expr(cg, &args[0]);
+                            cg.push(")(__x.clone()))");
+                        }
+                        _ => {
+                            emit_expr(cg, receiver);
+                            cg.push(".into_iter().map(|__x| (");
+                            emit_expr(cg, &args[0]);
+                            cg.push(")(__x.clone())).collect::<Vec<_>>()");
+                        }
+                    }
                 }
 
                 // ── Pure MVL higher-order list methods ────────────────────────────
@@ -270,26 +281,45 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     emit_expr(cg, receiver);
                     cg.push(".clone()) as f64)");
                 }
-                // pow(e) — MvlPow trait; works for both i64 and f64
+                // pow(e) — direct Rust using checker type info (#554).
+                // i64: .pow(e as u32); f64: .powf(e).
                 "pow" if args.len() == 1 => {
+                    let receiver_ty = cg.expr_types.get(&receiver.span()).cloned();
                     emit_expr(cg, receiver);
-                    cg.push(".mvl_pow(");
-                    emit_expr_as_arg(cg, &args[0]);
-                    cg.push(")");
+                    match receiver_ty.as_ref() {
+                        Some(Ty::Float) => {
+                            cg.push(".powf(");
+                            emit_expr_as_arg(cg, &args[0]);
+                            cg.push(")");
+                        }
+                        _ => {
+                            cg.push(".pow(");
+                            emit_expr_as_arg(cg, &args[0]);
+                            cg.push(" as u32)");
+                        }
+                    }
                 }
                 // clamp(low, high) — Rust's clamp panics on inverted bounds; safe wrapper
                 "clamp" if args.len() == 2 => {
                     emit_safe_clamp(cg, receiver, &args[0], &args[1]);
                 }
-                // contains(x) — MvlContains trait handles both Vec<T> and String.
-                // Corresponds to list_contains / str_contains (pub builtin fn in std/lists.mvl, std/strings.mvl).
-                // Uses a trait (not UFCS) because both List and String use the same
-                // method name but require different free-function signatures.
+                // contains(x) — direct Rust using checker type info (#554).
+                // String: .contains(arg.as_str()); List/Set: .contains(&arg).
                 "contains" if args.len() == 1 => {
+                    let receiver_ty = cg.expr_types.get(&receiver.span()).cloned();
                     emit_expr(cg, receiver);
-                    cg.push(".mvl_contains(&(");
-                    emit_args(cg, args);
-                    cg.push("))");
+                    match receiver_ty.as_ref() {
+                        Some(Ty::String) => {
+                            cg.push(".contains((");
+                            emit_args(cg, args);
+                            cg.push(").as_str())");
+                        }
+                        _ => {
+                            cg.push(".contains(&(");
+                            emit_args(cg, args);
+                            cg.push("))");
+                        }
+                    }
                 }
 
                 // ── Map / Set / List unified method traits ────────────────────────
@@ -299,20 +329,33 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                 // Trait-dispatch lets Rust pick the right impl at compile time without
                 // the transpiler needing type information about the receiver.
 
-                // get(key) — MvlGet trait: Vec.mvl_get(i64)→Option<T>,
-                //            HashMap.mvl_get(K)→Option<V>.
+                // get(key) — direct Rust using checker type info (#554).
+                // Map: .get(&key).cloned(); List: bounds-checked index.
                 "get" if args.len() == 1 => {
-                    emit_expr(cg, receiver);
-                    cg.push(".mvl_get(");
-                    emit_expr(cg, &args[0]);
-                    cg.push(".clone())");
+                    let receiver_ty = cg.expr_types.get(&receiver.span()).cloned();
+                    match receiver_ty.as_ref() {
+                        Some(Ty::Map(_, _)) => {
+                            emit_expr(cg, receiver);
+                            cg.push(".get(&(");
+                            emit_expr(cg, &args[0]);
+                            cg.push(").clone()).cloned()");
+                        }
+                        _ => {
+                            cg.push("{ let __mvl_i = (");
+                            emit_expr(cg, &args[0]);
+                            cg.push("); if __mvl_i < 0 { None } else { (");
+                            emit_expr(cg, receiver);
+                            cg.push(").get(__mvl_i as usize).cloned() } }");
+                        }
+                    }
                 }
 
-                // len() — MvlLen trait: returns i64 for Vec, HashMap, HashSet, String.
-                // Fixes usize→i64 mismatch in generated Rust.
+                // len() — direct Rust using checker type info (#554).
+                // String: .chars().count() as i64; List/Map/Set: .len() as i64.
+                // Labeled types: propagate label via field access.
                 "len" if args.is_empty() => {
-                    emit_expr(cg, receiver);
-                    cg.push(".mvl_len()");
+                    let receiver_ty = cg.expr_types.get(&receiver.span()).cloned();
+                    emit_len_direct(cg, receiver, receiver_ty.as_ref());
                 }
 
                 // insert(k, v) — Map: emit HashMap::insert (returns Option, discarded).
@@ -1230,6 +1273,39 @@ fn map_fn_name(name: &str) -> String {
 ///
 /// Emits: `{let _mvl_n=(n);let _mvl_lo=(low);let _mvl_hi=(high);
 ///          if _mvl_lo>_mvl_hi{_mvl_n}else{_mvl_n.clamp(_mvl_lo,_mvl_hi)}}`
+/// Emit `receiver.len()` as direct Rust using the receiver's checker type (#554).
+///
+/// - `String` → `.chars().count() as i64` (Unicode codepoint count, not byte count).
+/// - `List/Map/Set` → `.len() as i64`.
+/// - `Labeled(label, inner)` → `Label((&receiver).0.method as i64)` preserving IFC label.
+/// - Unknown → `.len() as i64` (safe fallback for any Rust collection).
+fn emit_len_direct(cg: &mut RustEmitter, receiver: &Expr, ty: Option<&Ty>) {
+    // Wrap in parens: `as i64` has low precedence and `.clone()` cannot follow
+    // an unparenthesised cast, e.g. `xs.len() as i64.clone()` is a parse error.
+    match ty {
+        Some(Ty::String) => {
+            cg.push("(");
+            emit_expr(cg, receiver);
+            cg.push(".chars().count() as i64)");
+        }
+        Some(Ty::Labeled(label, inner)) => {
+            let label_name = emit_label(*label);
+            let method = match inner.as_ref() {
+                Ty::String => ".chars().count()",
+                _ => ".len()",
+            };
+            cg.push(&format!("{label_name}((&("));
+            emit_expr(cg, receiver);
+            cg.push(&format!(")).0{method} as i64)"));
+        }
+        _ => {
+            cg.push("(");
+            emit_expr(cg, receiver);
+            cg.push(".len() as i64)");
+        }
+    }
+}
+
 fn emit_safe_clamp(cg: &mut RustEmitter, receiver: &Expr, low: &Expr, high: &Expr) {
     cg.push("{let _mvl_n=(");
     emit_expr(cg, receiver);

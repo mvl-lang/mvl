@@ -3,6 +3,7 @@
 //! [`RustEmitter`] is the single writer passed through every emit function.
 //! All other `emit_*` modules take `&mut RustEmitter` and append to it.
 
+use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{
     BinaryOp, Decl, ExternDecl, FieldDecl, FnDecl, Param, Program, TypeDecl, TypeExpr, Variant,
     VariantFields,
@@ -17,9 +18,7 @@ use crate::mvl::transpiler::borrow_params::build_borrow_params_map;
 use crate::mvl::transpiler::emit_functions::emit_fn_decl;
 use crate::mvl::transpiler::emit_impls::emit_impl_decl;
 use crate::mvl::transpiler::emit_types::emit_type_decl;
-use crate::mvl::transpiler::emit_types::{
-    emit_method_traits, emit_security_preamble, emit_type_expr,
-};
+use crate::mvl::transpiler::emit_types::{emit_security_preamble, emit_type_expr};
 use crate::mvl::transpiler::{collect_stdlib_modules, has_std_imports};
 
 /// Stdlib function names that shadow Rust built-ins or prelude items and must be
@@ -88,6 +87,12 @@ pub struct RustEmitter {
     /// At FnCall emission time, a hit in this map causes the call to be emitted
     /// as `mvl_runtime::stdlib::MODULE::fn_name(...)` instead of `fn_name(...)`.
     pub stdlib_fn_qualified: std::collections::HashMap<String, String>,
+    /// Inferred type for every expression, keyed by span.
+    ///
+    /// Populated from [`CheckResult::expr_types`] before emission so that
+    /// method-call sites can emit type-specific Rust (e.g. `.len() as i64` vs
+    /// `.chars().count() as i64`) without needing trait dispatch (#554).
+    pub expr_types: std::collections::HashMap<Span, Ty>,
 }
 
 impl RustEmitter {
@@ -333,10 +338,6 @@ impl RustEmitter {
         if has_runtime {
             self.use_mvl_runtime = true;
             self.line("use mvl_runtime::prelude::*;");
-            // Method dispatch traits are no longer exported from the prelude (#554);
-            // emit them inline so all transpiler-generated call sites (.mvl_len, .mvl_pow, …)
-            // resolve correctly regardless of runtime linkage.
-            emit_method_traits(self);
             self.blank();
             // Emit targeted stdlib imports for each `use std.X.*` in the MVL source (#488/#489).
             // The prelude no longer re-exports OS modules; each module is imported explicitly.

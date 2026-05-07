@@ -1379,8 +1379,18 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
         .collect();
     stdlib_prelude_progs.extend(load_mvl_native_stdlib_extras(&all_progs));
 
-    let out =
-        transpiler::transpile_project(&crate_name, &prog, &sibling_modules, &stdlib_prelude_progs);
+    // Collect expression types from ALL programs (prelude + user) for the
+    // transpiler to emit type-specific Rust at method-call sites (#554).
+    let mut all_expr_types = checker::collect_prelude_expr_types(&stdlib_prelude_progs);
+    let check_result = checker::check_with_prelude(&stdlib_prelude_progs, &prog);
+    all_expr_types.extend(check_result.expr_types);
+    let out = transpiler::transpile_project(
+        &crate_name,
+        &prog,
+        &sibling_modules,
+        &stdlib_prelude_progs,
+        all_expr_types,
+    );
 
     // Write to a per-crate workspace so each build gets its own mvl_runtime copy.
     // Layout: temp/mvl_build_{name}/{name}/  (crate), temp/mvl_build_{name}/mvl_runtime/ (runtime)
