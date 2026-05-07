@@ -893,8 +893,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                 self.emit_eprint(args)
             }
             "format" => self.emit_format(args),
-            "eprintln" => self.emit_eprintln(args),
-            "eprint" => self.emit_eprint(args),
             // assert(condition) — trap if condition is false.
             "assert" if args.len() == 1 => {
                 let cond = match self.emit_expr(&args[0])? {

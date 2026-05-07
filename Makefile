@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-corpus test-solver test-stdlib test-bdd test-transpiler test-llvm test-tree-sitter test-grammar-coverage test-examples coverage lint mvl-lint format format-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants
+.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-corpus test-solver test-stdlib test-bdd test-transpiler test-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples coverage lint mvl-lint format format-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants
 
 help: ## Show this help
 	@echo ""
@@ -181,6 +181,10 @@ test-llvm: build build-llvm-runtime ## Run LLVM backend tests across full corpus
 	else \
 		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
 	fi
+
+test-cross-backend: build build-llvm-runtime ## Run Rust integration tests for backend parity (transpiler vs LLVM)
+	@echo "Running cross-backend tests (transpiler vs LLVM parity)..."
+	cargo test --test cross_backend
 
 test-examples: build build-llvm-runtime ## Run `make test` for every example subdirectory (BACKEND=llvm for LLVM backend)
 	@examples/test-all.sh $(if $(filter llvm,$(BACKEND)),--llvm)

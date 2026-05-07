@@ -106,19 +106,6 @@ pub fn check_with_prelude(prelude: &[Program], prog: &Program) -> CheckResult {
 /// Used by the transpiler to get type information for stdlib prelude programs
 /// (e.g. json.mvl, collections.mvl) so method-call sites in those files can
 /// emit direct Rust rather than trait-dispatch (#554).
-pub fn collect_prelude_expr_types(programs: &[Program]) -> HashMap<Span, Ty> {
-    let mut checker = TypeChecker::new();
-    for p in programs {
-        checker.collect_declarations(&p.declarations);
-    }
-    for p in programs {
-        for decl in &p.declarations {
-            checker.check_decl(decl);
-        }
-    }
-    checker.expr_types
-}
-
 pub fn check(prog: &Program) -> CheckResult {
     check_with_prelude(&[], prog)
 }

@@ -300,7 +300,6 @@ pub fn transpile_source_with_prelude(
 
     let check_result = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
     let mut cg = RustEmitter::new();
-    cg.expr_types = check_result.expr_types;
     cg.test_extern_stubs = true;
     let mut all_expr_types = crate::mvl::checker::collect_prelude_expr_types(prelude_progs);
     all_expr_types.extend(check_result.expr_types);
