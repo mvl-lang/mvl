@@ -123,6 +123,28 @@ pub fn check(prog: &Program) -> CheckResult {
     check_with_prelude(&[], prog)
 }
 
+/// Collect inferred expression types for a set of programs without surfacing errors.
+///
+/// Used by the transpiler to get type information for stdlib prelude programs
+/// (e.g. json.mvl, collections.mvl) so method-call sites in those files can
+/// emit direct Rust rather than trait-dispatch (#554).
+///
+/// All declarations from all programs are registered first so cross-file
+/// references resolve correctly, then each declaration is checked for type
+/// inference (errors are discarded).
+pub fn collect_prelude_expr_types(programs: &[Program]) -> HashMap<Span, Ty> {
+    let mut checker = TypeChecker::new();
+    for p in programs {
+        checker.collect_declarations(&p.declarations);
+    }
+    for p in programs {
+        for decl in &p.declarations {
+            checker.check_decl(decl);
+        }
+    }
+    checker.expr_types
+}
+
 // ── Effect subsetting (002-effect-system/Req 3) ───────────────────────────────
 
 /// Returns `true` when `declared` covers `required` for effect propagation.
