@@ -29,6 +29,11 @@ def _(mo):
         |-----------|-------------|
         | [**Stdlib Parity**](/stdlib) | Compare stdlib coverage: Rust transpiler vs LLVM backend |
         | [**Phase Progress**](/phases) | Track the Nine Phases roadmap with GitHub issue counts |
+        | [**Epic Tracker**](/epics) | Monitor major epics (#533, #314) and sub-ticket progress |
+        | [**Test Results**](/tests) | Cross-backend test pass/fail and coverage metrics |
+        | [**Release Timeline**](/releases) | Version history, changelog entries, release velocity |
+        | [**Spec Compliance**](/specs) | Requirements from `.openspec/specs/` vs implementation |
+        | [**Codebase Metrics**](/metrics) | Lines of code by module, growth over time |
 
         ---
 
@@ -38,7 +43,9 @@ def _(mo):
 
         - **Backend parity** — Are both backends implementing the same stdlib functions?
         - **Phase progress** — Which phase are we in? How many issues remain?
-        - **Coverage gaps** — What's missing from LLVM that Rust has?
+        - **Epic status** — How close are the major epics to completion?
+        - **Test health** — Are cross-backend tests passing?
+        - **Spec coverage** — Which requirements have implementation links?
 
         ---
 
