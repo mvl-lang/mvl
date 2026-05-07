@@ -2,6 +2,11 @@
 //
 // Verifies that s.parse_int() and s.parse_float() work end-to-end in the
 // LLVM backend, including Ok extraction and Err handling via match.
+//
+// expect: 42
+// expect: 1
+// expect: ok
+// expect: 1
 
 fn main() -> Unit ! Console {
     // ── parse_int ─────────────────────────────────────────────────────────
