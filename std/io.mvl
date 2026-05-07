@@ -85,7 +85,7 @@ pub type Stdin = struct {}
 
 /// Construct a Path from a string.
 /// Pure — no filesystem access.
-pub fn path(s: String) -> Path { Path { inner: s } }
+pub builtin fn path(s: String) -> Path
 
 /// Append a path segment to a base path.
 ///

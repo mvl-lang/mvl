@@ -573,196 +573,284 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
     }
 
+    // ── ADR-0019: stdlib sig derivation (#557) ───────────────────────────────
+
+    /// Derive the C-ABI symbol name for a stdlib function from its module and MVL name.
+    ///
+    /// Most symbols follow `_mvl_{module}_{fn_name}`, with three exceptions:
+    /// - `time.sleep` uses `_mvl_time_thread_sleep` (POSIX thread-sleep naming).
+    /// - `log.*` functions already carry the `log_` prefix in their MVL name,
+    ///   so the symbol is `_mvl_{fn_name}` to avoid `_mvl_log_log_debug`.
+    /// - `crypto.crypto_random_bytes` would double the prefix — use `_mvl_{fn_name}`.
+    fn derive_c_abi_symbol(module: &str, fn_name: &str) -> String {
+        match (module, fn_name) {
+            ("time", "sleep") => "_mvl_time_thread_sleep".into(),
+            ("log", _) => format!("_mvl_{fn_name}"),
+            ("crypto", _) if fn_name.starts_with("crypto_") => format!("_mvl_{fn_name}"),
+            _ => format!("_mvl_{module}_{fn_name}"),
+        }
+    }
+
+    /// Strip IFC labels (`Tainted<T>`, `Secret<T>`, etc.) and refinements from a type.
+    fn unlabel_type(te: &TypeExpr) -> &TypeExpr {
+        match te {
+            TypeExpr::Labeled { inner, .. } => Self::unlabel_type(inner),
+            TypeExpr::Refined { inner, .. } => Self::unlabel_type(inner),
+            _ => te,
+        }
+    }
+
+    /// Return the outermost type name of `te` after stripping labels/refinements.
+    /// Returns `""` for non-named types (tuples, fn types, etc.).
+    fn base_type_name(te: &TypeExpr) -> &str {
+        match Self::unlabel_type(te) {
+            TypeExpr::Base { name, .. } => name.as_str(),
+            TypeExpr::Option { .. } => "Option",
+            TypeExpr::Result { .. } => "Result",
+            _ => "",
+        }
+    }
+
+    /// True if a type name is heap-pointer-sized at the C-ABI level.
+    ///
+    /// Everything except primitive scalars and `Duration` (flattened to two i64s)
+    /// is passed as an opaque pointer (`MvlString*`, `MvlArray*`, struct ptr, etc.).
+    fn is_ptr_type(name: &str) -> bool {
+        !matches!(
+            name,
+            "Int" | "Float" | "Bool" | "Unit" | "Never" | "Duration" | ""
+        )
+    }
+
+    /// Infer a [`StdlibSig`] from a `pub builtin fn` declaration's return and parameter types.
+    ///
+    /// Returns `None` for functions whose type shapes aren't supported by the LLVM
+    /// backend (complex generics, signal handlers, IFC-typed env vars, etc.).
+    /// Callers silently skip `None` — no error is emitted.
+    fn stdlib_sig_from_decl(
+        module: &str,
+        fn_name: &str,
+        ret_ty: &TypeExpr,
+        params: &[crate::mvl::parser::ast::Param],
+    ) -> Option<StdlibSig> {
+        let symbol = Self::derive_c_abi_symbol(module, fn_name);
+        let unlabeled_ret = Self::unlabel_type(ret_ty);
+        let ret_base = Self::base_type_name(unlabeled_ret);
+        let n = params.len();
+        let p0 = params
+            .first()
+            .map(|p| Self::base_type_name(&p.ty))
+            .unwrap_or("");
+        let p1 = params
+            .get(1)
+            .map(|p| Self::base_type_name(&p.ty))
+            .unwrap_or("");
+        let p2 = params
+            .get(2)
+            .map(|p| Self::base_type_name(&p.ty))
+            .unwrap_or("");
+
+        match (ret_base, n) {
+            // ── Scalar returns ────────────────────────────────────────────────
+            ("Int", 0) => Some(StdlibSig::I64NoArg(symbol)),
+            ("Float", 0) => Some(StdlibSig::F64NoArg(symbol)),
+            ("Int", 2) if p0 == "Int" && p1 == "Int" => Some(StdlibSig::I64TwoI64Args(symbol)),
+            // ── Void/Never returns ────────────────────────────────────────────
+            ("Unit" | "Never", 1) if p0 == "Int" => Some(StdlibSig::VoidI64Arg(symbol)),
+            ("Unit", 1) if p0 == "Duration" => Some(StdlibSig::VoidDurationArg(symbol)),
+            ("Unit", 2) if p0 == "String" && p1 == "Map" => {
+                Some(StdlibSig::VoidStringMapArg(symbol))
+            }
+            // ── Bool predicates: ptr → i64 ────────────────────────────────────
+            ("Bool", 1) if Self::is_ptr_type(p0) => Some(StdlibSig::I64OnePtrArg(symbol)),
+            // ── Result returns (must precede generic ptr patterns) ────────────
+            ("Result", 1) => {
+                let ok_base = if let TypeExpr::Result { ok, .. } = unlabeled_ret {
+                    Self::base_type_name(ok)
+                } else {
+                    ""
+                };
+                if ok_base == "Unit" && Self::is_ptr_type(p0) {
+                    Some(StdlibSig::ResultUnitOnePtrArg(symbol))
+                } else if Self::is_ptr_type(ok_base) && Self::is_ptr_type(p0) {
+                    Some(StdlibSig::ResultStringOnePtrArg(symbol))
+                } else {
+                    None
+                }
+            }
+            ("Result", 2) if p1 == "Int" => {
+                let ok_base = if let TypeExpr::Result { ok, .. } = unlabeled_ret {
+                    Self::base_type_name(ok)
+                } else {
+                    ""
+                };
+                if ok_base == "Unit" && Self::is_ptr_type(p0) {
+                    Some(StdlibSig::ResultUnitPtrI64Args(symbol))
+                } else {
+                    None
+                }
+            }
+            ("Result", 2) => {
+                let ok_base = if let TypeExpr::Result { ok, .. } = unlabeled_ret {
+                    Self::base_type_name(ok)
+                } else {
+                    ""
+                };
+                if ok_base == "Unit" && Self::is_ptr_type(p0) && Self::is_ptr_type(p1) {
+                    Some(StdlibSig::ResultUnitTwoPtrArgs(symbol))
+                } else {
+                    None
+                }
+            }
+            // ── Option[Match], two ptr args (must precede generic ptr patterns) ─
+            ("Option", 2) if Self::is_ptr_type(p0) && Self::is_ptr_type(p1) => {
+                let inner = if let TypeExpr::Option { inner, .. } = unlabeled_ret {
+                    Self::base_type_name(inner)
+                } else {
+                    ""
+                };
+                if inner == "Match" {
+                    Some(StdlibSig::OptionMatchTwoPtrArgs(symbol))
+                } else {
+                    None
+                }
+            }
+            // ── Ptr return, int arg (crypto_random_bytes, random.bytes) ───────
+            (ret, 1) if Self::is_ptr_type(ret) && p0 == "Int" => {
+                Some(StdlibSig::I64ReturnsPtrArg(symbol))
+            }
+            // ── Ptr → ptr identity (sha256, sha512, path) ────────────────────
+            (ret, 1) if Self::is_ptr_type(ret) && Self::is_ptr_type(p0) => {
+                Some(StdlibSig::PtrIdentArg(symbol))
+            }
+            // ── String/ptr return, three ptr args (regex.replace) ─────────────
+            (ret, 3)
+                if Self::is_ptr_type(ret)
+                    && Self::is_ptr_type(p0)
+                    && Self::is_ptr_type(p1)
+                    && Self::is_ptr_type(p2) =>
+            {
+                Some(StdlibSig::StringThreePtrArgs(symbol))
+            }
+            // ── Unrecognized: complex generics, signal handlers, etc. ─────────
+            _ => None,
+        }
+    }
+
+    /// Parse `{module}.mvl` from the embedded stdlib and return all non-generic
+    /// `pub builtin fn` declarations.
+    ///
+    /// Returns an empty vec if the module file isn't embedded (pure-MVL modules).
+    /// Generic builtins (e.g. `choice[T]`, `shuffle[T]`) are excluded — they have
+    /// no single concrete C-ABI calling convention.
+    fn load_module_builtins(module: &str) -> Vec<crate::mvl::parser::ast::FnDecl> {
+        use crate::mvl::parser::ast::Decl;
+        use crate::mvl::parser::Parser;
+        use crate::mvl::stdlib::stdlib_content;
+
+        let filename = format!("{module}.mvl");
+        let Some(content) = stdlib_content(&filename) else {
+            return Vec::new();
+        };
+        let (mut parser, _) = Parser::new(content);
+        let prog = parser.parse_program();
+        prog.declarations
+            .into_iter()
+            .filter_map(|decl| {
+                if let Decl::Fn(fd) = decl {
+                    if fd.is_builtin && fd.type_params.is_empty() {
+                        Some(fd)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     // ── ADR-0019: stdlib import dispatch ─────────────────────────────────────
 
     /// Scan `Decl::Use` nodes for `use std.*` imports and populate `stdlib_imports`.
     ///
-    /// The MVL parser discards individual items from brace imports
-    /// (`use std.env.{getuid, getgid}` → `path = ["std", "env"]`), so we register
-    /// *all* known symbols for a module when a brace import is detected.
-    /// Single-item imports (`use std.env.getuid`) produce `path = ["std", "env", "getuid"]`
-    /// and register only that symbol.
+    /// C-ABI symbol names and calling conventions are derived from the corresponding
+    /// `pub builtin fn` declarations in each stdlib `.mvl` file — no hardcoded
+    /// dispatch table required.  Adding a new `pub builtin fn` automatically works
+    /// in both backends as long as its type shape is recognised by
+    /// [`Self::stdlib_sig_from_decl`].
+    ///
+    /// Brace imports (`use std.env.{getuid, getgid}` → path `["std", "env"]`) register
+    /// all supported builtins for that module; single-item imports register only the
+    /// named symbol.
     fn collect_stdlib_imports(&mut self, prog: &Program) {
-        // Dispatch table: (module, mvl_name) → StdlibSig.
-        //
-        // I64NoArg          — no arguments, returns i64.
-        // F64NoArg          — no arguments, returns f64.
-        // I64TwoI64Args     — (i64, i64) → i64.
-        // VoidDurationArg   — (Duration) → void.
-        // VoidStringMapArg  — (ptr, ptr) → void.
-        // PtrIdentArg       — ptr → ptr (identity, e.g. path()).
-        // I64ReturnsPtrArg  — i64 → ptr (e.g. crypto_random_bytes(n) → MvlArray*).
-        // ResultUnitOnePtrArg  — ptr → {i8,ptr} Result[Unit,String].
-        // ResultUnitTwoPtrArgs — (ptr,ptr) → {i8,ptr} Result[Unit,String].
-        // ResultStringOnePtrArg — ptr → {i8,ptr} Result[String,String].
-        //
-        // Excluded (pending MvlArray*/MvlOption* marshalling):
-        //   - random.bytes, random.choice, random.shuffle (same pattern as crypto_random_bytes;
-        //     deferred until random module gets the same MvlArray* treatment — #507 followup)
-        //   - time.iso8601_format (returns *mut c_char, needs string dispatch)
-        //   - env.get, env.set, env.remove_var, env.cwd, …
-        //   - sigint/sigterm/…: return i8, not i64
-        //   - signal_reset/signal_ignore: take i8 argument
-        //   - process.is_success: takes i8 argument
-        type Sig = StdlibSig;
-        let known: &[(&str, &str, Sig)] = &[
-            // std.env
-            ("env", "getuid", Sig::I64NoArg("_mvl_env_getuid".into())),
-            ("env", "getgid", Sig::I64NoArg("_mvl_env_getgid".into())),
-            ("env", "args_len", Sig::I64NoArg("_mvl_env_args_len".into())),
-            // std.time
-            (
-                "time",
-                "sleep",
-                Sig::VoidDurationArg("_mvl_time_thread_sleep".into()),
-            ),
-            // std.random
-            (
-                "random",
-                "int",
-                Sig::I64TwoI64Args("_mvl_random_int".into()),
-            ),
-            ("random", "float", Sig::F64NoArg("_mvl_random_float".into())),
-            // std.log — (MvlString*, MvlMap*) → void
-            (
-                "log",
-                "log_debug",
-                Sig::VoidStringMapArg("_mvl_log_debug".into()),
-            ),
-            (
-                "log",
-                "log_info",
-                Sig::VoidStringMapArg("_mvl_log_info".into()),
-            ),
-            (
-                "log",
-                "log_warn",
-                Sig::VoidStringMapArg("_mvl_log_warn".into()),
-            ),
-            (
-                "log",
-                "log_error",
-                Sig::VoidStringMapArg("_mvl_log_error".into()),
-            ),
-            // std.io — #435: C-ABI ptr-based Result returns
-            ("io", "path", Sig::PtrIdentArg("_mvl_io_path".into())),
-            (
-                "io",
-                "write",
-                Sig::ResultUnitTwoPtrArgs("_mvl_io_write".into()),
-            ),
-            (
-                "io",
-                "append",
-                Sig::ResultUnitTwoPtrArgs("_mvl_io_append".into()),
-            ),
-            (
-                "io",
-                "read_to_string",
-                Sig::ResultStringOnePtrArg("_mvl_io_read_to_string".into()),
-            ),
-            (
-                "io",
-                "create_dir_all",
-                Sig::ResultUnitOnePtrArg("_mvl_io_create_dir_all".into()),
-            ),
-            (
-                "io",
-                "remove",
-                Sig::ResultUnitOnePtrArg("_mvl_io_remove".into()),
-            ),
-            // std.io — #536: path queries and additional file ops
-            ("io", "exists", Sig::I64OnePtrArg("_mvl_io_exists".into())),
-            ("io", "is_file", Sig::I64OnePtrArg("_mvl_io_is_file".into())),
-            ("io", "is_dir", Sig::I64OnePtrArg("_mvl_io_is_dir".into())),
-            (
-                "io",
-                "read_file",
-                Sig::ResultStringOnePtrArg("_mvl_io_read_file".into()),
-            ),
-            (
-                "io",
-                "create_symlink",
-                Sig::ResultUnitTwoPtrArgs("_mvl_io_create_symlink".into()),
-            ),
-            (
-                "io",
-                "read_link",
-                Sig::ResultStringOnePtrArg("_mvl_io_read_link".into()),
-            ),
-            (
-                "io",
-                "chmod",
-                Sig::ResultUnitPtrI64Args("_mvl_io_chmod".into()),
-            ),
-            // std.env — #536: exit
-            ("env", "exit", Sig::VoidI64Arg("_mvl_env_exit".into())),
-            // std.regex — #420/#439
-            (
-                "regex",
-                "compile",
-                Sig::ResultStringOnePtrArg("_mvl_regex_compile".into()),
-            ),
-            (
-                "regex",
-                "replace",
-                Sig::StringThreePtrArgs("_mvl_regex_replace".into()),
-            ),
-            (
-                "regex",
-                "find",
-                Sig::OptionMatchTwoPtrArgs("_mvl_regex_find".into()),
-            ),
-            // find_all, captures: C-ABI symbols planned; LLVM codegen deferred —
-            // find_all requires List[Struct] element-copy marshalling;
-            // captures requires nested List[Option[String]] + Map marshalling.
-        ];
-
+        // Pre-load builtins for every module referenced in `use std.*` declarations,
+        // plus `crypto` which is always registered regardless of explicit imports.
+        let mut module_cache: HashMap<String, Vec<crate::mvl::parser::ast::FnDecl>> =
+            HashMap::new();
         for decl in &prog.declarations {
             let Decl::Use(ud) = decl else { continue };
-            if ud.path.is_empty() || ud.path[0] != "std" {
-                continue;
+            if ud.path.len() >= 2 && ud.path[0] == "std" {
+                let m = ud.path[1].as_str();
+                module_cache
+                    .entry(m.to_string())
+                    .or_insert_with(|| Self::load_module_builtins(m));
             }
-            if ud.path.len() < 2 {
+        }
+        module_cache
+            .entry("crypto".to_string())
+            .or_insert_with(|| Self::load_module_builtins("crypto"));
+
+        // Register stdlib imports from `use std.*` declarations.
+        for decl in &prog.declarations {
+            let Decl::Use(ud) = decl else { continue };
+            if ud.path.is_empty() || ud.path[0] != "std" || ud.path.len() < 2 {
                 continue;
             }
             let module = &ud.path[1];
+            let Some(builtins) = module_cache.get(module.as_str()) else {
+                continue;
+            };
 
             if ud.path.len() == 2 {
                 // Brace import: `use std.env.{getuid, getgid}` — the parser discards the
-                // item list and stores only ["std", "env"] (parser limitation).
-                // We register all known symbols for the module as a conservative approximation.
-                // Single-item imports always have path.len() == 3 (e.g. ["std", "env", "getuid"]).
-                for (m, fn_name, sig) in known {
-                    if *m == module.as_str() {
-                        self.stdlib_imports
-                            .insert((*fn_name).to_string(), sig.clone());
+                // item list and stores only `["std", "env"]` (parser limitation).
+                // Register all supported builtins for this module.
+                for fd in builtins {
+                    if let Some(sig) =
+                        Self::stdlib_sig_from_decl(module, &fd.name, &fd.return_type, &fd.params)
+                    {
+                        self.stdlib_imports.entry(fd.name.clone()).or_insert(sig);
                     }
                 }
             } else {
                 // Single import: `use std.env.getuid` → path = ["std", "env", "getuid"].
-                let fn_name = &ud.path[ud.path.len() - 1];
-                for (m, kfn, sig) in known {
-                    if *m == module.as_str() && *kfn == fn_name.as_str() {
-                        self.stdlib_imports.insert(fn_name.clone(), sig.clone());
-                        break;
+                let fn_name = ud.path.last().unwrap();
+                if let Some(fd) = builtins.iter().find(|fd| &fd.name == fn_name) {
+                    if let Some(sig) =
+                        Self::stdlib_sig_from_decl(module, fn_name, &fd.return_type, &fd.params)
+                    {
+                        self.stdlib_imports.insert(fn_name.clone(), sig);
                     }
                 }
             }
         }
 
         // #180/#438/#507: crypto tier-1 builtins — always available, no `use` import required.
-        // sha256/sha512: ptr→ptr (PtrIdentArg). crypto_random_bytes: i64→ptr (I64ReturnsPtrArg).
+        // Derived from pub builtin fn declarations in crypto.mvl like all other stdlib symbols.
         // Use `entry().or_insert()` so an explicit `use std.crypto.*` import doesn't conflict.
-        self.stdlib_imports
-            .entry("sha256".into())
-            .or_insert_with(|| StdlibSig::PtrIdentArg("_mvl_crypto_sha256".into()));
-        self.stdlib_imports
-            .entry("sha512".into())
-            .or_insert_with(|| StdlibSig::PtrIdentArg("_mvl_crypto_sha512".into()));
-        self.stdlib_imports
-            .entry("crypto_random_bytes".into())
-            .or_insert_with(|| StdlibSig::I64ReturnsPtrArg("_mvl_crypto_random_bytes".into()));
+        for fn_name in &["sha256", "sha512", "crypto_random_bytes"] {
+            if let Some(fd) = module_cache
+                .get("crypto")
+                .and_then(|fns| fns.iter().find(|fd| fd.name.as_str() == *fn_name))
+            {
+                if let Some(sig) =
+                    Self::stdlib_sig_from_decl("crypto", &fd.name, &fd.return_type, &fd.params)
+                {
+                    self.stdlib_imports.entry(fd.name.clone()).or_insert(sig);
+                }
+            }
+        }
 
         // #508: Register return type for crypto_random_bytes so local_mvl_types tracks
         // it as Secret[List[Int]] when used in let-bindings — enables the codegen-level
