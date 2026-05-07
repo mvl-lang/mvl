@@ -1,4 +1,5 @@
 {
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/grammar.schema.json",
   "name": "mvl",
   "rules": {
     "program": {
@@ -586,8 +587,17 @@
           "type": "CHOICE",
           "members": [
             {
-              "type": "SYMBOL",
-              "name": "totality"
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "totality"
+                },
+                {
+                  "type": "STRING",
+                  "value": "builtin"
+                }
+              ]
             },
             {
               "type": "BLANK"
@@ -697,8 +707,16 @@
           ]
         },
         {
-          "type": "SYMBOL",
-          "name": "block"
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "block"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
         }
       ]
     },
@@ -2254,8 +2272,13 @@
                 "name": "expr"
               },
               {
-                "type": "STRING",
-                "value": "^"
+                "type": "ALIAS",
+                "content": {
+                  "type": "STRING",
+                  "value": "^"
+                },
+                "named": true,
+                "value": "bitxor_op"
               },
               {
                 "type": "SYMBOL",
@@ -3442,5 +3465,6 @@
   "precedences": [],
   "externals": [],
   "inline": [],
-  "supertypes": []
+  "supertypes": [],
+  "reserved": {}
 }
