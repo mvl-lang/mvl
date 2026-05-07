@@ -6,6 +6,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.80.2] — 2026-05-07
+
+### Fixed
+
+- **Tree-sitter grammar syntax error** — `module_path` updated from `::` separators to `.` separators with optional brace import group to match real MVL syntax (`use std.io.{File, Path}`). Fixes tree-sitter parser unable to parse any real MVL imports. Closes #479.
+- **Highlights.scm "Invalid node type" error** — Removed unnecessary `alias("^", $.bitxor_op)` from grammar.js; `^` is now a plain anonymous token like `&`, `|`, `~`, `<<`, `>>`. Fixes tree-sitter v0.24+ compatibility.
+
 ## [0.81.0] — 2026-05-07
 
 ### Added
