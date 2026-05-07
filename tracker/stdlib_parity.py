@@ -20,21 +20,32 @@ def _():
 
 
 @app.cell
-def _(mo):
-    mo.md("""
+def _(mo, repo_display):
+    mo.md(f"""
     # MVL Stdlib Parity Dashboard
 
     Comparing stdlib function coverage between the **Rust transpiler** and **LLVM backend**.
 
     Target: both backends should support the same stdlib functions with identical behavior.
+
+    **Repo:** `{repo_display}`
     """)
     return
 
 
 @app.cell
 def _(Path, subprocess):
-    # Find repo root
-    repo_root = Path(__file__).parent.parent
+    # Find repo root (tracker/ is one level down from mvl_language/)
+    repo_root = Path(__file__).parent.parent.resolve()
+
+    # For display: shorten absolute paths to ~/...
+    def shorten_path(p: Path | str) -> str:
+        """Replace home directory with ~ for cleaner display."""
+        s = str(p)
+        home = str(Path.home())
+        return s.replace(home, "~") if s.startswith(home) else s
+
+    repo_display = shorten_path(repo_root)
 
     def grep_stdlib_functions(pattern: str, path: str) -> list[str]:
         """Extract function names matching pattern from codebase."""
@@ -48,7 +59,7 @@ def _(Path, subprocess):
         except Exception:
             return []
 
-    return (grep_stdlib_functions,)
+    return grep_stdlib_functions, repo_display, shorten_path
 
 
 @app.cell
