@@ -1,20 +1,43 @@
 //! Static MC/DC obligation analysis.
 //!
-//! Walks the AST to identify all decisions (if/while conditions) and counts
-//! their atomic boolean clauses. Results feed the obligation table used by
-//! `cmd_mcdc` to verify MC/DC coverage.
+//! Walks the AST to identify all decisions (if/while conditions and match arms)
+//! and counts their atomic boolean clauses. Results feed the obligation table
+//! used by `cmd_mcdc` to verify MC/DC coverage.
 //!
 //! MC/DC (Modified Condition/Decision Coverage) requires that each atomic
 //! boolean clause in a compound condition independently affects the decision
 //! outcome. Required by DO-178C at DAL-A and ISO 26262 at ASIL-D.
+//!
+//! ## Decision types tracked
+//!
+//! | Kind         | Label     | Obligation per unit        | Notes                          |
+//! |--------------|-----------|----------------------------|--------------------------------|
+//! | `if` body    | `return`  | One per boolean clause     | Function whose body IS the cond|
+//! | `if` cond    | `if`      | One per boolean clause     | Top-level and `else if` chains |
+//! | `while` cond | `while`   | One per boolean clause     | Loop guard                     |
+//! | `match` arms | `match`   | One per arm                | Each arm must be taken once    |
+//! | match guard  | `guard`   | One per boolean clause     | `pat if a && b =>` (parser TODO)|
+//!
+//! ## What is NOT tracked
+//!
+//! - Single-clause conditions (no `&&`/`||`) — they have trivially one obligation
+//! - Conditions inside macro calls or `extern "rust"` blocks
+//! - Match arm guards — parser does not yet implement `pat if expr =>` (#9)
+//! - LLVM backend — no MC/DC infrastructure in `src/mvl/codegen/`
 
-use crate::mvl::parser::ast::{BinaryOp, Block, Decl, ElseBranch, Expr, MatchBody, Program, Stmt};
+use crate::mvl::parser::ast::{
+    BinaryOp, Block, Decl, ElseBranch, Expr, LogicOp, MatchBody, Program, RefExpr, Stmt,
+};
 
 /// Identifies the kind of decision point.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DecisionKind {
     If,
     While,
+    /// A `match` expression/statement — each arm is an independent outcome.
+    Match,
+    /// A compound guard condition on a match arm (`if cond` with `&&`/`||`).
+    MatchGuard,
 }
 
 /// A single decision point in the source with its obligation metadata.
@@ -139,7 +162,44 @@ fn collect_from_stmt(
             }
             collect_from_block(body, fn_name, file, decisions, next_id);
         }
-        Stmt::Match { arms, .. } => {
+        Stmt::Match {
+            scrutinee,
+            arms,
+            span,
+        } => {
+            // Recurse into scrutinee first (mirrors transpiler emission order).
+            collect_from_expr(scrutinee, fn_name, file, decisions, next_id);
+            // Register match arm coverage decision (each arm is an outcome).
+            if arms.len() >= 2 {
+                decisions.push(DecisionInfo {
+                    id: *next_id,
+                    fn_name: fn_name.to_string(),
+                    file: file.to_string(),
+                    line: span.line,
+                    kind: DecisionKind::Match,
+                    clause_count: arms.len(),
+                });
+                *next_id += 1;
+            }
+            // Register MatchGuard decisions for compound guards (all arms, in order,
+            // before recursing into bodies — mirrors transpiler pre-allocation order).
+            for arm in arms.iter() {
+                if let Some(guard) = &arm.guard {
+                    let n = count_clauses_ref(guard);
+                    if n >= 2 {
+                        decisions.push(DecisionInfo {
+                            id: *next_id,
+                            fn_name: fn_name.to_string(),
+                            file: file.to_string(),
+                            line: arm.span.line,
+                            kind: DecisionKind::MatchGuard,
+                            clause_count: n,
+                        });
+                        *next_id += 1;
+                    }
+                }
+            }
+            // Recurse into arm bodies.
             for arm in arms {
                 match &arm.body {
                     MatchBody::Block(b) => {
@@ -220,9 +280,42 @@ fn collect_from_expr(
             }
         }
         Expr::Match {
-            scrutinee, arms, ..
+            scrutinee,
+            arms,
+            span,
+            ..
         } => {
             collect_from_expr(scrutinee, fn_name, file, decisions, next_id);
+            // Register match arm coverage decision.
+            if arms.len() >= 2 {
+                decisions.push(DecisionInfo {
+                    id: *next_id,
+                    fn_name: fn_name.to_string(),
+                    file: file.to_string(),
+                    line: span.line,
+                    kind: DecisionKind::Match,
+                    clause_count: arms.len(),
+                });
+                *next_id += 1;
+            }
+            // Register MatchGuard decisions for compound guards (all, before bodies).
+            for arm in arms.iter() {
+                if let Some(guard) = &arm.guard {
+                    let n = count_clauses_ref(guard);
+                    if n >= 2 {
+                        decisions.push(DecisionInfo {
+                            id: *next_id,
+                            fn_name: fn_name.to_string(),
+                            file: file.to_string(),
+                            line: arm.span.line,
+                            kind: DecisionKind::MatchGuard,
+                            clause_count: n,
+                        });
+                        *next_id += 1;
+                    }
+                }
+            }
+            // Recurse into arm bodies.
             for arm in arms {
                 match &arm.body {
                     MatchBody::Block(b) => {
@@ -273,6 +366,23 @@ pub fn collect_clauses<'a>(expr: &'a Expr, clauses: &mut Vec<&'a Expr>) {
             collect_clauses(right, clauses);
         }
         _ => clauses.push(expr),
+    }
+}
+
+/// Count atomic boolean clauses in a `RefExpr` (match guard language).
+///
+/// For `a && b` → 2. For `(x > 0) || (y < 10 && z == 5)` → 3.
+/// Single comparisons or identifiers → 1.
+pub fn count_clauses_ref(expr: &RefExpr) -> usize {
+    match expr {
+        RefExpr::LogicOp {
+            op: LogicOp::And | LogicOp::Or,
+            left,
+            right,
+            ..
+        } => count_clauses_ref(left) + count_clauses_ref(right),
+        RefExpr::Grouped { inner, .. } => count_clauses_ref(inner),
+        _ => 1,
     }
 }
 
@@ -409,5 +519,77 @@ mod tests {
         let decisions = decisions_for(src);
         assert_eq!(decisions.len(), 1);
         assert_eq!(decisions[0].line, 3, "if statement should report line 3");
+    }
+
+    // ── Match coverage tests ──────────────────────────────────────────────
+
+    #[test]
+    fn match_with_two_arms_tracked() {
+        let decisions = decisions_for("fn f(x: Bool) -> Int { match x { true => 1, false => 0 } }");
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].kind, DecisionKind::Match);
+        assert_eq!(decisions[0].clause_count, 2);
+    }
+
+    #[test]
+    fn match_with_three_arms_tracked() {
+        // Use Bool/Int match (no enum needed) to avoid parse_program() limitations.
+        let decisions =
+            decisions_for("fn f(x: Int) -> Int { match x { 1 => 10, 2 => 20, _ => 30 } }");
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].kind, DecisionKind::Match);
+        assert_eq!(decisions[0].clause_count, 3);
+    }
+
+    #[test]
+    fn match_single_arm_not_tracked() {
+        // A match with only one arm has no meaningful decision — excluded.
+        let decisions = decisions_for("fn f(x: Int) -> Int { match x { n => n + 1 } }");
+        assert_eq!(decisions.len(), 0);
+    }
+
+    #[test]
+    fn match_compound_condition_in_arm_body_tracked_as_if() {
+        // A compound `if` inside a match arm body is still tracked as `If`.
+        let decisions = decisions_for(
+            "fn f(a: Bool, b: Bool, x: Int) -> Int { match x { 1 => if a && b { 1 } else { 0 }, _ => 2 } }",
+        );
+        // Match (2 arms) + If (a&&b in arm body)
+        assert_eq!(decisions.len(), 2);
+        assert_eq!(decisions[0].kind, DecisionKind::Match);
+        assert_eq!(decisions[0].clause_count, 2);
+        assert_eq!(decisions[1].kind, DecisionKind::If);
+        assert_eq!(decisions[1].clause_count, 2);
+    }
+
+    // NOTE: MatchGuard tests are deferred — the MVL parser does not yet implement
+    // guard patterns (`pat if expr =>`; see parser/statements.rs TODO #9).
+    // The analysis and transform code for DecisionKind::MatchGuard is in place
+    // and will activate once parser support is added.
+    #[test]
+    fn count_clauses_ref_basic() {
+        use crate::mvl::parser::ast::{LogicOp, RefExpr};
+        use crate::mvl::parser::lexer::Span;
+        let span = Span {
+            line: 1,
+            col: 1,
+            offset: 0,
+            len: 1,
+        };
+        let a = RefExpr::Ident {
+            name: "a".into(),
+            span,
+        };
+        let b = RefExpr::Ident {
+            name: "b".into(),
+            span,
+        };
+        let and_expr = RefExpr::LogicOp {
+            op: LogicOp::And,
+            left: Box::new(a),
+            right: Box::new(b),
+            span,
+        };
+        assert_eq!(count_clauses_ref(&and_expr), 2);
     }
 }

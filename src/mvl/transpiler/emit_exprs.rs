@@ -2,8 +2,11 @@
 
 use crate::mvl::parser::ast::{BinaryOp, Expr, Literal, MatchArm, MatchBody, Pattern, UnaryOp};
 use crate::mvl::passes::coverage::BranchKind;
+use crate::mvl::passes::mcdc::analysis::count_clauses_ref;
+use crate::mvl::transpiler::emit_stmts::emit_mcdc_guard_block;
 use crate::mvl::transpiler::emit_types::emit_type_expr;
 use crate::mvl::transpiler::emitter::RustEmitter;
+use crate::mvl::transpiler::mcdc_instr::DecisionKind;
 
 /// Methods implemented as pure MVL functions in std/strings.mvl and std/lists.mvl.
 ///
@@ -623,21 +626,52 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
             span,
             ..
         } => {
-            // Allocate coverage IDs for each arm up-front.
+            // Allocate branch coverage IDs for each arm up-front.
             let arm_ids: Vec<Option<usize>> = (0..arms.len())
                 .map(|i| cg.alloc_branch(span.line, BranchKind::MatchArm(i)))
                 .collect();
             let has_str_pattern = arms_have_str_pattern(arms);
+            // Emit scrutinee first so any compound conditions inside it allocate
+            // MC/DC IDs before the match-level decisions (mirrors analysis order).
             cg.push("match ");
             emit_expr(cg, scrutinee);
+            // Allocate MC/DC arm-coverage decision after scrutinee.
+            let match_mcdc_id: Option<usize> = if arms.len() >= 2 {
+                cg.alloc_mcdc_decision(span.line, arms.len(), DecisionKind::Match, vec![])
+            } else {
+                None
+            };
+            // Pre-allocate MatchGuard decision IDs (all arms, before body emission).
+            let guard_mcdc_ids: Vec<Option<usize>> = arms
+                .iter()
+                .map(|arm| {
+                    arm.guard.as_ref().and_then(|g| {
+                        let n = count_clauses_ref(g);
+                        if n >= 2 {
+                            cg.alloc_mcdc_decision(
+                                arm.span.line,
+                                n,
+                                DecisionKind::MatchGuard,
+                                vec![],
+                            )
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .collect();
             if has_str_pattern {
                 cg.push(".as_str()");
             }
             cg.push(" {");
             cg.nl();
             cg.push_indent();
-            for (arm, cov_id) in arms.iter().zip(arm_ids.iter()) {
-                emit_match_arm(cg, arm, *cov_id);
+            for ((arm_idx, arm), (cov_id, guard_mcdc_id)) in arms
+                .iter()
+                .enumerate()
+                .zip(arm_ids.iter().zip(guard_mcdc_ids.iter()))
+            {
+                emit_match_arm(cg, arm, arm_idx, *cov_id, match_mcdc_id, *guard_mcdc_id);
             }
             cg.pop_indent();
             cg.indent();
@@ -1006,27 +1040,41 @@ fn emit_binary_op(op: BinaryOp) -> &'static str {
 
 // ── Match arms ────────────────────────────────────────────────────────────
 
-fn emit_match_arm(cg: &mut RustEmitter, arm: &MatchArm, cov_id: Option<usize>) {
+fn emit_match_arm(
+    cg: &mut RustEmitter,
+    arm: &MatchArm,
+    arm_idx: usize,
+    cov_id: Option<usize>,
+    match_mcdc_id: Option<usize>,
+    guard_mcdc_id: Option<usize>,
+) {
     cg.indent();
     emit_pattern(cg, &arm.pattern);
     if let Some(guard) = &arm.guard {
         cg.push(" if ");
-        // Reuse ref_expr emitter — guard uses the same predicate language
-        use crate::mvl::transpiler::emit_types::emit_ref_expr_for_assert;
-        cg.push(&emit_ref_expr_for_assert(guard, "_"));
+        if let Some(gid) = guard_mcdc_id {
+            let n = count_clauses_ref(guard);
+            cg.push(&emit_mcdc_guard_block(guard, gid, n));
+        } else {
+            use crate::mvl::transpiler::emit_types::emit_ref_expr_for_assert;
+            cg.push(&emit_ref_expr_for_assert(guard, "_"));
+        }
     }
     cg.push(" => ");
     match &arm.body {
         MatchBody::Expr(e) => {
+            // Wrap in a block to inject coverage and MC/DC hits.
+            cg.push("{ ");
             if let Some(id) = cov_id {
-                // Wrap expression arm in a block so we can inject the hit statement.
-                cg.push("{ ");
                 cg.push(&format!("#[cfg(test)] crate::__mvl_cov::hit({id}); "));
-                emit_expr(cg, e);
-                cg.push(" }");
-            } else {
-                emit_expr(cg, e);
             }
+            if let Some(mid) = match_mcdc_id {
+                cg.push(&format!(
+                    "#[cfg(test)] crate::__mvl_mcdc::record({mid}usize, {arm_idx}u32); "
+                ));
+            }
+            emit_expr(cg, e);
+            cg.push(" }");
             cg.push(",");
             cg.nl();
         }
@@ -1036,6 +1084,11 @@ fn emit_match_arm(cg: &mut RustEmitter, arm: &MatchArm, cov_id: Option<usize>) {
             cg.push_indent();
             if let Some(id) = cov_id {
                 cg.emit_cov_hit(id);
+            }
+            if let Some(mid) = match_mcdc_id {
+                cg.line(&format!(
+                    "#[cfg(test)] crate::__mvl_mcdc::record({mid}usize, {arm_idx}u32);"
+                ));
             }
             emit_block_stmts(cg, &block.stmts);
             cg.pop_indent();

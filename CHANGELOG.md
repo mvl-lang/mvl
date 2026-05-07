@@ -6,13 +6,23 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.81.0] — 2026-05-07
+
+### Added
+
+- **MC/DC match statement coverage** — `DecisionKind::Match` and `DecisionKind::MatchGuard` variants added to MC/DC analysis; each arm of a match with ≥2 arms is tracked as a separate observation. Transpiler emits `__mvl_mcdc::record(mid, arm_idx)` in each match arm body. Compound `else if` conditions now correctly instrumented. Line-number offset applied to match decisions in test files. Closes #548.
+
+### Fixed
+
+- **Stdlib prelude not excluded from MC/DC reports** — `emitter.rs` now saves/restores `self.mcdc` during stdlib prelude emission, preventing stdlib functions from appearing in coverage reports.
+- **Compound `else if` conditions not instrumented** — `emit_else_branch` now calls `emit_mcdc_if` for compound conditions (clause count ≥2), wrapped in `{ }` block to satisfy Rust syntax.
+- **Match arm line numbers offset in test files** — `main.rs` applies line-number offset calculation to `Match`/`If`/`While` decisions (previously only applied to `Return`).
+
 ## [0.80.1] — 2026-05-07
 
 ### Fixed
 
 - **Neovim 0.12 tree-sitter crash** — tree-sitter ≥ 0.24 repurposed `^` as a query anchor, making `"^"` an invalid literal in highlights.scm. Alias the BitXor token to the named node `bitxor_op` in grammar.js and query via `(bitxor_op) @operator`. Parser regenerated. Fixes Neovim crash on `.mvl` files.
-
-
 ## [0.80.0] — 2026-05-06
 
 ### Added

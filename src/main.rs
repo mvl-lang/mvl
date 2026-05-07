@@ -618,6 +618,10 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
     // Transpile all test files with MC/DC instrumentation.
     let mut modules: Vec<(String, String, String)> = Vec::new();
     let mut all_decisions: Vec<MCDCDecision> = Vec::new();
+    // Map (module, fn_name) → fn start line in the *_test.mvl file.
+    // Used to compute source offsets for non-Return decision line patching.
+    let mut test_fn_starts: std::collections::HashMap<(String, String), u32> =
+        std::collections::HashMap::new();
     let mut all_static_decisions: Vec<DecisionInfo> = Vec::new();
     let mut file_stems: Vec<String> = Vec::new();
     // Map module_name → source lines for JSON source fragment lookup.
@@ -630,6 +634,16 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
         let s = stem(&file_str);
         let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
         module_sources.insert(module_name.clone(), src.lines().map(String::from).collect());
+        // Record non-test function start lines (needed for line-offset patching below).
+        for decl in &prog.declarations {
+            if let Decl::Fn(fd) = decl {
+                if !fd.is_test {
+                    test_fn_starts
+                        .entry((module_name.clone(), fd.name.clone()))
+                        .or_insert(fd.span.line);
+                }
+            }
+        }
         validate_module_name(&module_name, &file_str);
         let start_id = all_decisions.len();
         let static_d = analyze_mcdc(&prog, &module_name, start_id);
@@ -720,11 +734,15 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
             }
         }
         for decision in &mut all_decisions {
-            if matches!(decision.kind, DecisionKind::Return) {
-                if let Some(&line) =
-                    source_fn_lines.get(&(decision.file.clone(), decision.fn_name.clone()))
-                {
-                    decision.line = line;
+            let key = (decision.file.clone(), decision.fn_name.clone());
+            if let Some(&src_fn_line) = source_fn_lines.get(&key) {
+                if matches!(decision.kind, DecisionKind::Return) {
+                    decision.line = src_fn_line;
+                } else if let Some(&test_fn_line) = test_fn_starts.get(&key) {
+                    // Offset non-Return decisions by the function start difference
+                    // between the source and the test-file redeclaration.
+                    let offset = src_fn_line as i64 - test_fn_line as i64;
+                    decision.line = (decision.line as i64 + offset).max(1) as u32;
                 }
             }
         }
@@ -868,7 +886,9 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
         .collect();
 
     // Independence analysis.
-    use mvl::mvl::passes::mcdc::transform::is_clause_covered;
+    use mvl::mvl::passes::mcdc::transform::{
+        is_clause_covered, is_match_arm_covered, DecisionKind as TransformKind,
+    };
     let mut covered = 0usize;
     let mut total_obligations = 0usize;
 
@@ -883,20 +903,34 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
         let mut clause_results = Vec::new();
-        for clause_bit in 0..decision.clause_count {
-            let ok = is_clause_covered(decision.clause_count, clause_bit, obs);
-            clause_results.push(ok);
-            total_obligations += 1;
-            if ok {
-                covered += 1;
-            } else {
-                // Count as coupled-missed if this clause appears in any coupled pair.
-                let is_coupled = decision
-                    .coupled_pairs
-                    .iter()
-                    .any(|(i, j, _)| *i == clause_bit || *j == clause_bit);
-                if is_coupled {
-                    coupled_missed += 1;
+        if matches!(decision.kind, TransformKind::Match) {
+            // Match arm coverage: each arm must be taken at least once.
+            // Observations are arm indices (plain u32), not the 2N+1 bit encoding.
+            for arm_idx in 0..decision.clause_count {
+                let ok = is_match_arm_covered(arm_idx, obs);
+                clause_results.push(ok);
+                total_obligations += 1;
+                if ok {
+                    covered += 1;
+                }
+                // Match arms are never "coupled" in the boolean-condition sense.
+            }
+        } else {
+            for clause_bit in 0..decision.clause_count {
+                let ok = is_clause_covered(decision.clause_count, clause_bit, obs);
+                clause_results.push(ok);
+                total_obligations += 1;
+                if ok {
+                    covered += 1;
+                } else {
+                    // Count as coupled-missed if this clause appears in any coupled pair.
+                    let is_coupled = decision
+                        .coupled_pairs
+                        .iter()
+                        .any(|(i, j, _)| *i == clause_bit || *j == clause_bit);
+                    if is_coupled {
+                        coupled_missed += 1;
+                    }
                 }
             }
         }
@@ -932,8 +966,13 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
                 .map(|ok| if *ok { "✓" } else { "✗" })
                 .collect();
             let all_ok = clause_results.iter().all(|ok| *ok);
+            let unit = if matches!(decision.kind, TransformKind::Match) {
+                "arms"
+            } else {
+                "clauses"
+            };
             println!(
-                "  {}:{:<4} {} ({} clauses) [{}] {}",
+                "  {}:{:<4} {} ({} {unit}) [{}] {}",
                 decision.file,
                 decision.line,
                 kind_label,

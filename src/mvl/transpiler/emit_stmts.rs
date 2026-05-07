@@ -12,9 +12,11 @@
 //!
 //! See ADR-0003 for the overall compilation strategy.
 
-use crate::mvl::parser::ast::{BinaryOp, ElseBranch, Expr, LValue, MatchBody, Stmt, TypeExpr};
+use crate::mvl::parser::ast::{
+    BinaryOp, ElseBranch, Expr, LValue, LogicOp, MatchBody, RefExpr, Stmt, TypeExpr,
+};
 use crate::mvl::passes::coverage::BranchKind;
-use crate::mvl::passes::mcdc::analysis::collect_clauses;
+use crate::mvl::passes::mcdc::analysis::{collect_clauses, count_clauses_ref};
 use crate::mvl::transpiler::emit_exprs::{
     arms_have_str_pattern, emit_block_as_value, emit_block_stmts, emit_expr, emit_pattern,
 };
@@ -120,39 +122,82 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &Stmt) {
             span,
             ..
         } => {
-            // Allocate coverage IDs for each arm up-front (avoids borrow conflict).
+            // Allocate branch coverage IDs for each arm up-front (avoids borrow conflict).
             let arm_ids: Vec<Option<usize>> = (0..arms.len())
                 .map(|i| cg.alloc_branch(span.line, BranchKind::MatchArm(i)))
                 .collect();
             let has_str_arm = arms_have_str_pattern(arms);
+
+            // Emit scrutinee first so any compound conditions inside it allocate
+            // MC/DC IDs before the match-level decisions (mirrors analysis order).
             cg.indent();
             cg.push("match ");
             emit_expr(cg, scrutinee);
+
+            // Allocate MC/DC arm-coverage decision (Match kind, one "clause" per arm).
+            let match_mcdc_id: Option<usize> = if arms.len() >= 2 {
+                cg.alloc_mcdc_decision(span.line, arms.len(), DecisionKind::Match, vec![])
+            } else {
+                None
+            };
+            // Pre-allocate MatchGuard decision IDs for compound guards — all arms in
+            // order before any body emission (mirrors analysis pre-allocation order).
+            let guard_mcdc_ids: Vec<Option<usize>> = arms
+                .iter()
+                .map(|arm| {
+                    arm.guard.as_ref().and_then(|g| {
+                        let n = count_clauses_ref(g);
+                        if n >= 2 {
+                            cg.alloc_mcdc_decision(
+                                arm.span.line,
+                                n,
+                                DecisionKind::MatchGuard,
+                                vec![],
+                            )
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .collect();
+
             if has_str_arm {
                 cg.push(".as_str()");
             }
             cg.push(" {");
             cg.nl();
             cg.push_indent();
-            for (arm, cov_id) in arms.iter().zip(arm_ids.iter()) {
+            for ((arm_idx, arm), (cov_id, guard_mcdc_id)) in arms
+                .iter()
+                .enumerate()
+                .zip(arm_ids.iter().zip(guard_mcdc_ids.iter()))
+            {
                 cg.indent();
                 emit_pattern(cg, &arm.pattern);
                 if let Some(guard) = &arm.guard {
                     cg.push(" if ");
-                    cg.push(&emit_ref_expr_for_assert(guard, "_"));
+                    if let Some(&gid) = guard_mcdc_id.as_ref() {
+                        let n = count_clauses_ref(guard);
+                        cg.push(&emit_mcdc_guard_block(guard, gid, n));
+                    } else {
+                        cg.push(&emit_ref_expr_for_assert(guard, "_"));
+                    }
                 }
                 cg.push(" => ");
                 match &arm.body {
                     MatchBody::Expr(e) => {
-                        if let Some(id) = cov_id {
-                            // Wrap expr arm in a block to inject hit statement.
-                            cg.push("{ ");
+                        // Wrap in a block to inject coverage and MC/DC hits.
+                        cg.push("{ ");
+                        if let Some(&id) = cov_id.as_ref() {
                             cg.push(&format!("#[cfg(test)] crate::__mvl_cov::hit({id}); "));
-                            emit_expr(cg, e);
-                            cg.push(" }");
-                        } else {
-                            emit_expr(cg, e);
                         }
+                        if let Some(mid) = match_mcdc_id {
+                            cg.push(&format!(
+                                "#[cfg(test)] crate::__mvl_mcdc::record({mid}usize, {arm_idx}u32); "
+                            ));
+                        }
+                        emit_expr(cg, e);
+                        cg.push(" }");
                         cg.push(",");
                         cg.nl();
                     }
@@ -160,8 +205,13 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &Stmt) {
                         cg.push("{");
                         cg.nl();
                         cg.push_indent();
-                        if let Some(id) = cov_id {
-                            cg.emit_cov_hit(*id);
+                        if let Some(&id) = cov_id.as_ref() {
+                            cg.emit_cov_hit(id);
+                        }
+                        if let Some(mid) = match_mcdc_id {
+                            cg.line(&format!(
+                                "#[cfg(test)] crate::__mvl_mcdc::record({mid}usize, {arm_idx}u32);"
+                            ));
                         }
                         // Use emit_block_as_value so the final Stmt::Expr is a tail
                         // expression (no semicolon) and becomes the arm's return value.
@@ -289,6 +339,29 @@ fn emit_else_branch(cg: &mut RustEmitter, branch: &ElseBranch, cov_id: Option<us
                     let inner_false_id = else_
                         .as_ref()
                         .and(cg.alloc_branch(span.line, BranchKind::IfFalse));
+                    // Instrument compound else-if conditions with MC/DC (same as
+                    // top-level if — mirrors analysis order so decision IDs align).
+                    // Must wrap in `{ }` because `else` requires a block in Rust.
+                    let mut check_clauses = Vec::new();
+                    collect_clauses(cond, &mut check_clauses);
+                    if check_clauses.len() >= 2 && cg.mcdc.is_some() {
+                        cg.push("{");
+                        cg.nl();
+                        cg.push_indent();
+                        emit_mcdc_if(
+                            cg,
+                            cond,
+                            then,
+                            else_,
+                            span.line,
+                            inner_true_id,
+                            inner_false_id,
+                        );
+                        cg.pop_indent();
+                        cg.indent();
+                        cg.push("}");
+                        return;
+                    }
                     cg.push("if ");
                     emit_expr(cg, cond);
                     cg.push(" {");
@@ -308,6 +381,81 @@ fn emit_else_branch(cg: &mut RustEmitter, branch: &ElseBranch, cov_id: Option<us
                 }
                 other => unreachable!("ElseBranch::If must always wrap Stmt::If; got {:?}", other),
             }
+        }
+    }
+}
+
+// ── MC/DC guard instrumentation ──────────────────────────────────────────
+
+/// Build a Rust block expression (usable as a match arm guard) that tracks
+/// MC/DC clause values for a compound `RefExpr` guard.
+///
+/// The generated block evaluates the guard with short-circuit semantics,
+/// records an observation, and evaluates to the boolean guard outcome.
+/// Returned as a `String` because `RefExpr` uses string-building throughout.
+pub(crate) fn emit_mcdc_guard_block(guard: &RefExpr, decision_id: usize, n: usize) -> String {
+    let decls = format!(
+        "let mut __d{decision_id}_c = [false; {n}]; \
+         let mut __d{decision_id}_e = [false; {n}];"
+    );
+    let mut idx = 0usize;
+    let sc = sc_ref_outcome_str(guard, decision_id, &mut idx);
+
+    // Build 2N+1 bit observation encoding identical to emit_mcdc_record.
+    let vals: Vec<String> = (0..n)
+        .map(|i| format!("((__d{decision_id}_c[{i}] as u32) << {i}u32)"))
+        .collect();
+    let evals: Vec<String> = (0..n)
+        .map(|i| format!("((__d{decision_id}_e[{i}] as u32) << {}u32)", n + i))
+        .collect();
+    let outcome_bit = format!("((__d{decision_id}_outcome as u32) << {}u32)", 2 * n);
+    let encoding = vals
+        .into_iter()
+        .chain(evals)
+        .chain(std::iter::once(outcome_bit))
+        .collect::<Vec<_>>()
+        .join(" | ");
+
+    format!(
+        "{{ {decls} \
+         let __d{decision_id}_outcome: bool = {sc}; \
+         #[cfg(test)] crate::__mvl_mcdc::record({decision_id}usize, {encoding}); \
+         __d{decision_id}_outcome }}"
+    )
+}
+
+/// Recursively build the short-circuit evaluation tree for a `RefExpr`.
+///
+/// Returns a Rust expression string that evaluates the guard with short-circuit
+/// semantics while setting `__d{id}_c[i]` and `__d{id}_e[i]` for each leaf.
+fn sc_ref_outcome_str(expr: &RefExpr, id: usize, idx: &mut usize) -> String {
+    match expr {
+        RefExpr::LogicOp {
+            op: LogicOp::And,
+            left,
+            right,
+            ..
+        } => {
+            let l = sc_ref_outcome_str(left, id, idx);
+            let r = sc_ref_outcome_str(right, id, idx);
+            format!("(if {{ {l} }} {{ {r} }} else {{ false }})")
+        }
+        RefExpr::LogicOp {
+            op: LogicOp::Or,
+            left,
+            right,
+            ..
+        } => {
+            let l = sc_ref_outcome_str(left, id, idx);
+            let r = sc_ref_outcome_str(right, id, idx);
+            format!("(if {{ {l} }} {{ true }} else {{ {r} }})")
+        }
+        RefExpr::Grouped { inner, .. } => sc_ref_outcome_str(inner, id, idx),
+        _ => {
+            let i = *idx;
+            *idx += 1;
+            let val = emit_ref_expr_for_assert(expr, "_");
+            format!("{{ __d{id}_e[{i}] = true; __d{id}_c[{i}] = {val}; __d{id}_c[{i}] }}")
         }
     }
 }
