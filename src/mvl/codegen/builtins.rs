@@ -313,6 +313,12 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
         }
 
+        // Multi-arg non-string: synthesize implicit "{} {} ..." template.
+        if args.len() > 1 {
+            let template = vec!["{}"; args.len()].join(" ");
+            return self.emit_printf_format(&template, args, true);
+        }
+
         // Single non-string expression.
         let fmt_args = self.build_printf_args(args, true);
         let printf = self.get_printf();
@@ -344,6 +350,13 @@ impl<'ctx> LlvmBackend<'ctx> {
                 return self.emit_printf_format(&fmt_str, &args[1..], false);
             }
         }
+
+        // Multi-arg non-string: synthesize implicit "{} {} ..." template.
+        if args.len() > 1 {
+            let template = vec!["{}"; args.len()].join(" ");
+            return self.emit_printf_format(&template, args, false);
+        }
+
         let fmt_args = self.build_printf_args(args, false);
         let printf = self.get_printf();
         self.builder.build_call(printf, &fmt_args, "print").unwrap();
