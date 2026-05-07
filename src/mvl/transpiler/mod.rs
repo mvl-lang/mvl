@@ -254,7 +254,9 @@ pub fn transpile_with_prelude(
         extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
     let mut cg = RustEmitter::new();
-    cg.expr_types = check_result.expr_types;
+    let mut all_expr_types = crate::mvl::checker::collect_prelude_expr_types(prelude_progs);
+    all_expr_types.extend(check_result.expr_types);
+    cg.expr_types = all_expr_types;
     cg.emit_program_with_mods(prog, &[], prelude_progs);
     let lib_rs = cg.finish();
 
@@ -294,8 +296,12 @@ pub fn transpile_source_with_prelude(
     let use_runtime =
         extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
+    let check_result = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
     let mut cg = RustEmitter::new();
     cg.test_extern_stubs = true;
+    let mut all_expr_types = crate::mvl::checker::collect_prelude_expr_types(prelude_progs);
+    all_expr_types.extend(check_result.expr_types);
+    cg.expr_types = all_expr_types;
     cg.emit_program_with_mods(prog, &[], prelude_progs);
     let lib_rs = cg.finish();
 
