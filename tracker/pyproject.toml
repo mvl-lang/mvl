@@ -1,0 +1,26 @@
+[project]
+name = "mvl-tracker"
+version = "0.1.0"
+description = "Marimo dashboards for MVL compiler metrics and progress tracking"
+requires-python = ">=3.11"
+dependencies = [
+    "marimo>=0.8.0",
+    "polars>=1.0.0",
+    "pandas>=2.0.0",
+    "altair>=5.0.0",
+    "pyarrow>=24.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.4.0",
+    "pyright>=1.1.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
