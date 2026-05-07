@@ -17,7 +17,9 @@ use crate::mvl::transpiler::borrow_params::build_borrow_params_map;
 use crate::mvl::transpiler::emit_functions::emit_fn_decl;
 use crate::mvl::transpiler::emit_impls::emit_impl_decl;
 use crate::mvl::transpiler::emit_types::emit_type_decl;
-use crate::mvl::transpiler::emit_types::{emit_security_preamble, emit_type_expr};
+use crate::mvl::transpiler::emit_types::{
+    emit_method_traits, emit_security_preamble, emit_type_expr,
+};
 use crate::mvl::transpiler::{collect_stdlib_modules, has_std_imports};
 
 /// Stdlib function names that shadow Rust built-ins or prelude items and must be
@@ -331,6 +333,11 @@ impl RustEmitter {
         if has_runtime {
             self.use_mvl_runtime = true;
             self.line("use mvl_runtime::prelude::*;");
+            // Method dispatch traits are no longer exported from the prelude (#554);
+            // emit them inline so all transpiler-generated call sites (.mvl_len, .mvl_pow, …)
+            // resolve correctly regardless of runtime linkage.
+            emit_method_traits(self);
+            self.blank();
             // Emit targeted stdlib imports for each `use std.X.*` in the MVL source (#488/#489).
             // The prelude no longer re-exports OS modules; each module is imported explicitly.
             for module in collect_stdlib_modules(prog) {

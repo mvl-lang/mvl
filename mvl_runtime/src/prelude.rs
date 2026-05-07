@@ -58,148 +58,35 @@ pub use crate::stdlib::primitives::{
 
 pub use crate::stdlib::crypto::{crypto_random_bytes, sha256, sha512};
 
-// ── Higher-order method traits ─────────────────────────────────────────────
+// ── Secret<T>.mvl_len() ────────────────────────────────────────────────────
 //
-// These traits allow the transpiler to emit a single method name for `map`
-// and `pow` across multiple types (List/Option/Result and Int/Float) without
-// needing receiver-type information at emit time.
+// The method dispatch traits (MvlLen, MvlPow, etc.) are no longer exported
+// from the prelude — the transpiler emits them inline in each generated file
+// (#554).  However, `Secret<T>` is defined in this crate and can only receive
+// inherent methods here (E0116 prevents adding them in generated files).
+//
+// A private `MvlLen` bridge trait provides the bound without leaking it into
+// generated code; the inherent `mvl_len` method is callable without importing
+// the trait.
 
-/// Uniform `map` for `Vec<T>`, `Option<T>`, and `Result<T, E>`.
-///
-/// The transpiler emits `receiver.mvl_map(|__x| f(__x.clone()))` for all MVL
-/// `.map(f)` calls.  Rust resolves the correct impl via type inference.
-pub trait MvlMap {
-    /// The element type being mapped over.
-    type Inner;
-    /// The container type after mapping to element type `U`.
-    type Mapped<U>;
-    /// Apply `f` to each element, returning a new container of the same shape.
-    fn mvl_map<U, F: FnMut(Self::Inner) -> U>(self, f: F) -> Self::Mapped<U>;
-}
-
-impl<T> MvlMap for Vec<T> {
-    type Inner = T;
-    type Mapped<U> = Vec<U>;
-    fn mvl_map<U, F: FnMut(T) -> U>(self, f: F) -> Vec<U> {
-        self.into_iter().map(f).collect()
-    }
-}
-
-impl<T> MvlMap for Option<T> {
-    type Inner = T;
-    type Mapped<U> = Option<U>;
-    fn mvl_map<U, F: FnMut(T) -> U>(self, f: F) -> Option<U> {
-        self.map(f)
-    }
-}
-
-impl<T, E> MvlMap for Result<T, E> {
-    type Inner = T;
-    type Mapped<U> = Result<U, E>;
-    fn mvl_map<U, F: FnMut(T) -> U>(self, f: F) -> Result<U, E> {
-        self.map(f)
-    }
-}
-
-/// Uniform `contains` check across `Vec<T>`, `String`, and `HashSet<T>`.
-///
-/// The transpiler emits `receiver.mvl_contains(&(...))` for all MVL
-/// `.contains(x)` calls (see `emit_exprs.rs`).  This lets the same method
-/// syntax work on all three container types without requiring type information
-/// at codegen time.  Corresponds to the `list_contains` / `str_contains`
-/// extern primitives declared in `std/primitives.mvl`.
-///
-/// Note: constraint requirements differ per impl — `Vec<T>` needs `T: PartialEq`,
-/// `HashSet<T>` needs `T: Eq + Hash` (required by the underlying collection).
-/// MVL's `Set<T>` therefore requires `T` to be both `Eq` and `Hash`.
-///
-/// Keep in sync with the inline strings in `src/mvl/transpiler/emit_types.rs`.
-pub trait MvlContains<T: ?Sized> {
-    /// Return `true` if `self` contains `x`.
-    fn mvl_contains(&self, x: &T) -> bool;
-}
-
-impl<T: PartialEq> MvlContains<T> for Vec<T> {
-    fn mvl_contains(&self, x: &T) -> bool {
-        self.contains(x)
-    }
-}
-
-impl MvlContains<String> for String {
-    fn mvl_contains(&self, x: &String) -> bool {
-        self.contains(x.as_str())
-    }
-}
-
-impl MvlContains<str> for String {
-    fn mvl_contains(&self, x: &str) -> bool {
-        self.contains(x)
-    }
-}
-
-impl<T: Eq + std::hash::Hash> MvlContains<T> for std::collections::HashSet<T> {
-    fn mvl_contains(&self, x: &T) -> bool {
-        self.contains(x)
-    }
-}
-
-/// Uniform `.get(key)` returning `Option<V>` for `Vec<T>` (integer index) and
-/// `HashMap<K, V>` (key lookup).
-///
-/// The transpiler emits `receiver.mvl_get(key.clone())` for all MVL `.get(k)`
-/// calls on List and Map types.
-///
-/// Keep in sync with the inline strings in `src/mvl/transpiler/emit_types.rs`.
-pub trait MvlGet<K, V> {
-    /// Look up `key`, returning `Some(value)` or `None`.
-    fn mvl_get(&self, key: K) -> Option<V>;
-}
-
-impl<T: Clone> MvlGet<i64, T> for Vec<T> {
-    fn mvl_get(&self, i: i64) -> Option<T> {
-        if i < 0 {
-            return None;
-        }
-        self.get(i as usize).cloned()
-    }
-}
-
-impl<K: std::hash::Hash + Eq, V: Clone> MvlGet<K, V> for std::collections::HashMap<K, V> {
-    fn mvl_get(&self, key: K) -> Option<V> {
-        self.get(&key).cloned()
-    }
-}
-
-/// Uniform `.len()` returning `i64` for all MVL collection types and `String`.
-///
-/// The transpiler emits `receiver.mvl_len()` for all MVL `.len()` calls.
-/// MVL's `Int` is `i64`; Rust collections return `usize`, so this trait
-/// handles the cast uniformly.
-///
-/// Keep in sync with the inline strings in `src/mvl/transpiler/emit_types.rs`.
-pub trait MvlLen {
-    /// Return the number of elements as `i64`.
+trait MvlLen {
     fn mvl_len(&self) -> i64;
 }
-
 impl<T> MvlLen for Vec<T> {
     fn mvl_len(&self) -> i64 {
         self.len() as i64
     }
 }
-
 impl<K, V> MvlLen for std::collections::HashMap<K, V> {
     fn mvl_len(&self) -> i64 {
         self.len() as i64
     }
 }
-
 impl<T> MvlLen for std::collections::HashSet<T> {
     fn mvl_len(&self) -> i64 {
         self.len() as i64
     }
 }
-
 impl MvlLen for String {
     fn mvl_len(&self) -> i64 {
         self.chars().count() as i64
@@ -211,27 +98,5 @@ impl<T: MvlLen> crate::ifc::Secret<T> {
     /// propagating the IFC label so callers must `declassify` before logging.
     pub fn mvl_len(&self) -> crate::ifc::Secret<i64> {
         crate::ifc::Secret(self.0.mvl_len())
-    }
-}
-
-/// Uniform `pow` for `i64` (uses `u32` exponent cast) and `f64` (uses `powf`).
-///
-/// The transpiler emits `receiver.mvl_pow(arg.clone())` for all MVL `.pow(e)`
-/// calls.  This fixes `i64::pow`'s `u32`-exponent requirement while also
-/// supporting `f64::powf`.
-pub trait MvlPow {
-    /// Raise `self` to the power `exp`.
-    fn mvl_pow(self, exp: Self) -> Self;
-}
-
-impl MvlPow for i64 {
-    fn mvl_pow(self, exp: i64) -> i64 {
-        self.pow(exp as u32)
-    }
-}
-
-impl MvlPow for f64 {
-    fn mvl_pow(self, exp: f64) -> f64 {
-        self.powf(exp)
     }
 }
