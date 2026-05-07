@@ -1516,6 +1516,17 @@ impl<'ctx> LlvmBackend<'ctx> {
                 _ => None,
             },
 
+            // ── parse_int / parse_float (String → Result) ─────────────────────
+            "parse_int" => match recv_val {
+                BasicValueEnum::PointerValue(ptr) => self.emit_parse_int(ptr),
+                _ => None,
+            },
+
+            "parse_float" => match recv_val {
+                BasicValueEnum::PointerValue(ptr) => self.emit_parse_float(ptr),
+                _ => None,
+            },
+
             // ── clamp (Int) ───────────────────────────────────────────────────
             "clamp" if args.len() == 2 => {
                 let lo = self.emit_expr(&args[0])?.into_int_value();

@@ -1488,6 +1488,140 @@ impl<'ctx> LlvmBackend<'ctx> {
         )
     }
 
+    /// Emit `s.parse_int()` → `Result[Int, String]` via `_mvl_str_parse_int`.
+    ///
+    /// The C function uses out-pointer parameters to avoid the sret calling
+    /// convention on ARM64 (which `lli` mishandles for structs > 16 bytes):
+    ///   `i8 _mvl_str_parse_int(ptr s, ptr ok_out, ptr err_out)`
+    ///
+    /// We pre-allocate i64_slot and ptr_slot, call the function, then build
+    /// the LLVM `{i8, ptr}` Result pointing at the appropriate slot.
+    pub(crate) fn emit_parse_int(
+        &mut self,
+        input_ptr: inkwell::values::PointerValue<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        use inkwell::IntPredicate;
+        let i64_ty = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let result_ty = self
+            .context
+            .struct_type(&[self.context.i8_type().into(), ptr_ty.into()], false);
+
+        // Pre-allocate output slots.
+        let ok_slot = self.builder.build_alloca(i64_ty, "pi_ok_slot").unwrap();
+        let err_slot = self.builder.build_alloca(ptr_ty, "pi_err_slot").unwrap();
+
+        let parse_fn = self.get_mvl_str_parse_int();
+        let call = self
+            .builder
+            .build_call(
+                parse_fn,
+                &[input_ptr.into(), ok_slot.into(), err_slot.into()],
+                "pi_tag",
+            )
+            .ok()?;
+        use inkwell::values::AnyValue;
+        let tag_val = inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
+        let inkwell::values::BasicValueEnum::IntValue(disc_i) = tag_val else {
+            return None;
+        };
+
+        // select(disc == 0, ok_slot, err_slot) — both are ptr-typed allocas.
+        let zero = self.context.i8_type().const_int(0, false);
+        let is_ok = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, disc_i, zero, "pi_is_ok")
+            .unwrap();
+        let payload_ptr = self
+            .builder
+            .build_select(is_ok, ok_slot, err_slot, "pi_payload")
+            .unwrap()
+            .into_pointer_value();
+
+        // Build {i8, ptr} LLVM Result.
+        let res_alloca = self.builder.build_alloca(result_ty, "pi_res").unwrap();
+        let disc_ptr = self
+            .builder
+            .build_struct_gep(result_ty, res_alloca, 0, "pi_disc_ptr")
+            .unwrap();
+        self.builder.build_store(disc_ptr, disc_i).unwrap();
+        let payload_field = self
+            .builder
+            .build_struct_gep(result_ty, res_alloca, 1, "pi_payload_field")
+            .unwrap();
+        self.builder
+            .build_store(payload_field, payload_ptr)
+            .unwrap();
+        Some(
+            self.builder
+                .build_load(result_ty, res_alloca, "pi_result")
+                .unwrap(),
+        )
+    }
+
+    /// Emit `s.parse_float()` → `Result[Float, String]` via `_mvl_str_parse_float`.
+    ///
+    /// Mirrors `emit_parse_int` with f64 instead of i64.
+    pub(crate) fn emit_parse_float(
+        &mut self,
+        input_ptr: inkwell::values::PointerValue<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        use inkwell::IntPredicate;
+        let f64_ty = self.context.f64_type();
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let result_ty = self
+            .context
+            .struct_type(&[self.context.i8_type().into(), ptr_ty.into()], false);
+
+        let ok_slot = self.builder.build_alloca(f64_ty, "pf_ok_slot").unwrap();
+        let err_slot = self.builder.build_alloca(ptr_ty, "pf_err_slot").unwrap();
+
+        let parse_fn = self.get_mvl_str_parse_float();
+        let call = self
+            .builder
+            .build_call(
+                parse_fn,
+                &[input_ptr.into(), ok_slot.into(), err_slot.into()],
+                "pf_tag",
+            )
+            .ok()?;
+        use inkwell::values::AnyValue;
+        let tag_val = inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
+        let inkwell::values::BasicValueEnum::IntValue(disc_i) = tag_val else {
+            return None;
+        };
+
+        let zero = self.context.i8_type().const_int(0, false);
+        let is_ok = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, disc_i, zero, "pf_is_ok")
+            .unwrap();
+        let payload_ptr = self
+            .builder
+            .build_select(is_ok, ok_slot, err_slot, "pf_payload")
+            .unwrap()
+            .into_pointer_value();
+
+        let res_alloca = self.builder.build_alloca(result_ty, "pf_res").unwrap();
+        let disc_ptr = self
+            .builder
+            .build_struct_gep(result_ty, res_alloca, 0, "pf_disc_ptr")
+            .unwrap();
+        self.builder.build_store(disc_ptr, disc_i).unwrap();
+        let payload_field = self
+            .builder
+            .build_struct_gep(result_ty, res_alloca, 1, "pf_payload_field")
+            .unwrap();
+        self.builder
+            .build_store(payload_field, payload_ptr)
+            .unwrap();
+        Some(
+            self.builder
+                .build_load(result_ty, res_alloca, "pf_result")
+                .unwrap(),
+        )
+    }
+
     /// Emit an LLVM IR function body for a single `extern "rust"` declaration.
     ///
     /// Known bridges:

@@ -789,6 +789,77 @@ pub unsafe extern "C" fn mvl_map_remove(m: *mut MvlMap, key: *const u8, key_len:
         .unwrap_or_else(|| std::process::abort());
 }
 
+// ── String parsing ─────────────────────────────────────────────────────────────
+//
+// Both functions use out-pointer parameters to avoid returning large structs
+// (> 16 bytes), which triggers the sret calling convention on ARM64 and is
+// not reliably handled by `lli`'s JIT when calling into external dylibs.
+//
+// Signature pattern:
+//   tag = fn(s, ok_out, err_out)
+//   0 → Ok: *ok_out  is written; *err_out is untouched
+//   1 → Err: *err_out is written (heap MvlString, caller must drop); *ok_out is untouched
+
+/// Parse a `MvlString` as a signed 64-bit integer.
+///
+/// Returns 0 (Ok) and writes the value to `*ok_out`,
+/// or returns 1 (Err) and writes a heap `MvlString` error message to `*err_out`.
+///
+/// # Safety
+/// `s` must be a valid non-null `MvlString` pointer.
+/// `ok_out` and `err_out` must be valid non-null writable pointers.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_str_parse_int(
+    s: *const MvlString,
+    ok_out: *mut i64,
+    err_out: *mut *mut MvlString,
+) -> i8 {
+    let len = (*s).len as usize;
+    let bytes = std::slice::from_raw_parts((*s).ptr, len);
+    let text = std::str::from_utf8(bytes).unwrap_or("").trim();
+    match text.parse::<i64>() {
+        Ok(n) => {
+            *ok_out = n;
+            0
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            *err_out = mvl_string_new(msg.as_ptr(), msg.len());
+            1
+        }
+    }
+}
+
+/// Parse a `MvlString` as a 64-bit float.
+///
+/// Returns 0 (Ok) and writes the value to `*ok_out`,
+/// or returns 1 (Err) and writes a heap `MvlString` error message to `*err_out`.
+///
+/// # Safety
+/// `s` must be a valid non-null `MvlString` pointer.
+/// `ok_out` and `err_out` must be valid non-null writable pointers.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_str_parse_float(
+    s: *const MvlString,
+    ok_out: *mut f64,
+    err_out: *mut *mut MvlString,
+) -> i8 {
+    let len = (*s).len as usize;
+    let bytes = std::slice::from_raw_parts((*s).ptr, len);
+    let text = std::str::from_utf8(bytes).unwrap_or("").trim();
+    match text.parse::<f64>() {
+        Ok(x) => {
+            *ok_out = x;
+            0
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            *err_out = mvl_string_new(msg.as_ptr(), msg.len());
+            1
+        }
+    }
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
