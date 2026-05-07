@@ -26,6 +26,7 @@ pub(crate) enum HeapKind {
     StringPtrArray,
 }
 
+#[allow(dead_code)]
 impl<'ctx> LlvmBackend<'ctx> {
     // ── String runtime declarations ───────────────────────────────────────────
 
