@@ -26,7 +26,7 @@ decl_body      = type_decl | fn_decl | const_decl | reexport_decl
 (* Directories are module groups; mod.mvl is the entry file.        *)
 use_decl       = "use" module_path ";" ;
 reexport_decl  = "use" module_path ";" ;  (* "pub" required — enforced by type checker *)
-module_path    = IDENT { "::" IDENT } ;
+module_path    = IDENT { "." IDENT } [ "." "{" IDENT { "," IDENT } "}" ] ;
 
 (* === Type declarations === *)
 type_decl      = "type" IDENT [ type_params ] "=" type_body ;
