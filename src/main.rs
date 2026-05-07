@@ -618,6 +618,10 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
     // Transpile all test files with MC/DC instrumentation.
     let mut modules: Vec<(String, String, String)> = Vec::new();
     let mut all_decisions: Vec<MCDCDecision> = Vec::new();
+    // Map (module, fn_name) → fn start line in the *_test.mvl file.
+    // Used to compute source offsets for non-Return decision line patching.
+    let mut test_fn_starts: std::collections::HashMap<(String, String), u32> =
+        std::collections::HashMap::new();
     let mut all_static_decisions: Vec<DecisionInfo> = Vec::new();
     let mut file_stems: Vec<String> = Vec::new();
     // Map module_name → source lines for JSON source fragment lookup.
@@ -630,6 +634,16 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
         let s = stem(&file_str);
         let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
         module_sources.insert(module_name.clone(), src.lines().map(String::from).collect());
+        // Record non-test function start lines (needed for line-offset patching below).
+        for decl in &prog.declarations {
+            if let Decl::Fn(fd) = decl {
+                if !fd.is_test {
+                    test_fn_starts
+                        .entry((module_name.clone(), fd.name.clone()))
+                        .or_insert(fd.span.line);
+                }
+            }
+        }
         validate_module_name(&module_name, &file_str);
         let start_id = all_decisions.len();
         let static_d = analyze_mcdc(&prog, &module_name, start_id);
@@ -720,11 +734,15 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
             }
         }
         for decision in &mut all_decisions {
-            if matches!(decision.kind, DecisionKind::Return) {
-                if let Some(&line) =
-                    source_fn_lines.get(&(decision.file.clone(), decision.fn_name.clone()))
-                {
-                    decision.line = line;
+            let key = (decision.file.clone(), decision.fn_name.clone());
+            if let Some(&src_fn_line) = source_fn_lines.get(&key) {
+                if matches!(decision.kind, DecisionKind::Return) {
+                    decision.line = src_fn_line;
+                } else if let Some(&test_fn_line) = test_fn_starts.get(&key) {
+                    // Offset non-Return decisions by the function start difference
+                    // between the source and the test-file redeclaration.
+                    let offset = src_fn_line as i64 - test_fn_line as i64;
+                    decision.line = (decision.line as i64 + offset).max(1) as u32;
                 }
             }
         }

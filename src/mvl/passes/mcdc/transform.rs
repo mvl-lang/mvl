@@ -133,7 +133,7 @@ impl DecisionKind {
         match self {
             DecisionKind::If => "if",
             DecisionKind::While => "while",
-            DecisionKind::Return => "fn",
+            DecisionKind::Return => "return",
             DecisionKind::Match => "match",
             DecisionKind::MatchGuard => "guard",
         }
