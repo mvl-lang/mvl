@@ -85,3 +85,15 @@ pub fn str_is_empty(s: String) -> Bool {
 pub fn str_contains_sub(s: String, sub: String) -> Bool {
     str_contains(s, sub)
 }
+
+/// Parse `s` as an integer, returning Ok(n) or Err(message).
+/// Call as `s.parse_int()` in user code.
+pub fn parse_int(s: String) -> Result[Int, String] {
+    str_parse_int(s)
+}
+
+/// Parse `s` as a float, returning Ok(x) or Err(message).
+/// Call as `s.parse_float()` in user code.
+pub fn parse_float(s: String) -> Result[Float, String] {
+    str_parse_float(s)
+}

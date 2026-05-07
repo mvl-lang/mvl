@@ -556,3 +556,10 @@ fn cross_backend_crypto_random_bytes_zero_llvm() {
         );
     }
 }
+
+/// parse_int / parse_float — verify both succeed and fail correctly in the LLVM backend.
+#[test]
+fn cross_backend_parse_int_float_llvm() {
+    let file = corpus_types("parse_int_float_llvm.mvl");
+    assert_llvm_output(&file, "42\n1\nok\n1");
+}

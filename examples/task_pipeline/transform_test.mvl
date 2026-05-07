@@ -1,0 +1,243 @@
+// transform_test.mvl — Property-style unit tests for transform.mvl.
+//
+// Demonstrates:
+//   1. Req 7 (Effects):   transform functions are pure — we can test them
+//                         with arbitrary inputs, no I/O setup required.
+//   2. Req 3 (Totality):  exhaustive match on Option inside test assertions.
+//
+// NOTE: type declarations below duplicate model.mvl because cross-file type
+// resolution is not yet wired into the per-file checker (issue #96).
+// When #96 lands these can be replaced with:
+//   use model::Record;
+//   use model::Summary;
+// Assurance note: 0 extern blocks.
+
+// ── Type re-declarations (workaround: #96) ────────────────────────────────
+
+type Record = struct {
+    name:     String,
+    age:      Int,
+    amount:   Float,
+    category: Option[String],
+}
+
+type Summary = struct {
+    count:        Int,
+    total_amount: Float,
+}
+
+// ── Function re-declarations (workaround: #96) ────────────────────────────
+// Must match transform.mvl exactly.
+
+fn filter_by_amount(records: List[Record], min_amount: Float) -> List[Record] {
+    records.filter(|r: Record| r.amount >= min_amount)
+}
+
+fn filter_by_category(records: List[Record], cat: String) -> List[Record] {
+    records.filter(|r: Record| {
+        match r.category {
+            Some(c) => c == cat,
+            None    => false,
+        }
+    })
+}
+
+fn summarize(records: List[Record]) -> Summary {
+    records.fold(
+        Summary { count: 0, total_amount: 0.0 },
+        |acc: Summary, r: Record| Summary {
+            count:        acc.count + 1,
+            total_amount: acc.total_amount + r.amount,
+        }
+    )
+}
+
+fn enrich_high_value(records: List[Record], threshold: Float) -> List[Record] {
+    records.fold(
+        [],
+        |acc: List[Record], r: Record| {
+            let out: Record = if r.amount >= threshold {
+                Record {
+                    name:     r.name,
+                    age:      r.age,
+                    amount:   r.amount,
+                    category: Some("high-value"),
+                }
+            } else {
+                r
+            };
+            list_concat(acc, [out])
+        }
+    )
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+
+fn make_record(name: String, age: Int, amount: Float, cat: Option[String]) -> Record {
+    Record { name: name, age: age, amount: amount, category: cat }
+}
+
+// ── filter_by_amount ──────────────────────────────────────────────────────
+
+test fn filter_amount_empty_input() -> Unit {
+    let out: List[Record] = filter_by_amount([], 0.0);
+    assert_eq(out.len(), 0);
+}
+
+test fn filter_amount_zero_threshold_keeps_all() -> Unit {
+    let rs: List[Record] = [
+        make_record("A", 30, 0.0, None),
+        make_record("B", 25, 50.0, None),
+    ];
+    let out: List[Record] = filter_by_amount(rs, 0.0);
+    assert_eq(out.len(), 2);
+}
+
+test fn filter_amount_exact_threshold_is_inclusive() -> Unit {
+    let rs: List[Record] = [
+        make_record("A", 30, 10.0, None),
+    ];
+    let out: List[Record] = filter_by_amount(rs, 10.0);
+    assert_eq(out.len(), 1);
+}
+
+test fn filter_amount_just_below_threshold_excluded() -> Unit {
+    let rs: List[Record] = [
+        make_record("A", 30, 9.99, None),
+    ];
+    let out: List[Record] = filter_by_amount(rs, 10.0);
+    assert_eq(out.len(), 0);
+}
+
+// ── filter_by_category ────────────────────────────────────────────────────
+
+test fn filter_cat_empty_input() -> Unit {
+    let out: List[Record] = filter_by_category([], "food");
+    assert_eq(out.len(), 0);
+}
+
+test fn filter_cat_all_match() -> Unit {
+    let rs: List[Record] = [
+        make_record("A", 30, 10.0, Some("food")),
+        make_record("B", 25, 20.0, Some("food")),
+    ];
+    let out: List[Record] = filter_by_category(rs, "food");
+    assert_eq(out.len(), 2);
+}
+
+test fn filter_cat_none_match_different_category() -> Unit {
+    let rs: List[Record] = [
+        make_record("A", 30, 10.0, Some("transport")),
+    ];
+    let out: List[Record] = filter_by_category(rs, "food");
+    assert_eq(out.len(), 0);
+}
+
+test fn filter_cat_mixed_some_none() -> Unit {
+    let rs: List[Record] = [
+        make_record("A", 30, 10.0, Some("food")),
+        make_record("B", 25, 20.0, None),
+        make_record("C", 40, 5.0,  Some("food")),
+    ];
+    let out: List[Record] = filter_by_category(rs, "food");
+    assert_eq(out.len(), 2);
+}
+
+// ── summarize ─────────────────────────────────────────────────────────────
+
+test fn summarize_single_record() -> Unit {
+    let rs: List[Record] = [make_record("A", 30, 42.0, None)];
+    let s: Summary = summarize(rs);
+    assert_eq(s.count, 1);
+}
+
+test fn summarize_accumulates_total() -> Unit {
+    let rs: List[Record] = [
+        make_record("A", 30, 10.0, None),
+        make_record("B", 25, 15.0, None),
+        make_record("C", 40, 25.0, None),
+    ];
+    let s: Summary = summarize(rs);
+    assert_eq(s.count, 3);
+    let is_fifty: Int = if s.total_amount == 50.0 { 1 } else { 0 };
+    assert_eq(is_fifty, 1);
+}
+
+test fn summarize_zero_amount_records() -> Unit {
+    let rs: List[Record] = [
+        make_record("A", 30, 0.0, None),
+        make_record("B", 25, 0.0, None),
+    ];
+    let s: Summary = summarize(rs);
+    let is_zero: Int = if s.total_amount == 0.0 { 1 } else { 0 };
+    assert_eq(is_zero, 1);
+}
+
+// ── enrich_high_value ─────────────────────────────────────────────────────
+
+test fn enrich_empty_input_is_empty() -> Unit {
+    let out: List[Record] = enrich_high_value([], 50.0);
+    assert_eq(out.len(), 0);
+}
+
+test fn enrich_preserves_list_length() -> Unit {
+    let rs: List[Record] = [
+        make_record("A", 30, 100.0, None),
+        make_record("B", 25, 10.0,  None),
+    ];
+    let out: List[Record] = enrich_high_value(rs, 50.0);
+    assert_eq(out.len(), 2);
+}
+
+test fn enrich_at_threshold_is_high_value() -> Unit {
+    let rs: List[Record] = [make_record("A", 30, 50.0, Some("food"))];
+    let out: List[Record] = enrich_high_value(rs, 50.0);
+    match out.get(0) {
+        None    => assert_eq(0, 1),
+        Some(r) => {
+            let marked: Int = match r.category {
+                Some(c) => match c { "high-value" => 1, _ => 0 },
+                None    => 0,
+            };
+            assert_eq(marked, 1);
+        }
+    }
+}
+
+test fn enrich_below_threshold_category_unchanged() -> Unit {
+    let rs: List[Record] = [make_record("B", 25, 20.0, Some("transport"))];
+    let out: List[Record] = enrich_high_value(rs, 50.0);
+    match out.get(0) {
+        None    => assert_eq(0, 1),
+        Some(r) => {
+            let unchanged: Int = match r.category {
+                Some(c) => match c { "transport" => 1, _ => 0 },
+                None    => 0,
+            };
+            assert_eq(unchanged, 1);
+        }
+    }
+}
+
+// ── pipeline composition ──────────────────────────────────────────────────
+// Demonstrates that pure functions compose freely (Req 7):
+//   filter → enrich → summarize
+
+test fn pipeline_filter_enrich_summarize() -> Unit {
+    let rs: List[Record] = [
+        make_record("Alice", 30,  200.0, Some("food")),
+        make_record("Bob",   25,   10.0, Some("transport")),
+        make_record("Carol", 40, 1000.0, Some("food")),
+        make_record("Dave",  35,   75.0, None),
+    ];
+    // Step 1: keep only food category
+    let food: List[Record] = filter_by_category(rs, "food");
+    assert_eq(food.len(), 2);
+    // Step 2: enrich those above 500
+    let enriched: List[Record] = enrich_high_value(food, 500.0);
+    // Step 3: summarize
+    let s: Summary = summarize(enriched);
+    assert_eq(s.count, 2);
+    let is_1200: Int = if s.total_amount == 1200.0 { 1 } else { 0 };
+    assert_eq(is_1200, 1);
+}

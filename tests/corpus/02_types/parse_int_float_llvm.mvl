@@ -1,0 +1,28 @@
+// corpus:skip-transpiler — LLVM-only test for parse_int / parse_float.
+//
+// Verifies that s.parse_int() and s.parse_float() work end-to-end in the
+// LLVM backend, including Ok extraction and Err handling via match.
+
+fn main() -> Unit ! Console {
+    // ── parse_int ─────────────────────────────────────────────────────────
+    let r1: Result[Int, String] = "42".parse_int();
+    match r1 {
+        Ok(n)  => println(n.to_string()),
+        Err(_) => println("err"),
+    }
+
+    let r2: Result[Int, String] = "notanumber".parse_int();
+    let is_err: Int = match r2 { Err(_) => 1, Ok(_) => 0 };
+    println(is_err.to_string());
+
+    // ── parse_float ───────────────────────────────────────────────────────
+    let r3: Result[Float, String] = "3.14".parse_float();
+    match r3 {
+        Ok(_)  => println("ok"),
+        Err(_) => println("err"),
+    }
+
+    let r4: Result[Float, String] = "bad".parse_float();
+    let is_err2: Int = match r4 { Err(_) => 1, Ok(_) => 0 };
+    println(is_err2.to_string())
+}
