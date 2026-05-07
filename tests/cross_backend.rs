@@ -563,3 +563,9 @@ fn cross_backend_parse_int_float_llvm() {
     let file = corpus_types("parse_int_float_llvm.mvl");
     assert_llvm_output(&file, "42\n1\nok\n1");
 }
+
+#[test]
+fn cross_backend_println_multi_arg() {
+    let file = corpus("println_non_string_first_arg.mvl");
+    assert_llvm_output(&file, "hello 42\n42\n42 100\n42 100 hello");
+}
