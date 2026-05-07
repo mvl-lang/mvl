@@ -113,6 +113,9 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                             cg.push(")(__x.clone()))");
                         }
                         _ => {
+                            // List (and unknown types) use into_iter().collect().
+                            // Set.map is not a valid MVL operation (checker returns Ty::Unknown),
+                            // so this arm is only reached for List receivers in valid programs.
                             emit_expr(cg, receiver);
                             cg.push(".into_iter().map(|__x| (");
                             emit_expr(cg, &args[0]);

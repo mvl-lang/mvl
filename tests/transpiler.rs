@@ -1641,6 +1641,36 @@ fn method_len_list_emits_len_as_i64() {
     );
 }
 
+#[test]
+fn method_map_result_emits_direct_map() {
+    // Result[T,E].map(f) emits .map(|__x| ...) directly, not into_iter().collect() (#554)
+    let src = "fn f(r: Result[Int, String], g: fn(Int) -> Int) -> Result[Int, String] { r.map(g) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".map(|__x|");
+    assert!(
+        !rust.contains(".into_iter()"),
+        "Result.map must not emit into_iter():\n{rust}"
+    );
+}
+
+#[test]
+fn method_len_labeled_string_emits_label_wrapped_chars_count() {
+    // Secret[String].len() preserves the IFC label and emits chars().count() (#554)
+    let src = "fn f(s: Secret[String]) -> Secret[Int] { s.len() }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "Secret(");
+    assert_contains(&rust, ").0.chars().count() as i64)");
+}
+
+#[test]
+fn method_len_labeled_list_emits_label_wrapped_len() {
+    // Secret[List[Int]].len() preserves the IFC label and emits .len() as i64 (#554)
+    let src = "fn f(xs: Secret[List[Int]]) -> Secret[Int] { xs.len() }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "Secret(");
+    assert_contains(&rust, ").0.len() as i64)");
+}
+
 // ── emit_exprs coverage: escape_char ─────────────────────────────────────────
 
 #[test]
