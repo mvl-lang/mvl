@@ -1,12 +1,29 @@
 //! Static MC/DC obligation analysis.
 //!
-//! Walks the AST to identify all decisions (if/while conditions) and counts
-//! their atomic boolean clauses. Results feed the obligation table used by
-//! `cmd_mcdc` to verify MC/DC coverage.
+//! Walks the AST to identify all decisions (if/while conditions and match arms)
+//! and counts their atomic boolean clauses. Results feed the obligation table
+//! used by `cmd_mcdc` to verify MC/DC coverage.
 //!
 //! MC/DC (Modified Condition/Decision Coverage) requires that each atomic
 //! boolean clause in a compound condition independently affects the decision
 //! outcome. Required by DO-178C at DAL-A and ISO 26262 at ASIL-D.
+//!
+//! ## Decision types tracked
+//!
+//! | Kind         | Label     | Obligation per unit        | Notes                          |
+//! |--------------|-----------|----------------------------|--------------------------------|
+//! | `if` body    | `return`  | One per boolean clause     | Function whose body IS the cond|
+//! | `if` cond    | `if`      | One per boolean clause     | Top-level and `else if` chains |
+//! | `while` cond | `while`   | One per boolean clause     | Loop guard                     |
+//! | `match` arms | `match`   | One per arm                | Each arm must be taken once    |
+//! | match guard  | `guard`   | One per boolean clause     | `pat if a && b =>` (parser TODO)|
+//!
+//! ## What is NOT tracked
+//!
+//! - Single-clause conditions (no `&&`/`||`) — they have trivially one obligation
+//! - Conditions inside macro calls or `extern "rust"` blocks
+//! - Match arm guards — parser does not yet implement `pat if expr =>` (#9)
+//! - LLVM backend — no MC/DC infrastructure in `src/mvl/codegen/`
 
 use crate::mvl::parser::ast::{
     BinaryOp, Block, Decl, ElseBranch, Expr, LogicOp, MatchBody, Program, RefExpr, Stmt,

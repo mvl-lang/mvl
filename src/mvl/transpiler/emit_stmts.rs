@@ -339,6 +339,29 @@ fn emit_else_branch(cg: &mut RustEmitter, branch: &ElseBranch, cov_id: Option<us
                     let inner_false_id = else_
                         .as_ref()
                         .and(cg.alloc_branch(span.line, BranchKind::IfFalse));
+                    // Instrument compound else-if conditions with MC/DC (same as
+                    // top-level if — mirrors analysis order so decision IDs align).
+                    // Must wrap in `{ }` because `else` requires a block in Rust.
+                    let mut check_clauses = Vec::new();
+                    collect_clauses(cond, &mut check_clauses);
+                    if check_clauses.len() >= 2 && cg.mcdc.is_some() {
+                        cg.push("{");
+                        cg.nl();
+                        cg.push_indent();
+                        emit_mcdc_if(
+                            cg,
+                            cond,
+                            then,
+                            else_,
+                            span.line,
+                            inner_true_id,
+                            inner_false_id,
+                        );
+                        cg.pop_indent();
+                        cg.indent();
+                        cg.push("}");
+                        return;
+                    }
                     cg.push("if ");
                     emit_expr(cg, cond);
                     cg.push(" {");
