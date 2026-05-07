@@ -6,22 +6,28 @@
 // Type declarations (Int, String, Option, etc.) are resolved by the type checker.
 
 /// Print a value followed by a newline.
-pub fn println(value: String) -> Unit { }
+pub builtin fn println(value: String) -> Unit
+
+/// Print a value without a trailing newline.
+pub builtin fn print(value: String) -> Unit
 
 /// Print a value to stderr followed by a newline.
-pub fn eprintln(value: String) -> Unit { }
+pub builtin fn eprintln(value: String) -> Unit
+
+/// Print a value to stderr without a trailing newline.
+pub builtin fn eprint(value: String) -> Unit
 
 /// Format a value as a string.
-pub fn format(value: String) -> String { "" }
+pub builtin fn format(value: String) -> String
 
 /// Assert a condition; panic if false.
-pub fn assert(condition: Bool) -> Unit { }
+pub builtin fn assert(condition: Bool) -> Unit
 
 /// Assert two values are equal; panic if not.
-pub fn assert_eq(left: String, right: String) -> Unit { }
+pub builtin fn assert_eq(left: String, right: String) -> Unit
 
 /// Unconditionally terminate with a message.
-pub fn panic(message: String) -> Unit { }
+pub builtin fn panic(message: String) -> Unit
 
 /// Generate a sequence of integers [start, end) — exclusive upper bound.
 /// Semantics: range(0, 5) produces [0, 1, 2, 3, 4].

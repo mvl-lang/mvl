@@ -15,7 +15,7 @@ use crate::mvl::parser::ast::{Expr, Literal};
 use super::LlvmBackend;
 
 impl<'ctx> LlvmBackend<'ctx> {
-    // ── Printf declaration (L5-17) ───────────────────────────────────────────
+    // ── Printf / dprintf declarations ────────────────────────────────────────
 
     /// Get (or lazily declare) the external `printf` function.
     pub(crate) fn get_printf(&self) -> FunctionValue<'ctx> {
@@ -26,6 +26,21 @@ impl<'ctx> LlvmBackend<'ctx> {
         let printf_ty = self.context.i32_type().fn_type(&[ptr_ty], true);
         self.module
             .add_function("printf", printf_ty, Some(Linkage::External))
+    }
+
+    /// Get (or lazily declare) the POSIX `dprintf(fd, fmt, ...)` function.
+    ///
+    /// Used by `emit_eprintln` / `emit_eprint` to write to stderr (fd = 2)
+    /// without requiring a FILE* pointer.
+    pub(crate) fn get_dprintf(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("dprintf") {
+            return f;
+        }
+        let i32_ty: BasicMetadataTypeEnum = self.context.i32_type().into();
+        let ptr_ty: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
+        let dprintf_ty = self.context.i32_type().fn_type(&[i32_ty, ptr_ty], true);
+        self.module
+            .add_function("dprintf", dprintf_ty, Some(Linkage::External))
     }
 
     #[allow(dead_code)]
@@ -526,5 +541,205 @@ impl<'ctx> LlvmBackend<'ctx> {
             .build_global_string_ptr(suffix, "printf_fmt_empty")
             .unwrap();
         vec![fmt_global.as_pointer_value().into()]
+    }
+
+    // ── eprintln / eprint (stderr output) ────────────────────────────────────
+
+    /// Emit `eprintln(arg)` → `dprintf(2, "<arg>\n")`.
+    pub(crate) fn emit_eprintln(&mut self, args: &[Expr]) -> Option<BasicValueEnum<'ctx>> {
+        self.emit_dprintf(args, true)
+    }
+
+    /// Emit `eprint(arg)` → `dprintf(2, "<arg>")`.
+    pub(crate) fn emit_eprint(&mut self, args: &[Expr]) -> Option<BasicValueEnum<'ctx>> {
+        self.emit_dprintf(args, false)
+    }
+
+    /// Core of `emit_eprintln` / `emit_eprint`: write `args` to fd 2 via dprintf.
+    fn emit_dprintf(&mut self, args: &[Expr], newline: bool) -> Option<BasicValueEnum<'ctx>> {
+        let dprintf = self.get_dprintf();
+        let fd2 = self.context.i32_type().const_int(2, false);
+        let suffix = if newline { "\n" } else { "" };
+
+        // Single string literal: embed directly in the format string.
+        if let Some(Expr::Literal(Literal::Str(s), _)) = args.first() {
+            if args.len() == 1 && !s.contains("{}") {
+                let fmt = format!("{s}{suffix}");
+                let global = self
+                    .builder
+                    .build_global_string_ptr(&fmt, "dprintf_fmt")
+                    .unwrap();
+                self.builder
+                    .build_call(
+                        dprintf,
+                        &[fd2.into(), global.as_pointer_value().into()],
+                        "dprintf",
+                    )
+                    .unwrap();
+                return None;
+            }
+        }
+
+        // Format string with `{}` placeholders: delegate to emit_printf_format
+        // but re-route the output to stderr by swapping printf → dprintf(2, ...).
+        if let Some(Expr::Literal(Literal::Str(fmt_str), _)) = args.first() {
+            if args.len() > 1 || fmt_str.contains("{}") {
+                let fmt_str = fmt_str.clone();
+                return self.emit_dprintf_format(&fmt_str, &args[1..], newline);
+            }
+        }
+
+        // Single non-string expression: choose specifier by LLVM type.
+        let dprintf_args = self.build_dprintf_args(args, suffix);
+        self.builder
+            .build_call(dprintf, &dprintf_args, "dprintf")
+            .unwrap();
+        None
+    }
+
+    /// Build the dprintf argument list (fd=2 prepended, then format string + value).
+    fn build_dprintf_args(
+        &mut self,
+        args: &[Expr],
+        suffix: &str,
+    ) -> Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> {
+        let dprintf = self.get_dprintf();
+        let fd2: inkwell::values::BasicMetadataValueEnum =
+            self.context.i32_type().const_int(2, false).into();
+        let _ = dprintf; // ensure dprintf is declared
+
+        if let Some(expr) = args.first() {
+            if let Some(val) = self.emit_expr(expr) {
+                let val = if let BasicValueEnum::IntValue(iv) = val {
+                    if iv.get_type().get_bit_width() == 1 {
+                        self.emit_bool_to_str_ptr(iv)
+                    } else {
+                        val
+                    }
+                } else {
+                    val
+                };
+                let (fmt_str, extra): (String, Option<inkwell::values::BasicMetadataValueEnum>) =
+                    match val {
+                        BasicValueEnum::IntValue(v) => {
+                            let bits = v.get_type().get_bit_width();
+                            let spec = if bits <= 32 { "%d" } else { "%lld" };
+                            (format!("{spec}{suffix}"), Some(v.into()))
+                        }
+                        BasicValueEnum::FloatValue(v) => (format!("%g{suffix}"), Some(v.into())),
+                        BasicValueEnum::PointerValue(v) => {
+                            let sp = self.get_mvl_string_ptr();
+                            let cstr_call = self
+                                .builder
+                                .build_call(sp, &[v.into()], "str_cptr_dp")
+                                .unwrap();
+                            use inkwell::values::AnyValue;
+                            let cstr = BasicValueEnum::try_from(cstr_call.as_any_value_enum())
+                                .unwrap_or(v.into());
+                            (format!("%s{suffix}"), Some(cstr.into()))
+                        }
+                        _ => (suffix.to_string(), None),
+                    };
+                let fmt_global = self
+                    .builder
+                    .build_global_string_ptr(&fmt_str, "dprintf_fmt")
+                    .unwrap();
+                let mut result: Vec<inkwell::values::BasicMetadataValueEnum> =
+                    vec![fd2, fmt_global.as_pointer_value().into()];
+                if let Some(arg) = extra {
+                    result.push(arg);
+                }
+                return result;
+            }
+        }
+
+        let fmt_global = self
+            .builder
+            .build_global_string_ptr(suffix, "dprintf_fmt_empty")
+            .unwrap();
+        vec![fd2, fmt_global.as_pointer_value().into()]
+    }
+
+    /// Emit a format-string dprintf call (stderr), substituting `{}` with specifiers.
+    fn emit_dprintf_format(
+        &mut self,
+        fmt_template: &str,
+        value_args: &[Expr],
+        newline: bool,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let mut values: Vec<BasicValueEnum<'ctx>> = Vec::new();
+        for e in value_args {
+            let v = self.emit_expr(e)?;
+            let v = if let BasicValueEnum::IntValue(iv) = v {
+                if iv.get_type().get_bit_width() == 1 {
+                    self.emit_bool_to_str_ptr(iv)
+                } else {
+                    v
+                }
+            } else {
+                v
+            };
+            values.push(v);
+        }
+
+        let mut result_fmt = String::new();
+        let mut arg_idx = 0usize;
+        let mut chars = fmt_template.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '{' && chars.peek() == Some(&'}') {
+                chars.next();
+                let spec = if let Some(val) = values.get(arg_idx) {
+                    match val {
+                        BasicValueEnum::IntValue(v) => {
+                            if v.get_type().get_bit_width() <= 32 {
+                                "%d"
+                            } else {
+                                "%lld"
+                            }
+                        }
+                        BasicValueEnum::FloatValue(_) => "%g",
+                        BasicValueEnum::PointerValue(_) => "%s",
+                        _ => "%d",
+                    }
+                } else {
+                    "%d"
+                };
+                result_fmt.push_str(spec);
+                arg_idx += 1;
+            } else {
+                result_fmt.push(c);
+            }
+        }
+        if newline {
+            result_fmt.push('\n');
+        }
+
+        let dprintf = self.get_dprintf();
+        let fd2 = self.context.i32_type().const_int(2, false);
+        let fmt_global = self
+            .builder
+            .build_global_string_ptr(&result_fmt, "dprintf_fmt")
+            .unwrap();
+        let mut call_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> =
+            vec![fd2.into(), fmt_global.as_pointer_value().into()];
+        for val in values {
+            let printf_val = match val {
+                BasicValueEnum::PointerValue(p) => {
+                    let sp = self.get_mvl_string_ptr();
+                    let cstr_call = self
+                        .builder
+                        .build_call(sp, &[p.into()], "str_cptr_dpf")
+                        .unwrap();
+                    use inkwell::values::AnyValue;
+                    BasicValueEnum::try_from(cstr_call.as_any_value_enum()).unwrap_or(val)
+                }
+                other => other,
+            };
+            call_args.push(printf_val.into());
+        }
+        self.builder
+            .build_call(dprintf, &call_args, "dprintf_fmt_call")
+            .unwrap();
+        None
     }
 }

@@ -488,7 +488,10 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
         } => {
             // println!/print!/eprintln!/format! are Rust macros: first arg must be a bare string
             // literal, not a `.to_string()` expression.
-            if matches!(name.as_str(), "println" | "print" | "eprintln" | "format") {
+            if matches!(
+                name.as_str(),
+                "println" | "print" | "eprintln" | "eprint" | "format" | "panic"
+            ) {
                 cg.push(&format!("{name}!"));
                 cg.push("(");
                 emit_args_for_macro(cg, args);
