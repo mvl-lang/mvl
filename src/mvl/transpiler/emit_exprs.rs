@@ -12,15 +12,6 @@ use crate::mvl::transpiler::mcdc_instr::DecisionKind;
 /// Methods implemented as pure MVL functions in std/strings.mvl and std/lists.mvl.
 ///
 /// When the transpiler sees `receiver.method(args)` for one of these names it
-/// emits a UFCS free-function call instead: `method(receiver, args)`.  The Rust
-/// function is the transpiled MVL stdlib implementation, available in every
-/// generated file via the implicit prelude.
-///
-/// Phase 4 (ADR-0003): this replaces per-method hardcoded Rust emission with
-/// an explicit trust boundary declared as `pub builtin fn` in std/strings.mvl and std/lists.mvl.
-/// Methods implemented as pure MVL functions in std/strings.mvl and std/lists.mvl.
-///
-/// When the transpiler sees `receiver.method(args)` for one of these names it
 /// emits a UFCS free-function call instead: `method(receiver.clone().into(), args)`.
 /// The `.into()` coercion allows IFC-label wrapper types (`Clean<String>`, etc.) to
 /// flow into functions that take the plain inner type — `From<Label<T>> for T` is
@@ -1255,27 +1246,6 @@ fn map_fn_name(name: &str) -> String {
     }
 }
 
-/// Emit `xs.slice(start, end)` as a safe Rust block expression.
-///
-/// Semantics:
-/// - Negative indices are clamped to 0.
-/// - Out-of-bounds `start` or `end` are clamped to `xs.len()`.
-/// - Inverted range (`start > end` after clamping) returns an empty slice.
-/// - Never panics.
-///
-/// Emits: `{let _mvl_r=&(xs);
-///          let _mvl_s=((start).max(0)as usize).min(_mvl_r.len());
-///          let _mvl_e=((end).max(0)as usize).min(_mvl_r.len()).max(_mvl_s);
-///          _mvl_r[_mvl_s.._mvl_e].to_vec()}`
-/// Emit `n.clamp(low, high)` as a safe Rust block expression.
-///
-/// Semantics:
-/// - If `low > high`, the value is returned unchanged (graceful degradation).
-/// - Otherwise, clamps the value to `[low, high]`.
-/// - Never panics (unlike Rust's `i64::clamp`/`f64::clamp` which panic on inverted bounds).
-///
-/// Emits: `{let _mvl_n=(n);let _mvl_lo=(low);let _mvl_hi=(high);
-///          if _mvl_lo>_mvl_hi{_mvl_n}else{_mvl_n.clamp(_mvl_lo,_mvl_hi)}}`
 /// Emit `receiver.len()` as direct Rust using the receiver's checker type (#554).
 ///
 /// - `String` → `.chars().count() as i64` (Unicode codepoint count, not byte count).
@@ -1309,6 +1279,11 @@ fn emit_len_direct(cg: &mut RustEmitter, receiver: &Expr, ty: Option<&Ty>) {
     }
 }
 
+/// Emit `n.clamp(low, high)` as a safe Rust block expression.
+///
+/// - If `low > high`, the value is returned unchanged (graceful degradation).
+/// - Otherwise, clamps the value to `[low, high]`.
+/// - Never panics (unlike Rust's `i64::clamp`/`f64::clamp` which panic on inverted bounds).
 fn emit_safe_clamp(cg: &mut RustEmitter, receiver: &Expr, low: &Expr, high: &Expr) {
     cg.push("{let _mvl_n=(");
     emit_expr(cg, receiver);

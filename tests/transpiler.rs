@@ -1574,6 +1574,73 @@ fn method_pow_int_emits_direct_pow() {
     );
 }
 
+#[test]
+fn method_pow_float_emits_powf() {
+    // Float.pow(e) emits .powf(e), not .pow(e as u32) (#554)
+    let src = "fn f(x: Float, e: Float) -> Float { x.pow(e) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".powf(");
+    assert!(
+        !rust.contains(".pow(e as u32)"),
+        "Float.pow must emit .powf, not .pow(.. as u32):\n{rust}"
+    );
+}
+
+#[test]
+fn method_map_option_emits_direct_map() {
+    // Option[T].map(f) emits .map(|__x| ...) directly, not into_iter().collect() (#554)
+    let src = "fn f(x: Option[Int], g: fn(Int) -> Int) -> Option[Int] { x.map(g) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".map(|__x|");
+    assert!(
+        !rust.contains(".into_iter()"),
+        "Option.map must not emit into_iter():\n{rust}"
+    );
+}
+
+#[test]
+fn method_get_map_emits_hashmap_get() {
+    // Map[K,V].get(k) emits .get(&k.clone()).cloned() (#554)
+    let src = "fn f(m: Map[String, Int], k: String) -> Option[Int] { m.get(k) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".get(&(");
+    assert_contains(&rust, ".clone()).cloned()");
+    assert!(
+        !rust.contains("__mvl_i"),
+        "Map.get must not use the list bounds-check path:\n{rust}"
+    );
+}
+
+#[test]
+fn method_get_list_emits_bounds_check() {
+    // List[T].get(i) emits a negative-index guard block (#554)
+    let src = "fn f(xs: List[Int], i: Int) -> Option[Int] { xs.get(i) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "__mvl_i < 0");
+    assert_contains(&rust, "None");
+    assert_contains(&rust, ".get(__mvl_i as usize).cloned()");
+}
+
+#[test]
+fn method_len_string_emits_chars_count() {
+    // String.len() emits .chars().count() as i64 for Unicode correctness (#554)
+    let src = "fn f(s: String) -> Int { s.len() }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".chars().count() as i64");
+}
+
+#[test]
+fn method_len_list_emits_len_as_i64() {
+    // List[T].len() emits .len() as i64 (#554)
+    let src = "fn f(xs: List[Int]) -> Int { xs.len() }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, ".len() as i64");
+    assert!(
+        !rust.contains(".chars().count()"),
+        "List.len must not emit chars().count():\n{rust}"
+    );
+}
+
 // ── emit_exprs coverage: escape_char ─────────────────────────────────────────
 
 #[test]
