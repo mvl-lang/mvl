@@ -205,11 +205,11 @@
   "!"
   "&"
   "|"
-  "^"
   "~"
   "<<"
   ">>"
 ] @operator
+(bitxor_op) @operator
 
 ; Remove | from punctuation.delimiter (now classified as operator above)
 

@@ -423,7 +423,7 @@ module.exports = grammar({
           seq($.expr, choice("==", "!=", "<", ">", "<=", ">="), $.expr)
         ),
         prec.left(PREC.BITAND, seq($.expr, "&", $.expr)),
-        prec.left(PREC.BITXOR, seq($.expr, "^", $.expr)),
+        prec.left(PREC.BITXOR, seq($.expr, alias("^", $.bitxor_op), $.expr)),
         prec.left(PREC.BITOR, seq($.expr, "|", $.expr)),
         prec.left(PREC.AND, seq($.expr, "&&", $.expr)),
         prec.left(PREC.OR, seq($.expr, "||", $.expr)),

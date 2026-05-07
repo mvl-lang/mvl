@@ -394,6 +394,10 @@
       "required": false,
       "types": [
         {
+          "type": "bitxor_op",
+          "named": true
+        },
+        {
           "type": "block_expr",
           "named": true
         },
@@ -1133,6 +1137,7 @@
   {
     "type": "program",
     "named": true,
+    "root": true,
     "fields": {},
     "children": {
       "multiple": true,
@@ -1845,11 +1850,15 @@
     "named": false
   },
   {
-    "type": "^",
+    "type": "_",
     "named": false
   },
   {
-    "type": "_",
+    "type": "bitxor_op",
+    "named": true
+  },
+  {
+    "type": "builtin",
     "named": false
   },
   {
@@ -1922,7 +1931,8 @@
   },
   {
     "type": "line_comment",
-    "named": true
+    "named": true,
+    "extra": true
   },
   {
     "type": "match",
