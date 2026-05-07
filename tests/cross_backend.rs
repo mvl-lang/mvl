@@ -45,6 +45,13 @@ fn corpus_effects(name: &str) -> String {
     )
 }
 
+fn corpus_basics(name: &str) -> String {
+    format!(
+        "{}/tests/corpus/01_basics/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
 fn corpus_stdlib(name: &str) -> String {
     format!(
         "{}/tests/corpus/03_stdlib/{name}",
@@ -718,6 +725,57 @@ fn cross_backend_parse_int_float_llvm() {
 fn cross_backend_println_multi_arg() {
     let file = corpus("println_non_string_first_arg.mvl");
     assert_llvm_output(&file, "hello 42\n42\n42 100\n42 100 hello");
+}
+
+/// eprint/eprintln both backends write to stderr with identical output (#556).
+#[test]
+fn cross_backend_eprint_stderr() {
+    let file = corpus_basics("eprint_stderr.mvl");
+
+    // Transpiler path: capture stderr.
+    let transpiler = Command::new(mvl_bin())
+        .args(["run", &file])
+        .output()
+        .expect("failed to run mvl run (transpiler)");
+    assert!(
+        transpiler.status.success(),
+        "transpiler failed:\n{}",
+        String::from_utf8_lossy(&transpiler.stderr)
+    );
+    let t_stderr = String::from_utf8_lossy(&transpiler.stderr);
+    assert!(
+        t_stderr.contains("error: something went wrong"),
+        "transpiler stderr missing expected output:\n{t_stderr}"
+    );
+    assert!(
+        t_stderr.contains("count=42"),
+        "transpiler stderr missing count=42:\n{t_stderr}"
+    );
+
+    if mvl::mvl::codegen::find_lli().is_none() {
+        eprintln!("SKIP cross_backend_eprint_stderr LLVM half: lli not found");
+        return;
+    }
+
+    let llvm = Command::new(mvl_bin())
+        .args(["run", &file, "--backend=llvm"])
+        .output()
+        .expect("failed to run mvl run --backend=llvm");
+    assert!(
+        llvm.status.success(),
+        "LLVM backend failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&llvm.stdout),
+        String::from_utf8_lossy(&llvm.stderr)
+    );
+    let l_stderr = String::from_utf8_lossy(&llvm.stderr);
+    assert!(
+        l_stderr.contains("error: something went wrong"),
+        "LLVM stderr missing expected output:\n{l_stderr}"
+    );
+    assert!(
+        l_stderr.contains("count=42"),
+        "LLVM stderr missing count=42:\n{l_stderr}"
+    );
 }
 
 // ── ADR-0022: Category 1 operator intrinsics (LLVM backend) ──────────────────

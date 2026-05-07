@@ -1,0 +1,8 @@
+// Corpus: eprint/eprintln emit to stderr with correct formatting (#556).
+// Both backends must produce identical stderr output.
+
+fn main() -> Unit ! Console {
+    eprint("error: ");
+    eprintln("something went wrong");
+    eprintln("count={}", 42);
+}
