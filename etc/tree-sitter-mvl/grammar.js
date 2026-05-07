@@ -94,15 +94,21 @@ module.exports = grammar({
     // One file = one module (file=module, no inline module blocks).
     // Module name = filename without extension.
 
-    // `use path::to::Item;` — private import (top of file only)
+    // `use std.io.{File, Path};` — private import (top of file only)
     use_decl: ($) => seq("use", $.module_path, ";"),
 
-    // `pub use path::to::Item;` — re-export; "pub" is part of the rule so it
+    // `pub use std.io.File;` — re-export; "pub" is part of the rule so it
     // remains unambiguous with use_decl (which never has "pub").
     reexport_decl: ($) => seq("pub", "use", $.module_path, ";"),
 
     module_path: ($) =>
-      seq($.identifier, repeat(seq("::", $.identifier))),
+      seq(
+        $.identifier,
+        repeat(seq(".", $.identifier)),
+        optional(
+          seq(".", "{", $.identifier, repeat(seq(",", $.identifier)), optional(","), "}")
+        )
+      ),
 
     // Impl block: `impl Trait [ TypeParams ] for Type { fn_decls }`
     impl_decl: ($) =>
@@ -423,7 +429,7 @@ module.exports = grammar({
           seq($.expr, choice("==", "!=", "<", ">", "<=", ">="), $.expr)
         ),
         prec.left(PREC.BITAND, seq($.expr, "&", $.expr)),
-        prec.left(PREC.BITXOR, seq($.expr, alias("^", $.bitxor_op), $.expr)),
+        prec.left(PREC.BITXOR, seq($.expr, "^", $.expr)),
         prec.left(PREC.BITOR, seq($.expr, "|", $.expr)),
         prec.left(PREC.AND, seq($.expr, "&&", $.expr)),
         prec.left(PREC.OR, seq($.expr, "||", $.expr)),

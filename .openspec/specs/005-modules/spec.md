@@ -206,7 +206,7 @@ decl_body      = type_decl | fn_decl | const_decl | reexport_decl ;
 (* === Modules and imports === *)
 use_decl       = "use" module_path ";" ;
 reexport_decl  = "use" module_path ";" ;  (* "pub" required — enforced by type checker *)
-module_path    = IDENT { "::" IDENT } ;
+module_path    = IDENT { "." IDENT } [ "." "{" IDENT { "," IDENT } "}" ] ;
 
 (* === Declarations (no leading "pub" — hoisted to declaration) === *)
 type_decl      = "type" IDENT [ type_params ] "=" type_body ;

@@ -622,7 +622,7 @@ total fn process(raw: Tainted<String>) -> Clean<String> {
 Use import declaration
 ===============================================================================
 
-use std::io::File;
+use std.io.{File, Path};
 
 -------------------------------------------------------------------------------
 
@@ -631,13 +631,14 @@ use std::io::File;
     (module_path
       (identifier)
       (identifier)
+      (identifier)
       (identifier))))
 
 ===============================================================================
 Re-export declaration
 ===============================================================================
 
-pub use geometry::Point;
+pub use std.io.File;
 
 -------------------------------------------------------------------------------
 
@@ -645,6 +646,7 @@ pub use geometry::Point;
   (declaration
     (reexport_decl
       (module_path
+        (identifier)
         (identifier)
         (identifier)))))
 
