@@ -333,6 +333,196 @@ impl<'ctx> LlvmBackend<'ctx> {
         self.get_or_declare_fn("mvl_map_remove", &[ptr, ptr, i64], None, false)
     }
 
+    // ── String method declarations ────────────────────────────────────────────
+
+    /// `_mvl_str_len(ptr) -> i64`
+    pub(crate) fn get_mvl_str_len(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_str_len",
+            &[self.context.ptr_type(AddressSpace::default()).into()],
+            Some(self.context.i64_type().into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_trim(ptr) -> ptr`
+    pub(crate) fn get_mvl_str_trim(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_str_trim",
+            &[self.context.ptr_type(AddressSpace::default()).into()],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_starts_with(ptr, ptr) -> i64`
+    pub(crate) fn get_mvl_str_starts_with(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_str_starts_with",
+            &[
+                self.context.ptr_type(AddressSpace::default()).into(),
+                self.context.ptr_type(AddressSpace::default()).into(),
+            ],
+            Some(self.context.i64_type().into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_ends_with(ptr, ptr) -> i64`
+    pub(crate) fn get_mvl_str_ends_with(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_str_ends_with",
+            &[
+                self.context.ptr_type(AddressSpace::default()).into(),
+                self.context.ptr_type(AddressSpace::default()).into(),
+            ],
+            Some(self.context.i64_type().into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_contains(ptr, ptr) -> i64`
+    pub(crate) fn get_mvl_str_contains(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_str_contains",
+            &[
+                self.context.ptr_type(AddressSpace::default()).into(),
+                self.context.ptr_type(AddressSpace::default()).into(),
+            ],
+            Some(self.context.i64_type().into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_find(ptr, ptr) -> i64`  — returns char index or -1 for None
+    pub(crate) fn get_mvl_str_find(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_str_find",
+            &[
+                self.context.ptr_type(AddressSpace::default()).into(),
+                self.context.ptr_type(AddressSpace::default()).into(),
+            ],
+            Some(self.context.i64_type().into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_replace(ptr, ptr, ptr) -> ptr`
+    pub(crate) fn get_mvl_str_replace(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_str_replace",
+            &[
+                self.context.ptr_type(AddressSpace::default()).into(),
+                self.context.ptr_type(AddressSpace::default()).into(),
+                self.context.ptr_type(AddressSpace::default()).into(),
+            ],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_split(ptr, ptr) -> ptr`  — returns MvlArray* of MvlString*
+    pub(crate) fn get_mvl_str_split(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_str_split",
+            &[
+                self.context.ptr_type(AddressSpace::default()).into(),
+                self.context.ptr_type(AddressSpace::default()).into(),
+            ],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_substring(ptr, i64, i64) -> ptr`
+    pub(crate) fn get_mvl_str_substring(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_str_substring",
+            &[
+                self.context.ptr_type(AddressSpace::default()).into(),
+                self.context.i64_type().into(),
+                self.context.i64_type().into(),
+            ],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_char_at(ptr, i64) -> ptr`
+    pub(crate) fn get_mvl_str_char_at(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_str_char_at",
+            &[
+                self.context.ptr_type(AddressSpace::default()).into(),
+                self.context.i64_type().into(),
+            ],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_from_chars(ptr) -> ptr`  — List[String] → String
+    pub(crate) fn get_mvl_str_from_chars(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_str_from_chars",
+            &[self.context.ptr_type(AddressSpace::default()).into()],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_byte_at(ptr, i64) -> i64`  — returns byte value as i64
+    pub(crate) fn get_mvl_str_byte_at(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_str_byte_at",
+            &[
+                self.context.ptr_type(AddressSpace::default()).into(),
+                self.context.i64_type().into(),
+            ],
+            Some(self.context.i64_type().into()),
+            false,
+        )
+    }
+
+    /// `_mvl_str_from_bytes(ptr) -> ptr`  — List[Byte] → String
+    pub(crate) fn get_mvl_str_from_bytes(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_str_from_bytes",
+            &[self.context.ptr_type(AddressSpace::default()).into()],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
+    // ── List method declarations ──────────────────────────────────────────────
+
+    /// `_mvl_list_slice(ptr, i64, i64) -> ptr`
+    pub(crate) fn get_mvl_list_slice(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_list_slice",
+            &[
+                self.context.ptr_type(AddressSpace::default()).into(),
+                self.context.i64_type().into(),
+                self.context.i64_type().into(),
+            ],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
+    /// `_mvl_list_concat(ptr, ptr) -> ptr`
+    pub(crate) fn get_mvl_list_concat(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "_mvl_list_concat",
+            &[
+                self.context.ptr_type(AddressSpace::default()).into(),
+                self.context.ptr_type(AddressSpace::default()).into(),
+            ],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
     fn get_or_declare_fn(
         &self,
         name: &str,
