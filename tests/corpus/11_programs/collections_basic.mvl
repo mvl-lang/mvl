@@ -3,7 +3,7 @@
 // Exercises Map and Set method calls via native MVL dispatch so both the
 // Rust transpiler and LLVM backends are covered by the same source program.
 //
-// Expected stdout (deterministic — no iteration over unordered collections):
+// Expected stdout:
 //   map_len=2
 //   has_alice=true
 //   has_carol=false

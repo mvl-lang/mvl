@@ -3,7 +3,7 @@
 // Exercises: ADTs (Req 1), total fns (Req 8), refinement newtype (Req 10),
 // Option (Req 4), Result (Req 5), Console effect (Req 7).
 //
-// Expected stdout (one line per println):
+// Expected stdout:
 //   double(21) = 42
 //   safe_add(10, 32) = 42
 //   MathError: DivisionByZero
