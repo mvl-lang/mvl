@@ -1242,6 +1242,7 @@ fn map_fn_name(name: &str) -> String {
     // Built-in MVL functions mapped to Rust / stdlib equivalents
     match name {
         "println" => "println!".to_string(),
+        "panic" => "panic!".to_string(),
         "assert" => "assert!".to_string(),
         "assert_eq" => "assert_eq!".to_string(),
         "assert_ne" => "assert_ne!".to_string(),

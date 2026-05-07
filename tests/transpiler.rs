@@ -1671,6 +1671,48 @@ fn method_len_labeled_list_emits_label_wrapped_len() {
     assert_contains(&rust, ").0.len() as i64)");
 }
 
+// ── std/core.mvl: print/eprint/panic/assert (#556) ───────────────────────────
+
+#[test]
+fn print_emits_rust_macro() {
+    // print(s) → print!("{}", s) via macro arm
+    let src = r#"fn f(s: String) -> Unit ! Console { print(s) }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "print!(");
+}
+
+#[test]
+fn eprint_emits_rust_macro() {
+    // eprint(s) → eprint!("{}", s) via macro arm
+    let src = r#"fn f(s: String) -> Unit ! Console { eprint(s) }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "eprint!(");
+}
+
+#[test]
+fn eprintln_emits_rust_macro() {
+    // eprintln(s) → eprintln!("{}", s) via macro arm
+    let src = r#"fn f(s: String) -> Unit ! Console { eprintln(s) }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "eprintln!(");
+}
+
+#[test]
+fn panic_emits_rust_macro() {
+    // panic(msg) → panic!("{}", msg) via map_fn_name
+    let src = r#"fn f(msg: String) -> Unit { panic(msg) }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "panic!(");
+}
+
+#[test]
+fn assert_emits_rust_macro() {
+    // assert(cond) → assert!(cond) via map_fn_name
+    let src = r#"fn f(cond: Bool) -> Unit { assert(cond) }"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "assert!(");
+}
+
 // ── emit_exprs coverage: escape_char ─────────────────────────────────────────
 
 #[test]
