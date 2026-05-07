@@ -3,7 +3,7 @@
 
 import marimo
 
-__generated_with = "0.8.0"
+__generated_with = "0.23.4"
 app = marimo.App(width="medium")
 
 
@@ -15,20 +15,19 @@ def _():
     import subprocess
     import json
     from pathlib import Path
-    return mo, pl, alt, subprocess, json, Path
+
+    return Path, alt, mo, pl, subprocess
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        # MVL Stdlib Parity Dashboard
+    mo.md("""
+    # MVL Stdlib Parity Dashboard
 
-        Comparing stdlib function coverage between the **Rust transpiler** and **LLVM backend**.
+    Comparing stdlib function coverage between the **Rust transpiler** and **LLVM backend**.
 
-        Target: both backends should support the same stdlib functions with identical behavior.
-        """
-    )
+    Target: both backends should support the same stdlib functions with identical behavior.
+    """)
     return
 
 
@@ -49,7 +48,7 @@ def _(Path, subprocess):
         except Exception:
             return []
 
-    return repo_root, grep_stdlib_functions
+    return (grep_stdlib_functions,)
 
 
 @app.cell
@@ -83,11 +82,11 @@ def _(grep_stdlib_functions, pl):
     ])
 
     parity_df
-    return rust_funcs, llvm_funcs, all_funcs, parity_df
+    return (parity_df,)
 
 
 @app.cell
-def _(parity_df, mo):
+def _(mo, parity_df, pl):
     # Summary stats
     total = len(parity_df)
     both = parity_df.filter(pl.col("both")).height
@@ -107,11 +106,11 @@ def _(parity_df, mo):
         | **Parity %** | **{100 * both / total:.1f}%** |
         """
     )
-    return total, both, rust_only, llvm_only
+    return
 
 
 @app.cell
-def _(parity_df, alt, pl):
+def _(alt, parity_df, pl):
     # Visualization: stacked bar showing parity status
     viz_df = pl.DataFrame({
         "status": ["Both", "Rust only", "LLVM only"],
@@ -137,11 +136,11 @@ def _(parity_df, alt, pl):
     )
 
     chart
-    return viz_df, chart
+    return
 
 
 @app.cell
-def _(parity_df, mo, pl):
+def _(mo, parity_df, pl):
     # Gap list: functions missing from one backend
     gaps = parity_df.filter(~pl.col("both")).select(["function", "rust", "llvm"])
 
@@ -152,7 +151,7 @@ def _(parity_df, mo, pl):
         Functions not yet implemented in both backends:
         """
     )
-    return gaps,
+    return (gaps,)
 
 
 @app.cell
