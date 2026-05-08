@@ -1,0 +1,25 @@
+// Corpus: regex.find_all cross-backend parity (#584)
+//
+// Uses a deterministic digit pattern. Both backends must produce identical output.
+//
+// Used by: tests/cross_backend.rs::cross_backend_regex_find_all
+use std.regex.{Regex, Match, compile, find_all}
+
+fn main() -> Unit ! Console {
+    // Three matches: "1", "22", "333"
+    match compile(r"\d+") {
+        Ok(re) => {
+            let matches: List[Match] = find_all(re, "1 22 333");
+            println("{}", matches.len());
+        }
+        Err(_) => println("err"),
+    }
+    // Zero matches on a string with no digits
+    match compile(r"\d+") {
+        Ok(re2) => {
+            let zero: List[Match] = find_all(re2, "abc");
+            println("{}", zero.len());
+        }
+        Err(_) => println("err"),
+    }
+}

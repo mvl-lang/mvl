@@ -1081,6 +1081,15 @@ impl<'ctx> LlvmBackend<'ctx> {
                     return Some(arr_ptr.into());
                 }
 
+                // #583: generic builtins — inline emit using expr_types.
+                // Excluded from StdlibSig table (no single C-ABI calling convention).
+                if name == "choice" && args.len() == 1 {
+                    return self.emit_random_choice(&args[0]);
+                }
+                if name == "shuffle" && args.len() == 1 {
+                    return self.emit_random_shuffle(&args[0]);
+                }
+
                 // ADR-0019: dispatch to libmvl_runtime_c C-ABI for stdlib imports.
                 if let Some(sig) = self.stdlib_imports.get(name).cloned() {
                     use crate::mvl::codegen::StdlibSig;
@@ -1154,6 +1163,13 @@ impl<'ctx> LlvmBackend<'ctx> {
                             let input = self.emit_expr(&args[1])?;
                             return self
                                 .emit_stdlib_call_option_match_two_ptr_args(&sym, handle, input);
+                        }
+                        // #584: (ptr, ptr) → ptr (e.g. regex.find_all → MvlArray*)
+                        StdlibSig::PtrTwoPtrArgs(sym) if args.len() == 2 => {
+                            let sym = sym.clone();
+                            let a = self.emit_expr(&args[0])?;
+                            let b = self.emit_expr(&args[1])?;
+                            return self.emit_stdlib_call_ptr_two_ptr_args(&sym, a, b);
                         }
                         // #507: i64 → ptr (e.g. crypto_random_bytes(n) → *mut MvlArray)
                         StdlibSig::I64ReturnsPtrArg(sym) if args.len() == 1 => {

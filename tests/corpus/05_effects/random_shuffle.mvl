@@ -1,0 +1,20 @@
+// Corpus: random.shuffle cross-backend parity (#583)
+//
+// Uses a single-element list — Fisher-Yates on one element is a no-op regardless
+// of PRNG state.  Both backends must produce identical output.
+//
+// Used by: tests/cross_backend.rs::cross_backend_random_shuffle
+
+use std.random.{shuffle}
+
+fn main() -> Unit ! Random, Console {
+    // Single-element list — always returns [7].
+    let xs: List[Int] = [7];
+    let ys: List[Int] = shuffle(xs);
+    println("{}", ys.len());
+
+    // Empty list — always returns [].
+    let empty: List[Int] = [];
+    let r: List[Int] = shuffle(empty);
+    println("{}", r.len());
+}

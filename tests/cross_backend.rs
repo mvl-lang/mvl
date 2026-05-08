@@ -300,6 +300,44 @@ fn cross_backend_random_float_shape() {
     }
 }
 
+// ── #583: generic builtin parity tests (choice, shuffle) ─────────────────────
+
+/// `random.choice` on a single-element list is deterministic: always `Some(42)`.
+/// Empty list always returns `None`.  Both backends must match.
+#[test]
+fn cross_backend_random_choice() {
+    let file = corpus_effects("random_choice.mvl");
+    if let Some(llvm_out) = run_llvm(&file) {
+        let transpiler_out = run_transpiler(&file);
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "random_choice.mvl: LLVM and transpiler backends must produce identical output"
+        );
+        let lines: Vec<&str> = llvm_out.lines().collect();
+        assert_eq!(lines.len(), 2, "expected two lines");
+        assert_eq!(lines[0], "42", "choice([42]) must return Some(42)");
+        assert_eq!(lines[1], "none", "choice([]) must return None");
+    }
+}
+
+/// `random.shuffle` on a single-element list is a no-op.
+/// Both backends must return a list of length 1, and empty stays empty.
+#[test]
+fn cross_backend_random_shuffle() {
+    let file = corpus_effects("random_shuffle.mvl");
+    if let Some(llvm_out) = run_llvm(&file) {
+        let transpiler_out = run_transpiler(&file);
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "random_shuffle.mvl: LLVM and transpiler backends must produce identical output"
+        );
+        let lines: Vec<&str> = llvm_out.lines().collect();
+        assert_eq!(lines.len(), 2, "expected two lines");
+        assert_eq!(lines[0], "1", "shuffle([7]) must have length 1");
+        assert_eq!(lines[1], "0", "shuffle([]) must have length 0");
+    }
+}
+
 // ── #434: log C-ABI parity tests ─────────────────────────────────────────────
 
 /// Both backends must emit identical log records to stderr.
@@ -510,6 +548,24 @@ fn cross_backend_regex_find() {
         assert_eq!(lines[0], "123", "first digit run extracted");
         assert_eq!(lines[1], "(none)", "no-digits input returns None");
         assert_eq!(lines[2], "42", "leading digit run extracted");
+    }
+}
+
+/// Both backends must produce identical output for `regex.find_all` returning `List[Match]`.
+/// Verifies that the match count is correct for a multi-match and a zero-match input.
+#[test]
+fn cross_backend_regex_find_all() {
+    let file = corpus_stdlib("regex_find_all.mvl");
+    if let Some(llvm_out) = run_llvm(&file) {
+        let transpiler_out = run_transpiler(&file);
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "regex_find_all.mvl: LLVM and transpiler backends must produce identical output"
+        );
+        let lines: Vec<&str> = llvm_out.lines().collect();
+        assert_eq!(lines.len(), 2, "expected two output lines");
+        assert_eq!(lines[0], "3", "digit pattern matches 3 times in '1 22 333'");
+        assert_eq!(lines[1], "0", "digit pattern matches 0 times in 'abc'");
     }
 }
 
