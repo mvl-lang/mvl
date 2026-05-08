@@ -595,3 +595,15 @@ fn intrinsic_logical() {
 fn intrinsic_bitwise() {
     assert_llvm_output(&intrinsic("04_bitwise.mvl"), "ok");
 }
+
+// ── #557: parity quick wins ───────────────────────────────────────────────────
+
+#[test]
+fn intrinsic_random_bytes() {
+    assert_llvm_output(&intrinsic("05_random_bytes.mvl"), "ok");
+}
+
+#[test]
+fn intrinsic_env_args() {
+    assert_llvm_output(&intrinsic("06_env_args.mvl"), "ok");
+}

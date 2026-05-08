@@ -6,15 +6,13 @@
 //!
 //! # LLVM dispatch coverage
 //!
-//! The following functions are wired into the LLVM codegen dispatch table
-//! (no-arg or primitive-arg, primitive return):
-//!   - `_mvl_random_int`   — (i64, i64) → i64
-//!   - `_mvl_random_float` — () → f64
+//! The following functions are wired into the LLVM codegen dispatch table:
+//!   - `_mvl_random_int`   — (i64, i64) → i64  (`I64TwoI64Args`)
+//!   - `_mvl_random_float` — () → f64           (`F64NoArg`)
+//!   - `_mvl_random_bytes` — (i64) → ptr        (`I64ReturnsPtrArg`)
 //!
-//! The remaining functions (`_mvl_random_bytes`, `_mvl_random_choice`,
-//! `_mvl_random_shuffle`) require `MvlArray*` marshalling and are exported
-//! here for future codegen integration. They are intentionally excluded from
-//! the current dispatch table.
+//! `_mvl_random_choice_index` and `_mvl_random_shuffle_i64` use the old
+//! length-prefixed i64 layout and are deferred pending LLVM wiring.
 
 use libc::c_void;
 
@@ -34,33 +32,24 @@ pub extern "C" fn _mvl_random_float() -> f64 {
     random::float()
 }
 
-// ── Complex dispatch (MvlArray* — deferred LLVM wiring) ──────────────────────
+// ── MvlArray* dispatch ────────────────────────────────────────────────────────
 
-/// Return `n` pseudo-random bytes as a heap-allocated `*mut c_void`.
+/// Return `n` pseudo-random bytes as a `*mut MvlArray` of i64 values in [0, 255].
 ///
-/// Layout: `[len: i64][val0: i64][val1: i64]...` where each value is in [0, 255].
-/// Matches `random::bytes() -> Vec<i64>` — each element is a byte value stored as i64.
-/// Caller frees the allocation with `libc::free`.
-///
-/// LLVM codegen wiring is deferred pending `MvlArray*` marshalling support.
+/// Each element is an i64 byte value. The LLVM caller is responsible for
+/// dropping the array via `mvl_array_drop`. Wired via `I64ReturnsPtrArg`.
 #[no_mangle]
-pub extern "C" fn _mvl_random_bytes(n: i64) -> *mut c_void {
+#[allow(unsafe_code)]
+pub extern "C" fn _mvl_random_bytes(n: i64) -> *mut mvl_memory::MvlArray {
+    use mvl_memory::mvl_array_new;
     let vals = random::bytes(n);
-    let len = vals.len();
-    let total = (1usize.checked_add(len))
-        .and_then(|v| v.checked_mul(std::mem::size_of::<i64>()))
-        .unwrap_or_else(|| std::process::abort());
-    let ptr = unsafe { libc::malloc(total) } as *mut i64;
-    if ptr.is_null() {
-        return std::ptr::null_mut();
-    }
-    unsafe {
-        ptr.write(len as i64);
-        for (i, v) in vals.iter().enumerate() {
-            ptr.add(1 + i).write(*v);
+    let arr = unsafe { mvl_array_new(std::mem::size_of::<i64>(), vals.len().max(1)) };
+    for v in vals {
+        unsafe {
+            crate::memory_ops::mvl_array_push(arr, (&v as *const i64).cast());
         }
     }
-    ptr as *mut c_void
+    arr
 }
 
 /// Return the index of a random element in a length-prefixed i64 array, or -1 if empty.
@@ -129,10 +118,11 @@ mod tests {
     #[test]
     #[allow(unsafe_code)]
     fn test_random_bytes_length() {
-        let ptr = _mvl_random_bytes(16);
-        assert!(!ptr.is_null());
-        let len = unsafe { (ptr as *const i64).read() };
+        use mvl_memory::{mvl_array_drop, MvlArray};
+        let arr = _mvl_random_bytes(16);
+        assert!(!arr.is_null());
+        let len = unsafe { crate::memory_ops::mvl_array_len(arr as *const MvlArray) };
         assert_eq!(len, 16);
-        unsafe { libc::free(ptr) };
+        unsafe { mvl_array_drop(arr) };
     }
 }
