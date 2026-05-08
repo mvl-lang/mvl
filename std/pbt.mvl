@@ -5,8 +5,9 @@
 //
 // Import with: use std.pbt.{gen_int, gen_bool, property_check_int, ...}
 //
-// Design: refinement types express the property contract; this library
-// generates values satisfying them. No `forall` keyword — pure stdlib.
+// Design: concrete generator types per value kind (IntGen, BoolGen, etc.)
+// encode the generation strategy as data; property_check functions pattern-
+// match on the strategy and sample using std.random.* builtins.
 //
 // Range conventions: integer ranges are inclusive [min, max]; float ranges are
 // half-open [min, max). This mirrors Rust's rand crate conventions.
@@ -14,119 +15,358 @@
 // TODO (#40): gen_pair, gen_struct_of, gen_weighted — deferred until generics land
 // TODO (#40): compile-time codegen for generators from refinement-typed params
 // TODO (#40): counterexample persistence (tests/.proptest-regressions/)
-// TODO (#40/#425): statistics output (cases, shrink steps, value distribution)
-//
-// Usage:
-//   test fn test_divide_safe() {
-//       property_check_int("divide_safe", gen_int(1, 1000), fn_divide_never_fails, 1000)
-//   }
-//   fn fn_divide_never_fails(x: Int) -> Bool {
-//       divide(100, x).is_ok()
-//   }
+// TODO (#40/#425): shrinking, statistics output (cases, shrink steps, value distribution)
+
+use std.random.{int, float, bytes, choice}
+
+// ── Generator types ────────────────────────────────────────────────────────
+
+/// Generator for integers: either a uniform range, a filtered range, or a
+/// fixed set of choices.
+pub type IntGen = enum {
+    Range(Int, Int),
+    Filtered(Int, Int, fn(Int) -> Bool),
+    OneOf(List[Int]),
+}
+
+/// Generator for floats: uniform over [min, max).
+pub type FloatGen = struct { min: Float, max: Float }
+
+/// Generator for bools: either 50/50 or mapped from an int range via f.
+pub type BoolGen = enum {
+    BoolRandom,
+    MappedFromInt(Int, Int, fn(Int) -> Bool),
+}
+
+/// Generator for strings: uniform length in [min_len, max_len], printable ASCII.
+pub type StringGen = struct { min_len: Int, max_len: Int }
+
+/// Generator for List[Int]: length in [0, max_len], elements in [min_val, max_val].
+pub type ListIntGen = struct { min_val: Int, max_val: Int, max_len: Int }
 
 // ── Phase A: generators ────────────────────────────────────────────────────
 
 /// Generator for integers uniformly distributed in [min, max] (inclusive).
-pub fn gen_int(min: Int, max: Int) -> Generator[Int] ! Random { panic("stub") }
+pub fn gen_int(min: Int, max: Int) -> IntGen ! Random {
+    IntGen::Range(min, max)
+}
 
 /// Generator for floats uniformly distributed in [min, max).
-pub fn gen_float(min: Float, max: Float) -> Generator[Float] ! Random { panic("stub") }
+pub fn gen_float(min: Float, max: Float) -> FloatGen ! Random {
+    FloatGen { min: min, max: max }
+}
 
 /// Generator for Bool (50/50 true/false).
-pub fn gen_bool() -> Generator[Bool] ! Random { panic("stub") }
+pub fn gen_bool() -> BoolGen ! Random {
+    BoolGen::BoolRandom
+}
 
 /// Generator for strings with byte length in [min_len, max_len].
 /// Characters are drawn from printable ASCII (32–126).
-pub fn gen_string(min_len: Int, max_len: Int) -> Generator[String] ! Random { panic("stub") }
+pub fn gen_string(min_len: Int, max_len: Int) -> StringGen ! Random {
+    StringGen { min_len: min_len, max_len: max_len }
+}
 
 /// Generator for List[Int] with length in [0, max_len], where each
 /// element is uniformly distributed in [min_val, max_val] (inclusive).
-pub fn gen_list_int(min_val: Int, max_val: Int, max_len: Int) -> Generator[List[Int]] ! Random { panic("stub") }
+pub fn gen_list_int(min_val: Int, max_val: Int, max_len: Int) -> ListIntGen ! Random {
+    ListIntGen { min_val: min_val, max_val: max_val, max_len: max_len }
+}
 
 // ── Phase A: combinators ───────────────────────────────────────────────────
 
-/// Transform generator output: `gen_map(gen, f)` produces `f(x)` for each
-/// value `x` drawn from `gen`. Shrinking is inherited from `gen`.
-pub fn gen_map_int_bool(gen: Generator[Int], f: fn(Int) -> Bool) -> Generator[Bool] ! Random { panic("stub") }
+/// Transform generator output: `gen_map_int_bool(gen, f)` produces `f(x)` for each
+/// value `x` drawn from `gen`. Only Range-based generators are supported.
+pub fn gen_map_int_bool(gen: IntGen, f: fn(Int) -> Bool) -> BoolGen ! Random {
+    match gen {
+        IntGen::Range(lo, hi) => BoolGen::MappedFromInt(lo, hi, f),
+        IntGen::Filtered(lo, hi, _) => BoolGen::MappedFromInt(lo, hi, f),
+        IntGen::OneOf(_) => panic("gen_map_int_bool: OneOf generators not supported"),
+    }
+}
 
 /// Filter: only yield values from `gen` that satisfy `pred`.
 /// Retries up to 100× per sample; panics if no satisfying value found.
-pub fn gen_filter_int(gen: Generator[Int], pred: fn(Int) -> Bool) -> Generator[Int] ! Random { panic("stub") }
+/// Only Range-based generators are supported; replaces any existing filter.
+pub fn gen_filter_int(gen: IntGen, pred: fn(Int) -> Bool) -> IntGen ! Random {
+    match gen {
+        IntGen::Range(lo, hi) => IntGen::Filtered(lo, hi, pred),
+        IntGen::Filtered(lo, hi, _) => IntGen::Filtered(lo, hi, pred),
+        IntGen::OneOf(_) => panic("gen_filter_int: OneOf generators not supported"),
+    }
+}
 
 /// Choose uniformly among `options`; panics if list is empty.
-pub fn gen_one_of_int(options: List[Int]) -> Generator[Int] ! Random { panic("stub") }
+pub fn gen_one_of_int(options: List[Int]) -> IntGen ! Random {
+    IntGen::OneOf(options)
+}
 
 // ── Phase A: property checking ─────────────────────────────────────────────
 
 /// Run `prop` on `iterations` values drawn from `gen`.
-/// On failure, shrinks the counterexample before reporting.
-/// Panics with the minimal failing case if any iteration fails.
-/// Prints statistics (cases, shrink steps, value distribution) to stdout.
+/// Panics with the test name if any iteration fails.
 pub fn property_check_int(
     name: String,
-    gen: Generator[Int],
+    gen: IntGen,
     prop: fn(Int) -> Bool,
     iterations: Int
-) -> Unit ! Random { panic("stub") }
+) -> Unit ! Random {
+    let mut i: Int = 0;
+    match gen {
+        IntGen::Range(lo, hi) => {
+            while i < iterations {
+                let v: Int = int(lo, hi);
+                if !prop(v) { panic(name) };
+                i = i + 1
+            }
+        },
+        IntGen::Filtered(lo, hi, pred) => {
+            while i < iterations {
+                let mut v: Int = int(lo, hi);
+                let mut tries: Int = 0;
+                while !pred(v) && tries < 100 {
+                    v = int(lo, hi);
+                    tries = tries + 1
+                };
+                if tries >= 100 { panic("gen_filter_int: no satisfying value in 100 tries") };
+                if !prop(v) { panic(name) };
+                i = i + 1
+            }
+        },
+        IntGen::OneOf(opts) => {
+            let n: Int = list_len(opts);
+            if n == 0 { panic("gen_one_of_int: empty list") };
+            while i < iterations {
+                let idx: Int = int(0, n - 1);
+                let v: Int = match list_get(opts, idx) {
+                    Some(x) => x,
+                    None => panic("gen_one_of_int: index out of range"),
+                };
+                if !prop(v) { panic(name) };
+                i = i + 1
+            }
+        },
+    }
+}
 
 /// Same as property_check_int but for Bool generators.
 pub fn property_check_bool(
     name: String,
-    gen: Generator[Bool],
+    gen: BoolGen,
     prop: fn(Bool) -> Bool,
     iterations: Int
-) -> Unit ! Random { panic("stub") }
+) -> Unit ! Random {
+    let mut i: Int = 0;
+    match gen {
+        BoolGen::BoolRandom => {
+            while i < iterations {
+                let v: Bool = int(0, 1) == 1;
+                if !prop(v) { panic(name) };
+                i = i + 1
+            }
+        },
+        BoolGen::MappedFromInt(lo, hi, f) => {
+            while i < iterations {
+                let x: Int = int(lo, hi);
+                let v: Bool = f(x);
+                if !prop(v) { panic(name) };
+                i = i + 1
+            }
+        },
+    }
+}
 
 /// Same as property_check_int but for String generators.
+/// Characters are drawn from printable ASCII (codepoints 32–126).
 pub fn property_check_string(
     name: String,
-    gen: Generator[String],
+    gen: StringGen,
     prop: fn(String) -> Bool,
     iterations: Int
-) -> Unit ! Random { panic("stub") }
+) -> Unit ! Random {
+    // printable ASCII: space (32) through tilde (126) — 95 characters
+    let printable: String = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+    let mut i: Int = 0;
+    while i < iterations {
+        let len: Int = int(gen.min_len, gen.max_len);
+        let mut s: String = "";
+        let mut j: Int = 0;
+        while j < len {
+            let idx: Int = int(0, 94);
+            s = str_concat(s, str_char_at(printable, idx));
+            j = j + 1
+        };
+        if !prop(s) { panic(name) };
+        i = i + 1
+    }
+}
 
 /// Same as property_check_int but for List[Int] generators.
 pub fn property_check_list_int(
     name: String,
-    gen: Generator[List[Int]],
+    gen: ListIntGen,
     prop: fn(List[Int]) -> Bool,
     iterations: Int
-) -> Unit ! Random { panic("stub") }
+) -> Unit ! Random {
+    let mut i: Int = 0;
+    while i < iterations {
+        let len: Int = int(0, gen.max_len);
+        let mut xs: List[Int] = [];
+        let mut j: Int = 0;
+        while j < len {
+            xs.push(int(gen.min_val, gen.max_val));
+            j = j + 1
+        };
+        if !prop(xs) { panic(name) };
+        i = i + 1
+    }
+}
 
 // ── Phase B: mutation operators ────────────────────────────────────────────
 
-/// Produce a mutated variant of `x` (bit-flip, ±1, ×2, boundary values).
-pub fn mutate_int(x: Int) -> Int ! Random { panic("stub") }
+/// Produce a mutated variant of `x` (±1, ×2, zero, identity).
+pub fn mutate_int(x: Int) -> Int ! Random {
+    match int(0, 4) {
+        0 => x + 1,
+        1 => x - 1,
+        2 => x * 2,
+        3 => 0,
+        _ => x,
+    }
+}
 
-/// Produce a mutated variant of `x` (nearby float, 0.0, NaN, Infinity, sign flip).
-pub fn mutate_float(x: Float) -> Float ! Random { panic("stub") }
+/// Produce a mutated variant of `x` (nearby, zero, negated).
+pub fn mutate_float(x: Float) -> Float ! Random {
+    match int(0, 3) {
+        0 => x + 0.001,
+        1 => x - 0.001,
+        2 => 0.0,
+        _ => -x,
+    }
+}
 
-/// Produce a mutated variant of `s` (drop char, duplicate char, swap chars).
-pub fn mutate_string(s: String) -> String ! Random { panic("stub") }
+/// Produce a mutated variant of `s` (drop last char, prepend dup, swap first two).
+pub fn mutate_string(s: String) -> String ! Random {
+    let n: Int = str_len(s);
+    if n == 0 {
+        s
+    } else {
+        match int(0, 2) {
+            0 => str_substring(s, 0, n - 1),
+            1 => {
+                let c: String = str_char_at(s, 0);
+                str_concat(c, s)
+            },
+            _ => {
+                if n >= 2 {
+                    let a: String = str_char_at(s, 0);
+                    let b: String = str_char_at(s, 1);
+                    let rest: String = str_substring(s, 2, n);
+                    str_concat(str_concat(b, a), rest)
+                } else {
+                    s
+                }
+            },
+        }
+    }
+}
 
-/// Produce a mutated variant of `xs` (drop element, duplicate element, swap two).
-pub fn mutate_list_int(xs: List[Int]) -> List[Int] ! Random { panic("stub") }
+/// Produce a mutated variant of `xs` (drop last, prepend dup of first, swap first two).
+pub fn mutate_list_int(xs: List[Int]) -> List[Int] ! Random {
+    let n: Int = list_len(xs);
+    if n == 0 {
+        xs
+    } else {
+        match int(0, 2) {
+            0 => list_slice(xs, 0, n - 1),
+            1 => {
+                let first: Int = match list_get(xs, 0) {
+                    Some(v) => v,
+                    None => 0,
+                };
+                list_concat([first, first], list_slice(xs, 1, n))
+            },
+            _ => {
+                if n >= 2 {
+                    let a: Int = match list_get(xs, 0) { Some(v) => v, None => 0 };
+                    let b: Int = match list_get(xs, 1) { Some(v) => v, None => 0 };
+                    let rest: List[Int] = list_slice(xs, 2, n);
+                    list_concat([b, a], rest)
+                } else {
+                    xs
+                }
+            },
+        }
+    }
+}
 
 // ── Phase B: targeted property checking ────────────────────────────────────
 
 /// Like property_check_int but biases generation toward inputs where
 /// `distance(x)` is small — i.e., closest to violating the property.
-/// Uses the Löscher & Sagonas (2017) targeted-PBT technique.
+/// Only Range-based generators are supported for targeting; others fall back
+/// to standard property_check_int.
 pub fn property_check_targeted_int(
     name: String,
-    gen: Generator[Int],
+    gen: IntGen,
     prop: fn(Int) -> Bool,
     distance: fn(Int) -> Float,
     iterations: Int
-) -> Unit ! Random { panic("stub") }
+) -> Unit ! Random {
+    match gen {
+        IntGen::Range(lo, hi) => {
+            let mut i: Int = 0;
+            let mut best: Int = int(lo, hi);
+            let mut best_dist: Float = distance(best);
+            while i < iterations {
+                // 20% of the time mutate the best candidate; otherwise fresh sample
+                let v: Int = if int(0, 4) == 0 { mutate_int(best) } else { int(lo, hi) };
+                let d: Float = distance(v);
+                if d < best_dist {
+                    best = v;
+                    best_dist = d
+                };
+                if !prop(v) { panic(name) };
+                i = i + 1
+            }
+        },
+        _ => property_check_int(name, gen, prop, iterations),
+    }
+}
 
 /// Variant of property_check_int that mixes fresh generation with mutation
-/// of a corpus of previously interesting values.
+/// of a corpus of previously seen values.
 /// `mutation_ratio` in [0.0, 1.0] controls the fraction that are mutations.
+/// Only Range-based generators are supported for mutation; others fall back
+/// to standard property_check_int.
 pub fn property_check_with_mutation_int(
     name: String,
-    gen: Generator[Int],
+    gen: IntGen,
     prop: fn(Int) -> Bool,
     mutation_ratio: Float,
     iterations: Int
-) -> Unit ! Random { panic("stub") }
+) -> Unit ! Random {
+    match gen {
+        IntGen::Range(lo, hi) => {
+            let mut i: Int = 0;
+            let mut corpus: List[Int] = [];
+            while i < iterations {
+                let n: Int = list_len(corpus);
+                let v: Int = if n > 0 && float() < mutation_ratio {
+                    let idx: Int = int(0, n - 1);
+                    let base: Int = match list_get(corpus, idx) {
+                        Some(x) => x,
+                        None => int(lo, hi),
+                    };
+                    mutate_int(base)
+                } else {
+                    int(lo, hi)
+                };
+                corpus.push(v);
+                if !prop(v) { panic(name) };
+                i = i + 1
+            }
+        },
+        _ => property_check_int(name, gen, prop, iterations),
+    }
+}

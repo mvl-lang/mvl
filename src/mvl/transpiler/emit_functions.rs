@@ -29,11 +29,7 @@ fn emit_fn_param_type(ty: &TypeExpr) -> String {
     match ty {
         TypeExpr::Fn { params, ret, .. } => {
             let params_str: Vec<String> = params.iter().map(emit_type_expr).collect();
-            format!(
-                "impl Fn({}) -> {}",
-                params_str.join(", "),
-                emit_type_expr(ret)
-            )
+            format!("fn({}) -> {}", params_str.join(", "), emit_type_expr(ret))
         }
         _ => emit_type_expr(ty),
     }

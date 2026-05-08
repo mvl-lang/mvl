@@ -1455,16 +1455,16 @@ fn method_all_emits_ufcs_call() {
     assert_contains(&rust, ".clone().into()");
 }
 
-/// Verifies that `fn(T) -> U` typed parameters emit as `impl Fn(T) -> U` so
-/// that closures are accepted at HOF call sites (not just bare fn pointers).
+/// Verifies that `fn(T) -> U` typed parameters emit as bare `fn(T) -> U`
+/// function pointers, matching enum field emission and ensuring Copy+Clone.
 #[test]
-fn fn_type_param_emits_impl_fn_not_bare_fn() {
+fn fn_type_param_emits_bare_fn_pointer() {
     let src = "fn apply(xs: List[Int], p: fn(Int) -> Bool) -> List[Int] { xs.filter(p) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, "impl Fn(");
+    assert_contains(&rust, "fn(i64) -> bool");
     assert!(
-        !rust.contains("fn(i64) -> bool"),
-        "bare fn pointer must not appear as a parameter type; got:\n{rust}"
+        !rust.contains("impl Fn("),
+        "impl Fn must not appear as a parameter type; got:\n{rust}"
     );
 }
 

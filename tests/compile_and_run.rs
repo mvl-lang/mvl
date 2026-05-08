@@ -701,6 +701,21 @@ fn json_encode_runs_and_produces_expected_output() {
     );
 }
 
+// ── pbt_operations.mvl — property-based testing stdlib (#40, #425) ──────────
+
+/// Gate test: PBT generators, combinators, and property_check functions
+/// run to completion without panicking (all properties hold for generated inputs).
+#[test]
+fn pbt_operations_runs_without_panic() {
+    let out = run_mvl_run(&corpus_stdlib("pbt_operations.mvl"));
+    assert!(
+        out.status.success(),
+        "pbt_operations: property check panicked or crashed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
 fn corpus_bdd(name: &str) -> String {
     format!("{}/tests/corpus/12_bdd/{name}", env!("CARGO_MANIFEST_DIR"))
 }
