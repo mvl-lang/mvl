@@ -4,6 +4,18 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.83.0] — 2026-05-08
+
+### Added
+
+- **Property-based testing stdlib module** — `std/pbt.mvl` implements Phase A (generators, combinators, property_check) and Phase B (mutation operators, targeted property checking) of #40 and #425. Five concrete generator types (IntGen, FloatGen, BoolGen, StringGen, ListIntGen) encode generation strategies as data. All function types are pure MVL atop `std.random.*` (Tier 3, no new C-ABI). Closes #555.
+
+### Changed
+
+- **Function pointer parameters emit as bare `fn` instead of `impl Fn`** — Matches enum variant field emission and ensures `Copy+Clone` compatibility for function-typed values stored in enum variants. Fixes type mismatch when user-defined functions with `List[T]` parameters are passed as callbacks to higher-order functions.
+- **Prelude programs scanned for Rust-backed stdlib imports** — `emitter.rs` now includes stdlib imports from both user and prelude programs, enabling `std/pbt.mvl`'s `use std.random.*` to auto-generate `use mvl_runtime::stdlib::random::*` in transpiled output.
+
+
 ## [Unreleased]
 
 ## [0.82.0] — 2026-05-08
