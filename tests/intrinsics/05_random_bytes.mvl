@@ -1,0 +1,18 @@
+// Category 3 stdlib — random.bytes length (#557)
+// Tests: random.bytes(n) returns List[Int] of length n via I64ReturnsPtrArg dispatch.
+// ADR-0022: Category 3 type operations via C-ABI dispatch.
+//
+// corpus:llvm
+
+use std.random.{bytes}
+
+fn main() -> Unit ! Random, Console {
+    let bs8: List[Int] = bytes(8);
+    assert(bs8.len() == 8);
+    let bs0: List[Int] = bytes(0);
+    assert(bs0.len() == 0);
+    let bs1: List[Int] = bytes(1);
+    assert(bs1.len() == 1);
+    println("ok")
+}
+// expect: ok

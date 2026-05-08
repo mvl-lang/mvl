@@ -335,6 +335,11 @@ pub(crate) enum StdlibSig {
     /// Used for `_mvl_crypto_random_bytes(n)` → `*mut MvlArray` (#507).
     I64ReturnsPtrArg(String),
 
+    // ── #557: parity quick wins ───────────────────────────────────────────────
+    /// No arguments, returns an opaque pointer (e.g. `*mut MvlArray`).
+    /// Used for `env.args()`, `args.get_args()`.
+    PtrNoArg(String),
+
     // ── #536: parity additions ────────────────────────────────────────────────
     /// `(ptr) → i64` — one-ptr-arg C function returning i64 (e.g. Bool 0/1).
     /// Used for `exists`, `is_file`, `is_dir`.
@@ -662,6 +667,8 @@ impl<'ctx> LlvmBackend<'ctx> {
             // ── Scalar returns ────────────────────────────────────────────────
             ("Int", 0) => Some(StdlibSig::I64NoArg(symbol)),
             ("Float", 0) => Some(StdlibSig::F64NoArg(symbol)),
+            // ── Ptr return, no args (e.g. env.args, args.get_args) ────────────
+            (ret, 0) if Self::is_ptr_type(ret) => Some(StdlibSig::PtrNoArg(symbol)),
             ("Int", 2) if p0 == "Int" && p1 == "Int" => Some(StdlibSig::I64TwoI64Args(symbol)),
             // ── Void/Never returns ────────────────────────────────────────────
             ("Unit" | "Never", 1) if p0 == "Int" => Some(StdlibSig::VoidI64Arg(symbol)),
@@ -1038,6 +1045,24 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .add_function(symbol, fn_ty, Some(Linkage::External))
         };
         let call = self.builder.build_call(fn_val, &[], "stdlib_f64").ok()?;
+        use inkwell::values::AnyValue;
+        inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+    }
+
+    /// Emit a call to a stdlib C-ABI function with no arguments, returning a pointer.
+    pub(crate) fn emit_stdlib_call_ptr_no_arg(
+        &mut self,
+        symbol: &str,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let fn_val = if let Some(f) = self.module.get_function(symbol) {
+            f
+        } else {
+            let fn_ty = ptr_ty.fn_type(&[], false);
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        };
+        let call = self.builder.build_call(fn_val, &[], "stdlib_ptr").ok()?;
         use inkwell::values::AnyValue;
         inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()
     }

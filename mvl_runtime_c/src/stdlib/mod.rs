@@ -4,6 +4,7 @@
 //! Every public function in the Rust implementation has a corresponding
 //! `_mvl_*` export here that is callable from LLVM-generated code.
 
+pub mod args;
 pub mod crypto;
 pub mod env;
 pub mod io;

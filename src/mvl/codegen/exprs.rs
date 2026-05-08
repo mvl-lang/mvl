@@ -1091,6 +1091,10 @@ impl<'ctx> LlvmBackend<'ctx> {
                         StdlibSig::F64NoArg(sym) if args.is_empty() => {
                             return self.emit_stdlib_call_f64(sym);
                         }
+                        // #557: ptr return, no args (env.args, args.get_args)
+                        StdlibSig::PtrNoArg(sym) if args.is_empty() => {
+                            return self.emit_stdlib_call_ptr_no_arg(sym);
+                        }
                         StdlibSig::I64TwoI64Args(sym) if args.len() == 2 => {
                             let sym = sym.clone();
                             let a = self.emit_expr(&args[0])?;

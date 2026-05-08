@@ -127,6 +127,25 @@ pub extern "C" fn _mvl_env_args_get(i: i64) -> *mut c_char {
     }
 }
 
+/// Return all command-line arguments as a `*mut MvlArray` of `*mut MvlString`.
+///
+/// Includes the program name at index 0. Each element is a `Tainted[String]`.
+/// The LLVM caller is responsible for dropping the array via `mvl_array_drop`.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub extern "C" fn _mvl_env_args() -> *mut mvl_memory::MvlArray {
+    use mvl_memory::{mvl_array_new, mvl_string_new, MvlString};
+    let elem_size = std::mem::size_of::<*mut MvlString>();
+    let arr = unsafe { mvl_array_new(elem_size, 0) };
+    for mvl_runtime::ifc::Tainted(s) in mvl_runtime::stdlib::env::args() {
+        let s_ptr = unsafe { mvl_string_new(s.as_ptr(), s.len()) };
+        unsafe {
+            crate::memory_ops::mvl_array_push(arr, (&s_ptr as *const *mut MvlString).cast());
+        }
+    }
+    arr
+}
+
 // ── Signal constructors (pure) ───────────────────────────────────────────────
 
 // Signal values are encoded as i8 integers at the C boundary:
