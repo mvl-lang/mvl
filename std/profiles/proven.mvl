@@ -1,0 +1,59 @@
+// MVL stdlib — proven profile manifest
+//
+// The "proven" profile is the target state for #533: all Category 3 (type
+// operation) functions have pure MVL implementations that the compiler can
+// verify against all 11 requirements — no unverified Rust runtime calls.
+//
+// Status: PARTIALLY IMPLEMENTED. Functions listed under "Already proven"
+// have pure MVL bodies today. Functions listed under "Pending" still delegate
+// to the runtime and require verified implementations before this profile
+// can be considered complete.
+//
+// Category 2 (OS builtins) and operator intrinsics (Category 1) are excluded
+// from the proven model — they are inherently syscall-based.
+//
+// See ADR-0022 for the three-category model.
+// See #533 for the profile switching implementation plan.
+
+// ── Already proven (pure MVL today) ───────────────────────────────────────────
+
+// std/math.mvl — all 26 functions are pure MVL
+//   int_abs, int_clamp, is_zero, int_is_positive, int_is_negative,
+//   int_min, int_max, int_to_string, float_abs, float_ceil, float_floor,
+//   float_round, float_is_positive, float_is_negative, float_is_nan,
+//   float_is_infinite, float_is_finite, float_to_int, float_to_string,
+//   float_clamp, float_min, float_max
+//   (int_pow, int_to_float, float_pow are transpiler-dispatched stubs)
+
+// std/lists.mvl — higher-order combinators (pure MVL, compose kernel builtins)
+//   slice, take, skip, first, last, flatten, reverse, len, is_empty, get,
+//   push, contains, rev, map, filter, fold, sort, partition, take_while,
+//   skip_while, any, all, min, max, str_join
+
+// std/collections.mvl — all 19 functions are pure MVL
+//   map_get, map_insert, map_put, map_without, map_remove, map_contains_key,
+//   map_keys, map_values, map_len, map_is_empty,
+//   set_contains, set_insert, set_remove, set_to_list, set_len, set_is_empty,
+//   set_intersection, set_difference, set_union
+
+// std/core.mvl — Option/Result predicates (pure MVL)
+//   is_some, is_none, unwrap_or, is_ok, is_err
+
+// std/strings.mvl — wrapper layer (pure MVL, delegates to kernel builtins)
+//   trim, to_upper, to_lower, chars, concat, starts_with, ends_with, find,
+//   replace, split, substring, parse_int, parse_float
+
+// ── Pending proven implementations ────────────────────────────────────────────
+//
+// The following require verified string/list/byte models before a pure MVL
+// implementation can be written that satisfies all 11 requirements:
+
+// String kernel (str_len, str_concat, str_trim, str_char_at, str_from_chars,
+//   str_byte_at, str_from_bytes, str_to_upper, str_to_lower, str_starts_with,
+//   str_ends_with, str_find, str_replace, str_split, str_substring, str_contains,
+//   str_parse_int, str_parse_float, str_chars)
+//   Blocked on: verified string model (#314)
+
+// List kernel (list_len, list_get, list_push, list_slice, list_concat,
+//   list_contains)
+//   Blocked on: verified list model (#314)
