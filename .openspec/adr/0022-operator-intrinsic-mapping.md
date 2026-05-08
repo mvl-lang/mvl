@@ -66,6 +66,11 @@ never appear in the C-ABI dispatch table.
 matching MVL's memory-safety requirement (Req 2).  Float operations are IEEE-754 ordered
 comparisons (`o`-prefixed predicates) so NaN comparisons return false.
 
+**Precedence note:** MVL's Pratt parser assigns `&`=50, `|`=30, `^`=40, `<<`/`>>`=70,
+all comparisons=60.  This means `&`, `|`, `^` have **lower** precedence than `==` (same
+as C).  Write `(a & b) == c`, not `a & b == c`.  Shift operators (`<<`/`>>`) have
+**higher** precedence than `==`, so `a << b == c` = `(a << b) == c` (no parentheses needed).
+
 #### Unary operators
 
 | MVL | AST variant | Rust transpiler | LLVM |
