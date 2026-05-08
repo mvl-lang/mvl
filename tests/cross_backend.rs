@@ -569,3 +569,29 @@ fn cross_backend_println_multi_arg() {
     let file = corpus("println_non_string_first_arg.mvl");
     assert_llvm_output(&file, "hello 42\n42\n42 100\n42 100 hello");
 }
+
+// ── ADR-0022: Category 1 operator intrinsics (LLVM backend) ──────────────────
+
+fn intrinsic(name: &str) -> String {
+    format!("{}/tests/intrinsics/{name}", env!("CARGO_MANIFEST_DIR"))
+}
+
+#[test]
+fn intrinsic_arithmetic() {
+    assert_llvm_output(&intrinsic("01_arithmetic.mvl"), "ok");
+}
+
+#[test]
+fn intrinsic_comparison() {
+    assert_llvm_output(&intrinsic("02_comparison.mvl"), "ok");
+}
+
+#[test]
+fn intrinsic_logical() {
+    assert_llvm_output(&intrinsic("03_logical.mvl"), "ok");
+}
+
+#[test]
+fn intrinsic_bitwise() {
+    assert_llvm_output(&intrinsic("04_bitwise.mvl"), "ok");
+}

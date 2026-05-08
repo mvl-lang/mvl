@@ -1,0 +1,39 @@
+// Category 1 operator intrinsics — comparison
+// Tests: ==, !=, <, >, <=, >=
+// ADR-0022: these are compiler-emitted, not stdlib calls.
+//
+// corpus:llvm
+
+fn main() -> Unit ! Console {
+    // Int comparisons
+    assert(3 == 3);
+    assert(!(3 == 4));
+    assert(3 != 4);
+    assert(!(3 != 3));
+    assert(2 < 3);
+    assert(!(3 < 2));
+    assert(3 > 2);
+    assert(!(2 > 3));
+    assert(3 <= 3);
+    assert(2 <= 3);
+    assert(!(4 <= 3));
+    assert(3 >= 3);
+    assert(4 >= 3);
+    assert(!(2 >= 3));
+
+    // Float comparisons
+    assert(1.0 == 1.0);
+    assert(1.0 != 2.0);
+    assert(1.0 < 2.0);
+    assert(2.0 > 1.0);
+    assert(1.5 <= 1.5);
+    assert(1.5 >= 1.5);
+
+    // Bool comparisons
+    assert(true == true);
+    assert(false == false);
+    assert(true != false);
+
+    println("ok")
+}
+// expect: ok

@@ -1,0 +1,27 @@
+// Category 1 operator intrinsics — arithmetic
+// Tests: +, -, *, /, % for Int and Float
+// ADR-0022: these are compiler-emitted, not stdlib calls.
+//
+// corpus:llvm
+
+fn main() -> Unit ! Console {
+    // Integer arithmetic
+    assert(2 + 3 == 5);
+    assert(10 - 4 == 6);
+    assert(4 * 5 == 20);
+    assert(10 / 4 == 2);
+    assert(10 % 3 == 1);
+    assert(0 - 7 == -7);
+    assert(-3 + 3 == 0);
+    assert(100 / 10 == 10);
+    assert(7 % 7 == 0);
+
+    // Float arithmetic
+    assert(1.0 + 2.0 == 3.0);
+    assert(5.0 - 1.5 == 3.5);
+    assert(2.0 * 4.0 == 8.0);
+    assert(9.0 / 3.0 == 3.0);
+
+    println("ok")
+}
+// expect: ok
