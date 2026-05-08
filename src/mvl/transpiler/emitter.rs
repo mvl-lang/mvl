@@ -341,7 +341,17 @@ impl RustEmitter {
             self.blank();
             // Emit targeted stdlib imports for each `use std.X.*` in the MVL source (#488/#489).
             // The prelude no longer re-exports OS modules; each module is imported explicitly.
-            for module in collect_stdlib_modules(prog) {
+            // Also include Rust-backed modules needed by prelude programs (e.g. pbt uses random
+            // internally — #555).
+            let mut all_modules = collect_stdlib_modules(prog);
+            for pp in prelude_progs {
+                for m in collect_stdlib_modules(pp) {
+                    if !all_modules.contains(&m) {
+                        all_modules.push(m);
+                    }
+                }
+            }
+            for module in all_modules {
                 self.line(&format!("use mvl_runtime::stdlib::{}::*;", module));
                 for (m, fns) in STDLIB_CONFLICTS {
                     if *m == module.as_str() {
