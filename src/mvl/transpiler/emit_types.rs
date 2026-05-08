@@ -60,39 +60,6 @@ pub fn emit_security_preamble(cg: &mut RustEmitter) {
     cg.pop_indent();
     cg.line("}");
     cg.blank();
-    // ── Higher-order method traits ─────────────────────────────────────────
-    // MvlMap: uniform `.map(f)` across Vec<T>, Option<T>, Result<T,E>
-    cg.line("pub trait MvlMap { type Inner; type Mapped<U>; fn mvl_map<U, F: FnMut(Self::Inner) -> U>(self, f: F) -> Self::Mapped<U>; }");
-    cg.line("impl<T> MvlMap for Vec<T> { type Inner = T; type Mapped<U> = Vec<U>; fn mvl_map<U, F: FnMut(T) -> U>(self, mut f: F) -> Vec<U> { self.into_iter().map(|x| f(x)).collect() } }");
-    cg.line("impl<T> MvlMap for Option<T> { type Inner = T; type Mapped<U> = Option<U>; fn mvl_map<U, F: FnMut(T) -> U>(self, mut f: F) -> Option<U> { self.map(|x| f(x)) } }");
-    cg.line("impl<T, E> MvlMap for Result<T, E> { type Inner = T; type Mapped<U> = Result<U, E>; fn mvl_map<U, F: FnMut(T) -> U>(self, mut f: F) -> Result<U, E> { self.map(|x| f(x)) } }");
-    cg.blank();
-    // MvlContains: uniform `.contains(x)` for Vec<T>, String, and HashSet<T>
-    // Keep in sync with mvl_runtime/src/prelude.rs MvlContains section.
-    cg.line("pub trait MvlContains<T: ?Sized> { fn mvl_contains(&self, x: &T) -> bool; }");
-    cg.line("impl<T: PartialEq> MvlContains<T> for Vec<T> { fn mvl_contains(&self, x: &T) -> bool { self.contains(x) } }");
-    cg.line("impl MvlContains<String> for String { fn mvl_contains(&self, x: &String) -> bool { self.contains(x.as_str()) } }");
-    cg.line("impl MvlContains<str> for String { fn mvl_contains(&self, x: &str) -> bool { self.contains(x) } }");
-    cg.line("impl<T: Eq + std::hash::Hash> MvlContains<T> for std::collections::HashSet<T> { fn mvl_contains(&self, x: &T) -> bool { self.contains(x) } }");
-    cg.blank();
-    // MvlPow: uniform `.pow(e)` for i64 and f64
-    cg.line("pub trait MvlPow { fn mvl_pow(self, exp: Self) -> Self; }");
-    cg.line("impl MvlPow for i64 { fn mvl_pow(self, exp: i64) -> i64 { self.pow(exp as u32) } }");
-    cg.line("impl MvlPow for f64 { fn mvl_pow(self, exp: f64) -> f64 { self.powf(exp) } }");
-    cg.blank();
-    // MvlGet: uniform `.get(key)` returning Option<V> for Vec<T> (index) and HashMap<K,V> (key).
-    // Fixes the i64→usize index cast for lists and the &-borrow + cloned() for maps.
-    cg.line("pub trait MvlGet<K, V> { fn mvl_get(&self, key: K) -> Option<V>; }");
-    cg.line("impl<T: Clone> MvlGet<i64, T> for Vec<T> { fn mvl_get(&self, i: i64) -> Option<T> { if i < 0 { return None; } self.get(i as usize).cloned() } }");
-    cg.line("impl<K: std::hash::Hash + Eq, V: Clone> MvlGet<K, V> for std::collections::HashMap<K, V> { fn mvl_get(&self, key: K) -> Option<V> { self.get(&key).cloned() } }");
-    cg.blank();
-    // MvlLen: uniform `.len()` returning i64 for all MVL collection types and String.
-    // Fixes usize→i64 cast and provides unicode char-count for String.
-    cg.line("pub trait MvlLen { fn mvl_len(&self) -> i64; }");
-    cg.line("impl<T> MvlLen for Vec<T> { fn mvl_len(&self) -> i64 { self.len() as i64 } }");
-    cg.line("impl<K, V> MvlLen for std::collections::HashMap<K, V> { fn mvl_len(&self) -> i64 { self.len() as i64 } }");
-    cg.line("impl<T> MvlLen for std::collections::HashSet<T> { fn mvl_len(&self) -> i64 { self.len() as i64 } }");
-    cg.line("impl MvlLen for String { fn mvl_len(&self) -> i64 { self.chars().count() as i64 } }");
 }
 
 fn emit_label_newtype(cg: &mut RustEmitter, label: &str) {

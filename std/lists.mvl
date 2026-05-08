@@ -1,12 +1,38 @@
-// MVL stdlib — pure MVL list method implementations
+// MVL stdlib — list type operations and method implementations
 //
-// Phase 4 (ADR-0003): implementations of list methods that can be expressed
-// as pure MVL using only the kernel primitives from std/primitives.mvl.
-// Method-call syntax `xs.take(n)` compiles to `take(xs, n)` via UFCS dispatch.
+// The `pub builtin fn` declarations below are the list kernel —
+// the trust boundary between MVL and Rust (Category 3: type operations).
+// Each is implemented in `mvl_runtime::stdlib::primitives` and re-exported
+// via `mvl_runtime::prelude::*`.
+//
+// The pure MVL methods below compose only these builtins. Method-call syntax
+// `xs.take(n)` compiles to `take(xs, n)` via UFCS dispatch.
 //
 // Higher-order methods (filter, fold, map, etc.) were previously transpiler-only.
 // Declarations below provide the verification surface for the IFC label checker,
 // effect tracker, and totality checker (issue #341).
+
+// ── List kernel (6 functions) ─────────────────────────────────────────────────
+
+/// Number of elements.
+pub builtin fn list_len[T](xs: List[T]) -> Int
+
+/// Element at index `i`, or None if out of range.
+pub builtin fn list_get[T](xs: List[T], i: Int) -> Option[T]
+
+/// Append `x` to `xs`, returning the new list.
+pub builtin fn list_push[T](xs: List[T], x: T) -> List[T]
+
+/// Safe slice `[start, end)` — clamped, never panics.
+pub builtin fn list_slice[T](xs: List[T], start: Int, end: Int) -> List[T]
+
+/// Concatenate two lists.
+pub builtin fn list_concat[T](xs: List[T], ys: List[T]) -> List[T]
+
+/// True if `xs` contains `x`.
+pub builtin fn list_contains[T](xs: List[T], x: T) -> Bool
+
+// ── Pure MVL list method implementations ─────────────────────────────────────
 
 /// Safe slice `[start, end)` — clamped, never panics. Wraps the list_slice kernel.
 pub fn slice[T](xs: List[T], start: Int, end: Int) -> List[T] where T: Clone {

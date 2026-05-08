@@ -3,7 +3,7 @@
 // These declarations make arithmetic and predicate methods visible to the
 // IFC label checker, effect tracker, and totality checker (issue #341).
 // The transpiler handles actual code generation at call sites via dedicated
-// emit arms (pow → MvlPow, clamp → emit_safe_clamp, is_zero → == 0, etc.)
+// emit arms (pow → mvl_pow inline trait, clamp → emit_safe_clamp, is_zero → == 0, etc.)
 // or the generic Rust method fallthrough (abs, sqrt, ceil, …).
 //
 // Where the method can be expressed in pure MVL, a real implementation is
@@ -19,7 +19,7 @@ pub fn int_abs(n: Int) -> Int {
 
 /// `n` raised to the power `exp`.
 ///
-/// Transpiler-handled via the `MvlPow` trait; stub body for free-function use.
+/// Transpiler-handled via inline `mvl_pow` trait (emitted per-file); stub body for free-function use.
 pub fn int_pow(n: Int, exp: Int) -> Int {
     n.pow(exp)
 }
@@ -130,7 +130,7 @@ pub fn float_to_string(x: Float) -> String {
 
 /// `x` raised to the power `exp`.
 ///
-/// Transpiler-handled via the `MvlPow` trait; stub body for free-function use.
+/// Transpiler-handled via inline `mvl_pow` trait (emitted per-file); stub body for free-function use.
 pub fn float_pow(x: Float, exp: Float) -> Float {
     x.pow(exp)
 }

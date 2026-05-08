@@ -1093,7 +1093,7 @@ pub partial fn greet(n: Int) -> String {
     let prelude = vec![parse_prog(prelude_src)];
     let user_prog = parse_prog(user_src);
 
-    let out = transpile_project("crate", &user_prog, &[], &prelude);
+    let out = transpile_project("crate", &user_prog, &[], &prelude, Default::default());
     assert!(
         out.main_rs.contains("// ── stdlib prelude"),
         "prelude section header must appear:\n{}",
@@ -1114,7 +1114,7 @@ fn prelude_stub_with_empty_body_is_skipped() {
     let prelude = vec![parse_prog(prelude_src)];
     let user_prog = parse_prog(user_src);
 
-    let out = transpile_project("crate", &user_prog, &[], &prelude);
+    let out = transpile_project("crate", &user_prog, &[], &prelude, Default::default());
     assert!(
         !out.main_rs.contains("// ── stdlib prelude"),
         "stub-only prelude must not emit section header:\n{}",
@@ -1136,7 +1136,7 @@ fn macro_handled_names_are_excluded_from_prelude() {
     let prelude = vec![parse_prog(prelude_src)];
     let user_prog = parse_prog(user_src);
 
-    let out = transpile_project("crate", &user_prog, &[], &prelude);
+    let out = transpile_project("crate", &user_prog, &[], &prelude, Default::default());
     assert!(
         !out.main_rs.contains("fn println("),
         "macro-handled fn must not appear as a regular function:\n{}",
@@ -1150,7 +1150,7 @@ fn empty_prelude_progs_emits_no_prelude_section() {
     let user_src = "fn f() -> Unit { }";
     let user_prog = parse_prog(user_src);
 
-    let out = transpile_project("crate", &user_prog, &[], &[]);
+    let out = transpile_project("crate", &user_prog, &[], &[], Default::default());
     assert!(
         !out.main_rs.contains("// ── stdlib prelude"),
         "no prelude section must appear when prelude_progs is empty:\n{}",
@@ -1174,7 +1174,7 @@ fn main() -> Unit { }
     let prelude = vec![parse_prog(prelude_src)];
     let user_prog = parse_prog(user_src);
 
-    let out = transpile_project("crate", &user_prog, &[], &prelude);
+    let out = transpile_project("crate", &user_prog, &[], &prelude, Default::default());
     let count = out.main_rs.matches("fn my_fn(").count();
     assert_eq!(
         count, 1,
@@ -1290,44 +1290,41 @@ fn method_first_last_emit_cloned() {
 }
 
 #[test]
-fn method_contains_emits_mvl_contains() {
-    // List[T].contains(x) — emits via MvlContains trait, not hardcoded Rust
+fn method_contains_list_emits_direct_rust() {
+    // List[T].contains(x) — emits direct Rust .contains(&x) (#554)
     let src = "fn f(xs: List[Int], n: Int) -> Bool { xs.contains(n) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, ".mvl_contains(&(n");
+    assert_contains(&rust, ".contains(&(n");
     assert_contains(&rust, "))");
 }
 
 #[test]
-fn method_contains_string_emits_mvl_contains() {
-    // String.contains(sub) — same MvlContains trait dispatch
+fn method_contains_string_emits_as_str() {
+    // String.contains(sub) — emits .contains(sub.as_str()) for &str pattern (#554)
     let src = r#"fn f(s: String, sub: String) -> Bool { s.contains(sub) }"#;
     let rust = transpile_src(src);
-    assert_contains(&rust, ".mvl_contains(&(sub");
-    assert_contains(&rust, "))");
+    assert_contains(&rust, ".contains(");
+    assert_contains(&rust, ".as_str())");
 }
 
 #[test]
-fn method_contains_set_emits_mvl_contains() {
-    // Set[T].contains(x) — routes to HashSet MvlContains impl
+fn method_contains_set_emits_direct_rust() {
+    // Set[T].contains(x) — emits direct Rust .contains(&x) (#554)
     let src = "fn f(ss: Set[Int], n: Int) -> Bool { ss.contains(n) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, ".mvl_contains(&(");
+    assert_contains(&rust, ".contains(&(");
 }
 
 #[test]
-fn mvl_contains_trait_is_emitted_in_preamble() {
-    // The preamble must define MvlContains so generated code can call .mvl_contains()
+fn mvl_contains_trait_not_emitted_in_preamble() {
+    // No MvlContains trait — transpiler emits direct Rust instead (#554)
     let src = "fn f(xs: List[Int], n: Int) -> Bool { xs.contains(n) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, "pub trait MvlContains<T:");
-    assert_contains(&rust, "impl<T: PartialEq> MvlContains<T> for Vec<T>");
-    assert_contains(&rust, "impl MvlContains<String> for String");
-    assert_contains(&rust, "impl MvlContains<str> for String");
-    assert_contains(
-        &rust,
-        "impl<T: Eq + std::hash::Hash> MvlContains<T> for std::collections::HashSet<T>",
+    assert!(
+        !rust.contains("pub trait MvlContains"),
+        "MvlContains trait must not be emitted:\n{rust}"
     );
+    assert_contains(&rust, ".contains(&(");
 }
 
 #[test]
@@ -1335,10 +1332,10 @@ fn method_contains_wrong_arity_falls_through_to_generic() {
     // contains() with 0 args fails the arity guard and falls to the generic arm
     let src = "fn f(xs: List[Int]) -> Unit { xs.contains() }";
     let rust = transpile_src(src);
-    // Must not emit the MvlContains path
+    // Must not emit the direct-Rust contains path (which requires 1 arg)
     assert!(
-        !rust.contains(".mvl_contains("),
-        "zero-arg contains must not use mvl_contains"
+        !rust.contains(".contains(&("),
+        "zero-arg contains must not use direct-Rust contains path"
     );
 }
 
@@ -1418,10 +1415,11 @@ fn method_to_int_emits_cast() {
 }
 
 #[test]
-fn method_map_emits_mvl_map() {
+fn method_map_list_emits_into_iter_collect() {
+    // List.map(f) emits direct Rust into_iter().map().collect() (#554)
     let src = "fn f(xs: List[Int], g: fn(Int) -> Int) -> List[Int] { xs.map(g) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, ".mvl_map(|__x|");
+    assert_contains(&rust, ".into_iter().map(|__x|");
     assert_contains(&rust, "__x.clone()");
 }
 
@@ -1565,10 +1563,15 @@ fn method_is_zero_emits_eq_zero() {
 }
 
 #[test]
-fn method_pow_emits_mvl_pow() {
+fn method_pow_int_emits_direct_pow() {
+    // Int.pow(e) emits direct Rust .pow(e as u32) (#554)
     let src = "fn f(n: Int, e: Int) -> Int { n.pow(e) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, ".mvl_pow(");
+    assert_contains(&rust, ".pow(");
+    assert!(
+        !rust.contains(".mvl_pow("),
+        "must not use trait-dispatch mvl_pow:\n{rust}"
+    );
 }
 
 // ── emit_exprs coverage: escape_char ─────────────────────────────────────────
@@ -2257,7 +2260,7 @@ fn prelude_builtin_fn_is_not_emitted() {
     let prelude = vec![parse_prog(prelude_src)];
     let user_prog = parse_prog(user_src);
 
-    let out = transpile_project("crate", &user_prog, &[], &prelude);
+    let out = transpile_project("crate", &user_prog, &[], &prelude, Default::default());
     assert!(
         !out.main_rs.contains("fn len("),
         "builtin fn must not be emitted into Rust output:\n{}",
@@ -2275,7 +2278,7 @@ fn prelude_builtin_fn_does_not_produce_todo_stub() {
     let prelude = vec![parse_prog(prelude_src)];
     let user_prog = parse_prog(user_src);
 
-    let out = transpile_project("crate", &user_prog, &[], &prelude);
+    let out = transpile_project("crate", &user_prog, &[], &prelude, Default::default());
     assert!(
         !out.main_rs.contains("todo!"),
         "builtin fn must not produce a todo! stub:\n{}",

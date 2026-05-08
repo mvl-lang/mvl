@@ -139,8 +139,20 @@ test-transpiler: build ## Run end-to-end transpiler tests: .mvl → parse → ch
 	cargo test --test compile_and_run
 
 test-llvm: build build-llvm-runtime ## Run LLVM backend tests across full corpus
-	@echo "Running LLVM backend tests (full corpus)..."
-	$(MVL) test tests/corpus/ --backend=llvm --verbose
+	@pass=0; fail=0; \
+	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
+	while IFS= read -r line; do \
+		case "$$line" in \
+			"  PASS: "*) f="$${line#  PASS: }"; short="$${f#tests/corpus/}"; printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1));; \
+			"  FAIL: "*) f="$${line#  FAIL: }"; short="$${f#tests/corpus/}"; printf "  $$FAIL  %s\n" "$$short"; fail=$$((fail + 1));; \
+		esac; \
+	done < <($(MVL) test tests/corpus/ --backend=llvm --verbose 2>&1); \
+	echo ""; \
+	if [ $$fail -eq 0 ]; then \
+		printf "  \033[32m✓  $$pass passed, 0 failed\033[0m\n\n"; \
+	else \
+		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
+	fi
 
 test-examples: build build-llvm-runtime ## Run `make test` for every example subdirectory (BACKEND=llvm for LLVM backend)
 	@examples/test-all.sh $(if $(filter llvm,$(BACKEND)),--llvm)

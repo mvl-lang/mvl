@@ -79,16 +79,20 @@ pub fn count_extern_decls(prog: &Program) -> usize {
         .count()
 }
 
-/// True when any prelude program has `extern "rust"` declarations.
+/// True when any prelude program has `extern "rust"` or `pub builtin fn` declarations.
 ///
-/// Phase 4: `std/primitives.mvl` is always in the prelude and declares the
-/// kernel trust boundary via `extern "rust" { … }`. Any program that loads
-/// this prelude needs `mvl_runtime` as a Cargo dependency so that the kernel
-/// primitives (re-exported via `mvl_runtime::prelude::*`) are in scope.
+/// The string/list kernel is declared as `pub builtin fn` in std/strings.mvl and
+/// std/lists.mvl. These are implemented in `mvl_runtime::stdlib::primitives` and
+/// re-exported via `mvl_runtime::prelude::*`, so any program loading the implicit
+/// prelude needs `mvl_runtime` as a Cargo dependency.
 pub fn prelude_requires_runtime(prelude_progs: &[Program]) -> bool {
-    prelude_progs
-        .iter()
-        .any(|p| p.declarations.iter().any(|d| matches!(d, Decl::Extern(_))))
+    prelude_progs.iter().any(|p| {
+        p.declarations.iter().any(|d| match d {
+            Decl::Extern(_) => true,
+            Decl::Fn(fd) => fd.is_builtin,
+            _ => false,
+        })
+    })
 }
 
 /// Returns true if the program declares at least one `extern "rust"` block.
@@ -175,6 +179,10 @@ pub fn transpile_project(
     entry_prog: &Program,
     siblings: &[(String, Program)],
     prelude_progs: &[Program],
+    expr_types: std::collections::HashMap<
+        crate::mvl::parser::lexer::Span,
+        crate::mvl::checker::types::Ty,
+    >,
 ) -> ProjectOutput {
     let has_main = has_main_fn(entry_prog);
     let extern_count = count_extern_decls(entry_prog);
@@ -189,6 +197,7 @@ pub fn transpile_project(
 
     let sibling_names: Vec<&str> = siblings.iter().map(|(n, _)| n.as_str()).collect();
     let mut cg = RustEmitter::new();
+    cg.expr_types = expr_types;
     cg.emit_program_with_mods(entry_prog, &sibling_names, prelude_progs);
     let main_rs = cg.finish();
 
@@ -237,6 +246,7 @@ pub fn transpile_with_prelude(
     crate_name: &str,
     prelude_progs: &[Program],
 ) -> TranspileOutput {
+    let check_result = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
     let has_main = has_main_fn(prog);
     let extern_count = count_extern_decls(prog);
     let has_extern_rust = has_extern_rust_decls(prog);
@@ -244,6 +254,9 @@ pub fn transpile_with_prelude(
         extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
     let mut cg = RustEmitter::new();
+    let mut all_expr_types = crate::mvl::checker::collect_prelude_expr_types(prelude_progs);
+    all_expr_types.extend(check_result.expr_types);
+    cg.expr_types = all_expr_types;
     cg.emit_program_with_mods(prog, &[], prelude_progs);
     let lib_rs = cg.finish();
 
@@ -283,8 +296,12 @@ pub fn transpile_source_with_prelude(
     let use_runtime =
         extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
+    let check_result = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
     let mut cg = RustEmitter::new();
     cg.test_extern_stubs = true;
+    let mut all_expr_types = crate::mvl::checker::collect_prelude_expr_types(prelude_progs);
+    all_expr_types.extend(check_result.expr_types);
+    cg.expr_types = all_expr_types;
     cg.emit_program_with_mods(prog, &[], prelude_progs);
     let lib_rs = cg.finish();
 
@@ -311,6 +328,7 @@ pub fn transpile_source_with_prelude(
 ///
 /// Always succeeds in Phase 1 — unknown constructs fall back to `todo!()`.
 pub fn transpile(prog: &Program, crate_name: &str) -> TranspileOutput {
+    let check_result = crate::mvl::checker::check(prog);
     let has_main = has_main_fn(prog);
     let extern_count = count_extern_decls(prog);
     let has_extern_rust = has_extern_rust_decls(prog);
@@ -318,6 +336,7 @@ pub fn transpile(prog: &Program, crate_name: &str) -> TranspileOutput {
     let use_runtime = extern_count > 0 || has_std_imports(prog);
 
     let mut cg = RustEmitter::new();
+    cg.expr_types = check_result.expr_types;
     cg.emit_program(prog);
     let lib_rs = cg.finish();
 

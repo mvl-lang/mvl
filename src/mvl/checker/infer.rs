@@ -16,6 +16,12 @@ impl TypeChecker {
     // ── Expression type inference ─────────────────────────────────────────
 
     pub(super) fn infer_expr(&mut self, expr: &Expr) -> Ty {
+        let ty = self.infer_expr_inner(expr);
+        self.expr_types.insert(expr.span(), ty.clone());
+        ty
+    }
+
+    fn infer_expr_inner(&mut self, expr: &Expr) -> Ty {
         match expr {
             // #11: Literals
             Expr::Literal(lit, _) => self.infer_literal(lit),

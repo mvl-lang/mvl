@@ -35,6 +35,7 @@ use crate::mvl::checker::context::TypeEnv;
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{Effect, Program, Totality};
+use crate::mvl::parser::lexer::Span;
 use std::collections::{HashMap, HashSet};
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -48,6 +49,9 @@ pub struct CheckResult {
     pub extern_count: usize,
     /// Error counts indexed by requirement number (1–11). Index 0 is unused.
     pub req_errors: [usize; 12],
+    /// Inferred type for every expression in the program, keyed by span.
+    /// Used by the transpiler to emit type-specific Rust code (#554).
+    pub expr_types: HashMap<Span, Ty>,
 }
 
 impl CheckResult {
@@ -92,7 +96,26 @@ pub fn check_with_prelude(prelude: &[Program], prog: &Program) -> CheckResult {
         errors: checker.errors,
         extern_count: checker.extern_count,
         req_errors,
+        expr_types: checker.expr_types,
     }
+}
+
+/// Collect inferred expression types for a set of programs without surfacing errors.
+///
+/// Used by the transpiler to get type information for stdlib prelude programs
+/// (e.g. json.mvl, collections.mvl) so method-call sites in those files can
+/// emit direct Rust rather than trait-dispatch (#554).
+pub fn collect_prelude_expr_types(programs: &[Program]) -> HashMap<Span, Ty> {
+    let mut checker = TypeChecker::new();
+    for p in programs {
+        checker.collect_declarations(&p.declarations);
+    }
+    for p in programs {
+        for decl in &p.declarations {
+            checker.check_decl(decl);
+        }
+    }
+    checker.expr_types
 }
 
 pub fn check(prog: &Program) -> CheckResult {
@@ -180,6 +203,10 @@ struct TypeChecker {
     current_type_params: HashSet<String>,
     /// Trait bounds for type params in the current function (from `where` clauses).
     current_type_constraints: HashMap<String, Vec<String>>,
+    /// Inferred type for every expression, keyed by span. Populated during
+    /// `infer_expr` and surfaced in [`CheckResult::expr_types`] for the
+    /// transpiler to use when emitting type-specific Rust code (#554).
+    expr_types: HashMap<Span, Ty>,
 }
 
 impl TypeChecker {
@@ -196,6 +223,7 @@ impl TypeChecker {
             iterator_impls: HashMap::new(),
             current_type_params: HashSet::new(),
             current_type_constraints: HashMap::new(),
+            expr_types: HashMap::new(),
         }
     }
 

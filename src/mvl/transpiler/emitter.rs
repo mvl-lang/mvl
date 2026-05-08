@@ -3,6 +3,7 @@
 //! [`RustEmitter`] is the single writer passed through every emit function.
 //! All other `emit_*` modules take `&mut RustEmitter` and append to it.
 
+use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{
     BinaryOp, Decl, ExternDecl, FieldDecl, FnDecl, Param, Program, TypeDecl, TypeExpr, Variant,
     VariantFields,
@@ -86,6 +87,12 @@ pub struct RustEmitter {
     /// At FnCall emission time, a hit in this map causes the call to be emitted
     /// as `mvl_runtime::stdlib::MODULE::fn_name(...)` instead of `fn_name(...)`.
     pub stdlib_fn_qualified: std::collections::HashMap<String, String>,
+    /// Inferred type for every expression, keyed by span.
+    ///
+    /// Populated from [`CheckResult::expr_types`] before emission so that
+    /// method-call sites can emit type-specific Rust (e.g. `.len() as i64` vs
+    /// `.chars().count() as i64`) without needing trait dispatch (#554).
+    pub expr_types: std::collections::HashMap<Span, Ty>,
 }
 
 impl RustEmitter {
@@ -310,12 +317,17 @@ impl RustEmitter {
         // otherwise fall back to the inlined preamble for standalone files.
         // `force_runtime` is set for sibling modules in a project that uses mvl_runtime,
         // so all modules share the same type definitions.
-        // Also check prelude programs for extern declarations: std/primitives.mvl
-        // has `extern "rust"` blocks, so any program that loads the Phase 4 prelude
-        // needs `use mvl_runtime::prelude::*;` to resolve the kernel primitives.
-        let prelude_has_extern = prelude_progs
-            .iter()
-            .any(|p| p.declarations.iter().any(|d| matches!(d, Decl::Extern(_))));
+        // Also check prelude programs for builtin declarations: std/strings.mvl and
+        // std/lists.mvl have `pub builtin fn` declarations for the kernel primitives,
+        // so any program that loads the Phase 4 prelude needs `use mvl_runtime::prelude::*;`
+        // to resolve them (implemented in mvl_runtime::stdlib::primitives).
+        let prelude_has_extern = prelude_progs.iter().any(|p| {
+            p.declarations.iter().any(|d| match d {
+                Decl::Extern(_) => true,
+                Decl::Fn(fd) => fd.is_builtin,
+                _ => false,
+            })
+        });
         let has_runtime = force_runtime
             || prelude_has_extern
             || prog
@@ -326,6 +338,7 @@ impl RustEmitter {
         if has_runtime {
             self.use_mvl_runtime = true;
             self.line("use mvl_runtime::prelude::*;");
+            self.blank();
             // Emit targeted stdlib imports for each `use std.X.*` in the MVL source (#488/#489).
             // The prelude no longer re-exports OS modules; each module is imported explicitly.
             for module in collect_stdlib_modules(prog) {

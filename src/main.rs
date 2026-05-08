@@ -582,15 +582,15 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
 
     let stdlib_prelude_progs = load_implicit_prelude();
 
-    // The implicit prelude (primitives.mvl) always has `extern "rust"`, so
-    // mvl_runtime is always required for MC/DC instrumented builds.
+    // The implicit prelude always has `pub builtin fn` declarations (strings.mvl,
+    // lists.mvl), so mvl_runtime is always required for MC/DC instrumented builds.
     let need_mvl_runtime = transpiler::prelude_requires_runtime(&stdlib_prelude_progs);
 
     // Build a fn_name → prelude_stem map and preload prelude source lines so
     // that JSON source-fragment lookup works for decisions in stdlib functions.
     // IMPLICIT_STEMS must mirror load_implicit_prelude().
-    const IMPLICIT_STEMS: &[&str] = &["core", "primitives", "strings", "lists"];
-    const IMPLICIT_FILES: &[&str] = &["core.mvl", "primitives.mvl", "strings.mvl", "lists.mvl"];
+    const IMPLICIT_STEMS: &[&str] = &["core", "strings", "lists"];
+    const IMPLICIT_FILES: &[&str] = &["core.mvl", "strings.mvl", "lists.mvl"];
     let mut prelude_fn_to_stem: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     let mut prelude_sources: std::collections::HashMap<String, Vec<String>> =
@@ -1368,7 +1368,7 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
     }
 
     // Load the implicit stdlib prelude: core.mvl + Phase 4 stdlib files
-    // (primitives.mvl, strings.mvl, lists.mvl). Non-stub MVL functions
+    // (strings.mvl, lists.mvl). Non-stub MVL functions
     // (e.g. range(), trim()) are transpiled from source rather than relying
     // on hardcoded Rust mappings in the transpiler. Embedded at compile time.
     let mut stdlib_prelude_progs = load_implicit_prelude();
@@ -1379,8 +1379,18 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
         .collect();
     stdlib_prelude_progs.extend(load_mvl_native_stdlib_extras(&all_progs));
 
-    let out =
-        transpiler::transpile_project(&crate_name, &prog, &sibling_modules, &stdlib_prelude_progs);
+    // Collect expression types from ALL programs (prelude + user) for the
+    // transpiler to emit type-specific Rust at method-call sites (#554).
+    let mut all_expr_types = checker::collect_prelude_expr_types(&stdlib_prelude_progs);
+    let check_result = checker::check_with_prelude(&stdlib_prelude_progs, &prog);
+    all_expr_types.extend(check_result.expr_types);
+    let out = transpiler::transpile_project(
+        &crate_name,
+        &prog,
+        &sibling_modules,
+        &stdlib_prelude_progs,
+        all_expr_types,
+    );
 
     // Write to a per-crate workspace so each build gets its own mvl_runtime copy.
     // Layout: temp/mvl_build_{name}/{name}/  (crate), temp/mvl_build_{name}/mvl_runtime/ (runtime)
@@ -2303,21 +2313,19 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
     let assurance_prelude =
         load_stdlib_prelude(parsed_assurance.iter().map(|(_, p, _)| p), &stdlib_dir);
 
-    // Count extern kernel primitives from the implicit stdlib prelude (primitives.mvl).
+    // Count kernel builtins from the implicit stdlib prelude (strings.mvl, lists.mvl).
     // These are always part of the trust boundary for any MVL program, even though they
     // are not declared in user code. ADR-0006: trust boundaries must be declared and
-    // countable — this surfaces the kernel extern count in every assurance report.
+    // countable — this surfaces the kernel builtin count in every assurance report.
     let kernel_extern_count: usize = load_implicit_prelude()
         .iter()
         .flat_map(|p| p.declarations.iter())
-        .filter_map(|d| {
-            if let mvl::mvl::parser::ast::Decl::Extern(ed) = d {
-                Some(ed.fns.len())
-            } else {
-                None
-            }
+        .filter(|d| {
+            matches!(d,
+                mvl::mvl::parser::ast::Decl::Fn(fd) if fd.is_builtin
+            )
         })
-        .sum();
+        .count();
 
     for (file_str, prog, src) in &parsed_assurance {
         let file_str = file_str.as_str();
@@ -2435,7 +2443,7 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
         println!("  total fn:          {total_verified} ({verified_pct}% of implemented)");
         println!("  partial fn:        {total_partial}");
         println!("  extern fn:         {total_extern} ({extern_pct}% trust boundary)");
-        println!("  kernel extern:     {kernel_extern_count} (stdlib primitives.mvl)");
+        println!("  kernel builtins:   {kernel_extern_count} (stdlib strings.mvl + lists.mvl)");
         println!("  implemented:       {implemented}");
         println!("  test fn:           {total_test_fns}");
         println!();
@@ -2816,15 +2824,15 @@ fn parse_or_exit(path: &str) -> (mvl::mvl::parser::ast::Program, String) {
 /// The `std` namespace is excluded — it is provided by the runtime, not a sibling file.
 /// Parse the stdlib files imported by the given programs and return them as
 /// prelude programs for the checker.  For `use std.io.{...}` the path stored
-/// Build the implicit prelude: core.mvl + Phase 4 stdlib files (primitives,
-/// strings, lists). Every compile path loads these four files so that the
-/// string/list method implementations and extern declarations are always
-/// visible without requiring an explicit `use std.*` in user programs.
+/// Build the implicit prelude: core.mvl + Phase 4 stdlib files (strings, lists).
+/// Every compile path loads these three files so that the string/list kernel
+/// builtins and method implementations are always visible without requiring
+/// an explicit `use std.*` in user programs.
 ///
 /// Panics (via `process::exit`) if any embedded file fails to parse, since
 /// that would be a compiler bug.
 fn load_implicit_prelude() -> Vec<mvl::mvl::parser::ast::Program> {
-    const IMPLICIT: &[&str] = &["core.mvl", "primitives.mvl", "strings.mvl", "lists.mvl"];
+    const IMPLICIT: &[&str] = &["core.mvl", "strings.mvl", "lists.mvl"];
     let mut progs = Vec::new();
     for name in IMPLICIT {
         let content = stdlib::stdlib_content(name)
@@ -2838,7 +2846,7 @@ fn load_implicit_prelude() -> Vec<mvl::mvl::parser::ast::Program> {
 use transpiler::RUST_BACKED_STDLIB;
 
 /// Modules already in the implicit prelude — never loaded twice.
-const IMPLICIT_PRELUDE_STEMS: &[&str] = &["core", "primitives", "strings", "lists"];
+const IMPLICIT_PRELUDE_STEMS: &[&str] = &["core", "strings", "lists"];
 
 /// Load pure-MVL stdlib modules (e.g. json, collections) imported by `progs`
 /// into the prelude so the emitter can inline their types and functions.

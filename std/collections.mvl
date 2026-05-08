@@ -1,8 +1,8 @@
 // MVL stdlib — Map and Set real implementations (#418)
 //
 // Phase 4 (ADR-0003): pure MVL implementations using method forms dispatched
-// by the transpiler via the MvlGet / MvlLen trait arms and the LLVM backend
-// via explicit codegen in exprs.rs.
+// by the transpiler via inline mvl_get/mvl_len traits (emitted per-file) and
+// the LLVM backend via explicit codegen in exprs.rs.
 //
 // Both the transpiler path and the LLVM backend path handle the method calls
 // (`m.get(key)`, `m.len()`, etc.) directly, making these bodies the single

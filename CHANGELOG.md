@@ -6,6 +6,24 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.82.0] — 2026-05-08
+
+### Added
+
+- **Dynamic stdlib dispatch from `pub builtin fn` declarations** — Replaces 27-entry hardcoded dispatch table with runtime derivation from embedded stdlib declarations. Adding a new `pub builtin fn` now works automatically in both Rust and LLVM backends. Closes #557.
+- **`std/core.mvl` stubs as `pub builtin fn`** — Converts `println`, `print`, `eprintln`, `eprint`, `format`, `assert`, `assert_eq`, `panic` to `pub builtin fn` declarations. LLVM backend handles via inline emission. Closes #556.
+
+### Changed
+
+- **Deleted `std/primitives.mvl`** — Consolidated 25 `extern "rust"` kernel functions into their domain-specific modules: 17 string operations in `std/strings.mvl`, 6 list operations in `std/lists.mvl`. Re-exports preserved. Closes #553.
+- **Removed `Mvl*` dispatch traits from `mvl_runtime`** — Transpiler now emits direct Rust method calls instead of trait dispatch (e.g., `s.len()` instead of `MvlString::mvl_len(&s)`). Reduces indirection and improves type clarity. Closes #554.
+- **Makefile `test-llvm` target** — Reformatted output to show per-file ✓/✗ checkmarks matching `test-corpus` display style.
+
+### Fixed
+
+- **Stdlib `Map.get()` dispatch in generic functions** — Fixed transpiler `transpile_with_prelude` and `transpile_source_with_prelude` to merge prelude expression types (`collect_prelude_expr_types`) into `cg.expr_types` before emission. Previously only test-program types were available, causing `Map.get(key)` to fall through to the List-index pattern. All 403 stdlib tests now pass.
+- **Tree-sitter highlights query** — Replaced invalid `(bitxor_op)` named node reference with literal `"^"` (bitxor is an inline anonymous token in the grammar).
+
 ## [0.80.2] — 2026-05-07
 
 ### Fixed

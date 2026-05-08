@@ -877,6 +877,48 @@ impl<'ctx> LlvmBackend<'ctx> {
                 self.emit_print(args)
             }
             "format" => self.emit_format(args),
+            "eprintln" => self.emit_eprintln(args),
+            "eprint" => self.emit_eprint(args),
+            // assert(condition) — trap if condition is false.
+            "assert" if args.len() == 1 => {
+                let cond = match self.emit_expr(&args[0])? {
+                    BasicValueEnum::IntValue(v) => v,
+                    _ => return None,
+                };
+                let trap_fn = self.module.get_function("llvm.trap").unwrap_or_else(|| {
+                    let trap_ty = self.context.void_type().fn_type(&[], false);
+                    self.module.add_function("llvm.trap", trap_ty, None)
+                });
+                let parent = self
+                    .builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_parent()
+                    .unwrap();
+                let fail_bb = self.context.append_basic_block(parent, "assert_fail");
+                let ok_bb = self.context.append_basic_block(parent, "assert_ok");
+                let not_cond = self.builder.build_not(cond, "not_cond").unwrap();
+                self.builder
+                    .build_conditional_branch(not_cond, fail_bb, ok_bb)
+                    .unwrap();
+                self.builder.position_at_end(fail_bb);
+                self.builder.build_call(trap_fn, &[], "trap").unwrap();
+                self.builder.build_unreachable().unwrap();
+                self.builder.position_at_end(ok_bb);
+                None
+            }
+            // panic(message) — print to stderr, then trap unconditionally.
+            "panic" => {
+                self.emit_eprintln(args);
+                let trap_fn = self.module.get_function("llvm.trap").unwrap_or_else(|| {
+                    let trap_ty = self.context.void_type().fn_type(&[], false);
+                    self.module.add_function("llvm.trap", trap_ty, None)
+                });
+                self.builder.build_call(trap_fn, &[], "trap").unwrap();
+                self.builder.build_unreachable().unwrap();
+                self.terminated = true;
+                None
+            }
             // assert_eq / assert_ne — polymorphic comparisons.
             // core.mvl declares assert_eq(String, String) but call sites may pass Int or Bool.
             // Emit a type-appropriate comparison and trap on failure.
@@ -1161,7 +1203,10 @@ impl<'ctx> LlvmBackend<'ctx> {
                         }
                     }
                     // L5-08: generic function → monomorphize JIT and call the mangled version.
-                    if !fd.type_params.is_empty() {
+                    // Builtin generic functions (e.g. list_get[T], list_len[T]) already have a
+                    // concrete body emitted by the fourth pass of emit_program using pointer-typed
+                    // parameters, so no monomorphization is needed — just call the base symbol.
+                    if !fd.type_params.is_empty() && !fd.is_builtin {
                         // Emit all arguments first to get their concrete LLVM types.
                         let arg_vals: Vec<BasicValueEnum<'ctx>> =
                             args.iter().filter_map(|a| self.emit_expr(a)).collect();

@@ -1,11 +1,75 @@
-// MVL stdlib — pure MVL string method implementations
+// MVL stdlib — string type operations and method implementations
 //
-// Phase 4 (ADR-0003): each function here is a thin pure-MVL wrapper over an
-// extern primitive from std/primitives.mvl. The method-call syntax
+// The `pub builtin fn` declarations below are the string kernel —
+// the trust boundary between MVL and Rust (Category 3: type operations).
+// Each is implemented in `mvl_runtime::stdlib::primitives` and re-exported
+// via `mvl_runtime::prelude::*`.
+//
+// The pure MVL wrappers below compose only these builtins. Method-call syntax
 // `s.trim()` is compiled to `trim(s)` by the transpiler's UFCS dispatch.
-//
-// Trust boundary: the extern primitives in std/primitives.mvl. Everything
-// in this file is verified MVL code that composes only those primitives.
+
+// ── String kernel (17 functions) ─────────────────────────────────────────────
+
+/// Character count (Unicode scalar values), not byte count.
+pub builtin fn str_len(s: String) -> Int
+
+/// Decompose a string into a list of single-character strings.
+pub builtin fn str_chars(s: String) -> List[String]
+
+/// Single character at char-index `i`. Returns `""` if out of range.
+pub builtin fn str_char_at(s: String, i: Int) -> String
+
+/// Reconstruct a String from a list of single-character strings.
+pub builtin fn str_from_chars(chars: List[String]) -> String
+
+/// Raw byte at byte-index `i`. Returns 0 if out of range.
+pub builtin fn str_byte_at(s: String, i: Int) -> Byte
+
+/// Reconstruct a String from a list of bytes (UTF-8, lossy).
+pub builtin fn str_from_bytes(bytes: List[Byte]) -> String
+
+/// Concatenate two strings.
+pub builtin fn str_concat(s: String, other: String) -> String
+
+/// Remove leading and trailing ASCII whitespace.
+pub builtin fn str_trim(s: String) -> String
+
+/// Convert all characters to uppercase.
+pub builtin fn str_to_upper(s: String) -> String
+
+/// Convert all characters to lowercase.
+pub builtin fn str_to_lower(s: String) -> String
+
+/// True if `s` starts with `prefix`.
+pub builtin fn str_starts_with(s: String, prefix: String) -> Bool
+
+/// True if `s` ends with `suffix`.
+pub builtin fn str_ends_with(s: String, suffix: String) -> Bool
+
+/// Char-index of first occurrence of `sub`, or None.
+pub builtin fn str_find(s: String, sub: String) -> Option[Int]
+
+/// Replace all occurrences of `from` with `to`.
+pub builtin fn str_replace(s: String, from: String, to: String) -> String
+
+/// Split on `sep`, returning a list of substrings.
+pub builtin fn str_split(s: String, sep: String) -> List[String]
+
+/// Char-index substring `[start, end)` with safe clamping.
+pub builtin fn str_substring(s: String, start: Int, end: Int) -> String
+
+/// True if `sub` is found anywhere in `s`.
+pub builtin fn str_contains(s: String, sub: String) -> Bool
+
+// ── String parsing (2 functions) ─────────────────────────────────────────────
+
+/// Parse `s` as a signed 64-bit integer; Err on failure.
+pub builtin fn str_parse_int(s: String) -> Result[Int, String]
+
+/// Parse `s` as a 64-bit float; Err on failure.
+pub builtin fn str_parse_float(s: String) -> Result[Float, String]
+
+// ── Pure MVL string method implementations ───────────────────────────────────
 
 /// Remove leading and trailing ASCII whitespace.
 pub fn trim(s: String) -> String {
