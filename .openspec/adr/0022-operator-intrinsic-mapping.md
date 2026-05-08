@@ -160,6 +160,44 @@ These are also run cross-backend in `tests/cross_backend.rs`.
 
 ---
 
+## Relation to language definition
+
+### Eleven Requirements (ADR-0001)
+
+**Requirement 2 — Memory safety:** strengthens. Integer arithmetic operators use
+checked LLVM intrinsics (`llvm.sadd.with.overflow.i64`, etc.) that trap on overflow,
+directly enforcing the memory-safety requirement at the instruction level.
+
+**Requirement 5 — Information flow control:** consistent with. Operator intrinsics
+do not widen or narrow the security label of their operands; the type checker enforces
+label propagation before codegen.
+
+Requirements 1, 3, 4, 6–11 are not directly affected by this decision.
+
+### Design Principles (README)
+
+**Principle 3 — Two backends, one semantic:** strengthens. This ADR makes the
+operator→instruction mapping explicit and testable for both backends, reducing
+the risk of silent semantic divergence between the Rust transpiler and LLVM paths.
+
+**Principle 5 — Minimal stdlib:** consistent with. The three-category model clarifies
+what belongs in the stdlib (Category 3 type operations) versus what is intrinsic to
+the language (Category 1 operators, Category 2 OS builtins). This prevents feature
+creep into the Category 3 C-ABI dispatch path.
+
+**Principle 1 — Explicit over implicit:** strengthens. The trusted/proven profile
+manifests make the trust boundary explicit in source files rather than relying on
+implicit runtime dispatch.
+
+### Specifications
+
+No specs in `.openspec/specs/` directly enumerate operator semantics at this level.
+The three-category model is a cross-cutting concern addressed by ADR-0022 directly.
+Follow-up: a spec update may be needed once #533 (stdlib profile switching) is
+implemented to capture the profile selection semantics.
+
+---
+
 ## Evidence
 
 - `src/mvl/transpiler/emit_exprs.rs` — `emit_binary_op()`, `emit_unary()`
