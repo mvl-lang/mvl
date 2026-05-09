@@ -49,7 +49,7 @@ pub(crate) fn format_log_line(
 }
 
 fn log_internal(level: &str, msg: String, fields: HashMap<String, String>) {
-    let timestamp = format_instant(now(), "%Y-%m-%dT%H:%M:%SZ");
+    let timestamp = format_instant(now(), "%Y-%m-%dT%H:%M:%SZ".to_string());
     eprintln!("{}", format_log_line(level, &timestamp, &msg, &fields));
 }
 

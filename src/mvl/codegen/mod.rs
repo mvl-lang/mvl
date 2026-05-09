@@ -980,6 +980,45 @@ impl<'ctx> LlvmBackend<'ctx> {
             // (no fn_return_types entry needed; emitter uses i64 directly)
         }
 
+        // #585: Register `DateTime` struct fields for programs that import `std.time`.
+        // `time.mvl` is a Rust-backed stdlib module and is never loaded into the LLVM
+        // prelude, so register_type_decl never sees its type declarations.
+        let imports_time = prog.declarations.iter().any(|d| {
+            if let Decl::Use(ud) = d {
+                ud.path.len() >= 2 && ud.path[0] == "std" && ud.path[1] == "time"
+            } else {
+                false
+            }
+        });
+        if imports_time {
+            use crate::mvl::parser::lexer::Span;
+            let s = Span {
+                line: 0,
+                col: 0,
+                offset: 0,
+                len: 0,
+            };
+            let mk_base = |name: &str| TypeExpr::Base {
+                name: name.to_string(),
+                args: vec![],
+                span: s,
+            };
+            let int_ty = mk_base("Int");
+            // Register `DateTime = struct { year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int }`
+            self.struct_fields
+                .entry("DateTime".into())
+                .or_insert_with(|| {
+                    vec![
+                        ("year".into(), int_ty.clone()),
+                        ("month".into(), int_ty.clone()),
+                        ("day".into(), int_ty.clone()),
+                        ("hour".into(), int_ty.clone()),
+                        ("minute".into(), int_ty.clone()),
+                        ("second".into(), int_ty.clone()),
+                    ]
+                });
+        }
+
         // #420: Register return type for regex.compile so that `?` propagation
         // can infer the Ok payload type (Regex = opaque ptr).
         let imports_regex = prog.declarations.iter().any(|d| {
@@ -1539,6 +1578,10 @@ impl<'ctx> LlvmBackend<'ctx> {
     }
 
     /// Emit a call to a C-ABI `(ptr, ptr) → ptr` function (e.g. `_mvl_regex_find_all`).
+    ///
+    /// Struct-typed arguments (e.g. `DateTime`) are automatically boxed on the stack so
+    /// they can be passed as opaque pointers to the C function.  This enables
+    /// `format_datetime(dt, fmt)` where `dt` is an LLVM struct value (#585).
     pub(crate) fn emit_stdlib_call_ptr_two_ptr_args(
         &mut self,
         symbol: &str,
@@ -1547,6 +1590,11 @@ impl<'ctx> LlvmBackend<'ctx> {
     ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
         use inkwell::types::BasicMetadataTypeEnum;
         use inkwell::values::BasicMetadataValueEnum;
+
+        // Coerce struct values to stack pointers so they can be passed as `ptr` to C.
+        let a = self.coerce_struct_to_stack_ptr(a);
+        let b = self.coerce_struct_to_stack_ptr(b);
+
         let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
         let fn_val = if let Some(f) = self.module.get_function(symbol) {
             f
@@ -1569,11 +1617,29 @@ impl<'ctx> LlvmBackend<'ctx> {
                     BasicMetadataValueEnum::from(a),
                     BasicMetadataValueEnum::from(b),
                 ],
-                "find_all_c",
+                "ptr2_c",
             )
             .ok()?;
         use inkwell::values::AnyValue;
         BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+    }
+
+    /// Coerce a `StructValue` to a stack-allocated pointer so it can be passed to a
+    /// C-ABI function expecting `*const T`.  All other value kinds are returned as-is.
+    fn coerce_struct_to_stack_ptr(
+        &mut self,
+        val: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> inkwell::values::BasicValueEnum<'ctx> {
+        if let BasicValueEnum::StructValue(sv) = val {
+            let slot = self
+                .builder
+                .build_alloca(sv.get_type(), "struct_slot")
+                .unwrap();
+            self.builder.build_store(slot, sv).unwrap();
+            BasicValueEnum::PointerValue(slot)
+        } else {
+            val
+        }
     }
 
     // ── #420/#439: regex emission helpers ────────────────────────────────────────

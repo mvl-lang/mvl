@@ -473,6 +473,43 @@ fn cross_backend_time_sleep() {
     }
 }
 
+/// `time.format_datetime` with a fixed `DateTime` — deterministic on all backends.
+#[test]
+fn cross_backend_time_format_datetime() {
+    let file = corpus_effects("time_format_datetime.mvl");
+    if let Some(llvm_out) = run_llvm(&file) {
+        let transpiler_out = run_transpiler(&file);
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "time_format_datetime.mvl: LLVM and transpiler backends must produce identical output"
+        );
+        assert_eq!(
+            llvm_out.trim(),
+            "2024-03-15T12:30:45",
+            "expected fixed datetime string"
+        );
+    }
+}
+
+/// `time.now()` + `time.format_instant()` — non-deterministic value but both
+/// backends must return a 4-character year string.
+#[test]
+fn cross_backend_time_format_instant() {
+    let file = corpus_effects("time_format_instant.mvl");
+    if let Some(llvm_out) = run_llvm(&file) {
+        let transpiler_out = run_transpiler(&file);
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "time_format_instant.mvl: LLVM and transpiler backends must produce identical output"
+        );
+        assert_eq!(
+            llvm_out.trim().len(),
+            4,
+            "format_instant(now(), '%Y') must produce a 4-character year"
+        );
+    }
+}
+
 // ── #180 + #438: crypto stdlib — both backends ────────────────────────────────
 
 const SHA256_EMPTY: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
