@@ -276,6 +276,27 @@ pub enum CheckError {
         abi: String,
         span: Span,
     },
+
+    // ── Label-transparent function validation (ADR-0024) ─────────────────
+    /// `transparent fn` declared with no parameters — label join over empty
+    /// arg list is always `None`, so `transparent` has no effect (Req 11).
+    TransparentFnNoParams {
+        name: String,
+        span: Span,
+    },
+    /// `transparent fn` declares a labeled return type, which would produce
+    /// a nested `Labeled(L, Labeled(L, T))` — invalid IR (Req 11).
+    TransparentFnLabeledReturn {
+        name: String,
+        span: Span,
+    },
+    /// `transparent fn` combined with a generic function — the label_transparent
+    /// branch in calls.rs runs before the is_generic branch, producing a labeled
+    /// type-param instead of `Unknown` (Req 11).
+    TransparentFnGeneric {
+        name: String,
+        span: Span,
+    },
 }
 
 impl CheckError {
@@ -332,7 +353,10 @@ impl CheckError {
             CheckError::InvalidDeclassify { .. }
             | CheckError::InvalidSanitize { .. }
             | CheckError::LoggingLabelViolation { .. }
-            | CheckError::ImplicitFlowViolation { .. } => 11,
+            | CheckError::ImplicitFlowViolation { .. }
+            | CheckError::TransparentFnNoParams { .. }
+            | CheckError::TransparentFnLabeledReturn { .. }
+            | CheckError::TransparentFnGeneric { .. } => 11,
             // Req 1: Type Safety (declaration-level — malformed extern ABI is a type/decl error,
             // not an IFC violation; grouping it under Req 11 would pollute IFC metrics).
             CheckError::UnsupportedExternAbi { .. } => 1,
@@ -388,7 +412,10 @@ impl CheckError {
             | CheckError::PropagateIncompatibleError { span, .. }
             | CheckError::NotIterator { span, .. }
             | CheckError::ForLoopInPartialFn { span }
-            | CheckError::MissingConstraint { span, .. } => *span,
+            | CheckError::MissingConstraint { span, .. }
+            | CheckError::TransparentFnNoParams { span, .. }
+            | CheckError::TransparentFnLabeledReturn { span, .. }
+            | CheckError::TransparentFnGeneric { span, .. } => *span,
         }
     }
 
@@ -541,6 +568,15 @@ impl CheckError {
                 ..
             } => format!(
                 "type parameter `{type_param}` does not implement `{required_bound}` — add `where {type_param}: {required_bound}` to the function signature"
+            ),
+            CheckError::TransparentFnNoParams { name, .. } => format!(
+                "`transparent fn {name}` has no parameters — label propagation requires at least one argument; remove `transparent` or add a parameter"
+            ),
+            CheckError::TransparentFnLabeledReturn { name, .. } => format!(
+                "`transparent fn {name}` declares a labeled return type, which would produce a nested label at call sites — remove the label from the return type or remove `transparent`"
+            ),
+            CheckError::TransparentFnGeneric { name, .. } => format!(
+                "`transparent fn {name}` is also generic — `transparent` cannot be combined with generic type parameters; use label-polymorphic generics instead (see ADR-0024)"
             ),
         }
     }

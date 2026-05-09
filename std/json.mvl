@@ -31,7 +31,7 @@ type ObjectStep = enum { OSep(Map[String, Value], Int, String), OStepErr(String)
 // ── encode ────────────────────────────────────────────────────────────────────
 
 /// Serialises a Value to a JSON string.
-pub partial fn encode(v: Value) -> String {
+pub transparent partial fn encode(v: Value) -> String {
     match v {
         Value::Null      => "null",
         Value::Bool(b)   => if b { "true" } else { "false" },

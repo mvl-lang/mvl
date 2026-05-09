@@ -574,6 +574,7 @@ impl TypeEnv {
             },
         );
         // encode(v: Value) -> String — pure
+        // label_transparent: taint from the Value propagates to the encoded String (ADR-0024)
         self.fns.insert(
             "encode".into(),
             FnInfo {
@@ -582,7 +583,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
-                label_transparent: false,
+                label_transparent: true,
             },
         );
         // decode(s: String) -> Result<Value, String> — pure

@@ -54,7 +54,7 @@ Every type MUST support security labels: `Public[T]`, `Tainted[T]`, `Secret[T]`,
 
 ### Requirement 2: External Input is Tainted [MUST] *(Deferred — Phase 2)*
 
-> **Status:** Not yet implemented. Auto-tainting requires runtime/stdlib integration (HTTP, stdin, env-var APIs). Tracked in #28.
+> **Status:** Partially addressed. Auto-tainting of external sources is not yet implemented (tracked in #28, requires runtime/stdlib integration). Label propagation through stdlib transform functions (e.g. `json.decode`) is addressed by ADR-0024 (`transparent` keyword): `decode(tainted_str)` now returns `Tainted[Result[Value, String]]` rather than silently dropping the label.
 
 Data from external sources MUST be automatically labeled `Tainted`. This includes:
 - HTTP request bodies, headers, query parameters
@@ -150,13 +150,13 @@ Logging functions MUST accept only `Public[T]` arguments. Logging a `Secret` or 
 - GIVEN `log.info("User logged in: {}", username)` where `username: Public[String]`
 - THEN the compiler MUST accept
 
-### Requirement 7: IFC Applies to String Formatting [MUST]
+### Requirement 7: IFC Applies to String Formatting and Transform Functions [MUST]
 
-The `format()` function MUST be IFC-aware. The result label MUST be the join (highest) of all argument labels.
+The `format()` function MUST be IFC-aware. The result label MUST be the join (highest) of all argument labels. Functions declared `transparent` (ADR-0024) MUST propagate argument labels to their return type using the same join semantics. This closes the silent label-drop hole at stdlib boundaries (e.g. `json.decode`, `json.encode`).
 
-**Implementation:** `src/mvl/checker/ifc.rs`
+**Implementation:** `src/mvl/checker/ifc.rs`, `src/mvl/checker/calls.rs`, `src/mvl/parser/lexer.rs` (`transparent` keyword), ADR-0024
 
-**Tests:** `tests/type_checker.rs::arithmetic_label_join_propagates`, `tests/type_checker.rs::arithmetic_label_join_downgrade_rejected`
+**Tests:** `tests/type_checker.rs::arithmetic_label_join_propagates`, `tests/type_checker.rs::arithmetic_label_join_downgrade_rejected`, `tests/type_checker.rs::format_propagates_secret_label`, `tests/type_checker.rs::transparent_fn_propagates_label`, `tests/type_checker.rs::decode_propagates_tainted_label`
 
 #### Scenario: Tainted argument taints the result
 

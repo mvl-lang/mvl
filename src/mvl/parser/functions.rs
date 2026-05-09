@@ -1138,4 +1138,81 @@ fn main() -> String { greet(String::new()) }"#;
         let d = fn_decl("fn greet(name: String) -> String { }");
         assert!(!d.is_builtin);
     }
+
+    // ── ADR-0024: transparent keyword ─────────────────────────────────────
+
+    #[test]
+    fn parse_transparent_fn() {
+        // GIVEN: transparent fn wrap(s: String) -> String { }
+        // THEN: FnDecl with is_label_transparent=true, is_test=false, is_builtin=false
+        let d = fn_decl("transparent fn wrap(s: String) -> String { }");
+        assert!(d.is_label_transparent);
+        assert!(!d.is_test);
+        assert!(!d.is_builtin);
+        assert_eq!(d.name, "wrap");
+    }
+
+    #[test]
+    fn parse_transparent_partial_fn() {
+        // ADR-0024: transparent may be combined with partial
+        let d = fn_decl("transparent partial fn search(s: String) -> String { }");
+        assert!(d.is_label_transparent);
+        assert_eq!(d.totality, Some(Totality::Partial));
+    }
+
+    #[test]
+    fn parse_transparent_total_fn() {
+        // ADR-0024: transparent may be combined with total
+        let d = fn_decl("transparent total fn wrap(s: String) -> String { }");
+        assert!(d.is_label_transparent);
+        assert_eq!(d.totality, Some(Totality::Total));
+    }
+
+    #[test]
+    fn parse_transparent_builtin_fn() {
+        // ADR-0024: transparent may be combined with builtin
+        let d = fn_decl("transparent builtin fn len(s: String) -> Int");
+        assert!(d.is_label_transparent);
+        assert!(d.is_builtin);
+    }
+
+    #[test]
+    fn parse_pub_transparent_partial_fn() {
+        // ADR-0024: pub transparent partial fn — the primary stdlib use case
+        let src = "pub transparent partial fn decode(s: String) -> String { s }";
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        assert!(p.errors.is_empty(), "parse errors: {:?}", p.errors);
+        if let Decl::Fn(fd) = &prog.declarations[0] {
+            assert!(fd.visible);
+            assert!(fd.is_label_transparent);
+            assert_eq!(fd.totality, Some(Totality::Partial));
+            assert_eq!(fd.name, "decode");
+        } else {
+            panic!("expected FnDecl");
+        }
+    }
+
+    #[test]
+    fn transparent_and_test_combined_is_rejected() {
+        // ADR-0024: transparent MUST NOT be combined with test
+        let src = "test transparent fn bad() -> Unit { }";
+        let (mut p, _) = Parser::new(src);
+        p.parse_program();
+        assert!(
+            !p.errors.is_empty(),
+            "expected parse error for test transparent combination"
+        );
+        assert!(
+            p.errors[0].message.contains("transparent"),
+            "expected transparent error message, got: {}",
+            p.errors[0].message
+        );
+    }
+
+    #[test]
+    fn normal_fn_is_not_label_transparent() {
+        let d = fn_decl("fn f(s: String) -> String { }");
+        assert!(!d.is_label_transparent);
+    }
 }

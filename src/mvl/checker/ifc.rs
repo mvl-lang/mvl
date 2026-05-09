@@ -96,6 +96,7 @@ pub fn label_of(ty: &Ty) -> Option<SecurityLabel> {
 pub fn strip_label(ty: &Ty) -> &Ty {
     match ty {
         Ty::Labeled(_, inner) => inner,
+        Ty::Refined(inner, _) => strip_label(inner),
         _ => ty,
     }
 }
