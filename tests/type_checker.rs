@@ -4792,3 +4792,140 @@ fn builtin_fn_callable_from_user_code() {
         "call to builtin fn should type-check cleanly, got: {errors:?}"
     );
 }
+
+// ── HOF calling, panic never type, early-return in loops (#618) ──────────────
+
+/// A function parameter with type `fn(Int) -> Bool` can be called as a HOF;
+/// the call site resolves to Bool with no errors.
+#[test]
+fn hof_param_callable_and_returns_correct_type() {
+    let src = "fn apply(pred: fn(Int) -> Bool, x: Int) -> Bool { pred(x) }";
+    let errors = errors_for(src);
+    assert!(
+        errors.is_empty(),
+        "HOF call should type-check cleanly, got: {errors:?}"
+    );
+}
+
+/// Calling a HOF parameter with the wrong number of arguments emits WrongArgCount.
+#[test]
+fn hof_wrong_arg_count_emits_error() {
+    let src = "fn apply(pred: fn(Int) -> Bool, x: Int) -> Bool { pred(x, x) }";
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::WrongArgCount { .. })),
+        "expected WrongArgCount for HOF call with wrong arity, got: {errors:?}"
+    );
+}
+
+/// Calling a HOF parameter with a wrong argument type emits TypeMismatch.
+#[test]
+fn hof_wrong_arg_type_emits_type_mismatch() {
+    let src = r#"fn apply(pred: fn(Int) -> Bool) -> Bool { pred("hello") }"#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "expected TypeMismatch for HOF call with wrong arg type, got: {errors:?}"
+    );
+}
+
+/// A match expression where one arm calls panic() must unify: panic returns Never
+/// (the bottom type) which is compatible with any expected type.
+#[test]
+fn panic_in_match_arm_unifies_with_any_type() {
+    // GIVEN: a function returning Int with a match that panics on None
+    let src = r#"
+        pub builtin fn panic(message: String) -> Never
+        fn unwrap_int(x: Option[Int]) -> Int {
+            match x {
+                Some(v) => v,
+                None => panic("unwrap on None")
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "panic() in match arm should not cause TypeMismatch, got: {errors:?}"
+    );
+}
+
+/// An early `return` inside a for-loop body is type-checked against the
+/// function's declared return type, not against Unit.
+#[test]
+fn early_return_in_for_loop_type_checked_correctly() {
+    // GIVEN: a function returning Option[Int] with an early return inside a for loop
+    let src = "fn first(xs: List[Int]) -> Option[Int] { for x in xs { return Some(x) }; None }";
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "early return in for-loop should type-check against fn return type, got: {errors:?}"
+    );
+}
+
+/// An early `return` with the wrong type inside a for-loop body is caught.
+#[test]
+fn early_return_in_for_loop_wrong_type_rejected() {
+    let src = r#"fn f(xs: List[Int]) -> Int { for x in xs { return "bad" }; 0 }"#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "early return with wrong type in for-loop should emit TypeMismatch, got: {errors:?}"
+    );
+}
+
+// ── stdlib proven profile — unit tests (#538) ────────────────────────────────
+
+/// Proven profile verification is backed by `check_with_prelude`. Verify that
+/// a deliberately ill-typed stdlib body (wrong return type) is caught, proving
+/// the checker is actually applied to stdlib source rather than skipped.
+#[test]
+fn proven_profile_checker_catches_type_error_in_stdlib_body() {
+    use mvl::mvl::checker::check_with_prelude;
+
+    // GIVEN: a "stdlib" snippet with a body that returns the wrong type
+    let bad_stdlib = "pub fn broken(x: Int) -> String { x }";
+    let (mut p, _) = Parser::new(bad_stdlib);
+    let prog = p.parse_program();
+
+    // WHEN: verified with check_with_prelude (as check_proven_stdlib does)
+    let result = check_with_prelude(&[], &prog);
+
+    // THEN: a type error is reported — the checker is not a no-op
+    assert!(
+        result.has_errors(),
+        "expected type error for wrong return type, got no errors"
+    );
+}
+
+/// A pure-MVL stdlib body that is correctly typed must pass check_with_prelude
+/// without errors (proven profile does not over-reject valid stdlib).
+#[test]
+fn proven_profile_checker_accepts_valid_stdlib_body() {
+    use mvl::mvl::checker::check_with_prelude;
+
+    // GIVEN: a valid stdlib snippet
+    let good_stdlib = "pub fn double(x: Int) -> Int { x + x }";
+    let (mut p, _) = Parser::new(good_stdlib);
+    let prog = p.parse_program();
+
+    // WHEN: verified with check_with_prelude
+    let result = check_with_prelude(&[], &prog);
+
+    // THEN: no errors
+    assert!(
+        !result.has_errors(),
+        "valid stdlib body should pass proven profile check, got: {:?}",
+        result.errors
+    );
+}

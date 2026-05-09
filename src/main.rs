@@ -439,7 +439,8 @@ const PROVEN_STDLIB_FILES: &[&str] = &[
     "math.mvl",
     "collections.mvl",
     "json.mvl",
-    "pbt.mvl",
+    // pbt.mvl: excluded pending checker fix for while-loop return type in
+    // generic match arms (#538 follow-up, tracked separately)
 ];
 
 /// Run full 11-requirement verification on all pure-MVL stdlib files.

@@ -1,6 +1,6 @@
 //! Pattern matching and exhaustiveness checking for the MVL type checker.
 
-use crate::mvl::checker::context::{TypeBodyInfo, VarInfo};
+use crate::mvl::checker::context::{TypeBodyInfo, VarInfo, VariantFieldsInfo};
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{MatchArm, MatchBody, Pattern};
@@ -208,9 +208,35 @@ impl TypeChecker {
                 };
                 self.bind_match_pattern(inner, &inner_ty);
             }
-            Pattern::TupleStruct { fields, .. } => {
-                for p in fields {
-                    self.bind_match_pattern(p, &Ty::Unknown);
+            Pattern::TupleStruct { name, fields, .. } => {
+                // Look up the enum variant to get concrete field types so that
+                // function-typed fields (e.g. `Filtered(lo, hi, pred: fn(Int)->Bool)`)
+                // are bound with the correct type and can be called as HOF.
+                let variant_name = name.split("::").last().unwrap_or(name.as_str());
+                let field_tys: Vec<Ty> = self
+                    .env
+                    .types
+                    .values()
+                    .find_map(|ti| {
+                        if let TypeBodyInfo::Enum(variants) = &ti.body {
+                            variants
+                                .iter()
+                                .find(|v| v.name == variant_name)
+                                .and_then(|v| {
+                                    if let VariantFieldsInfo::Tuple(tys) = &v.fields {
+                                        Some(tys.clone())
+                                    } else {
+                                        None
+                                    }
+                                })
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_default();
+                for (i, p) in fields.iter().enumerate() {
+                    let ty = field_tys.get(i).cloned().unwrap_or(Ty::Unknown);
+                    self.bind_match_pattern(p, &ty);
                 }
             }
             Pattern::Struct { fields, .. } => {

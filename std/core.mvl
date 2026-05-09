@@ -33,7 +33,8 @@ pub builtin fn assert(condition: Bool) -> Unit
 pub builtin fn assert_eq(left: String, right: String) -> Unit
 
 /// Unconditionally terminate with a message.
-pub builtin fn panic(message: String) -> Unit
+/// Returns the Never (bottom) type — compatible with any expected type.
+pub builtin fn panic(message: String) -> Never
 
 /// Generate a sequence of integers [start, end) — exclusive upper bound.
 /// Semantics: range(0, 5) produces [0, 1, 2, 3, 4].

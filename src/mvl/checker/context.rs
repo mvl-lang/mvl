@@ -286,14 +286,16 @@ impl TypeEnv {
                 label_transparent: false,
             },
         );
-        // panic — unconditional termination with a message; pure effect-wise
+        // panic — unconditional termination; return type is Never (the bottom type)
+        // so it is compatible with any expected type in match arms, if-branches, etc.
+        // Marked partial because it aborts rather than returning a value.
         self.fns.insert(
             "panic".into(),
             FnInfo {
                 params: vec![Ty::String],
-                ret: Ty::Unit,
+                ret: Ty::Never,
                 effects: vec![],
-                totality: None,
+                totality: Some(Totality::Partial),
                 type_params: HashSet::new(),
                 label_transparent: false,
             },

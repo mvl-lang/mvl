@@ -105,7 +105,7 @@ pub fn gen_one_of_int(options: List[Int]) -> IntGen ! Random {
 
 /// Run `prop` on `iterations` values drawn from `gen`.
 /// Panics with the test name if any iteration fails.
-pub fn property_check_int(
+pub partial fn property_check_int(
     name: String,
     gen: IntGen,
     prop: fn(Int) -> Bool,
@@ -150,7 +150,7 @@ pub fn property_check_int(
 }
 
 /// Same as property_check_int but for Bool generators.
-pub fn property_check_bool(
+pub partial fn property_check_bool(
     name: String,
     gen: BoolGen,
     prop: fn(Bool) -> Bool,
@@ -178,7 +178,7 @@ pub fn property_check_bool(
 
 /// Same as property_check_int but for String generators.
 /// Characters are drawn from printable ASCII (codepoints 32–126).
-pub fn property_check_string(
+pub partial fn property_check_string(
     name: String,
     gen: StringGen,
     prop: fn(String) -> Bool,
@@ -202,7 +202,7 @@ pub fn property_check_string(
 }
 
 /// Same as property_check_int but for List[Int] generators.
-pub fn property_check_list_int(
+pub partial fn property_check_list_int(
     name: String,
     gen: ListIntGen,
     prop: fn(List[Int]) -> Bool,
@@ -306,7 +306,7 @@ pub fn mutate_list_int(xs: List[Int]) -> List[Int] ! Random {
 /// `distance(x)` is small — i.e., closest to violating the property.
 /// Only Range-based generators are supported for targeting; others fall back
 /// to standard property_check_int.
-pub fn property_check_targeted_int(
+pub partial fn property_check_targeted_int(
     name: String,
     gen: IntGen,
     prop: fn(Int) -> Bool,
@@ -339,7 +339,7 @@ pub fn property_check_targeted_int(
 /// `mutation_ratio` in [0.0, 1.0] controls the fraction that are mutations.
 /// Only Range-based generators are supported for mutation; others fall back
 /// to standard property_check_int.
-pub fn property_check_with_mutation_int(
+pub partial fn property_check_with_mutation_int(
     name: String,
     gen: IntGen,
     prop: fn(Int) -> Bool,
