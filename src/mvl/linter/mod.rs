@@ -214,7 +214,9 @@ mod tests {
     fn lint_detects_trailing_whitespace() {
         let src = "fn foo() -> Int { 1 }   \n";
         let prog = parse(src);
-        let result = lint(&prog, src, &default_cfg());
+        let mut cfg = default_cfg();
+        cfg.trailing_ws = true;
+        let result = lint(&prog, src, &cfg);
         assert!(
             result.diags.iter().any(|d| d.rule == "trailing-whitespace"),
             "expected trailing-whitespace diagnostic"
@@ -226,7 +228,9 @@ mod tests {
         let long_line = "x".repeat(200);
         let src = format!("fn foo() -> Int {{\n    {long_line}\n}}\n");
         let prog = parse(&src);
-        let result = lint(&prog, &src, &default_cfg());
+        let mut cfg = default_cfg();
+        cfg.line_length = 120;
+        let result = lint(&prog, &src, &cfg);
         assert!(
             result.diags.iter().any(|d| d.rule == "line-length"),
             "expected line-length diagnostic"

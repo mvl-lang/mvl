@@ -9,17 +9,28 @@
 //!
 //! ## Supported keys
 //!
-//! ### Phase 1 — style rules
+//! ### Style toggle
 //!
-//! | Key               | Default | Description                                     |
-//! |-------------------|---------|-------------------------------------------------|
-//! | `line_length`     | `120`   | Maximum line length (characters)                |
-//! | `indent_size`     | `4`     | Number of spaces per indent level               |
-//! | `indent_style`    | `spaces`| `spaces` or `tabs`                              |
-//! | `max_fn_length`   | `50`    | Maximum lines in a function body (0 = disabled) |
-//! | `naming`          | `true`  | Enforce `snake_case` / `PascalCase` conventions |
-//! | `trailing_ws`     | `true`  | Flag trailing whitespace                        |
-//! | `unused_bindings` | `true`  | Flag unused `let` bindings (future)             |
+//! | Key     | Default | Description                                                              |
+//! |---------|---------|--------------------------------------------------------------------------|
+//! | `style` | `false` | Master toggle: enables all style rules with standard values.             |
+//!
+//! Setting `style = true` enables: `line_length` (120), `trailing_ws`, `indentation`,
+//! `final_newline`, and `consistent_comment_style`. Individual keys override the toggle.
+//!
+//! ### Phase 1 — style rules (OFF by default)
+//!
+//! | Key               | Default | Description                                               |
+//! |-------------------|---------|-----------------------------------------------------------|
+//! | `line_length`     | `0`     | Maximum line length (characters; 0 = disabled)            |
+//! | `indent_size`     | `4`     | Number of spaces per indent level (used when enabled)     |
+//! | `indent_style`    | `spaces`| `spaces` or `tabs` (used when indentation is enabled)    |
+//! | `indentation`     | `false` | Flag wrong indent style/width                             |
+//! | `final_newline`   | `false` | Require file to end with exactly one newline              |
+//! | `max_fn_length`   | `50`    | Maximum lines in a function body (0 = disabled)           |
+//! | `naming`          | `true`  | Enforce `snake_case` / `PascalCase` conventions           |
+//! | `trailing_ws`     | `false` | Flag trailing whitespace                                  |
+//! | `unused_bindings` | `true`  | Flag unused `let` bindings (future)                       |
 //!
 //! ### Phase 2 — semantic rules
 //!
@@ -35,7 +46,7 @@
 //!
 //! | Key                         | Default | Description                                              |
 //! |-----------------------------|---------|----------------------------------------------------------|
-//! | `consistent_comment_style`  | `true`  | Flag block comments `/* */` (only `//` allowed)          |
+//! | `consistent_comment_style`  | `false` | Flag block comments `/* */` (only `//` allowed)          |
 //! | `require_doc_comments`      | `true`  | Require `///` doc comments on public functions and types |
 //! | `doc_comment_examples`      | `false` | Recommend `Example:` blocks in doc comments (warning)   |
 //!
@@ -69,6 +80,10 @@ pub struct LintConfig {
     pub naming: bool,
     /// Whether trailing-whitespace rule is active.
     pub trailing_ws: bool,
+    /// Whether indentation style/size rules are active.
+    pub indentation: bool,
+    /// Whether the final-newline rule is active.
+    pub final_newline: bool,
     /// Whether unused-binding rule is active.
     pub unused_bindings: bool,
 
@@ -113,19 +128,23 @@ pub struct LintConfig {
 impl Default for LintConfig {
     fn default() -> Self {
         Self {
-            line_length: 120,
+            // Style rules — OFF by default; enable with `style = true` in .mvllintrc
+            line_length: 0, // 0 = disabled; `style = true` sets this to 120
             indent_size: 4,
             indent_spaces: true,
+            trailing_ws: false,
+            indentation: false,
+            final_newline: false,
+            // Semantic / complexity rules — ON by default
             max_fn_length: 50,
             naming: true,
-            trailing_ws: true,
             unused_bindings: true,
             unreachable_code: true,
             redundant_match: true,
             redundant_effects: true,
             redundant_ifc_labels: true,
             missing_annotations: false,
-            consistent_comment_style: true,
+            consistent_comment_style: false,
             require_doc_comments: true,
             doc_comment_examples: false,
             max_cyclomatic_complexity: 10,
@@ -196,18 +215,34 @@ fn dirs_home() -> Option<PathBuf> {
 
 fn load_from(path: &Path) -> Option<LintConfig> {
     let text = fs::read_to_string(path).ok()?;
+
+    // Collect all key=value pairs (skip blank lines and comments).
+    let pairs: Vec<(&str, &str)> = text
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            line.split_once('=').map(|(k, v)| (k.trim(), v.trim()))
+        })
+        .collect();
+
+    // Phase 1: start from defaults, then apply the `style` master toggle if present.
+    // This ensures individual key overrides (phase 2) always win regardless of file order.
     let mut cfg = LintConfig::default();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((key, val)) = line.split_once('=') else {
-            continue;
-        };
-        let key = key.trim();
-        let val = val.trim();
+    if pairs.iter().any(|(k, v)| *k == "style" && parse_bool(v)) {
+        cfg.line_length = 120;
+        cfg.trailing_ws = true;
+        cfg.indentation = true;
+        cfg.final_newline = true;
+        cfg.consistent_comment_style = true;
+    }
+
+    // Phase 2: apply individual key overrides.
+    for (key, val) in pairs {
         match key {
+            "style" => {} // already handled in phase 1
             "line_length" => {
                 if let Ok(n) = val.parse::<usize>() {
                     cfg.line_length = n;
@@ -223,6 +258,8 @@ fn load_from(path: &Path) -> Option<LintConfig> {
                 "tabs" | "tab" => cfg.indent_spaces = false,
                 _ => {}
             },
+            "indentation" => cfg.indentation = parse_bool(val),
+            "final_newline" => cfg.final_newline = parse_bool(val),
             "max_fn_length" => {
                 if let Ok(n) = val.parse::<usize>() {
                     cfg.max_fn_length = n;
@@ -316,12 +353,18 @@ mod tests {
     #[test]
     fn default_config_has_expected_values() {
         let cfg = LintConfig::default();
-        assert_eq!(cfg.line_length, 120);
+        // Style rules — OFF by default
+        assert_eq!(cfg.line_length, 0);
+        assert!(!cfg.trailing_ws);
+        assert!(!cfg.indentation);
+        assert!(!cfg.final_newline);
+        assert!(!cfg.consistent_comment_style);
+        // Style parameters kept for when style is enabled
         assert_eq!(cfg.indent_size, 4);
         assert!(cfg.indent_spaces);
+        // Semantic / complexity rules — ON by default
         assert_eq!(cfg.max_fn_length, 50);
         assert!(cfg.naming);
-        assert!(cfg.trailing_ws);
         assert!(cfg.unreachable_code);
         assert!(cfg.redundant_match);
         assert_eq!(cfg.max_cyclomatic_complexity, 10);
@@ -400,6 +443,49 @@ mod tests {
     fn load_from_returns_none_for_missing_file() {
         let result = load_from(Path::new("/nonexistent/path/.mvllintrc"));
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn load_from_parses_final_newline_and_indentation() {
+        let f = write_temp_config("final_newline = true\nindentation = true\n");
+        let cfg = load_from(f.path()).expect("load_from");
+        assert!(cfg.final_newline);
+        assert!(cfg.indentation);
+    }
+
+    #[test]
+    fn style_toggle_enables_all_style_rules() {
+        let f = write_temp_config("style = true\n");
+        let cfg = load_from(f.path()).expect("load_from");
+        assert_eq!(cfg.line_length, 120);
+        assert!(cfg.trailing_ws);
+        assert!(cfg.indentation);
+        assert!(cfg.final_newline);
+        assert!(cfg.consistent_comment_style);
+        // Semantic rules unaffected
+        assert!(cfg.unreachable_code);
+        assert!(cfg.redundant_match);
+    }
+
+    #[test]
+    fn style_toggle_individual_override_wins() {
+        // Individual keys set after style toggle must win regardless of file order
+        let f = write_temp_config("style = true\nline_length = 80\ntrailing_ws = false\n");
+        let cfg = load_from(f.path()).expect("load_from");
+        assert_eq!(cfg.line_length, 80);
+        assert!(!cfg.trailing_ws);
+        // Other style rules still enabled by the toggle
+        assert!(cfg.indentation);
+        assert!(cfg.final_newline);
+    }
+
+    #[test]
+    fn style_toggle_individual_override_wins_regardless_of_order() {
+        // Individual key appears before `style = true` in the file — still wins
+        let f = write_temp_config("line_length = 60\nstyle = true\n");
+        let cfg = load_from(f.path()).expect("load_from");
+        assert_eq!(cfg.line_length, 60);
+        assert!(cfg.trailing_ws); // style toggle still applied
     }
 
     #[test]
