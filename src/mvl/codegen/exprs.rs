@@ -1122,16 +1122,27 @@ impl<'ctx> LlvmBackend<'ctx> {
                 )
             }
             _ => {
-                // Box::new(value) — heap-allocate T and return a pointer to it (#571).
-                // TODO(#571): build_malloc can return null on OOM; emitting an IR
-                // null-check + abort branch would make OOM safe, but requires
-                // generating a conditional branch and abort block.
+                // Box::new(value) — heap-allocate T and return a pointer to it (#571, #608).
+                // Uses mvl_box_new(size) from the runtime library instead of build_malloc
+                // so that OOM aborts cleanly rather than returning null (#608).
                 if name == "Box::new" && args.len() == 1 {
                     let val = self.emit_expr(&args[0])?;
-                    let ptr = self
+                    let size = self.llvm_type_byte_size(val.get_type()) as i64;
+                    let size_val = self.context.i64_type().const_int(size as u64, false);
+                    let box_new_fn = self.get_mvl_box_new();
+                    let call = self
                         .builder
-                        .build_malloc(val.get_type(), "box_alloc")
+                        .build_call(box_new_fn, &[size_val.into()], "box_alloc")
                         .unwrap();
+                    let ptr = BasicValueEnum::try_from(call.as_any_value_enum())
+                        .ok()
+                        .and_then(|v| {
+                            if let BasicValueEnum::PointerValue(p) = v {
+                                Some(p)
+                            } else {
+                                None
+                            }
+                        })?;
                     self.builder.build_store(ptr, val).unwrap();
                     return Some(ptr.into());
                 }

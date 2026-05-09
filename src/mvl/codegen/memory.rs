@@ -68,7 +68,21 @@ impl<'ctx> LlvmBackend<'ctx> {
         )
     }
 
-    /// `free(ptr)` — libc free, used to drop Box[T] allocations produced by build_malloc.
+    /// `mvl_box_new(i64) -> ptr` — OOM-safe Box allocation (#608).
+    ///
+    /// Wraps `malloc` with an abort-on-null guard in the runtime library so
+    /// the emitter never generates IR that dereferences a null pointer on OOM.
+    /// The returned pointer must be freed with `free` (see `get_libc_free`).
+    pub(crate) fn get_mvl_box_new(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "mvl_box_new",
+            &[self.context.i64_type().into()],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
+    /// `free(ptr)` — libc free, used to drop Box[T] allocations (#571).
     pub(crate) fn get_libc_free(&self) -> FunctionValue<'ctx> {
         self.get_or_declare_fn(
             "free",
