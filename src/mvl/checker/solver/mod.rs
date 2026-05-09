@@ -7,15 +7,17 @@
 //! |-------|---------|-------------------------------|-----------|
 //! | 1     | layer1  | Trivial pattern matching      | ~40%      |
 //! | 2     | layer2  | Interval arithmetic           | ~60%      |
-//! | 3     | —       | Symbolic / Cooper's (future)  |           |
+//! | 3     | layer3  | Symbolic path analysis        | ~15%      |
 //! | 4     | —       | SMT dispatch (future)         |           |
 
 pub mod layer1;
 pub mod layer2;
+pub mod layer3;
 
 use std::collections::HashMap;
 
-use crate::mvl::parser::ast::{Expr, FnDecl, RefExpr};
+use crate::mvl::parser::ast::{BinaryOp, CmpOp, Expr, FnDecl, RefExpr};
+use crate::mvl::parser::lexer::Span;
 
 // ── Outcome type ──────────────────────────────────────────────────────────────
 
@@ -28,6 +30,29 @@ pub(crate) enum RefResult {
     RuntimeCheck,
     /// The argument statically violates the predicate — a compile-time error.
     Failed,
+}
+
+// ── Shared helpers ────────────────────────────────────────────────────────────
+
+/// Construct a zero-span placeholder used for synthetic AST nodes in the solver.
+/// These nodes are only used for proof evaluation and never appear in user-facing
+/// error messages, so the span position (0,0) is acceptable.
+pub(crate) fn dummy_span() -> Span {
+    Span::new(0, 0, 0, 0)
+}
+
+/// Convert a `BinaryOp` comparison to the corresponding `CmpOp`, if applicable.
+/// Returns `None` for non-comparison operators (arithmetic, logical, bitwise).
+pub(crate) fn binary_op_to_cmp(op: BinaryOp) -> Option<CmpOp> {
+    match op {
+        BinaryOp::Gt => Some(CmpOp::Gt),
+        BinaryOp::Ge => Some(CmpOp::Ge),
+        BinaryOp::Lt => Some(CmpOp::Lt),
+        BinaryOp::Le => Some(CmpOp::Le),
+        BinaryOp::Eq => Some(CmpOp::Eq),
+        BinaryOp::Ne => Some(CmpOp::Ne),
+        _ => None,
+    }
 }
 
 // ── Solver ────────────────────────────────────────────────────────────────────
@@ -60,5 +85,18 @@ impl RefinementSolver {
         var_refs: &HashMap<String, Option<RefExpr>>,
     ) -> Option<RefResult> {
         layer2::try_interval(pred, arg, var_refs)
+    }
+
+    /// Try to prove or disprove `pred` for `arg` using Layer 3 (symbolic path analysis).
+    ///
+    /// Only applicable when `arg` is a call to a pure function in `fn_decls`.
+    /// Returns `None` when this layer cannot make a decision.
+    pub(crate) fn try_symbolic(
+        pred: &RefExpr,
+        arg: &Expr,
+        var_refs: &HashMap<String, Option<RefExpr>>,
+        fn_decls: &HashMap<String, FnDecl>,
+    ) -> Option<RefResult> {
+        layer3::try_symbolic(pred, arg, var_refs, fn_decls)
     }
 }

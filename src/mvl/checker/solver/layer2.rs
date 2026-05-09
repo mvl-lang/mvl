@@ -168,15 +168,7 @@ fn self_int_bound(op: &CmpOp, left: &RefExpr, right: &RefExpr) -> Option<(CmpOp,
         }
         (RefExpr::Integer { value, .. }, RefExpr::Ident { name, .. }) if name == "self" => {
             // Flip: `n op self` → `self flip(op) n`
-            let flipped = match op {
-                CmpOp::Lt => CmpOp::Gt,
-                CmpOp::Gt => CmpOp::Lt,
-                CmpOp::Le => CmpOp::Ge,
-                CmpOp::Ge => CmpOp::Le,
-                CmpOp::Eq => CmpOp::Eq,
-                CmpOp::Ne => CmpOp::Ne,
-            };
-            Some((flipped, *value))
+            Some((op.flip(), *value))
         }
         _ => None,
     }

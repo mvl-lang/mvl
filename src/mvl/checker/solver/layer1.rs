@@ -189,15 +189,7 @@ fn extract_self_int_bound(pred: &RefExpr) -> Option<(CmpOp, i64)> {
             }
             (RefExpr::Integer { value, .. }, RefExpr::Ident { name, .. }) if is_self_like(name) => {
                 // Flip: `N op self` → `self flip(op) N`
-                let flipped = match op {
-                    CmpOp::Lt => CmpOp::Gt,
-                    CmpOp::Gt => CmpOp::Lt,
-                    CmpOp::Le => CmpOp::Ge,
-                    CmpOp::Ge => CmpOp::Le,
-                    CmpOp::Eq => CmpOp::Eq,
-                    CmpOp::Ne => CmpOp::Ne,
-                };
-                Some((flipped, *value))
+                Some((op.flip(), *value))
             }
             _ => None,
         },

@@ -1,0 +1,33 @@
+// Solver Layer 3: Symbolic path analysis — min/max functions
+//
+// `min(a, b)` with literal b=5:
+//   Path 1 (a < 5) → returns a → from path condition a < 5 → a <= 4 < 5  ✓
+//   Path 2 (a >= 5)→ returns 5 → 5 <= 5  ✓  (Layer 1)
+//
+// `max(a, b)` with literal b=0:
+//   Path 1 (a > 0) → returns a → from path condition a > 0 → a >= 0  ✓
+//   Path 2 (a <= 0)→ returns 0 → 0 >= 0  ✓  (Layer 1)
+
+fn require_at_most_five(x: Int where self <= 5) -> Int {
+    x
+}
+
+fn require_non_negative(x: Int where self >= 0) -> Int {
+    x
+}
+
+fn min_val(a: Int, b: Int) -> Int {
+    if a < b { a } else { b }
+}
+
+fn max_val(a: Int, b: Int) -> Int {
+    if a > b { a } else { b }
+}
+
+fn examples(a: Int) -> Int {
+    // min(a, 5) is always <= 5.
+    require_at_most_five(min_val(a, 5));
+
+    // max(a, 0) is always >= 0.
+    require_non_negative(max_val(a, 0))
+}

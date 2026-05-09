@@ -26,7 +26,7 @@ use std::collections::HashMap;
 
 use crate::mvl::checker::const_eval;
 use crate::mvl::checker::errors::CheckError;
-use crate::mvl::checker::solver::{RefResult, RefinementSolver};
+use crate::mvl::checker::solver::{binary_op_to_cmp, dummy_span, RefResult, RefinementSolver};
 use crate::mvl::parser::ast::{
     ArithOp, BinaryOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, LValue, Literal, LogicOp,
     MatchArm, MatchBody, Pattern, Program, RefExpr, Stmt, TypeBody, TypeExpr,
@@ -248,11 +248,6 @@ fn param_refinements(
 }
 
 // ── Synthetic predicate helpers ──────────────────────────────────────────────
-
-/// A zero-length span used for compiler-synthesised predicates.
-fn dummy_span() -> Span {
-    Span::new(0, 0, 0, 0)
-}
 
 /// `self == n` (integer literal equality).
 fn self_eq_int(n: i64) -> RefExpr {
@@ -572,7 +567,7 @@ fn inject_if_hypothesis(cond: &Expr, var_refs: &mut HashMap<String, Option<RefEx
     else {
         return;
     };
-    if let Some(cmp) = binary_op_to_cmp(op) {
+    if let Some(cmp) = binary_op_to_cmp(*op) {
         // Recognise `x op n` and `n op x` (integer literal only).
         let (var_name, cmp_op, int_val) =
             if let (Expr::Ident(name, _), Expr::Literal(Literal::Integer(n), _)) =
@@ -582,7 +577,7 @@ fn inject_if_hypothesis(cond: &Expr, var_refs: &mut HashMap<String, Option<RefEx
             } else if let (Expr::Literal(Literal::Integer(n), _), Expr::Ident(name, _)) =
                 (left.as_ref(), right.as_ref())
             {
-                (name.clone(), flip_cmp(cmp), *n)
+                (name.clone(), cmp.flip(), *n)
             } else {
                 return;
             };
@@ -615,31 +610,6 @@ fn inject_if_hypothesis(cond: &Expr, var_refs: &mut HashMap<String, Option<RefEx
         // Recurse into both arms of a `&&` conjunction.
         inject_if_hypothesis(left, var_refs);
         inject_if_hypothesis(right, var_refs);
-    }
-}
-
-/// Convert a `BinaryOp` comparison to the corresponding `CmpOp`, if applicable.
-fn binary_op_to_cmp(op: &BinaryOp) -> Option<CmpOp> {
-    match op {
-        BinaryOp::Gt => Some(CmpOp::Gt),
-        BinaryOp::Ge => Some(CmpOp::Ge),
-        BinaryOp::Lt => Some(CmpOp::Lt),
-        BinaryOp::Le => Some(CmpOp::Le),
-        BinaryOp::Eq => Some(CmpOp::Eq),
-        BinaryOp::Ne => Some(CmpOp::Ne),
-        _ => None,
-    }
-}
-
-/// Flip a comparison operator (swap left/right operands).
-fn flip_cmp(op: CmpOp) -> CmpOp {
-    match op {
-        CmpOp::Lt => CmpOp::Gt,
-        CmpOp::Gt => CmpOp::Lt,
-        CmpOp::Le => CmpOp::Ge,
-        CmpOp::Ge => CmpOp::Le,
-        CmpOp::Eq => CmpOp::Eq,
-        CmpOp::Ne => CmpOp::Ne,
     }
 }
 
@@ -1002,6 +972,7 @@ fn check_arg_against_pred(
 ) -> RefResult {
     RefinementSolver::try_trivial(pred, arg, var_refs, fn_decls)
         .or_else(|| RefinementSolver::try_interval(pred, arg, var_refs))
+        .or_else(|| RefinementSolver::try_symbolic(pred, arg, var_refs, fn_decls))
         .unwrap_or(RefResult::RuntimeCheck)
 }
 

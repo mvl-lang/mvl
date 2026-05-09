@@ -1,0 +1,21 @@
+// solver:expect-fail
+//
+// Solver Layer 3: Violations — Layer 3 detects definite failures.
+//
+// When a path's substituted return value FAILS the predicate statically,
+// Layer 3 returns `Failed` instead of falling through to `RuntimeCheck`.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn clamp(x: Int, lo: Int, hi: Int) -> Int {
+    if x < lo { lo }
+    else if x > hi { hi }
+    else { x }
+}
+
+fn bad_call(a: Int) -> Int {
+    // clamp(a, 0, 10): path 1 returns 0, but 0 > 0 is false → Failed
+    require_positive(clamp(a, 0, 10))
+}

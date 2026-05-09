@@ -1,0 +1,38 @@
+// Solver Layer 3: Symbolic path analysis — if-without-else fall-through
+//
+// Tests the Stmt::If-without-else code path in collect_block_paths.
+// When a then-body always returns (Stmt::Return), only two paths are collected:
+//
+//   fn guarded(x: Int) -> Int:
+//     Path 1 (x < 0):  Stmt::Return 0          → return 0
+//     Path 2 (x >= 0): else fall-through        → tail expr `x`
+//
+// Both paths return a value >= 0, so the call is PROVEN by Layer 3.
+
+fn require_non_negative(x: Int where self >= 0) -> Int {
+    x
+}
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn guarded(x: Int) -> Int {
+    if x < 0 { return 0 }
+    x
+}
+
+fn guarded_pos(x: Int) -> Int {
+    if x < 1 { return 1 }
+    x
+}
+
+fn examples(a: Int) -> Int {
+    // Path 1 (a < 0)  → 0 → 0 >= 0  ✓ (Layer 1)
+    // Path 2 (a >= 0) → a → from path condition a >= 0  ✓ (Layer 2)
+    require_non_negative(guarded(a));
+
+    // Path 1 (a < 1)  → 1 → 1 > 0   ✓ (Layer 1)
+    // Path 2 (a >= 1) → a → from path condition a >= 1 > 0  ✓ (Layer 2)
+    require_positive(guarded_pos(a))
+}
