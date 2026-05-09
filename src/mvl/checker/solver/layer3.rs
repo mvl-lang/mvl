@@ -25,33 +25,23 @@
 //!   both are unresolved variables — `inject_condition` silently skips these)
 //! - Non-linear arithmetic in return expressions
 //! - Loop bodies (skipped conservatively)
-//! - More than [`MAX_PATHS`] paths (returns `None`)
+//! - [`MAX_PATHS`] or more execution paths (returns `None`)
 
 use std::collections::HashMap;
 
 use crate::mvl::parser::ast::{
-    BinaryOp, Block, CmpOp, ElseBranch, Expr, FnDecl, Literal, LogicOp, RefExpr, Stmt,
+    BinaryOp, Block, ElseBranch, Expr, FnDecl, Literal, LogicOp, RefExpr, Stmt,
 };
-use crate::mvl::parser::lexer::Span;
 
-use super::{layer1, layer2, RefResult};
+use super::{binary_op_to_cmp, dummy_span, flip_cmp, layer1, layer2, RefResult};
 
-/// Maximum number of execution paths before falling back to `None`.
+/// Functions with this many or more execution paths fall back to `None`.
 const MAX_PATHS: usize = 32;
 
+/// Blocks nested more deeply than this are treated conservatively (bail out).
+const MAX_DEPTH: usize = 64;
+
 // ── Data structures ───────────────────────────────────────────────────────────
-
-/// Accumulated branch conditions along a single execution path (a conjunction).
-struct PathConstraint {
-    conditions: Vec<Expr>,
-}
-
-/// Symbolic execution state for a call site: parameter bindings + path constraint.
-struct SymbolicEnv<'a> {
-    /// Maps parameter name → actual argument expression from the call site.
-    bindings: HashMap<&'a str, &'a Expr>,
-    path: PathConstraint,
-}
 
 /// One complete execution path collected from a function body.
 struct ExecutionPath {
@@ -67,6 +57,12 @@ struct ExecutionPath {
 ///
 /// Only applicable when `arg` is a call to a pure (no-effect) function whose
 /// body is available in `fn_decls`.
+///
+/// # Purity invariant
+///
+/// `fn_decls` must contain only pure (effect-free) functions. The caller
+/// (`check_arg_against_pred` in `refinements.rs`) enforces this via
+/// `build_pure_fn_decls` before passing the map here.
 ///
 /// Returns `None` when Layer 3 cannot make a determination; the caller should
 /// fall back to `RuntimeCheck`.
@@ -91,24 +87,20 @@ pub(super) fn try_symbolic(
         return None;
     }
 
-    // Build symbolic env: param name → actual argument expression.
+    // Build parameter bindings: param name → actual argument expression.
     let bindings: HashMap<&str, &Expr> = fd
         .params
         .iter()
         .zip(actual_args.iter())
         .map(|(p, a)| (p.name.as_str(), a))
         .collect();
-    let env = SymbolicEnv {
-        bindings,
-        path: PathConstraint { conditions: vec![] },
-    };
 
     // Collect all execution paths from the function body.
     let mut paths: Vec<ExecutionPath> = Vec::new();
-    collect_block_paths(&fd.body, env.path.conditions.clone(), &mut paths);
+    collect_block_paths(&fd.body, vec![], &mut paths, 0);
 
     // Bail out on empty collection (e.g. body has no return) or path explosion.
-    if paths.is_empty() || paths.len() > MAX_PATHS {
+    if paths.is_empty() || paths.len() >= MAX_PATHS {
         return None;
     }
 
@@ -119,12 +111,12 @@ pub(super) fn try_symbolic(
         // the path conditions (after substituting parameter names).
         let mut path_var_refs = var_refs.clone();
         for cond in &path.conditions {
-            let cond_subst = substitute_expr(cond, &env.bindings);
-            inject_condition(&cond_subst, &mut path_var_refs);
+            let cond_subst = substitute_expr(cond, &bindings);
+            inject_condition(&cond_subst, &mut path_var_refs, 0);
         }
 
         // Substitute parameters in the return expression, then check against pred.
-        let return_expr = substitute_expr(&path.return_expr, &env.bindings);
+        let return_expr = substitute_expr(&path.return_expr, &bindings);
         let result = layer1::try_trivial(pred, &return_expr, &path_var_refs, fn_decls)
             .or_else(|| layer2::try_interval(pred, &return_expr, &path_var_refs));
 
@@ -147,6 +139,7 @@ pub(super) fn try_symbolic(
 /// Walk a [`Block`] and collect all execution paths as `(conditions, return_expr)`.
 ///
 /// `prefix` holds the branch conditions accumulated on the way to this block.
+/// `depth` limits recursion; at [`MAX_DEPTH`] the block is treated conservatively.
 ///
 /// ## Handled patterns
 ///
@@ -157,7 +150,15 @@ pub(super) fn try_symbolic(
 /// All other statements (let bindings, assignments, loops) are skipped.
 /// This is conservative: skipped bindings may cause path conditions to be
 /// weaker than they could be, but the check is always sound.
-fn collect_block_paths(block: &Block, prefix: Vec<Expr>, paths: &mut Vec<ExecutionPath>) {
+fn collect_block_paths(
+    block: &Block,
+    prefix: Vec<Expr>,
+    paths: &mut Vec<ExecutionPath>,
+    depth: usize,
+) {
+    if depth > MAX_DEPTH || paths.len() >= MAX_PATHS {
+        return;
+    }
     let stmts = &block.stmts;
     for (i, stmt) in stmts.iter().enumerate() {
         match stmt {
@@ -180,14 +181,14 @@ fn collect_block_paths(block: &Block, prefix: Vec<Expr>, paths: &mut Vec<Executi
                 // Then-branch: prefix + [cond].
                 let mut then_prefix = prefix.clone();
                 then_prefix.push(cond.clone());
-                collect_block_paths(then, then_prefix, paths);
+                collect_block_paths(then, then_prefix.clone(), paths, depth + 1);
 
-                // Else-branch: prefix + [!cond] (if negation is possible).
+                // Else / fall-through handling.
                 let else_prefix = with_negated(prefix.clone(), cond);
 
                 match else_ {
                     Some(ElseBranch::Block(b)) => {
-                        collect_block_paths(b, else_prefix, paths);
+                        collect_block_paths(b, else_prefix, paths, depth + 1);
                     }
                     Some(ElseBranch::If(s)) => {
                         // `else if …` — wrap in a synthetic block and recurse.
@@ -195,27 +196,39 @@ fn collect_block_paths(block: &Block, prefix: Vec<Expr>, paths: &mut Vec<Executi
                             stmts: vec![*s.clone()],
                             span: dummy_span(),
                         };
-                        collect_block_paths(&synthetic, else_prefix, paths);
+                        collect_block_paths(&synthetic, else_prefix, paths, depth + 1);
                     }
                     None => {
-                        // No else — fall through to the remaining statements.
+                        // No else: both the cond-true and cond-false paths can
+                        // fall through to the remaining statements.
                         if i + 1 < stmts.len() {
-                            let rest = Block {
-                                stmts: stmts[i + 1..].to_vec(),
+                            let rest_stmts = stmts[i + 1..].to_vec();
+
+                            // cond-false fall-through (then-body skipped entirely).
+                            let else_rest = Block {
+                                stmts: rest_stmts.clone(),
                                 span: dummy_span(),
                             };
-                            collect_block_paths(&rest, else_prefix, paths);
+                            collect_block_paths(&else_rest, else_prefix, paths, depth + 1);
+
+                            // cond-true fall-through (then-body executed, did not return).
+                            if !block_always_returns(then) {
+                                let then_rest = Block {
+                                    stmts: rest_stmts,
+                                    span: dummy_span(),
+                                };
+                                collect_block_paths(&then_rest, then_prefix, paths, depth + 1);
+                            }
                         }
                     }
                 }
-                // Both branches handled — remaining stmts (if any) are unreachable
-                // on paths where the then-branch returned.
+                // All continuations from this if-statement have been handled.
                 return;
             }
 
             // Tail expression (last statement): implicit return value.
             Stmt::Expr { expr, .. } if i == stmts.len() - 1 => {
-                collect_expr_paths(expr, prefix, paths);
+                collect_expr_paths(expr, prefix, paths, depth + 1);
                 return;
             }
 
@@ -226,7 +239,15 @@ fn collect_block_paths(block: &Block, prefix: Vec<Expr>, paths: &mut Vec<Executi
 }
 
 /// Walk an [`Expr`] and collect execution paths (for if-expressions and tail positions).
-fn collect_expr_paths(expr: &Expr, prefix: Vec<Expr>, paths: &mut Vec<ExecutionPath>) {
+fn collect_expr_paths(
+    expr: &Expr,
+    prefix: Vec<Expr>,
+    paths: &mut Vec<ExecutionPath>,
+    depth: usize,
+) {
+    if depth > MAX_DEPTH || paths.len() >= MAX_PATHS {
+        return;
+    }
     match expr {
         Expr::If {
             cond, then, else_, ..
@@ -234,19 +255,48 @@ fn collect_expr_paths(expr: &Expr, prefix: Vec<Expr>, paths: &mut Vec<ExecutionP
             // Then-branch.
             let mut then_prefix = prefix.clone();
             then_prefix.push(*cond.clone());
-            collect_block_paths(then, then_prefix, paths);
+            collect_block_paths(then, then_prefix, paths, depth + 1);
 
             // Else-branch.
             let else_prefix = with_negated(prefix, cond);
             if let Some(e) = else_ {
-                collect_expr_paths(e, else_prefix, paths);
+                collect_expr_paths(e, else_prefix, paths, depth + 1);
             }
         }
-        Expr::Block(b) => collect_block_paths(b, prefix, paths),
+        Expr::Block(b) => collect_block_paths(b, prefix, paths, depth + 1),
         other => paths.push(ExecutionPath {
             conditions: prefix,
             return_expr: other.clone(),
         }),
+    }
+}
+
+/// Returns `true` if every path through `block` ends with an explicit `return`.
+///
+/// Conservative: returns `false` when the block's last statement is not a return
+/// or a fully-covered if/else. Used to determine whether a then-branch without
+/// an else clause can fall through to subsequent statements.
+fn block_always_returns(block: &Block) -> bool {
+    // Only the last statement determines whether the block always returns.
+    match block.stmts.last() {
+        Some(Stmt::Return { .. }) => true,
+        Some(Stmt::If {
+            then,
+            else_: Some(ElseBranch::Block(else_block)),
+            ..
+        }) => block_always_returns(then) && block_always_returns(else_block),
+        Some(Stmt::If {
+            then,
+            else_: Some(ElseBranch::If(s)),
+            ..
+        }) => {
+            let synthetic = Block {
+                stmts: vec![*s.clone()],
+                span: dummy_span(),
+            };
+            block_always_returns(then) && block_always_returns(&synthetic)
+        }
+        _ => false,
     }
 }
 
@@ -304,6 +354,8 @@ fn flip_binary_op(op: BinaryOp) -> Option<BinaryOp> {
 /// Handles `Ident`, `Binary`, `Unary`, and `FnCall` recursively.
 /// All other variants are cloned unchanged — conservative but always sound
 /// (worst case: the check falls through to `RuntimeCheck`).
+/// Note: `Expr::If` and `Expr::Block` are not substituted into; path
+/// collection extracts return expressions before substitution is applied.
 fn substitute_expr(expr: &Expr, bindings: &HashMap<&str, &Expr>) -> Expr {
     match expr {
         Expr::Ident(name, _) => {
@@ -352,10 +404,14 @@ fn substitute_expr(expr: &Expr, bindings: &HashMap<&str, &Expr>) -> Expr {
 
 /// Inject a (substituted) path condition into `var_refs` as a narrowing hypothesis.
 ///
-/// Mirrors `inject_if_hypothesis` in `refinements.rs`.  Handles `x op n` and
-/// `n op x` patterns (integer literal on one side) and `&&`-conjunctions.
-/// All other patterns are silently ignored — conservative and always sound.
-fn inject_condition(cond: &Expr, var_refs: &mut HashMap<String, Option<RefExpr>>) {
+/// Handles `x op n` and `n op x` patterns (integer literal on one side) and
+/// `&&`-conjunctions. All other patterns are silently ignored — conservative and
+/// always sound. `depth` limits `&&`-recursion to prevent stack overflow on
+/// pathological inputs.
+fn inject_condition(cond: &Expr, var_refs: &mut HashMap<String, Option<RefExpr>>, depth: usize) {
+    if depth > 32 {
+        return;
+    }
     let Expr::Binary {
         op, left, right, ..
     } = cond
@@ -402,34 +458,159 @@ fn inject_condition(cond: &Expr, var_refs: &mut HashMap<String, Option<RefExpr>>
         var_refs.insert(var_name, Some(hypothesis));
     } else if *op == BinaryOp::And {
         // Recurse into `&&` conjunctions.
-        inject_condition(left, var_refs);
-        inject_condition(right, var_refs);
+        inject_condition(left, var_refs, depth + 1);
+        inject_condition(right, var_refs, depth + 1);
     }
 }
 
-fn binary_op_to_cmp(op: BinaryOp) -> Option<CmpOp> {
-    match op {
-        BinaryOp::Gt => Some(CmpOp::Gt),
-        BinaryOp::Ge => Some(CmpOp::Ge),
-        BinaryOp::Lt => Some(CmpOp::Lt),
-        BinaryOp::Le => Some(CmpOp::Le),
-        BinaryOp::Eq => Some(CmpOp::Eq),
-        BinaryOp::Ne => Some(CmpOp::Ne),
-        _ => None,
-    }
-}
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
 
-fn flip_cmp(op: CmpOp) -> CmpOp {
-    match op {
-        CmpOp::Lt => CmpOp::Gt,
-        CmpOp::Gt => CmpOp::Lt,
-        CmpOp::Le => CmpOp::Ge,
-        CmpOp::Ge => CmpOp::Le,
-        CmpOp::Eq => CmpOp::Eq,
-        CmpOp::Ne => CmpOp::Ne,
-    }
-}
+    use super::{flip_binary_op, inject_condition, negate_simple};
+    use crate::mvl::parser::ast::{BinaryOp, CmpOp, Expr, Literal, LogicOp, RefExpr};
+    use crate::mvl::parser::lexer::Span;
 
-fn dummy_span() -> Span {
-    Span::new(0, 0, 0, 0)
+    fn sp() -> Span {
+        Span::new(0, 0, 0, 0)
+    }
+
+    fn int_expr(n: i64) -> Expr {
+        Expr::Literal(Literal::Integer(n), sp())
+    }
+
+    fn ident_expr(name: &str) -> Expr {
+        Expr::Ident(name.to_string(), sp())
+    }
+
+    fn bin(left: Expr, op: BinaryOp, right: Expr) -> Expr {
+        Expr::Binary {
+            op,
+            left: Box::new(left),
+            right: Box::new(right),
+            span: sp(),
+        }
+    }
+
+    // ── flip_binary_op ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_flip_lt() {
+        assert_eq!(flip_binary_op(BinaryOp::Lt), Some(BinaryOp::Ge));
+    }
+    #[test]
+    fn test_flip_le() {
+        assert_eq!(flip_binary_op(BinaryOp::Le), Some(BinaryOp::Gt));
+    }
+    #[test]
+    fn test_flip_gt() {
+        assert_eq!(flip_binary_op(BinaryOp::Gt), Some(BinaryOp::Le));
+    }
+    #[test]
+    fn test_flip_ge() {
+        assert_eq!(flip_binary_op(BinaryOp::Ge), Some(BinaryOp::Lt));
+    }
+    #[test]
+    fn test_flip_eq() {
+        assert_eq!(flip_binary_op(BinaryOp::Eq), Some(BinaryOp::Ne));
+    }
+    #[test]
+    fn test_flip_ne() {
+        assert_eq!(flip_binary_op(BinaryOp::Ne), Some(BinaryOp::Eq));
+    }
+    #[test]
+    fn test_flip_non_comparison_returns_none() {
+        assert_eq!(flip_binary_op(BinaryOp::Add), None);
+    }
+
+    // ── negate_simple ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_negate_lt_becomes_ge() {
+        let cond = bin(ident_expr("x"), BinaryOp::Lt, int_expr(5));
+        let neg = negate_simple(&cond).unwrap();
+        assert!(matches!(
+            neg,
+            Expr::Binary {
+                op: BinaryOp::Ge,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_negate_non_binary_returns_none() {
+        assert!(negate_simple(&ident_expr("x")).is_none());
+    }
+
+    #[test]
+    fn test_negate_arithmetic_returns_none() {
+        let cond = bin(ident_expr("x"), BinaryOp::Add, int_expr(1));
+        assert!(negate_simple(&cond).is_none());
+    }
+
+    // ── inject_condition ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_inject_x_op_n() {
+        let mut vr: HashMap<String, Option<RefExpr>> = HashMap::new();
+        inject_condition(&bin(ident_expr("x"), BinaryOp::Ge, int_expr(0)), &mut vr, 0);
+        assert!(matches!(
+            &vr["x"],
+            Some(RefExpr::Compare { op: CmpOp::Ge, .. })
+        ));
+    }
+
+    #[test]
+    fn test_inject_n_op_x_flips_cmp() {
+        // 5 > x  ↔  x < 5
+        let mut vr: HashMap<String, Option<RefExpr>> = HashMap::new();
+        inject_condition(&bin(int_expr(5), BinaryOp::Gt, ident_expr("x")), &mut vr, 0);
+        assert!(matches!(
+            &vr["x"],
+            Some(RefExpr::Compare { op: CmpOp::Lt, .. })
+        ));
+    }
+
+    #[test]
+    fn test_inject_var_vs_var_skipped() {
+        let mut vr: HashMap<String, Option<RefExpr>> = HashMap::new();
+        inject_condition(
+            &bin(ident_expr("x"), BinaryOp::Lt, ident_expr("y")),
+            &mut vr,
+            0,
+        );
+        assert!(vr.is_empty());
+    }
+
+    #[test]
+    fn test_inject_and_conjunction() {
+        let mut vr: HashMap<String, Option<RefExpr>> = HashMap::new();
+        let cond = bin(
+            bin(ident_expr("x"), BinaryOp::Ge, int_expr(0)),
+            BinaryOp::And,
+            bin(ident_expr("x"), BinaryOp::Le, int_expr(10)),
+        );
+        inject_condition(&cond, &mut vr, 0);
+        // Both constraints conjoined → LogicOp::And
+        assert!(matches!(
+            &vr["x"],
+            Some(RefExpr::LogicOp {
+                op: LogicOp::And,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn test_inject_depth_limit_bails() {
+        let mut vr: HashMap<String, Option<RefExpr>> = HashMap::new();
+        // depth 33 exceeds the limit of 32 — nothing injected
+        inject_condition(
+            &bin(ident_expr("x"), BinaryOp::Ge, int_expr(0)),
+            &mut vr,
+            33,
+        );
+        assert!(vr.is_empty());
+    }
 }

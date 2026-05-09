@@ -16,7 +16,8 @@ pub mod layer3;
 
 use std::collections::HashMap;
 
-use crate::mvl::parser::ast::{Expr, FnDecl, RefExpr};
+use crate::mvl::parser::ast::{BinaryOp, CmpOp, Expr, FnDecl, RefExpr};
+use crate::mvl::parser::lexer::Span;
 
 // ── Outcome type ──────────────────────────────────────────────────────────────
 
@@ -29,6 +30,42 @@ pub(crate) enum RefResult {
     RuntimeCheck,
     /// The argument statically violates the predicate — a compile-time error.
     Failed,
+}
+
+// ── Shared helpers ────────────────────────────────────────────────────────────
+
+/// Construct a zero-span placeholder used for synthetic AST nodes in the solver.
+/// These nodes are only used for proof evaluation and never appear in user-facing
+/// error messages, so the span position (0,0) is acceptable.
+pub(crate) fn dummy_span() -> Span {
+    Span::new(0, 0, 0, 0)
+}
+
+/// Convert a `BinaryOp` comparison to the corresponding `CmpOp`, if applicable.
+/// Returns `None` for non-comparison operators (arithmetic, logical, bitwise).
+pub(crate) fn binary_op_to_cmp(op: BinaryOp) -> Option<CmpOp> {
+    match op {
+        BinaryOp::Gt => Some(CmpOp::Gt),
+        BinaryOp::Ge => Some(CmpOp::Ge),
+        BinaryOp::Lt => Some(CmpOp::Lt),
+        BinaryOp::Le => Some(CmpOp::Le),
+        BinaryOp::Eq => Some(CmpOp::Eq),
+        BinaryOp::Ne => Some(CmpOp::Ne),
+        _ => None,
+    }
+}
+
+/// Flip a comparison operator to swap left/right operands (`<` ↔ `>`, `<=` ↔ `>=`).
+/// Used when normalising `n op x` patterns to `x flipped_op n`.
+pub(crate) fn flip_cmp(op: CmpOp) -> CmpOp {
+    match op {
+        CmpOp::Lt => CmpOp::Gt,
+        CmpOp::Gt => CmpOp::Lt,
+        CmpOp::Le => CmpOp::Ge,
+        CmpOp::Ge => CmpOp::Le,
+        CmpOp::Eq => CmpOp::Eq,
+        CmpOp::Ne => CmpOp::Ne,
+    }
 }
 
 // ── Solver ────────────────────────────────────────────────────────────────────
