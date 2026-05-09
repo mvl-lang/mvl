@@ -15,7 +15,7 @@
 //!   #27 — Declassify/sanitize validation
 
 use mvl::mvl::checker::errors::CheckError;
-use mvl::mvl::checker::{check, CheckResult};
+use mvl::mvl::checker::{check, check_with_prelude, CheckResult};
 use mvl::mvl::parser::Parser;
 
 fn check_src(src: &str) -> CheckResult {
@@ -4927,5 +4927,58 @@ fn proven_profile_checker_accepts_valid_stdlib_body() {
         !result.has_errors(),
         "valid stdlib body should pass proven profile check, got: {:?}",
         result.errors
+    );
+}
+
+// ── #609: whole-program checking (cross-file symbol resolution) ───────────────
+
+fn parse_src(src: &str) -> mvl::mvl::parser::ast::Program {
+    let (mut p, _) = Parser::new(src);
+    p.parse_program()
+}
+
+#[test]
+fn cross_file_function_call_resolves() {
+    // GIVEN: module A exports a function; module B calls it
+    // WHEN:  B is checked with A as prelude
+    // THEN:  no "undefined function" error
+    let module_a = parse_src("pub fn add_one(x: Int) -> Int { x + 1 }");
+    let module_b = parse_src("fn use_it(x: Int) -> Int { add_one(x) }");
+    let result = check_with_prelude(&[module_a], &module_b);
+    assert!(
+        result.is_ok(),
+        "cross-file call should resolve when module is in prelude, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn cross_file_call_without_prelude_is_undefined() {
+    // GIVEN: module B calls add_one which is NOT in scope
+    // WHEN:  B is checked without any prelude
+    // THEN:  UndefinedFunction error is reported
+    let module_b = parse_src("fn use_it(x: Int) -> Int { add_one(x) }");
+    let errors = check(&module_b).errors;
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UndefinedFunction { .. })),
+        "call to unknown function should be an error, got: {errors:?}"
+    );
+}
+
+#[test]
+fn cross_file_type_mismatch_still_caught() {
+    // GIVEN: module A exports fn returning Int; module B passes wrong type
+    // WHEN:  B is checked with A as prelude
+    // THEN:  type mismatch is reported (cross-file checking catches real errors)
+    let module_a = parse_src("pub fn greet(x: Int) -> Int { x }");
+    let module_b = parse_src(r#"fn bad() -> Int { greet("hello") }"#);
+    let errors = check_with_prelude(&[module_a], &module_b).errors;
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "wrong argument type should be caught even in multi-file mode, got: {errors:?}"
     );
 }

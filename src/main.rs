@@ -568,14 +568,25 @@ fn cmd_check(path: &str, req_filter: Option<u8>, error_limit: usize, stdlib_prof
 
     // Pre-parse stdlib files imported by user programs so the checker knows
     // about their types and functions.  This covers `use std.io.{...}` etc.
-    let prelude = load_stdlib_prelude(
+    let stdlib_prelude = load_stdlib_prelude(
         parsed.iter().take(check_count).map(|(_, p, _)| p),
         &stdlib_dir,
     );
 
+    // Snapshot all parsed user programs for cross-module prelude building.
+    let all_user_progs: Vec<Program> = parsed.iter().map(|(_, p, _)| p.clone()).collect();
+
     // Only run the checker on explicitly requested files (not resolver-only siblings).
-    for (file_str, prog, _src) in parsed.iter().take(check_count) {
-        let result = checker::check_with_prelude(&prelude, prog);
+    for (idx, (file_str, prog, _src)) in parsed.iter().take(check_count).enumerate() {
+        // Build per-file prelude: stdlib + all OTHER user modules so that
+        // cross-file function and type references resolve (whole-program checking).
+        let mut check_prelude = stdlib_prelude.clone();
+        for (j, p) in all_user_progs.iter().enumerate() {
+            if j != idx {
+                check_prelude.push(p.clone());
+            }
+        }
+        let result = checker::check_with_prelude(&check_prelude, prog);
 
         if let Some(req) = req_filter {
             // Single-requirement mode: run only the requested pass.
