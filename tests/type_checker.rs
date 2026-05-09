@@ -15,7 +15,7 @@
 //!   #27 — Declassify/sanitize validation
 
 use mvl::mvl::checker::errors::CheckError;
-use mvl::mvl::checker::{check, check_with_prelude, CheckResult};
+use mvl::mvl::checker::{check, check_with_prelude, check_with_two_preludes, CheckResult};
 use mvl::mvl::parser::Parser;
 
 fn check_src(src: &str) -> CheckResult {
@@ -4980,5 +4980,33 @@ fn cross_file_type_mismatch_still_caught() {
             .iter()
             .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
         "wrong argument type should be caught even in multi-file mode, got: {errors:?}"
+    );
+}
+
+#[test]
+fn cross_file_mutual_calls_both_resolve() {
+    // GIVEN: module A calls helper() defined in module B, and
+    //        module B calls double() defined in module A (mutual dependency).
+    // WHEN:  each module is checked with the other as prelude
+    // THEN:  both check cleanly — no UndefinedFunction errors in either direction
+    let module_a =
+        parse_src("pub fn double(x: Int) -> Int { x + x }  fn use_b(x: Int) -> Int { helper(x) }");
+    let module_b =
+        parse_src("pub fn helper(x: Int) -> Int { x }  fn use_a(x: Int) -> Int { double(x) }");
+
+    // Check A with B as prelude
+    let result_a = check_with_prelude(&[module_b.clone()], &module_a);
+    assert!(
+        result_a.is_ok(),
+        "module A with B as prelude should resolve, got: {:?}",
+        result_a.errors
+    );
+
+    // Check B with A as prelude (uses check_with_two_preludes with empty stdlib slot)
+    let result_b = check_with_two_preludes(&[], &[&module_a], &module_b);
+    assert!(
+        result_b.is_ok(),
+        "module B with A as prelude should resolve, got: {:?}",
+        result_b.errors
     );
 }
