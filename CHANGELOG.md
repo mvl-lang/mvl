@@ -18,6 +18,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.85.0] — 2026-05-09
+
+### Added
+
+- **Type-aware direct Rust method dispatch** — Transpiler now queries `expr_types` (from type checker) to emit type-specific Rust for `.map()`, `.pow()`, `.contains()`, `.get()`, `.len()` instead of trait-based dispatch. Eliminates `Mvl*` trait definitions and `emit_method_traits()` entirely. Closes #554.
+- **`eprint` / `eprintln` / `assert` / `panic` as first-class builtins** — Registered in checker, handled in transpiler via Rust macros, and supported in the LLVM backend via `dprintf(2, ...)`. Symmetric with `println`/`print`. IFC guard prevents Secret-labeled values reaching stderr. Closes #556.
+- **Cross-backend stderr parity test** — `cross_backend_eprint_stderr` validates that both Rust and LLVM backends produce identical stderr output for `eprint`/`eprintln` programs.
+
 ## [0.84.0] — 2026-05-09
 
 ### Added
