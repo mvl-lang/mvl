@@ -27,6 +27,7 @@ mod method_types;
 pub mod passes;
 mod patterns;
 pub mod refinements;
+pub(crate) mod solver;
 mod stmts;
 pub mod termination;
 pub mod types;
