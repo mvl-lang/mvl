@@ -79,17 +79,13 @@ pub(super) fn try_trivial(
         },
 
         // Pure function call with all-literal arguments: constant-fold then check.
-        Expr::FnCall { name, args, .. } => {
-            fn_decls.get(name.as_str()).and_then(|fd| {
-                const_eval::try_fold_call(fd, args, fn_decls).and_then(|cv| match cv {
-                    const_eval::ConstValue::Integer(n) => Some(eval_pred_int(n, pred)),
-                    const_eval::ConstValue::Float(f) if !f.is_nan() => {
-                        Some(eval_pred_float(f, pred))
-                    }
-                    _ => None,
-                })
+        Expr::FnCall { name, args, .. } => fn_decls.get(name.as_str()).and_then(|fd| {
+            const_eval::try_fold_call(fd, args, fn_decls).and_then(|cv| match cv {
+                const_eval::ConstValue::Integer(n) => Some(eval_pred_int(n, pred)),
+                const_eval::ConstValue::Float(f) if !f.is_nan() => Some(eval_pred_float(f, pred)),
+                _ => None,
             })
-        }
+        }),
 
         // Everything else: Layer 1 cannot decide.
         _ => None,
@@ -107,13 +103,14 @@ pub(super) fn try_trivial(
 /// - Grouping is transparent
 fn is_tautology(pred: &RefExpr) -> bool {
     match pred {
+        // Reflexive: self == self, self <= self, self >= self are always true.
         RefExpr::Compare {
-            op, left, right, ..
-        } => match op {
-            // Reflexive: self == self, self <= self, self >= self are always true.
-            CmpOp::Eq | CmpOp::Le | CmpOp::Ge => preds_equivalent(left, right),
-            _ => false,
-        },
+            op: CmpOp::Eq | CmpOp::Le | CmpOp::Ge,
+            left,
+            right,
+            ..
+        } => preds_equivalent(left, right),
+        RefExpr::Compare { .. } => false,
         RefExpr::LogicOp {
             op: LogicOp::Or,
             left,
@@ -136,13 +133,14 @@ fn is_tautology(pred: &RefExpr) -> bool {
 /// - Grouping is transparent
 fn is_contradiction(pred: &RefExpr) -> bool {
     match pred {
+        // Irreflexive on self: self < self, self > self, self != self are always false.
         RefExpr::Compare {
-            op, left, right, ..
-        } => match op {
-            // Irreflexive on self: self < self, self > self, self != self are always false.
-            CmpOp::Ne | CmpOp::Lt | CmpOp::Gt => preds_equivalent(left, right),
-            _ => false,
-        },
+            op: CmpOp::Ne | CmpOp::Lt | CmpOp::Gt,
+            left,
+            right,
+            ..
+        } => preds_equivalent(left, right),
+        RefExpr::Compare { .. } => false,
         RefExpr::LogicOp {
             op: LogicOp::And,
             left,
@@ -186,14 +184,10 @@ fn extract_self_int_bound(pred: &RefExpr) -> Option<(CmpOp, i64)> {
         RefExpr::Compare {
             op, left, right, ..
         } => match (left.as_ref(), right.as_ref()) {
-            (RefExpr::Ident { name, .. }, RefExpr::Integer { value, .. })
-                if is_self_like(name) =>
-            {
+            (RefExpr::Ident { name, .. }, RefExpr::Integer { value, .. }) if is_self_like(name) => {
                 Some((*op, *value))
             }
-            (RefExpr::Integer { value, .. }, RefExpr::Ident { name, .. })
-                if is_self_like(name) =>
-            {
+            (RefExpr::Integer { value, .. }, RefExpr::Ident { name, .. }) if is_self_like(name) => {
                 // Flip: `N op self` → `self flip(op) N`
                 let flipped = match op {
                     CmpOp::Lt => CmpOp::Gt,
@@ -542,14 +536,10 @@ pub(super) fn extract_eq_int_from_hyp(pred: &RefExpr) -> Option<i64> {
             right,
             ..
         } => match (left.as_ref(), right.as_ref()) {
-            (RefExpr::Ident { name, .. }, RefExpr::Integer { value, .. })
-                if is_self_like(name) =>
-            {
+            (RefExpr::Ident { name, .. }, RefExpr::Integer { value, .. }) if is_self_like(name) => {
                 Some(*value)
             }
-            (RefExpr::Integer { value, .. }, RefExpr::Ident { name, .. })
-                if is_self_like(name) =>
-            {
+            (RefExpr::Integer { value, .. }, RefExpr::Ident { name, .. }) if is_self_like(name) => {
                 Some(*value)
             }
             _ => None,
@@ -567,14 +557,10 @@ pub(super) fn extract_eq_float_from_hyp(pred: &RefExpr) -> Option<f64> {
             right,
             ..
         } => match (left.as_ref(), right.as_ref()) {
-            (RefExpr::Ident { name, .. }, RefExpr::Float { value, .. })
-                if is_self_like(name) =>
-            {
+            (RefExpr::Ident { name, .. }, RefExpr::Float { value, .. }) if is_self_like(name) => {
                 Some(*value)
             }
-            (RefExpr::Float { value, .. }, RefExpr::Ident { name, .. })
-                if is_self_like(name) =>
-            {
+            (RefExpr::Float { value, .. }, RefExpr::Ident { name, .. }) if is_self_like(name) => {
                 Some(*value)
             }
             _ => None,
@@ -607,7 +593,10 @@ mod tests {
     }
 
     fn int_lit(n: i64) -> RefExpr {
-        RefExpr::Integer { value: n, span: sp() }
+        RefExpr::Integer {
+            value: n,
+            span: sp(),
+        }
     }
 
     fn compare(op: CmpOp, left: RefExpr, right: RefExpr) -> RefExpr {
@@ -681,12 +670,20 @@ mod tests {
 
     #[test]
     fn tautology_self_le_self() {
-        assert!(is_tautology(&compare(CmpOp::Le, self_ident(), self_ident())));
+        assert!(is_tautology(&compare(
+            CmpOp::Le,
+            self_ident(),
+            self_ident()
+        )));
     }
 
     #[test]
     fn tautology_self_ge_self() {
-        assert!(is_tautology(&compare(CmpOp::Ge, self_ident(), self_ident())));
+        assert!(is_tautology(&compare(
+            CmpOp::Ge,
+            self_ident(),
+            self_ident()
+        )));
     }
 
     #[test]

@@ -895,8 +895,7 @@ fn check_arg_against_pred(
     var_refs: &HashMap<String, Option<RefExpr>>,
     fn_decls: &HashMap<String, FnDecl>,
 ) -> RefResult {
-    RefinementSolver::try_trivial(pred, arg, var_refs, fn_decls)
-        .unwrap_or(RefResult::RuntimeCheck)
+    RefinementSolver::try_trivial(pred, arg, var_refs, fn_decls).unwrap_or(RefResult::RuntimeCheck)
 }
 
 // ── Predicate display ─────────────────────────────────────────────────────────
