@@ -172,12 +172,47 @@ pub unsafe extern "C" fn _mvl_regex_find(
     }
 }
 
-// ── Deferred: find_all (List[Match]), captures (Option[Captures]) ─────────────
+// ── find_all (List[Match]) ────────────────────────────────────────────────────
+
+/// Return all non-overlapping matches of `handle` in `input` as a heap `MvlArray*`
+/// of `*mut MvlMatch` pointers (elem_size = 8).
+///
+/// Each element of the returned array is a heap-allocated `*mut MvlMatch`;
+/// the caller is responsible for freeing every element with `_mvl_match_drop`
+/// and the array itself with `mvl_array_drop`.
+///
+/// Returns an empty (zero-length) array if `handle` is null or there are no matches.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn _mvl_regex_find_all(
+    handle: *mut c_void,
+    input: *const MvlString,
+) -> *mut mvl_memory::MvlArray {
+    use crate::memory_ops::mvl_array_push;
+    use mvl_memory::{mvl_array_new, MvlArray};
+    let arr: *mut MvlArray = mvl_array_new(std::mem::size_of::<*mut MvlMatch>(), 0);
+    if handle.is_null() {
+        return arr;
+    }
+    let s = read_mvl_string(input);
+    let re: &rt::Regex = &*(handle as *const rt::Regex);
+    for m in re.find_all_borrowed(&s) {
+        let heap = Box::new(MvlMatch {
+            text: mvl_string_new(m.text.as_ptr(), m.text.len()),
+            start: m.start,
+            end: m.end,
+        });
+        let ptr: *mut MvlMatch = Box::into_raw(heap);
+        mvl_array_push(arr, (&ptr as *const *mut MvlMatch).cast());
+    }
+    arr
+}
+
+// ── Deferred: captures (Option[Captures]) ─────────────────────────────────────
 //
-// `_mvl_regex_find_all` and `_mvl_regex_captures` have complex return types
-// (List[Match] requires MvlArray element-copy marshalling; Option[Captures] requires
+// `_mvl_regex_captures` has complex return types (Option[Captures] requires
 // nested List[Option[String]] and Map[String, Option[String]]).
-// LLVM codegen dispatch for these is deferred until that infrastructure is in place.
+// LLVM codegen dispatch for this is deferred until that infrastructure is in place.
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 

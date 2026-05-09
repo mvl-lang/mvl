@@ -13,6 +13,19 @@ impl Regex {
         self.0.replace_all(s, replacement).into_owned()
     }
 
+    /// Return all non-overlapping matches of this pattern in `s`.
+    /// Provided for C-ABI callers that borrow the handle without consuming it.
+    pub fn find_all_borrowed(&self, s: &str) -> Vec<Match> {
+        self.0
+            .find_iter(s)
+            .map(|m| Match {
+                text: m.as_str().to_owned(),
+                start: m.start() as i64,
+                end: m.end() as i64,
+            })
+            .collect()
+    }
+
     /// Return the first match of this pattern in `s`, or `None`.
     /// Provided for C-ABI callers that borrow the handle without consuming it.
     pub fn find_borrowed(&self, s: &str) -> Option<Match> {

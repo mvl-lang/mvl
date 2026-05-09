@@ -148,7 +148,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                     // `Path` is an opaque stdlib struct backed by a String; at the
                     // LLVM level it is represented as a `MvlString*` (ptr).
                     // #420: Regex is an opaque heap handle (Box<regex::Regex> cast to *mut c_void).
-                    "String" | "List" | "Array" | "Map" | "Set" | "Path" | "Regex" => {
+                    // #585: Instant is a boxed i64 handle (epoch seconds) at the LLVM level.
+                    "String" | "List" | "Array" | "Map" | "Set" | "Path" | "Regex" | "Instant" => {
                         Some(self.context.ptr_type(AddressSpace::default()).into())
                     }
                     _ => {

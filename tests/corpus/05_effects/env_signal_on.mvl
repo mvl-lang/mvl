@@ -1,0 +1,16 @@
+// Corpus: signal_on with a named non-capturing handler (#586)
+//
+// Verifies that a named MVL function can be passed as a function pointer
+// to signal_on on the LLVM backend. The stub is a no-op; the test
+// checks that the program compiles and runs without crashing.
+//
+// Used by: tests/cross_backend.rs::cross_backend_env_signal_on
+
+use std.env.{signal_on, Signal}
+
+fn noop_handler() -> Unit {}
+
+fn main() -> Unit ! Env, Console {
+    signal_on(Signal::SIGINT, noop_handler);
+    println("ok");
+}

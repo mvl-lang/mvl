@@ -181,6 +181,14 @@ pub extern "C" fn _mvl_env_sigusr2() -> i8 {
     4
 }
 
+/// Register a signal handler (no-op stub; real libc integration tracked separately).
+///
+/// `handler` is a function pointer (`fn() -> Unit`) cast to `*mut c_void`.
+/// The callback model requires no-captures, so the trampoline pattern is safe
+/// for named functions.  Real dispatch deferred to Phase 3 (#45).
+#[no_mangle]
+pub extern "C" fn _mvl_env_signal_on(_sig: i8, _handler: *mut libc::c_void) {}
+
 /// No-op signal registration (Phase 2: callbacks not yet implemented).
 #[no_mangle]
 pub extern "C" fn _mvl_env_signal_reset(_sig: i8) {}

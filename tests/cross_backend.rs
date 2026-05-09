@@ -300,6 +300,44 @@ fn cross_backend_random_float_shape() {
     }
 }
 
+// ── #583: generic builtin parity tests (choice, shuffle) ─────────────────────
+
+/// `random.choice` on a single-element list is deterministic: always `Some(42)`.
+/// Empty list always returns `None`.  Both backends must match.
+#[test]
+fn cross_backend_random_choice() {
+    let file = corpus_effects("random_choice.mvl");
+    if let Some(llvm_out) = run_llvm(&file) {
+        let transpiler_out = run_transpiler(&file);
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "random_choice.mvl: LLVM and transpiler backends must produce identical output"
+        );
+        let lines: Vec<&str> = llvm_out.lines().collect();
+        assert_eq!(lines.len(), 2, "expected two lines");
+        assert_eq!(lines[0], "42", "choice([42]) must return Some(42)");
+        assert_eq!(lines[1], "none", "choice([]) must return None");
+    }
+}
+
+/// `random.shuffle` on a single-element list is a no-op.
+/// Both backends must return a list of length 1, and empty stays empty.
+#[test]
+fn cross_backend_random_shuffle() {
+    let file = corpus_effects("random_shuffle.mvl");
+    if let Some(llvm_out) = run_llvm(&file) {
+        let transpiler_out = run_transpiler(&file);
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "random_shuffle.mvl: LLVM and transpiler backends must produce identical output"
+        );
+        let lines: Vec<&str> = llvm_out.lines().collect();
+        assert_eq!(lines.len(), 2, "expected two lines");
+        assert_eq!(lines[0], "1", "shuffle([7]) must have length 1");
+        assert_eq!(lines[1], "0", "shuffle([]) must have length 0");
+    }
+}
+
 // ── #434: log C-ABI parity tests ─────────────────────────────────────────────
 
 /// Both backends must emit identical log records to stderr.
@@ -435,6 +473,43 @@ fn cross_backend_time_sleep() {
     }
 }
 
+/// `time.format_datetime` with a fixed `DateTime` — deterministic on all backends.
+#[test]
+fn cross_backend_time_format_datetime() {
+    let file = corpus_effects("time_format_datetime.mvl");
+    if let Some(llvm_out) = run_llvm(&file) {
+        let transpiler_out = run_transpiler(&file);
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "time_format_datetime.mvl: LLVM and transpiler backends must produce identical output"
+        );
+        assert_eq!(
+            llvm_out.trim(),
+            "2024-03-15T12:30:45",
+            "expected fixed datetime string"
+        );
+    }
+}
+
+/// `time.now()` + `time.format_instant()` — non-deterministic value but both
+/// backends must return a 4-character year string.
+#[test]
+fn cross_backend_time_format_instant() {
+    let file = corpus_effects("time_format_instant.mvl");
+    if let Some(llvm_out) = run_llvm(&file) {
+        let transpiler_out = run_transpiler(&file);
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "time_format_instant.mvl: LLVM and transpiler backends must produce identical output"
+        );
+        assert_eq!(
+            llvm_out.trim().len(),
+            4,
+            "format_instant(now(), '%Y') must produce a 4-character year"
+        );
+    }
+}
+
 // ── #180 + #438: crypto stdlib — both backends ────────────────────────────────
 
 const SHA256_EMPTY: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -510,6 +585,59 @@ fn cross_backend_regex_find() {
         assert_eq!(lines[0], "123", "first digit run extracted");
         assert_eq!(lines[1], "(none)", "no-digits input returns None");
         assert_eq!(lines[2], "42", "leading digit run extracted");
+    }
+}
+
+/// Both backends must produce identical output for `regex.find_all` returning `List[Match]`.
+/// Verifies that the match count is correct for a multi-match and a zero-match input.
+#[test]
+fn cross_backend_regex_find_all() {
+    let file = corpus_stdlib("regex_find_all.mvl");
+    if let Some(llvm_out) = run_llvm(&file) {
+        let transpiler_out = run_transpiler(&file);
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "regex_find_all.mvl: LLVM and transpiler backends must produce identical output"
+        );
+        let lines: Vec<&str> = llvm_out.lines().collect();
+        assert_eq!(lines.len(), 2, "expected two output lines");
+        assert_eq!(lines[0], "3", "digit pattern matches 3 times in '1 22 333'");
+        assert_eq!(lines[1], "0", "digit pattern matches 0 times in 'abc'");
+    }
+}
+
+// ── #586: signal handling (ignore, reset, on) ─────────────────────────────────
+
+/// Both backends must produce identical output for `signal_ignore` and `signal_reset`.
+/// Both are no-op stubs; the test verifies they compile and run without crashing.
+#[test]
+fn cross_backend_env_signal_ignore_reset() {
+    let file = corpus_effects("env_signal_ignore.mvl");
+    let transpiler_out = run_transpiler(&file);
+    assert_eq!(
+        transpiler_out.trim(),
+        "ok",
+        "Rust transpiler: expected 'ok', got: {transpiler_out:?}"
+    );
+    if let Some(llvm_out) = run_llvm(&file) {
+        assert_eq!(
+            llvm_out.trim(),
+            "ok",
+            "LLVM backend: expected 'ok', got: {llvm_out:?}"
+        );
+    }
+}
+
+/// LLVM-only: `signal_on` with a named non-capturing handler must not crash.
+#[test]
+fn cross_backend_env_signal_on_llvm() {
+    let file = corpus_effects("env_signal_on.mvl");
+    if let Some(llvm_out) = run_llvm(&file) {
+        assert_eq!(
+            llvm_out.trim(),
+            "ok",
+            "LLVM backend: expected 'ok', got: {llvm_out:?}"
+        );
     }
 }
 
