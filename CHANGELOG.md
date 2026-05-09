@@ -18,6 +18,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.89.0] — 2026-05-09
+
+### Added
+
+- **Whole-program checking (#609)** — Cross-file function resolution: each source file is now checked with all other user modules as a prelude, enabling correct type checking of cross-file function calls. O(n²) AST cloning eliminated via `check_with_two_preludes`. Closes #609.
+- **Cooper's algorithm refinement solver Layer 4 (#593)** — Presburger arithmetic: Fourier-Motzkin elimination + divisibility checks for linear inequality and divisibility predicates. Enables proofs like `n > 0 → n % 2 = 0 ∨ n % 2 = 1` without SMT. Closes #593.
+- **Z3 SMT solver refinement Layer 5 (#543)** — Final dispatch layer using the `z3` crate for theorem proving with 1s timeout. Unique capability: cross-variable hypothesis chains (e.g., `x > 10, y > x` implies `y > 5`). Always on when built with `--features z3`; CI updated to install `libz3-dev`. Closes #543.
+- **Example instrumentation** — All 7 example Makefiles now have `make test-solver` target showing per-file solver statistics with ✓/✗ status and summary pass/fail counts.
+
+### Fixed
+
+- **Transpiler spurious `.clone()` on rvalue arguments** — Removed unnecessary clones in `emit_expr_as_arg` fallback case; rvalue temporaries (function results, struct literals) that Rust moves into callees no longer generate redundant `.clone()`, eliminating 6 `unused_allocation` warnings in bzip example.
+- **bzip example type mismatches** — Added `val` keyword to `encode_symbol` and `build_tree` calls to properly pass borrowed parameters, fixing parameter type mismatches introduced by recent transpiler changes.
+
 ## [0.88.0] — 2026-05-09
 
 ### Added
