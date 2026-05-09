@@ -7,11 +7,12 @@
 //! |-------|---------|-------------------------------|-----------|
 //! | 1     | layer1  | Trivial pattern matching      | ~40%      |
 //! | 2     | layer2  | Interval arithmetic           | ~60%      |
-//! | 3     | —       | Symbolic / Cooper's (future)  |           |
+//! | 3     | layer3  | Symbolic path analysis        | ~15%      |
 //! | 4     | —       | SMT dispatch (future)         |           |
 
 pub mod layer1;
 pub mod layer2;
+pub mod layer3;
 
 use std::collections::HashMap;
 
@@ -60,5 +61,18 @@ impl RefinementSolver {
         var_refs: &HashMap<String, Option<RefExpr>>,
     ) -> Option<RefResult> {
         layer2::try_interval(pred, arg, var_refs)
+    }
+
+    /// Try to prove or disprove `pred` for `arg` using Layer 3 (symbolic path analysis).
+    ///
+    /// Only applicable when `arg` is a call to a pure function in `fn_decls`.
+    /// Returns `None` when this layer cannot make a decision.
+    pub(crate) fn try_symbolic(
+        pred: &RefExpr,
+        arg: &Expr,
+        var_refs: &HashMap<String, Option<RefExpr>>,
+        fn_decls: &HashMap<String, FnDecl>,
+    ) -> Option<RefResult> {
+        layer3::try_symbolic(pred, arg, var_refs, fn_decls)
     }
 }

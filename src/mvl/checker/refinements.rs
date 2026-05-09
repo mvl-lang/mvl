@@ -1002,6 +1002,7 @@ fn check_arg_against_pred(
 ) -> RefResult {
     RefinementSolver::try_trivial(pred, arg, var_refs, fn_decls)
         .or_else(|| RefinementSolver::try_interval(pred, arg, var_refs))
+        .or_else(|| RefinementSolver::try_symbolic(pred, arg, var_refs, fn_decls))
         .unwrap_or(RefResult::RuntimeCheck)
 }
 

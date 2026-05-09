@@ -1,0 +1,47 @@
+// Solver Layer 3: Symbolic path analysis — clamp-style functions
+//
+// Layer 3 inlines a pure function's body, forks execution at each if/else
+// branch, and proves the return value satisfies the predicate on every path.
+//
+// For `clamp(a, 0, 10)` called with an unconstrained Int `a`:
+//   Path 1 (a < 0)         → returns 0   → 0 >= 0  ✓  (Layer 1)
+//   Path 2 (a >= 0, a > 10)→ returns 10  → 10 >= 0 ✓  (Layer 1)
+//   Path 3 (a >= 0, a <=10)→ returns a   → from path condition a >= 0 ✓ (Layer 2)
+//
+// Every call below is PROVEN by Layer 3 (no runtime assertion needed).
+
+fn require_non_negative(x: Int where self >= 0) -> Int {
+    x
+}
+
+fn require_at_most_ten(x: Int where self <= 10) -> Int {
+    x
+}
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_bounded(x: Int where self >= 0 && self <= 10) -> Int {
+    x
+}
+
+fn clamp(x: Int, lo: Int, hi: Int) -> Int {
+    if x < lo { lo }
+    else if x > hi { hi }
+    else { x }
+}
+
+fn examples(a: Int) -> Int {
+    // Lower bound: all three paths return a value >= 0.
+    require_non_negative(clamp(a, 0, 10));
+
+    // Upper bound: all three paths return a value <= 10.
+    require_at_most_ten(clamp(a, 0, 10));
+
+    // Compound predicate: return is in [0, 10] on every path.
+    require_bounded(clamp(a, 0, 10));
+
+    // Positive lower bound: clamp(a, 1, 10) → result always >= 1 > 0.
+    require_positive(clamp(a, 1, 10))
+}
