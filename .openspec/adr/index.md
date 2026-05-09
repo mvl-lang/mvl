@@ -24,3 +24,4 @@
 | [0020](0020-bdd-library-naming-convention.md) | BDD as library naming convention, not language syntax | Accepted |
 | [0021](0021-primitives-runtime-redesign.md) | Primitives and runtime architecture redesign — unsigned types, bit ops, prelude slim, mvl_memory scope | Accepted |
 | [0022](0022-operator-intrinsic-mapping.md) | Operator → intrinsic mapping and stdlib category model (three-category model) | Accepted |
+| [0023](0023-stdlib-profiles.md) | Stdlib profiles — trusted vs proven | Accepted |
