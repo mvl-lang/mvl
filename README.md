@@ -115,6 +115,19 @@ make format   # cargo fmt
 make help     # show all targets grouped by section
 ```
 
+### Stdlib profiles
+
+MVL supports two stdlib profiles (see `docs/stdlib-profiles.md`):
+
+```bash
+mvl build myapp.mvl                  # trusted profile (default)
+mvl build myapp.mvl --stdlib=proven  # proven profile (pending #538)
+```
+
+The `trusted` profile verifies all 11 requirements on your code.  The `proven`
+profile extends verification into the standard library itself, for
+safety-critical systems (DO-178C, IEC 61508, ISO 26262).
+
 ### Documentation
 
 ```bash

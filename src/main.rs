@@ -66,13 +66,21 @@ fn main() {
             let path = require_path_arg(&args, "check");
             let req_filter = parse_req_filter_or_exit(&args);
             let error_limit = parse_error_limit(&args);
-            let _stdlib_profile = parse_stdlib_profile(&args);
-            cmd_check(&path, req_filter, error_limit);
+            let stdlib_profile = parse_stdlib_profile(&args);
+            let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
+            if verbose {
+                eprintln!("stdlib profile: {stdlib_profile}");
+            }
+            cmd_check(&path, req_filter, error_limit, stdlib_profile);
         }
         "build" => {
             let path = require_path_arg(&args, "build");
             let backend = parse_backend(&args);
-            let _stdlib_profile = parse_stdlib_profile(&args);
+            let stdlib_profile = parse_stdlib_profile(&args);
+            let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
+            if verbose {
+                eprintln!("stdlib profile: {stdlib_profile}");
+            }
             if backend == "llvm" {
                 #[cfg(feature = "llvm")]
                 build_project_llvm(&path);
@@ -88,7 +96,8 @@ fn main() {
         "run" => {
             let path = require_path_arg(&args, "run");
             let backend = parse_backend(&args);
-            let _stdlib_profile = parse_stdlib_profile(&args);
+            let stdlib_profile = parse_stdlib_profile(&args);
+            let _ = stdlib_profile; // profile routing added in #538
             let path_idx = path_arg_index(&args);
             let run_args: Vec<String> = args[path_idx + 1..]
                 .iter()
@@ -115,7 +124,8 @@ fn main() {
         "test" => {
             let path = require_path_arg(&args, "test");
             let backend = parse_backend(&args);
-            let _stdlib_profile = parse_stdlib_profile(&args);
+            let stdlib_profile = parse_stdlib_profile(&args);
+            let _ = stdlib_profile; // profile routing added in #538
             let quiet = args.iter().any(|a| a == "--quiet" || a == "-q");
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
             let coverage = args.iter().any(|a| a == "--coverage");
@@ -214,7 +224,8 @@ fn print_usage() {
   mvl test  <file|dir> --backend=llvm  — compile + run via LLVM/lli, check // expect: annotations
   mvl build <file|dir> --backend=llvm  — compile to LLVM IR and invoke lli (requires --features llvm)
   mvl run   <file|dir> --backend=llvm  — compile and run via LLVM lli (requires --features llvm)
-  mvl build <file|dir> --stdlib=trusted — stdlib profile: trusted (default) or proven (upcoming #538)"
+  mvl build <file|dir> --stdlib=trusted — stdlib profile: trusted (default, 95 builtins)
+  mvl build <file|dir> --stdlib=proven  — proven profile: 15 irreducible builtins + MVL impls (pending #538)"
     );
     eprintln!("  mvl mutate <file|dir>               — behavioral mutation testing (ADR-0014)");
     eprintln!("  mvl mutate <file|dir> -q            — quiet: only show mutation score");
@@ -266,21 +277,25 @@ fn parse_backend(args: &[String]) -> &str {
 
 /// Parse `--stdlib=<profile>` from args; defaults to `"trusted"`.
 ///
-/// The trusted profile uses `pub builtin fn` declarations backed directly by
-/// the runtime (mvl_runtime / mvl_runtime_c).  It is the only supported profile
-/// for now; `--stdlib=proven` will be introduced in #538.
-fn parse_stdlib_profile(args: &[String]) -> &str {
+/// Supported profiles:
+/// - `trusted` (default) — `pub builtin fn` declarations backed directly by
+///   mvl_runtime / mvl_runtime_c; fast compilation, 95 builtins.
+/// - `proven` — extends verification to all pure-MVL stdlib function bodies,
+///   applying all 11 compiler requirements to both user code and stdlib.
+///   OS/hardware builtins (I/O, memory, entropy, process) remain trusted.
+fn parse_stdlib_profile(args: &[String]) -> &'static str {
     let profile = args
         .iter()
         .find_map(|a| a.strip_prefix("--stdlib="))
         .unwrap_or("trusted");
-    if profile != "trusted" {
-        eprintln!(
-            "error: unknown stdlib profile '{profile}' (supported: trusted; proven coming in #538)"
-        );
-        process::exit(1);
+    match profile {
+        "trusted" => "trusted",
+        "proven" => "proven",
+        other => {
+            eprintln!("error: unknown stdlib profile '{other}' (supported: trusted, proven)");
+            process::exit(1);
+        }
     }
-    profile
 }
 
 fn cmd_self(args: &[String]) {
@@ -411,17 +426,97 @@ fn validate_module_name(name: &str, source_path: &str) {
 
 // ── Commands ─────────────────────────────────────────────────────────────
 
+// ── Pure-MVL stdlib files verified in proven mode (ADR-0023, #538) ───────────
+//
+// These files contain pure MVL function bodies that can be verified against
+// all 11 requirements.  OS/hardware-backed modules (io, env, process, crypto,
+// random, time, regex, args, log) are excluded — they are only `pub builtin fn`
+// declarations with no body to check.
+const PROVEN_STDLIB_FILES: &[&str] = &[
+    "core.mvl",
+    "strings.mvl",
+    "lists.mvl",
+    "math.mvl",
+    "collections.mvl",
+    "json.mvl",
+    "pbt.mvl",
+];
+
+/// Run full 11-requirement verification on all pure-MVL stdlib files.
+///
+/// Each file is checked with the other proven-stdlib files as its prelude so
+/// that cross-module references (e.g. lists.mvl calling list_len from core)
+/// resolve correctly.
+///
+/// Returns `(stdlib_file_name, errors)` for any file that has errors.
+fn check_proven_stdlib() -> Vec<(String, mvl::mvl::checker::CheckResult)> {
+    // Parse all proven-stdlib files up front.
+    let programs: Vec<(String, mvl::mvl::parser::ast::Program)> = PROVEN_STDLIB_FILES
+        .iter()
+        .filter_map(|name| {
+            stdlib::stdlib_content(name).map(|src| {
+                let (mut p, _) = Parser::new(src);
+                (name.to_string(), p.parse_program())
+            })
+        })
+        .collect();
+
+    let mut results = Vec::new();
+    for (i, (name, prog)) in programs.iter().enumerate() {
+        // Build a prelude from all OTHER proven-stdlib programs.
+        let prelude: Vec<&mvl::mvl::parser::ast::Program> = programs
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != i)
+            .map(|(_, (_, p))| p)
+            .collect();
+        let prelude_owned: Vec<mvl::mvl::parser::ast::Program> =
+            prelude.iter().map(|p| (*p).clone()).collect();
+
+        let result = checker::check_with_prelude(&prelude_owned, prog);
+        if result.has_errors() {
+            results.push((name.clone(), result));
+        }
+    }
+    results
+}
+
 /// Parse and type-check a .mvl file or all .mvl files in a directory.
 ///
 /// When `req_filter` is `Some(N)`, only the verification pass for Req N is run
 /// and its verdict is printed; errors for other requirements are suppressed.
-fn cmd_check(path: &str, req_filter: Option<u8>, error_limit: usize) {
+fn cmd_check(path: &str, req_filter: Option<u8>, error_limit: usize, stdlib_profile: &str) {
     let files = mvl_files(path, false);
     if files.is_empty() {
         eprintln!("No .mvl files found at: {path}");
         process::exit(1);
     }
     let stdlib_dir = stdlib::ensure_stdlib();
+
+    // --stdlib=proven: verify all pure-MVL stdlib function bodies against all
+    // 11 requirements before checking user code (ADR-0023, #538).
+    let mut stdlib_proven_failed = false;
+    if stdlib_profile == "proven" {
+        let stdlib_errors = check_proven_stdlib();
+        if !stdlib_errors.is_empty() {
+            eprintln!(
+                "note: --stdlib=proven: {} stdlib file(s) have verification errors:",
+                stdlib_errors.len()
+            );
+            for (name, result) in &stdlib_errors {
+                for err in &result.errors {
+                    eprintln!(
+                        "std/{name}:{}:{}: error[req{}]: {}",
+                        err.span().line,
+                        err.span().col,
+                        err.requirement_number(),
+                        err.message()
+                    );
+                }
+            }
+            stdlib_proven_failed = true;
+        }
+    }
 
     // Parse all files once so we can pass them to both the resolver and the checker.
     let mut parsed: Vec<(String, Program, String)> = files
@@ -463,7 +558,7 @@ fn cmd_check(path: &str, req_filter: Option<u8>, error_limit: usize) {
         .map(|(file_str, prog, _)| (stem(file_str), prog.clone()))
         .collect();
     let resolve_result = resolver::resolve_project(modules, Some(&stdlib_dir));
-    let mut had_errors = !resolve_result.is_ok();
+    let mut had_errors = !resolve_result.is_ok() || stdlib_proven_failed;
     for err in &resolve_result.errors {
         eprintln!("error[resolver]: {err}");
     }

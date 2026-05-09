@@ -831,3 +831,51 @@ fn cross_backend_box_field_deref() {
     assert_backends_agree("box_field_deref.mvl");
     assert_llvm_output(&corpus("box_field_deref.mvl"), "value: 42");
 }
+
+// ── #541: cross-profile behavioral parity (trusted vs proven) ────────────────
+//
+// Verifies that --stdlib=trusted and --stdlib=proven (which currently falls
+// back to trusted pending #538) produce identical output.  This test acts as
+// a regression guard: once proven mode has MVL implementations (#538), adding
+// an explicit proven-mode runner here will catch any behavioral divergence.
+
+fn run_transpiler_with_profile(file: &str, profile: &str) -> String {
+    let out = Command::new(mvl_bin())
+        .args(["run", file, &format!("--stdlib={profile}")])
+        .output()
+        .expect("failed to run mvl run --stdlib=...");
+    assert!(
+        out.status.success(),
+        "transpiler backend failed for {file} (--stdlib={profile}):\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let raw = String::from_utf8_lossy(&out.stdout);
+    raw.lines()
+        .filter(|l| !l.starts_with("Transpiled to:") && !l.starts_with("Running:"))
+        .map(|l| format!("{l}\n"))
+        .collect()
+}
+
+#[test]
+fn stdlib_trusted_profile_produces_expected_output() {
+    // Explicit --stdlib=trusted is identical to the default.
+    let default_out = run_transpiler(&corpus("hello_world.mvl"));
+    let trusted_out = run_transpiler_with_profile(&corpus("hello_world.mvl"), "trusted");
+    assert_eq!(
+        default_out, trusted_out,
+        "explicit --stdlib=trusted must match default (no flag)"
+    );
+}
+
+#[test]
+fn stdlib_proven_profile_falls_back_to_trusted() {
+    // --stdlib=proven currently falls back to trusted (#538 pending).
+    // Output must be identical; the only difference is a diagnostic note on stderr.
+    let trusted_out = run_transpiler_with_profile(&corpus("calculator.mvl"), "trusted");
+    let proven_out = run_transpiler_with_profile(&corpus("calculator.mvl"), "proven");
+    assert_eq!(
+        trusted_out, proven_out,
+        "--stdlib=proven fallback output must match --stdlib=trusted until #538 is implemented"
+    );
+}
