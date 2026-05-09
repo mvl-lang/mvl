@@ -161,7 +161,7 @@ pub fn fuzz_default_config() -> FuzzConfig {
 
 // Draw one value from a weighted discrete distribution.
 // `vals` and `wts` are parallel arrays; at least one weight must be positive.
-fn sample_weighted_int(vals: List[Int], wts: List[Int]) -> Int ! Random {
+partial fn sample_weighted_int(vals: List[Int], wts: List[Int]) -> Int ! Random {
     let n: Int = list_len(vals);
     if n == 0 { panic("gen_weighted_int: empty values list") };
     let mut weight_sum: Int = 0;
@@ -205,7 +205,7 @@ fn shrink_int_step(x: Int, prop: fn(Int) -> Bool) -> Int {
 }
 
 // Shrink an Int to the smallest failing value (up to 100 steps).
-fn shrink_int_loop(x: Int, prop: fn(Int) -> Bool) -> Int {
+partial fn shrink_int_loop(x: Int, prop: fn(Int) -> Bool) -> Int {
     let mut shrunk: Int = x;
     let mut shrinking: Bool = true;
     let mut steps: Int = 0;
@@ -234,7 +234,7 @@ fn shrink_string_step(s: String, prop: fn(String) -> Bool) -> String {
 }
 
 // Shrink a String by dropping characters until no shorter failing string exists.
-fn shrink_string_loop(s: String, prop: fn(String) -> Bool) -> String {
+partial fn shrink_string_loop(s: String, prop: fn(String) -> Bool) -> String {
     let mut shrunk: String = s;
     let mut shrinking: Bool = true;
     let mut steps: Int = 0;
@@ -263,7 +263,7 @@ fn shrink_list_int_step(xs: List[Int], prop: fn(List[Int]) -> Bool) -> List[Int]
 }
 
 // Shrink a List[Int] by removing elements until no shorter failing list exists.
-fn shrink_list_int_loop(xs: List[Int], prop: fn(List[Int]) -> Bool) -> List[Int] {
+partial fn shrink_list_int_loop(xs: List[Int], prop: fn(List[Int]) -> Bool) -> List[Int] {
     let mut shrunk: List[Int] = xs;
     let mut shrinking: Bool = true;
     let mut steps: Int = 0;
@@ -279,7 +279,7 @@ fn shrink_list_int_loop(xs: List[Int], prop: fn(List[Int]) -> Bool) -> List[Int]
 
 // Run all iterations of an IntGen property. Returns Some(shrunk) on first
 // failure, None if all iterations pass.
-fn run_property_int(
+partial fn run_property_int(
     gen: IntGen,
     prop: fn(Int) -> Bool,
     iterations: Int
@@ -333,7 +333,7 @@ fn run_property_int(
 }
 
 // Run all iterations of a BoolGen property.
-fn run_property_bool(
+partial fn run_property_bool(
     gen: BoolGen,
     prop: fn(Bool) -> Bool,
     iterations: Int
@@ -367,7 +367,7 @@ fn run_property_bool(
 }
 
 // Run all iterations of a FloatGen property.
-fn run_property_float(
+partial fn run_property_float(
     gen: FloatGen,
     prop: fn(Float) -> Bool,
     iterations: Int
@@ -389,7 +389,7 @@ fn run_property_float(
 }
 
 // Run all iterations of a StringGen property.
-fn run_property_string(
+partial fn run_property_string(
     gen: StringGen,
     prop: fn(String) -> Bool,
     iterations: Int
@@ -414,7 +414,7 @@ fn run_property_string(
 }
 
 // Run all iterations of a ListIntGen property.
-fn run_property_list_int(
+partial fn run_property_list_int(
     gen: ListIntGen,
     prop: fn(List[Int]) -> Bool,
     iterations: Int
