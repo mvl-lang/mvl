@@ -25,3 +25,5 @@
 | [0021](0021-primitives-runtime-redesign.md) | Primitives and runtime architecture redesign — unsigned types, bit ops, prelude slim, mvl_memory scope | Accepted |
 | [0022](0022-operator-intrinsic-mapping.md) | Operator → intrinsic mapping and stdlib category model (three-category model) | Accepted |
 | [0023](0023-stdlib-profiles.md) | Stdlib profiles — trusted vs proven | Accepted |
+| [0024](0024-label-transparent-functions.md) | Label-transparent functions (`transparent fn`) — ADR-0024 | Accepted |
+| [0025](0025-function-contracts.md) | Function contracts — `requires`/`ensures` Phase 1 | Accepted |

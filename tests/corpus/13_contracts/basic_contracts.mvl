@@ -1,0 +1,36 @@
+// corpus:skip-transpiler
+// Basic function contracts — requires and ensures (Issue #621, Phase 1).
+//
+// These programs are parse-and-check only (transpiler support for contracts is Phase 2).
+
+fn divide(a: Int, b: Int) -> Int
+  requires b != 0
+{
+    a
+}
+
+fn nonneg() -> Int
+  ensures result >= 0
+{
+    42
+}
+
+fn factorial(n: Int) -> Int
+  requires n >= 0
+  ensures result >= 1
+{
+    1
+}
+
+fn max(a: Int, b: Int) -> Int
+  ensures result >= 0
+{
+    if a >= b { a } else { b }
+}
+
+fn main() -> Unit ! Console {
+    let _ = divide(10, 2);
+    let _ = nonneg();
+    let _ = factorial(5);
+    let _ = max(3, 7);
+}

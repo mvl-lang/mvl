@@ -18,6 +18,7 @@ mod borrows;
 mod calls;
 pub mod const_eval;
 pub mod context;
+pub mod contracts;
 pub mod data_race;
 mod decls;
 pub mod errors;
@@ -88,6 +89,7 @@ pub fn check_with_two_preludes(
     data_race::check_iso_aliasing(prog, &mut checker.errors);
     ifc::check_implicit_flows(prog, &mut checker.errors);
     refinements::check_refinements(prog, &mut checker.errors);
+    contracts::check_contracts(prog, &mut checker.errors);
     let mut req_errors = [0usize; 12];
     for e in &checker.errors {
         let req = e.requirement_number() as usize;
@@ -797,6 +799,8 @@ mod tests {
                 return_refinement: None,
                 effects: vec![],
                 constraints: vec![],
+                requires: vec![],
+                ensures: vec![],
                 body: Block {
                     stmts: vec![
                         Stmt::Let {
@@ -893,6 +897,8 @@ mod tests {
                 return_refinement: None,
                 effects: vec![],
                 constraints: vec![],
+                requires: vec![],
+                ensures: vec![],
                 body: Block {
                     stmts: vec![
                         Stmt::Let {

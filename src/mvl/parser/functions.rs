@@ -113,6 +113,29 @@ impl Parser {
         // Optional where-clause constraints: `where T: Trait, U: Trait`
         let constraints = self.parse_where_constraints();
 
+        // Optional contract clauses: `requires pred` / `ensures pred`
+        let mut requires = Vec::new();
+        let mut ensures = Vec::new();
+        loop {
+            match self.peek_kind() {
+                TokenKind::Requires => {
+                    self.advance();
+                    match self.parse_ref_expr() {
+                        Ok(pred) => requires.push(pred),
+                        Err(()) => break,
+                    }
+                }
+                TokenKind::Ensures => {
+                    self.advance();
+                    match self.parse_ref_expr() {
+                        Ok(pred) => ensures.push(pred),
+                        Err(()) => break,
+                    }
+                }
+                _ => break,
+            }
+        }
+
         // Body block: required for normal functions, forbidden for builtin functions.
         let body = if is_builtin {
             if matches!(self.peek_kind(), TokenKind::LBrace) {
@@ -146,6 +169,8 @@ impl Parser {
             return_refinement,
             effects,
             constraints,
+            requires,
+            ensures,
             body,
             span,
         })
