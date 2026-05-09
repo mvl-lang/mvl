@@ -24,6 +24,10 @@ pub(crate) enum HeapKind {
     /// MvlArray whose elements are owned `*mut MvlString` pointers.
     /// Requires `mvl_string_ptr_array_drop` to free element strings before the array.
     StringPtrArray,
+    /// A heap pointer produced by `Box::new(value)` (build_malloc). Freed via libc `free`.
+    /// Note: only covers let-bound Box variables. Box pointers embedded in struct fields
+    /// require recursive field-walk at drop, which is not yet implemented (#571).
+    Box,
 }
 
 #[allow(dead_code)]
@@ -58,6 +62,16 @@ impl<'ctx> LlvmBackend<'ctx> {
     pub(crate) fn get_mvl_string_drop(&self) -> FunctionValue<'ctx> {
         self.get_or_declare_fn(
             "mvl_string_drop",
+            &[self.context.ptr_type(AddressSpace::default()).into()],
+            None,
+            false,
+        )
+    }
+
+    /// `free(ptr)` — libc free, used to drop Box[T] allocations produced by build_malloc.
+    pub(crate) fn get_libc_free(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "free",
             &[self.context.ptr_type(AddressSpace::default()).into()],
             None,
             false,
@@ -553,6 +567,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 HeapKind::Array | HeapKind::Set => self.get_mvl_array_drop(),
                 HeapKind::Map => self.get_mvl_map_drop(),
                 HeapKind::StringPtrArray => self.get_mvl_string_ptr_array_drop(),
+                HeapKind::Box => self.get_libc_free(),
             };
             let _ = self
                 .builder

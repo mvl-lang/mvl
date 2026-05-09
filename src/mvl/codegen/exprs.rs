@@ -819,6 +819,10 @@ impl<'ctx> LlvmBackend<'ctx> {
             },
             UnaryOp::Deref => {
                 // For Box[T], load the T value from the heap pointer (#571).
+                // TODO(#571): only Expr::Ident is handled; dereferencing non-ident
+                // expressions (field access, function-call results) silently falls
+                // through to Some(val) returning the raw pointer. Fixing this
+                // requires type-inference for arbitrary sub-expressions.
                 if let Expr::Ident(name, _) = expr {
                     if let Some(mvl_ty) = self.local_mvl_types.get(name.as_str()).cloned() {
                         let stripped = Self::strip_type_wrappers(&mvl_ty);
@@ -1075,6 +1079,9 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
             _ => {
                 // Box::new(value) — heap-allocate T and return a pointer to it (#571).
+                // TODO(#571): build_malloc can return null on OOM; emitting an IR
+                // null-check + abort branch would make OOM safe, but requires
+                // generating a conditional branch and abort block.
                 if name == "Box::new" && args.len() == 1 {
                     let val = self.emit_expr(&args[0])?;
                     let ptr = self

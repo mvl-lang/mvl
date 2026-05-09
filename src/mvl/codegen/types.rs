@@ -197,12 +197,12 @@ impl<'ctx> LlvmBackend<'ctx> {
         matches!(ty, TypeExpr::Base { name, .. } if name == "Unit")
     }
 
-    /// Peel `Labeled { inner }` and `Refined { inner }` wrappers recursively.
+    /// Peel `Labeled { inner }`, `Refined { inner }`, and `Ref { inner }` wrappers recursively.
     pub(crate) fn strip_type_wrappers(ty: &TypeExpr) -> &TypeExpr {
         match ty {
-            TypeExpr::Labeled { inner, .. } | TypeExpr::Refined { inner, .. } => {
-                Self::strip_type_wrappers(inner)
-            }
+            TypeExpr::Labeled { inner, .. }
+            | TypeExpr::Refined { inner, .. }
+            | TypeExpr::Ref { inner, .. } => Self::strip_type_wrappers(inner),
             other => other,
         }
     }

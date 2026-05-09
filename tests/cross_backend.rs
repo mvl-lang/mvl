@@ -821,4 +821,5 @@ fn intrinsic_env_args() {
 #[test]
 fn cross_backend_linked_list() {
     assert_backends_agree("linked_list.mvl");
+    assert_llvm_output(&corpus("linked_list.mvl"), "length: 3");
 }
