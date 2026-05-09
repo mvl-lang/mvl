@@ -821,6 +821,21 @@ impl<'ctx> LlvmBackend<'ctx> {
     ///
     /// Only `range(a, b)` iterators are supported for now.
     pub(crate) fn emit_for(&mut self, pattern: &Pattern, iter: &Expr, body: &Block) {
+        // #588: handle `for x in <list_expr>` — list/array/set iteration.
+        // Range iteration (`for x in range(a, b)`) is handled below.
+        let is_range = matches!(
+            iter,
+            Expr::FnCall { name, args, .. } if name == "range" && args.len() == 2
+        );
+        if !is_range {
+            let var = match pattern {
+                Pattern::Ident(n, _) => n.clone(),
+                _ => return,
+            };
+            self.emit_for_list(var, iter, body);
+            return;
+        }
+
         // Only handle `for x in range(a, b)`.
         let (var_name, start_expr, end_expr) = match iter {
             Expr::FnCall { name, args, .. } if name == "range" && args.len() == 2 => {
@@ -894,6 +909,148 @@ impl<'ctx> LlvmBackend<'ctx> {
         self.terminated = prev_terminated;
 
         // Exit block.
+        self.builder.position_at_end(exit_bb);
+    }
+
+    /// Emit `for x in <list_expr> { body }` — iterates over any MvlArray-backed
+    /// collection (List, Array, Set) by index.
+    ///
+    /// Element access: `mvl_array_get(list_ptr, i)` returns a `ptr` to the
+    /// element slot; we load the concrete element value and bind it to `var`.
+    fn emit_for_list(&mut self, var: String, iter_expr: &Expr, body: &Block) {
+        use inkwell::values::AnyValue;
+
+        // Determine the element LLVM type from the iterator's MVL type.
+        // For `for x in xs` where `xs: List[T]`, look up T in local_mvl_types.
+        let elem_ty: BasicTypeEnum<'ctx> = (|| {
+            let list_ty = match iter_expr {
+                Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
+                _ => None,
+            }?;
+            let list_ty_ref: &crate::mvl::parser::ast::TypeExpr = &list_ty;
+            let stripped = super::LlvmBackend::strip_type_wrappers(list_ty_ref);
+            if let crate::mvl::parser::ast::TypeExpr::Base { args, .. } = stripped {
+                let elem_ty_expr = args.first()?;
+                let elem_stripped = super::LlvmBackend::strip_type_wrappers(elem_ty_expr);
+                self.mvl_type_to_llvm(elem_stripped)
+            } else {
+                None
+            }
+        })()
+        .unwrap_or_else(|| self.context.i64_type().into());
+
+        // Emit the list expression to get the collection pointer.
+        let list_ptr = match self.emit_expr(iter_expr) {
+            Some(BasicValueEnum::PointerValue(p)) => p,
+            _ => return,
+        };
+
+        let i64_ty = self.context.i64_type();
+
+        // len = mvl_array_len(list_ptr)
+        let len_fn = self.get_mvl_array_len();
+        let len_call = self
+            .builder
+            .build_call(len_fn, &[list_ptr.into()], "list_len")
+            .unwrap();
+        let len_val = BasicValueEnum::try_from(len_call.as_any_value_enum())
+            .ok()
+            .and_then(|v| {
+                if let BasicValueEnum::IntValue(i) = v {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| i64_ty.const_int(0, false));
+
+        // i = 0
+        let idx_alloca = self.builder.build_alloca(i64_ty, "list_i").unwrap();
+        self.builder
+            .build_store(idx_alloca, i64_ty.const_int(0, false))
+            .unwrap();
+
+        let parent_fn = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
+        let cond_bb = self.context.append_basic_block(parent_fn, "list_for_cond");
+        let body_bb = self.context.append_basic_block(parent_fn, "list_for_body");
+        let exit_bb = self.context.append_basic_block(parent_fn, "list_for_exit");
+
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        // Condition: i < len
+        self.builder.position_at_end(cond_bb);
+        let cur_idx = self
+            .builder
+            .build_load(i64_ty, idx_alloca, "list_i")
+            .unwrap()
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, cur_idx, len_val, "list_lt")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body_bb, exit_bb)
+            .unwrap();
+
+        // Body: load element from the slot pointer, bind to var, execute.
+        self.builder.position_at_end(body_bb);
+
+        // elem_ptr = mvl_array_get(list_ptr, cur_idx) → ptr to element slot
+        let get_fn = self.get_mvl_array_get();
+        let elem_call = self
+            .builder
+            .build_call(get_fn, &[list_ptr.into(), cur_idx.into()], "elem_ptr")
+            .unwrap();
+        let elem_ptr_opt = BasicValueEnum::try_from(elem_call.as_any_value_enum())
+            .ok()
+            .and_then(|v| {
+                if let BasicValueEnum::PointerValue(p) = v {
+                    Some(p)
+                } else {
+                    None
+                }
+            });
+
+        if let Some(elem_ptr_val) = elem_ptr_opt {
+            // Load the element value from the slot (element type determines load width).
+            let elem_val = self
+                .builder
+                .build_load(elem_ty, elem_ptr_val, &var)
+                .unwrap();
+
+            // Bind element to the loop variable alloca.
+            let alloca = self.builder.build_alloca(elem_ty, &var).unwrap();
+            self.builder.build_store(alloca, elem_val).unwrap();
+            self.locals.insert(var.clone(), (alloca, elem_ty));
+            // Remove stale MVL type annotation (element type is resolved).
+            self.local_mvl_types.remove(&var);
+
+            let prev_terminated = self.terminated;
+            self.terminated = false;
+            self.emit_block(body);
+            if !self.terminated {
+                // Increment: i++
+                let cur_idx2 = self
+                    .builder
+                    .build_load(i64_ty, idx_alloca, "list_i_inc")
+                    .unwrap()
+                    .into_int_value();
+                let one = i64_ty.const_int(1, false);
+                let next = self
+                    .builder
+                    .build_int_add(cur_idx2, one, "list_next")
+                    .unwrap();
+                self.builder.build_store(idx_alloca, next).unwrap();
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+            }
+            self.terminated = prev_terminated;
+        }
+
         self.builder.position_at_end(exit_bb);
     }
 }

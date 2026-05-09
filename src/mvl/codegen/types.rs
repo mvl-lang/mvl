@@ -4,8 +4,12 @@
 //! the backend.  Separated here so expression and statement emitters can share
 //! type-lookup helpers without depending on each other.
 
-use inkwell::{types::BasicTypeEnum, AddressSpace};
+use inkwell::{
+    types::{BasicType, BasicTypeEnum},
+    AddressSpace,
+};
 
+use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{Expr, TypeBody, TypeDecl, TypeExpr, VariantFields};
 
 use super::LlvmBackend;
@@ -188,6 +192,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                         .into(),
                 )
             }
+            // #588: function types are represented as opaque function pointers.
+            TypeExpr::Fn { .. } => Some(self.context.ptr_type(AddressSpace::default()).into()),
             // Generic / compound types: i64 placeholder for Phase B
             _ => Some(self.context.i64_type().into()),
         }
@@ -195,6 +201,65 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     pub(crate) fn is_unit_type(&self, ty: &TypeExpr) -> bool {
         matches!(ty, TypeExpr::Base { name, .. } if name == "Unit")
+    }
+
+    // ── #588: closure/lambda type helpers ────────────────────────────────────
+
+    /// Build an LLVM `FunctionType` from a MVL `fn(params) -> ret` signature.
+    ///
+    /// Type-parameter substitutions in `self.type_subs` are respected, so this
+    /// works correctly inside monomorphized function bodies.
+    pub(crate) fn fn_type_to_llvm(
+        &self,
+        params: &[TypeExpr],
+        ret: &TypeExpr,
+    ) -> inkwell::types::FunctionType<'ctx> {
+        let param_tys: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = params
+            .iter()
+            .filter_map(|p| self.mvl_type_to_llvm(p))
+            .map(Into::into)
+            .collect();
+        if self.is_unit_type(ret) {
+            self.context.void_type().fn_type(&param_tys, false)
+        } else if let Some(ret_ty) = self.mvl_type_to_llvm(ret) {
+            ret_ty.fn_type(&param_tys, false)
+        } else {
+            self.context.void_type().fn_type(&param_tys, false)
+        }
+    }
+
+    /// Map a checker `Ty` to an LLVM `BasicTypeEnum`.
+    ///
+    /// Used to determine the return type of a lambda from the checker's inferred
+    /// type when no explicit return annotation is present.
+    #[allow(dead_code)]
+    pub(crate) fn ty_to_llvm(&self, ty: &Ty) -> Option<BasicTypeEnum<'ctx>> {
+        match ty {
+            Ty::Int | Ty::UInt => Some(self.context.i64_type().into()),
+            Ty::Float => Some(self.context.f64_type().into()),
+            Ty::Bool => Some(self.context.bool_type().into()),
+            Ty::Byte | Ty::UByte => Some(self.context.i8_type().into()),
+            Ty::Char => Some(self.context.i32_type().into()),
+            Ty::Unit | Ty::Never => None,
+            Ty::String
+            | Ty::List(_)
+            | Ty::Array(_, _)
+            | Ty::Map(_, _)
+            | Ty::Set(_)
+            | Ty::Named(_, _)
+            | Ty::Fn(_, _)
+            | Ty::Ref(_, _) => Some(self.context.ptr_type(AddressSpace::default()).into()),
+            Ty::Option(_) | Ty::Result(_, _) => {
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                Some(
+                    self.context
+                        .struct_type(&[self.context.i8_type().into(), ptr_ty.into()], false)
+                        .into(),
+                )
+            }
+            Ty::Labeled(_, inner) | Ty::Refined(inner, _) => self.ty_to_llvm(inner),
+            Ty::Unknown | Ty::Tuple(_) => Some(self.context.i64_type().into()),
+        }
     }
 
     /// Peel `Labeled { inner }`, `Refined { inner }`, and `Ref { inner }` wrappers recursively.

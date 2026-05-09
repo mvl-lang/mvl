@@ -187,6 +187,15 @@ fn cross_backend_collections_basic() {
     assert_backends_agree("collections_basic.mvl");
 }
 
+// ── #421: Higher-order functions (filter, map, fold, any + inline lambdas) ─────
+
+/// Both backends must agree on HOF operations (filter, map, fold, any) using
+/// both named-function arguments and inline lambda syntax.
+#[test]
+fn cross_backend_hof_lambdas() {
+    assert_backends_agree("hof_lambdas.mvl");
+}
+
 // ── Phase C: heap allocation tests (LLVM-only) ────────────────────────────────
 
 #[test]

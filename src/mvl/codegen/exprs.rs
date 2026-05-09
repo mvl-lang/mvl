@@ -70,6 +70,14 @@ impl<'ctx> LlvmBackend<'ctx> {
                 ..
             } => self.emit_method_call(receiver, method, args),
 
+            // #588: lambda expression → emit as a named top-level function, return its pointer.
+            Expr::Lambda {
+                params,
+                ret_type,
+                body,
+                span,
+            } => self.emit_lambda(params, ret_type.as_deref(), body, *span),
+
             _other => {
                 // Unhandled Expr variant: return None so the caller can propagate failure.
                 // In debug builds, print a notice to help catch missing codegen arms early.
@@ -115,7 +123,116 @@ impl<'ctx> LlvmBackend<'ctx> {
             return self.emit_enum_variant_construct(&etype, name, &[]);
         }
 
+        // #421: named function reference — return the function's pointer value
+        // so it can be stored in a local and passed to HOF as a fn-ptr argument.
+        if let Some(fn_val) = self.module.get_function(name) {
+            return Some(fn_val.as_global_value().as_pointer_value().into());
+        }
+
         None
+    }
+
+    // ── #588: lambda lowering ────────────────────────────────────────────────
+
+    /// Emit a lambda expression as a named top-level LLVM function.
+    ///
+    /// Non-capturing lambdas (the common case for HOF like `filter`, `map`,
+    /// `fold`) are emitted as bare function pointers — no closure struct needed.
+    /// The caller-side value is a `ptr` (function pointer) that can be stored
+    /// in a local alloca and called indirectly via `emit_fn_call`.
+    ///
+    /// Capturing lambdas are NOT supported in this pass; the body references to
+    /// captured variables from the enclosing scope will fail to emit and return
+    /// `None` (tracked as future work in issue #588).
+    fn emit_lambda(
+        &mut self,
+        params: &[crate::mvl::parser::ast::Param],
+        ret_type_ann: Option<&TypeExpr>,
+        body: &Expr,
+        _span: crate::mvl::parser::lexer::Span,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        use crate::mvl::parser::ast::{Block, FnDecl, Stmt};
+        use crate::mvl::parser::lexer::Span;
+        let zero = Span {
+            line: 0,
+            col: 0,
+            offset: 0,
+            len: 0,
+        };
+
+        let lambda_name = format!("__lambda_{}", self.lambda_counter);
+        self.lambda_counter += 1;
+
+        // Determine return type: explicit annotation takes precedence.
+        // When absent, use the body expression's inferred type from the checker
+        // (the most reliable source — the Fn entry in expr_types stores
+        // Ty::Unknown when the annotation is omitted, not the inferred body type).
+        let ret_ty: TypeExpr = if let Some(ann) = ret_type_ann {
+            ann.clone()
+        } else {
+            let body_span = body.span();
+            if let Some(body_ty) = self.expr_types.get(&body_span).cloned() {
+                checker_ret_ty_to_type_expr(&body_ty, zero)
+            } else {
+                // Last resort: default to i64 (avoids a silent codegen failure).
+                TypeExpr::Base {
+                    name: "Int".to_string(),
+                    args: vec![],
+                    span: zero,
+                }
+            }
+        };
+
+        // Wrap the body expression in a block so emit_fn can consume it.
+        let block = Block {
+            stmts: vec![Stmt::Expr {
+                expr: body.clone(),
+                span: zero,
+            }],
+            span: zero,
+        };
+
+        let fd = FnDecl {
+            visible: false,
+            is_test: false,
+            is_builtin: false,
+            is_label_transparent: false,
+            totality: None,
+            name: lambda_name.clone(),
+            type_params: vec![],
+            params: params.to_vec(),
+            return_type: Box::new(ret_ty),
+            return_refinement: None,
+            effects: vec![],
+            constraints: vec![],
+            body: block,
+            span: zero,
+        };
+
+        // Save the current function context so we can restore it after emitting
+        // the lambda as a separate top-level function.
+        let saved_block = self.builder.get_insert_block();
+        let saved_locals = std::mem::take(&mut self.locals);
+        let saved_mvl_types = std::mem::take(&mut self.local_mvl_types);
+        let saved_heap_locals = std::mem::take(&mut self.heap_locals);
+        let saved_terminated = self.terminated;
+        let saved_fn = self.current_fn;
+
+        self.emit_fn(&fd);
+
+        // Restore enclosing function context.
+        self.locals = saved_locals;
+        self.local_mvl_types = saved_mvl_types;
+        self.heap_locals = saved_heap_locals;
+        self.terminated = saved_terminated;
+        self.current_fn = saved_fn;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+
+        // Return the function pointer as the lambda value.
+        let fn_val = self.module.get_function(&lambda_name)?;
+        Some(fn_val.as_global_value().as_pointer_value().into())
     }
 
     pub(crate) fn emit_if_expr(
@@ -1345,6 +1462,35 @@ impl<'ctx> LlvmBackend<'ctx> {
                     }
                 }
 
+                // #588: indirect call through a local function-typed variable.
+                // Handles `f(x)` where `f: fn(T) -> U` is a parameter or local binding.
+                if let Some(TypeExpr::Fn {
+                    params: fn_params,
+                    ret,
+                    ..
+                }) = self.local_mvl_types.get(name).cloned()
+                {
+                    if let Some((alloca, _)) = self.locals.get(name).copied() {
+                        let fn_ty = self.fn_type_to_llvm(&fn_params, &ret);
+                        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+                        let fn_ptr = self
+                            .builder
+                            .build_load(ptr_ty, alloca, "fn_ptr")
+                            .unwrap()
+                            .into_pointer_value();
+                        let meta_args: Vec<inkwell::values::BasicMetadataValueEnum> = args
+                            .iter()
+                            .map(|a| self.emit_expr(a).map(Into::into))
+                            .collect::<Option<Vec<_>>>()?;
+                        let call = self
+                            .builder
+                            .build_indirect_call(fn_ty, fn_ptr, &meta_args, "indirect_call")
+                            .unwrap();
+                        use inkwell::values::AnyValue;
+                        return BasicValueEnum::try_from(call.as_any_value_enum()).ok();
+                    }
+                }
+
                 // L5-15 + L5-08: single lookup for user-defined function metadata.
                 if let Some(fd) = self.fn_decls.get(name).cloned() {
                     // L5-15: mark heap-typed value arguments as moved (ownership
@@ -1768,6 +1914,11 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
 
             // ── push (Array / List) ───────────────────────────────────────────
+            // #588: `.clone()` — for primitive types this is a no-op copy;
+            // for pointer types this returns the same pointer (shallow clone).
+            // Deep clone for String/List requires runtime support (future work).
+            "clone" if args.is_empty() => Some(recv_val),
+
             "push" => {
                 let elem = self.emit_expr(args.first()?)?;
                 match recv_val {
@@ -2421,6 +2572,27 @@ impl<'ctx> LlvmBackend<'ctx> {
                 _ => None,
             },
 
+            // ── #421: HOF methods — dispatch to monomorphized stdlib function ──
+            // xs.filter(f)   → filter(xs, f)
+            // xs.map(f)      → map(xs, f)
+            // xs.fold(i, f)  → fold(xs, i, f)
+            // xs.any(f)      → any(xs, f)
+            // xs.all(f)      → all(xs, f)
+            // xs.find(f)     → find(xs, f)
+            // xs.take_while(f)/skip_while(f) likewise
+            "filter" | "map" | "any" | "all" | "find" | "take_while" | "skip_while"
+                if args.len() == 1 =>
+            {
+                let mut all_args = vec![receiver.clone()];
+                all_args.extend_from_slice(args);
+                self.emit_fn_call(method, &all_args)
+            }
+            "fold" if args.len() == 2 => {
+                let mut all_args = vec![receiver.clone()];
+                all_args.extend_from_slice(args);
+                self.emit_fn_call("fold", &all_args)
+            }
+
             _ => None,
         }
     }
@@ -3008,5 +3180,74 @@ impl<'ctx> LlvmBackend<'ctx> {
         self.emit_set_copy_all(a_ptr, result_ptr, "union_a")?;
         self.emit_set_filter_append(b_ptr, a_ptr, false, result_ptr, "union_b")?;
         Some(result_ptr.into())
+    }
+}
+
+// ── #588: lambda lowering helpers ─────────────────────────────────────────────
+
+/// Convert a checker `Ty` (lambda return type) into a minimal `TypeExpr` for
+/// use as the return type annotation of a synthetic `FnDecl`.
+///
+/// Only the types actually needed for LLVM type mapping are handled; everything
+/// else falls back to `TypeExpr::Base { "Int" }` (i64) which is safe for
+/// unknown/unhandled cases.
+fn checker_ret_ty_to_type_expr(
+    ty: &crate::mvl::checker::types::Ty,
+    span: crate::mvl::parser::lexer::Span,
+) -> crate::mvl::parser::ast::TypeExpr {
+    use crate::mvl::checker::types::Ty;
+    use crate::mvl::parser::ast::TypeExpr;
+    match ty {
+        Ty::Bool => TypeExpr::Base {
+            name: "Bool".to_string(),
+            args: vec![],
+            span,
+        },
+        Ty::Int | Ty::UInt => TypeExpr::Base {
+            name: "Int".to_string(),
+            args: vec![],
+            span,
+        },
+        Ty::Float => TypeExpr::Base {
+            name: "Float".to_string(),
+            args: vec![],
+            span,
+        },
+        Ty::String => TypeExpr::Base {
+            name: "String".to_string(),
+            args: vec![],
+            span,
+        },
+        Ty::Unit => TypeExpr::Base {
+            name: "Unit".to_string(),
+            args: vec![],
+            span,
+        },
+        Ty::Byte | Ty::UByte => TypeExpr::Base {
+            name: "Byte".to_string(),
+            args: vec![],
+            span,
+        },
+        Ty::Char => TypeExpr::Base {
+            name: "Char".to_string(),
+            args: vec![],
+            span,
+        },
+        Ty::List(inner) => TypeExpr::Base {
+            name: "List".to_string(),
+            args: vec![checker_ret_ty_to_type_expr(inner, span)],
+            span,
+        },
+        Ty::Option(inner) => TypeExpr::Option {
+            inner: Box::new(checker_ret_ty_to_type_expr(inner, span)),
+            span,
+        },
+        Ty::Labeled(_, inner) | Ty::Refined(inner, _) => checker_ret_ty_to_type_expr(inner, span),
+        // Everything else falls back to Int (i64) — a safe default for codegen
+        _ => TypeExpr::Base {
+            name: "Int".to_string(),
+            args: vec![],
+            span,
+        },
     }
 }
