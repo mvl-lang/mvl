@@ -207,7 +207,9 @@ pub fn transpile_project(
     let module_files: Vec<(String, String)> = siblings
         .iter()
         .map(|(name, prog)| {
+            let sibling_check = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
             let mut cg = RustEmitter::new();
+            cg.expr_types = sibling_check.expr_types;
             if entry_uses_runtime {
                 cg.emit_sibling_module(prog, prelude_progs);
             } else {
@@ -380,7 +382,9 @@ pub fn transpile_covered_with_prelude(
     let use_runtime =
         extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
+    let check_result = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
     let mut cg = RustEmitter::new();
+    cg.expr_types = check_result.expr_types;
     cg.coverage = Some(CoverageMap::new(start_id));
     cg.current_file = file_stem.to_string();
     cg.emit_program_with_mods(prog, &[], prelude_progs);
@@ -425,7 +429,9 @@ pub fn transpile_covered(
     let has_extern_rust = has_extern_rust_decls(prog);
     let use_runtime = extern_count > 0 || has_std_imports(prog);
 
+    let check_result = crate::mvl::checker::check(prog);
     let mut cg = RustEmitter::new();
+    cg.expr_types = check_result.expr_types;
     cg.coverage = Some(CoverageMap::new(start_id));
     cg.current_file = file_stem.to_string();
     cg.emit_program(prog);
@@ -473,7 +479,9 @@ pub fn transpile_covered_source_with_prelude(
     let use_runtime =
         extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
+    let check_result = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
     let mut cg = RustEmitter::new();
+    cg.expr_types = check_result.expr_types;
     cg.coverage = Some(CoverageMap::new(start_id));
     cg.current_file = file_stem.to_string();
     cg.test_extern_stubs = true;
@@ -520,7 +528,9 @@ pub fn transpile_covered_source(
     let has_extern_rust = has_extern_rust_decls(prog);
     let use_runtime = extern_count > 0 || has_std_imports(prog);
 
+    let check_result = crate::mvl::checker::check(prog);
     let mut cg = RustEmitter::new();
+    cg.expr_types = check_result.expr_types;
     cg.coverage = Some(CoverageMap::new(start_id));
     cg.current_file = file_stem.to_string();
     cg.test_extern_stubs = true;
@@ -571,7 +581,9 @@ pub fn transpile_mutated_with_prelude(
     let use_runtime =
         extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
+    let check_result = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
     let mut cg = RustEmitter::new();
+    cg.expr_types = check_result.expr_types;
     cg.mutation = Some(MutationMap::new());
     cg.current_file = file_stem.to_string();
     cg.current_file_is_test = true;
@@ -621,7 +633,9 @@ pub fn transpile_mutated_source_with_prelude(
     let use_runtime =
         extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
+    let check_result = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
     let mut cg = RustEmitter::new();
+    cg.expr_types = check_result.expr_types;
     cg.mutation = Some(MutationMap::new());
     cg.current_file = file_stem.to_string();
     cg.test_extern_stubs = true;
@@ -670,7 +684,9 @@ pub fn transpile_mcdc_with_prelude(
     let use_runtime =
         extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
+    let check_result = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
     let mut cg = RustEmitter::new();
+    cg.expr_types = check_result.expr_types;
     cg.mcdc = Some(mcdc_instr::MCDCMap::new(start_id));
     cg.current_file = file_stem.to_string();
     cg.emit_program_with_mods(prog, &[], prelude_progs);
@@ -713,7 +729,9 @@ pub fn transpile_mcdc_source_with_prelude(
     let use_runtime =
         extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
 
+    let check_result = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
     let mut cg = RustEmitter::new();
+    cg.expr_types = check_result.expr_types;
     cg.mcdc = Some(mcdc_instr::MCDCMap::new(start_id));
     cg.current_file = file_stem.to_string();
     cg.test_extern_stubs = true;

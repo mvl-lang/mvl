@@ -247,6 +247,48 @@ impl TypeEnv {
                 type_params: HashSet::new(),
             },
         );
+        self.fns.insert(
+            "eprintln".into(),
+            FnInfo {
+                params: vec![],
+                ret: Ty::Unit,
+                effects: vec![Effect::new("Console", Span::new(0, 0, 0, 0))],
+                totality: None,
+                type_params: HashSet::new(),
+            },
+        );
+        self.fns.insert(
+            "eprint".into(),
+            FnInfo {
+                params: vec![],
+                ret: Ty::Unit,
+                effects: vec![Effect::new("Console", Span::new(0, 0, 0, 0))],
+                totality: None,
+                type_params: HashSet::new(),
+            },
+        );
+        // assert — pure, panics if condition is false
+        self.fns.insert(
+            "assert".into(),
+            FnInfo {
+                params: vec![Ty::Bool],
+                ret: Ty::Unit,
+                effects: vec![],
+                totality: None,
+                type_params: HashSet::new(),
+            },
+        );
+        // panic — unconditional termination with a message; pure effect-wise
+        self.fns.insert(
+            "panic".into(),
+            FnInfo {
+                params: vec![Ty::String],
+                ret: Ty::Unit,
+                effects: vec![],
+                totality: None,
+                type_params: HashSet::new(),
+            },
+        );
         // assert_eq — pure, for testing.
         // TODO: assert_eq accepts Secret/Tainted arguments without an IFC label check.
         // Assertion failures may expose secret values via panic messages (observable covert

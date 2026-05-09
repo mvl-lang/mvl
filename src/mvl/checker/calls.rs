@@ -21,7 +21,14 @@ impl TypeChecker {
         // Covers println/print (Console) and log_debug/info/warn/error (! Log, #54).
         if matches!(
             name,
-            "println" | "print" | "log_debug" | "log_info" | "log_warn" | "log_error"
+            "println"
+                | "print"
+                | "eprintln"
+                | "eprint"
+                | "log_debug"
+                | "log_info"
+                | "log_warn"
+                | "log_error"
         ) {
             for (arg, arg_ty) in args.iter().zip(arg_tys.iter()) {
                 if let Some(label) = ifc::label_of(arg_ty) {
@@ -47,6 +54,8 @@ impl TypeChecker {
                 name,
                 "println"
                     | "print"
+                    | "eprintln"
+                    | "eprint"
                     | "assert_eq"
                     | "parse_int"
                     | "format"

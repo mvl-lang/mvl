@@ -876,9 +876,23 @@ impl<'ctx> LlvmBackend<'ctx> {
                 );
                 self.emit_print(args)
             }
+            "eprintln" => {
+                // #508: IFC invariant — stderr is a public sink; no Secret args allowed.
+                assert!(
+                    args.iter().all(|a| !self.is_secret_labeled(a)),
+                    "codegen bug: Secret-labeled value routed to eprintln without declassify"
+                );
+                self.emit_eprintln(args)
+            }
+            "eprint" => {
+                // #508: IFC invariant — stderr is a public sink; no Secret args allowed.
+                assert!(
+                    args.iter().all(|a| !self.is_secret_labeled(a)),
+                    "codegen bug: Secret-labeled value routed to eprint without declassify"
+                );
+                self.emit_eprint(args)
+            }
             "format" => self.emit_format(args),
-            "eprintln" => self.emit_eprintln(args),
-            "eprint" => self.emit_eprint(args),
             // assert(condition) — trap if condition is false.
             "assert" if args.len() == 1 => {
                 let cond = match self.emit_expr(&args[0])? {

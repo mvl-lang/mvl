@@ -382,7 +382,7 @@ impl RustEmitter {
         // (println, print, eprintln, format) are skipped; test functions are skipped.
         // Functions already declared in the user program are skipped to prevent
         // duplicate Rust definitions when the user shadows a prelude function.
-        const MACRO_HANDLED: &[&str] = &["println", "print", "eprintln", "format"];
+        const MACRO_HANDLED: &[&str] = &["println", "print", "eprintln", "eprint", "format"];
         let user_fn_names: std::collections::HashSet<&str> = prog
             .declarations
             .iter()
