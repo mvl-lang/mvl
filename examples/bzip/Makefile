@@ -3,7 +3,7 @@
 # recursive ADTs (HuffmanTree), pure core + effect boundary.
 #
 # Run from this directory: make check, make test, make run
-.PHONY: help guard-mvl build check test test-llvm run run-llvm clean
+.PHONY: help guard-mvl build check test-solver test test-llvm run run-llvm clean
 
 MVL  := ../../target/debug/mvl
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
@@ -29,6 +29,25 @@ check: guard-mvl ## Type-check self-contained source modules
 	$(MVL) check $(DIR)mtf.mvl
 	$(MVL) check $(DIR)huffman.mvl
 	$(MVL) check $(DIR)bitstream.mvl
+
+test-solver: guard-mvl ## Show per-file solver statistics for all source files
+	@pass=0; fail=0; \
+	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
+	for f in $(DIR)rle.mvl $(DIR)bwt.mvl $(DIR)mtf.mvl $(DIR)huffman.mvl $(DIR)bitstream.mvl; do \
+		name=$$(basename "$$f"); \
+		out=$$($(MVL) check "$$f" 2>&1); rc=$$?; \
+		if [ $$rc -eq 0 ]; then \
+			printf "  $$OK  %s\n" "$$name"; pass=$$((pass + 1)); \
+		else \
+			printf "  $$FAIL  %s\n" "$$name"; printf "%s\n" "$$out" | sed 's/^/         /'; fail=$$((fail + 1)); \
+		fi; \
+	done; \
+	echo ""; \
+	if [ $$fail -eq 0 ]; then \
+		printf "  \033[32m✓  $$pass passed, 0 failed\033[0m\n\n"; \
+	else \
+		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
+	fi
 
 test: guard-mvl ## Run all inline test fn and roundtrip_test.mvl (transpiler backend)
 	$(MVL) test $(DIR)

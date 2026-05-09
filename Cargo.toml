@@ -13,13 +13,19 @@ license = "Apache-2.0"
 # LLVM backend is on by default. Requires LLVM 22 installed.
 # macOS homebrew: brew install llvm  (path set via .cargo/config.toml)
 # To build without LLVM: cargo build --no-default-features
-default = ["llvm"]
+#
+# Z3 backend is on by default. Requires Z3 installed.
+# macOS homebrew: brew install z3  (paths set via .cargo/config.toml)
+# To build without Z3: cargo build --no-default-features --features llvm
+default = ["llvm", "z3"]
 llvm = ["dep:inkwell"]
+z3 = ["dep:z3"]
 
 [dependencies]
 ureq = "2"
 tempfile = "3"
 inkwell = { version = "0.9", features = ["llvm22-1"], optional = true }
+z3 = { version = "0.12", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

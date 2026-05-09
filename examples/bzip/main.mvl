@@ -92,7 +92,7 @@ partial fn encode_symbols(
         Ok(w)
     } else {
         let sym: Int = symbols.get(i).unwrap();
-        match encode_symbol(codes, sym) {
+        match encode_symbol(val codes, sym) {
             None       => Err(CompressError::SymbolNotInTree),
             Some(bits) => encode_symbols(symbols, codes, write_code(w, bits), i + 1),
         }
@@ -108,7 +108,7 @@ pub fn decompress_bytes(
 ) -> Result[List[Int], CompressError] {
     // The decoder needs the Huffman tree (rebuilt from stored frequencies)
     // and the BWT primary index (stored alongside the compressed stream).
-    match build_tree(freqs) {
+    match build_tree(val freqs) {
         None        => Err(CompressError::HuffmanFailed),
         Some(result) => {
             // Stage 5 reverse: decode bit stream to MTF symbols

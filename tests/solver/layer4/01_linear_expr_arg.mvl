@@ -1,0 +1,34 @@
+// Solver Layer 4: Linear-expression arguments — all proven
+//
+// Layer 2 only handles simple variable arguments (e.g. `x` with hyp `x > 0`).
+// Layer 4 (Cooper's algorithm) handles arguments that are *linear combinations*
+// of variables, using Fourier-Motzkin elimination.
+//
+// Key pattern:
+//   Given `b: Int where self < a`   →  hypothesis: b < a, i.e. b − a < 0
+//   Argument: `a − b`               →  self = a − b
+//   Predicate: `self > 0`           →  (a − b) > 0
+//
+// Cooper's builds:  hyp(b < a)  ∧  ¬pred(a − b > 0)
+//               =  (b − a + 1 ≤ 0)  ∧  (a − b ≤ 0)
+//   Adding these eliminates a and b → 1 ≤ 0 → UNSAT → Proven.
+//
+// Every call in this file is PROVEN by Layer 4.
+
+// Return positive: proven because a > b implies a − b > 0.
+fn diff_positive(a: Int, b: Int where self < a) -> Int where result > 0 {
+    a - b
+}
+
+fn caller_diff() -> Int {
+    diff_positive(10, 3)
+}
+
+// Sum of two positives is positive.
+fn sum_positive(a: Int where self > 0, b: Int where self > 0) -> Int where result > 0 {
+    a + b
+}
+
+fn caller_sum() -> Int {
+    sum_positive(5, 7)
+}

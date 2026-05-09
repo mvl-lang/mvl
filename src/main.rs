@@ -568,14 +568,28 @@ fn cmd_check(path: &str, req_filter: Option<u8>, error_limit: usize, stdlib_prof
 
     // Pre-parse stdlib files imported by user programs so the checker knows
     // about their types and functions.  This covers `use std.io.{...}` etc.
-    let prelude = load_stdlib_prelude(
+    let stdlib_prelude = load_stdlib_prelude(
         parsed.iter().take(check_count).map(|(_, p, _)| p),
         &stdlib_dir,
     );
 
+    // Snapshot all parsed user programs for cross-module prelude building.
+    // Intentionally includes resolver-only siblings (auto-loaded to satisfy imports,
+    // not explicitly requested): they may define types or functions that the
+    // explicitly-checked files call and must therefore be visible to the checker.
+    let all_user_progs: Vec<Program> = parsed.iter().map(|(_, p, _)| p.clone()).collect();
+
     // Only run the checker on explicitly requested files (not resolver-only siblings).
-    for (file_str, prog, _src) in parsed.iter().take(check_count) {
-        let result = checker::check_with_prelude(&prelude, prog);
+    for (idx, (file_str, prog, _src)) in parsed.iter().take(check_count).enumerate() {
+        // Build per-file prelude: stdlib + all OTHER user modules so that
+        // cross-file function and type references resolve (whole-program checking).
+        // Flanking slices of all_user_progs avoid cloning individual Programs;
+        // check_with_two_preludes chains prelude_a (&[Program]) and prelude_b
+        // (&[&Program]) without any additional allocation.
+        let (before, after_with_self) = all_user_progs.split_at(idx);
+        let after = &after_with_self[1..];
+        let user_prelude: Vec<&Program> = before.iter().chain(after.iter()).collect();
+        let result = checker::check_with_two_preludes(&stdlib_prelude, &user_prelude, prog);
 
         if let Some(req) = req_filter {
             // Single-requirement mode: run only the requested pass.

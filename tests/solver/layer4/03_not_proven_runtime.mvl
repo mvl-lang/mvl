@@ -1,0 +1,24 @@
+// solver:expect-fail
+//
+// Solver Layer 4: Cases that Layer 4 cannot prove statically.
+//
+// When the argument is not a linear expression (e.g. it is a function call
+// with unknown return, or involves multiplication of two variables), Layer 4
+// returns None and the chain falls to RuntimeCheck.
+//
+// In these cases the checker emits a runtime assertion.  Since the test
+// program below calls the function with an argument that *violates* the
+// predicate, the checker (not the runtime) should flag the violation —
+// either as a compile-time error from an earlier layer or as a detected
+// violation here.
+//
+// This file is expected to produce checker errors (solver:expect-fail).
+
+fn require_nonzero(x: Int where self != 0) -> Int {
+    x
+}
+
+// Passing literal 0 violates `self != 0` — Layer 1 catches this.
+fn violate_nonzero() -> Int {
+    require_nonzero(0)
+}

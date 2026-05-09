@@ -973,6 +973,8 @@ fn check_arg_against_pred(
     RefinementSolver::try_trivial(pred, arg, var_refs, fn_decls)
         .or_else(|| RefinementSolver::try_interval(pred, arg, var_refs))
         .or_else(|| RefinementSolver::try_symbolic(pred, arg, var_refs, fn_decls))
+        .or_else(|| RefinementSolver::try_cooper(pred, arg, var_refs))
+        .or_else(|| RefinementSolver::try_z3(pred, arg, var_refs))
         .unwrap_or(RefResult::RuntimeCheck)
 }
 

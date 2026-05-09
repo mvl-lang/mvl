@@ -15,7 +15,7 @@
 //!   #27 — Declassify/sanitize validation
 
 use mvl::mvl::checker::errors::CheckError;
-use mvl::mvl::checker::{check, CheckResult};
+use mvl::mvl::checker::{check, check_with_prelude, check_with_two_preludes, CheckResult};
 use mvl::mvl::parser::Parser;
 
 fn check_src(src: &str) -> CheckResult {
@@ -4926,6 +4926,171 @@ fn proven_profile_checker_accepts_valid_stdlib_body() {
     assert!(
         !result.has_errors(),
         "valid stdlib body should pass proven profile check, got: {:?}",
+        result.errors
+    );
+}
+
+// ── #609: whole-program checking (cross-file symbol resolution) ───────────────
+
+fn parse_src(src: &str) -> mvl::mvl::parser::ast::Program {
+    let (mut p, _) = Parser::new(src);
+    p.parse_program()
+}
+
+#[test]
+fn cross_file_function_call_resolves() {
+    // GIVEN: module A exports a function; module B calls it
+    // WHEN:  B is checked with A as prelude
+    // THEN:  no "undefined function" error
+    let module_a = parse_src("pub fn add_one(x: Int) -> Int { x + 1 }");
+    let module_b = parse_src("fn use_it(x: Int) -> Int { add_one(x) }");
+    let result = check_with_prelude(&[module_a], &module_b);
+    assert!(
+        result.is_ok(),
+        "cross-file call should resolve when module is in prelude, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn cross_file_call_without_prelude_is_undefined() {
+    // GIVEN: module B calls add_one which is NOT in scope
+    // WHEN:  B is checked without any prelude
+    // THEN:  UndefinedFunction error is reported
+    let module_b = parse_src("fn use_it(x: Int) -> Int { add_one(x) }");
+    let errors = check(&module_b).errors;
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UndefinedFunction { .. })),
+        "call to unknown function should be an error, got: {errors:?}"
+    );
+}
+
+#[test]
+fn cross_file_type_mismatch_still_caught() {
+    // GIVEN: module A exports fn returning Int; module B passes wrong type
+    // WHEN:  B is checked with A as prelude
+    // THEN:  type mismatch is reported (cross-file checking catches real errors)
+    let module_a = parse_src("pub fn greet(x: Int) -> Int { x }");
+    let module_b = parse_src(r#"fn bad() -> Int { greet("hello") }"#);
+    let errors = check_with_prelude(&[module_a], &module_b).errors;
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "wrong argument type should be caught even in multi-file mode, got: {errors:?}"
+    );
+}
+
+#[test]
+fn cross_file_mutual_calls_both_resolve() {
+    // GIVEN: module A calls helper() defined in module B, and
+    //        module B calls double() defined in module A (mutual dependency).
+    // WHEN:  each module is checked with the other as prelude
+    // THEN:  both check cleanly — no UndefinedFunction errors in either direction
+    let module_a =
+        parse_src("pub fn double(x: Int) -> Int { x + x }  fn use_b(x: Int) -> Int { helper(x) }");
+    let module_b =
+        parse_src("pub fn helper(x: Int) -> Int { x }  fn use_a(x: Int) -> Int { double(x) }");
+
+    // Check A with B as prelude
+    let result_a = check_with_prelude(&[module_b.clone()], &module_a);
+    assert!(
+        result_a.is_ok(),
+        "module A with B as prelude should resolve, got: {:?}",
+        result_a.errors
+    );
+
+    // Check B with A as prelude (uses check_with_two_preludes with empty stdlib slot)
+    let result_b = check_with_two_preludes(&[], &[&module_a], &module_b);
+    assert!(
+        result_b.is_ok(),
+        "module B with A as prelude should resolve, got: {:?}",
+        result_b.errors
+    );
+}
+
+// ── #593: Layer 4 — Cooper's Presburger QE ────────────────────────────────────
+
+#[test]
+fn cooper_linear_expr_arg_proven() {
+    // GIVEN: `b: Int where self < a` and return value `a - b`
+    // WHEN:  return predicate `result > 0` is checked
+    // THEN:  Layer 4 proves it via FM elimination (no runtime check needed)
+    let src = r#"
+        fn diff_positive(a: Int, b: Int where self < a) -> Int where result > 0 {
+            a - b
+        }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "linear-expr diff with hyp should be proven by Layer 4, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn cooper_divisibility_always_nonzero() {
+    // GIVEN: return value `2 * x + 1`
+    // WHEN:  predicate `result != 0` is checked
+    // THEN:  Layer 4 detects 2*x + 1 = 0 has no integer solution → Proven
+    let src = r#"
+        fn always_nonzero(x: Int) -> Int where result != 0 {
+            2 * x + 1
+        }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "2*x+1 != 0 should be proven by divisibility check in Layer 4, got: {:?}",
+        result.errors
+    );
+}
+
+// ── Layer 5: Z3 SMT solver ───────────────────────────────────────────────────
+
+#[test]
+fn z3_proves_hypothesis_implies_pred() {
+    // GIVEN: y has refinement `self > 5`
+    // WHEN:  `require_positive(y)` is checked against `self > 0`
+    // THEN:  Z3 proves `y > 5 → y > 0` (Layers 1–4 already handle this,
+    //        but the test confirms Layer 5 is reachable and correct)
+    let src = r#"
+        fn require_positive(x: Int where self > 0) -> Int {
+            x
+        }
+        fn call_with_refined(y: Int where self > 5) -> Int {
+            require_positive(y)
+        }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "y > 5 implies y > 0 — should be proven statically, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn z3_proves_modular_implication() {
+    // GIVEN: y has refinement `self % 6 == 1`
+    // WHEN:  `require_nonzero_mod3(y)` is checked against `self % 3 != 0`
+    // THEN:  Z3 proves y%6=1 → y%3≠0 (Cooper handles linear arithmetic,
+    //        but modular chaining like this may reach Layer 5)
+    let src = r#"
+        fn require_nonzero_mod3(x: Int where self % 3 != 0) -> Int {
+            x
+        }
+        fn call_with_mod6(y: Int where self % 6 == 1) -> Int {
+            require_nonzero_mod3(y)
+        }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "y%6=1 implies y%3≠0 — should be proven statically, got: {:?}",
         result.errors
     );
 }

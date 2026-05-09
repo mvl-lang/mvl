@@ -69,9 +69,18 @@ impl CheckResult {
 /// registered (but not checked) before the user program is type-checked.
 /// Use this when stdlib files have been parsed and should be visible to the
 /// checker (e.g. `use std.io.{...}` imports in corpus / CLI check mode).
-pub fn check_with_prelude(prelude: &[Program], prog: &Program) -> CheckResult {
+/// Like `check_with_prelude` but accepts two prelude slices that are chained
+/// together, avoiding allocation when the caller already has programs in two
+/// separate vecs (e.g. stdlib owned + user modules borrowed).
+/// `prelude_b` holds references so callers can pass flanking slices of an
+/// existing vec without cloning individual `Program`s.
+pub fn check_with_two_preludes(
+    prelude_a: &[Program],
+    prelude_b: &[&Program],
+    prog: &Program,
+) -> CheckResult {
     let mut checker = TypeChecker::new();
-    for p in prelude {
+    for p in prelude_a.iter().chain(prelude_b.iter().copied()) {
         checker.collect_declarations(&p.declarations);
     }
     checker.check_program(prog);
@@ -99,6 +108,10 @@ pub fn check_with_prelude(prelude: &[Program], prog: &Program) -> CheckResult {
         req_errors,
         expr_types: checker.expr_types,
     }
+}
+
+pub fn check_with_prelude(prelude: &[Program], prog: &Program) -> CheckResult {
+    check_with_two_preludes(prelude, &[], prog)
 }
 
 /// Collect inferred expression types for a set of programs without surfacing errors.

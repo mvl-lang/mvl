@@ -8,11 +8,14 @@
 //! | 1     | layer1  | Trivial pattern matching      | ~40%      |
 //! | 2     | layer2  | Interval arithmetic           | ~60%      |
 //! | 3     | layer3  | Symbolic path analysis        | ~15%      |
-//! | 4     | —       | SMT dispatch (future)         |           |
+//! | 4     | layer4  | Presburger / Cooper's QE      | ~5%       |
+//! | 5     | layer5  | Z3 SMT solver (feature = z3)  | ~remaining|
 
 pub mod layer1;
 pub mod layer2;
 pub mod layer3;
+pub mod layer4;
+pub mod layer5;
 
 use std::collections::HashMap;
 
@@ -98,5 +101,31 @@ impl RefinementSolver {
         fn_decls: &HashMap<String, FnDecl>,
     ) -> Option<RefResult> {
         layer3::try_symbolic(pred, arg, var_refs, fn_decls)
+    }
+
+    /// Try to prove `pred` for `arg` using Layer 4 (Cooper's Presburger QE).
+    ///
+    /// Handles linear-expression arguments and divisibility constraints that
+    /// Layers 1–3 cannot decide.
+    /// Returns `None` when the predicate is non-linear or too complex.
+    pub(crate) fn try_cooper(
+        pred: &RefExpr,
+        arg: &Expr,
+        var_refs: &HashMap<String, Option<RefExpr>>,
+    ) -> Option<RefResult> {
+        layer4::try_cooper(pred, arg, var_refs)
+    }
+
+    /// Try to prove `pred` for `arg` using Layer 5 (Z3 SMT solver).
+    ///
+    /// Only available when compiled with the `z3` feature.  Returns `Some(Proven)`
+    /// when Z3 confirms the implication, `None` on unsupported constructs,
+    /// timeout, or satisfiable negation.
+    pub(crate) fn try_z3(
+        pred: &RefExpr,
+        arg: &Expr,
+        var_refs: &HashMap<String, Option<RefExpr>>,
+    ) -> Option<RefResult> {
+        layer5::try_z3(pred, arg, var_refs)
     }
 }

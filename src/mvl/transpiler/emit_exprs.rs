@@ -999,11 +999,9 @@ fn emit_expr_as_arg(cg: &mut RustEmitter, expr: &Expr) {
         }
         _ => {
             // Temporaries (function call results, struct literals, block expressions)
-            // are rvalues that Rust moves into the callee, so `.clone()` is technically
-            // redundant here. However, we clone unconditionally per Spec 009 Req 2
-            // "Phase 1: clone ALL non-Copy arguments" — LLVM removes redundant clones.
+            // are rvalues that Rust moves into the callee — no `.clone()` needed.
+            // The value is freshly created and has no other owner in the caller.
             emit_expr(cg, expr);
-            cg.push(".clone()");
         }
     }
 }
