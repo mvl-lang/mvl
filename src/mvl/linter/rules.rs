@@ -43,6 +43,9 @@ pub fn trailing_whitespace(src: &str, cfg: &LintConfig, out: &mut Vec<LintDiag>)
 ///
 /// Rule id: `line-length`
 pub fn line_length(src: &str, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if cfg.line_length == 0 {
+        return;
+    }
     for (i, line) in src.lines().enumerate() {
         let line_no = (i + 1) as u32;
         let len = line.chars().count();
@@ -66,6 +69,9 @@ pub fn line_length(src: &str, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
 /// * Use of the wrong character (tabs when `indent_style = spaces`, or vice versa).
 /// * Indent not a multiple of `indent_size` when using spaces.
 pub fn indentation(src: &str, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if !cfg.indentation {
+        return;
+    }
     for (i, line) in src.lines().enumerate() {
         let line_no = (i + 1) as u32;
         if line.is_empty() {
@@ -123,7 +129,10 @@ pub fn indentation(src: &str, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
 /// Check that the file ends with exactly one newline (no trailing blank lines).
 ///
 /// Rule id: `final-newline`
-pub fn final_newline(src: &str, _cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+pub fn final_newline(src: &str, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if !cfg.final_newline {
+        return;
+    }
     if src.is_empty() {
         return;
     }
@@ -1538,7 +1547,14 @@ mod tests {
     use crate::mvl::parser::Parser;
 
     fn cfg() -> LintConfig {
-        LintConfig::default()
+        let mut c = LintConfig::default();
+        // Enable all style rules so rule-level tests can verify they fire correctly.
+        c.line_length = 120;
+        c.trailing_ws = true;
+        c.indentation = true;
+        c.final_newline = true;
+        c.consistent_comment_style = true;
+        c
     }
 
     fn parse(src: &str) -> crate::mvl::parser::ast::Program {

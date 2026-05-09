@@ -19,6 +19,13 @@ spelled out. The linter therefore distinguishes between *correctness concerns* (
 and errors) and *style preferences* (hints). Explicit annotations are never wrong; they
 are the preferred default for generated code.
 
+**Semantic-first defaults:** Style rules (line length, trailing whitespace, indentation,
+final newline, comment style) are **OFF by default**. They have zero semantic value —
+a long line or trailing space does not affect program correctness. Semantic rules
+(unreachable code, redundant match, redundant effects) and complexity rules (cyclomatic
+complexity, function length) remain ON. This ensures that LLM-generated code that is
+correct and compiler-verified produces no spurious lint warnings.
+
 **Origin:** ADR-0017 — Linter Hint severity and explicit IFC annotations as preferred style.
 
 ---
@@ -197,3 +204,65 @@ demonstrates complexity rule violations and is permitted to carry warnings.
 - GIVEN all corpus and example files in their committed state
 - WHEN `make mvl-lint` runs
 - THEN the output is "MVL lint: all clean." and exit code is 0
+
+---
+
+### Requirement 6: Style Rules Are OFF by Default [MUST]
+
+The following rules MUST be disabled in `LintConfig::default()`:
+
+| Rule                   | Config key                  | Default |
+|------------------------|-----------------------------|---------|
+| Line length            | `line_length`               | `0` (disabled) |
+| Trailing whitespace    | `trailing_ws`               | `false` |
+| Indentation checks     | `indentation`               | `false` |
+| Final newline          | `final_newline`             | `false` |
+| Block comment style    | `consistent_comment_style`  | `false` |
+
+Semantic rules (`unreachable_code`, `redundant_match`, `redundant_effects`,
+`redundant_ifc_labels`) and complexity rules (`max_fn_length`,
+`max_cyclomatic_complexity`, etc.) MUST remain ON by default.
+
+**Implementation:** `src/mvl/linter/config.rs::LintConfig::default`
+
+#### Scenario: Fresh lint produces no style warnings
+
+- GIVEN any syntactically valid MVL file
+- AND no `.mvllintrc` present
+- WHEN `mvl lint` runs
+- THEN zero warnings are emitted due to line length, whitespace, indentation,
+  final newline, or comment style
+
+---
+
+### Requirement 7: Style Master Toggle [MUST]
+
+The linter MUST support a `style` key in `.mvllintrc` that enables all style rules
+with standard values. Individual keys override the toggle regardless of file order.
+
+Config parsing order:
+1. Start with hardcoded defaults (all style rules OFF)
+2. If `style = true` is present, enable all style rules with standard values
+3. Apply individual key overrides
+
+**Implementation:** `src/mvl/linter/config.rs::load_from`
+
+#### Scenario: style = true enables all style rules
+
+- GIVEN `.mvllintrc` containing `style = true`
+- WHEN `LintConfig::load` runs
+- THEN `line_length = 120`, `trailing_ws = true`, `indentation = true`,
+  `final_newline = true`, `consistent_comment_style = true`
+
+#### Scenario: Individual key overrides style toggle
+
+- GIVEN `.mvllintrc` containing `style = true` and `line_length = 80`
+- WHEN `LintConfig::load` runs
+- THEN `line_length = 80` (individual override wins)
+- AND all other style rules are enabled by the toggle
+
+#### Scenario: Individual key wins regardless of file order
+
+- GIVEN `.mvllintrc` containing `line_length = 60` on line 1 and `style = true` on line 2
+- WHEN `LintConfig::load` runs
+- THEN `line_length = 60` (earlier individual key still wins over later style toggle)

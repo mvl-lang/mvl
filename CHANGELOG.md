@@ -18,6 +18,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.86.0] — 2026-05-09
+
+### Changed
+
+- **Linter style rules OFF by default** — `line_length`, `trailing_ws`, `indentation`, `final_newline`, and `consistent_comment_style` are now disabled in `LintConfig::default()` to prioritize semantic correctness over style preferences. MVL is designed for LLM-generated code where correctness matters more than formatting. Semantic rules (`unreachable_code`, `redundant_match`, `redundant_effects`) remain ON. Closes #599.
+
+### Added
+
+- **Style master toggle** — New `style = true` key in `.mvllintrc` enables all style rules at once with standard values. Individual keys always override the toggle regardless of file order.
+- **Config fields** — `indentation: bool` and `final_newline: bool` fields added to `LintConfig` (previously these rules always fired, ignoring config).
+
 ## [0.85.0] — 2026-05-09
 
 ### Added
