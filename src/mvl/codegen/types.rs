@@ -149,9 +149,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                     // LLVM level it is represented as a `MvlString*` (ptr).
                     // #420: Regex is an opaque heap handle (Box<regex::Regex> cast to *mut c_void).
                     // #585: Instant is a boxed i64 handle (epoch seconds) at the LLVM level.
-                    "String" | "List" | "Array" | "Map" | "Set" | "Path" | "Regex" | "Instant" => {
-                        Some(self.context.ptr_type(AddressSpace::default()).into())
-                    }
+                    "String" | "List" | "Array" | "Map" | "Set" | "Path" | "Regex" | "Instant"
+                    | "Box" => Some(self.context.ptr_type(AddressSpace::default()).into()),
                     _ => {
                         // Known struct type → %StructName
                         if let Some(&st) = self.llvm_struct_types.get(name.as_str()) {

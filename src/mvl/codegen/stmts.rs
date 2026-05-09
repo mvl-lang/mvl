@@ -806,6 +806,9 @@ impl<'ctx> LlvmBackend<'ctx> {
                         .unwrap();
                     self.builder.build_store(alloca, loaded).unwrap();
                     self.locals.insert(bind_name.clone(), (alloca, llvm_ty));
+                    // Register MVL type so Deref (*box_val) can load the inner type (#571).
+                    self.local_mvl_types
+                        .insert(bind_name.clone(), field_ty.clone());
                 }
             }
         }

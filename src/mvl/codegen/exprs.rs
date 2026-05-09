@@ -817,7 +817,33 @@ impl<'ctx> LlvmBackend<'ctx> {
                 }
                 _ => None,
             },
-            UnaryOp::Deref => Some(val),
+            UnaryOp::Deref => {
+                // For Box[T], load the T value from the heap pointer (#571).
+                if let Expr::Ident(name, _) = expr {
+                    if let Some(mvl_ty) = self.local_mvl_types.get(name.as_str()).cloned() {
+                        let stripped = Self::strip_type_wrappers(&mvl_ty);
+                        if let TypeExpr::Base {
+                            name: tname, args, ..
+                        } = stripped
+                        {
+                            if tname == "Box" {
+                                if let Some(inner_ty) = args.first() {
+                                    if let Some(llvm_ty) = self.mvl_type_to_llvm(inner_ty) {
+                                        if let BasicValueEnum::PointerValue(ptr) = val {
+                                            return Some(
+                                                self.builder
+                                                    .build_load(llvm_ty, ptr, "deref")
+                                                    .unwrap(),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Some(val)
+            }
             UnaryOp::BitNot => match val {
                 // LLVM bitwise NOT = XOR with all-ones (-1).
                 BasicValueEnum::IntValue(v) => {
@@ -1048,6 +1074,16 @@ impl<'ctx> LlvmBackend<'ctx> {
                 )
             }
             _ => {
+                // Box::new(value) — heap-allocate T and return a pointer to it (#571).
+                if name == "Box::new" && args.len() == 1 {
+                    let val = self.emit_expr(&args[0])?;
+                    let ptr = self
+                        .builder
+                        .build_malloc(val.get_type(), "box_alloc")
+                        .unwrap();
+                    self.builder.build_store(ptr, val).unwrap();
+                    return Some(ptr.into());
+                }
                 // Built-in Result/Option constructors: Ok(v), Err(e), Some(v)
                 if matches!(name, "Ok" | "Some") && args.len() == 1 {
                     return self.emit_result_variant(0, args);
