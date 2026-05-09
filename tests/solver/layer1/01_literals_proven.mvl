@@ -1,0 +1,40 @@
+// Solver Layer 1: Literal argument evaluation — all proven
+//
+// Layer 1 evaluates integer and float literals directly against the
+// refinement predicate.  The result is known at compile time with O(1)
+// cost — no runtime assertion is emitted.
+//
+// Every call in this file is PROVEN by Layer 1.
+
+fn positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn non_negative(x: Int where self >= 0) -> Int {
+    x
+}
+
+fn in_range(x: Int where self >= 1 && self <= 100) -> Int {
+    x
+}
+
+fn not_zero(x: Int where self != 0) -> Int {
+    x
+}
+
+fn at_most_ten(x: Int where self <= 10) -> Int {
+    x
+}
+
+// Caller: all arguments are integer literals — Layer 1 evaluates each one.
+fn examples() -> Int {
+    let a: Int = positive(42);          // 42 > 0  ✓
+    let b: Int = non_negative(0);       // 0 >= 0  ✓
+    let c: Int = non_negative(1);       // 1 >= 0  ✓
+    let d: Int = in_range(1);           // 1 >= 1 && 1 <= 100  ✓
+    let e: Int = in_range(50);          // 50 >= 1 && 50 <= 100  ✓
+    let f: Int = in_range(100);         // 100 >= 1 && 100 <= 100  ✓
+    let g: Int = not_zero(-5);          // -5 != 0  ✓
+    let h: Int = at_most_ten(-999);     // -999 <= 10  ✓
+    h
+}

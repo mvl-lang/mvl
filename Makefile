@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-corpus test-stdlib test-bdd test-transpiler test-llvm test-tree-sitter test-grammar-coverage test-examples coverage lint mvl-lint format format-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants
+.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-corpus test-solver test-stdlib test-bdd test-transpiler test-llvm test-tree-sitter test-grammar-coverage test-examples coverage lint mvl-lint format format-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants
 
 help: ## Show this help
 	@echo ""
@@ -118,6 +118,34 @@ test-corpus: ## Validate corpus examples parse and type-check
 				printf "  $$FAIL  %s\n" "$$short"; printf "%s\n" "$$out" | sed 's/^/         /'; fail=$$((fail + 1)); \
 			else \
 				printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1)); \
+			fi; \
+		fi; \
+	done; \
+	echo ""; \
+	if [ $$fail -eq 0 ]; then \
+		printf "  \033[32m✓  $$pass passed, 0 failed\033[0m\n\n"; \
+	else \
+		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
+	fi
+
+test-solver: build ## Run solver layer programs — real MVL programs of progressing complexity
+	@pass=0; fail=0; \
+	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
+	for f in tests/solver/**/*.mvl; do \
+		short=$${f#tests/solver/}; \
+		if grep -q "solver:expect-fail" "$$f" 2>/dev/null; then \
+			cargo run --quiet -- check "$$f" >/dev/null 2>&1; rc=$$?; \
+			if [ $$rc -ne 0 ]; then \
+				printf "  $$OK  %s  (violations detected)\n" "$$short"; pass=$$((pass + 1)); \
+			else \
+				printf "  $$FAIL  %s  (expected violations but checker reported none)\n" "$$short"; fail=$$((fail + 1)); \
+			fi; \
+		else \
+			out=$$(cargo run --quiet -- check "$$f" 2>&1); rc=$$?; \
+			if [ $$rc -eq 0 ]; then \
+				printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1)); \
+			else \
+				printf "  $$FAIL  %s\n" "$$short"; printf "%s\n" "$$out" | sed 's/^/         /'; fail=$$((fail + 1)); \
 			fi; \
 		fi; \
 	done; \
