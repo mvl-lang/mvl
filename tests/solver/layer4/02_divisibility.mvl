@@ -1,0 +1,31 @@
+// Solver Layer 4: Divisibility constraints — all proven
+//
+// When the argument is `n*x + c` and the predicate is `self ≠ 0`, Cooper's
+// checks whether `n*x + c = 0` has an integer solution.
+//
+// `n*x + c = 0` has an integer solution iff n | c (n divides c).
+//
+// Example: `2*x + 1 ≠ 0` for all x:
+//   ¬pred = 2*x + 1 = 0  →  x = −½ (not an integer)
+//   gcd(2, 1) = 1 but 2 ∤ 1  →  UNSAT  →  Proven.
+//
+// Every call in this file is PROVEN by Layer 4.
+
+// 2*x + 1 is always odd — never zero.
+fn always_nonzero(x: Int) -> Int where result != 0 {
+    2 * x + 1
+}
+
+fn caller_nonzero() -> Int {
+    always_nonzero(5)
+}
+
+// 3*x + 1 is never divisible by 3 — never zero mod 3 (stronger: never zero itself).
+// 3*x + 1 = 0 → x = −1/3 — no integer solution.
+fn three_x_plus_one(x: Int) -> Int where result != 0 {
+    3 * x + 1
+}
+
+fn caller_three() -> Int {
+    three_x_plus_one(0)
+}

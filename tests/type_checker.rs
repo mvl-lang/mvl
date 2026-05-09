@@ -5010,3 +5010,41 @@ fn cross_file_mutual_calls_both_resolve() {
         result_b.errors
     );
 }
+
+// ── #593: Layer 4 — Cooper's Presburger QE ────────────────────────────────────
+
+#[test]
+fn cooper_linear_expr_arg_proven() {
+    // GIVEN: `b: Int where self < a` and return value `a - b`
+    // WHEN:  return predicate `result > 0` is checked
+    // THEN:  Layer 4 proves it via FM elimination (no runtime check needed)
+    let src = r#"
+        fn diff_positive(a: Int, b: Int where self < a) -> Int where result > 0 {
+            a - b
+        }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "linear-expr diff with hyp should be proven by Layer 4, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn cooper_divisibility_always_nonzero() {
+    // GIVEN: return value `2 * x + 1`
+    // WHEN:  predicate `result != 0` is checked
+    // THEN:  Layer 4 detects 2*x + 1 = 0 has no integer solution → Proven
+    let src = r#"
+        fn always_nonzero(x: Int) -> Int where result != 0 {
+            2 * x + 1
+        }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "2*x+1 != 0 should be proven by divisibility check in Layer 4, got: {:?}",
+        result.errors
+    );
+}
