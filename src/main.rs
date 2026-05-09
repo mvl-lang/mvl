@@ -574,6 +574,9 @@ fn cmd_check(path: &str, req_filter: Option<u8>, error_limit: usize, stdlib_prof
     );
 
     // Snapshot all parsed user programs for cross-module prelude building.
+    // Intentionally includes resolver-only siblings (auto-loaded to satisfy imports,
+    // not explicitly requested): they may define types or functions that the
+    // explicitly-checked files call and must therefore be visible to the checker.
     let all_user_progs: Vec<Program> = parsed.iter().map(|(_, p, _)| p.clone()).collect();
 
     // Only run the checker on explicitly requested files (not resolver-only siblings).
