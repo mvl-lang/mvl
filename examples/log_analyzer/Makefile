@@ -1,6 +1,6 @@
 # log_analyzer example — MVL Phase 4 demonstration
 # Run from this directory: make build, make test, etc.
-.PHONY: help guard-mvl build check test test-llvm generate run run-llvm clean
+.PHONY: help guard-mvl build check test-solver test test-llvm generate run run-llvm clean
 
 MVL  := ../../target/debug/mvl
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
@@ -24,6 +24,25 @@ check: guard-mvl ## Type-check all three source files
 	$(MVL) check $(DIR)main.mvl
 	$(MVL) check $(DIR)parser.mvl
 	$(MVL) check $(DIR)utils.mvl
+
+test-solver: guard-mvl ## Show per-file solver statistics for all source files
+	@pass=0; fail=0; \
+	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
+	for f in $(DIR)main.mvl $(DIR)parser.mvl $(DIR)utils.mvl; do \
+		name=$$(basename "$$f"); \
+		out=$$($(MVL) check "$$f" 2>&1); rc=$$?; \
+		if [ $$rc -eq 0 ]; then \
+			printf "  $$OK  %s\n" "$$name"; pass=$$((pass + 1)); \
+		else \
+			printf "  $$FAIL  %s\n" "$$name"; printf "%s\n" "$$out" | sed 's/^/         /'; fail=$$((fail + 1)); \
+		fi; \
+	done; \
+	echo ""; \
+	if [ $$fail -eq 0 ]; then \
+		printf "  \033[32m✓  $$pass passed, 0 failed\033[0m\n\n"; \
+	else \
+		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
+	fi
 
 test: guard-mvl ## Run all standalone _test.mvl files (18 tests)
 	$(MVL) test $(DIR)
