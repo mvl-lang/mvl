@@ -1,0 +1,76 @@
+// Solver Layer 2: Compound interval hypotheses — all proven
+//
+// When a parameter carries a compound refinement such as
+// `self > 0 && self <= 100`, Layer 2 intersects the two bounds to form
+// the tightest possible interval [1, 100], then checks the required predicate
+// against the entire range.
+//
+// Every call in this file is PROVEN by Layer 2.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_non_negative(x: Int where self >= 0) -> Int {
+    x
+}
+
+fn require_lt_200(x: Int where self < 200) -> Int {
+    x
+}
+
+fn require_le_100(x: Int where self <= 100) -> Int {
+    x
+}
+
+fn require_ge_1(x: Int where self >= 1) -> Int {
+    x
+}
+
+fn require_lt_60(x: Int where self < 60) -> Int {
+    x
+}
+
+// Hypothesis: self > 0 && self <= 100  →  interval [1, 100].
+fn bounded_positive(x: Int where self > 0 && self <= 100) -> Int {
+    require_positive(x);      // eff_min=1 > 0    ✓
+    require_non_negative(x);  // eff_min=1 >= 0   ✓
+    require_lt_200(x);        // eff_max=100 < 200 ✓
+    require_le_100(x)         // eff_max=100 <= 100 ✓
+}
+
+// Hypothesis: self >= 1 && self <= 50  →  interval [1, 50].
+fn narrow_range(x: Int where self >= 1 && self <= 50) -> Int {
+    require_positive(x);      // eff_min=1 > 0  ✓
+    require_non_negative(x);  // eff_min=1 >= 0 ✓
+    require_ge_1(x);          // eff_min=1 >= 1 ✓
+    require_lt_200(x)         // eff_max=50 < 200 ✓
+}
+
+// Hypothesis: self > 0 && self < 100  →  interval [1, 99].
+// Note: both Exclusive bounds are intersected.
+fn open_interval(x: Int where self > 0 && self < 100) -> Int {
+    require_positive(x);    // eff_min=1 > 0  ✓
+    require_le_100(x);      // eff_max=99 <= 100 ✓
+    require_lt_200(x)       // eff_max=99 < 200 ✓
+}
+
+// Three-way intersection: self > 0 && self < 50 && self <= 30  →  [1, 30].
+fn triple_bound(x: Int where self > 0 && self < 50 && self <= 30) -> Int {
+    require_positive(x);   // eff_min=1 > 0   ✓
+    require_lt_60(x)       // eff_max=30 < 60 ✓
+}
+
+// Mixed Inclusive/Exclusive: self >= 5 && self < 55  →  [5, 54].
+fn mixed_bounds(x: Int where self >= 5 && self < 55) -> Int {
+    require_positive(x);   // eff_min=5 > 0  ✓
+    require_lt_60(x)       // eff_max=54 < 60 ✓
+}
+
+fn examples() -> Int {
+    bounded_positive(42);
+    narrow_range(25);
+    open_interval(50);
+    triple_bound(15);
+    mixed_bounds(10)
+}

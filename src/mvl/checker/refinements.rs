@@ -28,8 +28,8 @@ use crate::mvl::checker::const_eval;
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::solver::{RefResult, RefinementSolver};
 use crate::mvl::parser::ast::{
-    ArithOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, LValue, Literal, LogicOp, MatchArm,
-    MatchBody, Pattern, Program, RefExpr, Stmt, TypeBody, TypeExpr,
+    ArithOp, BinaryOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, LValue, Literal, LogicOp,
+    MatchArm, MatchBody, Pattern, Program, RefExpr, Stmt, TypeBody, TypeExpr,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -557,6 +557,92 @@ fn resolve_type_alias_pred(
     None
 }
 
+// ── If-condition narrowing ────────────────────────────────────────────────────
+
+/// Inject narrowing hypotheses derived from an if-condition into `var_refs`.
+///
+/// Handles simple integer comparisons (`x op n`, `n op x`) and `&&`
+/// conjunctions.  Everything else is silently ignored — conservative and
+/// always sound.  The caller is responsible for working on a *clone* of
+/// `var_refs` so that the narrowing does not escape the if-branch.
+fn inject_if_hypothesis(cond: &Expr, var_refs: &mut HashMap<String, Option<RefExpr>>) {
+    let Expr::Binary {
+        op, left, right, ..
+    } = cond
+    else {
+        return;
+    };
+    if let Some(cmp) = binary_op_to_cmp(op) {
+        // Recognise `x op n` and `n op x` (integer literal only).
+        let (var_name, cmp_op, int_val) =
+            if let (Expr::Ident(name, _), Expr::Literal(Literal::Integer(n), _)) =
+                (left.as_ref(), right.as_ref())
+            {
+                (name.clone(), cmp, *n)
+            } else if let (Expr::Literal(Literal::Integer(n), _), Expr::Ident(name, _)) =
+                (left.as_ref(), right.as_ref())
+            {
+                (name.clone(), flip_cmp(cmp), *n)
+            } else {
+                return;
+            };
+
+        let s = dummy_span();
+        let ref_expr = RefExpr::Compare {
+            op: cmp_op,
+            left: Box::new(RefExpr::Ident {
+                name: "self".to_string(),
+                span: s,
+            }),
+            right: Box::new(RefExpr::Integer {
+                value: int_val,
+                span: s,
+            }),
+            span: s,
+        };
+        // Conjoin with any existing hypothesis for this variable.
+        let new_hyp = match var_refs.get(&var_name).and_then(|v| v.clone()) {
+            Some(existing) => RefExpr::LogicOp {
+                op: LogicOp::And,
+                left: Box::new(existing),
+                right: Box::new(ref_expr),
+                span: s,
+            },
+            None => ref_expr,
+        };
+        var_refs.insert(var_name, Some(new_hyp));
+    } else if *op == BinaryOp::And {
+        // Recurse into both arms of a `&&` conjunction.
+        inject_if_hypothesis(left, var_refs);
+        inject_if_hypothesis(right, var_refs);
+    }
+}
+
+/// Convert a `BinaryOp` comparison to the corresponding `CmpOp`, if applicable.
+fn binary_op_to_cmp(op: &BinaryOp) -> Option<CmpOp> {
+    match op {
+        BinaryOp::Gt => Some(CmpOp::Gt),
+        BinaryOp::Ge => Some(CmpOp::Ge),
+        BinaryOp::Lt => Some(CmpOp::Lt),
+        BinaryOp::Le => Some(CmpOp::Le),
+        BinaryOp::Eq => Some(CmpOp::Eq),
+        BinaryOp::Ne => Some(CmpOp::Ne),
+        _ => None,
+    }
+}
+
+/// Flip a comparison operator (swap left/right operands).
+fn flip_cmp(op: CmpOp) -> CmpOp {
+    match op {
+        CmpOp::Lt => CmpOp::Gt,
+        CmpOp::Gt => CmpOp::Lt,
+        CmpOp::Le => CmpOp::Ge,
+        CmpOp::Ge => CmpOp::Le,
+        CmpOp::Eq => CmpOp::Eq,
+        CmpOp::Ne => CmpOp::Ne,
+    }
+}
+
 // ── AST walkers ───────────────────────────────────────────────────────────────
 
 /// Walk the arms of a match expression/statement, injecting per-arm hypotheses.
@@ -696,8 +782,19 @@ fn analyze_stmt(
             analyze_expr(
                 cond, var_refs, fn_params, type_refs, fn_decls, errors, counts,
             );
+            // Narrow the then-branch: clone var_refs and inject the condition
+            // as an integer hypothesis.  Narrowings do not propagate out of the
+            // branch — the original var_refs is left unchanged.
+            let mut then_refs = var_refs.clone();
+            inject_if_hypothesis(cond, &mut then_refs);
             analyze_block(
-                then, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+                then,
+                &mut then_refs,
+                fn_params,
+                type_refs,
+                fn_decls,
+                errors,
+                counts,
             );
             if let Some(eb) = else_ {
                 match eb {
@@ -798,8 +895,16 @@ fn analyze_expr(
             analyze_expr(
                 cond, var_refs, fn_params, type_refs, fn_decls, errors, counts,
             );
+            let mut then_refs = var_refs.clone();
+            inject_if_hypothesis(cond, &mut then_refs);
             analyze_block(
-                then, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+                then,
+                &mut then_refs,
+                fn_params,
+                type_refs,
+                fn_decls,
+                errors,
+                counts,
             );
             if let Some(e) = else_ {
                 analyze_expr(e, var_refs, fn_params, type_refs, fn_decls, errors, counts);
@@ -895,7 +1000,9 @@ fn check_arg_against_pred(
     var_refs: &HashMap<String, Option<RefExpr>>,
     fn_decls: &HashMap<String, FnDecl>,
 ) -> RefResult {
-    RefinementSolver::try_trivial(pred, arg, var_refs, fn_decls).unwrap_or(RefResult::RuntimeCheck)
+    RefinementSolver::try_trivial(pred, arg, var_refs, fn_decls)
+        .or_else(|| RefinementSolver::try_interval(pred, arg, var_refs))
+        .unwrap_or(RefResult::RuntimeCheck)
 }
 
 // ── Predicate display ─────────────────────────────────────────────────────────

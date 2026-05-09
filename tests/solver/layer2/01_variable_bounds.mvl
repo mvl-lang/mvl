@@ -1,0 +1,79 @@
+// Solver Layer 2: Variable interval bounds — all proven
+//
+// When a parameter carries a refinement hypothesis, Layer 2 converts that
+// predicate to an integer interval and checks whether every value in the
+// interval satisfies the required predicate.
+//
+// Examples:
+//   x: self > 5  →  interval [6, ∞);  proves self > 0 (since 6 > 0)
+//   x: self <= 50 → interval (-∞, 50]; proves self <= 100 (since 50 <= 100)
+//
+// These are NOT proven by Layer 1 because the predicates are not structurally
+// equivalent (subsumption), but the interval relationship is clear.
+//
+// Every call in this file is PROVEN by Layer 2.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_non_negative(x: Int where self >= 0) -> Int {
+    x
+}
+
+fn require_le_100(x: Int where self <= 100) -> Int {
+    x
+}
+
+fn require_lt_200(x: Int where self < 200) -> Int {
+    x
+}
+
+fn require_ge_1(x: Int where self >= 1) -> Int {
+    x
+}
+
+// x > 5  →  interval [6, ∞).  6 > 0, so self > 0 is proven for all x.
+fn stronger_implies_weaker(x: Int where self > 5) -> Int {
+    require_positive(x)   // x > 5 → x > 0  ✓
+}
+
+// x > 0  →  interval [1, ∞).  1 >= 0, so self >= 0 is proven.
+fn positive_implies_non_negative(x: Int where self > 0) -> Int {
+    require_non_negative(x)   // x > 0 → x >= 0  ✓
+}
+
+// x >= 3  →  interval [3, ∞).  3 > 0, so self > 0 is proven.
+fn ge3_implies_positive(x: Int where self >= 3) -> Int {
+    require_positive(x)   // x >= 3 → x > 0  ✓
+}
+
+// x >= 1  →  interval [1, ∞).  1 >= 1, so self >= 1 is proven.
+fn ge1_satisfies_ge1(x: Int where self >= 1) -> Int {
+    require_ge_1(x)   // x >= 1 → x >= 1  ✓
+}
+
+// x <= 50  →  interval (-∞, 50].  50 <= 100, so self <= 100 is proven.
+fn tight_implies_loose_le(x: Int where self <= 50) -> Int {
+    require_le_100(x)   // x <= 50 → x <= 100  ✓
+}
+
+// x < 50  →  interval (-∞, 49].  49 < 200, so self < 200 is proven.
+fn tight_lt_implies_loose_lt(x: Int where self < 50) -> Int {
+    require_lt_200(x)   // x < 50 → x < 200  ✓
+}
+
+// x >= 1 && x <= 50  →  interval [1, 50].  1 > 0, so self > 0 is proven.
+fn bounded_implies_positive(x: Int where self >= 1 && self <= 50) -> Int {
+    require_positive(x)   // eff_min=1 > 0  ✓
+}
+
+fn examples() -> Int {
+    stronger_implies_weaker(10);
+    positive_implies_non_negative(1);
+    ge3_implies_positive(3);
+    ge1_satisfies_ge1(1);
+    tight_implies_loose_le(20);
+    tight_lt_implies_loose_lt(30);
+    bounded_implies_positive(25)
+}
