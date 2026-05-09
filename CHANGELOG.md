@@ -18,6 +18,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.88.0] — 2026-05-09
+
+### Added
+
+- **Property-based testing stdlib complete (Phase A/B + fuzz)** — `std/pbt.mvl` now implements the full PBT stack: Phase A generators (`gen_int`, `gen_float`, `gen_bool`, `gen_string`, `gen_list_int`, `gen_filter_int`, `gen_one_of_int`, `gen_weighted_int`, `gen_boundary_int`) with binary-search shrinking on failure; Phase B mutation operators (`mutate_int`, `mutate_float`, `mutate_string`, `mutate_list_int`), targeted property checking (`property_check_targeted_int`), and mutation-based checking (`property_check_with_mutation_int`); fuzz testing with raw-input generators (`gen_raw_bytes`, `gen_raw_string`) and `fuzz_check_bytes`/`fuzz_check_string`. Verbose and persistence variants added for all typed property checks. All public `property_check_*` and `fuzz_check_*` functions marked `partial`. Closes #40, #425, #617.
+
 ## [0.87.0] — 2026-05-09
 
 ### Added
