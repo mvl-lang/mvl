@@ -26,9 +26,7 @@ use std::collections::HashMap;
 
 use crate::mvl::checker::const_eval;
 use crate::mvl::checker::errors::CheckError;
-use crate::mvl::checker::solver::{
-    binary_op_to_cmp, dummy_span, flip_cmp, RefResult, RefinementSolver,
-};
+use crate::mvl::checker::solver::{binary_op_to_cmp, dummy_span, RefResult, RefinementSolver};
 use crate::mvl::parser::ast::{
     ArithOp, BinaryOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, LValue, Literal, LogicOp,
     MatchArm, MatchBody, Pattern, Program, RefExpr, Stmt, TypeBody, TypeExpr,
@@ -579,7 +577,7 @@ fn inject_if_hypothesis(cond: &Expr, var_refs: &mut HashMap<String, Option<RefEx
             } else if let (Expr::Literal(Literal::Integer(n), _), Expr::Ident(name, _)) =
                 (left.as_ref(), right.as_ref())
             {
-                (name.clone(), flip_cmp(cmp), *n)
+                (name.clone(), cmp.flip(), *n)
             } else {
                 return;
             };

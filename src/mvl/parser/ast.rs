@@ -420,6 +420,21 @@ pub enum CmpOp {
     Ge,
 }
 
+impl CmpOp {
+    /// Flip the operator to swap left/right operands (`<` ↔ `>`, `<=` ↔ `>=`).
+    /// Used when normalising `n op self` patterns to `self flipped_op n`.
+    pub fn flip(self) -> Self {
+        match self {
+            CmpOp::Lt => CmpOp::Gt,
+            CmpOp::Gt => CmpOp::Lt,
+            CmpOp::Le => CmpOp::Ge,
+            CmpOp::Ge => CmpOp::Le,
+            CmpOp::Eq => CmpOp::Eq,
+            CmpOp::Ne => CmpOp::Ne,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArithOp {
     Add,

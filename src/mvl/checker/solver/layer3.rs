@@ -33,7 +33,7 @@ use crate::mvl::parser::ast::{
     BinaryOp, Block, ElseBranch, Expr, FnDecl, Literal, LogicOp, RefExpr, Stmt,
 };
 
-use super::{binary_op_to_cmp, dummy_span, flip_cmp, layer1, layer2, RefResult};
+use super::{binary_op_to_cmp, dummy_span, layer1, layer2, RefResult};
 
 /// Functions with this many or more execution paths fall back to `None`.
 const MAX_PATHS: usize = 32;
@@ -428,7 +428,7 @@ fn inject_condition(cond: &Expr, var_refs: &mut HashMap<String, Option<RefExpr>>
             } else if let (Expr::Literal(Literal::Integer(n), _), Expr::Ident(name, _)) =
                 (left.as_ref(), right.as_ref())
             {
-                (name.clone(), flip_cmp(cmp), *n)
+                (name.clone(), cmp.flip(), *n)
             } else {
                 return; // var-vs-var or non-integer: skip conservatively
             };

@@ -55,19 +55,6 @@ pub(crate) fn binary_op_to_cmp(op: BinaryOp) -> Option<CmpOp> {
     }
 }
 
-/// Flip a comparison operator to swap left/right operands (`<` ↔ `>`, `<=` ↔ `>=`).
-/// Used when normalising `n op x` patterns to `x flipped_op n`.
-pub(crate) fn flip_cmp(op: CmpOp) -> CmpOp {
-    match op {
-        CmpOp::Lt => CmpOp::Gt,
-        CmpOp::Gt => CmpOp::Lt,
-        CmpOp::Le => CmpOp::Ge,
-        CmpOp::Ge => CmpOp::Le,
-        CmpOp::Eq => CmpOp::Eq,
-        CmpOp::Ne => CmpOp::Ne,
-    }
-}
-
 // ── Solver ────────────────────────────────────────────────────────────────────
 
 /// The layered refinement solver.
