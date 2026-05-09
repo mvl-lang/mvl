@@ -606,6 +606,28 @@ fn cross_backend_regex_find_all() {
     }
 }
 
+// ── #587: set algebra (intersection, difference, union) ───────────────────────
+
+/// Both backends must produce identical element counts for set_intersection,
+/// set_difference, and set_union on integer sets.
+#[test]
+fn cross_backend_set_algebra() {
+    let file = corpus_stdlib("set_algebra.mvl");
+    let transpiler_out = run_transpiler(&file);
+    assert_eq!(
+        transpiler_out.trim(),
+        "2\n2\n6",
+        "Rust transpiler: expected intersection=2, difference=2, union=6, got: {transpiler_out:?}"
+    );
+    if let Some(llvm_out) = run_llvm(&file) {
+        assert_eq!(
+            llvm_out.trim(),
+            transpiler_out.trim(),
+            "LLVM output must match Rust transpiler for set algebra"
+        );
+    }
+}
+
 // ── #586: signal handling (ignore, reset, on) ─────────────────────────────────
 
 /// Both backends must produce identical output for `signal_ignore` and `signal_reset`.

@@ -105,19 +105,16 @@ pub fn set_is_empty[T](s: Set[T]) -> Bool {
 }
 
 /// Elements present in both `a` and `b`.
-// LLVM: deferred to #436 — no codegen arm for `intersection` in exprs.rs yet.
 pub fn set_intersection[T](a: Set[T], b: Set[T]) -> Set[T] {
     a.intersection(b)
 }
 
 /// Elements present in `a` but not `b`.
-// LLVM: deferred to #436 — no codegen arm for `difference` in exprs.rs yet.
 pub fn set_difference[T](a: Set[T], b: Set[T]) -> Set[T] {
     a.difference(b)
 }
 
 /// Elements present in either `a` or `b`.
-// LLVM: deferred to #436 — no codegen arm for `union` in exprs.rs yet.
 pub fn set_union[T](a: Set[T], b: Set[T]) -> Set[T] {
     a.union(b)
 }
