@@ -1,0 +1,91 @@
+// Solver Layer 2: If-condition narrowing — all proven
+//
+// When `if x > N { ... }` is encountered, Layer 2 injects the condition
+// `x > N` as a hypothesis inside the then-block.  That hypothesis is
+// converted to an interval [N+1, ∞) and used to prove predicates on x.
+//
+// The narrowing is strictly local — it does not propagate beyond the
+// if-block, so the else-branch and outer scope are unaffected.
+//
+// Every call inside if-then blocks is PROVEN by Layer 2.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_non_negative(x: Int where self >= 0) -> Int {
+    x
+}
+
+fn require_small(x: Int where self < 100) -> Int {
+    x
+}
+
+fn require_at_least_5(x: Int where self >= 5) -> Int {
+    x
+}
+
+// After `if x > 0`, the solver knows x > 0 inside the block.
+fn guarded_call(x: Int) -> Int {
+    if x > 0 {
+        require_positive(x)   // narrowed: x > 0 → x > 0  ✓
+    } else {
+        0
+    }
+}
+
+// After `if x >= 0`, the solver knows x >= 0 inside the block.
+fn guarded_non_negative(x: Int) -> Int {
+    if x >= 0 {
+        require_non_negative(x)   // narrowed: x >= 0 → x >= 0  ✓
+    } else {
+        -1
+    }
+}
+
+// After `if n < 100`, the solver knows n < 100 inside the block.
+fn guarded_small(n: Int) -> Int {
+    if n < 100 {
+        require_small(n)   // narrowed: n < 100 → n < 100  ✓
+    } else {
+        99
+    }
+}
+
+// Condition `x >= 5` injects: effective interval [5, ∞).
+fn guarded_at_least_5(x: Int) -> Int {
+    if x >= 5 {
+        require_at_least_5(x)   // narrowed: x >= 5 → x >= 5  ✓
+    } else {
+        5
+    }
+}
+
+// Compound guard: both constraints injected via `&&`.
+// Inside the block: x in [1, 99].
+fn compound_guard(x: Int) -> Int {
+    if x > 0 && x < 100 {
+        require_positive(x);   // [1, 99]: eff_min=1 > 0  ✓
+        require_small(x)       // [1, 99]: eff_max=99 < 100  ✓
+    } else {
+        0
+    }
+}
+
+// Narrowing on the right-hand side of the comparison: `10 < x` means `x > 10`.
+fn flipped_condition(x: Int) -> Int {
+    if 10 < x {
+        require_positive(x)   // narrowed: x > 10 → x > 0  ✓
+    } else {
+        0
+    }
+}
+
+fn examples() -> Int {
+    guarded_call(3);
+    guarded_non_negative(0);
+    guarded_small(5);
+    guarded_at_least_5(7);
+    compound_guard(42);
+    flipped_condition(15)
+}

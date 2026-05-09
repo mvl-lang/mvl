@@ -1,0 +1,50 @@
+// Solver Layer 1: Contradiction detection — all violations
+// solver:expect-fail
+//
+// A predicate that can never be satisfied is a contradiction.  Layer 1
+// recognises contradictions and immediately fails the call — no valid
+// argument can ever satisfy the predicate, so passing one is a bug.
+//
+// Detected patterns:
+//   self < self           irreflexive strict comparison   (never true)
+//   self > self           irreflexive strict comparison   (never true)
+//   self != self          irreflexive inequality          (never true)
+//   A && !A               direct negation                 (never true)
+//   self > N && self < M  empty integer interval (N ≥ M)  (never true)
+//   !<tautology>          negation of always-true         (never true)
+//
+// Every call in this file is FAILED by Layer 1.
+
+// A function whose parameter predicate is a contradiction — no argument
+// can ever satisfy it.  Any call site is a compile-time error.
+
+fn irreflexive_lt(x: Int where self < self) -> Int {
+    x
+}
+
+fn irreflexive_ne(x: Int where self != self) -> Int {
+    x
+}
+
+fn direct_negation(x: Int where self > 0 && !(self > 0)) -> Int {
+    x
+}
+
+// Empty interval: no integer is both > 0 and < 0.
+fn empty_interval(x: Int where self > 0 && self < 0) -> Int {
+    x
+}
+
+// Reversed interval: no integer is both >= 5 and <= 3.
+fn reversed_interval(x: Int where self >= 5 && self <= 3) -> Int {
+    x
+}
+
+fn violations() -> Int {
+    let a: Int = irreflexive_lt(0);         // self < self  ✗  compile error
+    let b: Int = irreflexive_ne(42);        // self != self ✗  compile error
+    let c: Int = direct_negation(1);        // A && !A      ✗  compile error
+    let d: Int = empty_interval(0);         // > 0 && < 0   ✗  compile error
+    let e: Int = reversed_interval(4);      // >= 5 && <= 3 ✗  compile error
+    e
+}

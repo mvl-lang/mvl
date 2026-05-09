@@ -1,0 +1,47 @@
+// Solver Layer 1: Refinement subsumption — all proven
+//
+// When a variable already carries a refinement predicate that is
+// structurally equivalent to the one required by the callee, Layer 1
+// proves the call by subsumption — no runtime assertion needed.
+//
+// Subsumption is name-independent: the parameter may be called `x`, `n`,
+// or `value` — what matters is that the predicate shape matches.
+//
+// Every call in this file is PROVEN by Layer 1.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_non_zero(x: Int where self != 0) -> Int {
+    x
+}
+
+fn require_bounded(x: Int where self >= 1 && self <= 100) -> Int {
+    x
+}
+
+// Same predicate, same parameter name — trivially proven.
+fn caller_same_name(x: Int where self > 0) -> Int {
+    require_positive(x)
+}
+
+// Same predicate, different parameter name — still proven (names normalise to "self").
+fn caller_renamed(value: Int where self > 0) -> Int {
+    require_positive(value)
+}
+
+fn caller_non_zero(n: Int where self != 0) -> Int {
+    require_non_zero(n)
+}
+
+// Compound predicate: both sides must match.
+fn caller_bounded(n: Int where self >= 1 && self <= 100) -> Int {
+    require_bounded(n)
+}
+
+// Chain: subsumption at each step.
+fn double_call(x: Int where self > 0) -> Int {
+    let a: Int = require_positive(x);   // x carries self > 0  ✓
+    require_positive(x)                 // still in scope  ✓
+}

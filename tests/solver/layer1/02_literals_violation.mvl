@@ -1,0 +1,29 @@
+// Solver Layer 1: Literal argument evaluation — violations detected
+// solver:expect-fail
+//
+// When a literal argument definitively violates the predicate, Layer 1
+// reports a compile-time error.  No runtime is needed to detect these.
+//
+// Every call in this file is FAILED by Layer 1.
+
+fn positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn in_range(x: Int where self >= 1 && self <= 100) -> Int {
+    x
+}
+
+fn not_zero(x: Int where self != 0) -> Int {
+    x
+}
+
+// Caller: each argument violates the refinement predicate.
+fn violations() -> Int {
+    let a: Int = positive(-1);          // -1 > 0  ✗  compile error
+    let b: Int = positive(0);           // 0 > 0   ✗  compile error
+    let c: Int = in_range(0);           // 0 >= 1  ✗  compile error
+    let d: Int = in_range(101);         // 101 <= 100  ✗  compile error
+    let e: Int = not_zero(0);           // 0 != 0  ✗  compile error
+    e
+}

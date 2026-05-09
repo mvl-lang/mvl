@@ -1,0 +1,53 @@
+// Solver Layer 2: Interval violations — all failed
+// solver:expect-fail
+//
+// Layer 2 detects violations when a variable's interval is entirely outside
+// the required predicate's range.
+//
+// Example: `x: self < 0` gives interval (-∞, -1]; passing to `require_positive`
+// (which needs self > 0) is failed because eff_max = -1 ≤ 0.
+//
+// Every call in this file is FAILED by Layer 2.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_negative(x: Int where self < 0) -> Int {
+    x
+}
+
+fn require_non_negative(x: Int where self >= 0) -> Int {
+    x
+}
+
+fn require_large(x: Int where self >= 100) -> Int {
+    x
+}
+
+// x < 0  →  interval (-∞, -1].  eff_max=-1 ≤ 0, so self > 0 is Failed.
+fn negative_to_positive(x: Int where self < 0) -> Int {
+    require_positive(x)   // x < 0 → x > 0  ✗  compile error
+}
+
+// x > 5  →  interval [6, ∞).  eff_min=6 ≥ 0, so self < 0 is Failed.
+fn strongly_positive_to_negative(x: Int where self > 5) -> Int {
+    require_negative(x)   // x > 5 → x < 0  ✗  compile error
+}
+
+// x < 0  →  interval (-∞, -1].  eff_max=-1 < 0, so self >= 0 is Failed.
+fn strictly_negative_to_non_negative(x: Int where self < 0) -> Int {
+    require_non_negative(x)   // x < 0 → x >= 0  ✗  compile error
+}
+
+// x < 5  →  interval (-∞, 4].  eff_max=4 < 100, so self >= 100 is Failed.
+fn small_to_large(x: Int where self < 5) -> Int {
+    require_large(x)   // x < 5 → x >= 100  ✗  compile error
+}
+
+fn violations() -> Int {
+    negative_to_positive(0);
+    strongly_positive_to_negative(10);
+    strictly_negative_to_non_negative(0);
+    small_to_large(0)
+}

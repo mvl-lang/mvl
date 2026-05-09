@@ -18,6 +18,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.84.0] — 2026-05-09
+
+### Added
+
+- **Layer 2 interval arithmetic for refinement solver** — Adds interval-based reasoning to the layered refinement checker. Converts variable hypotheses to bounded integer intervals and checks predicate containment, proving calls where Layer 1 (trivial patterns) cannot. Handles compound bounds via `&&` intersection. Closes #590.
+- **If-condition narrowing in refinement context** — Injects condition constraints into then-block scope for local narrowing without propagation to else-branch (conservative, sound). Enables Layer 2 to prove calls inside `if x > N { require_something(x) }` blocks.
+
 ## [0.82.0] — 2026-05-08
 
 ### Added

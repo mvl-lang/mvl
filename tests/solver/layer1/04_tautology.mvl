@@ -1,0 +1,50 @@
+// Solver Layer 1: Tautology detection — all proven
+//
+// A predicate that is always true regardless of the argument value is a
+// tautology.  Layer 1 recognises tautologies and immediately proves the
+// call — the argument is not even inspected.
+//
+// Detected patterns:
+//   self == self          reflexive equality    (always true)
+//   self <= self          reflexive ≤           (always true)
+//   self >= self          reflexive ≥           (always true)
+//   A || <tautology>      disjunction absorbs   (always true)
+//   !<contradiction>      negation of impossible (always true)
+//
+// Every call in this file is PROVEN by Layer 1.
+
+fn reflexive_eq(x: Int where self == self) -> Int {
+    x
+}
+
+fn reflexive_le(x: Int where self <= self) -> Int {
+    x
+}
+
+fn reflexive_ge(x: Int where self >= self) -> Int {
+    x
+}
+
+// self > 0 || self == self — the second arm is a tautology, so the whole
+// disjunction is a tautology regardless of whether self > 0 holds.
+fn disjunction_absorbs(x: Int where self > 0 || self == self) -> Int {
+    x
+}
+
+// !(self > 0 && self < 0) — the inner predicate is a contradiction (empty
+// interval), so its negation is a tautology.
+fn negated_contradiction(x: Int where !(self > 0 && self < 0)) -> Int {
+    x
+}
+
+fn examples() -> Int {
+    // Tautology: argument value is irrelevant — proven for any integer.
+    let a: Int = reflexive_eq(42);
+    let b: Int = reflexive_eq(-999);
+    let c: Int = reflexive_eq(0);
+    let d: Int = reflexive_le(42);
+    let e: Int = reflexive_ge(-1);
+    let f: Int = disjunction_absorbs(-100);  // -100 > 0 is false, but tautology wins
+    let g: Int = negated_contradiction(5);
+    g
+}
