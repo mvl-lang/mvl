@@ -4561,3 +4561,49 @@ fn builtin_fn_callable_from_user_code() {
         "call to builtin fn should type-check cleanly, got: {errors:?}"
     );
 }
+
+// ── stdlib proven profile — unit tests (#538) ────────────────────────────────
+
+/// Proven profile verification is backed by `check_with_prelude`. Verify that
+/// a deliberately ill-typed stdlib body (wrong return type) is caught, proving
+/// the checker is actually applied to stdlib source rather than skipped.
+#[test]
+fn proven_profile_checker_catches_type_error_in_stdlib_body() {
+    use mvl::mvl::checker::check_with_prelude;
+
+    // GIVEN: a "stdlib" snippet with a body that returns the wrong type
+    let bad_stdlib = "pub fn broken(x: Int) -> String { x }";
+    let (mut p, _) = Parser::new(bad_stdlib);
+    let prog = p.parse_program();
+
+    // WHEN: verified with check_with_prelude (as check_proven_stdlib does)
+    let result = check_with_prelude(&[], &prog);
+
+    // THEN: a type error is reported — the checker is not a no-op
+    assert!(
+        result.has_errors(),
+        "expected type error for wrong return type, got no errors"
+    );
+}
+
+/// A pure-MVL stdlib body that is correctly typed must pass check_with_prelude
+/// without errors (proven profile does not over-reject valid stdlib).
+#[test]
+fn proven_profile_checker_accepts_valid_stdlib_body() {
+    use mvl::mvl::checker::check_with_prelude;
+
+    // GIVEN: a valid stdlib snippet
+    let good_stdlib = "pub fn double(x: Int) -> Int { x + x }";
+    let (mut p, _) = Parser::new(good_stdlib);
+    let prog = p.parse_program();
+
+    // WHEN: verified with check_with_prelude
+    let result = check_with_prelude(&[], &prog);
+
+    // THEN: no errors
+    assert!(
+        !result.has_errors(),
+        "valid stdlib body should pass proven profile check, got: {:?}",
+        result.errors
+    );
+}

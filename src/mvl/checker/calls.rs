@@ -196,6 +196,21 @@ impl TypeChecker {
             if let Some(enum_ty) = self.lookup_enum_for_variant(variant_name) {
                 return enum_ty;
             }
+            // HOF: `name` may be a local variable with a function type fn(T...) -> R.
+            // This covers stdlib patterns like `map(xs, f)` where `f: fn(T) -> U`.
+            if let Some(var_info) = self.env.lookup(name) {
+                if let Ty::Fn(param_tys, ret_ty) = var_info.ty.clone() {
+                    if arg_count != param_tys.len() {
+                        self.emit(CheckError::WrongArgCount {
+                            name: name.to_string(),
+                            expected: param_tys.len(),
+                            found: arg_count,
+                            span,
+                        });
+                    }
+                    return *ret_ty;
+                }
+            }
             // Not in function table — could be builtin or foreign; emit Unknown
             self.emit(CheckError::UndefinedFunction {
                 name: name.to_string(),

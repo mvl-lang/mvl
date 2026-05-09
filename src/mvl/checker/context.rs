@@ -278,12 +278,14 @@ impl TypeEnv {
                 type_params: HashSet::new(),
             },
         );
-        // panic — unconditional termination with a message; pure effect-wise
+        // panic — unconditional termination; return type is Unknown (the "never"
+        // sentinel) so it is compatible with any expected type in match arms,
+        // if-branches, etc.  The caller never actually receives a value.
         self.fns.insert(
             "panic".into(),
             FnInfo {
                 params: vec![Ty::String],
-                ret: Ty::Unit,
+                ret: Ty::Unknown,
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),

@@ -815,3 +815,60 @@ fn stdlib_unknown_profile_rejected() {
         "expected profile error, got:\n{stderr}"
     );
 }
+
+/// `--stdlib=proven` must be accepted on `mvl check` and exit 0 for valid code.
+#[test]
+fn stdlib_proven_flag_accepted_on_check() {
+    let out = Command::new(mvl_bin())
+        .args(["check", &corpus("hello_world.mvl"), "--stdlib=proven"])
+        .output()
+        .expect("failed to run mvl check --stdlib=proven");
+    assert!(
+        out.status.success(),
+        "mvl check --stdlib=proven failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// For valid user code, `--stdlib=proven` and `--stdlib=trusted` must produce
+/// identical stdout (same verdict lines, same requirement counts).
+#[test]
+fn stdlib_proven_and_trusted_produce_identical_output_for_valid_code() {
+    let file = corpus("hello_world.mvl");
+
+    let trusted = Command::new(mvl_bin())
+        .args(["check", &file, "--stdlib=trusted"])
+        .output()
+        .expect("failed to run mvl check --stdlib=trusted");
+    let proven = Command::new(mvl_bin())
+        .args(["check", &file, "--stdlib=proven"])
+        .output()
+        .expect("failed to run mvl check --stdlib=proven");
+
+    assert!(trusted.status.success(), "trusted failed unexpectedly");
+    assert!(proven.status.success(), "proven failed unexpectedly");
+    assert_eq!(
+        String::from_utf8_lossy(&trusted.stdout),
+        String::from_utf8_lossy(&proven.stdout),
+        "trusted and proven stdout differ for valid code"
+    );
+}
+
+/// `--verbose --stdlib=proven` must print the active profile to stderr.
+#[test]
+fn stdlib_proven_verbose_reports_profile() {
+    let out = Command::new(mvl_bin())
+        .args([
+            "check",
+            &corpus("hello_world.mvl"),
+            "--stdlib=proven",
+            "--verbose",
+        ])
+        .output()
+        .expect("failed to run mvl check --stdlib=proven --verbose");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("stdlib profile: proven"),
+        "expected 'stdlib profile: proven' in stderr, got:\n{stderr}"
+    );
+}

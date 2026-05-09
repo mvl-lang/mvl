@@ -332,7 +332,11 @@ impl TypeChecker {
             Stmt::Return { value, span } => {
                 if let Some(expr) = value {
                     let found = self.infer_expr(expr);
-                    if let Some(ret) = return_ty {
+                    // Use `return_ty` if available; fall back to the function-level
+                    // `current_return_ty` so that early `return` inside a for/while
+                    // loop body is still checked against the function's return type.
+                    let effective_ret = return_ty.or(self.current_return_ty.as_ref());
+                    if let Some(ret) = effective_ret {
                         if !types_compatible(ret, &found) {
                             self.emit(CheckError::TypeMismatch {
                                 expected: ret.display(),
@@ -363,22 +367,20 @@ impl TypeChecker {
                 // reveals the condition's value; non-Unit results must be promoted.
                 let cond_label = ifc::label_of(&cond_ty);
 
-                let then_ty = self.infer_block_type(then, return_ty);
-                // After the normal branch check, apply label promotion for non-Unit results:
-                // the implicit return of an if-statement branch inherits at least the
-                // condition's label. Skip Unit (carries no information).
+                // Pass None: non-tail if-branch body types don't constrain the
+                // function return. Early `return` inside branches uses
+                // `current_return_ty` as fallback (see Stmt::Return above).
+                let then_ty = self.infer_block_type(then, None);
                 self.check_branch_label_promotion(cond_label, &then_ty, return_ty, *span);
 
                 if let Some(else_branch) = else_ {
                     match else_branch {
                         ElseBranch::Block(b) => {
-                            let else_ty = self.infer_block_type(b, return_ty);
+                            let else_ty = self.infer_block_type(b, None);
                             self.check_branch_label_promotion(
                                 cond_label, &else_ty, return_ty, *span,
                             );
                         }
-                        // `else if` chains: recurse so each nested if also gets
-                        // promotion applied to its own branches.
                         ElseBranch::If(s) => self.check_stmt(s, return_ty),
                     }
                 }
@@ -390,7 +392,9 @@ impl TypeChecker {
                 span,
             } => {
                 let scrutinee_ty = self.infer_expr(scrutinee);
-                self.check_match_arms(arms, &scrutinee_ty, *span, return_ty);
+                // Pass None: non-tail match arm bodies don't constrain the function
+                // return. Early `return` in arms uses `current_return_ty` fallback.
+                self.check_match_arms(arms, &scrutinee_ty, *span, None);
             }
 
             Stmt::For {
@@ -408,7 +412,10 @@ impl TypeChecker {
                 let elem_ty = self.check_iterator_type(&iter_ty, iter_span);
                 self.env.push_scope();
                 self.bind_pattern(pattern, &elem_ty, false);
-                self.check_block(body, return_ty);
+                // Pass None: the loop body's tail type doesn't constrain the
+                // function return; early `return` inside the body uses
+                // `current_return_ty` as fallback in Stmt::Return.
+                self.check_block(body, None);
                 self.env.pop_scope();
             }
 
@@ -426,7 +433,8 @@ impl TypeChecker {
                 if !matches!(self.current_fn_totality, Some(Totality::Partial)) {
                     self.emit(CheckError::UnboundedLoopInTotal { span: *span });
                 }
-                self.check_block(body, return_ty);
+                // Same reasoning as Stmt::For: loop body tail type ≠ fn return type.
+                self.check_block(body, None);
             }
 
             // #14: Reject bare Result expressions (ResultIgnored)

@@ -72,15 +72,9 @@ pub fn flatten[T](xs: List[List[T]]) -> List[T] where T: Clone {
 
 /// Reverse a list.
 pub fn reverse[T](xs: List[T]) -> List[T] where T: Clone {
-    let len: Int = list_len(xs);
     let mut result: List[T] = [];
-    let mut i: Int = len - 1;
-    while i >= 0 {
-        match list_get(xs, i) {
-            Some(v) => { result.push(v) },
-            None => {}
-        };
-        i = i - 1
+    for x in xs {
+        result = list_concat([x], result)
     };
     result
 }
@@ -182,64 +176,42 @@ pub fn partition[T](xs: List[T], f: fn(T) -> Bool) -> (List[T], List[T]) where T
 
 /// Retain leading elements while `f` returns true; stop at first false.
 pub fn take_while[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
-    let mut i: Int = 0;
-    let len: Int = list_len(xs);
-    let mut running: Bool = true;
-    while running && i < len {
-        match list_get(xs, i) {
-            Some(x) => {
-                if f(x.clone()) {
-                    i = i + 1
-                } else {
-                    running = false
-                }
-            },
-            None => { running = false }
+    let mut result: List[T] = [];
+    for x in xs {
+        if f(x.clone()) {
+            result.push(x)
+        } else {
+            return result
         }
     };
-    slice(xs, 0, i)
+    result
 }
 
 /// Drop leading elements while `f` returns true; keep from first false onward.
 pub fn skip_while[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
-    let mut i: Int = 0;
-    let len: Int = list_len(xs);
-    let mut running: Bool = true;
-    while running && i < len {
-        match list_get(xs, i) {
-            Some(x) => {
-                if f(x.clone()) {
-                    i = i + 1
-                } else {
-                    running = false
-                }
-            },
-            None => { running = false }
+    let mut result: List[T] = [];
+    let mut skipping: Bool = true;
+    for x in xs {
+        if skipping && f(x.clone()) {
+            // still in the prefix — discard
+        } else {
+            skipping = false;
+            result.push(x)
         }
     };
-    slice(xs, i, len)
+    result
 }
 
 /// True if at least one element satisfies `f`.
 ///
 /// Short-circuits: stops at the first element where `f` returns true.
 pub fn any[T](xs: List[T], f: fn(T) -> Bool) -> Bool where T: Clone {
-    let mut i: Int = 0;
-    let len: Int = list_len(xs);
-    let mut found: Bool = false;
-    while found == false && i < len {
-        match list_get(xs, i) {
-            Some(x) => {
-                if f(x.clone()) {
-                    found = true
-                } else {
-                    i = i + 1
-                }
-            },
-            None => { i = i + 1 }
+    for x in xs {
+        if f(x) {
+            return true
         }
     };
-    found
+    false
 }
 
 /// True if every element satisfies `f`.
