@@ -484,25 +484,6 @@ pub(super) fn try_cooper(
 mod tests {
     use super::*;
 
-    fn make_le_constraint(vars: &[(&str, i64)], constant: i64) -> Constraint {
-        let mut t = LinTerm::constant(constant);
-        for (name, coeff) in vars {
-            let mut extra = LinTerm::var(*name);
-            extra.vars.insert(name.to_string(), *coeff);
-            extra.constant = 0;
-            t = t.add(&extra);
-        }
-        // Rebuild cleanly.
-        let mut term = LinTerm {
-            constant,
-            vars: HashMap::new(),
-        };
-        for (name, coeff) in vars {
-            term.vars.insert(name.to_string(), *coeff);
-        }
-        Constraint::Le(term)
-    }
-
     #[test]
     fn fm_constant_contradiction() {
         // 1 ≤ 0 → UNSAT
