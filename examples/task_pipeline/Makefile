@@ -7,7 +7,7 @@
 # Run from this directory or from the repo root.
 .PHONY: help guard-mvl check test run all clean
 
-MVL  := $(shell test -x ../../target/debug/mvl && echo ../../target/debug/mvl || echo mvl)
+MVL  := ../../target/debug/mvl
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 help: ## Show this help

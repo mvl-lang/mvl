@@ -2,7 +2,7 @@
 # Run from this directory: make build, make test, etc.
 .PHONY: help guard-mvl build check test test-llvm generate run run-llvm clean
 
-MVL  := $(shell test -x ../../target/debug/mvl && echo ../../target/debug/mvl || echo mvl)
+MVL  := ../../target/debug/mvl
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 help: ## Show this help
