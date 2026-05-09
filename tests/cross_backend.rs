@@ -823,3 +823,11 @@ fn cross_backend_linked_list() {
     assert_backends_agree("linked_list.mvl");
     assert_llvm_output(&corpus("linked_list.mvl"), "length: 3");
 }
+
+// ── #606: Box[T] deref via struct field access ────────────────────────────────
+
+#[test]
+fn cross_backend_box_field_deref() {
+    assert_backends_agree("box_field_deref.mvl");
+    assert_llvm_output(&corpus("box_field_deref.mvl"), "value: 42");
+}

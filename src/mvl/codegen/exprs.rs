@@ -818,28 +818,21 @@ impl<'ctx> LlvmBackend<'ctx> {
                 _ => None,
             },
             UnaryOp::Deref => {
-                // For Box[T], load the T value from the heap pointer (#571).
-                // TODO(#571): only Expr::Ident is handled; dereferencing non-ident
-                // expressions (field access, function-call results) silently falls
-                // through to Some(val) returning the raw pointer. Fixing this
-                // requires type-inference for arbitrary sub-expressions.
-                if let Expr::Ident(name, _) = expr {
-                    if let Some(mvl_ty) = self.local_mvl_types.get(name.as_str()).cloned() {
-                        let stripped = Self::strip_type_wrappers(&mvl_ty);
-                        if let TypeExpr::Base {
-                            name: tname, args, ..
-                        } = stripped
-                        {
-                            if tname == "Box" {
-                                if let Some(inner_ty) = args.first() {
-                                    if let Some(llvm_ty) = self.mvl_type_to_llvm(inner_ty) {
-                                        if let BasicValueEnum::PointerValue(ptr) = val {
-                                            return Some(
-                                                self.builder
-                                                    .build_load(llvm_ty, ptr, "deref")
-                                                    .unwrap(),
-                                            );
-                                        }
+                // For Box[T], load the T value from the heap pointer (#571, #606).
+                // infer_expr_mvl_type handles Ident, FieldAccess, and chained Deref.
+                if let Some(mvl_ty) = self.infer_expr_mvl_type(expr) {
+                    let stripped = Self::strip_type_wrappers(&mvl_ty);
+                    if let TypeExpr::Base {
+                        name: tname, args, ..
+                    } = stripped
+                    {
+                        if tname == "Box" {
+                            if let Some(inner_ty) = args.first() {
+                                if let Some(llvm_ty) = self.mvl_type_to_llvm(inner_ty) {
+                                    if let BasicValueEnum::PointerValue(ptr) = val {
+                                        return Some(
+                                            self.builder.build_load(llvm_ty, ptr, "deref").unwrap(),
+                                        );
                                     }
                                 }
                             }
@@ -856,6 +849,57 @@ impl<'ctx> LlvmBackend<'ctx> {
                 }
                 _ => None,
             },
+        }
+    }
+
+    // ── #606: MVL type inference for deref ───────────────────────────────────
+
+    /// Infer the MVL type of an expression from local tracking, without emitting IR.
+    ///
+    /// Covers the cases needed by the `UnaryOp::Deref` handler to determine
+    /// the inner type `T` of a `Box[T]` pointer (#571, #606):
+    /// - `Ident` — look up `local_mvl_types`
+    /// - `FieldAccess { base, field }` — recurse into base, look up field in `struct_fields`
+    /// - `Unary { Deref, inner }` — recurse into inner, strip the Box wrapper to get T
+    ///
+    /// Returns `None` for function calls, method calls, and any other expression
+    /// where the type cannot be determined without a full type-inference pass.
+    pub(crate) fn infer_expr_mvl_type(&self, expr: &Expr) -> Option<TypeExpr> {
+        match expr {
+            Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
+            Expr::FieldAccess {
+                expr: base, field, ..
+            } => {
+                let base_ty = self.infer_expr_mvl_type(base)?;
+                let stripped = Self::strip_type_wrappers(&base_ty);
+                if let TypeExpr::Base { name, .. } = stripped {
+                    let fields = self.struct_fields.get(name.as_str())?;
+                    fields
+                        .iter()
+                        .find(|(n, _)| n == field)
+                        .map(|(_, ty)| ty.clone())
+                } else {
+                    None
+                }
+            }
+            Expr::Unary {
+                op: UnaryOp::Deref,
+                expr: inner,
+                ..
+            } => {
+                let inner_ty = self.infer_expr_mvl_type(inner)?;
+                let stripped = Self::strip_type_wrappers(&inner_ty);
+                if let TypeExpr::Base { name, args, .. } = stripped {
+                    if name == "Box" {
+                        args.first().cloned()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
         }
     }
 
