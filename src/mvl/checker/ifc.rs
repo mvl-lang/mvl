@@ -89,6 +89,18 @@ pub fn label_of(ty: &Ty) -> Option<SecurityLabel> {
     }
 }
 
+/// Remove the outermost security label from a type, returning the inner type.
+/// Used for argument type-checking in label-transparent functions (ADR-0024):
+/// the function accepts any label on its arguments; the label is collected
+/// separately and applied to the return type.
+pub fn strip_label(ty: &Ty) -> &Ty {
+    match ty {
+        Ty::Labeled(_, inner) => inner,
+        Ty::Refined(inner, _) => strip_label(inner),
+        _ => ty,
+    }
+}
+
 /// Wrap a type in a security label, or return it unchanged if label is None.
 pub fn apply_label(label: Option<SecurityLabel>, ty: Ty) -> Ty {
     match label {

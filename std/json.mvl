@@ -31,7 +31,7 @@ type ObjectStep = enum { OSep(Map[String, Value], Int, String), OStepErr(String)
 // ── encode ────────────────────────────────────────────────────────────────────
 
 /// Serialises a Value to a JSON string.
-pub partial fn encode(v: Value) -> String {
+pub transparent partial fn encode(v: Value) -> String {
     match v {
         Value::Null      => "null",
         Value::Bool(b)   => if b { "true" } else { "false" },
@@ -120,10 +120,11 @@ partial fn encode_object(obj: Map[String, Value]) -> String {
 /// Returns Err if the input is not valid JSON.
 /// Pure — parsing is a deterministic transformation.
 ///
-/// IFC note: ideally `decode[L](s: L[String]) -> Result[L[Value], String]` so that
-/// taint from network input propagates to the result. Deferred pending label-polymorphic
-/// generics (#179).
-pub partial fn decode(s: String) -> Result[Value, String] {
+/// Label-transparent (ADR-0024): taint from the input string propagates to the decoded Value.
+/// `decode(tainted_str)` returns `Result[Tainted[Value], String]`.
+/// Future: migrate to `decode[L](s: L[String]) -> Result[L[Value], String]`
+/// when label-polymorphic generics land (phase 7+).
+pub transparent partial fn decode(s: String) -> Result[Value, String] {
     let chars: List[String] = str_chars(s);
     match parse_value(chars, 0) {
         ValuePos::VPErr(e)   => Err(e),

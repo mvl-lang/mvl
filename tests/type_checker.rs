@@ -3250,6 +3250,237 @@ fn log_debug_rejects_clean_value_in_fields_map() {
     );
 }
 
+// ── ADR-0024: label-transparent functions (003-information-flow) ──────────────
+
+/// `format()` with a Secret argument returns Secret[String] (label-transparent).
+#[test]
+fn format_propagates_secret_label() {
+    // GIVEN: format called with a Secret[String] argument
+    // THEN: return type is Secret[String] — no TypeMismatch when stored as Secret[String]
+    let errors =
+        errors_for(r#"fn f(s: Secret[String]) -> Secret[String] { format("value={}", s) }"#);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "format with Secret arg should yield Secret[String], got: {errors:?}"
+    );
+}
+
+/// `format()` with a Tainted argument cannot flow to Public[String].
+#[test]
+fn format_propagates_tainted_label_rejected_as_public() {
+    // GIVEN: format called with a Tainted[String] — result is Tainted[String]
+    // THEN: TypeMismatch when trying to assign to Public[String]
+    let errors = errors_for(r#"fn f(s: Tainted[String]) -> Public[String] { format("v={}", s) }"#);
+    assert!(
+        errors.iter().any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "format with Tainted arg should be Tainted[String], cannot flow to Public[String], got: {errors:?}"
+    );
+}
+
+/// User-defined `transparent fn` propagates argument label to return type.
+#[test]
+fn transparent_fn_propagates_label() {
+    // GIVEN: a transparent fn that wraps its string argument
+    // THEN: calling it with Tainted[String] yields Tainted[String] — no mismatch
+    let errors = errors_for(
+        r#"
+transparent fn wrap(s: String) -> String { s }
+fn f(s: Tainted[String]) -> Tainted[String] { wrap(s) }
+"#,
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "transparent fn with Tainted arg should yield Tainted[String], got: {errors:?}"
+    );
+}
+
+/// User-defined `transparent fn` result cannot flow to a lower label.
+#[test]
+fn transparent_fn_label_cannot_flow_down() {
+    // GIVEN: transparent fn called with Secret[String]
+    // THEN: result is Secret[String] — cannot assign to Public[String]
+    let errors = errors_for(
+        r#"
+transparent fn wrap(s: String) -> String { s }
+fn f(s: Secret[String]) -> Public[String] { wrap(s) }
+"#,
+    );
+    assert!(
+        errors.iter().any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "transparent fn with Secret arg should yield Secret[String], cannot flow to Public, got: {errors:?}"
+    );
+}
+
+/// `decode()` with Tainted[String] propagates the label to the result (primary ADR-0024 use case).
+#[test]
+fn decode_propagates_tainted_label() {
+    // GIVEN: decode called with Tainted[String] (issue #179 / ADR-0024 primary case)
+    // THEN: result is Tainted[Result[Value, String]] — no TypeMismatch
+    let errors =
+        errors_for(r#"fn f(s: Tainted[String]) -> Tainted[Result[Value, String]] { decode(s) }"#);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "decode(Tainted[String]) should yield Tainted[Result[Value, String]], got: {errors:?}"
+    );
+}
+
+/// `decode()` with Tainted input must not silently drop label when assigned to unlabeled Result.
+#[test]
+fn decode_tainted_cannot_flow_to_unlabeled() {
+    // GIVEN: decode(Tainted[String]) — result used as unlabeled Result[Value, String]
+    // THEN: some checker error — Tainted label cannot silently drop.
+    // Note: the checker may raise ResultIgnored or TypeMismatch depending on how
+    // Tainted[Result[...]] interacts with the expected return type; either is acceptable.
+    let errors = errors_for(r#"fn f(s: Tainted[String]) -> Result[Value, String] { decode(s) }"#);
+    assert!(
+        !errors.is_empty(),
+        "decode(Tainted[String]) must not silently drop its label (expected some error), got: {errors:?}"
+    );
+}
+
+/// Multi-argument transparent fn: join(Tainted, Secret) == Secret.
+#[test]
+fn transparent_fn_joins_mixed_labels_takes_highest() {
+    // GIVEN: transparent fn called with Tainted[String] and Secret[Int]
+    // THEN: result label is Secret (join of Tainted and Secret)
+    let errors = errors_for(
+        r#"
+transparent fn combine(a: String, b: Int) -> String { a }
+fn f(s: Tainted[String], n: Secret[Int]) -> Secret[String] { combine(s, n) }
+"#,
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "join(Tainted, Secret) should be Secret[String], got: {errors:?}"
+    );
+}
+
+/// Multi-argument transparent fn: Secret result cannot flow to Tainted (lower label).
+#[test]
+fn transparent_fn_joins_mixed_labels_reject_lower_bound() {
+    // GIVEN: combine(Tainted[String], Secret[Int]) — result is Secret[String]
+    // THEN: TypeMismatch — Secret[String] cannot flow to Tainted[String]
+    let errors = errors_for(
+        r#"
+transparent fn combine(a: String, b: Int) -> String { a }
+fn f(s: Tainted[String], n: Secret[Int]) -> Tainted[String] { combine(s, n) }
+"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "Secret[String] must not flow down to Tainted[String], got: {errors:?}"
+    );
+}
+
+/// All-unlabeled args to transparent fn: returns the declared type unchanged.
+#[test]
+fn transparent_fn_all_unlabeled_args_returns_declared_type() {
+    // GIVEN: transparent fn called with only unlabeled (Public) arguments
+    // THEN: no label applied — the declared return type is returned as-is
+    let errors = errors_for(
+        r#"
+transparent fn wrap(s: String) -> String { s }
+fn f(s: String) -> String { wrap(s) }
+"#,
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "transparent fn with all-unlabeled args should return declared type, got: {errors:?}"
+    );
+}
+
+/// Clean label propagates through transparent fn.
+#[test]
+fn transparent_fn_propagates_clean_label() {
+    // GIVEN: transparent fn called with Clean[String]
+    // THEN: result is Clean[String]
+    let errors = errors_for(
+        r#"
+transparent fn wrap(s: String) -> String { s }
+fn f(s: Clean[String]) -> Clean[String] { wrap(s) }
+"#,
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "transparent fn with Clean[String] arg should yield Clean[String], got: {errors:?}"
+    );
+}
+
+/// join(Clean, Tainted) == Tainted through transparent fn.
+#[test]
+fn transparent_fn_join_clean_and_tainted_gives_tainted() {
+    // GIVEN: transparent fn called with Clean[String] and Tainted[String]
+    // THEN: result is Tainted[String] (Tainted > Clean in lattice)
+    let errors = errors_for(
+        r#"
+transparent fn combine(a: String, b: String) -> String { a }
+fn f(a: Clean[String], b: Tainted[String]) -> Tainted[String] { combine(a, b) }
+"#,
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "join(Clean, Tainted) should be Tainted[String], got: {errors:?}"
+    );
+}
+
+/// Zero-arg transparent fn is rejected by the checker (ADR-0024 fix).
+#[test]
+fn transparent_fn_zero_args_is_rejected() {
+    // GIVEN: transparent fn with no parameters
+    // THEN: TransparentFnNoParams error
+    let errors = errors_for(r#"transparent fn constant() -> String { "hello" }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TransparentFnNoParams { .. })),
+        "zero-arg transparent fn should produce TransparentFnNoParams, got: {errors:?}"
+    );
+}
+
+/// Generic transparent fn is rejected by the checker (ADR-0024 fix).
+#[test]
+fn transparent_fn_generic_is_rejected() {
+    // GIVEN: transparent generic fn
+    // THEN: TransparentFnGeneric error
+    let errors = errors_for(r#"transparent fn wrap[T](x: T) -> T { x }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TransparentFnGeneric { .. })),
+        "transparent generic fn should produce TransparentFnGeneric, got: {errors:?}"
+    );
+}
+
+/// Transparent fn with labeled return type is rejected by the checker (ADR-0024 fix).
+#[test]
+fn transparent_fn_labeled_return_is_rejected() {
+    // GIVEN: transparent fn with labeled return type
+    // THEN: TransparentFnLabeledReturn error — would produce nested label at call sites
+    let errors = errors_for(r#"transparent fn wrap(s: String) -> Tainted[String] { s }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TransparentFnLabeledReturn { .. })),
+        "transparent fn with labeled return should produce TransparentFnLabeledReturn, got: {errors:?}"
+    );
+}
+
 // ── #219: Iterator trait (001-type-system Req 11) ─────────────────────────────
 
 /// Spec 001 Req 11 / Scenario: For loop over array accepted.

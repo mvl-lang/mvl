@@ -190,6 +190,7 @@ module.exports = grammar({
 
     fn_decl: ($) =>
       seq(
+        optional("transparent"),
         optional(choice($.totality, "builtin")),
         optional($.security_modifier),
         "fn",

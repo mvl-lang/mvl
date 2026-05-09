@@ -22,6 +22,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ### Added
 
+- **Label-transparent functions (ADR-0024)** — Functions marked `transparent` signal to the checker that they propagate security labels from arguments to return type, closing the silent label-drop hole at stdlib boundaries. `json.decode(tainted_str)` now returns `Tainted[Result[Value, String]]` instead of silently stripping the label. Generalizes the existing `format()` special case to any stdlib transform function. Closes #179.
+
+### Changed
+
+- **`json.encode()` marked label-transparent** — Ensures round-trip encode(decode(tainted)) preserves taint through both operations.
+
+### Added
+
 - **Stdlib proven profile** — `--stdlib=proven` now runs full 11-requirement verification on all pure-MVL stdlib files (`core`, `strings`, `lists`, `math`, `collections`, `json`, `pbt`) before checking user code. Verification failures exit non-zero. OS/hardware-backed modules remain trusted builtins. Closes #538, #539. Part of epic #533.
 - **Stdlib profiles documentation** — `docs/stdlib-profiles.md` user guide and ADR-0023 document the trusted/proven split, irreducible-builtins principle, and certification path. Closes #541, #542.
 

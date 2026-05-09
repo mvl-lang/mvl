@@ -60,6 +60,7 @@ impl TypeChecker {
                 effects: fd.effects.clone(),
                 totality: fd.totality.clone(),
                 type_params,
+                label_transparent: fd.is_label_transparent,
             },
         );
     }
@@ -80,6 +81,7 @@ impl TypeChecker {
                     effects: f.effects.clone(),
                     totality: None,
                     type_params: HashSet::new(), // extern fns may or may not terminate
+                    label_transparent: false,
                 },
             );
         }
@@ -166,6 +168,29 @@ impl TypeChecker {
         // Their signatures are registered (in collect_declarations) and trusted.
         if fd.is_builtin {
             return;
+        }
+
+        // ADR-0024: validate transparent function constraints.
+        if fd.is_label_transparent {
+            if fd.params.is_empty() {
+                self.emit(CheckError::TransparentFnNoParams {
+                    name: fd.name.clone(),
+                    span: fd.span,
+                });
+            }
+            if !fd.type_params.is_empty() {
+                self.emit(CheckError::TransparentFnGeneric {
+                    name: fd.name.clone(),
+                    span: fd.span,
+                });
+            }
+            let ret_ty = resolve(&fd.return_type);
+            if matches!(ret_ty, crate::mvl::checker::types::Ty::Labeled(..)) {
+                self.emit(CheckError::TransparentFnLabeledReturn {
+                    name: fd.name.clone(),
+                    span: fd.span,
+                });
+            }
         }
 
         let ret_ty = resolve(&fd.return_type);

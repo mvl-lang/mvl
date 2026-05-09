@@ -333,6 +333,7 @@ mod tests {
             visible: false,
             is_test: false,
             is_builtin: false,
+            is_label_transparent: false,
             totality: None,
             name: name.into(),
             type_params: vec![],
