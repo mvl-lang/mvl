@@ -606,6 +606,41 @@ fn cross_backend_regex_find_all() {
     }
 }
 
+// ── #586: signal handling (ignore, reset, on) ─────────────────────────────────
+
+/// Both backends must produce identical output for `signal_ignore` and `signal_reset`.
+/// Both are no-op stubs; the test verifies they compile and run without crashing.
+#[test]
+fn cross_backend_env_signal_ignore_reset() {
+    let file = corpus_effects("env_signal_ignore.mvl");
+    let transpiler_out = run_transpiler(&file);
+    assert_eq!(
+        transpiler_out.trim(),
+        "ok",
+        "Rust transpiler: expected 'ok', got: {transpiler_out:?}"
+    );
+    if let Some(llvm_out) = run_llvm(&file) {
+        assert_eq!(
+            llvm_out.trim(),
+            "ok",
+            "LLVM backend: expected 'ok', got: {llvm_out:?}"
+        );
+    }
+}
+
+/// LLVM-only: `signal_on` with a named non-capturing handler must not crash.
+#[test]
+fn cross_backend_env_signal_on_llvm() {
+    let file = corpus_effects("env_signal_on.mvl");
+    if let Some(llvm_out) = run_llvm(&file) {
+        assert_eq!(
+            llvm_out.trim(),
+            "ok",
+            "LLVM backend: expected 'ok', got: {llvm_out:?}"
+        );
+    }
+}
+
 /// crypto_random_bytes shape test — both backends must print the correct list length.
 ///
 /// Non-deterministic values are not compared; only the length (always == n) is checked.

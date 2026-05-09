@@ -1,0 +1,15 @@
+// Corpus: signal_ignore and signal_reset cross-backend parity (#586)
+//
+// Calls signal_ignore and signal_reset with a Signal value. Both are no-op
+// stubs in both backends for now; the test verifies they compile and run
+// without panicking on both the Rust transpiler and LLVM paths.
+//
+// Used by: tests/cross_backend.rs::cross_backend_env_signal_ignore_reset
+
+use std.env.{signal_ignore, signal_reset, Signal}
+
+fn main() -> Unit ! Env, Console {
+    signal_ignore(Signal::SIGINT);
+    signal_reset(Signal::SIGTERM);
+    println("ok");
+}

@@ -359,6 +359,14 @@ pub(crate) enum StdlibSig {
     /// `(i64) → void / noreturn` — one i64 arg, no return.
     /// Used for `exit(code)`.
     VoidI64Arg(String),
+
+    // ── #586: signal handling ────────────────────────────────────────────────
+    /// `(i8) → void` — signal_reset(sig), signal_ignore(sig).
+    /// Signal is a unit enum encoded as i8 at the C-ABI boundary.
+    VoidI8Arg(String),
+    /// `(i8, ptr) → void` — signal_on(sig, handler).
+    /// Second arg is a function pointer (non-capturing named fn).
+    VoidI8FnPtrArg(String),
 }
 
 // ── Backend struct ────────────────────────────────────────────────────────────
@@ -689,6 +697,9 @@ impl<'ctx> LlvmBackend<'ctx> {
             ("Int", 2) if p0 == "Int" && p1 == "Int" => Some(StdlibSig::I64TwoI64Args(symbol)),
             // ── Void/Never returns ────────────────────────────────────────────
             ("Unit" | "Never", 1) if p0 == "Int" => Some(StdlibSig::VoidI64Arg(symbol)),
+            // ── #586: Signal (unit enum, i8 at C-ABI boundary) ───────────────
+            ("Unit", 1) if p0 == "Signal" => Some(StdlibSig::VoidI8Arg(symbol)),
+            ("Unit", 2) if p0 == "Signal" => Some(StdlibSig::VoidI8FnPtrArg(symbol)),
             ("Unit", 1) if p0 == "Duration" => Some(StdlibSig::VoidDurationArg(symbol)),
             ("Unit", 2) if p0 == "String" && p1 == "Map" => {
                 Some(StdlibSig::VoidStringMapArg(symbol))
@@ -1015,6 +1026,31 @@ impl<'ctx> LlvmBackend<'ctx> {
                         ("hour".into(), int_ty.clone()),
                         ("minute".into(), int_ty.clone()),
                         ("second".into(), int_ty.clone()),
+                    ]
+                });
+        }
+
+        // #586: Register Signal enum variants for programs that import std.env.
+        // env.mvl is a Rust-backed stdlib module (skipped by load_mvl_native_stdlib_extras),
+        // so register_type_decl never sees its Signal type declaration.
+        let imports_env = prog.declarations.iter().any(|d| {
+            if let Decl::Use(ud) = d {
+                ud.path.len() >= 2 && ud.path[0] == "std" && ud.path[1] == "env"
+            } else {
+                false
+            }
+        });
+        if imports_env {
+            use crate::mvl::parser::ast::VariantFields;
+            self.enum_variants
+                .entry("Signal".into())
+                .or_insert_with(|| {
+                    vec![
+                        ("SIGINT".into(), VariantFields::Unit),
+                        ("SIGTERM".into(), VariantFields::Unit),
+                        ("SIGHUP".into(), VariantFields::Unit),
+                        ("SIGUSR1".into(), VariantFields::Unit),
+                        ("SIGUSR2".into(), VariantFields::Unit),
                     ]
                 });
         }
@@ -1905,6 +1941,57 @@ impl<'ctx> LlvmBackend<'ctx> {
         self.builder.build_unreachable().ok()?;
         self.terminated = true;
         None // caller sees None → no value produced, which is correct for Never
+    }
+
+    // ── #586: signal helpers ──────────────────────────────────────────────────
+
+    /// `#586`: `(i8) → void` — signal_ignore(sig), signal_reset(sig).
+    ///
+    /// Signal is a unit enum encoded as `i8` at the C-ABI boundary.
+    /// Returns `Some(i64 0)` as the Unit value.
+    pub(crate) fn emit_stdlib_call_void_i8_arg(
+        &mut self,
+        symbol: &str,
+        arg: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        let i8_ty = self.context.i8_type();
+        let i64_ty = self.context.i64_type();
+        let fn_val = self.module.get_function(symbol).unwrap_or_else(|| {
+            let fn_ty = self.context.void_type().fn_type(&[i8_ty.into()], false);
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        });
+        self.builder
+            .build_call(fn_val, &[arg.into()], symbol)
+            .ok()?;
+        Some(i64_ty.const_zero().into())
+    }
+
+    /// `#586`: `(i8, ptr) → void` — signal_on(sig, handler).
+    ///
+    /// First arg is a Signal (i8), second is a function pointer cast to `*mut c_void`.
+    /// Returns `Some(i64 0)` as the Unit value.
+    pub(crate) fn emit_stdlib_call_void_i8_fn_ptr_arg(
+        &mut self,
+        symbol: &str,
+        sig_arg: inkwell::values::BasicValueEnum<'ctx>,
+        fn_ptr: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        let i8_ty = self.context.i8_type();
+        let i64_ty = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let fn_val = self.module.get_function(symbol).unwrap_or_else(|| {
+            let fn_ty = self
+                .context
+                .void_type()
+                .fn_type(&[i8_ty.into(), ptr_ty.into()], false);
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        });
+        self.builder
+            .build_call(fn_val, &[sig_arg.into(), fn_ptr.into()], symbol)
+            .ok()?;
+        Some(i64_ty.const_zero().into())
     }
 
     /// Truncate an i64 IntValue to the target LLVM type if narrower (e.g. i64→i1 for Bool).
