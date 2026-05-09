@@ -3250,6 +3250,71 @@ fn log_debug_rejects_clean_value_in_fields_map() {
     );
 }
 
+// ── ADR-0024: label-transparent functions (003-information-flow) ──────────────
+
+/// `format()` with a Secret argument returns Secret[String] (label-transparent).
+#[test]
+fn format_propagates_secret_label() {
+    // GIVEN: format called with a Secret[String] argument
+    // THEN: return type is Secret[String] — no TypeMismatch when stored as Secret[String]
+    let errors =
+        errors_for(r#"fn f(s: Secret[String]) -> Secret[String] { format("value={}", s) }"#);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "format with Secret arg should yield Secret[String], got: {errors:?}"
+    );
+}
+
+/// `format()` with a Tainted argument cannot flow to Public[String].
+#[test]
+fn format_propagates_tainted_label_rejected_as_public() {
+    // GIVEN: format called with a Tainted[String] — result is Tainted[String]
+    // THEN: TypeMismatch when trying to assign to Public[String]
+    let errors = errors_for(r#"fn f(s: Tainted[String]) -> Public[String] { format("v={}", s) }"#);
+    assert!(
+        errors.iter().any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "format with Tainted arg should be Tainted[String], cannot flow to Public[String], got: {errors:?}"
+    );
+}
+
+/// User-defined `transparent fn` propagates argument label to return type.
+#[test]
+fn transparent_fn_propagates_label() {
+    // GIVEN: a transparent fn that wraps its string argument
+    // THEN: calling it with Tainted[String] yields Tainted[String] — no mismatch
+    let errors = errors_for(
+        r#"
+transparent fn wrap(s: String) -> String { s }
+fn f(s: Tainted[String]) -> Tainted[String] { wrap(s) }
+"#,
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "transparent fn with Tainted arg should yield Tainted[String], got: {errors:?}"
+    );
+}
+
+/// User-defined `transparent fn` result cannot flow to a lower label.
+#[test]
+fn transparent_fn_label_cannot_flow_down() {
+    // GIVEN: transparent fn called with Secret[String]
+    // THEN: result is Secret[String] — cannot assign to Public[String]
+    let errors = errors_for(
+        r#"
+transparent fn wrap(s: String) -> String { s }
+fn f(s: Secret[String]) -> Public[String] { wrap(s) }
+"#,
+    );
+    assert!(
+        errors.iter().any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "transparent fn with Secret arg should yield Secret[String], cannot flow to Public, got: {errors:?}"
+    );
+}
+
 // ── #219: Iterator trait (001-type-system Req 11) ─────────────────────────────
 
 /// Spec 001 Req 11 / Scenario: For loop over array accepted.

@@ -164,6 +164,9 @@ pub struct FnInfo {
     /// Type parameter names declared on this function (e.g. `T` in `fn f[T](...)`).
     /// Non-empty iff the function is generic; used to skip argument type checking at call sites.
     pub type_params: HashSet<String>,
+    /// Whether this function propagates security labels from arguments to return type (ADR-0024).
+    /// When true, the checker joins all argument labels and applies them to the declared return type.
+    pub label_transparent: bool,
 }
 
 // ── Type environment ─────────────────────────────────────────────────────────
@@ -235,6 +238,7 @@ impl TypeEnv {
                 effects: vec![Effect::new("Console", Span::new(0, 0, 0, 0))],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         self.fns.insert(
@@ -245,6 +249,7 @@ impl TypeEnv {
                 effects: vec![Effect::new("Console", Span::new(0, 0, 0, 0))],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         self.fns.insert(
@@ -255,6 +260,7 @@ impl TypeEnv {
                 effects: vec![Effect::new("Console", Span::new(0, 0, 0, 0))],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         self.fns.insert(
@@ -265,6 +271,7 @@ impl TypeEnv {
                 effects: vec![Effect::new("Console", Span::new(0, 0, 0, 0))],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // assert — pure, panics if condition is false
@@ -276,6 +283,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // panic — unconditional termination with a message; pure effect-wise
@@ -287,6 +295,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // assert_eq — pure, for testing.
@@ -301,6 +310,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // Standard math functions — pure, variadic (arity checked by special-case)
@@ -312,6 +322,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         self.fns.insert(
@@ -322,6 +333,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         self.fns.insert(
@@ -332,6 +344,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // parse_int — converts String to Result<Int, String>; variadic-flagged to skip arity check
@@ -343,9 +356,11 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // format — string interpolation, variadic (template + args), pure
+        // label_transparent: joins argument labels so `format("x={}", secret)` returns Secret<String>
         self.fns.insert(
             "format".into(),
             FnInfo {
@@ -354,6 +369,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: true,
             },
         );
         // range(start, end) — generates [start, start+1, …, end-1] (exclusive upper bound)
@@ -365,6 +381,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // Time — std.time: Instant, DateTime, Duration types + functions (#46)
@@ -386,6 +403,7 @@ impl TypeEnv {
                 effects: vec![Effect::new("Clock", Span::new(0, 0, 0, 0))],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // sleep(d: Duration) -> Unit ! Clock
@@ -397,6 +415,7 @@ impl TypeEnv {
                 effects: vec![Effect::new("Clock", Span::new(0, 0, 0, 0))],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // format_instant(t: Instant, fmt: String) -> String — pure
@@ -408,6 +427,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // format_datetime(t: DateTime, fmt: String) -> String — pure
@@ -419,6 +439,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // parse(s: String, fmt: String) -> Option<DateTime> — pure
@@ -430,6 +451,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // seconds(n: Int) -> Duration — pure
@@ -441,6 +463,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // millis(n: Int) -> Duration — pure
@@ -452,6 +475,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // Regex — std.regex: Regex, Match, Captures types + functions (#46)
@@ -477,6 +501,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // find(re: Regex, s: String) -> Option<Match> — pure
@@ -488,6 +513,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // find_all(re: Regex, s: String) -> List<Match> — pure
@@ -499,6 +525,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // replace(re: Regex, s: String, replacement: String) -> String — pure
@@ -510,6 +537,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // captures(re: Regex, s: String) -> Option<Captures> — pure
@@ -521,6 +549,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // JSON — std.json: Value enum, encode(), decode() (#46)
@@ -553,10 +582,11 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // decode(s: String) -> Result<Value, String> — pure
-        // IFC deferral: decode bypasses label tracking on the input string (#179)
+        // label_transparent: taint from input string propagates to decoded Value (ADR-0024)
         self.fns.insert(
             "decode".into(),
             FnInfo {
@@ -568,6 +598,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: true,
             },
         );
         // Random — std.random: int(), float(), bytes(), choice(), shuffle() (#46)
@@ -580,6 +611,7 @@ impl TypeEnv {
                 effects: vec![Effect::new("Random", Span::new(0, 0, 0, 0))],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         self.fns.insert(
@@ -590,6 +622,7 @@ impl TypeEnv {
                 effects: vec![Effect::new("Random", Span::new(0, 0, 0, 0))],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         self.fns.insert(
@@ -600,6 +633,7 @@ impl TypeEnv {
                 effects: vec![Effect::new("Random", Span::new(0, 0, 0, 0))],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // choice(items: List<T>) -> Option<T> — variadic-flagged to skip arity/type check
@@ -611,6 +645,7 @@ impl TypeEnv {
                 effects: vec![Effect::new("Random", Span::new(0, 0, 0, 0))],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // shuffle(items: List<T>) -> List<T> — variadic-flagged to skip arity/type check
@@ -622,6 +657,7 @@ impl TypeEnv {
                 effects: vec![Effect::new("Random", Span::new(0, 0, 0, 0))],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // Crypto — std.crypto (no import required at tier-1)
@@ -634,6 +670,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         self.fns.insert(
@@ -644,6 +681,7 @@ impl TypeEnv {
                 effects: vec![],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // crypto_random_bytes requires ! CryptoRandom; returns Secret<List<Int>>
@@ -655,6 +693,7 @@ impl TypeEnv {
                 effects: vec![Effect::new("CryptoRandom", Span::new(0, 0, 0, 0))],
                 totality: None,
                 type_params: HashSet::new(),
+                label_transparent: false,
             },
         );
         // std.log — structured logging with ! Log effect (#54, 003-information-flow Req 6).
@@ -672,6 +711,7 @@ impl TypeEnv {
                     effects: vec![Effect::new("Log", Span::new(0, 0, 0, 0))],
                     totality: None,
                     type_params: HashSet::new(),
+                    label_transparent: false,
                 },
             );
         }

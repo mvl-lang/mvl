@@ -176,6 +176,9 @@ pub struct FnDecl {
     /// Whether the function has a runtime-provided implementation (`builtin fn`).
     /// Builtin functions have no body; the compiler trusts the runtime to supply one.
     pub is_builtin: bool,
+    /// Whether the function propagates security labels from arguments to return type (`transparent fn`).
+    /// See ADR-0024: the checker joins argument labels and applies them to the return type.
+    pub is_label_transparent: bool,
     pub totality: Option<Totality>,
     pub name: String,
     pub type_params: Vec<GenericParam>,
@@ -832,6 +835,7 @@ mod tests {
             visible: false,
             is_test: false,
             is_builtin: false,
+            is_label_transparent: false,
             totality: Some(Totality::Total),
             name: "add".into(),
             type_params: vec![],

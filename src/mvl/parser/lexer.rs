@@ -80,6 +80,9 @@ pub enum TokenKind {
     /// `builtin` — marks a function as having a runtime-provided implementation.
     /// `builtin fn` declarations have no body; the compiler trusts the runtime.
     Builtin,
+    /// `transparent` — marks a function as label-transparent (ADR-0024):
+    /// the checker joins argument security labels and applies them to the return type.
+    Transparent,
 
     // ── Security labels ───────────────────────────────────────────────────
     Public,
@@ -186,6 +189,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Test => write!(f, "test"),
             TokenKind::Impl => write!(f, "impl"),
             TokenKind::Builtin => write!(f, "builtin"),
+            TokenKind::Transparent => write!(f, "transparent"),
             TokenKind::Public => write!(f, "Public"),
             TokenKind::Tainted => write!(f, "Tainted"),
             TokenKind::Secret => write!(f, "Secret"),
@@ -910,6 +914,7 @@ fn keyword_or_ident(s: String) -> TokenKind {
         "test" => TokenKind::Test,
         "impl" => TokenKind::Impl,
         "builtin" => TokenKind::Builtin,
+        "transparent" => TokenKind::Transparent,
         // Boolean literals
         "true" => TokenKind::True,
         "false" => TokenKind::False,

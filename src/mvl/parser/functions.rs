@@ -16,13 +16,30 @@ use crate::mvl::parser::{ParseError, Parser};
 impl Parser {
     // ── Function declarations ─────────────────────────────────────────────
 
-    /// Parse `[test] [total|partial|builtin] fn Name …`.
-    /// Pre-condition: current token is `test`, `total`, `partial`, `builtin`, or `fn`.
+    /// Parse `[test] [transparent] [total|partial|builtin] fn Name …`.
+    /// Pre-condition: current token is `test`, `transparent`, `total`, `partial`, `builtin`, or `fn`.
     pub fn parse_fn_decl(&mut self) -> Result<FnDecl, ()> {
         let start = self.peek_span();
 
         // Optional `test` marker
         let is_test = if *self.peek_kind() == TokenKind::Test {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
+        // Optional `transparent` marker (ADR-0024): label-propagating function.
+        // May be combined with any totality or `builtin`, but not with `test`.
+        let is_label_transparent = if *self.peek_kind() == TokenKind::Transparent {
+            if is_test {
+                let err = ParseError {
+                    message: "`transparent` cannot be combined with `test`".into(),
+                    span: self.peek_span(),
+                };
+                self.push_recover(err);
+                return Err(());
+            }
             self.advance();
             true
         } else {
@@ -120,6 +137,7 @@ impl Parser {
             visible: false, // set by parse_decl when `pub` prefix is present
             is_test,
             is_builtin,
+            is_label_transparent,
             totality,
             name,
             type_params,
@@ -327,7 +345,8 @@ impl Parser {
             | TokenKind::Total
             | TokenKind::Partial
             | TokenKind::Test
-            | TokenKind::Builtin => {
+            | TokenKind::Builtin
+            | TokenKind::Transparent => {
                 let mut d = self.parse_fn_decl()?;
                 d.visible = visible;
                 if d.is_test && d.visible {

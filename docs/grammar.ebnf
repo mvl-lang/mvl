@@ -40,12 +40,13 @@ field_list     = field_decl { "," field_decl } ;
 alias_type     = type_expr ;
 
 (* === Function declarations === *)
-fn_decl        = ( [ totality ] | "builtin" ) [ security ] "fn" IDENT [ type_params ]
+fn_decl        = [ "transparent" ] ( [ totality ] | "builtin" ) [ security ] "fn" IDENT [ type_params ]
                  "(" [ param_list ] ")" "->" return_type
                  [ "!" effect_list ] [ "where" constraints ]
                  ( block | (* empty — builtin only *) ) ;
 totality       = "total" | "partial" ;
 (* builtin fn: runtime-provided implementation; body is forbidden *)
+(* transparent fn: label-transparent — checker joins arg labels and applies to return type (ADR-0024) *)
 security       = "public" | "tainted" | "secret" ;
 param_list     = param { "," param } ;
 param          = [ capability ] [ "mut" ] IDENT ":" type_expr [ "where" refinement ] ;

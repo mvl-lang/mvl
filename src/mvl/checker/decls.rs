@@ -60,6 +60,7 @@ impl TypeChecker {
                 effects: fd.effects.clone(),
                 totality: fd.totality.clone(),
                 type_params,
+                label_transparent: fd.is_label_transparent,
             },
         );
     }
@@ -80,6 +81,7 @@ impl TypeChecker {
                     effects: f.effects.clone(),
                     totality: None,
                     type_params: HashSet::new(), // extern fns may or may not terminate
+                    label_transparent: false,
                 },
             );
         }

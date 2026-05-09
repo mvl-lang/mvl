@@ -83,7 +83,15 @@ impl TypeChecker {
             if !is_variadic_builtin && !is_generic {
                 for (i, (expected, found)) in fn_info.params.iter().zip(arg_tys.iter()).enumerate()
                 {
-                    if !types_compatible(expected, found) {
+                    // ADR-0024: for label-transparent functions, strip the security label
+                    // from the argument before type-checking.  The label is collected
+                    // separately and applied to the return type below.
+                    let found_check = if fn_info.label_transparent {
+                        ifc::strip_label(found)
+                    } else {
+                        found
+                    };
+                    if !types_compatible(expected, found_check) {
                         self.emit(CheckError::TypeMismatch {
                             expected: expected.display(),
                             found: found.display(),
@@ -131,9 +139,10 @@ impl TypeChecker {
                 });
             }
 
-            // Req 7: for `format()`, join argument labels into the result so that
-            // `format("x={}", secret_val)` correctly returns `Secret<String>`.
-            if name == "format" {
+            // ADR-0024: label-transparent functions propagate security labels from arguments
+            // to their return type.  Join all argument labels and apply to the declared return.
+            // This covers `format()` (always transparent) and `decode()` / other stdlib transforms.
+            if fn_info.label_transparent {
                 let arg_label = arg_tys
                     .iter()
                     .fold(None, |acc, ty| ifc::join_opt(acc, ifc::label_of(ty)));
