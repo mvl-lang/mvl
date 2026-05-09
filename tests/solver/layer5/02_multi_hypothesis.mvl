@@ -1,0 +1,35 @@
+// Solver Layer 5: Multiple simultaneous hypotheses — all proven
+//
+// Z3 asserts ALL in-scope variable hypotheses simultaneously.  This lets
+// it chain through three variables where each is bounded by the previous.
+//
+// Layers 1–4 cannot prove these:
+//   - The argument is a bare variable, so Layer 4 (linear-expression arg)
+//     does not apply.
+//   - The hypotheses contain non-constant references, so Layer 2 cannot
+//     compute a finite interval.
+//
+// Every call inside the *body* of each function below is PROVEN by Layer 5.
+
+fn require_positive(n: Int where self > 0) -> Int {
+    n
+}
+
+fn require_gt20(n: Int where self > 20) -> Int {
+    n
+}
+
+// Three-variable chain: x > 20, y > x, z > y  →  z > y > x > 20.
+// Z3 asserts all three hypotheses and proves z > 20.
+fn three_chain(
+    x: Int where self > 20,
+    y: Int where self > x,
+    z: Int where self > y,
+) -> Int {
+    require_gt20(z)
+}
+
+// Combined: a > 0, b > a  →  b > 0.  Weaker conclusion from stronger chain.
+fn positive_chain(a: Int where self > 0, b: Int where self > a) -> Int {
+    require_positive(b)
+}

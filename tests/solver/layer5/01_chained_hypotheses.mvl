@@ -1,0 +1,46 @@
+// Solver Layer 5: Two-variable hypothesis chains — all proven
+//
+// Layer 5 (Z3 SMT solver) handles cases where a variable's refinement
+// predicate *references another in-scope variable*.  Layers 1–4 cannot
+// prove these:
+//
+//   - Layer 2 requires constant bounds in hypotheses; `self > x` is not
+//     constant, so it cannot compute an interval.
+//   - Layer 4 handles linear-expression *arguments* (e.g. `a - b`), not
+//     bare-variable arguments whose hypotheses mention other variables.
+//
+// Key pattern:
+//   x: Int where self > 10   →  Z3 asserts "x > 10"
+//   y: Int where self > x    →  Z3 asserts "y > x"
+//   call: require_gt5(y)     →  pred: self > 5
+//
+//   Z3 query: x > 10  ∧  y > x  ∧  ¬(y > 5)  →  UNSAT  →  Proven
+//
+// Every call inside the *body* of each function below is PROVEN by Layer 5.
+
+fn require_positive(n: Int where self > 0) -> Int {
+    n
+}
+
+fn require_gt5(n: Int where self > 5) -> Int {
+    n
+}
+
+fn require_gt3(n: Int where self > 3) -> Int {
+    n
+}
+
+// x > 10, y > x  →  y > x > 10 > 5.  Z3 proves y satisfies self > 5.
+fn chain_via_gt10(x: Int where self > 10, y: Int where self > x) -> Int {
+    require_gt5(y)
+}
+
+// x > 0, y > x  →  y > x > 0.  Z3 proves y satisfies self > 0.
+fn chain_via_positive(x: Int where self > 0, y: Int where self > x) -> Int {
+    require_positive(y)
+}
+
+// x > 5, y > x  →  y > 5 > 3.  Z3 proves y satisfies self > 3.
+fn chain_via_gt5(x: Int where self > 5, y: Int where self > x) -> Int {
+    require_gt3(y)
+}
