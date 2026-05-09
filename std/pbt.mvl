@@ -1,7 +1,9 @@
 // MVL standard library — property-based testing (PBT)
 //
-// Phase A (#40): generators, combinators, property_check, shrinking, statistics.
-// Phase B (#425): mutation operators, targeted property checking.
+// Phase A (#40): generators, combinators, property_check (with shrinking),
+//               verbose stats variants, counterexample persistence.
+// Phase B (#425): mutation operators, targeted property checking, verbose stats.
+// Fuzz (#617): raw-input generators and fuzz_check for trust-boundary testing.
 //
 // Import with: use std.pbt.{gen_int, gen_bool, property_check_int, ...}
 //
@@ -12,21 +14,27 @@
 // Range conventions: integer ranges are inclusive [min, max]; float ranges are
 // half-open [min, max). This mirrors Rust's rand crate conventions.
 //
-// TODO (#40): gen_pair, gen_struct_of, gen_weighted — deferred until generics land
+// Shrinking: on first failure the library searches for a smaller value that
+// still fails the property (Int: toward 0; String: drop characters; List:
+// drop elements). The minimal failing case is reported in the panic message.
+//
+// TODO (#40): gen_pair, gen_struct_of — deferred until generic closures land
 // TODO (#40): compile-time codegen for generators from refinement-typed params
-// TODO (#40): counterexample persistence (tests/.proptest-regressions/)
-// TODO (#40/#425): shrinking, statistics output (cases, shrink steps, value distribution)
+// TODO (#40): counterexample replay on next run (needs sorted read of regressions file)
+// TODO (#617): fuzz_check timeout/OOM detection — requires OS process control
 
 use std.random.{int, float, bytes, choice}
+use std.io.{Path, path, create_dir_all, append}
 
 // ── Generator types ────────────────────────────────────────────────────────
 
-/// Generator for integers: either a uniform range, a filtered range, or a
-/// fixed set of choices.
+/// Generator for integers: uniform range, filtered range, fixed choices, or
+/// weighted choices.
 pub type IntGen = enum {
     Range(Int, Int),
     Filtered(Int, Int, fn(Int) -> Bool),
     OneOf(List[Int]),
+    Weighted(List[Int], List[Int]),
 }
 
 /// Generator for floats: uniform over [min, max).
@@ -44,84 +52,251 @@ pub type StringGen = struct { min_len: Int, max_len: Int }
 /// Generator for List[Int]: length in [0, max_len], elements in [min_val, max_val].
 pub type ListIntGen = struct { min_val: Int, max_val: Int, max_len: Int }
 
+/// Generator for raw byte sequences (fuzz mode — ignores refinement types).
+pub type BytesGen = struct { min_len: Int, max_len: Int }
+
+/// Generator for raw strings with extended charset (fuzz mode).
+pub type RawStringGen = struct { min_len: Int, max_len: Int }
+
+/// Configuration for fuzz_check runs.
+///
+/// Note: `timeout_ms` and `memory_limit_bytes` are reserved for future OS-level
+/// integration — not yet enforced. OS process control is required. See #617.
+pub type FuzzConfig = struct {
+    max_cases: Int,
+    timeout_ms: Int,
+    memory_limit_bytes: Int,
+}
+
 // ── Phase A: generators ────────────────────────────────────────────────────
 
 /// Generator for integers uniformly distributed in [min, max] (inclusive).
-pub fn gen_int(min: Int, max: Int) -> IntGen ! Random {
+pub fn gen_int(min: Int, max: Int) -> IntGen {
     IntGen::Range(min, max)
 }
 
 /// Generator for floats uniformly distributed in [min, max).
-pub fn gen_float(min: Float, max: Float) -> FloatGen ! Random {
+pub fn gen_float(min: Float, max: Float) -> FloatGen {
     FloatGen { min: min, max: max }
 }
 
 /// Generator for Bool (50/50 true/false).
-pub fn gen_bool() -> BoolGen ! Random {
+pub fn gen_bool() -> BoolGen {
     BoolGen::BoolRandom
 }
 
-/// Generator for strings with byte length in [min_len, max_len].
+/// Generator for strings with character count in [min_len, max_len].
 /// Characters are drawn from printable ASCII (32–126).
-pub fn gen_string(min_len: Int, max_len: Int) -> StringGen ! Random {
+pub fn gen_string(min_len: Int, max_len: Int) -> StringGen {
     StringGen { min_len: min_len, max_len: max_len }
 }
 
 /// Generator for List[Int] with length in [0, max_len], where each
 /// element is uniformly distributed in [min_val, max_val] (inclusive).
-pub fn gen_list_int(min_val: Int, max_val: Int, max_len: Int) -> ListIntGen ! Random {
+pub fn gen_list_int(min_val: Int, max_val: Int, max_len: Int) -> ListIntGen {
     ListIntGen { min_val: min_val, max_val: max_val, max_len: max_len }
 }
 
 // ── Phase A: combinators ───────────────────────────────────────────────────
 
-/// Transform generator output: `gen_map_int_bool(gen, f)` produces `f(x)` for each
-/// value `x` drawn from `gen`. Only Range-based generators are supported.
-pub fn gen_map_int_bool(gen: IntGen, f: fn(Int) -> Bool) -> BoolGen ! Random {
+/// Transform generator output: produces `f(x)` for each value `x` drawn from
+/// `gen`. Only Range-based generators are supported.
+pub fn gen_map_int_bool(gen: IntGen, f: fn(Int) -> Bool) -> BoolGen {
     match gen {
         IntGen::Range(lo, hi) => BoolGen::MappedFromInt(lo, hi, f),
         IntGen::Filtered(lo, hi, _) => BoolGen::MappedFromInt(lo, hi, f),
-        IntGen::OneOf(_) => panic("gen_map_int_bool: OneOf generators not supported"),
+        IntGen::OneOf(_) => panic("gen_map_int_bool: OneOf not supported"),
+        IntGen::Weighted(_, _) => panic("gen_map_int_bool: Weighted not supported"),
     }
 }
 
 /// Filter: only yield values from `gen` that satisfy `pred`.
-/// Retries up to 100× per sample; panics if no satisfying value found.
+/// Retries up to 100× per sample; panics if no satisfying value is found.
 /// Only Range-based generators are supported; replaces any existing filter.
-pub fn gen_filter_int(gen: IntGen, pred: fn(Int) -> Bool) -> IntGen ! Random {
+pub fn gen_filter_int(gen: IntGen, pred: fn(Int) -> Bool) -> IntGen {
     match gen {
         IntGen::Range(lo, hi) => IntGen::Filtered(lo, hi, pred),
         IntGen::Filtered(lo, hi, _) => IntGen::Filtered(lo, hi, pred),
-        IntGen::OneOf(_) => panic("gen_filter_int: OneOf generators not supported"),
+        IntGen::OneOf(_) => panic("gen_filter_int: OneOf not supported"),
+        IntGen::Weighted(_, _) => panic("gen_filter_int: Weighted not supported"),
     }
 }
 
 /// Choose uniformly among `options`; panics if list is empty.
-pub fn gen_one_of_int(options: List[Int]) -> IntGen ! Random {
+pub fn gen_one_of_int(options: List[Int]) -> IntGen {
     IntGen::OneOf(options)
 }
 
-// ── Phase A: property checking ─────────────────────────────────────────────
+/// Choose from `values` with probability proportional to `weights`.
+/// Both lists must have the same length; all weights must be non-negative;
+/// at least one weight must be positive.
+pub fn gen_weighted_int(values: List[Int], weights: List[Int]) -> IntGen {
+    IntGen::Weighted(values, weights)
+}
 
-/// Run `prop` on `iterations` values drawn from `gen`.
-/// Panics with the test name if any iteration fails.
-pub partial fn property_check_int(
-    name: String,
+/// Boundary-case integer generator: 0, ±1, ±100, ±1_000_000, and INT extremes.
+/// Useful for edge testing without a full range scan.
+pub fn gen_boundary_int() -> IntGen {
+    IntGen::OneOf([0, 1, -1, 100, -100, 1000000, -1000000, 2147483647, -2147483647])
+}
+
+/// Raw byte sequence generator (fuzz mode — ignores type constraints).
+pub fn gen_raw_bytes(min_len: Int, max_len: Int) -> BytesGen {
+    BytesGen { min_len: min_len, max_len: max_len }
+}
+
+/// Raw string generator with extended charset (fuzz mode).
+/// Characters drawn from printable ASCII plus tab and newline.
+pub fn gen_raw_string(min_len: Int, max_len: Int) -> RawStringGen {
+    RawStringGen { min_len: min_len, max_len: max_len }
+}
+
+/// Default FuzzConfig: 1000 cases, 100 ms timeout, 10 MiB memory limit.
+/// Timeout and memory_limit are not yet enforced — see #617.
+pub fn fuzz_default_config() -> FuzzConfig {
+    FuzzConfig { max_cases: 1000, timeout_ms: 100, memory_limit_bytes: 10485760 }
+}
+
+// ── Private: weighted sampling ────────────────────────────────────────────
+
+// Draw one value from a weighted discrete distribution.
+// `vals` and `wts` are parallel arrays; at least one weight must be positive.
+fn sample_weighted_int(vals: List[Int], wts: List[Int]) -> Int ! Random {
+    let n: Int = list_len(vals);
+    if n == 0 { panic("gen_weighted_int: empty values list") };
+    let mut weight_sum: Int = 0;
+    let mut k: Int = 0;
+    while k < n {
+        let w: Int = match list_get(wts, k) { Some(x) => x, None => 0 };
+        weight_sum = weight_sum + w;
+        k = k + 1
+    };
+    if weight_sum == 0 { panic("gen_weighted_int: all weights are zero") };
+    let pick: Int = int(0, weight_sum - 1);
+    let mut acc: Int = 0;
+    let mut j: Int = 0;
+    let mut result: Int = match list_get(vals, n - 1) { Some(x) => x, None => 0 };
+    while j < n {
+        let w: Int = match list_get(wts, j) { Some(x) => x, None => 0 };
+        let vj: Int = match list_get(vals, j) { Some(x) => x, None => 0 };
+        acc = acc + w;
+        if pick < acc { result = vj; j = n };
+        j = j + 1
+    };
+    result
+}
+
+// ── Private: shrink helpers ────────────────────────────────────────────────
+
+// One shrink step for Int: try 0, then half, then ±1 toward zero.
+// Returns same value if no smaller failing input exists.
+fn shrink_int_step(x: Int, prop: fn(Int) -> Bool) -> Int {
+    if x != 0 && !prop(0) {
+        0
+    } else {
+        let half: Int = x / 2;
+        if half != x && !prop(half) {
+            half
+        } else {
+            let step: Int = if x > 0 { x - 1 } else { x + 1 };
+            if step != x && !prop(step) { step } else { x }
+        }
+    }
+}
+
+// Shrink an Int to the smallest failing value (up to 100 steps).
+fn shrink_int_loop(x: Int, prop: fn(Int) -> Bool) -> Int {
+    let mut shrunk: Int = x;
+    let mut shrinking: Bool = true;
+    let mut steps: Int = 0;
+    while shrinking && steps < 100 {
+        let next: Int = shrink_int_step(shrunk, prop);
+        if next == shrunk { shrinking = false } else { shrunk = next };
+        steps = steps + 1
+    };
+    shrunk
+}
+
+// One shrink step for String: try dropping last char, then first char.
+fn shrink_string_step(s: String, prop: fn(String) -> Bool) -> String {
+    let n: Int = str_len(s);
+    if n == 0 {
+        s
+    } else {
+        let without_last: String = str_substring(s, 0, n - 1);
+        if !prop(without_last) {
+            without_last
+        } else {
+            let without_first: String = str_substring(s, 1, n);
+            if !prop(without_first) { without_first } else { s }
+        }
+    }
+}
+
+// Shrink a String by dropping characters until no shorter failing string exists.
+fn shrink_string_loop(s: String, prop: fn(String) -> Bool) -> String {
+    let mut shrunk: String = s;
+    let mut shrinking: Bool = true;
+    let mut steps: Int = 0;
+    while shrinking && steps < 100 {
+        let next: String = shrink_string_step(shrunk, prop);
+        if str_len(next) < str_len(shrunk) { shrunk = next } else { shrinking = false };
+        steps = steps + 1
+    };
+    shrunk
+}
+
+// One shrink step for List[Int]: try dropping last element, then first.
+fn shrink_list_int_step(xs: List[Int], prop: fn(List[Int]) -> Bool) -> List[Int] {
+    let n: Int = list_len(xs);
+    if n == 0 {
+        xs
+    } else {
+        let without_last: List[Int] = list_slice(xs, 0, n - 1);
+        if !prop(without_last) {
+            without_last
+        } else {
+            let without_first: List[Int] = list_slice(xs, 1, n);
+            if !prop(without_first) { without_first } else { xs }
+        }
+    }
+}
+
+// Shrink a List[Int] by removing elements until no shorter failing list exists.
+fn shrink_list_int_loop(xs: List[Int], prop: fn(List[Int]) -> Bool) -> List[Int] {
+    let mut shrunk: List[Int] = xs;
+    let mut shrinking: Bool = true;
+    let mut steps: Int = 0;
+    while shrinking && steps < 100 {
+        let next: List[Int] = shrink_list_int_step(shrunk, prop);
+        if list_len(next) < list_len(shrunk) { shrunk = next } else { shrinking = false };
+        steps = steps + 1
+    };
+    shrunk
+}
+
+// ── Private: run helpers (return Option on failure, with shrinking) ────────
+
+// Run all iterations of an IntGen property. Returns Some(shrunk) on first
+// failure, None if all iterations pass.
+fn run_property_int(
     gen: IntGen,
     prop: fn(Int) -> Bool,
     iterations: Int
-) -> Unit ! Random {
+) -> Option[Int] ! Random {
     let mut i: Int = 0;
+    let mut failed: Bool = false;
+    let mut failing_val: Int = 0;
     match gen {
         IntGen::Range(lo, hi) => {
-            while i < iterations {
+            while i < iterations && !failed {
                 let v: Int = int(lo, hi);
-                if !prop(v) { panic(name) };
+                if !prop(v) { failed = true; failing_val = v };
                 i = i + 1
             }
         },
         IntGen::Filtered(lo, hi, pred) => {
-            while i < iterations {
+            while i < iterations && !failed {
                 let mut v: Int = int(lo, hi);
                 let mut tries: Int = 0;
                 while !pred(v) && tries < 100 {
@@ -129,23 +304,151 @@ pub partial fn property_check_int(
                     tries = tries + 1
                 };
                 if tries >= 100 { panic("gen_filter_int: no satisfying value in 100 tries") };
-                if !prop(v) { panic(name) };
+                if !prop(v) { failed = true; failing_val = v };
                 i = i + 1
             }
         },
         IntGen::OneOf(opts) => {
             let n: Int = list_len(opts);
             if n == 0 { panic("gen_one_of_int: empty list") };
-            while i < iterations {
+            while i < iterations && !failed {
                 let idx: Int = int(0, n - 1);
                 let v: Int = match list_get(opts, idx) {
                     Some(x) => x,
                     None => panic("gen_one_of_int: index out of range"),
                 };
-                if !prop(v) { panic(name) };
+                if !prop(v) { failed = true; failing_val = v };
                 i = i + 1
             }
         },
+        IntGen::Weighted(vals, wts) => {
+            while i < iterations && !failed {
+                let v: Int = sample_weighted_int(vals, wts);
+                if !prop(v) { failed = true; failing_val = v };
+                i = i + 1
+            }
+        },
+    };
+    if failed { Some(shrink_int_loop(failing_val, prop)) } else { None }
+}
+
+// Run all iterations of a BoolGen property.
+fn run_property_bool(
+    gen: BoolGen,
+    prop: fn(Bool) -> Bool,
+    iterations: Int
+) -> Option[Bool] ! Random {
+    let mut i: Int = 0;
+    let mut failed: Bool = false;
+    let mut failing_val: Bool = false;
+    match gen {
+        BoolGen::BoolRandom => {
+            while i < iterations && !failed {
+                let v: Bool = int(0, 1) == 1;
+                if !prop(v) { failed = true; failing_val = v };
+                i = i + 1
+            }
+        },
+        BoolGen::MappedFromInt(lo, hi, f) => {
+            while i < iterations && !failed {
+                let x: Int = int(lo, hi);
+                let v: Bool = f(x);
+                if !prop(v) { failed = true; failing_val = v };
+                i = i + 1
+            }
+        },
+    };
+    if failed {
+        let shrunk: Bool = if failing_val && !prop(false) { false } else { failing_val };
+        Some(shrunk)
+    } else {
+        None
+    }
+}
+
+// Run all iterations of a FloatGen property.
+fn run_property_float(
+    gen: FloatGen,
+    prop: fn(Float) -> Bool,
+    iterations: Int
+) -> Option[Float] ! Random {
+    let mut i: Int = 0;
+    let mut failed: Bool = false;
+    let mut failing_val: Float = 0.0;
+    while i < iterations && !failed {
+        let v: Float = float() * (gen.max - gen.min) + gen.min;
+        if !prop(v) { failed = true; failing_val = v };
+        i = i + 1
+    };
+    if failed {
+        let shrunk: Float = if !prop(0.0) { 0.0 } else { failing_val };
+        Some(shrunk)
+    } else {
+        None
+    }
+}
+
+// Run all iterations of a StringGen property.
+fn run_property_string(
+    gen: StringGen,
+    prop: fn(String) -> Bool,
+    iterations: Int
+) -> Option[String] ! Random {
+    let printable: String = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+    let mut i: Int = 0;
+    let mut failed: Bool = false;
+    let mut failing_val: String = "";
+    while i < iterations && !failed {
+        let len: Int = int(gen.min_len, gen.max_len);
+        let mut s: String = "";
+        let mut j: Int = 0;
+        while j < len {
+            let idx: Int = int(0, 94);
+            s = str_concat(s, str_char_at(printable, idx));
+            j = j + 1
+        };
+        if !prop(s) { failed = true; failing_val = s };
+        i = i + 1
+    };
+    if failed { Some(shrink_string_loop(failing_val, prop)) } else { None }
+}
+
+// Run all iterations of a ListIntGen property.
+fn run_property_list_int(
+    gen: ListIntGen,
+    prop: fn(List[Int]) -> Bool,
+    iterations: Int
+) -> Option[List[Int]] ! Random {
+    let mut i: Int = 0;
+    let mut failed: Bool = false;
+    let mut failing_val: List[Int] = [];
+    while i < iterations && !failed {
+        let len: Int = int(0, gen.max_len);
+        let mut xs: List[Int] = [];
+        let mut j: Int = 0;
+        while j < len {
+            xs.push(int(gen.min_val, gen.max_val));
+            j = j + 1
+        };
+        if !prop(xs) { failed = true; failing_val = xs };
+        i = i + 1
+    };
+    if failed { Some(shrink_list_int_loop(failing_val, prop)) } else { None }
+}
+
+// ── Phase A: property checking ─────────────────────────────────────────────
+
+/// Run `prop` on `iterations` values drawn from `gen`.
+/// On failure, shrinks to the minimal failing input and panics with it.
+pub partial fn property_check_int(
+    name: String,
+    gen: IntGen,
+    prop: fn(Int) -> Bool,
+    iterations: Int
+) -> Unit ! Random {
+    match run_property_int(gen, prop, iterations) {
+        None => {},
+        Some(v) => panic(str_concat(str_concat(name, ": falsified for "), v.to_string())),
     }
 }
 
@@ -156,48 +459,35 @@ pub partial fn property_check_bool(
     prop: fn(Bool) -> Bool,
     iterations: Int
 ) -> Unit ! Random {
-    let mut i: Int = 0;
-    match gen {
-        BoolGen::BoolRandom => {
-            while i < iterations {
-                let v: Bool = int(0, 1) == 1;
-                if !prop(v) { panic(name) };
-                i = i + 1
-            }
-        },
-        BoolGen::MappedFromInt(lo, hi, f) => {
-            while i < iterations {
-                let x: Int = int(lo, hi);
-                let v: Bool = f(x);
-                if !prop(v) { panic(name) };
-                i = i + 1
-            }
-        },
+    match run_property_bool(gen, prop, iterations) {
+        None => {},
+        Some(v) => panic(str_concat(str_concat(name, ": falsified for "), v.to_string())),
+    }
+}
+
+/// Same as property_check_int but for Float generators.
+pub partial fn property_check_float(
+    name: String,
+    gen: FloatGen,
+    prop: fn(Float) -> Bool,
+    iterations: Int
+) -> Unit ! Random {
+    match run_property_float(gen, prop, iterations) {
+        None => {},
+        Some(v) => panic(str_concat(str_concat(name, ": falsified for "), v.to_string())),
     }
 }
 
 /// Same as property_check_int but for String generators.
-/// Characters are drawn from printable ASCII (codepoints 32–126).
 pub partial fn property_check_string(
     name: String,
     gen: StringGen,
     prop: fn(String) -> Bool,
     iterations: Int
 ) -> Unit ! Random {
-    // printable ASCII: space (32) through tilde (126) — 95 characters
-    let printable: String = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
-    let mut i: Int = 0;
-    while i < iterations {
-        let len: Int = int(gen.min_len, gen.max_len);
-        let mut s: String = "";
-        let mut j: Int = 0;
-        while j < len {
-            let idx: Int = int(0, 94);
-            s = str_concat(s, str_char_at(printable, idx));
-            j = j + 1
-        };
-        if !prop(s) { panic(name) };
-        i = i + 1
+    match run_property_string(gen, prop, iterations) {
+        None => {},
+        Some(v) => panic(str_concat(str_concat(str_concat(name, ": falsified for \""), v), "\"")),
     }
 }
 
@@ -208,17 +498,111 @@ pub partial fn property_check_list_int(
     prop: fn(List[Int]) -> Bool,
     iterations: Int
 ) -> Unit ! Random {
-    let mut i: Int = 0;
-    while i < iterations {
-        let len: Int = int(0, gen.max_len);
-        let mut xs: List[Int] = [];
-        let mut j: Int = 0;
-        while j < len {
-            xs.push(int(gen.min_val, gen.max_val));
-            j = j + 1
-        };
-        if !prop(xs) { panic(name) };
-        i = i + 1
+    match run_property_list_int(gen, prop, iterations) {
+        None => {},
+        Some(_) => panic(str_concat(name, ": falsified for a list input")),
+    }
+}
+
+// ── Phase A: verbose variants (statistics) ─────────────────────────────────
+
+/// Like property_check_int but prints a summary on success.
+/// Output: "<name>: OK, passed N tests."
+pub partial fn property_check_int_verbose(
+    name: String,
+    gen: IntGen,
+    prop: fn(Int) -> Bool,
+    iterations: Int
+) -> Unit ! Random, Console {
+    match run_property_int(gen, prop, iterations) {
+        None => println("{}: OK, passed {} tests.", name, iterations.to_string()),
+        Some(v) => panic(str_concat(str_concat(name, ": falsified for "), v.to_string())),
+    }
+}
+
+/// Like property_check_string but prints a summary on success.
+pub partial fn property_check_string_verbose(
+    name: String,
+    gen: StringGen,
+    prop: fn(String) -> Bool,
+    iterations: Int
+) -> Unit ! Random, Console {
+    match run_property_string(gen, prop, iterations) {
+        None => println("{}: OK, passed {} tests.", name, iterations.to_string()),
+        Some(v) => panic(str_concat(str_concat(str_concat(name, ": falsified for \""), v), "\"")),
+    }
+}
+
+/// Like property_check_list_int but prints a summary on success.
+pub partial fn property_check_list_int_verbose(
+    name: String,
+    gen: ListIntGen,
+    prop: fn(List[Int]) -> Bool,
+    iterations: Int
+) -> Unit ! Random, Console {
+    match run_property_list_int(gen, prop, iterations) {
+        None => println("{}: OK, passed {} tests.", name, iterations.to_string()),
+        Some(_) => panic(str_concat(name, ": falsified for a list input")),
+    }
+}
+
+// ── Phase A: counterexample persistence ───────────────────────────────────
+
+// Upcast a plain String to Tainted[String].
+// Required because append() takes Tainted[String] (all file contents are
+// considered potentially external data) and the String we build from test
+// failure info needs an explicit label to satisfy the IFC type.
+fn taint_string(s: String) -> Tainted[String] {
+    s
+}
+
+// Write one counterexample entry to tests/.proptest-regressions/failures.txt.
+// Errors are silently ignored — persistence is best-effort.
+fn save_counterexample(name: String, value: String) -> Unit ! FileWrite {
+    let dir: Path = path("tests/.proptest-regressions");
+    match create_dir_all(dir) {
+        Ok(_) => {
+            let p: Path = path("tests/.proptest-regressions/failures.txt");
+            let entry: String = str_concat(str_concat(str_concat(name, ": "), value), "\n");
+            match append(p, taint_string(entry)) {
+                Ok(_) => {},
+                Err(_) => {},
+            }
+        },
+        Err(_) => {},
+    }
+}
+
+/// Like property_check_int but also writes the minimal failing input to
+/// `tests/.proptest-regressions/failures.txt` before panicking.
+pub partial fn property_check_int_persist(
+    name: String,
+    gen: IntGen,
+    prop: fn(Int) -> Bool,
+    iterations: Int
+) -> Unit ! Random, FileWrite {
+    match run_property_int(gen, prop, iterations) {
+        None => {},
+        Some(v) => {
+            save_counterexample(name, v.to_string());
+            panic(str_concat(str_concat(name, ": falsified for "), v.to_string()))
+        },
+    }
+}
+
+/// Like property_check_string but also persists the minimal failing input.
+pub partial fn property_check_string_persist(
+    name: String,
+    gen: StringGen,
+    prop: fn(String) -> Bool,
+    iterations: Int
+) -> Unit ! Random, FileWrite {
+    match run_property_string(gen, prop, iterations) {
+        None => {},
+        Some(v) => {
+            save_counterexample(name, v);
+            panic(str_concat(str_concat(str_concat(name, ": falsified for \""), v), "\""))
+        },
     }
 }
 
@@ -304,8 +688,8 @@ pub fn mutate_list_int(xs: List[Int]) -> List[Int] ! Random {
 
 /// Like property_check_int but biases generation toward inputs where
 /// `distance(x)` is small — i.e., closest to violating the property.
-/// Only Range-based generators are supported for targeting; others fall back
-/// to standard property_check_int.
+/// Only Range-based generators support targeting; others fall back to
+/// standard property_check_int.
 pub partial fn property_check_targeted_int(
     name: String,
     gen: IntGen,
@@ -319,14 +703,13 @@ pub partial fn property_check_targeted_int(
             let mut best: Int = int(lo, hi);
             let mut best_dist: Float = distance(best);
             while i < iterations {
-                // 20% of the time mutate the best candidate; otherwise fresh sample
                 let v: Int = if int(0, 4) == 0 { mutate_int(best) } else { int(lo, hi) };
                 let d: Float = distance(v);
-                if d < best_dist {
-                    best = v;
-                    best_dist = d
+                if d < best_dist { best = v; best_dist = d };
+                if !prop(v) {
+                    let shrunk: Int = shrink_int_loop(v, prop);
+                    panic(str_concat(str_concat(name, ": falsified for "), shrunk.to_string()))
                 };
-                if !prop(v) { panic(name) };
                 i = i + 1
             }
         },
@@ -337,8 +720,8 @@ pub partial fn property_check_targeted_int(
 /// Variant of property_check_int that mixes fresh generation with mutation
 /// of a corpus of previously seen values.
 /// `mutation_ratio` in [0.0, 1.0] controls the fraction that are mutations.
-/// Only Range-based generators are supported for mutation; others fall back
-/// to standard property_check_int.
+/// Only Range-based generators support mutation; others fall back to
+/// standard property_check_int.
 pub partial fn property_check_with_mutation_int(
     name: String,
     gen: IntGen,
@@ -363,10 +746,124 @@ pub partial fn property_check_with_mutation_int(
                     int(lo, hi)
                 };
                 corpus.push(v);
-                if !prop(v) { panic(name) };
+                if !prop(v) {
+                    let shrunk: Int = shrink_int_loop(v, prop);
+                    panic(str_concat(str_concat(name, ": falsified for "), shrunk.to_string()))
+                };
                 i = i + 1
             }
         },
         _ => property_check_int(name, gen, prop, iterations),
+    }
+}
+
+// ── Phase B: verbose mutation stats ────────────────────────────────────────
+
+/// Like property_check_with_mutation_int but prints statistics on success:
+/// total, fresh, and mutated case counts.
+pub partial fn property_check_with_mutation_int_verbose(
+    name: String,
+    gen: IntGen,
+    prop: fn(Int) -> Bool,
+    mutation_ratio: Float,
+    iterations: Int
+) -> Unit ! Random, Console {
+    match gen {
+        IntGen::Range(lo, hi) => {
+            let mut i: Int = 0;
+            let mut corpus: List[Int] = [];
+            let mut fresh_count: Int = 0;
+            let mut mutated_count: Int = 0;
+            while i < iterations {
+                let n: Int = list_len(corpus);
+                let v: Int = if n > 0 && float() < mutation_ratio {
+                    let idx: Int = int(0, n - 1);
+                    let base: Int = match list_get(corpus, idx) {
+                        Some(x) => x,
+                        None => int(lo, hi),
+                    };
+                    mutated_count = mutated_count + 1;
+                    mutate_int(base)
+                } else {
+                    fresh_count = fresh_count + 1;
+                    int(lo, hi)
+                };
+                corpus.push(v);
+                if !prop(v) {
+                    let shrunk: Int = shrink_int_loop(v, prop);
+                    panic(str_concat(str_concat(name, ": falsified for "), shrunk.to_string()))
+                };
+                i = i + 1
+            };
+            println(
+                "{}: OK, {} tests ({} fresh, {} mutated).",
+                name,
+                iterations.to_string(),
+                fresh_count.to_string(),
+                mutated_count.to_string()
+            )
+        },
+        _ => {
+            property_check_int(name, gen, prop, iterations);
+            println("{}: OK, passed {} tests.", name, iterations.to_string())
+        },
+    }
+}
+
+// ── Fuzz: check functions (#617) ───────────────────────────────────────────
+
+/// Fuzz a property with raw byte sequences (adversarial inputs, no type constraints).
+///
+/// Runs `prop` on `config.max_cases` random byte sequences of length in
+/// [gen.min_len, gen.max_len]. Panics with the test name on first failure.
+///
+/// Note: `timeout_ms` and `memory_limit_bytes` in `config` are not yet enforced.
+/// OS process control is required. See #617.
+pub partial fn fuzz_check_bytes(
+    name: String,
+    gen: BytesGen,
+    prop: fn(List[Int]) -> Bool,
+    config: FuzzConfig
+) -> Unit ! Random {
+    let mut i: Int = 0;
+    while i < config.max_cases {
+        let n: Int = int(gen.min_len, gen.max_len);
+        let bs: List[Int] = bytes(n);
+        if !prop(bs) {
+            panic(str_concat(name, ": property failed on raw byte input"))
+        };
+        i = i + 1
+    }
+}
+
+/// Fuzz a property with raw strings (adversarial input, extended charset).
+///
+/// Charset: printable ASCII (32–126) plus tab and newline.
+/// Shrinks the failing string before panicking.
+///
+/// Note: `timeout_ms` and `memory_limit_bytes` in `config` are not yet enforced.
+pub partial fn fuzz_check_string(
+    name: String,
+    gen: RawStringGen,
+    prop: fn(String) -> Bool,
+    config: FuzzConfig
+) -> Unit ! Random {
+    let charset: String = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\t\n";
+    let charset_len: Int = str_len(charset);
+    let mut i: Int = 0;
+    while i < config.max_cases {
+        let n: Int = int(gen.min_len, gen.max_len);
+        let mut s: String = "";
+        let mut j: Int = 0;
+        while j < n {
+            let idx: Int = int(0, charset_len - 1);
+            s = str_concat(s, str_char_at(charset, idx));
+            j = j + 1
+        };
+        if !prop(s) {
+            let shrunk: String = shrink_string_loop(s, prop);
+            panic(str_concat(str_concat(name, ": property failed for: "), shrunk))
+        };
+        i = i + 1
     }
 }
