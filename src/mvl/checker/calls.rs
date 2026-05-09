@@ -150,7 +150,9 @@ impl TypeChecker {
             // ── Built-in enum constructors ────────────────────────────────
             // These are not in the function table but are valid expressions.
             let arg_count = arg_tys.len();
-            let first_arg = arg_tys.into_iter().next().unwrap_or(Ty::Unknown);
+            // Use first().cloned() rather than into_iter().next() so that arg_tys is
+            // still available below for HOF per-argument type checking.
+            let first_arg = arg_tys.first().cloned().unwrap_or(Ty::Unknown);
             match name {
                 "Some" => return Ty::Option(Box::new(first_arg)),
                 "Ok" => return Ty::Result(Box::new(first_arg), Box::new(Ty::Unknown)),
@@ -198,18 +200,37 @@ impl TypeChecker {
             }
             // HOF: `name` may be a local variable with a function type fn(T...) -> R.
             // This covers stdlib patterns like `map(xs, f)` where `f: fn(T) -> U`.
-            if let Some(var_info) = self.env.lookup(name) {
-                if let Ty::Fn(param_tys, ret_ty) = var_info.ty.clone() {
-                    if arg_count != param_tys.len() {
-                        self.emit(CheckError::WrongArgCount {
-                            name: name.to_string(),
-                            expected: param_tys.len(),
-                            found: arg_count,
-                            span,
-                        });
-                    }
-                    return *ret_ty;
+            // Note: effect and totality annotations are not yet carried in Ty::Fn, so
+            // those checks (Req 7/8) cannot be enforced for HOF calls.
+            // TODO: extend Ty::Fn with Vec<Effect> and Option<Totality> to close this gap.
+            if let Some(hof_fn) = self.env.lookup(name).and_then(|vi| {
+                if let Ty::Fn(pts, rt) = &vi.ty {
+                    Some((pts.clone(), *rt.clone()))
+                } else {
+                    None
                 }
+            }) {
+                let (param_tys, ret_ty) = hof_fn;
+                if arg_count != param_tys.len() {
+                    self.emit(CheckError::WrongArgCount {
+                        name: name.to_string(),
+                        expected: param_tys.len(),
+                        found: arg_count,
+                        span,
+                    });
+                } else {
+                    // Check each argument type against the declared parameter type.
+                    for (i, (expected, found)) in param_tys.iter().zip(arg_tys.iter()).enumerate() {
+                        if !types_compatible(expected, found) {
+                            self.emit(CheckError::TypeMismatch {
+                                expected: expected.display(),
+                                found: found.display(),
+                                span: args[i].span(),
+                            });
+                        }
+                    }
+                }
+                return ret_ty;
             }
             // Not in function table — could be builtin or foreign; emit Unknown
             self.emit(CheckError::UndefinedFunction {

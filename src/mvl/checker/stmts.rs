@@ -381,7 +381,7 @@ impl TypeChecker {
                                 cond_label, &else_ty, return_ty, *span,
                             );
                         }
-                        ElseBranch::If(s) => self.check_stmt(s, return_ty),
+                        ElseBranch::If(s) => self.check_stmt(s, None),
                     }
                 }
             }

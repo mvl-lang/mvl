@@ -1,6 +1,6 @@
 //! Pattern matching and exhaustiveness checking for the MVL type checker.
 
-use crate::mvl::checker::context::{TypeBodyInfo, VarInfo};
+use crate::mvl::checker::context::{TypeBodyInfo, VarInfo, VariantFieldsInfo};
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{MatchArm, MatchBody, Pattern};
@@ -218,16 +218,12 @@ impl TypeChecker {
                     .types
                     .values()
                     .find_map(|ti| {
-                        if let crate::mvl::checker::context::TypeBodyInfo::Enum(variants) = &ti.body
-                        {
+                        if let TypeBodyInfo::Enum(variants) = &ti.body {
                             variants
                                 .iter()
                                 .find(|v| v.name == variant_name)
                                 .and_then(|v| {
-                                    if let crate::mvl::checker::context::VariantFieldsInfo::Tuple(
-                                        tys,
-                                    ) = &v.fields
-                                    {
+                                    if let VariantFieldsInfo::Tuple(tys) = &v.fields {
                                         Some(tys.clone())
                                     } else {
                                         None

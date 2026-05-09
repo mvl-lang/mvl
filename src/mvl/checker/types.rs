@@ -224,6 +224,11 @@ pub fn types_compatible(a: &Ty, b: &Ty) -> bool {
     if matches!(a, Ty::Unknown) || matches!(b, Ty::Unknown) {
         return true;
     }
+    // Never is the bottom type: a diverging expression (panic, infinite loop) satisfies
+    // any expected type because the expression never actually produces a value.
+    if matches!(b, Ty::Never) {
+        return true;
+    }
     match (a, b) {
         // Both labeled: enforce lattice flow from b (found) to a (expected),
         // then check structural compatibility of the inner types.
