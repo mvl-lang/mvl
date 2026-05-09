@@ -77,6 +77,26 @@ pub unsafe extern "C" fn mvl_free(ptr: *mut u8, size: usize) {
     dealloc(ptr, layout);
 }
 
+/// Allocate `size` bytes via `malloc` for a `Box[T]` value (#608).
+///
+/// Unlike `build_malloc` in the LLVM emitter, this wrapper aborts on OOM
+/// instead of returning a null pointer, matching the safety invariant that
+/// MVL programs never dereference null.  The caller frees via `libc::free`.
+///
+/// # Safety
+/// Caller must free the returned pointer with `free(ptr)`.
+#[no_mangle]
+pub unsafe extern "C" fn mvl_box_new(size: i64) -> *mut u8 {
+    if size <= 0 {
+        std::process::abort();
+    }
+    let ptr = libc::malloc(size as libc::size_t) as *mut u8;
+    if ptr.is_null() {
+        mvl_panic(b"mvl_box_new: out of memory\0".as_ptr().cast());
+    }
+    ptr
+}
+
 /// Print `msg` (null-terminated C string) to stderr and abort.
 #[no_mangle]
 pub unsafe extern "C" fn mvl_panic(msg: *const u8) {

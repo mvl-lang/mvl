@@ -149,9 +149,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                     // LLVM level it is represented as a `MvlString*` (ptr).
                     // #420: Regex is an opaque heap handle (Box<regex::Regex> cast to *mut c_void).
                     // #585: Instant is a boxed i64 handle (epoch seconds) at the LLVM level.
-                    "String" | "List" | "Array" | "Map" | "Set" | "Path" | "Regex" | "Instant" => {
-                        Some(self.context.ptr_type(AddressSpace::default()).into())
-                    }
+                    "String" | "List" | "Array" | "Map" | "Set" | "Path" | "Regex" | "Instant"
+                    | "Box" => Some(self.context.ptr_type(AddressSpace::default()).into()),
                     _ => {
                         // Known struct type → %StructName
                         if let Some(&st) = self.llvm_struct_types.get(name.as_str()) {
@@ -198,12 +197,12 @@ impl<'ctx> LlvmBackend<'ctx> {
         matches!(ty, TypeExpr::Base { name, .. } if name == "Unit")
     }
 
-    /// Peel `Labeled { inner }` and `Refined { inner }` wrappers recursively.
+    /// Peel `Labeled { inner }`, `Refined { inner }`, and `Ref { inner }` wrappers recursively.
     pub(crate) fn strip_type_wrappers(ty: &TypeExpr) -> &TypeExpr {
         match ty {
-            TypeExpr::Labeled { inner, .. } | TypeExpr::Refined { inner, .. } => {
-                Self::strip_type_wrappers(inner)
-            }
+            TypeExpr::Labeled { inner, .. }
+            | TypeExpr::Refined { inner, .. }
+            | TypeExpr::Ref { inner, .. } => Self::strip_type_wrappers(inner),
             other => other,
         }
     }

@@ -126,6 +126,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                                         HeapKind::StringPtrArray => {
                                             self.get_mvl_string_ptr_array_drop()
                                         }
+                                        HeapKind::Box => self.get_libc_free(),
                                     };
                                     let _ = self.builder.build_call(
                                         drop_fn,
@@ -806,6 +807,9 @@ impl<'ctx> LlvmBackend<'ctx> {
                         .unwrap();
                     self.builder.build_store(alloca, loaded).unwrap();
                     self.locals.insert(bind_name.clone(), (alloca, llvm_ty));
+                    // Register MVL type so Deref (*box_val) can load the inner type (#571).
+                    self.local_mvl_types
+                        .insert(bind_name.clone(), field_ty.clone());
                 }
             }
         }
@@ -922,6 +926,10 @@ pub(crate) fn heap_kind_of(ty: &TypeExpr) -> Option<HeapKind> {
         }
         "Map" => Some(HeapKind::Map),
         "Set" => Some(HeapKind::Set),
+        // Box[T] allocations are freed via libc free at function exit (#571).
+        // Only covers let-bound Box variables; Box pointers embedded in struct
+        // fields require recursive field-walk at drop (not yet implemented).
+        "Box" => Some(HeapKind::Box),
         _ => None,
     }
 }

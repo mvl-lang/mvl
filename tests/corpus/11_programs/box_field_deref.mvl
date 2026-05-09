@@ -1,0 +1,19 @@
+// box_field_deref.mvl — deref Box[T] accessed via struct field (#606)
+//
+// Exercises:
+//   - Struct with a Box[T] field
+//   - Box::new() constructor
+//   - * dereference via field access (*w.field)
+//
+// Expected output:
+//   value: 42
+
+type Wrapper = struct {
+    inner: Box[Int],
+}
+
+fn main() -> Unit ! Console {
+    let w: Wrapper = Wrapper { inner: Box::new(42) };
+    let v: Int = *w.inner;
+    println(format("value: {}", v));
+}
