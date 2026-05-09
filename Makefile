@@ -27,7 +27,7 @@ setup: ## Install git hooks, verify tooling, and install tree-sitter npm deps
 
 doctor: ## Check that all dev tools are available
 	@echo "Checking dev tools..."; echo; \
-	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
+	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; WARN="\033[33m!\033[0m"; \
 	check() { command -v "$$1" >/dev/null 2>&1 && printf "  $$OK $$1\n" || printf "  $$FAIL $$1  ($$2)\n"; }; \
 	check cargo         "https://rustup.rs"; \
 	check rustfmt       "rustup component add rustfmt"; \
@@ -35,6 +35,15 @@ doctor: ## Check that all dev tools are available
 	check node          "https://nodejs.org"; \
 	check python3       "required for make assurance"; \
 	check /opt/homebrew/opt/llvm/bin/lli "brew install llvm  (required for LLVM backend)"; \
+	WANT=$$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/'); \
+	GOT=$$(mvl --version 2>/dev/null | awk '{print $$2}'); \
+	if [ -z "$$GOT" ]; then \
+	  printf "  $$FAIL mvl not installed  (run: make install)\n"; \
+	elif [ "$$GOT" != "$$WANT" ]; then \
+	  printf "  $$WARN mvl $$GOT installed but project is $$WANT  (run: make install)\n"; \
+	else \
+	  printf "  $$OK mvl $$GOT\n"; \
+	fi; \
 	echo
 
 install: build-release ## Install mvl binary to ~/.local/bin
