@@ -71,7 +71,7 @@ fn main() {
             if verbose {
                 eprintln!("stdlib profile: {stdlib_profile}");
             }
-            cmd_check(&path, req_filter, error_limit);
+            cmd_check(&path, req_filter, error_limit, stdlib_profile);
         }
         "build" => {
             let path = require_path_arg(&args, "build");
@@ -280,9 +280,9 @@ fn parse_backend(args: &[String]) -> &str {
 /// Supported profiles:
 /// - `trusted` (default) — `pub builtin fn` declarations backed directly by
 ///   mvl_runtime / mvl_runtime_c; fast compilation, 95 builtins.
-/// - `proven` — pure MVL implementations for all non-OS functions, leaving
-///   only 15 irreducible builtins (I/O, memory, entropy, process).
-///   Currently falls back to trusted pending #538 (MVL stdlib implementations).
+/// - `proven` — extends verification to all pure-MVL stdlib function bodies,
+///   applying all 11 compiler requirements to both user code and stdlib.
+///   OS/hardware builtins (I/O, memory, entropy, process) remain trusted.
 fn parse_stdlib_profile(args: &[String]) -> &'static str {
     let profile = args
         .iter()
@@ -290,13 +290,7 @@ fn parse_stdlib_profile(args: &[String]) -> &'static str {
         .unwrap_or("trusted");
     match profile {
         "trusted" => "trusted",
-        "proven" => {
-            eprintln!(
-                "note: --stdlib=proven selected; MVL stdlib implementations not yet available \
-                 (see #538) — using trusted builtins"
-            );
-            "trusted"
-        }
+        "proven" => "proven",
         other => {
             eprintln!("error: unknown stdlib profile '{other}' (supported: trusted, proven)");
             process::exit(1);
@@ -432,17 +426,97 @@ fn validate_module_name(name: &str, source_path: &str) {
 
 // ── Commands ─────────────────────────────────────────────────────────────
 
+// ── Pure-MVL stdlib files verified in proven mode (ADR-0023, #538) ───────────
+//
+// These files contain pure MVL function bodies that can be verified against
+// all 11 requirements.  OS/hardware-backed modules (io, env, process, crypto,
+// random, time, regex, args, log) are excluded — they are only `pub builtin fn`
+// declarations with no body to check.
+const PROVEN_STDLIB_FILES: &[&str] = &[
+    "core.mvl",
+    "strings.mvl",
+    "lists.mvl",
+    "math.mvl",
+    "collections.mvl",
+    "json.mvl",
+    "pbt.mvl",
+];
+
+/// Run full 11-requirement verification on all pure-MVL stdlib files.
+///
+/// Each file is checked with the other proven-stdlib files as its prelude so
+/// that cross-module references (e.g. lists.mvl calling list_len from core)
+/// resolve correctly.
+///
+/// Returns `(stdlib_file_name, errors)` for any file that has errors.
+fn check_proven_stdlib() -> Vec<(String, mvl::mvl::checker::CheckResult)> {
+    // Parse all proven-stdlib files up front.
+    let programs: Vec<(String, mvl::mvl::parser::ast::Program)> = PROVEN_STDLIB_FILES
+        .iter()
+        .filter_map(|name| {
+            stdlib::stdlib_content(name).map(|src| {
+                let (mut p, _) = Parser::new(src);
+                (name.to_string(), p.parse_program())
+            })
+        })
+        .collect();
+
+    let mut results = Vec::new();
+    for (i, (name, prog)) in programs.iter().enumerate() {
+        // Build a prelude from all OTHER proven-stdlib programs.
+        let prelude: Vec<&mvl::mvl::parser::ast::Program> = programs
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != i)
+            .map(|(_, (_, p))| p)
+            .collect();
+        let prelude_owned: Vec<mvl::mvl::parser::ast::Program> =
+            prelude.iter().map(|p| (*p).clone()).collect();
+
+        let result = checker::check_with_prelude(&prelude_owned, prog);
+        if result.has_errors() {
+            results.push((name.clone(), result));
+        }
+    }
+    results
+}
+
 /// Parse and type-check a .mvl file or all .mvl files in a directory.
 ///
 /// When `req_filter` is `Some(N)`, only the verification pass for Req N is run
 /// and its verdict is printed; errors for other requirements are suppressed.
-fn cmd_check(path: &str, req_filter: Option<u8>, error_limit: usize) {
+fn cmd_check(path: &str, req_filter: Option<u8>, error_limit: usize, stdlib_profile: &str) {
     let files = mvl_files(path, false);
     if files.is_empty() {
         eprintln!("No .mvl files found at: {path}");
         process::exit(1);
     }
     let stdlib_dir = stdlib::ensure_stdlib();
+
+    // --stdlib=proven: verify all pure-MVL stdlib function bodies against all
+    // 11 requirements before checking user code (ADR-0023, #538).
+    let mut stdlib_proven_failed = false;
+    if stdlib_profile == "proven" {
+        let stdlib_errors = check_proven_stdlib();
+        if !stdlib_errors.is_empty() {
+            eprintln!(
+                "note: --stdlib=proven: {} stdlib file(s) have verification errors:",
+                stdlib_errors.len()
+            );
+            for (name, result) in &stdlib_errors {
+                for err in &result.errors {
+                    eprintln!(
+                        "std/{name}:{}:{}: error[req{}]: {}",
+                        err.span().line,
+                        err.span().col,
+                        err.requirement_number(),
+                        err.message()
+                    );
+                }
+            }
+            stdlib_proven_failed = true;
+        }
+    }
 
     // Parse all files once so we can pass them to both the resolver and the checker.
     let mut parsed: Vec<(String, Program, String)> = files
@@ -484,7 +558,7 @@ fn cmd_check(path: &str, req_filter: Option<u8>, error_limit: usize) {
         .map(|(file_str, prog, _)| (stem(file_str), prog.clone()))
         .collect();
     let resolve_result = resolver::resolve_project(modules, Some(&stdlib_dir));
-    let mut had_errors = !resolve_result.is_ok();
+    let mut had_errors = !resolve_result.is_ok() || stdlib_proven_failed;
     for err in &resolve_result.errors {
         eprintln!("error[resolver]: {err}");
     }
