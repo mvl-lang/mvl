@@ -29,48 +29,6 @@ use model::AppError;
 
 use std.log.{log_info, log_warn}
 
-// ── Local type declarations (mirrors model.mvl) ────────────────────────────
-// workaround: #96 — cross-module type resolution not yet wired into the
-// per-file checker; types are re-declared locally until the module resolver
-// is integrated.
-
-type Role = enum {
-    Admin,
-    Moderator,
-    User,
-    Guest,
-}
-
-type Resource = enum {
-    UserProfile,
-    AdminPanel,
-    Post,
-    AuditLog,
-}
-
-type Action = enum {
-    Read,
-    Write,
-    Delete,
-}
-
-type Permission = enum {
-    Allow,
-    Deny,
-}
-
-type AuthError = enum {
-    InvalidCredentials,
-    SessionExpired,
-    InvalidToken,
-}
-
-type AppError = enum {
-    AuthFailed,
-    UserNotFound,
-    MissingArg,
-}
-
 // ── Trust boundary: demo fixture data lives in Rust ───────────────────────
 
 extern "rust" {
