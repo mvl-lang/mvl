@@ -55,9 +55,7 @@ pub fn int_max(a: Int, b: Int) -> Int {
 }
 
 /// Convert `n` to a `Float`.
-///
-/// Transpiler-handled as a Rust cast (`n as f64`); stub returns 0.0.
-pub fn int_to_float(n: Int) -> Float { 0.0 }
+pub fn int_to_float(n: Int) -> Float { n.to_float() }
 
 /// Convert `n` to its decimal string representation.
 pub fn int_to_string(n: Int) -> String {
