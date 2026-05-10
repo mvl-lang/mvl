@@ -964,7 +964,7 @@ fn check_call_site(
 
 // ── Argument checking ─────────────────────────────────────────────────────────
 
-fn check_arg_against_pred(
+pub(crate) fn check_arg_against_pred(
     arg: &Expr,
     pred: &RefExpr,
     var_refs: &HashMap<String, Option<RefExpr>>,

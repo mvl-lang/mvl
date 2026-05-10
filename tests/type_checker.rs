@@ -5094,3 +5094,614 @@ fn z3_proves_modular_implication() {
         result.errors
     );
 }
+
+// ── Issue #621: Function contracts — requires / ensures ───────────────────────
+
+#[test]
+fn contracts_corpus_parses_and_checks() {
+    // GIVEN: the basic_contracts corpus (valid contract programs)
+    // THEN: no type errors
+    let src = include_str!("corpus/13_contracts/basic_contracts.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "contracts corpus should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn requires_parses_and_is_stored_on_fndecl() {
+    // GIVEN: fn with `requires` contract clause
+    // THEN: parsed without errors and requires is non-empty
+    let src = r#"
+        fn divide(a: Int, b: Int) -> Int
+          requires b != 0
+        { a }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "requires clause should parse cleanly: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn ensures_parses_and_is_stored_on_fndecl() {
+    // GIVEN: fn with `ensures` contract clause
+    // THEN: parsed without errors
+    let src = r#"
+        fn identity(n: Int) -> Int
+          ensures result == n
+        { n }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "ensures clause should parse cleanly: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn requires_and_ensures_combined() {
+    // GIVEN: fn with both requires and ensures
+    // THEN: parsed without errors
+    let src = r#"
+        fn factorial(n: Int) -> Int
+          requires n >= 0
+          ensures result >= 1
+        { 1 }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "requires+ensures should parse cleanly: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn requires_literal_violation_detected() {
+    // GIVEN: fn with `requires b != 0`, called with literal 0
+    // THEN: PreconditionViolated error reported
+    let src = r#"
+        fn divide(a: Int, b: Int) -> Int
+          requires b != 0
+        { a }
+        fn caller() -> Int {
+            divide(10, 0)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::PreconditionViolated { fn_name, .. } if fn_name == "divide")
+        ),
+        "expected PreconditionViolated for divide(10, 0), got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn requires_literal_satisfied_no_error() {
+    // GIVEN: fn with `requires b != 0`, called with non-zero literal
+    // THEN: no error (Proven by solver)
+    let src = r#"
+        fn divide(a: Int, b: Int) -> Int
+          requires b != 0
+        { a }
+        fn caller() -> Int {
+            divide(10, 5)
+        }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "divide(10, 5) satisfies b != 0: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn requires_unknown_var_is_runtime_check_no_error() {
+    // GIVEN: fn with `requires b != 0`, called with an unknown variable
+    // THEN: no compile-time error (deferred to runtime)
+    let src = r#"
+        fn divide(a: Int, b: Int) -> Int
+          requires b != 0
+        { a }
+        fn caller(x: Int, y: Int) -> Int {
+            divide(x, y)
+        }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "unknown var satisfying requires should be RuntimeCheck (no error): {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn ensures_literal_violation_detected() {
+    // GIVEN: fn with `ensures result >= 0`, returning a negative literal
+    // THEN: PostconditionViolated error reported
+    let src = r#"
+        fn bad() -> Int
+          ensures result >= 0
+        { -1 }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::PostconditionViolated { fn_name, .. } if fn_name == "bad")
+        ),
+        "expected PostconditionViolated for bad(), got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn ensures_literal_satisfied_no_error() {
+    // GIVEN: fn with `ensures result >= 0`, returning a non-negative literal
+    // THEN: no error (Proven by solver)
+    let src = r#"
+        fn nonneg() -> Int
+          ensures result >= 0
+        { 42 }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "nonneg() returns 42 which satisfies result >= 0: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn ensures_with_param_ref_is_runtime_check_no_error() {
+    // GIVEN: fn with `ensures result >= n` (references param — Phase 2+)
+    // THEN: no compile-time error (conservatively deferred to runtime)
+    let src = r#"
+        fn at_least(n: Int) -> Int
+          ensures result >= n
+        { n }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "ensures with param ref should be RuntimeCheck (no error in Phase 1): {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn multiple_requires_all_checked() {
+    // GIVEN: fn with two requires clauses; call violates the second
+    // THEN: PreconditionViolated for the violated clause
+    let src = r#"
+        fn bounded(a: Int, b: Int) -> Int
+          requires a >= 0
+          requires b >= 0
+        { a }
+        fn caller() -> Int {
+            bounded(-1, 5)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(|e| matches!(e, CheckError::PreconditionViolated { fn_name, .. } if fn_name == "bounded")),
+        "expected PreconditionViolated for bounded(-1, 5), got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn requires_first_param_checked() {
+    // GIVEN: fn with `requires a >= 0`; call passes -1 for a
+    // THEN: PreconditionViolated at the call site
+    let src = r#"
+        fn positive_a(a: Int, b: Int) -> Int
+          requires a >= 0
+        { a }
+        fn caller() -> Int {
+            positive_a(-1, 99)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(|e| matches!(e, CheckError::PreconditionViolated { fn_name, .. } if fn_name == "positive_a")),
+        "expected PreconditionViolated for positive_a(-1, 99), got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn no_contracts_no_errors() {
+    // GIVEN: fn with no contracts
+    // THEN: no contract errors
+    let src = r#"
+        fn add(a: Int, b: Int) -> Int { a + b }
+        fn caller() -> Int { add(1, 2) }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "no contracts should produce no errors: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn requires_correct_param_position_second() {
+    // GIVEN: fn with `requires b > 0`; call passes b=3 (valid)
+    // THEN: no error
+    let src = r#"
+        fn f(a: Int, b: Int) -> Int
+          requires b > 0
+        { a }
+        fn caller() -> Int { f(0, 3) }
+    "#;
+    let result = check_src(src);
+    assert!(result.is_ok(), "b=3 satisfies b > 0: {:?}", result.errors);
+}
+
+#[test]
+fn ensures_explicit_return_checked() {
+    // GIVEN: fn with `ensures result >= 0` using explicit return statement
+    // THEN: explicit negative return causes PostconditionViolated
+    let src = r#"
+        fn early_exit(n: Int) -> Int
+          ensures result >= 0
+        {
+            return -5;
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(|e| matches!(e, CheckError::PostconditionViolated { fn_name, .. } if fn_name == "early_exit")),
+        "expected PostconditionViolated for explicit return -5, got: {:?}",
+        errors
+    );
+}
+
+// ── Phase 2: multi-param `requires` (literal substitution) ───────────────────
+
+#[test]
+fn requires_multi_param_literal_satisfied_no_error() {
+    // GIVEN: `requires a > b` and both args are literals satisfying it
+    // THEN:  no error
+    let src = r#"
+        fn sub_safe(a: Int, b: Int) -> Int
+          requires a > b
+        { a }
+        fn caller() -> Int { sub_safe(10, 3) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::PreconditionViolated { .. })),
+        "expected no PreconditionViolated for sub_safe(10, 3), got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn requires_multi_param_literal_violated_detected() {
+    // GIVEN: `requires a > b` and literal args that violate it
+    // THEN:  PreconditionViolated
+    let src = r#"
+        fn sub_safe(a: Int, b: Int) -> Int
+          requires a > b
+        { a }
+        fn caller() -> Int { sub_safe(3, 10) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::PreconditionViolated { fn_name, .. } if fn_name == "sub_safe")),
+        "expected PreconditionViolated for sub_safe(3, 10), got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn requires_multi_param_equal_fails() {
+    // GIVEN: `requires a > b` (strict) and equal literal args
+    // THEN:  PreconditionViolated
+    let src = r#"
+        fn sub_safe(a: Int, b: Int) -> Int
+          requires a > b
+        { a }
+        fn caller() -> Int { sub_safe(5, 5) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::PreconditionViolated { fn_name, .. } if fn_name == "sub_safe")),
+        "expected PreconditionViolated for sub_safe(5, 5), got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn requires_multi_param_non_literal_is_runtime_check_no_error() {
+    // GIVEN: `requires a > b` and variable args (not literals)
+    // THEN:  no compile-time error (deferred to RuntimeCheck)
+    let src = r#"
+        fn sub_safe(a: Int, b: Int) -> Int
+          requires a > b
+        { a }
+        fn caller(x: Int, y: Int) -> Int { sub_safe(x, y) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::PreconditionViolated { .. })),
+        "expected no PreconditionViolated for non-literal args, got: {:?}",
+        errors
+    );
+}
+
+// ── Phase 2: parameter-aware `ensures` (Layer 4 Cooper + param var_refs) ──────
+
+#[test]
+fn ensures_param_ref_identity_proven() {
+    // GIVEN: `ensures result == n`, body returns `n` directly
+    // THEN:  Layer 4 proves `n == n` — no error
+    let src = r#"
+        fn id_int(n: Int) -> Int
+          ensures result == n
+        {
+            n
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::PostconditionViolated { .. })),
+        "expected no PostconditionViolated for identity fn, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn ensures_param_ref_increment_proven() {
+    // GIVEN: `ensures result >= n`, body returns `n + 1`
+    // THEN:  Layer 4 proves `n + 1 >= n` — no error
+    let src = r#"
+        fn inc(n: Int) -> Int
+          ensures result >= n
+        {
+            n + 1
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::PostconditionViolated { .. })),
+        "expected no PostconditionViolated for inc fn, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn ensures_param_refinement_enables_proof() {
+    // GIVEN: param has `where self >= 0` and `ensures result >= 0`, body returns param
+    // THEN:  Layer 2 uses var_refs interval [0,∞) to prove `n >= 0` — no error
+    let src = r#"
+        fn nonneg_id(n: Int where self >= 0) -> Int
+          ensures result >= 0
+        {
+            n
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::PostconditionViolated { .. })),
+        "expected no PostconditionViolated for nonneg_id, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn ensures_param_ref_double_increment_proven() {
+    // GIVEN: `ensures result >= n + 1`, body returns `n + 2`
+    // THEN:  Layer 4 proves `n + 2 >= n + 1` — no error
+    let src = r#"
+        fn add_two(n: Int) -> Int
+          ensures result >= n + 1
+        {
+            n + 2
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::PostconditionViolated { .. })),
+        "expected no PostconditionViolated for add_two, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn ensures_param_ref_wrong_does_not_spuriously_fail() {
+    // GIVEN: `ensures result >= n + 1`, body returns `n` (genuinely wrong)
+    // THEN:  solver returns RuntimeCheck (not Failed) — no compile-time error
+    //        (violation detection for this pattern requires Z3 or Phase 3)
+    let src = r#"
+        fn bad_inc(n: Int) -> Int
+          ensures result >= n + 1
+        {
+            n
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors.iter().any(|e| matches!(e, CheckError::PostconditionViolated { fn_name, .. } if fn_name == "bad_inc")),
+        "expected no spurious PostconditionViolated for bad_inc (RuntimeCheck expected), got: {:?}",
+        errors
+    );
+}
+
+// ── Phase 3: loop invariants ───────────────────────────────────────────────────
+
+#[test]
+fn invariant_constant_true_no_error() {
+    // GIVEN: constant-true invariant (no variable references)
+    // THEN:  Layer 1 proves it — no error
+    let src = r#"
+        partial fn server() -> Unit {
+            while true
+              invariant 0 >= 0
+            { }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::InvariantViolated { .. })),
+        "expected no InvariantViolated for constant-true invariant, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn invariant_constant_false_detected() {
+    // GIVEN: constant-false invariant (statically impossible)
+    // THEN:  Layer 1 returns Failed -> InvariantViolated emitted
+    let src = r#"
+        partial fn server() -> Unit {
+            while true
+              invariant 1 < 0
+            { }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::InvariantViolated { fn_name, .. } if fn_name == "server")
+        ),
+        "expected InvariantViolated for constant-false invariant, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn invariant_param_refinement_proven() {
+    // GIVEN: parameter `n: Int where self >= 0`, invariant `n >= 0`
+    // THEN:  Layer 2 proves invariant holds at loop entry — no error
+    let src = r#"
+        partial fn loop_nonneg(n: Int where self >= 0) -> Unit {
+            while true
+              invariant n >= 0
+            { }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::InvariantViolated { .. })),
+        "expected no InvariantViolated when param refinement proves invariant, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn invariant_param_no_refinement_is_runtime_check() {
+    // GIVEN: parameter `n: Int` (no refinement), invariant `n >= 0`
+    // THEN:  solver returns RuntimeCheck — no compile-time error emitted
+    let src = r#"
+        partial fn loop_unknown(n: Int) -> Unit {
+            while true
+              invariant n >= 0
+            { }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::InvariantViolated { .. })),
+        "expected no InvariantViolated when param has no refinement (RuntimeCheck), got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn invariant_param_refinement_too_weak_is_runtime_check() {
+    // GIVEN: `n: Int where self > 0`, invariant `n >= 5`
+    // THEN:  Layer 2 cannot prove n >= 5 from n > 0 -> RuntimeCheck — no error
+    let src = r#"
+        partial fn loop_weak(n: Int where self > 0) -> Unit {
+            while true
+              invariant n >= 5
+            { }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::InvariantViolated { .. })),
+        "expected no InvariantViolated when solver cannot prove (RuntimeCheck), got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn invariant_multi_var_is_runtime_check_no_error() {
+    // GIVEN: multi-variable invariant `lo <= hi` (Phase 4 territory)
+    // THEN:  RuntimeCheck — no compile-time error
+    let src = r#"
+        partial fn loop_range(lo: Int, hi: Int) -> Unit {
+            while true
+              invariant lo <= hi
+            { }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::InvariantViolated { .. })),
+        "expected no InvariantViolated for multi-var invariant (RuntimeCheck), got: {:?}",
+        errors
+    );
+}
+
+// ── Phase 3: param-refined requires at call sites ─────────────────────────────
+
+#[test]
+fn requires_caller_param_refinement_proves_precondition() {
+    // GIVEN: `divide` requires `b != 0`; caller passes `b: Int where self > 0`
+    // THEN:  Layer 2 proves b > 0 implies b != 0 — no PreconditionViolated
+    let src = r#"
+        fn divide(a: Int, b: Int) -> Int
+          requires b != 0
+        { a }
+
+        fn caller(a: Int, b: Int where self > 0) -> Int {
+            divide(a, b)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors.iter().any(|e| matches!(e, CheckError::PreconditionViolated { fn_name, .. } if fn_name == "divide")),
+        "expected no PreconditionViolated when caller param refinement proves precondition, got: {:?}",
+        errors
+    );
+}

@@ -419,7 +419,9 @@ impl TypeChecker {
                 self.env.pop_scope();
             }
 
-            Stmt::While { cond, body, span } => {
+            Stmt::While {
+                cond, body, span, ..
+            } => {
                 let cond_ty = self.infer_expr(cond);
                 if !cond_ty.is_bool() && !matches!(cond_ty, Ty::Unknown) {
                     self.emit(CheckError::TypeMismatch {

@@ -83,6 +83,12 @@ pub enum TokenKind {
     /// `transparent` — marks a function as label-transparent (ADR-0024):
     /// the checker joins argument security labels and applies them to the return type.
     Transparent,
+    /// `requires` — function contract precondition.
+    Requires,
+    /// `ensures` — function contract postcondition.
+    Ensures,
+    /// `invariant` — loop invariant predicate (Phase 3, #621).
+    Invariant,
 
     // ── Security labels ───────────────────────────────────────────────────
     Public,
@@ -190,6 +196,9 @@ impl fmt::Display for TokenKind {
             TokenKind::Impl => write!(f, "impl"),
             TokenKind::Builtin => write!(f, "builtin"),
             TokenKind::Transparent => write!(f, "transparent"),
+            TokenKind::Requires => write!(f, "requires"),
+            TokenKind::Ensures => write!(f, "ensures"),
+            TokenKind::Invariant => write!(f, "invariant"),
             TokenKind::Public => write!(f, "Public"),
             TokenKind::Tainted => write!(f, "Tainted"),
             TokenKind::Secret => write!(f, "Secret"),
@@ -915,6 +924,9 @@ fn keyword_or_ident(s: String) -> TokenKind {
         "impl" => TokenKind::Impl,
         "builtin" => TokenKind::Builtin,
         "transparent" => TokenKind::Transparent,
+        "requires" => TokenKind::Requires,
+        "ensures" => TokenKind::Ensures,
+        "invariant" => TokenKind::Invariant,
         // Boolean literals
         "true" => TokenKind::True,
         "false" => TokenKind::False,

@@ -1,0 +1,81 @@
+// corpus:skip-transpiler
+// Basic function contracts — requires and ensures (Issue #621, Phase 1).
+//
+// These programs are parse-and-check only (transpiler support for contracts is Phase 2).
+
+fn divide(a: Int, b: Int) -> Int
+  requires b != 0
+{
+    a
+}
+
+fn nonneg() -> Int
+  ensures result >= 0
+{
+    42
+}
+
+fn factorial(n: Int) -> Int
+  requires n >= 0
+  ensures result >= 1
+{
+    1
+}
+
+fn max(a: Int, b: Int) -> Int
+  ensures result >= 0
+{
+    if a >= b { a } else { b }
+}
+
+// Phase 2: multi-param requires checked at call sites with literal args.
+fn range_check(lo: Int, hi: Int) -> Int
+  requires lo <= hi
+{
+    lo
+}
+
+// Phase 2: parameter-aware ensures — Layer 4 proves these statically.
+fn id_int(n: Int) -> Int
+  ensures result == n
+{
+    n
+}
+
+fn inc(n: Int) -> Int
+  ensures result >= n
+{
+    n + 1
+}
+
+fn nonneg_id(n: Int where self >= 0) -> Int
+  ensures result >= 0
+{
+    n
+}
+
+// Phase 3: loop invariants — checked at loop entry using the solver.
+// Constant-true invariant: Layer 1 proves it immediately.
+partial fn count_down(n: Int where self >= 0) -> Unit {
+    while true
+      invariant n >= 0
+    { }
+}
+
+// Invariant proven by param refinement (Layer 2).
+partial fn bounded_loop(lo: Int where self >= 0, hi: Int where self >= 0) -> Unit {
+    while true
+      invariant lo >= 0
+    { }
+}
+
+fn main() -> Unit ! Console {
+    let _ = divide(10, 2);
+    let _ = nonneg();
+    let _ = factorial(5);
+    let _ = max(3, 7);
+    let _ = range_check(1, 10);
+    let _ = id_int(42);
+    let _ = inc(7);
+    let _ = nonneg_id(5);
+}

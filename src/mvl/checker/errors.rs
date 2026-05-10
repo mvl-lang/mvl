@@ -277,6 +277,26 @@ pub enum CheckError {
         span: Span,
     },
 
+    // ── Function contracts (#621) ─────────────────────────────────────────
+    /// A `requires` precondition was statically proven to be violated at this call site.
+    PreconditionViolated {
+        fn_name: String,
+        pred: String,
+        span: Span,
+    },
+    /// An `ensures` postcondition was statically proven to be violated at this return point.
+    PostconditionViolated {
+        fn_name: String,
+        pred: String,
+        span: Span,
+    },
+    /// A `while` loop invariant was statically proven to not hold at loop entry.
+    InvariantViolated {
+        fn_name: String,
+        pred: String,
+        span: Span,
+    },
+
     // ── Label-transparent function validation (ADR-0024) ─────────────────
     /// `transparent fn` declared with no parameters — label join over empty
     /// arg list is always `None`, so `transparent` has no effect (Req 11).
@@ -347,8 +367,11 @@ impl CheckError {
             | CheckError::ForLoopInPartialFn { .. } => 8,
             // Req 9: Data Race Freedom
             CheckError::CapabilityViolation { .. } | CheckError::IsoAliasingViolation { .. } => 9,
-            // Req 10: Refinement Types
-            CheckError::RefinementViolated { .. } => 10,
+            // Req 10: Refinement Types & Contracts
+            CheckError::RefinementViolated { .. }
+            | CheckError::PreconditionViolated { .. }
+            | CheckError::PostconditionViolated { .. }
+            | CheckError::InvariantViolated { .. } => 10,
             // Req 11: Information Flow Control
             CheckError::InvalidDeclassify { .. }
             | CheckError::InvalidSanitize { .. }
@@ -415,7 +438,10 @@ impl CheckError {
             | CheckError::MissingConstraint { span, .. }
             | CheckError::TransparentFnNoParams { span, .. }
             | CheckError::TransparentFnLabeledReturn { span, .. }
-            | CheckError::TransparentFnGeneric { span, .. } => *span,
+            | CheckError::TransparentFnGeneric { span, .. }
+            | CheckError::PreconditionViolated { span, .. }
+            | CheckError::PostconditionViolated { span, .. }
+            | CheckError::InvariantViolated { span, .. } => *span,
         }
     }
 
@@ -577,6 +603,15 @@ impl CheckError {
             ),
             CheckError::TransparentFnGeneric { name, .. } => format!(
                 "`transparent fn {name}` is also generic — `transparent` cannot be combined with generic type parameters; use label-polymorphic generics instead (see ADR-0024)"
+            ),
+            CheckError::PreconditionViolated { fn_name, pred, .. } => format!(
+                "precondition violated for `{fn_name}`: `{pred}` cannot be proven at this call site"
+            ),
+            CheckError::PostconditionViolated { fn_name, pred, .. } => format!(
+                "postcondition violated in `{fn_name}`: `{pred}` cannot be proven at this return point"
+            ),
+            CheckError::InvariantViolated { fn_name, pred, .. } => format!(
+                "loop invariant `{pred}` in `{fn_name}` cannot be proven to hold at loop entry"
             ),
         }
     }

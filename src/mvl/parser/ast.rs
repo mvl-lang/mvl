@@ -190,6 +190,13 @@ pub struct FnDecl {
     pub effects: Vec<Effect>,
     /// Where-clause constraints: `where T: Eq`
     pub constraints: Vec<Constraint>,
+    /// Preconditions: `requires pred` — checked at call sites.
+    /// The special identifier `self` in a pred refers to the argument value.
+    /// Param names are normalised to `self` during contract checking.
+    pub requires: Vec<RefExpr>,
+    /// Postconditions: `ensures pred` — checked at return points.
+    /// The special identifier `result` refers to the return value.
+    pub ensures: Vec<RefExpr>,
     pub body: Block,
     pub span: Span,
 }
@@ -660,6 +667,8 @@ pub enum Stmt {
     },
     While {
         cond: Expr,
+        /// Loop invariant predicates — `invariant pred` clauses (Phase 3, #621).
+        invariants: Vec<RefExpr>,
         body: Block,
         span: Span,
     },
@@ -848,6 +857,8 @@ mod tests {
             return_refinement: None,
             effects: vec![],
             constraints: vec![],
+            requires: vec![],
+            ensures: vec![],
             body,
             span: dummy(),
         };
