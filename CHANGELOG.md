@@ -18,6 +18,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.92.0] — 2026-05-10
+
+### Added
+
+- **Function contracts — Phase 1: requires/ensures** — `fn` declarations now accept `requires` (precondition) and `ensures` (postcondition) clauses. Preconditions validated at call sites via the 5-layer refinement solver (Layer 1 literal eval + tautology; Layer 2 interval arithmetic). Postconditions checked at return points with predicate normalization (`result → self`). Deferred: multi-parameter `requires` checking at call sites, parameter-aware `ensures` analysis. Closes #621 (Phases 1–3).
+
+- **Function contracts — Phase 2: multi-param requires + parameter-aware ensures** — `requires` predicates with 2+ free variables now trigger `RuntimeCheck` (runtime assertion at call sites). Parameter-aware `ensures` clauses normalize to `self` and check parameter-ref constraints via the solver, with remaining multi-param predicates deferred to runtime. Enables precondition checking for range guards (`lo <= hi`) and postcondition checking tied to input values (`result == n`).
+
+- **Loop invariants on while statements** — `while cond { invariant pred1; invariant pred2; ... body }` syntax now supported. Invariants are checked at loop entry using the 5-layer solver (constant predicates via Layer 1, single-variable predicates via Layer 2 with normalization to `self`). Multi-variable invariants trigger `RuntimeCheck`. Parameter-aware `where` refinements on loop variables are threaded into the solver context, enabling proofs like "invariant holds because input was constrained". Deferred: invariant preservation (loop condition + body must prove invariant maintained), loop termination checking (`decreases`), quantified invariants (`forall`/`exists`).
+
+### Fixed
+
+- **FnDecl constructor in lambda lowering** — Added missing `requires: vec![]` and `ensures: vec![]` fields when constructing `FnDecl` for lowered lambdas in `codegen/exprs.rs`. Fixes type mismatch after Phase 1 AST expansion.
+
 ## [0.91.1] — 2026-05-10
 
 ### Fixed
