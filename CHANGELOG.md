@@ -18,6 +18,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.90.0] — 2026-05-10
+
+### Added
+
+- **Lambda lowering for LLVM backend (#421)** — Non-capturing lambdas (`|params| body`) are now emitted as top-level LLVM functions returning function pointers, enabling higher-order functions on the LLVM backend. Return type inferred from body's checker-inferred `Ty` when no explicit annotation present.
+- **HOF method dispatch on LLVM backend (#421)** — `xs.filter(f)`, `xs.map(f)`, `xs.fold(init, f)`, `xs.any(f)`, `xs.all(f)`, `xs.find(f)`, `xs.take_while(f)`, `xs.skip_while(f)` now work via stdlib function monomorphization. Rewrites method calls to free-function calls with receiver prepended.
+- **For-list iteration on LLVM backend** — `for x in <list>` implemented via `mvl_array_len` + `mvl_array_get` loop, supporting iteration over `MvlArray*` pointers.
+- **Named function references as HOF arguments** — `emit_ident` falls back to `module.get_function(name)` to return function pointers for named functions passed as callbacks, enabling `xs.filter(is_even)` patterns.
+- **`cross_backend_hof_lambdas` test** — New corpus test verifying filter, map, fold, any with both named functions and inline lambdas achieve output parity between Rust and LLVM backends. All 44 cross-backend tests pass.
+
+### Fixed
+
+- **`emit_fn_named` fallback return value** — Was always emitting `ret void` regardless of declared return type, causing LLVM IR verification errors for non-void monomorphized functions whose body emits no value. Now uses type-based zeroed return matching declared return type.
+
 ## [0.89.0] — 2026-05-09
 
 ### Added
