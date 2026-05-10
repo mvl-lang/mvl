@@ -18,6 +18,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.91.0] — 2026-05-10
+
+### Added
+
+- **`--stdlib=proven` wired into `build`, `run`, and `test`** — the proven-profile pre-flight check (`check_proven_stdlib`) now runs before all four commands (`check`, `build`, `run`, `test`). Previously it was only active for `mvl check`; the other three silently discarded the flag. Closes #533.
+
 ## [0.90.1] — 2026-05-10
 
 ### Fixed

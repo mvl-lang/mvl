@@ -81,6 +81,7 @@ fn main() {
             if verbose {
                 eprintln!("stdlib profile: {stdlib_profile}");
             }
+            maybe_check_proven_stdlib_or_exit(stdlib_profile);
             if backend == "llvm" {
                 #[cfg(feature = "llvm")]
                 build_project_llvm(&path);
@@ -97,7 +98,7 @@ fn main() {
             let path = require_path_arg(&args, "run");
             let backend = parse_backend(&args);
             let stdlib_profile = parse_stdlib_profile(&args);
-            let _ = stdlib_profile; // profile routing added in #538
+            maybe_check_proven_stdlib_or_exit(stdlib_profile);
             let path_idx = path_arg_index(&args);
             let run_args: Vec<String> = args[path_idx + 1..]
                 .iter()
@@ -125,7 +126,7 @@ fn main() {
             let path = require_path_arg(&args, "test");
             let backend = parse_backend(&args);
             let stdlib_profile = parse_stdlib_profile(&args);
-            let _ = stdlib_profile; // profile routing added in #538
+            maybe_check_proven_stdlib_or_exit(stdlib_profile);
             let quiet = args.iter().any(|a| a == "--quiet" || a == "-q");
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
             let coverage = args.iter().any(|a| a == "--coverage");
@@ -224,8 +225,8 @@ fn print_usage() {
   mvl test  <file|dir> --backend=llvm  — compile + run via LLVM/lli, check // expect: annotations
   mvl build <file|dir> --backend=llvm  — compile to LLVM IR and invoke lli (requires --features llvm)
   mvl run   <file|dir> --backend=llvm  — compile and run via LLVM lli (requires --features llvm)
-  mvl build <file|dir> --stdlib=trusted — stdlib profile: trusted (default, 95 builtins)
-  mvl build <file|dir> --stdlib=proven  — proven profile: 15 irreducible builtins + MVL impls (pending #538)"
+  mvl build|run|check|test <file|dir> --stdlib=trusted — stdlib profile: trusted (default, 95 builtins)
+  mvl build|run|check|test <file|dir> --stdlib=proven  — proven profile: verifies stdlib before user code (ADR-0023)"
     );
     eprintln!("  mvl mutate <file|dir>               — behavioral mutation testing (ADR-0014)");
     eprintln!("  mvl mutate <file|dir> -q            — quiet: only show mutation score");
@@ -480,6 +481,34 @@ fn check_proven_stdlib() -> Vec<(String, mvl::mvl::checker::CheckResult)> {
         }
     }
     results
+}
+
+/// Verify pure-MVL stdlib files when `profile == "proven"`.
+/// Prints errors and exits with code 1 if any failures are found.  No-op for "trusted".
+fn maybe_check_proven_stdlib_or_exit(profile: &str) {
+    if profile != "proven" {
+        return;
+    }
+    let stdlib_errors = check_proven_stdlib();
+    if stdlib_errors.is_empty() {
+        return;
+    }
+    eprintln!(
+        "note: --stdlib=proven: {} stdlib file(s) have verification errors:",
+        stdlib_errors.len()
+    );
+    for (name, result) in &stdlib_errors {
+        for err in &result.errors {
+            eprintln!(
+                "std/{name}:{}:{}: error[req{}]: {}",
+                err.span().line,
+                err.span().col,
+                err.requirement_number(),
+                err.message()
+            );
+        }
+    }
+    process::exit(1);
 }
 
 /// Parse and type-check a .mvl file or all .mvl files in a directory.
