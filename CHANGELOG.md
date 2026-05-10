@@ -18,6 +18,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.91.1] — 2026-05-10
+
+### Fixed
+
+- **Stdlib dead-code stubs cleaned up** — Removed duplicate `pub fn print { }` and `pub fn eprint { }` in `std/core.mvl` (the real `pub builtin fn` versions already existed). Fixed `int_to_float` in `std/math.mvl` from dead stub `{ 0.0 }` to correct implementation `{ n.to_float() }`. Added clarifying comment to `digit_of` in `std/json.mvl`. Closes #547.
+
 ## [0.91.0] — 2026-05-10
 
 ### Added
