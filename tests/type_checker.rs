@@ -5366,3 +5366,191 @@ fn ensures_explicit_return_checked() {
         errors
     );
 }
+
+// ── Phase 2: multi-param `requires` (literal substitution) ───────────────────
+
+#[test]
+fn requires_multi_param_literal_satisfied_no_error() {
+    // GIVEN: `requires a > b` and both args are literals satisfying it
+    // THEN:  no error
+    let src = r#"
+        fn sub_safe(a: Int, b: Int) -> Int
+          requires a > b
+        { a }
+        fn caller() -> Int { sub_safe(10, 3) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::PreconditionViolated { .. })),
+        "expected no PreconditionViolated for sub_safe(10, 3), got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn requires_multi_param_literal_violated_detected() {
+    // GIVEN: `requires a > b` and literal args that violate it
+    // THEN:  PreconditionViolated
+    let src = r#"
+        fn sub_safe(a: Int, b: Int) -> Int
+          requires a > b
+        { a }
+        fn caller() -> Int { sub_safe(3, 10) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::PreconditionViolated { fn_name, .. } if fn_name == "sub_safe")),
+        "expected PreconditionViolated for sub_safe(3, 10), got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn requires_multi_param_equal_fails() {
+    // GIVEN: `requires a > b` (strict) and equal literal args
+    // THEN:  PreconditionViolated
+    let src = r#"
+        fn sub_safe(a: Int, b: Int) -> Int
+          requires a > b
+        { a }
+        fn caller() -> Int { sub_safe(5, 5) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::PreconditionViolated { fn_name, .. } if fn_name == "sub_safe")),
+        "expected PreconditionViolated for sub_safe(5, 5), got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn requires_multi_param_non_literal_is_runtime_check_no_error() {
+    // GIVEN: `requires a > b` and variable args (not literals)
+    // THEN:  no compile-time error (deferred to RuntimeCheck)
+    let src = r#"
+        fn sub_safe(a: Int, b: Int) -> Int
+          requires a > b
+        { a }
+        fn caller(x: Int, y: Int) -> Int { sub_safe(x, y) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::PreconditionViolated { .. })),
+        "expected no PreconditionViolated for non-literal args, got: {:?}",
+        errors
+    );
+}
+
+// ── Phase 2: parameter-aware `ensures` (Layer 4 Cooper + param var_refs) ──────
+
+#[test]
+fn ensures_param_ref_identity_proven() {
+    // GIVEN: `ensures result == n`, body returns `n` directly
+    // THEN:  Layer 4 proves `n == n` — no error
+    let src = r#"
+        fn id_int(n: Int) -> Int
+          ensures result == n
+        {
+            n
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::PostconditionViolated { .. })),
+        "expected no PostconditionViolated for identity fn, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn ensures_param_ref_increment_proven() {
+    // GIVEN: `ensures result >= n`, body returns `n + 1`
+    // THEN:  Layer 4 proves `n + 1 >= n` — no error
+    let src = r#"
+        fn inc(n: Int) -> Int
+          ensures result >= n
+        {
+            n + 1
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::PostconditionViolated { .. })),
+        "expected no PostconditionViolated for inc fn, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn ensures_param_refinement_enables_proof() {
+    // GIVEN: param has `where self >= 0` and `ensures result >= 0`, body returns param
+    // THEN:  Layer 2 uses var_refs interval [0,∞) to prove `n >= 0` — no error
+    let src = r#"
+        fn nonneg_id(n: Int where self >= 0) -> Int
+          ensures result >= 0
+        {
+            n
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::PostconditionViolated { .. })),
+        "expected no PostconditionViolated for nonneg_id, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn ensures_param_ref_double_increment_proven() {
+    // GIVEN: `ensures result >= n + 1`, body returns `n + 2`
+    // THEN:  Layer 4 proves `n + 2 >= n + 1` — no error
+    let src = r#"
+        fn add_two(n: Int) -> Int
+          ensures result >= n + 1
+        {
+            n + 2
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::PostconditionViolated { .. })),
+        "expected no PostconditionViolated for add_two, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn ensures_param_ref_wrong_does_not_spuriously_fail() {
+    // GIVEN: `ensures result >= n + 1`, body returns `n` (genuinely wrong)
+    // THEN:  solver returns RuntimeCheck (not Failed) — no compile-time error
+    //        (violation detection for this pattern requires Z3 or Phase 3)
+    let src = r#"
+        fn bad_inc(n: Int) -> Int
+          ensures result >= n + 1
+        {
+            n
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors.iter().any(|e| matches!(e, CheckError::PostconditionViolated { fn_name, .. } if fn_name == "bad_inc")),
+        "expected no spurious PostconditionViolated for bad_inc (RuntimeCheck expected), got: {:?}",
+        errors
+    );
+}

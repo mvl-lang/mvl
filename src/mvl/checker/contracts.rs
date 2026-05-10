@@ -26,14 +26,14 @@
 //!   emit `RuntimeCheck` (conservative; those are tracked in Phase 2+).
 //! - Otherwise run the solver on the returned expression.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::refinements::check_arg_against_pred;
 use crate::mvl::checker::solver::RefResult;
 use crate::mvl::parser::ast::{
-    ArithOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, LogicOp, MatchBody, Param, Program,
-    RefExpr, Stmt,
+    ArithOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, Literal, LogicOp, MatchBody, Param,
+    Program, RefExpr, Stmt,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -330,8 +330,10 @@ fn check_requires_at_call(
                 // Proven or RuntimeCheck: silent at compile time.
             }
             _ => {
-                // Predicate references zero or multiple params — cannot check statically.
-                // Runtime check deferred (no error emitted).
+                // Phase 2: try multi-param substitution when all referenced args are literals.
+                check_multi_param_requires_literal(
+                    fn_name, req_pred, params, args, var_refs, fn_decls, errors, call_span,
+                );
             }
         }
     }
@@ -347,8 +349,6 @@ fn check_ensures_in_block(
     fn_decls: &HashMap<String, FnDecl>,
     errors: &mut Vec<CheckError>,
 ) {
-    let param_names: HashSet<&str> = params.iter().map(|p| p.name.as_str()).collect();
-
     for (i, stmt) in block.stmts.iter().enumerate() {
         match stmt {
             Stmt::Return {
@@ -356,13 +356,7 @@ fn check_ensures_in_block(
                 span,
             } => {
                 check_ensures_for_return(
-                    ret_expr,
-                    *span,
-                    fn_name,
-                    ensures,
-                    &param_names,
-                    fn_decls,
-                    errors,
+                    ret_expr, *span, fn_name, ensures, params, fn_decls, errors,
                 );
             }
             Stmt::Return { value: None, .. } => {
@@ -396,15 +390,7 @@ fn check_ensures_in_block(
             }
             // Tail expression (implicit return) — last Stmt::Expr in the block.
             Stmt::Expr { expr, span } if i + 1 == block.stmts.len() => {
-                check_ensures_for_return(
-                    expr,
-                    *span,
-                    fn_name,
-                    ensures,
-                    &param_names,
-                    fn_decls,
-                    errors,
-                );
+                check_ensures_for_return(expr, *span, fn_name, ensures, params, fn_decls, errors);
             }
             _ => {}
         }
@@ -449,39 +435,39 @@ fn check_ensures_in_match_body(
         }
         MatchBody::Expr(e) => {
             // MatchBody::Expr is a tail expression — treated as a return point.
-            let param_names: HashSet<&str> = params.iter().map(|p| p.name.as_str()).collect();
             let span = e.span();
-            check_ensures_for_return(e, span, fn_name, ensures, &param_names, fn_decls, errors);
+            check_ensures_for_return(e, span, fn_name, ensures, params, fn_decls, errors);
         }
     }
 }
 
 /// Check all `ensures` clauses against a single return expression.
+///
+/// Phase 2: builds `var_refs` from the function's own parameter `where`-refinements
+/// so that the solver can reason about parameter values symbolically.  The
+/// `has_param_ref` guard from Phase 1 is removed — the solver (Layer 4 Cooper)
+/// already handles linear multi-variable arithmetic like `n + 1 >= n`.
 fn check_ensures_for_return(
     ret_expr: &Expr,
     ret_span: Span,
     fn_name: &str,
     ensures: &[RefExpr],
-    param_names: &HashSet<&str>,
+    params: &[Param],
     fn_decls: &HashMap<String, FnDecl>,
     errors: &mut Vec<CheckError>,
 ) {
-    // var_refs is empty: parameter values are unknown at return-point check time.
-    let var_refs = HashMap::new();
+    // Phase 2: populate var_refs with each parameter's inline where-predicate
+    // (normalised so the param name becomes "self").  This lets Layer 2 and
+    // Layer 4 prove postconditions like `ensures result >= 0` when the function
+    // parameter is annotated `n: Int where self >= 0`.
+    let var_refs = build_param_var_refs(params);
+
     for ens_pred in ensures {
-        // Normalise "result" → "self".
+        // Normalise "result" → "self" so the solver recognises the return value.
         let normalized = normalize_pred(ens_pred, "result");
 
-        // If the normalised pred still references any parameter name,
-        // we can't prove it statically in Phase 1 — skip (RuntimeCheck).
-        let idents = collect_ident_names(&normalized);
-        let has_param_ref = idents
-            .iter()
-            .any(|id| id != "self" && param_names.contains(id.as_str()));
-        if has_param_ref {
-            continue;
-        }
-
+        // Let the solver decide: Proven (silent), Failed (emit error),
+        // or RuntimeCheck (silent — deferred to runtime).
         let outcome = check_arg_against_pred(ret_expr, &normalized, &var_refs, fn_decls);
         if outcome == RefResult::Failed {
             errors.push(CheckError::PostconditionViolated {
@@ -490,7 +476,6 @@ fn check_ensures_for_return(
                 span: ret_span,
             });
         }
-        // Proven or RuntimeCheck: silent.
     }
 }
 
@@ -568,6 +553,164 @@ fn normalize_pred(pred: &RefExpr, old_name: &str) -> RefExpr {
         },
         // Leaves unchanged.
         RefExpr::Integer { .. } | RefExpr::Float { .. } | RefExpr::Len { .. } => pred.clone(),
+    }
+}
+
+// ── Phase 2 helpers ───────────────────────────────────────────────────────────
+
+/// Build a `var_refs` map from a function's parameter inline `where`-refinements.
+///
+/// Each predicate is normalised so the parameter name becomes `"self"`,
+/// matching the form expected by the 5-layer solver.
+fn build_param_var_refs(params: &[Param]) -> HashMap<String, Option<RefExpr>> {
+    params
+        .iter()
+        .map(|p| {
+            let pred = p.refinement.as_ref().map(|r| normalize_pred(r, &p.name));
+            (p.name.clone(), pred)
+        })
+        .collect()
+}
+
+/// Substitute every `RefExpr::Ident { name == old_name }` with `new_val`.
+///
+/// Used to replace non-primary parameter names with their literal argument
+/// values before dispatching to the single-variable solver.
+fn subst_pred_ident(pred: &RefExpr, old_name: &str, new_val: &RefExpr) -> RefExpr {
+    match pred {
+        RefExpr::Ident { name, .. } if name == old_name => new_val.clone(),
+        RefExpr::Ident { .. } => pred.clone(),
+        RefExpr::Compare {
+            op,
+            left,
+            right,
+            span,
+        } => RefExpr::Compare {
+            op: *op,
+            left: Box::new(subst_pred_ident(left, old_name, new_val)),
+            right: Box::new(subst_pred_ident(right, old_name, new_val)),
+            span: *span,
+        },
+        RefExpr::LogicOp {
+            op,
+            left,
+            right,
+            span,
+        } => RefExpr::LogicOp {
+            op: *op,
+            left: Box::new(subst_pred_ident(left, old_name, new_val)),
+            right: Box::new(subst_pred_ident(right, old_name, new_val)),
+            span: *span,
+        },
+        RefExpr::ArithOp {
+            op,
+            left,
+            right,
+            span,
+        } => RefExpr::ArithOp {
+            op: *op,
+            left: Box::new(subst_pred_ident(left, old_name, new_val)),
+            right: Box::new(subst_pred_ident(right, old_name, new_val)),
+            span: *span,
+        },
+        RefExpr::Not { inner, span } => RefExpr::Not {
+            inner: Box::new(subst_pred_ident(inner, old_name, new_val)),
+            span: *span,
+        },
+        RefExpr::Grouped { inner, span } => RefExpr::Grouped {
+            inner: Box::new(subst_pred_ident(inner, old_name, new_val)),
+            span: *span,
+        },
+        RefExpr::Integer { .. } | RefExpr::Float { .. } | RefExpr::Len { .. } => pred.clone(),
+    }
+}
+
+/// Convert a simple `Expr` to a `RefExpr` literal for predicate substitution.
+///
+/// Only integer and float literals are converted; returns `None` for anything
+/// more complex, causing the multi-param check to fall back to `RuntimeCheck`.
+fn expr_to_ref_expr(expr: &Expr) -> Option<RefExpr> {
+    match expr {
+        Expr::Literal(Literal::Integer(n), span) => Some(RefExpr::Integer {
+            value: *n,
+            span: *span,
+        }),
+        Expr::Literal(Literal::Float(f), span) => Some(RefExpr::Float {
+            value: *f,
+            span: *span,
+        }),
+        _ => None,
+    }
+}
+
+/// Phase 2: check a multi-parameter `requires` predicate when all non-primary
+/// argument expressions are integer or float literals.
+///
+/// Algorithm:
+/// 1. Collect the distinct parameters referenced in the predicate.
+/// 2. Pick the lowest-indexed one as "primary" (mapped to `"self"`).
+/// 3. For each remaining parameter, convert its argument to a `RefExpr` literal.
+///    If any argument is not a literal, bail out silently (`RuntimeCheck`).
+/// 4. Substitute all non-primary names in the predicate with their literal values.
+/// 5. Call the standard single-variable solver on the primary argument.
+#[allow(clippy::too_many_arguments)]
+fn check_multi_param_requires_literal(
+    fn_name: &str,
+    pred: &RefExpr,
+    params: &[Param],
+    args: &[Expr],
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
+    errors: &mut Vec<CheckError>,
+    call_span: Span,
+) {
+    // Collect distinct param indices in order of first appearance.
+    let idents = collect_ident_names(pred);
+    let mut param_refs: Vec<(usize, String)> = Vec::new();
+    for ident in &idents {
+        if let Some(idx) = params.iter().position(|p| &p.name == ident) {
+            if !param_refs.iter().any(|(i, _)| *i == idx) {
+                param_refs.push((idx, ident.clone()));
+            }
+        }
+    }
+
+    // Need at least two distinct params for multi-param checking.
+    if param_refs.len() < 2 {
+        return;
+    }
+
+    // Sort by param index so the primary is the lowest-indexed param.
+    param_refs.sort_by_key(|(idx, _)| *idx);
+    let (primary_idx, primary_name) = &param_refs[0];
+
+    // Normalise primary name → "self".
+    let mut modified_pred = normalize_pred(pred, primary_name);
+
+    // Substitute each non-primary param with its literal arg value.
+    for (other_idx, other_name) in &param_refs[1..] {
+        if *other_idx >= args.len() {
+            return; // Arg count mismatch — bail.
+        }
+        match expr_to_ref_expr(&args[*other_idx]) {
+            Some(ref_val) => {
+                modified_pred = subst_pred_ident(&modified_pred, other_name, &ref_val);
+            }
+            None => return, // Non-literal arg — stay RuntimeCheck.
+        }
+    }
+
+    if *primary_idx >= args.len() {
+        return;
+    }
+
+    let outcome = check_arg_against_pred(&args[*primary_idx], &modified_pred, var_refs, fn_decls);
+    if outcome == RefResult::Failed {
+        errors.push(CheckError::PreconditionViolated {
+            fn_name: fn_name.to_string(),
+            pred: display_pred(pred),
+            span: call_span,
+        });
     }
 }
 
