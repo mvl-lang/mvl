@@ -432,6 +432,10 @@ struct LlvmBackend<'ctx> {
     /// generic builtin call sites (e.g. `choice[T]`, `shuffle[T]`) can emit
     /// type-specific inline IR without going through the C-ABI dispatch table.
     expr_types: HashMap<crate::mvl::parser::lexer::Span, crate::mvl::checker::types::Ty>,
+
+    // ── #588: lambda lowering ─────────────────────────────────────────────────
+    /// Counter for generating unique names for lambda functions (`__lambda_N`).
+    lambda_counter: u32,
 }
 
 impl<'ctx> LlvmBackend<'ctx> {
@@ -460,6 +464,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             heap_locals: HashMap::new(),
             stdlib_imports: HashMap::new(),
             expr_types: HashMap::new(),
+            lambda_counter: 0,
         }
     }
 
@@ -2540,7 +2545,26 @@ impl<'ctx> LlvmBackend<'ctx> {
             } else if let Some(val) = body_val {
                 self.builder.build_return(Some(&val)).unwrap();
             } else {
-                self.builder.build_return(None).unwrap();
+                // Fallback: body emitted no value (e.g. unsupported method call in body).
+                // Emit a zeroed return to keep IR well-formed.
+                let fallback = self.mvl_type_to_llvm(&fd.return_type);
+                match fallback {
+                    Some(BasicTypeEnum::IntType(it)) => {
+                        self.builder.build_return(Some(&it.const_zero())).unwrap();
+                    }
+                    Some(BasicTypeEnum::FloatType(ft)) => {
+                        self.builder.build_return(Some(&ft.const_zero())).unwrap();
+                    }
+                    Some(BasicTypeEnum::PointerType(pt)) => {
+                        self.builder.build_return(Some(&pt.const_null())).unwrap();
+                    }
+                    Some(BasicTypeEnum::StructType(st)) => {
+                        self.builder.build_return(Some(&st.const_zero())).unwrap();
+                    }
+                    _ => {
+                        self.builder.build_unreachable().unwrap();
+                    }
+                }
             }
         }
     }
