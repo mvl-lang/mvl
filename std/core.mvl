@@ -11,17 +11,11 @@ pub builtin fn println(value: String) -> Unit
 /// Print a value without a trailing newline.
 pub builtin fn print(value: String) -> Unit
 
-/// Print a value without a trailing newline.
-pub fn print(value: String) -> Unit { }
-
 /// Print a value to stderr followed by a newline.
 pub builtin fn eprintln(value: String) -> Unit
 
 /// Print a value to stderr without a trailing newline.
 pub builtin fn eprint(value: String) -> Unit
-
-/// Print a value to stderr without a trailing newline.
-pub fn eprint(value: String) -> Unit { }
 
 /// Format a value as a string.
 pub builtin fn format(value: String) -> String
