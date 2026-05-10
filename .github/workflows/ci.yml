@@ -105,6 +105,8 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y llvm-22-dev libclang-22-dev libpolly-22-dev libz3-dev
           echo "LLVM_SYS_221_PREFIX=$(llvm-config-22 --prefix)" >> "$GITHUB_ENV"
+          # Override .cargo/config.toml's macOS default so z3-sys uses the Linux system header.
+          echo "Z3_SYS_Z3_HEADER=/usr/include/z3.h" >> "$GITHUB_ENV"
 
       - name: Check formatting
         run: cargo fmt -- --check
