@@ -18,6 +18,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+## [0.90.1] — 2026-05-10
+
+### Fixed
+
+- **CI z3-sys build on Linux** — `.cargo/config.toml` sets `Z3_SYS_Z3_HEADER=/opt/homebrew/include/z3.h` (macOS path) with `force=false`. Despite the name, `force=false` still applies the value when the variable is unset — which is always the case on Linux CI runners. Fix: CI now explicitly sets `Z3_SYS_Z3_HEADER=/usr/include/z3.h` after installing `libz3-dev`, so Cargo's guard correctly leaves it alone.
+
 ## [0.90.0] — 2026-05-10
 
 ### Added
