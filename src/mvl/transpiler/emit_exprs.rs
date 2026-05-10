@@ -47,6 +47,19 @@ const STDLIB_UFCS_METHODS: &[&str] = &[
     "reverse",
 ];
 
+/// String methods that return a `String` with the same IFC label as their receiver.
+/// When the receiver is `Label<String>`, the call result must be re-wrapped in `Label::new(…)`
+/// because the UFCS trampoline (`method(receiver.clone().into(), …)`) strips the label via
+/// `.into()` before passing to the stdlib function (which returns plain `String`).
+const STRING_LABEL_PRESERVING_METHODS: &[&str] = &[
+    "trim",
+    "to_upper",
+    "to_lower",
+    "concat",
+    "replace",
+    "substring",
+];
+
 /// Emit an expression into the code buffer (no trailing newline).
 pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
     match expr {
@@ -129,33 +142,40 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
 
                 // ── Pure MVL higher-order list methods ────────────────────────────
                 //
-                // These are implemented as pure MVL in std/lists.mvl and dispatched
-                // via UFCS free-function calls.  The receiver is cloned (value
-                // semantics); the function argument is emitted directly — NOT via
-                // emit_expr_as_arg — because closures do not implement Clone.
-                // Passing by move is correct: MVL callers cannot reuse a function
-                // value after passing it anyway.
+                // Emitted as Rust native iterator chains rather than UFCS calls to
+                // std/lists.mvl free functions.  This allows the predicate/mapper
+                // argument to be ANY callable (fn pointer or capturing closure),
+                // because Rust's .filter() / .fold() etc. accept FnMut, not just
+                // bare fn pointers.
                 //
-                // filter / take_while / skip_while / any / all share identical
-                // single-arg emit structure.  `method` is safe to push verbatim
-                // because the match arm already constrains it to these literals.
-                "filter" | "take_while" | "skip_while" | "any" | "all" if args.len() == 1 => {
+                // filter / take_while / skip_while — predicate applied to a clone
+                // of each element; result collected back into Vec.
+                "filter" | "take_while" | "skip_while" if args.len() == 1 => {
+                    emit_expr(cg, receiver);
+                    cg.push(".clone().into_iter().");
                     cg.push(method);
-                    cg.push("(");
-                    emit_expr(cg, receiver);
-                    cg.push(".clone().into(), ");
+                    cg.push("(|__x| (");
                     emit_expr(cg, &args[0]);
-                    cg.push(")");
+                    cg.push(")(__x.clone())).collect::<Vec<_>>()");
                 }
-                // fold(init, f) — init is cloned (value arg); f is moved
-                "fold" if args.len() == 2 => {
-                    cg.push("fold(");
+                // any / all — same predicate pattern but return bool, no collect.
+                "any" | "all" if args.len() == 1 => {
                     emit_expr(cg, receiver);
-                    cg.push(".clone().into(), ");
+                    cg.push(".clone().into_iter().");
+                    cg.push(method);
+                    cg.push("(|__x| (");
+                    emit_expr(cg, &args[0]);
+                    cg.push(")(__x.clone()))");
+                }
+                // fold(init, f) — init cloned (value arg); f wrapped in closure
+                // so capturing closures are accepted alongside fn pointers.
+                "fold" if args.len() == 2 => {
+                    emit_expr(cg, receiver);
+                    cg.push(".clone().into_iter().fold(");
                     emit_expr_as_arg(cg, &args[0]);
-                    cg.push(", ");
+                    cg.push(", |acc, __x| (");
                     emit_expr(cg, &args[1]);
-                    cg.push(")");
+                    cg.push(")(acc, __x))");
                 }
                 // windows(n)/chunks(n) — Rust returns &[T] slices; collect into Vec<Vec<T>>
                 "windows" | "chunks" => {
@@ -454,7 +474,33 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                 // (`Clean<String>`, `Public<String>`, etc.) to coerce into the plain
                 // inner type expected by the MVL stdlib function. `From<Label<T>> for T`
                 // is implemented in `mvl_runtime::ifc` for all label variants.
+                //
+                // For string-transforming methods (`to_lower`, `trim`, `concat`, etc.) the
+                // checker propagates the receiver's IFC label to the result (the result is
+                // as sensitive as the input).  But the UFCS trampoline strips the label via
+                // `.into()`, so the raw call returns plain `String`.  We detect this case via
+                // `expr_types` and re-wrap: `Label::new(method(receiver.clone().into(), …))`.
                 m if STDLIB_UFCS_METHODS.contains(&m) => {
+                    // Check whether we must re-wrap the result in a label newtype.
+                    let wrap_label: Option<String> = if STRING_LABEL_PRESERVING_METHODS.contains(&m)
+                    {
+                        cg.expr_types.get(&receiver.span()).and_then(|ty| {
+                            if let Ty::Labeled(label, inner) = ty {
+                                if matches!(inner.as_ref(), Ty::String) {
+                                    Some(emit_label(*label).to_string())
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        })
+                    } else {
+                        None
+                    };
+                    if let Some(ref lname) = wrap_label {
+                        cg.push(&format!("{lname}::new("));
+                    }
                     cg.push(method);
                     cg.push("(");
                     emit_expr(cg, receiver);
@@ -464,6 +510,9 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                         emit_args(cg, args);
                     }
                     cg.push(")");
+                    if wrap_label.is_some() {
+                        cg.push(")");
+                    }
                 }
 
                 // ── Generic Rust method fallthrough ───────────────────────────────

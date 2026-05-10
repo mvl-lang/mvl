@@ -29,6 +29,23 @@ use model::Aircraft;
 use model::Clearance;
 use model::RouteType;
 
+// ── Local type declarations (mirrors model.mvl) ────────────────────────────
+// workaround: #96 — cross-module type resolution not yet wired into the
+// per-file checker; types are re-declared locally until the module resolver
+// is integrated.  MaintenanceStatus is included because its `Cleared` variant
+// would otherwise collide with Clearance::Cleared in the type checker.
+
+type Clearance = enum {
+    Cleared,
+    Rejected,
+}
+
+type MaintenanceStatus = enum {
+    Cleared,
+    DeferredItem,
+    Grounded,
+}
+
 // ── Decision 1: weather_clear ────────────────────────────────────────────
 // visibility_ok AND wind_ok AND NOT icing AND NOT thunderstorm
 // MC/DC: 4 conditions → 5 test cases (1 baseline + 4 toggles)

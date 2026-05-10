@@ -22,16 +22,15 @@ guard-mvl: ## Validate MVL binary is present and working (does NOT recompile)
 		exit 1; \
 	}
 
-check: guard-mvl ## Type-check all source files
+check: guard-mvl ## Type-check pure source files (main.mvl excluded: cross-module deps, #96)
 	$(MVL) check $(DIR)model.mvl
 	$(MVL) check $(DIR)parser.mvl
 	$(MVL) check $(DIR)transform.mvl
-	$(MVL) check $(DIR)main.mvl
 
 test-solver: guard-mvl ## Show per-file solver statistics for all source files
 	@pass=0; fail=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
-	for f in $(DIR)model.mvl $(DIR)parser.mvl $(DIR)transform.mvl $(DIR)main.mvl; do \
+	for f in $(DIR)model.mvl $(DIR)parser.mvl $(DIR)transform.mvl; do \
 		name=$$(basename "$$f"); \
 		out=$$($(MVL) check "$$f" 2>&1); rc=$$?; \
 		if [ $$rc -eq 0 ]; then \

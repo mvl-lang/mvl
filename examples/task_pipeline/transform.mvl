@@ -13,6 +13,26 @@
 
 use model::Record;
 use model::Summary;
+use std.lists.{list_concat}
+
+// ── Local type declarations (mirrors model.mvl) ────────────────────────────
+// workaround: #96 — cross-module type resolution not yet wired into the
+// per-file checker; types are re-declared locally until the module resolver
+// is integrated.
+// Record fields use base types (String/Int/Float) because refinement type aliases
+// are not transparent in the per-file checker.
+
+type Record = struct {
+    name:     String,
+    age:      Int,
+    amount:   Float,
+    category: Option[String],
+}
+
+type Summary = struct {
+    count:        Int,
+    total_amount: Float,
+}
 
 // ── Filtering ─────────────────────────────────────────────────────────────
 
@@ -87,9 +107,9 @@ pub fn record_line(r: Record) -> String {
         Some(c) => c,
         None    => "(none)",
     };
-    r.name + "  age=" + r.age.to_string()
-           + "  amount=" + r.amount.to_string()
-           + "  cat=" + cat_str
+    r.name.concat("  age=").concat(r.age.to_string())
+           .concat("  amount=").concat(r.amount.to_string())
+           .concat("  cat=").concat(cat_str)
 }
 
 // ── Internal unit tests ───────────────────────────────────────────────────

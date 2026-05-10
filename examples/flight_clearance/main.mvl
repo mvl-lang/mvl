@@ -16,6 +16,46 @@ use clearance::needs_diversion;
 use clearance::fuel_planning_ok;
 use clearance::route_permitted;
 
+// ── Local type declarations (mirrors model.mvl) ────────────────────────────
+// workaround: #96 — cross-module type resolution not yet wired into the
+// per-file checker; types are re-declared locally until the module resolver
+// is integrated.
+
+type Visibility = enum {
+    Good,
+    Reduced,
+    Poor,
+}
+
+type WindCondition = enum {
+    Calm,
+    Moderate,
+    Strong,
+}
+
+type MaintenanceStatus = enum {
+    Cleared,
+    DeferredItem,
+    Grounded,
+}
+
+type FuelStatus = enum {
+    Sufficient,
+    Marginal,
+    Insufficient,
+}
+
+type Clearance = enum {
+    Cleared,
+    Rejected,
+}
+
+type RouteType = enum {
+    Domestic,
+    International,
+    Oceanic,
+}
+
 fn s1_domestic_clear() -> String {
     let wx: Weather = Weather { visibility: Visibility::Good, wind: WindCondition::Calm,
         icing: false, thunderstorm: false };
@@ -74,12 +114,12 @@ fn s7_oceanic_deferred() -> String {
     }
 }
 
-fn main() -> Unit {
-    println("1. Domestic/clear:     " + s1_domestic_clear());
-    println("2. Thunderstorm:       " + s2_thunderstorm_divert());
-    println("3. Marginal/domestic:  " + s3_marginal_domestic());
-    println("4. Marginal/intl:      " + s4_marginal_intl());
-    println("5. Oceanic/no ETOPS:   " + s5_oceanic_no_etops());
-    println("6. Icing+poor vis:     " + s6_icing_poor_vis());
-    println("7. Oceanic/deferred:   " + s7_oceanic_deferred());
+fn main() -> Unit ! Console {
+    println("1. Domestic/clear:     ".concat(s1_domestic_clear()));
+    println("2. Thunderstorm:       ".concat(s2_thunderstorm_divert()));
+    println("3. Marginal/domestic:  ".concat(s3_marginal_domestic()));
+    println("4. Marginal/intl:      ".concat(s4_marginal_intl()));
+    println("5. Oceanic/no ETOPS:   ".concat(s5_oceanic_no_etops()));
+    println("6. Icing+poor vis:     ".concat(s6_icing_poor_vis()));
+    println("7. Oceanic/deferred:   ".concat(s7_oceanic_deferred()));
 }

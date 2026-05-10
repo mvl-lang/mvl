@@ -83,14 +83,14 @@ fn log_level_for_decision(decision: Permission) -> String {
 }
 
 // Log an access decision to the structured audit trail.
-// Only Clean[String] username and plain String values reach the log sink.
+// Only sanitized username and plain String values reach the log sink.
 // Secret[T] cannot appear here — enforced by the IFC type system.
 // Grant decisions are logged at INFO; deny decisions at WARN.
-// username is Clean[String] (IFC-safe for output) and is included in every
-// audit record so that access decisions are attributable to a principal.
+// username is passed as String (caller must sanitize before calling);
+// IFC-safe for output and included in every audit record for attribution.
 /// Log an access decision to the structured audit trail with IFC-safe fields.
 pub fn log_access(
-    username: Clean[String],
+    username: String,
     resource: Resource,
     action: Action,
     decision: Permission,

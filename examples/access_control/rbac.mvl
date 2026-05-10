@@ -15,6 +15,36 @@ use model::Resource;
 use model::Action;
 use model::Permission;
 
+// ── Local type declarations (mirrors model.mvl) ────────────────────────────
+// workaround: #96 — cross-module type resolution not yet wired into the
+// per-file checker; types are re-declared locally until the module resolver
+// is integrated.
+
+type Role = enum {
+    Admin,
+    Moderator,
+    User,
+    Guest,
+}
+
+type Resource = enum {
+    UserProfile,
+    AdminPanel,
+    Post,
+    AuditLog,
+}
+
+type Action = enum {
+    Read,
+    Write,
+    Delete,
+}
+
+type Permission = enum {
+    Allow,
+    Deny,
+}
+
 // ── Policy ──────────────────────────────────────────────────────────────────
 
 // total fn: the compiler rejects any non-exhaustive match.
