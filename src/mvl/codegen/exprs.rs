@@ -205,6 +205,8 @@ impl<'ctx> LlvmBackend<'ctx> {
             return_refinement: None,
             effects: vec![],
             constraints: vec![],
+            requires: vec![],
+            ensures: vec![],
             body: block,
             span: zero,
         };
