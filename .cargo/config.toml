@@ -13,8 +13,8 @@
 #   Build without Z3: cargo build --features llvm --no-default-features
 
 # Z3_SYS_Z3_HEADER lets z3-sys's build.rs find z3.h (bindgen).
-# force=false: only applied when not already set (CI can override).
-# On Linux with libz3-dev, Z3_SYS_Z3_HEADER is typically unneeded as
-# z3.h is in the system include path; set it here for macOS arm64 homebrew.
+# force=false: only applied when not already set in the environment.
+# macOS arm64 homebrew default; Linux CI must set Z3_SYS_Z3_HEADER=/usr/include/z3.h
+# to prevent this macOS path from being used on the Linux runner.
 [env]
 Z3_SYS_Z3_HEADER = { value = "/opt/homebrew/include/z3.h", force = false }
