@@ -16,50 +16,10 @@ use clearance::needs_diversion;
 use clearance::fuel_planning_ok;
 use clearance::route_permitted;
 
-// ── Local type declarations (mirrors model.mvl) ────────────────────────────
-// workaround: #96 — cross-module type resolution not yet wired into the
-// per-file checker; types are re-declared locally until the module resolver
-// is integrated.
-
-type Visibility = enum {
-    Good,
-    Reduced,
-    Poor,
-}
-
-type WindCondition = enum {
-    Calm,
-    Moderate,
-    Strong,
-}
-
-type MaintenanceStatus = enum {
-    Cleared,
-    DeferredItem,
-    Grounded,
-}
-
-type FuelStatus = enum {
-    Sufficient,
-    Marginal,
-    Insufficient,
-}
-
-type Clearance = enum {
-    Cleared,
-    Rejected,
-}
-
-type RouteType = enum {
-    Domestic,
-    International,
-    Oceanic,
-}
-
 fn s1_domestic_clear() -> String {
     let wx: Weather = Weather { visibility: Visibility::Good, wind: WindCondition::Calm,
         icing: false, thunderstorm: false };
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared,
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy,
         fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: false };
     match departure_gate(wx, ac, RouteType::Domestic) {
         Clearance::Cleared => "CLEARED", Clearance::Rejected => "REJECTED",
@@ -69,7 +29,7 @@ fn s1_domestic_clear() -> String {
 fn s2_thunderstorm_divert() -> String {
     let wx: Weather = Weather { visibility: Visibility::Good, wind: WindCondition::Moderate,
         icing: false, thunderstorm: true };
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared,
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy,
         fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: true };
     match needs_diversion(wx, ac) { true => "DIVERT", false => "OK", }
 }
@@ -77,7 +37,7 @@ fn s2_thunderstorm_divert() -> String {
 fn s3_marginal_domestic() -> String {
     let wx: Weather = Weather { visibility: Visibility::Good, wind: WindCondition::Calm,
         icing: false, thunderstorm: false };
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared,
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy,
         fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: false };
     match fuel_planning_ok(ac, RouteType::Domestic, wx) { true => "OK", false => "FAIL", }
 }
@@ -85,13 +45,13 @@ fn s3_marginal_domestic() -> String {
 fn s4_marginal_intl() -> String {
     let wx: Weather = Weather { visibility: Visibility::Good, wind: WindCondition::Calm,
         icing: false, thunderstorm: false };
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared,
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy,
         fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: false };
     match fuel_planning_ok(ac, RouteType::International, wx) { true => "OK", false => "FAIL", }
 }
 
 fn s5_oceanic_no_etops() -> String {
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared,
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy,
         fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: false };
     match route_permitted(RouteType::Oceanic, ac) { true => "PERMITTED", false => "DENIED", }
 }
@@ -99,7 +59,7 @@ fn s5_oceanic_no_etops() -> String {
 fn s6_icing_poor_vis() -> String {
     let wx: Weather = Weather { visibility: Visibility::Poor, wind: WindCondition::Calm,
         icing: true, thunderstorm: false };
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared,
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy,
         fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: true };
     match needs_diversion(wx, ac) { true => "DIVERT", false => "OK", }
 }

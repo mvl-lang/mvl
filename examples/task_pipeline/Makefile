@@ -22,7 +22,7 @@ guard-mvl: ## Validate MVL binary is present and working (does NOT recompile)
 		exit 1; \
 	}
 
-check: guard-mvl ## Type-check pure source files (main.mvl excluded: cross-module deps, #96)
+check: guard-mvl ## Type-check pure source files (main.mvl excluded: uses stdlib I/O with Tainted[String])
 	$(MVL) check $(DIR)model.mvl
 	$(MVL) check $(DIR)parser.mvl
 	$(MVL) check $(DIR)transform.mvl

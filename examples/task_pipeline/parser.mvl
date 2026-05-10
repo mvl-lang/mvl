@@ -16,28 +16,6 @@ use model::Record;
 use model::ParseError;
 use std.lists.{list_concat}
 
-// ── Local type declarations (mirrors model.mvl) ────────────────────────────
-// workaround: #96 — cross-module type resolution not yet wired into the
-// per-file checker; types are re-declared locally until the module resolver
-// is integrated.
-// Record fields use base types (String/Int/Float) because refinement type aliases
-// (PersonName/ValidAge/NonNegAmount) are not transparent in the per-file checker.
-
-type ParseError = enum {
-    EmptyInput,
-    MissingField,
-    EmptyName,
-    InvalidAge,
-    InvalidAmount,
-}
-
-type Record = struct {
-    name:     String,
-    age:      Int,
-    amount:   Float,
-    category: Option[String],
-}
-
 // ── Internal helpers ──────────────────────────────────────────────────────
 
 /// Parse a validated age integer from a trimmed string.
@@ -172,4 +150,4 @@ pub fn parse_csv(content: String) -> Result[List[Record], ParseError] {
     }
 }
 
-// Tests live in parser_test.mvl (type re-declarations workaround: #96).
+// Tests live in parser_test.mvl.

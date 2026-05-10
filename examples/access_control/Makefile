@@ -20,13 +20,17 @@ guard-mvl: ## Validate MVL binary is present and working (does NOT recompile)
 build: guard-mvl ## Compile the example to a native binary (requires bridge.rs)
 	$(MVL) build $(DIR)main.mvl
 
-check: guard-mvl ## Type-check standalone files (auth/rbac/audit/main excluded: cross-module deps, #96)
+check: guard-mvl ## Type-check all source files
 	$(MVL) check $(DIR)model.mvl
+	$(MVL) check $(DIR)auth.mvl
+	$(MVL) check $(DIR)rbac.mvl
+	$(MVL) check $(DIR)audit.mvl
+	$(MVL) check $(DIR)main.mvl
 
-test-solver: guard-mvl ## Show per-file solver statistics for standalone source files
+test-solver: guard-mvl ## Show per-file solver statistics for all source files
 	@pass=0; fail=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
-	for f in $(DIR)model.mvl; do \
+	for f in $(DIR)model.mvl $(DIR)auth.mvl $(DIR)rbac.mvl $(DIR)audit.mvl $(DIR)main.mvl; do \
 		name=$$(basename "$$f"); \
 		out=$$($(MVL) check "$$f" 2>&1); rc=$$?; \
 		if [ $$rc -eq 0 ]; then \

@@ -5,7 +5,7 @@
 type Visibility = enum { Good, Reduced, Poor }
 type WindCondition = enum { Calm, Moderate, Strong }
 type Weather = struct { visibility: Visibility, wind: WindCondition, icing: Bool, thunderstorm: Bool }
-type MaintenanceStatus = enum { Cleared, DeferredItem, Grounded }
+type MaintenanceStatus = enum { Airworthy, DeferredItem, Grounded }
 type FuelStatus = enum { Sufficient, Marginal, Insufficient }
 type Aircraft = struct { maintenance: MaintenanceStatus, fuel: FuelStatus, crew_valid: Bool }
 type RouteType = enum { Domestic, International, Oceanic }
@@ -22,7 +22,7 @@ fn weather_clear(wx: Weather) -> Bool {
 }
 fn maintenance_ok(m: MaintenanceStatus) -> Bool {
     match m {
-        MaintenanceStatus::Cleared => true, MaintenanceStatus::DeferredItem => true,
+        MaintenanceStatus::Airworthy => true, MaintenanceStatus::DeferredItem => true,
         MaintenanceStatus::Grounded => false,
     }
 }
@@ -54,7 +54,7 @@ fn print_clearance(c: Clearance) -> Unit ! Console {
 fn main() -> Unit ! Console {
     let good_wx: Weather = Weather { visibility: Visibility::Good, wind: WindCondition::Calm, icing: false, thunderstorm: false };
     let bad_wx: Weather = Weather { visibility: Visibility::Poor, wind: WindCondition::Strong, icing: true, thunderstorm: true };
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: true };
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy, fuel: FuelStatus::Sufficient, crew_valid: true };
     print_clearance(can_dispatch(good_wx, ac, RouteType::Domestic));
     print_clearance(can_dispatch(bad_wx, ac, RouteType::Domestic))
 }

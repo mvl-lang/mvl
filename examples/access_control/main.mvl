@@ -40,9 +40,9 @@ extern "rust" {
 
 // Check and audit a single RBAC decision.
 // Calls check_permission (pure) then log_access (! Log) to emit a structured
-// audit record. The username is Clean[String] — IFC-safe for log output.
+// audit record.
 fn check_and_audit(
-    username: Clean[String],
+    username: String,
     role: Role,
     resource: Resource,
     action: Action,
@@ -54,7 +54,6 @@ fn check_and_audit(
 // ── Demo scenarios ────────────────────────────────────────────────────────
 
 // RBAC demo: each call produces a structured audit record (INFO or WARN).
-// String literals are Clean[String]-compatible (compile-time constants at Public level).
 fn demo_rbac() -> Unit ! Log {
     let u1: Unit = check_and_audit("admin_demo", Role::Admin,     Resource::AdminPanel,  Action::Read);
     let u2: Unit = check_and_audit("mod_demo",   Role::Moderator, Resource::AdminPanel,  Action::Write);

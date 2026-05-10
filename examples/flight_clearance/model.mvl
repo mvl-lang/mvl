@@ -35,7 +35,7 @@ pub type Weather = struct {
 
 /// Aircraft airworthiness status at time of departure request.
 pub type MaintenanceStatus = enum {
-    Cleared,
+    Airworthy,      // fully serviceable
     DeferredItem,   // MEL item — may still fly with restrictions
     Grounded,       // AOG — no flight permitted
 }

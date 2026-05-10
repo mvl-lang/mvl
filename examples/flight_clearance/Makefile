@@ -17,13 +17,15 @@ guard-mvl: ## Validate MVL binary is present and working (does NOT recompile)
 		exit 1; \
 	}
 
-check: guard-mvl ## Type-check model.mvl (clearance.mvl/main.mvl excluded: Cleared variant collision, #96)
+check: guard-mvl ## Type-check all source files
 	$(MVL) check $(DIR)model.mvl
+	$(MVL) check $(DIR)clearance.mvl
+	$(MVL) check $(DIR)main.mvl
 
 test-solver: guard-mvl ## Show per-file solver statistics for all source files
 	@pass=0; fail=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
-	for f in $(DIR)model.mvl; do \
+	for f in $(DIR)model.mvl $(DIR)clearance.mvl $(DIR)main.mvl; do \
 		name=$$(basename "$$f"); \
 		out=$$($(MVL) check "$$f" 2>&1); rc=$$?; \
 		if [ $$rc -eq 0 ]; then \

@@ -15,25 +15,6 @@ use model::Record;
 use model::Summary;
 use std.lists.{list_concat}
 
-// ── Local type declarations (mirrors model.mvl) ────────────────────────────
-// workaround: #96 — cross-module type resolution not yet wired into the
-// per-file checker; types are re-declared locally until the module resolver
-// is integrated.
-// Record fields use base types (String/Int/Float) because refinement type aliases
-// are not transparent in the per-file checker.
-
-type Record = struct {
-    name:     String,
-    age:      Int,
-    amount:   Float,
-    category: Option[String],
-}
-
-type Summary = struct {
-    count:        Int,
-    total_amount: Float,
-}
-
 // ── Filtering ─────────────────────────────────────────────────────────────
 
 /// Keep only records whose amount is at or above `min_amount`.
