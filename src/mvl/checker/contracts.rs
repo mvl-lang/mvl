@@ -25,6 +25,15 @@
 //! - If the predicate contains references to parameter names after normalisation,
 //!   emit `RuntimeCheck` (conservative; those are tracked in Phase 2+).
 //! - Otherwise run the solver on the returned expression.
+//!
+//! # `invariant` checking (Phase 3)
+//!
+//! At each `while` loop entry point:
+//! - If the invariant references exactly one variable name, normalise it to `"self"`.
+//! - Run the solver on `Expr::Ident(var_name)` with the caller's `var_refs`.
+//! - If the predicate references zero names (constant), evaluate it directly.
+//! - If the predicate references multiple names: `RuntimeCheck` (Phase 4).
+//! - `RefResult::Failed` → `CheckError::InvariantViolated`.
 
 use std::collections::HashMap;
 
@@ -47,7 +56,10 @@ pub fn check_contracts(prog: &Program, errors: &mut Vec<CheckError>) {
     for decl in &prog.declarations {
         match decl {
             Decl::Fn(fd) => {
-                let var_refs = HashMap::new();
+                // Phase 3: seed var_refs with parameter where-refinements so that
+                // `requires` checks on variable arguments (e.g. `f(x)` where
+                // `x: Int where self > 0`) can be resolved by the solver.
+                let var_refs = build_param_var_refs(&fd.params);
                 check_requires_in_block(&fd.body, &fn_map, &var_refs, &fn_decls, errors);
                 if !fd.ensures.is_empty() {
                     check_ensures_in_block(
@@ -59,10 +71,12 @@ pub fn check_contracts(prog: &Program, errors: &mut Vec<CheckError>) {
                         errors,
                     );
                 }
+                // Phase 3: check loop invariants.
+                check_invariants_in_block(&fd.body, &fd.name, &var_refs, &fn_decls, errors);
             }
             Decl::Impl(impl_d) => {
                 for method in &impl_d.methods {
-                    let var_refs = HashMap::new();
+                    let var_refs = build_param_var_refs(&method.params);
                     check_requires_in_block(&method.body, &fn_map, &var_refs, &fn_decls, errors);
                     if !method.ensures.is_empty() {
                         check_ensures_in_block(
@@ -74,6 +88,14 @@ pub fn check_contracts(prog: &Program, errors: &mut Vec<CheckError>) {
                             errors,
                         );
                     }
+                    // Phase 3: check loop invariants.
+                    check_invariants_in_block(
+                        &method.body,
+                        &method.name,
+                        &var_refs,
+                        &fn_decls,
+                        errors,
+                    );
                 }
             }
             _ => {}
@@ -711,6 +733,130 @@ fn check_multi_param_requires_literal(
             pred: display_pred(pred),
             span: call_span,
         });
+    }
+}
+
+// ── Phase 3: invariant checker ────────────────────────────────────────────────
+
+/// Walk a block and check every `while` loop's invariants at loop entry.
+fn check_invariants_in_block(
+    block: &Block,
+    fn_name: &str,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
+    errors: &mut Vec<CheckError>,
+) {
+    for stmt in &block.stmts {
+        check_invariants_in_stmt(stmt, fn_name, var_refs, fn_decls, errors);
+    }
+}
+
+fn check_invariants_in_stmt(
+    stmt: &Stmt,
+    fn_name: &str,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
+    errors: &mut Vec<CheckError>,
+) {
+    match stmt {
+        Stmt::While {
+            invariants,
+            body,
+            span,
+            ..
+        } => {
+            for inv_pred in invariants {
+                check_invariant_at_entry(fn_name, inv_pred, var_refs, fn_decls, errors, *span);
+            }
+            // Recurse into the body for nested loops.
+            check_invariants_in_block(body, fn_name, var_refs, fn_decls, errors);
+        }
+        Stmt::If { then, else_, .. } => {
+            check_invariants_in_block(then, fn_name, var_refs, fn_decls, errors);
+            if let Some(eb) = else_ {
+                match eb {
+                    ElseBranch::Block(b) => {
+                        check_invariants_in_block(b, fn_name, var_refs, fn_decls, errors)
+                    }
+                    ElseBranch::If(s) => {
+                        check_invariants_in_stmt(s, fn_name, var_refs, fn_decls, errors)
+                    }
+                }
+            }
+        }
+        Stmt::For { body, .. } => {
+            check_invariants_in_block(body, fn_name, var_refs, fn_decls, errors);
+        }
+        Stmt::Match { arms, .. } => {
+            for arm in arms {
+                match &arm.body {
+                    MatchBody::Block(b) => {
+                        check_invariants_in_block(b, fn_name, var_refs, fn_decls, errors)
+                    }
+                    MatchBody::Expr(_) => {}
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Check a single `invariant` predicate at loop entry.
+///
+/// Strategy:
+/// - 0 free variable names: constant predicate — check directly with a dummy literal argument.
+/// - 1 free variable name: normalise it to `"self"` and run the solver on `Ident(name)`.
+/// - 2+ free variable names: `RuntimeCheck` (multi-variable reasoning is Phase 4).
+fn check_invariant_at_entry(
+    fn_name: &str,
+    inv_pred: &RefExpr,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
+    errors: &mut Vec<CheckError>,
+    loop_span: Span,
+) {
+    let idents = collect_ident_names(inv_pred);
+
+    // Deduplicate while preserving order.
+    let mut distinct: Vec<String> = Vec::new();
+    for id in &idents {
+        if !distinct.contains(id) {
+            distinct.push(id.clone());
+        }
+    }
+
+    match distinct.as_slice() {
+        [] => {
+            // Constant predicate (e.g., `invariant 0 >= 0` or `invariant 1 < 0`).
+            // The predicate has no `self` reference; pass a dummy literal as the argument.
+            // Layer 1 will const-fold the comparison directly.
+            let dummy = Expr::Literal(Literal::Integer(0), loop_span);
+            let outcome = check_arg_against_pred(&dummy, inv_pred, var_refs, fn_decls);
+            if outcome == RefResult::Failed {
+                errors.push(CheckError::InvariantViolated {
+                    fn_name: fn_name.to_string(),
+                    pred: display_pred(inv_pred),
+                    span: loop_span,
+                });
+            }
+        }
+        [var_name] => {
+            // Single free variable — normalise it to "self" and check via Ident lookup.
+            let normalized = normalize_pred(inv_pred, var_name);
+            let ident_expr = Expr::Ident(var_name.clone(), loop_span);
+            let outcome = check_arg_against_pred(&ident_expr, &normalized, var_refs, fn_decls);
+            if outcome == RefResult::Failed {
+                errors.push(CheckError::InvariantViolated {
+                    fn_name: fn_name.to_string(),
+                    pred: display_pred(inv_pred),
+                    span: loop_span,
+                });
+            }
+            // Proven or RuntimeCheck: silent at compile time.
+        }
+        _ => {
+            // Multiple variables: defer to Phase 4 (RuntimeCheck, no error).
+        }
     }
 }
 

@@ -667,6 +667,8 @@ pub enum Stmt {
     },
     While {
         cond: Expr,
+        /// Loop invariant predicates — `invariant pred` clauses (Phase 3, #621).
+        invariants: Vec<RefExpr>,
         body: Block,
         span: Span,
     },

@@ -147,7 +147,9 @@ fn collect_from_stmt(
                 }
             }
         }
-        Stmt::While { cond, body, span } => {
+        Stmt::While {
+            cond, body, span, ..
+        } => {
             let clause_count = count_clauses(cond);
             if clause_count > 1 {
                 decisions.push(DecisionInfo {

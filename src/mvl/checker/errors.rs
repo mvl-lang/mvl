@@ -290,6 +290,12 @@ pub enum CheckError {
         pred: String,
         span: Span,
     },
+    /// A `while` loop invariant was statically proven to not hold at loop entry.
+    InvariantViolated {
+        fn_name: String,
+        pred: String,
+        span: Span,
+    },
 
     // ── Label-transparent function validation (ADR-0024) ─────────────────
     /// `transparent fn` declared with no parameters — label join over empty
@@ -364,7 +370,8 @@ impl CheckError {
             // Req 10: Refinement Types & Contracts
             CheckError::RefinementViolated { .. }
             | CheckError::PreconditionViolated { .. }
-            | CheckError::PostconditionViolated { .. } => 10,
+            | CheckError::PostconditionViolated { .. }
+            | CheckError::InvariantViolated { .. } => 10,
             // Req 11: Information Flow Control
             CheckError::InvalidDeclassify { .. }
             | CheckError::InvalidSanitize { .. }
@@ -433,7 +440,8 @@ impl CheckError {
             | CheckError::TransparentFnLabeledReturn { span, .. }
             | CheckError::TransparentFnGeneric { span, .. }
             | CheckError::PreconditionViolated { span, .. }
-            | CheckError::PostconditionViolated { span, .. } => *span,
+            | CheckError::PostconditionViolated { span, .. }
+            | CheckError::InvariantViolated { span, .. } => *span,
         }
     }
 
@@ -601,6 +609,9 @@ impl CheckError {
             ),
             CheckError::PostconditionViolated { fn_name, pred, .. } => format!(
                 "postcondition violated in `{fn_name}`: `{pred}` cannot be proven at this return point"
+            ),
+            CheckError::InvariantViolated { fn_name, pred, .. } => format!(
+                "loop invariant `{pred}` in `{fn_name}` cannot be proven to hold at loop entry"
             ),
         }
     }

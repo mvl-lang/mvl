@@ -54,6 +54,21 @@ fn nonneg_id(n: Int where self >= 0) -> Int
     n
 }
 
+// Phase 3: loop invariants — checked at loop entry using the solver.
+// Constant-true invariant: Layer 1 proves it immediately.
+partial fn count_down(n: Int where self >= 0) -> Unit {
+    while true
+      invariant n >= 0
+    { }
+}
+
+// Invariant proven by param refinement (Layer 2).
+partial fn bounded_loop(lo: Int where self >= 0, hi: Int where self >= 0) -> Unit {
+    while true
+      invariant lo >= 0
+    { }
+}
+
 fn main() -> Unit ! Console {
     let _ = divide(10, 2);
     let _ = nonneg();

@@ -5554,3 +5554,154 @@ fn ensures_param_ref_wrong_does_not_spuriously_fail() {
         errors
     );
 }
+
+// ── Phase 3: loop invariants ───────────────────────────────────────────────────
+
+#[test]
+fn invariant_constant_true_no_error() {
+    // GIVEN: constant-true invariant (no variable references)
+    // THEN:  Layer 1 proves it — no error
+    let src = r#"
+        partial fn server() -> Unit {
+            while true
+              invariant 0 >= 0
+            { }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::InvariantViolated { .. })),
+        "expected no InvariantViolated for constant-true invariant, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn invariant_constant_false_detected() {
+    // GIVEN: constant-false invariant (statically impossible)
+    // THEN:  Layer 1 returns Failed -> InvariantViolated emitted
+    let src = r#"
+        partial fn server() -> Unit {
+            while true
+              invariant 1 < 0
+            { }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::InvariantViolated { fn_name, .. } if fn_name == "server")
+        ),
+        "expected InvariantViolated for constant-false invariant, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn invariant_param_refinement_proven() {
+    // GIVEN: parameter `n: Int where self >= 0`, invariant `n >= 0`
+    // THEN:  Layer 2 proves invariant holds at loop entry — no error
+    let src = r#"
+        partial fn loop_nonneg(n: Int where self >= 0) -> Unit {
+            while true
+              invariant n >= 0
+            { }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::InvariantViolated { .. })),
+        "expected no InvariantViolated when param refinement proves invariant, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn invariant_param_no_refinement_is_runtime_check() {
+    // GIVEN: parameter `n: Int` (no refinement), invariant `n >= 0`
+    // THEN:  solver returns RuntimeCheck — no compile-time error emitted
+    let src = r#"
+        partial fn loop_unknown(n: Int) -> Unit {
+            while true
+              invariant n >= 0
+            { }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::InvariantViolated { .. })),
+        "expected no InvariantViolated when param has no refinement (RuntimeCheck), got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn invariant_param_refinement_too_weak_is_runtime_check() {
+    // GIVEN: `n: Int where self > 0`, invariant `n >= 5`
+    // THEN:  Layer 2 cannot prove n >= 5 from n > 0 -> RuntimeCheck — no error
+    let src = r#"
+        partial fn loop_weak(n: Int where self > 0) -> Unit {
+            while true
+              invariant n >= 5
+            { }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::InvariantViolated { .. })),
+        "expected no InvariantViolated when solver cannot prove (RuntimeCheck), got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn invariant_multi_var_is_runtime_check_no_error() {
+    // GIVEN: multi-variable invariant `lo <= hi` (Phase 4 territory)
+    // THEN:  RuntimeCheck — no compile-time error
+    let src = r#"
+        partial fn loop_range(lo: Int, hi: Int) -> Unit {
+            while true
+              invariant lo <= hi
+            { }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::InvariantViolated { .. })),
+        "expected no InvariantViolated for multi-var invariant (RuntimeCheck), got: {:?}",
+        errors
+    );
+}
+
+// ── Phase 3: param-refined requires at call sites ─────────────────────────────
+
+#[test]
+fn requires_caller_param_refinement_proves_precondition() {
+    // GIVEN: `divide` requires `b != 0`; caller passes `b: Int where self > 0`
+    // THEN:  Layer 2 proves b > 0 implies b != 0 — no PreconditionViolated
+    let src = r#"
+        fn divide(a: Int, b: Int) -> Int
+          requires b != 0
+        { a }
+
+        fn caller(a: Int, b: Int where self > 0) -> Int {
+            divide(a, b)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors.iter().any(|e| matches!(e, CheckError::PreconditionViolated { fn_name, .. } if fn_name == "divide")),
+        "expected no PreconditionViolated when caller param refinement proves precondition, got: {:?}",
+        errors
+    );
+}

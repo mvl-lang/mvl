@@ -11,7 +11,7 @@
 //! - Expression statements (trailing `;` optional for block-final expressions)
 
 use crate::mvl::parser::ast::{
-    Block, ElseBranch, Expr, LValue, Literal, MatchArm, MatchBody, Pattern, Stmt,
+    Block, ElseBranch, Expr, LValue, Literal, MatchArm, MatchBody, Pattern, RefExpr, Stmt,
 };
 use crate::mvl::parser::lexer::TokenKind;
 use crate::mvl::parser::{ParseError, Parser};
@@ -214,10 +214,26 @@ impl Parser {
         self.advance(); // consume `while`
 
         let cond = self.parse_expr()?;
+
+        // Optional invariant clauses: `invariant pred`* (Phase 3, #621)
+        let mut invariants: Vec<RefExpr> = Vec::new();
+        while matches!(self.peek_kind(), TokenKind::Invariant) {
+            self.advance(); // consume `invariant`
+            match self.parse_ref_expr() {
+                Ok(pred) => invariants.push(pred),
+                Err(()) => break,
+            }
+        }
+
         let body = self.parse_block()?;
 
         let span = self.span_from(start);
-        Ok(Stmt::While { cond, body, span })
+        Ok(Stmt::While {
+            cond,
+            invariants,
+            body,
+            span,
+        })
     }
 
     // ── Assignment or expression statement ────────────────────────────────
