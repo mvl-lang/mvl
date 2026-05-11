@@ -355,11 +355,14 @@ fn emit_required_numeric_parse(
     rust_type: &str,
     type_label: &str,
 ) {
+    // Strip leading underscores so `_handle` → `__raw_handle`, not `__raw__handle`
+    // (double-underscore in the middle triggers Rust's non_snake_case lint).
+    let raw_var = format!("__raw_{}", name.trim_start_matches('_'));
     cg.line(&format!(
-        "let __raw_{name} = get_arg(Clean(\"{name}\".to_string())).ok_or_else(|| \"missing required argument: --{name}\".to_string())?;"
+        "let {raw_var} = get_arg(Clean(\"{name}\".to_string())).ok_or_else(|| \"missing required argument: --{name}\".to_string())?;"
     ));
     cg.line(&format!(
-        "let {name} = __raw_{name}.0.parse::<{rust_type}>().map_err(|_| \"--{name}: expected {type_label}\".to_string())?;"
+        "let {name} = {raw_var}.0.parse::<{rust_type}>().map_err(|_| \"--{name}: expected {type_label}\".to_string())?;"
     ));
 }
 
