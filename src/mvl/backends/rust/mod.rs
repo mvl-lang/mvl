@@ -16,7 +16,7 @@
 //! # Entry point
 //!
 //! ```
-//! use mvl::mvl::transpiler::transpile;
+//! use mvl::mvl::backends::rust::transpile;
 //! use mvl::mvl::parser::ast::Program;
 //!
 //! // let prog: Program = …;
@@ -1131,5 +1131,24 @@ mod tests {
         let out = transpile(&prog, "crate");
         assert_eq!(out.extern_count, 1);
         assert!(!out.has_extern_rust);
+    }
+}
+
+// ── Backend trait implementation ─────────────────────────────────────────────
+
+/// Unit struct implementing the [`Backend`] trait for the Rust transpiler.
+pub struct RustBackend;
+
+impl crate::mvl::backends::Backend for RustBackend {
+    fn name(&self) -> &'static str {
+        "rust"
+    }
+
+    fn file_extension(&self) -> &'static str {
+        "rs"
+    }
+
+    fn emit_program(&self, prog: &crate::mvl::parser::ast::Program, crate_name: &str) -> String {
+        transpile(prog, crate_name).lib_rs
     }
 }

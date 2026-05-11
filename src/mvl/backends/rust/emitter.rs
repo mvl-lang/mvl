@@ -6,6 +6,12 @@
 //! [`RustEmitter`] is the single writer passed through every emit function.
 //! All other `emit_*` modules take `&mut RustEmitter` and append to it.
 
+use crate::mvl::backends::rust::borrow_params::build_borrow_params_map;
+use crate::mvl::backends::rust::emit_functions::emit_fn_decl;
+use crate::mvl::backends::rust::emit_impls::emit_impl_decl;
+use crate::mvl::backends::rust::emit_types::emit_type_decl;
+use crate::mvl::backends::rust::emit_types::{emit_security_preamble, emit_type_expr};
+use crate::mvl::backends::rust::{collect_stdlib_modules, has_std_imports};
 use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{
     BinaryOp, Decl, ExternDecl, FieldDecl, FnDecl, Param, Program, TypeDecl, TypeExpr, Variant,
@@ -17,12 +23,6 @@ use crate::mvl::passes::mcdc::transform::{DecisionKind, MCDCMap};
 use crate::mvl::passes::mutation::{
     mutations_for_binary_op, mutations_for_int_literal, MutationMap,
 };
-use crate::mvl::transpiler::borrow_params::build_borrow_params_map;
-use crate::mvl::transpiler::emit_functions::emit_fn_decl;
-use crate::mvl::transpiler::emit_impls::emit_impl_decl;
-use crate::mvl::transpiler::emit_types::emit_type_decl;
-use crate::mvl::transpiler::emit_types::{emit_security_preamble, emit_type_expr};
-use crate::mvl::transpiler::{collect_stdlib_modules, has_std_imports};
 
 /// Stdlib function names that shadow Rust built-ins or prelude items and must be
 /// emitted as fully-qualified paths to avoid silent name resolution to the wrong symbol (#420).
@@ -654,7 +654,7 @@ fn collect_undefined_types(prog: &Program) -> Vec<String> {
     // Types from Rust-backed stdlib modules (e.g. Path/File from std.io) are
     // provided by the emitted `use mvl_runtime::stdlib::X::*;` wildcard import.
     // Add their names to `defined` so they are never emitted as placeholder stubs.
-    for module in crate::mvl::transpiler::collect_stdlib_modules(prog) {
+    for module in crate::mvl::backends::rust::collect_stdlib_modules(prog) {
         let filename = format!("{module}.mvl");
         if let Some(content) = crate::mvl::stdlib::stdlib_content(&filename) {
             let (mut p, _) = crate::mvl::parser::Parser::new(content);
@@ -808,8 +808,8 @@ fn collect_method_stubs_for_type(
     stub_type: &str,
     all_stubs: &[String],
 ) -> Vec<MethodStub> {
+    use crate::mvl::backends::rust::emit_types::emit_type_expr;
     use crate::mvl::parser::ast::{Expr, Stmt, TypeExpr};
-    use crate::mvl::transpiler::emit_types::emit_type_expr;
 
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut result: Vec<MethodStub> = Vec::new();

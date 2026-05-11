@@ -136,8 +136,8 @@ pub extern "C" fn _mvl_env_args_get(i: i64) -> *mut c_char {
 /// The LLVM caller is responsible for dropping the array via `mvl_array_drop`.
 #[no_mangle]
 #[allow(unsafe_code)]
-pub extern "C" fn _mvl_env_args() -> *mut mvl_memory::MvlArray {
-    use mvl_memory::{mvl_array_new, mvl_string_new, MvlString};
+pub extern "C" fn _mvl_env_args() -> *mut crate::memory::MvlArray {
+    use crate::memory::{mvl_array_new, mvl_string_new, MvlString};
     let elem_size = std::mem::size_of::<*mut MvlString>();
     let arr = unsafe { mvl_array_new(elem_size, 0) };
     for mvl_runtime::ifc::Tainted(s) in mvl_runtime::stdlib::env::args() {

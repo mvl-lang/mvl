@@ -520,13 +520,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mvl_memory"
-version = "0.1.0"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "mvl_runtime"
 version = "0.1.0"
 dependencies = [
@@ -541,7 +534,6 @@ name = "mvl_runtime_c"
 version = "0.1.0"
 dependencies = [
  "libc",
- "mvl_memory",
  "mvl_runtime",
 ]
 

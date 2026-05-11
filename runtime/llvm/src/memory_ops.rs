@@ -16,7 +16,7 @@
 
 use std::ptr;
 
-use mvl_memory::{
+use crate::memory::{
     mvl_alloc, mvl_array_new, mvl_free, mvl_string_drop, mvl_string_new, MvlArray, MvlMap,
     MvlMapSlot, MvlString,
 };
@@ -59,10 +59,10 @@ fn checked_add_size(a: usize, b: usize) -> usize {
     a.checked_add(b).unwrap_or_else(|| std::process::abort())
 }
 
-/// Growth cap used in `mvl_array_push` to mirror `mvl_memory::ARRAY_INITIAL_CAP`.
+/// Growth cap used in `mvl_array_push` to mirror `crate::memory::ARRAY_INITIAL_CAP`.
 const ARRAY_INITIAL_CAP: usize = 4;
 
-/// Minimum slot count for map growth to mirror `mvl_memory::MAP_INITIAL_CAP`.
+/// Minimum slot count for map growth to mirror `crate::memory::MAP_INITIAL_CAP`.
 const MAP_INITIAL_CAP: usize = 8;
 
 /// Byte size of a single `MvlMapSlot`.
@@ -868,9 +868,9 @@ pub unsafe extern "C" fn _mvl_str_parse_float(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mvl_memory::{mvl_array_clone, mvl_array_drop, mvl_array_new};
-    use mvl_memory::{mvl_map_clone, mvl_map_drop, mvl_map_new};
-    use mvl_memory::{mvl_string_clone, mvl_string_drop, mvl_string_new};
+    use crate::memory::{mvl_array_clone, mvl_array_drop, mvl_array_new};
+    use crate::memory::{mvl_map_clone, mvl_map_drop, mvl_map_new};
+    use crate::memory::{mvl_string_clone, mvl_string_drop, mvl_string_new};
 
     // ── string operations ──────────────────────────────────────────────────────
 

@@ -45,11 +45,11 @@
 //! }
 //! ```
 
+use crate::mvl::backends::rust::emit_exprs::{emit_block_stmts, emit_expr};
+use crate::mvl::backends::rust::emit_types::emit_type_expr;
+use crate::mvl::backends::rust::emitter::RustEmitter;
+use crate::mvl::backends::rust::last_use::compute_last_uses;
 use crate::mvl::parser::ast::{ImplDecl, Stmt}; // Stmt used in match below
-use crate::mvl::transpiler::emit_exprs::{emit_block_stmts, emit_expr};
-use crate::mvl::transpiler::emit_types::emit_type_expr;
-use crate::mvl::transpiler::emitter::RustEmitter;
-use crate::mvl::transpiler::last_use::compute_last_uses;
 
 /// Emit a trait implementation block.
 pub fn emit_impl_decl(cg: &mut RustEmitter, id: &ImplDecl) {

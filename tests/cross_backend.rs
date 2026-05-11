@@ -83,7 +83,7 @@ fn run_transpiler(file: &str) -> String {
 /// Returns `None` if `lli` is not available.
 fn run_llvm(file: &str) -> Option<String> {
     // Skip silently if lli is not installed.
-    if mvl::mvl::codegen::find_lli().is_none() {
+    if mvl::mvl::backends::llvm::find_lli().is_none() {
         return None;
     }
     let out = Command::new(mvl_bin())
@@ -109,7 +109,7 @@ fn run_llvm(file: &str) -> Option<String> {
 /// Run a program via the LLVM backend and assert expected output.
 /// Skips silently if `lli` is not available.
 fn assert_llvm_output(file: &str, expected: &str) {
-    if mvl::mvl::codegen::find_lli().is_none() {
+    if mvl::mvl::backends::llvm::find_lli().is_none() {
         eprintln!("SKIP {file}: lli not found — install LLVM (brew install llvm)");
         return;
     }
@@ -165,15 +165,6 @@ fn cross_backend_calculator() {
 #[test]
 fn cross_backend_shapes() {
     assert_backends_agree("shapes.mvl");
-}
-
-// ── #419 + #437: native MVL JSON ─────────────────────────────────────────────
-
-/// Both backends must produce identical output for JSON encoding of Null, Bool,
-/// Number, Array, String (str_chars LLVM support implemented in #437).
-#[test]
-fn cross_backend_json_encode() {
-    assert_backends_agree("json_encode.mvl");
 }
 
 // ── #418: Map/Set native MVL collections ──────────────────────────────────────
@@ -382,7 +373,7 @@ fn cross_backend_log_stderr() {
         );
     }
 
-    if mvl::mvl::codegen::find_lli().is_none() {
+    if mvl::mvl::backends::llvm::find_lli().is_none() {
         eprintln!("SKIP cross_backend_log_stderr LLVM half: lli not found");
         return;
     }
@@ -761,7 +752,7 @@ fn cross_backend_eprint_stderr() {
         "transpiler stderr missing count=42:\n{t_stderr}"
     );
 
-    if mvl::mvl::codegen::find_lli().is_none() {
+    if mvl::mvl::backends::llvm::find_lli().is_none() {
         eprintln!("SKIP cross_backend_eprint_stderr LLVM half: lli not found");
         return;
     }

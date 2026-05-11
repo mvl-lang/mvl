@@ -696,7 +696,6 @@ fn pbt_operations_runs_without_panic() {
     );
 }
 
-
 fn corpus_bdd(name: &str) -> String {
     format!("{}/tests/corpus/12_bdd/{name}", env!("CARGO_MANIFEST_DIR"))
 }

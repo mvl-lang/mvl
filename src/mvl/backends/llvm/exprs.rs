@@ -1337,7 +1337,7 @@ impl<'ctx> LlvmBackend<'ctx> {
 
                 // ADR-0019: dispatch to libmvl_runtime_c C-ABI for stdlib imports.
                 if let Some(sig) = self.stdlib_imports.get(name).cloned() {
-                    use crate::mvl::codegen::StdlibSig;
+                    use crate::mvl::backends::llvm::StdlibSig;
                     match &sig {
                         StdlibSig::I64NoArg(sym) if args.is_empty() => {
                             return self.emit_stdlib_call_i64(sym);

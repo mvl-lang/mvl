@@ -10,15 +10,17 @@
 //! - Type params with constraints → Rust generic bounds
 //! - Return refinement → `debug_assert!` at end of body
 
+use crate::mvl::backends::rust::emit_exprs::{emit_block_stmts, emit_expr};
+use crate::mvl::backends::rust::emit_stmts::emit_mcdc_return_expr;
+use crate::mvl::backends::rust::emit_types::{
+    emit_label, emit_ref_expr_for_assert, emit_type_expr,
+};
+use crate::mvl::backends::rust::emitter::RustEmitter;
+use crate::mvl::backends::rust::last_use::compute_last_uses;
 use crate::mvl::parser::ast::{
     Block, Capability, Constraint, Expr, FnDecl, GenericParam, Param, Stmt, Totality, TypeExpr,
 };
 use crate::mvl::passes::coverage::BranchKind;
-use crate::mvl::transpiler::emit_exprs::{emit_block_stmts, emit_expr};
-use crate::mvl::transpiler::emit_stmts::emit_mcdc_return_expr;
-use crate::mvl::transpiler::emit_types::{emit_label, emit_ref_expr_for_assert, emit_type_expr};
-use crate::mvl::transpiler::emitter::RustEmitter;
-use crate::mvl::transpiler::last_use::compute_last_uses;
 
 /// Emit a function-parameter type.
 ///

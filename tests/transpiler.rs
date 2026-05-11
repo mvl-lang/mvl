@@ -5,12 +5,12 @@
 //!   2. Transpile to Rust source string
 //!   3. Assert expected Rust snippets are present in the output
 
+use mvl::mvl::backends::rust::transpile;
 use mvl::mvl::parser::Parser;
-use mvl::mvl::transpiler::transpile;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-use mvl::mvl::transpiler::TranspileOutput;
+use mvl::mvl::backends::rust::TranspileOutput;
 
 fn transpile_src(src: &str) -> String {
     transpile_full(src).lib_rs
@@ -319,7 +319,7 @@ fn no_extern_uses_inline_preamble() {
 /// Cargo.toml includes mvl_runtime dependency when extern blocks are present.
 #[test]
 fn extern_rust_adds_mvl_runtime_to_cargo_toml() {
-    use mvl::mvl::transpiler::transpile;
+    use mvl::mvl::backends::rust::transpile;
     let src = r#"extern "rust" {
     fn greet(name: String) -> String;
 }"#;
@@ -337,8 +337,8 @@ fn extern_rust_adds_mvl_runtime_to_cargo_toml() {
 /// Full password_checker.mvl parses, checks, and transpiles cleanly.
 #[test]
 fn full_program_password_checker_transpiles() {
+    use mvl::mvl::backends::rust::transpile;
     use mvl::mvl::checker::check;
-    use mvl::mvl::transpiler::transpile;
     let src = include_str!("corpus/11_programs/password_checker.mvl");
     let (mut p, lex_errs) = mvl::mvl::parser::Parser::new(src);
     assert!(lex_errs.is_empty(), "lex errors: {lex_errs:?}");
@@ -1070,7 +1070,7 @@ fn corpus_bitwise_transpiles() {
 
 // ── Prelude emission (issue #229, Phase 4) ────────────────────────────────
 
-use mvl::mvl::transpiler::transpile_project;
+use mvl::mvl::backends::rust::transpile_project;
 
 fn parse_prog(src: &str) -> mvl::mvl::parser::ast::Program {
     let (mut p, lex_errs) = Parser::new(src);
@@ -1817,7 +1817,7 @@ fn type_args_in_fn_call_emit_turbofish() {
 
 // ── transpiler/mod.rs: uncovered entry points ─────────────────────────────────
 
-use mvl::mvl::transpiler::{
+use mvl::mvl::backends::rust::{
     has_main_fn, has_std_imports, transpile_covered, transpile_covered_source,
     transpile_covered_source_with_prelude, transpile_covered_with_prelude,
     transpile_mutated_source_with_prelude, transpile_mutated_with_prelude,

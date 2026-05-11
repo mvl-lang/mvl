@@ -8,7 +8,7 @@
 
 use inkwell::{types::BasicTypeEnum, values::BasicValueEnum, AddressSpace, IntPredicate};
 
-use crate::mvl::codegen::HeapKind;
+use crate::mvl::backends::llvm::HeapKind;
 use crate::mvl::parser::ast::TypeExpr;
 
 use crate::mvl::parser::ast::{

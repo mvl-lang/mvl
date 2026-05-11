@@ -196,12 +196,10 @@ fn find_cdylib(env_var: &str, lib_name: &str) -> Option<std::path::PathBuf> {
     None
 }
 
-/// Find the `libmvl_memory` shared library for the `lli --load` flag (ADR-0016).
-pub fn find_mvl_memory_lib() -> Option<std::path::PathBuf> {
-    find_cdylib("MVL_MEMORY_LIB", "libmvl_memory")
-}
-
 /// Find the `libmvl_runtime_c` shared library for the `lli --load` flag (ADR-0018).
+///
+/// Since `mvl_memory` is now merged into `mvl_runtime_c` (runtime/llvm), only this
+/// single library needs to be loaded by lli.
 pub fn find_mvl_runtime_c_lib() -> Option<std::path::PathBuf> {
     find_cdylib("MVL_RUNTIME_C_LIB", "libmvl_runtime_c")
 }
@@ -2780,5 +2778,27 @@ mod tests {
         std::env::remove_var(var);
         // Just must not panic; result is environment-dependent.
         let _ = find_cdylib(var, "libnonexistent_xyz");
+    }
+}
+
+// ── Backend trait implementation ─────────────────────────────────────────────
+
+/// Unit struct implementing the [`Backend`] trait for the LLVM backend.
+pub struct LlvmBackendImpl;
+
+impl crate::mvl::backends::Backend for LlvmBackendImpl {
+    fn name(&self) -> &'static str {
+        "llvm"
+    }
+
+    fn file_extension(&self) -> &'static str {
+        "ll"
+    }
+
+    fn emit_program(&self, prog: &crate::mvl::parser::ast::Program, module_name: &str) -> String {
+        let compiler = LlvmCompiler::new();
+        compiler
+            .compile_to_ir(prog, module_name)
+            .unwrap_or_default()
     }
 }
