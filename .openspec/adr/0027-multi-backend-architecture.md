@@ -1,8 +1,10 @@
 # ADR-0027: Multi-Backend Architecture
 
-**Status:** Accepted  
-**Date:** 2026-05-11  
+**Status:** Accepted
+**Date:** 2026-05-11
 **Issue:** #646 (first step of epic #615)
+
+---
 
 ## Context
 
