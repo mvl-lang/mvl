@@ -1,0 +1,117 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// tests/spikes/001-parser/02_tokenize_files.mvl
+//
+// Spike 001 — Experiment 02: Count tokens in MVL source files
+//
+// Context: issue #187 — MVL frontend in MVL (self-hosted compiler)
+// Goal: demonstrate reading a directory of .mvl files, sanitizing file
+//       contents, and counting whitespace-separated tokens in MVL itself.
+//       Building on experiment 01's IFC/FileRead pattern.
+//
+// Token counting: splits each source file on newlines, then on spaces,
+// and counts non-empty parts.  This is a word-count proxy for now —
+// experiment 03 will implement a proper lexer with keyword/ident/punct
+// classification (the real MVL token categories).
+//
+// IFC learning (building on experiment 01):
+//   - read_dir returns List[DirEntry]; entry paths are Public (not Tainted)
+//   - read_to_string returns Tainted[String]; file content is untrusted
+//   - sanitize() converts Tainted → Clean[String] for safe string processing
+//   - UFCS method calls on Clean[String] propagate the label transparently
+//   - Int results (token counts) are Public — safe to accumulate and print
+//
+// Note: read_dir is flat (no recursion).  Point --dir at a leaf directory
+//       that contains .mvl files directly, e.g.:
+//         examples/log_analyzer    (5 .mvl files, familiar from experiment 01)
+//         tests/corpus/01_basics   (corpus basics, ~10 files)
+//
+// Default: examples/log_analyzer
+//
+// Usage (from repo root):
+//   mvl run tests/spikes/001-parser/02_tokenize_files.mvl
+//   mvl run tests/spikes/001-parser/02_tokenize_files.mvl -- --dir tests/corpus/01_basics
+//   make -C tests/spikes/001-parser tokenize
+
+use std.io.{path, join, read_dir, read_to_string, to_string, Path}
+use std.args.{get_arg}
+
+// Count whitespace-separated tokens in one source file.
+//
+// IFC flow:
+//   raw: Tainted[String]  →  sanitize → src: Clean[String]
+//   src.split("\n") propagates the Clean label in the type checker, but
+//   the transpiler strips labels via .into() in the UFCS trampoline, so the
+//   fold result is Option<Int> in the generated Rust (not Clean<Option<Int>>).
+//   Matching directly (no annotated let) avoids the checker/transpiler mismatch.
+//
+// The double split on "\n" then " " is an approximation.
+// A proper lexer (experiment 03) will classify tokens as:
+//   COMMENT, STRING, FLOAT, INT, IDENT/KEYWORD, PUNCT.
+// Convert a Tainted CLI directory argument to a Path.
+//
+// Transpiler workaround: `emit_match_arm` in expression-mode matches uses
+// emit_block_stmts (not emit_block_as_value), so a multi-statement MatchBody::Block
+// always gets a spurious `;` on the tail expression, making the arm return `()`.
+// Moving the let-binding + join into a helper function avoids the issue: function
+// bodies use a separate emitter that correctly handles tail expressions.
+//
+// The let-binding is required because emit_expr_as_fn_arg only adds `.into()`
+// (Clean<String>→String) for identifier arguments, not for inline call results.
+fn dir_from_arg(v: Tainted[String]) -> Path {
+    let clean_dir: Clean[String] = sanitize(v);
+    join(path("."), clean_dir)
+}
+
+fn count_tokens(raw: Tainted[String]) -> Int {
+    let src: Clean[String] = sanitize(raw);
+    // Match directly on the fold result — no annotated let binding needed.
+    // Type checker: scrutinee is Clean<Option<Int>>; Some(n) strips the label
+    // via scrutinee_ty.unlabeled() = Option<Int> → n: Int (Public).
+    // Transpiler: fold on Vec<String> returns Option<i64> (label stripped by
+    // .into() in UFCS); match on Option<i64> works directly.
+    match src.split("\n").fold(Some(0), |acc: Option[Int], line: String|
+        match acc {
+            None    => None,
+            Some(k) => Some(k + line.split(" ").fold(0, |m: Int, w: String|
+                match w { "" => m, _ => m + 1 }
+            ))
+        }
+    ) {
+        None    => 0,
+        Some(n) => n,
+    }
+}
+
+fn main() -> Unit ! FileRead, Console {
+    // Resolve target directory: --dir arg (Tainted from CLI) or default.
+    // dir_from_arg handles sanitize → join; see its comment for the transpiler workaround.
+    let dir_path: Path = match get_arg("dir") {
+        None    => path("examples/log_analyzer"),
+        Some(v) => dir_from_arg(v),
+    };
+
+    match read_dir(dir_path) {
+        Err(e) => println("error reading directory: {}", e),
+        Ok(entries) => {
+            let mut file_count: Int = 0;
+            let mut token_count: Int = 0;
+            for entry in entries {
+                // to_string(entry.path): Path → String (Public, label-free)
+                let name: String = to_string(entry.path);
+                if entry.is_file && name.ends_with(".mvl") {
+                    file_count = file_count + 1;
+                    match read_to_string(entry.path) {
+                        Err(_)  => (),
+                        Ok(raw) => {
+                            token_count = token_count + count_tokens(raw)
+                        }
+                    }
+                }
+            }
+            println("files:  {}", file_count);
+            println("tokens: {}", token_count)
+        }
+    }
+}
