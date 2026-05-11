@@ -749,6 +749,20 @@ impl Parser {
                 let span = self.span_from(start);
                 Ok(RefExpr::Len { ident, span })
             }
+            // old(expr) — entry-time value in ensures predicates (Phase 4, #627)
+            TokenKind::Ident(ref s) if s == "old" => {
+                self.advance();
+                let lp = self.expect(&TokenKind::LParen);
+                self.require(lp)?;
+                let inner = self.parse_ref_expr()?;
+                let rp = self.expect(&TokenKind::RParen);
+                self.require(rp)?;
+                let span = self.span_from(start);
+                Ok(RefExpr::Old {
+                    inner: Box::new(inner),
+                    span,
+                })
+            }
             TokenKind::Ident(name) => {
                 self.advance();
                 let span = self.span_from(start);

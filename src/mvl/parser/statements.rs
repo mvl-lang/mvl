@@ -69,6 +69,7 @@ impl Parser {
         }
         match self.peek_kind() {
             TokenKind::Let => self.parse_let_stmt(),
+            TokenKind::Ghost => self.parse_ghost_let_stmt(),
             TokenKind::Return => self.parse_return_stmt(),
             TokenKind::If => self.parse_if_stmt(),
             TokenKind::Match => self.parse_match_stmt(),
@@ -101,6 +102,42 @@ impl Parser {
         let span = self.span_from(start);
         Ok(Stmt::Let {
             mutable,
+            ghost: false,
+            pattern,
+            ty,
+            init,
+            span,
+        })
+    }
+
+    // ── Ghost let statement ────────────────────────────────────────────────
+
+    /// Parse `ghost let name: T = expr;` — a specification-only binding (Phase 4, #627).
+    /// Ghost bindings are type-checked normally but erased before transpilation/codegen.
+    fn parse_ghost_let_stmt(&mut self) -> Result<Stmt, ()> {
+        let start = self.peek_span();
+        self.advance(); // consume `ghost`
+
+        let let_kw = self.expect(&TokenKind::Let);
+        self.require(let_kw)?;
+
+        let pattern = self.parse_pattern()?;
+
+        let colon = self.expect(&TokenKind::Colon);
+        self.require(colon)?;
+        let ty = self.parse_type_expr()?;
+
+        let eq = self.expect(&TokenKind::Eq);
+        self.require(eq)?;
+        let init = self.parse_expr()?;
+
+        let semi = self.expect(&TokenKind::Semicolon);
+        self.require(semi)?;
+
+        let span = self.span_from(start);
+        Ok(Stmt::Let {
+            mutable: false,
+            ghost: true,
             pattern,
             ty,
             init,

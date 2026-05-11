@@ -415,6 +415,11 @@ pub enum RefExpr {
         inner: Box<RefExpr>,
         span: Span,
     },
+    /// `old(expr)` — refers to the entry-time value of `expr` inside `ensures` (Phase 4, #627).
+    Old {
+        inner: Box<RefExpr>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -637,6 +642,9 @@ pub enum BinaryOp {
 pub enum Stmt {
     Let {
         mutable: bool,
+        /// `true` when the binding is declared `ghost let` (Phase 4, #627).
+        /// Ghost bindings are type-checked normally but erased before backends.
+        ghost: bool,
         pattern: Pattern,
         ty: TypeExpr,
         init: Expr,

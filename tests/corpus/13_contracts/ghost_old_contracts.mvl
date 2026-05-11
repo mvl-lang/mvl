@@ -1,0 +1,109 @@
+// Ghost bindings and old() expressions in function contracts (Phase 4, #627).
+
+// ── Ghost let bindings ────────────────────────────────────────────────────────
+
+// Basic ghost binding — erased before transpilation; no runtime cost.
+fn abs_value(n: Int) -> Int
+  ensures result >= 0
+{
+    ghost let spec_n: Int = n;
+    if n >= 0 { n } else { 0 - n }
+}
+
+// Ghost binding used to document a pre-computation for the reader.
+fn clamp(lo: Int, hi: Int, v: Int) -> Int
+  requires lo <= hi
+  ensures result >= lo
+{
+    ghost let in_range: Int = v;
+    if v < lo { lo } else { v }
+}
+
+// Ghost binding alongside a normal let.
+fn double(n: Int) -> Int
+  ensures result >= n
+{
+    ghost let original: Int = n;
+    let result_val: Int = n + n;
+    result_val
+}
+
+// ── old() in ensures predicates ───────────────────────────────────────────────
+
+// ensures result >= old(n): value only grows.
+fn inc(n: Int) -> Int
+  ensures result >= old(n)
+{
+    n + 1
+}
+
+// ensures result == old(n): identity function.
+fn id_int(n: Int) -> Int
+  ensures result == old(n)
+{
+    n
+}
+
+// Combines ghost binding with old() expression.
+fn guarded_inc(n: Int where self >= 0) -> Int
+  ensures result >= old(n)
+{
+    ghost let pre: Int = n;
+    n + 1
+}
+
+// ── Runtime-checked contracts (cross-backend) ─────────────────────────────────
+
+// requires with two parameters — deferred to runtime by the checker.
+fn safe_div(a: Int, b: Int) -> Int
+  requires b != 0
+{
+    a
+}
+
+// ensures with arithmetic — Layer 4 proves statically or defers to runtime.
+fn add_positive(a: Int where self > 0, b: Int where self > 0) -> Int
+  ensures result > 0
+{
+    a + b
+}
+
+// Multi-param requires — runtime check when args are not literals.
+fn range_clamp(lo: Int, hi: Int) -> Int
+  requires lo <= hi
+{
+    lo
+}
+
+// ── Contracts in partial functions ────────────────────────────────────────────
+
+fn sum_to(n: Int where self >= 0) -> Int
+  ensures result >= 0
+{
+    n
+}
+
+// ── Multiple requires and ensures ────────────────────────────────────────────
+
+fn bounded(x: Int, lo: Int, hi: Int) -> Int
+  requires lo <= hi
+  requires x >= lo
+  ensures result >= lo
+{
+    if x > hi { hi } else { x }
+}
+
+fn main() -> Unit ! Console {
+    let _: Int = abs_value(0 - 5);
+    let _: Int = abs_value(3);
+    let _: Int = clamp(0, 10, 5);
+    let _: Int = double(3);
+    let _: Int = inc(41);
+    let _: Int = id_int(7);
+    let _: Int = guarded_inc(0);
+    let _: Int = safe_div(10, 2);
+    let _: Int = add_positive(3, 4);
+    let _: Int = range_clamp(1, 5);
+    let _: Int = sum_to(10);
+    let _: Int = bounded(5, 0, 10);
+}

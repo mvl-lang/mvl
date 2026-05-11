@@ -1024,6 +1024,7 @@ fn display_pred(pred: &RefExpr) -> String {
         }
         RefExpr::Not { inner, .. } => format!("!{}", display_pred(inner)),
         RefExpr::Grouped { inner, .. } => format!("({})", display_pred(inner)),
+        RefExpr::Old { inner, .. } => format!("old({})", display_pred(inner)),
         RefExpr::Len { ident, .. } => format!("len({ident})"),
     }
 }

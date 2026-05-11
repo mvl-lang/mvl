@@ -104,6 +104,16 @@ pub fn emit_fn_decl(cg: &mut RustEmitter, fd: &FnDecl) {
     if let Some(id) = cg.alloc_branch(fd.span.line, BranchKind::FnEntry) {
         cg.emit_cov_hit(id);
     }
+    // Emit runtime precondition guards for `requires` clauses (Phase 4, #627).
+    // These catch contract violations at runtime when the static checker deferred
+    // to RuntimeCheck (e.g. when the predicate involves multiple parameters or
+    // complex arithmetic that the solver could not prove).
+    for req_pred in &fd.requires {
+        let pred_str = emit_ref_expr_for_assert(req_pred, "self");
+        cg.line(&format!(
+            "debug_assert!({pred_str}, \"requires: {pred_str}\");"
+        ));
+    }
     emit_fn_body(cg, fd);
     cg.pop_indent();
     cg.line("}");
@@ -129,15 +139,36 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
         emit_block_stmts(cg, head);
 
         // Last statement: if it's a bare Expr statement, emit without semicolon
-        // so it becomes the implicit return value
+        // so it becomes the implicit return value.
+        // Phase 4 (#627): when `ensures` clauses are present, wrap the tail value in a
+        // `let _result = …` binding so we can assert postconditions before returning.
         let last = &tail[0];
+        let is_unit =
+            matches!(fd.return_type.as_ref(), TypeExpr::Base { name, .. } if name == "Unit");
         use crate::mvl::parser::ast::Stmt;
+        let has_ensures = !fd.ensures.is_empty() && !is_unit;
         match last {
             Stmt::Expr { expr, .. } => {
                 if !emit_mcdc_return_expr(cg, expr, &fd.return_type, expr.span().line) {
-                    cg.indent();
-                    emit_expr_tail_with_return_type(cg, expr, &fd.return_type, &fd.params);
-                    cg.nl();
+                    if has_ensures {
+                        // Capture the return value so postcondition asserts can reference it.
+                        cg.indent();
+                        cg.push("let _result = ");
+                        emit_expr(cg, expr);
+                        cg.push(";");
+                        cg.nl();
+                        for ens_pred in &fd.ensures {
+                            let pred_str = emit_ref_expr_for_assert(ens_pred, "_result");
+                            cg.line(&format!(
+                                "debug_assert!({pred_str}, \"ensures: {pred_str}\");"
+                            ));
+                        }
+                        cg.line("_result");
+                    } else {
+                        cg.indent();
+                        emit_expr_tail_with_return_type(cg, expr, &fd.return_type, &fd.params);
+                        cg.nl();
+                    }
                 }
             }
             other => emit_block_stmts(cg, std::slice::from_ref(other)),

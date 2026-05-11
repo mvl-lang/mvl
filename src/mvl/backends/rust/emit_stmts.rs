@@ -30,6 +30,8 @@ use crate::mvl::passes::mcdc::analysis::{collect_clauses, count_clauses_ref};
 /// Emit a single statement (with indentation and trailing newline).
 pub fn emit_stmt(cg: &mut RustEmitter, stmt: &Stmt) {
     match stmt {
+        // Ghost bindings are specification-only — erased before codegen (Phase 4, #627).
+        Stmt::Let { ghost: true, .. } => {}
         Stmt::Let {
             mutable,
             pattern,

@@ -368,6 +368,7 @@ mod tests {
         // }
         let let_y_eq_x = Stmt::Let {
             mutable: false,
+            ghost: false,
             pattern: Pattern::Ident("y".into(), S),
             ty: int_ty(),
             init: Expr::Ident("x".into(), S),
@@ -385,6 +386,7 @@ mod tests {
         };
         let outer_let = Stmt::Let {
             mutable: false,
+            ghost: false,
             pattern: Pattern::Ident("g".into(), S),
             ty: int_ty(),
             init: lambda,
@@ -412,6 +414,7 @@ mod tests {
         // }
         let let_y_eq_x = Stmt::Let {
             mutable: false,
+            ghost: false,
             pattern: Pattern::Ident("y".into(), S),
             ty: int_ty(),
             init: Expr::Ident("x".into(), S),
@@ -429,6 +432,7 @@ mod tests {
         };
         let outer_let = Stmt::Let {
             mutable: false,
+            ghost: false,
             pattern: Pattern::Ident("g".into(), S),
             ty: int_ty(),
             init: lambda,

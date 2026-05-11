@@ -5705,3 +5705,147 @@ fn requires_caller_param_refinement_proves_precondition() {
         errors
     );
 }
+
+// ── Phase 4: ghost let bindings (#627) ───────────────────────────────────────
+
+#[test]
+fn ghost_let_parses_and_checks_cleanly() {
+    // GIVEN: a function with `ghost let x: T = expr;`
+    // THEN: no type errors — ghost bindings are type-checked normally
+    let src = r#"
+        fn abs_value(n: Int) -> Int
+          ensures result >= 0
+        {
+            ghost let spec_n: Int = n;
+            if n >= 0 { n } else { 0 - n }
+        }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "ghost let should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn ghost_let_multiple_in_body_checks_cleanly() {
+    // GIVEN: a function body with two ghost bindings
+    // THEN: no type errors
+    let src = r#"
+        fn example(x: Int) -> Int {
+            ghost let a: Int = x;
+            ghost let b: Int = a;
+            x
+        }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "multiple ghost lets should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn ghost_corpus_parses_and_checks() {
+    // GIVEN: the ghost_old_contracts corpus (all ghost/old contract programs)
+    // THEN: no type errors
+    let src = include_str!("corpus/13_contracts/ghost_old_contracts.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "ghost_old_contracts corpus should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+// ── Phase 4: old() in ensures predicates (#627) ───────────────────────────────
+
+#[test]
+fn old_in_ensures_parses_cleanly() {
+    // GIVEN: `ensures result >= old(n)` in function signature
+    // THEN: parses without errors
+    let src = r#"
+        fn inc(n: Int) -> Int
+          ensures result >= old(n)
+        {
+            n + 1
+        }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "old() in ensures should parse cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn old_ensures_identity_checks_cleanly() {
+    // GIVEN: `ensures result == old(n)` for an identity function
+    // THEN: static checker (Layer 4) proves it or defers to RuntimeCheck — no error
+    let src = r#"
+        fn id_val(n: Int) -> Int
+          ensures result == old(n)
+        {
+            n
+        }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "ensures result == old(n) for identity should check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn old_in_ensures_does_not_produce_false_violation() {
+    // GIVEN: increment function with `ensures result >= old(n)`
+    // THEN: no PostconditionViolated error — solver defers to RuntimeCheck
+    let src = r#"
+        fn inc(n: Int) -> Int
+          ensures result >= old(n)
+        {
+            n + 1
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::PostconditionViolated { .. })),
+        "old() in ensures should not produce false PostconditionViolated, got: {:?}",
+        errors
+    );
+}
+
+// ── Phase 4: counterexample field in errors (#627) ───────────────────────────
+
+#[test]
+fn precondition_violated_counterexample_field_is_none() {
+    // GIVEN: a precondition is statically violated
+    // THEN: the error has counterexample: None (Phase 4 wires this up in future)
+    let src = r#"
+        fn divide(a: Int, b: Int) -> Int
+          requires b != 0
+        { a }
+        fn caller() -> Int { divide(10, 0) }
+    "#;
+    let errors = errors_for(src);
+    let error = errors
+        .iter()
+        .find(|e| matches!(e, CheckError::PreconditionViolated { .. }));
+    assert!(
+        error.is_some(),
+        "expected PreconditionViolated, got: {:?}",
+        errors
+    );
+    if let Some(CheckError::PreconditionViolated { counterexample, .. }) = error {
+        assert!(
+            counterexample.is_none(),
+            "counterexample should be None in Phase 4 (no Z3 extraction yet)"
+        );
+    }
+}

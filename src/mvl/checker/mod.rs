@@ -808,6 +808,7 @@ mod tests {
                     stmts: vec![
                         Stmt::Let {
                             mutable: true,
+                            ghost: false,
                             pattern: Pattern::Ident("x".into(), dummy_span),
                             ty: int_ty,
                             init: Expr::Literal(Literal::Integer(1), dummy_span),
@@ -815,6 +816,7 @@ mod tests {
                         },
                         Stmt::Let {
                             mutable: false,
+                            ghost: false,
                             pattern: Pattern::Ident("g".into(), dummy_span),
                             ty: fn_int_int_ty,
                             init: lambda,
@@ -906,6 +908,7 @@ mod tests {
                     stmts: vec![
                         Stmt::Let {
                             mutable: false, // immutable
+                            ghost: false,
                             pattern: Pattern::Ident("x".into(), dummy_span),
                             ty: int_ty,
                             init: Expr::Literal(Literal::Integer(1), dummy_span),
@@ -913,6 +916,7 @@ mod tests {
                         },
                         Stmt::Let {
                             mutable: false,
+                            ghost: false,
                             pattern: Pattern::Ident("g".into(), dummy_span),
                             ty: fn_int_int_ty,
                             init: lambda,

@@ -1,7 +1,6 @@
-// corpus:skip-transpiler
-// Basic function contracts — requires and ensures (Issue #621, Phase 1).
+// Basic function contracts — requires and ensures (Issue #621, Phase 1–4).
 //
-// These programs are parse-and-check only (transpiler support for contracts is Phase 2).
+// Cross-backend transpiler support added in Phase 4 (#627).
 
 fn divide(a: Int, b: Int) -> Int
   requires b != 0
