@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Rust-specific MC/DC emission helpers.
 //!
 //! Generates the `__mvl_mcdc` runtime module and report test embedded in the

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! C-ABI exports for `std.log` stdlib functions.
 //!
 //! Mirrors `mvl_runtime::stdlib::log`. Each function takes a `MvlString*` message

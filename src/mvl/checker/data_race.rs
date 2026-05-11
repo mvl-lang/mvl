@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Data race freedom checker for Req 9 (partial — Phase 3).
 //!
 //! **Spec:** `docs/specs/008-data-race-freedom.md`

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Layered refinement solver for MVL `where` predicates.
 //!
 //! Each layer handles an increasingly complex subset of proofs,

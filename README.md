@@ -173,4 +173,4 @@ Full research, EBNF grammar, code examples, language scorecard, OWASP mapping, a
 
 ## License
 
-MIT
+Apache-2.0

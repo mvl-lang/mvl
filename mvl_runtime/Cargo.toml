@@ -3,7 +3,7 @@ name = "mvl_runtime"
 version = "0.1.0"
 edition = "2021"
 description = "MVL runtime — newtypes, prelude, and effect markers for generated Rust code"
-license = "MIT"
+license = "Apache-2.0"
 
 [dependencies]
 sha2 = "0.10"

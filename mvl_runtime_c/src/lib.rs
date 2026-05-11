@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 // All public `extern "C"` functions accept raw pointer parameters from C/LLVM
 // callers.  The unsafety is documented per-function via the Safety contract in
 // their doc comments.  Clippy's `not_unsafe_ptr_arg_deref` is suppressed

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Refinement type checker — symbolic proof for `where` predicates.
 //!
 //! Implements Requirement 10 of the MVL spec (001-type-system/Req 5).

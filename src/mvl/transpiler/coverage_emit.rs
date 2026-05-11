@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Rust-specific coverage emission helpers.
 //!
 //! Generates the `__mvl_cov` runtime module and report test that are embedded

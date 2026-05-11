@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Stdlib embedding, extraction, and path resolution.
 //!
 //! All `.mvl` stdlib source files are embedded in the binary at compile time

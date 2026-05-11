@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Minimum Version Selection (MVS) algorithm.
 //!
 //! Go's MVS selects the *minimum* version of each dependency that satisfies

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! C-ABI exports for `std.regex` stdlib functions — LLVM backend path (#420/#439).
 //!
 //! Mirrors `mvl_runtime::stdlib::regex`. Every public function has a

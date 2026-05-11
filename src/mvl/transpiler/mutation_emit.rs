@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Rust-specific mutation emission helpers.
 //!
 //! The mutation pass (`passes/mutation/transform.rs`) is already

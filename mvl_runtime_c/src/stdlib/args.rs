@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! C-ABI exports for `std.args` stdlib functions.
 //!
 //! Mirrors `mvl_runtime::stdlib::args`. Provides typed argument and

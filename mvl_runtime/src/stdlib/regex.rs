@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Rust implementations of `std.regex` stdlib functions.
 //!
 //! Backed by the `regex` crate. All functions are pure — no I/O or side effects.

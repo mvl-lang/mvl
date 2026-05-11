@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Layer 2 — interval arithmetic for refinement predicates.
 //!
 //! Handles cases where Layer 1 cannot decide by extracting integer intervals

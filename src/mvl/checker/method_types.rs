@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Method return-type lookup tables for built-in types.
 //!
 //! Each function takes a method name (and optionally argument types) and returns

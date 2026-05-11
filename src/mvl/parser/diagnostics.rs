@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Diagnostic rendering for parser errors (Requirement 8).
 //!
 //! Formats [`ParseError`] values into human-readable messages with:

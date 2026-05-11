@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Statement and control-flow emission for the MVL LLVM backend.
 //!
 //! Covers: `let`, assignment, `if`/`else`, `while`, `for`, `match`, `return`,

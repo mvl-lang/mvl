@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Layer 5: Z3 SMT solver — complete integer arithmetic.
 //!
 //! When Layers 1–4 cannot statically prove or disprove a refinement predicate,

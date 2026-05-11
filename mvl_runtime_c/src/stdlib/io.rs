@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! C-ABI exports for `std.io` stdlib functions — LLVM backend path (#435).
 //!
 //! Each function operates directly on the filesystem via `std::fs` (bypassing

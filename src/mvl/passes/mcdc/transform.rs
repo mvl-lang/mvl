@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! MC/DC instrumentation: runtime types, coupling analysis, and generated code.
 //!
 //! When `mvl mcdc` is active the transpiler injects per-clause evaluation

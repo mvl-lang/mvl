@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! L5-14: Heap allocation helpers for the MVL LLVM backend.
 //!
 //! Provides lazy-declaration helpers for every `mvl_memory` runtime function

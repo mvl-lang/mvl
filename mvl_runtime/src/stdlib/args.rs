@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Rust implementations of `std.args` stdlib functions.
 //!
 //! Provides real CLI argument and environment access for the stubs declared

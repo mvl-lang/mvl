@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Rust implementations of `std.io` stdlib functions.
 //!
 //! Provides real file I/O backing for the stubs declared in `std/io.mvl`.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Rust kernel primitives for the MVL standard library.
 //!
 //! These are the `extern "rust"` trust-boundary functions declared in

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Declaration registration and checking for the MVL type checker.
 //!
 //! Pass 1: `collect_declarations` populates the type/function tables.

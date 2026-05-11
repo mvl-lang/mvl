@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Rust implementations of MVL standard library functions.
 //!
 //! These are the real Rust-backed implementations for the stubs declared in

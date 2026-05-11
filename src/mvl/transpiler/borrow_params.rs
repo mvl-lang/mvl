@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Borrow-parameter analysis (Phase B, Spec 009 Req 2).
 //!
 //! For each function declaration, determines which parameters are passed by

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Package fetching: clone from git, cache in XDG, compute source hash.
 //!
 //! Implements Spec 008 Requirements 3 (cache) and 7 (build fetches deps).

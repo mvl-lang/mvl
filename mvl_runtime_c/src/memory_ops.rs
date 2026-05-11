@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Heap-collection operations for the MVL LLVM backend.
 //!
 //! This module provides the `extern "C"` operation functions for `MvlString`,

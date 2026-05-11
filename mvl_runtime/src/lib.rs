@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! `mvl_runtime` — the thin Rust crate that every MVL-generated file depends on.
 //!
 //! # Design constraints

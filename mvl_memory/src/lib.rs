@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! MVL memory runtime — heap allocation and reference counting for collection types.
 //!
 //! Compiled as a `cdylib` and loaded by `lli` at runtime via `--load=libmvl_memory.{dylib,so}`.
