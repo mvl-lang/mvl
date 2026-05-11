@@ -4,6 +4,21 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.93.0] — 2026-05-11
+
+### Added
+
+- **Function contracts Phase 4: cross-backend runtime assertion emission** — Rust and LLVM backends now emit `debug_assert!` for `requires` clauses at function entry and `ensures` clauses at return points, catching RuntimeCheck violations at runtime. Closes #627.
+- **Ghost bindings (`ghost let`)** — Specification-only declarations that are type-checked at compile time but erased before transpilation/codegen. Complement explicit refinements with informal documentation.
+- **Entry-time value capture in postconditions (`old(e)`)** — New `RefExpr::Old` syntax in `ensures` predicates captures parameter values at function entry (currently uses conservative current-value emission; full register allocation deferred to future phase).
+- **LetKind enum for unrepresentable invalid states** — Replaced `mutable: bool, ghost: bool` pair on `Stmt::Let` with `kind: LetKind { Regular { mutable }, Ghost }`, making the invalid state `ghost + mutable` unrepresentable at the type level (#651).
+
+### Fixed
+
+- **LLVM backend ghost erasure** — Added missing `Stmt::Let { kind: LetKind::Ghost, .. }` guard to prevent ghost bindings from being emitted as real LLVM locals.
+- **Labeled return types with ensures clauses** — `emit_expr_tail_with_return_type` now called in `has_ensures` branch to preserve security-label wrapping for functions with postconditions.
+- **Format string injection risk in debug_assert messages** — Predicate strings in `debug_assert!` messages now escape `{` and `}` to prevent malformed Rust format strings if future predicate forms emit braces.
+
 ## [0.92.1] — 2026-05-11
 
 ### Fixed
