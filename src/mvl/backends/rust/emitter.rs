@@ -64,6 +64,9 @@ pub struct RustEmitter {
     /// `todo!`) instead of real extern declarations.  Used when compiling source
     /// files into the test crate so the crate can link without the external dep.
     pub test_extern_stubs: bool,
+    /// Tracks stub function names already emitted in test mode, preventing duplicate
+    /// stub definitions when multiple prelude programs declare the same extern fn.
+    emitted_extern_stub_fns: std::collections::HashSet<String>,
     /// Spans of last uses for the current function body (Phase A, Spec 009 Req 2).
     ///
     /// Populated by [`last_use::compute_last_uses`] before each function body is
@@ -408,6 +411,10 @@ impl RustEmitter {
                 }
             })
             .collect();
+        // Deduplicate by name: when multiple prelude programs define the same function
+        // (e.g. bwt.mvl and huffman.mvl both define `zero_int`), keep only the first.
+        let mut seen_prelude_fns: std::collections::HashSet<&str> =
+            std::collections::HashSet::new();
         let prelude_fns: Vec<&FnDecl> = prelude_progs
             .iter()
             .flat_map(|p| p.declarations.iter())
@@ -417,13 +424,17 @@ impl RustEmitter {
             .filter(|fd| !MACRO_HANDLED.contains(&fd.name.as_str()))
             .filter(|fd| !fd.is_test)
             .filter(|fd| !user_fn_names.contains(fd.name.as_str()))
+            .filter(|fd| seen_prelude_fns.insert(fd.name.as_str()))
             .collect();
-        // Pure-MVL stdlib modules (no extern "rust") may define types (e.g. json.mvl's Value).
-        // Emit those type declarations before the functions that use them.
-        // Rust-backed modules (io, env, …) are excluded: their types come from mvl_runtime.
+        // Emit type declarations from prelude programs before the functions that use them.
+        // Deduplicate by name (keep first) so that multiple prelude modules defining the
+        // same type (e.g. a shared helper struct) don't produce duplicate definitions.
+        // Note: rust-backed stdlib modules (io, env, …) are never in the prelude — they
+        // are skipped by load_mvl_native_stdlib_extras — so no conflict with mvl_runtime.
+        let mut seen_prelude_types: std::collections::HashSet<&str> =
+            std::collections::HashSet::new();
         let prelude_types: Vec<&TypeDecl> = prelude_progs
             .iter()
-            .filter(|p| !p.declarations.iter().any(|d| matches!(d, Decl::Extern(_))))
             .flat_map(|p| p.declarations.iter())
             .filter_map(|d| {
                 if let Decl::Type(td) = d {
@@ -433,6 +444,7 @@ impl RustEmitter {
                 }
             })
             .filter(|td| !user_type_names.contains(td.name.as_str()))
+            .filter(|td| seen_prelude_types.insert(td.name.as_str()))
             .collect();
 
         // Phase B: build the borrow-params map from all known functions so that
@@ -590,6 +602,10 @@ fn emit_extern_decl(cg: &mut RustEmitter, ed: &ExternDecl) {
             ed.abi
         ));
         for f in &ed.fns {
+            // Skip stubs already emitted from an earlier prelude extern block.
+            if !cg.emitted_extern_stub_fns.insert(f.name.clone()) {
+                continue;
+            }
             let params_str: Vec<String> = f
                 .params
                 .iter()
@@ -606,16 +622,22 @@ fn emit_extern_decl(cg: &mut RustEmitter, ed: &ExternDecl) {
         return;
     }
 
-    // Register extern function names so calls are wrapped in unsafe
-    for f in &ed.fns {
-        cg.extern_fns.insert(f.name.clone());
+    // Register extern function names so calls are wrapped in unsafe.
+    // Skip functions already declared from an earlier prelude extern block.
+    let new_fns: Vec<_> = ed
+        .fns
+        .iter()
+        .filter(|f| cg.extern_fns.insert(f.name.clone()))
+        .collect();
+    if new_fns.is_empty() {
+        return;
     }
 
     cg.line(&format!(
         "// ── extern \"{}\" trust boundary ({} fn{}) ──────────────────────────────────",
         ed.abi,
-        ed.fns.len(),
-        if ed.fns.len() == 1 { "" } else { "s" }
+        new_fns.len(),
+        if new_fns.len() == 1 { "" } else { "s" }
     ));
     // Unknown ABIs are rejected by the checker; skip codegen for them.
     let rust_abi = match ed.abi.as_str() {
@@ -630,7 +652,7 @@ fn emit_extern_decl(cg: &mut RustEmitter, ed: &ExternDecl) {
     };
     cg.line(&format!("extern \"{rust_abi}\" {{"));
     cg.push_indent();
-    for f in &ed.fns {
+    for f in &new_fns {
         // Emit effects as a doc comment (not enforced by Rust's type system yet)
         if !f.effects.is_empty() {
             cg.line(&format!(
