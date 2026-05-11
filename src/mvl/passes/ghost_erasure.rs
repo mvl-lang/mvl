@@ -9,7 +9,7 @@
 //! # Erasure strategy
 //!
 //! Ghost erasure is implemented at the backend level: each backend simply skips
-//! `Stmt::Let { ghost: true, .. }` nodes when emitting statements.  This is
+//! `Stmt::Let { kind: LetKind::Ghost, .. }` nodes when emitting statements.  This is
 //! simpler than a full AST transformation pass and produces the same result
 //! because ghost lets have no runtime effect.
 //!
@@ -22,19 +22,21 @@
 //! # This module
 //!
 //! This module serves as the canonical documentation point for the ghost erasure
-//! strategy.  Backends import from `crate::mvl::parser::ast::Stmt` directly and
-//! check the `ghost` field.
+//! strategy.  Backends import from `crate::mvl::parser::ast::{LetKind, Stmt}` directly
+//! and pattern-match on `LetKind::Ghost`.
 
-/// Returns `true` when a `Stmt::Let` with `ghost: true` should be erased
-/// (i.e. not emitted by backends).
+use crate::mvl::parser::ast::LetKind;
+
+/// Returns `true` when a `Stmt::Let` should be erased (i.e. not emitted by backends).
 ///
-/// Ghost lets are always immutable by construction (enforced by the parser).
+/// Ghost lets are always `LetKind::Ghost` by construction — the invalid state
+/// `ghost + mutable` is unrepresentable in [`LetKind`] (#651).
 ///
 /// Usage in backends:
 /// ```ignore
-/// if is_ghost_let(ghost) { return; }
+/// if is_ghost_let(kind) { return; }
 /// ```
 #[allow(dead_code)]
-pub fn is_ghost_let(ghost: bool) -> bool {
-    ghost
+pub fn is_ghost_let(kind: &LetKind) -> bool {
+    matches!(kind, LetKind::Ghost)
 }

@@ -9,7 +9,7 @@ use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
 use crate::mvl::parser::ast::{
-    Block, ElseBranch, Expr, LValue, Pattern, SecurityLabel, Stmt, Totality,
+    Block, ElseBranch, Expr, LValue, LetKind, Pattern, SecurityLabel, Stmt, Totality,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -266,7 +266,7 @@ impl TypeChecker {
     pub(super) fn check_stmt(&mut self, stmt: &Stmt, return_ty: Option<&Ty>) {
         match stmt {
             Stmt::Let {
-                mutable,
+                kind,
                 pattern,
                 ty,
                 init,
@@ -291,7 +291,11 @@ impl TypeChecker {
                         span: init.span(),
                     });
                 }
-                self.bind_pattern(pattern, &ann_ty, *mutable);
+                self.bind_pattern(
+                    pattern,
+                    &ann_ty,
+                    matches!(kind, LetKind::Regular { mutable: true }),
+                );
                 // Phase D (#362): record which variable the new binding borrows so that
                 // `pop_scope()` can release the borrow when the binding goes out of scope.
                 // Also update the referent's borrow_state here (not in Expr::Borrow) so

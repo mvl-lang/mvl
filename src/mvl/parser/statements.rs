@@ -101,8 +101,7 @@ impl Parser {
 
         let span = self.span_from(start);
         Ok(Stmt::Let {
-            mutable,
-            ghost: false,
+            kind: crate::mvl::parser::ast::LetKind::Regular { mutable },
             pattern,
             ty,
             init,
@@ -136,8 +135,7 @@ impl Parser {
 
         let span = self.span_from(start);
         Ok(Stmt::Let {
-            mutable: false,
-            ghost: true,
+            kind: crate::mvl::parser::ast::LetKind::Ghost,
             pattern,
             ty,
             init,
@@ -569,7 +567,7 @@ mod tests {
             matches!(
                 &s,
                 Stmt::Let {
-                    mutable: false,
+                    kind: LetKind::Regular { mutable: false },
                     pattern: Pattern::Ident(name, _),
                     ty: TypeExpr::Base { name: ty_name, .. },
                     init: Expr::Literal(Literal::Integer(42), _),
@@ -589,7 +587,13 @@ mod tests {
         // THEN: LetStmt with mutable=true
         let s = one_stmt("{ let mut count: Int = 0; }");
         assert!(
-            matches!(&s, Stmt::Let { mutable: true, .. }),
+            matches!(
+                &s,
+                Stmt::Let {
+                    kind: LetKind::Regular { mutable: true },
+                    ..
+                }
+            ),
             "expected mutable let, got: {:?}",
             s
         );

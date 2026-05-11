@@ -638,13 +638,21 @@ pub enum BinaryOp {
 
 // ── Statements ─────────────────────────────────────────────────────────────
 
+/// Binding kind for `let` statements — makes the invalid state `ghost + mutable`
+/// unrepresentable at the type level (#651).
+#[derive(Debug, Clone, PartialEq)]
+pub enum LetKind {
+    /// Ordinary `let` or `let mut` binding emitted at runtime.
+    Regular { mutable: bool },
+    /// `ghost let` — specification-only binding, erased before transpilation/codegen (Phase 4, #627).
+    /// Ghost bindings are type-checked normally but never appear in emitted code.
+    Ghost,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Let {
-        mutable: bool,
-        /// `true` when the binding is declared `ghost let` (Phase 4, #627).
-        /// Ghost bindings are type-checked normally but erased before backends.
-        ghost: bool,
+        kind: LetKind,
         pattern: Pattern,
         ty: TypeExpr,
         init: Expr,
