@@ -110,9 +110,8 @@ pub fn emit_fn_decl(cg: &mut RustEmitter, fd: &FnDecl) {
     // complex arithmetic that the solver could not prove).
     for req_pred in &fd.requires {
         let pred_str = emit_ref_expr_for_assert(req_pred, "self");
-        cg.line(&format!(
-            "debug_assert!({pred_str}, \"requires: {pred_str}\");"
-        ));
+        let msg = pred_str.replace('{', "{{").replace('}', "}}");
+        cg.line(&format!("debug_assert!({pred_str}, \"requires: {msg}\");"));
     }
     emit_fn_body(cg, fd);
     cg.pop_indent();
@@ -149,19 +148,23 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
         let has_ensures = !fd.ensures.is_empty() && !is_unit;
         match last {
             Stmt::Expr { expr, .. } => {
+                // Note: when emit_mcdc_return_expr returns true (Bool-returning functions),
+                // `ensures` assertions are not emitted for that path. This is a known
+                // limitation: Bool-return MC/DC coverage and ensures are not yet integrated.
                 if !emit_mcdc_return_expr(cg, expr, &fd.return_type, expr.span().line) {
                     if has_ensures {
                         // Capture the return value so postcondition asserts can reference it.
+                        // Use emit_expr_tail_with_return_type to preserve security-label
+                        // wrapping (e.g. Secret<T> return types).
                         cg.indent();
                         cg.push("let _result = ");
-                        emit_expr(cg, expr);
+                        emit_expr_tail_with_return_type(cg, expr, &fd.return_type, &fd.params);
                         cg.push(";");
                         cg.nl();
                         for ens_pred in &fd.ensures {
                             let pred_str = emit_ref_expr_for_assert(ens_pred, "_result");
-                            cg.line(&format!(
-                                "debug_assert!({pred_str}, \"ensures: {pred_str}\");"
-                            ));
+                            let msg = pred_str.replace('{', "{{").replace('}', "}}");
+                            cg.line(&format!("debug_assert!({pred_str}, \"ensures: {msg}\");"));
                         }
                         cg.line("_result");
                     } else {
@@ -171,6 +174,9 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
                     }
                 }
             }
+            // Note: explicit `return` statements and other non-tail-expr last statements
+            // are emitted as-is. `ensures` assertions are not injected for these paths;
+            // the static checker handles postcondition verification for them at compile time.
             other => emit_block_stmts(cg, std::slice::from_ref(other)),
         }
     }

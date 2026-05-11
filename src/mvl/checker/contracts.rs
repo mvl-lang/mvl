@@ -652,6 +652,10 @@ fn subst_pred_ident(pred: &RefExpr, old_name: &str, new_val: &RefExpr) -> RefExp
             inner: Box::new(subst_pred_ident(inner, old_name, new_val)),
             span: *span,
         },
+        // Substituting inside old(e) is correct here: all current callers supply a
+        // call-site literal as new_val, which represents the value at call time — the same
+        // moment old(e) refers to. If this function is ever used with post-call values,
+        // re-evaluate whether substituting inside Old remains sound.
         RefExpr::Old { inner, span } => RefExpr::Old {
             inner: Box::new(subst_pred_ident(inner, old_name, new_val)),
             span: *span,

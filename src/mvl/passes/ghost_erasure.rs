@@ -28,11 +28,13 @@
 /// Returns `true` when a `Stmt::Let` with `ghost: true` should be erased
 /// (i.e. not emitted by backends).
 ///
+/// Ghost lets are always immutable by construction (enforced by the parser).
+///
 /// Usage in backends:
 /// ```ignore
-/// if is_ghost_let(stmt) { return; }
+/// if is_ghost_let(ghost) { return; }
 /// ```
-pub fn is_ghost_let(mutable: bool, ghost: bool) -> bool {
-    let _ = mutable; // ghost lets are always immutable, but we accept either
+#[allow(dead_code)]
+pub fn is_ghost_let(ghost: bool) -> bool {
     ghost
 }

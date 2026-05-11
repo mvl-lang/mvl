@@ -33,6 +33,8 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     pub(crate) fn emit_stmt(&mut self, stmt: &Stmt) -> Option<BasicValueEnum<'ctx>> {
         match stmt {
+            // Ghost bindings are specification-only — erased before codegen (Phase 4, #627).
+            Stmt::Let { ghost: true, .. } => None,
             Stmt::Let {
                 pattern, init, ty, ..
             } => {
