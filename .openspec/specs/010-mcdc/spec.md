@@ -71,7 +71,7 @@ single condition trivially affects the outcome by definition.
 Test functions (`test fn`) MUST be excluded from obligation analysis — MC/DC
 applies only to production code.
 
-**Implementation:** `src/mvl/transpiler/mcdc_instr.rs::MCDCMap`
+**Implementation:** `src/mvl/backends/rust/mcdc_instr.rs::MCDCMap`
 
 #### Scenario: compound AND is one obligation with two clauses
 
@@ -91,10 +91,10 @@ applies only to production code.
 - WHEN processed in order
 - THEN the second file's decision has id = 1 (not id = 0)
 
-**Tests:** `src/mvl/transpiler/mod.rs::tests::mcdc_test_fn_excluded`,
-`src/mvl/transpiler/mod.rs::tests::mcdc_start_id_offset_applied`,
-`src/mvl/transpiler/mod.rs::tests::mcdc_bool_return_expr_instrumented`,
-`src/mvl/transpiler/mod.rs::tests::mcdc_non_bool_return_not_instrumented`
+**Tests:** `src/mvl/backends/rust/mod.rs::tests::mcdc_test_fn_excluded`,
+`src/mvl/backends/rust/mod.rs::tests::mcdc_start_id_offset_applied`,
+`src/mvl/backends/rust/mod.rs::tests::mcdc_bool_return_expr_instrumented`,
+`src/mvl/backends/rust/mod.rs::tests::mcdc_non_bool_return_not_instrumented`
 
 ---
 
@@ -138,10 +138,10 @@ code-generation time if this limit is exceeded.
 `while` conditions MUST be restructured as `loop { … if !outcome { break; } … body … }`
 so clause arrays are re-evaluated on every iteration.
 
-**Implementation:** `src/mvl/transpiler/emit_stmts.rs::emit_mcdc_if`,
-`src/mvl/transpiler/emit_stmts.rs::emit_mcdc_while`,
-`src/mvl/transpiler/emit_stmts.rs::emit_mcdc_sc_outcome`,
-`src/mvl/transpiler/emit_stmts.rs::emit_mcdc_record`
+**Implementation:** `src/mvl/backends/rust/emit_stmts.rs::emit_mcdc_if`,
+`src/mvl/backends/rust/emit_stmts.rs::emit_mcdc_while`,
+`src/mvl/backends/rust/emit_stmts.rs::emit_mcdc_sc_outcome`,
+`src/mvl/backends/rust/emit_stmts.rs::emit_mcdc_record`
 
 #### Scenario: if with A && B emits clause arrays and record call
 
@@ -151,8 +151,8 @@ so clause arrays are re-evaluated on every iteration.
   `let mut __d0_e = [false; 2]`, `let __d0_outcome: bool =`,
   and `__mvl_mcdc::record(0usize,`
 
-**Tests:** `src/mvl/transpiler/mod.rs::tests::mcdc_if_emits_clause_locals_and_record`,
-`src/mvl/transpiler/mod.rs::tests::mcdc_record_encoding_present`
+**Tests:** `src/mvl/backends/rust/mod.rs::tests::mcdc_if_emits_clause_locals_and_record`,
+`src/mvl/backends/rust/mod.rs::tests::mcdc_record_encoding_present`
 
 #### Scenario: while with A && B is restructured as loop
 
@@ -160,7 +160,7 @@ so clause arrays are re-evaluated on every iteration.
 - WHEN transpiled with MC/DC instrumentation
 - THEN emitted Rust contains `loop {` and `if !__d0_outcome { break; }`
 
-**Tests:** `src/mvl/transpiler/mod.rs::tests::mcdc_while_restructured_as_loop`
+**Tests:** `src/mvl/backends/rust/mod.rs::tests::mcdc_while_restructured_as_loop`
 
 #### Scenario: short-circuit tree sets eval flags per clause
 
@@ -169,7 +169,7 @@ so clause arrays are re-evaluated on every iteration.
 - THEN emitted Rust contains `__d0_e[0] = true` and `__d0_e[1] = true`
   inside the short-circuit tree
 
-**Tests:** `src/mvl/transpiler/mod.rs::tests::mcdc_if_recomposed_uses_clause_vars`
+**Tests:** `src/mvl/backends/rust/mod.rs::tests::mcdc_if_recomposed_uses_clause_vars`
 
 ---
 
@@ -196,8 +196,8 @@ to the file path in `MVL_MCDC_OUT`. The `zzz_` prefix ensures it sorts last in
 cargo's alphabetic test ordering so all observations are captured before the
 file is written.
 
-**Implementation:** `src/mvl/transpiler/mcdc_instr.rs::emit_mcdc_preamble`,
-`src/mvl/transpiler/mcdc_instr.rs::emit_mcdc_report_test`
+**Implementation:** `src/mvl/backends/rust/mcdc_instr.rs::emit_mcdc_preamble`,
+`src/mvl/backends/rust/mcdc_instr.rs::emit_mcdc_report_test`
 
 ---
 
@@ -224,7 +224,7 @@ Unique-Cause is chosen over Masking MC/DC because:
 - The O(|obs|²) per-clause algorithm is practical because the `HashSet` bounds
   |obs| to `2^(N+1)`
 
-**Implementation:** `src/mvl/transpiler/mcdc_instr.rs::is_clause_covered`
+**Implementation:** `src/mvl/backends/rust/mcdc_instr.rs::is_clause_covered`
 
 #### Scenario: B independently toggles outcome in A && B
 
@@ -244,9 +244,9 @@ Unique-Cause is chosen over Masking MC/DC because:
 - WHEN checking clauses 0, 1, 2 for clause_count=3
 - THEN all three is_clause_covered calls return true
 
-**Tests:** `src/mvl/transpiler/mcdc_instr.rs::tests::independence_covered_and_b`,
-`src/mvl/transpiler/mcdc_instr.rs::tests::three_clause_all_covered`,
-`src/mvl/transpiler/mcdc_instr.rs::tests::independence_not_covered_when_other_clause_varies`
+**Tests:** `src/mvl/backends/rust/mcdc_instr.rs::tests::independence_covered_and_b`,
+`src/mvl/backends/rust/mcdc_instr.rs::tests::three_clause_all_covered`,
+`src/mvl/backends/rust/mcdc_instr.rs::tests::independence_not_covered_when_other_clause_varies`
 
 ---
 

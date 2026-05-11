@@ -30,7 +30,7 @@ MVL is a verification language that transpiles to Rust (Phase 1). The transpiler
 
 All transpiled struct and enum declarations MUST include `#[derive(Debug, Clone, PartialEq)]`. Refined type aliases over Copy primitives MUST additionally derive `Copy` and `PartialOrd`.
 
-**Implementation:** `src/mvl/transpiler/emit_types.rs::emit_struct`, `emit_enum`, `emit_alias`
+**Implementation:** `src/mvl/backends/rust/emit_types.rs::emit_struct`, `emit_enum`, `emit_alias`
 
 | MVL type | Derives |
 |----------|---------|
@@ -61,12 +61,12 @@ MVL has value semantics: passing a value to a function conceptually copies it. T
 - Copy types (`Int`, `Float`, `Bool`, `Char`, refined aliases over Copy primitives)
 - The last use of a value in its scope (move is sufficient — Phase A)
 
-**Implementation:** `src/mvl/transpiler/emit_exprs.rs::emit_expr_as_arg`
+**Implementation:** `src/mvl/backends/rust/emit_exprs.rs::emit_expr_as_arg`
 
 #### Phase A: Last-use move elision (implemented, issue #234)
 
 The transpiler performs a single-pass last-use analysis over each function body
-before emission (`src/mvl/transpiler/last_use.rs::compute_last_uses`).  Variables
+before emission (`src/mvl/backends/rust/last_use.rs::compute_last_uses`).  Variables
 used exactly once, or whose last occurrence is outside any loop, are moved instead
 of cloned.  This eliminates unnecessary copies for the common case: a value passed
 to one function and never used again.
@@ -138,7 +138,7 @@ to one function and never used again.
 
 `else if` chains MUST be emitted as `} else if cond {` on a single line. The transpiler MUST NOT delegate `ElseBranch::If` to the top-level `emit_stmt` path, which prepends indentation.
 
-**Implementation:** `src/mvl/transpiler/emit_stmts.rs::emit_if`
+**Implementation:** `src/mvl/backends/rust/emit_stmts.rs::emit_if`
 
 #### Scenario: else-if on one line
 
@@ -152,7 +152,7 @@ to one function and never used again.
 
 When `match` or `if/else` is the last expression in a block, the transpiler SHOULD emit it as a Rust expression (no trailing semicolon) so the block returns the arm values. This requires the parser to recognise tail-position control flow as expressions, not statements.
 
-**Implementation:** `src/mvl/transpiler/emit_stmts.rs::emit_block` (tail detection)
+**Implementation:** `src/mvl/backends/rust/emit_stmts.rs::emit_block` (tail detection)
 
 > **Note:** This is tracked as #189. Until resolved, users must use `let` bindings as a workaround.
 
@@ -179,7 +179,7 @@ When `match` or `if/else` is the last expression in a block, the transpiler SHOU
 
 Built-in functions from `std/core.mvl` MUST be translated to valid Rust macro invocations or function calls.
 
-**Implementation:** `src/mvl/transpiler/emit_exprs.rs::emit_call`
+**Implementation:** `src/mvl/backends/rust/emit_exprs.rs::emit_call`
 
 | MVL function | Rust emission | Notes |
 |-------------|---------------|-------|
@@ -218,7 +218,7 @@ Built-in functions from `std/core.mvl` MUST be translated to valid Rust macro in
 
 The transpiler MUST track whether an expression is emitted in statement context (result discarded, semicolon appended) or expression context (result used, no semicolon). Function calls, `match`, and `if/else` can appear in both contexts.
 
-**Implementation:** `src/mvl/transpiler/emit_stmts.rs`, `src/mvl/transpiler/emit_exprs.rs`
+**Implementation:** `src/mvl/backends/rust/emit_stmts.rs`, `src/mvl/backends/rust/emit_exprs.rs`
 
 #### Scenario: Function call as statement
 
@@ -236,7 +236,7 @@ The transpiler MUST track whether an expression is emitted in statement context 
 
 Effect annotations declared on functions (`fn foo() -> T ! E1, E2`) SHOULD be preserved as Rust doc comments on the emitted function, for auditability.
 
-**Implementation:** `src/mvl/transpiler/emit_functions.rs`
+**Implementation:** `src/mvl/backends/rust/emit_functions.rs`
 
 #### Scenario: Effect preserved as doc comment
 
@@ -248,7 +248,7 @@ Effect annotations declared on functions (`fn foo() -> T ! E1, E2`) SHOULD be pr
 
 `for` loops MUST be desugared to Rust `for` loops with correct iterator handling. The iterable expression MUST be cloned if it is a non-Copy type (see Requirement 2).
 
-**Implementation:** `src/mvl/transpiler/emit_stmts.rs::emit_for`
+**Implementation:** `src/mvl/backends/rust/emit_stmts.rs::emit_for`
 
 The clone MUST wrap the entire iterable expression, not be appended after emit:
 

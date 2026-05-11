@@ -113,7 +113,7 @@ Each toolchain's `std/` directory MUST be immutable after installation. The comp
 
 All MVL versions MUST share a single Cargo registry cache at `$XDG_CACHE_HOME/mvl/cargo/`. Crate downloads happen once. Build artifacts are per-project in `.mvl/target/`.
 
-**Implementation:** `src/mvl/transpiler/cargo.rs` (existing, needs `CARGO_HOME` override)
+**Implementation:** `src/mvl/backends/rust/cargo.rs` (existing, needs `CARGO_HOME` override)
 
 #### Scenario: Two projects share Cargo downloads
 
@@ -130,7 +130,7 @@ All MVL versions MUST share a single Cargo registry cache at `$XDG_CACHE_HOME/mv
 
 Each project MUST store build artifacts in a `.mvl/` directory at the project root. This directory is disposable and gitignored by default.
 
-**Implementation:** `src/mvl/transpiler/cargo.rs` (needs CARGO_TARGET_DIR override)
+**Implementation:** `src/mvl/backends/rust/cargo.rs` (needs CARGO_TARGET_DIR override)
 
 #### Scenario: mvl build creates .mvl/ directory
 
