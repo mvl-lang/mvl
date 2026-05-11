@@ -189,7 +189,8 @@ pub fn transpile_project(
 ) -> ProjectOutput {
     let has_main = has_main_fn(entry_prog);
     let extern_count = count_extern_decls(entry_prog);
-    let has_extern_rust = has_extern_rust_decls(entry_prog);
+    let has_extern_rust =
+        has_extern_rust_decls(entry_prog) || prelude_progs.iter().any(has_extern_rust_decls);
     // Link mvl_runtime when extern "rust" is used OR when stdlib is imported.
     // Stdlib functions (e.g. read_file, get_arg) are re-exported from
     // mvl_runtime::prelude::* and require the runtime crate to be present.
@@ -262,6 +263,15 @@ pub fn transpile_with_prelude(
     let mut all_expr_types = crate::mvl::checker::collect_prelude_expr_types(prelude_progs);
     all_expr_types.extend(check_result.expr_types);
     cg.expr_types = all_expr_types;
+    // `*_test.mvl` files are compiled without bridge.rs — emit safe stubs for
+    // any `extern "rust"` blocks in the prelude (e.g. pkg.tui's ffi.mvl).
+    if prelude_progs.iter().any(|p| {
+        p.declarations
+            .iter()
+            .any(|d| matches!(d, crate::mvl::parser::ast::Decl::Extern(_)))
+    }) {
+        cg.test_extern_stubs = true;
+    }
     cg.emit_program_with_mods(prog, &[], prelude_progs);
     let lib_rs = cg.finish();
 

@@ -1523,6 +1523,10 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
         .collect();
     stdlib_prelude_progs.extend(load_mvl_native_stdlib_extras(&all_progs));
 
+    // Load MVL source files from any `pkg.*` packages referenced by the program.
+    let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    stdlib_prelude_progs.extend(load_pkg_modules(&all_progs, &project_root));
+
     // Collect expression types from ALL programs (prelude + user) for the
     // transpiler to emit type-specific Rust at method-call sites (#554).
     let mut all_expr_types = checker::collect_prelude_expr_types(&stdlib_prelude_progs);
@@ -1561,7 +1565,7 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
         .parent()
         .unwrap_or_else(|| Path::new("."));
     let bridge_candidate = mvl_dir.join("bridge.rs");
-    let bridge_path: Option<PathBuf> = match fs::canonicalize(&bridge_candidate) {
+    let mut bridge_path: Option<PathBuf> = match fs::canonicalize(&bridge_candidate) {
         Ok(canon_bridge) => {
             let canon_dir = fs::canonicalize(mvl_dir).unwrap_or_else(|e| {
                 eprintln!("error: cannot canonicalize {}: {e}", mvl_dir.display());
@@ -1582,6 +1586,11 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
             process::exit(1);
         }
     };
+
+    if out.has_extern_rust && bridge_path.is_none() {
+        // No user bridge.rs — check if a pkg.* package provides one.
+        bridge_path = find_pkg_bridge(&all_progs, &project_root);
+    }
 
     if out.has_extern_rust && bridge_path.is_none() {
         eprintln!(
@@ -1772,12 +1781,42 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     let mut stdlib_prelude_progs = load_implicit_prelude();
     // Pre-scan all test files to discover pure-MVL stdlib imports (e.g. json) and
     // extend the prelude so their types/functions are available during transpilation.
+    // Also load any pkg.* package modules referenced by the test files.
     {
         let all_test_progs: Vec<_> = test_files
             .iter()
             .map(|f| parse_or_exit(&f.display().to_string()).0)
             .collect();
         stdlib_prelude_progs.extend(load_mvl_native_stdlib_extras(&all_test_progs));
+        let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        stdlib_prelude_progs.extend(load_pkg_modules(&all_test_progs, &project_root));
+
+        // For packages tested from their own src/ directory, also load sibling
+        // .mvl files (non-test, including internal/) so types and extern
+        // declarations are in scope during transpilation.
+        for f in &test_files {
+            let dir = f.parent().unwrap_or_else(|| std::path::Path::new("."));
+            // Scan src/ and src/internal/ (package convention per ADR-0012).
+            let dirs_to_scan: Vec<std::path::PathBuf> =
+                vec![dir.to_path_buf(), dir.join("internal")];
+            for scan_dir in dirs_to_scan {
+                if let Ok(entries) = fs::read_dir(&scan_dir) {
+                    for entry in entries.flatten() {
+                        let p = entry.path();
+                        let fname = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                        if p.extension().map(|e| e == "mvl").unwrap_or(false)
+                            && !fname.contains("_test")
+                            && p != **f
+                        {
+                            if let Ok(src) = fs::read_to_string(&p) {
+                                let (mut pp, _) = Parser::new(&src);
+                                stdlib_prelude_progs.push(pp.parse_program());
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Build a combined Rust test file from all test modules.
@@ -3049,6 +3088,99 @@ fn load_mvl_native_stdlib_extras(
     }
 
     extras
+}
+
+/// Load MVL source files from `pkg.*` packages referenced by user programs.
+///
+/// For each `use pkg.X` declaration, looks up the package in:
+///   1. `<project_root>/.mvl/pkg/X/` (local override)
+///   2. `$XDG_DATA_HOME/mvl/pkg/X/<version>/` (global cache)
+///
+/// Loads every `.mvl` file found in `src/` and `src/internal/` so that
+/// type declarations and extern "rust" blocks are available to the transpiler.
+fn load_pkg_modules(
+    progs: &[mvl::mvl::parser::ast::Program],
+    project_root: &std::path::Path,
+) -> Vec<mvl::mvl::parser::ast::Program> {
+    use mvl::mvl::parser::ast::Decl;
+    use std::collections::HashSet;
+
+    let mut loaded: HashSet<String> = HashSet::new();
+    let mut result: Vec<mvl::mvl::parser::ast::Program> = Vec::new();
+
+    for prog in progs {
+        for decl in &prog.declarations {
+            if let Decl::Use(ud) = decl {
+                if ud.path.first().map(|s| s == "pkg").unwrap_or(false) {
+                    if let Some(pkg_name) = ud.path.get(1) {
+                        if !loaded.insert(pkg_name.clone()) {
+                            continue;
+                        }
+                        // Resolve package directory (local override takes precedence)
+                        let pkg_dir =
+                            mvl::mvl::packages::fetch::local_override_dir(project_root, pkg_name);
+                        if !pkg_dir.exists() {
+                            continue; // package not installed — checker will surface errors
+                        }
+                        // Load src/*.mvl and src/internal/*.mvl
+                        for sub in &["src", "src/internal"] {
+                            let dir = pkg_dir.join(sub);
+                            if let Ok(entries) = fs::read_dir(&dir) {
+                                for entry in entries.flatten() {
+                                    let path = entry.path();
+                                    if path.extension().map(|e| e == "mvl").unwrap_or(false) {
+                                        if let Ok(src) = fs::read_to_string(&path) {
+                                            let (mut p, _) = Parser::new(&src);
+                                            result.push(p.parse_program());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    result
+}
+
+/// Find a `bridge.rs` from a `pkg.*` package used by the given programs.
+///
+/// Returns the path to the first package bridge.rs found, or None.
+/// Used as a fallback when the user program has no bridge.rs of its own.
+fn find_pkg_bridge(
+    progs: &[mvl::mvl::parser::ast::Program],
+    project_root: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    use mvl::mvl::parser::ast::Decl;
+
+    // Canonicalize the package root once; reject any bridge that escapes it
+    // (same symlink-escape guard applied to user-supplied bridge.rs at line 1572).
+    let canon_pkg_root = match fs::canonicalize(project_root.join(".mvl").join("pkg")) {
+        Ok(p) => p,
+        Err(_) => return None,
+    };
+
+    for prog in progs {
+        for decl in &prog.declarations {
+            if let Decl::Use(ud) = decl {
+                if ud.path.first().map(|s| s == "pkg").unwrap_or(false) {
+                    if let Some(pkg_name) = ud.path.get(1) {
+                        let pkg_dir =
+                            mvl::mvl::packages::fetch::local_override_dir(project_root, pkg_name);
+                        let bridge = pkg_dir.join("bridge.rs");
+                        if let Ok(canon_bridge) = fs::canonicalize(&bridge) {
+                            if canon_bridge.starts_with(&canon_pkg_root) {
+                                return Some(canon_bridge);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// is `["std", "io"]`, so we look for `<stdlib_dir>/io.mvl`.

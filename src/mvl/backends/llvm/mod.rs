@@ -2355,7 +2355,26 @@ impl<'ctx> LlvmBackend<'ctx> {
                     .unwrap();
                 self.builder.build_return(Some(&result)).unwrap();
             }
+            // ── pkg.tui stubs ────────────────────────────────────────────────
+            // The LLVM backend cannot run interactive terminal I/O, so these
+            // stubs return neutral values that keep unit-test programs alive.
+            // tui_init() → 1 (success handle; tests don't use the terminal)
+            "tui_init" => {
+                let one = i64_ty.const_int(1, false);
+                self.builder.build_return(Some(&one)).unwrap();
+            }
+            // tui_drop, tui_clear, tui_set_cursor, tui_print → void no-ops
+            "tui_drop" | "tui_clear" | "tui_set_cursor" | "tui_print" => {
+                self.builder.build_return(None).unwrap();
+            }
+            // tui_size() → 24*1000+80 = 24080 (safe default 24×80 terminal)
+            "tui_size" => {
+                let sz = i64_ty.const_int(24_080, false);
+                self.builder.build_return(Some(&sz)).unwrap();
+            }
             // Generic stub: return zero / null / None-struct.
+            // Note: tui_read_key / tui_read_key_timeout return String (a Rust struct),
+            // so the StructType arm below returns a correctly zeroed value for them.
             _ => match ret_llvm {
                 Some(BasicTypeEnum::IntType(it)) => {
                     let zero = it.const_zero();
