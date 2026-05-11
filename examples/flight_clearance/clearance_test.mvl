@@ -183,6 +183,18 @@ test fn d1_toggle_thunderstorm() -> Unit {
     assert_eq(weather_clear(wx), false);
 }
 
+// MC/DC boundary: Reduced visibility is still acceptable — covers visibility_ok Reduced arm.
+test fn d1_boundary_reduced_visibility() -> Unit {
+    let wx: Weather = Weather { visibility: Visibility::Reduced, wind: WindCondition::Calm, icing: false, thunderstorm: false };
+    assert_eq(weather_clear(wx), true);
+}
+
+// MC/DC boundary: Moderate wind is still acceptable — covers wind_ok Moderate arm.
+test fn d1_boundary_moderate_wind() -> Unit {
+    let wx: Weather = Weather { visibility: Visibility::Good, wind: WindCondition::Moderate, icing: false, thunderstorm: false };
+    assert_eq(weather_clear(wx), true);
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // Decision 2: aircraft_ready
 // maintenance_ok(m) && fuel_ok(f) && crew_valid
@@ -430,6 +442,13 @@ test fn d7_domestic_no_fuel() -> Unit {
     assert_eq(crew_duty_ok(ac, RouteType::Domestic), true);
 }
 
+// MC/DC boundary: Oceanic route — is_domestic=false, fuel_ok rescues it.
+// Covers the Oceanic arm of is_domestic (never hit by other crew_duty tests).
+test fn d7_oceanic_with_fuel() -> Unit {
+    let ac: Aircraft = good_aircraft();
+    assert_eq(crew_duty_ok(ac, RouteType::Oceanic), true);
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // Decision 8: fuel_planning_ok
 // fuel_sufficient || (fuel_marginal && is_domestic && !icing)
@@ -475,6 +494,13 @@ test fn d8_insufficient() -> Unit {
     let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Insufficient, crew_valid: true, etops_cert: true };
     let wx: Weather = good_weather();
     assert_eq(fuel_planning_ok(ac, RouteType::Domestic, wx), false);
+}
+
+// MC/DC boundary: fuel_marginal(Sufficient) = false — the Sufficient arm in fuel_marginal.
+// Unreachable through fuel_planning_ok (short-circuit: fuel_sufficient(Sufficient)=true
+// bypasses the right-hand AND branch, so fuel_marginal is never called with Sufficient).
+test fn d8_boundary_fuel_marginal_sufficient() -> Unit {
+    assert_eq(fuel_marginal(FuelStatus::Sufficient), false);
 }
 
 // ════════════════════════════════════════════════════════════════════════
