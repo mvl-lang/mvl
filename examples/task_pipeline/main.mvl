@@ -19,10 +19,10 @@
 // Assurance note: 0 extern blocks.
 
 use parser::parse_csv;
-use transform::filter_by_amount;
-use transform::enrich_high_value;
-use transform::summarize;
-use transform::record_line;
+use transform::apply_filter_by_amount;
+use transform::apply_enrich_high_value;
+use transform::compute_summary;
+use transform::format_record;
 use model::Record;
 use model::Summary;
 use model::ParseError;
@@ -57,8 +57,7 @@ fn threshold_or_default(opt: Option[Tainted[String]]) -> Float {
         None    => 0.0,
         Some(t) => {
             let clean: Clean[String] = sanitize(t);
-            let s: String = clean.trim();
-            let result: Result[Float, String] = s.parse_float();
+            let result: Result[Float, String] = clean.parse_float();
             match result {
                 Err(_) => 0.0,
                 Ok(v)  => if v >= 0.0 { v } else { 0.0 },
@@ -100,9 +99,9 @@ fn run() -> Result[Unit, RunError] ! FileRead, Console {
                         Ok(records) => {
                             // Pure pipeline — no effects from here on.
                             // These calls are safe to reorder, parallelize, or memoize.
-                            let filtered: List[Record] = filter_by_amount(records, threshold);
-                            let enriched: List[Record] = enrich_high_value(filtered, threshold * 10.0);
-                            let summary: Summary = summarize(enriched);
+                            let filtered: List[Record] = apply_filter_by_amount(records, threshold);
+                            let enriched: List[Record] = apply_enrich_high_value(filtered, threshold * 10.0);
+                            let summary: Summary = compute_summary(enriched);
 
                             println("=== task_pipeline: CSV summary ===");
                             println("Input records:  ".concat(records.len().to_string()));
@@ -114,7 +113,7 @@ fn run() -> Result[Unit, RunError] ! FileRead, Console {
                             let _: Unit = enriched.fold(
                                 (),
                                 |_acc: Unit, r: Record| {
-                                    println(record_line(r));
+                                    println(format_record(r));
                                     ()
                                 }
                             );

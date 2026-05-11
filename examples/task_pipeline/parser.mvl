@@ -114,6 +114,16 @@ pub fn parse_record(line: String) -> Result[Record, ParseError] {
 // Fold step for parse_csv: accumulate parsed records line-by-line.
 // Extracted as a named function so the checker can verify the return type
 // explicitly (fold closures returning Result trip a checker limitation).
+//
+// csv_fold_step_value: thin wrapper taking owned String.
+// The transpiler infers &String for csv_fold_step (read-only param), but the
+// fold lambda doesn't auto-borrow when passing a function reference.  This
+// wrapper takes String by value (disqualified via free-function pass-through)
+// so the fold closure receives it correctly.
+fn csv_fold_step_value(acc: Result[List[Record], ParseError], line: String) -> Result[List[Record], ParseError] {
+    csv_fold_step(acc, line)
+}
+
 fn csv_fold_step(acc: Result[List[Record], ParseError], line: String) -> Result[List[Record], ParseError] {
     let trimmed: String = line.trim();
     if trimmed.is_empty() || trimmed.starts_with("#") {
@@ -132,22 +142,33 @@ fn csv_fold_step(acc: Result[List[Record], ParseError], line: String) -> Result[
 }
 
 /// Parse a complete CSV file (header + data rows) into a list of records.
+/// Inner implementation — takes Clean[String] so `parse_csv` can pass its
+/// sanitized binding without a cross-module borrow issue.
 ///
-/// - Line 0 (header) is skipped.
-/// - Blank lines and lines starting with '#' are silently ignored.
-/// - The first parse error aborts the pipeline and is returned as Err.
-///   This is a deliberate design: the caller gets a named error (Req 5)
-///   and can decide whether to report, skip, or fail the job.
-pub fn parse_csv(content: String) -> Result[List[Record], ParseError] {
-    if content.trim().is_empty() {
-        Err(ParseError::EmptyInput)
-    } else {
-        let lines: List[String] = content.split("\n");
-        // Skip the header row (index 0) by dropping the first element.
-        let data_lines: List[String] = lines.skip(1);
-        let init: Result[List[Record], ParseError] = Ok([]);
-        data_lines.fold(init, csv_fold_step)
+/// IFC note: All method calls on `content: Clean[String]` produce labeled
+/// types in the checker.  We use `match` on those labeled values to strip
+/// the label (bind_match_pattern uses unlabeled() for Ok/Err/Some/None),
+/// which keeps the declared return type plain `Result[...]`.
+fn parse_csv_impl(content: Clean[String]) -> Result[List[Record], ParseError] {
+    let init: Result[List[Record], ParseError] = Ok([]);
+    // match on Clean[Bool]: checker allows it; scrutinee label is NOT
+    // promoted to arm bodies in check_match_arms (unlike `if`).
+    match content.trim().is_empty() {
+        true  => Err(ParseError::EmptyInput),
+        false => match content.split("\n").skip(1).fold(init, csv_fold_step_value) {
+            Err(e)      => Err(e),
+            Ok(records) => Ok(records),
+        },
     }
+}
+
+/// Public entry point.  Accepts `Tainted[String]` from file I/O.
+/// `content` is passed to `sanitize` (free-function) → disqualified from
+/// borrow inference → `content: Tainted<String>` (owned) in generated Rust.
+/// This prevents the cross-module `&String` mismatch when called from main.rs.
+pub fn parse_csv(content: Tainted[String]) -> Result[List[Record], ParseError] {
+    let clean: Clean[String] = sanitize(content);
+    parse_csv_impl(clean)
 }
 
 // Tests live in parser_test.mvl.

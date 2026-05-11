@@ -79,15 +79,29 @@ pub fn enrich_high_value(records: List[Record], threshold: Float) -> List[Record
     )
 }
 
+// Helper: unwrap an Option[String] with a default.
+//
+// The transpiler infers &Record for functions that access struct fields directly.
+// Passing r.category (a FieldAccess) as a free-function argument causes the
+// emitter to add .clone() at the call site, giving an owned Option<String> that
+// the match can safely destructure without moving out of a reference.
+fn option_str_or(opt: Option[String], default: String) -> String {
+    // `let d = default` is a let-binding identity: the borrow_params analysis
+    // treats this as a disqualifying use, so `default` stays String (owned)
+    // in the generated Rust rather than being inferred as &String.
+    let d: String = default;
+    match opt {
+        Some(s) => s,
+        None    => d,
+    }
+}
+
 /// Format a record as a single display line (pure map helper).
 ///
 /// Used by main.mvl to produce output without mixing formatting into
 /// business logic. Demonstrates map over records for display (Req 7).
 pub fn record_line(r: Record) -> String {
-    let cat_str: String = match r.category {
-        Some(c) => c,
-        None    => "(none)",
-    };
+    let cat_str: String = option_str_or(r.category, "(none)");
     r.name.concat("  age=").concat(r.age.to_string())
            .concat("  amount=").concat(r.amount.to_string())
            .concat("  cat=").concat(cat_str)
@@ -204,4 +218,25 @@ test fn record_line_without_category() -> Unit {
     let line: String = record_line(r);
     let has_none_label: Int = match line.contains("(none)") { true => 1, false => 0 };
     assert_eq(has_none_label, 1);
+}
+
+// ── Call-site bridges ─────────────────────────────────────────────────────
+// The transpiler gives &T params to functions that access struct fields directly.
+// These thin wrappers don't access fields, so they get value params, allowing
+// main.mvl to call them without borrow-at-call-site issues.
+
+pub fn compute_summary(records: List[Record]) -> Summary {
+    summarize(records)
+}
+
+pub fn format_record(r: Record) -> String {
+    record_line(r)
+}
+
+pub fn apply_filter_by_amount(records: List[Record], min_amount: Float) -> List[Record] {
+    filter_by_amount(records, min_amount)
+}
+
+pub fn apply_enrich_high_value(records: List[Record], threshold: Float) -> List[Record] {
+    enrich_high_value(records, threshold)
 }
