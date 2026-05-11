@@ -1,0 +1,26 @@
+# pkg/tui — terminal UI package Makefile
+.PHONY: help guard-mvl check test clean
+
+MVL := ../../target/debug/mvl
+DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+
+help: ## Show this help
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
+
+guard-mvl: ## Validate MVL binary is present
+	@$(MVL) --version > /dev/null 2>&1 || { \
+		echo ""; \
+		echo "  ERROR: MVL compiler not found at: $(MVL)"; \
+		echo "  Run 'make build' from the repo root first."; \
+		echo ""; \
+		exit 1; \
+	}
+
+check: guard-mvl ## Type-check package source files
+	$(MVL) check $(DIR)src/
+
+test: guard-mvl ## Run inline tests in core.mvl (pure logic only — no terminal I/O)
+	$(MVL) test $(DIR)src/core_test.mvl
+
+clean: ## Remove build artifacts
+	rm -rf $(TMPDIR)mvl_build_tui

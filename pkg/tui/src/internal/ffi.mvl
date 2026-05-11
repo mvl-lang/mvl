@@ -1,0 +1,39 @@
+// pkg.tui — internal FFI boundary
+//
+// extern "rust" declarations for the raw-terminal primitives implemented in
+// bridge.rs. This file is package-private (internal/ convention per ADR-0012);
+// user code cannot import it directly.
+//
+// Key encoding (tui_read_key / tui_read_key_timeout return values):
+//   "Enter"     — Enter / Return
+//   "Escape"    — Escape
+//   "Backspace" — Backspace / DEL(127)
+//   "Delete"    — Delete escape sequence
+//   "Up"        — Arrow up
+//   "Down"      — Arrow down
+//   "Left"      — Arrow left
+//   "Right"     — Arrow right
+//   "<char>"    — Single printable character (e.g. "a", "q", " ")
+//   ""          — Timeout expired (tui_read_key_timeout only)
+//
+// tui_size encoding: rows * 1000 + cols  (e.g. 24080 = 24 rows, 80 cols)
+//
+// Color int encoding (tui_print fg/bg arguments):
+//   0=Default  1=Black  2=Red  3=Green  4=Yellow
+//   5=Blue     6=Magenta  7=Cyan  8=White
+
+extern "rust" {
+    // Terminal lifecycle
+    fn tui_init() -> Int;
+    fn tui_drop() -> Unit;
+
+    // Output
+    fn tui_clear() -> Unit;
+    fn tui_set_cursor(row: Int, col: Int) -> Unit;
+    fn tui_print(text: String, bold: Bool, underline: Bool, fg_color: Int) -> Unit;
+    fn tui_size() -> Int;
+
+    // Input
+    fn tui_read_key() -> String;
+    fn tui_read_key_timeout(millis: Int) -> String;
+}

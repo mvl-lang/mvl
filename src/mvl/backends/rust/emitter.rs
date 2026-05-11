@@ -439,7 +439,22 @@ impl RustEmitter {
         // call sites can emit `&x` instead of `x.clone()` for reference params.
         self.borrow_params_map = build_borrow_params_map(prog, &prelude_fns);
 
-        if !prelude_types.is_empty() || !prelude_fns.is_empty() {
+        // Collect extern "rust" declarations from package prelude programs (pkg.*).
+        // These are distinct from Rust-backed stdlib modules: the extern fns are
+        // implemented in the package's bridge.rs, not in mvl_runtime.
+        let prelude_externs: Vec<&ExternDecl> = prelude_progs
+            .iter()
+            .flat_map(|p| p.declarations.iter())
+            .filter_map(|d| {
+                if let Decl::Extern(ed) = d {
+                    Some(ed)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if !prelude_types.is_empty() || !prelude_fns.is_empty() || !prelude_externs.is_empty() {
             self.line(
                 "// ── stdlib prelude (transpiled from MVL source) ──────────────────────────",
             );
@@ -452,6 +467,12 @@ impl RustEmitter {
             }
             for fd in prelude_fns {
                 emit_fn_decl(self, fd);
+                self.blank();
+            }
+            // Emit extern "rust" blocks from packages (pkg.*) so that call sites
+            // can reference the declared functions and calls are wrapped in unsafe{}.
+            for ed in prelude_externs {
+                emit_extern_decl(self, ed);
                 self.blank();
             }
             self.coverage = saved_coverage;
@@ -559,12 +580,9 @@ impl RustEmitter {
 /// Rust items — the linker resolves them from the crate in `Cargo.toml`.
 /// For `extern "c"`: standard C ABI extern block.
 fn emit_extern_decl(cg: &mut RustEmitter, ed: &ExternDecl) {
-    // Register extern function names so calls can be wrapped in unsafe
-    for f in &ed.fns {
-        cg.extern_fns.insert(f.name.clone());
-    }
-
     if cg.test_extern_stubs {
+        // In test mode stubs are regular safe fns — do NOT register in extern_fns
+        // so call sites are not wrapped in `unsafe {}` (which would be a type error).
         // In test mode, emit stub functions instead of real extern declarations
         // so the test crate links without the external dependency.
         cg.line(&format!(
@@ -586,6 +604,11 @@ fn emit_extern_decl(cg: &mut RustEmitter, ed: &ExternDecl) {
             ));
         }
         return;
+    }
+
+    // Register extern function names so calls are wrapped in unsafe
+    for f in &ed.fns {
+        cg.extern_fns.insert(f.name.clone());
     }
 
     cg.line(&format!(

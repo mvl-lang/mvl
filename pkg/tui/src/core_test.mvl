@@ -1,0 +1,218 @@
+// pkg.tui — unit tests for pure logic in core.mvl
+//
+// These tests cover decode_key, color_to_int, and style constructors.
+// No terminal I/O is performed — effects are absent from all test functions.
+//
+// Run with: mvl test pkg/tui/src/
+
+// ── decode_key tests ──────────────────────────────────────────────────────────
+
+test fn decode_key_enter() -> Unit {
+    let k: Key = decode_key("Enter");
+    let ok: Int = match k {
+        Key::Enter => 1,
+        _ => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn decode_key_escape() -> Unit {
+    let k: Key = decode_key("Escape");
+    let ok: Int = match k {
+        Key::Escape => 1,
+        _ => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn decode_key_backspace() -> Unit {
+    let k: Key = decode_key("Backspace");
+    let ok: Int = match k {
+        Key::Backspace => 1,
+        _ => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn decode_key_delete() -> Unit {
+    let k: Key = decode_key("Delete");
+    let ok: Int = match k {
+        Key::Delete => 1,
+        _ => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn decode_key_arrow_up() -> Unit {
+    let k: Key = decode_key("Up");
+    let ok: Int = match k {
+        Key::Arrow(Direction::Up) => 1,
+        _ => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn decode_key_arrow_down() -> Unit {
+    let k: Key = decode_key("Down");
+    let ok: Int = match k {
+        Key::Arrow(Direction::Down) => 1,
+        _ => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn decode_key_arrow_left() -> Unit {
+    let k: Key = decode_key("Left");
+    let ok: Int = match k {
+        Key::Arrow(Direction::Left) => 1,
+        _ => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn decode_key_arrow_right() -> Unit {
+    let k: Key = decode_key("Right");
+    let ok: Int = match k {
+        Key::Arrow(Direction::Right) => 1,
+        _ => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn decode_key_char_q() -> Unit {
+    let k: Key = decode_key("q");
+    let ok: Int = match k {
+        Key::Char(_) => 1,
+        _ => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn decode_key_char_space() -> Unit {
+    let k: Key = decode_key(" ");
+    let ok: Int = match k {
+        Key::Char(_) => 1,
+        _ => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn decode_key_unknown_string_becomes_char() -> Unit {
+    // Unrecognised sequences are wrapped as Char
+    let k: Key = decode_key("xyz");
+    let ok: Int = match k {
+        Key::Char(_) => 1,
+        _ => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+// ── color_to_int tests ────────────────────────────────────────────────────────
+
+test fn color_default_is_zero() -> Unit {
+    assert_eq(color_to_int(Color::Default), 0)
+}
+
+test fn color_black_is_one() -> Unit {
+    assert_eq(color_to_int(Color::Black), 1)
+}
+
+test fn color_red_is_two() -> Unit {
+    assert_eq(color_to_int(Color::Red), 2)
+}
+
+test fn color_green_is_three() -> Unit {
+    assert_eq(color_to_int(Color::Green), 3)
+}
+
+test fn color_yellow_is_four() -> Unit {
+    assert_eq(color_to_int(Color::Yellow), 4)
+}
+
+test fn color_blue_is_five() -> Unit {
+    assert_eq(color_to_int(Color::Blue), 5)
+}
+
+test fn color_magenta_is_six() -> Unit {
+    assert_eq(color_to_int(Color::Magenta), 6)
+}
+
+test fn color_cyan_is_seven() -> Unit {
+    assert_eq(color_to_int(Color::Cyan), 7)
+}
+
+test fn color_white_is_eight() -> Unit {
+    assert_eq(color_to_int(Color::White), 8)
+}
+
+// ── Style constructor tests ───────────────────────────────────────────────────
+
+test fn style_not_bold_by_default() -> Unit {
+    let s: Style = style();
+    assert_eq(s.bold, false)
+}
+
+test fn style_not_underline_by_default() -> Unit {
+    let s: Style = style();
+    assert_eq(s.underline, false)
+}
+
+test fn bold_style_is_bold() -> Unit {
+    let s: Style = bold_style();
+    assert_eq(s.bold, true)
+}
+
+test fn colored_sets_fg_green() -> Unit {
+    let s: Style = colored(Color::Green);
+    assert_eq(color_to_int(s.fg), 3)
+}
+
+test fn colored_not_bold() -> Unit {
+    let s: Style = colored(Color::Red);
+    assert_eq(s.bold, false)
+}
+
+test fn bold_colored_is_bold() -> Unit {
+    let s: Style = bold_colored(Color::Cyan);
+    assert_eq(s.bold, true)
+}
+
+test fn bold_colored_sets_fg() -> Unit {
+    let s: Style = bold_colored(Color::Cyan);
+    assert_eq(color_to_int(s.fg), 7)
+}
+
+test fn with_fg_changes_color() -> Unit {
+    let s: Style = style();
+    let s2: Style = with_fg(s, Color::Blue);
+    assert_eq(color_to_int(s2.fg), 5)
+}
+
+test fn with_bold_makes_bold() -> Unit {
+    let s: Style = colored(Color::Red);
+    let s2: Style = with_bold(s);
+    assert_eq(s2.bold, true)
+}
+
+test fn with_bold_preserves_color() -> Unit {
+    let s: Style = colored(Color::Magenta);
+    let s2: Style = with_bold(s);
+    assert_eq(color_to_int(s2.fg), 6)
+}
+
+// ── TerminalSize tests ────────────────────────────────────────────────────────
+
+test fn terminal_size_fields() -> Unit {
+    let ts: TerminalSize = TerminalSize { rows: 24, cols: 80 };
+    assert_eq(ts.rows, 24);
+    assert_eq(ts.cols, 80)
+}
+
+test fn terminal_size_size_decode() -> Unit {
+    // Mirrors bridge.rs encoding: rows * 1000 + cols
+    let encoded: Int = 24 * 1000 + 80;
+    let rows: Int = encoded / 1000;
+    let cols: Int = encoded % 1000;
+    assert_eq(rows, 24);
+    assert_eq(cols, 80)
+}
