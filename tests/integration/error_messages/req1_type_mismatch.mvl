@@ -1,0 +1,7 @@
+// Expected error: type mismatch — assigning String to Int binding
+// Triggers: CheckError::TypeMismatch (req1)
+
+fn main() -> Unit ! Console {
+    let x: Int = "hello";
+    println("{}", x);
+}

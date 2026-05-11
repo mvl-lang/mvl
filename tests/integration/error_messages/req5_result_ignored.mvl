@@ -1,0 +1,9 @@
+// Expected error: Result value must be used — handle with match or propagate with ?
+// Triggers: CheckError::ResultIgnored (req5)
+
+fn might_fail() -> Result[Int, String] { Ok(42) }
+
+fn main() -> Unit ! Console {
+    might_fail();
+    println("done");
+}

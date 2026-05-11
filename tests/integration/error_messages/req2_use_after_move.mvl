@@ -1,0 +1,9 @@
+// Expected error: use of moved value `s`
+// Triggers: CheckError::UseAfterMove (req2)
+// Uses move() builtin to explicitly transfer ownership, then reads the original.
+
+fn main() -> Unit ! Console {
+    let s: String = "hello";
+    let _a: String = move(s);
+    let _b: String = s;
+}

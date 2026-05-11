@@ -1,0 +1,7 @@
+// Expected error: logging functions accept only `Public<T>` but argument has label `Secret`
+// Triggers: CheckError::LoggingLabelViolation (req11)
+
+fn main() -> Unit ! Console {
+    let password: Secret[String] = "s3cr3t";
+    println("password: {}", password);
+}

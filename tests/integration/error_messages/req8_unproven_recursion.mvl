@@ -1,0 +1,10 @@
+// Expected error: recursive call in total function `loop_forever` cannot be proven terminating
+// Triggers: CheckError::UnprovenRecursion (req8)
+
+total fn loop_forever(n: Int) -> Int {
+    loop_forever(n)
+}
+
+fn main() -> Unit ! Console {
+    println("{}", loop_forever(1));
+}

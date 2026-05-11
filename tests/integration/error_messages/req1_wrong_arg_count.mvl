@@ -1,0 +1,9 @@
+// Expected error: wrong argument count — add expects 2 args, got 3
+// Triggers: CheckError::WrongArgCount (req1)
+
+fn add(a: Int, b: Int) -> Int { a + b }
+
+fn main() -> Unit ! Console {
+    let x: Int = add(1, 2, 3);
+    println("{}", x);
+}

@@ -1,0 +1,10 @@
+// Expected error: `?` applied to `Int`, which is neither Result nor Option
+// Triggers: CheckError::PropagateNotResult (req5)
+
+fn get_number() -> Int { 42 }
+
+fn main() -> Result[Unit, String] ! Console {
+    let x: Int = get_number()?;
+    println("{}", x);
+    Ok(())
+}

@@ -1,0 +1,9 @@
+// Expected error: refinement predicate violated — literal 0 violates `b != 0`
+// Triggers: CheckError::RefinementViolated (req10)
+
+total fn safe_divide(a: Int, b: Int where b != 0) -> Int { a / b }
+
+fn main() -> Unit ! Console {
+    let result: Int = safe_divide(10, 0);
+    println("{}", result);
+}

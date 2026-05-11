@@ -1,0 +1,12 @@
+// Expected error: total function calls `partial` function `do_work`
+// Triggers: CheckError::PartialCallInTotal (req8)
+
+partial fn do_work(n: Int) -> Int { n * 2 }
+
+total fn compute(n: Int) -> Int {
+    do_work(n)
+}
+
+fn main() -> Unit ! Console {
+    println("{}", compute(5));
+}
