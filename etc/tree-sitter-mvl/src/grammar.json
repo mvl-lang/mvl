@@ -643,6 +643,18 @@
           "type": "CHOICE",
           "members": [
             {
+              "type": "STRING",
+              "value": "transparent"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
               "type": "CHOICE",
               "members": [
                 {

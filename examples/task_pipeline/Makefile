@@ -22,6 +22,9 @@ guard-mvl: ## Validate MVL binary is present and working (does NOT recompile)
 		exit 1; \
 	}
 
+build: guard-mvl ## Only build the application
+	$(MVL) build $(DIR)main.mvl
+
 check: guard-mvl ## Type-check pure source files (main.mvl excluded: uses stdlib I/O with Tainted[String])
 	$(MVL) check $(DIR)model.mvl
 	$(MVL) check $(DIR)parser.mvl

@@ -205,3 +205,20 @@ pub fn departure_gate(wx: Weather, ac: Aircraft, route: RouteType) -> Clearance 
         Clearance::Rejected
     }
 }
+
+// ── Call-site bridges ─────────────────────────────────────────────────────
+// The transpiler gives &T params to functions that access struct fields directly.
+// These thin wrappers don't access fields, so they get value params, allowing
+// main.mvl to call them without borrow-at-call-site issues.
+
+pub fn check_needs_diversion(wx: Weather, ac: Aircraft) -> Bool {
+    needs_diversion(wx, ac)
+}
+
+pub fn check_fuel_planning_ok(ac: Aircraft, route: RouteType, wx: Weather) -> Bool {
+    fuel_planning_ok(ac, route, wx)
+}
+
+pub fn check_route_permitted(route: RouteType, ac: Aircraft) -> Bool {
+    route_permitted(route, ac)
+}

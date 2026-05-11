@@ -53,11 +53,11 @@ for dir in "$SCRIPT_DIR"/*/; do
         printf "  %-20s" "$name"
         example_ok=1
         failed_targets=""
-        for target in check "$TEST_TARGET" run; do
+        for target in check test-solver "$TEST_TARGET" run; do
             if out=$(run_target "$dir" "$target" 2>&1); then
-                printf "  \033[32m%-8s✓\033[0m" "$target"
+                printf "  \033[32m%-10s✓\033[0m" "$target"
             else
-                printf "  \033[31m%-8s✗\033[0m" "$target"
+                printf "  \033[31m%-10s✗\033[0m" "$target"
                 failed_targets="$failed_targets\n--- $target ---\n$out"
                 example_ok=0
             fi

@@ -8,7 +8,7 @@ DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-guard-mvl: ## Validate MVL binary is present and working (does NOT recompile)
+guard-mvl: 
 	@$(MVL) --version > /dev/null 2>&1 || { \
 		echo ""; \
 		echo "  ERROR: MVL compiler not found at: $(MVL)"; \
@@ -48,7 +48,7 @@ test-llvm: guard-mvl ## Run unit tests via LLVM backend
 	$(MVL) test $(DIR) --backend=llvm
 
 mcdc: guard-mvl ## Run MC/DC coverage analysis (use ARGS="--masking" to exempt coupled)
-	$(MVL) mcdc $(DIR) $(ARGS)
+	$(MVL) mcdc $(DIR) --verbose $(ARGS)
 
 mutate: guard-mvl ## Run mutation testing
 	$(MVL) mutate $(DIR)

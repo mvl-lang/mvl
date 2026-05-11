@@ -12,9 +12,9 @@ use model::Aircraft;
 use model::Clearance;
 use model::RouteType;
 use clearance::departure_gate;
-use clearance::needs_diversion;
-use clearance::fuel_planning_ok;
-use clearance::route_permitted;
+use clearance::check_needs_diversion;
+use clearance::check_fuel_planning_ok;
+use clearance::check_route_permitted;
 
 fn s1_domestic_clear() -> String {
     let wx: Weather = Weather { visibility: Visibility::Good, wind: WindCondition::Calm,
@@ -31,7 +31,7 @@ fn s2_thunderstorm_divert() -> String {
         icing: false, thunderstorm: true };
     let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy,
         fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: true };
-    match needs_diversion(wx, ac) { true => "DIVERT", false => "OK", }
+    match check_needs_diversion(wx, ac) { true => "DIVERT", false => "OK", }
 }
 
 fn s3_marginal_domestic() -> String {
@@ -39,7 +39,7 @@ fn s3_marginal_domestic() -> String {
         icing: false, thunderstorm: false };
     let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy,
         fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: false };
-    match fuel_planning_ok(ac, RouteType::Domestic, wx) { true => "OK", false => "FAIL", }
+    match check_fuel_planning_ok(ac, RouteType::Domestic, wx) { true => "OK", false => "FAIL", }
 }
 
 fn s4_marginal_intl() -> String {
@@ -47,13 +47,13 @@ fn s4_marginal_intl() -> String {
         icing: false, thunderstorm: false };
     let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy,
         fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: false };
-    match fuel_planning_ok(ac, RouteType::International, wx) { true => "OK", false => "FAIL", }
+    match check_fuel_planning_ok(ac, RouteType::International, wx) { true => "OK", false => "FAIL", }
 }
 
 fn s5_oceanic_no_etops() -> String {
     let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy,
         fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: false };
-    match route_permitted(RouteType::Oceanic, ac) { true => "PERMITTED", false => "DENIED", }
+    match check_route_permitted(RouteType::Oceanic, ac) { true => "PERMITTED", false => "DENIED", }
 }
 
 fn s6_icing_poor_vis() -> String {
@@ -61,7 +61,7 @@ fn s6_icing_poor_vis() -> String {
         icing: true, thunderstorm: false };
     let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy,
         fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: true };
-    match needs_diversion(wx, ac) { true => "DIVERT", false => "OK", }
+    match check_needs_diversion(wx, ac) { true => "DIVERT", false => "OK", }
 }
 
 fn s7_oceanic_deferred() -> String {
