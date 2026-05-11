@@ -1,0 +1,11 @@
+// Expected error: function has no effect declaration but calls `println` which requires `! Console`
+// Triggers: CheckError::UndeclaredEffect (req7)
+
+fn greet(name: String) -> String {
+    println("hello {}", name);
+    name
+}
+
+fn main() -> Unit ! Console {
+    let _s: String = greet("world");
+}

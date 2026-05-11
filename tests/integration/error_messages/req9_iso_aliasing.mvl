@@ -1,0 +1,15 @@
+// Expected error: `iso` value `data` aliased without `consume()`
+// Triggers: CheckError::IsoAliasingViolation (req9)
+// `iso` parameters cannot be assigned to a new binding without consume().
+
+type Payload = struct { size: Int }
+
+fn alias_iso(iso data: Payload) -> Int {
+    let y: Payload = data;
+    y.size
+}
+
+fn main() -> Unit ! Console {
+    let p: Payload = Payload { size: 10 };
+    println("{}", alias_iso(p));
+}

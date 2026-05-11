@@ -1,0 +1,13 @@
+// Expected error: cannot access Option<T> value directly — use match or ?
+// Triggers: CheckError::OptionDirectAccess (req4)
+// Direct field access on Option[T] triggers the guard check.
+
+fn get_value() -> Option[Int] { Some(42) }
+
+fn unwrap_direct(x: Option[Int]) -> Int {
+    x.value
+}
+
+fn main() -> Unit ! Console {
+    println("{}", unwrap_direct(get_value()));
+}

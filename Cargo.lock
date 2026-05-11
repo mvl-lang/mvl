@@ -510,7 +510,7 @@ dependencies = [
 
 [[package]]
 name = "mvl"
-version = "0.89.0"
+version = "0.92.1"
 dependencies = [
  "inkwell",
  "libc",

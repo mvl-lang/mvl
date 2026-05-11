@@ -1,0 +1,9 @@
+// Expected error: unknown field `z` in construction of `Point`
+// Triggers: CheckError::UnknownField (req1)
+
+type Point = struct { x: Int, y: Int }
+
+fn main() -> Unit ! Console {
+    let p: Point = Point { x: 1, y: 2, z: 3 };
+    println("{}", p.x);
+}

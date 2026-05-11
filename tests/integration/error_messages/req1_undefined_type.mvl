@@ -1,0 +1,8 @@
+// Expected error: undefined type `Nonexistent`
+// Triggers: CheckError::UndefinedType (req1)
+// Uses struct construction of an unknown type name to trigger the lookup path.
+
+fn main() -> Unit ! Console {
+    let _x: Int = Nonexistent { value: 42 }.value;
+    println("done");
+}

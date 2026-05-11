@@ -1,0 +1,11 @@
+// Expected error: reference to `x` escapes its scope
+// Triggers: CheckError::ReferenceEscapesScope (req2)
+
+fn borrow_local() -> val Int {
+    let x: Int = 42;
+    val x
+}
+
+fn main() -> Unit ! Console {
+    let _r: val Int = borrow_local();
+}

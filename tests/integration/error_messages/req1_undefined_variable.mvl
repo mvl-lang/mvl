@@ -1,0 +1,7 @@
+// Expected error: undefined variable `z`
+// Triggers: CheckError::UndefinedVariable (req1)
+
+fn main() -> Unit ! Console {
+    let x: Int = z + 1;
+    println("{}", x);
+}

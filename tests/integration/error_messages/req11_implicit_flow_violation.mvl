@@ -1,0 +1,12 @@
+// Expected error: implicit information flow — println inside a branch controlled by a Secret condition
+// Triggers: CheckError::ImplicitFlowViolation (req11)
+
+fn check(secret: Secret[Bool]) -> Unit ! Console {
+    if secret {
+        println("condition was true");
+    }
+}
+
+fn main() -> Unit ! Console {
+    check(true);
+}

@@ -1,0 +1,9 @@
+// Expected error: missing field `y` in construction of `Point`
+// Triggers: CheckError::MissingField (req1)
+
+type Point = struct { x: Int, y: Int }
+
+fn main() -> Unit ! Console {
+    let p: Point = Point { x: 1 };
+    println("{}", p.x);
+}

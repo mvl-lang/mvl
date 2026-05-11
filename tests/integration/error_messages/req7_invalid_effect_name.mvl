@@ -1,0 +1,10 @@
+// Expected error: unknown effect `Teleport`
+// Triggers: CheckError::InvalidEffectName (req7)
+
+fn beam_up(x: Int) -> Int ! Teleport {
+    x
+}
+
+fn main() -> Unit ! Console {
+    println("{}", beam_up(42));
+}

@@ -1,0 +1,8 @@
+// Expected error: cannot assign to immutable binding `x`
+// Triggers: CheckError::AssignToImmutable (req6)
+
+fn main() -> Unit ! Console {
+    let x: Int = 1;
+    x = 2;
+    println("{}", x);
+}

@@ -1,0 +1,14 @@
+// Expected error: unbounded loop in total function
+// Triggers: CheckError::UnboundedLoopInTotal (req8)
+
+total fn count_up(n: Int) -> Int {
+    let mut i: Int = 0;
+    while i < n {
+        i = i + 1;
+    }
+    i
+}
+
+fn main() -> Unit ! Console {
+    println("{}", count_up(5));
+}

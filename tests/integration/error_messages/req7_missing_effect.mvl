@@ -1,0 +1,10 @@
+// Expected error: function `log_value` calls `println` which requires `! Console` but `log_value` does not declare it
+// Triggers: CheckError::MissingEffect (req7)
+
+fn log_value(x: Int) -> Unit ! Log {
+    println("value: {}", x);
+}
+
+fn main() -> Unit ! Console {
+    log_value(42);
+}
