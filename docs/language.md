@@ -36,6 +36,8 @@ Requirements define what the compiler proves. Constructs define what the program
 
 Testing, BDD, property testing, and model checking are all tooling on top of the same AST — zero language extensions. Mocking is free because effects are explicit. The language is the minimum. Everything else is tooling or library.
 
+**Input boundary policy (ADR-0026):** MVL is post-Postel. Parsers MAY accept multiple syntactic formats; validators MUST enforce refinement predicates before values enter the proven core. Invalid input is rejected, never coerced. Unvalidated input carries the `Tainted` IFC label until proven.
+
 ### Architectural decisions
 
 | ADR | Decision |

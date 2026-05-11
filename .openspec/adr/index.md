@@ -27,3 +27,4 @@
 | [0023](0023-stdlib-profiles.md) | Stdlib profiles — trusted vs proven | Accepted |
 | [0024](0024-label-transparent-functions.md) | Label-transparent functions (`transparent fn`) — ADR-0024 | Accepted |
 | [0025](0025-function-contracts.md) | Function contracts — `requires`/`ensures` Phase 1 | Accepted |
+| [0026](0026-input-validation-philosophy.md) | Input validation philosophy — post-Postel strictness | Accepted |
