@@ -54,6 +54,8 @@ EBNF_KNOWN_ABSENT = {
     # borrow_expr and impl_decl added to EBNF (hardening #384); ts update pending
     "borrow_expr": "not yet implemented in tree-sitter grammar",
     "impl_decl": "not yet implemented in tree-sitter grammar",
+    # fn_contract added to EBNF for contracts (#621); ts update pending
+    "fn_contract": "not yet implemented in tree-sitter grammar",
     # Uppercase EBNF terminals map to regex patterns, not named rules
     "COMMENT": "terminal — mapped to line_comment regex",
     "DOC_COMMENT": "terminal — mapped to line_comment regex (prefix ///)",
