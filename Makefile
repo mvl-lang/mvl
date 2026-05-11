@@ -57,10 +57,7 @@ build: ## Build the MVL compiler
 	@echo "Building MVL compiler..."
 	cargo build
 
-build-memory: ## Build mvl_memory cdylib (required by LLVM backend at runtime)
-	cargo build -p mvl_memory
-
-build-llvm-runtime: build-memory ## Build both LLVM runtime cdylibs: mvl_memory + mvl_runtime_c
+build-llvm-runtime: ## Build the LLVM runtime cdylib (mvl_runtime_c at runtime/llvm)
 	cargo build -p mvl_runtime_c
 
 build-release: ## Build release binary

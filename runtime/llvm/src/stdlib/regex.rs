@@ -22,8 +22,8 @@
 
 use std::slice;
 
+use crate::memory::{mvl_string_drop, mvl_string_new, MvlString};
 use libc::c_void;
-use mvl_memory::{mvl_string_drop, mvl_string_new, MvlString};
 use mvl_runtime::stdlib::regex as rt;
 
 use crate::abi::LlvmResult;
@@ -190,9 +190,9 @@ pub unsafe extern "C" fn _mvl_regex_find(
 pub unsafe extern "C" fn _mvl_regex_find_all(
     handle: *mut c_void,
     input: *const MvlString,
-) -> *mut mvl_memory::MvlArray {
+) -> *mut crate::memory::MvlArray {
+    use crate::memory::{mvl_array_new, MvlArray};
     use crate::memory_ops::mvl_array_push;
-    use mvl_memory::{mvl_array_new, MvlArray};
     let arr: *mut MvlArray = mvl_array_new(std::mem::size_of::<*mut MvlMatch>(), 0);
     if handle.is_null() {
         return arr;

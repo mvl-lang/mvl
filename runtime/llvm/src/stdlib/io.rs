@@ -29,8 +29,8 @@
 
 use std::slice;
 
+use crate::memory::{mvl_string_new, MvlString};
 use libc::c_void;
-use mvl_memory::{mvl_string_new, MvlString};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -324,7 +324,7 @@ pub unsafe extern "C" fn _mvl_io_chmod(path: *const MvlString, mode: i64) -> Llv
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mvl_memory::{mvl_string_drop, mvl_string_new};
+    use crate::memory::{mvl_string_drop, mvl_string_new};
 
     unsafe fn make_str(s: &str) -> *mut MvlString {
         mvl_string_new(s.as_bytes().as_ptr(), s.len())

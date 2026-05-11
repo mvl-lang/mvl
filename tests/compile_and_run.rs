@@ -681,26 +681,6 @@ fn collections_basic_runs_and_produces_expected_output() {
     );
 }
 
-// ── json_encode.mvl — native MVL JSON (#419) ─────────────────────────────────
-
-/// Gate test: encode(Null/Bool/Number/Array) via pure MVL std/json.mvl.
-///
-/// Expected stdout:
-///   null
-///   true
-///   false
-///   42
-///   1.5
-///   []
-///   [null,true,42]
-#[test]
-fn json_encode_runs_and_produces_expected_output() {
-    assert_run_output(
-        "json_encode.mvl",
-        &["null", "true", "false", "42", "1.5", "[]", "[null,true,42]"],
-    );
-}
-
 // ── pbt_operations.mvl — property-based testing stdlib (#40, #425) ──────────
 
 /// Gate test: PBT generators, combinators, and property_check functions

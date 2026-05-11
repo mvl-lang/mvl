@@ -155,8 +155,10 @@ mvl_language/
 │   ├── parser/             # stage 1: MVL source → AST
 │   ├── checker/            # stage 3: typed AST, 11 requirements
 │   ├── passes/             # stage 4: coverage, MC/DC, mutation, linting
-│   ├── transpiler/         # stage 5a: typed AST → Rust source
-│   └── codegen/            # stage 5b: typed AST → LLVM IR
+│   └── backends/           # stage 5: code generation (ADR-0027)
+│       ├── mod.rs          # Backend trait
+│       ├── rust/           # stage 5a: typed AST → Rust source
+│       └── llvm/           # stage 5b: typed AST → LLVM IR
 ├── tests/
 │   ├── corpus/             # MVL example programs (LLM training seed)
 │   ├── integration/        # end-to-end: .mvl → compile → run → verify

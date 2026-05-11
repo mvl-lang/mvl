@@ -10,8 +10,8 @@
 //! - `move_*`    — Phase A: callee NOT inferred (returned, etc.) → last use is a move
 //! - `clone_*`   — cases where Phase B cannot infer a borrow, so Phase A still applies
 
+use mvl::mvl::backends::rust::transpile;
 use mvl::mvl::parser::Parser;
-use mvl::mvl::transpiler::transpile;
 
 fn transpile_src(src: &str) -> String {
     let (mut parser, lex_errors) = Parser::new(src);

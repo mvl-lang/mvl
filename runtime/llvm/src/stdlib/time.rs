@@ -34,7 +34,7 @@ use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
 use libc::{c_char, c_void};
 
 use crate::abi::string_to_c;
-use mvl_memory::{mvl_string_new, MvlString};
+use crate::memory::{mvl_string_new, MvlString};
 use mvl_runtime::stdlib::time as rt;
 use mvl_runtime::stdlib::time::{sleep, Duration};
 use rt::Instant;

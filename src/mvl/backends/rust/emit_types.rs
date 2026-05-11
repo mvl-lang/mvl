@@ -12,11 +12,11 @@
 //! - Refinement field predicates → `debug_assert!` in constructors
 //! - Concrete structs with parseable fields → `impl ParseFromArgs`
 
+use crate::mvl::backends::rust::emitter::RustEmitter;
 use crate::mvl::parser::ast::{
     FieldDecl, GenericParam, RefExpr, SecurityLabel, TypeBody, TypeDecl, TypeExpr, Variant,
     VariantFields,
 };
-use crate::mvl::transpiler::emitter::RustEmitter;
 
 // ── Security label preamble ───────────────────────────────────────────────
 

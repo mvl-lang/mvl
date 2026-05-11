@@ -3,14 +3,14 @@
 
 //! Emit Rust expressions from MVL [`Expr`] nodes.
 
+use crate::mvl::backends::rust::emit_stmts::emit_mcdc_guard_block;
+use crate::mvl::backends::rust::emit_types::{emit_label, emit_type_expr};
+use crate::mvl::backends::rust::emitter::RustEmitter;
+use crate::mvl::backends::rust::mcdc_instr::DecisionKind;
 use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{BinaryOp, Expr, Literal, MatchArm, MatchBody, Pattern, UnaryOp};
 use crate::mvl::passes::coverage::BranchKind;
 use crate::mvl::passes::mcdc::analysis::count_clauses_ref;
-use crate::mvl::transpiler::emit_stmts::emit_mcdc_guard_block;
-use crate::mvl::transpiler::emit_types::{emit_label, emit_type_expr};
-use crate::mvl::transpiler::emitter::RustEmitter;
-use crate::mvl::transpiler::mcdc_instr::DecisionKind;
 
 /// Methods implemented as pure MVL functions in std/strings.mvl and std/lists.mvl.
 ///
@@ -1146,7 +1146,7 @@ fn emit_match_arm(
             let n = count_clauses_ref(guard);
             cg.push(&emit_mcdc_guard_block(guard, gid, n));
         } else {
-            use crate::mvl::transpiler::emit_types::emit_ref_expr_for_assert;
+            use crate::mvl::backends::rust::emit_types::emit_ref_expr_for_assert;
             cg.push(&emit_ref_expr_for_assert(guard, "_"));
         }
     }
@@ -1252,7 +1252,7 @@ pub fn emit_pattern(cg: &mut RustEmitter, pat: &Pattern) {
 // ── Block statements (used in if/match body/function body) ────────────────
 
 pub fn emit_block_stmts(cg: &mut RustEmitter, stmts: &[crate::mvl::parser::ast::Stmt]) {
-    use crate::mvl::transpiler::emit_stmts::emit_stmt;
+    use crate::mvl::backends::rust::emit_stmts::emit_stmt;
     for stmt in stmts {
         emit_stmt(cg, stmt);
     }
@@ -1261,8 +1261,8 @@ pub fn emit_block_stmts(cg: &mut RustEmitter, stmts: &[crate::mvl::parser::ast::
 /// Emit block statements where the final `Stmt::Expr` is a tail expression
 /// (no semicolon), so it becomes the implicit return value of the block.
 pub fn emit_block_as_value(cg: &mut RustEmitter, stmts: &[crate::mvl::parser::ast::Stmt]) {
+    use crate::mvl::backends::rust::emit_stmts::emit_stmt;
     use crate::mvl::parser::ast::Stmt;
-    use crate::mvl::transpiler::emit_stmts::emit_stmt;
     if stmts.is_empty() {
         return;
     }

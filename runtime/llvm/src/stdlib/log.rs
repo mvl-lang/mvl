@@ -21,7 +21,7 @@
 use std::collections::HashMap;
 use std::slice;
 
-use mvl_memory::{MvlMap, MvlString};
+use crate::memory::{MvlMap, MvlString};
 use mvl_runtime::stdlib::log::{log_debug, log_error, log_info, log_warn};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -88,8 +88,8 @@ unsafe fn read_mvl_map(m: *const MvlMap) -> HashMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::{mvl_map_drop, mvl_map_new, mvl_string_drop, mvl_string_new};
     use crate::memory_ops::mvl_map_insert;
-    use mvl_memory::{mvl_map_drop, mvl_map_new, mvl_string_drop, mvl_string_new};
 
     #[test]
     fn read_mvl_string_null_returns_empty() {

@@ -8,8 +8,8 @@
 //! Fix: hoist left/right into temp `let` bindings before the match block so each
 //! sub-expression is emitted — and its mutations allocated — exactly once.
 
+use mvl::mvl::backends::rust::transpile_mutated_source_with_prelude;
 use mvl::mvl::parser::Parser;
-use mvl::mvl::transpiler::transpile_mutated_source_with_prelude;
 
 fn parse(src: &str) -> mvl::mvl::parser::ast::Program {
     let (mut p, lex_errs) = Parser::new(src);

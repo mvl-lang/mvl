@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "mvl_runtime", "mvl_memory", "mvl_runtime_c"]
+members = [".", "runtime/rust", "runtime/llvm"]
 exclude = ["fuzz"]
 
 [package]

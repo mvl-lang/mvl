@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 
+#[cfg(feature = "llvm")]
+use mvl::mvl::backends::llvm as codegen;
+use mvl::mvl::backends::rust as transpiler;
 use mvl::mvl::checker;
 use mvl::mvl::checker::passes::{
     aggregate_verdicts, parse_req_filter, source_hash, PassRegistry, Verdict, VerdictCache,
 };
-#[cfg(feature = "llvm")]
-use mvl::mvl::codegen;
 use mvl::mvl::linter::{self, config::LintConfig};
 use mvl::mvl::packages;
 use mvl::mvl::parser::ast::{Decl, Program, Totality, TypeBody};
@@ -15,7 +16,6 @@ use mvl::mvl::passes::mcdc::analysis::{analyze_mcdc, DecisionInfo};
 use mvl::mvl::resolver;
 use mvl::mvl::stdlib;
 use mvl::mvl::toolchain;
-use mvl::mvl::transpiler;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -697,7 +697,7 @@ fn cmd_check(path: &str, req_filter: Option<u8>, error_limit: usize, stdlib_prof
 ///   4. Independence check — for each clause, verify it independently toggles outcome
 ///   5. Report — score + optional verbose covered/missed table
 fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
-    use mvl::mvl::transpiler::{
+    use mvl::mvl::backends::rust::{
         emit_mcdc_preamble, emit_mcdc_report_test, transpile_mcdc_source_with_prelude,
         transpile_mcdc_with_prelude, MCDCDecision,
     };
@@ -960,7 +960,9 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
         process::exit(1);
     });
     if need_mvl_runtime {
-        let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mvl_runtime");
+        let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("runtime")
+            .join("rust");
         let runtime_dst = tmp_dir.join("mvl_runtime");
         copy_dir_recursive(&runtime_src, &runtime_dst).unwrap_or_else(|e| {
             eprintln!("error: cannot copy mvl_runtime: {e}");
@@ -1645,7 +1647,9 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
     // + fs::copy both tolerate pre-existing targets.  Stale artefacts from a
     // prior build of a different version are handled by cargo's incremental cache.
     if out.use_mvl_runtime {
-        let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mvl_runtime");
+        let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("runtime")
+            .join("rust");
         let runtime_dst = tmp_dir.join("mvl_runtime");
         if !runtime_src.exists() {
             eprintln!(
@@ -1939,7 +1943,9 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
 
     // Copy mvl_runtime into the temp dir if needed (parallel builds each get their own copy).
     if need_mvl_runtime {
-        let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mvl_runtime");
+        let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("runtime")
+            .join("rust");
         let runtime_dst = tmp_dir.join("mvl_runtime");
         if !runtime_src.exists() {
             eprintln!(
@@ -2246,7 +2252,9 @@ fn cmd_mutate(path: &str, quiet: bool, gen_boundary: bool, limit: Option<usize>)
         process::exit(1);
     });
     if need_mvl_runtime {
-        let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mvl_runtime");
+        let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("runtime")
+            .join("rust");
         let runtime_dst = tmp_dir.join("mvl_runtime");
         copy_dir_recursive(&runtime_src, &runtime_dst).unwrap_or_else(|e| {
             eprintln!("error: cannot copy mvl_runtime: {e}");
@@ -3411,11 +3419,7 @@ fn run_project_llvm(path: &str) {
         process::exit(1);
     });
     let mut cmd = process::Command::new(&lli);
-    // L5-16: load the MVL memory runtime if present (needed for Phase C heap types).
-    if let Some(lib) = codegen::find_mvl_memory_lib() {
-        cmd.arg(format!("--load={}", lib.display()));
-    }
-    // ADR-0019: load the C-ABI stdlib runtime if present (needed for stdlib calls).
+    // ADR-0019: load the C-ABI stdlib runtime (merged with mvl_memory since #646).
     if let Some(lib) = codegen::find_mvl_runtime_c_lib() {
         cmd.arg(format!("--load={}", lib.display()));
     }
@@ -3609,12 +3613,8 @@ fn run_llvm_prog(
         return false;
     }
 
-    // L5-16: load the MVL memory runtime if present (needed for Phase C heap types).
+    // ADR-0019: load the C-ABI stdlib runtime (merged with mvl_memory since #646).
     let mut lli_cmd = process::Command::new(lli);
-    if let Some(lib) = codegen::find_mvl_memory_lib() {
-        lli_cmd.arg(format!("--load={}", lib.display()));
-    }
-    // ADR-0019: load the C-ABI stdlib runtime if present.
     if let Some(lib) = codegen::find_mvl_runtime_c_lib() {
         lli_cmd.arg(format!("--load={}", lib.display()));
     }

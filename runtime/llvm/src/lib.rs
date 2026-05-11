@@ -11,20 +11,20 @@
 
 //! `mvl_runtime_c` — C-ABI stdlib for the MVL LLVM backend.
 //!
-//! This crate is a `cdylib` loaded by `lli` at runtime alongside `mvl_memory`:
+//! `mvl_runtime_c` — C-ABI stdlib for the MVL LLVM backend (merged with `mvl_memory`).
+//!
+//! This crate is a `cdylib` loaded by `lli` at runtime:
 //!
 //! ```text
-//! lli --load=libmvl_memory.{dylib,so} \
-//!     --load=libmvl_runtime_c.{dylib,so} \
-//!     program.ll
+//! lli --load=libmvl_runtime_c.{dylib,so} program.ll
 //! ```
 //!
 //! It wraps `mvl_runtime` Rust APIs with `#[no_mangle] extern "C"` symbols
 //! so LLVM-generated code can call them.  The Rust transpiler path is
 //! unaffected and continues to use `mvl_runtime` natively via the prelude.
 //!
-//! Collection operations (mvl_string_len, mvl_array_push, mvl_map_get, …)
-//! live in [`memory_ops`]; `mvl_memory` retains only types + lifecycle (#490).
+//! Heap types (MvlString, MvlArray, MvlMap) and their lifecycle functions live
+//! in [`memory`]; collection operations live in [`memory_ops`].
 //!
 //! # Architecture
 //!
@@ -41,6 +41,7 @@
 #[macro_use]
 pub mod macros;
 pub mod abi;
+pub mod memory;
 pub mod memory_ops;
 pub mod stdlib;
 pub mod version;

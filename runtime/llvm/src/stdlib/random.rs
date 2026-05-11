@@ -43,8 +43,8 @@ pub extern "C" fn _mvl_random_float() -> f64 {
 /// dropping the array via `mvl_array_drop`. Wired via `I64ReturnsPtrArg`.
 #[no_mangle]
 #[allow(unsafe_code)]
-pub extern "C" fn _mvl_random_bytes(n: i64) -> *mut mvl_memory::MvlArray {
-    use mvl_memory::mvl_array_new;
+pub extern "C" fn _mvl_random_bytes(n: i64) -> *mut crate::memory::MvlArray {
+    use crate::memory::mvl_array_new;
     let vals = random::bytes(n);
     let arr = unsafe { mvl_array_new(std::mem::size_of::<i64>(), vals.len().max(1)) };
     for v in vals {
@@ -121,7 +121,7 @@ mod tests {
     #[test]
     #[allow(unsafe_code)]
     fn test_random_bytes_length() {
-        use mvl_memory::{mvl_array_drop, MvlArray};
+        use crate::memory::{mvl_array_drop, MvlArray};
         let arr = _mvl_random_bytes(16);
         assert!(!arr.is_null());
         let len = unsafe { crate::memory_ops::mvl_array_len(arr as *const MvlArray) };

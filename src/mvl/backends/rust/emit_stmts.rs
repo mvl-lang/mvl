@@ -15,17 +15,17 @@
 //!
 //! See ADR-0003 for the overall compilation strategy.
 
+use crate::mvl::backends::rust::emit_exprs::{
+    arms_have_str_pattern, emit_block_as_value, emit_block_stmts, emit_expr, emit_pattern,
+};
+use crate::mvl::backends::rust::emit_types::{emit_ref_expr_for_assert, emit_type_expr};
+use crate::mvl::backends::rust::emitter::RustEmitter;
+use crate::mvl::backends::rust::mcdc_instr::{detect_coupled_pairs, DecisionKind};
 use crate::mvl::parser::ast::{
     BinaryOp, ElseBranch, Expr, LValue, LogicOp, MatchBody, RefExpr, Stmt, TypeExpr,
 };
 use crate::mvl::passes::coverage::BranchKind;
 use crate::mvl::passes::mcdc::analysis::{collect_clauses, count_clauses_ref};
-use crate::mvl::transpiler::emit_exprs::{
-    arms_have_str_pattern, emit_block_as_value, emit_block_stmts, emit_expr, emit_pattern,
-};
-use crate::mvl::transpiler::emit_types::{emit_ref_expr_for_assert, emit_type_expr};
-use crate::mvl::transpiler::emitter::RustEmitter;
-use crate::mvl::transpiler::mcdc_instr::{detect_coupled_pairs, DecisionKind};
 
 /// Emit a single statement (with indentation and trailing newline).
 pub fn emit_stmt(cg: &mut RustEmitter, stmt: &Stmt) {
