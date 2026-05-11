@@ -64,12 +64,22 @@ impl TypeChecker {
                         return Ty::Option(Box::new(Ty::Unknown));
                     }
                     // Bare variant: `DivisionByZero` or path: `MathError::DivisionByZero`
-                    let variant_name = if let Some((_, v)) = name.split_once("::") {
-                        v
-                    } else {
-                        name.as_str()
-                    };
-                    if let Some(enum_ty) = self.lookup_enum_for_variant(variant_name) {
+                    // When the path has a namespace prefix (e.g. `Foo::Bar`), prefer the
+                    // type named `Foo` over any other enum that happens to have a `Bar` variant.
+                    // This prevents ambiguous-variant bugs when two enums share a variant name
+                    // (e.g. user `TokenCat::Number` vs stdlib JSON `Value::Number`).
+                    if let Some((ns, v)) = name.split_once("::") {
+                        // Prefer the explicitly named type.
+                        if self.env.types.get(ns).is_some_and(|ti| {
+                            matches!(&ti.body, TypeBodyInfo::Enum(vs) if vs.iter().any(|x| x.name == v))
+                        }) {
+                            return Ty::Named(ns.to_string(), vec![]);
+                        }
+                        // Fallback: search all enums (handles aliased / re-exported types).
+                        if let Some(enum_ty) = self.lookup_enum_for_variant(v) {
+                            return enum_ty;
+                        }
+                    } else if let Some(enum_ty) = self.lookup_enum_for_variant(name.as_str()) {
                         return enum_ty;
                     }
                     // Function reference: `xs.map(double)` — ident is a known function name.

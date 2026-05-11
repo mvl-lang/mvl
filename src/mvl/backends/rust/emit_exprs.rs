@@ -327,8 +327,12 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     emit_expr(cg, receiver);
                     match receiver_ty.as_ref() {
                         Some(Ty::String) => {
+                            // emit_args_no_into avoids .into() before .as_str().
+                            // (x.into()).as_str() is ambiguous (E0282) when the arg
+                            // is a String variable — Rust cannot infer the Into target
+                            // without a constraining function parameter type.
                             cg.push(".contains((");
-                            emit_args(cg, args);
+                            emit_args_no_into(cg, args);
                             cg.push(").as_str())");
                         }
                         _ => {

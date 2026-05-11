@@ -1,0 +1,172 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/main.mvl — S6: MVL compiler driver (issue #187)
+//
+// Entry point for the self-hosted MVL frontend.
+// Reads a directory of .mvl source files, lexes each one with the MVL
+// lexer (compiler/lexer.mvl), and reports per-category token counts.
+//
+// Token categories reported:
+//   keywords  — KwFn … KwFalse (41 keyword variants)
+//   idents    — identifiers
+//   numbers   — integer and float literals
+//   strings   — string literals
+//   punct     — operators and punctuation
+//   comments  — line comments (//)
+//
+// Usage (from repo root):
+//   mvl run compiler/main.mvl
+//   mvl run compiler/main.mvl -- --dir tests/corpus/01_basics
+//   make -C tests/spikes/001-parser compiler
+//
+// Default directory: compiler/ (dog-fooding: lex the compiler itself)
+
+use lexer::lex;
+use ast::Token;
+use ast::TokenKind;
+use std.io.{path, join, read_dir, read_to_string, to_string, Path}
+use std.args.{get_arg}
+
+// ── Token predicate functions for filter ────────────────────────────────────
+//
+// filter requires fn(T) -> Bool — named functions work as function pointers.
+
+fn is_keyword_token(tok: Token) -> Bool {
+    match tok.kind {
+        TokenKind::Ident    => false,
+        TokenKind::IntLit   => false,
+        TokenKind::FloatLit => false,
+        TokenKind::StrLit   => false,
+        TokenKind::Punct    => false,
+        TokenKind::Comment  => false,
+        TokenKind::Eof      => false,
+        _                   => true,
+    }
+}
+
+fn is_ident_token(tok: Token) -> Bool {
+    match tok.kind {
+        TokenKind::Ident => true,
+        _                => false,
+    }
+}
+
+fn is_number_token(tok: Token) -> Bool {
+    match tok.kind {
+        TokenKind::IntLit   => true,
+        TokenKind::FloatLit => true,
+        _                   => false,
+    }
+}
+
+fn is_str_token(tok: Token) -> Bool {
+    match tok.kind {
+        TokenKind::StrLit => true,
+        _                 => false,
+    }
+}
+
+fn is_punct_token(tok: Token) -> Bool {
+    match tok.kind {
+        TokenKind::Punct => true,
+        _                => false,
+    }
+}
+
+fn is_comment_token(tok: Token) -> Bool {
+    match tok.kind {
+        TokenKind::Comment => true,
+        _                  => false,
+    }
+}
+
+// ── IFC helpers ──────────────────────────────────────────────────────────────
+
+fn dir_from_arg(v: Tainted[String]) -> Path {
+    let clean_dir: Clean[String] = sanitize(v);
+    join(path("."), clean_dir)
+}
+
+// ── Token-count aggregation ───────────────────────────────────────────────────
+
+type Counts = struct {
+    keywords: Int,
+    idents:   Int,
+    numbers:  Int,
+    strings:  Int,
+    punct:    Int,
+    comments: Int,
+}
+
+// Label bridge: transparent accepts Clean[String] from IFC boundary; body is
+// type-checked with src: String so lex(src) is valid.  Returns Clean[Counts];
+// callers use field access (.keywords etc.) which strips the label back to Int.
+transparent partial fn lex_and_count(src: String) -> Counts {
+    let tokens: List[Token] = lex(src);
+    Counts {
+        keywords: tokens.filter(is_keyword_token).len(),
+        idents:   tokens.filter(is_ident_token).len(),
+        numbers:  tokens.filter(is_number_token).len(),
+        strings:  tokens.filter(is_str_token).len(),
+        punct:    tokens.filter(is_punct_token).len(),
+        comments: tokens.filter(is_comment_token).len(),
+    }
+}
+
+// ── Main ─────────────────────────────────────────────────────────────────────
+
+partial fn main() -> Unit ! FileRead, Console {
+    let dir_path: Path = match get_arg("dir") {
+        None    => path("compiler"),
+        Some(v) => dir_from_arg(v),
+    };
+
+    match read_dir(dir_path) {
+        Err(e) => println("error reading directory: {}", e),
+        Ok(entries) => {
+            let mut file_count: Int  = 0;
+            let mut kw_total: Int    = 0;
+            let mut id_total: Int    = 0;
+            let mut num_total: Int   = 0;
+            let mut str_total: Int   = 0;
+            let mut pct_total: Int   = 0;
+            let mut cmt_total: Int   = 0;
+
+            let mut i: Int = 0;
+            while i < entries.len() {
+                match entries.get(i) {
+                    None => (),
+                    Some(entry) => {
+                        let name: String = to_string(entry.path);
+                        if entry.is_file && name.ends_with(".mvl") {
+                            file_count = file_count + 1;
+                            match read_to_string(entry.path) {
+                                Err(_)  => (),
+                                Ok(raw) => {
+                                    let src: Clean[String] = sanitize(raw);
+                                    let c: Clean[Counts] = lex_and_count(src);
+                                    kw_total  = kw_total  + c.keywords;
+                                    id_total  = id_total  + c.idents;
+                                    num_total = num_total + c.numbers;
+                                    str_total = str_total + c.strings;
+                                    pct_total = pct_total + c.punct;
+                                    cmt_total = cmt_total + c.comments
+                                }
+                            }
+                        }
+                    }
+                }
+                i = i + 1
+            }
+
+            println("files:    {}", file_count);
+            println("keywords: {}", kw_total);
+            println("idents:   {}", id_total);
+            println("numbers:  {}", num_total);
+            println("strings:  {}", str_total);
+            println("punct:    {}", pct_total);
+            println("comments: {}", cmt_total)
+        }
+    }
+}

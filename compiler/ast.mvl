@@ -1,0 +1,90 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/ast.mvl — S1: MVL token type definitions (issue #187)
+//
+// Port of TokenKind / Token / Span from src/mvl/parser/lexer.rs.
+//
+// All 42 keywords (including IFC labels and capability markers) are modelled
+// as unit enum variants.  The actual source text is stored in Token.lexeme
+// so the parser can reconstruct spans and error messages without carrying
+// data inside each variant.
+//
+// Parallel structure to std/: flat module, one concern per file.
+// Used by compiler/lexer.mvl (S2) and compiler/main.mvl (S6).
+
+// ── Source location ─────────────────────────────────────────────────────────
+
+pub type Span = struct {
+    line: Int,
+    col:  Int,
+}
+
+// ── Token classification ─────────────────────────────────────────────────────
+
+pub type TokenKind = enum {
+    // ── Declaration keywords ────────────────────────────────────────────
+    KwFn,
+    KwLet,
+    KwMut,
+    KwMatch,
+    KwIf,
+    KwElse,
+    KwFor,
+    KwWhile,
+    KwType,
+    KwTotal,
+    KwPartial,
+    KwReturn,
+    KwMove,
+    KwConsume,
+    KwDeclassify,
+    KwSanitize,
+    KwConst,
+    KwWhere,
+    KwIn,
+    KwExtern,
+    KwStruct,
+    KwEnum,
+    KwPub,
+    KwUse,
+    KwTest,
+    KwImpl,
+    KwBuiltin,
+    KwTransparent,
+    KwRequires,
+    KwEnsures,
+    KwInvariant,
+    // ── IFC security labels ─────────────────────────────────────────────
+    KwPublic,
+    KwTainted,
+    KwSecret,
+    KwClean,
+    // ── Capability markers ──────────────────────────────────────────────
+    KwIso,
+    KwVal,
+    KwRef,
+    KwTag,
+    // ── Boolean literals ────────────────────────────────────────────────
+    KwTrue,
+    KwFalse,
+    // ── Value-carrying kinds (actual text in Token.lexeme) ───────────────
+    Ident,
+    IntLit,
+    FloatLit,
+    StrLit,
+    // ── Punctuation and operators ───────────────────────────────────────
+    Punct,
+    // ── Line comment (//) ───────────────────────────────────────────────
+    Comment,
+    // ── End of file ─────────────────────────────────────────────────────
+    Eof,
+}
+
+// ── Token ────────────────────────────────────────────────────────────────────
+
+pub type Token = struct {
+    kind:   TokenKind,
+    lexeme: String,
+    span:   Span,
+}
