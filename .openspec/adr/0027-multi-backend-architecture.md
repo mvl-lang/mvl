@@ -1,10 +1,8 @@
 # ADR-0027: Multi-Backend Architecture
 
-**Status:** Accepted
-**Date:** 2026-05-11
-**Issues:** #646 (first step of epic #615)
-
----
+**Status:** Accepted  
+**Date:** 2026-05-11  
+**Issue:** #646 (first step of epic #615)
 
 ## Context
 
@@ -60,12 +58,6 @@ runtime/
 - **Calling convention:** `libmvl_runtime_c.{dylib,so}` filename is unchanged; CI and tooling continue to work without changes.
 - **No functional change:** All existing tests pass; `--backend=rust` and `--backend=llvm` produce identical output.
 - **Import paths:** `mvl::mvl::transpiler` → `mvl::mvl::backends::rust`, `mvl::mvl::codegen` → `mvl::mvl::backends::llvm`.
-
-## Relation to language definition
-
-This ADR defines the compiler infrastructure architecture and does not affect the MVL language semantics. It organizes existing functionality (Rust transpilation and LLVM code generation) under a unified `Backend` trait to enable future extensions (WebAssembly, C, Python, etc.) without language changes.
-
-The Backend trait is internal compiler plumbing — users see no difference: `mvl build --backend=rust` and `mvl build --backend=llvm` continue to work identically.
 
 ## References
 
