@@ -70,12 +70,12 @@ partial fn bounded_loop(lo: Int where self >= 0, hi: Int where self >= 0) -> Uni
 }
 
 fn main() -> Unit ! Console {
-    let _ = divide(10, 2);
-    let _ = nonneg();
-    let _ = factorial(5);
-    let _ = max(3, 7);
-    let _ = range_check(1, 10);
-    let _ = id_int(42);
-    let _ = inc(7);
-    let _ = nonneg_id(5);
+    let _: Int = divide(10, 2);
+    let _: Int = nonneg();
+    let _: Int = factorial(5);
+    let _: Int = max(3, 7);
+    let _: Int = range_check(1, 10);
+    let _: Int = id_int(42);
+    let _: Int = inc(7);
+    let _: Int = nonneg_id(5);
 }

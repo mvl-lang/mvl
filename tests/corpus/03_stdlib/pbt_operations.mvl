@@ -16,6 +16,8 @@ use std.pbt.{
     IntGen, BoolGen, FloatGen, StringGen, ListIntGen,
     BytesGen, RawStringGen, FuzzConfig,
 }
+use std.lists.{list_len}
+use std.strings.{str_len}
 
 // ── Phase A: basic property checks ────────────────────────────────────────────
 
@@ -24,7 +26,7 @@ fn fn_divide_never_fails(x: Int) -> Bool {
     x > 0
 }
 
-fn test_divide_never_fails() -> Unit ! Random {
+partial fn test_divide_never_fails() -> Unit ! Random {
     property_check_int("divide_never_fails", gen_int(1, 1000), fn_divide_never_fails, 1000)
 }
 
@@ -33,7 +35,7 @@ fn fn_bool_tautology(b: Bool) -> Bool {
     true
 }
 
-fn test_bool_property() -> Unit ! Random {
+partial fn test_bool_property() -> Unit ! Random {
     property_check_bool("bool_tautology", gen_bool(), fn_bool_tautology, 100)
 }
 
@@ -42,7 +44,7 @@ fn fn_list_len_nonneg(xs: List[Int]) -> Bool {
     list_len(xs) >= 0
 }
 
-fn test_list_len_nonneg() -> Unit ! Random {
+partial fn test_list_len_nonneg() -> Unit ! Random {
     property_check_list_int(
         "list_len_nonneg",
         gen_list_int(0, 100, 20),
@@ -56,7 +58,7 @@ fn fn_string_len_nonneg(s: String) -> Bool {
     str_len(s) >= 0
 }
 
-fn test_string_len_nonneg() -> Unit ! Random {
+partial fn test_string_len_nonneg() -> Unit ! Random {
     property_check_string("string_len_nonneg", gen_string(0, 50), fn_string_len_nonneg, 500)
 }
 
@@ -65,7 +67,7 @@ fn fn_float_lt_one(x: Float) -> Bool {
     x < 1.0
 }
 
-fn test_float_property() -> Unit ! Random {
+partial fn test_float_property() -> Unit ! Random {
     property_check_float("float_lt_one", gen_float(0.0, 1.0), fn_float_lt_one, 500)
 }
 
@@ -76,7 +78,7 @@ fn is_even(x: Int) -> Bool {
     x % 2 == 0
 }
 
-fn test_filtered_generator() -> Unit ! Random {
+partial fn test_filtered_generator() -> Unit ! Random {
     let even_gen: IntGen = gen_filter_int(gen_int(0, 200), is_even);
     property_check_int("filtered_gen", even_gen, is_even, 200)
 }
@@ -86,7 +88,7 @@ fn is_small(x: Int) -> Bool {
     x < 10
 }
 
-fn test_one_of_generator() -> Unit ! Random {
+partial fn test_one_of_generator() -> Unit ! Random {
     let g: IntGen = gen_one_of_int([1, 2, 3, 5, 7]);
     property_check_int("one_of_gen", g, is_small, 100)
 }
@@ -96,7 +98,7 @@ fn is_positive(x: Int) -> Bool {
     x > 0
 }
 
-fn test_weighted_generator() -> Unit ! Random {
+partial fn test_weighted_generator() -> Unit ! Random {
     // Values: [1, 10, 100] with weights [10, 3, 1] — 1 is drawn most often.
     let g: IntGen = gen_weighted_int([1, 10, 100], [10, 3, 1]);
     property_check_int("weighted_gen", g, is_positive, 200)
@@ -107,7 +109,7 @@ fn fn_always_true(x: Int) -> Bool {
     true
 }
 
-fn test_boundary_generator() -> Unit ! Random {
+partial fn test_boundary_generator() -> Unit ! Random {
     property_check_int("boundary_gen", gen_boundary_int(), fn_always_true, 100)
 }
 
@@ -143,7 +145,7 @@ fn fn_square_nonneg(x: Int) -> Bool {
     sq >= 0
 }
 
-fn test_targeted_pbt() -> Unit ! Random {
+partial fn test_targeted_pbt() -> Unit ! Random {
     property_check_targeted_int(
         "targeted_square_nonneg",
         gen_int(-100, 100),
@@ -153,7 +155,7 @@ fn test_targeted_pbt() -> Unit ! Random {
     )
 }
 
-fn test_mutation_based_pbt() -> Unit ! Random {
+partial fn test_mutation_based_pbt() -> Unit ! Random {
     property_check_with_mutation_int(
         "mutation_square_nonneg",
         gen_int(-100, 100),
@@ -170,7 +172,7 @@ fn fn_bytes_len_nonneg(bs: List[Int]) -> Bool {
     list_len(bs) >= 0
 }
 
-fn test_fuzz_bytes() -> Unit ! Random {
+partial fn test_fuzz_bytes() -> Unit ! Random {
     fuzz_check_bytes(
         "fuzz_bytes_len_nonneg",
         gen_raw_bytes(0, 256),
@@ -184,7 +186,7 @@ fn fn_raw_string_len_nonneg(s: String) -> Bool {
     str_len(s) >= 0
 }
 
-fn test_fuzz_string() -> Unit ! Random {
+partial fn test_fuzz_string() -> Unit ! Random {
     fuzz_check_string(
         "fuzz_string_len_nonneg",
         gen_raw_string(0, 100),
@@ -193,7 +195,7 @@ fn test_fuzz_string() -> Unit ! Random {
     )
 }
 
-fn main() -> Unit ! Random {
+partial fn main() -> Unit ! Random {
     test_divide_never_fails();
     test_bool_property();
     test_list_len_nonneg();
