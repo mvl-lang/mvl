@@ -158,14 +158,21 @@ pub fn find_lli() -> Option<std::path::PathBuf> {
 /// Locate a cdylib by env-var override then by proximity to the current executable.
 ///
 /// Search order:
-/// 1. `env_var` environment variable (explicit override)
+/// 1. `env_var` environment variable (explicit override, must end in `.dylib` or `.so`)
 /// 2. `target/{profile}/{lib_name}.{dylib,so}` — sibling of the current executable
 /// 3. `target/{profile}/deps/{lib_name}.{dylib,so}` — Cargo cdylib output location
 /// 4. Returns `None` if not found
+///
+/// **Security note:** `env_var` is a trusted-operator override. It must not be
+/// derived from user-controlled input. The extension check guards against
+/// obvious misconfiguration but is not a sandbox boundary.
 fn find_cdylib(env_var: &str, lib_name: &str) -> Option<std::path::PathBuf> {
     if let Ok(path) = std::env::var(env_var) {
-        let p = std::path::PathBuf::from(path);
-        if p.exists() {
+        let p = std::path::PathBuf::from(&path);
+        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if !matches!(ext, "dylib" | "so") {
+            eprintln!("warning: {env_var} ignored — must end in .dylib or .so: {path}");
+        } else if p.exists() {
             return Some(p);
         }
     }
@@ -2703,5 +2710,72 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     fn to_ir_string(&self) -> String {
         self.module.print_to_string().to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_cdylib;
+    use std::io::Write;
+
+    /// Extension validation: a path with a wrong extension must be rejected even
+    /// if the file exists on disk.
+    #[test]
+    fn find_cdylib_rejects_bad_extension() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        // Rename via a path with .txt extension
+        let bad_path = tmp.path().with_extension("txt");
+        std::fs::copy(tmp.path(), &bad_path).unwrap();
+
+        let var = "MVL_TEST_BAD_EXT_LIB";
+        std::env::set_var(var, &bad_path);
+        let result = find_cdylib(var, "dummy");
+        std::env::remove_var(var);
+        std::fs::remove_file(&bad_path).ok();
+
+        assert!(result.is_none(), "bad extension must be rejected");
+    }
+
+    /// Extension validation: a path with a `.so` extension is accepted when the
+    /// file exists.
+    #[test]
+    fn find_cdylib_accepts_so_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = dir.path().join("libfake.so");
+        std::fs::File::create(&lib).unwrap().write_all(&[]).unwrap();
+
+        let var = "MVL_TEST_SO_LIB";
+        std::env::set_var(var, &lib);
+        let result = find_cdylib(var, "dummy");
+        std::env::remove_var(var);
+
+        assert_eq!(result, Some(lib));
+    }
+
+    /// Extension validation: a path with a `.dylib` extension is accepted when
+    /// the file exists.
+    #[test]
+    fn find_cdylib_accepts_dylib_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = dir.path().join("libfake.dylib");
+        std::fs::File::create(&lib).unwrap().write_all(&[]).unwrap();
+
+        let var = "MVL_TEST_DYLIB_LIB";
+        std::env::set_var(var, &lib);
+        let result = find_cdylib(var, "dummy");
+        std::env::remove_var(var);
+
+        assert_eq!(result, Some(lib));
+    }
+
+    /// When the env var is absent the function falls through to the filesystem
+    /// search (which returns None in a test context since the binary dir won't
+    /// have the lib). Crucially it must not panic.
+    #[test]
+    fn find_cdylib_no_env_var_returns_none_or_path() {
+        let var = "MVL_TEST_ABSENT_LIB_XYZ";
+        std::env::remove_var(var);
+        // Just must not panic; result is environment-dependent.
+        let _ = find_cdylib(var, "libnonexistent_xyz");
     }
 }
