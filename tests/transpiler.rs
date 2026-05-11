@@ -549,7 +549,8 @@ impl From[IoError] for AppError {
     assert_contains(&rust, "impl std::convert::From<IoError> for AppError {");
     assert_contains(&rust, "fn from(e: IoError) -> Self {");
     // Phase A: e is used exactly once — last use is a move, not a clone.
-    assert_contains(&rust, "AppError::Io(e)");
+    // `.into()` is emitted for all value args to allow IFC-label coercions.
+    assert_contains(&rust, "AppError::Io(e.into())");
 }
 
 /// `impl From[A] for B` with no `from` method emits a todo!().
@@ -2309,7 +2310,8 @@ fn if_expr_as_value_emits_block_body() {
 fn ident_arg_non_last_use_emits_clone() {
     let src = "fn double(n: Int) -> Int { n }  fn f(x: Int) -> Int { let _a: Int = double(x); double(x) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, "double(x.clone())");
+    // `.into()` is now emitted for all value args to allow IFC-label coercions.
+    assert_contains(&rust, "double(x.clone().into())");
 }
 
 // ── Epic #480: Primitives and runtime architecture redesign ──────────────────

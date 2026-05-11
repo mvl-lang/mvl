@@ -292,7 +292,8 @@ fn forward(b: Blob) -> Blob { wrap(b) }
 "#;
     let rust = transpile_src(src);
     // wrap returns b → not inferred as borrow → forward's single use is a move.
-    assert_contains(&rust, "wrap(b)");
+    // `.into()` is emitted for all value args to allow IFC-label coercions (identity here).
+    assert_contains(&rust, "wrap(b.into())");
     assert_not_contains(&rust, "wrap(b.clone())");
 }
 
@@ -305,7 +306,8 @@ fn make_greeting(s: String) -> String { greet(s) }
 "#;
     let rust = transpile_src(src);
     // greet returns name → not in borrow map → single use moved.
-    assert_contains(&rust, "greet(s)");
+    // `.into()` is emitted for all value args to allow IFC-label coercions (identity here).
+    assert_contains(&rust, "greet(s.into())");
     assert_not_contains(&rust, "greet(s.clone())");
 }
 
@@ -343,8 +345,9 @@ fn caller(b: Buf) -> Buf {
     let rust = transpile_src(src);
     // take returns b → disqualified from borrow inference → kept as owned.
     // caller uses b twice: first call must clone, last call moves.
-    assert_contains(&rust, "take(b.clone())");
-    assert_contains(&rust, "take(b)");
+    // `.into()` is emitted for all value args to allow IFC-label coercions.
+    assert_contains(&rust, "take(b.clone().into())");
+    assert_contains(&rust, "take(b.into())");
 }
 
 // ── Regression: for-loop iterable param must not be inferred as borrow ────────
@@ -368,8 +371,9 @@ fn caller(xs: List[Int]) -> Int { process(xs) }
     let rust = transpile_src(src);
     // process: xs is the direct for-loop iterable → disqualified.
     // caller: single use of xs → moved (Phase A last-use move).
+    // `.into()` is emitted for all value args to allow IFC-label coercions.
     assert_not_contains(&rust, "process(&xs)");
-    assert_contains(&rust, "process(xs)");
+    assert_contains(&rust, "process(xs.into())");
 }
 
 // ── Fix: callee signature emits &T for inferred-borrow params (AC #1) ─────────

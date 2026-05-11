@@ -947,7 +947,7 @@ fn emit_args(cg: &mut RustEmitter, args: &[Expr]) {
         if i > 0 {
             cg.push(", ");
         }
-        emit_expr_as_arg(cg, arg);
+        emit_expr_as_fn_arg(cg, arg);
     }
 }
 
@@ -985,7 +985,7 @@ fn emit_args_with_borrows(cg: &mut RustEmitter, args: &[Expr], borrows: &[Option
         }
         match borrows.get(i).copied().flatten() {
             Some(mutable) => emit_expr_as_borrow_arg(cg, arg, mutable),
-            None => emit_expr_as_arg(cg, arg),
+            None => emit_expr_as_fn_arg(cg, arg),
         }
     }
 }
@@ -1049,6 +1049,46 @@ fn emit_expr_as_arg(cg: &mut RustEmitter, expr: &Expr) {
             // Temporaries (function call results, struct literals, block expressions)
             // are rvalues that Rust moves into the callee — no `.clone()` needed.
             // The value is freshly created and has no other owner in the caller.
+            emit_expr(cg, expr);
+        }
+    }
+}
+
+/// Emit an expression as an argument to a regular function call (not a macro).
+///
+/// Adds `.into()` so that unlabeled (Public) values coerce to labeled parameters
+/// (e.g. `String` → `Clean<String>`) via `From<T> for Label<T>` in mvl_runtime::ifc.
+/// This is safe for function calls because the parameter type constrains `.into()`'s
+/// target, preventing the E0283 ambiguity that arises in macros like `println!`.
+fn emit_expr_as_fn_arg(cg: &mut RustEmitter, expr: &Expr) {
+    use crate::mvl::checker::types::Ty;
+    match expr {
+        Expr::Literal(Literal::Str(s), _) => {
+            cg.push(&format!("\"{}\".to_string().into()", escape_str(s)));
+        }
+        // Function-typed identifiers (callbacks, named function references) must NOT
+        // get `.into()` — Rust function items do not implement `Into<_>` generically.
+        Expr::Ident(_, span) if matches!(cg.expr_types.get(span), Some(Ty::Fn(..))) => {
+            emit_expr(cg, expr);
+            if !cg.last_uses.contains(span) {
+                cg.push(".clone()");
+            }
+        }
+        // Value identifiers: `.into()` allows unlabeled (Public) values to coerce into
+        // labeled parameters (e.g. `String` → `Clean<String>`).
+        Expr::Ident(_, span) => {
+            emit_expr(cg, expr);
+            if !cg.last_uses.contains(span) {
+                cg.push(".clone().into()");
+            } else {
+                cg.push(".into()");
+            }
+        }
+        Expr::FieldAccess { .. } => {
+            emit_expr(cg, expr);
+            cg.push(".clone().into()");
+        }
+        _ => {
             emit_expr(cg, expr);
         }
     }
