@@ -286,18 +286,24 @@ pub enum CheckError {
         fn_name: String,
         pred: String,
         span: Span,
+        /// Counterexample witness value, if the solver extracted one (Phase 4, #627).
+        counterexample: Option<String>,
     },
     /// An `ensures` postcondition was statically proven to be violated at this return point.
     PostconditionViolated {
         fn_name: String,
         pred: String,
         span: Span,
+        /// Counterexample witness value, if the solver extracted one (Phase 4, #627).
+        counterexample: Option<String>,
     },
     /// A `while` loop invariant was statically proven to not hold at loop entry.
     InvariantViolated {
         fn_name: String,
         pred: String,
         span: Span,
+        /// Counterexample witness value, if the solver extracted one (Phase 4, #627).
+        counterexample: Option<String>,
     },
 
     // ── Label-transparent function validation (ADR-0024) ─────────────────
@@ -607,15 +613,18 @@ impl CheckError {
             CheckError::TransparentFnGeneric { name, .. } => format!(
                 "`transparent fn {name}` is also generic — `transparent` cannot be combined with generic type parameters; use label-polymorphic generics instead (see ADR-0024)"
             ),
-            CheckError::PreconditionViolated { fn_name, pred, .. } => format!(
-                "precondition violated for `{fn_name}`: `{pred}` cannot be proven at this call site"
-            ),
-            CheckError::PostconditionViolated { fn_name, pred, .. } => format!(
-                "postcondition violated in `{fn_name}`: `{pred}` cannot be proven at this return point"
-            ),
-            CheckError::InvariantViolated { fn_name, pred, .. } => format!(
-                "loop invariant `{pred}` in `{fn_name}` cannot be proven to hold at loop entry"
-            ),
+            CheckError::PreconditionViolated { fn_name, pred, counterexample, .. } => {
+                let cx = counterexample.as_deref().map(|c| format!(" (counterexample: {c})")).unwrap_or_default();
+                format!("precondition violated for `{fn_name}`: `{pred}` cannot be proven at this call site{cx}")
+            }
+            CheckError::PostconditionViolated { fn_name, pred, counterexample, .. } => {
+                let cx = counterexample.as_deref().map(|c| format!(" (counterexample: {c})")).unwrap_or_default();
+                format!("postcondition violated in `{fn_name}`: `{pred}` cannot be proven at this return point{cx}")
+            }
+            CheckError::InvariantViolated { fn_name, pred, counterexample, .. } => {
+                let cx = counterexample.as_deref().map(|c| format!(" (counterexample: {c})")).unwrap_or_default();
+                format!("loop invariant `{pred}` in `{fn_name}` cannot be proven to hold at loop entry{cx}")
+            }
         }
     }
 }

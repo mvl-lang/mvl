@@ -720,6 +720,9 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
             }
         }
         RefExpr::Grouped { inner, .. } => format!("({})", emit_ref_expr(inner, binding)),
+        // old(e) in ensures: for runtime assertion purposes, treat as the current value.
+        // Full entry-time capture is a future enhancement.
+        RefExpr::Old { inner, .. } => emit_ref_expr(inner, binding),
     }
 }
 

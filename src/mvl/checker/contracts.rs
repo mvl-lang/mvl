@@ -350,6 +350,7 @@ fn check_requires_at_call(
                         fn_name: fn_name.to_string(),
                         pred: display_pred(req_pred),
                         span: call_span,
+                        counterexample: None,
                     });
                 }
                 // Proven or RuntimeCheck: silent at compile time.
@@ -499,6 +500,7 @@ fn check_ensures_for_return(
                 fn_name: fn_name.to_string(),
                 pred: display_pred(ens_pred),
                 span: ret_span,
+                counterexample: None,
             });
         }
     }
@@ -576,6 +578,10 @@ fn normalize_pred(pred: &RefExpr, old_name: &str) -> RefExpr {
             inner: Box::new(normalize_pred(inner, old_name)),
             span: *span,
         },
+        RefExpr::Old { inner, span } => RefExpr::Old {
+            inner: Box::new(normalize_pred(inner, old_name)),
+            span: *span,
+        },
         // Leaves unchanged.
         RefExpr::Integer { .. } | RefExpr::Float { .. } | RefExpr::Len { .. } => pred.clone(),
     }
@@ -643,6 +649,14 @@ fn subst_pred_ident(pred: &RefExpr, old_name: &str, new_val: &RefExpr) -> RefExp
             span: *span,
         },
         RefExpr::Grouped { inner, span } => RefExpr::Grouped {
+            inner: Box::new(subst_pred_ident(inner, old_name, new_val)),
+            span: *span,
+        },
+        // Substituting inside old(e) is correct here: all current callers supply a
+        // call-site literal as new_val, which represents the value at call time — the same
+        // moment old(e) refers to. If this function is ever used with post-call values,
+        // re-evaluate whether substituting inside Old remains sound.
+        RefExpr::Old { inner, span } => RefExpr::Old {
             inner: Box::new(subst_pred_ident(inner, old_name, new_val)),
             span: *span,
         },
@@ -735,6 +749,7 @@ fn check_multi_param_requires_literal(
             fn_name: fn_name.to_string(),
             pred: display_pred(pred),
             span: call_span,
+            counterexample: None,
         });
     }
 }
@@ -840,6 +855,7 @@ fn check_invariant_at_entry(
                     fn_name: fn_name.to_string(),
                     pred: display_pred(inv_pred),
                     span: loop_span,
+                    counterexample: None,
                 });
             }
         }
@@ -853,6 +869,7 @@ fn check_invariant_at_entry(
                     fn_name: fn_name.to_string(),
                     pred: display_pred(inv_pred),
                     span: loop_span,
+                    counterexample: None,
                 });
             }
             // Proven or RuntimeCheck: silent at compile time.
@@ -879,7 +896,9 @@ fn collect_idents_inner(pred: &RefExpr, names: &mut Vec<String>) {
             collect_idents_inner(left, names);
             collect_idents_inner(right, names);
         }
-        RefExpr::Not { inner, .. } | RefExpr::Grouped { inner, .. } => {
+        RefExpr::Not { inner, .. }
+        | RefExpr::Grouped { inner, .. }
+        | RefExpr::Old { inner, .. } => {
             collect_idents_inner(inner, names);
         }
         RefExpr::Len { ident, .. } => names.push(ident.clone()),
@@ -929,6 +948,7 @@ fn display_pred(pred: &RefExpr) -> String {
         }
         RefExpr::Not { inner, .. } => format!("!{}", display_pred(inner)),
         RefExpr::Grouped { inner, .. } => format!("({})", display_pred(inner)),
+        RefExpr::Old { inner, .. } => format!("old({})", display_pred(inner)),
         RefExpr::Len { ident, .. } => format!("len({ident})"),
     }
 }

@@ -2427,3 +2427,89 @@ fn prelude_builtin_fn_does_not_produce_todo_stub() {
         out.main_rs
     );
 }
+
+// ── Phase 4 (#627): contracts cross-backend transpilation ────────────────────
+
+/// Phase 4: `basic_contracts.mvl` transpiles without panic or error.
+/// Verifies that `corpus:skip-transpiler` has been lifted.
+#[test]
+fn corpus_basic_contracts_transpiles() {
+    let src = include_str!("corpus/13_contracts/basic_contracts.mvl");
+    let rust = transpile_src(src);
+    assert_contains(&rust, "pub fn");
+}
+
+/// Phase 4: `requires` clauses emit `debug_assert!` in the function body.
+#[test]
+fn requires_emits_debug_assert_at_entry() {
+    let src = r#"
+        fn divide(a: Int, b: Int) -> Int
+          requires b != 0
+        {
+            a
+        }
+    "#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "debug_assert!");
+    assert_contains(&rust, "b != 0");
+}
+
+/// Phase 4: `ensures` clauses emit `debug_assert!` wrapping the tail return.
+#[test]
+fn ensures_emits_debug_assert_at_return() {
+    let src = r#"
+        fn nonneg() -> Int
+          ensures result >= 0
+        {
+            42
+        }
+    "#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "debug_assert!");
+    assert_contains(&rust, "_result");
+}
+
+/// Phase 4: ghost let bindings are erased — not emitted in Rust output.
+#[test]
+fn ghost_let_is_erased_in_transpiler() {
+    let src = r#"
+        fn example(n: Int) -> Int {
+            ghost let spec: Int = n;
+            n
+        }
+    "#;
+    let rust = transpile_src(src);
+    // Ghost binding must not appear as a real `let` in emitted Rust.
+    assert!(
+        !rust.contains("let spec"),
+        "ghost let should be erased from transpiler output:\n{rust}"
+    );
+}
+
+/// Phase 4: `ghost_old_contracts.mvl` corpus transpiles cleanly.
+#[test]
+fn corpus_ghost_old_contracts_transpiles() {
+    let src = include_str!("corpus/13_contracts/ghost_old_contracts.mvl");
+    let rust = transpile_src(src);
+    assert_contains(&rust, "pub fn");
+    // Ghost bindings must be erased.
+    assert!(
+        !rust.contains("let spec_n"),
+        "ghost binding `spec_n` should be erased from transpiler output:\n{rust}"
+    );
+}
+
+/// Phase 4: old() in ensures emits debug_assert! referencing the return binding.
+#[test]
+fn old_in_ensures_emits_debug_assert() {
+    let src = r#"
+        fn inc(n: Int) -> Int
+          ensures result >= old(n)
+        {
+            n + 1
+        }
+    "#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "debug_assert!");
+    assert_contains(&rust, "_result");
+}

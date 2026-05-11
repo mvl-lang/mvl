@@ -21,5 +21,6 @@
 //! | mutation   | —                        | `mutation::transform`      |
 
 pub mod coverage;
+pub mod ghost_erasure;
 pub mod mcdc;
 pub mod mutation;

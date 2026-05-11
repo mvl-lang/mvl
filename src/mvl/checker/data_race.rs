@@ -291,7 +291,7 @@ fn check_expr_iso(expr: &Expr, iso_vars: &HashSet<&str>, errors: &mut Vec<CheckE
 mod tests {
     use super::*;
     use crate::mvl::parser::ast::{Block, Capability, Decl, Expr, FnDecl, Pattern, Program, Stmt};
-    use crate::mvl::parser::ast::{Param, TypeExpr};
+    use crate::mvl::parser::ast::{LetKind, Param, TypeExpr};
     use crate::mvl::parser::lexer::Span;
 
     const S: Span = Span {
@@ -367,7 +367,7 @@ mod tests {
         //     let g = || { let y = x; y };  <- aliasing x inside lambda
         // }
         let let_y_eq_x = Stmt::Let {
-            mutable: false,
+            kind: LetKind::Regular { mutable: false },
             pattern: Pattern::Ident("y".into(), S),
             ty: int_ty(),
             init: Expr::Ident("x".into(), S),
@@ -384,7 +384,7 @@ mod tests {
             span: S,
         };
         let outer_let = Stmt::Let {
-            mutable: false,
+            kind: LetKind::Regular { mutable: false },
             pattern: Pattern::Ident("g".into(), S),
             ty: int_ty(),
             init: lambda,
@@ -411,7 +411,7 @@ mod tests {
         //     let g = |x: Int| { let y = x; y };  <- lambda's own x shadows outer iso x
         // }
         let let_y_eq_x = Stmt::Let {
-            mutable: false,
+            kind: LetKind::Regular { mutable: false },
             pattern: Pattern::Ident("y".into(), S),
             ty: int_ty(),
             init: Expr::Ident("x".into(), S),
@@ -428,7 +428,7 @@ mod tests {
             span: S,
         };
         let outer_let = Stmt::Let {
-            mutable: false,
+            kind: LetKind::Regular { mutable: false },
             pattern: Pattern::Ident("g".into(), S),
             ty: int_ty(),
             init: lambda,

@@ -415,6 +415,11 @@ pub enum RefExpr {
         inner: Box<RefExpr>,
         span: Span,
     },
+    /// `old(expr)` — refers to the entry-time value of `expr` inside `ensures` (Phase 4, #627).
+    Old {
+        inner: Box<RefExpr>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -633,10 +638,21 @@ pub enum BinaryOp {
 
 // ── Statements ─────────────────────────────────────────────────────────────
 
+/// Binding kind for `let` statements — makes the invalid state `ghost + mutable`
+/// unrepresentable at the type level (#651).
+#[derive(Debug, Clone, PartialEq)]
+pub enum LetKind {
+    /// Ordinary `let` or `let mut` binding emitted at runtime.
+    Regular { mutable: bool },
+    /// `ghost let` — specification-only binding, erased before transpilation/codegen (Phase 4, #627).
+    /// Ghost bindings are type-checked normally but never appear in emitted code.
+    Ghost,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Let {
-        mutable: bool,
+        kind: LetKind,
         pattern: Pattern,
         ty: TypeExpr,
         init: Expr,

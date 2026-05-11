@@ -22,7 +22,7 @@ use crate::mvl::backends::rust::emit_types::{emit_ref_expr_for_assert, emit_type
 use crate::mvl::backends::rust::emitter::RustEmitter;
 use crate::mvl::backends::rust::mcdc_instr::{detect_coupled_pairs, DecisionKind};
 use crate::mvl::parser::ast::{
-    BinaryOp, ElseBranch, Expr, LValue, LogicOp, MatchBody, RefExpr, Stmt, TypeExpr,
+    BinaryOp, ElseBranch, Expr, LValue, LetKind, LogicOp, MatchBody, RefExpr, Stmt, TypeExpr,
 };
 use crate::mvl::passes::coverage::BranchKind;
 use crate::mvl::passes::mcdc::analysis::{collect_clauses, count_clauses_ref};
@@ -30,8 +30,13 @@ use crate::mvl::passes::mcdc::analysis::{collect_clauses, count_clauses_ref};
 /// Emit a single statement (with indentation and trailing newline).
 pub fn emit_stmt(cg: &mut RustEmitter, stmt: &Stmt) {
     match stmt {
+        // Ghost bindings are specification-only — erased before codegen (Phase 4, #627).
         Stmt::Let {
-            mutable,
+            kind: LetKind::Ghost,
+            ..
+        } => {}
+        Stmt::Let {
+            kind: LetKind::Regular { mutable },
             pattern,
             ty,
             init,

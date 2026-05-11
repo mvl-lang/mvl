@@ -12,7 +12,8 @@ use crate::mvl::backends::llvm::HeapKind;
 use crate::mvl::parser::ast::TypeExpr;
 
 use crate::mvl::parser::ast::{
-    Block, ElseBranch, Expr, LValue, Literal, MatchArm, MatchBody, Pattern, Stmt, VariantFields,
+    Block, ElseBranch, Expr, LValue, LetKind, Literal, MatchArm, MatchBody, Pattern, Stmt,
+    VariantFields,
 };
 
 use super::LlvmBackend;
@@ -33,6 +34,11 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     pub(crate) fn emit_stmt(&mut self, stmt: &Stmt) -> Option<BasicValueEnum<'ctx>> {
         match stmt {
+            // Ghost bindings are specification-only — erased before codegen (Phase 4, #627).
+            Stmt::Let {
+                kind: LetKind::Ghost,
+                ..
+            } => None,
             Stmt::Let {
                 pattern, init, ty, ..
             } => {

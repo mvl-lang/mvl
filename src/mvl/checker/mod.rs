@@ -742,7 +742,7 @@ mod tests {
     #[test]
     fn lambda_mutable_capture_rejected_via_ast() {
         use crate::mvl::parser::ast::{
-            Block, Decl, Expr, FnDecl, Literal, Param, Pattern, Program, Stmt, TypeExpr,
+            Block, Decl, Expr, FnDecl, LetKind, Literal, Param, Pattern, Program, Stmt, TypeExpr,
         };
         use crate::mvl::parser::lexer::Span;
 
@@ -807,14 +807,14 @@ mod tests {
                 body: Block {
                     stmts: vec![
                         Stmt::Let {
-                            mutable: true,
+                            kind: LetKind::Regular { mutable: true },
                             pattern: Pattern::Ident("x".into(), dummy_span),
                             ty: int_ty,
                             init: Expr::Literal(Literal::Integer(1), dummy_span),
                             span: dummy_span,
                         },
                         Stmt::Let {
-                            mutable: false,
+                            kind: LetKind::Regular { mutable: false },
                             pattern: Pattern::Ident("g".into(), dummy_span),
                             ty: fn_int_int_ty,
                             init: lambda,
@@ -840,7 +840,7 @@ mod tests {
     #[test]
     fn lambda_immutable_capture_accepted_via_ast() {
         use crate::mvl::parser::ast::{
-            Block, Decl, Expr, FnDecl, Literal, Param, Pattern, Program, Stmt, TypeExpr,
+            Block, Decl, Expr, FnDecl, LetKind, Literal, Param, Pattern, Program, Stmt, TypeExpr,
         };
         use crate::mvl::parser::lexer::Span;
 
@@ -905,14 +905,14 @@ mod tests {
                 body: Block {
                     stmts: vec![
                         Stmt::Let {
-                            mutable: false, // immutable
+                            kind: LetKind::Regular { mutable: false }, // immutable
                             pattern: Pattern::Ident("x".into(), dummy_span),
                             ty: int_ty,
                             init: Expr::Literal(Literal::Integer(1), dummy_span),
                             span: dummy_span,
                         },
                         Stmt::Let {
-                            mutable: false,
+                            kind: LetKind::Regular { mutable: false },
                             pattern: Pattern::Ident("g".into(), dummy_span),
                             ty: fn_int_int_ty,
                             init: lambda,
