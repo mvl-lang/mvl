@@ -1221,16 +1221,20 @@ fn method_take_and_skip_emit_iterator_adapters() {
 fn method_take_while_emits_closure_clone() {
     let src = "fn f(xs: List[Int], p: fn(Int) -> Bool) -> List[Int] { xs.take_while(p) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, "take_while(");
-    assert_contains(&rust, ".clone().into()");
+    assert_contains(
+        &rust,
+        ".into_iter().take_while(|__x| (p)(__x.clone())).collect::<Vec<_>>()",
+    );
 }
 
 #[test]
 fn method_skip_while_emits_closure_clone() {
     let src = "fn f(xs: List[Int], p: fn(Int) -> Bool) -> List[Int] { xs.skip_while(p) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, "skip_while(");
-    assert_contains(&rust, ".clone().into()");
+    assert_contains(
+        &rust,
+        ".into_iter().skip_while(|__x| (p)(__x.clone())).collect::<Vec<_>>()",
+    );
 }
 
 #[test]
@@ -1427,32 +1431,31 @@ fn method_map_list_emits_into_iter_collect() {
 fn method_filter_emits_iterator_filter() {
     let src = "fn f(xs: List[Int], p: fn(Int) -> Bool) -> List[Int] { xs.filter(p) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, "filter(");
-    assert_contains(&rust, ".clone().into()");
+    assert_contains(
+        &rust,
+        ".into_iter().filter(|__x| (p)(__x.clone())).collect::<Vec<_>>()",
+    );
 }
 
 #[test]
 fn method_fold_emits_iterator_fold() {
     let src = "fn f(xs: List[Int], init: Int, g: fn(Int, Int) -> Int) -> Int { xs.fold(init, g) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, "fold(");
-    assert_contains(&rust, ".clone().into()");
+    assert_contains(&rust, ".into_iter().fold(init, |acc, __x| (g)(acc, __x))");
 }
 
 #[test]
 fn method_any_emits_ufcs_call() {
     let src = "fn f(xs: List[Int], p: fn(Int) -> Bool) -> Bool { xs.any(p) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, "any(");
-    assert_contains(&rust, ".clone().into()");
+    assert_contains(&rust, ".into_iter().any(|__x| (p)(__x.clone()))");
 }
 
 #[test]
 fn method_all_emits_ufcs_call() {
     let src = "fn f(xs: List[Int], p: fn(Int) -> Bool) -> Bool { xs.all(p) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, "all(");
-    assert_contains(&rust, ".clone().into()");
+    assert_contains(&rust, ".into_iter().all(|__x| (p)(__x.clone()))");
 }
 
 /// Verifies that `fn(T) -> U` typed parameters emit as bare `fn(T) -> U`

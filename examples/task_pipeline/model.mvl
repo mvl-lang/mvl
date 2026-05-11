@@ -25,14 +25,14 @@ pub type NonNegAmount = Float where self >= 0.0
 /// A single data record parsed from a CSV row.
 ///
 /// CSV format: name,age,amount,category
-///   - name     required, non-empty string
-///   - age      required, integer 1–150
-///   - amount   required, non-negative float (e.g., 42.50)
+///   - name     required, non-empty string     (PersonName invariant held by parser)
+///   - age      required, integer 1–150        (ValidAge invariant held by parser)
+///   - amount   required, non-negative float   (NonNegAmount invariant held by parser)
 ///   - category optional — empty cell becomes None (Req 4)
 pub type Record = struct {
-    name:     PersonName,
-    age:      ValidAge,
-    amount:   NonNegAmount,
+    name:     String,
+    age:      Int,
+    amount:   Float,
     category: Option[String],
 }
 

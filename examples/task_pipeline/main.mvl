@@ -9,10 +9,8 @@
 //   1. Req 7  (Effects):  sharp effect boundary — only this file and its
 //                         direct I/O helpers carry ! FileRead, ! Console.
 //                         All transform logic is in effect-free transform.mvl.
-//   2. IFC:               CLI input is Tainted[String], sanitized before use
-//                         as a file path or passed as Tainted to parse_csv.
-//   3. Req 5  (Errors):   Result propagation through a nested match chain.
-//   4. Req 3  (Totality): every Err variant in RunError is handled.
+//   2. Req 5  (Errors):   Result propagation through a nested match chain.
+//   3. Req 3  (Totality): every Err variant in RunError is handled.
 //
 // Usage:
 //   mvl run examples/task_pipeline/main.mvl -- --input data.csv
@@ -21,10 +19,10 @@
 // Assurance note: 0 extern blocks.
 
 use parser::parse_csv;
-use transform::filter_by_amount;
-use transform::enrich_high_value;
-use transform::summarize;
-use transform::record_line;
+use transform::apply_filter_by_amount;
+use transform::apply_enrich_high_value;
+use transform::compute_summary;
+use transform::format_record;
 use model::Record;
 use model::Summary;
 use model::ParseError;
@@ -59,8 +57,7 @@ fn threshold_or_default(opt: Option[Tainted[String]]) -> Float {
         None    => 0.0,
         Some(t) => {
             let clean: Clean[String] = sanitize(t);
-            let s: String = clean.trim();
-            let result: Result[Float, String] = s.parse_float();
+            let result: Result[Float, String] = clean.parse_float();
             match result {
                 Err(_) => 0.0,
                 Ok(v)  => if v >= 0.0 { v } else { 0.0 },
@@ -96,27 +93,27 @@ fn run() -> Result[Unit, RunError] ! FileRead, Console {
                     let parse_result: Result[List[Record], ParseError] = parse_csv(content);
                     match parse_result {
                         Err(e)      => {
-                            println("parse error: " + parse_error_msg(e));
+                            println("parse error: ".concat(parse_error_msg(e)));
                             Err(RunError::ParseFailed)
                         },
                         Ok(records) => {
                             // Pure pipeline — no effects from here on.
                             // These calls are safe to reorder, parallelize, or memoize.
-                            let filtered: List[Record] = filter_by_amount(records, threshold);
-                            let enriched: List[Record] = enrich_high_value(filtered, threshold * 10.0);
-                            let summary: Summary = summarize(enriched);
+                            let filtered: List[Record] = apply_filter_by_amount(records, threshold);
+                            let enriched: List[Record] = apply_enrich_high_value(filtered, threshold * 10.0);
+                            let summary: Summary = compute_summary(enriched);
 
                             println("=== task_pipeline: CSV summary ===");
-                            println("Input records:  " + records.len().to_string());
-                            println("After filter:   " + filtered.len().to_string()
-                                   + "  (amount >= " + threshold.to_string() + ")");
-                            println("Count:          " + summary.count.to_string());
-                            println("Total amount:   " + summary.total_amount.to_string());
+                            println("Input records:  ".concat(records.len().to_string()));
+                            println("After filter:   ".concat(filtered.len().to_string())
+                                   .concat("  (amount >= ").concat(threshold.to_string()).concat(")"));
+                            println("Count:          ".concat(summary.count.to_string()));
+                            println("Total amount:   ".concat(summary.total_amount.to_string()));
                             println("--- records ---");
                             let _: Unit = enriched.fold(
                                 (),
                                 |_acc: Unit, r: Record| {
-                                    println(record_line(r));
+                                    println(format_record(r));
                                     ()
                                 }
                             );
@@ -138,9 +135,9 @@ fn main() -> Unit ! FileRead, Console {
                 RunError::IOFailure   => "failed to read CSV file",
                 RunError::ParseFailed => "CSV parsing failed (see details above)",
             };
-            println("error: " + msg);
+            println("error: ".concat(msg));
         }
     }
 }
 
-// Tests live in main_test.mvl (type re-declarations workaround: #96).
+// Tests live in main_test.mvl.

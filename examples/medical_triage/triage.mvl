@@ -16,16 +16,35 @@ use model::ChiefComplaint;
 use model::Patient;
 use model::Assessment;
 
+// ── Enum variant helpers ──────────────────────────────────────────────────
+// BreathingStatus and PulseStrength both have an `Absent` variant.
+// When model.mvl types are resolved (via use imports), the checker may associate
+// the `Absent` name with one type, making `Type::Absent` in expression position
+// ambiguous.  Match-based helpers avoid the expression-position collision:
+// pattern arms resolve `Absent` from the match target's field type, not by name.
+
+fn breathing_is_absent(b: BreathingStatus) -> Bool {
+    match b { BreathingStatus::Absent => true, _ => false }
+}
+
+fn pulse_is_absent(p: PulseStrength) -> Bool {
+    match p { PulseStrength::Absent => true, _ => false }
+}
+
+fn pulse_is_weak(p: PulseStrength) -> Bool {
+    match p { PulseStrength::Weak => true, _ => false }
+}
+
 /// True iff the airway is compromised: breathing absent, labored with low SpO2, or no pulse.
 pub fn airway_compromise(v: Vitals) -> Bool {
-    v.breathing == BreathingStatus::Absent
+    breathing_is_absent(v.breathing)
     || (v.breathing == BreathingStatus::Labored && v.oxygen_sat < 92)
-    || v.pulse == PulseStrength::Absent
+    || pulse_is_absent(v.pulse)
 }
 
 /// True iff circulation is failing: low BP with weak pulse, or tachycardia with borderline BP.
 pub fn circulation_failure(v: Vitals) -> Bool {
-    (v.systolic_bp < 90 && v.pulse == PulseStrength::Weak)
+    (v.systolic_bp < 90 && pulse_is_weak(v.pulse))
     || (v.heart_rate > 130 && v.systolic_bp < 100)
 }
 
@@ -62,7 +81,7 @@ pub fn fever_risk(p: Patient) -> Bool {
 /// True iff a trauma patient shows haemodynamic compromise and reduced consciousness.
 pub fn trauma_urgent(p: Patient) -> Bool {
     p.complaint == ChiefComplaint::Trauma
-    && (p.vitals.pulse == PulseStrength::Weak || p.vitals.systolic_bp < 110)
+    && (pulse_is_weak(p.vitals.pulse) || p.vitals.systolic_bp < 110)
     && p.vitals.consciousness != Consciousness::Alert
 }
 
@@ -90,8 +109,8 @@ pub fn pregnancy_escalate(p: Patient) -> Bool {
 /// True iff the patient needs immediate resuscitation: absent breathing/pulse, unresponsive,
 /// or combined circulation and airway failure.
 pub fn needs_resuscitation(v: Vitals, complaint: ChiefComplaint) -> Bool {
-    v.breathing == BreathingStatus::Absent
-    || v.pulse == PulseStrength::Absent
+    breathing_is_absent(v.breathing)
+    || pulse_is_absent(v.pulse)
     || v.consciousness == Consciousness::Unresponsive
     || (circulation_failure(v) && airway_compromise(v))
 }

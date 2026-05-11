@@ -78,14 +78,14 @@ fn s6_fever_breathing() -> String {
         vitals: v, allergies: false, pregnant: false };
     let a: Assessment = assess(p);
     let iso_str: String = match a.isolate { true => " [ISOLATE]", false => "" };
-    pri_str(a.priority) + iso_str
+    pri_str(a.priority).concat(iso_str)
 }
 
-fn main() -> Unit {
-    println("1. Stable adult/minor:     " + s1_stable_adult());
-    println("2. Unresponsive/neuro:     " + s2_unresponsive());
-    println("3. Elderly/chest pain:     " + s3_elderly_chest_pain());
-    println("4. Febrile infant:         " + s4_febrile_infant());
-    println("5. Pregnant/abdominal:     " + s5_pregnant_abdominal());
-    println("6. Fever/breathing:        " + s6_fever_breathing());
+fn main() -> Unit ! Console {
+    println("1. Stable adult/minor:     ".concat(s1_stable_adult()));
+    println("2. Unresponsive/neuro:     ".concat(s2_unresponsive()));
+    println("3. Elderly/chest pain:     ".concat(s3_elderly_chest_pain()));
+    println("4. Febrile infant:         ".concat(s4_febrile_infant()));
+    println("5. Pregnant/abdominal:     ".concat(s5_pregnant_abdominal()));
+    println("6. Fever/breathing:        ".concat(s6_fever_breathing()));
 }

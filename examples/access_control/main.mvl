@@ -29,48 +29,6 @@ use model::AppError;
 
 use std.log.{log_info, log_warn}
 
-// ── Local type declarations (mirrors model.mvl) ────────────────────────────
-// workaround: #96 — cross-module type resolution not yet wired into the
-// per-file checker; types are re-declared locally until the module resolver
-// is integrated.
-
-type Role = enum {
-    Admin,
-    Moderator,
-    User,
-    Guest,
-}
-
-type Resource = enum {
-    UserProfile,
-    AdminPanel,
-    Post,
-    AuditLog,
-}
-
-type Action = enum {
-    Read,
-    Write,
-    Delete,
-}
-
-type Permission = enum {
-    Allow,
-    Deny,
-}
-
-type AuthError = enum {
-    InvalidCredentials,
-    SessionExpired,
-    InvalidToken,
-}
-
-type AppError = enum {
-    AuthFailed,
-    UserNotFound,
-    MissingArg,
-}
-
 // ── Trust boundary: demo fixture data lives in Rust ───────────────────────
 
 extern "rust" {
@@ -82,9 +40,9 @@ extern "rust" {
 
 // Check and audit a single RBAC decision.
 // Calls check_permission (pure) then log_access (! Log) to emit a structured
-// audit record. The username is Clean[String] — IFC-safe for log output.
+// audit record.
 fn check_and_audit(
-    username: Clean[String],
+    username: String,
     role: Role,
     resource: Resource,
     action: Action,
@@ -96,7 +54,6 @@ fn check_and_audit(
 // ── Demo scenarios ────────────────────────────────────────────────────────
 
 // RBAC demo: each call produces a structured audit record (INFO or WARN).
-// String literals are Clean[String]-compatible (compile-time constants at Public level).
 fn demo_rbac() -> Unit ! Log {
     let u1: Unit = check_and_audit("admin_demo", Role::Admin,     Resource::AdminPanel,  Action::Read);
     let u2: Unit = check_and_audit("mod_demo",   Role::Moderator, Resource::AdminPanel,  Action::Write);

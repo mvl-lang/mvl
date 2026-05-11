@@ -12,14 +12,14 @@ use model::Aircraft;
 use model::Clearance;
 use model::RouteType;
 use clearance::departure_gate;
-use clearance::needs_diversion;
-use clearance::fuel_planning_ok;
-use clearance::route_permitted;
+use clearance::check_needs_diversion;
+use clearance::check_fuel_planning_ok;
+use clearance::check_route_permitted;
 
 fn s1_domestic_clear() -> String {
     let wx: Weather = Weather { visibility: Visibility::Good, wind: WindCondition::Calm,
         icing: false, thunderstorm: false };
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared,
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy,
         fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: false };
     match departure_gate(wx, ac, RouteType::Domestic) {
         Clearance::Cleared => "CLEARED", Clearance::Rejected => "REJECTED",
@@ -29,39 +29,39 @@ fn s1_domestic_clear() -> String {
 fn s2_thunderstorm_divert() -> String {
     let wx: Weather = Weather { visibility: Visibility::Good, wind: WindCondition::Moderate,
         icing: false, thunderstorm: true };
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared,
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy,
         fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: true };
-    match needs_diversion(wx, ac) { true => "DIVERT", false => "OK", }
+    match check_needs_diversion(wx, ac) { true => "DIVERT", false => "OK", }
 }
 
 fn s3_marginal_domestic() -> String {
     let wx: Weather = Weather { visibility: Visibility::Good, wind: WindCondition::Calm,
         icing: false, thunderstorm: false };
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared,
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy,
         fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: false };
-    match fuel_planning_ok(ac, RouteType::Domestic, wx) { true => "OK", false => "FAIL", }
+    match check_fuel_planning_ok(ac, RouteType::Domestic, wx) { true => "OK", false => "FAIL", }
 }
 
 fn s4_marginal_intl() -> String {
     let wx: Weather = Weather { visibility: Visibility::Good, wind: WindCondition::Calm,
         icing: false, thunderstorm: false };
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared,
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy,
         fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: false };
-    match fuel_planning_ok(ac, RouteType::International, wx) { true => "OK", false => "FAIL", }
+    match check_fuel_planning_ok(ac, RouteType::International, wx) { true => "OK", false => "FAIL", }
 }
 
 fn s5_oceanic_no_etops() -> String {
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared,
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy,
         fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: false };
-    match route_permitted(RouteType::Oceanic, ac) { true => "PERMITTED", false => "DENIED", }
+    match check_route_permitted(RouteType::Oceanic, ac) { true => "PERMITTED", false => "DENIED", }
 }
 
 fn s6_icing_poor_vis() -> String {
     let wx: Weather = Weather { visibility: Visibility::Poor, wind: WindCondition::Calm,
         icing: true, thunderstorm: false };
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared,
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy,
         fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: true };
-    match needs_diversion(wx, ac) { true => "DIVERT", false => "OK", }
+    match check_needs_diversion(wx, ac) { true => "DIVERT", false => "OK", }
 }
 
 fn s7_oceanic_deferred() -> String {
@@ -74,12 +74,12 @@ fn s7_oceanic_deferred() -> String {
     }
 }
 
-fn main() -> Unit {
-    println("1. Domestic/clear:     " + s1_domestic_clear());
-    println("2. Thunderstorm:       " + s2_thunderstorm_divert());
-    println("3. Marginal/domestic:  " + s3_marginal_domestic());
-    println("4. Marginal/intl:      " + s4_marginal_intl());
-    println("5. Oceanic/no ETOPS:   " + s5_oceanic_no_etops());
-    println("6. Icing+poor vis:     " + s6_icing_poor_vis());
-    println("7. Oceanic/deferred:   " + s7_oceanic_deferred());
+fn main() -> Unit ! Console {
+    println("1. Domestic/clear:     ".concat(s1_domestic_clear()));
+    println("2. Thunderstorm:       ".concat(s2_thunderstorm_divert()));
+    println("3. Marginal/domestic:  ".concat(s3_marginal_domestic()));
+    println("4. Marginal/intl:      ".concat(s4_marginal_intl()));
+    println("5. Oceanic/no ETOPS:   ".concat(s5_oceanic_no_etops()));
+    println("6. Icing+poor vis:     ".concat(s6_icing_poor_vis()));
+    println("7. Oceanic/deferred:   ".concat(s7_oceanic_deferred()));
 }

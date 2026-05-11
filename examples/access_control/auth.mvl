@@ -14,16 +14,7 @@
 //
 // Assurance note: 1 extern block (2 trust-boundary functions).
 
-// ── Local type declarations (mirrors model.mvl) ────────────────────────────
-// workaround: #96 — cross-module type resolution not yet wired into the
-// per-file checker; types are re-declared locally until the module resolver
-// is integrated.
-
-type AuthError = enum {
-    InvalidCredentials,
-    SessionExpired,
-    InvalidToken,
-}
+use model::AuthError;
 
 // ── Trust boundary ─────────────────────────────────────────────────────────
 

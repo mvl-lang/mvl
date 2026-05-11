@@ -61,7 +61,7 @@ pub type Report = struct {
 /// "ERROR", "Error", and "error" all resolve to `LogLevel::Error`.
 pub total fn parse_level(raw: Tainted[String]) -> Result[LogLevel, ParseError] {
     let clean: Clean[String] = sanitize(raw);
-    let lower: String = clean.to_lower();
+    let lower: Clean[String] = clean.to_lower();
     match lower {
         "debug" => Ok(LogLevel::Debug),
         "info"  => Ok(LogLevel::Info),

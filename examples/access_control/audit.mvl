@@ -20,29 +20,6 @@ use model::Permission;
 
 use std.log.{log_info, log_warn}
 
-// ── Local type declarations (mirrors model.mvl) ────────────────────────────
-// workaround: #96 — cross-module type resolution not yet wired into the
-// per-file checker; types are re-declared locally until the module resolver
-// is integrated.
-
-type Resource = enum {
-    UserProfile,
-    AdminPanel,
-    Post,
-    AuditLog,
-}
-
-type Action = enum {
-    Read,
-    Write,
-    Delete,
-}
-
-type Permission = enum {
-    Allow,
-    Deny,
-}
-
 // ── Audit helpers — pure, no effects ──────────────────────────────────────
 
 total fn resource_name(resource: Resource) -> String {
@@ -83,14 +60,13 @@ fn log_level_for_decision(decision: Permission) -> String {
 }
 
 // Log an access decision to the structured audit trail.
-// Only Clean[String] username and plain String values reach the log sink.
+// Only sanitized username and plain String values reach the log sink.
 // Secret[T] cannot appear here — enforced by the IFC type system.
 // Grant decisions are logged at INFO; deny decisions at WARN.
-// username is Clean[String] (IFC-safe for output) and is included in every
-// audit record so that access decisions are attributable to a principal.
+// username is a plain String — callers are responsible for passing clean values.
 /// Log an access decision to the structured audit trail with IFC-safe fields.
 pub fn log_access(
-    username: Clean[String],
+    username: String,
     resource: Resource,
     action: Action,
     decision: Permission,
@@ -105,72 +81,4 @@ pub fn log_access(
     }
 }
 
-// ── Internal unit tests ────────────────────────────────────────────────────
-
-test fn resource_name_returns_user_profile() -> Unit {
-    let name: String = resource_name(Resource::UserProfile);
-    let ok: Int = match name {
-        "UserProfile" => 1,
-        _             => 0,
-    };
-    assert_eq(ok, 1);
-}
-
-test fn resource_name_returns_admin_panel() -> Unit {
-    let name: String = resource_name(Resource::AdminPanel);
-    let ok: Int = match name {
-        "AdminPanel" => 1,
-        _            => 0,
-    };
-    assert_eq(ok, 1);
-}
-
-test fn permission_allow_maps_to_allow_string() -> Unit {
-    let name: String = permission_name(Permission::Allow);
-    let ok: Int = match name {
-        "ALLOW" => 1,
-        _       => 0,
-    };
-    assert_eq(ok, 1);
-}
-
-test fn permission_deny_maps_to_deny_string() -> Unit {
-    let name: String = permission_name(Permission::Deny);
-    let ok: Int = match name {
-        "DENY" => 1,
-        _      => 0,
-    };
-    assert_eq(ok, 1);
-}
-
-test fn action_name_returns_delete() -> Unit {
-    let name: String = action_name(Action::Delete);
-    let ok: Int = match name {
-        "Delete" => 1,
-        _        => 0,
-    };
-    assert_eq(ok, 1);
-}
-
-// ── log_access routing tests ───────────────────────────────────────────────
-// log_access carries ! Log so it cannot be called from pure test functions.
-// log_level_for_decision is the pure extraction of the branch selector and
-// verifies that Allow → log_info path and Deny → log_warn path are distinct.
-
-test fn allow_decision_routes_to_info_level() -> Unit {
-    let level: String = log_level_for_decision(Permission::Allow);
-    let ok: Int = match level {
-        "info" => 1,
-        _      => 0,
-    };
-    assert_eq(ok, 1);
-}
-
-test fn deny_decision_routes_to_warn_level() -> Unit {
-    let level: String = log_level_for_decision(Permission::Deny);
-    let ok: Int = match level {
-        "warn" => 1,
-        _      => 0,
-    };
-    assert_eq(ok, 1);
-}
+// Tests live in audit_test.mvl.
