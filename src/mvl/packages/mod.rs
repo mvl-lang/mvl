@@ -458,7 +458,7 @@ mod tests {
     #[test]
     fn ensure_deps_empty_dependencies_returns_empty() {
         let tmp = tempfile::tempdir().unwrap();
-        let content = "[package]\nname = \"proj\"\nversion = \"1.0.0\"\nlicense = \"MIT\"\nrequires-mvl = \">=0.1.0\"\n";
+        let content = "[package]\nname = \"proj\"\nversion = \"1.0.0\"\nlicense = \"Apache-2.0\"\nrequires-mvl = \">=0.1.0\"\n";
         std::fs::write(tmp.path().join("mvl.toml"), content).unwrap();
         let dirs = ensure_dependencies(tmp.path());
         assert!(dirs.is_empty());
@@ -478,7 +478,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
 
-        let manifest = "[package]\nname = \"my-app\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\nrequires-mvl = \">=0.1.0\"\n\n[dependencies]\nmypkg = { git = \"https://example.com/mypkg\", tag = \"v1.0.0\" }\n";
+        let manifest = "[package]\nname = \"my-app\"\nversion = \"0.1.0\"\nlicense = \"Apache-2.0\"\nrequires-mvl = \">=0.1.0\"\n\n[dependencies]\nmypkg = { git = \"https://example.com/mypkg\", tag = \"v1.0.0\" }\n";
         std::fs::write(root.join("mvl.toml"), manifest).unwrap();
 
         let lock = "[[package]]\nname = \"mypkg\"\nversion = \"1.0.0\"\nhash = \"sha256:abc123\"\ngit = \"https://example.com/mypkg\"\n";
@@ -508,7 +508,7 @@ mod tests {
     #[test]
     fn cmd_update_no_deps_returns_early() {
         let tmp = tempfile::tempdir().unwrap();
-        let manifest = "[package]\nname = \"proj\"\nversion = \"1.0.0\"\nlicense = \"MIT\"\nrequires-mvl = \">=0.1.0\"\n";
+        let manifest = "[package]\nname = \"proj\"\nversion = \"1.0.0\"\nlicense = \"Apache-2.0\"\nrequires-mvl = \">=0.1.0\"\n";
         std::fs::write(tmp.path().join("mvl.toml"), manifest).unwrap();
         cmd_update(tmp.path()); // must not call process::exit
     }
@@ -516,7 +516,7 @@ mod tests {
     #[test]
     fn cmd_update_version_only_dep_skips_without_network() {
         let tmp = tempfile::tempdir().unwrap();
-        let manifest = "[package]\nname = \"proj\"\nversion = \"1.0.0\"\nlicense = \"MIT\"\nrequires-mvl = \">=0.1.0\"\n\n[dependencies]\n\"some-pkg\" = \">=1.0.0\"\n";
+        let manifest = "[package]\nname = \"proj\"\nversion = \"1.0.0\"\nlicense = \"Apache-2.0\"\nrequires-mvl = \">=0.1.0\"\n\n[dependencies]\n\"some-pkg\" = \">=1.0.0\"\n";
         std::fs::write(tmp.path().join("mvl.toml"), manifest).unwrap();
         // Version-only dep has no git URL → emits warning and skips; writes mvl.lock
         cmd_update(tmp.path());
