@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.92.1] — 2026-05-11
+
+### Fixed
+
+- **Security: validate `MVL_MEMORY_LIB` and `MVL_RUNTIME_C_LIB` paths** — Environment variable overrides for cdylib paths now reject any path that doesn't end in `.dylib` or `.so`, preventing accidental or malicious loading of arbitrary files into the `lli` interpreter process. Closes #454.
+
 ## [0.83.0] — 2026-05-08
 
 ### Added
