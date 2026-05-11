@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Static MC/DC obligation analysis.
 //!
 //! Walks the AST to identify all decisions (if/while conditions and match arms)

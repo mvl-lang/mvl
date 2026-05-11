@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Compile-time evaluation of pure function calls (constant folding).
 //!
 //! When a function with no declared effects is called with all-literal arguments,

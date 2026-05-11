@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Generate Cargo project files for transpiled MVL programs.
 //!
 //! This module is part of the Phase 1 compilation pipeline described in ADR-0003

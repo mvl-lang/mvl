@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Layer 1 — trivial pattern matching for refinement predicates.
 //!
 //! Handles the simplest ~40% of refinement proofs with O(1) complexity:

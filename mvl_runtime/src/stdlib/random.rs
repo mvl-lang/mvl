@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Rust implementations of `std.random` stdlib functions.
 //!
 //! Non-deterministic PRNG backed by xorshift64, seeded from `SystemTime` on

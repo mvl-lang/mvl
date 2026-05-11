@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! C-ABI wrappers for MVL stdlib modules.
 //!
 //! Each sub-module mirrors a stdlib module from `mvl_runtime::stdlib::*`.

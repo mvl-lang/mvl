@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Emit Rust trait implementations from MVL [`ImplDecl`] nodes.
 //!
 //! Supported traits:

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Block, statement, and expression-statement type checking for the MVL type checker.
 //! Also includes field access, struct construction, and alias resolution helpers.
 

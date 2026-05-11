@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Structural recursion checker for Req 8 (Termination).
 //!
 //! **Spec:** `docs/specs/007-termination.md`

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Rust implementations of `std.env` stdlib functions.
 //!
 //! Provides real environment, working-directory, Unix-identity, and signal

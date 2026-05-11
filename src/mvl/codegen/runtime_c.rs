@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Generic C-ABI stdlib dispatch for the LLVM backend (ADR-0018).
 //!
 //! Replaces per-function getter boilerplate with a single `emit_stdlib_call`

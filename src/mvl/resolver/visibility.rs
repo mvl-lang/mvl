@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Visibility checking — Spec 005 Requirement 2.
 //!
 //! Rules:

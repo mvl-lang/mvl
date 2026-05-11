@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! MVL Abstract Syntax Tree — typed node definitions for every grammar construct.
 //!
 //! Every node carries a [`Span`] (line, col, byte offset, length) so downstream

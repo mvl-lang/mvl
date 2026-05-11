@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! `mvl_c_export!` — declarative macro for generating C-ABI wrapper functions.
 //!
 //! Reduces boilerplate: each new stdlib export is ~5-10 lines instead of ~50.

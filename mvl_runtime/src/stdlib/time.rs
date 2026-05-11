@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Rust implementations of `std.time` stdlib functions.
 //!
 //! Provides wall-clock time and sleep backing for the stubs declared in

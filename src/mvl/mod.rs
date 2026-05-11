@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 pub mod checker;
 #[cfg(feature = "llvm")]
 pub mod codegen;

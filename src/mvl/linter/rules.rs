@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Phase-1 and Phase-2 lint rules.
 //!
 //! Two families:

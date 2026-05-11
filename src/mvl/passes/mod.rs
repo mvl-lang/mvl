@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! AST transformation passes — backend-agnostic instrumentation.
 //!
 //! Passes operate on the typed AST produced by the checker and produce an

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Borrow checking and reference lifetime helpers for the MVL type checker.
 
 use crate::mvl::checker::errors::CheckError;

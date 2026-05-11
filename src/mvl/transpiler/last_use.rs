@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Last-use analysis for clone elision (Phase A, Spec 009 Req 2).
 //!
 //! Computes the set of [`Span`]s that represent the *final* use of each local

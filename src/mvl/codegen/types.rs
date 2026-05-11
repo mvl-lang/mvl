@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Type registration, LLVM type building, and MVL→LLVM type mapping.
 //!
 //! Phase B (L5-05, L5-06): struct and enum type knowledge used by the rest of

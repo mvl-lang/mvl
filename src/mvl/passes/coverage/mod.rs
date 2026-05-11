@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Native behavioral coverage pass.
 //!
 //! Tracks branch hit counts at runtime. The transform module injects

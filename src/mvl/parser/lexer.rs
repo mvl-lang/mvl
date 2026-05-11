@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! MVL Lexer — tokenizes source text into a stream of typed tokens.
 //!
 //! Every token carries a [`Span`] (line, col, byte offset, length) so

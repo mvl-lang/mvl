@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Statement parser (Requirement 5).
 //!
 //! Parses all MVL statement forms within a block:

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! C-ABI marshalling types for the MVL LLVM runtime boundary.
 //!
 //! Every value that crosses the C-ABI boundary uses one of these types.

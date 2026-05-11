@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! LLVM backend for MVL — Phase A + Phase B (issues #352, #367–#371 / epics #352, #367).
 //!
 //! Compiles a checked MVL `Program` AST directly to LLVM IR via inkwell.

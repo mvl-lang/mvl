@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! MVL linter — style and structural checks for source files.
 //!
 //! # Entry point

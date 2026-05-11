@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Layer 3 — symbolic path analysis for refinement predicates.
 //!
 //! Handles ~15% of refinement proofs by symbolically executing pure function

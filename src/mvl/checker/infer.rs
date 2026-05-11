@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Expression type inference for the MVL type checker.
 //!
 //! Contains `infer_expr`, `infer_literal`, `infer_binary`, `infer_unary`,

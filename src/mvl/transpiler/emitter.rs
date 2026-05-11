@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Rust source emitter: string-builder with indentation tracking.
 //!
 //! [`RustEmitter`] is the single writer passed through every emit function.

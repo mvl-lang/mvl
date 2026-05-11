@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Pattern matching and exhaustiveness checking for the MVL type checker.
 
 use crate::mvl::checker::context::{TypeBodyInfo, VarInfo, VariantFieldsInfo};

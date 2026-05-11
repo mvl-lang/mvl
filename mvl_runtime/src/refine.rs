@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Refinement type assertion macro.
 //!
 //! MVL Requirement 6: refinement types express value-level invariants.

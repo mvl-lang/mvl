@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! `mvl.lock` — lockfile read/write with content hashes.
 //!
 //! Implements Spec 008 Requirement 4: Lock File.

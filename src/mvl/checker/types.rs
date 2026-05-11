@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Internal type representation for the checker.
 //!
 //! [`Ty`] is the checker's resolved type — separate from the AST's [`TypeExpr`]

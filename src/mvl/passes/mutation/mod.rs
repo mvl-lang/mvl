@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Native behavioral mutation testing pass.
 //!
 //! Tracks mutation points and provides report formatting. The transform

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Emit Rust expressions from MVL [`Expr`] nodes.
 
 use crate::mvl::checker::types::Ty;

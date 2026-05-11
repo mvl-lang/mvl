@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! `mvl.toml` manifest parsing and writing.
 //!
 //! Implements Spec 008 Requirement 1: Package Manifest.

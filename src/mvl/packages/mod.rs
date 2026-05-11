@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Package management: manifest, lock file, fetch, version resolution.
 //!
 //! Implements Spec 008 (Extended Package Model) and ADR-0012.

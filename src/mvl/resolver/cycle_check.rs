@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Circular import detection using depth-first search (DFS).
 //!
 //! Given a directed graph of module dependencies (module A imports from module B),

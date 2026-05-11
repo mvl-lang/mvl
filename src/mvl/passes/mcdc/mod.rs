@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! MC/DC (Modified Condition/Decision Coverage) pass.
 //!
 //! Split into two modules:

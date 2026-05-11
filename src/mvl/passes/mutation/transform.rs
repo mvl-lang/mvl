@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Native behavioral mutation testing: mutation point tracking and report generation.
 //!
 //! When `mvl mutate` is active, the transpiler injects env-var dispatch wrappers

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Pilot export: `_mvl_runtime_version`.
 //!
 //! Proves the cdylib loads and resolves correctly at the Rust unit-test level.

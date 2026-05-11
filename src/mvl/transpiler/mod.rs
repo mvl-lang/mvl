@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! MVL transpiler — emits Rust source from a parsed [`Program`].
 //!
 //! Phase 1: prototype transpilation to Rust.  Security labels become newtypes,

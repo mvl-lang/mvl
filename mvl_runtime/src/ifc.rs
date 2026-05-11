@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Information-flow control (IFC) security label newtypes.
 //!
 //! MVL Requirement 11: every value carries a security label. The label is

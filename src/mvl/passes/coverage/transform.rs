@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Native behavioral coverage: branch tracking and report generation.
 //!
 //! When `--coverage` is active in `mvl test`, the transpiler injects

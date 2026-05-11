@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Semver parsing and version constraint checking.
 //!
 //! Handles `>=1.0.0`, `<2.0.0`, `>=1.0.0, <2.0.0` and exact version strings.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Effect marker types for MVL's capability/effect system.
 //!
 //! MVL Requirement 5: all side-effects are declared in function signatures.

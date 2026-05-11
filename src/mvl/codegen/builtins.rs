@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
 //! Built-in function emission for the MVL LLVM backend.
 //!
 //! Covers libc wrappers (printf, snprintf, strlen), collection literals
