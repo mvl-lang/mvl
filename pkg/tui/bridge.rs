@@ -68,12 +68,17 @@ pub extern "Rust" fn tui_clear() {
 
 #[no_mangle]
 pub extern "Rust" fn tui_set_cursor(row: i64, col: i64) {
+    // Clamp to valid 1-indexed ANSI coordinates; row=0 or col=0 is undefined behaviour.
+    let row = row.max(1);
+    let col = col.max(1);
     print!("\x1b[{};{}H", row, col);
     stdout().flush().ok();
 }
 
 #[no_mangle]
 pub extern "Rust" fn tui_print(text: String, bold: bool, underline: bool, fg_color: i64) {
+    // Strip ESC bytes to prevent ANSI injection from caller-supplied text.
+    let text = text.replace('\x1b', "");
     let bold_on      = if bold      { "\x1b[1m" } else { "" };
     let underline_on = if underline { "\x1b[4m" } else { "" };
     let color_on     = ansi_fg(fg_color);
@@ -109,6 +114,9 @@ pub extern "Rust" fn tui_size() -> i64 {
             if let (Ok(rows), Ok(cols)) =
                 (parts[0].parse::<i64>(), parts[1].parse::<i64>())
             {
+                // Clamp to 999 max: encoding is rows*1000+cols, so cols>=1000 would corrupt rows.
+                let rows = rows.clamp(1, 999);
+                let cols = cols.clamp(1, 999);
                 return rows * 1000 + cols;
             }
         }
@@ -125,16 +133,33 @@ pub extern "Rust" fn tui_read_key() -> String {
 
 #[no_mangle]
 pub extern "Rust" fn tui_read_key_timeout(millis: i64) -> String {
-    use std::sync::mpsc;
-    use std::thread;
-    use std::time::Duration;
-
-    let (tx, rx) = mpsc::channel::<String>();
-    thread::spawn(move || {
-        tx.send(read_one_key()).ok();
-    });
-    rx.recv_timeout(Duration::from_millis(millis.max(0) as u64))
-        .unwrap_or_default()
+    // Use stty VTIME (1/10-second units) instead of a spawned thread to avoid
+    // leaking a stdin-blocked OS thread on every timeout. Granularity: 100 ms.
+    // Phase 4: replace with crossterm for sub-100ms accuracy and Windows support.
+    let tenths = (millis / 100).clamp(0, 255) as u64;
+    Command::new("stty")
+        .args(["min", "0", "time", &tenths.to_string()])
+        .stdin(std::process::Stdio::inherit())
+        .status()
+        .ok();
+    let mut b = [0u8; 1];
+    let n = stdin().read(&mut b).unwrap_or(0);
+    // Restore raw mode (min=1 blocks until a byte arrives, as normal).
+    Command::new("stty")
+        .args(["-echo", "-icanon", "min", "1", "time", "0"])
+        .stdin(std::process::Stdio::inherit())
+        .status()
+        .ok();
+    if n == 0 {
+        return String::new(); // timeout — caller checks for "" to detect None
+    }
+    match b[0] {
+        b'\r' | b'\n' => "Enter".to_string(),
+        127 => "Backspace".to_string(),
+        27 => read_escape_sequence(),
+        c if c >= 0x20 => String::from_utf8(vec![c]).unwrap_or_else(|_| "Unknown".to_string()),
+        _ => "Unknown".to_string(),
+    }
 }
 
 // ── Key reading ───────────────────────────────────────────────────────────────

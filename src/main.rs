@@ -1803,8 +1803,9 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                 if let Ok(entries) = fs::read_dir(&scan_dir) {
                     for entry in entries.flatten() {
                         let p = entry.path();
+                        let fname = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
                         if p.extension().map(|e| e == "mvl").unwrap_or(false)
-                            && !p.to_string_lossy().contains("_test")
+                            && !fname.contains("_test")
                             && p != **f
                         {
                             if let Ok(src) = fs::read_to_string(&p) {
@@ -3154,6 +3155,13 @@ fn find_pkg_bridge(
 ) -> Option<std::path::PathBuf> {
     use mvl::mvl::parser::ast::Decl;
 
+    // Canonicalize the package root once; reject any bridge that escapes it
+    // (same symlink-escape guard applied to user-supplied bridge.rs at line 1572).
+    let canon_pkg_root = match fs::canonicalize(project_root.join(".mvl").join("pkg")) {
+        Ok(p) => p,
+        Err(_) => return None,
+    };
+
     for prog in progs {
         for decl in &prog.declarations {
             if let Decl::Use(ud) = decl {
@@ -3162,8 +3170,10 @@ fn find_pkg_bridge(
                         let pkg_dir =
                             mvl::mvl::packages::fetch::local_override_dir(project_root, pkg_name);
                         let bridge = pkg_dir.join("bridge.rs");
-                        if bridge.exists() {
-                            return Some(bridge);
+                        if let Ok(canon_bridge) = fs::canonicalize(&bridge) {
+                            if canon_bridge.starts_with(&canon_pkg_root) {
+                                return Some(canon_bridge);
+                            }
                         }
                     }
                 }

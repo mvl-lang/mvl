@@ -2372,14 +2372,9 @@ impl<'ctx> LlvmBackend<'ctx> {
                 let sz = i64_ty.const_int(24_080, false);
                 self.builder.build_return(Some(&sz)).unwrap();
             }
-            // tui_read_key() → "" (empty string ptr — Unknown key)
-            // tui_read_key_timeout() → "" (timeout)
-            "tui_read_key" | "tui_read_key_timeout" => {
-                let empty = self.context.ptr_type(AddressSpace::default()).const_null();
-                self.builder.build_return(Some(&empty)).unwrap();
-            }
-
             // Generic stub: return zero / null / None-struct.
+            // Note: tui_read_key / tui_read_key_timeout return String (a Rust struct),
+            // so the StructType arm below returns a correctly zeroed value for them.
             _ => match ret_llvm {
                 Some(BasicTypeEnum::IntType(it)) => {
                     let zero = it.const_zero();
