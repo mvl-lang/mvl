@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-05-11
-**Issue:** #646 (first step of epic #615)
+**Issues:** #646 (first step of epic #615)
 
 ---
 
