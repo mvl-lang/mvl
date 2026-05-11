@@ -200,9 +200,9 @@ implemented to capture the profile selection semantics.
 
 ## Evidence
 
-- `src/mvl/transpiler/emit_exprs.rs` — `emit_binary_op()`, `emit_unary()`
-- `src/mvl/codegen/exprs.rs` — `emit_int_binop()`, `emit_float_binop()`, `emit_unary()`
-- `src/mvl/codegen/builtins.rs` — `emit_println`, `emit_eprintln`, `emit_dprintf`
+- `src/mvl/backends/rust/emit_exprs.rs` — `emit_binary_op()`, `emit_unary()`
+- `src/mvl/backends/llvm/exprs.rs` — `emit_int_binop()`, `emit_float_binop()`, `emit_unary()`
+- `src/mvl/backends/llvm/builtins.rs` — `emit_println`, `emit_eprintln`, `emit_dprintf`
 - `std/core.mvl`, `std/random.mvl`, `std/time.mvl`
-- `mvl_runtime_c/src/stdlib/random.rs`, `mvl_runtime_c/src/stdlib/time.rs`
+- `runtime/llvm/src/stdlib/random.rs`, `runtime/llvm/src/stdlib/time.rs`
 - `tests/intrinsics/` (new — this ADR)

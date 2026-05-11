@@ -1794,6 +1794,10 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         // For packages tested from their own src/ directory, also load sibling
         // .mvl files (non-test, including internal/) so types and extern
         // declarations are in scope during transpilation.
+        // Track already-loaded paths so that multiple test files in the same
+        // directory don't add the same library file multiple times.
+        let mut loaded_prelude_paths: std::collections::HashSet<std::path::PathBuf> =
+            std::collections::HashSet::new();
         for f in &test_files {
             let dir = f.parent().unwrap_or_else(|| std::path::Path::new("."));
             // Scan src/ and src/internal/ (package convention per ADR-0012).
@@ -1807,10 +1811,18 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                         if p.extension().map(|e| e == "mvl").unwrap_or(false)
                             && !fname.contains("_test")
                             && p != **f
+                            && loaded_prelude_paths.insert(p.clone())
                         {
                             if let Ok(src) = fs::read_to_string(&p) {
                                 let (mut pp, _) = Parser::new(&src);
-                                stdlib_prelude_progs.push(pp.parse_program());
+                                let parsed = pp.parse_program();
+                                // Skip entry-point files (those defining `main`) — they are
+                                // programs, not library modules.  Including them in the prelude
+                                // causes duplicate type/function definitions when combined with
+                                // test-local re-declarations.
+                                if !transpiler::has_main_fn(&parsed) {
+                                    stdlib_prelude_progs.push(parsed);
+                                }
                             }
                         }
                     }

@@ -127,7 +127,7 @@ A `bridge.rs` file SHOULD follow these conventions to integrate correctly with t
 
 The transpiler MUST expose a `has_extern_rust: bool` field on `TranspileOutput` that is `true` iff the program contains at least one `extern "rust"` block. Build tooling MUST use this flag (not `extern_count`) for bridge decisions.
 
-**Implementation:** `src/mvl/transpiler/mod.rs::TranspileOutput`, `src/mvl/transpiler/mod.rs::has_extern_rust_decls`
+**Implementation:** `src/mvl/backends/rust/mod.rs::TranspileOutput`, `src/mvl/backends/rust/mod.rs::has_extern_rust_decls`
 
 > **Rationale:** `extern_count` counts all ABI blocks (`"rust"` and `"c"`). Only `extern "rust"` blocks require a bridge. The dedicated flag is precise and audit-friendly.
 

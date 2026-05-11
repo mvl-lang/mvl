@@ -61,7 +61,7 @@ Pratt table renumbered to 10–90 scale (matching C-style precedences): BITOR=30
 
 Grammar (`docs/grammar.ebnf`), tree-sitter (`etc/tree-sitter-mvl/grammar.js`, `highlights.scm`), and nvim highlights updated.
 
-**Evidence:** `tests/corpus/02_types/bit_operators.mvl`, `src/mvl/parser/ast.rs`, `src/mvl/transpiler/emit_exprs.rs`, `src/mvl/codegen/exprs.rs`
+**Evidence:** `tests/corpus/02_types/bit_operators.mvl`, `src/mvl/parser/ast.rs`, `src/mvl/backends/rust/emit_exprs.rs`, `src/mvl/backends/llvm/exprs.rs`
 
 ### 4. Overflow-checking arithmetic (#485)
 
@@ -84,9 +84,9 @@ Methods: `checked_add/sub/mul/div` return `Option[T]`; `wrapping_add/sub/mul` re
 
 OS-specific modules (`io`, `env`, `log`, `time`, `random`, `process`, `crypto`) are NOT in the prelude. Instead, the transpiler emits an explicit `use mvl_runtime::stdlib::X::*;` line for each `use std.X.*` declaration in the MVL source.
 
-New helper: `collect_stdlib_modules(prog: &Program) -> Vec<String>` in `src/mvl/transpiler/mod.rs`.
+New helper: `collect_stdlib_modules(prog: &Program) -> Vec<String>` in `src/mvl/backends/rust/mod.rs`.
 
-**Evidence:** `mvl_runtime/src/prelude.rs`, `src/mvl/transpiler/emitter.rs`
+**Evidence:** `runtime/rust/src/prelude.rs`, `src/mvl/backends/rust/emitter.rs`
 
 ### 6. mvl_memory scope clarification (#490)
 
@@ -102,7 +102,7 @@ All **operations** move to `mvl_runtime_c::memory_ops`:
 
 `mvl_memory` tests are now lifecycle-only (Miri-safe: raw struct field access, no operation calls). Operation tests live in `mvl_runtime_c::memory_ops::tests`.
 
-**Evidence:** `mvl_memory/src/lib.rs`, `mvl_runtime_c/src/memory_ops.rs`
+**Evidence:** `runtime/llvm/src/memory.rs`, `runtime/llvm/src/memory_ops.rs`
 
 ---
 

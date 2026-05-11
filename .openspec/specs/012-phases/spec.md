@@ -98,7 +98,7 @@ Phase 5 MUST deliver the **Backends** pillar to the point where MVL has its
 own compilation chain: LLVM IR codegen, runtime, ownership-based drop, and
 cross-backend regression testing.
 
-**Implementation:** `src/mvl/codegen/` (LLVM backend), `mvl_memory/`, `mvl_runtime/`
+**Implementation:** `src/mvl/backends/llvm/` (LLVM backend), `runtime/llvm/`, `runtime/rust/`
 
 #### Scenario: Phase 5 completion criteria
 
@@ -225,7 +225,7 @@ backends   ─►  per-program:     AST → Rust source / LLVM IR    (transpiler
 | Resolver | `src/mvl/resolver/` | Whole-project | No | Visibility, imports, cycle detection (Spec 005) |
 | Checker | `src/mvl/checker/` | Per-program | No | Type, effect, IFC, termination, refinement, data-race |
 | Passes | `src/mvl/passes/` | Per-program | Yes (each pass) | Coverage, MC/DC, mutation (ADR-0014, ADR-0015) |
-| Backends | `src/mvl/transpiler/`, `src/mvl/codegen/` | Per-program | One required | Rust source emission, LLVM IR emission |
+| Backends | `src/mvl/backends/rust/`, `src/mvl/backends/llvm/` | Per-program | One required | Rust source emission, LLVM IR emission |
 
 Sibling concerns that are not pipeline stages:
 
@@ -234,9 +234,9 @@ Sibling concerns that are not pipeline stages:
 
 ### Requirement 9: Pipeline Stage Discipline [MUST]
 
-Each pipeline stage MUST live in its own top-level directory under `src/mvl/`. AST-level instrumentation transformations (coverage, MC/DC instrumentation, mutation injection) MUST live under `src/mvl/passes/`, not under `src/mvl/transpiler/` or `src/mvl/codegen/`. The transpiler and LLVM codegen MUST consume the same instrumented AST produced by the passes — instrumentation is written once per concern, not per backend.
+Each pipeline stage MUST live in its own top-level directory under `src/mvl/`. AST-level instrumentation transformations (coverage, MC/DC instrumentation, mutation injection) MUST live under `src/mvl/passes/`, not under `src/mvl/backends/rust/` or `src/mvl/backends/llvm/`. The transpiler and LLVM codegen MUST consume the same instrumented AST produced by the passes — instrumentation is written once per concern, not per backend.
 
-**Implementation:** `src/mvl/{parser,resolver,checker,passes,transpiler,codegen,linter}/`
+**Implementation:** `src/mvl/{parser,resolver,checker,passes,backends,linter}/`
 
 #### Scenario: New AST instrumentation lands in passes/
 

@@ -136,7 +136,7 @@ src/main.rs
   build_project()          — bridge discovery, copy, error if missing
   inject_mod_bridge()      — inserts mod bridge; after use mvl_runtime::prelude::*;
 
-src/mvl/transpiler/mod.rs
+src/mvl/backends/rust/mod.rs
   TranspileOutput.has_extern_rust  — flag set by transpiler
   has_extern_rust_decls()          — predicate on Program AST
 

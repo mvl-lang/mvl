@@ -300,7 +300,7 @@ Users MAY implement `Display` for custom string representation using `impl Displ
 
 All struct and enum declarations MUST emit `#[derive(Debug, Clone, PartialEq)]` so any value can be debug-printed.
 
-**Implementation:** `src/mvl/transpiler/emit_types.rs::emit_struct`, `src/mvl/transpiler/emit_types.rs::emit_enum`
+**Implementation:** `src/mvl/backends/rust/emit_types.rs::emit_struct`, `src/mvl/backends/rust/emit_types.rs::emit_enum`
 
 **Tests:** `tests/transpiler.rs::struct_derives_debug`, `tests/transpiler.rs::enum_derives_debug`
 
@@ -324,7 +324,7 @@ impl std::fmt::Display for Point {
 }
 ```
 
-**Implementation:** `src/mvl/transpiler/emit_impls.rs::emit_display_impl`
+**Implementation:** `src/mvl/backends/rust/emit_impls.rs::emit_display_impl`
 
 **Tests:** `tests/transpiler.rs::impl_display_emits_display_trait`
 
@@ -337,7 +337,7 @@ let msg: String = format("Hello, {}!", name)
 let hex: String = format("{:08x}", value)
 ```
 
-**Implementation:** `src/mvl/transpiler/emit_exprs.rs` (mapped to Rust `format!` macro)
+**Implementation:** `src/mvl/backends/rust/emit_exprs.rs` (mapped to Rust `format!` macro)
 
 **Tests:** `tests/transpiler.rs::format_call_emits_format_macro`
 
@@ -364,7 +364,7 @@ Float literals MUST support scientific notation (`1.5e10`, `2.0e-3`).
 
 The type system MUST define the `Iterator[T]` trait as the protocol for lazy, sequential element access. Every type used in a `for...in` loop MUST implement `Iterator[T]`. Collection operations that transform sequences (`map`, `filter`, `flat_map`) MUST return `Iterator[U]` rather than a concrete collection — evaluation is deferred until elements are consumed.
 
-**Implementation:** `src/mvl/checker/mod.rs`, `src/mvl/transpiler/emit_impls.rs`, `src/mvl/transpiler/emit_stmts.rs`
+**Implementation:** `src/mvl/checker/mod.rs`, `src/mvl/backends/rust/emit_impls.rs`, `src/mvl/backends/rust/emit_stmts.rs`
 
 #### Iterator trait definition
 
@@ -607,7 +607,7 @@ The transpiler MAY internally map specific stdlib functions (e.g., `println`, `f
 
 This is Design Principle 3 ("Vocabulary over syntax").
 
-**Implementation:** `src/mvl/transpiler/emit_exprs.rs` (MACRO_HANDLED list), `src/mvl/stdlib/`
+**Implementation:** `src/mvl/backends/rust/emit_exprs.rs` (MACRO_HANDLED list), `src/mvl/stdlib/`
 
 **Tests:** `tests/transpiler.rs::format_call_emits_format_macro`, `tests/transpiler.rs::macro_handled_names_are_excluded_from_prelude`
 

@@ -34,7 +34,7 @@ test fn check_add() -> Unit {
   External tests (`_test.mvl` files) are permanent evidence (E layer) and
   survive regeneration.
 
-**Implementation:** `src/mvl/transpiler/emit_functions.rs`
+**Implementation:** `src/mvl/backends/rust/emit_functions.rs`
 
 #### Scenario: test fn is emitted under #[cfg(test)]
 
