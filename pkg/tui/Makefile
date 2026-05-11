@@ -1,6 +1,8 @@
 # pkg/tui — terminal UI package Makefile
 .PHONY: help guard-mvl check test clean
 
+.DEFAULT_GOAL := help
+
 MVL := ../../target/debug/mvl
 DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
