@@ -44,8 +44,8 @@ use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::refinements::check_arg_against_pred;
 use crate::mvl::checker::solver::RefResult;
 use crate::mvl::parser::ast::{
-    ArithOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, Literal, LogicOp, MatchBody, Param,
-    Program, RefExpr, Stmt,
+    ArithOp, BinaryOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, LValue, LetKind, Literal,
+    LogicOp, MatchBody, Param, Program, RefExpr, Stmt, UnaryOp,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -582,6 +582,39 @@ fn normalize_pred(pred: &RefExpr, old_name: &str) -> RefExpr {
             inner: Box::new(normalize_pred(inner, old_name)),
             span: *span,
         },
+        // Quantifiers: recurse into body; the bound variable shadows the outer scope, so
+        // only normalize free occurrences in the body that differ from the bound var.
+        RefExpr::Forall {
+            var,
+            ty,
+            body,
+            span,
+        } => RefExpr::Forall {
+            var: var.clone(),
+            ty: ty.clone(),
+            body: Box::new(if var == old_name {
+                // old_name is bound here — do not rename inside this scope.
+                *body.clone()
+            } else {
+                normalize_pred(body, old_name)
+            }),
+            span: *span,
+        },
+        RefExpr::Exists {
+            var,
+            ty,
+            body,
+            span,
+        } => RefExpr::Exists {
+            var: var.clone(),
+            ty: ty.clone(),
+            body: Box::new(if var == old_name {
+                *body.clone()
+            } else {
+                normalize_pred(body, old_name)
+            }),
+            span: *span,
+        },
         // Leaves unchanged.
         RefExpr::Integer { .. } | RefExpr::Float { .. } | RefExpr::Len { .. } => pred.clone(),
     }
@@ -658,6 +691,37 @@ fn subst_pred_ident(pred: &RefExpr, old_name: &str, new_val: &RefExpr) -> RefExp
         // re-evaluate whether substituting inside Old remains sound.
         RefExpr::Old { inner, span } => RefExpr::Old {
             inner: Box::new(subst_pred_ident(inner, old_name, new_val)),
+            span: *span,
+        },
+        // Quantifiers: substitute in the body unless old_name is the bound variable.
+        RefExpr::Forall {
+            var,
+            ty,
+            body,
+            span,
+        } => RefExpr::Forall {
+            var: var.clone(),
+            ty: ty.clone(),
+            body: Box::new(if var == old_name {
+                *body.clone()
+            } else {
+                subst_pred_ident(body, old_name, new_val)
+            }),
+            span: *span,
+        },
+        RefExpr::Exists {
+            var,
+            ty,
+            body,
+            span,
+        } => RefExpr::Exists {
+            var: var.clone(),
+            ty: ty.clone(),
+            body: Box::new(if var == old_name {
+                *body.clone()
+            } else {
+                subst_pred_ident(body, old_name, new_val)
+            }),
             span: *span,
         },
         RefExpr::Integer { .. } | RefExpr::Float { .. } | RefExpr::Len { .. } => pred.clone(),
@@ -779,12 +843,24 @@ fn check_invariants_in_stmt(
     match stmt {
         Stmt::While {
             invariants,
+            decreases,
             body,
             span,
             ..
         } => {
             for inv_pred in invariants {
                 check_invariant_at_entry(fn_name, inv_pred, var_refs, fn_decls, errors, *span);
+                // Phase 5: also verify the invariant is preserved across iterations.
+                check_invariant_preserved(
+                    fn_name, inv_pred, body, var_refs, fn_decls, errors, *span,
+                );
+            }
+            // Phase 5: verify the decreases measure.
+            if let Some(dec_expr) = decreases {
+                check_decreases_at_entry(fn_name, dec_expr, var_refs, fn_decls, errors, *span);
+                check_decreases_across_iteration(
+                    fn_name, dec_expr, body, var_refs, fn_decls, errors, *span,
+                );
             }
             // Recurse into the body for nested loops.
             check_invariants_in_block(body, fn_name, var_refs, fn_decls, errors);
@@ -901,6 +977,11 @@ fn collect_idents_inner(pred: &RefExpr, names: &mut Vec<String>) {
         | RefExpr::Old { inner, .. } => {
             collect_idents_inner(inner, names);
         }
+        // Quantifiers: collect free identifiers from the body (bound var is treated as free
+        // here since the caller uses this to count variables, and the bound var is in scope).
+        RefExpr::Forall { body, .. } | RefExpr::Exists { body, .. } => {
+            collect_idents_inner(body, names);
+        }
         RefExpr::Len { ident, .. } => names.push(ident.clone()),
         RefExpr::Integer { .. } | RefExpr::Float { .. } => {}
     }
@@ -950,5 +1031,375 @@ fn display_pred(pred: &RefExpr) -> String {
         RefExpr::Grouped { inner, .. } => format!("({})", display_pred(inner)),
         RefExpr::Old { inner, .. } => format!("old({})", display_pred(inner)),
         RefExpr::Len { ident, .. } => format!("len({ident})"),
+        RefExpr::Forall { var, body, .. } => format!("forall {var}, {}", display_pred(body)),
+        RefExpr::Exists { var, body, .. } => format!("exists {var}, {}", display_pred(body)),
     }
+}
+
+// ── Phase 5: loop body analysis helpers ───────────────────────────────────────
+
+/// Extract simple variable assignments from a loop body.
+///
+/// Only handles top-level `x = expr` assignments where the target is a plain
+/// identifier.  Returns `None` if the body contains any control-flow statement
+/// (`if`, `while`, `for`, `match`) — indicating the effect map cannot be
+/// determined statically and callers should fall back to `RuntimeCheck`.
+fn extract_simple_assignments(body: &Block) -> Option<HashMap<String, Expr>> {
+    let mut effects = HashMap::new();
+    for stmt in &body.stmts {
+        match stmt {
+            Stmt::Assign {
+                target: LValue::Ident(name, _),
+                value,
+                ..
+            } => {
+                effects.insert(name.clone(), value.clone());
+            }
+            // Ghost bindings and bare expression statements have no effect on
+            // the variables tracked in invariants / decreases measures.
+            Stmt::Let {
+                kind: LetKind::Ghost,
+                ..
+            }
+            | Stmt::Expr { .. } => {}
+            // Any control flow makes static analysis too complex → RuntimeCheck.
+            _ => return None,
+        }
+    }
+    Some(effects)
+}
+
+/// Convert a simple `Expr` to a `RefExpr` for use in predicate substitution.
+///
+/// Handles integer/float literals, identifiers, binary arithmetic (`+`, `-`,
+/// `*`, `/`, `%`), and unary negation.  Returns `None` for anything more
+/// complex, triggering a fallback to `RuntimeCheck` in the caller.
+fn expr_to_ref_expr_ext(expr: &Expr, fallback_span: Span) -> Option<RefExpr> {
+    match expr {
+        Expr::Literal(Literal::Integer(n), span) => Some(RefExpr::Integer {
+            value: *n,
+            span: *span,
+        }),
+        Expr::Literal(Literal::Float(f), span) => Some(RefExpr::Float {
+            value: *f,
+            span: *span,
+        }),
+        Expr::Ident(name, span) => Some(RefExpr::Ident {
+            name: name.clone(),
+            span: *span,
+        }),
+        Expr::Binary {
+            op,
+            left,
+            right,
+            span,
+        } => {
+            let l = expr_to_ref_expr_ext(left, *span)?;
+            let r = expr_to_ref_expr_ext(right, *span)?;
+            let aop = match op {
+                BinaryOp::Add => ArithOp::Add,
+                BinaryOp::Sub => ArithOp::Sub,
+                BinaryOp::Mul => ArithOp::Mul,
+                BinaryOp::Div => ArithOp::Div,
+                BinaryOp::Rem => ArithOp::Rem,
+                _ => return None,
+            };
+            Some(RefExpr::ArithOp {
+                op: aop,
+                left: Box::new(l),
+                right: Box::new(r),
+                span: *span,
+            })
+        }
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            expr: inner,
+            span,
+        } => {
+            let inner_ref = expr_to_ref_expr_ext(inner, *span)?;
+            Some(RefExpr::ArithOp {
+                op: ArithOp::Sub,
+                left: Box::new(RefExpr::Integer {
+                    value: 0,
+                    span: *span,
+                }),
+                right: Box::new(inner_ref),
+                span: *span,
+            })
+        }
+        _ => {
+            let _ = fallback_span;
+            None
+        }
+    }
+}
+
+/// Substitute all free identifiers in `pred` with their post-iteration values
+/// from `effects` (variable name → new `RefExpr` value).
+fn apply_effects_to_pred(pred: &RefExpr, effects: &HashMap<String, RefExpr>) -> RefExpr {
+    match pred {
+        RefExpr::Ident { name, .. } => {
+            if let Some(new_val) = effects.get(name) {
+                new_val.clone()
+            } else {
+                pred.clone()
+            }
+        }
+        RefExpr::Compare {
+            op,
+            left,
+            right,
+            span,
+        } => RefExpr::Compare {
+            op: *op,
+            left: Box::new(apply_effects_to_pred(left, effects)),
+            right: Box::new(apply_effects_to_pred(right, effects)),
+            span: *span,
+        },
+        RefExpr::LogicOp {
+            op,
+            left,
+            right,
+            span,
+        } => RefExpr::LogicOp {
+            op: *op,
+            left: Box::new(apply_effects_to_pred(left, effects)),
+            right: Box::new(apply_effects_to_pred(right, effects)),
+            span: *span,
+        },
+        RefExpr::ArithOp {
+            op,
+            left,
+            right,
+            span,
+        } => RefExpr::ArithOp {
+            op: *op,
+            left: Box::new(apply_effects_to_pred(left, effects)),
+            right: Box::new(apply_effects_to_pred(right, effects)),
+            span: *span,
+        },
+        RefExpr::Not { inner, span } => RefExpr::Not {
+            inner: Box::new(apply_effects_to_pred(inner, effects)),
+            span: *span,
+        },
+        RefExpr::Grouped { inner, span } => RefExpr::Grouped {
+            inner: Box::new(apply_effects_to_pred(inner, effects)),
+            span: *span,
+        },
+        // Old/Len/Integer/Float/Forall/Exists: leave unchanged.
+        _ => pred.clone(),
+    }
+}
+
+/// Build `var_refs` augmented with the invariant predicate as an induction
+/// hypothesis for every variable the invariant mentions.
+///
+/// This lets the solver assume `inv_pred` holds at the start of the iteration
+/// when checking whether it holds at the end (preservation proof).
+fn augment_var_refs_with_invariant(
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    inv_pred: &RefExpr,
+) -> HashMap<String, Option<RefExpr>> {
+    let mut augmented = var_refs.clone();
+    let vars_in_inv = collect_ident_names(inv_pred);
+    let mut distinct: Vec<String> = Vec::new();
+    for v in &vars_in_inv {
+        if !distinct.contains(v) {
+            distinct.push(v.clone());
+        }
+    }
+    for var in distinct {
+        // Add invariant-derived hypothesis only if this variable has no finer
+        // constraint already known to the solver.
+        augmented.entry(var.clone()).or_insert_with(|| {
+            // Normalise the invariant so the variable maps to "self".
+            Some(normalize_pred(inv_pred, &var))
+        });
+    }
+    augmented
+}
+
+/// Check a standalone `RefExpr` predicate (not parameterised by a "self" arg)
+/// against the current hypotheses.
+///
+/// Uses a dummy integer-0 argument; the solver resolves all free identifiers
+/// via `var_refs`.  Returns the solver outcome.
+fn check_standalone_pred(
+    pred: &RefExpr,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
+    loop_span: Span,
+) -> RefResult {
+    let idents = collect_ident_names(pred);
+    let mut distinct: Vec<String> = Vec::new();
+    for id in &idents {
+        if !distinct.contains(id) {
+            distinct.push(id.clone());
+        }
+    }
+
+    match distinct.as_slice() {
+        [] => {
+            // Constant predicate — pass dummy literal.
+            let dummy = Expr::Literal(Literal::Integer(0), loop_span);
+            check_arg_against_pred(&dummy, pred, var_refs, fn_decls)
+        }
+        [var_name] => {
+            // Single free variable — normalise to "self".
+            let normalized = normalize_pred(pred, var_name);
+            let ident_expr = Expr::Ident(var_name.clone(), loop_span);
+            check_arg_against_pred(&ident_expr, &normalized, var_refs, fn_decls)
+        }
+        _ => {
+            // Multiple variables: pass dummy; the solver (Z3 / Cooper) will
+            // resolve all identifiers from `var_refs`.
+            let dummy = Expr::Literal(Literal::Integer(0), loop_span);
+            check_arg_against_pred(&dummy, pred, var_refs, fn_decls)
+        }
+    }
+}
+
+// ── Phase 5: decreases checks ─────────────────────────────────────────────────
+
+/// Check that the `decreases` measure is bounded below (≥ 0) at loop entry.
+fn check_decreases_at_entry(
+    fn_name: &str,
+    decreases_expr: &RefExpr,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
+    errors: &mut Vec<CheckError>,
+    loop_span: Span,
+) {
+    // Prove the *negation*: if `decreases_expr < 0` is Proven, the measure is
+    // definitely not bounded below → emit error.
+    // (Direct `Failed` is not reliably produced for variable predicates.)
+    let lt_zero = RefExpr::Compare {
+        op: CmpOp::Lt,
+        left: Box::new(decreases_expr.clone()),
+        right: Box::new(RefExpr::Integer {
+            value: 0,
+            span: loop_span,
+        }),
+        span: loop_span,
+    };
+    let outcome = check_standalone_pred(&lt_zero, var_refs, fn_decls, loop_span);
+    if outcome == RefResult::Proven {
+        errors.push(CheckError::DecreasesNotBounded {
+            fn_name: fn_name.to_string(),
+            measure: display_pred(decreases_expr),
+            span: loop_span,
+        });
+    }
+    // Proven of the positive check or RuntimeCheck: silent at compile time.
+}
+
+/// Check that the `decreases` measure strictly decreases across one iteration.
+///
+/// Strategy: extract the simple assignment effect map from the body, apply it
+/// to the decreases expression to get `post_decreases`, then prove
+/// `post_decreases < pre_decreases` under the current hypotheses.
+/// Falls back to `RuntimeCheck` (silent) if the body is too complex to analyse.
+fn check_decreases_across_iteration(
+    fn_name: &str,
+    decreases_expr: &RefExpr,
+    body: &Block,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
+    errors: &mut Vec<CheckError>,
+    loop_span: Span,
+) {
+    let Some(effects_exprs) = extract_simple_assignments(body) else {
+        return; // Too complex — RuntimeCheck (no error at compile time).
+    };
+
+    // Convert Expr effects to RefExpr effects.
+    let mut effects_ref: HashMap<String, RefExpr> = HashMap::new();
+    for (var, expr) in &effects_exprs {
+        match expr_to_ref_expr_ext(expr, loop_span) {
+            Some(ref_e) => {
+                effects_ref.insert(var.clone(), ref_e);
+            }
+            None => return, // Can't convert — RuntimeCheck.
+        }
+    }
+
+    // post_decreases = decreases_expr with effect map applied.
+    let post_decreases = apply_effects_to_pred(decreases_expr, &effects_ref);
+
+    // Prove the *negation*: if `post_decreases >= pre_decreases` is Proven, the
+    // measure is definitely not decreasing → emit error.
+    // This is equivalent to: ¬(post < pre) = (post >= pre).
+    let not_decreasing = RefExpr::Compare {
+        op: CmpOp::Ge,
+        left: Box::new(post_decreases),
+        right: Box::new(decreases_expr.clone()),
+        span: loop_span,
+    };
+
+    let outcome = check_standalone_pred(&not_decreasing, var_refs, fn_decls, loop_span);
+    if outcome == RefResult::Proven {
+        errors.push(CheckError::DecreasesNotDecreasing {
+            fn_name: fn_name.to_string(),
+            measure: display_pred(decreases_expr),
+            span: loop_span,
+        });
+    }
+    // RuntimeCheck (can't determine) or Failed (positive case, measure IS decreasing): silent.
+}
+
+// ── Phase 5: invariant preservation ───────────────────────────────────────────
+
+/// Check that a loop invariant is preserved across one iteration.
+///
+/// Strategy:
+/// 1. Extract the simple assignment effect map from the body.
+/// 2. Apply the effect map to the invariant predicate to get `post_inv`.
+/// 3. Augment `var_refs` with the invariant itself as an induction hypothesis.
+/// 4. Check `post_inv` holds under the augmented hypotheses.
+///
+/// Falls back to `RuntimeCheck` (silent) if the body cannot be statically analysed.
+fn check_invariant_preserved(
+    fn_name: &str,
+    inv_pred: &RefExpr,
+    body: &Block,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
+    errors: &mut Vec<CheckError>,
+    loop_span: Span,
+) {
+    let Some(effects_exprs) = extract_simple_assignments(body) else {
+        return; // Too complex — RuntimeCheck.
+    };
+
+    let mut effects_ref: HashMap<String, RefExpr> = HashMap::new();
+    for (var, expr) in &effects_exprs {
+        match expr_to_ref_expr_ext(expr, loop_span) {
+            Some(ref_e) => {
+                effects_ref.insert(var.clone(), ref_e);
+            }
+            None => return, // RuntimeCheck.
+        }
+    }
+
+    // post_inv = invariant with post-iteration variable values.
+    let post_inv = apply_effects_to_pred(inv_pred, &effects_ref);
+
+    // Add invariant as an induction hypothesis for the variables it mentions.
+    let augmented = augment_var_refs_with_invariant(var_refs, inv_pred);
+
+    // Prove the *negation*: if `NOT post_inv` is Proven, the invariant is
+    // definitely violated after one iteration → emit error.
+    let negated_post = RefExpr::Not {
+        inner: Box::new(post_inv),
+        span: loop_span,
+    };
+    let outcome = check_standalone_pred(&negated_post, &augmented, fn_decls, loop_span);
+    if outcome == RefResult::Proven {
+        errors.push(CheckError::InvariantNotPreserved {
+            fn_name: fn_name.to_string(),
+            pred: display_pred(inv_pred),
+            span: loop_span,
+        });
+    }
+    // RuntimeCheck or Failed (positive case — invariant IS preserved): silent.
 }

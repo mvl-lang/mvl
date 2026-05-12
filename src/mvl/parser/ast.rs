@@ -420,6 +420,20 @@ pub enum RefExpr {
         inner: Box<RefExpr>,
         span: Span,
     },
+    /// `forall x: T, pred` — universal quantifier; ghost/contract context only (Phase 5, #628).
+    Forall {
+        var: String,
+        ty: Box<TypeExpr>,
+        body: Box<RefExpr>,
+        span: Span,
+    },
+    /// `exists x: T, pred` — existential quantifier; ghost/contract context only (Phase 5, #628).
+    Exists {
+        var: String,
+        ty: Box<TypeExpr>,
+        body: Box<RefExpr>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -688,6 +702,8 @@ pub enum Stmt {
         cond: Expr,
         /// Loop invariant predicates — `invariant pred` clauses (Phase 3, #621).
         invariants: Vec<RefExpr>,
+        /// Optional termination measure — `decreases expr` clause (Phase 5, #628).
+        decreases: Option<Box<RefExpr>>,
         body: Block,
         span: Span,
     },

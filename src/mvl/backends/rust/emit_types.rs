@@ -723,6 +723,10 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
         // old(e) in ensures: for runtime assertion purposes, treat as the current value.
         // Full entry-time capture is a future enhancement.
         RefExpr::Old { inner, .. } => emit_ref_expr(inner, binding),
+        // Quantifiers are ghost-only and erased before codegen; unreachable here.
+        RefExpr::Forall { .. } | RefExpr::Exists { .. } => {
+            unreachable!("quantifiers are ghost-only and must not appear in codegen")
+        }
     }
 }
 

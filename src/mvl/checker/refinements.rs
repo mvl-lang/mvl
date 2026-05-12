@@ -1026,5 +1026,7 @@ fn display_pred(pred: &RefExpr) -> String {
         RefExpr::Grouped { inner, .. } => format!("({})", display_pred(inner)),
         RefExpr::Old { inner, .. } => format!("old({})", display_pred(inner)),
         RefExpr::Len { ident, .. } => format!("len({ident})"),
+        RefExpr::Forall { var, body, .. } => format!("forall {var}, {}", display_pred(body)),
+        RefExpr::Exists { var, body, .. } => format!("exists {var}, {}", display_pred(body)),
     }
 }

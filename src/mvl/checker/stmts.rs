@@ -427,7 +427,11 @@ impl TypeChecker {
             }
 
             Stmt::While {
-                cond, body, span, ..
+                cond,
+                decreases,
+                body,
+                span,
+                ..
             } => {
                 let cond_ty = self.infer_expr(cond);
                 if !cond_ty.is_bool() && !matches!(cond_ty, Ty::Unknown) {
@@ -437,9 +441,11 @@ impl TypeChecker {
                         span: cond.span(),
                     });
                 }
-                // Req 8: reject `while` in total functions (only `for` is bounded).
-                // Unannotated `fn` is implicitly total and also rejects while loops.
-                if !matches!(self.current_fn_totality, Some(Totality::Partial)) {
+                // Req 8: reject `while` in total functions unless a `decreases` measure
+                // is provided (Phase 5, #628 — decreases enables bounded while loops).
+                if !matches!(self.current_fn_totality, Some(Totality::Partial))
+                    && decreases.is_none()
+                {
                     self.emit(CheckError::UnboundedLoopInTotal { span: *span });
                 }
                 // Same reasoning as Stmt::For: loop body tail type ≠ fn return type.

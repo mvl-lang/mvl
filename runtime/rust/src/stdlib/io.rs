@@ -118,7 +118,8 @@ pub fn to_string(p: Path) -> String {
 // ── Path queries (! FileRead) ──────────────────────────────────────────────
 
 /// Return true if the path exists on the filesystem.
-pub fn exists(p: Path) -> bool {
+/// Renamed from `exists` — `exists` is a reserved keyword in MVL (Phase 5, #628).
+pub fn path_exists(p: Path) -> bool {
     std::fs::metadata(&p.inner).is_ok()
 }
 
@@ -467,13 +468,13 @@ mod tests {
     fn exists_returns_true_for_existing_file() {
         let path_str = tmp("mvl_test_exists.txt");
         std::fs::write(&path_str, "").unwrap();
-        assert!(exists(path(path_str.clone())));
+        assert!(path_exists(path(path_str.clone())));
         std::fs::remove_file(&path_str).ok();
     }
 
     #[test]
     fn exists_returns_false_for_missing_file() {
-        assert!(!exists(path("/tmp/mvl_no_such_file_xyz".to_string())));
+        assert!(!path_exists(path("/tmp/mvl_no_such_file_xyz".to_string())));
     }
 
     #[test]

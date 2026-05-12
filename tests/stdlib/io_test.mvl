@@ -14,7 +14,7 @@
 //   remove         — remove file or empty directory
 //
 // Not yet implemented in runtime:
-//   read_file, exists, is_file, is_dir, open, close,
+//   read_file, path_exists, is_file, is_dir, open, close,
 //   buf_reader, buf_writer, read_line, write_line,
 //   read_dir, metadata, chmod, create_symlink, read_link,
 //   stdin, stdin_read_line, stdin_read_to_string
@@ -22,7 +22,7 @@
 use std.io.{
     File, Path, DirEntry, Metadata,
     path, join, to_string,
-    exists, is_file, is_dir,
+    path_exists, is_file, is_dir,
     open, close,
     write, append, read_to_string, read_file,
     create_dir_all, remove,
@@ -286,21 +286,21 @@ test fn io_join_preserves_extension() -> Unit {
     assert_eq(to_string(joined).len(), 16);
 }
 
-// ── exists / is_file / is_dir (real filesystem) ───────────────────────────
+// ── path_exists / is_file / is_dir (real filesystem) ─────────────────────
 
 test fn io_exists_true_for_tmp() -> Unit ! FileRead {
     // /tmp always exists on POSIX systems
-    assert_eq(exists(path("/tmp")), true);
+    assert_eq(path_exists(path("/tmp")), true);
 }
 
 test fn io_exists_false_for_nonexistent() -> Unit ! FileRead {
-    assert_eq(exists(path("/tmp/mvl_nonexistent_exists_417")), false);
+    assert_eq(path_exists(path("/tmp/mvl_nonexistent_exists_417")), false);
 }
 
 test fn io_exists_true_after_write() -> Unit ! FileRead, FileWrite, FileDelete {
     let p: Path = path("/tmp/mvl_io_exists_test_417.txt");
     let _: Result[Unit, String] = write(p, "x");
-    assert_eq(exists(p), true);
+    assert_eq(path_exists(p), true);
     let _: Result[Unit, String] = remove(p);
 }
 

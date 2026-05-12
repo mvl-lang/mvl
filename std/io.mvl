@@ -2,7 +2,7 @@
 //
 // File I/O, path utilities, filesystem operations, and standard input.
 // Import with: use std.io.{File, Path, BufReader, BufWriter, DirEntry, Metadata, Stdin,
-//                          path, join, to_string, exists, is_file, is_dir,
+//                          path, join, to_string, path_exists, is_file, is_dir,
 //                          open, close, read_to_string, write, append,
 //                          buf_reader, buf_writer, read_line, write_line,
 //                          create_dir_all, remove, read_dir, metadata, chmod,
@@ -100,7 +100,8 @@ pub fn to_string(p: Path) -> String { p.inner }
 // ── Path queries — runtime: mvl_runtime::stdlib::io ──────────────────────
 
 /// Return true if the path exists on the filesystem.
-pub builtin fn exists(p: Path) -> Bool ! FileRead
+/// Renamed from `exists` — `exists` is a reserved keyword (Phase 5, #628).
+pub builtin fn path_exists(p: Path) -> Bool ! FileRead
 
 /// Return true if the path refers to a regular file.
 pub builtin fn is_file(p: Path) -> Bool ! FileRead

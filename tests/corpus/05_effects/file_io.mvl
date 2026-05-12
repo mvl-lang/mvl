@@ -9,7 +9,7 @@
 
 use std.io.{
     File, Path, BufReader, BufWriter, DirEntry, Metadata, Stdin,
-    path, join, to_string, exists, is_file, is_dir,
+    path, join, to_string, path_exists, is_file, is_dir,
     open, close, read_to_string, write, append,
     buf_reader, buf_writer, read_line, write_line,
     create_dir_all, remove, read_dir, metadata, chmod,
@@ -106,7 +106,7 @@ fn rotate_log(src: Path, dst: Path, new_content: Tainted[String]) -> Result[Unit
 // ── Path queries (! FileRead) ─────────────────────────────────────────────
 
 fn check_exists(p: Path) -> Bool ! FileRead {
-    exists(p)
+    path_exists(p)
 }
 
 fn check_regular_file(p: Path) -> Bool ! FileRead {

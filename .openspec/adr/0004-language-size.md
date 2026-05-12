@@ -6,13 +6,15 @@
 
 ## Decision
 
-The MVL SHALL be the smallest general-purpose language by surface area. ~10 statement forms, ~5 expression forms, ~3 declaration forms, ~25 keywords. One way to do each thing.
+The MVL SHALL be the smallest general-purpose language by surface area. ~10 statement forms, ~5 expression forms, ~3 declaration forms, ~45 keywords. One way to do each thing.
+
+> **Keyword growth note (2026-05-12):** The original target was ~25 keywords (comparable to Go). Verification-density features added in Phases 1–5 of function contracts (#621, #627, #628) — `requires`, `ensures`, `ghost`, `invariant`, `decreases`, `forall`, `exists` — grew the count to ~45. Each addition satisfies the growth policy (each keyword enables the compiler to prove something it could not before). The comparison-table row below is updated accordingly.
 
 ## The spectrum
 
 | Language | Statement forms | Keywords | Spec pages | Design era |
 |----------|----------------|----------|------------|------------|
-| **MVL** | ~10 | ~25 | ~5 (EBNF) | 2026 — designed for LLMs |
+| **MVL** | ~10 | ~45 | ~5 (EBNF) | 2026 — designed for LLMs |
 | **Go** | ~15 | 25 | ~50 | 2009 — designed for simplicity |
 | **Rust** | ~20 | 51 | ~300 | 2015 — designed for safety |
 | **Python** | ~30 | 35 | ~700 | 1991 — designed for readability |

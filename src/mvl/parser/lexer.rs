@@ -94,6 +94,12 @@ pub enum TokenKind {
     Invariant,
     /// `ghost` — marks a binding as ghost (specification-only, erased before codegen, Phase 4, #627).
     Ghost,
+    /// `decreases` — loop termination measure; proves `while` terminates (Phase 5, #628).
+    Decreases,
+    /// `forall` — universal quantifier in ghost/contract predicates (Phase 5, #628).
+    Forall,
+    /// `exists` — existential quantifier in ghost/contract predicates (Phase 5, #628).
+    Exists,
 
     // ── Security labels ───────────────────────────────────────────────────
     Public,
@@ -205,6 +211,9 @@ impl fmt::Display for TokenKind {
             TokenKind::Ensures => write!(f, "ensures"),
             TokenKind::Invariant => write!(f, "invariant"),
             TokenKind::Ghost => write!(f, "ghost"),
+            TokenKind::Decreases => write!(f, "decreases"),
+            TokenKind::Forall => write!(f, "forall"),
+            TokenKind::Exists => write!(f, "exists"),
             TokenKind::Public => write!(f, "Public"),
             TokenKind::Tainted => write!(f, "Tainted"),
             TokenKind::Secret => write!(f, "Secret"),
@@ -934,6 +943,9 @@ fn keyword_or_ident(s: String) -> TokenKind {
         "ensures" => TokenKind::Ensures,
         "invariant" => TokenKind::Invariant,
         "ghost" => TokenKind::Ghost,
+        "decreases" => TokenKind::Decreases,
+        "forall" => TokenKind::Forall,
+        "exists" => TokenKind::Exists,
         // Boolean literals
         "true" => TokenKind::True,
         "false" => TokenKind::False,

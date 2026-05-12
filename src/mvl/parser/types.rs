@@ -749,6 +749,44 @@ impl Parser {
                 let span = self.span_from(start);
                 Ok(RefExpr::Len { ident, span })
             }
+            // forall x: T, pred — universal quantifier, ghost/contract context (Phase 5, #628)
+            TokenKind::Forall => {
+                self.advance(); // consume `forall`
+                let ident_result = self.expect_ident();
+                let (var, _) = self.require(ident_result)?;
+                let colon = self.expect(&TokenKind::Colon);
+                self.require(colon)?;
+                let ty = self.parse_type_expr()?;
+                let comma = self.expect(&TokenKind::Comma);
+                self.require(comma)?;
+                let body = self.parse_ref_expr()?;
+                let span = self.span_from(start);
+                Ok(RefExpr::Forall {
+                    var,
+                    ty: Box::new(ty),
+                    body: Box::new(body),
+                    span,
+                })
+            }
+            // exists x: T, pred — existential quantifier, ghost/contract context (Phase 5, #628)
+            TokenKind::Exists => {
+                self.advance(); // consume `exists`
+                let ident_result = self.expect_ident();
+                let (var, _) = self.require(ident_result)?;
+                let colon = self.expect(&TokenKind::Colon);
+                self.require(colon)?;
+                let ty = self.parse_type_expr()?;
+                let comma = self.expect(&TokenKind::Comma);
+                self.require(comma)?;
+                let body = self.parse_ref_expr()?;
+                let span = self.span_from(start);
+                Ok(RefExpr::Exists {
+                    var,
+                    ty: Box::new(ty),
+                    body: Box::new(body),
+                    span,
+                })
+            }
             // old(expr) — entry-time value in ensures predicates (Phase 4, #627)
             TokenKind::Ident(ref s) if s == "old" => {
                 self.advance();
