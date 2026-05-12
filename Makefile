@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-corpus test-solver test-stdlib test-bdd test-transpiler test-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples coverage lint mvl-lint format format-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants
+.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-corpus test-solver test-stdlib test-mvl test-bdd test-transpiler test-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples coverage lint mvl-lint format format-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants
 
 .DEFAULT_GOAL := help
 
@@ -167,6 +167,9 @@ test-solver: build ## Run solver layer programs — real MVL programs of progres
 test-stdlib: build ## Verify stdlib runtime correctness: transpile tests/stdlib/ → cargo test
 	@echo "Running stdlib correctness tests..."
 	$(MVL) test tests/stdlib/
+
+test-mvl: build ## Run MVL-in-MVL tests for the self-hosted compiler (compiler/*_test.mvl)
+	$(MVL) test compiler/
 
 test-bdd: build ## Run BDD corpus scenarios with Gherkin report (mvl test --bdd)
 	$(MVL) test tests/corpus/12_bdd/ --bdd

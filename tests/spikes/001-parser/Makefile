@@ -12,8 +12,8 @@ MVL  := $(ROOT)/target/debug/mvl
 ARGS ?= compiler/main.mvl
 
 .PHONY: help build guard-mvl check check-compiler test \
-        test-01 test-02 test-03 test-04 test-05 test-06 test-07 test-08 \
-        run-01 run-02 run-03 run-04 run-05 run-06 run-07 run-08 run-main
+        test-01 test-02 test-03 test-04 test-05 test-06 test-07 test-08 test-09 \
+        run-01 run-02 run-03 run-04 run-05 run-06 run-07 run-08 run-09 run-main
 
 .DEFAULT_GOAL := help
 
@@ -65,6 +65,9 @@ test-07: guard-mvl ## Run unit tests for experiment 07 (use-path parser)
 test-08: guard-mvl ## Run unit tests for experiment 08 (signature parser)
 	cd "$(ROOT)" && $(MVL) test tests/spikes/001-parser/08_sig_test.mvl
 
+test-09: guard-mvl ## Run unit tests for experiment 09 (complete recursive-descent parser)
+	cd "$(ROOT)" && $(MVL) test tests/spikes/001-parser/09_parser_test.mvl
+
 run-01: guard-mvl ## Run experiment 01 — reads examples/log_analyzer/main.mvl
 	cd "$(ROOT)" && $(MVL) run tests/spikes/001-parser/01_read_files.mvl
 
@@ -88,6 +91,9 @@ run-07: guard-mvl ## Run experiment 07 — use-path parser on examples/log_analy
 
 run-08: guard-mvl ## Run experiment 08 — signature parser on examples/log_analyzer/*.mvl
 	cd "$(ROOT)" && $(MVL) run tests/spikes/001-parser/08_sig_parser.mvl
+
+run-09: guard-mvl ## Run experiment 09 — self-hosted parser on compiler/ (dog-food)
+	cd "$(ROOT)" && $(MVL) run compiler/main.mvl
 
 run-main: guard-mvl ## Run $(ARGS) through the MVL lexer (override: make run-main ARGS=path/to/file.mvl)
 	cd "$(ROOT)" && $(MVL) run $(ARGS)
