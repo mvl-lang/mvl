@@ -494,6 +494,43 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     );
                 }
 
+                // push(elem) / extend(iter) / append(other) — collection mutators.
+                //
+                // emit_expr_as_fn_arg adds `.into()` for all ident args, which causes
+                // E0283 when the element type is plain (e.g. Vec<i64>.push(n.into())):
+                // Rust cannot infer which Into impl to use.  Only add `.into()` when
+                // the receiver element type is labeled (e.g. Vec<Clean<String>>).
+                "push" if args.len() == 1 => {
+                    let elem_is_labeled = cg
+                        .expr_types
+                        .get(&receiver.span())
+                        .is_some_and(|ty| matches!(ty, Ty::List(inner) if matches!(inner.as_ref(), Ty::Labeled(..))));
+                    emit_expr(cg, receiver);
+                    cg.push(".push(");
+                    if elem_is_labeled {
+                        emit_expr_as_fn_arg(cg, &args[0]);
+                    } else {
+                        emit_expr_as_arg(cg, &args[0]);
+                    }
+                    cg.push(")");
+                }
+                "extend" | "append" if args.len() == 1 => {
+                    let elem_is_labeled = cg
+                        .expr_types
+                        .get(&receiver.span())
+                        .is_some_and(|ty| matches!(ty, Ty::List(inner) if matches!(inner.as_ref(), Ty::Labeled(..))));
+                    emit_expr(cg, receiver);
+                    cg.push(".");
+                    cg.push(method);
+                    cg.push("(");
+                    if elem_is_labeled {
+                        emit_expr_as_fn_arg(cg, &args[0]);
+                    } else {
+                        emit_expr_as_arg(cg, &args[0]);
+                    }
+                    cg.push(")");
+                }
+
                 // ── UFCS dispatch for pure MVL stdlib methods ─────────────────────
                 //
                 // Methods implemented in std/strings.mvl and std/lists.mvl are
