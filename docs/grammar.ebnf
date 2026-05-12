@@ -32,7 +32,8 @@ module_path    = IDENT { "." IDENT } [ "." "{" IDENT { "," IDENT } "}" ] ;
 type_decl      = "type" IDENT [ type_params ] "=" type_body ;
 type_params    = "<" IDENT { "," IDENT } ">" ;
 type_body      = struct_body | enum_body | alias_type ;
-struct_body    = "struct" "{" { field_decl } "}" ;
+struct_body    = "struct" "{" { field_decl } "}" [ "with" "invariant" refinement ] ;
+                 (* "with invariant" adds a cross-field predicate checked at construction and mutation — Phase 6, #654 *)
 enum_body      = "enum" "{" variant { "," variant } "}" ;
 variant        = IDENT [ "(" type_list ")" | "{" field_list "}" ] ;
 field_decl     = IDENT ":" type_expr [ "where" refinement ] ;
@@ -188,7 +189,7 @@ DOC_COMMENT    = "///" { ANY_CHAR } NEWLINE ;    (* doc comment — convention, 
 (* IFC labels:      Tainted  Clean  Secret  Public                               *)
 (* IFC operations:  declassify  sanitize                                         *)
 (* Boolean:         true  false                                                  *)
-(* Refinements:     where  self  old  requires  ensures  invariant               *)
+(* Refinements:     where  self  old  requires  ensures  invariant  with        *)
 (*                  decreases  forall  exists                                    *)
 (* Transparency:    transparent                                                  *)
 (* Pattern:         Some  None  Ok  Err                                          *)

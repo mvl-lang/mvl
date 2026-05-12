@@ -90,6 +90,8 @@ pub enum TokenKind {
     Ensures,
     /// `invariant` — loop invariant predicate (Phase 3, #621).
     Invariant,
+    /// `with` — used in `with invariant` struct-level invariant clauses (Phase 6, #654).
+    With,
     /// `ghost` — marks a binding as ghost (specification-only, erased before codegen, Phase 4, #627).
     Ghost,
     /// `decreases` — loop termination measure; proves `while` terminates (Phase 5, #628).
@@ -206,6 +208,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Requires => write!(f, "requires"),
             TokenKind::Ensures => write!(f, "ensures"),
             TokenKind::Invariant => write!(f, "invariant"),
+            TokenKind::With => write!(f, "with"),
             TokenKind::Ghost => write!(f, "ghost"),
             TokenKind::Decreases => write!(f, "decreases"),
             TokenKind::Forall => write!(f, "forall"),
@@ -936,6 +939,7 @@ fn keyword_or_ident(s: String) -> TokenKind {
         "requires" => TokenKind::Requires,
         "ensures" => TokenKind::Ensures,
         "invariant" => TokenKind::Invariant,
+        "with" => TokenKind::With,
         "ghost" => TokenKind::Ghost,
         "decreases" => TokenKind::Decreases,
         "forall" => TokenKind::Forall,

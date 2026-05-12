@@ -54,7 +54,15 @@ impl Parser {
             TokenKind::Struct => {
                 self.advance();
                 let fields = self.parse_struct_body()?;
-                Ok(TypeBody::Struct(fields))
+                let invariant = if matches!(self.peek_kind(), TokenKind::With) {
+                    self.advance(); // consume `with`
+                    let inv = self.expect(&TokenKind::Invariant);
+                    self.require(inv)?;
+                    Some(self.parse_ref_expr()?)
+                } else {
+                    None
+                };
+                Ok(TypeBody::Struct { fields, invariant })
             }
             TokenKind::Enum => {
                 self.advance();
@@ -795,8 +803,23 @@ impl Parser {
             }
             TokenKind::Ident(name) => {
                 self.advance();
-                let span = self.span_from(start);
-                Ok(RefExpr::Ident { name, span })
+                let mut expr = RefExpr::Ident {
+                    name,
+                    span: self.span_from(start),
+                };
+                // Handle field access: `self.field`, `self.a.b`, etc.
+                while matches!(self.peek_kind(), TokenKind::Dot) {
+                    self.advance(); // consume '.'
+                    let field_result = self.expect_ident();
+                    let (field, _) = self.require(field_result)?;
+                    let span = self.span_from(start);
+                    expr = RefExpr::FieldAccess {
+                        object: Box::new(expr),
+                        field,
+                        span,
+                    };
+                }
+                Ok(expr)
             }
             TokenKind::Integer(n) => {
                 self.advance();
@@ -887,19 +910,20 @@ mod tests {
         let d = type_decl("type Point = struct { x: Float64, y: Float64 }");
         assert_eq!(d.name, "Point");
         assert!(d.params.is_empty());
-        let TypeBody::Struct(fields) = d.body else {
+        let TypeBody::Struct { fields, invariant } = d.body else {
             panic!("expected Struct body")
         };
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].name, "x");
         assert_eq!(fields[1].name, "y");
+        assert!(invariant.is_none());
     }
 
     #[test]
     fn parse_struct_with_ref_field() {
         // `ref Int` in the field type encodes mutability (replaces `mut count: Int`)
         let d = type_decl("type Counter = struct { count: ref Int }");
-        let TypeBody::Struct(fields) = d.body else {
+        let TypeBody::Struct { fields, .. } = d.body else {
             panic!()
         };
         assert!(matches!(fields[0].ty, TypeExpr::Ref { mutable: true, .. }));
@@ -909,10 +933,58 @@ mod tests {
     #[test]
     fn parse_struct_with_refined_field() {
         let d = type_decl("type Positive = struct { value: Int where self > 0 }");
-        let TypeBody::Struct(fields) = d.body else {
+        let TypeBody::Struct { fields, .. } = d.body else {
             panic!()
         };
         assert!(fields[0].refinement.is_some());
+    }
+
+    // ── Phase 6 / Scenario: Parse struct invariants (#654) ────────────────
+
+    #[test]
+    fn parse_struct_with_invariant() {
+        // GIVEN: a struct with a `with invariant` cross-field predicate
+        let d = type_decl(
+            "type Stack = struct { size: Int where self >= 0, capacity: Int where self > 0, } with invariant self.size <= self.capacity"
+        );
+        let TypeBody::Struct { fields, invariant } = d.body else {
+            panic!("expected Struct body")
+        };
+        assert_eq!(fields.len(), 2);
+        assert!(invariant.is_some(), "expected invariant to be parsed");
+        // The invariant should be a Compare: self.size <= self.capacity
+        let inv = invariant.unwrap();
+        assert!(
+            matches!(inv, RefExpr::Compare { .. }),
+            "expected Compare expression in invariant"
+        );
+    }
+
+    #[test]
+    fn parse_struct_without_invariant_gives_none() {
+        let d = type_decl("type Point = struct { x: Int, y: Int }");
+        let TypeBody::Struct { invariant, .. } = d.body else {
+            panic!()
+        };
+        assert!(invariant.is_none());
+    }
+
+    #[test]
+    fn parse_struct_invariant_field_access() {
+        // GIVEN: invariant uses self.lo and self.hi
+        let d = type_decl(
+            "type Range = struct { lo: Int, hi: Int, } with invariant self.lo <= self.hi",
+        );
+        let TypeBody::Struct { invariant, .. } = d.body else {
+            panic!()
+        };
+        let inv = invariant.expect("expected invariant");
+        // Top-level: Compare { FieldAccess("lo") <= FieldAccess("hi") }
+        let RefExpr::Compare { left, right, .. } = inv else {
+            panic!("expected Compare")
+        };
+        assert!(matches!(*left, RefExpr::FieldAccess { .. }));
+        assert!(matches!(*right, RefExpr::FieldAccess { .. }));
     }
 
     // ── Requirement 3 / Scenario: Parse enum ─────────────────────────────

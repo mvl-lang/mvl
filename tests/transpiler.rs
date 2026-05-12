@@ -205,6 +205,35 @@ fn struct_field_refinement_emits_constructor() {
     assert_contains(&rust, "(value >= 0)");
 }
 
+/// Phase 6 / Scenario: Struct-level invariant → constructor with debug_assert on struct value (#654)
+#[test]
+fn struct_invariant_emits_constructor_with_assert() {
+    let src =
+        "type Stack = struct { size: Int where self >= 0, capacity: Int where self > 0, } with invariant self.size <= self.capacity";
+    let rust = transpile_src(src);
+    // Constructor must be emitted
+    assert_contains(&rust, "pub fn new(");
+    // Field refinement assertions come first
+    assert_contains(&rust, "refinement violated: size");
+    assert_contains(&rust, "refinement violated: capacity");
+    // Struct value bound, then invariant checked
+    assert_contains(&rust, "let _mvl_val = Self {");
+    assert_contains(&rust, "struct invariant violated for `Stack`");
+    assert_contains(&rust, "_mvl_val.size <= _mvl_val.capacity");
+}
+
+/// Phase 6 / Scenario: Struct invariant only (no per-field refinements) (#654)
+#[test]
+fn struct_invariant_only_emits_constructor() {
+    let src = "type Range = struct { lo: Int, hi: Int, } with invariant self.lo <= self.hi";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "pub fn new(lo: i64, hi: i64) -> Self {");
+    assert_contains(&rust, "let _mvl_val = Self {");
+    assert_contains(&rust, "_mvl_val.lo <= _mvl_val.hi");
+    assert_contains(&rust, "struct invariant violated for `Range`");
+    assert_contains(&rust, "_mvl_val");
+}
+
 // ── Corpus roundtrip tests ────────────────────────────────────────────────
 
 /// Parse and transpile every corpus file that is known to parse cleanly.

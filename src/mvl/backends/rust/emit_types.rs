@@ -128,8 +128,8 @@ fn emit_label_newtype(cg: &mut RustEmitter, label: &str) {
 
 pub fn emit_type_decl(cg: &mut RustEmitter, td: &TypeDecl) {
     match &td.body {
-        TypeBody::Struct(fields) => {
-            emit_struct(cg, &td.name, &td.params, fields);
+        TypeBody::Struct { fields, invariant } => {
+            emit_struct(cg, &td.name, &td.params, fields, invariant.as_ref());
             // Emit ParseFromArgs impl for concrete (non-generic) structs, but
             // only when the program uses mvl_runtime (ParseFromArgs, get_arg
             // are defined there). Programs without stdlib imports use an inline
@@ -145,7 +145,13 @@ pub fn emit_type_decl(cg: &mut RustEmitter, td: &TypeDecl) {
 
 // ── Struct ────────────────────────────────────────────────────────────────
 
-fn emit_struct(cg: &mut RustEmitter, name: &str, params: &[GenericParam], fields: &[FieldDecl]) {
+fn emit_struct(
+    cg: &mut RustEmitter,
+    name: &str,
+    params: &[GenericParam],
+    fields: &[FieldDecl],
+    invariant: Option<&RefExpr>,
+) {
     emit_derive(cg, &["Debug", "Clone", "PartialEq"]);
     cg.line(&format!("pub struct {}{} {{", name, generic_params(params)));
     cg.push_indent();
@@ -156,9 +162,9 @@ fn emit_struct(cg: &mut RustEmitter, name: &str, params: &[GenericParam], fields
     cg.pop_indent();
     cg.line("}");
 
-    // Emit a constructor if any field has a refinement predicate
+    // Emit a constructor if any field has a refinement predicate or a struct invariant exists
     let refined_fields: Vec<_> = fields.iter().filter(|f| f.refinement.is_some()).collect();
-    if !refined_fields.is_empty() {
+    if !refined_fields.is_empty() || invariant.is_some() {
         cg.blank();
         cg.line(&format!(
             "impl{} {}{} {{",
@@ -187,7 +193,20 @@ fn emit_struct(cg: &mut RustEmitter, name: &str, params: &[GenericParam], fields
             }
         }
         let field_inits: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
-        cg.line(&format!("Self {{ {} }}", field_inits.join(", ")));
+        if let Some(inv) = invariant {
+            // Build struct first, then assert the invariant using field access on the value.
+            cg.line(&format!(
+                "let _mvl_val = Self {{ {} }};",
+                field_inits.join(", ")
+            ));
+            let inv_str = emit_ref_expr_for_assert(inv, "_mvl_val");
+            cg.line(&format!(
+                "debug_assert!({inv_str}, \"struct invariant violated for `{name}`\");"
+            ));
+            cg.line("_mvl_val");
+        } else {
+            cg.line(&format!("Self {{ {} }}", field_inits.join(", ")));
+        }
         cg.pop_indent();
         cg.line("}");
         cg.pop_indent();
@@ -702,6 +721,9 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
             } else {
                 name.clone()
             }
+        }
+        RefExpr::FieldAccess { object, field, .. } => {
+            format!("{}.{}", emit_ref_expr(object, binding), field)
         }
         RefExpr::Integer { value, .. } => value.to_string(),
         RefExpr::Float { value, .. } => {

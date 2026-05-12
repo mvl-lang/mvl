@@ -813,7 +813,7 @@ fn collect_types_in_variant(v: &Variant, out: &mut std::collections::HashSet<Str
 fn collect_types_in_type_decl(td: &TypeDecl, out: &mut std::collections::HashSet<String>) {
     use crate::mvl::parser::ast::TypeBody;
     match &td.body {
-        TypeBody::Struct(fields) => {
+        TypeBody::Struct { fields, .. } => {
             for f in fields {
                 collect_types_in_field(f, out);
             }

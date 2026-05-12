@@ -22,7 +22,7 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     pub(crate) fn register_type_decl(&mut self, td: &TypeDecl) {
         match &td.body {
-            TypeBody::Struct(fields) => {
+            TypeBody::Struct { fields, .. } => {
                 self.struct_fields.insert(
                     td.name.clone(),
                     fields

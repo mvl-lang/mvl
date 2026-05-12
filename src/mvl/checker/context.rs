@@ -46,7 +46,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{
-    Capability, Effect, FieldDecl, GenericParam, SecurityLabel, Totality, Variant,
+    Capability, Effect, FieldDecl, GenericParam, RefExpr, SecurityLabel, Totality, Variant,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -129,7 +129,11 @@ pub struct TypeInfo {
 
 #[derive(Debug, Clone)]
 pub enum TypeBodyInfo {
-    Struct(Vec<FieldInfo>),
+    Struct {
+        fields: Vec<FieldInfo>,
+        /// Struct-level invariant predicate (Phase 6, #654).
+        invariant: Option<RefExpr>,
+    },
     Enum(Vec<VariantInfo>),
     Alias(Ty),
 }
@@ -375,7 +379,10 @@ impl TypeEnv {
                 (*name).into(),
                 TypeInfo {
                     params: vec![],
-                    body: TypeBodyInfo::Struct(vec![]),
+                    body: TypeBodyInfo::Struct {
+                        fields: vec![],
+                        invariant: None,
+                    },
                 },
             );
         }
@@ -451,7 +458,10 @@ impl TypeEnv {
                 (*name).into(),
                 TypeInfo {
                     params: vec![],
-                    body: TypeBodyInfo::Struct(vec![]),
+                    body: TypeBodyInfo::Struct {
+                        fields: vec![],
+                        invariant: None,
+                    },
                 },
             );
         }

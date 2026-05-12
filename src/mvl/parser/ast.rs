@@ -138,7 +138,11 @@ pub struct TypeDecl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeBody {
-    Struct(Vec<FieldDecl>),
+    Struct {
+        fields: Vec<FieldDecl>,
+        /// Optional struct-level invariant: `with invariant <pred>` (Phase 6, #654).
+        invariant: Option<RefExpr>,
+    },
     Enum(Vec<Variant>),
     /// Type alias (including refined alias `T where pred`).
     Alias(Box<TypeExpr>),
@@ -395,6 +399,12 @@ pub enum RefExpr {
     },
     Ident {
         name: String,
+        span: Span,
+    },
+    /// Field access in an invariant/refinement predicate: `self.size` (Phase 6, #654).
+    FieldAccess {
+        object: Box<RefExpr>,
+        field: String,
         span: Span,
     },
     Integer {

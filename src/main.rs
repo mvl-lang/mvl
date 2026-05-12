@@ -2930,7 +2930,7 @@ fn collect_stats_from_decls(decls: &[Decl], stats: &mut AssuranceStats, collect_
                 }
             }
             Decl::Type(td) => match &td.body {
-                TypeBody::Struct(_) => stats.struct_type_count += 1,
+                TypeBody::Struct { .. } => stats.struct_type_count += 1,
                 TypeBody::Enum(_) => stats.enum_type_count += 1,
                 TypeBody::Alias(_) => {}
             },
