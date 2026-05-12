@@ -22,8 +22,7 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     pub(crate) fn register_type_decl(&mut self, td: &TypeDecl) {
         match &td.body {
-            // TODO (#654): emit invariant check for LLVM backend (Phase 6)
-            TypeBody::Struct { fields, .. } => {
+            TypeBody::Struct { fields, invariant } => {
                 self.struct_fields.insert(
                     td.name.clone(),
                     fields
@@ -31,6 +30,9 @@ impl<'ctx> LlvmBackend<'ctx> {
                         .map(|f| (f.name.clone(), f.ty.clone()))
                         .collect(),
                 );
+                if let Some(inv) = invariant {
+                    self.struct_invariants.insert(td.name.clone(), inv.clone());
+                }
             }
             TypeBody::Enum(variants) => {
                 self.enum_variants.insert(

@@ -32,6 +32,8 @@ impl TypeChecker {
                 | "log_info"
                 | "log_warn"
                 | "log_error"
+                | "assert_eq"
+                | "assert_ne"
         ) {
             for (arg, arg_ty) in args.iter().zip(arg_tys.iter()) {
                 if let Some(label) = ifc::label_of(arg_ty) {
@@ -60,6 +62,7 @@ impl TypeChecker {
                     | "eprintln"
                     | "eprint"
                     | "assert_eq"
+                    | "assert_ne"
                     | "parse_int"
                     | "format"
                     | "choice"

@@ -12,7 +12,8 @@ use inkwell::{
 };
 
 use crate::mvl::parser::ast::{
-    BinaryOp, Block, Expr, LValue, Literal, TypeExpr, UnaryOp, VariantFields,
+    ArithOp, BinaryOp, Block, CmpOp, Expr, LValue, Literal, LogicOp, RefExpr, TypeExpr, UnaryOp,
+    VariantFields,
 };
 
 use super::{stmts, LlvmBackend};
@@ -336,11 +337,144 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
         }
 
+        // Phase 6 (#670): emit invariant check via conditional branch + llvm.trap.
+        if let Some(inv) = self.struct_invariants.get(name).cloned() {
+            let field_info_copy = field_info.clone();
+            if let Some(cond) = self.emit_ref_expr_bool(&inv, alloca, struct_ty, &field_info_copy) {
+                let cur_block = self.builder.get_insert_block().unwrap();
+                let cur_fn = cur_block.get_parent().unwrap();
+                let trap_bb = self.context.append_basic_block(cur_fn, "inv_fail");
+                let ok_bb = self.context.append_basic_block(cur_fn, "inv_ok");
+                self.builder
+                    .build_conditional_branch(cond, ok_bb, trap_bb)
+                    .unwrap();
+                self.builder.position_at_end(trap_bb);
+                let trap_ty = self.context.void_type().fn_type(&[], false);
+                let trap_fn = self
+                    .module
+                    .get_function("llvm.trap")
+                    .unwrap_or_else(|| self.module.add_function("llvm.trap", trap_ty, None));
+                self.builder.build_call(trap_fn, &[], "trap").unwrap();
+                self.builder.build_unreachable().unwrap();
+                self.builder.position_at_end(ok_bb);
+            }
+        }
+
         Some(
             self.builder
                 .build_load(struct_ty, alloca, "struct_val")
                 .unwrap(),
         )
+    }
+
+    // ── Phase 6 (#670): RefExpr evaluator for struct invariant checks ────────
+
+    /// Evaluate a `RefExpr` as an LLVM i1 (boolean) value.
+    ///
+    /// Used to emit conditional invariant checks in struct constructors.
+    /// Returns `None` for unsupported predicate shapes (check is skipped).
+    fn emit_ref_expr_bool(
+        &mut self,
+        pred: &RefExpr,
+        alloca: inkwell::values::PointerValue<'ctx>,
+        struct_ty: inkwell::types::StructType<'ctx>,
+        field_info: &[(String, TypeExpr)],
+    ) -> Option<inkwell::values::IntValue<'ctx>> {
+        match pred {
+            RefExpr::Compare {
+                op, left, right, ..
+            } => {
+                let lv = self.emit_ref_expr_int(left, alloca, struct_ty, field_info)?;
+                let rv = self.emit_ref_expr_int(right, alloca, struct_ty, field_info)?;
+                let pred_op = match op {
+                    CmpOp::Eq => IntPredicate::EQ,
+                    CmpOp::Ne => IntPredicate::NE,
+                    CmpOp::Lt => IntPredicate::SLT,
+                    CmpOp::Gt => IntPredicate::SGT,
+                    CmpOp::Le => IntPredicate::SLE,
+                    CmpOp::Ge => IntPredicate::SGE,
+                };
+                Some(
+                    self.builder
+                        .build_int_compare(pred_op, lv, rv, "inv_cmp")
+                        .unwrap(),
+                )
+            }
+            RefExpr::LogicOp {
+                op, left, right, ..
+            } => {
+                let lv = self.emit_ref_expr_bool(left, alloca, struct_ty, field_info)?;
+                let rv = self.emit_ref_expr_bool(right, alloca, struct_ty, field_info)?;
+                Some(match op {
+                    LogicOp::And => self.builder.build_and(lv, rv, "inv_and").unwrap(),
+                    LogicOp::Or => self.builder.build_or(lv, rv, "inv_or").unwrap(),
+                })
+            }
+            RefExpr::Not { inner, .. } => {
+                let v = self.emit_ref_expr_bool(inner, alloca, struct_ty, field_info)?;
+                Some(self.builder.build_not(v, "inv_not").unwrap())
+            }
+            RefExpr::Grouped { inner, .. } => {
+                self.emit_ref_expr_bool(inner, alloca, struct_ty, field_info)
+            }
+            _ => None,
+        }
+    }
+
+    /// Evaluate a `RefExpr` as an LLVM i64 integer value.
+    ///
+    /// Handles field accesses (`self.field`), integer literals, and arithmetic.
+    fn emit_ref_expr_int(
+        &mut self,
+        pred: &RefExpr,
+        alloca: inkwell::values::PointerValue<'ctx>,
+        struct_ty: inkwell::types::StructType<'ctx>,
+        field_info: &[(String, TypeExpr)],
+    ) -> Option<inkwell::values::IntValue<'ctx>> {
+        match pred {
+            RefExpr::Integer { value, .. } => {
+                Some(self.context.i64_type().const_int(*value as u64, true))
+            }
+            RefExpr::FieldAccess { object, field, .. } => {
+                // Only handle `self.field` — invariant context always uses `self` as root.
+                if let RefExpr::Ident { name, .. } = object.as_ref() {
+                    if name == "self" {
+                        let idx = field_info.iter().position(|(n, _)| n == field)?;
+                        let ptr = self
+                            .builder
+                            .build_struct_gep(
+                                struct_ty,
+                                alloca,
+                                idx as u32,
+                                &format!("inv_{field}_ptr"),
+                            )
+                            .unwrap();
+                        let val = self
+                            .builder
+                            .build_load(self.context.i64_type(), ptr, &format!("inv_{field}"))
+                            .unwrap();
+                        return Some(val.into_int_value());
+                    }
+                }
+                None
+            }
+            RefExpr::ArithOp {
+                op, left, right, ..
+            } => {
+                let lv = self.emit_ref_expr_int(left, alloca, struct_ty, field_info)?;
+                let rv = self.emit_ref_expr_int(right, alloca, struct_ty, field_info)?;
+                Some(match op {
+                    ArithOp::Add => self.builder.build_int_add(lv, rv, "inv_add").unwrap(),
+                    ArithOp::Sub => self.builder.build_int_sub(lv, rv, "inv_sub").unwrap(),
+                    ArithOp::Mul => self.builder.build_int_mul(lv, rv, "inv_mul").unwrap(),
+                    _ => return None,
+                })
+            }
+            RefExpr::Grouped { inner, .. } => {
+                self.emit_ref_expr_int(inner, alloca, struct_ty, field_info)
+            }
+            _ => None,
+        }
     }
 
     /// Emit a struct-variant enum construction: `AuthError::AccountLocked { attempts: 3 }`.

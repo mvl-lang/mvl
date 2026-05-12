@@ -261,6 +261,36 @@ fn struct_invariant_logical_and_emits_correctly() {
     assert_contains(&rust, "struct invariant violated for `Window`");
 }
 
+/// Phase 1 / #672: `requires` clause emits `assert!`, not `debug_assert!`
+#[test]
+fn requires_emits_assert_not_debug_assert() {
+    let src = "fn divide(a: Int, b: Int) -> Int requires b != 0 { a }";
+    let rust = transpile_src(src);
+    assert!(
+        rust.contains("assert!("),
+        "requires must emit assert!, got:\n{rust}"
+    );
+    assert!(
+        !rust.contains("debug_assert!("),
+        "requires must not emit debug_assert!, got:\n{rust}"
+    );
+}
+
+/// Phase 1 / #672: `ensures` clause emits `assert!`, not `debug_assert!`
+#[test]
+fn ensures_emits_assert_not_debug_assert() {
+    let src = "fn abs_val(n: Int) -> Int ensures result >= 0 { n }";
+    let rust = transpile_src(src);
+    assert!(
+        rust.contains("assert!("),
+        "ensures must emit assert!, got:\n{rust}"
+    );
+    assert!(
+        !rust.contains("debug_assert!("),
+        "ensures must not emit debug_assert!, got:\n{rust}"
+    );
+}
+
 // ── Corpus roundtrip tests ────────────────────────────────────────────────
 
 /// Parse and transpile every corpus file that is known to parse cleanly.
@@ -2497,7 +2527,7 @@ fn corpus_basic_contracts_transpiles() {
     assert_contains(&rust, "pub fn");
 }
 
-/// Phase 4: `requires` clauses emit `debug_assert!` in the function body.
+/// Phase 4 / #672: `requires` clauses emit `assert!` in the function body.
 #[test]
 fn requires_emits_debug_assert_at_entry() {
     let src = r#"
@@ -2508,11 +2538,11 @@ fn requires_emits_debug_assert_at_entry() {
         }
     "#;
     let rust = transpile_src(src);
-    assert_contains(&rust, "debug_assert!");
+    assert_contains(&rust, "assert!");
     assert_contains(&rust, "b != 0");
 }
 
-/// Phase 4: `ensures` clauses emit `debug_assert!` wrapping the tail return.
+/// Phase 4 / #672: `ensures` clauses emit `assert!` wrapping the tail return.
 #[test]
 fn ensures_emits_debug_assert_at_return() {
     let src = r#"
@@ -2523,7 +2553,7 @@ fn ensures_emits_debug_assert_at_return() {
         }
     "#;
     let rust = transpile_src(src);
-    assert_contains(&rust, "debug_assert!");
+    assert_contains(&rust, "assert!");
     assert_contains(&rust, "_result");
 }
 
@@ -2557,7 +2587,7 @@ fn corpus_ghost_old_contracts_transpiles() {
     );
 }
 
-/// Phase 4: old() in ensures emits debug_assert! referencing the return binding.
+/// Phase 4 / #672: old() in ensures emits assert! referencing the return binding.
 #[test]
 fn old_in_ensures_emits_debug_assert() {
     let src = r#"
@@ -2568,6 +2598,6 @@ fn old_in_ensures_emits_debug_assert() {
         }
     "#;
     let rust = transpile_src(src);
-    assert_contains(&rust, "debug_assert!");
+    assert_contains(&rust, "assert!");
     assert_contains(&rust, "_result");
 }

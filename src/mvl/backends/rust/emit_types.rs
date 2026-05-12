@@ -673,7 +673,7 @@ pub fn emit_label(label: SecurityLabel) -> &'static str {
 // ── Refinement predicate → Rust assert expression ─────────────────────────
 
 /// Emit a refinement predicate as a Rust boolean expression suitable for
-/// use inside `debug_assert!(…)`.  The binding name `self` is replaced with
+/// use inside `assert!(…)`.  The binding name `self` is replaced with
 /// `binding`.
 pub fn emit_ref_expr_for_assert(pred: &RefExpr, binding: &str) -> String {
     emit_ref_expr(pred, binding)
