@@ -4,6 +4,22 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.97.0] — 2026-05-12
+
+### Added
+
+- **Struct-level invariants (`with invariant`)** — SPARK-style cross-field predicates for structs. Syntax: `type Stack = struct { size: Int, capacity: Int } with invariant self.size <= self.capacity`. Checked at construction via `assert!` in the Rust backend; LLVM support planned (#662). Closes #654.
+
+### Fixed
+
+- **ParseFromArgs bypass of struct invariants** — CLI argument parsing now routes through `Self::new()`, ensuring invariants are always enforced.
+- **Missing identifier validation on FieldAccess predicates** — Added `assert_safe_identifier()` guard before code generation interpolation.
+- **EBNF `ref_atom` documentation** — Updated to document the new `IDENT { "." IDENT }` field-access form.
+
+### Changed
+
+- **Refinement and invariant checks upgraded from `debug_assert!` to `assert!`** — Ensures enforcement in release builds. See #662 for planned `AssertMode` (configurable Rust/LLVM enforcement levels).
+
 ## [0.96.0] — 2026-05-12
 
 ### Changed
