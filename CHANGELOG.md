@@ -4,6 +4,17 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.94.0] — 2026-05-12
+
+### Added
+
+- **Function contracts Phase 5: loop verification** — `while` loops now accept `invariant` and `decreases` clauses; the checker verifies invariant preservation and termination (decreasing metric). Closes #628.
+- **Quantifiers in refinements (`forall`/`exists`)** — New `RefExpr::Forall` and `RefExpr::Exists` AST nodes; Z3 solver encodes universal and existential quantifiers for contract verification.
+- **Hard-reserved contract keywords** — `requires`, `ensures`, `ghost`, `invariant`, `decreases`, `forall`, `exists` are now reserved identifiers; stdlib `io.exists` renamed to `io.path_exists` to avoid conflict.
+- **Grammar EBNF updated** — `docs/grammar.ebnf` extended with all Phase 3–5 productions and a reserved-keyword reference section.
+- **ADR-0025 updated** — Hard-keyword decision documented with rationale and migration example.
+- **ADR-0004 keyword count updated** — Target revised from ~25 to ~45 keywords; growth justified by verification-density policy.
+
 ## [0.93.0] — 2026-05-11
 
 ### Added
