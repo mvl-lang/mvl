@@ -4,6 +4,22 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.95.0] — 2026-05-12
+
+### Changed
+
+- **Removed `mut` and `move` keywords** — Mutability and ownership transfer are now encoded exclusively through Pony-style capabilities (`iso`, `val`, `ref`, `tag`). Bindings use `let x: ref T` for mutability instead of `let mut x: T`; function parameters use `ref param: T` instead of `mut param: T`; expressions use `consume(x)` for ownership transfer instead of `move(x)`. All three backends (Rust, LLVM, Cranelift) and type checker updated. Closes #653.
+
+### Technical Details
+
+- **Type-level `ref` marker**: `ref T` in type annotations encodes mutability at the type system level
+- **Environment type stripping**: Bindings store stripped inner type in environment for simplicity; type checking uses transparent `Ty::Ref` case for compatibility
+- **Ownership transfer via `consume()`**: Replaced `Expr::Move` with `Expr::Consume` using mark-moved semantics
+- **Lexer/AST cleanup**: Removed `TokenKind::Mut`, `TokenKind::Move`, `mutable: bool` field from AST nodes, `LetKind::Regular { mutable }` simplified to `LetKind::Regular`
+- **Parser updates**: All keyword parsing for `mut`/`move` removed; parameter/field/let declarations now use only capability annotations
+- **Type checker**: Added mutability derivation from `Ty::Ref(true, _)` or capability (`Capability::Ref`/`Iso`); binding type stripping ensures correct type lookup
+- **All tests updated**: 1582 tests passing; corpus files, stdlib, and transpiler tests refactored to new syntax
+
 ## [0.94.0] — 2026-05-12
 
 ### Added
