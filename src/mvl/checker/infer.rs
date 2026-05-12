@@ -6,7 +6,7 @@
 //! Contains `infer_expr`, `infer_literal`, `infer_binary`, `infer_unary`,
 //! and the enum-variant lookup helper.
 
-use crate::mvl::checker::context::{BorrowState, TypeBodyInfo, VarInfo};
+use crate::mvl::checker::context::{CapabilityState, TypeBodyInfo, VarInfo};
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
@@ -123,25 +123,25 @@ impl TypeChecker {
                     });
                     return Ty::Unknown;
                 }
-                // Phase D (#362): check BorrowState on the referent (error only).
-                // State updates are deferred to Stmt::Let where borrows_var is also set,
-                // so that borrow_state is always released on scope exit. Updating state
-                // here (expression position) would leak when the borrow is not `let`-bound.
+                // Phase D (#362): check CapabilityState on the referent (error only).
+                // State updates are deferred to Stmt::Let where ref_var is also set,
+                // so that capability_state is always released on scope exit. Updating state
+                // here (expression position) would leak when the reference is not `let`-bound.
                 if let Expr::Ident(name, _) = expr.as_ref() {
                     let current = self
                         .env
                         .lookup(name)
-                        .map(|i| i.borrow_state.clone())
-                        .unwrap_or(BorrowState::Owned);
+                        .map(|i| i.capability_state.clone())
+                        .unwrap_or(CapabilityState::Owned);
 
                     if *mutable {
-                        if current != BorrowState::Owned {
+                        if current != CapabilityState::Owned {
                             self.emit(CheckError::AliasingMutableBorrow {
                                 name: name.clone(),
                                 span: *span,
                             });
                         }
-                    } else if matches!(current, BorrowState::MutablyBorrowed) {
+                    } else if matches!(current, CapabilityState::Ref) {
                         self.emit(CheckError::AliasingMutableBorrow {
                             name: name.clone(),
                             span: *span,

@@ -52,7 +52,7 @@ use crate::mvl::parser::lexer::Span;
 
 // ── Variable binding ─────────────────────────────────────────────────────────
 
-/// Borrow state of a variable (Phase D, Spec 009 Req 2).
+/// Capability state of a variable (Phase D, Spec 009 Req 2).
 ///
 /// Tracks whether a variable currently has any outstanding references,
 /// enforcing capability-based reference rules at the checker level.
@@ -62,19 +62,19 @@ use crate::mvl::parser::lexer::Span;
 /// The transitions below are the intended semantics for the full Phase D
 /// implementation.
 ///
-/// * `Owned` → `SharedBorrowed(n)` when `val x` is created.
-/// * `Owned` → `MutablyBorrowed` when `ref x` is created.
-/// * `SharedBorrowed(n)` → `SharedBorrowed(n-1)` when a `val` reference goes out of scope.
-/// * `SharedBorrowed(0)` == `Owned`.
-/// * `MutablyBorrowed` → `Owned` when the `ref` reference goes out of scope.
+/// * `Owned` → `Val(n)` when `val x` is created.
+/// * `Owned` → `Ref` when `ref x` is created.
+/// * `Val(n)` → `Val(n-1)` when a `val` reference goes out of scope.
+/// * `Val(0)` == `Owned`.
+/// * `Ref` → `Owned` when the `ref` reference goes out of scope.
 #[derive(Debug, Clone, PartialEq)]
-pub enum BorrowState {
-    /// No outstanding borrows — value is exclusively owned.
+pub enum CapabilityState {
+    /// No active capabilities — value is exclusively owned.
     Owned,
     /// `n` shared (`val T`) references are live.  Value may still be read but not mutably referenced.
-    SharedBorrowed(usize),
+    Val(usize),
     /// Exactly one exclusive (`ref T`) reference is live.  Value may not be read or re-referenced.
-    MutablyBorrowed,
+    Ref,
 }
 
 #[derive(Debug, Clone)]
@@ -89,15 +89,15 @@ pub struct VarInfo {
     /// Used for scope-based lifetime checking: a `val`/`ref` reference to this
     /// variable must not be assigned to a binding at a shallower scope depth.
     pub scope_depth: usize,
-    /// Active borrow state (Phase D, Spec 009 Req 2).
+    /// Active capability state (Phase D, Spec 009 Req 2).
     ///
-    /// Tracks outstanding shared and mutable borrows to enforce alias safety.
-    pub borrow_state: BorrowState,
-    /// Name of the variable this reference borrows, if any (Phase D).
+    /// Tracks outstanding shared and mutable capabilities to enforce alias safety.
+    pub capability_state: CapabilityState,
+    /// Name of the variable this binding references, if any (Phase D).
     ///
     /// Set when `let r = val x` or `let r = ref x` is bound.  Used by `pop_scope()`
     /// to release the reference on `x` when `r` goes out of scope.
-    pub borrows_var: Option<String>,
+    pub ref_var: Option<String>,
 }
 
 impl VarInfo {
@@ -108,8 +108,8 @@ impl VarInfo {
             moved: false,
             capability: None,
             scope_depth: 0,
-            borrow_state: BorrowState::Owned,
-            borrows_var: None,
+            capability_state: CapabilityState::Owned,
+            ref_var: None,
         }
     }
 
@@ -655,16 +655,16 @@ impl TypeEnv {
 
     pub fn pop_scope(&mut self) {
         if let Some(scope) = self.scopes.pop() {
-            // Phase D: release borrows held by variables going out of scope.
+            // Phase D: release capabilities held by variables going out of scope.
             for info in scope.values() {
-                if let Some(ref borrowed_name) = info.borrows_var {
+                if let Some(ref borrowed_name) = info.ref_var {
                     if let Some(target) = self.lookup_mut_var(borrowed_name) {
-                        target.borrow_state = match target.borrow_state {
-                            BorrowState::SharedBorrowed(1) | BorrowState::MutablyBorrowed => {
-                                BorrowState::Owned
+                        target.capability_state = match target.capability_state {
+                            CapabilityState::Val(1) | CapabilityState::Ref => {
+                                CapabilityState::Owned
                             }
-                            BorrowState::SharedBorrowed(n) => BorrowState::SharedBorrowed(n - 1),
-                            BorrowState::Owned => BorrowState::Owned,
+                            CapabilityState::Val(n) => CapabilityState::Val(n - 1),
+                            CapabilityState::Owned => CapabilityState::Owned,
                         };
                     }
                 }

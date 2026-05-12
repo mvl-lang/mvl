@@ -4,7 +4,7 @@
 //! Block, statement, and expression-statement type checking for the MVL type checker.
 //! Also includes field access, struct construction, and alias resolution helpers.
 
-use crate::mvl::checker::context::{BorrowState, TypeBodyInfo};
+use crate::mvl::checker::context::{CapabilityState, TypeBodyInfo};
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
@@ -279,7 +279,7 @@ impl TypeChecker {
                     false
                 };
                 if is_ref_assignment {
-                    self.check_borrow_lifetime(pattern, init);
+                    self.check_capability_scope(pattern, init);
                 } else if !types_compatible(&ann_ty, &init_ty) {
                     self.emit(CheckError::TypeMismatch {
                         expected: ann_ty.display(),
@@ -299,24 +299,22 @@ impl TypeChecker {
                 self.bind_pattern(pattern, &bind_ty, is_mutable);
                 // Phase D (#362): record which variable the new binding borrows so that
                 // `pop_scope()` can release the borrow when the binding goes out of scope.
-                // Also update the referent's borrow_state here (not in Expr::Borrow) so
-                // that state is only set when borrows_var is simultaneously recorded.
+                // Also update the referent's capability_state here (not in Expr::Borrow) so
+                // that state is only set when ref_var is simultaneously recorded.
                 if let (Pattern::Ident(bound_name, _), Expr::Borrow { expr, mutable, .. }) =
                     (pattern, init)
                 {
                     if let Expr::Ident(borrowed_name, _) = expr.as_ref() {
                         if let Some(bound_info) = self.env.lookup_mut_var(bound_name) {
-                            bound_info.borrows_var = Some(borrowed_name.clone());
+                            bound_info.ref_var = Some(borrowed_name.clone());
                         }
                         if let Some(referent) = self.env.lookup_mut_var(borrowed_name) {
-                            referent.borrow_state = if *mutable {
-                                BorrowState::MutablyBorrowed
+                            referent.capability_state = if *mutable {
+                                CapabilityState::Ref
                             } else {
-                                match referent.borrow_state.clone() {
-                                    BorrowState::SharedBorrowed(n) => {
-                                        BorrowState::SharedBorrowed(n + 1)
-                                    }
-                                    _ => BorrowState::SharedBorrowed(1),
+                                match referent.capability_state.clone() {
+                                    CapabilityState::Val(n) => CapabilityState::Val(n + 1),
+                                    _ => CapabilityState::Val(1),
                                 }
                             };
                         }
