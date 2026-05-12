@@ -141,6 +141,27 @@ fn ref_to_bool<'ctx>(
         }
         RefExpr::Not { inner, .. } => Some(ref_to_bool(ctx, inner, self_term, vars)?.not()),
         RefExpr::Grouped { inner, .. } => ref_to_bool(ctx, inner, self_term, vars),
+        // Quantifiers (Phase 5, #628): translate to Z3 first-order quantifiers.
+        // The bound variable is introduced as a fresh Z3 integer constant and
+        // added to a local `vars` copy for the duration of the body translation.
+        RefExpr::Forall { var, body, .. } => {
+            let bound = z3::ast::Int::new_const(ctx, var.as_str());
+            let mut inner_vars = vars.clone();
+            inner_vars.insert(var.clone(), bound.clone());
+            let body_bool = ref_to_bool(ctx, body, self_term, &inner_vars)?;
+            // forall x: Int, P(x)  ↔  ¬(∃ x: Int, ¬P(x))
+            // Z3 universal quantifier via the `forall` builder.
+            let bound_ast: &dyn z3::ast::Ast = &bound;
+            Some(z3::ast::forall_const(ctx, &[bound_ast], &[], &body_bool))
+        }
+        RefExpr::Exists { var, body, .. } => {
+            let bound = z3::ast::Int::new_const(ctx, var.as_str());
+            let mut inner_vars = vars.clone();
+            inner_vars.insert(var.clone(), bound.clone());
+            let body_bool = ref_to_bool(ctx, body, self_term, &inner_vars)?;
+            let bound_ast: &dyn z3::ast::Ast = &bound;
+            Some(z3::ast::exists_const(ctx, &[bound_ast], &[], &body_bool))
+        }
         // Float, Len, and bare Ident/Integer as booleans are not supported.
         _ => None,
     }

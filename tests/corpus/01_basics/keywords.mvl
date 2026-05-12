@@ -56,3 +56,31 @@ partial fn countdown(mut n: Int) -> Int {
     }
     n
 }
+
+// Contract keywords: requires, ensures (Phase 1), ghost (Phase 4)
+fn non_negative(x: Int) -> Int
+    requires x >= 0
+    ensures self >= 0
+{
+    ghost let witness: Int = x;
+    x
+}
+
+// Loop contract keywords: invariant (Phase 3), decreases (Phase 5)
+partial fn loop_contracts(mut i: Int where self >= 0) -> Int {
+    while i > 0
+        invariant i >= 0
+        decreases i
+    {
+        i = i - 1;
+    }
+    i
+}
+
+// Quantifier keywords: forall, exists (Phase 5)
+fn quantified(n: Int where self >= 0) -> Int
+    requires forall k: Int, k >= 0
+    ensures exists k: Int, k >= 0
+{
+    n
+}

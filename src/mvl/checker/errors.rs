@@ -305,6 +305,28 @@ pub enum CheckError {
         /// Counterexample witness value, if the solver extracted one (Phase 4, #627).
         counterexample: Option<String>,
     },
+    /// A `while` loop invariant was statically proven to not be preserved across iterations.
+    InvariantNotPreserved {
+        fn_name: String,
+        pred: String,
+        span: Span,
+    },
+    /// A `decreases` measure is not bounded below (must be ≥ 0) at loop entry.
+    DecreasesNotBounded {
+        fn_name: String,
+        measure: String,
+        span: Span,
+    },
+    /// A `decreases` measure is not proven to strictly decrease across loop iterations.
+    DecreasesNotDecreasing {
+        fn_name: String,
+        measure: String,
+        span: Span,
+    },
+    /// A `forall` or `exists` quantifier was used outside a ghost/contract context.
+    QuantifierOutsideGhost {
+        span: Span,
+    },
 
     // ── Label-transparent function validation (ADR-0024) ─────────────────
     /// `transparent fn` declared with no parameters — label join over empty
@@ -373,14 +395,18 @@ impl CheckError {
             CheckError::UnboundedLoopInTotal { .. }
             | CheckError::PartialCallInTotal { .. }
             | CheckError::UnprovenRecursion { .. }
-            | CheckError::ForLoopInPartialFn { .. } => 8,
+            | CheckError::ForLoopInPartialFn { .. }
+            | CheckError::DecreasesNotBounded { .. }
+            | CheckError::DecreasesNotDecreasing { .. } => 8,
             // Req 9: Data Race Freedom
             CheckError::CapabilityViolation { .. } | CheckError::IsoAliasingViolation { .. } => 9,
             // Req 10: Refinement Types & Contracts
             CheckError::RefinementViolated { .. }
             | CheckError::PreconditionViolated { .. }
             | CheckError::PostconditionViolated { .. }
-            | CheckError::InvariantViolated { .. } => 10,
+            | CheckError::InvariantViolated { .. }
+            | CheckError::InvariantNotPreserved { .. }
+            | CheckError::QuantifierOutsideGhost { .. } => 10,
             // Req 11: Information Flow Control
             CheckError::InvalidDeclassify { .. }
             | CheckError::InvalidSanitize { .. }
@@ -450,7 +476,11 @@ impl CheckError {
             | CheckError::TransparentFnGeneric { span, .. }
             | CheckError::PreconditionViolated { span, .. }
             | CheckError::PostconditionViolated { span, .. }
-            | CheckError::InvariantViolated { span, .. } => *span,
+            | CheckError::InvariantViolated { span, .. }
+            | CheckError::InvariantNotPreserved { span, .. }
+            | CheckError::DecreasesNotBounded { span, .. }
+            | CheckError::DecreasesNotDecreasing { span, .. }
+            | CheckError::QuantifierOutsideGhost { span } => *span,
         }
     }
 
@@ -624,6 +654,18 @@ impl CheckError {
             CheckError::InvariantViolated { fn_name, pred, counterexample, .. } => {
                 let cx = counterexample.as_deref().map(|c| format!(" (counterexample: {c})")).unwrap_or_default();
                 format!("loop invariant `{pred}` in `{fn_name}` cannot be proven to hold at loop entry{cx}")
+            }
+            CheckError::InvariantNotPreserved { fn_name, pred, .. } => {
+                format!("loop invariant `{pred}` in `{fn_name}` is not preserved across loop iterations")
+            }
+            CheckError::DecreasesNotBounded { fn_name, measure, .. } => {
+                format!("`decreases {measure}` in `{fn_name}` cannot be proven to be bounded below (must be ≥ 0) at loop entry")
+            }
+            CheckError::DecreasesNotDecreasing { fn_name, measure, .. } => {
+                format!("`decreases {measure}` in `{fn_name}` cannot be proven to strictly decrease across loop iterations")
+            }
+            CheckError::QuantifierOutsideGhost { .. } => {
+                "`forall`/`exists` quantifiers are only valid inside ghost bindings, `requires`, `ensures`, or `invariant` predicates".to_string()
             }
         }
     }

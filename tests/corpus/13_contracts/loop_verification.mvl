@@ -1,0 +1,76 @@
+// Phase 5: loop verification — decreases, invariant preservation, quantifiers (#628).
+
+// ── decreases: simple countdown (partial) ─────────────────────────────────────
+
+// The decreases measure `i` decreases by 1 each iteration (i = i - 1).
+// `check_decreases_across_iteration` proves `i - 1 < i` via Cooper/Z3.
+partial fn count_down_decreases(n: Int where self >= 0) -> Unit {
+    let mut i: Int = n;
+    while i > 0 decreases i {
+        i = i - 1;
+    }
+}
+
+// ── decreases: enables while in total function ────────────────────────────────
+
+// Without `decreases`, a `while` in an implicit-total function is rejected
+// (UnboundedLoopInTotal). With `decreases i`, it is now permitted (Phase 5).
+fn total_with_decreases(n: Int where self >= 0) -> Unit {
+    let mut i: Int = n;
+    while i > 0 decreases i {
+        i = i - 1;
+    }
+}
+
+// ── invariant preservation: single-variable ───────────────────────────────────
+
+// `invariant i >= 0` with body `i = i + 1`: preserved because `i + 1 >= 0`
+// follows from the induction hypothesis `i >= 0` (Layer 2 proves).
+partial fn invariant_preserved_single_var(n: Int where self >= 0) -> Unit {
+    let mut i: Int = 0;
+    while i < n invariant i >= 0 {
+        i = i + 1;
+    }
+}
+
+// ── invariant + decreases together (partial) ──────────────────────────────────
+
+// Combines both Phase 5 checks: invariant preserved and measure strictly
+// decreasing, both verified statically by the solver.
+partial fn loop_with_inv_and_decreases(n: Int where self >= 0) -> Unit {
+    let mut i: Int = n;
+    while i > 0
+        invariant i >= 0
+        decreases i
+    {
+        i = i - 1;
+    }
+}
+
+// ── forall quantifier in requires predicate ───────────────────────────────────
+
+// Quantifier is parsed and the solver attempts verification.
+// Since the quantifier has no simple closed form to resolve against call-site
+// args, the outcome is RuntimeCheck — no compile-time error, deferred to runtime.
+partial fn requires_forall(lo: Int, hi: Int) -> Int
+    requires forall x: Int, x >= lo
+{
+    lo
+}
+
+// ── exists quantifier in ensures predicate ────────────────────────────────────
+
+partial fn ensures_exists(n: Int where self > 0) -> Int
+    ensures exists x: Int, x > 0
+{
+    n
+}
+
+partial fn main() -> Unit ! Console {
+    count_down_decreases(3);
+    total_with_decreases(5);
+    invariant_preserved_single_var(4);
+    loop_with_inv_and_decreases(3);
+    let _: Int = requires_forall(0, 10);
+    let _: Int = ensures_exists(1);
+}

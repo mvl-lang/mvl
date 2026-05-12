@@ -26,6 +26,6 @@
 | [0022](0022-operator-intrinsic-mapping.md) | Operator → intrinsic mapping and stdlib category model (three-category model) | Accepted |
 | [0023](0023-stdlib-profiles.md) | Stdlib profiles — trusted vs proven | Accepted |
 | [0024](0024-label-transparent-functions.md) | Label-transparent functions (`transparent fn`) — ADR-0024 | Accepted |
-| [0025](0025-function-contracts.md) | Function contracts — `requires`/`ensures` Phase 1 | Accepted |
+| [0025](0025-function-contracts.md) | Function contracts — `requires`/`ensures`, `ghost`, `invariant`, `decreases`, `forall`/`exists` (Phases 1–5) | Accepted |
 | [0026](0026-input-validation-philosophy.md) | Input validation philosophy — post-Postel strictness | Accepted |
 | [0027](0027-multi-backend-architecture.md) | Multi-backend architecture — `backends/` namespace, `Backend` trait, merged runtime | Accepted |

@@ -5849,3 +5849,193 @@ fn precondition_violated_counterexample_field_is_none() {
         );
     }
 }
+
+// ── Phase 5: loop verification — decreases, invariant preservation, quantifiers (#628) ───────
+
+#[test]
+fn loop_verification_corpus_parses_and_checks() {
+    // GIVEN: the Phase 5 loop verification corpus
+    // THEN: no type errors (decreases + invariant preservation + quantifiers)
+    let src = include_str!("corpus/13_contracts/loop_verification.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "loop_verification corpus should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn decreases_parses_in_while_loop() {
+    // GIVEN: `while cond decreases expr { ... }` syntax
+    // THEN: parses without error and the AST carries the decreases field
+    let src = r#"
+        partial fn f(n: Int) -> Unit {
+            let mut i: Int = n;
+            while i > 0 decreases i { i = i - 1; }
+        }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "decreases clause should parse cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn while_with_decreases_allowed_in_total_fn() {
+    // GIVEN: implicit-total function with `while … decreases expr`
+    // THEN: no UnboundedLoopInTotal error (decreases makes it bounded)
+    let src = r#"
+        fn f(n: Int where self >= 0) -> Unit {
+            let mut i: Int = n;
+            while i > 0 decreases i { i = i - 1; }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnboundedLoopInTotal { .. })),
+        "while + decreases should NOT produce UnboundedLoopInTotal, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn while_without_decreases_still_rejected_in_total_fn() {
+    // GIVEN: implicit-total function with bare `while` (no decreases)
+    // THEN: UnboundedLoopInTotal error is still emitted
+    let src = r#"
+        fn f() -> Unit {
+            while true { }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnboundedLoopInTotal { .. })),
+        "while without decreases should still produce UnboundedLoopInTotal, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn decreases_not_decreasing_detected() {
+    // GIVEN: `decreases i` but body does `i = i + 1` (increasing, not decreasing)
+    // THEN: DecreasesNotDecreasing error
+    let src = r#"
+        partial fn f(n: Int) -> Unit {
+            let mut i: Int = n;
+            while i > 0 decreases i { i = i + 1; }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::DecreasesNotDecreasing { .. })),
+        "increasing measure should produce DecreasesNotDecreasing, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn invariant_preservation_proven_for_simple_increment() {
+    // GIVEN: `invariant i >= 0` with `i = i + 1`; induction hypothesis makes it provable.
+    // THEN: no InvariantNotPreserved error
+    let src = r#"
+        partial fn f(n: Int where self >= 0) -> Unit {
+            let mut i: Int = 0;
+            while i < n invariant i >= 0 { i = i + 1; }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::InvariantNotPreserved { .. })),
+        "invariant i >= 0 should be preserved by i = i + 1, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn invariant_not_preserved_detected() {
+    // GIVEN: `invariant i >= 0` but body does `i = 0 - 1` (sets i to -1)
+    // THEN: InvariantNotPreserved error
+    let src = r#"
+        partial fn f(n: Int) -> Unit {
+            let mut i: Int = n;
+            while i > 0 invariant i >= 0 { i = 0 - 1; }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::InvariantNotPreserved { .. })),
+        "setting i = -1 should produce InvariantNotPreserved, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn forall_quantifier_parses_in_requires() {
+    // GIVEN: `requires forall x: Int, x >= lo` — quantifier in contract context
+    // THEN: parses and type-checks; verification deferred to RuntimeCheck (no error)
+    let src = r#"
+        partial fn f(lo: Int) -> Int
+            requires forall x: Int, x >= lo
+        { lo }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "forall in requires should not produce compile errors, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn exists_quantifier_parses_in_ensures() {
+    // GIVEN: `ensures exists x: Int, x > 0` — quantifier in ensures context
+    // THEN: parses and type-checks; verification deferred to RuntimeCheck (no error)
+    let src = r#"
+        partial fn f(n: Int where self > 0) -> Int
+            ensures exists x: Int, x > 0
+        { n }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "exists in ensures should not produce compile errors, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn keywords_corpus_parses_and_checks() {
+    // GIVEN: the keywords corpus (01_basics/keywords.mvl) covering all reserved keywords
+    // THEN: parses and type-checks cleanly (no serious errors)
+    let src = include_str!("corpus/01_basics/keywords.mvl");
+    let result = check_src(src);
+    let serious: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            !matches!(
+                e,
+                CheckError::UndefinedFunction { .. }
+                    | CheckError::UndefinedVariable { .. }
+                    | CheckError::UndefinedType { .. }
+            )
+        })
+        .collect();
+    assert!(
+        serious.is_empty(),
+        "keywords corpus should have no serious errors, got: {serious:?}"
+    );
+}

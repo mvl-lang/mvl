@@ -101,9 +101,18 @@ Every value MUST have exactly one owner. Transfer of ownership MUST be explicit 
 
 The type system MUST support refinement predicates on types: `T where predicate`. The compiler MUST verify refinements statically where possible and insert runtime checks where necessary.
 
-**Implementation:** `src/mvl/checker/mod.rs`
+This requirement also covers **function contracts** — the relational extension of refinement types:
+- `requires pred` / `ensures pred` — pre/postconditions on function calls (Phases 1–2, #621)
+- `ghost let x: T = e` — specification-only bindings erased before codegen (Phase 4, #627)
+- `invariant pred` on `while` loops — checked at entry and after each iteration (Phase 3, #621)
+- `decreases expr` on `while` loops — termination measure (Phase 5, #628)
+- `forall x: T, pred` / `exists x: T, pred` — quantifiers in contract positions (Phase 5, #628)
 
-**Tests:** `tests/type_checker.rs::refinements_corpus_parses`, `tests/compile_and_run.rs::safe_division_check_passes`, `tests/compile_and_run.rs::safe_division_runs_and_produces_expected_output` (#191)
+See ADR-0025 for the full contract system design and phased implementation.
+
+**Implementation:** `src/mvl/checker/mod.rs`, `src/mvl/checker/contracts.rs`, `src/mvl/checker/refinements.rs`
+
+**Tests:** `tests/type_checker.rs::refinements_corpus_parses`, `tests/compile_and_run.rs::safe_division_check_passes`, `tests/compile_and_run.rs::safe_division_runs_and_produces_expected_output` (#191); `tests/type_checker.rs::loop_verification_corpus_parses_and_checks` (#628)
 
 #### Scenario: Division by zero prevention
 

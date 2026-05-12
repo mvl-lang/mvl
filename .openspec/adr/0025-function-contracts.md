@@ -40,7 +40,9 @@ Phase 1 is intentionally conservative: it handles the most common patterns (sing
 
 6. **Error assignment**: both new errors belong to Req 10 (Refinement Types & Contracts).
 
-7. **Deferred to Phase 2+**: `ghost`, `old(e)`, `invariant`, `decreases`, `forall`/`exists`.
+7. **Deferred to Phase 2+**: `ghost`, `old(e)`, `invariant`, `decreases`, `forall`/`exists` — all now implemented in Phases 3–5 (#628).
+
+8. **All contract keywords are hard-reserved** (Phase 5 decision): `ghost`, `invariant`, `decreases`, `forall`, `exists` are unconditional keywords in the lexer, not contextual keywords. This keeps the grammar LL(1) without disambiguation hacks and is consistent with every verification language (Dafny, F*, Lean). User code that previously used any of these as identifiers must rename. The concrete conflict resolved by Phase 5 was `exists` in the file-I/O corpus, renamed to `path_exists`.
 
 ---
 
