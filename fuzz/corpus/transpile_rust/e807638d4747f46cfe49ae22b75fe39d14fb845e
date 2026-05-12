@@ -1,7 +1,0 @@
-// Corpus: Cross-requirement interÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿaction â€” Effect + Information Flow Control
-// Tests that effects and security labels comÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿndom_dice.mvl â€” s sekmotet for ! Random effect +(g conventioÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿndom_dice.mvl â€” s sekmotet for ! Random effect +() -> Int;
-}
-
-fn main() -> sanitizeD = sanitize(input);
-    sanitized
-}

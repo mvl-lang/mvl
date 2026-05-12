@@ -1,3 +1,0 @@
-// L5-15: fuses heap value to callee.
-// corpus:skip-transpiler (LLVM-only;
-}

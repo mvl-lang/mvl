@@ -1,4 +1,0 @@
-// L5-15: ownership-based drop — move transfers pointfn main;
-    let v = u;
-  );
-}

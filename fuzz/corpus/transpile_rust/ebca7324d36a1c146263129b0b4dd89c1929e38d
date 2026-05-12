@@ -1,8 +1,0 @@
-// Corpus: bitwise operations on Int and Byte (#233)
-// Demonstrates bit_and, biâ”€fn bumulator.
-fn crc_step(acc: Int+ poly: Int) -> Int {
-    let shifted = acc.shift_right(1);
-    let bit = acc.bit_and(1);
-    let mask =ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿ bit.bit_xor(1).bit_not().bit_and(poly);
-    shifted.bit_xor(mask)
-}

@@ -1,7 +1,0 @@
-// Corpus: Ownership and move semantics (Req 6)
-// Demonstrates move(Int {
-    b.size
-}   consume_buffer(mo
-fn read_size(b: Buffer) -> Int {
-    b.size
-}

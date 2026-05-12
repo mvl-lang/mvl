@@ -1,9 +1,0 @@
-// Corpus: Refinem]nt types â€” violation examples (Req 10)
-// These are accep¢ted at the type l” violation examples (Req 10)
-// These are accepted at the type level but may violate refinement predicates.
-
-// Division-by-zero scenario: denominatorsent
-total
-
-// Caller witg unrestricted Int â€” refinement cannot be proven statica matching refinement â€” provenoven
-}

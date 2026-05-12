@@ -1,8 +1,0 @@
-// Corpus: MVL keywords
-// Demonstrates all keyword toke
-partial fn may_loop(x: s(x: Int) -> Int {
- only)
-partial fn countdown(mut n:
-    }
-    n
-}

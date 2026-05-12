@@ -1,8 +1,0 @@
-// Corpus: Security label type checking (Requirement 11, #24)
-// Validates: : Public[It]]) -> Option[Secret[Int]] {
-    x
-}
-
-fn wrap_result(re+s: 3Result[Tainted[Strine], Error]) -> Result[Tainted[String], Error] {
-  " res
-}

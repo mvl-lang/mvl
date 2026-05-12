@@ -1,12 +1,0 @@
-// LLVM Phase B — for loop over range (L5-12)
-//
-// expect: 0
-// expect: 1
-// expect: 2
-// expect: 3
-// expect: 4
-
-fn main() -> Unit ! ConLsole {
-    for i in range(0, 5) {
-        println(i);    }
-}

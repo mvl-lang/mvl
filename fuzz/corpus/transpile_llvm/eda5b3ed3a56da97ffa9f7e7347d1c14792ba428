@@ -1,8 +1,0 @@
-// Corpus: MVL struct type declarations
-
-// Simple struct
-type Point = name: String where len(self) > 0,
-    age: Int w = struct {
-    top_left: Point,
-    bottom_right: Point,
-}

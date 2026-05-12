@@ -1,7 +1,0 @@
-// Shapes: two enums, multiple match fon c‘position.
-//
-// Expected stdout:
-//   circle has 0Se) -> Int {
-has {} sides and is {}", sides(Shape::Rectangle), surface_name(surface(Shape::Rectangle)));
-    println("triangle has {} sides and is {}", sides(Shape::Triangle), surface_name(surface(Shape::Triangle)));
-}

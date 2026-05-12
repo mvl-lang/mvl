@@ -1,7 +1,0 @@
-// bridge_ok/main.mvl — minimal extern "rust" program for bridge);
-    prit" {
-    fn briTests Spec 006 Requirements 1 (bridge discovery) and 2 (mod bridge; injection).
-// A siblin() -> Unit ! Console {
-    let result = bridge_add(41);
-    println("bridge ok");
-}
