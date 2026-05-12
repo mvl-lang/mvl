@@ -4,6 +4,14 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.97.1] — 2026-05-13
+
+### Fixed
+
+- **LLVM backend silently ignores `with invariant`** — `register_type_decl` now stores invariants and `emit_construct` emits a conditional branch to `llvm.trap` on violation. Enables cross-backend parity with the Rust backend (#670).
+- **`assert_eq` covert channel for Secret/Tainted arguments** — Added `assert_eq` and `assert_ne` to the IFC label guard; assertion failures expose their arguments to stderr (#671).
+- **Split enforcement model for `requires`/`ensures`** — Promoted from `debug_assert!` to `assert!`, matching the `assert!` enforcement already used for struct `with invariant` and field refinements since v0.97.0 (#672).
+
 ## [0.97.0] — 2026-05-12
 
 ### Added
