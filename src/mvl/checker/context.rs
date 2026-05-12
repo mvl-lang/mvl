@@ -57,10 +57,10 @@ use crate::mvl::parser::lexer::Span;
 /// Tracks whether a variable currently has any outstanding references,
 /// enforcing capability-based reference rules at the checker level.
 ///
-/// # State machine (not yet driven — TODO #306)
+/// # State machine
 ///
-/// The transitions below are the intended semantics for the full Phase D
-/// implementation.
+/// Driven by `val`/`ref` type annotations on `let` bindings (#306, #660).
+/// The transitions below are enforced by the checker.
 ///
 /// * `Owned` → `Val(n)` when `val x` is created.
 /// * `Owned` → `Ref` when `ref x` is created.
