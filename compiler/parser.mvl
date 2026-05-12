@@ -783,21 +783,20 @@ partial fn parse_impl_decl(ps: ParserState) -> ImplR {
     let fty_args: List[TypeExpr] = first_ty_r.value.args;
     let fty_span: Span = first_ty_r.value.span;
 
-    let mut impl_ty: TypeExpr = empty_type_expr();
     let mut trait_name: String = "";
     let mut trait_args: List[TypeExpr] = [];
     let for_tok: Token = ps_current(curr);
-    if for_tok.lexeme == "for" {
+    let impl_ty: TypeExpr = if for_tok.lexeme == "for" {
         // first_ty was the trait
         trait_name = fty_name;
         trait_args = fty_args;
         curr = ps_advance(curr); // consume 'for'
         let recv_r: TypeExprR = parse_type_expr(curr);
         curr = recv_r.ps;
-        impl_ty = recv_r.value
+        recv_r.value
     } else {
-        impl_ty = TypeExpr { name: fty_name, args: fty_args, span: fty_span }
-    }
+        TypeExpr { name: fty_name, args: fty_args, span: fty_span }
+    };
 
     curr = ps_expect_punct(curr, "{");
     let mut methods: List[FnDecl] = [];
