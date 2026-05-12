@@ -1694,17 +1694,15 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
     }
 
     if run && out.has_main {
-        // Run the binary with the source file's parent as working dir so that
-        // relative file paths in run_args (e.g. --file logs.jsonl) resolve
-        // against where the user invoked `mvl run`, not the tmp build dir.
+        // Run the binary with the invocation CWD (where the user ran `mvl run`) so that
+        // relative file paths in the program (and in run_args like --file logs.jsonl)
+        // resolve against the caller's working directory, not the tmp build dir or
+        // the source file's parent directory.
         let binary = tmp_dir.join("target").join("debug").join(&crate_name);
-        let source_dir = Path::new(&file_path)
-            .parent()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("."));
+        let invocation_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let run_status = process::Command::new(&binary)
             .args(run_args)
-            .current_dir(&source_dir)
+            .current_dir(&invocation_dir)
             .status()
             .unwrap_or_else(|e| {
                 eprintln!("error: failed to run {}: {e}", binary.display());
@@ -3258,7 +3256,7 @@ fn collect_imported_module_names(prog: &mvl::mvl::parser::ast::Program) -> Vec<S
 /// Extract the file or directory stem from a path.
 fn stem(path: &str) -> String {
     let p = Path::new(path);
-    if p.is_dir() {
+    let raw = if p.is_dir() {
         p.file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("mvl_program")
@@ -3268,6 +3266,12 @@ fn stem(path: &str) -> String {
             .and_then(|s| s.to_str())
             .unwrap_or("mvl_program")
             .to_string()
+    };
+    // Rust package names must not start with a digit.
+    if raw.starts_with(|c: char| c.is_ascii_digit()) {
+        format!("mvl_{raw}")
+    } else {
+        raw
     }
 }
 

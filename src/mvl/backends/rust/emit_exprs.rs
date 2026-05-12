@@ -151,31 +151,79 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                 // filter / take_while / skip_while — predicate applied to a clone
                 // of each element; result collected back into Vec.
                 "filter" | "take_while" | "skip_while" if args.len() == 1 => {
+                    let needs_borrow = if let Expr::Ident(name, _) = &args[0] {
+                        cg.borrow_params_map
+                            .get(name.as_str())
+                            .and_then(|b| b.first().copied())
+                            .flatten()
+                            .is_some()
+                    } else {
+                        false
+                    };
                     emit_expr(cg, receiver);
                     cg.push(".clone().into_iter().");
                     cg.push(method);
                     cg.push("(|__x| (");
                     emit_expr(cg, &args[0]);
-                    cg.push(")(__x.clone())).collect::<Vec<_>>()");
+                    if needs_borrow {
+                        cg.push(")(&__x.clone())).collect::<Vec<_>>()");
+                    } else {
+                        cg.push(")(__x.clone())).collect::<Vec<_>>()");
+                    }
                 }
                 // any / all — same predicate pattern but return bool, no collect.
                 "any" | "all" if args.len() == 1 => {
+                    let needs_borrow = if let Expr::Ident(name, _) = &args[0] {
+                        cg.borrow_params_map
+                            .get(name.as_str())
+                            .and_then(|b| b.first().copied())
+                            .flatten()
+                            .is_some()
+                    } else {
+                        false
+                    };
                     emit_expr(cg, receiver);
                     cg.push(".clone().into_iter().");
                     cg.push(method);
                     cg.push("(|__x| (");
                     emit_expr(cg, &args[0]);
-                    cg.push(")(__x.clone()))");
+                    if needs_borrow {
+                        cg.push(")(&__x.clone()))");
+                    } else {
+                        cg.push(")(__x.clone()))");
+                    }
                 }
                 // fold(init, f) — init cloned (value arg); f wrapped in closure
                 // so capturing closures are accepted alongside fn pointers.
+                // When f is a named function with borrow params, add & to the
+                // accumulator and/or element in the generated lambda.
                 "fold" if args.len() == 2 => {
+                    let (borrow_acc, borrow_elem) = if let Expr::Ident(name, _) = &args[1] {
+                        let borrows = cg
+                            .borrow_params_map
+                            .get(name.as_str())
+                            .cloned()
+                            .unwrap_or_default();
+                        let b0 = borrows.first().copied().flatten().is_some();
+                        let b1 = borrows.get(1).copied().flatten().is_some();
+                        (b0, b1)
+                    } else {
+                        (false, false)
+                    };
                     emit_expr(cg, receiver);
                     cg.push(".clone().into_iter().fold(");
                     emit_expr_as_arg(cg, &args[0]);
                     cg.push(", |acc, __x| (");
                     emit_expr(cg, &args[1]);
-                    cg.push(")(acc, __x))");
+                    cg.push(")(");
+                    if borrow_acc {
+                        cg.push("&");
+                    }
+                    cg.push("acc, ");
+                    if borrow_elem {
+                        cg.push("&");
+                    }
+                    cg.push("__x))");
                 }
                 // windows(n)/chunks(n) — Rust returns &[T] slices; collect into Vec<Vec<T>>
                 "windows" | "chunks" => {
@@ -327,8 +375,12 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     emit_expr(cg, receiver);
                     match receiver_ty.as_ref() {
                         Some(Ty::String) => {
+                            // emit_args_no_into avoids .into() before .as_str().
+                            // (x.into()).as_str() is ambiguous (E0282) when the arg
+                            // is a String variable — Rust cannot infer the Into target
+                            // without a constraining function parameter type.
                             cg.push(".contains((");
-                            emit_args(cg, args);
+                            emit_args_no_into(cg, args);
                             cg.push(").as_str())");
                         }
                         _ => {
@@ -462,6 +514,43 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     cg.push(
                         ".difference(&__b).cloned().collect::<std::collections::HashSet<_>>() }",
                     );
+                }
+
+                // push(elem) / extend(iter) / append(other) — collection mutators.
+                //
+                // emit_expr_as_fn_arg adds `.into()` for all ident args, which causes
+                // E0283 when the element type is plain (e.g. Vec<i64>.push(n.into())):
+                // Rust cannot infer which Into impl to use.  Only add `.into()` when
+                // the receiver element type is labeled (e.g. Vec<Clean<String>>).
+                "push" if args.len() == 1 => {
+                    let elem_is_labeled = cg
+                        .expr_types
+                        .get(&receiver.span())
+                        .is_some_and(|ty| matches!(ty, Ty::List(inner) if matches!(inner.as_ref(), Ty::Labeled(..))));
+                    emit_expr(cg, receiver);
+                    cg.push(".push(");
+                    if elem_is_labeled {
+                        emit_expr_as_fn_arg(cg, &args[0]);
+                    } else {
+                        emit_expr_as_arg(cg, &args[0]);
+                    }
+                    cg.push(")");
+                }
+                "extend" | "append" if args.len() == 1 => {
+                    let elem_is_labeled = cg
+                        .expr_types
+                        .get(&receiver.span())
+                        .is_some_and(|ty| matches!(ty, Ty::List(inner) if matches!(inner.as_ref(), Ty::Labeled(..))));
+                    emit_expr(cg, receiver);
+                    cg.push(".");
+                    cg.push(method);
+                    cg.push("(");
+                    if elem_is_labeled {
+                        emit_expr_as_fn_arg(cg, &args[0]);
+                    } else {
+                        emit_expr_as_arg(cg, &args[0]);
+                    }
+                    cg.push(")");
                 }
 
                 // ── UFCS dispatch for pure MVL stdlib methods ─────────────────────
@@ -947,7 +1036,7 @@ fn emit_args(cg: &mut RustEmitter, args: &[Expr]) {
         if i > 0 {
             cg.push(", ");
         }
-        emit_expr_as_arg(cg, arg);
+        emit_expr_as_fn_arg(cg, arg);
     }
 }
 
@@ -985,7 +1074,7 @@ fn emit_args_with_borrows(cg: &mut RustEmitter, args: &[Expr], borrows: &[Option
         }
         match borrows.get(i).copied().flatten() {
             Some(mutable) => emit_expr_as_borrow_arg(cg, arg, mutable),
-            None => emit_expr_as_arg(cg, arg),
+            None => emit_expr_as_fn_arg(cg, arg),
         }
     }
 }
@@ -1049,6 +1138,46 @@ fn emit_expr_as_arg(cg: &mut RustEmitter, expr: &Expr) {
             // Temporaries (function call results, struct literals, block expressions)
             // are rvalues that Rust moves into the callee — no `.clone()` needed.
             // The value is freshly created and has no other owner in the caller.
+            emit_expr(cg, expr);
+        }
+    }
+}
+
+/// Emit an expression as an argument to a regular function call (not a macro).
+///
+/// Adds `.into()` so that unlabeled (Public) values coerce to labeled parameters
+/// (e.g. `String` → `Clean<String>`) via `From<T> for Label<T>` in mvl_runtime::ifc.
+/// This is safe for function calls because the parameter type constrains `.into()`'s
+/// target, preventing the E0283 ambiguity that arises in macros like `println!`.
+fn emit_expr_as_fn_arg(cg: &mut RustEmitter, expr: &Expr) {
+    use crate::mvl::checker::types::Ty;
+    match expr {
+        Expr::Literal(Literal::Str(s), _) => {
+            cg.push(&format!("\"{}\".to_string().into()", escape_str(s)));
+        }
+        // Function-typed identifiers (callbacks, named function references) must NOT
+        // get `.into()` — Rust function items do not implement `Into<_>` generically.
+        Expr::Ident(_, span) if matches!(cg.expr_types.get(span), Some(Ty::Fn(..))) => {
+            emit_expr(cg, expr);
+            if !cg.last_uses.contains(span) {
+                cg.push(".clone()");
+            }
+        }
+        // Value identifiers: `.into()` allows unlabeled (Public) values to coerce into
+        // labeled parameters (e.g. `String` → `Clean<String>`).
+        Expr::Ident(_, span) => {
+            emit_expr(cg, expr);
+            if !cg.last_uses.contains(span) {
+                cg.push(".clone().into()");
+            } else {
+                cg.push(".into()");
+            }
+        }
+        Expr::FieldAccess { .. } => {
+            emit_expr(cg, expr);
+            cg.push(".clone().into()");
+        }
+        _ => {
             emit_expr(cg, expr);
         }
     }

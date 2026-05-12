@@ -29,6 +29,6 @@ fn log_with_labels(public_data: Public[String], secret_data: Secret[String]) -> 
 
 // Sanitize tainted input before use
 fn process_input(input: Tainted[String]) -> Clean[String] ! Log {
-    let sanitized = sanitize(input);
+    let sanitized: Clean[String] = sanitize(input);
     sanitized
 }

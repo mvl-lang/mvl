@@ -10,11 +10,13 @@
 # Run from this directory or from the repo root.
 .PHONY: help guard-mvl build check test-solver test test-llvm run clean
 
+.DEFAULT_GOAL := help
+
 MVL  := ../../target/debug/mvl
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
 guard-mvl: ## Validate MVL binary is present (does NOT recompile)
 	@$(MVL) --version > /dev/null 2>&1 || { \

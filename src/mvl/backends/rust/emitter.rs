@@ -86,6 +86,12 @@ pub struct RustEmitter {
     /// * `emit_params` — wraps inferred-borrow param types in `&` / `&mut ` (Rust output).
     /// * `emit_args` at call sites — emits `&x` / `&mut x` instead of `x.clone()`.
     pub borrow_params_map: std::collections::HashMap<String, Vec<Option<bool>>>,
+    /// Names of borrowed parameters in the function currently being emitted.
+    ///
+    /// Set at the start of each function body, cleared at the end.
+    /// Used by let-binding emission to add `.clone()` when reading a field
+    /// from a borrowed parameter (`acc.items` where `acc: &ParseAcc`).
+    pub borrow_param_names: std::collections::HashSet<String>,
     /// Fully-qualified Rust paths for stdlib function names that would shadow
     /// built-in primitives in the generated file (#420: regex.replace / regex.find).
     ///
@@ -495,7 +501,7 @@ impl RustEmitter {
         // Emit placeholder structs for external types referenced but not defined
         // in this module (e.g. `DbConn` from library code), along with any
         // method stubs inferred from call sites.
-        let stubs = collect_undefined_types(prog);
+        let stubs = collect_undefined_types(prog, prelude_progs);
         if !stubs.is_empty() {
             self.line(
                 "// ── External type stubs (Phase 1 placeholders) ──────────────────────────",
@@ -687,12 +693,22 @@ fn emit_extern_decl(cg: &mut RustEmitter, ed: &ExternDecl) {
 /// Collect the names of all base types referenced in the program that are
 /// not defined by a `TypeDecl` in this program and are not MVL built-ins.
 /// Returns a sorted, deduplicated list suitable for emitting stub structs.
-fn collect_undefined_types(prog: &Program) -> Vec<String> {
+/// `prelude_progs` types are treated as already-defined so they are never stubbed.
+fn collect_undefined_types(prog: &Program, prelude_progs: &[Program]) -> Vec<String> {
     // Collect defined type names
     let mut defined: std::collections::HashSet<String> = std::collections::HashSet::new();
     for decl in &prog.declarations {
         if let Decl::Type(td) = decl {
             defined.insert(td.name.clone());
+        }
+    }
+    // Types defined in prelude programs are already emitted before this module;
+    // skip them so we never emit a conflicting `pub struct Foo;` stub.
+    for pp in prelude_progs {
+        for decl in &pp.declarations {
+            if let Decl::Type(td) = decl {
+                defined.insert(td.name.clone());
+            }
         }
     }
 

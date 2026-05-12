@@ -1,0 +1,221 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/main.mvl — S6: MVL compiler driver (issue #187)
+//
+// Entry point for the self-hosted MVL frontend.
+// Reads a directory of .mvl source files, lexes + parses each one, then
+// prints a structured summary of all top-level declarations found.
+//
+// Output per file:
+//   fns:N  types:M  uses:P  consts:Q  externs:R  impls:S  errors:E
+//   followed by one line per fn declaration:
+//     [pub] [total|partial] [transparent] fn name(params) -> RetType ! Effects
+//
+// Usage (from repo root):
+//   mvl run compiler/main.mvl
+//   mvl run compiler/main.mvl -- --dir tests/corpus/01_basics
+//
+// Default directory: compiler/ (dog-fooding: parse the compiler itself)
+
+use lexer::lex;
+use parser::parse;
+use ast::Token;
+use ast::TokenKind;
+use ast::FnDecl;
+use ast::TypeDecl;
+use ast::TypeBodyKind;
+use ast::UseDecl;
+use ast::ConstDecl;
+use ast::ExternDecl;
+use ast::ImplDecl;
+use ast::Program;
+use ast::TypeExpr;
+use ast::Param;
+use ast::Effect;
+use std.io.{path, join, read_dir, read_to_string, to_string, Path}
+use std.args.{get_arg}
+
+// ── Formatting helpers ────────────────────────────────────────────────────────
+
+total fn format_type_expr(ty: TypeExpr) -> String {
+    if ty.args.len() == 0 {
+        format("{}", ty.name)
+    } else {
+        let args_str: String = ty.args.fold("", |acc: String, a: TypeExpr|
+            if acc == "" { format("{}", a.name) } else { format("{}, {}", acc, a.name) }
+        );
+        format("{}[{}]", ty.name, args_str)
+    }
+}
+
+total fn format_param(p: Param) -> String {
+    let ty_str: String = format_type_expr(p.ty);
+    let cap_pfx: String = if p.capability != "" { format("{} ", p.capability) } else { "" };
+    let mut_pfx: String = if p.mutable { "mut " } else { "" };
+    format("{}{}{}: {}", cap_pfx, mut_pfx, p.name, ty_str)
+}
+
+total fn format_params(params: List[Param]) -> String {
+    params.fold("", |acc: String, p: Param|
+        if acc == "" { format_param(p) } else { format("{}, {}", acc, format_param(p)) }
+    )
+}
+
+total fn format_effects(effects: List[Effect]) -> String {
+    if effects.len() == 0 {
+        ""
+    } else {
+        let eff_str: String = effects.fold("", |acc: String, e: Effect|
+            if acc == "" { e.name } else { format("{}, {}", acc, e.name) }
+        );
+        format(" ! {}", eff_str)
+    }
+}
+
+total fn format_fn_sig(f: FnDecl) -> String {
+    let vis: String    = if f.visible   { "pub " } else { "" };
+    let tot: String    = if f.totality != "" { format("{} ", f.totality) } else { "" };
+    let tran: String   = if f.is_transp { "transparent " } else { "" };
+    let test_s: String = if f.is_test   { "test " } else { "" };
+    let params: String = format_params(f.params);
+    let ret: String    = if f.ret_type.name != "" {
+        format(" -> {}", format_type_expr(f.ret_type))
+    } else { "" };
+    let effs: String   = format_effects(f.effects);
+    format("  {}{}{}{}fn {}({}){}{}", vis, tot, tran, test_s, f.name, params, ret, effs)
+}
+
+total fn format_path(segs: List[String]) -> String {
+    segs.fold("", |acc: String, s: String|
+        if acc == "" { s } else { format("{}.{}", acc, s) }
+    )
+}
+
+total fn format_imports(imports: List[String]) -> String {
+    imports.fold("", |acc: String, s: String|
+        if acc == "" { s } else { format("{}, {}", acc, s) }
+    )
+}
+
+// ── IFC bridge ────────────────────────────────────────────────────────────────
+
+transparent partial fn lex_and_parse(src: String) -> Program {
+    let tokens: List[Token] = lex(src);
+    parse(tokens)
+}
+
+// ── Argument helpers ──────────────────────────────────────────────────────────
+
+fn dir_from_arg(v: Tainted[String]) -> Path {
+    let clean_dir: Clean[String] = sanitize(v);
+    join(path("."), clean_dir)
+}
+
+// ── Main ─────────────────────────────────────────────────────────────────────
+
+partial fn main() -> Unit ! FileRead, Console {
+    let dir_path: Path = match get_arg("dir") {
+        None    => path("compiler"),
+        Some(v) => dir_from_arg(v),
+    };
+
+    match read_dir(dir_path) {
+        Err(e) => println("error reading directory: {}", e),
+        Ok(entries) => {
+            let file_count: ref Int  = 0;
+            let fn_total: ref   Int  = 0;
+            let type_total: ref Int  = 0;
+            let use_total: ref  Int  = 0;
+            let err_total: ref  Int  = 0;
+
+            let i: ref Int = 0;
+            while i < entries.len() {
+                match entries.get(i) {
+                    None => (),
+                    Some(entry) => {
+                        let name: String = to_string(entry.path);
+                        if entry.is_file && name.ends_with(".mvl") {
+                            file_count = file_count + 1;
+                            match read_to_string(entry.path) {
+                                Err(_)  => (),
+                                Ok(raw) => {
+                                    let src: Clean[String] = sanitize(raw);
+                                    let prog: Clean[Program] = lex_and_parse(src);
+                                    println("── {} ──", name);
+                                    println("  fns:{} types:{} uses:{} consts:{} externs:{} impls:{} errors:{}",
+                                        prog.fns.len(), prog.types.len(), prog.uses.len(),
+                                        prog.consts.len(), prog.externs.len(), prog.impls.len(),
+                                        prog.errors.len());
+
+                                    // print fn signatures
+                                    let fi: ref Int = 0;
+                                    while fi < prog.fns.len() {
+                                        match prog.fns.get(fi) {
+                                            None    => (),
+                                            Some(f) => println("{}", format_fn_sig(f)),
+                                        }
+                                        fi = fi + 1
+                                    }
+
+                                    // print type declarations
+                                    let ti: ref Int = 0;
+                                    while ti < prog.types.len() {
+                                        match prog.types.get(ti) {
+                                            None    => (),
+                                            Some(t) => {
+                                                let kind_str: String = match t.body_kind {
+                                                    TypeBodyKind::IsStruct => "struct",
+                                                    TypeBodyKind::IsEnum   => "enum",
+                                                    TypeBodyKind::IsAlias  => "alias",
+                                                };
+                                                let vis_s: String = if t.visible { "pub " } else { "" };
+                                                println("  {}type {} = {} ({} fields/{} variants)",
+                                                    vis_s, t.name, kind_str,
+                                                    t.fields.len(), t.variants.len())
+                                            }
+                                        }
+                                        ti = ti + 1
+                                    }
+
+                                    // print use declarations
+                                    let ui: ref Int = 0;
+                                    while ui < prog.uses.len() {
+                                        match prog.uses.get(ui) {
+                                            None    => (),
+                                            Some(u) => {
+                                                println("  use {}.{{{}}}",
+                                                    format_path(u.path), format_imports(u.imports))
+                                            }
+                                        }
+                                        ui = ui + 1
+                                    }
+
+                                    // print parse errors
+                                    let ei: ref Int = 0;
+                                    while ei < prog.errors.len() {
+                                        match prog.errors.get(ei) {
+                                            None    => (),
+                                            Some(e) => println("  ERROR L{}: {}", e.span.line, e.message),
+                                        }
+                                        ei = ei + 1
+                                    }
+
+                                    fn_total   = fn_total   + prog.fns.len();
+                                    type_total = type_total + prog.types.len();
+                                    use_total  = use_total  + prog.uses.len();
+                                    err_total  = err_total  + prog.errors.len()
+                                }
+                            }
+                        }
+                    }
+                }
+                i = i + 1
+            }
+
+            println("");
+            println("totals: {} files  {} fns  {} types  {} uses  {} errors",
+                file_count, fn_total, type_total, use_total, err_total)
+        }
+    }
+}

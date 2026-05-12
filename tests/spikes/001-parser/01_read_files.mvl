@@ -1,0 +1,44 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// tests/spikes/001-parser/01_read_files.mvl
+//
+// Spike 001 — Experiment 01: Read MVL source files
+//
+// Context: issue #187 — MVL frontend in MVL (self-hosted compiler)
+// Goal: establish the ! FileRead pattern for reading source files.
+//       This is step zero for S6 (driver: read source → parse → check → lint).
+//
+// Key IFC learning:
+//   read_file returns Result[Tainted[String], String].
+//   File content is Tainted — it comes from an external (untrusted) source.
+//   Tainted/Clean values cannot be passed to println; only Public (unlabeled) values can.
+//   sanitize() lowers Tainted → Clean but Clean is still not printable.
+//
+//   Resolution for the parser (future experiments): parse the Tainted content into
+//   a Public-typed token stream or AST. Parsing is the sanitisation boundary —
+//   it transforms unstructured Tainted bytes into typed, Public MVL values.
+//
+// Input: examples/log_analyzer/main.mvl (a real MVL source file)
+//
+// Run from repo root:
+//   mvl run tests/spikes/001-parser/01_read_files.mvl
+//   make -C tests/spikes/001-parser run
+
+use std.io.{read_file}
+
+partial fn main() -> Unit ! Console, FileRead {
+    // String literals are Public and coerce upward to Clean[String] for read_file.
+    // filepath stays Public so it can be used in println below.
+    let filepath: String = "examples/log_analyzer/main.mvl";
+    match read_file(filepath) {
+        Err(e)  => println("error reading {}: {}", filepath, e),
+        Ok(raw) => {
+            // raw: Tainted[String] — externally sourced, cannot be printed directly.
+            // sanitize() lowers to Clean[String] for safe processing (still not printable).
+            // Experiment 02 will tokenize: Tainted[String] → List[Token] (Public).
+            let _source: Clean[String] = sanitize(raw);
+            println("read ok: {}", filepath);
+        }
+    }
+}

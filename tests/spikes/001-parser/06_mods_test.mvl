@@ -1,0 +1,315 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// tests/spikes/001-parser/06_mods_test.mvl
+//
+// Unit tests for experiment 06 (modifier-aware parser).
+// Validates that pub, transparent, total, partial, builtin, test modifiers
+// are correctly captured in Item.vis and Item.mods.
+//
+// Run with: mvl test tests/spikes/001-parser/06_mods_test.mvl
+
+// ── Re-declarations ───────────────────────────────────────────────────────────
+
+type TokenCat = enum { Keyword, Ident, Number, Str, Punct, Comment }
+
+type Token = struct {
+    cat:    TokenCat,
+    lexeme: String,
+    line:   Int,
+}
+
+pub type ItemKind = enum { FnDecl, TypeDecl, UseDecl, TestFn }
+
+pub type Item = struct {
+    kind: ItemKind,
+    name: String,
+    line: Int,
+    vis:  Bool,
+    mods: List[String],
+}
+
+type ParseMode = enum { Scan, NeedFn, NeedName }
+
+type ParseAcc = struct {
+    items:     List[Item],
+    mode:      ParseMode,
+    item_kind: ItemKind,
+    item_line: Int,
+    depth:     Int,
+    vis:       Bool,
+    mods:      List[String],
+}
+
+total fn is_fn_prefix(lexeme: String) -> Bool {
+    lexeme == "total" || lexeme == "partial" || lexeme == "transparent" || lexeme == "builtin"
+}
+
+total fn reset_mods(acc: ParseAcc) -> ParseAcc {
+    ParseAcc { items: acc.items, mode: ParseMode::Scan, item_kind: ItemKind::FnDecl, item_line: 0, depth: acc.depth, vis: false, mods: [] }
+}
+
+total fn add_mod(acc: ParseAcc, m: String) -> ParseAcc {
+    let new_mods: ref List[String] = acc.mods;
+    new_mods.push(m);
+    ParseAcc { items: acc.items, mode: acc.mode, item_kind: acc.item_kind, item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: new_mods }
+}
+
+total fn handle_brace_open(acc: ParseAcc) -> ParseAcc {
+    ParseAcc { items: acc.items, mode: ParseMode::Scan, item_kind: acc.item_kind, item_line: acc.item_line, depth: acc.depth + 1, vis: false, mods: [] }
+}
+
+total fn handle_brace_close(acc: ParseAcc) -> ParseAcc {
+    let new_depth: Int = if acc.depth > 0 { acc.depth - 1 } else { 0 };
+    ParseAcc { items: acc.items, mode: ParseMode::Scan, item_kind: acc.item_kind, item_line: acc.item_line, depth: new_depth, vis: false, mods: [] }
+}
+
+total fn parse_scan(acc: ParseAcc, tok: Token) -> ParseAcc {
+    if tok.cat == TokenCat::Punct && tok.lexeme == "{" {
+        handle_brace_open(acc)
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == "}" {
+        handle_brace_close(acc)
+    } else if acc.depth > 0 {
+        acc
+    } else {
+        match tok.cat {
+            TokenCat::Keyword => {
+                if tok.lexeme == "pub" {
+                    ParseAcc { items: acc.items, mode: ParseMode::Scan, item_kind: acc.item_kind, item_line: tok.line, depth: acc.depth, vis: true, mods: acc.mods }
+                } else if tok.lexeme == "fn" {
+                    ParseAcc { items: acc.items, mode: ParseMode::NeedName, item_kind: ItemKind::FnDecl, item_line: tok.line, depth: acc.depth, vis: acc.vis, mods: acc.mods }
+                } else if tok.lexeme == "type" {
+                    ParseAcc { items: acc.items, mode: ParseMode::NeedName, item_kind: ItemKind::TypeDecl, item_line: tok.line, depth: acc.depth, vis: acc.vis, mods: acc.mods }
+                } else if tok.lexeme == "use" {
+                    ParseAcc { items: acc.items, mode: ParseMode::NeedName, item_kind: ItemKind::UseDecl, item_line: tok.line, depth: acc.depth, vis: acc.vis, mods: acc.mods }
+                } else if tok.lexeme == "test" {
+                    let a2: ParseAcc = add_mod(acc, "test");
+                    ParseAcc { items: a2.items, mode: ParseMode::NeedFn, item_kind: ItemKind::TestFn, item_line: tok.line, depth: acc.depth, vis: a2.vis, mods: a2.mods }
+                } else if is_fn_prefix(tok.lexeme) {
+                    let a2: ParseAcc = add_mod(acc, tok.lexeme);
+                    ParseAcc { items: a2.items, mode: ParseMode::NeedFn, item_kind: ItemKind::FnDecl, item_line: tok.line, depth: acc.depth, vis: a2.vis, mods: a2.mods }
+                } else {
+                    reset_mods(acc)
+                }
+            }
+            _ => reset_mods(acc)
+        }
+    }
+}
+
+total fn parse_need_fn(acc: ParseAcc, tok: Token) -> ParseAcc {
+    if tok.cat == TokenCat::Punct && tok.lexeme == "{" {
+        handle_brace_open(acc)
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == "}" {
+        handle_brace_close(acc)
+    } else {
+        match tok.cat {
+            TokenCat::Keyword => {
+                if tok.lexeme == "fn" {
+                    ParseAcc { items: acc.items, mode: ParseMode::NeedName, item_kind: acc.item_kind, item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods }
+                } else if tok.lexeme == "partial" || tok.lexeme == "transparent" {
+                    add_mod(acc, tok.lexeme)
+                } else {
+                    reset_mods(acc)
+                }
+            }
+            _ => reset_mods(acc)
+        }
+    }
+}
+
+total fn parse_need_name(acc: ParseAcc, tok: Token) -> ParseAcc {
+    if tok.cat == TokenCat::Punct && tok.lexeme == "{" {
+        handle_brace_open(acc)
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == "}" {
+        handle_brace_close(acc)
+    } else {
+        match tok.cat {
+            TokenCat::Ident => {
+                let item: Item = Item { kind: acc.item_kind, name: tok.lexeme, line: acc.item_line, vis: acc.vis, mods: acc.mods };
+                let new_items: ref List[Item] = acc.items;
+                new_items.push(item);
+                ParseAcc { items: new_items, mode: ParseMode::Scan, item_kind: ItemKind::FnDecl, item_line: 0, depth: acc.depth, vis: false, mods: [] }
+            }
+            _ => reset_mods(acc)
+        }
+    }
+}
+
+total fn parse_step(acc: ParseAcc, tok: Token) -> ParseAcc {
+    match acc.mode {
+        ParseMode::Scan     => parse_scan(acc, tok),
+        ParseMode::NeedFn   => parse_need_fn(acc, tok),
+        ParseMode::NeedName => parse_need_name(acc, tok),
+    }
+}
+
+total fn parse_tokens(tokens: List[Token]) -> List[Item] {
+    let init: ParseAcc = ParseAcc {
+        items: [],
+        mode: ParseMode::Scan,
+        item_kind: ItemKind::FnDecl,
+        item_line: 0,
+        depth: 0,
+        vis: false,
+        mods: [],
+    };
+    tokens.fold(init, parse_step).items
+}
+
+// ── Test helpers ──────────────────────────────────────────────────────────────
+
+total fn kw(lexeme: String) -> Token { Token { cat: TokenCat::Keyword, lexeme: lexeme, line: 1 } }
+total fn id(lexeme: String) -> Token { Token { cat: TokenCat::Ident,   lexeme: lexeme, line: 1 } }
+total fn lbrace() -> Token           { Token { cat: TokenCat::Punct,   lexeme: "{",    line: 1 } }
+total fn rbrace() -> Token           { Token { cat: TokenCat::Punct,   lexeme: "}",    line: 1 } }
+
+// ── vis tests ─────────────────────────────────────────────────────────────────
+
+test fn plain_fn_not_pub() -> Unit {
+    let items: List[Item] = parse_tokens([kw("fn"), id("foo")]);
+    match items.get(0) {
+        None       => assert_eq(true, false),
+        Some(item) => assert_eq(item.vis, false),
+    }
+}
+
+test fn pub_fn_is_visible() -> Unit {
+    let items: List[Item] = parse_tokens([kw("pub"), kw("fn"), id("foo")]);
+    match items.get(0) {
+        None       => assert_eq(true, false),
+        Some(item) => assert_eq(item.vis, true),
+    }
+}
+
+test fn pub_type_is_visible() -> Unit {
+    let items: List[Item] = parse_tokens([kw("pub"), kw("type"), id("Foo")]);
+    match items.get(0) {
+        None       => assert_eq(true, false),
+        Some(item) => assert_eq(item.vis, true),
+    }
+}
+
+test fn pub_use_is_visible() -> Unit {
+    let items: List[Item] = parse_tokens([kw("pub"), kw("use"), id("foo")]);
+    match items.get(0) {
+        None       => assert_eq(true, false),
+        Some(item) => assert_eq(item.vis, true),
+    }
+}
+
+// ── mods tests ────────────────────────────────────────────────────────────────
+
+test fn plain_fn_has_no_mods() -> Unit {
+    let items: List[Item] = parse_tokens([kw("fn"), id("foo")]);
+    match items.get(0) {
+        None       => assert_eq(true, false),
+        Some(item) => assert_eq(item.mods.len(), 0),
+    }
+}
+
+test fn total_fn_has_total_mod() -> Unit {
+    let items: List[Item] = parse_tokens([kw("total"), kw("fn"), id("foo")]);
+    match items.get(0) {
+        None       => assert_eq(true, false),
+        Some(item) => {
+            assert_eq(item.mods.len(), 1);
+            match item.mods.get(0) {
+                None    => assert_eq(true, false),
+                Some(m) => assert_eq(m, "total"),
+            }
+        }
+    }
+}
+
+test fn partial_fn_has_partial_mod() -> Unit {
+    let items: List[Item] = parse_tokens([kw("partial"), kw("fn"), id("foo")]);
+    match items.get(0) {
+        None       => assert_eq(true, false),
+        Some(item) => {
+            assert_eq(item.mods.len(), 1);
+            match item.mods.get(0) {
+                None    => assert_eq(true, false),
+                Some(m) => assert_eq(m, "partial"),
+            }
+        }
+    }
+}
+
+test fn transparent_partial_fn_has_two_mods() -> Unit {
+    let tokens: List[Token] = [kw("transparent"), kw("partial"), kw("fn"), id("bridge")];
+    let items: List[Item] = parse_tokens(tokens);
+    match items.get(0) {
+        None       => assert_eq(true, false),
+        Some(item) => assert_eq(item.mods.len(), 2),
+    }
+}
+
+test fn test_fn_has_test_mod() -> Unit {
+    let items: List[Item] = parse_tokens([kw("test"), kw("fn"), id("my_test")]);
+    match items.get(0) {
+        None       => assert_eq(true, false),
+        Some(item) => {
+            assert_eq(item.mods.len(), 1);
+            match item.mods.get(0) {
+                None    => assert_eq(true, false),
+                Some(m) => assert_eq(m, "test"),
+            }
+        }
+    }
+}
+
+test fn pub_total_fn_has_vis_and_mod() -> Unit {
+    let tokens: List[Token] = [kw("pub"), kw("total"), kw("fn"), id("exported")];
+    let items: List[Item] = parse_tokens(tokens);
+    match items.get(0) {
+        None       => assert_eq(true, false),
+        Some(item) => {
+            assert_eq(item.vis, true);
+            assert_eq(item.mods.len(), 1);
+        }
+    }
+}
+
+test fn mods_reset_between_declarations() -> Unit {
+    // total fn a  then  fn b — b should have no mods
+    let tokens: List[Token] = [
+        kw("total"), kw("fn"), id("a"),
+        kw("fn"), id("b"),
+    ];
+    let items: List[Item] = parse_tokens(tokens);
+    assert_eq(items.len(), 2);
+    match items.get(1) {
+        None       => assert_eq(true, false),
+        Some(item) => assert_eq(item.mods.len(), 0),
+    }
+}
+
+test fn pub_resets_after_declaration() -> Unit {
+    // pub fn a  then  fn b — b should NOT be visible
+    let tokens: List[Token] = [
+        kw("pub"), kw("fn"), id("a"),
+        kw("fn"), id("b"),
+    ];
+    let items: List[Item] = parse_tokens(tokens);
+    assert_eq(items.len(), 2);
+    match items.get(1) {
+        None       => assert_eq(true, false),
+        Some(item) => assert_eq(item.vis, false),
+    }
+}
+
+test fn builtin_fn_captures_builtin_mod() -> Unit {
+    let tokens: List[Token] = [kw("builtin"), kw("fn"), id("native")];
+    let items: List[Item] = parse_tokens(tokens);
+    match items.get(0) {
+        None       => assert_eq(true, false),
+        Some(item) => {
+            assert_eq(item.mods.len(), 1);
+            match item.mods.get(0) {
+                None    => assert_eq(true, false),
+                Some(m) => assert_eq(m, "builtin"),
+            }
+        }
+    }
+}

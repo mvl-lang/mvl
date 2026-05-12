@@ -1,0 +1,242 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// tests/spikes/001-parser/05_depth_test.mvl
+//
+// Unit tests for experiment 05 (depth-aware parser).
+// Validates that depth tracking correctly excludes declarations inside
+// nested blocks (extern, impl, function bodies) from the top-level list.
+//
+// Run with: mvl test tests/spikes/001-parser/05_depth_test.mvl
+
+// ── Re-declarations ───────────────────────────────────────────────────────────
+
+type TokenCat = enum { Keyword, Ident, Number, Str, Punct, Comment }
+
+type Token = struct {
+    cat:    TokenCat,
+    lexeme: String,
+    line:   Int,
+}
+
+pub type ItemKind = enum { FnDecl, TypeDecl, UseDecl, TestFn }
+
+pub type Item = struct {
+    kind: ItemKind,
+    name: String,
+    line: Int,
+}
+
+type ParseMode = enum { Scan, NeedFn, NeedName }
+
+type ParseAcc = struct {
+    items:     List[Item],
+    mode:      ParseMode,
+    item_kind: ItemKind,
+    item_line: Int,
+    depth:     Int,
+}
+
+total fn parse_scan(acc: ParseAcc, tok: Token) -> ParseAcc {
+    if tok.cat == TokenCat::Punct && tok.lexeme == "{" {
+        ParseAcc { items: acc.items, mode: ParseMode::Scan, item_kind: acc.item_kind, item_line: acc.item_line, depth: acc.depth + 1 }
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == "}" {
+        let new_depth: Int = if acc.depth > 0 { acc.depth - 1 } else { 0 };
+        ParseAcc { items: acc.items, mode: ParseMode::Scan, item_kind: acc.item_kind, item_line: acc.item_line, depth: new_depth }
+    } else if acc.depth > 0 {
+        acc
+    } else {
+        match tok.cat {
+            TokenCat::Keyword => {
+                if tok.lexeme == "fn" {
+                    ParseAcc { items: acc.items, mode: ParseMode::NeedName, item_kind: ItemKind::FnDecl, item_line: tok.line, depth: acc.depth }
+                } else if tok.lexeme == "type" {
+                    ParseAcc { items: acc.items, mode: ParseMode::NeedName, item_kind: ItemKind::TypeDecl, item_line: tok.line, depth: acc.depth }
+                } else if tok.lexeme == "use" {
+                    ParseAcc { items: acc.items, mode: ParseMode::NeedName, item_kind: ItemKind::UseDecl, item_line: tok.line, depth: acc.depth }
+                } else if tok.lexeme == "total" || tok.lexeme == "partial" || tok.lexeme == "transparent" {
+                    ParseAcc { items: acc.items, mode: ParseMode::NeedFn, item_kind: ItemKind::FnDecl, item_line: tok.line, depth: acc.depth }
+                } else if tok.lexeme == "test" {
+                    ParseAcc { items: acc.items, mode: ParseMode::NeedFn, item_kind: ItemKind::TestFn, item_line: tok.line, depth: acc.depth }
+                } else {
+                    acc
+                }
+            }
+            _ => acc
+        }
+    }
+}
+
+total fn parse_need_fn(acc: ParseAcc, tok: Token) -> ParseAcc {
+    if tok.cat == TokenCat::Punct && tok.lexeme == "{" {
+        ParseAcc { items: acc.items, mode: ParseMode::Scan, item_kind: acc.item_kind, item_line: acc.item_line, depth: acc.depth + 1 }
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == "}" {
+        let new_depth: Int = if acc.depth > 0 { acc.depth - 1 } else { 0 };
+        ParseAcc { items: acc.items, mode: ParseMode::Scan, item_kind: acc.item_kind, item_line: acc.item_line, depth: new_depth }
+    } else {
+        match tok.cat {
+            TokenCat::Keyword => {
+                if tok.lexeme == "fn" {
+                    ParseAcc { items: acc.items, mode: ParseMode::NeedName, item_kind: acc.item_kind, item_line: acc.item_line, depth: acc.depth }
+                } else if tok.lexeme == "partial" || tok.lexeme == "transparent" {
+                    acc
+                } else {
+                    ParseAcc { items: acc.items, mode: ParseMode::Scan, item_kind: acc.item_kind, item_line: acc.item_line, depth: acc.depth }
+                }
+            }
+            _ => ParseAcc { items: acc.items, mode: ParseMode::Scan, item_kind: acc.item_kind, item_line: acc.item_line, depth: acc.depth }
+        }
+    }
+}
+
+total fn parse_need_name(acc: ParseAcc, tok: Token) -> ParseAcc {
+    if tok.cat == TokenCat::Punct && tok.lexeme == "{" {
+        ParseAcc { items: acc.items, mode: ParseMode::Scan, item_kind: acc.item_kind, item_line: acc.item_line, depth: acc.depth + 1 }
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == "}" {
+        let new_depth: Int = if acc.depth > 0 { acc.depth - 1 } else { 0 };
+        ParseAcc { items: acc.items, mode: ParseMode::Scan, item_kind: acc.item_kind, item_line: acc.item_line, depth: new_depth }
+    } else {
+        match tok.cat {
+            TokenCat::Ident => {
+                let item: Item = Item { kind: acc.item_kind, name: tok.lexeme, line: acc.item_line };
+                let new_items: ref List[Item] = acc.items;
+                new_items.push(item);
+                ParseAcc { items: new_items, mode: ParseMode::Scan, item_kind: ItemKind::FnDecl, item_line: 0, depth: acc.depth }
+            }
+            _ => ParseAcc { items: acc.items, mode: ParseMode::Scan, item_kind: acc.item_kind, item_line: acc.item_line, depth: acc.depth }
+        }
+    }
+}
+
+total fn parse_step(acc: ParseAcc, tok: Token) -> ParseAcc {
+    match acc.mode {
+        ParseMode::Scan     => parse_scan(acc, tok),
+        ParseMode::NeedFn   => parse_need_fn(acc, tok),
+        ParseMode::NeedName => parse_need_name(acc, tok),
+    }
+}
+
+total fn parse_tokens(tokens: List[Token]) -> List[Item] {
+    let init: ParseAcc = ParseAcc {
+        items: [],
+        mode: ParseMode::Scan,
+        item_kind: ItemKind::FnDecl,
+        item_line: 0,
+        depth: 0,
+    };
+    tokens.fold(init, parse_step).items
+}
+
+// ── Test helpers ──────────────────────────────────────────────────────────────
+
+total fn kw(lexeme: String) -> Token {
+    Token { cat: TokenCat::Keyword, lexeme: lexeme, line: 1 }
+}
+
+total fn id(lexeme: String) -> Token {
+    Token { cat: TokenCat::Ident, lexeme: lexeme, line: 1 }
+}
+
+total fn lbrace() -> Token {
+    Token { cat: TokenCat::Punct, lexeme: "{", line: 1 }
+}
+
+total fn rbrace() -> Token {
+    Token { cat: TokenCat::Punct, lexeme: "}", line: 1 }
+}
+
+// ── Depth tracking tests ──────────────────────────────────────────────────────
+
+test fn top_level_fn_registered() -> Unit {
+    let items: List[Item] = parse_tokens([kw("fn"), id("foo")]);
+    assert_eq(items.len(), 1);
+}
+
+test fn fn_inside_block_ignored() -> Unit {
+    // extern "rust" { fn foo(); } — fn at depth 1 must not be registered
+    let tokens: List[Token] = [lbrace(), kw("fn"), id("inner"), rbrace()];
+    let items: List[Item] = parse_tokens(tokens);
+    assert_eq(items.len(), 0);
+}
+
+test fn fn_after_block_registered() -> Unit {
+    // extern { fn inner(); }  fn outer() — only outer should appear
+    let tokens: List[Token] = [
+        lbrace(), kw("fn"), id("inner"), rbrace(),
+        kw("fn"), id("outer"),
+    ];
+    let items: List[Item] = parse_tokens(tokens);
+    assert_eq(items.len(), 1);
+    match items.get(0) {
+        None       => assert_eq(true, false),
+        Some(item) => assert_eq(item.name, "outer"),
+    }
+}
+
+test fn nested_braces_both_ignored() -> Unit {
+    // { { fn deep() } }  fn surface() — only surface registered
+    let tokens: List[Token] = [
+        lbrace(), lbrace(), kw("fn"), id("deep"), rbrace(), rbrace(),
+        kw("fn"), id("surface"),
+    ];
+    let items: List[Item] = parse_tokens(tokens);
+    assert_eq(items.len(), 1);
+    match items.get(0) {
+        None       => assert_eq(true, false),
+        Some(item) => assert_eq(item.name, "surface"),
+    }
+}
+
+test fn depth_resets_after_close_brace() -> Unit {
+    // Two top-level fns with a block in between
+    let tokens: List[Token] = [
+        kw("fn"), id("a"),
+        lbrace(), kw("fn"), id("hidden"), rbrace(),
+        kw("fn"), id("b"),
+    ];
+    let items: List[Item] = parse_tokens(tokens);
+    assert_eq(items.len(), 2);
+}
+
+test fn type_inside_block_ignored() -> Unit {
+    let tokens: List[Token] = [lbrace(), kw("type"), id("Inner"), rbrace()];
+    let items: List[Item] = parse_tokens(tokens);
+    assert_eq(items.len(), 0);
+}
+
+test fn use_inside_block_ignored() -> Unit {
+    let tokens: List[Token] = [lbrace(), kw("use"), id("mod"), rbrace()];
+    let items: List[Item] = parse_tokens(tokens);
+    assert_eq(items.len(), 0);
+}
+
+test fn partial_fn_inside_block_ignored() -> Unit {
+    let tokens: List[Token] = [lbrace(), kw("partial"), kw("fn"), id("helper"), rbrace()];
+    let items: List[Item] = parse_tokens(tokens);
+    assert_eq(items.len(), 0);
+}
+
+test fn unmatched_close_brace_does_not_go_negative() -> Unit {
+    // Stray } should not make depth go below 0
+    let tokens: List[Token] = [rbrace(), kw("fn"), id("safe")];
+    let items: List[Item] = parse_tokens(tokens);
+    assert_eq(items.len(), 1);
+}
+
+test fn extern_block_pattern_exact() -> Unit {
+    // extern "rust" { fn foo(x: T) -> R; }  fn real()
+    // The string token "rust" and other tokens appear but fn foo at depth 1 is hidden
+    let str_tok: Token = Token { cat: TokenCat::Str, lexeme: "rust", line: 1 };
+    let tokens: List[Token] = [
+        kw("extern"), str_tok, lbrace(),
+        kw("fn"), id("extern_fn"),
+        rbrace(),
+        kw("fn"), id("real_fn"),
+    ];
+    let items: List[Item] = parse_tokens(tokens);
+    assert_eq(items.len(), 1);
+    match items.get(0) {
+        None       => assert_eq(true, false),
+        Some(item) => assert_eq(item.name, "real_fn"),
+    }
+}

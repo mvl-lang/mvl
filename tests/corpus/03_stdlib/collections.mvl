@@ -103,7 +103,7 @@ fn list_rev() -> List[Int] {
     xs.rev()
 }
 
-fn list_len() -> Int {
+fn demo_list_len() -> Int {
     let xs: List[Int] = [1, 2, 3];
     xs.len()
 }
@@ -203,7 +203,7 @@ fn set_contains() -> Bool {
     primes.contains(5)
 }
 
-fn set_len() -> Int {
+fn demo_set_len() -> Int {
     let s: Set[Int] = {1, 2, 3};
     s.len()
 }

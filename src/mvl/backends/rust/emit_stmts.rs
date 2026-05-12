@@ -64,13 +64,32 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &Stmt) {
             cg.push(&emit_type_expr(emit_ty));
             cg.push(" = ");
             emit_expr(cg, init);
+            // When the init is a field access on a borrowed parameter (e.g.
+            // `acc.items` where `acc: &ParseAcc`), the field is behind a reference
+            // and cannot be moved — `.clone()` produces an owned copy.
+            let needs_clone = if let Expr::FieldAccess { expr, .. } = init {
+                if let Expr::Ident(name, _) = expr.as_ref() {
+                    cg.borrow_param_names.contains(name.as_str())
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            if needs_clone {
+                cg.push(".clone()");
+            }
             // When the declared type is a security label (e.g. Tainted<String>) and the
-            // init is a plain string/value, `.into()` converts it to the labeled type.
-            // The explicit type annotation makes this unambiguous (unlike assert_eq! context).
+            // init is a plain value or function call, `.into()` converts it to the labeled
+            // type. Covers: string literals, function calls returning plain types, and
+            // transparent-fn calls whose result needs lifting (e.g. `Clean<Counts>`).
+            // Safe for calls already returning the labeled type — `From<T> for T` is no-op.
             let needs_into = matches!(ty, TypeExpr::Labeled { .. })
                 && matches!(
                     init,
                     Expr::Literal(crate::mvl::parser::ast::Literal::Str(_), _)
+                        | Expr::FnCall { .. }
+                        | Expr::MethodCall { .. }
                 );
             if needs_into {
                 cg.push(".into()");
