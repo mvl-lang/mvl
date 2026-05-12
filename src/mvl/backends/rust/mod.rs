@@ -24,8 +24,8 @@
 //! // println!("{}", out.lib_rs);
 //! ```
 
-pub mod borrow_params;
 pub mod boundary_gen;
+pub mod capability_params;
 pub mod cargo;
 pub mod coverage_emit;
 pub mod emit_exprs;

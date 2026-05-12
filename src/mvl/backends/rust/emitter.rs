@@ -6,7 +6,7 @@
 //! [`RustEmitter`] is the single writer passed through every emit function.
 //! All other `emit_*` modules take `&mut RustEmitter` and append to it.
 
-use crate::mvl::backends::rust::borrow_params::build_borrow_params_map;
+use crate::mvl::backends::rust::capability_params::build_capability_params_map;
 use crate::mvl::backends::rust::emit_functions::emit_fn_decl;
 use crate::mvl::backends::rust::emit_impls::emit_impl_decl;
 use crate::mvl::backends::rust::emit_types::emit_type_decl;
@@ -83,15 +83,15 @@ pub struct RustEmitter {
     /// Built once before emission from all [`FnDecl`] nodes in the program.
     ///
     /// Used in two places:
-    /// * `emit_params` — wraps inferred-borrow param types in `&` / `&mut ` (Rust output).
+    /// * `emit_params` — wraps inferred-capability param types in `&` / `&mut ` (Rust output).
     /// * `emit_args` at call sites — emits `&x` / `&mut x` instead of `x.clone()`.
-    pub borrow_params_map: std::collections::HashMap<String, Vec<Option<bool>>>,
-    /// Names of borrowed parameters in the function currently being emitted.
+    pub capability_params_map: std::collections::HashMap<String, Vec<Option<bool>>>,
+    /// Names of capability parameters in the function currently being emitted.
     ///
     /// Set at the start of each function body, cleared at the end.
     /// Used by let-binding emission to add `.clone()` when reading a field
-    /// from a borrowed parameter (`acc.items` where `acc: &ParseAcc`).
-    pub borrow_param_names: std::collections::HashSet<String>,
+    /// from a capability parameter (`acc.items` where `acc: &ParseAcc`).
+    pub capability_param_names: std::collections::HashSet<String>,
     /// Fully-qualified Rust paths for stdlib function names that would shadow
     /// built-in primitives in the generated file (#420: regex.replace / regex.find).
     ///
@@ -455,7 +455,7 @@ impl RustEmitter {
 
         // Phase B: build the borrow-params map from all known functions so that
         // call sites can emit `&x` instead of `x.clone()` for reference params.
-        self.borrow_params_map = build_borrow_params_map(prog, &prelude_fns);
+        self.capability_params_map = build_capability_params_map(prog, &prelude_fns);
 
         // Collect extern "rust" declarations from package prelude programs (pkg.*).
         // These are distinct from Rust-backed stdlib modules: the extern fns are

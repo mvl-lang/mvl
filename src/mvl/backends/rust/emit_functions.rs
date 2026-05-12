@@ -50,7 +50,7 @@ pub fn emit_fn_decl(cg: &mut RustEmitter, fd: &FnDecl) {
     // emit the #[test] attribute and a non-pub signature.
     // Retrieve borrow flags for this function (Phase B, Spec 009 Req 2).
     let borrows: Vec<Option<bool>> = cg
-        .borrow_params_map
+        .capability_params_map
         .get(&fd.name)
         .cloned()
         .unwrap_or_default();
@@ -125,15 +125,15 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
 
     // Populate borrow_param_names so let-binding emission can add `.clone()`
     // when reading a field from a borrowed parameter (e.g. `acc.items`).
-    cg.borrow_param_names.clear();
+    cg.capability_param_names.clear();
     let borrows = cg
-        .borrow_params_map
+        .capability_params_map
         .get(&fd.name)
         .cloned()
         .unwrap_or_default();
     for (i, param) in fd.params.iter().enumerate() {
         if borrows.get(i).copied().flatten().is_some() {
-            cg.borrow_param_names.insert(param.name.clone());
+            cg.capability_param_names.insert(param.name.clone());
         }
     }
 
