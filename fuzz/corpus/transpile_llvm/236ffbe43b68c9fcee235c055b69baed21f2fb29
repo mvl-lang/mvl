@@ -1,5 +1,0 @@
-// L5-15: function receives String  and drops it.
-// Verifies no double-free when caller passes heap v omain() -> Unit ! Console {
-    let s =‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹ "hello world";
-    greet(s);
-}

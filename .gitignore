@@ -24,3 +24,8 @@ AGENTS.md
 *.jsonl
 librust_out.rlib
 *.profraw
+
+# Fuzzing runtime artifacts (cargo-fuzz)
+fuzz/corpus/
+fuzz/artifacts/
+fuzz/Cargo.lock

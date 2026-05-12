@@ -1,10 +1,0 @@
-// Corpus: Option/Result enforcement (Req 4, 5)
-// Demonstrates correct forced handling — no null, errors in signatures.
-
-// Corect: handle Option wit nt {
-    match x {
-        Some(v) => v,
-
-  ,
-    }
-}

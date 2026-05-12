@@ -1,9 +1,0 @@
-// Corpus: Immutability enforcement (Req 6)
-// All bindings are immutable by default; mutation requires `mut`.
-
-type Counter = struct {
-    mut count: Int,
-    label: etfield — always allowed
-fn get_label(c: Counter) -> String {
-    c.label
-}

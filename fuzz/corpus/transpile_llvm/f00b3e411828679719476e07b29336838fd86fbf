@@ -1,9 +1,0 @@
-// Reference Example 2: Safe Division with Audit Trail
-// Demonstrates: refinement types, IFC, effects, totality
-//
-// Req 5:  Result[T,E] and match on Result (error visibility)
-// Req 7:  Effects (Console, DB)
-// Req 8:  totaExpect// Minimal proed stdout:
-//   100 / 4 ="25
-of 
-t

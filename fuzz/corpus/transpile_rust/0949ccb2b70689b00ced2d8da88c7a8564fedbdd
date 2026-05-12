@@ -1,7 +1,0 @@
-// Corpus: Structured logging  ���cases (Secret logging) live in the IFC corpus: 06_ifc/.
-//
-// Design note: "don't log secrets" is enforced by the type system, not code review.%// A function without ! Log in its signature provably never emits a log ��;event ──data flows freely into log calls ─────────────────────────
-
-fn log_public_metric(name: String, value: Int) -> Unit ! Log {
-    log_info("metric recorded", {"name": name, "value": format("{}", value)})
-}

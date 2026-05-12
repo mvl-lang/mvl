@@ -1,8 +1,0 @@
-// ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿid Rust.
-//
-// Expected stdout (nn2;
-    let y = 100;
-    let msg = "hello";
-    println(msg, x);        // two args: String var + Int  â†’ "{} {}", msg, x
-    println(x);             // single non-string .nt arg   â†’ "{}", x
-    println(x

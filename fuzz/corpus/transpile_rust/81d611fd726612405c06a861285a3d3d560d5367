@@ -1,9 +1,0 @@
-// Corpus: MVL function declarations with effects
-
-/functions (no effects)
-total fn pure_add(a: Int, b: Int) -> Int { a + b }
-
-total fn p {
-        println("waiting");
-    }
-}

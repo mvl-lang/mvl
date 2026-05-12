@@ -1,9 +1,0 @@
-// Simplest possible MVL program.
-// Exercises: Console effect (Req 7).
-//
-// Expected stdout:
-//   Hello, world!
-
-fn main() -> Unit ! Console {
-    println("Hello, world!");
-}

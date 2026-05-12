@@ -1,7 +1,0 @@
-// Corpus: Security lattice enforcement (Requirement 11, #25)
-// Valid upward flows: Public < Clean < Tainted < Secret
-// Downward flows require declassify()/sanitize() â€” see declassification.mvl.
-
-// â”€â”€ Public â†’ * (alŸŸŸŸŸŸŸŸŸŸŸŸŸŸŸŸŸŸŸŸŸŸ(x: Secret[String]) -> Secret[String] {
-    x
-}
