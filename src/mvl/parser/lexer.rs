@@ -49,7 +49,6 @@ pub enum TokenKind {
     // ── Declaration keywords ──────────────────────────────────────────────
     Fn,
     Let,
-    Mut,
     Match,
     If,
     Else,
@@ -59,7 +58,6 @@ pub enum TokenKind {
     Total,
     Partial,
     Return,
-    Move,
     Consume,
     Declassify,
     Sanitize,
@@ -181,7 +179,6 @@ impl fmt::Display for TokenKind {
         match self {
             TokenKind::Fn => write!(f, "fn"),
             TokenKind::Let => write!(f, "let"),
-            TokenKind::Mut => write!(f, "mut"),
             TokenKind::Match => write!(f, "match"),
             TokenKind::If => write!(f, "if"),
             TokenKind::Else => write!(f, "else"),
@@ -191,7 +188,6 @@ impl fmt::Display for TokenKind {
             TokenKind::Total => write!(f, "total"),
             TokenKind::Partial => write!(f, "partial"),
             TokenKind::Return => write!(f, "return"),
-            TokenKind::Move => write!(f, "move"),
             TokenKind::Consume => write!(f, "consume"),
             TokenKind::Declassify => write!(f, "declassify"),
             TokenKind::Sanitize => write!(f, "sanitize"),
@@ -913,7 +909,6 @@ fn keyword_or_ident(s: String) -> TokenKind {
         // Declaration keywords
         "fn" => TokenKind::Fn,
         "let" => TokenKind::Let,
-        "mut" => TokenKind::Mut,
         "match" => TokenKind::Match,
         "if" => TokenKind::If,
         "else" => TokenKind::Else,
@@ -923,7 +918,6 @@ fn keyword_or_ident(s: String) -> TokenKind {
         "total" => TokenKind::Total,
         "partial" => TokenKind::Partial,
         "return" => TokenKind::Return,
-        "move" => TokenKind::Move,
         "consume" => TokenKind::Consume,
         "declassify" => TokenKind::Declassify,
         "sanitize" => TokenKind::Sanitize,
@@ -987,14 +981,13 @@ mod tests {
 
     #[test]
     fn tokenize_declaration_keywords() {
-        let src = "fn let mut match if else for type total partial return";
+        let src = "fn let match if else for type total partial return";
         let kinds = lex_kinds_no_eof(src);
         assert_eq!(
             kinds,
             vec![
                 TokenKind::Fn,
                 TokenKind::Let,
-                TokenKind::Mut,
                 TokenKind::Match,
                 TokenKind::If,
                 TokenKind::Else,
@@ -1009,11 +1002,10 @@ mod tests {
 
     #[test]
     fn tokenize_extra_keywords() {
-        let kinds = lex_kinds_no_eof("move consume declassify sanitize const where in while");
+        let kinds = lex_kinds_no_eof("consume declassify sanitize const where in while");
         assert_eq!(
             kinds,
             vec![
-                TokenKind::Move,
                 TokenKind::Consume,
                 TokenKind::Declassify,
                 TokenKind::Sanitize,

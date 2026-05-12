@@ -36,9 +36,8 @@ impl<'ctx> LlvmBackend<'ctx> {
 
             Expr::Block(block) => self.emit_block(block),
 
-            // move/consume/declassify/sanitize: transparent at IR level.
-            Expr::Move { expr, .. }
-            | Expr::Consume { expr, .. }
+            // consume/declassify/sanitize: transparent at IR level.
+            Expr::Consume { expr, .. }
             | Expr::Declassify { expr, .. }
             | Expr::Sanitize { expr, .. } => self.emit_expr(expr),
 
@@ -1507,10 +1506,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                         if stmts::heap_kind_of(&param.ty).is_some() {
                             let src = match arg {
                                 Expr::Ident(s, _) => Some(s.as_str()),
-                                Expr::Move { expr, .. } => match expr.as_ref() {
-                                    Expr::Ident(s, _) => Some(s.as_str()),
-                                    _ => None,
-                                },
                                 _ => None,
                             };
                             if let Some(src) = src {

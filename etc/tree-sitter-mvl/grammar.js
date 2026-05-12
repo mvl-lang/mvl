@@ -176,7 +176,6 @@ module.exports = grammar({
 
     field_decl: ($) =>
       seq(
-        optional("mut"),
         $.identifier,
         ":",
         $.type_expr,
@@ -216,7 +215,6 @@ module.exports = grammar({
     param: ($) =>
       seq(
         optional($.capability),
-        optional("mut"),
         $.identifier,
         ":",
         $.type_expr,
@@ -344,7 +342,6 @@ module.exports = grammar({
     let_stmt: ($) =>
       seq(
         "let",
-        optional("mut"),
         $.pattern,
         seq(":", $.type_expr),
         "=",
@@ -419,7 +416,7 @@ module.exports = grammar({
         prec.right(PREC.UNARY, seq("!", $.expr)),
         prec.right(PREC.UNARY, seq("~", $.expr)),
         prec.right(PREC.UNARY, seq("-", $.expr)),
-        prec.right(PREC.UNARY, seq("move", $.expr)),
+        // "move" removed — use "consume" for ownership transfer
         prec.right(PREC.UNARY, seq("consume", $.expr)),
         // Binary operators
         prec.left(PREC.MUL, seq($.expr, choice("*", "/", "%"), $.expr)),

@@ -2,13 +2,13 @@
 
 fn example_let() -> Int {
     let x: Int     = 42;
-    let mut count: Int = 0;
+    let count: ref Int = 0;
     let y: Int     = 99;
     return x;
 }
 
 fn example_assign() -> Int {
-    let mut n: Int = 0;
+    let n: ref Int = 0;
     n = 5;
     return n;
 }
@@ -53,14 +53,14 @@ fn example_match_literal(n: Int) -> Bool {
 }
 
 fn example_for(items: List[Int]) -> Int {
-    let mut sum: Int = 0;
+    let sum: ref Int = 0;
     for item in items {
         sum = sum + item;
     }
     return sum;
 }
 
-partial fn example_while(mut n: Int) -> Int {
+partial fn example_while(ref n: Int) -> Int {
     while n > 0 {
         n = n - 1;
     }

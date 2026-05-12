@@ -336,17 +336,15 @@ impl TypeChecker {
                 ty.propagate_inner()
             }
 
-            // #15: explicit move — infer first, then mark as moved so
-            // subsequent references to the same binding are caught.
-            Expr::Move { expr, .. } => {
+            // consume(x) — explicit iso consumption; marks the binding as moved
+            // so subsequent references are caught by use-after-move checking.
+            Expr::Consume { expr, .. } => {
                 let ty = self.infer_expr(expr);
                 if let Expr::Ident(name, _) = expr.as_ref() {
                     self.env.mark_moved(name);
                 }
                 ty
             }
-
-            Expr::Consume { expr, .. } => self.infer_expr(expr),
 
             // #27: declassify() — converts Secret<T> to Public<T>
             Expr::Declassify { expr, span } => {
@@ -400,8 +398,22 @@ impl TypeChecker {
                     .iter()
                     .map(|p| {
                         let ty = resolve(&p.ty);
-                        self.env
-                            .define(p.name.clone(), VarInfo::new(ty.clone(), p.mutable));
+                        let env_ty = match &ty {
+                            Ty::Ref(_, inner) => (**inner).clone(),
+                            _ => ty.clone(),
+                        };
+                        self.env.define(
+                            p.name.clone(),
+                            VarInfo::new(
+                                env_ty,
+                                matches!(ty.base(), Ty::Ref(true, _))
+                                    || matches!(
+                                        p.capability,
+                                        Some(crate::mvl::parser::ast::Capability::Ref)
+                                            | Some(crate::mvl::parser::ast::Capability::Iso)
+                                    ),
+                            ),
+                        );
                         ty
                     })
                     .collect();

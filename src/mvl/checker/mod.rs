@@ -490,12 +490,12 @@ mod tests {
         );
     }
 
-    // ── Requirement 2 / Scenario: Ownership / use-after-move (#15) ────────
+    // ── Requirement 2 / Scenario: Ownership / use-after-consume (#15) ────────
 
     #[test]
     fn use_after_move_rejected() {
-        // move(x) is the MVL syntax for explicit move
-        let src = "fn f() -> Int { let x: Int = 1; let y: Int = move(x); x }";
+        // consume(x) is the MVL syntax for explicit ownership transfer (iso semantics)
+        let src = "fn f() -> Int { let x: Int = 1; let y: Int = consume(x); x }";
         let errors = errors_for(src);
         assert!(
             errors
@@ -571,7 +571,7 @@ mod tests {
 
     #[test]
     fn assign_type_mismatch_rejected() {
-        let src = "fn f() -> Unit { let mut x: Int = 1; x = true; }";
+        let src = "fn f() -> Unit { let x: ref Int = 1; x = true; }";
         let errors = errors_for(src);
         assert!(
             errors
@@ -762,16 +762,21 @@ mod tests {
             args: vec![],
             span: dummy_span,
         };
+        // `ref Int` makes the binding mutable (ADR-0002: lambdas may not capture mutable bindings)
+        let ref_int_ty = TypeExpr::Ref {
+            mutable: true,
+            inner: Box::new(int_ty.clone()),
+            span: dummy_span,
+        };
 
         // Build: fn f() -> Unit {
-        //    let mut x = 1;
-        //    let g = |y: Int| -> Int { x };
+        //    let x: ref Int = 1;   // mutable binding
+        //    let g = |y: Int| -> Int { x };  // captures mutable x — should fail
         // }
         let lambda = Expr::Lambda {
             params: vec![Param {
                 name: "y".into(),
                 ty: int_ty.clone(),
-                mutable: false,
                 capability: None,
                 refinement: None,
                 span: dummy_span,
@@ -807,14 +812,14 @@ mod tests {
                 body: Block {
                     stmts: vec![
                         Stmt::Let {
-                            kind: LetKind::Regular { mutable: true },
+                            kind: LetKind::Regular,
                             pattern: Pattern::Ident("x".into(), dummy_span),
-                            ty: int_ty,
+                            ty: ref_int_ty,
                             init: Expr::Literal(Literal::Integer(1), dummy_span),
                             span: dummy_span,
                         },
                         Stmt::Let {
-                            kind: LetKind::Regular { mutable: false },
+                            kind: LetKind::Regular,
                             pattern: Pattern::Ident("g".into(), dummy_span),
                             ty: fn_int_int_ty,
                             init: lambda,
@@ -869,7 +874,6 @@ mod tests {
             params: vec![Param {
                 name: "y".into(),
                 ty: int_ty.clone(),
-                mutable: false,
                 capability: None,
                 refinement: None,
                 span: dummy_span,
@@ -905,14 +909,14 @@ mod tests {
                 body: Block {
                     stmts: vec![
                         Stmt::Let {
-                            kind: LetKind::Regular { mutable: false }, // immutable
+                            kind: LetKind::Regular,
                             pattern: Pattern::Ident("x".into(), dummy_span),
                             ty: int_ty,
                             init: Expr::Literal(Literal::Integer(1), dummy_span),
                             span: dummy_span,
                         },
                         Stmt::Let {
-                            kind: LetKind::Regular { mutable: false },
+                            kind: LetKind::Regular,
                             pattern: Pattern::Ident("g".into(), dummy_span),
                             ty: fn_int_int_ty,
                             init: lambda,

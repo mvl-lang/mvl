@@ -146,7 +146,6 @@ pub enum TypeBody {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FieldDecl {
-    pub mutable: bool,
     pub name: String,
     pub ty: TypeExpr,
     /// Inline refinement: `field: Int where self > 0`
@@ -213,7 +212,6 @@ pub enum Totality {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
     pub capability: Option<Capability>,
-    pub mutable: bool,
     pub name: String,
     pub ty: TypeExpr,
     pub refinement: Option<RefExpr>,
@@ -554,10 +552,6 @@ pub enum Expr {
         elems: Vec<Expr>,
         span: Span,
     },
-    Move {
-        expr: Box<Expr>,
-        span: Span,
-    },
     Consume {
         expr: Box<Expr>,
         span: Span,
@@ -596,7 +590,6 @@ impl Expr {
             | Expr::List { span, .. }
             | Expr::Map { span, .. }
             | Expr::Set { span, .. }
-            | Expr::Move { span, .. }
             | Expr::Consume { span, .. }
             | Expr::Declassify { span, .. }
             | Expr::Sanitize { span, .. }
@@ -652,12 +645,12 @@ pub enum BinaryOp {
 
 // ── Statements ─────────────────────────────────────────────────────────────
 
-/// Binding kind for `let` statements — makes the invalid state `ghost + mutable`
-/// unrepresentable at the type level (#651).
+/// Binding kind for `let` statements.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LetKind {
-    /// Ordinary `let` or `let mut` binding emitted at runtime.
-    Regular { mutable: bool },
+    /// Ordinary `let` binding emitted at runtime.
+    /// Mutability is encoded in the type annotation (`ref T` = mutable, `val T` / bare type = immutable).
+    Regular,
     /// `ghost let` — specification-only binding, erased before transpilation/codegen (Phase 4, #627).
     /// Ghost bindings are type-checked normally but never appear in emitted code.
     Ghost,
@@ -841,7 +834,6 @@ mod tests {
         // Represents: `total fn add(a: Int, b: Int) -> Int { a + b }`
         let a_param = Param {
             capability: None,
-            mutable: false,
             name: "a".into(),
             ty: TypeExpr::Base {
                 name: "Int".into(),
@@ -853,7 +845,6 @@ mod tests {
         };
         let b_param = Param {
             capability: None,
-            mutable: false,
             name: "b".into(),
             ty: TypeExpr::Base {
                 name: "Int".into(),
@@ -914,7 +905,6 @@ mod tests {
         // Represents: `fn f(x: Tainted<String>) -> Clean<String>`
         let param = Param {
             capability: None,
-            mutable: false,
             name: "x".into(),
             ty: TypeExpr::Labeled {
                 label: SecurityLabel::Tainted,
@@ -992,7 +982,6 @@ mod tests {
         ] {
             let p = Param {
                 capability: Some(cap),
-                mutable: false,
                 name: "x".into(),
                 ty: TypeExpr::Base {
                     name: "T".into(),

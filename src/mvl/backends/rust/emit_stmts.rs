@@ -36,21 +36,32 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &Stmt) {
             ..
         } => {}
         Stmt::Let {
-            kind: LetKind::Regular { mutable },
+            kind: LetKind::Regular,
             pattern,
             ty,
             init,
             ..
         } => {
             cg.indent();
-            if *mutable {
+            // `ref T` in the type annotation encodes mutability — emit `let mut` and strip the ref wrapper.
+            let (is_mutable, emit_ty) = if let TypeExpr::Ref {
+                mutable: true,
+                inner,
+                ..
+            } = ty
+            {
+                (true, inner.as_ref())
+            } else {
+                (false, ty)
+            };
+            if is_mutable {
                 cg.push("let mut ");
             } else {
                 cg.push("let ");
             }
             emit_pattern(cg, pattern);
             cg.push(": ");
-            cg.push(&emit_type_expr(ty));
+            cg.push(&emit_type_expr(emit_ty));
             cg.push(" = ");
             emit_expr(cg, init);
             // When the declared type is a security label (e.g. Tainted<String>) and the

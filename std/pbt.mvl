@@ -164,8 +164,8 @@ pub fn fuzz_default_config() -> FuzzConfig {
 partial fn sample_weighted_int(vals: List[Int], wts: List[Int]) -> Int ! Random {
     let n: Int = list_len(vals);
     if n == 0 { panic("gen_weighted_int: empty values list") };
-    let mut weight_sum: Int = 0;
-    let mut k: Int = 0;
+    let weight_sum: ref Int = 0;
+    let k: ref Int = 0;
     while k < n {
         let w: Int = match list_get(wts, k) { Some(x) => x, None => 0 };
         weight_sum = weight_sum + w;
@@ -173,9 +173,9 @@ partial fn sample_weighted_int(vals: List[Int], wts: List[Int]) -> Int ! Random 
     };
     if weight_sum == 0 { panic("gen_weighted_int: all weights are zero") };
     let pick: Int = int(0, weight_sum - 1);
-    let mut acc: Int = 0;
-    let mut j: Int = 0;
-    let mut result: Int = match list_get(vals, n - 1) { Some(x) => x, None => 0 };
+    let acc: ref Int = 0;
+    let j: ref Int = 0;
+    let result: ref Int = match list_get(vals, n - 1) { Some(x) => x, None => 0 };
     while j < n {
         let w: Int = match list_get(wts, j) { Some(x) => x, None => 0 };
         let vj: Int = match list_get(vals, j) { Some(x) => x, None => 0 };
@@ -206,9 +206,9 @@ fn shrink_int_step(x: Int, prop: fn(Int) -> Bool) -> Int {
 
 // Shrink an Int to the smallest failing value (up to 100 steps).
 partial fn shrink_int_loop(x: Int, prop: fn(Int) -> Bool) -> Int {
-    let mut shrunk: Int = x;
-    let mut shrinking: Bool = true;
-    let mut steps: Int = 0;
+    let shrunk: ref Int = x;
+    let shrinking: ref Bool = true;
+    let steps: ref Int = 0;
     while shrinking && steps < 100 {
         let next: Int = shrink_int_step(shrunk, prop);
         if next == shrunk { shrinking = false } else { shrunk = next };
@@ -235,9 +235,9 @@ fn shrink_string_step(s: String, prop: fn(String) -> Bool) -> String {
 
 // Shrink a String by dropping characters until no shorter failing string exists.
 partial fn shrink_string_loop(s: String, prop: fn(String) -> Bool) -> String {
-    let mut shrunk: String = s;
-    let mut shrinking: Bool = true;
-    let mut steps: Int = 0;
+    let shrunk: ref String = s;
+    let shrinking: ref Bool = true;
+    let steps: ref Int = 0;
     while shrinking && steps < 100 {
         let next: String = shrink_string_step(shrunk, prop);
         if str_len(next) < str_len(shrunk) { shrunk = next } else { shrinking = false };
@@ -264,9 +264,9 @@ fn shrink_list_int_step(xs: List[Int], prop: fn(List[Int]) -> Bool) -> List[Int]
 
 // Shrink a List[Int] by removing elements until no shorter failing list exists.
 partial fn shrink_list_int_loop(xs: List[Int], prop: fn(List[Int]) -> Bool) -> List[Int] {
-    let mut shrunk: List[Int] = xs;
-    let mut shrinking: Bool = true;
-    let mut steps: Int = 0;
+    let shrunk: ref List[Int] = xs;
+    let shrinking: ref Bool = true;
+    let steps: ref Int = 0;
     while shrinking && steps < 100 {
         let next: List[Int] = shrink_list_int_step(shrunk, prop);
         if list_len(next) < list_len(shrunk) { shrunk = next } else { shrinking = false };
@@ -284,9 +284,9 @@ partial fn run_property_int(
     prop: fn(Int) -> Bool,
     iterations: Int
 ) -> Option[Int] ! Random {
-    let mut i: Int = 0;
-    let mut failed: Bool = false;
-    let mut failing_val: Int = 0;
+    let i: ref Int = 0;
+    let failed: ref Bool = false;
+    let failing_val: ref Int = 0;
     match gen {
         IntGen::Range(lo, hi) => {
             while i < iterations && !failed {
@@ -297,8 +297,8 @@ partial fn run_property_int(
         },
         IntGen::Filtered(lo, hi, pred) => {
             while i < iterations && !failed {
-                let mut v: Int = int(lo, hi);
-                let mut tries: Int = 0;
+                let v: ref Int = int(lo, hi);
+                let tries: ref Int = 0;
                 while !pred(v) && tries < 100 {
                     v = int(lo, hi);
                     tries = tries + 1
@@ -338,9 +338,9 @@ partial fn run_property_bool(
     prop: fn(Bool) -> Bool,
     iterations: Int
 ) -> Option[Bool] ! Random {
-    let mut i: Int = 0;
-    let mut failed: Bool = false;
-    let mut failing_val: Bool = false;
+    let i: ref Int = 0;
+    let failed: ref Bool = false;
+    let failing_val: ref Bool = false;
     match gen {
         BoolGen::BoolRandom => {
             while i < iterations && !failed {
@@ -372,9 +372,9 @@ partial fn run_property_float(
     prop: fn(Float) -> Bool,
     iterations: Int
 ) -> Option[Float] ! Random {
-    let mut i: Int = 0;
-    let mut failed: Bool = false;
-    let mut failing_val: Float = 0.0;
+    let i: ref Int = 0;
+    let failed: ref Bool = false;
+    let failing_val: ref Float = 0.0;
     while i < iterations && !failed {
         let v: Float = float() * (gen.max - gen.min) + gen.min;
         if !prop(v) { failed = true; failing_val = v };
@@ -395,13 +395,13 @@ partial fn run_property_string(
     iterations: Int
 ) -> Option[String] ! Random {
     let printable: String = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
-    let mut i: Int = 0;
-    let mut failed: Bool = false;
-    let mut failing_val: String = "";
+    let i: ref Int = 0;
+    let failed: ref Bool = false;
+    let failing_val: ref String = "";
     while i < iterations && !failed {
         let len: Int = int(gen.min_len, gen.max_len);
-        let mut s: String = "";
-        let mut j: Int = 0;
+        let s: ref String = "";
+        let j: ref Int = 0;
         while j < len {
             let idx: Int = int(0, 94);
             s = str_concat(s, str_char_at(printable, idx));
@@ -419,13 +419,13 @@ partial fn run_property_list_int(
     prop: fn(List[Int]) -> Bool,
     iterations: Int
 ) -> Option[List[Int]] ! Random {
-    let mut i: Int = 0;
-    let mut failed: Bool = false;
-    let mut failing_val: List[Int] = [];
+    let i: ref Int = 0;
+    let failed: ref Bool = false;
+    let failing_val: ref List[Int] = [];
     while i < iterations && !failed {
         let len: Int = int(0, gen.max_len);
-        let mut xs: List[Int] = [];
-        let mut j: Int = 0;
+        let xs: ref List[Int] = [];
+        let j: ref Int = 0;
         while j < len {
             xs.push(int(gen.min_val, gen.max_val));
             j = j + 1
@@ -699,9 +699,9 @@ pub partial fn property_check_targeted_int(
 ) -> Unit ! Random {
     match gen {
         IntGen::Range(lo, hi) => {
-            let mut i: Int = 0;
-            let mut best: Int = int(lo, hi);
-            let mut best_dist: Float = distance(best);
+            let i: ref Int = 0;
+            let best: ref Int = int(lo, hi);
+            let best_dist: ref Float = distance(best);
             while i < iterations {
                 let v: Int = if int(0, 4) == 0 { mutate_int(best) } else { int(lo, hi) };
                 let d: Float = distance(v);
@@ -731,8 +731,8 @@ pub partial fn property_check_with_mutation_int(
 ) -> Unit ! Random {
     match gen {
         IntGen::Range(lo, hi) => {
-            let mut i: Int = 0;
-            let mut corpus: List[Int] = [];
+            let i: ref Int = 0;
+            let corpus: ref List[Int] = [];
             while i < iterations {
                 let n: Int = list_len(corpus);
                 let v: Int = if n > 0 && float() < mutation_ratio {
@@ -770,10 +770,10 @@ pub partial fn property_check_with_mutation_int_verbose(
 ) -> Unit ! Random, Console {
     match gen {
         IntGen::Range(lo, hi) => {
-            let mut i: Int = 0;
-            let mut corpus: List[Int] = [];
-            let mut fresh_count: Int = 0;
-            let mut mutated_count: Int = 0;
+            let i: ref Int = 0;
+            let corpus: ref List[Int] = [];
+            let fresh_count: ref Int = 0;
+            let mutated_count: ref Int = 0;
             while i < iterations {
                 let n: Int = list_len(corpus);
                 let v: Int = if n > 0 && float() < mutation_ratio {
@@ -825,7 +825,7 @@ pub partial fn fuzz_check_bytes(
     prop: fn(List[Int]) -> Bool,
     config: FuzzConfig
 ) -> Unit ! Random {
-    let mut i: Int = 0;
+    let i: ref Int = 0;
     while i < config.max_cases {
         let n: Int = int(gen.min_len, gen.max_len);
         let bs: List[Int] = bytes(n);
@@ -850,11 +850,11 @@ pub partial fn fuzz_check_string(
 ) -> Unit ! Random {
     let charset: String = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\t\n";
     let charset_len: Int = str_len(charset);
-    let mut i: Int = 0;
+    let i: ref Int = 0;
     while i < config.max_cases {
         let n: Int = int(gen.min_len, gen.max_len);
-        let mut s: String = "";
-        let mut j: Int = 0;
+        let s: ref String = "";
+        let j: ref Int = 0;
         while j < n {
             let idx: Int = int(0, charset_len - 1);
             s = str_concat(s, str_char_at(charset, idx));

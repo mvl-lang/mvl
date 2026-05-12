@@ -20,7 +20,7 @@ pub type BwtResult = struct {
 pub fn bwt_encode(input: val List[Int]) -> BwtResult {
     let n: Int = input.len();
     // Build all cyclic rotations (each is a new List[Int])
-    let mut rotations: List[List[Int]] = [];
+    let rotations: ref List[List[Int]] = [];
     for i in range(0, n) {
         rotations.push(make_rotation(input, n, i))
     }
@@ -28,8 +28,8 @@ pub fn bwt_encode(input: val List[Int]) -> BwtResult {
     let sorted: List[List[Int]] = rotations.sort();
     // Find which sorted row corresponds to the original (rotation starting at 0)
     let original: List[Int] = make_rotation(input, n, 0);
-    let mut last: List[Int] = [];
-    let mut primary: Int = 0;
+    let last: ref List[Int] = [];
+    let primary: ref Int = 0;
     for idx in range(0, n) {
         let rot: List[Int] = sorted.get(idx).unwrap();
         last.push(rot.get(n - 1).unwrap());
@@ -42,7 +42,7 @@ pub fn bwt_encode(input: val List[Int]) -> BwtResult {
 
 // Build cyclic rotation starting at index i: input[i..] ++ input[..i]
 fn make_rotation(input: val List[Int], n: Int, i: Int) -> List[Int] {
-    let mut rot: List[Int] = input.slice(i, n);
+    let rot: ref List[Int] = input.slice(i, n);
     let head: List[Int] = input.slice(0, i);
     rot.extend(head);
     rot
@@ -59,8 +59,8 @@ pub fn bwt_decode(block: BwtResult) -> List[Int] {
     // build_t computes LF-mapping; invert it to get FL-mapping for forward reconstruction.
     let lf: List[Int] = build_t(val owned.data, val first, n);
     let fl: List[Int] = invert_perm(lf, n);
-    let mut result: List[Int] = [];
-    let mut pos: Int = owned.primary;
+    let result: ref List[Int] = [];
+    let pos: ref Int = owned.primary;
     for _step in range(0, n) {
         result.push(first.get(pos).unwrap());
         pos = fl.get(pos).unwrap()
@@ -70,7 +70,7 @@ pub fn bwt_decode(block: BwtResult) -> List[Int] {
 
 // Invert a permutation: if perm[i] = j, then result[j] = i.
 fn invert_perm(perm: List[Int], n: Int) -> List[Int] {
-    let mut inv: List[Int] = range(0, n).map(zero_int);
+    let inv: ref List[Int] = range(0, n).map(zero_int);
     for i in range(0, n) {
         let j: Int = perm.get(i).unwrap();
         inv = int_list_set(inv, j, i)
@@ -82,10 +82,10 @@ fn invert_perm(perm: List[Int], n: Int) -> List[Int] {
 // t[i] = position in first[] where last[i] "maps to" (accounting for rank).
 fn build_t(last: val List[Int], first: val List[Int], n: Int) -> List[Int] {
     // seen[sym] tracks how many times sym has appeared in last[0..i]
-    let mut seen: List[Int] = range(0, 256).map(zero_int);
+    let seen: ref List[Int] = range(0, 256).map(zero_int);
     // first_occ[sym] = index of first occurrence of sym in first[] (or n if absent)
     let first_occ: List[Int] = build_first_occ(first, n);
-    let mut t: List[Int] = range(0, n).map(zero_int);
+    let t: ref List[Int] = range(0, n).map(zero_int);
     for i in range(0, n) {
         let sym: Int = last.get(i).unwrap();
         let rank: Int = seen.get(sym).unwrap();
@@ -98,7 +98,7 @@ fn build_t(last: val List[Int], first: val List[Int], n: Int) -> List[Int] {
 
 // Build first-occurrence table: first_occ[sym] = smallest i where first[i] == sym.
 fn build_first_occ(first: val List[Int], n: Int) -> List[Int] {
-    let mut occ: List[Int] = range(0, 256).map(|_x: Int| -> Int { n }); // n = "not present"
+    let occ: ref List[Int] = range(0, 256).map(|_x: Int| -> Int { n }); // n = "not present"
     for i in range(0, n) {
         let sym: Int = first.get(i).unwrap();
         if occ.get(sym).unwrap() == n {
@@ -124,7 +124,7 @@ fn zero_int(_x: Int) -> Int { 0 }
 fn int_list_set(list: List[Int], idx: Int, new_val: Int) -> List[Int] {
     let before: List[Int] = list.slice(0, idx);
     let after: List[Int]  = list.slice(idx + 1, list.len());
-    let mut result: List[Int] = before;
+    let result: ref List[Int] = before;
     result.push(new_val);
     result.extend(after);
     result

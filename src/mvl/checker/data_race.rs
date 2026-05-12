@@ -182,9 +182,9 @@ fn check_else_iso(eb: &ElseBranch, iso_vars: &HashSet<&str>, errors: &mut Vec<Ch
 
 fn check_expr_iso(expr: &Expr, iso_vars: &HashSet<&str>, errors: &mut Vec<CheckError>) {
     match expr {
-        // `consume()` and `move` are ownership-transfer operations — not aliases.
+        // `consume()` is an ownership-transfer operation — not an alias.
         // Do NOT recurse: the inner ident is being consumed, not aliased.
-        Expr::Consume { .. } | Expr::Move { .. } => {}
+        Expr::Consume { .. } => {}
 
         Expr::FnCall { args, .. } => {
             for arg in args {
@@ -312,7 +312,6 @@ mod tests {
     fn iso_param(name: &str) -> Param {
         Param {
             capability: Some(Capability::Iso),
-            mutable: false,
             name: name.into(),
             ty: int_ty(),
             refinement: None,
@@ -323,7 +322,6 @@ mod tests {
     fn plain_param(name: &str) -> Param {
         Param {
             capability: None,
-            mutable: false,
             name: name.into(),
             ty: int_ty(),
             refinement: None,
@@ -367,7 +365,7 @@ mod tests {
         //     let g = || { let y = x; y };  <- aliasing x inside lambda
         // }
         let let_y_eq_x = Stmt::Let {
-            kind: LetKind::Regular { mutable: false },
+            kind: LetKind::Regular,
             pattern: Pattern::Ident("y".into(), S),
             ty: int_ty(),
             init: Expr::Ident("x".into(), S),
@@ -384,7 +382,7 @@ mod tests {
             span: S,
         };
         let outer_let = Stmt::Let {
-            kind: LetKind::Regular { mutable: false },
+            kind: LetKind::Regular,
             pattern: Pattern::Ident("g".into(), S),
             ty: int_ty(),
             init: lambda,
@@ -411,7 +409,7 @@ mod tests {
         //     let g = |x: Int| { let y = x; y };  <- lambda's own x shadows outer iso x
         // }
         let let_y_eq_x = Stmt::Let {
-            kind: LetKind::Regular { mutable: false },
+            kind: LetKind::Regular,
             pattern: Pattern::Ident("y".into(), S),
             ty: int_ty(),
             init: Expr::Ident("x".into(), S),
@@ -428,7 +426,7 @@ mod tests {
             span: S,
         };
         let outer_let = Stmt::Let {
-            kind: LetKind::Regular { mutable: false },
+            kind: LetKind::Regular,
             pattern: Pattern::Ident("g".into(), S),
             ty: int_ty(),
             init: lambda,

@@ -8,7 +8,7 @@ type Point = struct {
 
 // Struct with mutable field
 type Counter = struct {
-    mut count: Int,
+    count: ref Int,
     label: String,
 }
 

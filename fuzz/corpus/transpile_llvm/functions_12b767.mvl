@@ -44,7 +44,7 @@ fn demo_caps(
 ) -> Unit { }
 
 // Function with mutable parameter
-fn increment(mut counter: Int) -> Int {
+fn increment(ref counter: Int) -> Int {
     counter = counter + 1;
     counter
 }
@@ -98,6 +98,6 @@ fn read_buffer(buf: val Buffer) -> Int {
     buf.len()
 }
 
-fn write_buffer(buf: ref Buffer, data: Byte) -> Unit {
+fn write_buffer(ref buf: Buffer, data: Byte) -> Unit {
     buf.push(data)
 }

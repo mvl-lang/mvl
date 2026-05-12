@@ -12,8 +12,8 @@
 // then move it to the front. Input borrowed — large BWT output must not clone.
 pub fn mtf_encode(data: val List[Int]) -> List[Int] {
     // Alphabet: all 256 byte values in initial order [0, 1, 2, ..., 255]
-    let mut alphabet: List[Int] = range(0, 256);
-    let mut out: List[Int] = [];
+    let alphabet: ref List[Int] = range(0, 256);
+    let out: ref List[Int] = [];
     for i in range(0, data.len()) {
         let sym: Int = data.get(i).unwrap();
         let pos: Int = find_in_alphabet(val alphabet, sym);
@@ -25,8 +25,8 @@ pub fn mtf_encode(data: val List[Int]) -> List[Int] {
 
 // Decode: reconstruct original bytes from MTF-encoded indices.
 pub fn mtf_decode(encoded: val List[Int]) -> List[Int] {
-    let mut alphabet: List[Int] = range(0, 256);
-    let mut out: List[Int] = [];
+    let alphabet: ref List[Int] = range(0, 256);
+    let out: ref List[Int] = [];
     for i in range(0, encoded.len()) {
         let pos: Int = encoded.get(i).unwrap();
         let sym: Int = alphabet.get(pos).unwrap();
@@ -40,7 +40,7 @@ pub fn mtf_decode(encoded: val List[Int]) -> List[Int] {
 // Alphabet always contains all 256 unique values; scan is always O(256).
 // Uses a for loop (bounded, provably terminating) instead of recursion.
 fn find_in_alphabet(alphabet: val List[Int], sym: Int) -> Int {
-    let mut found: Int = 0;
+    let found: ref Int = 0;
     for i in range(0, alphabet.len()) {
         if alphabet.get(i).unwrap() == sym {
             found = i
@@ -54,7 +54,7 @@ fn find_in_alphabet(alphabet: val List[Int], sym: Int) -> Int {
 fn move_to_front(alphabet: List[Int], sym: Int, pos: Int) -> List[Int] {
     let before: List[Int] = alphabet.slice(0, pos);
     let after: List[Int]  = alphabet.slice(pos + 1, alphabet.len());
-    let mut result: List[Int] = [sym];
+    let result: ref List[Int] = [sym];
     result.extend(before);
     result.extend(after);
     result

@@ -49,8 +49,8 @@ fn encode_number(n: Float) -> String {
 partial fn json_escape(s: String) -> String {
     let chars: List[String] = str_chars(s);
     let len: Int = list_len(chars);
-    let mut out: String = "";
-    let mut i: Int = 0;
+    let out: ref String = "";
+    let i: ref Int = 0;
     while i < len {
         match list_get(chars, i) {
             None    => {},
@@ -73,8 +73,8 @@ partial fn encode_array(arr: List[Value]) -> String {
     if len == 0 {
         "[]"
     } else {
-        let mut out: String = "[";
-        let mut i: Int = 0;
+        let out: ref String = "[";
+        let i: ref Int = 0;
         while i < len {
             if i > 0 { out = str_concat(out, ",") } else {}
             match list_get(arr, i) {
@@ -93,8 +93,8 @@ partial fn encode_object(obj: Map[String, Value]) -> String {
     if len == 0 {
         "{}"
     } else {
-        let mut out: String = "{";
-        let mut i: Int = 0;
+        let out: ref String = "{";
+        let i: ref Int = 0;
         while i < len {
             if i > 0 { out = str_concat(out, ",") } else {}
             match list_get(keys, i) {
@@ -136,8 +136,8 @@ pub transparent partial fn decode(s: String) -> Result[Value, String] {
 
 partial fn skip_ws(chars: List[String], pos: Int) -> Int {
     let len: Int = list_len(chars);
-    let mut cur: Int = pos;
-    let mut go: Bool = true;
+    let cur: ref Int = pos;
+    let go: ref Bool = true;
     while go && cur < len {
         match list_get(chars, cur) {
             None    => { go = false },
@@ -240,11 +240,11 @@ partial fn parse_string_val(chars: List[String], pos: Int) -> ValuePos {
 
 partial fn parse_string(chars: List[String], pos: Int) -> StrPos {
     let len: Int = list_len(chars);
-    let mut cur: Int = pos + 1;
-    let mut out: String = "";
-    let mut done: Bool = false;
-    let mut err: String = "";
-    let mut had_err: Bool = false;
+    let cur: ref Int = pos + 1;
+    let out: ref String = "";
+    let done: ref Bool = false;
+    let err: ref String = "";
+    let had_err: ref Bool = false;
     while done == false && had_err == false && cur < len {
         match list_get(chars, cur) {
             None    => { had_err = true; err = "unterminated string" },
@@ -292,9 +292,9 @@ partial fn parse_number_val(chars: List[String], pos: Int) -> ValuePos {
 
 partial fn parse_number(chars: List[String], pos: Int) -> FloatPos {
     let len: Int = list_len(chars);
-    let mut cur: Int = pos;
+    let cur: ref Int = pos;
 
-    let mut negative: Bool = false;
+    let negative: ref Bool = false;
     match list_get(chars, cur) {
         None    => { return FloatPos::FPErr("empty number") },
         Some(c) => {
@@ -302,9 +302,9 @@ partial fn parse_number(chars: List[String], pos: Int) -> FloatPos {
         }
     }
 
-    let mut int_val: Int = 0;
-    let mut has_digit: Bool = false;
-    let mut go: Bool = true;
+    let int_val: ref Int = 0;
+    let has_digit: ref Bool = false;
+    let go: ref Bool = true;
     while go && cur < len {
         match list_get(chars, cur) {
             None    => { go = false },
@@ -321,14 +321,14 @@ partial fn parse_number(chars: List[String], pos: Int) -> FloatPos {
     }
     if has_digit == false { return FloatPos::FPErr("expected digit in number") } else {}
 
-    let mut frac: Float = 0.0;
+    let frac: ref Float = 0.0;
     match list_get(chars, cur) {
         None    => {},
         Some(c) => {
             if c == "." {
                 cur = cur + 1;
-                let mut denom: Float = 10.0;
-                let mut fgo: Bool = true;
+                let denom: ref Float = 10.0;
+                let fgo: ref Bool = true;
                 while fgo && cur < len {
                     match list_get(chars, cur) {
                         None     => { fgo = false },
@@ -347,13 +347,13 @@ partial fn parse_number(chars: List[String], pos: Int) -> FloatPos {
         }
     }
 
-    let mut exp_mult: Float = 1.0;
+    let exp_mult: ref Float = 1.0;
     match list_get(chars, cur) {
         None    => {},
         Some(c) => {
             if c == "e" || c == "E" {
                 cur = cur + 1;
-                let mut exp_neg: Bool = false;
+                let exp_neg: ref Bool = false;
                 match list_get(chars, cur) {
                     None     => {},
                     Some(sc) => {
@@ -362,8 +362,8 @@ partial fn parse_number(chars: List[String], pos: Int) -> FloatPos {
                         else              {}
                     }
                 }
-                let mut exp_int: Int = 0;
-                let mut ego: Bool = true;
+                let exp_int: ref Int = 0;
+                let ego: ref Bool = true;
                 while ego && cur < len {
                     match list_get(chars, cur) {
                         None     => { ego = false },
@@ -377,15 +377,15 @@ partial fn parse_number(chars: List[String], pos: Int) -> FloatPos {
                         }
                     }
                 }
-                let mut e: Int = exp_int;
-                let mut pow: Float = 1.0;
+                let e: ref Int = exp_int;
+                let pow: ref Float = 1.0;
                 while e > 0 { pow = pow * 10.0; e = e - 1 }
                 if exp_neg { exp_mult = 1.0 / pow } else { exp_mult = pow }
             } else {}
         }
     }
 
-    let mut result: Float = (int_val.to_float() + frac) * exp_mult;
+    let result: ref Float = (int_val.to_float() + frac) * exp_mult;
     if negative { result = 0.0 - result } else {}
     FloatPos::FP(result, cur)
 }
@@ -399,17 +399,17 @@ partial fn parse_array_val(chars: List[String], pos: Int) -> ValuePos {
 
 partial fn parse_array(chars: List[String], pos: Int) -> ArrPos {
     let len: Int = list_len(chars);
-    let mut cur: Int = skip_ws(chars, pos + 1);
+    let cur: ref Int = skip_ws(chars, pos + 1);
     match list_get(chars, cur) {
         None    => { return ArrPos::ArrPErr("unterminated array") },
         Some(c) => {
             if c == "]" { return ArrPos::ArrP([], cur + 1) } else {}
         }
     }
-    let mut result: List[Value] = [];
-    let mut go: Bool = true;
-    let mut err: String = "";
-    let mut had_err: Bool = false;
+    let result: ref List[Value] = [];
+    let go: ref Bool = true;
+    let err: ref String = "";
+    let had_err: ref Bool = false;
     while go {
         match parse_value(chars, cur) {
             ValuePos::VPErr(e)   => { had_err = true; err = e; go = false },
@@ -440,7 +440,7 @@ partial fn parse_object_val(chars: List[String], pos: Int) -> ValuePos {
 fn empty_object() -> Map[String, Value] {
     // {} parses as an empty block in MVL, not an empty map literal.
     // Workaround: create a one-entry sentinel map then remove the key via method call.
-    let mut m: Map[String, Value] = {"__mvl_json_init__": Value::Null};
+    let m: ref Map[String, Value] = {"__mvl_json_init__": Value::Null};
     m.remove("__mvl_json_init__");
     m
 }
@@ -473,7 +473,7 @@ partial fn parse_object_step(chars: List[String], cur: Int, result: Map[String, 
     match parse_kv(chars, cur) {
         KVPos::KVPErr(e)          => ObjectStep::OStepErr(e),
         KVPos::KVP(key, jv, np)   => {
-            let mut r: Map[String, Value] = result;
+            let r: ref Map[String, Value] = result;
             r.insert(key, jv);
             let c2: Int = skip_ws(chars, np);
             match list_get(chars, c2) {
@@ -486,17 +486,17 @@ partial fn parse_object_step(chars: List[String], cur: Int, result: Map[String, 
 
 partial fn parse_object(chars: List[String], pos: Int) -> ObjPos {
     let len: Int = list_len(chars);
-    let mut cur: Int = skip_ws(chars, pos + 1);
+    let cur: ref Int = skip_ws(chars, pos + 1);
     match list_get(chars, cur) {
         None    => { return ObjPos::ObjPErr("unterminated object") },
         Some(c) => {
             if c == "}" { return ObjPos::ObjP(empty_object(), cur + 1) } else {}
         }
     }
-    let mut result: Map[String, Value] = empty_object();
-    let mut go: Bool = true;
-    let mut err: String = "";
-    let mut had_err: Bool = false;
+    let result: ref Map[String, Value] = empty_object();
+    let go: ref Bool = true;
+    let err: ref String = "";
+    let had_err: ref Bool = false;
     while go {
         cur = skip_ws(chars, cur);
         match list_get(chars, cur) {

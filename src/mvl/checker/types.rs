@@ -258,6 +258,8 @@ pub fn types_compatible(a: &Ty, b: &Ty) -> bool {
         (Ty::Map(ak, av), Ty::Map(bk, bv)) => types_compatible(ak, bk) && types_compatible(av, bv),
         (Ty::Set(ai), Ty::Set(bi)) => types_compatible(ai, bi),
         (Ty::Ref(am, ai), Ty::Ref(bm, bi)) => am == bm && types_compatible(ai, bi),
+        // A plain value T is compatible where val/ref T is expected (env types are stripped).
+        (Ty::Ref(_, ai), _) => types_compatible(ai, b),
         (Ty::Tuple(aes), Ty::Tuple(bes)) => {
             aes.len() == bes.len()
                 && aes

@@ -160,7 +160,7 @@ fn borrow_var_used_in_while_loop_no_clone_needed() {
     let src = r#"
 type Buf = struct { data: String }
 fn inspect(b: Buf) -> String { b.data }
-partial fn repeat_while(b: Buf, mut n: Int) -> Unit {
+partial fn repeat_while(b: Buf, ref n: Int) -> Unit {
     while n > 0 {
         inspect(b);
         n = n - 1;
@@ -179,7 +179,7 @@ fn borrow_var_used_only_in_while_condition_no_clone_needed() {
     let src = r#"
 type Buf = struct { data: String }
 fn should_continue(b: Buf) -> Bool { true }
-partial fn process(b: Buf, mut n: Int) -> Unit {
+partial fn process(b: Buf, ref n: Int) -> Unit {
     while should_continue(b) {
         n = n - 1;
         ()
@@ -357,7 +357,7 @@ fn caller(b: Buf) -> Buf {
 fn param_as_direct_for_iterable_not_inferred_as_borrow() {
     let src = r#"
 fn process(xs: List[Int]) -> Int {
-    let mut s: Int = 0;
+    let s: ref Int = 0;
     for x in xs {
         s = s + x
     }

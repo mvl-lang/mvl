@@ -316,7 +316,6 @@ fn expr_has_disqualifying_use(param: &str, expr: &Expr) -> bool {
         // disqualifying.  For compound inner expressions, recurse.
         Expr::Sanitize { expr, .. }
         | Expr::Declassify { expr, .. }
-        | Expr::Move { expr, .. }
         | Expr::Consume { expr, .. }
         | Expr::Propagate { expr, .. } => {
             matches!(expr.as_ref(), Expr::Ident(n, _) if n == param)
@@ -403,7 +402,6 @@ fn expr_mentions_param(param: &str, expr: &Expr) -> bool {
         | Expr::FieldAccess { expr, .. }
         | Expr::Sanitize { expr, .. }
         | Expr::Declassify { expr, .. }
-        | Expr::Move { expr, .. }
         | Expr::Consume { expr, .. }
         | Expr::Propagate { expr, .. }
         | Expr::Borrow { expr, .. } => expr_mentions_param(param, expr),
@@ -587,7 +585,7 @@ mod tests {
         // Iterating `&Vec<T>` gives `&T` elements — type error in the body.
         // Disqualify xs so it stays owned and the move/clone path handles it.
         let fd = parse_fn(
-            "fn sum(xs: List[Int]) -> Int { let mut acc: Int = 0; for x in xs { acc = acc } acc }",
+            "fn sum(xs: List[Int]) -> Int { let acc: ref Int = 0; for x in xs { acc = acc } acc }",
         );
         assert_eq!(borrow_params_for_fn(&fd), vec![None]);
     }

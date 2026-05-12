@@ -210,9 +210,6 @@ impl Parser {
         // Optional capability: iso / val / ref / tag
         let capability = self.try_parse_capability();
 
-        // Optional `mut`
-        let mutable = self.eat(&TokenKind::Mut);
-
         // Parameter name
         let ident_result = self.expect_ident();
         let (name, _) = self.require(ident_result)?;
@@ -233,7 +230,6 @@ impl Parser {
         let span = self.span_from(start);
         Ok(Param {
             capability,
-            mutable,
             name,
             ty,
             refinement,
@@ -813,9 +809,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_fn_with_mut_param() {
-        let d = fn_decl("fn inc(mut count: Int) -> Int { }");
-        assert!(d.params[0].mutable);
+    fn parse_fn_with_ref_capability_param() {
+        // ref capability replaces the old `mut` keyword on params
+        let d = fn_decl("fn inc(ref count: Int) -> Int { }");
+        assert_eq!(d.params[0].capability, Some(Capability::Ref));
         assert_eq!(d.params[0].name, "count");
     }
 

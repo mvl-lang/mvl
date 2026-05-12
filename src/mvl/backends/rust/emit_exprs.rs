@@ -830,10 +830,6 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
             emit_args(cg, elems);
             cg.push("])");
         }
-        Expr::Move { expr, .. } => {
-            // `move` in MVL means transfer ownership — Rust does this implicitly
-            emit_expr(cg, expr);
-        }
         Expr::Consume { expr, .. } => {
             // `consume` mirrors Pony's `consume` for iso; just emit the inner expr in Phase 1
             emit_expr(cg, expr);

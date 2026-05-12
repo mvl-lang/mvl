@@ -387,7 +387,6 @@ fn check_expr_flows(
         Expr::Unary { expr, .. }
         | Expr::Declassify { expr, .. }
         | Expr::Sanitize { expr, .. }
-        | Expr::Move { expr, .. }
         | Expr::Consume { expr, .. }
         | Expr::Propagate { expr, .. }
         | Expr::FieldAccess { expr, .. }
@@ -496,7 +495,6 @@ fn count_in_expr(expr: &Expr, dc: &mut usize, sc: &mut usize) {
             count_in_expr(right, dc, sc);
         }
         Expr::Unary { expr, .. }
-        | Expr::Move { expr, .. }
         | Expr::Consume { expr, .. }
         | Expr::Propagate { expr, .. }
         | Expr::FieldAccess { expr, .. }

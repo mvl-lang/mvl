@@ -800,10 +800,10 @@ fn f(x: Int) -> Int { add(x, x) }
 #[test]
 fn iterator_impl_emits_rust_iterator() {
     let src = r#"
-type Counter = struct { mut current: Int, limit: Int }
+type Counter = struct { current: ref Int, limit: Int }
 
 impl Iterator[Int] for Counter {
-    fn next(mut self: Counter) -> Option[Int] {
+    fn next(ref self: Counter) -> Option[Int] {
         None
     }
 }
@@ -1744,12 +1744,12 @@ fn char_literal_backslash_is_escaped() {
 
 #[test]
 fn move_expr_emits_inner() {
-    let src = "fn f(x: Int) -> Int { move(x) }";
+    let src = "fn f(x: Int) -> Int { consume(x) }";
     let rust = transpile_src(src);
-    // move(x) strips the wrapper — the inner expr is emitted directly.
+    // consume(x) strips the wrapper — the inner expr is emitted directly.
     assert!(
-        !rust.contains("move("),
-        "move wrapper should not appear in output: {rust}"
+        !rust.contains("consume("),
+        "consume wrapper should not appear in output: {rust}"
     );
     assert_contains(&rust, "x");
 }
@@ -2049,7 +2049,7 @@ fn borrow_expr_shared_emits_ampersand() {
 /// Expression-level mutable borrow `ref x` emits `&mut x` in Rust. (#366)
 #[test]
 fn borrow_expr_mutable_emits_ampersand_mut() {
-    let src = "fn f(mut x: Int) -> Unit { let r: ref Int = ref x; }";
+    let src = "fn f(ref x: Int) -> Unit { let r: ref Int = ref x; }";
     let rust = transpile_src(src);
     assert_contains(&rust, "&mut x");
 }
@@ -2229,7 +2229,7 @@ fn immutable_let_emits_let_not_let_mut() {
 /// Mutable let-binding emits `let mut ` (not just `let `).
 #[test]
 fn mutable_let_emits_let_mut() {
-    let src = "fn f() -> Int { let mut x: Int = 1; x = 2; x }";
+    let src = "fn f() -> Int { let x: ref Int = 1; x = 2; x }";
     let rust = transpile_src(src);
     assert_contains(&rust, "let mut x:");
 }

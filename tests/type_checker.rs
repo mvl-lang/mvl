@@ -395,7 +395,7 @@ fn immutable_binding_assignment_rejected() {
 fn immutable_field_mutation_rejected() {
     // GIVEN: assignment to a non-mut struct field
     // THEN: MutateImmutableField reported
-    let src = "type Pt = struct { x: Int, mut y: Int }\nfn f(mut p: Pt) -> Unit { p.x = 5; }";
+    let src = "type Pt = struct { x: Int, y: ref Int }\nfn f(ref p: Pt) -> Unit { p.x = 5; }";
     let errors = errors_for(src);
     assert!(
         errors
@@ -429,7 +429,7 @@ fn ownership_corpus_parses() {
 fn use_after_explicit_move_rejected() {
     // GIVEN: variable used after move(x)
     // THEN: UseAfterMove reported
-    let errors = errors_for("fn f() -> Int { let x: Int = 1; let _y: Int = move(x); x }");
+    let errors = errors_for("fn f() -> Int { let x: Int = 1; let _y: Int = consume(x); x }");
     assert!(
         errors
             .iter()
@@ -2235,7 +2235,7 @@ fn io_effect_bucket_rejected() {
 #[test]
 fn lambda_mutable_capture_rejected() {
     let errors = errors_for(
-        r#"fn f() -> Unit { let mut x: Int = 1; let _g: fn(Int) -> Int = |y: Int| -> Int { x + y }; }"#,
+        r#"fn f() -> Unit { let x: ref Int = 1; let _g: fn(Int) -> Int = |y: Int| -> Int { x + y }; }"#,
     );
     assert!(
         errors.iter().any(
@@ -2631,7 +2631,7 @@ fn refinement_stale_after_reassignment_is_not_proven() {
     // THEN: verdict is NOT Proven (refinement was invalidated by assignment)
     let src = r#"
         total fn positive_only(b: Int where b > 0) -> Int { b }
-        total fn caller(mut y: Int where y > 0) -> Int {
+        total fn caller(ref y: Int where y > 0) -> Int {
             y = 0;
             positive_only(y)
         }
@@ -3537,10 +3537,10 @@ fn non_iterator_for_loop_rejected() {
 #[test]
 fn custom_iterator_impl_accepted() {
     let src = r#"
-        type Counter = struct { mut current: Int, limit: Int }
+        type Counter = struct { current: ref Int, limit: Int }
 
         impl Iterator[Int] for Counter {
-            fn next(mut self: Counter) -> Option[Int] { None }
+            fn next(ref self: Counter) -> Option[Int] { None }
         }
 
         fn f() -> Unit {
@@ -4440,7 +4440,7 @@ fn shared_and_mut_ref_params_of_same_type_rejected() {
 fn borrow_expr_transitions_borrow_state_rejected_on_double_mut() {
     // Two simultaneous `ref x` borrows must be rejected via BorrowState tracking.
     let result =
-        check_src("fn f(mut x: Int) -> Unit { let r1: ref Int = ref x; let r2: ref Int = ref x; }");
+        check_src("fn f(ref x: Int) -> Unit { let r1: ref Int = ref x; let r2: ref Int = ref x; }");
     assert!(
         result.errors.iter().any(|e| matches!(
             e,
@@ -4470,7 +4470,7 @@ fn shared_and_mut_ref_params_reversed_order_rejected() {
 #[test]
 fn borrow_expr_shared_of_mutably_borrowed_rejected() {
     let result =
-        check_src("fn f(mut x: Int) -> Unit { let r1: ref Int = ref x; let r2: val Int = val x; }");
+        check_src("fn f(ref x: Int) -> Unit { let r1: ref Int = ref x; let r2: val Int = val x; }");
     assert!(
         result
             .errors
@@ -4511,7 +4511,7 @@ fn ref_mut_binding_outliving_owner_rejected() {
     let result = check_src(
         "fn bad() -> Unit {
             let r: ref Int = {
-                let mut x: Int = 42;
+                let x: ref Int = 42;
                 x
             };
         }",
@@ -5871,7 +5871,7 @@ fn decreases_parses_in_while_loop() {
     // THEN: parses without error and the AST carries the decreases field
     let src = r#"
         partial fn f(n: Int) -> Unit {
-            let mut i: Int = n;
+            let i: ref Int = n;
             while i > 0 decreases i { i = i - 1; }
         }
     "#;
@@ -5889,7 +5889,7 @@ fn while_with_decreases_allowed_in_total_fn() {
     // THEN: no UnboundedLoopInTotal error (decreases makes it bounded)
     let src = r#"
         fn f(n: Int where self >= 0) -> Unit {
-            let mut i: Int = n;
+            let i: ref Int = n;
             while i > 0 decreases i { i = i - 1; }
         }
     "#;
@@ -5928,7 +5928,7 @@ fn decreases_not_decreasing_detected() {
     // THEN: DecreasesNotDecreasing error
     let src = r#"
         partial fn f(n: Int) -> Unit {
-            let mut i: Int = n;
+            let i: ref Int = n;
             while i > 0 decreases i { i = i + 1; }
         }
     "#;
@@ -5948,7 +5948,7 @@ fn invariant_preservation_proven_for_simple_increment() {
     // THEN: no InvariantNotPreserved error
     let src = r#"
         partial fn f(n: Int where self >= 0) -> Unit {
-            let mut i: Int = 0;
+            let i: ref Int = 0;
             while i < n invariant i >= 0 { i = i + 1; }
         }
     "#;
@@ -5968,7 +5968,7 @@ fn invariant_not_preserved_detected() {
     // THEN: InvariantNotPreserved error
     let src = r#"
         partial fn f(n: Int) -> Unit {
-            let mut i: Int = n;
+            let i: ref Int = n;
             while i > 0 invariant i >= 0 { i = 0 - 1; }
         }
     "#;

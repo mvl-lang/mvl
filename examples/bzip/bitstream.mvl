@@ -42,7 +42,7 @@ pub fn flush_writer(w: BitWriter) -> List[Int] {
         owned.bytes
     } else {
         // Pad the final partial byte with zeros on the high bits
-        let mut out: List[Int] = owned.bytes;
+        let out: ref List[Int] = owned.bytes;
         out.push(owned.current);
         out
     }
@@ -65,7 +65,7 @@ fn write_bits_loop(w: BitWriter, value: Int, remaining: Int) -> BitWriter {
         let new_bit_pos: Int = w.bit_pos + 1;
         if new_bit_pos == 8 {
             // Current byte is full — flush it and start the next byte
-            let mut new_bytes: List[Int] = w.bytes;
+            let new_bytes: ref List[Int] = w.bytes;
             new_bytes.push(new_current);
             let next_w: BitWriter = BitWriter {
                 bytes:   new_bytes,
@@ -129,7 +129,7 @@ fn read_bits_loop(r: BitReader, remaining: Int, acc: Int, shift: Int) -> ReadRes
 
 // Pack a Huffman code (list of 0/1 bits) into a BitWriter.
 pub fn write_code(w: BitWriter, bits: List[Int]) -> BitWriter {
-    let mut writer: BitWriter = w;
+    let writer: ref BitWriter = w;
     for bit in bits {
         writer = write_bits(writer, bit, 1)
     }
@@ -148,7 +148,7 @@ type Crc32ByteState = struct { crc: Int, byte_in: Int }
 
 fn crc32_byte(crc: Int, byte_in: Int) -> Int {
     let poly: Int = 0xEDB88320;
-    let mut st: Crc32ByteState = Crc32ByteState { crc: crc, byte_in: byte_in };
+    let st: ref Crc32ByteState = Crc32ByteState { crc: crc, byte_in: byte_in };
     for _ in range(0, 8) {
         st = crc32_bit_step(st, poly)
     }

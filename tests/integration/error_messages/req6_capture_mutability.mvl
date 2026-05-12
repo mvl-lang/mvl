@@ -3,7 +3,7 @@
 // Lambdas must have immutable captures only (ADR-0002).
 
 fn main() -> Unit ! Console {
-    let mut counter: Int = 0;
+    let counter: ref Int = 0;
     let _g: fn(Int) -> Int = |y: Int| -> Int { counter + y };
     println("{}", counter);
 }

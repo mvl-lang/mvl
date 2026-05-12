@@ -126,7 +126,7 @@ pub fn decompress_bytes(
 }
 
 fn freqs_total(freqs: val List[Int]) -> Int {
-    let mut acc: Int = 0;
+    let acc: ref Int = 0;
     for i in range(0, freqs.len()) {
         acc = acc + freqs.get(i).unwrap()
     }
@@ -157,7 +157,7 @@ partial fn huf_dec_loop(
         syms
     } else {
         let decoded: DecodeOneResult = decode_one_symbol(tree, r);
-        let mut next_syms: List[Int] = syms;
+        let next_syms: ref List[Int] = syms;
         next_syms.push(decoded.symbol);
         huf_dec_loop(tree, decoded.reader, next_syms, count + 1, n_symbols)
     }

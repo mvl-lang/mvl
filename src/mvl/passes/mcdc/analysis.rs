@@ -485,7 +485,7 @@ mod tests {
     #[test]
     fn while_compound_condition_tracked() {
         let decisions = decisions_for(
-            "partial fn f(a: Bool, b: Bool) -> Int { let mut x: Int = 0; while a && b { x = x + 1; } x }"
+            "partial fn f(a: Bool, b: Bool) -> Int { let x: ref Int = 0; while a && b { x = x + 1; } x }"
         );
         let while_decisions: Vec<_> = decisions
             .iter()

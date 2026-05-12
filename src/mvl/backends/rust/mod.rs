@@ -941,7 +941,7 @@ mod tests {
     #[test]
     fn mcdc_while_restructured_as_loop() {
         let prog = parse(
-            "partial fn f(a: Bool, b: Bool) -> Int { let mut x: Int = 0; while a && b { x = x + 1; } x }",
+            "partial fn f(a: Bool, b: Bool) -> Int { let x: ref Int = 0; while a && b { x = x + 1; } x }",
         );
         let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
         assert_eq!(decisions.len(), 1);

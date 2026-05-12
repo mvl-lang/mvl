@@ -61,7 +61,7 @@ pub fn last[T](xs: List[T]) -> Option[T] where T: Clone {
 
 /// Flatten a list of lists into a single list.
 pub fn flatten[T](xs: List[List[T]]) -> List[T] where T: Clone {
-    let mut result: List[T] = [];
+    let result: ref List[T] = [];
     for inner in xs {
         for x in inner {
             result.push(x)
@@ -72,7 +72,7 @@ pub fn flatten[T](xs: List[List[T]]) -> List[T] where T: Clone {
 
 /// Reverse a list.
 pub fn reverse[T](xs: List[T]) -> List[T] where T: Clone {
-    let mut result: List[T] = [];
+    let result: ref List[T] = [];
     for x in xs {
         result = list_concat([x], result)
     };
@@ -126,7 +126,7 @@ pub fn rev[T](xs: List[T]) -> List[T] where T: Clone {
 /// body.  This body is compiled into the stdlib but is only reachable via
 /// direct free-function call `map(xs, f)`.
 pub fn map[T, U](xs: List[T], f: fn(T) -> U) -> List[U] where T: Clone, U: Clone {
-    let mut result: List[U] = [];
+    let result: ref List[U] = [];
     for x in xs {
         result.push(f(x))
     };
@@ -135,7 +135,7 @@ pub fn map[T, U](xs: List[T], f: fn(T) -> U) -> List[U] where T: Clone, U: Clone
 
 /// Retain elements of `xs` satisfying predicate `f`.
 pub fn filter[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
-    let mut result: List[T] = [];
+    let result: ref List[T] = [];
     for x in xs {
         if f(x.clone()) {
             result.push(x)
@@ -151,7 +151,7 @@ pub fn filter[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
 /// transpiled code needs `U: Clone` to re-bind after each iteration.  This
 /// is an implementation constraint, not a semantic requirement of fold itself.
 pub fn fold[T, U](xs: List[T], init: U, f: fn(U, T) -> U) -> U where T: Clone, U: Clone {
-    let mut acc: U = init;
+    let acc: ref U = init;
     for x in xs {
         acc = f(acc, x)
     };
@@ -176,7 +176,7 @@ pub fn partition[T](xs: List[T], f: fn(T) -> Bool) -> (List[T], List[T]) where T
 
 /// Retain leading elements while `f` returns true; stop at first false.
 pub fn take_while[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
-    let mut result: List[T] = [];
+    let result: ref List[T] = [];
     for x in xs {
         if f(x.clone()) {
             result.push(x)
@@ -189,8 +189,8 @@ pub fn take_while[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
 
 /// Drop leading elements while `f` returns true; keep from first false onward.
 pub fn skip_while[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
-    let mut result: List[T] = [];
-    let mut skipping: Bool = true;
+    let result: ref List[T] = [];
+    let skipping: ref Bool = true;
     for x in xs {
         if skipping && f(x.clone()) {
             // still in the prefix — discard

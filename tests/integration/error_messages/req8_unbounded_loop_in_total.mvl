@@ -2,7 +2,7 @@
 // Triggers: CheckError::UnboundedLoopInTotal (req8)
 
 total fn count_up(n: Int) -> Int {
-    let mut i: Int = 0;
+    let i: ref Int = 0;
     while i < n {
         i = i + 1;
     }
