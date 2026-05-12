@@ -88,3 +88,152 @@ pub type Token = struct {
     lexeme: String,
     span:   Span,
 }
+
+// ── Parse error ──────────────────────────────────────────────────────────────
+
+pub type ParseError = struct {
+    message: String,
+    span:    Span,
+}
+
+// ── Type expression (self-referential via heap-allocated List) ────────────────
+
+pub type TypeExpr = struct {
+    name: String,
+    args: List[TypeExpr],
+    span: Span,
+}
+
+// ── Generic type parameter ────────────────────────────────────────────────────
+
+pub type GenericParam = struct {
+    name:  String,
+    bound: String,
+    span:  Span,
+}
+
+// ── Effect annotation ─────────────────────────────────────────────────────────
+
+pub type Effect = struct {
+    name:  String,
+    param: String,
+    span:  Span,
+}
+
+// ── Where-clause constraint ───────────────────────────────────────────────────
+
+pub type Constraint = struct {
+    param: String,
+    bound: String,
+    span:  Span,
+}
+
+// ── Function parameter ────────────────────────────────────────────────────────
+
+pub type Param = struct {
+    capability: String,
+    mutable:    Bool,
+    name:       String,
+    ty:         TypeExpr,
+    span:       Span,
+}
+
+// ── Function declaration ──────────────────────────────────────────────────────
+
+pub type FnDecl = struct {
+    visible:     Bool,
+    is_test:     Bool,
+    is_builtin:  Bool,
+    is_transp:   Bool,
+    totality:    String,
+    name:        String,
+    type_params: List[GenericParam],
+    params:      List[Param],
+    ret_type:    TypeExpr,
+    effects:     List[Effect],
+    constraints: List[Constraint],
+    has_body:    Bool,
+    span:        Span,
+}
+
+// ── Struct field declaration ──────────────────────────────────────────────────
+
+pub type FieldDecl = struct {
+    name: String,
+    ty:   TypeExpr,
+    span: Span,
+}
+
+// ── Type declaration body kind ────────────────────────────────────────────────
+
+pub type TypeBodyKind = enum { IsStruct, IsEnum, IsAlias }
+
+// ── Type declaration ──────────────────────────────────────────────────────────
+
+pub type TypeDecl = struct {
+    visible:     Bool,
+    name:        String,
+    type_params: List[GenericParam],
+    body_kind:   TypeBodyKind,
+    fields:      List[FieldDecl],
+    variants:    List[String],
+    alias_ty:    TypeExpr,
+    span:        Span,
+}
+
+// ── Use declaration ───────────────────────────────────────────────────────────
+
+pub type UseDecl = struct {
+    visible: Bool,
+    path:    List[String],
+    imports: List[String],
+    span:    Span,
+}
+
+// ── Const declaration ─────────────────────────────────────────────────────────
+
+pub type ConstDecl = struct {
+    visible: Bool,
+    name:    String,
+    ty:      TypeExpr,
+    value:   String,
+    span:    Span,
+}
+
+// ── Extern declarations ───────────────────────────────────────────────────────
+
+pub type ExternFnDecl = struct {
+    name:    String,
+    params:  List[Param],
+    ret_ty:  TypeExpr,
+    effects: List[Effect],
+    span:    Span,
+}
+
+pub type ExternDecl = struct {
+    lang: String,
+    fns:  List[ExternFnDecl],
+    span: Span,
+}
+
+// ── Impl block declaration ────────────────────────────────────────────────────
+
+pub type ImplDecl = struct {
+    ty:          TypeExpr,
+    trait_name:  String,
+    trait_args:  List[TypeExpr],
+    methods:     List[FnDecl],
+    span:        Span,
+}
+
+// ── Top-level program (separate lists per declaration kind) ───────────────────
+
+pub type Program = struct {
+    fns:     List[FnDecl],
+    types:   List[TypeDecl],
+    uses:    List[UseDecl],
+    consts:  List[ConstDecl],
+    externs: List[ExternDecl],
+    impls:   List[ImplDecl],
+    errors:  List[ParseError],
+}

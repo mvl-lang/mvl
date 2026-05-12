@@ -4,114 +4,112 @@
 // compiler/main.mvl — S6: MVL compiler driver (issue #187)
 //
 // Entry point for the self-hosted MVL frontend.
-// Reads a directory of .mvl source files, lexes each one with the MVL
-// lexer (compiler/lexer.mvl), and reports per-category token counts.
+// Reads a directory of .mvl source files, lexes + parses each one, then
+// prints a structured summary of all top-level declarations found.
 //
-// Token categories reported:
-//   keywords  — KwFn … KwFalse (41 keyword variants)
-//   idents    — identifiers
-//   numbers   — integer and float literals
-//   strings   — string literals
-//   punct     — operators and punctuation
-//   comments  — line comments (//)
+// Output per file:
+//   fns:N  types:M  uses:P  consts:Q  externs:R  impls:S  errors:E
+//   followed by one line per fn declaration:
+//     [pub] [total|partial] [transparent] fn name(params) -> RetType ! Effects
 //
 // Usage (from repo root):
 //   mvl run compiler/main.mvl
 //   mvl run compiler/main.mvl -- --dir tests/corpus/01_basics
-//   make -C tests/spikes/001-parser compiler
 //
-// Default directory: compiler/ (dog-fooding: lex the compiler itself)
+// Default directory: compiler/ (dog-fooding: parse the compiler itself)
 
 use lexer::lex;
+use parser::parse;
 use ast::Token;
 use ast::TokenKind;
+use ast::FnDecl;
+use ast::TypeDecl;
+use ast::TypeBodyKind;
+use ast::UseDecl;
+use ast::ConstDecl;
+use ast::ExternDecl;
+use ast::ImplDecl;
+use ast::Program;
+use ast::TypeExpr;
+use ast::Param;
+use ast::Effect;
 use std.io.{path, join, read_dir, read_to_string, to_string, Path}
 use std.args.{get_arg}
 
-// ── Token predicate functions for filter ────────────────────────────────────
-//
-// filter requires fn(T) -> Bool — named functions work as function pointers.
+// ── Formatting helpers ────────────────────────────────────────────────────────
 
-fn is_keyword_token(tok: Token) -> Bool {
-    match tok.kind {
-        TokenKind::Ident    => false,
-        TokenKind::IntLit   => false,
-        TokenKind::FloatLit => false,
-        TokenKind::StrLit   => false,
-        TokenKind::Punct    => false,
-        TokenKind::Comment  => false,
-        TokenKind::Eof      => false,
-        _                   => true,
+total fn format_type_expr(ty: TypeExpr) -> String {
+    if ty.args.len() == 0 {
+        format("{}", ty.name)
+    } else {
+        let args_str: String = ty.args.fold("", |acc: String, a: TypeExpr|
+            if acc == "" { format("{}", a.name) } else { format("{}, {}", acc, a.name) }
+        );
+        format("{}[{}]", ty.name, args_str)
     }
 }
 
-fn is_ident_token(tok: Token) -> Bool {
-    match tok.kind {
-        TokenKind::Ident => true,
-        _                => false,
+total fn format_param(p: Param) -> String {
+    let ty_str: String = format_type_expr(p.ty);
+    let cap_pfx: String = if p.capability != "" { format("{} ", p.capability) } else { "" };
+    let mut_pfx: String = if p.mutable { "mut " } else { "" };
+    format("{}{}{}: {}", cap_pfx, mut_pfx, p.name, ty_str)
+}
+
+total fn format_params(params: List[Param]) -> String {
+    params.fold("", |acc: String, p: Param|
+        if acc == "" { format_param(p) } else { format("{}, {}", acc, format_param(p)) }
+    )
+}
+
+total fn format_effects(effects: List[Effect]) -> String {
+    if effects.len() == 0 {
+        ""
+    } else {
+        let eff_str: String = effects.fold("", |acc: String, e: Effect|
+            if acc == "" { e.name } else { format("{}, {}", acc, e.name) }
+        );
+        format(" ! {}", eff_str)
     }
 }
 
-fn is_number_token(tok: Token) -> Bool {
-    match tok.kind {
-        TokenKind::IntLit   => true,
-        TokenKind::FloatLit => true,
-        _                   => false,
-    }
+total fn format_fn_sig(f: FnDecl) -> String {
+    let vis: String    = if f.visible   { "pub " } else { "" };
+    let tot: String    = if f.totality != "" { format("{} ", f.totality) } else { "" };
+    let tran: String   = if f.is_transp { "transparent " } else { "" };
+    let test_s: String = if f.is_test   { "test " } else { "" };
+    let params: String = format_params(f.params);
+    let ret: String    = if f.ret_type.name != "" {
+        format(" -> {}", format_type_expr(f.ret_type))
+    } else { "" };
+    let effs: String   = format_effects(f.effects);
+    format("  {}{}{}{}fn {}({}){}{}", vis, tot, tran, test_s, f.name, params, ret, effs)
 }
 
-fn is_str_token(tok: Token) -> Bool {
-    match tok.kind {
-        TokenKind::StrLit => true,
-        _                 => false,
-    }
+total fn format_path(segs: List[String]) -> String {
+    segs.fold("", |acc: String, s: String|
+        if acc == "" { s } else { format("{}.{}", acc, s) }
+    )
 }
 
-fn is_punct_token(tok: Token) -> Bool {
-    match tok.kind {
-        TokenKind::Punct => true,
-        _                => false,
-    }
+total fn format_imports(imports: List[String]) -> String {
+    imports.fold("", |acc: String, s: String|
+        if acc == "" { s } else { format("{}, {}", acc, s) }
+    )
 }
 
-fn is_comment_token(tok: Token) -> Bool {
-    match tok.kind {
-        TokenKind::Comment => true,
-        _                  => false,
-    }
+// ── IFC bridge ────────────────────────────────────────────────────────────────
+
+transparent partial fn lex_and_parse(src: String) -> Program {
+    let tokens: List[Token] = lex(src);
+    parse(tokens)
 }
 
-// ── IFC helpers ──────────────────────────────────────────────────────────────
+// ── Argument helpers ──────────────────────────────────────────────────────────
 
 fn dir_from_arg(v: Tainted[String]) -> Path {
     let clean_dir: Clean[String] = sanitize(v);
     join(path("."), clean_dir)
-}
-
-// ── Token-count aggregation ───────────────────────────────────────────────────
-
-type Counts = struct {
-    keywords: Int,
-    idents:   Int,
-    numbers:  Int,
-    strings:  Int,
-    punct:    Int,
-    comments: Int,
-}
-
-// Label bridge: transparent accepts Clean[String] from IFC boundary; body is
-// type-checked with src: String so lex(src) is valid.  Returns Clean[Counts];
-// callers use field access (.keywords etc.) which strips the label back to Int.
-transparent partial fn lex_and_count(src: String) -> Counts {
-    let tokens: List[Token] = lex(src);
-    Counts {
-        keywords: tokens.filter(is_keyword_token).len(),
-        idents:   tokens.filter(is_ident_token).len(),
-        numbers:  tokens.filter(is_number_token).len(),
-        strings:  tokens.filter(is_str_token).len(),
-        punct:    tokens.filter(is_punct_token).len(),
-        comments: tokens.filter(is_comment_token).len(),
-    }
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
@@ -126,12 +124,10 @@ partial fn main() -> Unit ! FileRead, Console {
         Err(e) => println("error reading directory: {}", e),
         Ok(entries) => {
             let mut file_count: Int  = 0;
-            let mut kw_total: Int    = 0;
-            let mut id_total: Int    = 0;
-            let mut num_total: Int   = 0;
-            let mut str_total: Int   = 0;
-            let mut pct_total: Int   = 0;
-            let mut cmt_total: Int   = 0;
+            let mut fn_total:   Int  = 0;
+            let mut type_total: Int  = 0;
+            let mut use_total:  Int  = 0;
+            let mut err_total:  Int  = 0;
 
             let mut i: Int = 0;
             while i < entries.len() {
@@ -145,13 +141,70 @@ partial fn main() -> Unit ! FileRead, Console {
                                 Err(_)  => (),
                                 Ok(raw) => {
                                     let src: Clean[String] = sanitize(raw);
-                                    let c: Clean[Counts] = lex_and_count(src);
-                                    kw_total  = kw_total  + c.keywords;
-                                    id_total  = id_total  + c.idents;
-                                    num_total = num_total + c.numbers;
-                                    str_total = str_total + c.strings;
-                                    pct_total = pct_total + c.punct;
-                                    cmt_total = cmt_total + c.comments
+                                    let prog: Clean[Program] = lex_and_parse(src);
+                                    println("── {} ──", name);
+                                    println("  fns:{} types:{} uses:{} consts:{} externs:{} impls:{} errors:{}",
+                                        prog.fns.len(), prog.types.len(), prog.uses.len(),
+                                        prog.consts.len(), prog.externs.len(), prog.impls.len(),
+                                        prog.errors.len());
+
+                                    // print fn signatures
+                                    let mut fi: Int = 0;
+                                    while fi < prog.fns.len() {
+                                        match prog.fns.get(fi) {
+                                            None    => (),
+                                            Some(f) => println("{}", format_fn_sig(f)),
+                                        }
+                                        fi = fi + 1
+                                    }
+
+                                    // print type declarations
+                                    let mut ti: Int = 0;
+                                    while ti < prog.types.len() {
+                                        match prog.types.get(ti) {
+                                            None    => (),
+                                            Some(t) => {
+                                                let kind_str: String = match t.body_kind {
+                                                    TypeBodyKind::IsStruct => "struct",
+                                                    TypeBodyKind::IsEnum   => "enum",
+                                                    TypeBodyKind::IsAlias  => "alias",
+                                                };
+                                                let vis_s: String = if t.visible { "pub " } else { "" };
+                                                println("  {}type {} = {} ({} fields/{} variants)",
+                                                    vis_s, t.name, kind_str,
+                                                    t.fields.len(), t.variants.len())
+                                            }
+                                        }
+                                        ti = ti + 1
+                                    }
+
+                                    // print use declarations
+                                    let mut ui: Int = 0;
+                                    while ui < prog.uses.len() {
+                                        match prog.uses.get(ui) {
+                                            None    => (),
+                                            Some(u) => {
+                                                println("  use {}.{{{}}}",
+                                                    format_path(u.path), format_imports(u.imports))
+                                            }
+                                        }
+                                        ui = ui + 1
+                                    }
+
+                                    // print parse errors
+                                    let mut ei: Int = 0;
+                                    while ei < prog.errors.len() {
+                                        match prog.errors.get(ei) {
+                                            None    => (),
+                                            Some(e) => println("  ERROR L{}: {}", e.span.line, e.message),
+                                        }
+                                        ei = ei + 1
+                                    }
+
+                                    fn_total   = fn_total   + prog.fns.len();
+                                    type_total = type_total + prog.types.len();
+                                    use_total  = use_total  + prog.uses.len();
+                                    err_total  = err_total  + prog.errors.len()
                                 }
                             }
                         }
@@ -160,13 +213,9 @@ partial fn main() -> Unit ! FileRead, Console {
                 i = i + 1
             }
 
-            println("files:    {}", file_count);
-            println("keywords: {}", kw_total);
-            println("idents:   {}", id_total);
-            println("numbers:  {}", num_total);
-            println("strings:  {}", str_total);
-            println("punct:    {}", pct_total);
-            println("comments: {}", cmt_total)
+            println("");
+            println("totals: {} files  {} fns  {} types  {} uses  {} errors",
+                file_count, fn_total, type_total, use_total, err_total)
         }
     }
 }

@@ -1,0 +1,1026 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/parser.mvl — S3: recursive-descent MVL parser (issue #187)
+//
+// Parses a flat List[Token] (from compiler/lexer.mvl) into a Program AST
+// (compiler/ast.mvl).  Handles all six top-level declaration kinds:
+//   use, const, type, fn (with modifiers), extern, impl
+//
+// Design:
+//   - ParserState threads { tokens, pos, errors } through every parse fn.
+//   - Result carriers (BoolR, StringR, …) carry (value, updated_state) because
+//     MVL has no tuple syntax and no generic user types.
+//   - partial fn throughout (while-loops, self-recursion in type parser).
+//   - Type expression parsing uses a depth counter to avoid mutual recursion:
+//     parse_type_expr_depth(ps, 4) recurses via itself with depth-1, so no
+//     forward declaration is needed.
+//   - IFC bridge: transparent partial fn call_parse(src) → Program.
+//
+// Public surface: parse(tokens: List[Token]) -> Program
+
+use ast::Token;
+use ast::TokenKind;
+use ast::Span;
+use ast::ParseError;
+use ast::TypeExpr;
+use ast::GenericParam;
+use ast::Effect;
+use ast::Constraint;
+use ast::Param;
+use ast::FnDecl;
+use ast::FieldDecl;
+use ast::TypeBodyKind;
+use ast::TypeDecl;
+use ast::UseDecl;
+use ast::ConstDecl;
+use ast::ExternFnDecl;
+use ast::ExternDecl;
+use ast::ImplDecl;
+use ast::Program;
+use lexer::lex;
+
+// ── Parser state ──────────────────────────────────────────────────────────────
+
+pub type ParserState = struct {
+    tokens: List[Token],
+    pos:    Int,
+    errors: List[ParseError],
+}
+
+// ── Result carriers ───────────────────────────────────────────────────────────
+// No generic user types and no tuple syntax → one carrier per return type.
+
+pub type BoolR = struct {
+    value: Bool,
+    ps:    ParserState,
+}
+
+pub type StringR = struct {
+    value: String,
+    ps:    ParserState,
+}
+
+pub type TypeExprR = struct {
+    value: TypeExpr,
+    ps:    ParserState,
+}
+
+pub type TypeExprsR = struct {
+    value: List[TypeExpr],
+    ps:    ParserState,
+}
+
+pub type GenParamsR = struct {
+    value: List[GenericParam],
+    ps:    ParserState,
+}
+
+pub type ParamR = struct {
+    value: Param,
+    ps:    ParserState,
+}
+
+pub type ParamsR = struct {
+    value: List[Param],
+    ps:    ParserState,
+}
+
+pub type EffectsR = struct {
+    value: List[Effect],
+    ps:    ParserState,
+}
+
+pub type ConstrR = struct {
+    value: List[Constraint],
+    ps:    ParserState,
+}
+
+pub type FieldsR = struct {
+    value: List[FieldDecl],
+    ps:    ParserState,
+}
+
+pub type FnDeclR = struct {
+    value: FnDecl,
+    ps:    ParserState,
+}
+
+pub type TypeDeclR = struct {
+    value: TypeDecl,
+    ps:    ParserState,
+}
+
+pub type UseDeclR = struct {
+    value: UseDecl,
+    ps:    ParserState,
+}
+
+pub type ConstDeclR = struct {
+    value: ConstDecl,
+    ps:    ParserState,
+}
+
+pub type ExtFnR = struct {
+    value: ExternFnDecl,
+    ps:    ParserState,
+}
+
+pub type ExternR = struct {
+    value: ExternDecl,
+    ps:    ParserState,
+}
+
+pub type ImplR = struct {
+    value: ImplDecl,
+    ps:    ParserState,
+}
+
+// ── Sentinel / empty values ───────────────────────────────────────────────────
+
+total fn empty_span() -> Span {
+    Span { line: 0, col: 0 }
+}
+
+total fn empty_type_expr() -> TypeExpr {
+    TypeExpr { name: "", args: [], span: empty_span() }
+}
+
+// ── ParserState utilities ─────────────────────────────────────────────────────
+
+total fn ps_current(ps: ParserState) -> Token {
+    match ps.tokens.get(ps.pos) {
+        None    => Token { kind: TokenKind::Eof, lexeme: "", span: empty_span() },
+        Some(t) => t,
+    }
+}
+
+total fn ps_at_eof(ps: ParserState) -> Bool {
+    let tok: Token = ps_current(ps);
+    match tok.kind {
+        TokenKind::Eof => true,
+        _              => false,
+    }
+}
+
+total fn ps_at_punct(ps: ParserState, p: String) -> Bool {
+    let tok: Token = ps_current(ps);
+    match tok.kind {
+        TokenKind::Punct => tok.lexeme == p,
+        _                => false,
+    }
+}
+
+total fn ps_advance(ps: ParserState) -> ParserState {
+    ParserState { tokens: ps.tokens, pos: ps.pos + 1, errors: ps.errors }
+}
+
+total fn ps_add_error(ps: ParserState, msg: String) -> ParserState {
+    let tok: Token = ps_current(ps);
+    let err: ParseError = ParseError { message: msg, span: tok.span };
+    let mut errs: List[ParseError] = ps.errors;
+    errs.push(err);
+    ParserState { tokens: ps.tokens, pos: ps.pos, errors: errs }
+}
+
+total fn ps_expect_punct(ps: ParserState, p: String) -> ParserState {
+    if ps_at_punct(ps, p) {
+        ps_advance(ps)
+    } else {
+        let tok: Token = ps_current(ps);
+        ps_add_error(ps, format("expected '{}', got '{}'", p, tok.lexeme))
+    }
+}
+
+// Consume any identifier or keyword as a name string.
+total fn ps_expect_name(ps: ParserState) -> StringR {
+    let tok: Token = ps_current(ps);
+    match tok.kind {
+        TokenKind::Ident => StringR { value: tok.lexeme, ps: ps_advance(ps) },
+        TokenKind::Eof   => StringR { value: "", ps: ps_add_error(ps, "unexpected end of file") },
+        _ => {
+            // keywords appearing as names (e.g. field named 'type', or 'use' path segments)
+            let lex: String = tok.lexeme;
+            StringR { value: lex, ps: ps_advance(ps) }
+        }
+    }
+}
+
+// ── Body skipping ─────────────────────────────────────────────────────────────
+
+partial fn skip_body(ps: ParserState) -> ParserState {
+    let mut curr: ParserState = ps_expect_punct(ps, "{");
+    let mut depth: Int = 1;
+    while depth > 0 && !ps_at_eof(curr) {
+        if ps_at_punct(curr, "{") {
+            depth = depth + 1;
+            curr = ps_advance(curr)
+        } else if ps_at_punct(curr, "}") {
+            depth = depth - 1;
+            curr = ps_advance(curr)
+        } else {
+            curr = ps_advance(curr)
+        }
+    }
+    curr
+}
+
+// ── Type expression parser (depth-limited to avoid mutual recursion) ───────────
+//
+// parse_type_expr_depth(ps, depth) self-recurses with depth-1 for generic args.
+// At depth 0, no generic args are parsed (prevents infinite regress).
+// parse_type_expr(ps) calls with depth=5, enough for real MVL code.
+
+partial fn parse_type_expr_depth(ps: ParserState, max_depth: Int) -> TypeExprR {
+    let tok: Token = ps_current(ps);
+    let sp: Span = tok.span;
+    let is_eof: Bool = match tok.kind { TokenKind::Eof => true, _ => false };
+    // Capability keywords (val/iso/ref/tag) may appear in type position: "val DbConn"
+    let is_cap_kw: Bool = match tok.kind {
+        TokenKind::KwVal => true,
+        TokenKind::KwIso => true,
+        TokenKind::KwRef => true,
+        TokenKind::KwTag => true,
+        _                => false,
+    };
+    let tok_lex: String = tok.lexeme;
+    let mut curr: ParserState = if is_eof {
+        ps_add_error(ps, "expected type name")
+    } else {
+        ps_advance(ps)
+    };
+    let name: String = if is_eof {
+        ""
+    } else if is_cap_kw {
+        // capability qualifier followed by actual type name: "val DbConn"
+        let next: Token = ps_current(curr);
+        let is_next_eof: Bool = match next.kind { TokenKind::Eof => true, _ => false };
+        if is_next_eof {
+            tok_lex
+        } else {
+            let next_lex: String = next.lexeme;
+            curr = ps_advance(curr);
+            format("{} {}", tok_lex, next_lex)
+        }
+    } else {
+        tok_lex
+    };
+    // Function type in type position: fn(A, B) -> C — skip balanced parens then optional return
+    let name_is_fn: Bool = name == "fn";
+    if name_is_fn && ps_at_punct(curr, "(") {
+        curr = ps_advance(curr); // consume '('
+        let mut paren_depth: Int = 1;
+        while paren_depth > 0 && !ps_at_eof(curr) {
+            if ps_at_punct(curr, "(") {
+                paren_depth = paren_depth + 1; curr = ps_advance(curr)
+            } else if ps_at_punct(curr, ")") {
+                paren_depth = paren_depth - 1; curr = ps_advance(curr)
+            } else {
+                curr = ps_advance(curr)
+            }
+        }
+        if ps_at_punct(curr, "->") {
+            curr = ps_advance(curr);
+            let ret_r: TypeExprR = parse_type_expr_depth(curr, if max_depth > 0 { max_depth - 1 } else { 0 });
+            curr = ret_r.ps
+        } else { () }
+    } else { () }
+    // Generic args: Name[arg, arg, ...]
+    if max_depth > 0 && !name_is_fn && ps_at_punct(curr, "[") {
+        curr = ps_advance(curr);
+        let mut args: List[TypeExpr] = [];
+        while !ps_at_eof(curr) && !ps_at_punct(curr, "]") {
+            let arg_r: TypeExprR = parse_type_expr_depth(curr, max_depth - 1);
+            args.push(arg_r.value);
+            curr = arg_r.ps;
+            if ps_at_punct(curr, ",") {
+                curr = ps_advance(curr)
+            }
+        }
+        curr = ps_expect_punct(curr, "]");
+        TypeExprR { value: TypeExpr { name: name, args: args, span: sp }, ps: curr }
+    } else {
+        TypeExprR { value: TypeExpr { name: name, args: [], span: sp }, ps: curr }
+    }
+}
+
+partial fn parse_type_expr(ps: ParserState) -> TypeExprR {
+    parse_type_expr_depth(ps, 5)
+}
+
+// ── Generic type parameters: [A, B: Bound, ...] ───────────────────────────────
+
+partial fn parse_type_params(ps: ParserState) -> GenParamsR {
+    if !ps_at_punct(ps, "[") {
+        GenParamsR { value: [], ps: ps }
+    } else {
+        let mut curr: ParserState = ps_advance(ps);
+        let mut params: List[GenericParam] = [];
+        while !ps_at_eof(curr) && !ps_at_punct(curr, "]") {
+            let tok: Token = ps_current(curr);
+            let sp: Span = tok.span;
+            let name_r: StringR = ps_expect_name(curr);
+            curr = name_r.ps;
+            let bound: String = if ps_at_punct(curr, ":") {
+                curr = ps_advance(curr);
+                let br: StringR = ps_expect_name(curr);
+                curr = br.ps;
+                br.value
+            } else {
+                ""
+            };
+            params.push(GenericParam { name: name_r.value, bound: bound, span: sp });
+            if ps_at_punct(curr, ",") {
+                curr = ps_advance(curr)
+            }
+        }
+        curr = ps_expect_punct(curr, "]");
+        GenParamsR { value: params, ps: curr }
+    }
+}
+
+// ── Parameter: [cap] [mut] name: Type ────────────────────────────────────────
+
+partial fn parse_param(ps: ParserState) -> ParamR {
+    let tok: Token = ps_current(ps);
+    let sp: Span = tok.span;
+    let cap_str: String = match tok.kind {
+        TokenKind::KwIso => "iso",
+        TokenKind::KwVal => "val",
+        TokenKind::KwRef => "ref",
+        TokenKind::KwTag => "tag",
+        _                => "",
+    };
+    let mut curr: ParserState = if cap_str != "" { ps_advance(ps) } else { ps };
+    let is_mut: Bool = match ps_current(curr).kind {
+        TokenKind::KwMut => true,
+        _                => false,
+    };
+    if is_mut { curr = ps_advance(curr) }
+    let name_r: StringR = ps_expect_name(curr);
+    curr = name_r.ps;
+    curr = ps_expect_punct(curr, ":");
+    let ty_r: TypeExprR = parse_type_expr(curr);
+    curr = ty_r.ps;
+    // Skip inline type refinement: "where self > 0" inside parameter list
+    let has_where: Bool = match ps_current(curr).kind { TokenKind::KwWhere => true, _ => false };
+    if has_where {
+        curr = ps_advance(curr); // consume 'where'
+        let mut rfn_done: Bool = false;
+        while !rfn_done && !ps_at_eof(curr) {
+            if ps_at_punct(curr, ",") || ps_at_punct(curr, ")") {
+                rfn_done = true
+            } else {
+                curr = ps_advance(curr)
+            }
+        }
+    } else { () }
+    ParamR {
+        value: Param {
+            capability: cap_str, mutable: is_mut,
+            name: name_r.value, ty: ty_r.value, span: sp,
+        },
+        ps: curr,
+    }
+}
+
+partial fn parse_param_list(ps: ParserState) -> ParamsR {
+    let mut curr: ParserState = ps_expect_punct(ps, "(");
+    let mut params: List[Param] = [];
+    while !ps_at_eof(curr) && !ps_at_punct(curr, ")") {
+        let pr: ParamR = parse_param(curr);
+        params.push(pr.value);
+        curr = pr.ps;
+        if ps_at_punct(curr, ",") { curr = ps_advance(curr) }
+    }
+    ParamsR { value: params, ps: ps_expect_punct(curr, ")") }
+}
+
+// ── Effect list: ! Eff1, Eff2[Param], ... ────────────────────────────────────
+
+partial fn parse_effects(ps: ParserState) -> EffectsR {
+    if !ps_at_punct(ps, "!") {
+        EffectsR { value: [], ps: ps }
+    } else {
+        let mut curr: ParserState = ps_advance(ps);
+        let mut effects: List[Effect] = [];
+        let mut done: Bool = false;
+        while !done && !ps_at_eof(curr) {
+            let tok: Token = ps_current(curr);
+            let sp: Span = tok.span;
+            match tok.kind {
+                TokenKind::Ident => {
+                    let eff_name: String = tok.lexeme;
+                    curr = ps_advance(curr);
+                    let eff_param: String = if ps_at_punct(curr, "[") {
+                        curr = ps_advance(curr);
+                        let pn_r: StringR = ps_expect_name(curr);
+                        curr = ps_expect_punct(pn_r.ps, "]");
+                        pn_r.value
+                    } else {
+                        ""
+                    };
+                    effects.push(Effect { name: eff_name, param: eff_param, span: sp });
+                    if ps_at_punct(curr, ",") {
+                        curr = ps_advance(curr)
+                    } else {
+                        done = true
+                    }
+                }
+                _ => { done = true }
+            }
+        }
+        EffectsR { value: effects, ps: curr }
+    }
+}
+
+// ── Where clause: where A: Bound, B: Bound ───────────────────────────────────
+
+partial fn parse_where_clause(ps: ParserState) -> ConstrR {
+    match ps_current(ps).kind {
+        TokenKind::KwWhere => {
+            let mut curr: ParserState = ps_advance(ps);
+            let mut cs: List[Constraint] = [];
+            let mut done: Bool = false;
+            while !done && !ps_at_eof(curr) {
+                let tok: Token = ps_current(curr);
+                match tok.kind {
+                    TokenKind::Ident => {
+                        let pname: String = tok.lexeme;
+                        let sp: Span = tok.span;
+                        curr = ps_advance(curr);
+                        // Type bound: "T: Eq"  vs  refinement expression: "self > 0"
+                        if ps_at_punct(curr, ":") {
+                            curr = ps_advance(curr);
+                            let bound_r: StringR = ps_expect_name(curr);
+                            curr = bound_r.ps;
+                            cs.push(Constraint { param: pname, bound: bound_r.value, span: sp });
+                            if ps_at_punct(curr, ",") {
+                                curr = ps_advance(curr)
+                            } else {
+                                done = true
+                            }
+                        } else {
+                            // Refinement expression — skip to '{' or ';' or EOF
+                            let mut skip_done: Bool = false;
+                            while !skip_done && !ps_at_eof(curr) {
+                                if ps_at_punct(curr, "{") || ps_at_punct(curr, ";") {
+                                    skip_done = true
+                                } else {
+                                    curr = ps_advance(curr)
+                                }
+                            }
+                            done = true
+                        }
+                    }
+                    _ => { done = true }
+                }
+            }
+            ConstrR { value: cs, ps: curr }
+        }
+        _ => ConstrR { value: [], ps: ps }
+    }
+}
+
+// ── fn declaration parser ─────────────────────────────────────────────────────
+// Entry: current token is 'fn' (modifiers already consumed by caller).
+
+partial fn parse_fn_decl(
+    ps: ParserState,
+    visible: Bool,
+    is_test: Bool,
+    is_builtin: Bool,
+    is_transp: Bool,
+    totality: String,
+) -> FnDeclR {
+    let sp: Span = ps_current(ps).span;
+    // consume 'fn'
+    let mut curr: ParserState = ps_advance(ps);
+    // name
+    let name_r: StringR = ps_expect_name(curr);
+    curr = name_r.ps;
+    // optional generic type params
+    let gp_r: GenParamsR = parse_type_params(curr);
+    curr = gp_r.ps;
+    // parameter list
+    let params_r: ParamsR = parse_param_list(curr);
+    curr = params_r.ps;
+    // optional return type: -> Type
+    let ret_type: TypeExpr = if ps_at_punct(curr, "->") {
+        curr = ps_advance(curr);
+        let tr: TypeExprR = parse_type_expr(curr);
+        curr = tr.ps;
+        tr.value
+    } else {
+        empty_type_expr()
+    };
+    // optional effects: ! Eff1, Eff2
+    let eff_r: EffectsR = parse_effects(curr);
+    curr = eff_r.ps;
+    // optional where clause
+    let con_r: ConstrR = parse_where_clause(curr);
+    curr = con_r.ps;
+    // body or extern semicolon
+    let has_body: Bool = ps_at_punct(curr, "{");
+    if has_body {
+        curr = skip_body(curr)
+    } else if ps_at_punct(curr, ";") {
+        curr = ps_advance(curr)
+    }
+    FnDeclR {
+        value: FnDecl {
+            visible: visible, is_test: is_test, is_builtin: is_builtin,
+            is_transp: is_transp, totality: totality, name: name_r.value,
+            type_params: gp_r.value, params: params_r.value, ret_type: ret_type,
+            effects: eff_r.value, constraints: con_r.value, has_body: has_body,
+            span: sp,
+        },
+        ps: curr,
+    }
+}
+
+// ── type declaration parser ───────────────────────────────────────────────────
+// Entry: current token is 'type'.
+
+partial fn parse_type_decl(ps: ParserState, visible: Bool) -> TypeDeclR {
+    let sp: Span = ps_current(ps).span;
+    let mut curr: ParserState = ps_advance(ps); // consume 'type'
+    let name_r: StringR = ps_expect_name(curr);
+    curr = name_r.ps;
+    let gp_r: GenParamsR = parse_type_params(curr);
+    curr = gp_r.ps;
+    curr = ps_expect_punct(curr, "=");
+    let kw: Token = ps_current(curr);
+    match kw.kind {
+        TokenKind::KwStruct => {
+            curr = ps_advance(curr); // consume 'struct'
+            curr = ps_expect_punct(curr, "{");
+            let mut fields: List[FieldDecl] = [];
+            while !ps_at_eof(curr) && !ps_at_punct(curr, "}") {
+                let ftok: Token = ps_current(curr);
+                let fsp: Span = ftok.span;
+                // Skip optional 'mut' on struct fields
+                let fld_mut: Bool = match ftok.kind { TokenKind::KwMut => true, _ => false };
+                if fld_mut { curr = ps_advance(curr) } else { () }
+                let fn_r: StringR = ps_expect_name(curr);
+                curr = fn_r.ps;
+                curr = ps_expect_punct(curr, ":");
+                let ft_r: TypeExprR = parse_type_expr(curr);
+                curr = ft_r.ps;
+                // Skip inline field refinement: "where self > 0"
+                let fld_has_where: Bool = match ps_current(curr).kind { TokenKind::KwWhere => true, _ => false };
+                if fld_has_where {
+                    curr = ps_advance(curr);
+                    let mut rfn_done: Bool = false;
+                    while !rfn_done && !ps_at_eof(curr) {
+                        if ps_at_punct(curr, ",") || ps_at_punct(curr, "}") {
+                            rfn_done = true
+                        } else {
+                            curr = ps_advance(curr)
+                        }
+                    }
+                } else { () }
+                fields.push(FieldDecl { name: fn_r.value, ty: ft_r.value, span: fsp });
+                if ps_at_punct(curr, ",") { curr = ps_advance(curr) }
+            }
+            curr = ps_expect_punct(curr, "}");
+            TypeDeclR {
+                value: TypeDecl {
+                    visible: visible, name: name_r.value, type_params: gp_r.value,
+                    body_kind: TypeBodyKind::IsStruct, fields: fields,
+                    variants: [], alias_ty: empty_type_expr(), span: sp,
+                },
+                ps: curr,
+            }
+        }
+        TokenKind::KwEnum => {
+            curr = ps_advance(curr); // consume 'enum'
+            curr = ps_expect_punct(curr, "{");
+            let mut variants: List[String] = [];
+            while !ps_at_eof(curr) && !ps_at_punct(curr, "}") {
+                let vn_r: StringR = ps_expect_name(curr);
+                curr = vn_r.ps;
+                variants.push(vn_r.value);
+                if ps_at_punct(curr, ",") { curr = ps_advance(curr) }
+            }
+            curr = ps_expect_punct(curr, "}");
+            TypeDeclR {
+                value: TypeDecl {
+                    visible: visible, name: name_r.value, type_params: gp_r.value,
+                    body_kind: TypeBodyKind::IsEnum, fields: [],
+                    variants: variants, alias_ty: empty_type_expr(), span: sp,
+                },
+                ps: curr,
+            }
+        }
+        _ => {
+            // type alias: type Foo = Bar
+            let alias_r: TypeExprR = parse_type_expr(curr);
+            curr = alias_r.ps;
+            TypeDeclR {
+                value: TypeDecl {
+                    visible: visible, name: name_r.value, type_params: gp_r.value,
+                    body_kind: TypeBodyKind::IsAlias, fields: [],
+                    variants: [], alias_ty: alias_r.value, span: sp,
+                },
+                ps: curr,
+            }
+        }
+    }
+}
+
+// ── use declaration parser ────────────────────────────────────────────────────
+// Entry: current token is 'use'.
+
+partial fn parse_use_decl(ps: ParserState, visible: Bool) -> UseDeclR {
+    let sp: Span = ps_current(ps).span;
+    let mut curr: ParserState = ps_advance(ps); // consume 'use'
+    let mut path_segs: List[String] = [];
+    let mut imports: List[String] = [];
+    // first segment
+    let seg_r: StringR = ps_expect_name(curr);
+    curr = seg_r.ps;
+    path_segs.push(seg_r.value);
+    // additional path segments or brace group
+    let mut done: Bool = false;
+    while !done && !ps_at_eof(curr) {
+        if ps_at_punct(curr, "::") || ps_at_punct(curr, ".") {
+            curr = ps_advance(curr);
+            if ps_at_punct(curr, "{") {
+                curr = ps_advance(curr);
+                while !ps_at_eof(curr) && !ps_at_punct(curr, "}") {
+                    let imp_r: StringR = ps_expect_name(curr);
+                    curr = imp_r.ps;
+                    imports.push(imp_r.value);
+                    if ps_at_punct(curr, ",") { curr = ps_advance(curr) }
+                }
+                curr = ps_expect_punct(curr, "}");
+                done = true
+            } else {
+                let seg2_r: StringR = ps_expect_name(curr);
+                curr = seg2_r.ps;
+                path_segs.push(seg2_r.value)
+            }
+        } else {
+            // bare use: last path segment becomes the import
+            let last_idx: Int = path_segs.len() - 1;
+            match path_segs.get(last_idx) {
+                None    => ()
+                Some(s) => {
+                    imports.push(s);
+                    path_segs = path_segs.take(last_idx)
+                }
+            }
+            done = true
+        }
+    }
+    if ps_at_punct(curr, ";") { curr = ps_advance(curr) }
+    UseDeclR {
+        value: UseDecl { visible: visible, path: path_segs, imports: imports, span: sp },
+        ps: curr,
+    }
+}
+
+// ── const declaration parser ──────────────────────────────────────────────────
+// Entry: current token is 'const'.
+
+partial fn parse_const_decl(ps: ParserState, visible: Bool) -> ConstDeclR {
+    let sp: Span = ps_current(ps).span;
+    let mut curr: ParserState = ps_advance(ps); // consume 'const'
+    let name_r: StringR = ps_expect_name(curr);
+    curr = name_r.ps;
+    curr = ps_expect_punct(curr, ":");
+    let ty_r: TypeExprR = parse_type_expr(curr);
+    curr = ty_r.ps;
+    curr = ps_expect_punct(curr, "=");
+    // collect value tokens until ';'
+    let mut value_str: String = "";
+    let mut vdone: Bool = false;
+    while !vdone && !ps_at_eof(curr) {
+        if ps_at_punct(curr, ";") {
+            curr = ps_advance(curr);
+            vdone = true
+        } else {
+            let vt: Token = ps_current(curr);
+            value_str = if value_str == "" { vt.lexeme } else { format("{} {}", value_str, vt.lexeme) };
+            curr = ps_advance(curr)
+        }
+    }
+    ConstDeclR {
+        value: ConstDecl {
+            visible: visible, name: name_r.value,
+            ty: ty_r.value, value: value_str, span: sp,
+        },
+        ps: curr,
+    }
+}
+
+// ── extern declaration parser ─────────────────────────────────────────────────
+// Entry: current token is 'extern'.
+
+partial fn parse_extern_fn(ps: ParserState) -> ExtFnR {
+    let sp: Span = ps_current(ps).span;
+    let mut curr: ParserState = ps_advance(ps); // consume 'fn'
+    let name_r: StringR = ps_expect_name(curr);
+    curr = name_r.ps;
+    let params_r: ParamsR = parse_param_list(curr);
+    curr = params_r.ps;
+    let ret_ty: TypeExpr = if ps_at_punct(curr, "->") {
+        curr = ps_advance(curr);
+        let tr: TypeExprR = parse_type_expr(curr);
+        curr = tr.ps;
+        tr.value
+    } else {
+        empty_type_expr()
+    };
+    let eff_r: EffectsR = parse_effects(curr);
+    curr = eff_r.ps;
+    if ps_at_punct(curr, ";") { curr = ps_advance(curr) }
+    ExtFnR {
+        value: ExternFnDecl {
+            name: name_r.value, params: params_r.value,
+            ret_ty: ret_ty, effects: eff_r.value, span: sp,
+        },
+        ps: curr,
+    }
+}
+
+partial fn parse_extern_decl(ps: ParserState) -> ExternR {
+    let sp: Span = ps_current(ps).span;
+    let mut curr: ParserState = ps_advance(ps); // consume 'extern'
+    let is_str_lit: Bool = match ps_current(curr).kind { TokenKind::StrLit => true, _ => false };
+    let lang: String = if is_str_lit { ps_current(curr).lexeme } else { "" };
+    if is_str_lit { curr = ps_advance(curr) } else { () }
+    curr = ps_expect_punct(curr, "{");
+    let mut efns: List[ExternFnDecl] = [];
+    while !ps_at_eof(curr) && !ps_at_punct(curr, "}") {
+        match ps_current(curr).kind {
+            TokenKind::KwFn => {
+                let efr: ExtFnR = parse_extern_fn(curr);
+                efns.push(efr.value);
+                curr = efr.ps
+            }
+            _ => { curr = ps_advance(curr) }
+        }
+    }
+    curr = ps_expect_punct(curr, "}");
+    ExternR { value: ExternDecl { lang: lang, fns: efns, span: sp }, ps: curr }
+}
+
+// ── impl block parser ─────────────────────────────────────────────────────────
+// Entry: current token is 'impl'.
+// Syntax: impl Type { methods... }  or  impl Trait[Args] for Type { methods... }
+
+partial fn parse_impl_decl(ps: ParserState) -> ImplR {
+    let sp: Span = ps_current(ps).span;
+    let mut curr: ParserState = ps_advance(ps); // consume 'impl'
+    let first_ty_r: TypeExprR = parse_type_expr(curr);
+    curr = first_ty_r.ps;
+
+    // Optional: 'for' introduces trait impl — first_ty is the trait, next type is the receiver.
+    // Decompose first_ty_r.value into parts before conditional branching to avoid move errors.
+    let fty_name: String = first_ty_r.value.name;
+    let fty_args: List[TypeExpr] = first_ty_r.value.args;
+    let fty_span: Span = first_ty_r.value.span;
+
+    let mut impl_ty: TypeExpr = empty_type_expr();
+    let mut trait_name: String = "";
+    let mut trait_args: List[TypeExpr] = [];
+    let for_tok: Token = ps_current(curr);
+    if for_tok.lexeme == "for" {
+        // first_ty was the trait
+        trait_name = fty_name;
+        trait_args = fty_args;
+        curr = ps_advance(curr); // consume 'for'
+        let recv_r: TypeExprR = parse_type_expr(curr);
+        curr = recv_r.ps;
+        impl_ty = recv_r.value
+    } else {
+        impl_ty = TypeExpr { name: fty_name, args: fty_args, span: fty_span }
+    }
+
+    curr = ps_expect_punct(curr, "{");
+    let mut methods: List[FnDecl] = [];
+    while !ps_at_eof(curr) && !ps_at_punct(curr, "}") {
+        let tok: Token = ps_current(curr);
+        match tok.kind {
+            TokenKind::KwFn => {
+                let fr: FnDeclR = parse_fn_decl(curr, false, false, false, false, "");
+                methods.push(fr.value);
+                curr = fr.ps
+            }
+            TokenKind::KwPub => {
+                curr = ps_advance(curr);
+                let fr: FnDeclR = parse_fn_decl(curr, true, false, false, false, "");
+                methods.push(fr.value);
+                curr = fr.ps
+            }
+            TokenKind::KwTotal => {
+                curr = ps_advance(curr);
+                let fr: FnDeclR = parse_fn_decl(curr, false, false, false, false, "total");
+                methods.push(fr.value);
+                curr = fr.ps
+            }
+            TokenKind::KwPartial => {
+                curr = ps_advance(curr);
+                let fr: FnDeclR = parse_fn_decl(curr, false, false, false, false, "partial");
+                methods.push(fr.value);
+                curr = fr.ps
+            }
+            _ => { curr = ps_advance(curr) }
+        }
+    }
+    curr = ps_expect_punct(curr, "}");
+    ImplR {
+        value: ImplDecl {
+            ty: impl_ty, trait_name: trait_name,
+            trait_args: trait_args, methods: methods, span: sp,
+        },
+        ps: curr,
+    }
+}
+
+// ── Modifier parsing helper ───────────────────────────────────────────────────
+// Collect optional pub/test/builtin/transparent after total/partial.
+
+type ModFlags = struct {
+    visible:    Bool,
+    is_test:    Bool,
+    is_builtin: Bool,
+    is_transp:  Bool,
+    ps:         ParserState,
+}
+
+partial fn collect_mod_flags(ps: ParserState) -> ModFlags {
+    let mut curr: ParserState = ps;
+    let mut visible: Bool    = false;
+    let mut is_test: Bool    = false;
+    let mut is_builtin: Bool = false;
+    let mut is_transp: Bool  = false;
+    let mut done: Bool = false;
+    while !done {
+        match ps_current(curr).kind {
+            TokenKind::KwPub         => { visible    = true; curr = ps_advance(curr) }
+            TokenKind::KwTest        => { is_test    = true; curr = ps_advance(curr) }
+            TokenKind::KwBuiltin     => { is_builtin = true; curr = ps_advance(curr) }
+            TokenKind::KwTransparent => { is_transp  = true; curr = ps_advance(curr) }
+            _ => { done = true }
+        }
+    }
+    ModFlags { visible: visible, is_test: is_test, is_builtin: is_builtin, is_transp: is_transp, ps: curr }
+}
+
+// ── Top-level program parser ───────────────────────────────────────────────────
+
+partial fn parse_program(ps: ParserState) -> Program {
+    let mut curr: ParserState = ps;
+    let mut fns:     List[FnDecl]     = [];
+    let mut types:   List[TypeDecl]   = [];
+    let mut uses:    List[UseDecl]    = [];
+    let mut consts:  List[ConstDecl]  = [];
+    let mut externs: List[ExternDecl] = [];
+    let mut impls:   List[ImplDecl]   = [];
+
+    while !ps_at_eof(curr) {
+        let tok: Token = ps_current(curr);
+        match tok.kind {
+            TokenKind::KwUse => {
+                let ur: UseDeclR = parse_use_decl(curr, false);
+                uses.push(ur.value);
+                curr = ur.ps
+            }
+            TokenKind::KwConst => {
+                let cr: ConstDeclR = parse_const_decl(curr, false);
+                consts.push(cr.value);
+                curr = cr.ps
+            }
+            TokenKind::KwExtern => {
+                let er: ExternR = parse_extern_decl(curr);
+                externs.push(er.value);
+                curr = er.ps
+            }
+            TokenKind::KwImpl => {
+                let ir: ImplR = parse_impl_decl(curr);
+                impls.push(ir.value);
+                curr = ir.ps
+            }
+            TokenKind::KwType => {
+                let tr: TypeDeclR = parse_type_decl(curr, false);
+                types.push(tr.value);
+                curr = tr.ps
+            }
+            TokenKind::KwFn => {
+                let fr: FnDeclR = parse_fn_decl(curr, false, false, false, false, "");
+                fns.push(fr.value);
+                curr = fr.ps
+            }
+            TokenKind::KwPub => {
+                curr = ps_advance(curr);
+                let t2: Token = ps_current(curr);
+                match t2.kind {
+                    TokenKind::KwFn => {
+                        let fr: FnDeclR = parse_fn_decl(curr, true, false, false, false, "");
+                        fns.push(fr.value);
+                        curr = fr.ps
+                    }
+                    TokenKind::KwType => {
+                        let tr: TypeDeclR = parse_type_decl(curr, true);
+                        types.push(tr.value);
+                        curr = tr.ps
+                    }
+                    TokenKind::KwUse => {
+                        let ur: UseDeclR = parse_use_decl(curr, true);
+                        uses.push(ur.value);
+                        curr = ur.ps
+                    }
+                    TokenKind::KwConst => {
+                        let cr: ConstDeclR = parse_const_decl(curr, true);
+                        consts.push(cr.value);
+                        curr = cr.ps
+                    }
+                    TokenKind::KwTotal => {
+                        curr = ps_advance(curr);
+                        let mf: ModFlags = collect_mod_flags(curr);
+                        curr = mf.ps;
+                        let fr: FnDeclR = parse_fn_decl(curr, true, mf.is_test, mf.is_builtin, mf.is_transp, "total");
+                        fns.push(fr.value);
+                        curr = fr.ps
+                    }
+                    TokenKind::KwPartial => {
+                        curr = ps_advance(curr);
+                        let mf: ModFlags = collect_mod_flags(curr);
+                        curr = mf.ps;
+                        let fr: FnDeclR = parse_fn_decl(curr, true, mf.is_test, mf.is_builtin, mf.is_transp, "partial");
+                        fns.push(fr.value);
+                        curr = fr.ps
+                    }
+                    TokenKind::KwTransparent => {
+                        curr = ps_advance(curr);
+                        let mf: ModFlags = collect_mod_flags(curr);
+                        curr = mf.ps;
+                        let fr: FnDeclR = parse_fn_decl(curr, true, mf.is_test, mf.is_builtin, true, "");
+                        fns.push(fr.value);
+                        curr = fr.ps
+                    }
+                    _ => { curr = ps_advance(curr) }
+                }
+            }
+            TokenKind::KwTotal => {
+                curr = ps_advance(curr);
+                let mf: ModFlags = collect_mod_flags(curr);
+                curr = mf.ps;
+                let fr: FnDeclR = parse_fn_decl(curr, mf.visible, mf.is_test, mf.is_builtin, mf.is_transp, "total");
+                fns.push(fr.value);
+                curr = fr.ps
+            }
+            TokenKind::KwPartial => {
+                curr = ps_advance(curr);
+                let mf: ModFlags = collect_mod_flags(curr);
+                curr = mf.ps;
+                let fr: FnDeclR = parse_fn_decl(curr, mf.visible, mf.is_test, mf.is_builtin, mf.is_transp, "partial");
+                fns.push(fr.value);
+                curr = fr.ps
+            }
+            TokenKind::KwTransparent => {
+                curr = ps_advance(curr);
+                // transparent may be followed by: partial, total, or directly fn
+                let is_partial: Bool = match ps_current(curr).kind { TokenKind::KwPartial => true, _ => false };
+                let is_total:   Bool = match ps_current(curr).kind { TokenKind::KwTotal   => true, _ => false };
+                let tot: String = if is_partial { "partial" } else if is_total { "total" } else { "" };
+                if is_partial || is_total { curr = ps_advance(curr) } else { () }
+                let mf: ModFlags = collect_mod_flags(curr);
+                curr = mf.ps;
+                let fr: FnDeclR = parse_fn_decl(curr, mf.visible, mf.is_test, mf.is_builtin, true, tot);
+                fns.push(fr.value);
+                curr = fr.ps
+            }
+            TokenKind::KwTest => {
+                curr = ps_advance(curr);
+                let fr: FnDeclR = parse_fn_decl(curr, false, true, false, false, "");
+                fns.push(fr.value);
+                curr = fr.ps
+            }
+            TokenKind::KwBuiltin => {
+                curr = ps_advance(curr);
+                let fr: FnDeclR = parse_fn_decl(curr, false, false, true, false, "");
+                fns.push(fr.value);
+                curr = fr.ps
+            }
+            // Comments and unknown tokens — skip
+            _ => { curr = ps_advance(curr) }
+        }
+    }
+
+    Program {
+        fns: fns, types: types, uses: uses,
+        consts: consts, externs: externs, impls: impls,
+        errors: curr.errors,
+    }
+}
+
+// ── Public entry point ────────────────────────────────────────────────────────
+
+pub partial fn parse(tokens: List[Token]) -> Program {
+    let ps: ParserState = ParserState { tokens: tokens, pos: 0, errors: [] };
+    parse_program(ps)
+}
