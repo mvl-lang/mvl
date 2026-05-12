@@ -908,7 +908,7 @@ impl Show for Int {
                   (string_literal))))))))))
 
 ===============================================================================
-Borrow expression — shared
+Borrow expression — val
 ===============================================================================
 
 total fn take_ref(x: Int) -> Int {
@@ -955,7 +955,7 @@ total fn take_ref(x: Int) -> Int {
               (identifier))))))))
 
 ===============================================================================
-Borrow expression — mutable
+Borrow expression — ref
 ===============================================================================
 
 total fn mutate(x: Int) -> Unit {
