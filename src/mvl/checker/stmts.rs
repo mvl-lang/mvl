@@ -297,10 +297,16 @@ impl TypeChecker {
                     other => other.clone(),
                 };
                 self.bind_pattern(pattern, &bind_ty, is_mutable);
-                // Phase D (#362): record which variable the new binding borrows so that
+                // Phase D (#362, #660): record which variable the new binding borrows so that
                 // `pop_scope()` can release the borrow when the binding goes out of scope.
                 // Also update the referent's capability_state here (not in Expr::Borrow) so
                 // that state is only set when ref_var is simultaneously recorded.
+                //
+                // Two cases:
+                //  (a) Explicit borrow: `let v: val T = val x` — init is Expr::Borrow.
+                //      Aliasing is already checked in Expr::Borrow (infer.rs).
+                //  (b) Implicit borrow: `let v: val T = x` — init is Expr::Ident.
+                //      Aliasing must be checked here; state transitions are the same.
                 if let (Pattern::Ident(bound_name, _), Expr::Borrow { expr, mutable, .. }) =
                     (pattern, init)
                 {
@@ -310,6 +316,49 @@ impl TypeChecker {
                         }
                         if let Some(referent) = self.env.lookup_mut_var(borrowed_name) {
                             referent.capability_state = if *mutable {
+                                CapabilityState::Ref
+                            } else {
+                                match referent.capability_state.clone() {
+                                    CapabilityState::Val(n) => CapabilityState::Val(n + 1),
+                                    _ => CapabilityState::Val(1),
+                                }
+                            };
+                        }
+                    }
+                } else if is_ref_assignment {
+                    // Case (b): implicit borrow driven by type annotation.
+                    if let (
+                        Pattern::Ident(bound_name, _),
+                        Expr::Ident(borrowed_name, borrow_span),
+                    ) = (pattern, init)
+                    {
+                        let is_mutable = matches!(ann_ty, Ty::Ref(true, _));
+                        // Check aliasing violation before updating state.
+                        let current = self
+                            .env
+                            .lookup(borrowed_name)
+                            .map(|i| i.capability_state.clone())
+                            .unwrap_or(CapabilityState::Owned);
+                        if is_mutable {
+                            if current != CapabilityState::Owned {
+                                self.emit(CheckError::AliasingMutableBorrow {
+                                    name: borrowed_name.clone(),
+                                    span: *borrow_span,
+                                });
+                            }
+                        } else if matches!(current, CapabilityState::Ref) {
+                            self.emit(CheckError::AliasingMutableBorrow {
+                                name: borrowed_name.clone(),
+                                span: *borrow_span,
+                            });
+                        }
+                        // Record ref_var so pop_scope() can release the capability.
+                        if let Some(bound_info) = self.env.lookup_mut_var(bound_name) {
+                            bound_info.ref_var = Some(borrowed_name.clone());
+                        }
+                        // Transition the referent's capability state.
+                        if let Some(referent) = self.env.lookup_mut_var(borrowed_name) {
+                            referent.capability_state = if is_mutable {
                                 CapabilityState::Ref
                             } else {
                                 match referent.capability_state.clone() {

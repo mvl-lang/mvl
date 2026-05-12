@@ -4481,6 +4481,78 @@ fn borrow_expr_shared_of_mutably_borrowed_rejected() {
     );
 }
 
+// ── #660: capability state machine driven from implicit borrows ──────────────
+
+/// Multiple implicit `val T` borrows of the same variable are allowed.
+#[test]
+fn implicit_multiple_val_borrows_allowed() {
+    let result = check_src("fn f(x: Int) -> Unit { let v1: val Int = x; let v2: val Int = x; }");
+    assert!(
+        result.errors.is_empty(),
+        "expected no errors for multiple implicit val borrows, got: {:?}",
+        result.errors
+    );
+}
+
+/// Implicit `ref T` borrow blocks a subsequent implicit `val T` borrow.
+#[test]
+fn implicit_ref_then_val_rejected() {
+    let result = check_src("fn f(x: Int) -> Unit { let r: ref Int = x; let v: val Int = x; }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::AliasingMutableBorrow { .. })),
+        "expected AliasingMutableBorrow when implicit val follows ref, got: {:?}",
+        result.errors
+    );
+}
+
+/// Implicit `val T` borrow blocks a subsequent implicit `ref T` borrow.
+#[test]
+fn implicit_val_then_ref_rejected() {
+    let result = check_src("fn f(x: Int) -> Unit { let v: val Int = x; let r: ref Int = x; }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::AliasingMutableBorrow { .. })),
+        "expected AliasingMutableBorrow when implicit ref follows val, got: {:?}",
+        result.errors
+    );
+}
+
+/// Two simultaneous implicit `ref T` borrows of the same variable are rejected.
+#[test]
+fn implicit_double_ref_rejected() {
+    let result = check_src("fn f(x: Int) -> Unit { let r1: ref Int = x; let r2: ref Int = x; }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::AliasingMutableBorrow { .. })),
+        "expected AliasingMutableBorrow for double implicit ref borrow, got: {:?}",
+        result.errors
+    );
+}
+
+/// Scope exit releases capability — implicit `val T` borrow allowed after inner scope's
+/// `ref T` borrow exits.
+#[test]
+fn implicit_borrow_released_on_scope_exit() {
+    let result = check_src(
+        "fn f(x: Int) -> Unit {
+            if true { let r: ref Int = x; }
+            let v: val Int = x;
+        }",
+    );
+    assert!(
+        result.errors.is_empty(),
+        "expected no errors after scope releases implicit ref, got: {:?}",
+        result.errors
+    );
+}
+
 /// Phase C (#305, #363): ReferenceOutlivesOwner — assigning a `val T` reference to a
 /// binding at a shallower scope depth than the referent.
 /// Also verifies that `ref_name` and `owner_name` fields are correctly populated.
