@@ -50,7 +50,7 @@ total fn reset_mods(acc: ParseAcc) -> ParseAcc {
 }
 
 total fn add_mod(acc: ParseAcc, m: String) -> ParseAcc {
-    let mut new_mods: List[String] = acc.mods;
+    let new_mods: ref List[String] = acc.mods;
     new_mods.push(m);
     ParseAcc { items: acc.items, mode: acc.mode, item_kind: acc.item_kind, item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: new_mods }
 }
@@ -127,7 +127,7 @@ total fn parse_need_name(acc: ParseAcc, tok: Token) -> ParseAcc {
         match tok.cat {
             TokenCat::Ident => {
                 let item: Item = Item { kind: acc.item_kind, name: tok.lexeme, line: acc.item_line, vis: acc.vis, mods: acc.mods };
-                let mut new_items: List[Item] = acc.items;
+                let new_items: ref List[Item] = acc.items;
                 new_items.push(item);
                 ParseAcc { items: new_items, mode: ParseMode::Scan, item_kind: ItemKind::FnDecl, item_line: 0, depth: acc.depth, vis: false, mods: [] }
             }

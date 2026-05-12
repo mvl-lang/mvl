@@ -82,7 +82,7 @@ fn is_keyword(s: String) -> Bool {
 // ── Scanner helpers ───────────────────────────────────────────────────────────
 
 partial fn scan_word(src: String, pos: Int, src_len: Int) -> ScanResult {
-    let mut p: Int = pos;
+    let p: ref Int = pos;
     while p < src_len && is_alnum(str_char_at(src, p)) {
         p = p + 1
     }
@@ -92,7 +92,7 @@ partial fn scan_word(src: String, pos: Int, src_len: Int) -> ScanResult {
 }
 
 partial fn scan_number(src: String, pos: Int, src_len: Int) -> ScanResult {
-    let mut p: Int = pos;
+    let p: ref Int = pos;
     while p < src_len && is_digit(str_char_at(src, p)) {
         p = p + 1
     }
@@ -108,7 +108,7 @@ partial fn scan_number(src: String, pos: Int, src_len: Int) -> ScanResult {
 }
 
 partial fn scan_comment_end(src: String, pos: Int, src_len: Int) -> Int {
-    let mut p: Int = pos;
+    let p: ref Int = pos;
     while p < src_len && str_char_at(src, p) != "\n" {
         p = p + 1
     }
@@ -116,7 +116,7 @@ partial fn scan_comment_end(src: String, pos: Int, src_len: Int) -> Int {
 }
 
 partial fn scan_string_body(src: String, pos: Int, src_len: Int) -> ScanResult {
-    let mut p: Int = pos;
+    let p: ref Int = pos;
     while p < src_len && str_char_at(src, p) != "\"" {
         if str_char_at(src, p) == "\\" && p + 1 < src_len {
             p = p + 2
@@ -161,13 +161,13 @@ fn zero_counts() -> Counts {
 
 partial fn lex_counts(src: String) -> Counts {
     let src_len: Int = src.len();
-    let mut pos: Int = 0;
-    let mut kw: Int  = 0;
-    let mut id: Int  = 0;
-    let mut nm: Int  = 0;
-    let mut st: Int  = 0;
-    let mut pt: Int  = 0;
-    let mut cm: Int  = 0;
+    let pos: ref Int = 0;
+    let kw: ref Int  = 0;
+    let id: ref Int  = 0;
+    let nm: ref Int  = 0;
+    let st: ref Int  = 0;
+    let pt: ref Int  = 0;
+    let cm: ref Int  = 0;
 
     while pos < src_len {
         let c: String = str_char_at(src, pos);
@@ -239,15 +239,15 @@ partial fn main() -> Unit ! FileRead, Console {
     match read_dir(dir_path) {
         Err(e) => println("error reading directory: {}", e),
         Ok(entries) => {
-            let mut file_count: Int = 0;
-            let mut kw_total: Int   = 0;
-            let mut id_total: Int   = 0;
-            let mut nm_total: Int   = 0;
-            let mut st_total: Int   = 0;
-            let mut pt_total: Int   = 0;
-            let mut cm_total: Int   = 0;
+            let file_count: ref Int = 0;
+            let kw_total: ref Int   = 0;
+            let id_total: ref Int   = 0;
+            let nm_total: ref Int   = 0;
+            let st_total: ref Int   = 0;
+            let pt_total: ref Int   = 0;
+            let cm_total: ref Int   = 0;
 
-            let mut i: Int = 0;
+            let i: ref Int = 0;
             while i < entries.len() {
                 match entries.get(i) {
                     None => (),

@@ -120,7 +120,7 @@ type ScanResult = struct {
 }
 
 partial fn scan_word(src: String, pos: Int, src_len: Int) -> ScanResult {
-    let mut p: Int = pos;
+    let p: ref Int = pos;
     while p < src_len && is_alnum(str_char_at(src, p)) {
         p = p + 1
     }
@@ -130,7 +130,7 @@ partial fn scan_word(src: String, pos: Int, src_len: Int) -> ScanResult {
 }
 
 partial fn scan_number(src: String, pos: Int, src_len: Int) -> ScanResult {
-    let mut p: Int = pos;
+    let p: ref Int = pos;
     while p < src_len && is_digit(str_char_at(src, p)) {
         p = p + 1
     }
@@ -146,7 +146,7 @@ partial fn scan_number(src: String, pos: Int, src_len: Int) -> ScanResult {
 }
 
 partial fn scan_comment_end(src: String, pos: Int, src_len: Int) -> Int {
-    let mut p: Int = pos;
+    let p: ref Int = pos;
     while p < src_len && str_char_at(src, p) != "\n" {
         p = p + 1
     }
@@ -154,7 +154,7 @@ partial fn scan_comment_end(src: String, pos: Int, src_len: Int) -> Int {
 }
 
 partial fn scan_string_body(src: String, pos: Int, src_len: Int) -> ScanResult {
-    let mut p: Int = pos;
+    let p: ref Int = pos;
     while p < src_len && str_char_at(src, p) != "\"" {
         if str_char_at(src, p) == "\\" && p + 1 < src_len {
             p = p + 2
@@ -186,9 +186,9 @@ fn two_char_punct(c: String, c2: String) -> String {
 
 partial fn lex(src: String) -> List[Token] {
     let src_len: Int = src.len();
-    let mut pos: Int = 0;
-    let mut line: Int = 1;
-    let mut tokens: List[Token] = [];
+    let pos: ref Int = 0;
+    let line: ref Int = 1;
+    let tokens: ref List[Token] = [];
     while pos < src_len {
         let c: String = str_char_at(src, pos);
         let c2: String = str_char_at(src, pos + 1);
@@ -262,7 +262,7 @@ total fn sig_close_brace(acc: SigAcc) -> SigAcc {
 
 // Add modifier to mods list (preserves all other fields).
 total fn add_mod(acc: SigAcc, m: String) -> SigAcc {
-    let mut new_mods: List[String] = acc.mods;
+    let new_mods: ref List[String] = acc.mods;
     new_mods.push(m);
     SigAcc {
         items: acc.items, mode: acc.mode, item_kind: acc.item_kind,
@@ -277,7 +277,7 @@ total fn add_mod(acc: SigAcc, m: String) -> SigAcc {
 total fn sig_push_param(acc: SigAcc) -> SigAcc {
     if acc.cur_pname != "" {
         let param: SigParam = SigParam { name: acc.cur_pname, type_text: acc.cur_ptype };
-        let mut new_params: List[SigParam] = acc.params;
+        let new_params: ref List[SigParam] = acc.params;
         new_params.push(param);
         SigAcc {
             items: acc.items, mode: acc.mode, item_kind: acc.item_kind,
@@ -294,7 +294,7 @@ total fn sig_push_param(acc: SigAcc) -> SigAcc {
 // Finalize current fn item (params/ret_type/effects) and push.
 // depth_delta is added to acc.depth (1 when we just saw "{", 0 for ";").
 total fn sig_push_fn(acc: SigAcc, depth_delta: Int) -> SigAcc {
-    let mut final_effects: List[String] = acc.effects;
+    let final_effects: ref List[String] = acc.effects;
     if acc.cur_effect != "" {
         final_effects.push(acc.cur_effect)
     }
@@ -303,7 +303,7 @@ total fn sig_push_fn(acc: SigAcc, depth_delta: Int) -> SigAcc {
         vis: acc.vis, mods: acc.mods, params: acc.params,
         ret_type: acc.ret_type, effects: final_effects,
     };
-    let mut new_items: List[SigItem] = acc.items;
+    let new_items: ref List[SigItem] = acc.items;
     new_items.push(item);
     SigAcc {
         items: new_items, mode: ParseMode::Scan, item_kind: ItemKind::FnDecl,
@@ -319,7 +319,7 @@ total fn sig_push_item(acc: SigAcc, name: String) -> SigAcc {
         kind: acc.item_kind, name: name, line: acc.item_line,
         vis: acc.vis, mods: acc.mods, params: [], ret_type: "", effects: [],
     };
-    let mut new_items: List[SigItem] = acc.items;
+    let new_items: ref List[SigItem] = acc.items;
     new_items.push(item);
     SigAcc {
         items: new_items, mode: ParseMode::Scan, item_kind: ItemKind::FnDecl,
@@ -683,7 +683,7 @@ total fn parse_in_effects(acc: SigAcc, tok: Token) -> SigAcc {
     } else if tok.cat == TokenCat::Keyword && (tok.lexeme == "where" || tok.lexeme == "requires" || tok.lexeme == "ensures") {
         sig_push_fn(acc, 0)
     } else if tok.cat == TokenCat::Punct && tok.lexeme == "," && acc.type_depth == 0 {
-        let mut new_effects: List[String] = acc.effects;
+        let new_effects: ref List[String] = acc.effects;
         if acc.cur_effect != "" { new_effects.push(acc.cur_effect) }
         SigAcc {
             items: acc.items, mode: ParseMode::InEffects, item_kind: acc.item_kind,
@@ -832,7 +832,7 @@ partial fn main() -> Unit ! FileRead, Console {
     match read_dir(dir_path) {
         Err(e) => println("error reading directory: {}", e),
         Ok(entries) => {
-            let mut i: Int = 0;
+            let i: ref Int = 0;
             while i < entries.len() {
                 match entries.get(i) {
                     None => (),

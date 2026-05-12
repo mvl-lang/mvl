@@ -76,7 +76,7 @@ type ScanResult = struct {
 }
 
 partial fn scan_word(src: String, pos: Int, src_len: Int) -> ScanResult {
-    let mut p: Int = pos;
+    let p: ref Int = pos;
     while p < src_len && is_alnum(str_char_at(src, p)) {
         p = p + 1
     }
@@ -86,7 +86,7 @@ partial fn scan_word(src: String, pos: Int, src_len: Int) -> ScanResult {
 }
 
 partial fn scan_number(src: String, pos: Int, src_len: Int) -> ScanResult {
-    let mut p: Int = pos;
+    let p: ref Int = pos;
     while p < src_len && is_digit(str_char_at(src, p)) {
         p = p + 1
     }
@@ -102,7 +102,7 @@ partial fn scan_number(src: String, pos: Int, src_len: Int) -> ScanResult {
 }
 
 partial fn scan_comment_end(src: String, pos: Int, src_len: Int) -> Int {
-    let mut p: Int = pos;
+    let p: ref Int = pos;
     while p < src_len && str_char_at(src, p) != "\n" {
         p = p + 1
     }
@@ -110,7 +110,7 @@ partial fn scan_comment_end(src: String, pos: Int, src_len: Int) -> Int {
 }
 
 partial fn scan_string_body(src: String, pos: Int, src_len: Int) -> ScanResult {
-    let mut p: Int = pos;
+    let p: ref Int = pos;
     while p < src_len && str_char_at(src, p) != "\"" {
         if str_char_at(src, p) == "\\" && p + 1 < src_len {
             p = p + 2
@@ -142,9 +142,9 @@ fn two_char_punct(c: String, c2: String) -> String {
 
 partial fn lex(src: String) -> List[Token] {
     let src_len: Int = src.len();
-    let mut pos: Int = 0;
-    let mut line: Int = 1;
-    let mut tokens: List[Token] = [];
+    let pos: ref Int = 0;
+    let line: ref Int = 1;
+    let tokens: ref List[Token] = [];
 
     while pos < src_len {
         let c: String = str_char_at(src, pos);
@@ -238,7 +238,7 @@ fn use_step(acc: UseAcc, tok: Token) -> UseAcc {
             UseMode::InPath => {
                 if tok.cat == TokenCat::Ident || (tok.cat == TokenCat::Keyword && acc.expect_seg) {
                     // Path segment or final import name
-                    let mut new_path: List[String] = acc.path;
+                    let new_path: ref List[String] = acc.path;
                     new_path.push(tok.lexeme);
                     UseAcc { items: acc.items, mode: UseMode::InPath, path: new_path, imports: acc.imports, item_line: acc.item_line, depth: acc.depth, expect_seg: false }
                 } else if is_path_sep(tok) {
@@ -256,12 +256,12 @@ fn use_step(acc: UseAcc, tok: Token) -> UseAcc {
                         None    => "",
                         Some(s) => s,
                     };
-                    let mut new_imports: List[String] = [];
+                    let new_imports: ref List[String] = [];
                     if import_name != "" {
                         new_imports.push(import_name)
                     }
                     let item: UseItem = UseItem { path: module_path, imports: new_imports, line: acc.item_line };
-                    let mut new_items: List[UseItem] = acc.items;
+                    let new_items: ref List[UseItem] = acc.items;
                     new_items.push(item);
                     UseAcc { items: new_items, mode: UseMode::Idle, path: [], imports: [], item_line: 0, depth: acc.depth, expect_seg: false }
                 }
@@ -270,12 +270,12 @@ fn use_step(acc: UseAcc, tok: Token) -> UseAcc {
                 if tok.cat == TokenCat::Punct && tok.lexeme == "}" {
                     // Commit the use item
                     let item: UseItem = UseItem { path: acc.path, imports: acc.imports, line: acc.item_line };
-                    let mut new_items: List[UseItem] = acc.items;
+                    let new_items: ref List[UseItem] = acc.items;
                     new_items.push(item);
                     UseAcc { items: new_items, mode: UseMode::Idle, path: [], imports: [], item_line: 0, depth: acc.depth, expect_seg: false }
                 } else if tok.cat == TokenCat::Ident {
                     // Import name
-                    let mut new_imports: List[String] = acc.imports;
+                    let new_imports: ref List[String] = acc.imports;
                     new_imports.push(tok.lexeme);
                     UseAcc { items: acc.items, mode: UseMode::InBrace, path: acc.path, imports: new_imports, item_line: acc.item_line, depth: acc.depth, expect_seg: false }
                 } else {
@@ -367,7 +367,7 @@ partial fn main() -> Unit ! FileRead, Console {
     match read_dir(dir_path) {
         Err(e) => println("error reading directory: {}", e),
         Ok(entries) => {
-            let mut i: Int = 0;
+            let i: ref Int = 0;
             while i < entries.len() {
                 match entries.get(i) {
                     None => (),

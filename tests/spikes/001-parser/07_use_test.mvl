@@ -61,7 +61,7 @@ total fn use_step(acc: UseAcc, tok: Token) -> UseAcc {
             }
             UseMode::InPath => {
                 if tok.cat == TokenCat::Ident || (tok.cat == TokenCat::Keyword && acc.expect_seg) {
-                    let mut new_path: List[String] = acc.path;
+                    let new_path: ref List[String] = acc.path;
                     new_path.push(tok.lexeme);
                     UseAcc { items: acc.items, mode: UseMode::InPath, path: new_path, imports: acc.imports, item_line: acc.item_line, depth: acc.depth, expect_seg: false }
                 } else if is_path_sep(tok) {
@@ -75,12 +75,12 @@ total fn use_step(acc: UseAcc, tok: Token) -> UseAcc {
                         None    => "",
                         Some(s) => s,
                     };
-                    let mut new_imports: List[String] = [];
+                    let new_imports: ref List[String] = [];
                     if import_name != "" {
                         new_imports.push(import_name)
                     }
                     let item: UseItem = UseItem { path: module_path, imports: new_imports, line: acc.item_line };
-                    let mut new_items: List[UseItem] = acc.items;
+                    let new_items: ref List[UseItem] = acc.items;
                     new_items.push(item);
                     UseAcc { items: new_items, mode: UseMode::Idle, path: [], imports: [], item_line: 0, depth: acc.depth, expect_seg: false }
                 }
@@ -88,11 +88,11 @@ total fn use_step(acc: UseAcc, tok: Token) -> UseAcc {
             UseMode::InBrace => {
                 if tok.cat == TokenCat::Punct && tok.lexeme == "}" {
                     let item: UseItem = UseItem { path: acc.path, imports: acc.imports, line: acc.item_line };
-                    let mut new_items: List[UseItem] = acc.items;
+                    let new_items: ref List[UseItem] = acc.items;
                     new_items.push(item);
                     UseAcc { items: new_items, mode: UseMode::Idle, path: [], imports: [], item_line: 0, depth: acc.depth, expect_seg: false }
                 } else if tok.cat == TokenCat::Ident {
-                    let mut new_imports: List[String] = acc.imports;
+                    let new_imports: ref List[String] = acc.imports;
                     new_imports.push(tok.lexeme);
                     UseAcc { items: acc.items, mode: UseMode::InBrace, path: acc.path, imports: new_imports, item_line: acc.item_line, depth: acc.depth, expect_seg: false }
                 } else {

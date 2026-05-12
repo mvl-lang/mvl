@@ -71,7 +71,7 @@ type ScanResult = struct {
 }
 
 partial fn scan_word(src: String, pos: Int, src_len: Int) -> ScanResult {
-    let mut p: Int = pos;
+    let p: ref Int = pos;
     while p < src_len && is_alnum(str_char_at(src, p)) {
         p = p + 1
     }
@@ -81,7 +81,7 @@ partial fn scan_word(src: String, pos: Int, src_len: Int) -> ScanResult {
 }
 
 partial fn scan_number(src: String, pos: Int, src_len: Int) -> ScanResult {
-    let mut p: Int = pos;
+    let p: ref Int = pos;
     while p < src_len && is_digit(str_char_at(src, p)) {
         p = p + 1
     }
@@ -97,7 +97,7 @@ partial fn scan_number(src: String, pos: Int, src_len: Int) -> ScanResult {
 }
 
 partial fn scan_comment_end(src: String, pos: Int, src_len: Int) -> Int {
-    let mut p: Int = pos;
+    let p: ref Int = pos;
     while p < src_len && str_char_at(src, p) != "\n" {
         p = p + 1
     }
@@ -105,7 +105,7 @@ partial fn scan_comment_end(src: String, pos: Int, src_len: Int) -> Int {
 }
 
 partial fn scan_string_body(src: String, pos: Int, src_len: Int) -> ScanResult {
-    let mut p: Int = pos;
+    let p: ref Int = pos;
     while p < src_len && str_char_at(src, p) != "\"" {
         if str_char_at(src, p) == "\\" && p + 1 < src_len {
             p = p + 2
@@ -137,9 +137,9 @@ fn two_char_punct(c: String, c2: String) -> String {
 
 partial fn lex(src: String) -> List[Token] {
     let src_len: Int = src.len();
-    let mut pos: Int = 0;
-    let mut line: Int = 1;
-    let mut tokens: List[Token] = [];
+    let pos: ref Int = 0;
+    let line: ref Int = 1;
+    let tokens: ref List[Token] = [];
 
     while pos < src_len {
         let c: String = str_char_at(src, pos);
@@ -273,7 +273,7 @@ fn parse_need_name(acc: ParseAcc, tok: Token) -> ParseAcc {
         match tok.cat {
             TokenCat::Ident => {
                 let item: Item = Item { kind: acc.item_kind, name: tok.lexeme, line: acc.item_line };
-                let mut new_items: List[Item] = acc.items;
+                let new_items: ref List[Item] = acc.items;
                 new_items.push(item);
                 ParseAcc { items: new_items, mode: ParseMode::Scan, item_kind: ItemKind::FnDecl, item_line: 0, depth: acc.depth }
             }
@@ -370,13 +370,13 @@ partial fn main() -> Unit ! FileRead, Console {
     match read_dir(dir_path) {
         Err(e) => println("error reading directory: {}", e),
         Ok(entries) => {
-            let mut file_count: Int = 0;
-            let mut fn_count:   Int = 0;
-            let mut type_count: Int = 0;
-            let mut use_count:  Int = 0;
-            let mut test_count: Int = 0;
+            let file_count: ref Int = 0;
+            let fn_count: ref   Int = 0;
+            let type_count: ref Int = 0;
+            let use_count: ref  Int = 0;
+            let test_count: ref Int = 0;
 
-            let mut i: Int = 0;
+            let i: ref Int = 0;
             while i < entries.len() {
                 match entries.get(i) {
                     None => (),

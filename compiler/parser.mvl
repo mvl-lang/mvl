@@ -178,7 +178,7 @@ total fn ps_advance(ps: ParserState) -> ParserState {
 total fn ps_add_error(ps: ParserState, msg: String) -> ParserState {
     let tok: Token = ps_current(ps);
     let err: ParseError = ParseError { message: msg, span: tok.span };
-    let mut errs: List[ParseError] = ps.errors;
+    let errs: ref List[ParseError] = ps.errors;
     errs.push(err);
     ParserState { tokens: ps.tokens, pos: ps.pos, errors: errs }
 }
@@ -209,8 +209,8 @@ total fn ps_expect_name(ps: ParserState) -> StringR {
 // ── Body skipping ─────────────────────────────────────────────────────────────
 
 partial fn skip_body(ps: ParserState) -> ParserState {
-    let mut curr: ParserState = ps_expect_punct(ps, "{");
-    let mut depth: Int = 1;
+    let curr: ref ParserState = ps_expect_punct(ps, "{");
+    let depth: ref Int = 1;
     while depth > 0 && !ps_at_eof(curr) {
         if ps_at_punct(curr, "{") {
             depth = depth + 1;
@@ -244,7 +244,7 @@ partial fn parse_type_expr_depth(ps: ParserState, max_depth: Int) -> TypeExprR {
         _                => false,
     };
     let tok_lex: String = tok.lexeme;
-    let mut curr: ParserState = if is_eof {
+    let curr: ref ParserState = if is_eof {
         ps_add_error(ps, "expected type name")
     } else {
         ps_advance(ps)
@@ -269,7 +269,7 @@ partial fn parse_type_expr_depth(ps: ParserState, max_depth: Int) -> TypeExprR {
     let name_is_fn: Bool = name == "fn";
     if name_is_fn && ps_at_punct(curr, "(") {
         curr = ps_advance(curr); // consume '('
-        let mut paren_depth: Int = 1;
+        let paren_depth: ref Int = 1;
         while paren_depth > 0 && !ps_at_eof(curr) {
             if ps_at_punct(curr, "(") {
                 paren_depth = paren_depth + 1; curr = ps_advance(curr)
@@ -288,7 +288,7 @@ partial fn parse_type_expr_depth(ps: ParserState, max_depth: Int) -> TypeExprR {
     // Generic args: Name[arg, arg, ...]
     if max_depth > 0 && !name_is_fn && ps_at_punct(curr, "[") {
         curr = ps_advance(curr);
-        let mut args: List[TypeExpr] = [];
+        let args: ref List[TypeExpr] = [];
         while !ps_at_eof(curr) && !ps_at_punct(curr, "]") {
             let arg_r: TypeExprR = parse_type_expr_depth(curr, max_depth - 1);
             args.push(arg_r.value);
@@ -314,8 +314,8 @@ partial fn parse_type_params(ps: ParserState) -> GenParamsR {
     if !ps_at_punct(ps, "[") {
         GenParamsR { value: [], ps: ps }
     } else {
-        let mut curr: ParserState = ps_advance(ps);
-        let mut params: List[GenericParam] = [];
+        let curr: ref ParserState = ps_advance(ps);
+        let params: ref List[GenericParam] = [];
         while !ps_at_eof(curr) && !ps_at_punct(curr, "]") {
             let tok: Token = ps_current(curr);
             let sp: Span = tok.span;
@@ -351,7 +351,7 @@ partial fn parse_param(ps: ParserState) -> ParamR {
         TokenKind::KwTag => "tag",
         _                => "",
     };
-    let mut curr: ParserState = if cap_str != "" { ps_advance(ps) } else { ps };
+    let curr: ref ParserState = if cap_str != "" { ps_advance(ps) } else { ps };
     let is_mut: Bool = match ps_current(curr).kind {
         TokenKind::KwMut => true,
         _                => false,
@@ -366,7 +366,7 @@ partial fn parse_param(ps: ParserState) -> ParamR {
     let has_where: Bool = match ps_current(curr).kind { TokenKind::KwWhere => true, _ => false };
     if has_where {
         curr = ps_advance(curr); // consume 'where'
-        let mut rfn_done: Bool = false;
+        let rfn_done: ref Bool = false;
         while !rfn_done && !ps_at_eof(curr) {
             if ps_at_punct(curr, ",") || ps_at_punct(curr, ")") {
                 rfn_done = true
@@ -385,8 +385,8 @@ partial fn parse_param(ps: ParserState) -> ParamR {
 }
 
 partial fn parse_param_list(ps: ParserState) -> ParamsR {
-    let mut curr: ParserState = ps_expect_punct(ps, "(");
-    let mut params: List[Param] = [];
+    let curr: ref ParserState = ps_expect_punct(ps, "(");
+    let params: ref List[Param] = [];
     while !ps_at_eof(curr) && !ps_at_punct(curr, ")") {
         let pr: ParamR = parse_param(curr);
         params.push(pr.value);
@@ -402,9 +402,9 @@ partial fn parse_effects(ps: ParserState) -> EffectsR {
     if !ps_at_punct(ps, "!") {
         EffectsR { value: [], ps: ps }
     } else {
-        let mut curr: ParserState = ps_advance(ps);
-        let mut effects: List[Effect] = [];
-        let mut done: Bool = false;
+        let curr: ref ParserState = ps_advance(ps);
+        let effects: ref List[Effect] = [];
+        let done: ref Bool = false;
         while !done && !ps_at_eof(curr) {
             let tok: Token = ps_current(curr);
             let sp: Span = tok.span;
@@ -439,9 +439,9 @@ partial fn parse_effects(ps: ParserState) -> EffectsR {
 partial fn parse_where_clause(ps: ParserState) -> ConstrR {
     match ps_current(ps).kind {
         TokenKind::KwWhere => {
-            let mut curr: ParserState = ps_advance(ps);
-            let mut cs: List[Constraint] = [];
-            let mut done: Bool = false;
+            let curr: ref ParserState = ps_advance(ps);
+            let cs: ref List[Constraint] = [];
+            let done: ref Bool = false;
             while !done && !ps_at_eof(curr) {
                 let tok: Token = ps_current(curr);
                 match tok.kind {
@@ -462,7 +462,7 @@ partial fn parse_where_clause(ps: ParserState) -> ConstrR {
                             }
                         } else {
                             // Refinement expression — skip to '{' or ';' or EOF
-                            let mut skip_done: Bool = false;
+                            let skip_done: ref Bool = false;
                             while !skip_done && !ps_at_eof(curr) {
                                 if ps_at_punct(curr, "{") || ps_at_punct(curr, ";") {
                                     skip_done = true
@@ -495,7 +495,7 @@ partial fn parse_fn_decl(
 ) -> FnDeclR {
     let sp: Span = ps_current(ps).span;
     // consume 'fn'
-    let mut curr: ParserState = ps_advance(ps);
+    let curr: ref ParserState = ps_advance(ps);
     // name
     let name_r: StringR = ps_expect_name(curr);
     curr = name_r.ps;
@@ -544,7 +544,7 @@ partial fn parse_fn_decl(
 
 partial fn parse_type_decl(ps: ParserState, visible: Bool) -> TypeDeclR {
     let sp: Span = ps_current(ps).span;
-    let mut curr: ParserState = ps_advance(ps); // consume 'type'
+    let curr: ref ParserState = ps_advance(ps); // consume 'type'
     let name_r: StringR = ps_expect_name(curr);
     curr = name_r.ps;
     let gp_r: GenParamsR = parse_type_params(curr);
@@ -555,7 +555,7 @@ partial fn parse_type_decl(ps: ParserState, visible: Bool) -> TypeDeclR {
         TokenKind::KwStruct => {
             curr = ps_advance(curr); // consume 'struct'
             curr = ps_expect_punct(curr, "{");
-            let mut fields: List[FieldDecl] = [];
+            let fields: ref List[FieldDecl] = [];
             while !ps_at_eof(curr) && !ps_at_punct(curr, "}") {
                 let ftok: Token = ps_current(curr);
                 let fsp: Span = ftok.span;
@@ -571,7 +571,7 @@ partial fn parse_type_decl(ps: ParserState, visible: Bool) -> TypeDeclR {
                 let fld_has_where: Bool = match ps_current(curr).kind { TokenKind::KwWhere => true, _ => false };
                 if fld_has_where {
                     curr = ps_advance(curr);
-                    let mut rfn_done: Bool = false;
+                    let rfn_done: ref Bool = false;
                     while !rfn_done && !ps_at_eof(curr) {
                         if ps_at_punct(curr, ",") || ps_at_punct(curr, "}") {
                             rfn_done = true
@@ -596,7 +596,7 @@ partial fn parse_type_decl(ps: ParserState, visible: Bool) -> TypeDeclR {
         TokenKind::KwEnum => {
             curr = ps_advance(curr); // consume 'enum'
             curr = ps_expect_punct(curr, "{");
-            let mut variants: List[String] = [];
+            let variants: ref List[String] = [];
             while !ps_at_eof(curr) && !ps_at_punct(curr, "}") {
                 let vn_r: StringR = ps_expect_name(curr);
                 curr = vn_r.ps;
@@ -634,15 +634,15 @@ partial fn parse_type_decl(ps: ParserState, visible: Bool) -> TypeDeclR {
 
 partial fn parse_use_decl(ps: ParserState, visible: Bool) -> UseDeclR {
     let sp: Span = ps_current(ps).span;
-    let mut curr: ParserState = ps_advance(ps); // consume 'use'
-    let mut path_segs: List[String] = [];
-    let mut imports: List[String] = [];
+    let curr: ref ParserState = ps_advance(ps); // consume 'use'
+    let path_segs: ref List[String] = [];
+    let imports: ref List[String] = [];
     // first segment
     let seg_r: StringR = ps_expect_name(curr);
     curr = seg_r.ps;
     path_segs.push(seg_r.value);
     // additional path segments or brace group
-    let mut done: Bool = false;
+    let done: ref Bool = false;
     while !done && !ps_at_eof(curr) {
         if ps_at_punct(curr, "::") || ps_at_punct(curr, ".") {
             curr = ps_advance(curr);
@@ -686,7 +686,7 @@ partial fn parse_use_decl(ps: ParserState, visible: Bool) -> UseDeclR {
 
 partial fn parse_const_decl(ps: ParserState, visible: Bool) -> ConstDeclR {
     let sp: Span = ps_current(ps).span;
-    let mut curr: ParserState = ps_advance(ps); // consume 'const'
+    let curr: ref ParserState = ps_advance(ps); // consume 'const'
     let name_r: StringR = ps_expect_name(curr);
     curr = name_r.ps;
     curr = ps_expect_punct(curr, ":");
@@ -694,8 +694,8 @@ partial fn parse_const_decl(ps: ParserState, visible: Bool) -> ConstDeclR {
     curr = ty_r.ps;
     curr = ps_expect_punct(curr, "=");
     // collect value tokens until ';'
-    let mut value_str: String = "";
-    let mut vdone: Bool = false;
+    let value_str: ref String = "";
+    let vdone: ref Bool = false;
     while !vdone && !ps_at_eof(curr) {
         if ps_at_punct(curr, ";") {
             curr = ps_advance(curr);
@@ -720,7 +720,7 @@ partial fn parse_const_decl(ps: ParserState, visible: Bool) -> ConstDeclR {
 
 partial fn parse_extern_fn(ps: ParserState) -> ExtFnR {
     let sp: Span = ps_current(ps).span;
-    let mut curr: ParserState = ps_advance(ps); // consume 'fn'
+    let curr: ref ParserState = ps_advance(ps); // consume 'fn'
     let name_r: StringR = ps_expect_name(curr);
     curr = name_r.ps;
     let params_r: ParamsR = parse_param_list(curr);
@@ -747,12 +747,12 @@ partial fn parse_extern_fn(ps: ParserState) -> ExtFnR {
 
 partial fn parse_extern_decl(ps: ParserState) -> ExternR {
     let sp: Span = ps_current(ps).span;
-    let mut curr: ParserState = ps_advance(ps); // consume 'extern'
+    let curr: ref ParserState = ps_advance(ps); // consume 'extern'
     let is_str_lit: Bool = match ps_current(curr).kind { TokenKind::StrLit => true, _ => false };
     let lang: String = if is_str_lit { ps_current(curr).lexeme } else { "" };
     if is_str_lit { curr = ps_advance(curr) } else { () }
     curr = ps_expect_punct(curr, "{");
-    let mut efns: List[ExternFnDecl] = [];
+    let efns: ref List[ExternFnDecl] = [];
     while !ps_at_eof(curr) && !ps_at_punct(curr, "}") {
         match ps_current(curr).kind {
             TokenKind::KwFn => {
@@ -773,7 +773,7 @@ partial fn parse_extern_decl(ps: ParserState) -> ExternR {
 
 partial fn parse_impl_decl(ps: ParserState) -> ImplR {
     let sp: Span = ps_current(ps).span;
-    let mut curr: ParserState = ps_advance(ps); // consume 'impl'
+    let curr: ref ParserState = ps_advance(ps); // consume 'impl'
     let first_ty_r: TypeExprR = parse_type_expr(curr);
     curr = first_ty_r.ps;
 
@@ -783,8 +783,8 @@ partial fn parse_impl_decl(ps: ParserState) -> ImplR {
     let fty_args: List[TypeExpr] = first_ty_r.value.args;
     let fty_span: Span = first_ty_r.value.span;
 
-    let mut trait_name: String = "";
-    let mut trait_args: List[TypeExpr] = [];
+    let trait_name: ref String = "";
+    let trait_args: ref List[TypeExpr] = [];
     let for_tok: Token = ps_current(curr);
     let impl_ty: TypeExpr = if for_tok.lexeme == "for" {
         // first_ty was the trait
@@ -799,7 +799,7 @@ partial fn parse_impl_decl(ps: ParserState) -> ImplR {
     };
 
     curr = ps_expect_punct(curr, "{");
-    let mut methods: List[FnDecl] = [];
+    let methods: ref List[FnDecl] = [];
     while !ps_at_eof(curr) && !ps_at_punct(curr, "}") {
         let tok: Token = ps_current(curr);
         match tok.kind {
@@ -851,12 +851,12 @@ type ModFlags = struct {
 }
 
 partial fn collect_mod_flags(ps: ParserState) -> ModFlags {
-    let mut curr: ParserState = ps;
-    let mut visible: Bool    = false;
-    let mut is_test: Bool    = false;
-    let mut is_builtin: Bool = false;
-    let mut is_transp: Bool  = false;
-    let mut done: Bool = false;
+    let curr: ref ParserState = ps;
+    let visible: ref Bool    = false;
+    let is_test: ref Bool    = false;
+    let is_builtin: ref Bool = false;
+    let is_transp: ref Bool  = false;
+    let done: ref Bool = false;
     while !done {
         match ps_current(curr).kind {
             TokenKind::KwPub         => { visible    = true; curr = ps_advance(curr) }
@@ -872,13 +872,13 @@ partial fn collect_mod_flags(ps: ParserState) -> ModFlags {
 // ── Top-level program parser ───────────────────────────────────────────────────
 
 partial fn parse_program(ps: ParserState) -> Program {
-    let mut curr: ParserState = ps;
-    let mut fns:     List[FnDecl]     = [];
-    let mut types:   List[TypeDecl]   = [];
-    let mut uses:    List[UseDecl]    = [];
-    let mut consts:  List[ConstDecl]  = [];
-    let mut externs: List[ExternDecl] = [];
-    let mut impls:   List[ImplDecl]   = [];
+    let curr: ref ParserState = ps;
+    let fns: ref     List[FnDecl]     = [];
+    let types: ref   List[TypeDecl]   = [];
+    let uses: ref    List[UseDecl]    = [];
+    let consts: ref  List[ConstDecl]  = [];
+    let externs: ref List[ExternDecl] = [];
+    let impls: ref   List[ImplDecl]   = [];
 
     while !ps_at_eof(curr) {
         let tok: Token = ps_current(curr);

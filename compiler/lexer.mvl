@@ -106,7 +106,7 @@ fn keyword_kind(s: String) -> TokenKind {
 // Scan an identifier or keyword starting at pos.
 // Advances while alphanumeric/underscore; classifies via keyword_kind.
 partial fn scan_word(src: String, pos: Int, src_len: Int) -> ScanResult {
-    let mut p: Int = pos;
+    let p: ref Int = pos;
     while p < src_len && is_alnum(str_char_at(src, p)) {
         p = p + 1
     }
@@ -118,7 +118,7 @@ partial fn scan_word(src: String, pos: Int, src_len: Int) -> ScanResult {
 // Scan an integer or float literal starting at pos.
 // Detects the float suffix: digits "." digit digits.
 partial fn scan_number(src: String, pos: Int, src_len: Int) -> ScanResult {
-    let mut p: Int = pos;
+    let p: ref Int = pos;
     while p < src_len && is_digit(str_char_at(src, p)) {
         p = p + 1
     }
@@ -136,7 +136,7 @@ partial fn scan_number(src: String, pos: Int, src_len: Int) -> ScanResult {
 // Skip a line comment body (call after "//" is confirmed).
 // Returns end_pos pointing at the '\n' or end-of-string.
 partial fn scan_comment_end(src: String, pos: Int, src_len: Int) -> Int {
-    let mut p: Int = pos;
+    let p: ref Int = pos;
     while p < src_len && str_char_at(src, p) != "\n" {
         p = p + 1
     }
@@ -147,7 +147,7 @@ partial fn scan_comment_end(src: String, pos: Int, src_len: Int) -> Int {
 // Returns ScanResult with kind=StrLit, lexeme=content (without quotes),
 // end_pos pointing past the closing '"'.
 partial fn scan_string_body(src: String, pos: Int, src_len: Int) -> ScanResult {
-    let mut p: Int = pos;
+    let p: ref Int = pos;
     while p < src_len && str_char_at(src, p) != "\"" {
         if str_char_at(src, p) == "\\" && p + 1 < src_len {
             p = p + 2
@@ -183,10 +183,10 @@ fn two_char_punct(c: String, c2: String) -> String {
 // Unknown characters (outside ASCII alpha/digit/punct) are emitted as Punct.
 pub partial fn lex(src: String) -> List[Token] {
     let src_len: Int = src.len();
-    let mut pos: Int = 0;
-    let mut line: Int = 1;
-    let mut col: Int = 1;
-    let mut tokens: List[Token] = [];
+    let pos: ref Int = 0;
+    let line: ref Int = 1;
+    let col: ref Int = 1;
+    let tokens: ref List[Token] = [];
 
     while pos < src_len {
         let c: String = str_char_at(src, pos);

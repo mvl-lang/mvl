@@ -88,7 +88,7 @@ total fn sig_close_brace(acc: SigAcc) -> SigAcc {
 }
 
 total fn add_mod(acc: SigAcc, m: String) -> SigAcc {
-    let mut new_mods: List[String] = acc.mods;
+    let new_mods: ref List[String] = acc.mods;
     new_mods.push(m);
     SigAcc {
         items: acc.items, mode: acc.mode, item_kind: acc.item_kind,
@@ -102,7 +102,7 @@ total fn add_mod(acc: SigAcc, m: String) -> SigAcc {
 total fn sig_push_param(acc: SigAcc) -> SigAcc {
     if acc.cur_pname != "" {
         let param: SigParam = SigParam { name: acc.cur_pname, type_text: acc.cur_ptype };
-        let mut new_params: List[SigParam] = acc.params;
+        let new_params: ref List[SigParam] = acc.params;
         new_params.push(param);
         SigAcc {
             items: acc.items, mode: acc.mode, item_kind: acc.item_kind,
@@ -117,7 +117,7 @@ total fn sig_push_param(acc: SigAcc) -> SigAcc {
 }
 
 total fn sig_push_fn(acc: SigAcc, depth_delta: Int) -> SigAcc {
-    let mut final_effects: List[String] = acc.effects;
+    let final_effects: ref List[String] = acc.effects;
     if acc.cur_effect != "" {
         final_effects.push(acc.cur_effect)
     }
@@ -126,7 +126,7 @@ total fn sig_push_fn(acc: SigAcc, depth_delta: Int) -> SigAcc {
         vis: acc.vis, mods: acc.mods, params: acc.params,
         ret_type: acc.ret_type, effects: final_effects,
     };
-    let mut new_items: List[SigItem] = acc.items;
+    let new_items: ref List[SigItem] = acc.items;
     new_items.push(item);
     SigAcc {
         items: new_items, mode: ParseMode::Scan, item_kind: ItemKind::FnDecl,
@@ -141,7 +141,7 @@ total fn sig_push_item(acc: SigAcc, name: String) -> SigAcc {
         kind: acc.item_kind, name: name, line: acc.item_line,
         vis: acc.vis, mods: acc.mods, params: [], ret_type: "", effects: [],
     };
-    let mut new_items: List[SigItem] = acc.items;
+    let new_items: ref List[SigItem] = acc.items;
     new_items.push(item);
     SigAcc {
         items: new_items, mode: ParseMode::Scan, item_kind: ItemKind::FnDecl,
@@ -489,7 +489,7 @@ total fn parse_in_effects(acc: SigAcc, tok: Token) -> SigAcc {
     } else if tok.cat == TokenCat::Keyword && (tok.lexeme == "where" || tok.lexeme == "requires" || tok.lexeme == "ensures") {
         sig_push_fn(acc, 0)
     } else if tok.cat == TokenCat::Punct && tok.lexeme == "," && acc.type_depth == 0 {
-        let mut new_effects: List[String] = acc.effects;
+        let new_effects: ref List[String] = acc.effects;
         if acc.cur_effect != "" { new_effects.push(acc.cur_effect) }
         SigAcc {
             items: acc.items, mode: ParseMode::InEffects, item_kind: acc.item_kind,

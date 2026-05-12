@@ -99,7 +99,7 @@ total fn parse_need_name(acc: ParseAcc, tok: Token) -> ParseAcc {
         match tok.cat {
             TokenCat::Ident => {
                 let item: Item = Item { kind: acc.item_kind, name: tok.lexeme, line: acc.item_line };
-                let mut new_items: List[Item] = acc.items;
+                let new_items: ref List[Item] = acc.items;
                 new_items.push(item);
                 ParseAcc { items: new_items, mode: ParseMode::Scan, item_kind: ItemKind::FnDecl, item_line: 0, depth: acc.depth }
             }

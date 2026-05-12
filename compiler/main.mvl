@@ -123,13 +123,13 @@ partial fn main() -> Unit ! FileRead, Console {
     match read_dir(dir_path) {
         Err(e) => println("error reading directory: {}", e),
         Ok(entries) => {
-            let mut file_count: Int  = 0;
-            let mut fn_total:   Int  = 0;
-            let mut type_total: Int  = 0;
-            let mut use_total:  Int  = 0;
-            let mut err_total:  Int  = 0;
+            let file_count: ref Int  = 0;
+            let fn_total: ref   Int  = 0;
+            let type_total: ref Int  = 0;
+            let use_total: ref  Int  = 0;
+            let err_total: ref  Int  = 0;
 
-            let mut i: Int = 0;
+            let i: ref Int = 0;
             while i < entries.len() {
                 match entries.get(i) {
                     None => (),
@@ -149,7 +149,7 @@ partial fn main() -> Unit ! FileRead, Console {
                                         prog.errors.len());
 
                                     // print fn signatures
-                                    let mut fi: Int = 0;
+                                    let fi: ref Int = 0;
                                     while fi < prog.fns.len() {
                                         match prog.fns.get(fi) {
                                             None    => (),
@@ -159,7 +159,7 @@ partial fn main() -> Unit ! FileRead, Console {
                                     }
 
                                     // print type declarations
-                                    let mut ti: Int = 0;
+                                    let ti: ref Int = 0;
                                     while ti < prog.types.len() {
                                         match prog.types.get(ti) {
                                             None    => (),
@@ -179,7 +179,7 @@ partial fn main() -> Unit ! FileRead, Console {
                                     }
 
                                     // print use declarations
-                                    let mut ui: Int = 0;
+                                    let ui: ref Int = 0;
                                     while ui < prog.uses.len() {
                                         match prog.uses.get(ui) {
                                             None    => (),
@@ -192,7 +192,7 @@ partial fn main() -> Unit ! FileRead, Console {
                                     }
 
                                     // print parse errors
-                                    let mut ei: Int = 0;
+                                    let ei: ref Int = 0;
                                     while ei < prog.errors.len() {
                                         match prog.errors.get(ei) {
                                             None    => (),

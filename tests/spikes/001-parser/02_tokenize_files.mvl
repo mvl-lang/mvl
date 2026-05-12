@@ -95,8 +95,8 @@ fn main() -> Unit ! FileRead, Console {
     match read_dir(dir_path) {
         Err(e) => println("error reading directory: {}", e),
         Ok(entries) => {
-            let mut file_count: Int = 0;
-            let mut token_count: Int = 0;
+            let file_count: ref Int = 0;
+            let token_count: ref Int = 0;
             for entry in entries {
                 // to_string(entry.path): Path → String (Public, label-free)
                 let name: String = to_string(entry.path);
