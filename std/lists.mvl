@@ -146,7 +146,7 @@ pub fn filter[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
 
 /// Left fold: reduce `xs` to a single value using `f` and accumulator `init`.
 ///
-/// `U: Clone` is required by the generated Rust: the `let mut acc = init`
+/// `U: Clone` is required by the generated Rust: the emitted `let mut acc = init`
 /// binding and the `acc = f(acc, x)` rebinding both move `acc`, so the
 /// transpiled code needs `U: Clone` to re-bind after each iteration.  This
 /// is an implementation constraint, not a semantic requirement of fold itself.

@@ -152,7 +152,7 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                 // of each element; result collected back into Vec.
                 "filter" | "take_while" | "skip_while" if args.len() == 1 => {
                     let needs_borrow = if let Expr::Ident(name, _) = &args[0] {
-                        cg.borrow_params_map
+                        cg.capability_params_map
                             .get(name.as_str())
                             .and_then(|b| b.first().copied())
                             .flatten()
@@ -174,7 +174,7 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                 // any / all — same predicate pattern but return bool, no collect.
                 "any" | "all" if args.len() == 1 => {
                     let needs_borrow = if let Expr::Ident(name, _) = &args[0] {
-                        cg.borrow_params_map
+                        cg.capability_params_map
                             .get(name.as_str())
                             .and_then(|b| b.first().copied())
                             .flatten()
@@ -200,7 +200,7 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                 "fold" if args.len() == 2 => {
                     let (borrow_acc, borrow_elem) = if let Expr::Ident(name, _) = &args[1] {
                         let borrows = cg
-                            .borrow_params_map
+                            .capability_params_map
                             .get(name.as_str())
                             .cloned()
                             .unwrap_or_default();
@@ -252,7 +252,7 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                         // Phase B: if the key function takes a reference for its first
                         // parameter, emit `&__v.clone()` instead of `__v.clone()`.
                         let needs_borrow = if let Expr::Ident(name, _) = arg {
-                            cg.borrow_params_map
+                            cg.capability_params_map
                                 .get(name.as_str())
                                 .and_then(|b| b.first().copied())
                                 .flatten()
@@ -673,7 +673,7 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                 // Phase B: look up borrow flags for this callee so we can emit `&x`
                 // instead of `x.clone()` for reference parameters.
                 let borrows: Vec<Option<bool>> = cg
-                    .borrow_params_map
+                    .capability_params_map
                     .get(name.as_str())
                     .cloned()
                     .unwrap_or_default();

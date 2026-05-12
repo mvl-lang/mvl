@@ -69,7 +69,7 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &Stmt) {
             // and cannot be moved — `.clone()` produces an owned copy.
             let needs_clone = if let Expr::FieldAccess { expr, .. } = init {
                 if let Expr::Ident(name, _) = expr.as_ref() {
-                    cg.borrow_param_names.contains(name.as_str())
+                    cg.capability_param_names.contains(name.as_str())
                 } else {
                     false
                 }

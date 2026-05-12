@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 
-//! Borrow-parameter analysis (Phase B, Spec 009 Req 2).
+//! Capability-parameter analysis (Phase B, Spec 009 Req 2).
 //!
 //! For each function declaration, determines which parameters are passed by
 //! reference (`&T`) rather than by value.  The result drives two
@@ -48,7 +48,7 @@ use crate::mvl::parser::ast::{
 /// `Some(false)` at index `i` means "pass as `&x`" (shared reference).
 /// `Some(true)` means "pass as `&mut x`" (mutable reference).
 /// `None` means "pass by value (clone / move as normal)".
-pub fn build_borrow_params_map(
+pub fn build_capability_params_map(
     prog: &Program,
     prelude_fns: &[&FnDecl],
 ) -> HashMap<String, Vec<Option<bool>>> {
@@ -65,7 +65,7 @@ pub fn build_borrow_params_map(
     // User functions — explicit + inferred.
     for decl in &prog.declarations {
         if let Decl::Fn(fd) = decl {
-            let flags = borrow_params_for_fn(fd);
+            let flags = capability_params_for_fn(fd);
             if flags.iter().any(|b| b.is_some()) {
                 map.insert(fd.name.clone(), flags);
             }
@@ -81,7 +81,7 @@ pub fn build_borrow_params_map(
 /// Explicit `val T` / `ref T` annotations are detected first; for remaining
 /// non-Copy owned parameters, conservative read-only body analysis infers
 /// whether they can be passed as `&T` (Rust borrow).
-pub fn borrow_params_for_fn(fd: &FnDecl) -> Vec<Option<bool>> {
+pub fn capability_params_for_fn(fd: &FnDecl) -> Vec<Option<bool>> {
     fd.params
         .iter()
         .map(|p| {
@@ -520,14 +520,14 @@ mod tests {
     #[test]
     fn explicit_ref_param_is_shared_borrow() {
         let fd = parse_fn("fn f(x: val Int) -> Unit { }");
-        let flags = borrow_params_for_fn(&fd);
+        let flags = capability_params_for_fn(&fd);
         assert_eq!(flags, vec![Some(false)]);
     }
 
     #[test]
     fn explicit_mut_ref_param_is_mutable_borrow() {
         let fd = parse_fn("fn f(x: ref Int) -> Unit { }");
-        let flags = borrow_params_for_fn(&fd);
+        let flags = capability_params_for_fn(&fd);
         assert_eq!(flags, vec![Some(true)]);
     }
 
@@ -535,7 +535,7 @@ mod tests {
     fn owned_copy_param_is_not_borrow() {
         // Int is Copy — no benefit to borrowing, so always None.
         let fd = parse_fn("fn f(x: Int) -> Int { x }");
-        let flags = borrow_params_for_fn(&fd);
+        let flags = capability_params_for_fn(&fd);
         assert_eq!(flags, vec![None]);
     }
 
@@ -543,7 +543,7 @@ mod tests {
     fn owned_copy_read_only_param_stays_none() {
         // Even a read-only Int param stays owned — Int is Copy.
         let fd = parse_fn("fn f(x: Int) -> Bool { if x == 0 { true } else { false } }");
-        let flags = borrow_params_for_fn(&fd);
+        let flags = capability_params_for_fn(&fd);
         assert_eq!(flags, vec![None]);
     }
 
@@ -551,21 +551,21 @@ mod tests {
     fn mixed_explicit_and_owned_params() {
         // Only the explicitly val-annotated param is a borrow.
         let fd = parse_fn("fn f(a: Int, b: val Int) -> Int { a }");
-        let flags = borrow_params_for_fn(&fd);
+        let flags = capability_params_for_fn(&fd);
         assert_eq!(flags, vec![None, Some(false)]);
     }
 
     #[test]
     fn all_ref_params_flags_correct() {
         let fd = parse_fn("fn f(a: val Int, b: ref Bool) -> Unit { }");
-        let flags = borrow_params_for_fn(&fd);
+        let flags = capability_params_for_fn(&fd);
         assert_eq!(flags, vec![Some(false), Some(true)]);
     }
 
     #[test]
     fn no_params_returns_empty_flags() {
         let fd = parse_fn("fn f() -> Unit { }");
-        let flags = borrow_params_for_fn(&fd);
+        let flags = capability_params_for_fn(&fd);
         assert!(flags.is_empty());
     }
 
@@ -575,7 +575,7 @@ mod tests {
     fn list_param_unused_in_body_inferred_as_borrow() {
         // xs is never used → trivially read-only → borrow (Rust &T).
         let fd = parse_fn("fn f(xs: List[Int]) -> Int { 0 }");
-        assert_eq!(borrow_params_for_fn(&fd), vec![Some(false)]);
+        assert_eq!(capability_params_for_fn(&fd), vec![Some(false)]);
     }
 
     #[test]
@@ -587,21 +587,21 @@ mod tests {
         let fd = parse_fn(
             "fn sum(xs: List[Int]) -> Int { let acc: ref Int = 0; for x in xs { acc = acc } acc }",
         );
-        assert_eq!(borrow_params_for_fn(&fd), vec![None]);
+        assert_eq!(capability_params_for_fn(&fd), vec![None]);
     }
 
     #[test]
     fn list_param_used_only_as_method_receiver_inferred_as_borrow() {
         // Method call receiver auto-derefs → not disqualifying.
         let fd = parse_fn("fn f(xs: List[Int]) -> Int { xs.len() }");
-        assert_eq!(borrow_params_for_fn(&fd), vec![Some(false)]);
+        assert_eq!(capability_params_for_fn(&fd), vec![Some(false)]);
     }
 
     #[test]
     fn struct_param_used_only_via_field_access_inferred_as_borrow() {
         // Field access on a struct auto-derefs in Rust.
         let fd = parse_fn("fn show(p: Point) -> Int { p.x }");
-        assert_eq!(borrow_params_for_fn(&fd), vec![Some(false)]);
+        assert_eq!(capability_params_for_fn(&fd), vec![Some(false)]);
     }
 
     // ── Borrow inference: disqualified → None ────────────────────────────
@@ -610,51 +610,51 @@ mod tests {
     fn param_returned_directly_is_not_borrow() {
         // Returning xs would cause a type mismatch if xs: &Vec<i64>.
         let fd = parse_fn("fn f(xs: List[Int]) -> List[Int] { xs }");
-        assert_eq!(borrow_params_for_fn(&fd), vec![None]);
+        assert_eq!(capability_params_for_fn(&fd), vec![None]);
     }
 
     #[test]
     fn param_passed_to_fn_call_is_not_borrow() {
         // xs passed directly to helper() → cannot guarantee callee owns it.
         let fd = parse_fn("fn f(xs: List[Int]) -> Int { helper(xs) }");
-        assert_eq!(borrow_params_for_fn(&fd), vec![None]);
+        assert_eq!(capability_params_for_fn(&fd), vec![None]);
     }
 
     #[test]
     fn param_used_as_match_scrutinee_is_not_borrow() {
         // match xs { … } moves xs — cannot borrow.
         let fd = parse_fn("fn f(xs: List[Int]) -> Int { match xs { _ => 0 } }");
-        assert_eq!(borrow_params_for_fn(&fd), vec![None]);
+        assert_eq!(capability_params_for_fn(&fd), vec![None]);
     }
 
     #[test]
     fn param_stored_in_struct_field_is_not_borrow() {
         let fd = parse_fn("fn f(xs: List[Int]) -> Wrapper { Wrapper { data: xs } }");
-        assert_eq!(borrow_params_for_fn(&fd), vec![None]);
+        assert_eq!(capability_params_for_fn(&fd), vec![None]);
     }
 
     #[test]
     fn param_in_list_literal_is_not_borrow() {
         let fd = parse_fn("fn f(xs: List[Int]) -> List[List[Int]] { [xs] }");
-        assert_eq!(borrow_params_for_fn(&fd), vec![None]);
+        assert_eq!(capability_params_for_fn(&fd), vec![None]);
     }
 
     #[test]
     fn param_moved_into_let_binding_is_not_borrow() {
         let fd = parse_fn("fn f(xs: List[Int]) -> Int { let ys: List[Int] = xs; 0 }");
-        assert_eq!(borrow_params_for_fn(&fd), vec![None]);
+        assert_eq!(capability_params_for_fn(&fd), vec![None]);
     }
 
     #[test]
     fn param_assigned_to_is_not_borrow() {
         let fd = parse_fn("fn f(xs: List[Int]) -> Int { xs = []; 0 }");
-        assert_eq!(borrow_params_for_fn(&fd), vec![None]);
+        assert_eq!(capability_params_for_fn(&fd), vec![None]);
     }
 
     #[test]
     fn param_returned_via_explicit_return_is_not_borrow() {
         let fd = parse_fn("fn f(xs: List[Int]) -> List[Int] { return xs; xs }");
-        assert_eq!(borrow_params_for_fn(&fd), vec![None]);
+        assert_eq!(capability_params_for_fn(&fd), vec![None]);
     }
 
     // ── Map building ─────────────────────────────────────────────────────
@@ -662,17 +662,17 @@ mod tests {
     #[test]
     fn owned_copy_only_fn_absent_from_map() {
         let prog = parse_prog("fn f(x: Int) -> Int { x }");
-        let map = build_borrow_params_map(&prog, &[]);
+        let map = build_capability_params_map(&prog, &[]);
         assert!(
             !map.contains_key("f"),
-            "copy-only fn must not appear in borrow_params_map"
+            "copy-only fn must not appear in capability_params_map"
         );
     }
 
     #[test]
     fn inferred_borrow_fn_present_in_map() {
         let prog = parse_prog("fn sum(xs: List[Int]) -> Int { 0 }");
-        let map = build_borrow_params_map(&prog, &[]);
+        let map = build_capability_params_map(&prog, &[]);
         assert_eq!(map.get("sum"), Some(&vec![Some(false)]));
     }
 
@@ -680,7 +680,7 @@ mod tests {
     fn prelude_fn_with_ref_param_appears_in_map() {
         let prelude_fn = parse_fn("fn print_ref(x: val Int) -> Unit { }");
         let prog = parse_prog("");
-        let map = build_borrow_params_map(&prog, &[&prelude_fn]);
+        let map = build_capability_params_map(&prog, &[&prelude_fn]);
         assert_eq!(map.get("print_ref"), Some(&vec![Some(false)]));
     }
 
@@ -690,7 +690,7 @@ mod tests {
     fn char_param_is_not_inferred_as_borrow() {
         // Char maps to Rust `char` which is Copy — no benefit to borrowing.
         let fd = parse_fn("fn f(c: Char) -> Bool { true }");
-        assert_eq!(borrow_params_for_fn(&fd), vec![None]);
+        assert_eq!(capability_params_for_fn(&fd), vec![None]);
     }
 
     // ── Fix: Binary operand disqualifies ─────────────────────────────────
@@ -701,7 +701,7 @@ mod tests {
         // so `&Vec<i64> + rhs` would fail to compile.  Must disqualify.
         let fd = parse_fn("fn f(xs: List[Int], ys: List[Int]) -> Bool { xs == ys }");
         // both xs and ys appear as direct binary operands → both disqualified.
-        assert_eq!(borrow_params_for_fn(&fd), vec![None, None]);
+        assert_eq!(capability_params_for_fn(&fd), vec![None, None]);
     }
 
     #[test]
@@ -709,7 +709,7 @@ mod tests {
         // xs.len() is just a method receiver — the Int result is used in binary.
         // xs itself is never a direct binary operand, so it stays read-only.
         let fd = parse_fn("fn f(xs: List[Int]) -> Bool { xs.len() == 0 }");
-        assert_eq!(borrow_params_for_fn(&fd), vec![Some(false)]);
+        assert_eq!(capability_params_for_fn(&fd), vec![Some(false)]);
     }
 
     // ── Fix: Deref unary does not disqualify ─────────────────────────────
@@ -722,7 +722,10 @@ mod tests {
         // Here `b` is field-accessed only → still inferred as borrow.
         let fd = parse_fn("fn f(b: Point, r: val Int) -> Int { b.x }");
         // b: Point — field access only → Some(false); r: &Int — explicit → Some(false).
-        assert_eq!(borrow_params_for_fn(&fd), vec![Some(false), Some(false)]);
+        assert_eq!(
+            capability_params_for_fn(&fd),
+            vec![Some(false), Some(false)]
+        );
     }
 
     // ── Fix: Lambda capture disqualifies ─────────────────────────────────
@@ -732,7 +735,7 @@ mod tests {
         // xs is captured inside a lambda passed to apply().
         // The lambda's lifetime is unknown — disqualify xs.
         let fd = parse_fn("fn f(xs: List[Int]) -> Int { apply(|| xs.len()) }");
-        assert_eq!(borrow_params_for_fn(&fd), vec![None]);
+        assert_eq!(capability_params_for_fn(&fd), vec![None]);
     }
 
     #[test]
@@ -740,6 +743,6 @@ mod tests {
         // The lambda introduces its own `xs` parameter, shadowing the outer one.
         // The outer `xs` is never captured — still inferred as borrow.
         let fd = parse_fn("fn f(xs: List[Int]) -> Int { apply(|xs: List[Int]| xs.len()) }");
-        assert_eq!(borrow_params_for_fn(&fd), vec![Some(false)]);
+        assert_eq!(capability_params_for_fn(&fd), vec![Some(false)]);
     }
 }
