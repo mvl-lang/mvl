@@ -486,6 +486,17 @@ fn emit_expr_tail_with_return_type(
             cg.push(")");
             return;
         }
+        TypeExpr::Labeled { .. }
+            if matches!(expr, Expr::FnCall { .. } | Expr::MethodCall { .. }) =>
+        {
+            // Function call returning a plain value inside a labeled-return function
+            // (e.g. `call_lex_counts(src.into())` in a `-> Clean<Counts>` fn).
+            // `.into()` lifts the result via From<T> for Label<T>; also a no-op if
+            // the call already returns the labeled type (From<T> for T blanket impl).
+            emit_expr(cg, expr);
+            cg.push(".into()");
+            return;
+        }
         TypeExpr::Result { ok, .. } => {
             // Ok(x) where x should be Labeled and x is a raw value: emit Ok(Label(x))
             if let TypeExpr::Labeled { label, .. } = ok.as_ref() {

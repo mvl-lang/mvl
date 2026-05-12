@@ -1,0 +1,143 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// tests/spikes/001-parser/03_lex_test.mvl
+//
+// Unit tests for experiment 03 (lex_files) character classifiers and
+// keyword detection.  All functions are pure (no FileRead / IFC labels).
+//
+// Run with: mvl test tests/spikes/001-parser/03_lex_test.mvl
+
+// ── Re-declarations (mirrors 03_lex_files.mvl) ───────────────────────────────
+
+total fn is_digit(c: String) -> Bool {
+    c != "" && "0123456789".contains(c)
+}
+
+total fn is_alpha(c: String) -> Bool {
+    c != "" && "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_".contains(c)
+}
+
+total fn is_alnum(c: String) -> Bool {
+    c != "" && "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789".contains(c)
+}
+
+total fn is_whitespace(c: String) -> Bool {
+    c == " " || c == "\t" || c == "\n" || c == "\r"
+}
+
+total fn is_keyword(s: String) -> Bool {
+    let kws: String = " fn let mut match if else for while type total partial return extern use pub in true false builtin transparent move consume declassify sanitize const where struct enum impl test requires ensures invariant Public Tainted Secret Clean iso val ref tag ";
+    kws.contains(format(" {} ", s))
+}
+
+// ── is_digit ─────────────────────────────────────────────────────────────────
+
+test fn digit_zero_is_digit() -> Unit {
+    assert_eq(is_digit("0"), true);
+}
+
+test fn digit_nine_is_digit() -> Unit {
+    assert_eq(is_digit("9"), true);
+}
+
+test fn letter_is_not_digit() -> Unit {
+    assert_eq(is_digit("a"), false);
+}
+
+test fn empty_is_not_digit() -> Unit {
+    assert_eq(is_digit(""), false);
+}
+
+// ── is_alpha ─────────────────────────────────────────────────────────────────
+
+test fn lowercase_is_alpha() -> Unit {
+    assert_eq(is_alpha("a"), true);
+}
+
+test fn uppercase_is_alpha() -> Unit {
+    assert_eq(is_alpha("Z"), true);
+}
+
+test fn underscore_is_alpha() -> Unit {
+    assert_eq(is_alpha("_"), true);
+}
+
+test fn digit_is_not_alpha() -> Unit {
+    assert_eq(is_alpha("5"), false);
+}
+
+test fn empty_is_not_alpha() -> Unit {
+    assert_eq(is_alpha(""), false);
+}
+
+// ── is_alnum ─────────────────────────────────────────────────────────────────
+
+test fn letter_is_alnum() -> Unit {
+    assert_eq(is_alnum("a"), true);
+}
+
+test fn digit_is_alnum() -> Unit {
+    assert_eq(is_alnum("3"), true);
+}
+
+test fn underscore_is_alnum() -> Unit {
+    assert_eq(is_alnum("_"), true);
+}
+
+test fn space_is_not_alnum() -> Unit {
+    assert_eq(is_alnum(" "), false);
+}
+
+// ── is_whitespace ─────────────────────────────────────────────────────────────
+
+test fn space_is_whitespace() -> Unit {
+    assert_eq(is_whitespace(" "), true);
+}
+
+test fn tab_is_whitespace() -> Unit {
+    assert_eq(is_whitespace("\t"), true);
+}
+
+test fn newline_is_whitespace() -> Unit {
+    assert_eq(is_whitespace("\n"), true);
+}
+
+test fn letter_is_not_whitespace() -> Unit {
+    assert_eq(is_whitespace("a"), false);
+}
+
+// ── is_keyword ────────────────────────────────────────────────────────────────
+
+test fn fn_is_keyword() -> Unit {
+    assert_eq(is_keyword("fn"), true);
+}
+
+test fn let_is_keyword() -> Unit {
+    assert_eq(is_keyword("let"), true);
+}
+
+test fn match_is_keyword() -> Unit {
+    assert_eq(is_keyword("match"), true);
+}
+
+test fn true_is_keyword() -> Unit {
+    assert_eq(is_keyword("true"), true);
+}
+
+test fn false_is_keyword() -> Unit {
+    assert_eq(is_keyword("false"), true);
+}
+
+test fn identifier_is_not_keyword() -> Unit {
+    assert_eq(is_keyword("foo"), false);
+}
+
+test fn partial_keyword_not_matched() -> Unit {
+    // "fn" is a keyword but "f" is not
+    assert_eq(is_keyword("f"), false);
+}
+
+test fn empty_is_not_keyword() -> Unit {
+    assert_eq(is_keyword(""), false);
+}

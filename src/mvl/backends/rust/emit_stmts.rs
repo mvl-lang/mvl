@@ -65,12 +65,16 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &Stmt) {
             cg.push(" = ");
             emit_expr(cg, init);
             // When the declared type is a security label (e.g. Tainted<String>) and the
-            // init is a plain string/value, `.into()` converts it to the labeled type.
-            // The explicit type annotation makes this unambiguous (unlike assert_eq! context).
+            // init is a plain value or function call, `.into()` converts it to the labeled
+            // type. Covers: string literals, function calls returning plain types, and
+            // transparent-fn calls whose result needs lifting (e.g. `Clean<Counts>`).
+            // Safe for calls already returning the labeled type — `From<T> for T` is no-op.
             let needs_into = matches!(ty, TypeExpr::Labeled { .. })
                 && matches!(
                     init,
                     Expr::Literal(crate::mvl::parser::ast::Literal::Str(_), _)
+                        | Expr::FnCall { .. }
+                        | Expr::MethodCall { .. }
                 );
             if needs_into {
                 cg.push(".into()");

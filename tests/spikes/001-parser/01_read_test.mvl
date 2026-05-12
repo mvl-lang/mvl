@@ -1,0 +1,42 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// tests/spikes/001-parser/01_read_test.mvl
+//
+// Unit tests for experiment 01 (read_files).
+// 01_read_files.mvl has no pure functions; these tests cover the
+// string/path helpers that the experiment relies on.
+//
+// Run with: mvl test tests/spikes/001-parser/01_read_test.mvl
+
+// ── Helpers (re-declared locally; module resolver not yet wired into test runner) ──
+
+total fn is_mvl_file(name: String) -> Bool {
+    name.ends_with(".mvl")
+}
+
+total fn mvl_extension() -> String {
+    ".mvl"
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+test fn mvl_file_detected() -> Unit {
+    assert_eq(is_mvl_file("main.mvl"), true);
+}
+
+test fn non_mvl_file_rejected() -> Unit {
+    assert_eq(is_mvl_file("main.rs"), false);
+}
+
+test fn empty_string_not_mvl_file() -> Unit {
+    assert_eq(is_mvl_file(""), false);
+}
+
+test fn extension_constant_correct() -> Unit {
+    assert_eq(mvl_extension(), ".mvl");
+}
+
+test fn filename_with_numbers_detected() -> Unit {
+    assert_eq(is_mvl_file("01_read_files.mvl"), true);
+}

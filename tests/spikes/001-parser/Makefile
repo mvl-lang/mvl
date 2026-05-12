@@ -11,30 +11,51 @@ ROOT := $(shell git -C "$(dir $(abspath $(lastword $(MAKEFILE_LIST))))" rev-pars
 MVL  := $(ROOT)/target/debug/mvl
 ARGS ?= compiler/main.mvl
 
-.PHONY: help build check check-compiler run-01 run-02 run-03 run-main
+.PHONY: help build guard-mvl check check-compiler test test-01 test-02 test-03 run-01 run-02 run-03 run-main
 
 .DEFAULT_GOAL := help
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
-build: ## Build the MVL compiler (required before check/run-*)
+guard-mvl: ## Validate MVL binary is present and working (does NOT recompile)
+	@$(MVL) --version > /dev/null 2>&1 || { \
+		echo ""; \
+		echo "  ERROR: MVL compiler not found at: $(MVL)"; \
+		echo "  Run 'make build' from the repo root first."; \
+		echo ""; \
+		exit 1; \
+	}
+
+build: ## Build the MVL compiler (required before check/run-*/test-*)
 	cd "$(ROOT)" && cargo build --quiet
 
-check: ## Type-check all experiment .mvl files (0N_*.mvl)
+check: guard-mvl ## Type-check all experiment .mvl files (0N_*.mvl)
 	cd "$(ROOT)" && for f in tests/spikes/001-parser/[0-9][0-9]_*.mvl; do $(MVL) check "$$f"; done
 
-check-compiler: ## Type-check all compiler/ .mvl files
+check-compiler: guard-mvl ## Type-check all compiler/ .mvl files
 	cd "$(ROOT)" && for f in compiler/*.mvl; do $(MVL) check "$$f"; done
 
-run-01: ## Run experiment 01 — reads examples/log_analyzer/main.mvl
+test: guard-mvl ## Run all unit tests (*_test.mvl) in this spike
+	cd "$(ROOT)" && $(MVL) test tests/spikes/001-parser/
+
+test-01: guard-mvl ## Run unit tests for experiment 01 (file/path helpers)
+	cd "$(ROOT)" && $(MVL) test tests/spikes/001-parser/01_read_test.mvl
+
+test-02: guard-mvl ## Run unit tests for experiment 02 (token counting)
+	cd "$(ROOT)" && $(MVL) test tests/spikes/001-parser/02_tokenize_test.mvl
+
+test-03: guard-mvl ## Run unit tests for experiment 03 (lexer classifiers)
+	cd "$(ROOT)" && $(MVL) test tests/spikes/001-parser/03_lex_test.mvl
+
+run-01: guard-mvl ## Run experiment 01 — reads examples/log_analyzer/main.mvl
 	cd "$(ROOT)" && $(MVL) run tests/spikes/001-parser/01_read_files.mvl
 
-run-02: ## Run experiment 02 — counts tokens in examples/log_analyzer/*.mvl
+run-02: guard-mvl ## Run experiment 02 — counts tokens in examples/log_analyzer/*.mvl
 	cd "$(ROOT)" && $(MVL) run tests/spikes/001-parser/02_tokenize_files.mvl
 
-run-03: ## Run experiment 03 — lex files in examples/log_analyzer/*.mvl
+run-03: guard-mvl ## Run experiment 03 — lex files in examples/log_analyzer/*.mvl
 	cd "$(ROOT)" && $(MVL) run tests/spikes/001-parser/03_lex_files.mvl
 
-run-main: ## Run $(ARGS) through the MVL lexer (override: make run-main ARGS=path/to/file.mvl)
+run-main: guard-mvl ## Run $(ARGS) through the MVL lexer (override: make run-main ARGS=path/to/file.mvl)
 	cd "$(ROOT)" && $(MVL) run $(ARGS)

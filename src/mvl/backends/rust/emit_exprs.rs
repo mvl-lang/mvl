@@ -151,21 +151,47 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                 // filter / take_while / skip_while — predicate applied to a clone
                 // of each element; result collected back into Vec.
                 "filter" | "take_while" | "skip_while" if args.len() == 1 => {
+                    let needs_borrow = if let Expr::Ident(name, _) = &args[0] {
+                        cg.borrow_params_map
+                            .get(name.as_str())
+                            .and_then(|b| b.first().copied())
+                            .flatten()
+                            .is_some()
+                    } else {
+                        false
+                    };
                     emit_expr(cg, receiver);
                     cg.push(".clone().into_iter().");
                     cg.push(method);
                     cg.push("(|__x| (");
                     emit_expr(cg, &args[0]);
-                    cg.push(")(__x.clone())).collect::<Vec<_>>()");
+                    if needs_borrow {
+                        cg.push(")(&__x.clone())).collect::<Vec<_>>()");
+                    } else {
+                        cg.push(")(__x.clone())).collect::<Vec<_>>()");
+                    }
                 }
                 // any / all — same predicate pattern but return bool, no collect.
                 "any" | "all" if args.len() == 1 => {
+                    let needs_borrow = if let Expr::Ident(name, _) = &args[0] {
+                        cg.borrow_params_map
+                            .get(name.as_str())
+                            .and_then(|b| b.first().copied())
+                            .flatten()
+                            .is_some()
+                    } else {
+                        false
+                    };
                     emit_expr(cg, receiver);
                     cg.push(".clone().into_iter().");
                     cg.push(method);
                     cg.push("(|__x| (");
                     emit_expr(cg, &args[0]);
-                    cg.push(")(__x.clone()))");
+                    if needs_borrow {
+                        cg.push(")(&__x.clone()))");
+                    } else {
+                        cg.push(")(__x.clone()))");
+                    }
                 }
                 // fold(init, f) — init cloned (value arg); f wrapped in closure
                 // so capturing closures are accepted alongside fn pointers.

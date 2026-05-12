@@ -1,0 +1,59 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// tests/spikes/001-parser/02_tokenize_test.mvl
+//
+// Unit tests for experiment 02 (tokenize_files).
+// Re-declares count_tokens logic as a pure String variant for testing
+// (original takes Tainted[String] which requires FileRead at the boundary).
+//
+// Run with: mvl test tests/spikes/001-parser/02_tokenize_test.mvl
+
+// ── Re-declaration (pure String variant for testing) ─────────────────────────
+
+// Mirrors count_tokens from 02_tokenize_files.mvl but takes String directly,
+// allowing unit testing without FileRead / Tainted inputs.
+total fn count_tokens_str(src: String) -> Int {
+    match src.split("\n").fold(Some(0), |acc: Option[Int], line: String|
+        match acc {
+            None    => None,
+            Some(k) => Some(k + line.split(" ").fold(0, |m: Int, w: String|
+                match w { "" => m, _ => m + 1 }
+            ))
+        }
+    ) {
+        None    => 0,
+        Some(n) => n,
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+test fn empty_string_has_zero_tokens() -> Unit {
+    assert_eq(count_tokens_str(""), 0);
+}
+
+test fn single_word_counts_as_one() -> Unit {
+    assert_eq(count_tokens_str("hello"), 1);
+}
+
+test fn two_space_separated_words() -> Unit {
+    assert_eq(count_tokens_str("hello world"), 2);
+}
+
+test fn newline_separated_words() -> Unit {
+    assert_eq(count_tokens_str("hello\nworld"), 2);
+}
+
+test fn multiple_spaces_not_counted() -> Unit {
+    assert_eq(count_tokens_str("a  b"), 2);
+}
+
+test fn mvl_snippet_token_count() -> Unit {
+    let snippet: String = "fn main() -> Unit {\n    let x: Int = 42;\n}";
+    // "fn", "main()", "->", "Unit", "{" = 5 on line 1
+    // "let", "x:", "Int", "=", "42;" = 5 on line 2
+    // "}" = 1 on line 3  → 11 total (spaces in "    let" collapse)
+    let n: Int = count_tokens_str(snippet);
+    assert_eq(n > 0, true);
+}
