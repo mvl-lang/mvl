@@ -86,10 +86,12 @@ test: ## Run all test suites and print a one-line PASS/FAIL summary for each
 	echo ""; \
 	run_suite "Unit tests"        test-unit; \
 	run_suite "Corpus"            test-corpus; \
+	run_suite "Solver"            test-solver; \
 	run_suite "Stdlib"            test-stdlib; \
 	run_suite "BDD"               test-bdd; \
 	run_suite "Transpiler"        test-transpiler; \
 	run_suite "LLVM backend"      test-llvm; \
+	run_suite "Cross-backend"     test-cross-backend; \
 	run_suite "Examples"          test-examples; \
 	run_suite "Tree-sitter"       test-tree-sitter; \
 	run_suite "Grammar coverage"  test-grammar-coverage; \
