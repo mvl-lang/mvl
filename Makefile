@@ -4,6 +4,8 @@ SHELL := /bin/bash
 
 .PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-corpus test-solver test-stdlib test-bdd test-transpiler test-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples coverage lint mvl-lint format format-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants
 
+.DEFAULT_GOAL := help
+
 help: ## Show this help
 	@echo ""
 	@awk 'BEGIN {FS = ":.*?## "} \

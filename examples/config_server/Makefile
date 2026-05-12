@@ -10,6 +10,8 @@
 # Run from this directory or from the repo root.
 .PHONY: help guard-mvl build check test-solver test test-llvm run clean
 
+.DEFAULT_GOAL := help
+
 MVL  := ../../target/debug/mvl
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 

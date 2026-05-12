@@ -2,6 +2,8 @@
 # Run from this directory: make build, make test, etc.
 .PHONY: help guard-mvl build check test-solver test test-llvm generate run run-llvm clean
 
+.DEFAULT_GOAL := help
+
 MVL  := ../../target/debug/mvl
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
