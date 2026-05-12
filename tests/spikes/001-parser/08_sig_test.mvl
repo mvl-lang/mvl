@@ -1,0 +1,861 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// tests/spikes/001-parser/08_sig_test.mvl
+//
+// Unit tests for experiment 08 (signature parser).
+// Tests the parameter, return-type, and effect parsers independently.
+//
+// Run with: mvl test tests/spikes/001-parser/08_sig_test.mvl
+
+// ── Re-declarations ───────────────────────────────────────────────────────────
+
+type TokenCat = enum { Keyword, Ident, Number, Str, Punct, Comment }
+
+type Token = struct {
+    cat:    TokenCat,
+    lexeme: String,
+    line:   Int,
+}
+
+pub type ItemKind = enum { FnDecl, TypeDecl, UseDecl, TestFn }
+
+pub type SigParam = struct {
+    name:      String,
+    type_text: String,
+}
+
+pub type SigItem = struct {
+    kind:     ItemKind,
+    name:     String,
+    line:     Int,
+    vis:      Bool,
+    mods:     List[String],
+    params:   List[SigParam],
+    ret_type: String,
+    effects:  List[String],
+}
+
+type ParseMode = enum {
+    Scan, NeedFn, NeedName, AfterName, InParams, AfterParams, InRetType, InEffects,
+}
+
+type SigAcc = struct {
+    items:         List[SigItem],
+    mode:          ParseMode,
+    item_kind:     ItemKind,
+    item_line:     Int,
+    depth:         Int,
+    vis:           Bool,
+    mods:          List[String],
+    item_name:     String,
+    params:        List[SigParam],
+    cur_pname:     String,
+    cur_ptype:     String,
+    in_param_type: Bool,
+    type_depth:    Int,
+    ret_type:      String,
+    effects:       List[String],
+    cur_effect:    String,
+}
+
+total fn sig_reset(acc: SigAcc) -> SigAcc {
+    SigAcc {
+        items: acc.items, mode: ParseMode::Scan, item_kind: ItemKind::FnDecl,
+        item_line: 0, depth: acc.depth, vis: false, mods: [],
+        item_name: "", params: [], cur_pname: "", cur_ptype: "",
+        in_param_type: false, type_depth: 0, ret_type: "", effects: [], cur_effect: "",
+    }
+}
+
+total fn sig_open_brace(acc: SigAcc) -> SigAcc {
+    SigAcc {
+        items: acc.items, mode: ParseMode::Scan, item_kind: ItemKind::FnDecl,
+        item_line: 0, depth: acc.depth + 1, vis: false, mods: [],
+        item_name: "", params: [], cur_pname: "", cur_ptype: "",
+        in_param_type: false, type_depth: 0, ret_type: "", effects: [], cur_effect: "",
+    }
+}
+
+total fn sig_close_brace(acc: SigAcc) -> SigAcc {
+    let new_depth: Int = if acc.depth > 0 { acc.depth - 1 } else { 0 };
+    SigAcc {
+        items: acc.items, mode: ParseMode::Scan, item_kind: ItemKind::FnDecl,
+        item_line: 0, depth: new_depth, vis: false, mods: [],
+        item_name: "", params: [], cur_pname: "", cur_ptype: "",
+        in_param_type: false, type_depth: 0, ret_type: "", effects: [], cur_effect: "",
+    }
+}
+
+total fn add_mod(acc: SigAcc, m: String) -> SigAcc {
+    let mut new_mods: List[String] = acc.mods;
+    new_mods.push(m);
+    SigAcc {
+        items: acc.items, mode: acc.mode, item_kind: acc.item_kind,
+        item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: new_mods,
+        item_name: acc.item_name, params: acc.params, cur_pname: acc.cur_pname,
+        cur_ptype: acc.cur_ptype, in_param_type: acc.in_param_type, type_depth: acc.type_depth,
+        ret_type: acc.ret_type, effects: acc.effects, cur_effect: acc.cur_effect,
+    }
+}
+
+total fn sig_push_param(acc: SigAcc) -> SigAcc {
+    if acc.cur_pname != "" {
+        let param: SigParam = SigParam { name: acc.cur_pname, type_text: acc.cur_ptype };
+        let mut new_params: List[SigParam] = acc.params;
+        new_params.push(param);
+        SigAcc {
+            items: acc.items, mode: acc.mode, item_kind: acc.item_kind,
+            item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+            item_name: acc.item_name, params: new_params, cur_pname: "", cur_ptype: "",
+            in_param_type: false, type_depth: 0, ret_type: acc.ret_type,
+            effects: acc.effects, cur_effect: acc.cur_effect,
+        }
+    } else {
+        acc
+    }
+}
+
+total fn sig_push_fn(acc: SigAcc, depth_delta: Int) -> SigAcc {
+    let mut final_effects: List[String] = acc.effects;
+    if acc.cur_effect != "" {
+        final_effects.push(acc.cur_effect)
+    }
+    let item: SigItem = SigItem {
+        kind: acc.item_kind, name: acc.item_name, line: acc.item_line,
+        vis: acc.vis, mods: acc.mods, params: acc.params,
+        ret_type: acc.ret_type, effects: final_effects,
+    };
+    let mut new_items: List[SigItem] = acc.items;
+    new_items.push(item);
+    SigAcc {
+        items: new_items, mode: ParseMode::Scan, item_kind: ItemKind::FnDecl,
+        item_line: 0, depth: acc.depth + depth_delta, vis: false, mods: [],
+        item_name: "", params: [], cur_pname: "", cur_ptype: "",
+        in_param_type: false, type_depth: 0, ret_type: "", effects: [], cur_effect: "",
+    }
+}
+
+total fn sig_push_item(acc: SigAcc, name: String) -> SigAcc {
+    let item: SigItem = SigItem {
+        kind: acc.item_kind, name: name, line: acc.item_line,
+        vis: acc.vis, mods: acc.mods, params: [], ret_type: "", effects: [],
+    };
+    let mut new_items: List[SigItem] = acc.items;
+    new_items.push(item);
+    SigAcc {
+        items: new_items, mode: ParseMode::Scan, item_kind: ItemKind::FnDecl,
+        item_line: 0, depth: acc.depth, vis: false, mods: [],
+        item_name: "", params: [], cur_pname: "", cur_ptype: "",
+        in_param_type: false, type_depth: 0, ret_type: "", effects: [], cur_effect: "",
+    }
+}
+
+total fn append_tok(cur: String, tok: String) -> String {
+    if cur == "" { tok } else { format("{}{}", cur, tok) }
+}
+
+total fn is_fn_prefix(lexeme: String) -> Bool {
+    lexeme == "total" || lexeme == "partial" || lexeme == "transparent" || lexeme == "builtin"
+}
+
+total fn ends_sig(tok: Token) -> Bool {
+    if tok.cat == TokenCat::Punct {
+        tok.lexeme == "{" || tok.lexeme == ";"
+    } else if tok.cat == TokenCat::Keyword {
+        tok.lexeme == "where" || tok.lexeme == "requires" || tok.lexeme == "ensures"
+    } else {
+        false
+    }
+}
+
+total fn parse_scan(acc: SigAcc, tok: Token) -> SigAcc {
+    if tok.cat == TokenCat::Punct && tok.lexeme == "{" {
+        sig_open_brace(acc)
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == "}" {
+        sig_close_brace(acc)
+    } else if acc.depth > 0 {
+        acc
+    } else {
+        match tok.cat {
+            TokenCat::Keyword => {
+                if tok.lexeme == "pub" {
+                    SigAcc {
+                        items: acc.items, mode: ParseMode::Scan, item_kind: acc.item_kind,
+                        item_line: tok.line, depth: acc.depth, vis: true, mods: acc.mods,
+                        item_name: "", params: [], cur_pname: "", cur_ptype: "",
+                        in_param_type: false, type_depth: 0, ret_type: "", effects: [], cur_effect: "",
+                    }
+                } else if tok.lexeme == "fn" {
+                    SigAcc {
+                        items: acc.items, mode: ParseMode::NeedName, item_kind: ItemKind::FnDecl,
+                        item_line: tok.line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+                        item_name: "", params: [], cur_pname: "", cur_ptype: "",
+                        in_param_type: false, type_depth: 0, ret_type: "", effects: [], cur_effect: "",
+                    }
+                } else if tok.lexeme == "type" {
+                    SigAcc {
+                        items: acc.items, mode: ParseMode::NeedName, item_kind: ItemKind::TypeDecl,
+                        item_line: tok.line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+                        item_name: "", params: [], cur_pname: "", cur_ptype: "",
+                        in_param_type: false, type_depth: 0, ret_type: "", effects: [], cur_effect: "",
+                    }
+                } else if tok.lexeme == "use" {
+                    SigAcc {
+                        items: acc.items, mode: ParseMode::NeedName, item_kind: ItemKind::UseDecl,
+                        item_line: tok.line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+                        item_name: "", params: [], cur_pname: "", cur_ptype: "",
+                        in_param_type: false, type_depth: 0, ret_type: "", effects: [], cur_effect: "",
+                    }
+                } else if tok.lexeme == "test" {
+                    let a1: SigAcc = add_mod(acc, "test");
+                    SigAcc {
+                        items: a1.items, mode: ParseMode::NeedFn, item_kind: ItemKind::TestFn,
+                        item_line: tok.line, depth: acc.depth, vis: acc.vis, mods: a1.mods,
+                        item_name: "", params: [], cur_pname: "", cur_ptype: "",
+                        in_param_type: false, type_depth: 0, ret_type: "", effects: [], cur_effect: "",
+                    }
+                } else if is_fn_prefix(tok.lexeme) {
+                    let a1: SigAcc = add_mod(acc, tok.lexeme);
+                    SigAcc {
+                        items: a1.items, mode: ParseMode::NeedFn, item_kind: ItemKind::FnDecl,
+                        item_line: tok.line, depth: acc.depth, vis: acc.vis, mods: a1.mods,
+                        item_name: "", params: [], cur_pname: "", cur_ptype: "",
+                        in_param_type: false, type_depth: 0, ret_type: "", effects: [], cur_effect: "",
+                    }
+                } else {
+                    sig_reset(acc)
+                }
+            }
+            _ => sig_reset(acc)
+        }
+    }
+}
+
+total fn parse_need_fn(acc: SigAcc, tok: Token) -> SigAcc {
+    if tok.cat == TokenCat::Punct && tok.lexeme == "{" {
+        sig_open_brace(acc)
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == "}" {
+        sig_close_brace(acc)
+    } else {
+        match tok.cat {
+            TokenCat::Keyword => {
+                if tok.lexeme == "fn" {
+                    SigAcc {
+                        items: acc.items, mode: ParseMode::NeedName, item_kind: acc.item_kind,
+                        item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+                        item_name: "", params: [], cur_pname: "", cur_ptype: "",
+                        in_param_type: false, type_depth: 0, ret_type: "", effects: [], cur_effect: "",
+                    }
+                } else if tok.lexeme == "partial" || tok.lexeme == "transparent" {
+                    add_mod(acc, tok.lexeme)
+                } else {
+                    sig_reset(acc)
+                }
+            }
+            _ => sig_reset(acc)
+        }
+    }
+}
+
+total fn parse_need_name(acc: SigAcc, tok: Token) -> SigAcc {
+    if tok.cat == TokenCat::Punct && tok.lexeme == "{" {
+        sig_open_brace(acc)
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == "}" {
+        sig_close_brace(acc)
+    } else {
+        match tok.cat {
+            TokenCat::Ident => {
+                if acc.item_kind == ItemKind::FnDecl || acc.item_kind == ItemKind::TestFn {
+                    SigAcc {
+                        items: acc.items, mode: ParseMode::AfterName, item_kind: acc.item_kind,
+                        item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+                        item_name: tok.lexeme, params: [], cur_pname: "", cur_ptype: "",
+                        in_param_type: false, type_depth: 0, ret_type: "", effects: [], cur_effect: "",
+                    }
+                } else {
+                    sig_push_item(acc, tok.lexeme)
+                }
+            }
+            _ => sig_reset(acc)
+        }
+    }
+}
+
+total fn parse_after_name(acc: SigAcc, tok: Token) -> SigAcc {
+    if tok.cat == TokenCat::Punct && tok.lexeme == "[" {
+        SigAcc {
+            items: acc.items, mode: ParseMode::AfterName, item_kind: acc.item_kind,
+            item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+            item_name: acc.item_name, params: acc.params, cur_pname: acc.cur_pname,
+            cur_ptype: acc.cur_ptype, in_param_type: acc.in_param_type,
+            type_depth: acc.type_depth + 1, ret_type: acc.ret_type,
+            effects: acc.effects, cur_effect: acc.cur_effect,
+        }
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == "]" {
+        let new_td: Int = if acc.type_depth > 0 { acc.type_depth - 1 } else { 0 };
+        SigAcc {
+            items: acc.items, mode: ParseMode::AfterName, item_kind: acc.item_kind,
+            item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+            item_name: acc.item_name, params: acc.params, cur_pname: acc.cur_pname,
+            cur_ptype: acc.cur_ptype, in_param_type: acc.in_param_type,
+            type_depth: new_td, ret_type: acc.ret_type,
+            effects: acc.effects, cur_effect: acc.cur_effect,
+        }
+    } else if acc.type_depth > 0 {
+        acc
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == "(" {
+        SigAcc {
+            items: acc.items, mode: ParseMode::InParams, item_kind: acc.item_kind,
+            item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+            item_name: acc.item_name, params: [], cur_pname: "", cur_ptype: "",
+            in_param_type: false, type_depth: 0, ret_type: "", effects: [], cur_effect: "",
+        }
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == "{" {
+        sig_push_fn(acc, 1)
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == ";" {
+        sig_push_fn(acc, 0)
+    } else {
+        acc
+    }
+}
+
+total fn parse_in_params(acc: SigAcc, tok: Token) -> SigAcc {
+    if acc.in_param_type {
+        if tok.cat == TokenCat::Punct && (tok.lexeme == "[" || tok.lexeme == "(") {
+            SigAcc {
+                items: acc.items, mode: ParseMode::InParams, item_kind: acc.item_kind,
+                item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+                item_name: acc.item_name, params: acc.params, cur_pname: acc.cur_pname,
+                cur_ptype: append_tok(acc.cur_ptype, tok.lexeme), in_param_type: true,
+                type_depth: acc.type_depth + 1, ret_type: acc.ret_type,
+                effects: acc.effects, cur_effect: acc.cur_effect,
+            }
+        } else if tok.cat == TokenCat::Punct && tok.lexeme == "]" {
+            let new_td: Int = if acc.type_depth > 0 { acc.type_depth - 1 } else { 0 };
+            SigAcc {
+                items: acc.items, mode: ParseMode::InParams, item_kind: acc.item_kind,
+                item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+                item_name: acc.item_name, params: acc.params, cur_pname: acc.cur_pname,
+                cur_ptype: append_tok(acc.cur_ptype, "]"), in_param_type: true,
+                type_depth: new_td, ret_type: acc.ret_type,
+                effects: acc.effects, cur_effect: acc.cur_effect,
+            }
+        } else if tok.cat == TokenCat::Punct && tok.lexeme == ")" && acc.type_depth > 0 {
+            SigAcc {
+                items: acc.items, mode: ParseMode::InParams, item_kind: acc.item_kind,
+                item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+                item_name: acc.item_name, params: acc.params, cur_pname: acc.cur_pname,
+                cur_ptype: append_tok(acc.cur_ptype, ")"), in_param_type: true,
+                type_depth: acc.type_depth - 1, ret_type: acc.ret_type,
+                effects: acc.effects, cur_effect: acc.cur_effect,
+            }
+        } else if tok.cat == TokenCat::Punct && tok.lexeme == ")" {
+            let a1: SigAcc = sig_push_param(acc);
+            SigAcc {
+                items: a1.items, mode: ParseMode::AfterParams, item_kind: a1.item_kind,
+                item_line: a1.item_line, depth: a1.depth, vis: a1.vis, mods: a1.mods,
+                item_name: a1.item_name, params: a1.params, cur_pname: "", cur_ptype: "",
+                in_param_type: false, type_depth: 0, ret_type: "", effects: [], cur_effect: "",
+            }
+        } else if tok.cat == TokenCat::Punct && tok.lexeme == "," && acc.type_depth == 0 {
+            let a1: SigAcc = sig_push_param(acc);
+            SigAcc {
+                items: a1.items, mode: ParseMode::InParams, item_kind: a1.item_kind,
+                item_line: a1.item_line, depth: a1.depth, vis: a1.vis, mods: a1.mods,
+                item_name: a1.item_name, params: a1.params, cur_pname: "", cur_ptype: "",
+                in_param_type: false, type_depth: 0, ret_type: a1.ret_type,
+                effects: a1.effects, cur_effect: a1.cur_effect,
+            }
+        } else {
+            SigAcc {
+                items: acc.items, mode: ParseMode::InParams, item_kind: acc.item_kind,
+                item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+                item_name: acc.item_name, params: acc.params, cur_pname: acc.cur_pname,
+                cur_ptype: append_tok(acc.cur_ptype, tok.lexeme), in_param_type: true,
+                type_depth: acc.type_depth, ret_type: acc.ret_type,
+                effects: acc.effects, cur_effect: acc.cur_effect,
+            }
+        }
+    } else {
+        if tok.cat == TokenCat::Punct && tok.lexeme == ")" {
+            let a1: SigAcc = sig_push_param(acc);
+            SigAcc {
+                items: a1.items, mode: ParseMode::AfterParams, item_kind: a1.item_kind,
+                item_line: a1.item_line, depth: a1.depth, vis: a1.vis, mods: a1.mods,
+                item_name: a1.item_name, params: a1.params, cur_pname: "", cur_ptype: "",
+                in_param_type: false, type_depth: 0, ret_type: "", effects: [], cur_effect: "",
+            }
+        } else if tok.cat == TokenCat::Punct && tok.lexeme == ":" {
+            SigAcc {
+                items: acc.items, mode: ParseMode::InParams, item_kind: acc.item_kind,
+                item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+                item_name: acc.item_name, params: acc.params, cur_pname: acc.cur_pname,
+                cur_ptype: "", in_param_type: true, type_depth: 0, ret_type: acc.ret_type,
+                effects: acc.effects, cur_effect: acc.cur_effect,
+            }
+        } else if tok.cat == TokenCat::Ident {
+            SigAcc {
+                items: acc.items, mode: ParseMode::InParams, item_kind: acc.item_kind,
+                item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+                item_name: acc.item_name, params: acc.params, cur_pname: tok.lexeme,
+                cur_ptype: "", in_param_type: false, type_depth: 0, ret_type: acc.ret_type,
+                effects: acc.effects, cur_effect: acc.cur_effect,
+            }
+        } else {
+            acc
+        }
+    }
+}
+
+total fn parse_after_params(acc: SigAcc, tok: Token) -> SigAcc {
+    if tok.cat == TokenCat::Punct && tok.lexeme == "->" {
+        SigAcc {
+            items: acc.items, mode: ParseMode::InRetType, item_kind: acc.item_kind,
+            item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+            item_name: acc.item_name, params: acc.params, cur_pname: "", cur_ptype: "",
+            in_param_type: false, type_depth: 0, ret_type: "", effects: [], cur_effect: "",
+        }
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == "!" {
+        SigAcc {
+            items: acc.items, mode: ParseMode::InEffects, item_kind: acc.item_kind,
+            item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+            item_name: acc.item_name, params: acc.params, cur_pname: "", cur_ptype: "",
+            in_param_type: false, type_depth: 0, ret_type: "", effects: [], cur_effect: "",
+        }
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == "{" {
+        sig_push_fn(acc, 1)
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == ";" {
+        sig_push_fn(acc, 0)
+    } else if tok.cat == TokenCat::Keyword && (tok.lexeme == "where" || tok.lexeme == "requires" || tok.lexeme == "ensures") {
+        sig_push_fn(acc, 0)
+    } else {
+        acc
+    }
+}
+
+total fn parse_in_ret_type(acc: SigAcc, tok: Token) -> SigAcc {
+    if acc.type_depth == 0 && tok.cat == TokenCat::Punct && tok.lexeme == "!" {
+        SigAcc {
+            items: acc.items, mode: ParseMode::InEffects, item_kind: acc.item_kind,
+            item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+            item_name: acc.item_name, params: acc.params, cur_pname: "", cur_ptype: "",
+            in_param_type: false, type_depth: 0, ret_type: acc.ret_type, effects: [], cur_effect: "",
+        }
+    } else if acc.type_depth == 0 && ends_sig(tok) {
+        let delta: Int = if tok.lexeme == "{" { 1 } else { 0 };
+        sig_push_fn(acc, delta)
+    } else if tok.cat == TokenCat::Punct && (tok.lexeme == "[" || tok.lexeme == "(") {
+        SigAcc {
+            items: acc.items, mode: ParseMode::InRetType, item_kind: acc.item_kind,
+            item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+            item_name: acc.item_name, params: acc.params, cur_pname: "", cur_ptype: "",
+            in_param_type: false, type_depth: acc.type_depth + 1,
+            ret_type: append_tok(acc.ret_type, tok.lexeme), effects: acc.effects, cur_effect: acc.cur_effect,
+        }
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == "]" {
+        let new_td: Int = if acc.type_depth > 0 { acc.type_depth - 1 } else { 0 };
+        SigAcc {
+            items: acc.items, mode: ParseMode::InRetType, item_kind: acc.item_kind,
+            item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+            item_name: acc.item_name, params: acc.params, cur_pname: "", cur_ptype: "",
+            in_param_type: false, type_depth: new_td,
+            ret_type: append_tok(acc.ret_type, "]"), effects: acc.effects, cur_effect: acc.cur_effect,
+        }
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == ")" && acc.type_depth > 0 {
+        SigAcc {
+            items: acc.items, mode: ParseMode::InRetType, item_kind: acc.item_kind,
+            item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+            item_name: acc.item_name, params: acc.params, cur_pname: "", cur_ptype: "",
+            in_param_type: false, type_depth: acc.type_depth - 1,
+            ret_type: append_tok(acc.ret_type, ")"), effects: acc.effects, cur_effect: acc.cur_effect,
+        }
+    } else {
+        SigAcc {
+            items: acc.items, mode: ParseMode::InRetType, item_kind: acc.item_kind,
+            item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+            item_name: acc.item_name, params: acc.params, cur_pname: "", cur_ptype: "",
+            in_param_type: false, type_depth: acc.type_depth,
+            ret_type: append_tok(acc.ret_type, tok.lexeme), effects: acc.effects, cur_effect: acc.cur_effect,
+        }
+    }
+}
+
+total fn parse_in_effects(acc: SigAcc, tok: Token) -> SigAcc {
+    if tok.cat == TokenCat::Punct && tok.lexeme == "{" {
+        sig_push_fn(acc, 1)
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == ";" {
+        sig_push_fn(acc, 0)
+    } else if tok.cat == TokenCat::Keyword && (tok.lexeme == "where" || tok.lexeme == "requires" || tok.lexeme == "ensures") {
+        sig_push_fn(acc, 0)
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == "," && acc.type_depth == 0 {
+        let mut new_effects: List[String] = acc.effects;
+        if acc.cur_effect != "" { new_effects.push(acc.cur_effect) }
+        SigAcc {
+            items: acc.items, mode: ParseMode::InEffects, item_kind: acc.item_kind,
+            item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+            item_name: acc.item_name, params: acc.params, cur_pname: "", cur_ptype: "",
+            in_param_type: false, type_depth: 0, ret_type: acc.ret_type,
+            effects: new_effects, cur_effect: "",
+        }
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == "(" {
+        SigAcc {
+            items: acc.items, mode: ParseMode::InEffects, item_kind: acc.item_kind,
+            item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+            item_name: acc.item_name, params: acc.params, cur_pname: "", cur_ptype: "",
+            in_param_type: false, type_depth: acc.type_depth + 1,
+            ret_type: acc.ret_type, effects: acc.effects,
+            cur_effect: append_tok(acc.cur_effect, "("),
+        }
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == ")" && acc.type_depth > 0 {
+        SigAcc {
+            items: acc.items, mode: ParseMode::InEffects, item_kind: acc.item_kind,
+            item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+            item_name: acc.item_name, params: acc.params, cur_pname: "", cur_ptype: "",
+            in_param_type: false, type_depth: acc.type_depth - 1,
+            ret_type: acc.ret_type, effects: acc.effects,
+            cur_effect: append_tok(acc.cur_effect, ")"),
+        }
+    } else if tok.cat == TokenCat::Ident || tok.cat == TokenCat::Str {
+        SigAcc {
+            items: acc.items, mode: ParseMode::InEffects, item_kind: acc.item_kind,
+            item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods,
+            item_name: acc.item_name, params: acc.params, cur_pname: "", cur_ptype: "",
+            in_param_type: false, type_depth: acc.type_depth,
+            ret_type: acc.ret_type, effects: acc.effects,
+            cur_effect: append_tok(acc.cur_effect, tok.lexeme),
+        }
+    } else {
+        acc
+    }
+}
+
+total fn parse_step(acc: SigAcc, tok: Token) -> SigAcc {
+    match acc.mode {
+        ParseMode::Scan        => parse_scan(acc, tok),
+        ParseMode::NeedFn      => parse_need_fn(acc, tok),
+        ParseMode::NeedName    => parse_need_name(acc, tok),
+        ParseMode::AfterName   => parse_after_name(acc, tok),
+        ParseMode::InParams    => parse_in_params(acc, tok),
+        ParseMode::AfterParams => parse_after_params(acc, tok),
+        ParseMode::InRetType   => parse_in_ret_type(acc, tok),
+        ParseMode::InEffects   => parse_in_effects(acc, tok),
+    }
+}
+
+total fn parse_tokens(tokens: List[Token]) -> List[SigItem] {
+    let init: SigAcc = SigAcc {
+        items: [], mode: ParseMode::Scan, item_kind: ItemKind::FnDecl,
+        item_line: 0, depth: 0, vis: false, mods: [],
+        item_name: "", params: [], cur_pname: "", cur_ptype: "",
+        in_param_type: false, type_depth: 0, ret_type: "", effects: [], cur_effect: "",
+    };
+    tokens.fold(init, parse_step).items
+}
+
+// ── Test helpers ──────────────────────────────────────────────────────────────
+
+total fn kw(s: String) -> Token { Token { cat: TokenCat::Keyword, lexeme: s, line: 1 } }
+total fn id(s: String) -> Token { Token { cat: TokenCat::Ident,   lexeme: s, line: 1 } }
+total fn pt(s: String) -> Token { Token { cat: TokenCat::Punct,   lexeme: s, line: 1 } }
+
+total fn empty_acc() -> SigAcc {
+    SigAcc {
+        items: [], mode: ParseMode::Scan, item_kind: ItemKind::FnDecl,
+        item_line: 0, depth: 0, vis: false, mods: [],
+        item_name: "", params: [], cur_pname: "", cur_ptype: "",
+        in_param_type: false, type_depth: 0, ret_type: "", effects: [], cur_effect: "",
+    }
+}
+
+// ── empty parameter list ──────────────────────────────────────────────────────
+
+test fn fn_no_params_no_ret() -> Unit {
+    // fn foo() { }
+    let tokens: List[Token] = [kw("fn"), id("foo"), pt("("), pt(")"), pt("{"), pt("}")];
+    let items: List[SigItem] = parse_tokens(tokens);
+    assert_eq(items.len(), 1);
+    match items.get(0) {
+        None    => assert_eq(true, false),
+        Some(i) => {
+            assert_eq(i.name, "foo");
+            assert_eq(i.params.len(), 0);
+            assert_eq(i.ret_type, "");
+        }
+    }
+}
+
+// ── single parameter ─────────────────────────────────────────────────────────
+
+test fn fn_single_param() -> Unit {
+    // fn foo(x: Int) -> Bool { }
+    let tokens: List[Token] = [
+        kw("fn"), id("foo"), pt("("), id("x"), pt(":"), id("Int"), pt(")"),
+        pt("->"), id("Bool"), pt("{"), pt("}"),
+    ];
+    let items: List[SigItem] = parse_tokens(tokens);
+    assert_eq(items.len(), 1);
+    match items.get(0) {
+        None    => assert_eq(true, false),
+        Some(i) => {
+            assert_eq(i.params.len(), 1);
+            match i.params.get(0) {
+                None    => assert_eq(true, false),
+                Some(p) => {
+                    assert_eq(p.name, "x");
+                    assert_eq(p.type_text, "Int");
+                }
+            }
+            assert_eq(i.ret_type, "Bool");
+        }
+    }
+}
+
+// ── two parameters ───────────────────────────────────────────────────────────
+
+test fn fn_two_params() -> Unit {
+    // fn foo(x: Int, y: Bool) -> String { }
+    let tokens: List[Token] = [
+        kw("fn"), id("foo"), pt("("),
+        id("x"), pt(":"), id("Int"), pt(","),
+        id("y"), pt(":"), id("Bool"),
+        pt(")"), pt("->"), id("String"), pt("{"), pt("}"),
+    ];
+    let items: List[SigItem] = parse_tokens(tokens);
+    match items.get(0) {
+        None    => assert_eq(true, false),
+        Some(i) => {
+            assert_eq(i.params.len(), 2);
+            match i.params.get(0) {
+                None    => assert_eq(true, false),
+                Some(p) => assert_eq(p.name, "x"),
+            }
+            match i.params.get(1) {
+                None    => assert_eq(true, false),
+                Some(p) => assert_eq(p.name, "y"),
+            }
+        }
+    }
+}
+
+// ── generic type in parameter ─────────────────────────────────────────────────
+
+test fn fn_generic_param() -> Unit {
+    // fn foo(xs: List[Int]) -> Int { }
+    let tokens: List[Token] = [
+        kw("fn"), id("foo"), pt("("),
+        id("xs"), pt(":"), id("List"), pt("["), id("Int"), pt("]"),
+        pt(")"), pt("->"), id("Int"), pt("{"), pt("}"),
+    ];
+    let items: List[SigItem] = parse_tokens(tokens);
+    match items.get(0) {
+        None    => assert_eq(true, false),
+        Some(i) => {
+            assert_eq(i.params.len(), 1);
+            match i.params.get(0) {
+                None    => assert_eq(true, false),
+                Some(p) => {
+                    assert_eq(p.name, "xs");
+                    assert_eq(p.type_text, "List[Int]");
+                }
+            }
+        }
+    }
+}
+
+// ── nested generic in parameter (List[Option[String]]) ───────────────────────
+
+test fn fn_nested_generic_param() -> Unit {
+    let tokens: List[Token] = [
+        kw("fn"), id("foo"), pt("("),
+        id("xs"), pt(":"), id("List"), pt("["), id("Option"), pt("["), id("String"), pt("]"), pt("]"),
+        pt(")"), pt("->"), id("Unit"), pt("{"), pt("}"),
+    ];
+    let items: List[SigItem] = parse_tokens(tokens);
+    match items.get(0) {
+        None    => assert_eq(true, false),
+        Some(i) => {
+            assert_eq(i.params.len(), 1);
+            match i.params.get(0) {
+                None    => assert_eq(true, false),
+                Some(p) => assert_eq(p.type_text, "List[Option[String]]"),
+            }
+        }
+    }
+}
+
+// ── generic return type ───────────────────────────────────────────────────────
+
+test fn fn_generic_return() -> Unit {
+    // fn foo() -> List[String] { }
+    let tokens: List[Token] = [
+        kw("fn"), id("foo"), pt("("), pt(")"),
+        pt("->"), id("List"), pt("["), id("String"), pt("]"),
+        pt("{"), pt("}"),
+    ];
+    let items: List[SigItem] = parse_tokens(tokens);
+    match items.get(0) {
+        None    => assert_eq(true, false),
+        Some(i) => assert_eq(i.ret_type, "List[String]"),
+    }
+}
+
+// ── single effect ─────────────────────────────────────────────────────────────
+
+test fn fn_single_effect() -> Unit {
+    // fn foo() -> Int ! Console { }
+    let tokens: List[Token] = [
+        kw("fn"), id("foo"), pt("("), pt(")"),
+        pt("->"), id("Int"), pt("!"), id("Console"),
+        pt("{"), pt("}"),
+    ];
+    let items: List[SigItem] = parse_tokens(tokens);
+    match items.get(0) {
+        None    => assert_eq(true, false),
+        Some(i) => {
+            assert_eq(i.ret_type, "Int");
+            assert_eq(i.effects.len(), 1);
+            match i.effects.get(0) {
+                None    => assert_eq(true, false),
+                Some(e) => assert_eq(e, "Console"),
+            }
+        }
+    }
+}
+
+// ── multiple effects ──────────────────────────────────────────────────────────
+
+test fn fn_multiple_effects() -> Unit {
+    // fn foo() -> Unit ! FileRead, Console { }
+    let tokens: List[Token] = [
+        kw("fn"), id("foo"), pt("("), pt(")"),
+        pt("->"), id("Unit"), pt("!"), id("FileRead"), pt(","), id("Console"),
+        pt("{"), pt("}"),
+    ];
+    let items: List[SigItem] = parse_tokens(tokens);
+    match items.get(0) {
+        None    => assert_eq(true, false),
+        Some(i) => {
+            assert_eq(i.effects.len(), 2);
+            match i.effects.get(0) {
+                None    => assert_eq(true, false),
+                Some(e) => assert_eq(e, "FileRead"),
+            }
+            match i.effects.get(1) {
+                None    => assert_eq(true, false),
+                Some(e) => assert_eq(e, "Console"),
+            }
+        }
+    }
+}
+
+// ── effect without return type ────────────────────────────────────────────────
+
+test fn fn_effect_no_ret() -> Unit {
+    // fn foo() ! Log { }  (no -> before !)
+    let tokens: List[Token] = [
+        kw("fn"), id("foo"), pt("("), pt(")"),
+        pt("!"), id("Log"),
+        pt("{"), pt("}"),
+    ];
+    let items: List[SigItem] = parse_tokens(tokens);
+    match items.get(0) {
+        None    => assert_eq(true, false),
+        Some(i) => {
+            assert_eq(i.ret_type, "");
+            assert_eq(i.effects.len(), 1);
+            match i.effects.get(0) {
+                None    => assert_eq(true, false),
+                Some(e) => assert_eq(e, "Log"),
+            }
+        }
+    }
+}
+
+// ── total modifier preserved ──────────────────────────────────────────────────
+
+test fn total_fn_has_mod() -> Unit {
+    let tokens: List[Token] = [
+        kw("total"), kw("fn"), id("compute"), pt("("), id("n"), pt(":"), id("Int"), pt(")"),
+        pt("->"), id("Int"), pt("{"), pt("}"),
+    ];
+    let items: List[SigItem] = parse_tokens(tokens);
+    match items.get(0) {
+        None    => assert_eq(true, false),
+        Some(i) => {
+            assert_eq(i.mods.len(), 1);
+            match i.mods.get(0) {
+                None    => assert_eq(true, false),
+                Some(m) => assert_eq(m, "total"),
+            }
+            assert_eq(i.params.len(), 1);
+            assert_eq(i.ret_type, "Int");
+        }
+    }
+}
+
+// ── pub fn is visible ─────────────────────────────────────────────────────────
+
+test fn pub_fn_visible() -> Unit {
+    let tokens: List[Token] = [
+        kw("pub"), kw("fn"), id("foo"), pt("("), pt(")"), pt("->"), id("Bool"), pt("{"), pt("}"),
+    ];
+    let items: List[SigItem] = parse_tokens(tokens);
+    match items.get(0) {
+        None    => assert_eq(true, false),
+        Some(i) => assert_eq(i.vis, true),
+    }
+}
+
+// ── fn inside block is ignored ────────────────────────────────────────────────
+
+test fn fn_inside_block_not_collected() -> Unit {
+    let tokens: List[Token] = [
+        pt("{"), kw("fn"), id("inner"), pt("("), pt(")"), pt("->"), id("Int"), pt("{"), pt("}"), pt("}"),
+        kw("fn"), id("outer"), pt("("), pt(")"), pt("->"), id("Bool"), pt("{"), pt("}"),
+    ];
+    let items: List[SigItem] = parse_tokens(tokens);
+    assert_eq(items.len(), 1);
+    match items.get(0) {
+        None    => assert_eq(true, false),
+        Some(i) => assert_eq(i.name, "outer"),
+    }
+}
+
+// ── type declaration captured ─────────────────────────────────────────────────
+
+test fn type_decl_captured() -> Unit {
+    let tokens: List[Token] = [kw("type"), id("Foo")];
+    let items: List[SigItem] = parse_tokens(tokens);
+    assert_eq(items.len(), 1);
+    match items.get(0) {
+        None    => assert_eq(true, false),
+        Some(i) => {
+            assert_eq(i.name, "Foo");
+            assert_eq(i.params.len(), 0);
+            assert_eq(i.ret_type, "");
+        }
+    }
+}
+
+// ── comma inside generic type is not a param separator ───────────────────────
+
+test fn comma_inside_generic_not_separator() -> Unit {
+    // fn foo(m: Map[String, Int]) -> Unit { }
+    let tokens: List[Token] = [
+        kw("fn"), id("foo"), pt("("),
+        id("m"), pt(":"), id("Map"), pt("["), id("String"), pt(","), id("Int"), pt("]"),
+        pt(")"), pt("->"), id("Unit"), pt("{"), pt("}"),
+    ];
+    let items: List[SigItem] = parse_tokens(tokens);
+    match items.get(0) {
+        None    => assert_eq(true, false),
+        Some(i) => {
+            assert_eq(i.params.len(), 1);
+            match i.params.get(0) {
+                None    => assert_eq(true, false),
+                Some(p) => assert_eq(p.type_text, "Map[String,Int]"),
+            }
+        }
+    }
+}

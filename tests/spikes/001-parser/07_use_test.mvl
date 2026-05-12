@@ -1,0 +1,274 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// tests/spikes/001-parser/07_use_test.mvl
+//
+// Unit tests for experiment 07 (use-path parser).
+// Tests both the state machine and the formatting helpers.
+//
+// Run with: mvl test tests/spikes/001-parser/07_use_test.mvl
+
+// ── Re-declarations ───────────────────────────────────────────────────────────
+
+type TokenCat = enum { Keyword, Ident, Number, Str, Punct, Comment }
+
+type Token = struct {
+    cat:    TokenCat,
+    lexeme: String,
+    line:   Int,
+}
+
+pub type UseItem = struct {
+    path:    List[String],
+    imports: List[String],
+    line:    Int,
+}
+
+type UseMode = enum { Idle, InPath, InBrace }
+
+type UseAcc = struct {
+    items:      List[UseItem],
+    mode:       UseMode,
+    path:       List[String],
+    imports:    List[String],
+    item_line:  Int,
+    depth:      Int,
+    expect_seg: Bool,
+}
+
+total fn use_reset(acc: UseAcc) -> UseAcc {
+    UseAcc { items: acc.items, mode: UseMode::Idle, path: [], imports: [], item_line: 0, depth: acc.depth, expect_seg: false }
+}
+
+total fn is_path_sep(tok: Token) -> Bool {
+    tok.cat == TokenCat::Punct && (tok.lexeme == "." || tok.lexeme == "::")
+}
+
+total fn use_step(acc: UseAcc, tok: Token) -> UseAcc {
+    if acc.mode == UseMode::Idle && tok.cat == TokenCat::Punct && tok.lexeme == "{" {
+        UseAcc { items: acc.items, mode: UseMode::Idle, path: [], imports: [], item_line: 0, depth: acc.depth + 1, expect_seg: false }
+    } else if acc.mode == UseMode::Idle && tok.cat == TokenCat::Punct && tok.lexeme == "}" {
+        let new_depth: Int = if acc.depth > 0 { acc.depth - 1 } else { 0 };
+        UseAcc { items: acc.items, mode: UseMode::Idle, path: [], imports: [], item_line: 0, depth: new_depth, expect_seg: false }
+    } else {
+        match acc.mode {
+            UseMode::Idle => {
+                if acc.depth == 0 && tok.cat == TokenCat::Keyword && tok.lexeme == "use" {
+                    UseAcc { items: acc.items, mode: UseMode::InPath, path: [], imports: [], item_line: tok.line, depth: acc.depth, expect_seg: true }
+                } else {
+                    acc
+                }
+            }
+            UseMode::InPath => {
+                if tok.cat == TokenCat::Ident || (tok.cat == TokenCat::Keyword && acc.expect_seg) {
+                    let mut new_path: List[String] = acc.path;
+                    new_path.push(tok.lexeme);
+                    UseAcc { items: acc.items, mode: UseMode::InPath, path: new_path, imports: acc.imports, item_line: acc.item_line, depth: acc.depth, expect_seg: false }
+                } else if is_path_sep(tok) {
+                    UseAcc { items: acc.items, mode: UseMode::InPath, path: acc.path, imports: acc.imports, item_line: acc.item_line, depth: acc.depth, expect_seg: true }
+                } else if tok.cat == TokenCat::Punct && tok.lexeme == "{" {
+                    UseAcc { items: acc.items, mode: UseMode::InBrace, path: acc.path, imports: [], item_line: acc.item_line, depth: acc.depth, expect_seg: false }
+                } else {
+                    let path_len: Int = acc.path.len();
+                    let module_path: List[String] = acc.path.take(path_len - 1);
+                    let import_name: String = match acc.path.get(path_len - 1) {
+                        None    => "",
+                        Some(s) => s,
+                    };
+                    let mut new_imports: List[String] = [];
+                    if import_name != "" {
+                        new_imports.push(import_name)
+                    }
+                    let item: UseItem = UseItem { path: module_path, imports: new_imports, line: acc.item_line };
+                    let mut new_items: List[UseItem] = acc.items;
+                    new_items.push(item);
+                    UseAcc { items: new_items, mode: UseMode::Idle, path: [], imports: [], item_line: 0, depth: acc.depth, expect_seg: false }
+                }
+            }
+            UseMode::InBrace => {
+                if tok.cat == TokenCat::Punct && tok.lexeme == "}" {
+                    let item: UseItem = UseItem { path: acc.path, imports: acc.imports, line: acc.item_line };
+                    let mut new_items: List[UseItem] = acc.items;
+                    new_items.push(item);
+                    UseAcc { items: new_items, mode: UseMode::Idle, path: [], imports: [], item_line: 0, depth: acc.depth, expect_seg: false }
+                } else if tok.cat == TokenCat::Ident {
+                    let mut new_imports: List[String] = acc.imports;
+                    new_imports.push(tok.lexeme);
+                    UseAcc { items: acc.items, mode: UseMode::InBrace, path: acc.path, imports: new_imports, item_line: acc.item_line, depth: acc.depth, expect_seg: false }
+                } else {
+                    acc
+                }
+            }
+        }
+    }
+}
+
+total fn parse_use_decls(tokens: List[Token]) -> List[UseItem] {
+    let init: UseAcc = UseAcc {
+        items: [], mode: UseMode::Idle, path: [], imports: [],
+        item_line: 0, depth: 0, expect_seg: false,
+    };
+    tokens.fold(init, use_step).items
+}
+
+total fn join_path(parts: List[String]) -> String {
+    parts.fold("", |acc: String, seg: String|
+        if acc == "" { seg } else { format("{}.{}", acc, seg) }
+    )
+}
+
+total fn join_imports(imports: List[String]) -> String {
+    imports.fold("", |acc: String, imp: String|
+        if acc == "" { imp } else { format("{}, {}", acc, imp) }
+    )
+}
+
+// ── Test helpers ──────────────────────────────────────────────────────────────
+
+total fn kw(s: String) -> Token  { Token { cat: TokenCat::Keyword, lexeme: s,   line: 1 } }
+total fn id(s: String) -> Token  { Token { cat: TokenCat::Ident,   lexeme: s,   line: 1 } }
+total fn pt(s: String) -> Token  { Token { cat: TokenCat::Punct,   lexeme: s,   line: 1 } }
+
+// ── join_path tests ───────────────────────────────────────────────────────────
+
+test fn join_path_single_segment() -> Unit {
+    assert_eq(join_path(["std"]), "std");
+}
+
+test fn join_path_two_segments() -> Unit {
+    assert_eq(join_path(["std", "io"]), "std.io");
+}
+
+test fn join_path_three_segments() -> Unit {
+    assert_eq(join_path(["std", "io", "fs"]), "std.io.fs");
+}
+
+test fn join_path_empty() -> Unit {
+    assert_eq(join_path([]), "");
+}
+
+// ── join_imports tests ────────────────────────────────────────────────────────
+
+test fn join_imports_single() -> Unit {
+    assert_eq(join_imports(["path"]), "path");
+}
+
+test fn join_imports_two() -> Unit {
+    assert_eq(join_imports(["path", "join"]), "path, join");
+}
+
+test fn join_imports_empty() -> Unit {
+    assert_eq(join_imports([]), "");
+}
+
+// ── bare use tests (use mod::name; or use mod.name) ──────────────────────────
+
+test fn bare_use_double_colon() -> Unit {
+    // use parser::parse_line;
+    let semi: Token = pt(";");
+    let tokens: List[Token] = [kw("use"), id("parser"), pt("::"), id("parse_line"), semi];
+    let items: List[UseItem] = parse_use_decls(tokens);
+    assert_eq(items.len(), 1);
+    match items.get(0) {
+        None    => assert_eq(true, false),
+        Some(u) => {
+            assert_eq(join_path(u.path), "parser");
+            assert_eq(join_imports(u.imports), "parse_line");
+        }
+    }
+}
+
+test fn bare_use_dot_separator() -> Unit {
+    // use std.io; (bare, no brace)
+    let semi: Token = pt(";");
+    let tokens: List[Token] = [kw("use"), id("std"), pt("."), id("io"), semi];
+    let items: List[UseItem] = parse_use_decls(tokens);
+    assert_eq(items.len(), 1);
+    match items.get(0) {
+        None    => assert_eq(true, false),
+        Some(u) => {
+            assert_eq(join_path(u.path), "std");
+            assert_eq(join_imports(u.imports), "io");
+        }
+    }
+}
+
+// ── brace import tests ────────────────────────────────────────────────────────
+
+test fn brace_import_single() -> Unit {
+    // use std.args.{get_arg}
+    let tokens: List[Token] = [
+        kw("use"), id("std"), pt("."), id("args"), pt("."), pt("{"), id("get_arg"), pt("}"),
+    ];
+    let items: List[UseItem] = parse_use_decls(tokens);
+    assert_eq(items.len(), 1);
+    match items.get(0) {
+        None    => assert_eq(true, false),
+        Some(u) => {
+            assert_eq(join_path(u.path), "std.args");
+            assert_eq(join_imports(u.imports), "get_arg");
+            assert_eq(u.imports.len(), 1);
+        }
+    }
+}
+
+test fn brace_import_multiple() -> Unit {
+    // use std.io.{path, join, read_dir}
+    let tokens: List[Token] = [
+        kw("use"), id("std"), pt("."), id("io"), pt("."), pt("{"),
+        id("path"), pt(","), id("join"), pt(","), id("read_dir"),
+        pt("}"),
+    ];
+    let items: List[UseItem] = parse_use_decls(tokens);
+    assert_eq(items.len(), 1);
+    match items.get(0) {
+        None    => assert_eq(true, false),
+        Some(u) => {
+            assert_eq(join_path(u.path), "std.io");
+            assert_eq(u.imports.len(), 3);
+            assert_eq(join_imports(u.imports), "path, join, read_dir");
+        }
+    }
+}
+
+// ── multiple use declarations ─────────────────────────────────────────────────
+
+test fn two_use_declarations() -> Unit {
+    let semi: Token = pt(";");
+    let tokens: List[Token] = [
+        kw("use"), id("std"), pt("."), id("io"), pt("."), pt("{"), id("read_dir"), pt("}"),
+        kw("use"), id("std"), pt("."), id("args"), pt("."), pt("{"), id("get_arg"), pt("}"),
+    ];
+    let items: List[UseItem] = parse_use_decls(tokens);
+    assert_eq(items.len(), 2);
+}
+
+// ── use inside block is ignored ───────────────────────────────────────────────
+
+test fn use_inside_block_ignored() -> Unit {
+    let tokens: List[Token] = [
+        pt("{"), kw("use"), id("foo"), pt("}"),
+        kw("use"), id("bar"), pt("."), pt("{"), id("baz"), pt("}"),
+    ];
+    let items: List[UseItem] = parse_use_decls(tokens);
+    // only the top-level "use bar.{baz}" should be counted
+    assert_eq(items.len(), 1);
+    match items.get(0) {
+        None    => assert_eq(true, false),
+        Some(u) => assert_eq(join_path(u.path), "bar"),
+    }
+}
+
+// ── line number is preserved ──────────────────────────────────────────────────
+
+test fn line_number_from_use_keyword() -> Unit {
+    let use_tok: Token = Token { cat: TokenCat::Keyword, lexeme: "use", line: 42 };
+    let tokens: List[Token] = [
+        use_tok, id("std"), pt("."), pt("{"), id("foo"), pt("}"),
+    ];
+    let items: List[UseItem] = parse_use_decls(tokens);
+    match items.get(0) {
+        None    => assert_eq(true, false),
+        Some(u) => assert_eq(u.line, 42),
+    }
+}

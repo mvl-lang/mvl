@@ -1,0 +1,438 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// tests/spikes/001-parser/06_mods_parser.mvl
+//
+// Spike 001 — Experiment 06: modifier-aware top-level declaration parser
+//
+// Context: issue #187 — MVL frontend in MVL (self-hosted compiler)
+// Goal: extend experiment 05 to capture the full modifier sequence for each
+//       top-level declaration:
+//         pub, transparent, total, partial, builtin, test
+//
+// Item gains two new fields:
+//   vis:  Bool         — true if `pub` preceded the declaration
+//   mods: List[String] — ordered modifier keywords (excluding `pub`)
+//
+// State machine change:
+//   ParseMode::Scan:
+//     pub       → add to mod accumulator, stay Scan (vis flag set)
+//     transparent, total, partial → add to mods, transition NeedFn
+//     test, builtin               → add to mods, transition NeedFn
+//     fn                          → NeedName with FnDecl
+//     type/use                    → NeedName
+//   ParseMode::NeedFn:
+//     fn                          → NeedName (keep accumulated mods)
+//     partial, transparent        → add to mods, stay NeedFn
+//   ParseMode::NeedName:
+//     ident                       → commit item with mods, reset, → Scan
+//
+// Default directory: examples/log_analyzer
+// Usage:
+//   mvl run tests/spikes/001-parser/06_mods_parser.mvl
+//   mvl run tests/spikes/001-parser/06_mods_parser.mvl -- --dir compiler
+
+use std.io.{path, join, read_dir, read_to_string, to_string, Path}
+use std.args.{get_arg}
+use std.strings.{str_char_at}
+
+// ── Token categories ──────────────────────────────────────────────────────────
+
+type TokenCat = enum { Keyword, Ident, Number, Str, Punct, Comment }
+
+type Token = struct {
+    cat:    TokenCat,
+    lexeme: String,
+    line:   Int,
+}
+
+// ── Character classification ──────────────────────────────────────────────────
+
+fn is_digit(c: String) -> Bool {
+    c != "" && "0123456789".contains(c)
+}
+
+fn is_alpha(c: String) -> Bool {
+    c != "" && "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_".contains(c)
+}
+
+fn is_alnum(c: String) -> Bool {
+    c != "" && "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789".contains(c)
+}
+
+fn is_whitespace(c: String) -> Bool {
+    c == " " || c == "\t" || c == "\r"
+}
+
+fn is_keyword(s: String) -> Bool {
+    let kws: String = " fn let mut match if else for while type total partial return extern use pub in true false builtin transparent move consume declassify sanitize const where struct enum impl test requires ensures invariant Public Tainted Secret Clean iso val ref tag ";
+    kws.contains(format(" {} ", s))
+}
+
+// ── Scanner helpers ───────────────────────────────────────────────────────────
+
+type ScanResult = struct {
+    cat:     TokenCat,
+    lexeme:  String,
+    end_pos: Int,
+}
+
+partial fn scan_word(src: String, pos: Int, src_len: Int) -> ScanResult {
+    let mut p: Int = pos;
+    while p < src_len && is_alnum(str_char_at(src, p)) {
+        p = p + 1
+    }
+    let lexeme: String = src.substring(pos, p);
+    let cat: TokenCat = if is_keyword(lexeme) { TokenCat::Keyword } else { TokenCat::Ident };
+    ScanResult { cat: cat, lexeme: lexeme, end_pos: p }
+}
+
+partial fn scan_number(src: String, pos: Int, src_len: Int) -> ScanResult {
+    let mut p: Int = pos;
+    while p < src_len && is_digit(str_char_at(src, p)) {
+        p = p + 1
+    }
+    if p < src_len && str_char_at(src, p) == "." && is_digit(str_char_at(src, p + 1)) {
+        p = p + 1;
+        while p < src_len && is_digit(str_char_at(src, p)) {
+            p = p + 1
+        }
+        ScanResult { cat: TokenCat::Number, lexeme: src.substring(pos, p), end_pos: p }
+    } else {
+        ScanResult { cat: TokenCat::Number, lexeme: src.substring(pos, p), end_pos: p }
+    }
+}
+
+partial fn scan_comment_end(src: String, pos: Int, src_len: Int) -> Int {
+    let mut p: Int = pos;
+    while p < src_len && str_char_at(src, p) != "\n" {
+        p = p + 1
+    }
+    p
+}
+
+partial fn scan_string_body(src: String, pos: Int, src_len: Int) -> ScanResult {
+    let mut p: Int = pos;
+    while p < src_len && str_char_at(src, p) != "\"" {
+        if str_char_at(src, p) == "\\" && p + 1 < src_len {
+            p = p + 2
+        } else {
+            p = p + 1
+        }
+    }
+    let content: String = src.substring(pos, p);
+    let after_close: Int = if p < src_len { p + 1 } else { p };
+    ScanResult { cat: TokenCat::Str, lexeme: content, end_pos: after_close }
+}
+
+fn two_char_punct(c: String, c2: String) -> String {
+    if      c == "=" && c2 == "=" { "==" }
+    else if c == "!" && c2 == "=" { "!=" }
+    else if c == "<" && c2 == "=" { "<=" }
+    else if c == ">" && c2 == "=" { ">=" }
+    else if c == "-" && c2 == ">" { "->" }
+    else if c == "=" && c2 == ">" { "=>" }
+    else if c == "|" && c2 == "|" { "||" }
+    else if c == "&" && c2 == "&" { "&&" }
+    else if c == ":" && c2 == ":" { "::" }
+    else if c == "<" && c2 == "<" { "<<" }
+    else if c == ">" && c2 == ">" { ">>" }
+    else { "" }
+}
+
+// ── Lexer ─────────────────────────────────────────────────────────────────────
+
+partial fn lex(src: String) -> List[Token] {
+    let src_len: Int = src.len();
+    let mut pos: Int = 0;
+    let mut line: Int = 1;
+    let mut tokens: List[Token] = [];
+
+    while pos < src_len {
+        let c: String = str_char_at(src, pos);
+        let c2: String = str_char_at(src, pos + 1);
+
+        if c == "\n" {
+            line = line + 1;
+            pos = pos + 1
+        } else if is_whitespace(c) {
+            pos = pos + 1
+        } else if c == "/" && c2 == "/" {
+            let end: Int = scan_comment_end(src, pos + 2, src_len);
+            tokens.push(Token { cat: TokenCat::Comment, lexeme: "//", line: line });
+            pos = end
+        } else if c == "\"" {
+            let res: ScanResult = scan_string_body(src, pos + 1, src_len);
+            tokens.push(Token { cat: TokenCat::Str, lexeme: res.lexeme, line: line });
+            pos = res.end_pos
+        } else if is_digit(c) {
+            let res: ScanResult = scan_number(src, pos, src_len);
+            tokens.push(Token { cat: TokenCat::Number, lexeme: res.lexeme, line: line });
+            pos = res.end_pos
+        } else if is_alpha(c) {
+            let res: ScanResult = scan_word(src, pos, src_len);
+            tokens.push(Token { cat: res.cat, lexeme: res.lexeme, line: line });
+            pos = res.end_pos
+        } else {
+            let two: String = two_char_punct(c, c2);
+            if two != "" {
+                tokens.push(Token { cat: TokenCat::Punct, lexeme: two, line: line });
+                pos = pos + 2
+            } else {
+                tokens.push(Token { cat: TokenCat::Punct, lexeme: c, line: line });
+                pos = pos + 1
+            }
+        }
+    }
+    tokens
+}
+
+// ── Parser AST ────────────────────────────────────────────────────────────────
+
+pub type ItemKind = enum { FnDecl, TypeDecl, UseDecl, TestFn }
+
+// Item now captures visibility and ordered modifiers.
+pub type Item = struct {
+    kind: ItemKind,
+    name: String,
+    line: Int,
+    vis:  Bool,           // true if `pub` preceded the declaration
+    mods: List[String],   // e.g. ["transparent", "partial"] for transparent partial fn
+}
+
+// ── Parser state ──────────────────────────────────────────────────────────────
+
+type ParseMode = enum { Scan, NeedFn, NeedName }
+
+type ParseAcc = struct {
+    items:     List[Item],
+    mode:      ParseMode,
+    item_kind: ItemKind,
+    item_line: Int,
+    depth:     Int,
+    vis:       Bool,          // accumulated pub flag
+    mods:      List[String],  // accumulated modifiers
+}
+
+// ── Modifier helpers ──────────────────────────────────────────────────────────
+
+fn is_fn_prefix(lexeme: String) -> Bool {
+    lexeme == "total" || lexeme == "partial" || lexeme == "transparent" || lexeme == "builtin"
+}
+
+fn reset_mods(acc: ParseAcc) -> ParseAcc {
+    ParseAcc { items: acc.items, mode: ParseMode::Scan, item_kind: ItemKind::FnDecl, item_line: 0, depth: acc.depth, vis: false, mods: [] }
+}
+
+fn add_mod(acc: ParseAcc, m: String) -> ParseAcc {
+    let mut new_mods: List[String] = acc.mods;
+    new_mods.push(m);
+    ParseAcc { items: acc.items, mode: acc.mode, item_kind: acc.item_kind, item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: new_mods }
+}
+
+fn handle_brace_open(acc: ParseAcc) -> ParseAcc {
+    ParseAcc { items: acc.items, mode: ParseMode::Scan, item_kind: acc.item_kind, item_line: acc.item_line, depth: acc.depth + 1, vis: false, mods: [] }
+}
+
+fn handle_brace_close(acc: ParseAcc) -> ParseAcc {
+    let new_depth: Int = if acc.depth > 0 { acc.depth - 1 } else { 0 };
+    ParseAcc { items: acc.items, mode: ParseMode::Scan, item_kind: acc.item_kind, item_line: acc.item_line, depth: new_depth, vis: false, mods: [] }
+}
+
+// ── Parse steps ───────────────────────────────────────────────────────────────
+
+fn parse_scan(acc: ParseAcc, tok: Token) -> ParseAcc {
+    if tok.cat == TokenCat::Punct && tok.lexeme == "{" {
+        handle_brace_open(acc)
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == "}" {
+        handle_brace_close(acc)
+    } else if acc.depth > 0 {
+        acc
+    } else {
+        match tok.cat {
+            TokenCat::Keyword => {
+                if tok.lexeme == "pub" {
+                    ParseAcc { items: acc.items, mode: ParseMode::Scan, item_kind: acc.item_kind, item_line: tok.line, depth: acc.depth, vis: true, mods: acc.mods }
+                } else if tok.lexeme == "fn" {
+                    ParseAcc { items: acc.items, mode: ParseMode::NeedName, item_kind: ItemKind::FnDecl, item_line: tok.line, depth: acc.depth, vis: acc.vis, mods: acc.mods }
+                } else if tok.lexeme == "type" {
+                    ParseAcc { items: acc.items, mode: ParseMode::NeedName, item_kind: ItemKind::TypeDecl, item_line: tok.line, depth: acc.depth, vis: acc.vis, mods: acc.mods }
+                } else if tok.lexeme == "use" {
+                    ParseAcc { items: acc.items, mode: ParseMode::NeedName, item_kind: ItemKind::UseDecl, item_line: tok.line, depth: acc.depth, vis: acc.vis, mods: acc.mods }
+                } else if tok.lexeme == "test" {
+                    let a2: ParseAcc = add_mod(acc, "test");
+                    ParseAcc { items: a2.items, mode: ParseMode::NeedFn, item_kind: ItemKind::TestFn, item_line: tok.line, depth: acc.depth, vis: a2.vis, mods: a2.mods }
+                } else if is_fn_prefix(tok.lexeme) {
+                    let a2: ParseAcc = add_mod(acc, tok.lexeme);
+                    ParseAcc { items: a2.items, mode: ParseMode::NeedFn, item_kind: ItemKind::FnDecl, item_line: tok.line, depth: acc.depth, vis: a2.vis, mods: a2.mods }
+                } else {
+                    reset_mods(acc)
+                }
+            }
+            _ => reset_mods(acc)
+        }
+    }
+}
+
+fn parse_need_fn(acc: ParseAcc, tok: Token) -> ParseAcc {
+    if tok.cat == TokenCat::Punct && tok.lexeme == "{" {
+        handle_brace_open(acc)
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == "}" {
+        handle_brace_close(acc)
+    } else {
+        match tok.cat {
+            TokenCat::Keyword => {
+                if tok.lexeme == "fn" {
+                    ParseAcc { items: acc.items, mode: ParseMode::NeedName, item_kind: acc.item_kind, item_line: acc.item_line, depth: acc.depth, vis: acc.vis, mods: acc.mods }
+                } else if tok.lexeme == "partial" || tok.lexeme == "transparent" {
+                    add_mod(acc, tok.lexeme)
+                } else {
+                    reset_mods(acc)
+                }
+            }
+            _ => reset_mods(acc)
+        }
+    }
+}
+
+fn parse_need_name(acc: ParseAcc, tok: Token) -> ParseAcc {
+    if tok.cat == TokenCat::Punct && tok.lexeme == "{" {
+        handle_brace_open(acc)
+    } else if tok.cat == TokenCat::Punct && tok.lexeme == "}" {
+        handle_brace_close(acc)
+    } else {
+        match tok.cat {
+            TokenCat::Ident => {
+                let item: Item = Item { kind: acc.item_kind, name: tok.lexeme, line: acc.item_line, vis: acc.vis, mods: acc.mods };
+                let mut new_items: List[Item] = acc.items;
+                new_items.push(item);
+                ParseAcc { items: new_items, mode: ParseMode::Scan, item_kind: ItemKind::FnDecl, item_line: 0, depth: acc.depth, vis: false, mods: [] }
+            }
+            _ => reset_mods(acc)
+        }
+    }
+}
+
+fn parse_step(acc: ParseAcc, tok: Token) -> ParseAcc {
+    match acc.mode {
+        ParseMode::Scan     => parse_scan(acc, tok),
+        ParseMode::NeedFn   => parse_need_fn(acc, tok),
+        ParseMode::NeedName => parse_need_name(acc, tok),
+    }
+}
+
+// ── Top-level parser ──────────────────────────────────────────────────────────
+
+total fn parse_tokens(tokens: List[Token]) -> List[Item] {
+    let init: ParseAcc = ParseAcc {
+        items: [],
+        mode: ParseMode::Scan,
+        item_kind: ItemKind::FnDecl,
+        item_line: 0,
+        depth: 0,
+        vis: false,
+        mods: [],
+    };
+    tokens.fold(init, parse_step).items
+}
+
+partial fn parse_file(src: String) -> List[Item] {
+    parse_tokens(lex(src))
+}
+
+// ── Counts aggregator ─────────────────────────────────────────────────────────
+
+type Counts = struct {
+    fns:   Int,
+    types: Int,
+    uses:  Int,
+    tests: Int,
+    pub_:  Int,
+}
+
+fn zero_counts() -> Counts {
+    Counts { fns: 0, types: 0, uses: 0, tests: 0, pub_: 0 }
+}
+
+fn add_item(acc: Counts, item: Item) -> Counts {
+    let pub_inc: Int = if item.vis { 1 } else { 0 };
+    match item.kind {
+        ItemKind::FnDecl   => Counts { fns: acc.fns + 1, types: acc.types, uses: acc.uses, tests: acc.tests, pub_: acc.pub_ + pub_inc },
+        ItemKind::TypeDecl => Counts { fns: acc.fns, types: acc.types + 1, uses: acc.uses, tests: acc.tests, pub_: acc.pub_ + pub_inc },
+        ItemKind::UseDecl  => Counts { fns: acc.fns, types: acc.types, uses: acc.uses + 1, tests: acc.tests, pub_: acc.pub_ + pub_inc },
+        ItemKind::TestFn   => Counts { fns: acc.fns, types: acc.types, uses: acc.uses, tests: acc.tests + 1, pub_: acc.pub_ + pub_inc },
+    }
+}
+
+total fn count_items(items: List[Item]) -> Counts {
+    items.fold(zero_counts(), add_item)
+}
+
+// ── IFC helpers ───────────────────────────────────────────────────────────────
+
+fn dir_from_arg(v: Tainted[String]) -> Path {
+    let clean_dir: Clean[String] = sanitize(v);
+    join(path("."), clean_dir)
+}
+
+transparent partial fn call_parse_file(src: String) -> List[Item] {
+    parse_file(src)
+}
+
+transparent partial fn call_count_items(items: List[Item]) -> Counts {
+    count_items(items)
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
+partial fn main() -> Unit ! FileRead, Console {
+    let dir_path: Path = match get_arg("dir") {
+        None    => path("examples/log_analyzer"),
+        Some(v) => dir_from_arg(v),
+    };
+
+    match read_dir(dir_path) {
+        Err(e) => println("error reading directory: {}", e),
+        Ok(entries) => {
+            let mut file_count: Int = 0;
+            let mut fn_count:   Int = 0;
+            let mut type_count: Int = 0;
+            let mut use_count:  Int = 0;
+            let mut test_count: Int = 0;
+            let mut pub_count:  Int = 0;
+
+            let mut i: Int = 0;
+            while i < entries.len() {
+                match entries.get(i) {
+                    None => (),
+                    Some(entry) => {
+                        let name: String = to_string(entry.path);
+                        if entry.is_file && name.ends_with(".mvl") {
+                            file_count = file_count + 1;
+                            match read_to_string(entry.path) {
+                                Err(_)  => (),
+                                Ok(raw) => {
+                                    let src: Clean[String] = sanitize(raw);
+                                    let items: Clean[List[Item]] = call_parse_file(src);
+                                    let c: Clean[Counts] = call_count_items(items);
+                                    fn_count   = fn_count   + c.fns;
+                                    type_count = type_count + c.types;
+                                    use_count  = use_count  + c.uses;
+                                    test_count = test_count + c.tests;
+                                    pub_count  = pub_count  + c.pub_
+                                }
+                            }
+                        }
+                    }
+                }
+                i = i + 1
+            }
+            println("files: {}", file_count);
+            println("fn:    {}", fn_count);
+            println("type:  {}", type_count);
+            println("use:   {}", use_count);
+            println("test:  {}", test_count);
+            println("pub:   {}", pub_count)
+        }
+    }
+}
