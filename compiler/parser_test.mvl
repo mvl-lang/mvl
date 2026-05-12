@@ -1,0 +1,394 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/parser_test.mvl — integration tests for compiler/parser.mvl
+//
+// mvl test inlines all dependent modules into one compilation unit, so
+// functions from ast.mvl, lexer.mvl, and parser.mvl are already in scope
+// — no 'use' imports needed here.
+//
+// Tests call lex() + parse() end-to-end on real MVL source snippets,
+// then assert on the resulting Program struct.
+//
+// Run with:  mvl test compiler/
+//            make test-mvl
+
+// ── Helper: lex + parse a source string ──────────────────────────────────────
+
+total fn lp(src: String) -> Program {
+    parse(lex(src))
+}
+
+// ── Empty source ──────────────────────────────────────────────────────────────
+
+test fn empty_source_gives_empty_program() -> Unit {
+    let p: Program = lp("");
+    assert_eq(p.fns.len(),    0);
+    assert_eq(p.types.len(),  0);
+    assert_eq(p.uses.len(),   0);
+    assert_eq(p.consts.len(), 0);
+    assert_eq(p.errors.len(), 0)
+}
+
+// ── fn declarations ───────────────────────────────────────────────────────────
+
+test fn bare_fn_no_params() -> Unit {
+    let p: Program = lp("fn foo() -> Unit { }");
+    assert_eq(p.fns.len(), 1);
+    assert_eq(p.errors.len(), 0);
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => {
+            assert_eq(f.name,       "foo");
+            assert_eq(f.visible,    false);
+            assert_eq(f.totality,   "");
+            assert_eq(f.is_transp,  false);
+            assert_eq(f.has_body,   true);
+            assert_eq(f.params.len(), 0)
+        }
+    }
+}
+
+test fn pub_fn_is_visible() -> Unit {
+    let p: Program = lp("pub fn bar() -> Int { 0 }");
+    assert_eq(p.fns.len(), 1);
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => {
+            assert_eq(f.name,    "bar");
+            assert_eq(f.visible, true)
+        }
+    }
+}
+
+test fn total_fn_has_totality() -> Unit {
+    let p: Program = lp("total fn add(a: Int, b: Int) -> Int { a + b }");
+    assert_eq(p.fns.len(), 1);
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => {
+            assert_eq(f.totality,     "total");
+            assert_eq(f.params.len(), 2)
+        }
+    }
+}
+
+test fn partial_fn_has_totality() -> Unit {
+    let p: Program = lp("partial fn loop_fn() -> Unit { }");
+    assert_eq(p.fns.len(), 1);
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => assert_eq(f.totality, "partial")
+    }
+}
+
+test fn transparent_partial_fn() -> Unit {
+    let p: Program = lp("transparent partial fn bridge(s: String) -> String { s }");
+    assert_eq(p.fns.len(), 1);
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => {
+            assert_eq(f.is_transp, true);
+            assert_eq(f.totality,  "partial")
+        }
+    }
+}
+
+test fn pub_total_fn() -> Unit {
+    let p: Program = lp("pub total fn identity(x: Int) -> Int { x }");
+    assert_eq(p.fns.len(), 1);
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => {
+            assert_eq(f.visible,  true);
+            assert_eq(f.totality, "total")
+        }
+    }
+}
+
+test fn test_fn_flag() -> Unit {
+    let p: Program = lp("test fn my_test() -> Unit { assert_eq(1, 1) }");
+    assert_eq(p.fns.len(), 1);
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => assert_eq(f.is_test, true)
+    }
+}
+
+test fn fn_with_two_params() -> Unit {
+    let p: Program = lp("fn add(x: Int, y: Int) -> Int { x + y }");
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => {
+            assert_eq(f.params.len(), 2);
+            match f.params.get(0) {
+                None     => assert_eq(true, false),
+                Some(p0) => assert_eq(p0.name, "x")
+            }
+            match f.params.get(1) {
+                None     => assert_eq(true, false),
+                Some(p1) => assert_eq(p1.name, "y")
+            }
+        }
+    }
+}
+
+test fn fn_param_type_recorded() -> Unit {
+    let p: Program = lp("fn greet(name: String) -> Unit { }");
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => match f.params.get(0) {
+            None     => assert_eq(true, false),
+            Some(p0) => assert_eq(p0.ty.name, "String")
+        }
+    }
+}
+
+test fn fn_generic_param_type() -> Unit {
+    let p: Program = lp("fn first(xs: List[Int]) -> Int { xs.get(0) }");
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => match f.params.get(0) {
+            None     => assert_eq(true, false),
+            Some(p0) => {
+                assert_eq(p0.ty.name,       "List");
+                assert_eq(p0.ty.args.len(), 1)
+            }
+        }
+    }
+}
+
+test fn fn_with_effects() -> Unit {
+    let p: Program = lp("fn log(msg: String) -> Unit ! Console { println(msg) }");
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => {
+            assert_eq(f.effects.len(), 1);
+            match f.effects.get(0) {
+                None    => assert_eq(true, false),
+                Some(e) => assert_eq(e.name, "Console")
+            }
+        }
+    }
+}
+
+test fn fn_with_multiple_effects() -> Unit {
+    let p: Program = lp("fn io_fn() -> Unit ! FileRead, Console { }");
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => assert_eq(f.effects.len(), 2)
+    }
+}
+
+test fn fn_with_where_clause() -> Unit {
+    let p: Program = lp("fn compare[T](a: T, b: T) -> Bool where T: Eq { a == b }");
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => {
+            assert_eq(f.type_params.len(), 1);
+            assert_eq(f.constraints.len(), 1);
+            match f.constraints.get(0) {
+                None    => assert_eq(true, false),
+                Some(c) => {
+                    assert_eq(c.param, "T");
+                    assert_eq(c.bound, "Eq")
+                }
+            }
+        }
+    }
+}
+
+test fn fn_without_body() -> Unit {
+    let p: Program = lp("fn stub() -> Int;");
+    assert_eq(p.fns.len(), 1);
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => assert_eq(f.has_body, false)
+    }
+}
+
+test fn fn_inside_impl_not_top_level() -> Unit {
+    let src: String = "impl Foo { fn bar() -> Int { 0 } } fn baz() -> Unit { }";
+    let p: Program = lp(src);
+    assert_eq(p.fns.len(),   1);
+    assert_eq(p.impls.len(), 1);
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => assert_eq(f.name, "baz")
+    }
+}
+
+// ── type declarations ─────────────────────────────────────────────────────────
+
+test fn type_struct_two_fields() -> Unit {
+    let p: Program = lp("type Point = struct { x: Int, y: Int }");
+    assert_eq(p.types.len(), 1);
+    match p.types.get(0) {
+        None    => assert_eq(true, false),
+        Some(t) => {
+            assert_eq(t.name,         "Point");
+            assert_eq(t.fields.len(), 2);
+            assert_eq(t.visible,      false);
+            match t.body_kind {
+                TypeBodyKind::IsStruct => assert_eq(true, true),
+                _                      => assert_eq(true, false)
+            }
+        }
+    }
+}
+
+test fn pub_type_is_visible() -> Unit {
+    let p: Program = lp("pub type Color = enum { Red, Green, Blue }");
+    match p.types.get(0) {
+        None    => assert_eq(true, false),
+        Some(t) => {
+            assert_eq(t.visible,        true);
+            assert_eq(t.variants.len(), 3)
+        }
+    }
+}
+
+test fn type_enum_variants() -> Unit {
+    let p: Program = lp("type Dir = enum { North, South, East, West }");
+    match p.types.get(0) {
+        None    => assert_eq(true, false),
+        Some(t) => {
+            assert_eq(t.variants.len(), 4);
+            match t.body_kind {
+                TypeBodyKind::IsEnum => assert_eq(true, true),
+                _                    => assert_eq(true, false)
+            }
+        }
+    }
+}
+
+test fn type_alias() -> Unit {
+    let p: Program = lp("type Name = String");
+    match p.types.get(0) {
+        None    => assert_eq(true, false),
+        Some(t) => {
+            assert_eq(t.name,          "Name");
+            assert_eq(t.alias_ty.name, "String");
+            match t.body_kind {
+                TypeBodyKind::IsAlias => assert_eq(true, true),
+                _                     => assert_eq(true, false)
+            }
+        }
+    }
+}
+
+test fn struct_field_names_recorded() -> Unit {
+    let p: Program = lp("type Span = struct { line: Int, col: Int }");
+    match p.types.get(0) {
+        None    => assert_eq(true, false),
+        Some(t) => {
+            match t.fields.get(0) {
+                None    => assert_eq(true, false),
+                Some(f) => assert_eq(f.name, "line")
+            }
+            match t.fields.get(1) {
+                None    => assert_eq(true, false),
+                Some(f) => assert_eq(f.name, "col")
+            }
+        }
+    }
+}
+
+// ── use declarations ──────────────────────────────────────────────────────────
+
+test fn use_double_colon() -> Unit {
+    let p: Program = lp("use lexer::lex;");
+    assert_eq(p.uses.len(), 1);
+    match p.uses.get(0) {
+        None    => assert_eq(true, false),
+        Some(u) => {
+            assert_eq(u.path.len(),    1);
+            assert_eq(u.imports.len(), 1);
+            match u.imports.get(0) {
+                None    => assert_eq(true, false),
+                Some(s) => assert_eq(s, "lex")
+            }
+        }
+    }
+}
+
+test fn use_brace_group() -> Unit {
+    let p: Program = lp("use std.io.{path, join}");
+    assert_eq(p.uses.len(), 1);
+    match p.uses.get(0) {
+        None    => assert_eq(true, false),
+        Some(u) => assert_eq(u.imports.len(), 2)
+    }
+}
+
+// ── const declaration ─────────────────────────────────────────────────────────
+
+test fn const_declaration() -> Unit {
+    let p: Program = lp("const MAX: Int = 100;");
+    assert_eq(p.consts.len(), 1);
+    match p.consts.get(0) {
+        None    => assert_eq(true, false),
+        Some(c) => {
+            assert_eq(c.name,    "MAX");
+            assert_eq(c.ty.name, "Int")
+        }
+    }
+}
+
+// ── multiple declarations ─────────────────────────────────────────────────────
+
+test fn two_fns_and_one_type() -> Unit {
+    let src: String = "fn foo() -> Unit { } fn bar() -> Int { 0 } type X = struct { n: Int }";
+    let p: Program = lp(src);
+    assert_eq(p.fns.len(),    2);
+    assert_eq(p.types.len(),  1);
+    assert_eq(p.errors.len(), 0)
+}
+
+test fn errors_empty_on_valid_input() -> Unit {
+    let p: Program = lp("pub total fn pure(x: Int) -> Int { x }");
+    assert_eq(p.errors.len(), 0)
+}
+
+// ── advanced syntax (regression) ──────────────────────────────────────────────
+
+test fn fn_type_in_param_no_errors() -> Unit {
+    let p: Program = lp("fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }");
+    assert_eq(p.errors.len(), 0);
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => assert_eq(f.params.len(), 2)
+    }
+}
+
+test fn inline_param_refinement_no_errors() -> Unit {
+    let p: Program = lp("fn positive(x: Int where self > 0) -> Int { x }");
+    assert_eq(p.errors.len(), 0);
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => assert_eq(f.params.len(), 1)
+    }
+}
+
+test fn struct_field_refinement_no_errors() -> Unit {
+    let p: Program = lp("type Port = struct { value: Int where self > 0, }");
+    assert_eq(p.errors.len(), 0);
+    match p.types.get(0) {
+        None    => assert_eq(true, false),
+        Some(t) => assert_eq(t.fields.len(), 1)
+    }
+}
+
+test fn capability_qualified_type_no_errors() -> Unit {
+    let p: Program = lp("fn f(iso db: val Conn) -> Int { 0 }");
+    assert_eq(p.errors.len(), 0);
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => assert_eq(f.params.len(), 1)
+    }
+}
+
+test fn return_type_refinement_no_errors() -> Unit {
+    let p: Program = lp("fn pos_result(x: Int) -> Int where self > 0 { if x > 0 { x } else { 1 } }");
+    assert_eq(p.errors.len(), 0)
+}
