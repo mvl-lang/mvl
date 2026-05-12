@@ -234,6 +234,33 @@ fn struct_invariant_only_emits_constructor() {
     assert_contains(&rust, "_mvl_val");
 }
 
+/// Phase 6 / Regression: struct without invariant must not emit _mvl_val binding (#654)
+#[test]
+fn struct_without_invariant_does_not_emit_mvl_val() {
+    let src = "type Positive = struct { value: Int where self > 0 }";
+    let rust = transpile_src(src);
+    assert!(
+        !rust.contains("_mvl_val"),
+        "structs without invariant must not use _mvl_val binding"
+    );
+    assert!(
+        !rust.contains("struct invariant violated"),
+        "structs without invariant must not emit invariant assert"
+    );
+}
+
+/// Phase 6 / Scenario: compound invariant (&&) emits correctly (#654)
+#[test]
+fn struct_invariant_logical_and_emits_correctly() {
+    let src =
+        "type Window = struct { start: Int, end: Int, } with invariant self.start >= 0 && self.start <= self.end";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "let _mvl_val = Self {");
+    assert_contains(&rust, "_mvl_val.start >= 0");
+    assert_contains(&rust, "_mvl_val.start <= _mvl_val.end");
+    assert_contains(&rust, "struct invariant violated for `Window`");
+}
+
 // ── Corpus roundtrip tests ────────────────────────────────────────────────
 
 /// Parse and transpile every corpus file that is known to parse cleanly.

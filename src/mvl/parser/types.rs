@@ -987,6 +987,17 @@ mod tests {
         assert!(matches!(*right, RefExpr::FieldAccess { .. }));
     }
 
+    #[test]
+    fn parse_struct_with_keyword_produces_error_without_invariant() {
+        // GIVEN: `with` appears but `invariant` keyword is absent
+        let (mut p, _) = Parser::new("type T = struct { x: Int } with");
+        let _ = p.parse_type_decl();
+        assert!(
+            !p.errors.is_empty(),
+            "expected a parse error when `invariant` keyword is absent after `with`"
+        );
+    }
+
     // ── Requirement 3 / Scenario: Parse enum ─────────────────────────────
 
     #[test]

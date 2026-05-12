@@ -135,7 +135,7 @@ pub fn emit_type_decl(cg: &mut RustEmitter, td: &TypeDecl) {
             // are defined there). Programs without stdlib imports use an inline
             // preamble that does not include these symbols.
             if td.params.is_empty() && cg.use_mvl_runtime {
-                emit_parse_from_args_impl(cg, &td.name, fields);
+                emit_parse_from_args_impl(cg, &td.name, fields, invariant.is_some());
             }
         }
         TypeBody::Enum(variants) => emit_enum(cg, &td.name, &td.params, variants),
@@ -225,7 +225,12 @@ fn emit_struct(
 /// Skipped when any field has an unsupported type (e.g. nested structs,
 /// generic params, security labels) — callers receive a Rust type-error if
 /// they attempt `parse::<T>()` on such a struct.
-pub(crate) fn emit_parse_from_args_impl(cg: &mut RustEmitter, name: &str, fields: &[FieldDecl]) {
+pub(crate) fn emit_parse_from_args_impl(
+    cg: &mut RustEmitter,
+    name: &str,
+    fields: &[FieldDecl],
+    has_invariant: bool,
+) {
     // Only emit for structs where every field is parseable
     if !fields.iter().all(|f| is_parseable_field_type(&f.ty)) {
         return;
@@ -241,7 +246,12 @@ pub(crate) fn emit_parse_from_args_impl(cg: &mut RustEmitter, name: &str, fields
     }
 
     let field_names: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
-    cg.line(&format!("Ok(Self {{ {} }})", field_names.join(", ")));
+    if has_invariant {
+        // Route through the generated constructor so the struct invariant is checked.
+        cg.line(&format!("Ok(Self::new({}))", field_names.join(", ")));
+    } else {
+        cg.line(&format!("Ok(Self {{ {} }})", field_names.join(", ")));
+    }
     cg.pop_indent();
     cg.line("}");
     cg.pop_indent();
@@ -723,6 +733,7 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
             }
         }
         RefExpr::FieldAccess { object, field, .. } => {
+            assert_safe_identifier(field);
             format!("{}.{}", emit_ref_expr(object, binding), field)
         }
         RefExpr::Integer { value, .. } => value.to_string(),
