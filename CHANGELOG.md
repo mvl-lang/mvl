@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.96.0] — 2026-05-12
+
+### Changed
+
+- **Phase D capability state machine now driven by implicit borrows** — The `CapabilityState` state machine in the type checker now enforces reference aliasing rules on implicit borrow assignments (`let v: val T = x` / `let r: ref T = x`), not just explicit borrow expressions (`let v: val T = val x` / `let r: ref T = ref x`). Improves error detection for capability violations in real-world code. Closes #660.
+
 ## [0.95.0] — 2026-05-12
 
 ### Changed
