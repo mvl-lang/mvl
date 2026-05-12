@@ -1133,6 +1133,7 @@
   {
     "type": "program",
     "named": true,
+    "root": true,
     "fields": {},
     "children": {
       "multiple": true,
@@ -1426,6 +1427,10 @@
       "types": [
         {
           "type": "field_decl",
+          "named": true
+        },
+        {
+          "type": "refinement",
           "named": true
         }
       ]
@@ -1913,6 +1918,10 @@
     "named": true
   },
   {
+    "type": "invariant",
+    "named": false
+  },
+  {
     "type": "iso",
     "named": false
   },
@@ -1926,23 +1935,16 @@
   },
   {
     "type": "line_comment",
-    "named": true
+    "named": true,
+    "extra": true
   },
   {
     "type": "match",
     "named": false
   },
   {
-    "type": "move",
-    "named": false
-  },
-  {
     "type": "multiline_string_literal",
     "named": true
-  },
-  {
-    "type": "mut",
-    "named": false
   },
   {
     "type": "none_pattern",
@@ -2026,6 +2028,10 @@
   },
   {
     "type": "while",
+    "named": false
+  },
+  {
+    "type": "with",
     "named": false
   },
   {

@@ -9,7 +9,7 @@
 //! - `type Alias = T` → `pub type Alias = <rust_type>;`
 //! - `type Refined = T where pred` → newtype with constructor validation
 //! - Security labels (Public<T> etc.) → module-level preamble structs
-//! - Refinement field predicates → `debug_assert!` in constructors
+//! - Refinement field predicates → `assert!` in constructors (always enforced)
 //! - Concrete structs with parseable fields → `impl ParseFromArgs`
 
 use crate::mvl::backends::rust::emitter::RustEmitter;
@@ -128,14 +128,14 @@ fn emit_label_newtype(cg: &mut RustEmitter, label: &str) {
 
 pub fn emit_type_decl(cg: &mut RustEmitter, td: &TypeDecl) {
     match &td.body {
-        TypeBody::Struct(fields) => {
-            emit_struct(cg, &td.name, &td.params, fields);
+        TypeBody::Struct { fields, invariant } => {
+            emit_struct(cg, &td.name, &td.params, fields, invariant.as_ref());
             // Emit ParseFromArgs impl for concrete (non-generic) structs, but
             // only when the program uses mvl_runtime (ParseFromArgs, get_arg
             // are defined there). Programs without stdlib imports use an inline
             // preamble that does not include these symbols.
             if td.params.is_empty() && cg.use_mvl_runtime {
-                emit_parse_from_args_impl(cg, &td.name, fields);
+                emit_parse_from_args_impl(cg, &td.name, fields, invariant.is_some());
             }
         }
         TypeBody::Enum(variants) => emit_enum(cg, &td.name, &td.params, variants),
@@ -145,7 +145,13 @@ pub fn emit_type_decl(cg: &mut RustEmitter, td: &TypeDecl) {
 
 // ── Struct ────────────────────────────────────────────────────────────────
 
-fn emit_struct(cg: &mut RustEmitter, name: &str, params: &[GenericParam], fields: &[FieldDecl]) {
+fn emit_struct(
+    cg: &mut RustEmitter,
+    name: &str,
+    params: &[GenericParam],
+    fields: &[FieldDecl],
+    invariant: Option<&RefExpr>,
+) {
     emit_derive(cg, &["Debug", "Clone", "PartialEq"]);
     cg.line(&format!("pub struct {}{} {{", name, generic_params(params)));
     cg.push_indent();
@@ -156,9 +162,9 @@ fn emit_struct(cg: &mut RustEmitter, name: &str, params: &[GenericParam], fields
     cg.pop_indent();
     cg.line("}");
 
-    // Emit a constructor if any field has a refinement predicate
+    // Emit a constructor if any field has a refinement predicate or a struct invariant exists
     let refined_fields: Vec<_> = fields.iter().filter(|f| f.refinement.is_some()).collect();
-    if !refined_fields.is_empty() {
+    if !refined_fields.is_empty() || invariant.is_some() {
         cg.blank();
         cg.line(&format!(
             "impl{} {}{} {{",
@@ -181,13 +187,29 @@ fn emit_struct(cg: &mut RustEmitter, name: &str, params: &[GenericParam], fields
             if let Some(pred) = &field.refinement {
                 let pred_str = emit_ref_expr_for_assert(pred, &field.name);
                 cg.line(&format!(
-                    "debug_assert!({pred_str}, \"refinement violated: {} {{}}\", {});",
+                    "assert!({pred_str}, \"refinement violated: {} {{}}\", {});",
                     field.name, field.name
                 ));
             }
         }
         let field_inits: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
-        cg.line(&format!("Self {{ {} }}", field_inits.join(", ")));
+        if let Some(inv) = invariant {
+            // Build struct first, then assert the invariant using field access on the value.
+            cg.line(&format!(
+                "let _mvl_val = Self {{ {} }};",
+                field_inits.join(", ")
+            ));
+            let inv_str = emit_ref_expr_for_assert(inv, "_mvl_val");
+            // Always enforce invariants — debug_assert! is silent in release builds.
+            // TODO (#662): replace with AssertMode once both Rust and LLVM backends
+            // support configurable enforcement levels (rust/llvm parity).
+            cg.line(&format!(
+                "assert!({inv_str}, \"struct invariant violated for `{name}`\");"
+            ));
+            cg.line("_mvl_val");
+        } else {
+            cg.line(&format!("Self {{ {} }}", field_inits.join(", ")));
+        }
         cg.pop_indent();
         cg.line("}");
         cg.pop_indent();
@@ -206,7 +228,12 @@ fn emit_struct(cg: &mut RustEmitter, name: &str, params: &[GenericParam], fields
 /// Skipped when any field has an unsupported type (e.g. nested structs,
 /// generic params, security labels) — callers receive a Rust type-error if
 /// they attempt `parse::<T>()` on such a struct.
-pub(crate) fn emit_parse_from_args_impl(cg: &mut RustEmitter, name: &str, fields: &[FieldDecl]) {
+pub(crate) fn emit_parse_from_args_impl(
+    cg: &mut RustEmitter,
+    name: &str,
+    fields: &[FieldDecl],
+    has_invariant: bool,
+) {
     // Only emit for structs where every field is parseable
     if !fields.iter().all(|f| is_parseable_field_type(&f.ty)) {
         return;
@@ -222,7 +249,12 @@ pub(crate) fn emit_parse_from_args_impl(cg: &mut RustEmitter, name: &str, fields
     }
 
     let field_names: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
-    cg.line(&format!("Ok(Self {{ {} }})", field_names.join(", ")));
+    if has_invariant {
+        // Route through the generated constructor so the struct invariant is checked.
+        cg.line(&format!("Ok(Self::new({}))", field_names.join(", ")));
+    } else {
+        cg.line(&format!("Ok(Self {{ {} }})", field_names.join(", ")));
+    }
     cg.pop_indent();
     cg.line("}");
     cg.pop_indent();
@@ -484,13 +516,13 @@ fn emit_alias(cg: &mut RustEmitter, name: &str, params: &[GenericParam], ty: &Ty
             cg.line(&format!("impl {} {{", name));
             cg.push_indent();
             cg.line(&format!(
-                "/// Construct `{name}` — panics in debug mode if the refinement is violated."
+                "/// Construct `{name}` — panics if the refinement is violated."
             ));
             cg.line(&format!("pub fn new(v: {inner_str}) -> Self {{"));
             cg.push_indent();
             let pred_str = emit_ref_expr_for_assert(pred, "v");
             cg.line(&format!(
-                "debug_assert!({pred_str}, \"refinement violated: {name}({{}})\", v);"
+                "assert!({pred_str}, \"refinement violated: {name}({{}})\", v);"
             ));
             cg.line("Self(v)");
             cg.pop_indent();
@@ -702,6 +734,10 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
             } else {
                 name.clone()
             }
+        }
+        RefExpr::FieldAccess { object, field, .. } => {
+            assert_safe_identifier(field);
+            format!("{}.{}", emit_ref_expr(object, binding), field)
         }
         RefExpr::Integer { value, .. } => value.to_string(),
         RefExpr::Float { value, .. } => {

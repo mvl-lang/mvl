@@ -602,7 +602,7 @@ impl TypeChecker {
         let base = ty.unlabeled();
         if let Ty::Named(name, _) = base {
             if let Some(type_info) = self.env.lookup_type(name).cloned() {
-                if let TypeBodyInfo::Struct(fields) = &type_info.body {
+                if let TypeBodyInfo::Struct { fields, .. } = &type_info.body {
                     if let Some(fi) = fields.iter().find(|f| f.name == field) {
                         if !fi.mutable {
                             self.emit(CheckError::MutateImmutableField {
@@ -624,7 +624,7 @@ impl TypeChecker {
         let base = ty.unlabeled();
         if let Ty::Named(name, _) = base {
             if let Some(type_info) = self.env.lookup_type(name) {
-                if let TypeBodyInfo::Struct(fields) = &type_info.body {
+                if let TypeBodyInfo::Struct { fields, .. } = &type_info.body {
                     return fields
                         .iter()
                         .find(|f| f.name == field)
@@ -642,7 +642,7 @@ impl TypeChecker {
             Ty::Named(name, _) => {
                 if let Some(type_info) = self.env.lookup_type(name).cloned() {
                     match &type_info.body {
-                        TypeBodyInfo::Struct(fields) => {
+                        TypeBodyInfo::Struct { fields, .. } => {
                             if let Some(fi) = fields.iter().find(|f| f.name == field) {
                                 fi.ty.clone()
                             } else {
@@ -698,7 +698,10 @@ impl TypeChecker {
 
         if let Some(type_info) = self.env.lookup_type(name).cloned() {
             match &type_info.body {
-                TypeBodyInfo::Struct(declared_fields) => {
+                TypeBodyInfo::Struct {
+                    fields: declared_fields,
+                    ..
+                } => {
                     // Check that all declared fields are provided
                     for df in declared_fields.iter() {
                         if !provided.iter().any(|(pname, _)| pname == &df.name) {

@@ -537,6 +537,16 @@ fn normalize_pred(pred: &RefExpr, param_name: &str) -> RefExpr {
             inner: Box::new(normalize_pred(inner, param_name)),
             span: *span,
         },
+        // Field access: recurse into object, keep field unchanged.
+        RefExpr::FieldAccess {
+            object,
+            field,
+            span,
+        } => RefExpr::FieldAccess {
+            object: Box::new(normalize_pred(object, param_name)),
+            field: field.clone(),
+            span: *span,
+        },
         // Literals and Len don't contain the param name.
         other => other.clone(),
     }
@@ -1027,5 +1037,8 @@ fn display_pred(pred: &RefExpr) -> String {
         RefExpr::Len { ident, .. } => format!("len({ident})"),
         RefExpr::Forall { var, body, .. } => format!("forall {var}, {}", display_pred(body)),
         RefExpr::Exists { var, body, .. } => format!("exists {var}, {}", display_pred(body)),
+        RefExpr::FieldAccess { object, field, .. } => {
+            format!("{}.{}", display_pred(object), field)
+        }
     }
 }

@@ -26,3 +26,16 @@ type Person = struct {
     name: String where len(self) > 0,
     age: ValidAge,
 }
+
+// Struct-level invariants (Phase 6, #654)
+// Cross-field predicate: size must not exceed capacity.
+type BoundedStack = struct {
+    size: Int where self >= 0,
+    capacity: Int where self > 0,
+} with invariant self.size <= self.capacity
+
+// Invariant over two fields without per-field refinements.
+type Range = struct {
+    lo: Int,
+    hi: Int,
+} with invariant self.lo <= self.hi

@@ -34,7 +34,10 @@ impl TypeChecker {
 
     fn register_type(&mut self, td: &TypeDecl) {
         let body_info = match &td.body {
-            TypeBody::Struct(fields) => TypeBodyInfo::Struct(field_infos(fields)),
+            TypeBody::Struct { fields, invariant } => TypeBodyInfo::Struct {
+                fields: field_infos(fields),
+                invariant: invariant.clone(),
+            },
             TypeBody::Enum(variants) => TypeBodyInfo::Enum(variant_infos(variants)),
             TypeBody::Alias(ty_expr) => TypeBodyInfo::Alias(resolve(ty_expr)),
         };

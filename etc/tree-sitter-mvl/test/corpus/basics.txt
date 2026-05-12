@@ -131,6 +131,42 @@ type Point = struct {
                 (identifier)))))))))
 
 ===============================================================================
+Type — struct with invariant
+===============================================================================
+
+type Range = struct {
+  lo: Int,
+  hi: Int,
+} with invariant lo <= hi
+
+-------------------------------------------------------------------------------
+
+(program
+  (declaration
+    (type_decl
+      (identifier)
+      (type_body
+        (struct_body
+          (field_decl
+            (identifier)
+            (type_expr
+              (base_type
+                (identifier))))
+          (field_decl
+            (identifier)
+            (type_expr
+              (base_type
+                (identifier))))
+          (refinement
+            (ref_expr
+              (ref_expr
+                (ref_atom
+                  (identifier)))
+              (ref_expr
+                (ref_atom
+                  (identifier))))))))))
+
+===============================================================================
 Type — enum
 ===============================================================================
 
@@ -368,7 +404,7 @@ Let binding with type annotation
 
 total fn example() -> Unit {
   let x: Int = 42;
-  let mut y: Int = 0;
+  let y: Int = 0;
 }
 
 -------------------------------------------------------------------------------

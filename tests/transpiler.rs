@@ -77,14 +77,14 @@ fn plain_alias_transpiles_to_type_alias() {
     assert_contains(&rust, "pub type Name = String;");
 }
 
-/// Requirement 10 / Scenario: Refined type alias → Rust newtype with debug_assert
+/// Requirement 10 / Scenario: Refined type alias → Rust newtype with assert
 #[test]
 fn refined_alias_transpiles_to_newtype() {
     let src = "type PositiveInt = Int where self > 0";
     let rust = transpile_src(src);
     assert_contains(&rust, "pub struct PositiveInt(pub i64)");
     assert_contains(&rust, "pub fn new(v: i64) -> Self");
-    assert_contains(&rust, "debug_assert!(");
+    assert_contains(&rust, "assert!(");
     assert_contains(&rust, "(v > 0)");
 }
 
@@ -94,7 +94,7 @@ fn refined_alias_float_predicate_transpiles() {
     let src = "type NonNegative = Float where self >= 0.0";
     let rust = transpile_src(src);
     assert_contains(&rust, "pub struct NonNegative(pub f64)");
-    assert_contains(&rust, "debug_assert!(");
+    assert_contains(&rust, "assert!(");
     assert_contains(&rust, "(v >= 0.0)");
 }
 
@@ -195,14 +195,70 @@ fn declassify_expr_transpiles() {
 
 // ── #32: Refinement types ─────────────────────────────────────────────────
 
-/// Requirement 10 / Scenario: Struct field refinement → constructor with debug_assert
+/// Requirement 10 / Scenario: Struct field refinement → constructor with assert
 #[test]
 fn struct_field_refinement_emits_constructor() {
     let src = "type Age = struct { value: Int where self >= 0 }";
     let rust = transpile_src(src);
     assert_contains(&rust, "pub fn new(value: i64) -> Self {");
-    assert_contains(&rust, "debug_assert!(");
+    assert_contains(&rust, "assert!(");
     assert_contains(&rust, "(value >= 0)");
+}
+
+/// Phase 6 / Scenario: Struct-level invariant → constructor with debug_assert on struct value (#654)
+#[test]
+fn struct_invariant_emits_constructor_with_assert() {
+    let src =
+        "type Stack = struct { size: Int where self >= 0, capacity: Int where self > 0, } with invariant self.size <= self.capacity";
+    let rust = transpile_src(src);
+    // Constructor must be emitted
+    assert_contains(&rust, "pub fn new(");
+    // Field refinement assertions come first
+    assert_contains(&rust, "refinement violated: size");
+    assert_contains(&rust, "refinement violated: capacity");
+    // Struct value bound, then invariant checked
+    assert_contains(&rust, "let _mvl_val = Self {");
+    assert_contains(&rust, "struct invariant violated for `Stack`");
+    assert_contains(&rust, "_mvl_val.size <= _mvl_val.capacity");
+}
+
+/// Phase 6 / Scenario: Struct invariant only (no per-field refinements) (#654)
+#[test]
+fn struct_invariant_only_emits_constructor() {
+    let src = "type Range = struct { lo: Int, hi: Int, } with invariant self.lo <= self.hi";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "pub fn new(lo: i64, hi: i64) -> Self {");
+    assert_contains(&rust, "let _mvl_val = Self {");
+    assert_contains(&rust, "_mvl_val.lo <= _mvl_val.hi");
+    assert_contains(&rust, "struct invariant violated for `Range`");
+    assert_contains(&rust, "_mvl_val");
+}
+
+/// Phase 6 / Regression: struct without invariant must not emit _mvl_val binding (#654)
+#[test]
+fn struct_without_invariant_does_not_emit_mvl_val() {
+    let src = "type Positive = struct { value: Int where self > 0 }";
+    let rust = transpile_src(src);
+    assert!(
+        !rust.contains("_mvl_val"),
+        "structs without invariant must not use _mvl_val binding"
+    );
+    assert!(
+        !rust.contains("struct invariant violated"),
+        "structs without invariant must not emit invariant assert"
+    );
+}
+
+/// Phase 6 / Scenario: compound invariant (&&) emits correctly (#654)
+#[test]
+fn struct_invariant_logical_and_emits_correctly() {
+    let src =
+        "type Window = struct { start: Int, end: Int, } with invariant self.start >= 0 && self.start <= self.end";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "let _mvl_val = Self {");
+    assert_contains(&rust, "_mvl_val.start >= 0");
+    assert_contains(&rust, "_mvl_val.start <= _mvl_val.end");
+    assert_contains(&rust, "struct invariant violated for `Window`");
 }
 
 // ── Corpus roundtrip tests ────────────────────────────────────────────────

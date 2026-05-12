@@ -614,6 +614,16 @@ fn normalize_pred(pred: &RefExpr, old_name: &str) -> RefExpr {
             }),
             span: *span,
         },
+        // Field access: recurse into object, keep field unchanged.
+        RefExpr::FieldAccess {
+            object,
+            field,
+            span,
+        } => RefExpr::FieldAccess {
+            object: Box::new(normalize_pred(object, old_name)),
+            field: field.clone(),
+            span: *span,
+        },
         // Leaves unchanged.
         RefExpr::Integer { .. } | RefExpr::Float { .. } | RefExpr::Len { .. } => pred.clone(),
     }
@@ -721,6 +731,16 @@ fn subst_pred_ident(pred: &RefExpr, old_name: &str, new_val: &RefExpr) -> RefExp
             } else {
                 subst_pred_ident(body, old_name, new_val)
             }),
+            span: *span,
+        },
+        // Field access: substitute inside the object expression.
+        RefExpr::FieldAccess {
+            object,
+            field,
+            span,
+        } => RefExpr::FieldAccess {
+            object: Box::new(subst_pred_ident(object, old_name, new_val)),
+            field: field.clone(),
             span: *span,
         },
         RefExpr::Integer { .. } | RefExpr::Float { .. } | RefExpr::Len { .. } => pred.clone(),
@@ -983,6 +1003,8 @@ fn collect_idents_inner(pred: &RefExpr, names: &mut Vec<String>) {
         }
         RefExpr::Len { ident, .. } => names.push(ident.clone()),
         RefExpr::Integer { .. } | RefExpr::Float { .. } => {}
+        // Field access: collect idents from the object (e.g. `self` in `self.size`).
+        RefExpr::FieldAccess { object, .. } => collect_idents_inner(object, names),
     }
 }
 
@@ -1032,6 +1054,9 @@ fn display_pred(pred: &RefExpr) -> String {
         RefExpr::Len { ident, .. } => format!("len({ident})"),
         RefExpr::Forall { var, body, .. } => format!("forall {var}, {}", display_pred(body)),
         RefExpr::Exists { var, body, .. } => format!("exists {var}, {}", display_pred(body)),
+        RefExpr::FieldAccess { object, field, .. } => {
+            format!("{}.{}", display_pred(object), field)
+        }
     }
 }
 

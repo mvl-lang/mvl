@@ -192,7 +192,7 @@ pub fn naming(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
                 }
                 // Check field names inside structs and enum struct-variants
                 match &t.body {
-                    TypeBody::Struct(fields) => {
+                    TypeBody::Struct { fields, .. } => {
                         for field in fields {
                             if !is_snake_case(&field.name) {
                                 out.push(LintDiag::warning(
@@ -717,7 +717,7 @@ pub fn redundant_ifc_labels(prog: &Program, cfg: &LintConfig, out: &mut Vec<Lint
             }
             Decl::Const(c) => check_type_expr_ifc(&c.ty, out),
             Decl::Type(t) => match &t.body {
-                TypeBody::Struct(fields) => {
+                TypeBody::Struct { fields, .. } => {
                     for field in fields {
                         check_type_expr_ifc(&field.ty, out);
                     }
