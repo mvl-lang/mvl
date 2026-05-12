@@ -853,7 +853,6 @@ fn analyze_expr(
         Expr::Unary { expr: inner, .. }
         | Expr::FieldAccess { expr: inner, .. }
         | Expr::Propagate { expr: inner, .. }
-        | Expr::Move { expr: inner, .. }
         | Expr::Consume { expr: inner, .. }
         | Expr::Declassify { expr: inner, .. }
         | Expr::Sanitize { expr: inner, .. }

@@ -684,7 +684,6 @@ fn expr_has_calls(expr: &Expr) -> bool {
         Expr::Block(b) => block_has_calls(b),
         Expr::Lambda { body, .. } => expr_has_calls(body),
         Expr::Propagate { expr: e, .. }
-        | Expr::Move { expr: e, .. }
         | Expr::Consume { expr: e, .. }
         | Expr::Declassify { expr: e, .. }
         | Expr::Sanitize { expr: e, .. }
@@ -1150,7 +1149,6 @@ fn cyclomatic_complexity_expr(expr: &Expr) -> usize {
         }
         Expr::FieldAccess { expr: e, .. }
         | Expr::Propagate { expr: e, .. }
-        | Expr::Move { expr: e, .. }
         | Expr::Consume { expr: e, .. }
         | Expr::Declassify { expr: e, .. }
         | Expr::Sanitize { expr: e, .. }
@@ -1311,7 +1309,6 @@ fn max_match_depth_expr(expr: &Expr, depth: usize) -> usize {
         Expr::Unary { expr: e, .. }
         | Expr::FieldAccess { expr: e, .. }
         | Expr::Propagate { expr: e, .. }
-        | Expr::Move { expr: e, .. }
         | Expr::Consume { expr: e, .. }
         | Expr::Declassify { expr: e, .. }
         | Expr::Sanitize { expr: e, .. }

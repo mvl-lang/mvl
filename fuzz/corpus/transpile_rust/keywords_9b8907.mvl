@@ -20,7 +20,7 @@ type UserId = Int where self > 0
 
 // Control flow: if, else, for, match
 fn demo(x: Int) -> Int {
-    let mut result = 0;
+    let result: ref Int = 0;
     if x > 0 {
         for i in [1, 2, 3] {
             result = result + i;
@@ -50,7 +50,7 @@ fn reveal(s: Secret[String]) -> String {
 fn positive(x: Int where self > 0) -> Int { x }
 
 // while (partial functions only)
-partial fn countdown(mut n: Int) -> Int {
+partial fn countdown(ref n: Int) -> Int {
     while n > 0 {
         n = n - 1;
     }

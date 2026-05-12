@@ -40,7 +40,7 @@ pub type BuildResult = struct {
 // Count symbol frequencies from a symbol stream.
 // Returns a List[Int] of length 256; index i = frequency of symbol i.
 pub fn count_freqs(data: val List[Int]) -> List[Int] {
-    let mut freqs: List[Int] = range(0, 256).map(zero_int);
+    let freqs: ref List[Int] = range(0, 256).map(zero_int);
     for i in range(0, data.len()) {
         let sym: Int = data.get(i).unwrap();
         let old: Int = freqs.get(sym).unwrap();
@@ -55,7 +55,7 @@ fn zero_int(_x: Int) -> Int { 0 }
 fn int_list_set(list: List[Int], idx: Int, new_v: Int) -> List[Int] {
     let before: List[Int] = list.slice(0, idx);
     let after: List[Int]  = list.slice(idx + 1, list.len());
-    let mut result: List[Int] = before;
+    let result: ref List[Int] = before;
     result.push(new_v);
     result.extend(after);
     result
@@ -65,7 +65,7 @@ fn int_list_set(list: List[Int], idx: Int, new_v: Int) -> List[Int] {
 fn ll_set(list: List[List[Int]], idx: Int, new_v: List[Int]) -> List[List[Int]] {
     let before: List[List[Int]] = list.slice(0, idx);
     let after: List[List[Int]]  = list.slice(idx + 1, list.len());
-    let mut result: List[List[Int]] = before;
+    let result: ref List[List[Int]] = before;
     result.push(new_v);
     result.extend(after);
     result
@@ -95,7 +95,7 @@ pub fn build_tree(freqs: val List[Int]) -> Option[BuildResult] {
     } else if init.queue.len() == 1 {
         // Single symbol: assign code [0] (degenerate tree needs at least 1 bit).
         let sym: Int = init.syms.get(0).unwrap().get(0).unwrap();
-        let mut codes: List[List[Int]] = range(0, 256).map(empty_code);
+        let codes: ref List[List[Int]] = range(0, 256).map(empty_code);
         codes = ll_set(codes, sym, [0]);
         Some(BuildResult {
             tree:  init.queue.get(0).unwrap(),
@@ -121,7 +121,7 @@ fn empty_code(_x: Int) -> List[Int] { [] }
 // Build the initial priority queue: one leaf per symbol with freq > 0.
 // Uses a state struct so the for body is a single assignment (no nesting).
 fn build_init(freqs: val List[Int]) -> InitState {
-    let mut st: InitState = InitState { queue: [], syms: [] };
+    let st: ref InitState = InitState { queue: [], syms: [] };
     for sym in range(0, 256) {
         st = init_step(st, freqs, sym)
     }
@@ -139,8 +139,8 @@ fn init_step(st: InitState, freqs: val List[Int], sym: Int) -> InitState {
 
 fn add_leaf(st: InitState, sym: Int, f: Int) -> InitState {
     let owned: InitState = st;
-    let mut new_queue: List[HuffmanTree] = owned.queue;
-    let mut new_syms: List[List[Int]]    = owned.syms;
+    let new_queue: ref List[HuffmanTree] = owned.queue;
+    let new_syms: ref List[List[Int]]    = owned.syms;
     new_queue.push(HuffmanTree::Leaf(sym, f));
     new_syms.push([sym]);
     InitState { queue: new_queue, syms: new_syms }
@@ -148,7 +148,7 @@ fn add_leaf(st: InitState, sym: Int, f: Int) -> InitState {
 
 // Build loop: bounded to 255 merge steps (max needed for 256 symbols).
 fn build_loop(init: BuildState) -> BuildState {
-    let mut st: BuildState = init;
+    let st: ref BuildState = init;
     for _ in range(0, 255) {
         if st.queue.len() > 1 {
             st = build_merge(st)
@@ -175,9 +175,9 @@ fn build_merge(st: BuildState) -> BuildState {
     let codes2: List[List[Int]] = prepend_bit_for(codes1, val syms_ri, 1);
     let w: Int = tree_weight(val left) + tree_weight(val right);
     let merged: HuffmanTree = HuffmanTree::Node(w, Box::new(left), Box::new(right));
-    let mut new_syms: List[Int]         = syms_li;
-    let mut new_q: List[HuffmanTree]    = q3;
-    let mut new_sl: List[List[Int]]     = syms3;
+    let new_syms: ref List[Int]         = syms_li;
+    let new_q: ref List[HuffmanTree]    = q3;
+    let new_sl: ref List[List[Int]]     = syms3;
     new_syms.extend(syms_ri);
     new_q.push(merged);
     new_sl.push(new_syms);
@@ -186,7 +186,7 @@ fn build_merge(st: BuildState) -> BuildState {
 
 // Prepend bit 0 or 1 to the code of every symbol in the subtree.
 fn prepend_bit_for(codes: List[List[Int]], syms: val List[Int], bit: Int) -> List[List[Int]] {
-    let mut c: List[List[Int]] = codes;
+    let c: ref List[List[Int]] = codes;
     for i in range(0, syms.len()) {
         let sym: Int      = syms.get(i).unwrap();
         let old: List[Int] = c.get(sym).unwrap();
@@ -197,7 +197,7 @@ fn prepend_bit_for(codes: List[List[Int]], syms: val List[Int], bit: Int) -> Lis
 
 // Return [bit] ++ code — prepends one bit to a code sequence.
 fn prepend_bit(code: List[Int], bit: Int) -> List[Int] {
-    let mut result: List[Int] = [bit];
+    let result: ref List[Int] = [bit];
     result.extend(code);
     result
 }
@@ -205,8 +205,8 @@ fn prepend_bit(code: List[Int], bit: Int) -> List[Int] {
 // ── Priority-queue helpers ────────────────────────────────────────────────────
 
 fn min_weight_idx(queue: val List[HuffmanTree]) -> Int {
-    let mut best_idx: Int = 0;
-    let mut best_w: Int = tree_weight(val queue.get(0).unwrap());
+    let best_idx: ref Int = 0;
+    let best_w: ref Int = tree_weight(val queue.get(0).unwrap());
     for i in range(1, queue.len()) {
         let w: Int = tree_weight(val queue.get(i).unwrap());
         if w < best_w {
@@ -220,7 +220,7 @@ fn min_weight_idx(queue: val List[HuffmanTree]) -> Int {
 fn remove_at(list: List[HuffmanTree], idx: Int) -> List[HuffmanTree] {
     let before: List[HuffmanTree] = list.slice(0, idx);
     let after: List[HuffmanTree]  = list.slice(idx + 1, list.len());
-    let mut result: List[HuffmanTree] = before;
+    let result: ref List[HuffmanTree] = before;
     result.extend(after);
     result
 }
@@ -228,7 +228,7 @@ fn remove_at(list: List[HuffmanTree], idx: Int) -> List[HuffmanTree] {
 fn remove_at_ll(list: List[List[Int]], idx: Int) -> List[List[Int]] {
     let before: List[List[Int]] = list.slice(0, idx);
     let after: List[List[Int]]  = list.slice(idx + 1, list.len());
-    let mut result: List[List[Int]] = before;
+    let result: ref List[List[Int]] = before;
     result.extend(after);
     result
 }
@@ -251,7 +251,7 @@ pub fn encode_symbol(codes: val List[List[Int]], sym: Int) -> Option[List[Int]] 
 // Find which symbol has the given bit sequence as its code.
 // Returns -1 if no match (should not occur for valid compressed streams).
 pub fn find_code(codes: val List[List[Int]], bits: List[Int]) -> Int {
-    let mut found: Int = -1;
+    let found: ref Int = -1;
     for sym in range(0, 256) {
         found = try_match(codes, val bits, sym, found)
     }
@@ -286,7 +286,7 @@ test fn tree_weight_node() -> Unit {
 }
 
 test fn build_tree_two_symbols() -> Unit {
-    let mut freqs: List[Int] = range(0, 256).map(zero_int);
+    let freqs: ref List[Int] = range(0, 256).map(zero_int);
     freqs = int_list_set(freqs, 65, 3);
     freqs = int_list_set(freqs, 66, 7);
     let result_opt: Option[BuildResult] = build_tree(val freqs);
@@ -298,7 +298,7 @@ test fn build_tree_two_symbols() -> Unit {
 }
 
 test fn encode_symbol_finds_code() -> Unit {
-    let mut freqs: List[Int] = range(0, 256).map(zero_int);
+    let freqs: ref List[Int] = range(0, 256).map(zero_int);
     freqs = int_list_set(freqs, 65, 3);
     freqs = int_list_set(freqs, 66, 7);
     let result_opt: Option[BuildResult] = build_tree(val freqs);

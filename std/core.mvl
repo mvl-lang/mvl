@@ -33,8 +33,8 @@ pub builtin fn panic(message: String) -> Never
 /// Generate a sequence of integers [start, end) — exclusive upper bound.
 /// Semantics: range(0, 5) produces [0, 1, 2, 3, 4].
 pub partial fn range(start: Int, end: Int) -> List[Int] {
-    let mut result: List[Int] = [];
-    let mut current: Int = start;
+    let result: ref List[Int] = [];
+    let current: ref Int = start;
     while current < end {
         result.push(current);
         current = current + 1

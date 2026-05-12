@@ -3339,8 +3339,8 @@ mod assurance_tests {
 
     #[test]
     fn req_errors_populated_from_checker() {
-        // UseAfterMove → requirement 2
-        let src = "fn f() -> Int { let x: Int = 1; let _y: Int = move(x); x }";
+        // UseAfterMove → requirement 2 (consume() is the explicit ownership-transfer form)
+        let src = "fn f() -> Int { let x: Int = 1; let _y: Int = consume(x); x }";
         let prog = parse_prog(src);
         let result = checker::check(&prog);
         assert!(

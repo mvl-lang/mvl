@@ -1,5 +1,5 @@
 // Corpus: Ownership and move semantics (Req 6)
-// Demonstrates move(x) for explicit ownership transfer.
+// Demonstrates consume(x) for explicit ownership transfer.
 
 type Buffer = struct {
     data: String,
@@ -13,7 +13,7 @@ fn consume_buffer(b: Buffer) -> Int {
 
 // Move into a function call
 fn transfer(b: Buffer) -> Int {
-    consume_buffer(move(b))
+    consume_buffer(consume(b))
 }
 
 // Immutable reference access — does not move

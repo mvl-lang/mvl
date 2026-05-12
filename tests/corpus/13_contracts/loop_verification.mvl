@@ -5,7 +5,7 @@
 // The decreases measure `i` decreases by 1 each iteration (i = i - 1).
 // `check_decreases_across_iteration` proves `i - 1 < i` via Cooper/Z3.
 partial fn count_down_decreases(n: Int where self >= 0) -> Unit {
-    let mut i: Int = n;
+    let i: ref Int = n;
     while i > 0 decreases i {
         i = i - 1;
     }
@@ -16,7 +16,7 @@ partial fn count_down_decreases(n: Int where self >= 0) -> Unit {
 // Without `decreases`, a `while` in an implicit-total function is rejected
 // (UnboundedLoopInTotal). With `decreases i`, it is now permitted (Phase 5).
 fn total_with_decreases(n: Int where self >= 0) -> Unit {
-    let mut i: Int = n;
+    let i: ref Int = n;
     while i > 0 decreases i {
         i = i - 1;
     }
@@ -27,7 +27,7 @@ fn total_with_decreases(n: Int where self >= 0) -> Unit {
 // `invariant i >= 0` with body `i = i + 1`: preserved because `i + 1 >= 0`
 // follows from the induction hypothesis `i >= 0` (Layer 2 proves).
 partial fn invariant_preserved_single_var(n: Int where self >= 0) -> Unit {
-    let mut i: Int = 0;
+    let i: ref Int = 0;
     while i < n invariant i >= 0 {
         i = i + 1;
     }
@@ -38,7 +38,7 @@ partial fn invariant_preserved_single_var(n: Int where self >= 0) -> Unit {
 // Combines both Phase 5 checks: invariant preserved and measure strictly
 // decreasing, both verified statically by the solver.
 partial fn loop_with_inv_and_decreases(n: Int where self >= 0) -> Unit {
-    let mut i: Int = n;
+    let i: ref Int = n;
     while i > 0
         invariant i >= 0
         decreases i

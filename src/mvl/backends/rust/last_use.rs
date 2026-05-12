@@ -154,7 +154,6 @@ impl LastUseTracker {
             }
             Expr::Unary { expr, .. }
             | Expr::Propagate { expr, .. }
-            | Expr::Move { expr, .. }
             | Expr::Consume { expr, .. }
             | Expr::Declassify { expr, .. }
             | Expr::Sanitize { expr, .. }

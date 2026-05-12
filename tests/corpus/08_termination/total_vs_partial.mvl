@@ -7,7 +7,7 @@ total fn mul(a: Int, b: Int) -> Int { a * b }
 
 // Total with for loop (bounded — allowed)
 total fn sum(items: List[Int]) -> Int {
-    let mut acc: Int = 0;
+    let acc: ref Int = 0;
     for item in items {
         acc = add(acc, item)
     }
@@ -15,7 +15,7 @@ total fn sum(items: List[Int]) -> Int {
 }
 
 total fn product(items: List[Int]) -> Int {
-    let mut acc: Int = 1;
+    let acc: ref Int = 1;
     for item in items {
         acc = mul(acc, item)
     }
@@ -23,7 +23,7 @@ total fn product(items: List[Int]) -> Int {
 }
 
 total fn count(items: List[Int]) -> Int {
-    let mut n: Int = 0;
+    let n: ref Int = 0;
     for _x in items {
         n = add(n, 1)
     }
@@ -46,7 +46,7 @@ total fn count_with_effect(items: List[String]) -> Unit ! Console {
 
 // Partial: allowed to use while loop
 partial fn drain_until_empty(queue: List[Int], limit: Int) -> Int {
-    let mut acc: Int = 0;
+    let acc: ref Int = 0;
     while queue.not_empty(limit) {
         let task: Int = queue.pop();
         acc = add(acc, task)

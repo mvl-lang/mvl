@@ -292,9 +292,23 @@ impl TypeChecker {
         self.env.push_scope();
         for param in &fd.params {
             let ty = resolve(&param.ty);
+            // Strip ref/val wrapper so the param's env type is T not ref T.
+            let env_ty = match &ty {
+                crate::mvl::checker::types::Ty::Ref(_, inner) => (**inner).clone(),
+                _ => ty.clone(),
+            };
             self.env.define(
                 param.name.clone(),
-                VarInfo::new(ty, param.mutable).with_capability(param.capability.clone()),
+                VarInfo::new(
+                    env_ty,
+                    matches!(ty.base(), crate::mvl::checker::types::Ty::Ref(true, _))
+                        || matches!(
+                            param.capability,
+                            Some(crate::mvl::parser::ast::Capability::Ref)
+                                | Some(crate::mvl::parser::ast::Capability::Iso)
+                        ),
+                )
+                .with_capability(param.capability.clone()),
             );
         }
 

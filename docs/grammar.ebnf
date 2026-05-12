@@ -35,7 +35,7 @@ type_body      = struct_body | enum_body | alias_type ;
 struct_body    = "struct" "{" { field_decl } "}" ;
 enum_body      = "enum" "{" variant { "," variant } "}" ;
 variant        = IDENT [ "(" type_list ")" | "{" field_list "}" ] ;
-field_decl     = [ "mut" ] IDENT ":" type_expr [ "where" refinement ] ;
+field_decl     = IDENT ":" type_expr [ "where" refinement ] ;
 field_list     = field_decl { "," field_decl } ;
 alias_type     = type_expr ;
 
@@ -52,7 +52,7 @@ totality       = "total" | "partial" ;
 (* transparent fn: label-transparent — checker joins arg labels and applies to return type (ADR-0024) *)
 security       = "public" | "tainted" | "secret" ;
 param_list     = param { "," param } ;
-param          = [ capability ] [ "mut" ] IDENT ":" type_expr [ "where" refinement ] ;
+param          = [ capability ] IDENT ":" type_expr [ "where" refinement ] ;
 capability     = "iso" | "val" | "ref" | "tag" ;
 return_type    = type_expr [ "where" refinement ] ;
 effect_list    = effect { "," effect } ;
@@ -109,7 +109,7 @@ ref_atom       = IDENT | INTEGER | FLOAT
 block          = "{" { statement } "}" ;
 statement      = let_stmt | assign_stmt | return_stmt | if_stmt
                | match_stmt | for_stmt | while_stmt | expr_stmt ;
-let_stmt       = "let" [ "mut" ] pattern ":" type_expr "=" expr ";" ;
+let_stmt       = "let" pattern ":" type_expr "=" expr ";" ;
 assign_stmt    = lvalue "=" expr ";" ;
 return_stmt    = "return" [ expr ] ";" ;
 if_stmt        = "if" expr block [ "else" ( if_stmt | block ) ] ;
@@ -126,7 +126,7 @@ expr_stmt      = expr ";" ;
 expr           = literal | IDENT | field_access | fn_call | method_call
                | unary_expr | binary_expr | borrow_expr | if_expr | match_expr
                | lambda | block_expr | propagate | construct
-               | "move" expr | "consume" expr
+               | "consume" expr
                | "declassify" "(" expr ")" | "sanitize" "(" expr ")" ;
 unary_expr     = unary_op expr ;
 binary_expr    = expr binary_op expr ;
@@ -183,8 +183,8 @@ DOC_COMMENT    = "///" { ANY_CHAR } NEWLINE ;    (* doc comment — convention, 
 (* Declaration:     fn  type  const  use  pub  extern  impl  builtin            *)
 (* Totality:        total  partial                                               *)
 (* Control flow:    if  else  for  in  while  match  return                      *)
-(* Let binding:     let  mut  ghost                                              *)
-(* Ownership:       iso  val  ref  tag  move  consume                            *)
+(* Let binding:     let  ghost                                                    *)
+(* Ownership:       iso  val  ref  tag  consume                                  *)
 (* IFC labels:      Tainted  Clean  Secret  Public                               *)
 (* IFC operations:  declassify  sanitize                                         *)
 (* Boolean:         true  false                                                  *)

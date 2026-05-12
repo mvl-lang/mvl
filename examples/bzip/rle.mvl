@@ -27,7 +27,7 @@ type RleEncState = struct {
 // Input borrowed — large blocks must not be cloned at every call site.
 pub fn rle_encode(data: val List[Int]) -> List[Int] {
     let n: Int = data.len();
-    let mut st: RleEncState = RleEncState { out: [], skip: 0 };
+    let st: ref RleEncState = RleEncState { out: [], skip: 0 };
     for idx in range(0, n) {
         st = rle_enc_step(st, data, idx)
     }
@@ -52,7 +52,7 @@ fn rle_enc_step(st: RleEncState, data: val List[Int], idx: Int) -> RleEncState {
 
 fn rle_emit_run(out: List[Int], b: Int, run: Int, idx: Int) -> RleEncState {
     let extra: Int = if run - 4 > 255 { 255 } else { run - 4 };
-    let mut new_out: List[Int] = out;
+    let new_out: ref List[Int] = out;
     new_out.push(b);
     new_out.push(b);
     new_out.push(b);
@@ -62,7 +62,7 @@ fn rle_emit_run(out: List[Int], b: Int, run: Int, idx: Int) -> RleEncState {
 }
 
 fn rle_emit_byte(out: List[Int], b: Int, skip: Int) -> RleEncState {
-    let mut new_out: List[Int] = out;
+    let new_out: ref List[Int] = out;
     new_out.push(b);
     RleEncState { out: new_out, skip: skip }
 }
@@ -73,7 +73,7 @@ fn rle_emit_byte(out: List[Int], b: Int, skip: Int) -> RleEncState {
 fn count_run(data: val List[Int], start: Int, b: Int) -> Int {
     let n: Int = data.len();
     let cap: Int = if n - start < 259 { n - start } else { 259 };
-    let mut count: Int = 0;
+    let count: ref Int = 0;
     for j in range(0, cap) {
         if count == j && data.get(start + j).unwrap() == b {
             count = count + 1
@@ -92,7 +92,7 @@ type RleDecState = struct {
 // Decode: expand RLE-encoded runs back to original bytes.
 pub fn rle_decode(data: val List[Int]) -> List[Int] {
     let n: Int = data.len();
-    let mut st: RleDecState = RleDecState { out: [], skip: 0 };
+    let st: ref RleDecState = RleDecState { out: [], skip: 0 };
     for idx in range(0, n) {
         st = rle_dec_step(st, data, idx, n)
     }
@@ -118,13 +118,13 @@ fn rle_dec_step(st: RleDecState, data: val List[Int], idx: Int, n: Int) -> RleDe
 }
 
 fn rle_expand_run(out: List[Int], b: Int, extra: Int, idx: Int) -> RleDecState {
-    let mut new_out: List[Int] = out;
+    let new_out: ref List[Int] = out;
     new_out.extend(repeat_int(b, 4 + extra));
     RleDecState { out: new_out, skip: idx + 5 }
 }
 
 fn rle_dec_byte(out: List[Int], b: Int, skip: Int) -> RleDecState {
-    let mut new_out: List[Int] = out;
+    let new_out: ref List[Int] = out;
     new_out.push(b);
     RleDecState { out: new_out, skip: skip }
 }

@@ -431,7 +431,14 @@ fn emit_params(
                     TypeExpr::Base { name, .. } if name == "Map" || name == "Set"
                 )
                 && mutated_params.contains(&p.name);
-            let mut_prefix = if p.mutable || is_mutated_map_or_set {
+            // A param is mutable in Rust when it has a `ref` or `iso` capability,
+            // or when it is a Map/Set whose contents are mutated.
+            let has_ref_cap = matches!(
+                p.capability,
+                Some(crate::mvl::parser::ast::Capability::Ref)
+                    | Some(crate::mvl::parser::ast::Capability::Iso)
+            );
+            let mut_prefix = if has_ref_cap || is_mutated_map_or_set {
                 "mut "
             } else {
                 ""

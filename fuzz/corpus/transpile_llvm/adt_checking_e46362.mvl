@@ -13,7 +13,7 @@ type Person = struct {
 }
 
 type Counter = struct {
-    mut count: Int,
+    count: ref Int,
     label: String,
 }
 

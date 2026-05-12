@@ -759,8 +759,17 @@ pub fn field_infos(fields: &[FieldDecl]) -> Vec<FieldInfo> {
         .iter()
         .map(|f| FieldInfo {
             name: f.name.clone(),
-            ty: resolve(&f.ty),
-            mutable: f.mutable,
+            ty: {
+                let r = resolve(&f.ty);
+                match r {
+                    crate::mvl::checker::types::Ty::Ref(_, inner) => *inner,
+                    other => other,
+                }
+            },
+            mutable: matches!(
+                crate::mvl::checker::types::resolve(&f.ty).base(),
+                crate::mvl::checker::types::Ty::Ref(true, _)
+            ),
         })
         .collect()
 }

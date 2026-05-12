@@ -269,7 +269,6 @@ fn check_requires_in_expr(
         }
         Expr::Borrow { expr, .. }
         | Expr::Unary { expr, .. }
-        | Expr::Move { expr, .. }
         | Expr::Consume { expr, .. }
         | Expr::Declassify { expr, .. }
         | Expr::Sanitize { expr, .. }

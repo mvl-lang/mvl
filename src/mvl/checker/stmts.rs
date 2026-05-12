@@ -9,7 +9,7 @@ use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
 use crate::mvl::parser::ast::{
-    Block, ElseBranch, Expr, LValue, LetKind, Pattern, SecurityLabel, Stmt, Totality,
+    Block, ElseBranch, Expr, LValue, Pattern, SecurityLabel, Stmt, Totality,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -266,11 +266,7 @@ impl TypeChecker {
     pub(super) fn check_stmt(&mut self, stmt: &Stmt, return_ty: Option<&Ty>) {
         match stmt {
             Stmt::Let {
-                kind,
-                pattern,
-                ty,
-                init,
-                ..
+                pattern, ty, init, ..
             } => {
                 let init_ty = self.infer_expr(init);
                 let ann_ty = resolve(ty);
@@ -291,11 +287,16 @@ impl TypeChecker {
                         span: init.span(),
                     });
                 }
-                self.bind_pattern(
-                    pattern,
-                    &ann_ty,
-                    matches!(kind, LetKind::Regular { mutable: true }),
-                );
+                // Mutability is encoded in the type: `ref T` = mutable, everything else = immutable.
+                // Strip the `ref`/`val` wrapper so the binding carries the inner type T —
+                // reading `x: ref T` in expressions should yield T, not ref T.
+                let is_mutable =
+                    matches!(ann_ty.base(), crate::mvl::checker::types::Ty::Ref(true, _));
+                let bind_ty = match &ann_ty {
+                    Ty::Ref(_, inner) => (**inner).clone(),
+                    other => other.clone(),
+                };
+                self.bind_pattern(pattern, &bind_ty, is_mutable);
                 // Phase D (#362): record which variable the new binding borrows so that
                 // `pop_scope()` can release the borrow when the binding goes out of scope.
                 // Also update the referent's borrow_state here (not in Expr::Borrow) so

@@ -146,7 +146,6 @@ fn collect_refs_expr(expr: &Expr, params: &[&str], out: &mut Vec<(String, Span)>
         }
         Expr::Unary { expr: e, .. }
         | Expr::Propagate { expr: e, .. }
-        | Expr::Move { expr: e, .. }
         | Expr::Consume { expr: e, .. }
         | Expr::Declassify { expr: e, .. }
         | Expr::Sanitize { expr: e, .. }

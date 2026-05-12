@@ -1009,7 +1009,7 @@ fn alias_iso(channel: Channel, iso x: Payload) -> Unit {
     fn phase3_stub_pass_failed_for_use_after_move() {
         // GIVEN: program with use-after-move → Req 2 error
         // THEN: Phase3StubPass for Req 2 returns Verdict::Failed
-        let src = r#"fn f() -> Int { let x: Int = 1; let _y: Int = move(x); x }"#;
+        let src = r#"fn f() -> Int { let x: Int = 1; let _y: Int = consume(x); x }"#;
         let (prog, result) = check_src(src);
         assert!(
             result.req_errors[2] > 0,

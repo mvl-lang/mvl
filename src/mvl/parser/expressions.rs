@@ -162,16 +162,10 @@ impl Parser {
             // Reject Rust-style borrow syntax with helpful error
             TokenKind::Amp => {
                 self.advance();
-                let mutable = self.eat(&TokenKind::Mut);
                 let _ = self.parse_unary();
                 let span = self.span_from(start);
-                let hint = if mutable {
-                    "use `ref expr` instead of `&mut expr`"
-                } else {
-                    "use `val expr` instead of `&expr`"
-                };
                 let err = ParseError {
-                    message: hint.to_string(),
+                    message: "use `val expr` or `ref expr` instead of `&expr`".to_string(),
                     span,
                 };
                 self.push_recover(err);
@@ -280,19 +274,6 @@ impl Parser {
             }
 
             // ── Security-flow operations ─────────────────────────────────────
-            TokenKind::Move => {
-                self.advance();
-                let lp = self.expect(&TokenKind::LParen);
-                self.require(lp)?;
-                let inner = self.parse_expr()?;
-                let rp = self.expect(&TokenKind::RParen);
-                self.require(rp)?;
-                let span = self.span_from(start);
-                Ok(Expr::Move {
-                    expr: Box::new(inner),
-                    span,
-                })
-            }
             TokenKind::Consume => {
                 self.advance();
                 let lp = self.expect(&TokenKind::LParen);
@@ -482,9 +463,6 @@ impl Parser {
                 // Optional capability annotation: iso / val / ref / tag
                 let capability = self.try_parse_capability();
 
-                // Optional `mut`
-                let mutable = self.eat(&TokenKind::Mut);
-
                 let ir = self.expect_ident();
                 let (name, _) = self.require(ir)?;
                 let colon = self.expect(&TokenKind::Colon);
@@ -493,7 +471,6 @@ impl Parser {
                 let param_span = self.span_from(param_start);
                 params.push(Param {
                     capability,
-                    mutable,
                     name,
                     ty,
                     refinement: None,

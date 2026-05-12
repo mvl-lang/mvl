@@ -85,7 +85,6 @@ impl Parser {
         let start = self.peek_span();
         self.advance(); // consume `let`
 
-        let mutable = self.eat(&TokenKind::Mut);
         let pattern = self.parse_pattern()?;
 
         let colon = self.expect(&TokenKind::Colon);
@@ -101,7 +100,7 @@ impl Parser {
 
         let span = self.span_from(start);
         Ok(Stmt::Let {
-            kind: crate::mvl::parser::ast::LetKind::Regular { mutable },
+            kind: crate::mvl::parser::ast::LetKind::Regular,
             pattern,
             ty,
             init,
@@ -573,13 +572,13 @@ mod tests {
     #[test]
     fn parse_let_with_type() {
         // GIVEN: let x: Int = 42;
-        // THEN: LetStmt with mutable=false, pattern=Ident("x"), type=Int, value=Literal(42)
+        // THEN: LetStmt with Regular kind, pattern=Ident("x"), type=Int, value=Literal(42)
         let s = one_stmt("{ let x: Int = 42; }");
         assert!(
             matches!(
                 &s,
                 Stmt::Let {
-                    kind: LetKind::Regular { mutable: false },
+                    kind: LetKind::Regular,
                     pattern: Pattern::Ident(name, _),
                     ty: TypeExpr::Base { name: ty_name, .. },
                     init: Expr::Literal(Literal::Integer(42), _),
@@ -591,22 +590,23 @@ mod tests {
         );
     }
 
-    // ── Requirement 5 / Scenario: Parse mutable let ───────────────────────
+    // ── Requirement 5 / Scenario: Parse mutable let (ref type) ───────────
 
     #[test]
-    fn parse_let_mutable() {
-        // GIVEN: let mut count: Int = 0;
-        // THEN: LetStmt with mutable=true
-        let s = one_stmt("{ let mut count: Int = 0; }");
+    fn parse_let_mutable_ref() {
+        // GIVEN: let count: ref Int = 0;  (ref in type encodes mutability)
+        // THEN: LetStmt with Regular kind and Ref type
+        let s = one_stmt("{ let count: ref Int = 0; }");
         assert!(
             matches!(
                 &s,
                 Stmt::Let {
-                    kind: LetKind::Regular { mutable: true },
+                    kind: LetKind::Regular,
+                    ty: TypeExpr::Ref { mutable: true, .. },
                     ..
                 }
             ),
-            "expected mutable let, got: {:?}",
+            "expected ref-typed let, got: {:?}",
             s
         );
     }

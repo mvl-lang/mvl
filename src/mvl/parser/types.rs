@@ -121,10 +121,9 @@ impl Parser {
         Ok(variants)
     }
 
-    /// Parse a single struct field: `[mut] name: type [where pred]`.
+    /// Parse a single struct field: `name: type [where pred]`.
     fn parse_field_decl(&mut self) -> Result<FieldDecl, ()> {
         let start = self.peek_span();
-        let mutable = self.eat(&TokenKind::Mut);
         let ident_result = self.expect_ident();
         let (name, _) = self.require(ident_result)?;
 
@@ -141,7 +140,6 @@ impl Parser {
 
         let span = self.span_from(start);
         Ok(FieldDecl {
-            mutable,
             name,
             ty,
             refinement,
@@ -330,17 +328,11 @@ impl Parser {
             // Reject Rust-style borrow syntax with helpful error
             TokenKind::Amp => {
                 self.advance();
-                let mutable = self.eat(&TokenKind::Mut);
                 // Try to parse the inner type so we can give a better error
                 let _ = self.parse_type_expr();
                 let span = self.span_from(start);
-                let hint = if mutable {
-                    "use `ref T` instead of `&mut T`"
-                } else {
-                    "use `val T` instead of `&T`"
-                };
                 let err = ParseError {
-                    message: hint.to_string(),
+                    message: "use `val T` or `ref T` instead of `&T`".to_string(),
                     span,
                 };
                 self.push_recover(err);
@@ -904,12 +896,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_struct_with_mut_field() {
-        let d = type_decl("type Counter = struct { mut count: Int }");
+    fn parse_struct_with_ref_field() {
+        // `ref Int` in the field type encodes mutability (replaces `mut count: Int`)
+        let d = type_decl("type Counter = struct { count: ref Int }");
         let TypeBody::Struct(fields) = d.body else {
             panic!()
         };
-        assert!(fields[0].mutable);
+        assert!(matches!(fields[0].ty, TypeExpr::Ref { mutable: true, .. }));
         assert_eq!(fields[0].name, "count");
     }
 
@@ -1114,12 +1107,12 @@ mod tests {
 
     #[test]
     fn parse_ampersand_mut_type_rejected() {
-        let (mut p, _) = crate::mvl::parser::Parser::new("&mut Vec");
+        let (mut p, _) = crate::mvl::parser::Parser::new("&Vec");
         let result = p.parse_type_expr();
         assert!(result.is_err());
         assert!(
-            p.errors().iter().any(|e| e.message.contains("use `ref T`")),
-            "expected helpful error about ref T"
+            p.errors().iter().any(|e| e.message.contains("val T")),
+            "expected helpful error about val T / ref T"
         );
     }
 

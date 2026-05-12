@@ -64,16 +64,12 @@ impl<'ctx> LlvmBackend<'ctx> {
                 // L5-08: record MVL type annotation for Ok/Some payload inference.
                 self.local_mvl_types.insert(name.clone(), ty.clone());
                 // L5-15: ownership transfer for heap moves.
-                // If init is a bare identifier or move(ident), transfer ownership from
+                // If init is a bare identifier, transfer ownership from
                 // the source variable — remove it from heap_locals so it is not dropped
                 // at the original scope exit (the new binding becomes the sole owner).
                 let move_src_kind = {
                     let src = match init {
                         Expr::Ident(src, _) => Some(src.as_str()),
-                        Expr::Move { expr, .. } => match expr.as_ref() {
-                            Expr::Ident(src, _) => Some(src.as_str()),
-                            _ => None,
-                        },
                         _ => None,
                     };
                     src.and_then(|s| self.heap_locals.remove(s))
@@ -150,10 +146,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                             // twice (the target n is already tracked and will drop it).
                             let move_src = match value {
                                 Expr::Ident(src, _) => Some(src.as_str()),
-                                Expr::Move { expr, .. } => match expr.as_ref() {
-                                    Expr::Ident(src, _) => Some(src.as_str()),
-                                    _ => None,
-                                },
                                 _ => None,
                             };
                             if let Some(src) = move_src.filter(|&s| s != n.as_str()) {
