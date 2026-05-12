@@ -59,6 +59,12 @@ runtime/
 - **No functional change:** All existing tests pass; `--backend=rust` and `--backend=llvm` produce identical output.
 - **Import paths:** `mvl::mvl::transpiler` → `mvl::mvl::backends::rust`, `mvl::mvl::codegen` → `mvl::mvl::backends::llvm`.
 
+## Relation to language definition
+
+This ADR defines the compiler infrastructure architecture and does not affect the MVL language semantics. It organizes existing functionality (Rust transpilation and LLVM code generation) under a unified `Backend` trait to enable future extensions (WebAssembly, C, Python, etc.) without language changes.
+
+The Backend trait is internal compiler plumbing — users see no difference: `mvl build --backend=rust` and `mvl build --backend=llvm` continue to work identically.
+
 ## References
 
 - ADR-0003: Compilation strategy
