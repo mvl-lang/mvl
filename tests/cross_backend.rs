@@ -879,3 +879,32 @@ fn stdlib_proven_profile_falls_back_to_trusted() {
         "--stdlib=proven fallback output must match --stdlib=trusted until #538 is implemented"
     );
 }
+
+/// #670: LLVM backend emits `llvm.trap` for structs with `with invariant` (#670).
+///
+/// Verifies backend parity: the LLVM IR for a struct constructor with an invariant
+/// contains a conditional branch to `call void @llvm.trap()`.
+#[test]
+fn llvm_struct_invariant_emits_trap() {
+    let src = r#"
+type Range = struct { lo: Int, hi: Int, } with invariant self.lo <= self.hi
+fn main() -> Unit {
+    let r: Range = Range { lo: 1, hi: 10 };
+    println("ok")
+}
+"#;
+    let (mut parser, lex_errors) = mvl::mvl::parser::Parser::new(src);
+    assert!(lex_errors.is_empty(), "lex errors: {lex_errors:?}");
+    let prog = parser.parse_program();
+    assert!(
+        parser.errors().is_empty(),
+        "parse errors: {:?}",
+        parser.errors()
+    );
+    let ir =
+        mvl::mvl::backends::llvm::compile_to_ir(&prog, "test_inv").expect("IR generation failed");
+    assert!(
+        ir.contains("llvm.trap"),
+        "LLVM IR for struct with `with invariant` must contain llvm.trap.\nIR:\n{ir}"
+    );
+}

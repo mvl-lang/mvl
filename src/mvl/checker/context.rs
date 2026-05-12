@@ -307,10 +307,7 @@ impl TypeEnv {
                 ..Default::default()
             },
         );
-        // assert_eq — pure, for testing.
-        // TODO: assert_eq accepts Secret/Tainted arguments without an IFC label check.
-        // Assertion failures may expose secret values via panic messages (observable covert
-        // channel). Tracked as a known gap; full enforcement requires Phase 2 IFC propagation.
+        // assert_eq — pure, for testing. IFC label guard enforced in checker/calls.rs.
         self.fns.insert(
             "assert_eq".into(),
             FnInfo {

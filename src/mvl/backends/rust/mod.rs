@@ -4,7 +4,7 @@
 //! MVL transpiler — emits Rust source from a parsed [`Program`].
 //!
 //! Phase 1: prototype transpilation to Rust.  Security labels become newtypes,
-//! refinement predicates become `debug_assert!` guards, effects and totality
+//! refinement predicates become `assert!` guards, effects and totality
 //! are preserved as doc comments.
 //!
 //! # Pipeline position

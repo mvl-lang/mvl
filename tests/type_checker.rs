@@ -2169,6 +2169,31 @@ fn print_rejects_tainted_argument() {
     );
 }
 
+/// `assert_eq` with a Secret argument MUST be rejected (#671 — covert channel via panic message).
+#[test]
+fn assert_eq_rejects_secret_argument() {
+    let errors = errors_for(r#"fn f(key: Secret[String]) -> Unit { assert_eq(key, "expected"); }"#);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Secret")
+        ),
+        "assert_eq with Secret arg should emit LoggingLabelViolation, got: {errors:?}"
+    );
+}
+
+/// `assert_eq` with a Tainted argument MUST be rejected (#671).
+#[test]
+fn assert_eq_rejects_tainted_argument() {
+    let errors =
+        errors_for(r#"fn f(input: Tainted[String]) -> Unit { assert_eq(input, "clean"); }"#);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Tainted")
+        ),
+        "assert_eq with Tainted arg should emit LoggingLabelViolation, got: {errors:?}"
+    );
+}
+
 // ── 002-effect-system/Req 2: Effect name validation ──────────────────────────
 
 /// Unknown effect name MUST be rejected (002-effect-system/Req 2).

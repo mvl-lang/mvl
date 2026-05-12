@@ -398,6 +398,8 @@ struct LlvmBackend<'ctx> {
     enum_variants: HashMap<String, Vec<(String, crate::mvl::parser::ast::VariantFields)>>,
     /// Struct types: struct_name → [(field_name, TypeExpr)] in declaration order.
     struct_fields: HashMap<String, Vec<(String, TypeExpr)>>,
+    /// Struct invariant predicates: struct_name → RefExpr (Phase 6, #670).
+    struct_invariants: HashMap<String, crate::mvl::parser::ast::RefExpr>,
     /// LLVM named struct types (for structs and payload enums).
     llvm_struct_types: HashMap<String, StructType<'ctx>>,
     /// Return types of user-defined functions (name → MVL TypeExpr).
@@ -462,6 +464,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             current_fn: None,
             enum_variants: HashMap::new(),
             struct_fields: HashMap::new(),
+            struct_invariants: HashMap::new(),
             llvm_struct_types: HashMap::new(),
             fn_return_types: HashMap::new(),
             fn_decls: HashMap::new(),

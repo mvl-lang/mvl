@@ -8,7 +8,7 @@
 //! - Totality (`total`) → `/// # Totality: total` doc comment
 //! - Capabilities (`iso`, `val`, `ref`, `tag`) → `// capability: iso` comment on param
 //! - Type params with constraints → Rust generic bounds
-//! - Return refinement → `debug_assert!` at end of body
+//! - Return refinement → `assert!` at end of body
 
 use crate::mvl::backends::rust::emit_exprs::{emit_block_stmts, emit_expr};
 use crate::mvl::backends::rust::emit_stmts::emit_mcdc_return_expr;
@@ -111,7 +111,7 @@ pub fn emit_fn_decl(cg: &mut RustEmitter, fd: &FnDecl) {
     for req_pred in &fd.requires {
         let pred_str = emit_ref_expr_for_assert(req_pred, "self");
         let msg = pred_str.replace('{', "{{").replace('}', "}}");
-        cg.line(&format!("debug_assert!({pred_str}, \"requires: {msg}\");"));
+        cg.line(&format!("assert!({pred_str}, \"requires: {msg}\");"));
     }
     emit_fn_body(cg, fd);
     cg.pop_indent();
@@ -178,7 +178,7 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
                         for ens_pred in &fd.ensures {
                             let pred_str = emit_ref_expr_for_assert(ens_pred, "_result");
                             let msg = pred_str.replace('{', "{{").replace('}', "}}");
-                            cg.line(&format!("debug_assert!({pred_str}, \"ensures: {msg}\");"));
+                            cg.line(&format!("assert!({pred_str}, \"ensures: {msg}\");"));
                         }
                         cg.line("_result");
                     } else {
@@ -195,11 +195,11 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
         }
     }
 
-    // Return refinement: emit debug_assert! before closing brace
+    // Return refinement: emit assert! before closing brace
     if let Some(pred) = &fd.return_refinement {
         let pred_str = emit_ref_expr_for_assert(pred, "_return_val");
         cg.line(&format!(
-            "// return refinement: debug_assert!({pred_str}) — checked by MVL type checker"
+            "// return refinement: assert!({pred_str}) — checked by MVL type checker"
         ));
     }
 }
