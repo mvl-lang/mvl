@@ -15,7 +15,7 @@ use crate::mvl::parser::ast::{ConstDecl, Decl, ExternDecl, FnDecl, ImplDecl, Typ
 use crate::mvl::parser::lexer::Span;
 use std::collections::{HashMap, HashSet};
 
-use super::borrows::block_return_flows_from_ref_param;
+use super::capabilities::block_return_flows_from_ref_param;
 use super::{TypeChecker, VALID_EFFECT_NAMES};
 
 impl TypeChecker {

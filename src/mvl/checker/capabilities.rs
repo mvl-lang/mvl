@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 
-//! Borrow checking and reference lifetime helpers for the MVL type checker.
+//! Capability scope checking and reference lifetime helpers for the MVL type checker.
 
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::parser::ast::{
@@ -80,7 +80,7 @@ impl TypeChecker {
     ///
     /// Handles both implicit borrow (`let r: val T = x`) and explicit borrow
     /// (`let r: val T = val x`) via `referent_ident`'s `Expr::Borrow` unwrapping.
-    pub(super) fn check_borrow_lifetime(&mut self, pattern: &Pattern, init: &Expr) {
+    pub(super) fn check_capability_scope(&mut self, pattern: &Pattern, init: &Expr) {
         let Pattern::Ident(ref_name, _) = pattern else {
             return;
         };

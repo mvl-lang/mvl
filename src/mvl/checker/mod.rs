@@ -17,8 +17,8 @@
 //!                 └─ check_block / check_stmt / infer_expr
 //! ```
 
-mod borrows;
 mod calls;
+mod capabilities;
 pub mod const_eval;
 pub mod context;
 pub mod contracts;

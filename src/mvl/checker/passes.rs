@@ -480,7 +480,7 @@ impl PassRegistry {
             Box::new(Phase3StubPass {
                 req: 2,
                 pass_name: "Memory Safety",
-                stub_reason: "borrow lifetime analysis pending (Phase 3)",
+                stub_reason: "capability scope analysis pending (Phase 3)",
             }),
             Box::new(DataRaceFreedomPass),
             Box::new(RefinementsPass),
