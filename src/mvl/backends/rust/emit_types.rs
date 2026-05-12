@@ -9,7 +9,7 @@
 //! - `type Alias = T` → `pub type Alias = <rust_type>;`
 //! - `type Refined = T where pred` → newtype with constructor validation
 //! - Security labels (Public<T> etc.) → module-level preamble structs
-//! - Refinement field predicates → `debug_assert!` in constructors
+//! - Refinement field predicates → `assert!` in constructors (always enforced)
 //! - Concrete structs with parseable fields → `impl ParseFromArgs`
 
 use crate::mvl::backends::rust::emitter::RustEmitter;
@@ -187,7 +187,7 @@ fn emit_struct(
             if let Some(pred) = &field.refinement {
                 let pred_str = emit_ref_expr_for_assert(pred, &field.name);
                 cg.line(&format!(
-                    "debug_assert!({pred_str}, \"refinement violated: {} {{}}\", {});",
+                    "assert!({pred_str}, \"refinement violated: {} {{}}\", {});",
                     field.name, field.name
                 ));
             }
@@ -200,8 +200,11 @@ fn emit_struct(
                 field_inits.join(", ")
             ));
             let inv_str = emit_ref_expr_for_assert(inv, "_mvl_val");
+            // Always enforce invariants — debug_assert! is silent in release builds.
+            // TODO (#662): replace with AssertMode once both Rust and LLVM backends
+            // support configurable enforcement levels (rust/llvm parity).
             cg.line(&format!(
-                "debug_assert!({inv_str}, \"struct invariant violated for `{name}`\");"
+                "assert!({inv_str}, \"struct invariant violated for `{name}`\");"
             ));
             cg.line("_mvl_val");
         } else {
@@ -513,13 +516,13 @@ fn emit_alias(cg: &mut RustEmitter, name: &str, params: &[GenericParam], ty: &Ty
             cg.line(&format!("impl {} {{", name));
             cg.push_indent();
             cg.line(&format!(
-                "/// Construct `{name}` — panics in debug mode if the refinement is violated."
+                "/// Construct `{name}` — panics if the refinement is violated."
             ));
             cg.line(&format!("pub fn new(v: {inner_str}) -> Self {{"));
             cg.push_indent();
             let pred_str = emit_ref_expr_for_assert(pred, "v");
             cg.line(&format!(
-                "debug_assert!({pred_str}, \"refinement violated: {name}({{}})\", v);"
+                "assert!({pred_str}, \"refinement violated: {name}({{}})\", v);"
             ));
             cg.line("Self(v)");
             cg.pop_indent();

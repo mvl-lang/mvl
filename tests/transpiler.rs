@@ -77,14 +77,14 @@ fn plain_alias_transpiles_to_type_alias() {
     assert_contains(&rust, "pub type Name = String;");
 }
 
-/// Requirement 10 / Scenario: Refined type alias → Rust newtype with debug_assert
+/// Requirement 10 / Scenario: Refined type alias → Rust newtype with assert
 #[test]
 fn refined_alias_transpiles_to_newtype() {
     let src = "type PositiveInt = Int where self > 0";
     let rust = transpile_src(src);
     assert_contains(&rust, "pub struct PositiveInt(pub i64)");
     assert_contains(&rust, "pub fn new(v: i64) -> Self");
-    assert_contains(&rust, "debug_assert!(");
+    assert_contains(&rust, "assert!(");
     assert_contains(&rust, "(v > 0)");
 }
 
@@ -94,7 +94,7 @@ fn refined_alias_float_predicate_transpiles() {
     let src = "type NonNegative = Float where self >= 0.0";
     let rust = transpile_src(src);
     assert_contains(&rust, "pub struct NonNegative(pub f64)");
-    assert_contains(&rust, "debug_assert!(");
+    assert_contains(&rust, "assert!(");
     assert_contains(&rust, "(v >= 0.0)");
 }
 
@@ -195,13 +195,13 @@ fn declassify_expr_transpiles() {
 
 // ── #32: Refinement types ─────────────────────────────────────────────────
 
-/// Requirement 10 / Scenario: Struct field refinement → constructor with debug_assert
+/// Requirement 10 / Scenario: Struct field refinement → constructor with assert
 #[test]
 fn struct_field_refinement_emits_constructor() {
     let src = "type Age = struct { value: Int where self >= 0 }";
     let rust = transpile_src(src);
     assert_contains(&rust, "pub fn new(value: i64) -> Self {");
-    assert_contains(&rust, "debug_assert!(");
+    assert_contains(&rust, "assert!(");
     assert_contains(&rust, "(value >= 0)");
 }
 
