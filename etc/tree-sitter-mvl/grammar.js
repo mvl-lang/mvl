@@ -151,7 +151,14 @@ module.exports = grammar({
 
     type_body: ($) => choice($.struct_body, $.enum_body, $.type_expr),
 
-    struct_body: ($) => seq("struct", "{", repeat($.field_decl), "}"),
+    struct_body: ($) =>
+      seq(
+        "struct",
+        "{",
+        repeat($.field_decl),
+        "}",
+        optional(seq("with", "invariant", $.refinement))
+      ),
 
     enum_body: ($) =>
       seq(
