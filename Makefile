@@ -69,7 +69,7 @@ build-release: ## Build release binary
 
 MVL ?= ./target/debug/mvl
 
-test: ## Run all test suites and print a one-line PASS/FAIL summary for each
+test: build build-llvm-runtime ## Run all test suites and print a one-line PASS/FAIL summary for each
 	@pass=0; fail=0; \
 	run_suite() { \
 		label="$$1"; target="$$2"; \
