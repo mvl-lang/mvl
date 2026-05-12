@@ -11,7 +11,7 @@ ROOT := $(shell git -C "$(dir $(abspath $(lastword $(MAKEFILE_LIST))))" rev-pars
 MVL  := $(ROOT)/target/debug/mvl
 ARGS ?= compiler/main.mvl
 
-.PHONY: help build guard-mvl check check-compiler test test-01 test-02 test-03 run-01 run-02 run-03 run-main
+.PHONY: help build guard-mvl check check-compiler test test-01 test-02 test-03 test-04 run-01 run-02 run-03 run-04 run-main
 
 .DEFAULT_GOAL := help
 
@@ -48,6 +48,9 @@ test-02: guard-mvl ## Run unit tests for experiment 02 (token counting)
 test-03: guard-mvl ## Run unit tests for experiment 03 (lexer classifiers)
 	cd "$(ROOT)" && $(MVL) test tests/spikes/001-parser/03_lex_test.mvl
 
+test-04: guard-mvl ## Run unit tests for experiment 04 (parser pure functions)
+	cd "$(ROOT)" && $(MVL) test tests/spikes/001-parser/04_parser_test.mvl
+
 run-01: guard-mvl ## Run experiment 01 — reads examples/log_analyzer/main.mvl
 	cd "$(ROOT)" && $(MVL) run tests/spikes/001-parser/01_read_files.mvl
 
@@ -56,6 +59,9 @@ run-02: guard-mvl ## Run experiment 02 — counts tokens in examples/log_analyze
 
 run-03: guard-mvl ## Run experiment 03 — lex files in examples/log_analyzer/*.mvl
 	cd "$(ROOT)" && $(MVL) run tests/spikes/001-parser/03_lex_files.mvl
+
+run-04: guard-mvl ## Run experiment 04 — parse top-level decls in examples/log_analyzer/*.mvl
+	cd "$(ROOT)" && $(MVL) run tests/spikes/001-parser/04_parser.mvl
 
 run-main: guard-mvl ## Run $(ARGS) through the MVL lexer (override: make run-main ARGS=path/to/file.mvl)
 	cd "$(ROOT)" && $(MVL) run $(ARGS)

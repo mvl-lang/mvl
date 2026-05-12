@@ -86,6 +86,12 @@ pub struct RustEmitter {
     /// * `emit_params` — wraps inferred-borrow param types in `&` / `&mut ` (Rust output).
     /// * `emit_args` at call sites — emits `&x` / `&mut x` instead of `x.clone()`.
     pub borrow_params_map: std::collections::HashMap<String, Vec<Option<bool>>>,
+    /// Names of borrowed parameters in the function currently being emitted.
+    ///
+    /// Set at the start of each function body, cleared at the end.
+    /// Used by let-binding emission to add `.clone()` when reading a field
+    /// from a borrowed parameter (`acc.items` where `acc: &ParseAcc`).
+    pub borrow_param_names: std::collections::HashSet<String>,
     /// Fully-qualified Rust paths for stdlib function names that would shadow
     /// built-in primitives in the generated file (#420: regex.replace / regex.find).
     ///

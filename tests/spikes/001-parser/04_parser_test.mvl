@@ -1,0 +1,383 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// tests/spikes/001-parser/04_parser_test.mvl
+//
+// Unit tests for experiment 04 (parser).
+// Re-declares all pure types and functions from 04_parser.mvl so these
+// tests run without FileRead / Tainted inputs.
+//
+// Run with: mvl test tests/spikes/001-parser/04_parser_test.mvl
+
+// ── Re-declarations (mirrors 04_parser.mvl) ───────────────────────────────────
+
+type TokenCat = enum { Keyword, Ident, Number, Str, Punct, Comment }
+
+type Token = struct {
+    cat:    TokenCat,
+    lexeme: String,
+    line:   Int,
+}
+
+pub type ItemKind = enum { FnDecl, TypeDecl, UseDecl, TestFn }
+
+pub type Item = struct {
+    kind: ItemKind,
+    name: String,
+    line: Int,
+}
+
+type ParseMode = enum { Scan, NeedFn, NeedName }
+
+type ParseAcc = struct {
+    items:     List[Item],
+    mode:      ParseMode,
+    item_kind: ItemKind,
+    item_line: Int,
+}
+
+type Counts = struct {
+    fns:   Int,
+    types: Int,
+    uses:  Int,
+    tests: Int,
+}
+
+// ── two_char_punct ────────────────────────────────────────────────────────────
+
+total fn two_char_punct(c: String, c2: String) -> String {
+    if      c == "=" && c2 == "=" { "==" }
+    else if c == "!" && c2 == "=" { "!=" }
+    else if c == "<" && c2 == "=" { "<=" }
+    else if c == ">" && c2 == "=" { ">=" }
+    else if c == "-" && c2 == ">" { "->" }
+    else if c == "=" && c2 == ">" { "=>" }
+    else if c == "|" && c2 == "|" { "||" }
+    else if c == "&" && c2 == "&" { "&&" }
+    else if c == ":" && c2 == ":" { "::" }
+    else if c == "<" && c2 == "<" { "<<" }
+    else if c == ">" && c2 == ">" { ">>" }
+    else { "" }
+}
+
+// ── item_kind_label ───────────────────────────────────────────────────────────
+
+total fn item_kind_label(kind: ItemKind) -> String {
+    match kind {
+        ItemKind::FnDecl   => "fn",
+        ItemKind::TypeDecl => "type",
+        ItemKind::UseDecl  => "use",
+        ItemKind::TestFn   => "test fn",
+    }
+}
+
+// ── Counts helpers ────────────────────────────────────────────────────────────
+
+total fn zero_counts() -> Counts {
+    Counts { fns: 0, types: 0, uses: 0, tests: 0 }
+}
+
+total fn add_item(acc: Counts, item: Item) -> Counts {
+    match item.kind {
+        ItemKind::FnDecl   => Counts { fns: acc.fns + 1, types: acc.types, uses: acc.uses, tests: acc.tests },
+        ItemKind::TypeDecl => Counts { fns: acc.fns, types: acc.types + 1, uses: acc.uses, tests: acc.tests },
+        ItemKind::UseDecl  => Counts { fns: acc.fns, types: acc.types, uses: acc.uses + 1, tests: acc.tests },
+        ItemKind::TestFn   => Counts { fns: acc.fns, types: acc.types, uses: acc.uses, tests: acc.tests + 1 },
+    }
+}
+
+total fn count_items(items: List[Item]) -> Counts {
+    items.fold(zero_counts(), add_item)
+}
+
+// ── Parser state machine ──────────────────────────────────────────────────────
+
+total fn parse_scan(acc: ParseAcc, tok: Token) -> ParseAcc {
+    match tok.cat {
+        TokenCat::Keyword => {
+            if tok.lexeme == "fn" {
+                ParseAcc { items: acc.items, mode: ParseMode::NeedName, item_kind: ItemKind::FnDecl, item_line: tok.line }
+            } else if tok.lexeme == "type" {
+                ParseAcc { items: acc.items, mode: ParseMode::NeedName, item_kind: ItemKind::TypeDecl, item_line: tok.line }
+            } else if tok.lexeme == "use" {
+                ParseAcc { items: acc.items, mode: ParseMode::NeedName, item_kind: ItemKind::UseDecl, item_line: tok.line }
+            } else if tok.lexeme == "total" || tok.lexeme == "partial" || tok.lexeme == "transparent" {
+                ParseAcc { items: acc.items, mode: ParseMode::NeedFn, item_kind: ItemKind::FnDecl, item_line: tok.line }
+            } else if tok.lexeme == "test" {
+                ParseAcc { items: acc.items, mode: ParseMode::NeedFn, item_kind: ItemKind::TestFn, item_line: tok.line }
+            } else {
+                acc
+            }
+        }
+        _ => acc
+    }
+}
+
+total fn parse_need_fn(acc: ParseAcc, tok: Token) -> ParseAcc {
+    match tok.cat {
+        TokenCat::Keyword => {
+            if tok.lexeme == "fn" {
+                ParseAcc { items: acc.items, mode: ParseMode::NeedName, item_kind: acc.item_kind, item_line: acc.item_line }
+            } else if tok.lexeme == "partial" || tok.lexeme == "transparent" {
+                acc
+            } else {
+                ParseAcc { items: acc.items, mode: ParseMode::Scan, item_kind: acc.item_kind, item_line: acc.item_line }
+            }
+        }
+        _ => ParseAcc { items: acc.items, mode: ParseMode::Scan, item_kind: acc.item_kind, item_line: acc.item_line }
+    }
+}
+
+total fn parse_need_name(acc: ParseAcc, tok: Token) -> ParseAcc {
+    match tok.cat {
+        TokenCat::Ident => {
+            let item: Item = Item { kind: acc.item_kind, name: tok.lexeme, line: acc.item_line };
+            let mut new_items: List[Item] = acc.items;
+            new_items.push(item);
+            ParseAcc { items: new_items, mode: ParseMode::Scan, item_kind: ItemKind::FnDecl, item_line: 0 }
+        }
+        _ => ParseAcc { items: acc.items, mode: ParseMode::Scan, item_kind: acc.item_kind, item_line: acc.item_line }
+    }
+}
+
+total fn parse_step(acc: ParseAcc, tok: Token) -> ParseAcc {
+    match acc.mode {
+        ParseMode::Scan     => parse_scan(acc, tok),
+        ParseMode::NeedFn   => parse_need_fn(acc, tok),
+        ParseMode::NeedName => parse_need_name(acc, tok),
+    }
+}
+
+total fn parse_tokens(tokens: List[Token]) -> List[Item] {
+    let init: ParseAcc = ParseAcc {
+        items: [],
+        mode: ParseMode::Scan,
+        item_kind: ItemKind::FnDecl,
+        item_line: 0,
+    };
+    tokens.fold(init, parse_step).items
+}
+
+// ── Test helpers ──────────────────────────────────────────────────────────────
+
+total fn kw(lexeme: String) -> Token {
+    Token { cat: TokenCat::Keyword, lexeme: lexeme, line: 1 }
+}
+
+total fn id(lexeme: String) -> Token {
+    Token { cat: TokenCat::Ident, lexeme: lexeme, line: 1 }
+}
+
+total fn empty_acc() -> ParseAcc {
+    ParseAcc { items: [], mode: ParseMode::Scan, item_kind: ItemKind::FnDecl, item_line: 0 }
+}
+
+// ── two_char_punct tests ──────────────────────────────────────────────────────
+
+test fn arrow_recognized() -> Unit {
+    assert_eq(two_char_punct("-", ">"), "->");
+}
+
+test fn fat_arrow_recognized() -> Unit {
+    assert_eq(two_char_punct("=", ">"), "=>");
+}
+
+test fn eq_eq_recognized() -> Unit {
+    assert_eq(two_char_punct("=", "="), "==");
+}
+
+test fn not_eq_recognized() -> Unit {
+    assert_eq(two_char_punct("!", "="), "!=");
+}
+
+test fn leq_recognized() -> Unit {
+    assert_eq(two_char_punct("<", "="), "<=");
+}
+
+test fn geq_recognized() -> Unit {
+    assert_eq(two_char_punct(">", "="), ">=");
+}
+
+test fn double_colon_recognized() -> Unit {
+    assert_eq(two_char_punct(":", ":"), "::");
+}
+
+test fn logical_or_recognized() -> Unit {
+    assert_eq(two_char_punct("|", "|"), "||");
+}
+
+test fn logical_and_recognized() -> Unit {
+    assert_eq(two_char_punct("&", "&"), "&&");
+}
+
+test fn unknown_pair_returns_empty() -> Unit {
+    assert_eq(two_char_punct("+", "+"), "");
+}
+
+test fn single_char_returns_empty() -> Unit {
+    assert_eq(two_char_punct("+", " "), "");
+}
+
+// ── item_kind_label tests ─────────────────────────────────────────────────────
+
+test fn fn_decl_label() -> Unit {
+    assert_eq(item_kind_label(ItemKind::FnDecl), "fn");
+}
+
+test fn type_decl_label() -> Unit {
+    assert_eq(item_kind_label(ItemKind::TypeDecl), "type");
+}
+
+test fn use_decl_label() -> Unit {
+    assert_eq(item_kind_label(ItemKind::UseDecl), "use");
+}
+
+test fn test_fn_label() -> Unit {
+    assert_eq(item_kind_label(ItemKind::TestFn), "test fn");
+}
+
+// ── add_item / count_items tests ──────────────────────────────────────────────
+
+test fn add_fn_increments_fns() -> Unit {
+    let item: Item = Item { kind: ItemKind::FnDecl, name: "foo", line: 1 };
+    let c: Counts = add_item(zero_counts(), item);
+    assert_eq(c.fns, 1);
+    assert_eq(c.types, 0);
+    assert_eq(c.uses, 0);
+    assert_eq(c.tests, 0);
+}
+
+test fn add_type_increments_types() -> Unit {
+    let item: Item = Item { kind: ItemKind::TypeDecl, name: "Foo", line: 1 };
+    let c: Counts = add_item(zero_counts(), item);
+    assert_eq(c.types, 1);
+    assert_eq(c.fns, 0);
+}
+
+test fn add_use_increments_uses() -> Unit {
+    let item: Item = Item { kind: ItemKind::UseDecl, name: "foo", line: 1 };
+    let c: Counts = add_item(zero_counts(), item);
+    assert_eq(c.uses, 1);
+}
+
+test fn add_test_fn_increments_tests() -> Unit {
+    let item: Item = Item { kind: ItemKind::TestFn, name: "my_test", line: 1 };
+    let c: Counts = add_item(zero_counts(), item);
+    assert_eq(c.tests, 1);
+}
+
+test fn count_items_empty_list() -> Unit {
+    let c: Counts = count_items([]);
+    assert_eq(c.fns, 0);
+    assert_eq(c.types, 0);
+    assert_eq(c.uses, 0);
+    assert_eq(c.tests, 0);
+}
+
+test fn count_items_mixed_list() -> Unit {
+    let items: List[Item] = [
+        Item { kind: ItemKind::FnDecl,   name: "a", line: 1 },
+        Item { kind: ItemKind::FnDecl,   name: "b", line: 2 },
+        Item { kind: ItemKind::TypeDecl, name: "T", line: 3 },
+        Item { kind: ItemKind::UseDecl,  name: "u", line: 4 },
+        Item { kind: ItemKind::TestFn,   name: "t", line: 5 },
+    ];
+    let c: Counts = count_items(items);
+    assert_eq(c.fns, 2);
+    assert_eq(c.types, 1);
+    assert_eq(c.uses, 1);
+    assert_eq(c.tests, 1);
+}
+
+// ── parse_tokens integration tests ───────────────────────────────────────────
+
+test fn empty_token_list_gives_empty_items() -> Unit {
+    let items: List[Item] = parse_tokens([]);
+    assert_eq(items.len(), 0);
+}
+
+test fn fn_ident_gives_fn_decl() -> Unit {
+    let tokens: List[Token] = [kw("fn"), id("my_func")];
+    let items: List[Item] = parse_tokens(tokens);
+    assert_eq(items.len(), 1);
+    match items.get(0) {
+        None       => assert_eq(true, false),
+        Some(item) => {
+            assert_eq(item_kind_label(item.kind), "fn");
+            assert_eq(item.name, "my_func");
+        }
+    }
+}
+
+test fn type_ident_gives_type_decl() -> Unit {
+    let tokens: List[Token] = [kw("type"), id("MyType")];
+    let items: List[Item] = parse_tokens(tokens);
+    assert_eq(items.len(), 1);
+    match items.get(0) {
+        None       => assert_eq(true, false),
+        Some(item) => assert_eq(item_kind_label(item.kind), "type"),
+    }
+}
+
+test fn use_ident_gives_use_decl() -> Unit {
+    let tokens: List[Token] = [kw("use"), id("std")];
+    let items: List[Item] = parse_tokens(tokens);
+    assert_eq(items.len(), 1);
+    match items.get(0) {
+        None       => assert_eq(true, false),
+        Some(item) => assert_eq(item_kind_label(item.kind), "use"),
+    }
+}
+
+test fn partial_fn_ident_gives_fn_decl() -> Unit {
+    let tokens: List[Token] = [kw("partial"), kw("fn"), id("helper")];
+    let items: List[Item] = parse_tokens(tokens);
+    assert_eq(items.len(), 1);
+    match items.get(0) {
+        None       => assert_eq(true, false),
+        Some(item) => {
+            assert_eq(item_kind_label(item.kind), "fn");
+            assert_eq(item.name, "helper");
+        }
+    }
+}
+
+test fn test_fn_ident_gives_test_fn() -> Unit {
+    let tokens: List[Token] = [kw("test"), kw("fn"), id("my_test")];
+    let items: List[Item] = parse_tokens(tokens);
+    assert_eq(items.len(), 1);
+    match items.get(0) {
+        None       => assert_eq(true, false),
+        Some(item) => assert_eq(item_kind_label(item.kind), "test fn"),
+    }
+}
+
+test fn total_fn_ident_gives_fn_decl() -> Unit {
+    let tokens: List[Token] = [kw("total"), kw("fn"), id("pure_fn")];
+    let items: List[Item] = parse_tokens(tokens);
+    assert_eq(items.len(), 1);
+    match items.get(0) {
+        None       => assert_eq(true, false),
+        Some(item) => {
+            assert_eq(item_kind_label(item.kind), "fn");
+            assert_eq(item.name, "pure_fn");
+        }
+    }
+}
+
+test fn non_keyword_token_skipped_in_scan() -> Unit {
+    // Ident without preceding keyword should not produce an item
+    let tokens: List[Token] = [id("orphan"), kw("fn"), id("real_fn")];
+    let items: List[Item] = parse_tokens(tokens);
+    assert_eq(items.len(), 1);
+}
+
+test fn multiple_decls_parsed() -> Unit {
+    let tokens: List[Token] = [
+        kw("fn"), id("a"),
+        kw("type"), id("B"),
+        kw("use"), id("c"),
+    ];
+    let items: List[Item] = parse_tokens(tokens);
+    assert_eq(items.len(), 3);
+}

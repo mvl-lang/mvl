@@ -195,13 +195,35 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                 }
                 // fold(init, f) — init cloned (value arg); f wrapped in closure
                 // so capturing closures are accepted alongside fn pointers.
+                // When f is a named function with borrow params, add & to the
+                // accumulator and/or element in the generated lambda.
                 "fold" if args.len() == 2 => {
+                    let (borrow_acc, borrow_elem) = if let Expr::Ident(name, _) = &args[1] {
+                        let borrows = cg
+                            .borrow_params_map
+                            .get(name.as_str())
+                            .cloned()
+                            .unwrap_or_default();
+                        let b0 = borrows.first().copied().flatten().is_some();
+                        let b1 = borrows.get(1).copied().flatten().is_some();
+                        (b0, b1)
+                    } else {
+                        (false, false)
+                    };
                     emit_expr(cg, receiver);
                     cg.push(".clone().into_iter().fold(");
                     emit_expr_as_arg(cg, &args[0]);
                     cg.push(", |acc, __x| (");
                     emit_expr(cg, &args[1]);
-                    cg.push(")(acc, __x))");
+                    cg.push(")(");
+                    if borrow_acc {
+                        cg.push("&");
+                    }
+                    cg.push("acc, ");
+                    if borrow_elem {
+                        cg.push("&");
+                    }
+                    cg.push("__x))");
                 }
                 // windows(n)/chunks(n) — Rust returns &[T] slices; collect into Vec<Vec<T>>
                 "windows" | "chunks" => {

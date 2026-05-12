@@ -123,6 +123,20 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
     // Phase A: compute last uses so emit_expr_as_arg can elide .clone() at move points.
     cg.last_uses = compute_last_uses(&fd.body);
 
+    // Populate borrow_param_names so let-binding emission can add `.clone()`
+    // when reading a field from a borrowed parameter (e.g. `acc.items`).
+    cg.borrow_param_names.clear();
+    let borrows = cg
+        .borrow_params_map
+        .get(&fd.name)
+        .cloned()
+        .unwrap_or_default();
+    for (i, param) in fd.params.iter().enumerate() {
+        if borrows.get(i).copied().flatten().is_some() {
+            cg.borrow_param_names.insert(param.name.clone());
+        }
+    }
+
     let stmts = &fd.body.stmts;
     if stmts.is_empty() {
         // Unit-returning functions with an empty body are valid in Rust (implicit `()`).
