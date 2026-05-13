@@ -114,7 +114,7 @@ fn dir_from_arg(v: Tainted[String]) -> Path {
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
-partial fn main() -> Unit ! FileRead, Console {
+partial fn main() -> Unit ! FileRead + Console {
     let dir_path: Path = match get_arg("dir") {
         None    => path("compiler"),
         Some(v) => dir_from_arg(v),

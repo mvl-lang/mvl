@@ -38,14 +38,14 @@ fn load_app_config(path: Path) -> Result[String, Error] ! FileRead {
 }
 
 // Transitive caller also declares FileRead + Console
-fn bootstrap(path: Path) -> Result[Unit, Error] ! FileRead, Console {
+fn bootstrap(path: Path) -> Result[Unit, Error] ! FileRead + Console {
     let cfg: String = load_app_config(path)?;
     cfg.print();
     Ok(())
 }
 
 // Effect union: caller declares union of all callees
-fn fetch_and_write(url: String, path: Path) -> Result[Unit, Error] ! Net, FileWrite {
+fn fetch_and_write(url: String, path: Path) -> Result[Unit, Error] ! Net + FileWrite {
     let data: String = fetch_data(url)?;
     write_output(path, data)?;
     Ok(())

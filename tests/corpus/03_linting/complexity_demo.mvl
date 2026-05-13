@@ -62,7 +62,7 @@ impl Eq for Request {
 // 4 declared effects exceeds the default max of 3.
 // A function this wide is doing too many things at once.
 
-fn process_request(req: Request) -> Status ! Console, DB, Net, Log {
+fn process_request(req: Request) -> Status ! Console + DB + Net + Log {
     authorize(req.method, req.role, req.path)
 }
 

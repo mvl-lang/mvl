@@ -2294,7 +2294,7 @@ mod tests {
     #[test]
     fn effect_width_exceeds_threshold() {
         // 4 effects > default max 3
-        let src = "fn f() -> Unit ! Console, DB, Network, FileSystem { f() }\n";
+        let src = "fn f() -> Unit ! Console + DB + Network + FileSystem { f() }\n";
         let prog = parse(src);
         let mut diags = vec![];
         complexity_effect_width(&prog, &cfg(), &mut diags);
@@ -2306,7 +2306,7 @@ mod tests {
 
     #[test]
     fn effect_width_disabled() {
-        let src = "fn f() -> Unit ! Console, DB, Network, FileSystem { f() }\n";
+        let src = "fn f() -> Unit ! Console + DB + Network + FileSystem { f() }\n";
         let prog = parse(src);
         let mut diags = vec![];
         let mut c = cfg();
@@ -2548,7 +2548,7 @@ mod tests {
         let src = concat!(
             "type Foo = struct { x: Int }\n",
             "impl Bar for Foo {\n",
-            "    fn m(f: Foo) -> Unit ! Console, DB, Network, FileSystem { f.x }\n",
+            "    fn m(f: Foo) -> Unit ! Console + DB + Network + FileSystem { f.x }\n",
             "}\n",
         );
         let prog = parse(src);

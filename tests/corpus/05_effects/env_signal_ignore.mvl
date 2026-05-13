@@ -8,7 +8,7 @@
 
 use std.env.{signal_ignore, signal_reset, Signal}
 
-fn main() -> Unit ! Env, Console {
+fn main() -> Unit ! Env + Console {
     signal_ignore(Signal::SIGINT);
     signal_reset(Signal::SIGTERM);
     println("ok");

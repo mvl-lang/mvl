@@ -6,7 +6,7 @@
 
 use std.env.{args}
 
-fn main() -> Unit ! Env, Console {
+fn main() -> Unit ! Env + Console {
     let a: List[Tainted[String]] = args();
     assert(a.len() >= 1);
     println("ok")

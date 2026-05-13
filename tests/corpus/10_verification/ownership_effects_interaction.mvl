@@ -8,7 +8,7 @@ fn consume_and_log(x: Int) -> Unit ! Console {
 }
 
 // Mutable local with effect
-fn mutate_and_log(x: Int) -> Unit ! Console, DB {
+fn mutate_and_log(x: Int) -> Unit ! Console + DB {
     let y: ref Int = x;
     y = y + 1;
     println(y)
@@ -22,7 +22,7 @@ total fn move_prevention(vec: Array[Int]) -> Int ! Console {
 }
 
 // Effect composition: multiple effects declared
-fn log_and_store(msg: String) -> Unit ! Console, DB {
+fn log_and_store(msg: String) -> Unit ! Console + DB {
     println(msg)
 }
 

@@ -192,7 +192,7 @@ pub struct FnDecl {
     pub return_type: Box<TypeExpr>,
     /// Refinement on the return type: `-> Int where self > 0`
     pub return_refinement: Option<RefExpr>,
-    /// Effect list: `! DB, Console` or `! FileRead("/path")`
+    /// Effect list: `! DB + Console` or `! FileRead("/path")`
     pub effects: Vec<Effect>,
     /// Where-clause constraints: `where T: Eq`
     pub constraints: Vec<Constraint>,

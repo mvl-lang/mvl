@@ -408,7 +408,7 @@ fn bridge_symlink_outside_source_dir_rejected() {
 // ── random_dice (! Random effect + extern bridge) ─────────────────────────
 
 /// random_dice/ declares `extern "rust" { fn roll_dice() -> Int; }` and
-/// annotates `main` with `! Random, Console`. Validates the ! Random effect
+/// annotates `main` with `! Random + Console`. Validates the ! Random effect
 /// annotation + extern bridge end-to-end: build, link, and run all pass.
 ///
 /// The bridge uses std::time for seeding — no external crates.

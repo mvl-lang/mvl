@@ -541,12 +541,12 @@ fn caller_missing_callee_effect_rejected() {
 
 #[test]
 fn caller_declaring_effect_union_accepted() {
-    // GIVEN: fn a ! FileRead, fn b ! Net, fn c ! FileRead, Net calls both
+    // GIVEN: fn a ! FileRead, fn b ! Net, fn c ! FileRead + Net calls both
     // THEN: no effect errors
     let src = r#"
         fn read_fn() -> Unit ! FileRead { file.read("x") }
         fn net_fn() -> Unit ! Net { http.get("url") }
-        fn union_caller() -> Unit ! FileRead, Net { read_fn(); net_fn() }
+        fn union_caller() -> Unit ! FileRead + Net { read_fn(); net_fn() }
     "#;
     let errors = errors_for(src);
     let effect_errors: Vec<_> = errors
@@ -2845,7 +2845,7 @@ fn crypto_random_bytes_result_rejected_by_log_info() {
     // GIVEN: crypto_random_bytes returns Secret[List[Int]]
     // THEN: passing the result to log_info is a LoggingLabelViolation
     let errors = errors_for(
-        r#"fn leak_attempt(n: Int) -> Unit ! CryptoRandom, Log {
+        r#"fn leak_attempt(n: Int) -> Unit ! CryptoRandom + Log {
     let bytes: Secret[List[Int]] = crypto_random_bytes(n);
     log_info("{}", bytes);
 }"#,

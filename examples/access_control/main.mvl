@@ -65,7 +65,7 @@ fn demo_rbac() -> Unit ! Log {
 // Auth demo: alice's hash is Secret[String] — cannot be printed or leaked.
 // It flows directly into hash_verify at the extern boundary inside auth module.
 // Phase 4: std.log replaces raw println; ! CryptoRandom propagated from authenticate().
-fn demo_auth() -> Unit ! Log, CryptoRandom {
+fn demo_auth() -> Unit ! Log + CryptoRandom {
     let hash_opt: Option[Secret[String]] = get_demo_hash("alice");
     match hash_opt {
         None => log_warn("auth attempt: user not found", {"user": "alice"}),
@@ -79,7 +79,7 @@ fn demo_auth() -> Unit ! Log, CryptoRandom {
     }
 }
 
-fn main() -> Unit ! Log, CryptoRandom {
+fn main() -> Unit ! Log + CryptoRandom {
     let rbac_done: Unit = demo_rbac();
     demo_auth()
 }

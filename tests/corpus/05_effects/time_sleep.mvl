@@ -8,7 +8,7 @@
 
 use std.time.{sleep, seconds}
 
-fn main() -> Unit ! Clock, Console {
+fn main() -> Unit ! Clock + Console {
     sleep(seconds(0));
     println("ok");
 }

@@ -513,7 +513,7 @@ pub partial fn property_check_int_verbose(
     gen: IntGen,
     prop: fn(Int) -> Bool,
     iterations: Int
-) -> Unit ! Random, Console {
+) -> Unit ! Random + Console {
     match run_property_int(gen, prop, iterations) {
         None => println("{}: OK, passed {} tests.", name, iterations.to_string()),
         Some(v) => panic(str_concat(str_concat(name, ": falsified for "), v.to_string())),
@@ -526,7 +526,7 @@ pub partial fn property_check_string_verbose(
     gen: StringGen,
     prop: fn(String) -> Bool,
     iterations: Int
-) -> Unit ! Random, Console {
+) -> Unit ! Random + Console {
     match run_property_string(gen, prop, iterations) {
         None => println("{}: OK, passed {} tests.", name, iterations.to_string()),
         Some(v) => panic(str_concat(str_concat(str_concat(name, ": falsified for \""), v), "\"")),
@@ -539,7 +539,7 @@ pub partial fn property_check_list_int_verbose(
     gen: ListIntGen,
     prop: fn(List[Int]) -> Bool,
     iterations: Int
-) -> Unit ! Random, Console {
+) -> Unit ! Random + Console {
     match run_property_list_int(gen, prop, iterations) {
         None => println("{}: OK, passed {} tests.", name, iterations.to_string()),
         Some(_) => panic(str_concat(name, ": falsified for a list input")),
@@ -580,7 +580,7 @@ pub partial fn property_check_int_persist(
     gen: IntGen,
     prop: fn(Int) -> Bool,
     iterations: Int
-) -> Unit ! Random, FileWrite {
+) -> Unit ! Random + FileWrite {
     match run_property_int(gen, prop, iterations) {
         None => {},
         Some(v) => {
@@ -596,7 +596,7 @@ pub partial fn property_check_string_persist(
     gen: StringGen,
     prop: fn(String) -> Bool,
     iterations: Int
-) -> Unit ! Random, FileWrite {
+) -> Unit ! Random + FileWrite {
     match run_property_string(gen, prop, iterations) {
         None => {},
         Some(v) => {
@@ -767,7 +767,7 @@ pub partial fn property_check_with_mutation_int_verbose(
     prop: fn(Int) -> Bool,
     mutation_ratio: Float,
     iterations: Int
-) -> Unit ! Random, Console {
+) -> Unit ! Random + Console {
     match gen {
         IntGen::Range(lo, hi) => {
             let i: ref Int = 0;
