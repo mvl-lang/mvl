@@ -4,6 +4,24 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.97.3] — 2026-05-13
+
+### Added
+
+- **Test coverage matrix and gap analysis** — `tests/COVERAGE.md` maps all 102 corpus files to 11 ADR-0001 requirements with coverage statistics and recommendations for closing gaps (#677).
+- **20 negative corpus programs** — Comprehensive negative test suite for Requirements 1–10 in `tests/corpus/13_negative/req{01-10}/`, validated by `make test-corpus` via `corpus:expect-fail` annotation (#680).
+
+### Changed
+
+- **Test directory reorganization** — Separated concerns: `tests/corpus/03_stdlib/*.mvl` → `tests/stdlib/`, `tests/corpus/11_programs/*` → `examples/programs/`, corpus directory renumbering (04_linting→03_linting, 12_bdd→11_bdd, 13_contracts→12_contracts, 14_negative→13_negative) (#694).
+- **Makefile** — Renamed test suites to clarify backends: `test-transpiler` → `test-backend-rust`, `test-mvl` → `test-backend-mvl`; added `examples/programs/Makefile` for showcase program validation.
+- **Spec cross-references** — Added Design Principles 4–10 cross-references to existing requirements in specs 001, 002, 003 for traceability (#427).
+- **Type checker** — Deleted 6 redundant stdlib smoke tests (now covered natively by `make test-corpus`); updated 48 test file paths for directory reorg.
+
+### Fixed
+
+- **`make test-corpus` on macOS** — Replaced bash globstar `**/*.mvl` (unsupported in macOS `/bin/bash` 3.2) with `find` + process substitution; also caught 3 previously-missed nested test files in corpus subdirectories.
+
 ## [0.97.2] — 2026-05-13
 
 ### Fixed
