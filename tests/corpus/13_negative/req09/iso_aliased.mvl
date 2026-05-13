@@ -1,0 +1,21 @@
+// corpus:expect-fail
+// expect-requirement: 9
+// Scenario: an iso parameter is assigned to a second binding without consume().
+//           iso guarantees uniqueness; aliasing breaks that invariant.
+// Triggers: CheckError::IsoAliasingViolation (req9)
+
+type Connection = struct {
+    host: String,
+    port: Int,
+}
+
+fn open(iso conn: Connection) -> Unit ! Console {
+    // BUG: assigning `conn` to `alias` creates two references to the same iso value.
+    let alias: Connection = conn;
+    println("connected to {}:{}", alias.host, conn.port);
+}
+
+fn main() -> Unit ! Console {
+    let c: Connection = Connection { host: "db.local", port: 5432 };
+    open(c);
+}

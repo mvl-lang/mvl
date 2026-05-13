@@ -1,0 +1,19 @@
+// corpus:expect-fail
+// expect-requirement: 7
+// Scenario: function calls println but does not declare ! Console in its signature.
+// Triggers: CheckError::UndeclaredEffect (req7)
+
+type Event = struct {
+    name: String,
+    severity: Int,
+}
+
+fn log_event(ev: Event) -> Unit {
+    // BUG: `println` requires `! Console` but the signature declares no effects.
+    println("[{}] severity={}", ev.name, ev.severity);
+}
+
+fn main() -> Unit ! Console {
+    let ev: Event = Event { name: "startup", severity: 0 };
+    log_event(ev);
+}

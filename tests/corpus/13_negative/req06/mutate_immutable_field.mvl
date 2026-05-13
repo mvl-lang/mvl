@@ -1,0 +1,20 @@
+// corpus:expect-fail
+// expect-requirement: 6
+// Scenario: mutating a field on a struct that was not declared with `mut`.
+// Triggers: CheckError::MutateImmutableField (req6)
+
+type Settings = struct {
+    max_retries: Int,
+    timeout_ms: Int,
+}
+
+fn bump_retries(s: Settings) -> Unit ! Console {
+    // BUG: `s` is not `mut` — field mutation requires `let mut s`.
+    s.max_retries = s.max_retries + 1;
+    println("retries: {}", s.max_retries);
+}
+
+fn main() -> Unit ! Console {
+    let cfg: Settings = Settings { max_retries: 3, timeout_ms: 5000 };
+    bump_retries(cfg);
+}

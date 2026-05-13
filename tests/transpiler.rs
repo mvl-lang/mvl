@@ -335,7 +335,7 @@ fn corpus_total_vs_partial_transpiles() {
 /// The safe_division.mvl reference example transpiles without panicking.
 #[test]
 fn full_program_safe_division_transpiles() {
-    let src = include_str!("corpus/11_programs/safe_division.mvl");
+    let src = include_str!("../examples/programs/safe_division.mvl");
     let rust = transpile_src(src);
     assert_contains(&rust, "pub struct Amount");
     assert_contains(&rust, "pub struct NonZero");
@@ -349,7 +349,7 @@ fn full_program_safe_division_transpiles() {
 /// The auth_handler.mvl reference example transpiles without panicking.
 #[test]
 fn full_program_auth_handler_transpiles() {
-    let src = include_str!("corpus/11_programs/auth_handler.mvl");
+    let src = include_str!("../examples/programs/auth_handler.mvl");
     let rust = transpile_src(src);
     assert_contains(&rust, "pub struct UserId");
     assert_contains(&rust, "pub enum AuthError");
@@ -425,7 +425,7 @@ fn extern_rust_adds_mvl_runtime_to_cargo_toml() {
 fn full_program_password_checker_transpiles() {
     use mvl::mvl::backends::rust::transpile;
     use mvl::mvl::checker::check;
-    let src = include_str!("corpus/11_programs/password_checker.mvl");
+    let src = include_str!("../examples/programs/password_checker.mvl");
     let (mut p, lex_errs) = mvl::mvl::parser::Parser::new(src);
     assert!(lex_errs.is_empty(), "lex errors: {lex_errs:?}");
     let prog = p.parse_program();
@@ -2522,7 +2522,7 @@ fn prelude_builtin_fn_does_not_produce_todo_stub() {
 /// Verifies that `corpus:skip-transpiler` has been lifted.
 #[test]
 fn corpus_basic_contracts_transpiles() {
-    let src = include_str!("corpus/13_contracts/basic_contracts.mvl");
+    let src = include_str!("corpus/12_contracts/basic_contracts.mvl");
     let rust = transpile_src(src);
     assert_contains(&rust, "pub fn");
 }
@@ -2577,7 +2577,7 @@ fn ghost_let_is_erased_in_transpiler() {
 /// Phase 4: `ghost_old_contracts.mvl` corpus transpiles cleanly.
 #[test]
 fn corpus_ghost_old_contracts_transpiles() {
-    let src = include_str!("corpus/13_contracts/ghost_old_contracts.mvl");
+    let src = include_str!("corpus/12_contracts/ghost_old_contracts.mvl");
     let rust = transpile_src(src);
     assert_contains(&rust, "pub fn");
     // Ghost bindings must be erased.

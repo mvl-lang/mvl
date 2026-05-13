@@ -314,19 +314,6 @@ fn immutability_corpus_parses_and_checks() {
     );
 }
 
-#[test]
-fn collections_corpus_parses_and_checks() {
-    // GIVEN: the string + collection operations corpus (#43)
-    // THEN: no type errors (method calls resolve to correct types)
-    let src = include_str!("corpus/03_stdlib/collections.mvl");
-    let result = check_src(src);
-    assert!(
-        result.is_ok(),
-        "collections corpus should type-check cleanly, got: {:?}",
-        result.errors
-    );
-}
-
 // ── String.concat arity/type enforcement ─────────────────────────────────────
 
 #[test]
@@ -2051,17 +2038,6 @@ fn run() -> Result[String, AppError] {
 // ── #58/#66: Map/Set literals and multiline/raw strings ──────────────────────
 
 #[test]
-fn map_set_literals_corpus_parses_and_checks() {
-    let src = include_str!("corpus/03_stdlib/map_set_literals.mvl");
-    let result = check_src(src);
-    assert!(
-        result.is_ok(),
-        "map_set_literals corpus should type-check cleanly, got: {:?}",
-        result.errors
-    );
-}
-
-#[test]
 fn literals_corpus_with_multiline_raw_strings_checks() {
     let src = include_str!("corpus/01_basics/literals.mvl");
     let result = check_src(src);
@@ -2786,118 +2762,6 @@ fn refinement_operators_lt_le_ge_eq() {
     }
 }
 
-// ── Stdlib corpus tests (#46) ────────────────────────────────────────────────
-
-#[test]
-fn stdlib_time_corpus_parses_and_checks() {
-    // GIVEN: the time stdlib corpus (valid programs using std.time)
-    // THEN: no type errors (UndefinedFunction for stdlib symbols is OK without stdlib loaded)
-    let src = include_str!("corpus/03_stdlib/time_operations.mvl");
-    let result = check_src(src);
-    let serious: Vec<_> = result
-        .errors
-        .iter()
-        .filter(|e| {
-            !matches!(
-                e,
-                CheckError::UndefinedFunction { .. } | CheckError::UndefinedVariable { .. }
-            )
-        })
-        .collect();
-    assert!(
-        serious.is_empty(),
-        "time_operations corpus should have no serious errors, got: {serious:?}"
-    );
-}
-
-#[test]
-fn stdlib_json_corpus_parses_and_checks() {
-    // GIVEN: the json stdlib corpus (valid programs using std.json)
-    // THEN: no type errors (UndefinedFunction for stdlib symbols is OK without stdlib loaded)
-    let src = include_str!("corpus/03_stdlib/json_operations.mvl");
-    let result = check_src(src);
-    let serious: Vec<_> = result
-        .errors
-        .iter()
-        .filter(|e| {
-            !matches!(
-                e,
-                CheckError::UndefinedFunction { .. } | CheckError::UndefinedVariable { .. }
-            )
-        })
-        .collect();
-    assert!(
-        serious.is_empty(),
-        "json_operations corpus should have no serious errors, got: {serious:?}"
-    );
-}
-
-#[test]
-fn stdlib_regex_corpus_parses_and_checks() {
-    // GIVEN: the regex stdlib corpus (valid programs using std.regex)
-    // THEN: no type errors (UndefinedFunction for stdlib symbols is OK without stdlib loaded)
-    let src = include_str!("corpus/03_stdlib/regex_operations.mvl");
-    let result = check_src(src);
-    let serious: Vec<_> = result
-        .errors
-        .iter()
-        .filter(|e| {
-            !matches!(
-                e,
-                CheckError::UndefinedFunction { .. } | CheckError::UndefinedVariable { .. }
-            )
-        })
-        .collect();
-    assert!(
-        serious.is_empty(),
-        "regex_operations corpus should have no serious errors, got: {serious:?}"
-    );
-}
-
-#[test]
-fn stdlib_random_corpus_parses_and_checks() {
-    // GIVEN: the random stdlib corpus (valid programs using std.random)
-    // THEN: no type errors (UndefinedFunction for stdlib symbols is OK without stdlib loaded)
-    let src = include_str!("corpus/03_stdlib/random_operations.mvl");
-    let result = check_src(src);
-    let serious: Vec<_> = result
-        .errors
-        .iter()
-        .filter(|e| {
-            !matches!(
-                e,
-                CheckError::UndefinedFunction { .. } | CheckError::UndefinedVariable { .. }
-            )
-        })
-        .collect();
-    assert!(
-        serious.is_empty(),
-        "random_operations corpus should have no serious errors, got: {serious:?}"
-    );
-}
-
-#[test]
-fn stdlib_crypto_corpus_parses_and_checks() {
-    // GIVEN: the crypto stdlib corpus (valid programs using std.crypto)
-    // THEN: no type errors (UndefinedFunction for stdlib symbols is OK without stdlib loaded)
-    let src = include_str!("corpus/03_stdlib/crypto_operations.mvl");
-    let result = check_src(src);
-    let serious: Vec<_> = result
-        .errors
-        .iter()
-        .filter(|e| {
-            !matches!(
-                e,
-                CheckError::UndefinedFunction { .. } | CheckError::UndefinedVariable { .. }
-            )
-        })
-        .collect();
-    assert!(
-        serious.is_empty(),
-        "crypto_operations corpus should have no serious errors, got: {serious:?}"
-    );
-}
-
 // ── IFC tests for crypto functions (#180) ─────────────────────────────────────
 
 #[test]
@@ -3008,31 +2872,6 @@ fn caller_missing_crypto_random_effect_rejected() {
             if callee == "gen_bytes" && effect == "CryptoRandom"
         )),
         "expected UndeclaredEffect(gen_bytes, CryptoRandom), got: {errors:?}"
-    );
-}
-
-#[test]
-fn stdlib_pbt_corpus_parses_and_checks() {
-    // GIVEN: the PBT stdlib corpus (valid programs using std.pbt, #40 Phase A + #425 Phase B)
-    // THEN: no serious type errors; UndefinedFunction/UndefinedVariable are expected (stdlib not
-    //       loaded); UndefinedType is expected because Generator[T] is not yet a built-in type
-    let src = include_str!("corpus/03_stdlib/pbt_operations.mvl");
-    let result = check_src(src);
-    let serious: Vec<_> = result
-        .errors
-        .iter()
-        .filter(|e| {
-            !matches!(
-                e,
-                CheckError::UndefinedFunction { .. }
-                    | CheckError::UndefinedVariable { .. }
-                    | CheckError::UndefinedType { .. }
-            )
-        })
-        .collect();
-    assert!(
-        serious.is_empty(),
-        "pbt_operations corpus should have no serious errors, got: {serious:?}"
     );
 }
 
@@ -5198,7 +5037,7 @@ fn z3_proves_modular_implication() {
 fn contracts_corpus_parses_and_checks() {
     // GIVEN: the basic_contracts corpus (valid contract programs)
     // THEN: no type errors
-    let src = include_str!("corpus/13_contracts/basic_contracts.mvl");
+    let src = include_str!("corpus/12_contracts/basic_contracts.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -5848,7 +5687,7 @@ fn ghost_let_multiple_in_body_checks_cleanly() {
 fn ghost_corpus_parses_and_checks() {
     // GIVEN: the ghost_old_contracts corpus (all ghost/old contract programs)
     // THEN: no type errors
-    let src = include_str!("corpus/13_contracts/ghost_old_contracts.mvl");
+    let src = include_str!("corpus/12_contracts/ghost_old_contracts.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -5953,7 +5792,7 @@ fn precondition_violated_counterexample_field_is_none() {
 fn loop_verification_corpus_parses_and_checks() {
     // GIVEN: the Phase 5 loop verification corpus
     // THEN: no type errors (decreases + invariant preservation + quantifiers)
-    let src = include_str!("corpus/13_contracts/loop_verification.mvl");
+    let src = include_str!("corpus/12_contracts/loop_verification.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),

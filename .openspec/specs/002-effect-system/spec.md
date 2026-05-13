@@ -21,6 +21,8 @@ A function signature should tell the full truth about what the function does. If
 
 Functions with side effects MUST declare them in the signature using `! Effect` syntax. Functions without effect declarations MUST be pure — the compiler MUST reject any side-effecting operation in a pure function.
 
+This is Design Principle 6 ("Effects in signatures"). Pure is the default; every side effect is an explicit, visible opt-in in the function's type.
+
 **Implementation:** `src/mvl/checker/mod.rs`
 
 **Tests:** `tests/type_checker.rs::pure_function_calling_effectful_rejected`, `tests/type_checker.rs::effectful_function_with_correct_declaration_accepted`, `tests/type_checker.rs::caller_missing_callee_effect_rejected`, `tests/compile_and_run.rs::safe_division_check_passes`, `tests/compile_and_run.rs::safe_division_runs_and_produces_expected_output` (#191)
@@ -128,6 +130,8 @@ Effects MUST compose. A function calling two effectful functions MUST declare th
 
 Non-terminating functions MUST be marked `partial`. Total functions (the default) MUST provably terminate. `partial` is semantically an effect — it declares that the function may not return.
 
+This is Design Principle 4 ("Total by default"). Functions terminate unless they explicitly opt out with `partial`.
+
 **Implementation:** `src/mvl/checker/mod.rs`, `src/mvl/parser/ast.rs::Totality`
 
 **Tests:** `tests/type_checker.rs::for_loop_in_total_function_accepted`, `tests/type_checker.rs::while_loop_in_total_function_rejected`, `tests/type_checker.rs::while_loop_in_implicit_total_function_rejected`, `tests/type_checker.rs::while_loop_in_partial_function_accepted`, `tests/type_checker.rs::partial_call_in_total_function_rejected`, `tests/compile_and_run.rs::safe_division_check_passes`, `tests/compile_and_run.rs::safe_division_runs_and_produces_expected_output` (#191), `tests/compile_and_run.rs::linked_list_check_passes`, `tests/compile_and_run.rs::linked_list_runs_and_produces_expected_output` (#194)
@@ -156,6 +160,8 @@ Non-terminating functions MUST be marked `partial`. Total functions (the default
 ### Requirement 6: Concurrency Effects [MUST]
 
 Spawning tasks and sending/receiving on channels MUST be effects. The effect system MUST prevent data races by requiring appropriate reference capabilities on values crossing actor boundaries.
+
+This is Design Principle 8 ("Actors, not threads"). No shared mutable state, no locks, no deadlocks — the concurrency model is a directed graph of actors communicating via capability-checked channels.
 
 **Implementation:** `src/mvl/checker/mod.rs`, `src/mvl/parser/ast.rs::Capability`
 

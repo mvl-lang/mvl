@@ -36,6 +36,8 @@ Data flows DOWN only via explicit declassification: `Tainted` → `Clean` requir
 
 Every type MUST support security labels: `Public[T]`, `Tainted[T]`, `Secret[T]`, `Clean[T]`. Labels MUST be part of the type — `Public[String]` and `Secret[String]` are different types.
 
+This is Design Principle 7 ("Security labels on all data"). `Public`, `Tainted`, `Secret` are types, not conventions or documentation — the compiler enforces them.
+
 **Implementation:** `src/mvl/checker/types.rs`, `src/mvl/checker/ifc.rs`, `src/mvl/parser/ast.rs`
 
 **Tests:** `tests/type_checker.rs::secret_flows_to_public_rejected`, `tests/type_checker.rs::public_flows_to_secret_accepted`, `tests/type_checker.rs::label_types_corpus_parses_and_checks`

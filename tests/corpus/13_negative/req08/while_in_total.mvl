@@ -1,0 +1,18 @@
+// corpus:expect-fail
+// expect-requirement: 8
+// Scenario: a total function contains an unbounded while loop.
+// Triggers: CheckError::UnboundedLoopInTotal (req8)
+
+total fn wait_for_ready(max_polls: Int) -> Bool {
+    let polls: ref Int = 0;
+    // BUG: while in a total function — use `for` with bounded iteration instead.
+    while polls < max_polls {
+        polls = polls + 1;
+    }
+    polls >= max_polls
+}
+
+fn main() -> Unit ! Console {
+    let ready: Bool = wait_for_ready(10);
+    println("{}", ready);
+}

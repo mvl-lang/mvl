@@ -1,0 +1,24 @@
+// corpus:expect-fail
+// expect-requirement: 3
+// Scenario: a new enum variant is added but existing match is not updated.
+// Triggers: CheckError::NonExhaustiveMatch (req3)
+
+type Priority = enum {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+total fn priority_score(p: Priority) -> Int {
+    match p {
+        Low    => 1,
+        Medium => 2,
+        High   => 3,
+        // BUG: Critical added later but not handled here.
+    }
+}
+
+fn main() -> Unit ! Console {
+    println("{}", priority_score(Priority::High));
+}

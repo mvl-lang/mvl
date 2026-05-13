@@ -1,0 +1,22 @@
+// corpus:expect-fail
+// expect-requirement: 3
+// Scenario: match on a three-variant enum covers only two variants.
+// Triggers: CheckError::NonExhaustiveMatch (req3)
+
+type HttpMethod = enum {
+    Get,
+    Post,
+    Delete,
+}
+
+total fn method_label(m: HttpMethod) -> String {
+    match m {
+        Get  => "read",
+        Post => "write",
+        // BUG: Delete variant not handled — non-exhaustive match.
+    }
+}
+
+fn main() -> Unit ! Console {
+    println("{}", method_label(HttpMethod::Get));
+}

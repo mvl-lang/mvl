@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-corpus test-solver test-stdlib test-mvl test-bdd test-transpiler test-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples coverage lint mvl-lint format format-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants
+.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-corpus test-solver test-stdlib test-backend-mvl test-bdd test-backend-rust test-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples coverage lint mvl-lint format format-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants
 
 .DEFAULT_GOAL := help
 
@@ -89,7 +89,7 @@ test: build build-llvm-runtime ## Run all test suites and print a one-line PASS/
 	run_suite "Solver"            test-solver; \
 	run_suite "Stdlib"            test-stdlib; \
 	run_suite "BDD"               test-bdd; \
-	run_suite "Transpiler"        test-transpiler; \
+	run_suite "Backend (Rust)"    test-backend-rust; \
 	run_suite "LLVM backend"      test-llvm; \
 	run_suite "Cross-backend"     test-cross-backend; \
 	run_suite "Examples"          test-examples; \
@@ -112,7 +112,7 @@ test-integration: ## Run integration tests
 test-corpus: ## Validate corpus examples parse and type-check
 	@pass=0; fail=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
-	for f in tests/corpus/**/*.mvl; do \
+	while IFS= read -r f; do \
 		short=$${f#tests/corpus/}; \
 		[[ "$$f" == *_test.mvl ]] && continue; \
 		if grep -q "corpus:expect-fail" "$$f" 2>/dev/null; then \
@@ -130,7 +130,7 @@ test-corpus: ## Validate corpus examples parse and type-check
 				printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1)); \
 			fi; \
 		fi; \
-	done; \
+	done < <(find tests/corpus -name "*.mvl" | sort); \
 	echo ""; \
 	if [ $$fail -eq 0 ]; then \
 		printf "  \033[32m✓  $$pass passed, 0 failed\033[0m\n\n"; \
@@ -170,13 +170,13 @@ test-stdlib: build ## Verify stdlib runtime correctness: transpile tests/stdlib/
 	@echo "Running stdlib correctness tests..."
 	$(MVL) test tests/stdlib/
 
-test-mvl: build ## Run MVL-in-MVL tests for the self-hosted compiler (compiler/*_test.mvl)
+test-backend-mvl: build ## Run MVL-in-MVL tests for the self-hosted compiler (compiler/*_test.mvl)
 	$(MVL) test compiler/
 
 test-bdd: build ## Run BDD corpus scenarios with Gherkin report (mvl test --bdd)
-	$(MVL) test tests/corpus/12_bdd/ --bdd
+	$(MVL) test tests/corpus/11_bdd/ --bdd
 
-test-transpiler: build ## Run end-to-end transpiler tests: .mvl → parse → check → transpile → cargo → binary → assert output
+test-backend-rust: build ## Run end-to-end transpiler tests: .mvl → parse → check → transpile → cargo → binary → assert output
 	cargo test --test compile_and_run
 
 test-llvm: build build-llvm-runtime ## Run LLVM backend tests across full corpus + intrinsics

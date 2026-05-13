@@ -1,0 +1,29 @@
+// corpus:expect-fail
+// expect-requirement: 4
+// Scenario: field access on an Option[User] without matching first.
+// This variant tests struct field access (different call path from option_field_access.mvl).
+// Triggers: CheckError::OptionDirectAccess (req4)
+
+type Account = struct {
+    id: Int,
+    balance: Int,
+}
+
+total fn lookup_account(id: Int) -> Option[Account] {
+    if id > 0 {
+        Some(Account { id: id, balance: 1000 })
+    } else {
+        None
+    }
+}
+
+fn withdraw(id: Int, amount: Int) -> Unit ! Console {
+    let acct: Option[Account] = lookup_account(id);
+    // BUG: accessing .balance directly on Option[Account] — must match first.
+    let new_balance: Int = acct.balance - amount;
+    println("new balance: {}", new_balance);
+}
+
+fn main() -> Unit ! Console {
+    withdraw(1, 200);
+}

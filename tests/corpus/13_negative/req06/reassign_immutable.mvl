@@ -1,0 +1,20 @@
+// corpus:expect-fail
+// expect-requirement: 6
+// Scenario: immutable binding reassigned after initialisation.
+// Triggers: CheckError::AssignToImmutable (req6)
+
+type Counter = struct {
+    value: Int,
+    step: Int,
+}
+
+fn run_counter(start: Int) -> Unit ! Console {
+    let count: Int = start;
+    // BUG: `count` is immutable — use `let mut count: Int = start` instead.
+    count = count + 1;
+    println("{}", count);
+}
+
+fn main() -> Unit ! Console {
+    run_counter(0);
+}

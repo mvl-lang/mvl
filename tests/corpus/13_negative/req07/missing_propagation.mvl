@@ -1,0 +1,19 @@
+// corpus:expect-fail
+// expect-requirement: 7
+// Scenario: caller declares only ! Log but calls a function that requires ! Console.
+//           Effect from callee must propagate to caller signature.
+// Triggers: CheckError::MissingEffect (req7)
+
+fn write_report(msg: String) -> Unit ! Console {
+    println("[REPORT] {}", msg);
+}
+
+// BUG: `send_alert` calls `write_report` which needs ! Console,
+//       but `send_alert` only declares ! Log.
+fn send_alert(msg: String) -> Unit ! Log {
+    write_report(msg);
+}
+
+fn main() -> Unit ! Console, Log {
+    send_alert("disk full");
+}

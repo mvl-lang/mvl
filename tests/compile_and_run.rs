@@ -26,10 +26,7 @@ fn mvl_bin() -> std::path::PathBuf {
 }
 
 fn corpus(name: &str) -> String {
-    format!(
-        "{}/tests/corpus/11_programs/{name}",
-        env!("CARGO_MANIFEST_DIR")
-    )
+    format!("{}/examples/programs/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────
@@ -453,10 +450,7 @@ fn else_if_chain_runs_and_produces_expected_output() {
 // ── Phase 4 gate tests (issue #229) ───────────────────────────────────────
 
 fn corpus_stdlib(name: &str) -> String {
-    format!(
-        "{}/tests/corpus/03_stdlib/{name}",
-        env!("CARGO_MANIFEST_DIR")
-    )
+    format!("{}/tests/stdlib/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
 /// Phase 4 gate: stdlib range() is transpiled from MVL source, not hardcoded.
@@ -697,7 +691,7 @@ fn pbt_operations_runs_without_panic() {
 }
 
 fn corpus_bdd(name: &str) -> String {
-    format!("{}/tests/corpus/12_bdd/{name}", env!("CARGO_MANIFEST_DIR"))
+    format!("{}/tests/corpus/11_bdd/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
 /// Spec 004 Req 5 (ADR-0020): BDD naming convention — given_*/when_*/then_*/scenario_*

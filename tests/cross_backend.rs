@@ -25,10 +25,7 @@ fn mvl_bin() -> std::path::PathBuf {
 }
 
 fn corpus(name: &str) -> String {
-    format!(
-        "{}/tests/corpus/11_programs/{name}",
-        env!("CARGO_MANIFEST_DIR")
-    )
+    format!("{}/examples/programs/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
 fn corpus_types(name: &str) -> String {
@@ -53,10 +50,7 @@ fn corpus_basics(name: &str) -> String {
 }
 
 fn corpus_stdlib(name: &str) -> String {
-    format!(
-        "{}/tests/corpus/03_stdlib/{name}",
-        env!("CARGO_MANIFEST_DIR")
-    )
+    format!("{}/tests/stdlib/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
 /// Run a program via the Rust transpiler backend; return stdout.
