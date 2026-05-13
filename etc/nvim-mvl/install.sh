@@ -15,13 +15,24 @@ mkdir -p "$INSTALL_DIR"
 cp -r "$PLUGIN_SRC"/. "$INSTALL_DIR/"
 echo "    copied plugin files"
 
-# ── 2. Clean up any old repo-path entries from init.lua ──────────────────────
+# ── 2. Clean up old repo-path entries; wire in fixed XDG path ────────────────
 if [[ -f "$INIT_LUA" ]]; then
-  # Remove the lazy.nvim dir= block for nvim-mvl (multi-line)
+  # Remove lazy.nvim dir= block for nvim-mvl (multi-line)
   perl -i -0pe 's/\n\s*--[^\n]*MVL[^\n]*\n\s*\{\n\s*dir\s*=\s*[^\n]*nvim-mvl[^\n]*\n[^}]*\},//g' "$INIT_LUA"
-  # Remove standalone rtp:prepend and require lines for nvim-mvl
+  # Remove any existing nvim-mvl rtp/require lines (repo-path or XDG)
   perl -i -ne 'print unless /nvim-mvl|require\("mvl"\)|FileType.*mvl.*treesitter/' "$INIT_LUA"
   echo "    cleaned up old init.lua entries"
+fi
+
+# Add fixed XDG-path rtp:prepend so lazy.nvim doesn't block pack loading
+if ! grep -q 'nvim-mvl' "$INIT_LUA" 2>/dev/null; then
+  cat >> "$INIT_LUA" <<EOF
+
+-- MVL language support (nvim-mvl) — installed via make install-nvim
+vim.opt.runtimepath:prepend("$INSTALL_DIR")
+require("mvl").setup()
+EOF
+  echo "    wired XDG install path into $INIT_LUA"
 fi
 
 # ── 3. Compile parsers via headless Neovim ────────────────────────────────────
