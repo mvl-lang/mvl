@@ -253,7 +253,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             | Ty::Map(_, _)
             | Ty::Set(_)
             | Ty::Named(_, _)
-            | Ty::Fn(_, _)
+            | Ty::Fn(..)
             | Ty::Ref(_, _) => Some(self.context.ptr_type(AddressSpace::default()).into()),
             Ty::Option(_) | Ty::Result(_, _) => {
                 let ptr_ty = self.context.ptr_type(AddressSpace::default());

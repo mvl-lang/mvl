@@ -102,7 +102,7 @@ impl TypeChecker {
             "unwrap_or" => inner.clone(),
             // map(f: fn(T) -> U) -> Option<U>
             "map" => {
-                let u = if let Some(Ty::Fn(_, ret)) = arg_tys.first() {
+                let u = if let Some(Ty::Fn(_, ret, ..)) = arg_tys.first() {
                     *ret.clone()
                 } else {
                     Ty::Unknown
@@ -111,7 +111,7 @@ impl TypeChecker {
             }
             // and_then(f: fn(T) -> Option<U>) -> Option<U>
             "and_then" => {
-                if let Some(Ty::Fn(_, ret)) = arg_tys.first() {
+                if let Some(Ty::Fn(_, ret, ..)) = arg_tys.first() {
                     *ret.clone()
                 } else {
                     Ty::Unknown
@@ -128,7 +128,7 @@ impl TypeChecker {
             "unwrap_or" => ok_ty.clone(),
             // map(f: fn(T) -> U) -> Result<U, E>  — infer U from lambda return type
             "map" => {
-                let u = if let Some(Ty::Fn(_, ret)) = arg_tys.first() {
+                let u = if let Some(Ty::Fn(_, ret, ..)) = arg_tys.first() {
                     *ret.clone()
                 } else {
                     Ty::Unknown
@@ -138,7 +138,7 @@ impl TypeChecker {
             }
             // and_then(f: fn(T) -> Result<U,E>) -> Result<U,E>
             "and_then" => {
-                if let Some(Ty::Fn(_, ret)) = arg_tys.first() {
+                if let Some(Ty::Fn(_, ret, ..)) = arg_tys.first() {
                     *ret.clone()
                 } else {
                     Ty::Unknown
@@ -185,7 +185,7 @@ impl TypeChecker {
         match method {
             // map(f: fn(T) -> U) -> List<U>  — infer U from lambda return type
             "map" => {
-                let u_ty = if let Some(Ty::Fn(_, ret)) = arg_tys.first() {
+                let u_ty = if let Some(Ty::Fn(_, ret, ..)) = arg_tys.first() {
                     *ret.clone()
                 } else {
                     Ty::Unknown
@@ -230,7 +230,7 @@ impl TypeChecker {
             "push" | "extend" | "append" => Ty::Unit,
             // Flat-map
             "flat_map" => {
-                let u_ty = if let Some(Ty::Fn(_, ret)) = arg_tys.first() {
+                let u_ty = if let Some(Ty::Fn(_, ret, ..)) = arg_tys.first() {
                     if let Ty::List(inner) = ret.as_ref() {
                         *inner.clone()
                     } else {
@@ -275,7 +275,7 @@ impl TypeChecker {
             ]),
             // group_by(f: fn(T) -> K) — Map<K, List<T>>
             "group_by" => {
-                let k_ty = if let Some(Ty::Fn(_, ret)) = arg_tys.first() {
+                let k_ty = if let Some(Ty::Fn(_, ret, ..)) = arg_tys.first() {
                     *ret.clone()
                 } else {
                     Ty::Unknown
