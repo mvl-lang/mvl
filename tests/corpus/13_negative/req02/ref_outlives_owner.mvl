@@ -1,0 +1,14 @@
+// corpus:expect-fail
+// expect-requirement: 2
+// Scenario: A val reference binding is initialised from a block-local variable.
+//           The owner (x) is deallocated when the block exits, so the reference
+//           would dangle — it outlives its owner.
+// Triggers: CheckError::ReferenceOutlivesOwner (req2)
+
+fn main() -> Unit {
+    let r: val Int = {
+        let x: Int = 42;
+        x
+    };
+    // r now references x, but x went out of scope with the block above.
+}
