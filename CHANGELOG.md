@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.97.2] — 2026-05-13
+
+### Fixed
+
+- **Stale Rust/`mut` references in specs** — Replaced `let mut x`, `mut self`, `mut field` with Pony-style capability equivalents (`let x: ref T`, `ref self`, `ref field`) in type-system and parser specs; fixed language.md statement syntax table; corrected `mvl_rationale.md` framing from "Pony + Rust's ownership" to "Pony's deny capabilities" (#692, part of #669).
+
 ## [0.97.1] — 2026-05-13
 
 ### Fixed
