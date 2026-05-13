@@ -116,7 +116,8 @@ assign_stmt    = lvalue "=" expr ";" ;
 return_stmt    = "return" [ expr ] ";" ;
 if_stmt        = "if" expr block [ "else" ( if_stmt | block ) ] ;
 match_stmt     = "match" expr "{" { match_arm } "}" ;
-match_arm      = pattern [ "where" refinement ] "=>" ( expr | block ) "," ;
+match_arm      = pattern [ "if" guard_expr ] "=>" ( expr | block ) "," ;
+guard_expr     = expr ;                  (* guard pattern — see ADR-0005; parser sets guard: None until Phase 2 *)
 for_stmt       = "for" pattern "in" expr block ;
 while_stmt     = "while" expr
                  { "invariant" refinement }        (* Phase 3, #621 — checked at entry and after each iteration *)

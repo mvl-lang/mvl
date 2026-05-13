@@ -1,0 +1,1 @@
+../../.openspec/specs/013-termination/spec.md
