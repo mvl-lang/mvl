@@ -1139,7 +1139,10 @@ mod tests {
             !d.coupled_pairs.is_empty(),
             "both read p.x — shared field read via bare arg must still be coupled"
         );
-        let has_px = d.coupled_pairs.iter().any(|(_, _, v)| v.contains(&"p.x".to_string()));
+        let has_px = d
+            .coupled_pairs
+            .iter()
+            .any(|(_, _, v)| v.contains(&"p.x".to_string()));
         assert!(has_px, "shared path must be reported as p.x");
     }
 

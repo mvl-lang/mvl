@@ -79,7 +79,9 @@ fn collect_paths_from_stmt(stmt: &Stmt, out: &mut Vec<String>) {
         Stmt::Return { value: Some(e), .. } => collect_paths_from_expr(e, out),
         Stmt::Return { value: None, .. } => {}
         Stmt::Expr { expr, .. } => collect_paths_from_expr(expr, out),
-        Stmt::If { cond, then, else_, .. } => {
+        Stmt::If {
+            cond, then, else_, ..
+        } => {
             collect_paths_from_expr(cond, out);
             collect_paths_from_block(then, out);
             if let Some(eb) = else_ {
@@ -89,7 +91,9 @@ fn collect_paths_from_stmt(stmt: &Stmt, out: &mut Vec<String>) {
                 }
             }
         }
-        Stmt::Match { scrutinee, arms, .. } => {
+        Stmt::Match {
+            scrutinee, arms, ..
+        } => {
             collect_paths_from_expr(scrutinee, out);
             for arm in arms {
                 match &arm.body {
@@ -138,14 +142,18 @@ fn collect_paths_from_expr(expr: &Expr, out: &mut Vec<String>) {
                 collect_paths_from_expr(a, out);
             }
         }
-        Expr::If { cond, then, else_, .. } => {
+        Expr::If {
+            cond, then, else_, ..
+        } => {
             collect_paths_from_expr(cond, out);
             collect_paths_from_block(then, out);
             if let Some(e) = else_ {
                 collect_paths_from_expr(e, out);
             }
         }
-        Expr::Match { scrutinee, arms, .. } => {
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
             collect_paths_from_expr(scrutinee, out);
             for arm in arms {
                 match &arm.body {
