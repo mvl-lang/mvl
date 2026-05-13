@@ -1,0 +1,21 @@
+// corpus:expect-fail
+// expect-requirement: 5
+// Scenario: ? propagation used on a non-Result type.
+// Triggers: CheckError::PropagateNotResult (req5)
+
+total fn get_count() -> Int {
+    42
+}
+
+fn report() -> Result[Unit, String] {
+    // BUG: get_count() returns Int, not Result — ? cannot propagate a non-error.
+    let _n: Int = get_count()?;
+    Ok(unit)
+}
+
+fn main() -> Unit ! Console {
+    match report() {
+        Ok(_)    => println("ok"),
+        Err(msg) => println("error: {}", msg),
+    }
+}

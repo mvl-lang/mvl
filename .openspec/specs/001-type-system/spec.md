@@ -81,6 +81,8 @@ Functions that can fail MUST return `Result[T, E]`. Error types MUST be visible 
 
 Every value MUST have exactly one owner. Transfer of ownership MUST be explicit (`move` semantics). Borrowing MUST be either read-only (`val T`) or mutable (`ref T`), never both simultaneously.
 
+This is Design Principle 9 ("Ownership, not GC"). Deterministic deallocation eliminates garbage-collection pauses and enables real-time guarantees that GC languages cannot provide.
+
 **Implementation:** `src/mvl/checker/mod.rs`
 
 **Tests:** `tests/type_checker.rs::use_after_explicit_move_rejected`, `tests/type_checker.rs::ownership_corpus_parses`
@@ -110,6 +112,8 @@ This requirement also covers **function contracts** — the relational extension
 
 See ADR-0025 for the full contract system design and phased implementation.
 
+This is Design Principle 10 ("Refinement types inline"). `x: Int where x > 0` is a first-class type — the predicate is part of the type, not merely a runtime assertion.
+
 **Implementation:** `src/mvl/checker/mod.rs`, `src/mvl/checker/contracts.rs`, `src/mvl/checker/refinements.rs`
 
 **Tests:** `tests/type_checker.rs::refinements_corpus_parses`, `tests/compile_and_run.rs::safe_division_check_passes`, `tests/compile_and_run.rs::safe_division_runs_and_produces_expected_output` (#191); `tests/type_checker.rs::loop_verification_corpus_parses_and_checks` (#628)
@@ -135,6 +139,8 @@ See ADR-0025 for the full contract system design and phased implementation.
 ### Requirement 6: Immutable by Default [MUST]
 
 All bindings and struct fields MUST be immutable unless explicitly marked `mut`. Mutation MUST be visible at the declaration site.
+
+This is Design Principle 5 ("Immutable by default"). `mut` is the explicit opt-in for mutation, not the default.
 
 **Implementation:** `src/mvl/checker/mod.rs`
 

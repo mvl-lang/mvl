@@ -1,0 +1,19 @@
+// corpus:expect-fail
+// expect-requirement: 1
+// Scenario: assign a String literal where Int is required.
+// Triggers: CheckError::TypeMismatch (req1)
+
+type Config = struct {
+    timeout_ms: Int,
+    host: String,
+}
+
+fn parse_timeout(raw: String) -> Int {
+    // BUG: returning the raw string instead of parsing it
+    raw
+}
+
+fn main() -> Unit ! Console {
+    let cfg: Config = Config { timeout_ms: parse_timeout("5000"), host: "localhost" };
+    println("{}", cfg.timeout_ms);
+}

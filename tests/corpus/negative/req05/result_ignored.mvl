@@ -1,0 +1,18 @@
+// corpus:expect-fail
+// expect-requirement: 5
+// Scenario: Result returned by a fallible function is discarded silently.
+// Triggers: CheckError::ResultIgnored (req5)
+
+total fn parse_port(s: String) -> Result[Int, String] {
+    Ok(8080)
+}
+
+fn configure(port_str: String) -> Unit ! Console {
+    // BUG: parse_port returns Result[Int, String] but the result is dropped.
+    parse_port(port_str);
+    println("configured");
+}
+
+fn main() -> Unit ! Console {
+    configure("8080");
+}

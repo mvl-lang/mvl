@@ -1,0 +1,19 @@
+// corpus:expect-fail
+// expect-requirement: 9
+// Scenario: a ref-capability parameter is passed to channel.send() which requires
+//           sendable (iso or val) capability. ref values cannot cross actor boundaries.
+// Triggers: CheckError::CapabilityViolation (req9)
+
+type Payload = struct {
+    id: Int,
+    data: String,
+}
+
+fn dispatch(channel: Channel, ref data: Payload) -> Unit {
+    // BUG: `data` is `ref` (aliased, not sendable) — cannot send across actor boundary.
+    channel.send(data);
+}
+
+fn main() -> Unit ! Console {
+    println("done");
+}

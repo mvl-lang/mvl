@@ -1,0 +1,19 @@
+// corpus:expect-fail
+// expect-requirement: 2
+// Scenario: a String is consume()-d into a buffer, then read again — use after move.
+// Triggers: CheckError::UseAfterMove (req2)
+
+total fn byte_count(s: String) -> Int {
+    s.len()
+}
+
+fn process(input: String) -> Unit ! Console {
+    // consume() transfers ownership — `input` is moved here.
+    let _size: Int = byte_count(consume(input));
+    // BUG: `input` was consumed above; reading it again is a use-after-move.
+    println("original: {}", input);
+}
+
+fn main() -> Unit ! Console {
+    process("hello world");
+}

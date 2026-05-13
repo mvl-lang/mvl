@@ -1,0 +1,25 @@
+// corpus:expect-fail
+// expect-requirement: 2
+// Scenario: an iso value is consumed twice (double-free equivalent).
+// Triggers: CheckError::UseAfterMove (req2)
+
+type Buffer = struct {
+    data: String,
+    capacity: Int,
+}
+
+fn flush(iso buf: Buffer) -> Unit ! Console {
+    println("flushing {} bytes", buf.capacity);
+}
+
+fn drain(iso buf: Buffer) -> Unit ! Console {
+    // First consume — transfers ownership to flush
+    flush(consume(buf));
+    // BUG: buf already moved; second consume is a use-after-move.
+    flush(consume(buf));
+}
+
+fn main() -> Unit ! Console {
+    let b: Buffer = Buffer { data: "abc", capacity: 3 };
+    drain(b);
+}

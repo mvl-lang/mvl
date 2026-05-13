@@ -1,0 +1,20 @@
+// corpus:expect-fail
+// expect-requirement: 8
+// Scenario: a total function calls a partial function — totality is not preserved.
+// Triggers: CheckError::PartialCallInTotal (req8)
+
+partial fn poll_sensor() -> Int ! Console {
+    while true {
+        println("polling...");
+    }
+    0
+}
+
+// BUG: `read_sensor` is total but delegates to `poll_sensor` which is partial.
+total fn read_sensor() -> Int ! Console {
+    poll_sensor()
+}
+
+fn main() -> Unit ! Console {
+    println("{}", read_sensor());
+}

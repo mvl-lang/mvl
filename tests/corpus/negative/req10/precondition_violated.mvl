@@ -1,0 +1,21 @@
+// corpus:expect-fail
+// expect-requirement: 10
+// Scenario: a function with `requires b != 0` is called with literal 0.
+//           The precondition is statically falsified at the call site.
+// Triggers: CheckError::PreconditionViolated (req10)
+
+total fn safe_modulo(a: Int, b: Int) -> Int
+    requires b != 0
+{
+    a
+}
+
+fn compute_checksum(value: Int) -> Unit ! Console {
+    // BUG: literal 0 directly falsifies `requires b != 0`.
+    let check: Int = safe_modulo(value, 0);
+    println("checksum: {}", check);
+}
+
+fn main() -> Unit ! Console {
+    compute_checksum(255);
+}

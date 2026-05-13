@@ -1,0 +1,19 @@
+// corpus:expect-fail
+// expect-requirement: 10
+// Scenario: literal 0 passed to a parameter with refinement `where b != 0`.
+//           The refinement predicate is statically falsified.
+// Triggers: CheckError::RefinementViolated (req10)
+
+total fn safe_divide(numerator: Int, denominator: Int where denominator != 0) -> Int {
+    numerator / denominator
+}
+
+fn compute_rate(total_items: Int) -> Unit ! Console {
+    // BUG: denominator is literally 0 — refinement predicate violated at call site.
+    let rate: Int = safe_divide(total_items, 0);
+    println("rate: {}", rate);
+}
+
+fn main() -> Unit ! Console {
+    compute_rate(100);
+}

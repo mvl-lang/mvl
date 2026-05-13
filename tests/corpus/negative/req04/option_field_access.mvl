@@ -1,0 +1,26 @@
+// corpus:expect-fail
+// expect-requirement: 4
+// Scenario: direct field access on an Option[T] without matching first.
+// Triggers: CheckError::OptionDirectAccess (req4)
+
+type User = struct {
+    name: String,
+    age: Int,
+}
+
+total fn find_user(id: Int) -> Option[User] {
+    if id == 1 {
+        Some(User { name: "alice", age: 30 })
+    } else {
+        None
+    }
+}
+
+fn greet(id: Int) -> Unit ! Console {
+    // BUG: accessing .name directly on Option[User] without matching.
+    println("hello {}", find_user(id).name);
+}
+
+fn main() -> Unit ! Console {
+    greet(1);
+}
