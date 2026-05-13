@@ -1,0 +1,28 @@
+// Solver Layer 5: Literal violations in functions with cross-variable hypotheses
+// solver:expect-fail
+//
+// Even when a function body uses cross-variable hypotheses (L5 territory),
+// literal violations are still caught at compile time by Layer 1.
+//
+// This file contains a mix: some calls would be proven by L5, but the literal
+// violations cause the checker to emit compile-time errors.
+
+fn require_gt20(n: Int where self > 20) -> Int {
+    n
+}
+
+fn require_positive(n: Int where self > 0) -> Int {
+    n
+}
+
+// The function has L5-style cross-variable hyps, but then calls with a bad literal.
+fn chain_with_bad_literal(
+    x: Int where self > 10,
+    y: Int where self > x,
+) -> Int {
+    require_gt20(5)        // literal 5 > 20 ✗  compile error (L1)
+}
+
+fn violations() -> Int {
+    chain_with_bad_literal(15, 20)
+}

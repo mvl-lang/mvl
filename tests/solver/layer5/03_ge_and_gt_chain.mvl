@@ -1,0 +1,44 @@
+// Solver Layer 5: Mixed >= and > chains across variables
+//
+// When hypotheses mix strict (>) and non-strict (>=) comparisons referencing
+// other variables, Layers 1–4 cannot handle them (no constant interval, no
+// linear-expression argument for bare variables).  Z3 asserts all hypotheses
+// simultaneously and checks the negation.
+//
+// Every call in this file is PROVEN by Layer 5.
+
+fn require_positive(n: Int where self > 0) -> Int {
+    n
+}
+
+fn require_non_negative(n: Int where self >= 0) -> Int {
+    n
+}
+
+fn require_ge_1(n: Int where self >= 1) -> Int {
+    n
+}
+
+// x > 0, y >= x  →  y >= x > 0  →  y > 0
+// Z3: assert x > 0, y >= x, ¬(y > 0) → UNSAT → Proven.
+fn ge_from_positive(x: Int where self > 0, y: Int where self >= x) -> Int {
+    require_positive(y)   // Z3: x > 0, y >= x → y > 0  ✓
+}
+
+// a >= 0, b >= a  →  b >= 0
+// Z3: assert a >= 0, b >= a, ¬(b >= 0) → UNSAT → Proven.
+fn non_neg_chain(a: Int where self >= 0, b: Int where self >= a) -> Int {
+    require_non_negative(b)   // Z3: a >= 0, b >= a → b >= 0  ✓
+}
+
+// x > 0, y > x  →  y > x > 0  →  y > 0 and y >= 1
+fn strict_chain(x: Int where self > 0, y: Int where self > x) -> Int {
+    require_positive(y);   // Z3: x > 0, y > x → y > 0  ✓
+    require_ge_1(y)        // Z3: y > x > 0 → y > 0 → y ≥ 1  ✓
+}
+
+// a >= 1, b >= a  →  b >= 1 > 0
+fn ge1_chain(a: Int where self >= 1, b: Int where self >= a) -> Int {
+    require_positive(b);     // Z3: a ≥ 1, b ≥ a → b ≥ 1 > 0  ✓
+    require_ge_1(b)          // Z3: b ≥ a ≥ 1  ✓
+}

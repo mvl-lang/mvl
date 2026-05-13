@@ -1,0 +1,50 @@
+// Solver Layer 3: Three explicit branches with literal returns
+//
+// A function with three branches using else-if chains.  Layer 3 collects all
+// paths, proves each literal return satisfies the predicate, and returns
+// Proven only when every path passes.
+//
+// Every call in this file is PROVEN by Layer 3.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_lt_10(x: Int where self < 10) -> Int {
+    x
+}
+
+fn require_non_negative(x: Int where self >= 0) -> Int {
+    x
+}
+
+// Returns 1, 2, or 3 based on sign of x.
+fn sign_rank(x: Int) -> Int {
+    if x < 0 { 1 }
+    else if x == 0 { 2 }
+    else { 3 }
+}
+
+// Returns 2, 5, or 8 — all positive and < 10.
+fn low_medium_high(x: Int) -> Int {
+    if x < 0 { 2 }
+    else if x == 0 { 5 }
+    else { 8 }
+}
+
+// Returns 0, 3, or 6 — all non-negative.
+fn zero_or_positive(x: Int) -> Int {
+    if x < 0 { 0 }
+    else if x == 0 { 3 }
+    else { 6 }
+}
+
+fn examples(a: Int) -> Int {
+    require_positive(sign_rank(a));        // 1 > 0, 2 > 0, 3 > 0          ✓
+    require_lt_10(sign_rank(a));           // 1 < 10, 2 < 10, 3 < 10       ✓
+
+    require_positive(low_medium_high(a));  // 2 > 0, 5 > 0, 8 > 0          ✓
+    require_lt_10(low_medium_high(a));     // 2 < 10, 5 < 10, 8 < 10       ✓
+
+    require_non_negative(zero_or_positive(a))  // 0 >= 0, 3 >= 0, 6 >= 0   ✓
+}

@@ -1,0 +1,45 @@
+// Solver Layer 4: Ordered subtraction — a - b > 0 when b < a
+//
+// The call-site pattern: `require_positive(a - b)` with hypothesis `b < a`.
+// Layers 1–3 cannot prove this because the argument is a subtraction expression.
+//
+// Layer 4 (Fourier-Motzkin):
+//   LinTerm: a − b  (vars={a:1, b:−1})
+//   ¬pred:   a − b ≤ 0
+//   Hyp:     b − a + 1 ≤ 0  (from b < a, i.e. b ≤ a − 1)
+//   Adding:  (a−b ≤ 0) + (b−a+1 ≤ 0)  →  1 ≤ 0  →  UNSAT → Proven.
+//
+// Every call in this file is PROVEN by Layer 4.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_non_negative(x: Int where self >= 0) -> Int {
+    x
+}
+
+fn require_ge_1(x: Int where self >= 1) -> Int {
+    x
+}
+
+// b < a  →  a - b > 0  (strict: a - b ≥ 1)
+fn strict_diff(a: Int, b: Int where self < a) -> Int {
+    require_positive(a - b)   // L4: b < a → a-b ≥ 1 > 0  ✓
+}
+
+// b <= a  →  a - b >= 0
+fn non_strict_diff(a: Int, b: Int where self <= a) -> Int {
+    require_non_negative(a - b)   // L4: b ≤ a → a-b ≥ 0  ✓
+}
+
+// With additional bounds: a > 5, b > 0, b < a  →  a - b > 0
+fn bounded_diff(a: Int where self > 5, b: Int where self > 0 && self < a) -> Int {
+    require_positive(a - b)   // L4: b < a → a-b ≥ 1 > 0  ✓
+}
+
+fn examples() -> Int {
+    strict_diff(10, 3);
+    non_strict_diff(7, 7);
+    bounded_diff(8, 2)
+}

@@ -1,0 +1,53 @@
+// Solver Layer 4: Divisibility — various forms of "never zero"
+//
+// A linear expression `n*x + c` is never zero when `n` does not divide `c`.
+// The divisibility check is O(1): if gcd(|n|, |c|) does not divide 0 in the
+// equation n*x + c = 0, the constraint system is UNSAT → Proven.
+//
+// Equivalently: n*x + c = 0  ↔  n*x = -c  has an integer solution
+// iff n | c.  If n ∤ c, no integer x satisfies it → result is never zero.
+//
+// Every call in this file is PROVEN by Layer 4.
+
+fn require_nonzero(x: Int where self != 0) -> Int {
+    x
+}
+
+// 2*x + 1: 2 ∤ 1  →  never zero.  (All odd numbers)
+fn odd(x: Int) -> Int where result != 0 {
+    2 * x + 1
+}
+
+// 4*x + 1: 4 ∤ 1  →  never zero.
+fn four_k_plus_one(x: Int) -> Int where result != 0 {
+    4 * x + 1
+}
+
+// 3*x + 2: 3 ∤ 2  →  never zero.
+fn three_k_plus_two(x: Int) -> Int where result != 0 {
+    3 * x + 2
+}
+
+// 6*x + 5: 6 ∤ 5  →  never zero.
+fn six_k_plus_five(x: Int) -> Int where result != 0 {
+    6 * x + 5
+}
+
+// 5*x + 3: 5 ∤ 3  →  never zero.
+fn five_k_plus_three(x: Int) -> Int where result != 0 {
+    5 * x + 3
+}
+
+// 10*x + 7: 10 ∤ 7  →  never zero.
+fn ten_k_plus_seven(x: Int) -> Int where result != 0 {
+    10 * x + 7
+}
+
+fn examples(x: Int) -> Int {
+    require_nonzero(2 * x + 1);     // odd always != 0  ✓
+    require_nonzero(4 * x + 1);     // ✓
+    require_nonzero(3 * x + 2);     // ✓
+    require_nonzero(6 * x + 5);     // ✓
+    require_nonzero(5 * x + 3);     // ✓
+    require_nonzero(10 * x + 7)     // ✓
+}

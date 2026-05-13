@@ -1,0 +1,48 @@
+// Solver Layer 1: Equality hypothesis — concrete value extraction
+//
+// When a variable carries a predicate of the form `self == N`, Layer 1
+// extracts the concrete integer N and evaluates the required predicate at
+// that value.  This is a distinct path from subsumption (predicate match)
+// and is cheaper than full interval arithmetic.
+//
+// Every call in this file is PROVEN by Layer 1.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_lt_10(x: Int where self < 10) -> Int {
+    x
+}
+
+fn require_ge_5(x: Int where self >= 5) -> Int {
+    x
+}
+
+fn require_non_zero(x: Int where self != 0) -> Int {
+    x
+}
+
+fn require_le_100(x: Int where self <= 100) -> Int {
+    x
+}
+
+// x == 5: Layer 1 extracts 5 and evaluates each predicate at 5.
+fn caller_eq_five(x: Int where self == 5) -> Int {
+    require_positive(x);   // eval 5 > 0   ✓
+    require_lt_10(x);      // eval 5 < 10  ✓
+    require_ge_5(x);       // eval 5 >= 5  ✓
+    require_non_zero(x);   // eval 5 != 0  ✓
+    require_le_100(x)      // eval 5 <= 100 ✓
+}
+
+// x == 42: extracted value 42 satisfies all predicates below.
+fn caller_eq_42(x: Int where self == 42) -> Int {
+    require_positive(x);   // eval 42 > 0   ✓
+    require_le_100(x)      // eval 42 <= 100 ✓
+}
+
+fn examples() -> Int {
+    caller_eq_five(5);
+    caller_eq_42(42)
+}

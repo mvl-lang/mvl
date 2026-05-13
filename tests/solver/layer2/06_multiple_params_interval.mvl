@@ -1,0 +1,55 @@
+// Solver Layer 2: Multiple parameters — each checked independently
+//
+// When a function takes several refined parameters, each call-site argument
+// is checked against its own parameter predicate.  Layer 2 applies interval
+// arithmetic independently to each argument-predicate pair.
+//
+// Every call in this file is PROVEN by Layer 2.
+
+fn take_two(a: Int where self > 0, b: Int where self <= 50) -> Int {
+    a
+}
+
+fn take_three(
+    lo: Int where self >= 0,
+    mid: Int where self >= 10,
+    hi: Int where self <= 100,
+) -> Int {
+    lo
+}
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+// Both parameters proven independently by L2.
+fn caller_two(a: Int where self > 5, b: Int where self < 30) -> Int {
+    take_two(a, b)
+    // a: self > 5  → interval [6, ∞); eff_min=6 > 0  ✓
+    // b: self < 30 → interval (-∞,29]; eff_max=29 ≤ 50 ✓
+}
+
+// Three parameters, each proven by L2 from their respective hypotheses.
+fn caller_three(
+    lo: Int where self >= 1,
+    mid: Int where self >= 20,
+    hi: Int where self <= 80,
+) -> Int {
+    take_three(lo, mid, hi)
+    // lo:  self >= 1  → [1,∞);   eff_min=1 >= 0   ✓
+    // mid: self >= 20 → [20,∞);  eff_min=20 >= 10 ✓
+    // hi:  self <= 80 → (-∞,80]; eff_max=80 <= 100 ✓
+}
+
+// Passing the same variable to two parameters — each proven separately.
+fn caller_same_var(x: Int where self >= 3 && self <= 10) -> Int {
+    take_two(x, x)
+    // x for param a: [3,10]; eff_min=3 > 0   ✓
+    // x for param b: [3,10]; eff_max=10 <= 50 ✓
+}
+
+fn examples() -> Int {
+    caller_two(10, 15);
+    caller_three(5, 25, 70);
+    caller_same_var(7)
+}

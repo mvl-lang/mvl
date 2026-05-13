@@ -1,0 +1,57 @@
+// Solver Layer 2: Parameter refinement combined with if-condition narrowing
+//
+// When a parameter already carries a refinement and the function body contains
+// an if-condition on that parameter, the if-block narrows the interval further
+// (intersecting the param hypothesis with the condition hypothesis).
+//
+// Every call inside the if-blocks is PROVEN by Layer 2.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_ge_5(x: Int where self >= 5) -> Int {
+    x
+}
+
+fn require_lt_50(x: Int where self < 50) -> Int {
+    x
+}
+
+fn require_le_30(x: Int where self <= 30) -> Int {
+    x
+}
+
+// Param: x >= 0.  In if-block: condition x > 0 narrows to interval [1, ∞).
+fn non_neg_narrowed_to_positive(x: Int where self >= 0) -> Int {
+    if x > 0 {
+        require_positive(x)    // [0,∞) ∩ (0,∞) → [1,∞); eff_min=1 > 0  ✓
+    } else {
+        0
+    }
+}
+
+// Param: x > 0 → [1,∞).  In if-block: condition x >= 5 narrows to [5,∞).
+fn positive_narrowed_to_ge5(x: Int where self > 0) -> Int {
+    if x >= 5 {
+        require_ge_5(x)        // [1,∞) ∩ [5,∞) → [5,∞); eff_min=5 >= 5 ✓
+    } else {
+        0
+    }
+}
+
+// Param: x < 100 → (-∞,99].  In if-block: x <= 30 narrows to (-∞,30].
+fn bounded_narrowed_further(x: Int where self < 100) -> Int {
+    if x <= 30 {
+        require_lt_50(x);      // (-∞,99] ∩ (-∞,30] → (-∞,30]; eff_max=30 < 50  ✓
+        require_le_30(x)       // eff_max=30 <= 30 ✓
+    } else {
+        50
+    }
+}
+
+fn examples() -> Int {
+    non_neg_narrowed_to_positive(5);
+    positive_narrowed_to_ge5(7);
+    bounded_narrowed_further(20)
+}

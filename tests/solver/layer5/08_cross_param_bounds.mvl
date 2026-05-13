@@ -1,0 +1,35 @@
+// Solver Layer 5: Cross-parameter bounding without a single chain
+//
+// Some cases involve multiple hypotheses that together constrain an argument,
+// but there is no single transitive chain.  Z3 handles these by asserting all
+// hypotheses simultaneously.
+//
+// Every call in this file is PROVEN by Layer 5.
+
+fn require_positive(n: Int where self > 0) -> Int {
+    n
+}
+
+fn require_gt5(n: Int where self > 5) -> Int {
+    n
+}
+
+fn require_ge_2(n: Int where self >= 2) -> Int {
+    n
+}
+
+// x > y AND y > 0  →  x > y > 0  →  x > 0
+// (same conclusion from different direction than previous chain tests)
+fn x_gt_y_y_positive(x: Int where self > y, y: Int where self > 0) -> Int {
+    require_positive(x)   // Z3: x > y, y > 0 → x > y > 0  ✓
+}
+
+// a > 5, b > a  →  b > 5
+fn b_from_a_gt5(a: Int where self > 5, b: Int where self > a) -> Int {
+    require_gt5(b)    // Z3: a > 5, b > a → b > a > 5  ✓
+}
+
+// p > 1, q > p  →  q > p > 1 → q > 1 → q >= 2
+fn ge2_from_chain(p: Int where self > 1, q: Int where self > p) -> Int {
+    require_ge_2(q)   // Z3: p > 1, q > p → q > 1 → q ≥ 2  ✓
+}

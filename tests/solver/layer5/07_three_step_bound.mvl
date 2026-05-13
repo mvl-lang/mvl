@@ -1,0 +1,45 @@
+// Solver Layer 5: Three-step bound derivation
+//
+// A three-link chain where the conclusion requires traversing all three steps.
+// Z3 asserts all hypotheses as axioms and derives the required bound.
+//
+// Every call in this file is PROVEN by Layer 5.
+
+fn require_positive(n: Int where self > 0) -> Int {
+    n
+}
+
+fn require_gt_100(n: Int where self > 100) -> Int {
+    n
+}
+
+fn require_non_negative(n: Int where self >= 0) -> Int {
+    n
+}
+
+// a > 100, b > a, c > b  →  c > b > a > 100
+fn triple_gt100(
+    a: Int where self > 100,
+    b: Int where self > a,
+    c: Int where self > b,
+) -> Int {
+    require_gt_100(c)   // Z3: a > 100, b > a, c > b → c > 100  ✓
+}
+
+// a >= 0, b >= a, c >= b  →  c >= 0
+fn triple_non_neg(
+    a: Int where self >= 0,
+    b: Int where self >= a,
+    c: Int where self >= b,
+) -> Int {
+    require_non_negative(c)   // Z3: a >= 0, b >= a, c >= b → c >= 0  ✓
+}
+
+// a > 0, b > a, c >= b  →  c >= b > a > 0  →  c > 0
+fn mixed_triple(
+    a: Int where self > 0,
+    b: Int where self > a,
+    c: Int where self >= b,
+) -> Int {
+    require_positive(c)   // Z3: a > 0, b > a, c >= b → c >= b > a > 0  ✓
+}

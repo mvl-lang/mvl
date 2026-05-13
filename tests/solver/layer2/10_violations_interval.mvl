@@ -1,0 +1,56 @@
+// Solver Layer 2: Interval violations — all failed
+// solver:expect-fail
+//
+// Layer 2 detects violations from interval arithmetic:
+//   - eff_max < required_min  →  the whole interval is below the lower bound
+//   - eff_min > required_max  →  the whole interval is above the upper bound
+//
+// These violations cannot be caught by Layer 1 (no literal or exact predicate
+// match), so they fall through to Layer 2 which detects them via intervals.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_ge_10(x: Int where self >= 10) -> Int {
+    x
+}
+
+fn require_lt_0(x: Int where self < 0) -> Int {
+    x
+}
+
+fn require_le_5(x: Int where self <= 5) -> Int {
+    x
+}
+
+// x >= 10 → interval [10, ∞).  eff_max is ∞, eff_min=10.
+// require_lt_0 needs self < 0.  eff_min=10 ≥ 0 → interval never below 0 → Failed.
+fn large_to_negative(x: Int where self >= 10) -> Int {
+    require_lt_0(x)   // x >= 10 → x < 0  ✗
+}
+
+// x > 0 → interval [1, ∞).  eff_min=1.
+// require_lt_0 needs self < 0.  eff_min=1 ≥ 0 → Failed.
+fn positive_to_negative(x: Int where self > 0) -> Int {
+    require_lt_0(x)   // x > 0 → x < 0  ✗
+}
+
+// x <= 5 → interval (-∞, 5].  eff_max=5.
+// require_ge_10 needs self >= 10.  eff_max=5 < 10 → Failed.
+fn small_to_large(x: Int where self <= 5) -> Int {
+    require_ge_10(x)  // x <= 5 → x >= 10  ✗
+}
+
+// x < 0 → interval (-∞, -1].  eff_max=-1.
+// require_positive needs self > 0.  eff_max=-1 ≤ 0 → Failed.
+fn strictly_negative_to_positive(x: Int where self < 0) -> Int {
+    require_positive(x)  // x < 0 → x > 0  ✗
+}
+
+fn violations() -> Int {
+    large_to_negative(0);
+    positive_to_negative(0);
+    small_to_large(0);
+    strictly_negative_to_positive(0)
+}

@@ -1,0 +1,67 @@
+// Solver Layer 2: Strict hypothesis proving non-strict predicate
+//
+// A hypothesis `self > N` (exclusive lower bound) converts to an interval
+// with eff_min = N+1.  That effective minimum is then checked against
+// non-strict predicates like `self >= N` or `self >= N+1`.
+//
+// Similarly `self < N` converts to eff_max = N-1, proven against `self <= N-1`.
+//
+// Every call in this file is PROVEN by Layer 2.
+
+fn require_ge_0(x: Int where self >= 0) -> Int {
+    x
+}
+
+fn require_ge_1(x: Int where self >= 1) -> Int {
+    x
+}
+
+fn require_ge_10(x: Int where self >= 10) -> Int {
+    x
+}
+
+fn require_le_9(x: Int where self <= 9) -> Int {
+    x
+}
+
+fn require_le_4(x: Int where self <= 4) -> Int {
+    x
+}
+
+fn require_le_99(x: Int where self <= 99) -> Int {
+    x
+}
+
+// x > 0  →  eff_min = 1 ≥ 0  and  eff_min = 1 ≥ 1
+fn strict_gt_to_ge(x: Int where self > 0) -> Int {
+    require_ge_0(x);   // eff_min=1 >= 0 ✓
+    require_ge_1(x)    // eff_min=1 >= 1 ✓
+}
+
+// x > 9  →  eff_min = 10 ≥ 10
+fn strict_gt9_to_ge10(x: Int where self > 9) -> Int {
+    require_ge_10(x)   // eff_min=10 >= 10 ✓
+}
+
+// x < 10  →  eff_max = 9 ≤ 9
+fn strict_lt_to_le(x: Int where self < 10) -> Int {
+    require_le_9(x)    // eff_max=9 <= 9 ✓
+}
+
+// x < 5  →  eff_max = 4 ≤ 4
+fn strict_lt5_to_le4(x: Int where self < 5) -> Int {
+    require_le_4(x)    // eff_max=4 <= 4 ✓
+}
+
+// x < 100  →  eff_max = 99 ≤ 99
+fn strict_lt100_to_le99(x: Int where self < 100) -> Int {
+    require_le_99(x)   // eff_max=99 <= 99 ✓
+}
+
+fn examples() -> Int {
+    strict_gt_to_ge(1);
+    strict_gt9_to_ge10(10);
+    strict_lt_to_le(5);
+    strict_lt5_to_le4(2);
+    strict_lt100_to_le99(50)
+}

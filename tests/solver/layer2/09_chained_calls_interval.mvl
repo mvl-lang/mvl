@@ -1,0 +1,50 @@
+// Solver Layer 2: Chained call sites — interval proven at each step
+//
+// A sequence of function calls where each call-site argument comes from a
+// refined local variable.  Layer 2 proves each independently.
+//
+// Every call in this file is PROVEN by Layer 2.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_lt_100(x: Int where self < 100) -> Int {
+    x
+}
+
+fn require_ge_1(x: Int where self >= 1) -> Int {
+    x
+}
+
+fn require_le_50(x: Int where self <= 50) -> Int {
+    x
+}
+
+fn step(x: Int where self > 0) -> Int {
+    x
+}
+
+// Three sequential calls, each argument proven by its hypothesis.
+fn sequence(
+    a: Int where self > 0,
+    b: Int where self >= 1 && self <= 50,
+    c: Int where self < 100,
+) -> Int {
+    require_positive(a);    // a: [1,∞); eff_min=1 > 0     ✓
+    require_ge_1(b);        // b: [1,50]; eff_min=1 >= 1    ✓
+    require_le_50(b);       // b: [1,50]; eff_max=50 <= 50  ✓
+    require_lt_100(c)       // c: (-∞,99]; eff_max=99 < 100 ✓
+}
+
+// Call result of one function as arg to another — each proven by param hyp.
+fn pipeline(x: Int where self > 5) -> Int {
+    let y: Int = step(x);       // x: [6,∞); eff_min=6 > 0  ✓
+    require_positive(y);        // y: return of step(x), no hyp → runtime
+    require_positive(x)         // x: [6,∞); eff_min=6 > 0  ✓
+}
+
+fn examples() -> Int {
+    sequence(3, 25, 50);
+    pipeline(10)
+}

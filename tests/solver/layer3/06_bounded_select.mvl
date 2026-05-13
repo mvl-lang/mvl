@@ -1,0 +1,48 @@
+// Solver Layer 3: Two-branch select between bounded literal values
+//
+// A function that selects one of two literal values based on a condition.
+// Layer 3 inlines the function, evaluates each literal against the predicate
+// using Layer 1, and returns Proven when all paths pass.
+//
+// Every call in this file is PROVEN by Layer 3.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_ge_5(x: Int where self >= 5) -> Int {
+    x
+}
+
+fn require_le_20(x: Int where self <= 20) -> Int {
+    x
+}
+
+fn require_non_negative(x: Int where self >= 0) -> Int {
+    x
+}
+
+// Selects 5 or 10 — both satisfy > 0, >= 5, and <= 20.
+fn select_5_or_10(x: Int) -> Int {
+    if x > 0 { 5 } else { 10 }
+}
+
+// Selects 1 or 100 — both satisfy > 0 and >= 1; only the min is bounded.
+fn select_1_or_100(x: Int) -> Int {
+    if x > 0 { 1 } else { 100 }
+}
+
+// Selects 0 or 15 — both satisfy >= 0; neither violates <= 20.
+fn select_0_or_15(x: Int) -> Int {
+    if x >= 0 { 0 } else { 15 }
+}
+
+fn examples(a: Int) -> Int {
+    require_positive(select_5_or_10(a));   // 5 > 0 and 10 > 0   ✓
+    require_ge_5(select_5_or_10(a));        // 5 >= 5 and 10 >= 5 ✓
+    require_le_20(select_5_or_10(a));       // 5 <= 20 and 10 <= 20 ✓
+
+    require_positive(select_1_or_100(a));   // 1 > 0 and 100 > 0  ✓
+
+    require_non_negative(select_0_or_15(a)) // 0 >= 0 and 15 >= 0 ✓
+}

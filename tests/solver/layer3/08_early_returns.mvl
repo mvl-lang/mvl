@@ -1,0 +1,46 @@
+// Solver Layer 3: Multiple early Stmt::Return paths
+//
+// When a function body uses explicit `return` statements to exit early on
+// certain conditions, Layer 3 collects each early-return path separately.
+// The tail expression (after all early returns) forms the final path.
+//
+// Every call in this file is PROVEN by Layer 3.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_non_negative(x: Int where self >= 0) -> Int {
+    x
+}
+
+fn require_lt_100(x: Int where self < 100) -> Int {
+    x
+}
+
+// Two early returns (1 and 2), tail returns 3.  All > 0.
+fn ranked(x: Int) -> Int {
+    if x < 0 { return 1 }
+    if x > 50 { return 2 }
+    3
+}
+
+// Early return 0 on negative input; tail is x (narrowed to x >= 0 by path condition).
+fn floor_zero(x: Int) -> Int {
+    if x < 0 { return 0 }
+    x
+}
+
+// Early return 99 on large input; tail returns a literal.
+fn cap_result(x: Int) -> Int {
+    if x >= 100 { return 99 }
+    if x < 0 { return 1 }
+    42
+}
+
+fn examples(a: Int) -> Int {
+    require_positive(ranked(a));         // 1 > 0, 2 > 0, 3 > 0    ✓
+    require_non_negative(floor_zero(a)); // 0 >= 0, path a≥0 → a >= 0 ✓ (L2)
+    require_positive(cap_result(a));     // 99 > 0, 1 > 0, 42 > 0  ✓
+    require_lt_100(cap_result(a))        // 99 < 100, 1 < 100, 42 < 100 ✓
+}

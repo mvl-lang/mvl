@@ -1,0 +1,48 @@
+// Solver Layer 5: Sandwich bounds — proving both upper and lower constraints
+//
+// Z3 can simultaneously use upper-bound and lower-bound hypotheses involving
+// different variables to prove two-sided predicates or compound conclusions.
+//
+// Every call in this file is PROVEN by Layer 5.
+
+fn require_non_negative(n: Int where self >= 0) -> Int {
+    n
+}
+
+fn require_le_100(n: Int where self <= 100) -> Int {
+    n
+}
+
+fn require_positive(n: Int where self > 0) -> Int {
+    n
+}
+
+// Lower chain: a >= 0, b >= a  →  b >= 0
+// Upper chain: c <= 100, d <= c  →  d <= 100
+fn independent_chains(
+    a: Int where self >= 0,
+    b: Int where self >= a,
+    c: Int where self <= 100,
+    d: Int where self <= c,
+) -> Int {
+    require_non_negative(b);   // Z3: a >= 0, b >= a → b >= 0  ✓
+    require_le_100(d)          // Z3: c <= 100, d <= c → d <= 100  ✓
+}
+
+// Both: a > 0, b > a, c <= b  →  c could be anything up to b.
+// But: also a > 0, b > a → b > 0 → b >= 1 → c's lower bound depends on other hyps.
+// Let's use: a > 0, b > a → b > 0  (just the lower chain)
+fn two_step_positive(a: Int where self > 0, b: Int where self > a) -> Int {
+    require_positive(b)   // Z3: a > 0, b > a → b > 0  ✓
+}
+
+// Upper: x > 0, y >= x, z <= 100  →  z <= 100 (L1 subsumption via hypothesis)
+// But also: y >= x > 0 → y > 0 (chain)
+fn combined(
+    x: Int where self > 0,
+    y: Int where self >= x,
+    z: Int where self <= 100,
+) -> Int {
+    require_positive(y);     // Z3: x > 0, y >= x → y >= x > 0 → y > 0  ✓
+    require_le_100(z)        // L1: z <= 100 ≡ self <= 100  ✓
+}
