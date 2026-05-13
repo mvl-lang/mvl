@@ -2,6 +2,13 @@
 # MVL pre-commit hook — format, lint, test
 set -e
 
+# Skip Rust checks when only non-Rust files (e.g. etc/, docs/) are staged
+staged=$(git diff --cached --name-only)
+if ! echo "$staged" | grep -qE '\.(rs|toml)$'; then
+  echo "pre-commit: no Rust files changed, skipping checks"
+  exit 0
+fi
+
 echo "pre-commit: cargo fmt"
 cargo fmt -- --check || { echo "Run 'cargo fmt' to fix formatting."; exit 1; }
 
