@@ -1,0 +1,94 @@
+// main.mvl — game loop entry point for snake_game.
+//
+// This is the ONLY file with Terminal and Clock effects.
+// The effect system enforces the split:
+//   game.mvl  = pure (no effects, fully testable)
+//   render.mvl = ! Terminal (drawing only)
+//   main.mvl  = ! Terminal, Clock (loop, input, random food)
+//
+// Demonstrates:
+//   1. Req 7  (Effects):  sharp effect boundary — game logic in game.mvl has
+//                         zero effects; only the I/O shell touches the terminal.
+//   2. Req 5  (Errors):   tui_init failure handled via Int sentinel (0 = fail).
+//   3. Req 4  (Null):     Option[Direction] for ticks with no key press.
+//   4. Req 3  (Totality): game loop is partial (user-driven, not termination-proven).
+//
+// Usage:
+//   mvl run examples/snake_game/main.mvl
+//   make run   (from examples/snake_game/)
+//
+// Assurance note: 1 extern block (tui lifecycle + input + clock + random).
+
+use game::Game;
+use game::Board;
+use game::Pos;
+use game::Direction;
+use game::apply_new_game;
+use game::apply_update;
+use render::render;
+use input::key_to_direction;
+
+// ── Trust boundary: terminal lifecycle, input, clock, random ──────────────────
+
+extern "rust" {
+    fn tui_init() -> Int;
+    fn tui_drop() -> Unit;
+    fn tui_read_key_timeout(millis: Int) -> String;
+    fn clock_ms() -> Int;
+    fn rand_next(seed: Int) -> Int;
+}
+
+// ── Random food placement ─────────────────────────────────────────────────────
+
+// Produce a board position from a clock seed.
+// rand_next returns a non-negative value in [0, 999999]; modulo fits in board.
+fn random_food(board: Board, seed: Int) -> Pos {
+    let x: Int = rand_next(seed) % board.width;
+    let y: Int = rand_next(seed + 7) % board.height;
+    Pos { x: x, y: y }
+}
+
+// ── Game loop ─────────────────────────────────────────────────────────────────
+
+// Advance the game one tick at a time until the snake dies or the user quits.
+// Returns the final score.
+//
+// Partial: the loop runs as long as game.alive is true and the user has not
+// pressed 'q' or Escape. The compiler cannot statically bound the duration.
+partial fn game_loop(game: Game, seed: Int) -> Int ! Terminal, Clock {
+    if game.alive {
+        let key: String        = tui_read_key_timeout(100);
+        let is_quit: Bool      = key == "q" || key == "Escape";
+        if is_quit {
+            game.score
+        } else {
+            let dir: Option[Direction] = key_to_direction(key);
+            let new_seed: Int          = clock_ms();
+            let next_food: Pos         = random_food(game.board, new_seed);
+            let next_game: Game        = apply_update(game, dir, next_food);
+            let _: Unit                = render(next_game);
+            game_loop(next_game, new_seed)
+        }
+    } else {
+        game.score
+    }
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
+partial fn main() -> Unit ! Terminal, Clock, Console {
+    let handle: Int = tui_init();
+    if handle == 0 {
+        println("snake_game: failed to enter raw terminal mode (not a tty?)")
+    } else {
+        let board: Board = Board { width: 20, height: 10 };
+        let seed0: Int   = clock_ms();
+        let start: Pos   = Pos { x: 5, y: 5 };
+        let food: Pos    = random_food(board, seed0);
+        let game: Game   = apply_new_game(board, start, food);
+        let _: Unit      = render(game);
+        let score: Int   = game_loop(game, seed0);
+        let _: Unit      = tui_drop();
+        println("Game over! Final score: ".concat(score.to_string()))
+    }
+}

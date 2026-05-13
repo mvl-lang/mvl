@@ -1,0 +1,97 @@
+// render.mvl — draw game state to the terminal.
+//
+// All public functions carry ! Terminal — the effect system enforces that
+// rendering is isolated from the pure game logic in game.mvl.
+//
+// Layout (1-indexed terminal coordinates):
+//   Row 1               : top border  "+----...----+"
+//   Rows 2 .. height+1  : play area   "|          |"
+//   Row height+2        : bot border  "+----...----+"
+//   Row height+3        : score line
+//
+// Snake head = 'O', body = 'o', food = '*'.
+//
+// Assurance note: 1 extern block (3 terminal output primitives).
+
+use game::Game;
+use game::Pos;
+use game::Board;
+
+// ── Terminal output primitives ────────────────────────────────────────────────
+
+extern "rust" {
+    fn tui_clear() -> Unit;
+    fn tui_set_cursor(row: Int, col: Int) -> Unit;
+    fn tui_print(text: String, bold: Bool, underline: Bool, fg_color: Int) -> Unit;
+}
+
+// ── Internal helpers ──────────────────────────────────────────────────────────
+
+// Place text at (row, col) in plain style.
+fn put(row: Int, col: Int, text: String) -> Unit ! Terminal {
+    let _: Unit = tui_set_cursor(row, col);
+    tui_print(text, false, false, 0)
+}
+
+// Build a string of n dashes for the border lines.
+partial fn dashes(n: Int, acc: String) -> String {
+    if n <= 0 {
+        acc
+    } else {
+        dashes(n - 1, acc.concat("-"))
+    }
+}
+
+// Draw left and right walls for game rows 0 .. max_row (0-indexed).
+// Terminal row = game_row + 2  (row 1 = top border, row 2 = game row 0).
+partial fn draw_walls(game_row: Int, max_row: Int, board_width: Int) -> Unit ! Terminal {
+    if game_row > max_row {
+        ()
+    } else {
+        let term_row: Int = game_row + 2;
+        let _: Unit = put(term_row, 1, "|");
+        let _: Unit = put(term_row, board_width + 2, "|");
+        draw_walls(game_row + 1, max_row, board_width)
+    }
+}
+
+// Draw snake segments recursively.
+// First call: is_head=true → draws 'O'; subsequent calls: 'o'.
+partial fn draw_body(segs: List[Pos], is_head: Bool) -> Unit ! Terminal {
+    match segs.first() {
+        None => (),
+        Some(seg) => {
+            let ch: String = if is_head { "O" } else { "o" };
+            // Terminal position: game coords are 0-indexed; add 2 for top border + 1-index.
+            let _: Unit = put(seg.y + 2, seg.x + 2, ch);
+            draw_body(segs.skip(1), false)
+        }
+    }
+}
+
+// ── Public render function ────────────────────────────────────────────────────
+
+// Internal render implementation; accesses struct fields → gets &Game borrow param.
+partial fn render_impl(game: Game) -> Unit ! Terminal {
+    let _: Unit = tui_clear();
+    // Border top and bottom
+    let inner: String     = dashes(game.board.width, "");
+    let border: String    = "+".concat(inner).concat("+");
+    let _: Unit = put(1, 1, border);
+    let _: Unit = put(game.board.height + 2, 1, border);
+    // Side walls
+    let _: Unit = draw_walls(0, game.board.height - 1, game.board.width);
+    // Food
+    let _: Unit = put(game.food.y + 2, game.food.x + 2, "*");
+    // Snake
+    let _: Unit = draw_body(game.snake, true);
+    // Score line (below bottom border)
+    let score_line: String = "Score: ".concat(game.score.to_string())
+        .concat("   (arrow keys to move, q to quit)");
+    put(game.board.height + 3, 1, score_line)
+}
+
+/// Thin wrapper: no field accesses → value param → callers pass owned Game.
+pub partial fn render(game: Game) -> Unit ! Terminal {
+    render_impl(game)
+}

@@ -1,0 +1,256 @@
+// game_test.mvl — Unit tests for snake game logic.
+//
+// Tests the pure update/collision/scoring logic without a terminal.
+// Type and function declarations duplicate game.mvl because cross-module
+// type resolution is not yet wired into the per-file test checker (#96).
+// When #96 lands these can be replaced with:
+//   use game::{Direction, Pos, Board, Game, new_game, update, is_wall};
+//
+// Assurance note: 0 extern blocks.
+
+use std.lists.{list_concat}
+
+// ── Type re-declarations ──────────────────────────────────────────────────────
+
+type Direction = enum { Up, Down, Left, Right }
+
+type Pos = struct {
+    x: Int,
+    y: Int,
+}
+
+// No refinement constraints here — the test context creates arbitrary positions.
+type Board = struct {
+    width:  Int,
+    height: Int,
+}
+
+type Game = struct {
+    snake:     List[Pos],
+    direction: Direction,
+    food:      Pos,
+    score:     Int,
+    alive:     Bool,
+    board:     Board,
+}
+
+// ── Function re-declarations ──────────────────────────────────────────────────
+
+fn new_game(board: Board, start: Pos, food: Pos) -> Game {
+    Game {
+        snake:     [start],
+        direction: Direction::Right,
+        food:      food,
+        score:     0,
+        alive:     true,
+        board:     board,
+    }
+}
+
+fn step_head(pos: Pos, dir: Direction) -> Pos {
+    match dir {
+        Direction::Up    => Pos { x: pos.x,     y: pos.y - 1 },
+        Direction::Down  => Pos { x: pos.x,     y: pos.y + 1 },
+        Direction::Left  => Pos { x: pos.x - 1, y: pos.y },
+        Direction::Right => Pos { x: pos.x + 1, y: pos.y },
+    }
+}
+
+fn resolve_dir(current: Direction, input: Option[Direction]) -> Direction {
+    match input {
+        Some(d) => d,
+        None    => match current {
+            Direction::Up    => Direction::Up,
+            Direction::Down  => Direction::Down,
+            Direction::Left  => Direction::Left,
+            Direction::Right => Direction::Right,
+        },
+    }
+}
+
+fn is_wall(pos: Pos, board: Board) -> Bool {
+    pos.x < 0 || pos.y < 0 || pos.x >= board.width || pos.y >= board.height
+}
+
+fn hits_snake(pos: Pos, snake: List[Pos]) -> Bool {
+    snake.any(|seg: Pos| seg.x == pos.x && seg.y == pos.y)
+}
+
+fn update(game: Game, input: Option[Direction], next_food: Pos) -> Game {
+    let new_dir: Direction = resolve_dir(game.direction, input);
+    let old_head: Pos = match game.snake.first() {
+        None    => Pos { x: 0, y: 0 },
+        Some(h) => h,
+    };
+    let new_head: Pos  = step_head(old_head, new_dir);
+    let wall_hit: Bool = is_wall(new_head, game.board);
+    let self_hit: Bool = hits_snake(new_head, game.snake);
+    let cur_food: Pos  = game.food;
+    if wall_hit || self_hit {
+        Game {
+            snake:     game.snake,
+            direction: new_dir,
+            food:      cur_food,
+            score:     game.score,
+            alive:     false,
+            board:     game.board,
+        }
+    } else {
+        let grew: List[Pos]      = list_concat([new_head], game.snake);
+        let ate: Bool            = new_head.x == cur_food.x && new_head.y == cur_food.y;
+        let new_snake: List[Pos] = if ate { grew } else { grew.take(game.snake.len()) };
+        let new_food:  Pos       = if ate { next_food } else { cur_food };
+        let new_score: Int       = if ate { game.score + 1 } else { game.score };
+        Game {
+            snake:     new_snake,
+            direction: new_dir,
+            food:      new_food,
+            score:     new_score,
+            alive:     true,
+            board:     game.board,
+        }
+    }
+}
+
+// ── Tests: initial state ──────────────────────────────────────────────────────
+
+test fn snake_starts_alive() -> Unit {
+    let board: Board = Board { width: 20, height: 10 };
+    let game: Game   = new_game(board, Pos { x: 5, y: 5 }, Pos { x: 10, y: 5 });
+    assert_eq(game.alive, true)
+}
+
+test fn snake_starts_with_score_zero() -> Unit {
+    let board: Board = Board { width: 20, height: 10 };
+    let game: Game   = new_game(board, Pos { x: 5, y: 5 }, Pos { x: 10, y: 5 });
+    assert_eq(game.score, 0)
+}
+
+test fn snake_starts_with_length_one() -> Unit {
+    let board: Board = Board { width: 20, height: 10 };
+    let game: Game   = new_game(board, Pos { x: 5, y: 5 }, Pos { x: 10, y: 5 });
+    assert_eq(game.snake.len(), 1)
+}
+
+// ── Tests: movement ───────────────────────────────────────────────────────────
+
+test fn snake_moves_right() -> Unit {
+    let board: Board = Board { width: 20, height: 10 };
+    let game: Game   = new_game(board, Pos { x: 5, y: 5 }, Pos { x: 10, y: 5 });
+    let next: Game   = update(game, Some(Direction::Right), Pos { x: 3, y: 3 });
+    let head: Pos    = match next.snake.first() { None => Pos { x: 0, y: 0 }, Some(h) => h };
+    assert_eq(head.x, 6);
+    assert_eq(head.y, 5)
+}
+
+test fn snake_moves_down() -> Unit {
+    let board: Board = Board { width: 20, height: 10 };
+    let game: Game   = new_game(board, Pos { x: 5, y: 5 }, Pos { x: 10, y: 5 });
+    let next: Game   = update(game, Some(Direction::Down), Pos { x: 3, y: 3 });
+    let head: Pos    = match next.snake.first() { None => Pos { x: 0, y: 0 }, Some(h) => h };
+    assert_eq(head.x, 5);
+    assert_eq(head.y, 6)
+}
+
+test fn snake_holds_direction_on_none_input() -> Unit {
+    let board: Board = Board { width: 20, height: 10 };
+    let game: Game   = new_game(board, Pos { x: 5, y: 5 }, Pos { x: 10, y: 5 });
+    // default direction is Right; None input should keep moving right
+    let next: Game   = update(game, None, Pos { x: 3, y: 3 });
+    let head: Pos    = match next.snake.first() { None => Pos { x: 0, y: 0 }, Some(h) => h };
+    assert_eq(head.x, 6);
+    assert_eq(head.y, 5)
+}
+
+// ── Tests: wall collision ─────────────────────────────────────────────────────
+
+test fn right_wall_collision_kills_snake() -> Unit {
+    let board: Board = Board { width: 5, height: 5 };
+    let game: Game   = new_game(board, Pos { x: 4, y: 2 }, Pos { x: 1, y: 1 });
+    let next: Game   = update(game, Some(Direction::Right), Pos { x: 2, y: 2 });
+    assert_eq(next.alive, false)
+}
+
+test fn top_wall_collision_kills_snake() -> Unit {
+    let board: Board = Board { width: 10, height: 5 };
+    let game: Game   = new_game(board, Pos { x: 3, y: 0 }, Pos { x: 7, y: 2 });
+    let next: Game   = update(game, Some(Direction::Up), Pos { x: 5, y: 3 });
+    assert_eq(next.alive, false)
+}
+
+test fn left_wall_collision_kills_snake() -> Unit {
+    let board: Board = Board { width: 10, height: 5 };
+    let game: Game   = new_game(board, Pos { x: 0, y: 2 }, Pos { x: 5, y: 2 });
+    let next: Game   = update(game, Some(Direction::Left), Pos { x: 5, y: 3 });
+    assert_eq(next.alive, false)
+}
+
+test fn bottom_wall_collision_kills_snake() -> Unit {
+    let board: Board = Board { width: 10, height: 5 };
+    let game: Game   = new_game(board, Pos { x: 3, y: 4 }, Pos { x: 5, y: 1 });
+    let next: Game   = update(game, Some(Direction::Down), Pos { x: 5, y: 3 });
+    assert_eq(next.alive, false)
+}
+
+// ── Tests: food and scoring ───────────────────────────────────────────────────
+
+test fn eating_food_grows_snake() -> Unit {
+    let board: Board = Board { width: 20, height: 10 };
+    // food is one step to the right of start
+    let game: Game   = new_game(board, Pos { x: 5, y: 5 }, Pos { x: 6, y: 5 });
+    let next: Game   = update(game, Some(Direction::Right), Pos { x: 3, y: 3 });
+    assert_eq(next.snake.len(), 2)
+}
+
+test fn eating_food_increments_score() -> Unit {
+    let board: Board = Board { width: 20, height: 10 };
+    let game: Game   = new_game(board, Pos { x: 5, y: 5 }, Pos { x: 6, y: 5 });
+    let next: Game   = update(game, Some(Direction::Right), Pos { x: 3, y: 3 });
+    assert_eq(next.score, 1)
+}
+
+test fn not_eating_food_keeps_length_one() -> Unit {
+    let board: Board = Board { width: 20, height: 10 };
+    let game: Game   = new_game(board, Pos { x: 5, y: 5 }, Pos { x: 10, y: 5 });
+    let next: Game   = update(game, Some(Direction::Right), Pos { x: 3, y: 3 });
+    assert_eq(next.snake.len(), 1)
+}
+
+test fn not_eating_food_score_unchanged() -> Unit {
+    let board: Board = Board { width: 20, height: 10 };
+    let game: Game   = new_game(board, Pos { x: 5, y: 5 }, Pos { x: 10, y: 5 });
+    let next: Game   = update(game, Some(Direction::Right), Pos { x: 3, y: 3 });
+    assert_eq(next.score, 0)
+}
+
+// ── Tests: is_wall ────────────────────────────────────────────────────────────
+
+test fn is_wall_detects_right_boundary() -> Unit {
+    let board: Board = Board { width: 10, height: 10 };
+    assert_eq(is_wall(Pos { x: 10, y: 5 }, board), true)
+}
+
+test fn is_wall_detects_bottom_boundary() -> Unit {
+    let board: Board = Board { width: 10, height: 10 };
+    assert_eq(is_wall(Pos { x: 5, y: 10 }, board), true)
+}
+
+test fn is_wall_detects_left_boundary() -> Unit {
+    let board: Board = Board { width: 10, height: 10 };
+    assert_eq(is_wall(Pos { x: -1, y: 5 }, board), true)
+}
+
+test fn is_wall_detects_top_boundary() -> Unit {
+    let board: Board = Board { width: 10, height: 10 };
+    assert_eq(is_wall(Pos { x: 5, y: -1 }, board), true)
+}
+
+test fn is_wall_inside_board() -> Unit {
+    let board: Board = Board { width: 10, height: 10 };
+    assert_eq(is_wall(Pos { x: 5, y: 5 }, board), false)
+}
+
+test fn is_wall_corner_inside() -> Unit {
+    let board: Board = Board { width: 10, height: 10 };
+    assert_eq(is_wall(Pos { x: 9, y: 9 }, board), false)
+}

@@ -1,0 +1,61 @@
+// input.mvl — pure key-string → Direction mapping.
+//
+// Converts the string key encoding from the tui bridge (same convention as
+// pkg.tui/src/internal/ffi.mvl) to the game's Direction type.
+// No effects, no extern — a pure transform.
+//
+// Key encoding: "Up" | "Down" | "Left" | "Right" | "Escape" | "q" | "" (timeout) | ...
+//
+// Assurance note: 0 extern blocks.
+
+use game::Direction;
+
+// Convert a raw key string from tui_read_key_timeout to a movement direction.
+// Returns None for non-arrow keys (snake holds its current direction this tick).
+pub fn key_to_direction(key: String) -> Option[Direction] {
+    match key {
+        "Up"    => Some(Direction::Up),
+        "Down"  => Some(Direction::Down),
+        "Left"  => Some(Direction::Left),
+        "Right" => Some(Direction::Right),
+        _       => None,
+    }
+}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+test fn up_arrow_maps_to_up() -> Unit {
+    let d: Option[Direction] = key_to_direction("Up");
+    let ok: Int = match d {
+        Some(Direction::Up) => 1,
+        _ => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn right_arrow_maps_to_right() -> Unit {
+    let d: Option[Direction] = key_to_direction("Right");
+    let ok: Int = match d {
+        Some(Direction::Right) => 1,
+        _ => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn timeout_maps_to_none() -> Unit {
+    let d: Option[Direction] = key_to_direction("");
+    let ok: Int = match d {
+        None => 1,
+        _    => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn escape_maps_to_none() -> Unit {
+    let d: Option[Direction] = key_to_direction("Escape");
+    let ok: Int = match d {
+        None => 1,
+        _    => 0,
+    };
+    assert_eq(ok, 1)
+}
