@@ -2,23 +2,39 @@
 # MVL pre-commit hook — format, lint, test
 set -e
 
-# Skip Rust checks when only non-Rust files (e.g. etc/, docs/) are staged
 staged=$(git diff --cached --name-only)
-if ! echo "$staged" | grep -qE '\.rs$'; then
-  echo "pre-commit: no Rust files changed, skipping checks"
-  exit 0
+
+# Rust checks — only when .rs files are staged
+if echo "$staged" | grep -qE '\.rs$'; then
+  echo "pre-commit: cargo fmt"
+  cargo fmt -- --check || { echo "Run 'cargo fmt' to fix formatting."; exit 1; }
+
+  echo "pre-commit: cargo clippy"
+  cargo clippy -- -D warnings || { echo "Fix clippy warnings before committing."; exit 1; }
+
+  echo "pre-commit: cargo build -p mvl_runtime_c"
+  cargo build -p mvl_runtime_c --quiet || { echo "Failed to build mvl_runtime_c."; exit 1; }
+
+  echo "pre-commit: cargo test"
+  cargo test --quiet -- --test-threads=1 || { echo "Tests must pass before committing."; exit 1; }
 fi
 
-echo "pre-commit: cargo fmt"
-cargo fmt -- --check || { echo "Run 'cargo fmt' to fix formatting."; exit 1; }
+# MVL compiler sources → test-mvl
+if echo "$staged" | grep -qE '^compiler/'; then
+  echo "pre-commit: make test-mvl"
+  make test-mvl || { echo "MVL compiler tests failed."; exit 1; }
+fi
 
-echo "pre-commit: cargo clippy"
-cargo clippy -- -D warnings || { echo "Fix clippy warnings before committing."; exit 1; }
+# Example programs → test-examples
+if echo "$staged" | grep -qE '^examples/'; then
+  echo "pre-commit: make test-examples"
+  make test-examples || { echo "Example tests failed."; exit 1; }
+fi
 
-echo "pre-commit: cargo build -p mvl_runtime_c"
-cargo build -p mvl_runtime_c --quiet || { echo "Failed to build mvl_runtime_c."; exit 1; }
-
-echo "pre-commit: cargo test"
-cargo test --quiet -- --test-threads=1 || { echo "Tests must pass before committing."; exit 1; }
+# Corpus → test-corpus
+if echo "$staged" | grep -qE '^tests/corpus/'; then
+  echo "pre-commit: make test-corpus"
+  make test-corpus || { echo "Corpus tests failed."; exit 1; }
+fi
 
 echo "pre-commit: all checks passed"
