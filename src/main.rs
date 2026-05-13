@@ -1818,7 +1818,14 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                                 // programs, not library modules.  Including them in the prelude
                                 // causes duplicate type/function definitions when combined with
                                 // test-local re-declarations.
-                                if !transpiler::has_main_fn(&parsed) {
+                                //
+                                // Also skip pure-function helper/demo files (no extern blocks
+                                // or type declarations): loading them shadows runtime primitives
+                                // and causes compilation failures (e.g. collections.mvl defining
+                                // `fn list_get()` that shadows `list_get<T>` from mvl_runtime).
+                                if !transpiler::has_main_fn(&parsed)
+                                    && transpiler::has_library_decls(&parsed)
+                                {
                                     stdlib_prelude_progs.push(parsed);
                                 }
                             }

@@ -1163,6 +1163,21 @@ fn emit_expr_as_fn_arg(cg: &mut RustEmitter, expr: &Expr) {
                 cg.push(".clone()");
             }
         }
+        // Option/Result identifiers must NOT get `.into()` — the IFC label impl
+        // `From<T> for Label<T>` creates multiple conversion candidates for compound
+        // types (e.g. `Option<i64>.into()` could be `Option<i64>` or `Clean<Option<i64>>`),
+        // causing E0283 when the parameter type is generic (e.g. `is_some<T>(Option<T>)`).
+        Expr::Ident(_, span)
+            if matches!(
+                cg.expr_types.get(span),
+                Some(Ty::Option(_) | Ty::Result(_, _))
+            ) =>
+        {
+            emit_expr(cg, expr);
+            if !cg.last_uses.contains(span) {
+                cg.push(".clone()");
+            }
+        }
         // Value identifiers: `.into()` allows unlabeled (Public) values to coerce into
         // labeled parameters (e.g. `String` → `Clean<String>`).
         Expr::Ident(_, span) => {
