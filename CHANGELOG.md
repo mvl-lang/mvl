@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.97.4] — 2026-05-13
+
+### Fixed
+
+- **Effect-list grammar ambiguity** — Switched effect separator from `,` to `+` to restore LL(1) parsing. The comma had created a local LL(k>1) ambiguity in fn-type expressions where the parser couldn't determine at `,` whether the next identifier was another effect name or a function parameter. Using `+` (`! Effect1 + Effect2`) eliminates the ambiguity with zero lookahead since `,` remains the sole parameter/tuple separator everywhere. Grammar documentation (EBNF, Tree-sitter) and all test/example files updated (#712, closes #711).
+
 ## [0.97.3] — 2026-05-13
 
 ### Added
