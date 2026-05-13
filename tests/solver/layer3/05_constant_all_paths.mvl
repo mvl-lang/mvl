@@ -1,0 +1,51 @@
+// Solver Layer 3: Functions returning the same constant on every path
+//
+// When all execution paths of a pure function return the same literal value,
+// Layer 3 proves the predicate by checking that one literal against it.
+// Layer 1 handles each individual path (literal evaluation); Layer 3 combines
+// all paths and returns Proven only if every path passes.
+//
+// Every call in this file is PROVEN by Layer 3.
+
+fn require_non_negative(x: Int where self >= 0) -> Int {
+    x
+}
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_ge_5(x: Int where self >= 5) -> Int {
+    x
+}
+
+// All three paths return 0 — Layer 1 proves 0 >= 0 on each.
+fn always_zero(x: Int) -> Int {
+    if x > 0 { 0 }
+    else if x < 0 { 0 }
+    else { 0 }
+}
+
+// All two paths return 7 — Layer 1 proves 7 > 0 and 7 >= 5.
+fn always_seven(x: Int) -> Int {
+    if x > 0 { 7 } else { 7 }
+}
+
+// Three paths return 1, 2, or 3 — all > 0.
+fn small_positive(x: Int) -> Int {
+    if x < 0 { 1 }
+    else if x == 0 { 2 }
+    else { 3 }
+}
+
+fn examples(a: Int) -> Int {
+    // always_zero: all paths return 0 → 0 >= 0  ✓
+    require_non_negative(always_zero(a));
+
+    // always_seven: returns 7 → 7 > 0 and 7 >= 5  ✓
+    require_positive(always_seven(a));
+    require_ge_5(always_seven(a));
+
+    // small_positive: returns 1/2/3, all > 0  ✓
+    require_positive(small_positive(a))
+}

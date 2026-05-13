@@ -1,0 +1,71 @@
+// Solver Layer 1: Branch-condition exact-match subsumption
+//
+// When an if-condition `x op N` is injected as a hypothesis into the
+// then-block and that hypothesis is structurally equivalent to the
+// required predicate (`self op N`), Layer 1 proves the call via
+// subsumption — no interval arithmetic needed.
+//
+// This is distinct from Layer 2's if-narrowing tests, which cover cases
+// where the condition is STRONGER than the predicate (e.g. `x > 5`
+// proving `self > 0`).  Here the condition and the predicate are the same.
+//
+// Every call inside the if-blocks is PROVEN by Layer 1.
+
+fn not_zero(x: Int where self != 0) -> Int {
+    x
+}
+
+fn positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn at_least_3(x: Int where self >= 3) -> Int {
+    x
+}
+
+fn below_100(x: Int where self < 100) -> Int {
+    x
+}
+
+// Injected hypothesis `x != 0` matches predicate `self != 0` exactly.
+fn guarded_nonzero(x: Int) -> Int {
+    if x != 0 {
+        not_zero(x)   // injected: x != 0 ≡ self != 0  ✓  L1 subsumption
+    } else {
+        0
+    }
+}
+
+// Injected hypothesis `x > 0` matches predicate `self > 0` exactly.
+fn guarded_positive(x: Int) -> Int {
+    if x > 0 {
+        positive(x)   // injected: x > 0 ≡ self > 0  ✓  L1 subsumption
+    } else {
+        0
+    }
+}
+
+// Injected hypothesis `x >= 3` matches predicate `self >= 3` exactly.
+fn guarded_at_least_3(x: Int) -> Int {
+    if x >= 3 {
+        at_least_3(x)   // injected: x >= 3 ≡ self >= 3  ✓  L1 subsumption
+    } else {
+        0
+    }
+}
+
+// Injected hypothesis `x < 100` matches predicate `self < 100` exactly.
+fn guarded_below_100(x: Int) -> Int {
+    if x < 100 {
+        below_100(x)   // injected: x < 100 ≡ self < 100  ✓  L1 subsumption
+    } else {
+        100
+    }
+}
+
+fn examples() -> Int {
+    guarded_nonzero(7);
+    guarded_positive(1);
+    guarded_at_least_3(5);
+    guarded_below_100(42)
+}

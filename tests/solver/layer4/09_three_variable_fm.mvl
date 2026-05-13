@@ -1,0 +1,56 @@
+// Solver Layer 4: Three-variable Fourier-Motzkin elimination
+//
+// When the linear term involves three variables, Fourier-Motzkin eliminates
+// them one at a time.  Each elimination step reduces the variable count until
+// a constant contradiction is derived.
+//
+// Layer 4 has a guard for > 5 free variables; three variables is well within
+// the supported range.
+//
+// Every call in this file is PROVEN by Layer 4.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_gt_5(x: Int where self > 5) -> Int {
+    x
+}
+
+fn require_ge_3(x: Int where self >= 3) -> Int {
+    x
+}
+
+// a > 0, b > 0, c > 0  →  a + b + c > 0
+fn three_sum_positive(
+    a: Int where self > 0,
+    b: Int where self > 0,
+    c: Int where self > 0,
+) -> Int {
+    require_positive(a + b + c)   // L4: a ≥ 1, b ≥ 1, c ≥ 1 → sum ≥ 3 > 0  ✓
+}
+
+// a > 0, b > 1, c > 2  →  a + b + c > 5  (since a ≥ 1, b ≥ 2, c ≥ 3 → sum ≥ 6)
+fn three_sum_gt5(
+    a: Int where self > 0,
+    b: Int where self > 1,
+    c: Int where self > 2,
+) -> Int {
+    require_gt_5(a + b + c)   // L4: a ≥ 1, b ≥ 2, c ≥ 3 → sum ≥ 6 > 5  ✓
+}
+
+// a >= 0, b > 0, c > 0  →  a + b + c >= 2 >= 0 (and actually > 1, but we just need >= 3 here)
+// Let's use: a >= 1, b >= 1, c >= 1 → a + b + c >= 3
+fn three_sum_ge3(
+    a: Int where self >= 1,
+    b: Int where self >= 1,
+    c: Int where self >= 1,
+) -> Int {
+    require_ge_3(a + b + c)   // L4: a ≥ 1, b ≥ 1, c ≥ 1 → sum ≥ 3  ✓
+}
+
+fn examples() -> Int {
+    three_sum_positive(1, 2, 3);
+    three_sum_gt5(2, 3, 4);
+    three_sum_ge3(1, 1, 1)
+}

@@ -1,0 +1,46 @@
+// Cross-layer: all static layers fail → RuntimeCheck
+//
+// When no static layer can prove a predicate, the checker falls back to
+// emitting a runtime assertion.  This is NOT a compile error — the program
+// is valid and accepted by the checker.
+//
+// Cases that reach RuntimeCheck:
+//   - A bare variable with no refinement hypothesis (no predicate in var_refs).
+//   - A non-linear expression (x * y with two unknowns).
+//   - A function call whose body has undecidable paths.
+//
+// These programs compile cleanly — RuntimeCheck is not a compile error.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_non_negative(x: Int where self >= 0) -> Int {
+    x
+}
+
+// x has no refinement → all layers return None → RuntimeCheck (no error).
+fn bare_variable(x: Int) -> Int {
+    require_positive(x)   // no hyp → L1-L5 all return None → RuntimeCheck
+}
+
+// Two unrefined variables — non-linear multiply → RuntimeCheck.
+fn product_unrefined(x: Int, y: Int) -> Int {
+    require_positive(x * y)   // L1-L5 all return None → RuntimeCheck
+}
+
+// Function result without a return refinement — caller can't statically prove it.
+fn identity(x: Int) -> Int {
+    x
+}
+
+fn call_identity(x: Int) -> Int {
+    require_non_negative(identity(x))   // identity has no ensures → L3 inlines
+    // Path: returns x.  x has no hyp → L2 returns None → overall None → RuntimeCheck
+}
+
+fn examples() -> Int {
+    bare_variable(5);       // runtime check fires at runtime: 5 > 0 ✓ (passes at runtime)
+    product_unrefined(3, 4); // runtime check fires: 12 > 0 ✓
+    call_identity(7)         // runtime check fires: 7 >= 0 ✓
+}

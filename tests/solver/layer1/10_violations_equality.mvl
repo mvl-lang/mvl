@@ -1,0 +1,38 @@
+// Solver Layer 1: Equality hypothesis violations — all failed
+// solver:expect-fail
+//
+// When a variable has a concrete equality hypothesis (self == N) and the
+// evaluated predicate at N is false, Layer 1 reports a compile-time error.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_ge_10(x: Int where self >= 10) -> Int {
+    x
+}
+
+fn require_non_zero(x: Int where self != 0) -> Int {
+    x
+}
+
+// x == 0: eval 0 > 0 = false  ✗  compile error
+fn caller_zero_to_positive(x: Int where self == 0) -> Int {
+    require_positive(x)
+}
+
+// x == 5: eval 5 >= 10 = false  ✗  compile error
+fn caller_five_to_ge10(x: Int where self == 5) -> Int {
+    require_ge_10(x)
+}
+
+// x == 0: eval 0 != 0 = false  ✗  compile error
+fn caller_zero_to_nonzero(x: Int where self == 0) -> Int {
+    require_non_zero(x)
+}
+
+fn violations() -> Int {
+    caller_zero_to_positive(0);
+    caller_five_to_ge10(5);
+    caller_zero_to_nonzero(0)
+}

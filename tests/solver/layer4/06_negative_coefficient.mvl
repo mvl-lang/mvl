@@ -1,0 +1,51 @@
+// Solver Layer 4: Negative coefficient — 0 - a > 0 when a < 0
+//
+// When the argument involves negation of a variable, Layer 4 extracts the
+// linear term with a negative coefficient and applies Fourier-Motzkin.
+//
+// Layer 4 for `0 - a` with hyp `a < 0`:
+//   LinTerm: 0 − a  (vars={a:−1}, constant=0)
+//   ¬pred:   −a ≤ 0  →  a ≥ 0
+//   Hyp:     a ≤ −1  (from a < 0)
+//   Combined: a ≥ 0 AND a ≤ −1  →  UNSAT → Proven.
+//
+// Every call in this file is PROVEN by Layer 4.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_non_negative(x: Int where self >= 0) -> Int {
+    x
+}
+
+fn require_ge_1(x: Int where self >= 1) -> Int {
+    x
+}
+
+// a < 0  →  0 - a > 0  (since a ≤ -1, -a ≥ 1 > 0)
+fn negate_negative(a: Int where self < 0) -> Int {
+    require_positive(0 - a)    // L4: a ≤ -1 → -a ≥ 1 > 0  ✓
+}
+
+// a < 0  →  0 - a >= 1
+fn negate_negative_ge1(a: Int where self < 0) -> Int {
+    require_ge_1(0 - a)        // L4: a ≤ -1 → -a ≥ 1  ✓
+}
+
+// a <= -5  →  0 - a >= 5 > 0
+fn negate_very_negative(a: Int where self <= 0 - 5) -> Int {
+    require_positive(0 - a)    // L4: a ≤ -5 → -a ≥ 5 > 0  ✓
+}
+
+// a <= 0  →  0 - a >= 0
+fn negate_non_positive(a: Int where self <= 0) -> Int {
+    require_non_negative(0 - a)   // L4: a ≤ 0 → -a ≥ 0  ✓
+}
+
+fn examples() -> Int {
+    negate_negative(0 - 3);
+    negate_negative_ge1(0 - 7);
+    negate_very_negative(0 - 10);
+    negate_non_positive(0)
+}

@@ -1,0 +1,50 @@
+// Cross-layer: L2 → L3 fallback
+//
+// Layers 1 and 2 only handle literal arguments and bare-variable arguments.
+// When the argument is a *function call*, both layers return None and Layer 3
+// takes over by inlining the function body and proving all paths.
+//
+// Pattern: argument is `clamp(a, 0, 10)` — a call expression.
+//   L1: not a literal, not a variable → None.
+//   L2: not Expr::Ident → None.
+//   L3: inlines clamp; all paths return values in [0, 10] → Proven.
+//
+// Every call in this file is PROVEN (by L3 after L1+L2 fall through).
+
+fn require_non_negative(x: Int where self >= 0) -> Int {
+    x
+}
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_le_10(x: Int where self <= 10) -> Int {
+    x
+}
+
+// Inline clamp: returns 0, hi, or x based on path.  All >= 0.
+fn clamp(x: Int, lo: Int, hi: Int) -> Int {
+    if x < lo { lo }
+    else if x > hi { hi }
+    else { x }
+}
+
+// Returns x if >= 0, else 0.  Both paths return >= 0.
+fn floor_zero(x: Int) -> Int {
+    if x >= 0 { x } else { 0 }
+}
+
+// Returns 1 or 5 — both positive.
+fn one_or_five(x: Int) -> Int {
+    if x > 0 { 5 } else { 1 }
+}
+
+fn examples(a: Int) -> Int {
+    // L1 falls (fn call arg), L2 falls (fn call arg), L3 proves.
+    require_non_negative(clamp(a, 0, 10));   // paths: 0, 10, a≥0  ✓
+    require_le_10(clamp(a, 0, 10));          // paths: 0, 10, a≤10 ✓
+
+    require_non_negative(floor_zero(a));      // paths: 0, a≥0  ✓
+    require_positive(one_or_five(a))          // paths: 1, 5  both > 0  ✓
+}

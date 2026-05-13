@@ -1,0 +1,72 @@
+// Solver Layer 2: Interval proven from various hypothesis shapes
+//
+// Additional Layer 2 cases not covered by 01–04:
+//   - Strict lower bounds proving non-strict predicates
+//   - Non-strict upper bounds proving strict predicates
+//   - Compound hypotheses narrowed by both bounds
+//   - Multiple independent parameters each requiring L2
+//
+// Every call in this file is PROVEN by Layer 2.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_non_negative(x: Int where self >= 0) -> Int {
+    x
+}
+
+fn require_lt_200(x: Int where self < 200) -> Int {
+    x
+}
+
+fn require_le_100(x: Int where self <= 100) -> Int {
+    x
+}
+
+fn require_ge_1(x: Int where self >= 1) -> Int {
+    x
+}
+
+fn require_lt_50(x: Int where self < 50) -> Int {
+    x
+}
+
+// Wider lower bound proves weaker predicate (same direction as 01 but different operator).
+// x >= 3  →  interval [3, ∞).  eff_min=3; 3 > 0 and 3 >= 1.
+fn ge3_proves_positive_and_ge1(x: Int where self >= 3) -> Int {
+    require_positive(x);    // eff_min=3 > 0   ✓
+    require_ge_1(x);        // eff_min=3 >= 1  ✓
+    require_non_negative(x) // eff_min=3 >= 0  ✓
+}
+
+// Upper bound hypothesis — interval (-∞, 99].
+// x <= 99  →  eff_max=99; 99 < 200 and 99 <= 100.
+fn le99_proves_bounds(x: Int where self <= 99) -> Int {
+    require_lt_200(x);   // eff_max=99 < 200  ✓
+    require_le_100(x)    // eff_max=99 <= 100 ✓
+}
+
+// Compound: x >= 2 && x <= 40 → interval [2, 40].
+// eff_min=2 proves positive, ge_1; eff_max=40 proves lt_50, le_100, lt_200.
+fn compound_proves_multiple(x: Int where self >= 2 && self <= 40) -> Int {
+    require_positive(x);     // eff_min=2 > 0    ✓
+    require_ge_1(x);         // eff_min=2 >= 1   ✓
+    require_non_negative(x); // eff_min=2 >= 0   ✓
+    require_lt_50(x);        // eff_max=40 < 50  ✓
+    require_le_100(x);       // eff_max=40 <= 100 ✓
+    require_lt_200(x)        // eff_max=40 < 200 ✓
+}
+
+// Two parameters, each proven independently by L2.
+fn two_params(a: Int where self > 10, b: Int where self < 30) -> Int {
+    require_positive(a);     // a: [11,∞); eff_min=11 > 0    ✓
+    require_lt_50(b)         // b: (-∞,29]; eff_max=29 < 50  ✓
+}
+
+fn examples() -> Int {
+    ge3_proves_positive_and_ge1(5);
+    le99_proves_bounds(50);
+    compound_proves_multiple(10);
+    two_params(15, 20)
+}

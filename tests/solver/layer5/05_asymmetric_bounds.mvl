@@ -1,0 +1,40 @@
+// Solver Layer 5: Asymmetric bounds — proving weakened conclusions
+//
+// When a chain has a strong starting bound, Z3 can prove that later variables
+// satisfy even weaker predicates derived from the chain.
+//
+// Every call in this file is PROVEN by Layer 5.
+
+fn require_gt3(n: Int where self > 3) -> Int {
+    n
+}
+
+fn require_gt5(n: Int where self > 5) -> Int {
+    n
+}
+
+fn require_ge_5(n: Int where self >= 5) -> Int {
+    n
+}
+
+fn require_gt10(n: Int where self > 10) -> Int {
+    n
+}
+
+// x > 5, y > x  →  y > x > 5  →  y > 5 > 3  →  y satisfies both > 5 and > 3.
+fn chain_proves_weaker(x: Int where self > 5, y: Int where self > x) -> Int {
+    require_gt5(y);   // Z3: x > 5, y > x → y > 5  ✓
+    require_gt3(y)    // Z3: y > 5 > 3  ✓ (subsumed, but Z3 handles it)
+}
+
+// x >= 5, y > x  →  y > x >= 5  →  y > 5  →  y >= 6 >= 5
+fn ge_start_proves_gt(x: Int where self >= 5, y: Int where self > x) -> Int {
+    require_gt5(y);    // Z3: x >= 5, y > x → y > x ≥ 5 → y > 5  ✓
+    require_ge_5(y)    // Z3: y > 5 → y ≥ 6 ≥ 5  ✓
+}
+
+// x > 10, y > x  →  y > 10.  Both y and x satisfy the predicate.
+fn both_satisfy(x: Int where self > 10, y: Int where self > x) -> Int {
+    require_gt10(x);   // L1/L2: x > 10 subsumption  ✓
+    require_gt10(y)    // Z3: y > x > 10  ✓
+}

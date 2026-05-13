@@ -1,0 +1,27 @@
+// Solver Layer 5: Non-linear expressions in Z3 territory → RuntimeCheck
+//
+// Layer 5 translates `x * y` (two unknown variables) to None and returns
+// None, just as Layer 4 does.  The checker falls to RuntimeCheck — NOT a
+// compile error.  The program is valid and accepted by the checker.
+//
+// This demonstrates the boundary of what L5 can prove: linear arithmetic
+// and variable-to-variable comparisons, but not non-linear multiplication.
+
+fn require_positive(n: Int where self > 0) -> Int {
+    n
+}
+
+// x > 0, y > 0 but x * y — L5 skips non-linear → RuntimeCheck (no error).
+fn nonlinear_with_hyps(x: Int where self > 0, y: Int where self > 0) -> Int {
+    require_positive(x * y)   // L5: non-linear → None → RuntimeCheck (not an error)
+}
+
+// Chain hypotheses present, but the argument is x * x (non-linear) → RuntimeCheck.
+fn square_in_chain(x: Int where self > 0, y: Int where self > x) -> Int {
+    require_positive(x * x)   // L5: non-linear → RuntimeCheck (not an error)
+}
+
+fn examples() -> Int {
+    nonlinear_with_hyps(3, 4);
+    square_in_chain(2, 5)
+}

@@ -1,0 +1,31 @@
+// Solver Layer 3: One failing path causes overall failure
+// solver:expect-fail
+//
+// Layer 3 returns `Failed` when ANY execution path returns a value that
+// definitively violates the predicate.  Even if all other paths pass,
+// a single failing path makes the whole call a compile-time error.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_gt_10(x: Int where self > 10) -> Int {
+    x
+}
+
+// Path 1 (x > 0): returns x  → L2 proves x > 0 from path condition  ✓
+// Path 2 (x <= 0): returns 0 → L1: 0 > 0  ✗  compile error
+fn sometimes_zero(x: Int) -> Int {
+    if x > 0 { x } else { 0 }
+}
+
+// Path 1 (x > 10): returns x  → L2: x > 10 ✓
+// Path 2 (x <= 10): returns 5 → L1: 5 > 10 ✗  compile error
+fn sometimes_five(x: Int) -> Int {
+    if x > 10 { x } else { 5 }
+}
+
+fn bad_calls(a: Int) -> Int {
+    require_positive(sometimes_zero(a));   // path 2 returns 0 > 0 ✗
+    require_gt_10(sometimes_five(a))       // path 2 returns 5 > 10 ✗
+}

@@ -1,0 +1,48 @@
+// Solver Layer 5: Four-variable transitive chain
+//
+// A four-link chain where each variable bounds the next.  Layers 1–4 cannot
+// prove the endpoint satisfies the predicate because:
+//   - The argument to the call is a bare variable (not a literal or linear expr).
+//   - The variable's hypothesis references another non-constant variable.
+//
+// Z3 asserts all four hypotheses simultaneously and proves the conclusion.
+//
+// Every call in this file is PROVEN by Layer 5.
+
+fn require_positive(n: Int where self > 0) -> Int {
+    n
+}
+
+fn require_gt20(n: Int where self > 20) -> Int {
+    n
+}
+
+// Chain: w > 0, x > w, y > x, z > y  →  z > y > x > w > 0
+fn four_chain_gt0(
+    w: Int where self > 0,
+    x: Int where self > w,
+    y: Int where self > x,
+    z: Int where self > y,
+) -> Int {
+    require_positive(z)   // Z3: w > 0, x > w, y > x, z > y → z > 0  ✓
+}
+
+// Chain: a > 20, b > a, c > b, d > c  →  d > c > b > a > 20
+fn four_chain_gt20(
+    a: Int where self > 20,
+    b: Int where self > a,
+    c: Int where self > b,
+    d: Int where self > c,
+) -> Int {
+    require_gt20(d)   // Z3: a > 20, b > a, c > b, d > c → d > 20  ✓
+}
+
+// Mixed >/>=: w >= 0, x > w, y >= x, z > y  →  z > 0
+fn four_chain_mixed(
+    w: Int where self >= 0,
+    x: Int where self > w,
+    y: Int where self >= x,
+    z: Int where self > y,
+) -> Int {
+    require_positive(z)   // Z3: w >= 0, x > w, y >= x, z > y → z > 0  ✓
+}

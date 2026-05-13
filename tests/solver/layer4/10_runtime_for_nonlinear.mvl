@@ -1,0 +1,34 @@
+// Solver Layer 4: Non-linear expressions fall through to RuntimeCheck
+//
+// Layer 4 only handles *linear* integer arithmetic.  Expressions involving
+// multiplication of two unknown variables (x * y) cannot be expressed as a
+// LinTerm and are returned as None → Layer 5 → RuntimeCheck.
+//
+// RuntimeCheck is NOT a compile error — the checker emits a runtime assertion.
+// This file verifies that non-linear patterns are accepted without errors.
+//
+// These programs are valid and accepted by the checker.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_non_negative(x: Int where self >= 0) -> Int {
+    x
+}
+
+// x * y is non-linear → L4 returns None → L5 → RuntimeCheck.
+// The checker still accepts this program — it just cannot prove it statically.
+fn product_runtime(x: Int where self > 0, y: Int where self > 0) -> Int {
+    require_positive(x * y)   // non-linear → RuntimeCheck (no error)
+}
+
+// x * x is non-linear (x * x, both same unknown) → RuntimeCheck.
+fn square_runtime(x: Int where self > 0) -> Int {
+    require_positive(x * x)   // non-linear → RuntimeCheck (no error)
+}
+
+fn examples() -> Int {
+    product_runtime(3, 5);
+    square_runtime(4)
+}

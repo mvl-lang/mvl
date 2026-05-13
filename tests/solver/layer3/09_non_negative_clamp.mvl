@@ -1,0 +1,54 @@
+// Solver Layer 3: max(x, 0) style functions — always non-negative
+//
+// A function that returns the argument when it is non-negative, or a
+// non-negative constant otherwise.  Layer 3 inlines both paths:
+//
+//   Path 1 (x >= 0): returns x — Layer 2 proves x >= 0 from path condition.
+//   Path 2 (x < 0):  returns 0 — Layer 1 proves 0 >= 0.
+//
+// Every call in this file is PROVEN by Layer 3.
+
+fn require_non_negative(x: Int where self >= 0) -> Int {
+    x
+}
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_ge_1(x: Int where self >= 1) -> Int {
+    x
+}
+
+// max(x, 0): returns x when x >= 0, else 0.
+fn max_zero(x: Int) -> Int {
+    if x >= 0 { x } else { 0 }
+}
+
+// max(x, 1): returns x when x >= 1, else 1.  Always >= 1 > 0.
+fn max_one(x: Int) -> Int {
+    if x >= 1 { x } else { 1 }
+}
+
+// max(x, 5): returns x when x >= 5, else 5.  Always >= 5 > 0.
+fn max_five(x: Int) -> Int {
+    if x >= 5 { x } else { 5 }
+}
+
+fn examples(a: Int) -> Int {
+    // max_zero paths:
+    //   a >= 0: return a → L2: [0,∞) eff_min=0 → 0 >= 0  ✓
+    //   a < 0:  return 0 → L1: 0 >= 0  ✓
+    require_non_negative(max_zero(a));
+
+    // max_one paths:
+    //   a >= 1: return a → L2: [1,∞) eff_min=1 > 0  ✓
+    //   a < 1:  return 1 → L1: 1 > 0  ✓
+    require_positive(max_one(a));
+    require_ge_1(max_one(a));
+
+    // max_five paths:
+    //   a >= 5: return a → L2: [5,∞) eff_min=5 > 0  ✓
+    //   a < 5:  return 5 → L1: 5 > 0  ✓
+    require_positive(max_five(a))
+}

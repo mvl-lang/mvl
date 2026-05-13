@@ -1,0 +1,55 @@
+// Cross-layer: L1 → L2 fallback
+//
+// Layer 1 (subsumption) requires the argument predicate to be structurally
+// identical to the required predicate.  When the argument carries a STRONGER
+// but structurally different predicate, L1 returns None and Layer 2 takes
+// over using interval arithmetic.
+//
+// Pattern: argument has `self > 5`, required predicate is `self > 0`.
+//   L1: `self > 5` ≠ `self > 0` structurally → None.
+//   L2: `self > 5` → interval [6, ∞); eff_min=6 > 0 → Proven.
+//
+// Every call in this file is PROVEN (by L2 after L1 falls through).
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_non_negative(x: Int where self >= 0) -> Int {
+    x
+}
+
+fn require_lt_100(x: Int where self < 100) -> Int {
+    x
+}
+
+// Argument has self > 5: L1 sees different predicate shape → None.
+// L2: interval [6, ∞); eff_min=6 > 0 → Proven.
+fn stronger_to_weaker_positive(x: Int where self > 5) -> Int {
+    require_positive(x)   // L1 falls → L2 proves  ✓
+}
+
+// Argument has self > 0: L1 sees different shape than self >= 0 → None.
+// L2: interval [1, ∞); eff_min=1 >= 0 → Proven.
+fn positive_to_non_negative(x: Int where self > 0) -> Int {
+    require_non_negative(x)   // L1 falls → L2 proves  ✓
+}
+
+// Argument has self < 50: L1 can't match self < 100 → None.
+// L2: interval (-∞, 49]; eff_max=49 < 100 → Proven.
+fn tighter_lt_to_looser(x: Int where self < 50) -> Int {
+    require_lt_100(x)   // L1 falls → L2 proves  ✓
+}
+
+// Compound hypothesis: L1 can't match compound to simple → None.
+// L2: [5, 20] from self >= 5 && self <= 20; eff_min=5 > 0 → Proven.
+fn compound_to_positive(x: Int where self >= 5 && self <= 20) -> Int {
+    require_positive(x)   // L1 falls → L2 proves  ✓
+}
+
+fn examples() -> Int {
+    stronger_to_weaker_positive(10);
+    positive_to_non_negative(3);
+    tighter_lt_to_looser(30);
+    compound_to_positive(10)
+}

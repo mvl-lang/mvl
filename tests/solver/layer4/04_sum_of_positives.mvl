@@ -1,0 +1,58 @@
+// Solver Layer 4: Sum of two positive variables
+//
+// `a + b > 0` given `a > 0, b > 0` cannot be proven by Layers 1–3:
+//   - Not a literal, tautology, or contradiction (L1).
+//   - Not a simple variable with a single interval that satisfies the pred (L2),
+//     because the *argument* is `a + b`, not a bare variable.
+//   - Not a pure function call whose body can be inlined (L3).
+//
+// Layer 4 (Fourier-Motzkin):
+//   LinTerm: a + b  (vars={a:1, b:1})
+//   ¬pred:   a + b ≤ 0
+//   Hyps:    a ≥ 1  (from a > 0),  b ≥ 1  (from b > 0)
+//   Derive:  a ≥ 1, b ≥ 1 → a + b ≥ 2 → a + b ≤ 0 is UNSAT → Proven.
+//
+// Every call in this file is PROVEN by Layer 4.
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_non_negative(x: Int where self >= 0) -> Int {
+    x
+}
+
+fn require_ge_2(x: Int where self >= 2) -> Int {
+    x
+}
+
+// a > 0, b > 0  →  a + b > 0
+fn sum_two_positives(a: Int where self > 0, b: Int where self > 0) -> Int {
+    require_positive(a + b)   // L4: a ≥ 1, b ≥ 1 → a+b ≥ 2 > 0  ✓
+}
+
+// a > 0, b > 0  →  a + b >= 2
+fn sum_two_ge2(a: Int where self > 0, b: Int where self > 0) -> Int {
+    require_ge_2(a + b)       // L4: a ≥ 1, b ≥ 1 → a+b ≥ 2  ✓
+}
+
+// a >= 0, b >= 0  →  a + b >= 0
+fn sum_two_non_neg(a: Int where self >= 0, b: Int where self >= 0) -> Int {
+    require_non_negative(a + b)   // L4: a ≥ 0, b ≥ 0 → a+b ≥ 0  ✓
+}
+
+// Three positives: a + b + c > 0
+fn sum_three_positives(
+    a: Int where self > 0,
+    b: Int where self > 0,
+    c: Int where self > 0,
+) -> Int {
+    require_positive(a + b + c)   // L4: a ≥ 1, b ≥ 1, c ≥ 1 → sum ≥ 3 > 0  ✓
+}
+
+fn examples() -> Int {
+    sum_two_positives(3, 5);
+    sum_two_ge2(1, 1);
+    sum_two_non_neg(0, 0);
+    sum_three_positives(2, 3, 4)
+}

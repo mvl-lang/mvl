@@ -1,0 +1,53 @@
+// Solver Layer 1: Deep constant folding — two levels of pure-function calls
+//
+// Layer 1 uses const_eval to fold a pure function call with literal arguments.
+// When the argument to the outer call is itself a pure-function call with
+// literal arguments, const_eval evaluates both levels and the predicate is
+// checked against the final computed value.
+//
+// Every call in this file is PROVEN by Layer 1.
+
+fn inc(x: Int) -> Int {
+    x + 1
+}
+
+fn double(x: Int) -> Int {
+    x * 2
+}
+
+fn square(x: Int) -> Int {
+    x * x
+}
+
+fn require_positive(x: Int where self > 0) -> Int {
+    x
+}
+
+fn require_ge_10(x: Int where self >= 10) -> Int {
+    x
+}
+
+fn require_le_50(x: Int where self <= 50) -> Int {
+    x
+}
+
+fn require_gt_3(x: Int where self > 3) -> Int {
+    x
+}
+
+fn examples() -> Int {
+    // inc(4) = 5 → double(5) = 10 → 10 > 0  ✓
+    require_positive(double(inc(4)));
+
+    // double(3) = 6 → inc(6) = 7 → 7 > 0  ✓
+    require_positive(inc(double(3)));
+
+    // double(inc(4)) = 10 → 10 >= 10  ✓
+    require_ge_10(double(inc(4)));
+
+    // double(7) = 14 → 14 <= 50  ✓
+    require_le_50(double(7));
+
+    // inc(3) = 4 → 4 > 3  ✓
+    require_gt_3(inc(3))
+}
