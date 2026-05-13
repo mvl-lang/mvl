@@ -57,7 +57,7 @@ fn random_food(board: Board, seed: Int) -> Pos {
 // pressed 'q' or Escape. The compiler cannot statically bound the duration.
 partial fn game_loop(game: Game, seed: Int) -> Int ! Terminal, Clock {
     if game.alive {
-        let key: String        = tui_read_key_timeout(100);
+        let key: String        = tui_read_key_timeout(150);
         let is_quit: Bool      = key == "q" || key == "Escape";
         if is_quit {
             game.score
@@ -81,9 +81,9 @@ partial fn main() -> Unit ! Terminal, Clock, Console {
     if handle == 0 {
         println("snake_game: failed to enter raw terminal mode (not a tty?)")
     } else {
-        let board: Board = Board { width: 20, height: 10 };
+        let board: Board = Board { width: 40, height: 20 };
         let seed0: Int   = clock_ms();
-        let start: Pos   = Pos { x: 5, y: 5 };
+        let start: Pos   = Pos { x: 10, y: 10 };
         let food: Pos    = random_food(board, seed0);
         let game: Game   = apply_new_game(board, start, food);
         let _: Unit      = render(game);

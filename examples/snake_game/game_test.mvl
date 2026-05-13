@@ -58,8 +58,13 @@ total fn step_head(pos: Pos, dir: Direction) -> Pos {
 
 total fn resolve_dir(current: Direction, input: Option[Direction]) -> Direction {
     match input {
-        Some(d) => d,
-        None    => match current {
+        Some(d) => match current {
+            Direction::Up    => match d { Direction::Down  => Direction::Up,    _ => d },
+            Direction::Down  => match d { Direction::Up    => Direction::Down,  _ => d },
+            Direction::Left  => match d { Direction::Right => Direction::Left,  _ => d },
+            Direction::Right => match d { Direction::Left  => Direction::Right, _ => d },
+        },
+        None => match current {
             Direction::Up    => Direction::Up,
             Direction::Down  => Direction::Down,
             Direction::Left  => Direction::Left,
@@ -180,7 +185,15 @@ test fn top_wall_collision_kills_snake() -> Unit {
 
 test fn left_wall_collision_kills_snake() -> Unit {
     let board: Board = Board { width: 10, height: 5 };
-    let game: Game   = new_game(board, Pos { x: 0, y: 2 }, Pos { x: 5, y: 2 });
+    // moving Down so Left is a valid 90° turn (not a reversal)
+    let game: Game   = Game {
+        snake:     [Pos { x: 0, y: 2 }],
+        direction: Direction::Down,
+        food:      Pos { x: 5, y: 2 },
+        score:     0,
+        alive:     true,
+        board:     board,
+    };
     let next: Game   = update(game, Some(Direction::Left), Pos { x: 5, y: 3 });
     assert_eq(next.alive, false)
 }
@@ -268,7 +281,15 @@ test fn snake_moves_up() -> Unit {
 
 test fn snake_moves_left() -> Unit {
     let board: Board = Board { width: 20, height: 10 };
-    let game: Game   = new_game(board, Pos { x: 5, y: 5 }, Pos { x: 10, y: 8 });
+    // moving Down so Left is a valid 90° turn (not a reversal)
+    let game: Game   = Game {
+        snake:     [Pos { x: 5, y: 5 }],
+        direction: Direction::Down,
+        food:      Pos { x: 10, y: 8 },
+        score:     0,
+        alive:     true,
+        board:     board,
+    };
     let next: Game   = update(game, Some(Direction::Left), Pos { x: 3, y: 3 });
     let head: Pos    = match next.snake.first() { None => Pos { x: 0, y: 0 }, Some(h) => h };
     assert_eq(head.x, 4);
@@ -307,10 +328,10 @@ test fn eating_food_replaces_food_position() -> Unit {
 
 // ── Tests: direction reversal ─────────────────────────────────────────────────
 
-test fn reversal_is_allowed_and_causes_self_collision() -> Unit {
+test fn reversal_is_blocked_snake_continues_straight() -> Unit {
     let board: Board = Board { width: 20, height: 10 };
     // Snake of length 2 moving Right: head (5,5), tail (4,5).
-    // resolve_dir has no reversal guard; turning Left moves head to (4,5) = tail → self-hit.
+    // Pressing Left (180° reversal) is blocked; snake continues Right to (6,5).
     let snake: List[Pos] = [Pos { x: 5, y: 5 }, Pos { x: 4, y: 5 }];
     let game: Game = Game {
         snake:     snake,
@@ -321,5 +342,8 @@ test fn reversal_is_allowed_and_causes_self_collision() -> Unit {
         board:     board,
     };
     let next: Game = update(game, Some(Direction::Left), Pos { x: 15, y: 8 });
-    assert_eq(next.alive, false)
+    assert_eq(next.alive, true);
+    let head: Pos = match next.snake.first() { None => Pos { x: 0, y: 0 }, Some(h) => h };
+    assert_eq(head.x, 6);
+    assert_eq(head.y, 5)
 }

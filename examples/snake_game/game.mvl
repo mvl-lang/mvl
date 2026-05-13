@@ -67,12 +67,19 @@ total fn step_head(pos: Pos, dir: Direction) -> Pos {
 }
 
 // Apply the player's input: hold course on None, change direction on Some(d).
-// `current` is matched as a scrutinee to disqualify it from borrow inference,
-// ensuring the transpiler emits a Direction value (not a reference).
+// 180° reversals are blocked — pressing the opposite direction is ignored so
+// the snake continues straight (classic snake behaviour).
+// Both arms use exhaustive matches on `current` so the transpiler emits owned
+// Direction values rather than references (borrow-inference workaround).
 total fn resolve_dir(current: Direction, input: Option[Direction]) -> Direction {
     match input {
-        Some(d) => d,
-        None    => match current {
+        Some(d) => match current {
+            Direction::Up    => match d { Direction::Down  => Direction::Up,    _ => d },
+            Direction::Down  => match d { Direction::Up    => Direction::Down,  _ => d },
+            Direction::Left  => match d { Direction::Right => Direction::Left,  _ => d },
+            Direction::Right => match d { Direction::Left  => Direction::Right, _ => d },
+        },
+        None => match current {
             Direction::Up    => Direction::Up,
             Direction::Down  => Direction::Down,
             Direction::Left  => Direction::Left,
