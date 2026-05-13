@@ -4,6 +4,19 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.97.6] — 2026-05-13
+
+### Added
+
+- **Solver layer test corpus** — 34 new `.mvl` test files across `tests/solver/layer1`–`layer5` and `tests/solver/cross_layer`, expanding dedicated solver coverage from 19 to 53 tests. Each layer exercises distinct patterns (equality hypotheses, interval arithmetic, symbolic paths, Fourier-Motzkin, Z3 chains, and runtime fallback) (#684).
+- **LLM-generated corpus infrastructure** — `tests/corpus/llm_generated/` directory with YAML schema, README, and analysis templates for collecting and categorising LLM-authored programs and self-healing attempt records (#685).
+- **Spike tests README** — `tests/spikes/README.md` documents spike exclusion from CI and provides manual invocation instructions (#683).
+
+### Fixed
+
+- **Effect-list parser accepts `+` separator** — `compiler/parser.mvl` now accepts `! Eff1 + Eff2` in addition to comma-separated effects; fixes `parser::tests::fn_with_multiple_effects`.
+- **Pre-commit hook target name** — `.githooks/pre-commit` referenced `make test-mvl` which does not exist; corrected to `make test-backend-mvl`.
+
 ## [0.97.5] — 2026-05-13
 
 ### Fixed
