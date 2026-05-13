@@ -656,7 +656,7 @@ total fn process(raw: Tainted<String>) -> Clean<String> {
               (identifier))))))))
 
 ===============================================================================
-Use import declaration
+Use import declaration — with semicolon
 ===============================================================================
 
 use std.io.{File, Path};
@@ -668,6 +668,36 @@ use std.io.{File, Path};
     (module_path
       (identifier)
       (identifier)
+      (identifier)
+      (identifier))))
+
+===============================================================================
+Use import declaration — without semicolon
+===============================================================================
+
+use std.io.{File, Path}
+
+-------------------------------------------------------------------------------
+
+(program
+  (use_decl
+    (module_path
+      (identifier)
+      (identifier)
+      (identifier)
+      (identifier))))
+
+===============================================================================
+Use import declaration — :: path separator
+===============================================================================
+
+use lexer::lex;
+
+-------------------------------------------------------------------------------
+
+(program
+  (use_decl
+    (module_path
       (identifier)
       (identifier))))
 
