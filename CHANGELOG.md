@@ -4,6 +4,15 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.97.5] — 2026-05-13
+
+### Fixed
+
+- **Higher-order function effect propagation** — Caller must now declare all effects of higher-order function parameters, enforcing Req 7/8. Validates parameter effect lists before call site inference (#676).
+- **Linear type enforcement for `consume()` parameters** — Enforce destructive-read semantics for `iso` and `val` parameters, rejecting non-consume operations on linear types in function arguments. Closes linear-type gap tracked in #691.
+- **Const-generic `N` type resolution** — Const-generic `N` now resolves to `UNKNOWN` instead of `Named("N")` to allow polymorphic instantiation across generic call sites. Type::Fn now expands effects list for concrete call-site validation (#687).
+- **Cargo `publish` unsafe warning** — `cargo-gen` emits `PUBLISH-UNSAFE` comment for path and unversioned dependencies, signaling unsafe publish attempts (#679).
+
 ## [0.97.4] — 2026-05-13
 
 ### Fixed
