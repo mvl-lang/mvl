@@ -12,9 +12,6 @@
 (match_stmt) @indent
 (match_expr) @indent
 
-; Indent inside module declarations
-(module_decl) @indent
-
 ; Indent after opening brackets
 [
   "{"

@@ -1,17 +1,46 @@
 #!/usr/bin/env bash
 # MVL pre-commit hook — format, lint, test
-set -e
+set -euo pipefail
 
-echo "pre-commit: cargo fmt"
-cargo fmt -- --check || { echo "Run 'cargo fmt' to fix formatting."; exit 1; }
+staged=$(git diff --cached --name-only)
 
-echo "pre-commit: cargo clippy"
-cargo clippy -- -D warnings || { echo "Fix clippy warnings before committing."; exit 1; }
+# Rust checks — only when .rs files are staged
+if echo "$staged" | grep -qE '\.rs$'; then
+  echo "pre-commit: cargo fmt"
+  cargo fmt -- --check || { echo "Run 'cargo fmt' to fix formatting."; exit 1; }
 
-echo "pre-commit: cargo build -p mvl_runtime_c"
-cargo build -p mvl_runtime_c --quiet || { echo "Failed to build mvl_runtime_c."; exit 1; }
+  echo "pre-commit: cargo clippy"
+  cargo clippy -- -D warnings || { echo "Fix clippy warnings before committing."; exit 1; }
 
-echo "pre-commit: cargo test"
-cargo test --quiet -- --test-threads=1 || { echo "Tests must pass before committing."; exit 1; }
+  echo "pre-commit: cargo build -p mvl_runtime_c"
+  cargo build -p mvl_runtime_c --quiet || { echo "Failed to build mvl_runtime_c."; exit 1; }
+
+  echo "pre-commit: cargo test"
+  cargo test --quiet -- --test-threads=1 || { echo "Tests must pass before committing."; exit 1; }
+fi
+
+# MVL compiler sources → test-mvl
+if echo "$staged" | grep -qE '^compiler/'; then
+  echo "pre-commit: make test-mvl"
+  make test-mvl || { echo "MVL compiler tests failed."; exit 1; }
+fi
+
+# Example programs → test-examples
+if echo "$staged" | grep -qE '^examples/'; then
+  echo "pre-commit: make test-examples"
+  make test-examples || { echo "Example tests failed."; exit 1; }
+fi
+
+# Corpus → test-corpus
+if echo "$staged" | grep -qE '^tests/corpus/'; then
+  echo "pre-commit: make test-corpus"
+  make test-corpus || { echo "Corpus tests failed."; exit 1; }
+fi
+
+# Tree-sitter grammar or nvim query changes → run corpus tests
+if echo "$staged" | grep -qE '^etc/(tree-sitter-mvl|nvim-mvl/queries)/'; then
+  echo "pre-commit: make test-tree-sitter"
+  make test-tree-sitter || { echo "Tree-sitter corpus tests failed."; exit 1; }
+fi
 
 echo "pre-commit: all checks passed"

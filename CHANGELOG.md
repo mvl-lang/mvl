@@ -4,6 +4,16 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.97.4] — 2026-05-13
+
+### Fixed
+
+- **nvim-mvl install** — Global XDG pack install (`~/.local/share/nvim/site/pack/`), sentinel-based idempotent `init.lua` wiring, backup before edits, `nvim` presence check moved before any filesystem writes, XDG path validation (#669).
+- **Tree-sitter highlights** — Removed stale `mut`, `move`, `bitxor_op`, `module_decl` nodes; added `impl`, `extern`, `builtin`, `transparent`, `with`, `invariant` keywords; scoped `!` operator highlight to `unary_expr` to avoid false-matching effect-list separator (#669).
+- **Tree-sitter grammar** — Added `word` property, `unary_expr` named node, optional `;` in `use_decl`/`reexport_decl`, `::` path separator in `module_path` (#669).
+- **Pre-commit hook** — Upgraded to `set -euo pipefail`; added `make test-tree-sitter` trigger for grammar/query file changes (#669).
+- **Compiler lexer** — Removed stale `mut` and `move` keyword entries from `keyword_kind()` (#669).
+
 ## [0.97.3] — 2026-05-13
 
 ### Added

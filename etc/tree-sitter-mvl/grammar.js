@@ -38,6 +38,8 @@ const PREC = {
 module.exports = grammar({
   name: "mvl",
 
+  word: ($) => $.identifier,
+
   extras: ($) => [/\s/, $.line_comment],
 
   // GLR conflicts: `where` after a type_expr is ambiguous between
@@ -95,16 +97,16 @@ module.exports = grammar({
     // Module name = filename without extension.
 
     // `use std.io.{File, Path};` — private import (top of file only)
-    use_decl: ($) => seq("use", $.module_path, ";"),
+    use_decl: ($) => seq("use", $.module_path, optional(";")),
 
     // `pub use std.io.File;` — re-export; "pub" is part of the rule so it
     // remains unambiguous with use_decl (which never has "pub").
-    reexport_decl: ($) => seq("pub", "use", $.module_path, ";"),
+    reexport_decl: ($) => seq("pub", "use", $.module_path, optional(";")),
 
     module_path: ($) =>
       seq(
         $.identifier,
-        repeat(seq(".", $.identifier)),
+        repeat(seq(choice(".", "::"), $.identifier)),
         optional(
           seq(".", "{", $.identifier, repeat(seq(",", $.identifier)), optional(","), "}")
         )
@@ -237,7 +239,7 @@ module.exports = grammar({
 
     effect: ($) =>
       seq(
-        /[a-zA-Z_][a-zA-Z0-9_]*/,
+        $.identifier,
         optional(seq("(", $.string_literal, ")"))
       ),
 
@@ -420,11 +422,7 @@ module.exports = grammar({
           )
         ),
         // Unary operators (right-associative)
-        prec.right(PREC.UNARY, seq("!", $.expr)),
-        prec.right(PREC.UNARY, seq("~", $.expr)),
-        prec.right(PREC.UNARY, seq("-", $.expr)),
-        // "move" removed — use "consume" for ownership transfer
-        prec.right(PREC.UNARY, seq("consume", $.expr)),
+        $.unary_expr,
         // Binary operators
         prec.left(PREC.MUL, seq($.expr, choice("*", "/", "%"), $.expr)),
         prec.left(PREC.ADD, seq($.expr, choice("+", "-"), $.expr)),
@@ -441,6 +439,13 @@ module.exports = grammar({
         // Atoms
         $._atom_expr
       ),
+
+    // Unary prefix operators: ! ~ - consume
+    unary_expr: ($) =>
+      prec.right(PREC.UNARY, seq(
+        field("operator", choice("!", "~", "-", "consume")),
+        field("operand", $.expr)
+      )),
 
     // Borrow expression: `val expr` or `ref expr`
     borrow_expr: ($) =>

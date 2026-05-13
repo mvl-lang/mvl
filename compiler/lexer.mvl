@@ -58,7 +58,6 @@ fn keyword_kind(s: String) -> TokenKind {
     match s {
         "fn"          => TokenKind::KwFn,
         "let"         => TokenKind::KwLet,
-        "mut"         => TokenKind::KwMut,
         "match"       => TokenKind::KwMatch,
         "if"          => TokenKind::KwIf,
         "else"        => TokenKind::KwElse,
@@ -68,7 +67,6 @@ fn keyword_kind(s: String) -> TokenKind {
         "total"       => TokenKind::KwTotal,
         "partial"     => TokenKind::KwPartial,
         "return"      => TokenKind::KwReturn,
-        "move"        => TokenKind::KwMove,
         "consume"     => TokenKind::KwConsume,
         "declassify"  => TokenKind::KwDeclassify,
         "sanitize"    => TokenKind::KwSanitize,

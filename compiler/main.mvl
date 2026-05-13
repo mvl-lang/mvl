@@ -112,6 +112,45 @@ fn dir_from_arg(v: Tainted[String]) -> Path {
     join(path("."), clean_dir)
 }
 
+// ── File processor ───────────────────────────────────────────────────────────
+
+transparent partial fn process_file(name: String, raw: String) -> Program ! Console {
+    let src: Clean[String]  = sanitize(raw);
+    let prog: Clean[Program] = lex_and_parse(src);
+
+    println("── {} ──", name);
+    println("  fns:{} types:{} uses:{} consts:{} externs:{} impls:{} errors:{}",
+        prog.fns.len(), prog.types.len(), prog.uses.len(),
+        prog.consts.len(), prog.externs.len(), prog.impls.len(),
+        prog.errors.len());
+
+    for f in prog.fns {
+        println("{}", format_fn_sig(f))
+    }
+
+    for t in prog.types {
+        let kind_str: String = match t.body_kind {
+            TypeBodyKind::IsStruct => "struct",
+            TypeBodyKind::IsEnum   => "enum",
+            TypeBodyKind::IsAlias  => "alias",
+        };
+        let vis_s: String = if t.visible { "pub " } else { "" };
+        println("  {}type {} = {} ({} fields/{} variants)",
+            vis_s, t.name, kind_str, t.fields.len(), t.variants.len())
+    }
+
+    for u in prog.uses {
+        println("  use {}.{{{}}}",
+            format_path(u.path), format_imports(u.imports))
+    }
+
+    for e in prog.errors {
+        println("  ERROR L{}: {}", e.span.line, e.message)
+    }
+
+    prog
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 partial fn main() -> Unit ! FileRead, Console {
@@ -129,88 +168,21 @@ partial fn main() -> Unit ! FileRead, Console {
             let use_total: ref  Int  = 0;
             let err_total: ref  Int  = 0;
 
-            let i: ref Int = 0;
-            while i < entries.len() {
-                match entries.get(i) {
-                    None => (),
-                    Some(entry) => {
-                        let name: String = to_string(entry.path);
-                        if entry.is_file && name.ends_with(".mvl") {
-                            file_count = file_count + 1;
-                            match read_to_string(entry.path) {
-                                Err(_)  => (),
-                                Ok(raw) => {
-                                    let src: Clean[String] = sanitize(raw);
-                                    let prog: Clean[Program] = lex_and_parse(src);
-                                    println("── {} ──", name);
-                                    println("  fns:{} types:{} uses:{} consts:{} externs:{} impls:{} errors:{}",
-                                        prog.fns.len(), prog.types.len(), prog.uses.len(),
-                                        prog.consts.len(), prog.externs.len(), prog.impls.len(),
-                                        prog.errors.len());
-
-                                    // print fn signatures
-                                    let fi: ref Int = 0;
-                                    while fi < prog.fns.len() {
-                                        match prog.fns.get(fi) {
-                                            None    => (),
-                                            Some(f) => println("{}", format_fn_sig(f)),
-                                        }
-                                        fi = fi + 1
-                                    }
-
-                                    // print type declarations
-                                    let ti: ref Int = 0;
-                                    while ti < prog.types.len() {
-                                        match prog.types.get(ti) {
-                                            None    => (),
-                                            Some(t) => {
-                                                let kind_str: String = match t.body_kind {
-                                                    TypeBodyKind::IsStruct => "struct",
-                                                    TypeBodyKind::IsEnum   => "enum",
-                                                    TypeBodyKind::IsAlias  => "alias",
-                                                };
-                                                let vis_s: String = if t.visible { "pub " } else { "" };
-                                                println("  {}type {} = {} ({} fields/{} variants)",
-                                                    vis_s, t.name, kind_str,
-                                                    t.fields.len(), t.variants.len())
-                                            }
-                                        }
-                                        ti = ti + 1
-                                    }
-
-                                    // print use declarations
-                                    let ui: ref Int = 0;
-                                    while ui < prog.uses.len() {
-                                        match prog.uses.get(ui) {
-                                            None    => (),
-                                            Some(u) => {
-                                                println("  use {}.{{{}}}",
-                                                    format_path(u.path), format_imports(u.imports))
-                                            }
-                                        }
-                                        ui = ui + 1
-                                    }
-
-                                    // print parse errors
-                                    let ei: ref Int = 0;
-                                    while ei < prog.errors.len() {
-                                        match prog.errors.get(ei) {
-                                            None    => (),
-                                            Some(e) => println("  ERROR L{}: {}", e.span.line, e.message),
-                                        }
-                                        ei = ei + 1
-                                    }
-
-                                    fn_total   = fn_total   + prog.fns.len();
-                                    type_total = type_total + prog.types.len();
-                                    use_total  = use_total  + prog.uses.len();
-                                    err_total  = err_total  + prog.errors.len()
-                                }
-                            }
+            for entry in entries {
+                let name: String = to_string(entry.path);
+                if entry.is_file && name.ends_with(".mvl") {
+                    file_count = file_count + 1;
+                    match read_to_string(entry.path) {
+                        Err(_)  => (),
+                        Ok(raw) => {
+                            let prog: Program = process_file(name, raw);
+                            fn_total   = fn_total   + prog.fns.len();
+                            type_total = type_total + prog.types.len();
+                            use_total  = use_total  + prog.uses.len();
+                            err_total  = err_total  + prog.errors.len()
                         }
                     }
                 }
-                i = i + 1
             }
 
             println("");

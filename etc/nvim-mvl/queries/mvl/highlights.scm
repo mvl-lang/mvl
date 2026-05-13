@@ -17,6 +17,9 @@
   "const"
   "struct"
   "enum"
+  "impl"
+  "extern"
+  "builtin"
 ] @keyword
 
 [
@@ -50,7 +53,6 @@
   "in"
   "while"
   "where"
-  "mut"
 ] @keyword
 
 ; ============================================================
@@ -58,12 +60,15 @@
 ; ============================================================
 
 [
-  "move"
   "consume"
 ] @keyword.operator
 
 (declassify_expr "declassify" @keyword.special)
 (sanitize_expr "sanitize" @keyword.special)
+
+"transparent" @keyword.modifier
+"with" @keyword
+"invariant" @keyword
 
 ; ============================================================
 ; Capability annotations (ownership/isolation)
@@ -202,14 +207,14 @@
   ">="
   "&&"
   "||"
-  "!"
   "&"
   "|"
-  "~"
   "<<"
   ">>"
+  "^"
 ] @operator
-(bitxor_op) @operator
+(unary_expr operator: "!") @operator
+(unary_expr operator: "~") @operator
 
 ; Remove | from punctuation.delimiter (now classified as operator above)
 
