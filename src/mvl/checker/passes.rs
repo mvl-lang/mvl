@@ -168,48 +168,10 @@ impl VerificationPass for BasicCheckPass {
     }
 }
 
-// ── Phase 3 stub pass ─────────────────────────────────────────────────────────
-
-/// Reports Phase 1 violations as `Failed`; returns `Unchecked` when Phase 1
-/// found no errors, because a deeper Phase 3 prover is needed for a full proof.
-struct Phase3StubPass {
-    req: u8,
-    pass_name: &'static str,
-    /// Reason shown in the `Unchecked` verdict.
-    stub_reason: &'static str,
-}
-
-impl VerificationPass for Phase3StubPass {
-    fn name(&self) -> &'static str {
-        self.pass_name
-    }
-    fn requirement(&self) -> u8 {
-        self.req
-    }
-    fn run(&self, _prog: &Program, result: &CheckResult) -> Verdict {
-        let errors = result.req_errors[self.req as usize];
-        if errors > 0 {
-            Verdict::Failed {
-                reason: format!("{errors} violation(s)"),
-                span: result
-                    .errors
-                    .iter()
-                    .find(|e| e.requirement_number() == self.req)
-                    .map(|e| e.span()),
-            }
-        } else {
-            Verdict::Unchecked {
-                reason: self.stub_reason.to_string(),
-            }
-        }
-    }
-}
-
 // ── Data race freedom pass (Req 9 — Phase 3 partial proof) ───────────────────
 
 /// Phase 3 data race freedom pass for Req 9.
 ///
-/// Upgrades from the generic `Phase3StubPass` by:
 /// - Reporting Phase 1 capability violations (from the type checker) as `Failed`.
 /// - Reporting Phase 3 iso aliasing violations (from `data_race::check_iso_aliasing`)
 ///   as `Failed`.
@@ -436,8 +398,11 @@ impl PassRegistry {
     /// Phase 1 complete (Req 1, 3, 4, 5, 6, 7, 8): `BasicCheckPass` —
     /// structural / type-system guarantees, verdict is `Proven` when clean.
     ///
-    /// Phase 3 pending (Req 2, 9, 10, 11): `Phase3StubPass` — basic violations
-    /// reported as `Failed`; `Unchecked` when clean (full proof pending).
+    /// Phase 3 complete (Req 2): `BasicCheckPass` — borrow scope, aliasing,
+    /// and use-after-move checks; verdict is `Proven` when no violations found.
+    ///
+    /// Phase 3 pending (Req 9, 10, 11): partial proofs — violations reported as
+    /// `Failed`; `Unchecked` or `Proven` depending on code structure.
     pub fn default_registry() -> Self {
         let passes: Vec<Box<dyn VerificationPass>> = vec![
             // ── Phase 1 complete ────────────────────────────────────────────
@@ -477,10 +442,10 @@ impl PassRegistry {
                 ok_evidence: "no unbounded loops or unproven recursive calls in total functions",
             }),
             // ── Phase 3 pending ─────────────────────────────────────────────
-            Box::new(Phase3StubPass {
+            Box::new(BasicCheckPass {
                 req: 2,
                 pass_name: "Memory Safety",
-                stub_reason: "capability scope analysis pending (Phase 3)",
+                ok_evidence: "no use-after-move, dangling ref, or aliasing violations",
             }),
             Box::new(DataRaceFreedomPass),
             Box::new(RefinementsPass),
@@ -683,9 +648,11 @@ fn add(x: Int, y: Int) -> Int {
             .filter(|&i| verdicts[i as usize].is_proven())
             .collect();
         // Phase 1 complete: Req 1, 3, 4, 5, 6, 7, 8
+        // Phase 3 memory safety: Req 2 (proven when no violations)
         // Phase 3 capability pass: Req 9 (proven when no ref params)
-        assert_eq!(proven.len(), 8, "expected 8 proven, got {proven:?}");
+        assert_eq!(proven.len(), 9, "expected 9 proven, got {proven:?}");
         assert!(verdicts[1].is_proven(), "Req 1 should be Proven");
+        assert!(verdicts[2].is_proven(), "Req 2 should be Proven");
         assert!(verdicts[3].is_proven(), "Req 3 should be Proven");
         assert!(verdicts[4].is_proven(), "Req 4 should be Proven");
         assert!(verdicts[5].is_proven(), "Req 5 should be Proven");
@@ -704,14 +671,18 @@ fn add(x: Int, y: Int) -> Int {
         let (prog, result) = check_src(src);
         let reg = PassRegistry::default_registry();
         let verdicts = reg.run_all(&prog, &result);
-        // Req 2 and 10 are Phase 3 stubs — still Unchecked on clean code.
+        // Req 10 is a Phase 3 stub — still Unchecked on clean code.
         // Req 11 (IFCPass) returns Unchecked because the test function has no labeled types.
-        for req in [2u8, 10, 11] {
+        for req in [10u8, 11] {
             assert!(
                 matches!(verdicts[req as usize], Verdict::Unchecked { .. }),
                 "Req {req} should be Unchecked on clean code"
             );
         }
+        assert!(
+            verdicts[2].is_proven(),
+            "Req 2 should be Proven on clean code"
+        );
         // Req 9 (Data Race Freedom) uses the Phase 3 capability pass:
         // a single function with no `ref` params is provably race-free.
         assert!(

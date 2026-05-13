@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.0] — 2026-05-14
+
+### Changed
+
+- **Req 2 Memory Safety Phase 3 completion** — upgrade from `Unchecked` to `Proven` verdict when all borrow scope, aliasing, and use-after-move checks pass. All underlying checks (Phase C scope-depth analysis, `AliasingMutableBorrow`, `DoubleMutableBorrow`, `UseAfterMove`) were already implemented; only the pass verdict needed updating (#722).
+
 ## [0.98.1] — 2026-05-13
 
 ### Fixed
