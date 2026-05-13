@@ -8,38 +8,44 @@ NVIM_DATA="${XDG_DATA_HOME:-$HOME/.local/share}/nvim"
 INSTALL_DIR="$NVIM_DATA/site/pack/nvim-mvl/start/nvim-mvl"
 INIT_LUA="${XDG_CONFIG_HOME:-$HOME/.config}/nvim/init.lua"
 
+# ── 0. Validate paths stay under $HOME ───────────────────────────────────────
+[[ "$NVIM_DATA" == "$HOME/"* ]] || { echo "ERROR: NVIM_DATA resolves outside HOME ($NVIM_DATA)"; exit 1; }
+[[ "$INIT_LUA"  == "$HOME/"* ]] || { echo "ERROR: INIT_LUA resolves outside HOME ($INIT_LUA)";  exit 1; }
+
+# ── 1. Require nvim before touching any files ─────────────────────────────────
+if ! command -v nvim &>/dev/null; then
+  echo "ERROR: nvim not found in PATH"
+  exit 1
+fi
+
 echo "==> Installing nvim-mvl into $INSTALL_DIR"
 
-# ── 1. Copy plugin files into XDG pack directory ─────────────────────────────
+# ── 2. Copy plugin files into XDG pack directory ─────────────────────────────
 mkdir -p "$INSTALL_DIR"
 cp -r "$PLUGIN_SRC"/. "$INSTALL_DIR/"
 echo "    copied plugin files"
 
-# ── 2. Clean up old repo-path entries; wire in fixed XDG path ────────────────
+# ── 3. Idempotently wire into init.lua via sentinel markers ──────────────────
 if [[ -f "$INIT_LUA" ]]; then
-  # Remove lazy.nvim dir= block for nvim-mvl (multi-line)
-  perl -i -0pe 's/\n\s*--[^\n]*MVL[^\n]*\n\s*\{\n\s*dir\s*=\s*[^\n]*nvim-mvl[^\n]*\n[^}]*\},//g' "$INIT_LUA"
-  # Remove any existing nvim-mvl rtp/require lines (repo-path or XDG)
-  perl -i -ne 'print unless /nvim-mvl|require\("mvl"\)|FileType.*mvl.*treesitter/' "$INIT_LUA"
+  cp "$INIT_LUA" "$INIT_LUA.bak"
+  echo "    backed up init.lua → $INIT_LUA.bak"
+  # Remove sentinel block from prior installs
+  perl -i -0pe 's/\n-- BEGIN nvim-mvl\n.*?-- END nvim-mvl\n//gs' "$INIT_LUA"
+  # Remove any remaining loose nvim-mvl lines (old repo-path rtp:prepend style)
+  perl -i -ne 'print unless /nvim-mvl/' "$INIT_LUA"
   echo "    cleaned up old init.lua entries"
 fi
 
-# Add fixed XDG-path rtp:prepend so lazy.nvim doesn't block pack loading
-if ! grep -q 'nvim-mvl' "$INIT_LUA" 2>/dev/null; then
-  cat >> "$INIT_LUA" <<EOF
+# Append sentinel-marked block (always re-written after cleanup above)
+cat >> "$INIT_LUA" <<ENDLUA
 
--- MVL language support (nvim-mvl) — installed via make install-nvim
+-- BEGIN nvim-mvl
+-- MVL language support — installed via make install-nvim
 vim.opt.runtimepath:prepend("$INSTALL_DIR")
 require("mvl").setup()
-EOF
-  echo "    wired XDG install path into $INIT_LUA"
-fi
-
-# ── 3. Compile parsers via headless Neovim ────────────────────────────────────
-if ! command -v nvim &>/dev/null; then
-  echo "    ERROR: nvim not found in PATH"
-  exit 1
-fi
+-- END nvim-mvl
+ENDLUA
+echo "    wired XDG install path into $INIT_LUA"
 
 # ── 4. Compile and install MVL parser from source ────────────────────────────
 GRAMMAR_DIR="$(cd "$SCRIPT_DIR/../tree-sitter-mvl" && pwd)"

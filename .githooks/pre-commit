@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # MVL pre-commit hook — format, lint, test
-set -e
+set -euo pipefail
 
 staged=$(git diff --cached --name-only)
 
@@ -35,6 +35,12 @@ fi
 if echo "$staged" | grep -qE '^tests/corpus/'; then
   echo "pre-commit: make test-corpus"
   make test-corpus || { echo "Corpus tests failed."; exit 1; }
+fi
+
+# Tree-sitter grammar or nvim query changes → run corpus tests
+if echo "$staged" | grep -qE '^etc/(tree-sitter-mvl|nvim-mvl/queries)/'; then
+  echo "pre-commit: make test-tree-sitter"
+  make test-tree-sitter || { echo "Tree-sitter corpus tests failed."; exit 1; }
 fi
 
 echo "pre-commit: all checks passed"
