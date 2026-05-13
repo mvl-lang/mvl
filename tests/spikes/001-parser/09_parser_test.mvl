@@ -880,7 +880,7 @@ test fn fn_with_single_effect() -> Unit {
 }
 
 test fn fn_with_multiple_effects() -> Unit {
-    // fn io_fn() -> Unit ! FileRead, Console { }
+    // fn io_fn() -> Unit ! FileRead + Console { }
     let toks: List[Token] = [
         kw_fn(), id("io_fn"), pt("("), pt(")"),
         pt("->"), id("Unit"), pt("!"), id("FileRead"), pt(","), id("Console"),

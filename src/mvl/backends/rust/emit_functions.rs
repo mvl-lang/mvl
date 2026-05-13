@@ -4,7 +4,7 @@
 //! Emit Rust function declarations from MVL [`FnDecl`] nodes.
 //!
 //! Phase 1 mappings:
-//! - Effects (`! DB, Console`) → `/// # Effects: DB, Console` doc comment
+//! - Effects (`! DB + Console`) → `/// # Effects: DB, Console` doc comment
 //! - Totality (`total`) → `/// # Totality: total` doc comment
 //! - Capabilities (`iso`, `val`, `ref`, `tag`) → `// capability: iso` comment on param
 //! - Type params with constraints → Rust generic bounds

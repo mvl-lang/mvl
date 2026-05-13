@@ -6,7 +6,7 @@ fn print_line(msg: String) -> Unit ! Console {
 }
 
 // Multiple effects
-fn log_and_store(msg: String) -> Unit ! DB, Console {
+fn log_and_store(msg: String) -> Unit ! DB + Console {
     println(msg);
 }
 

@@ -10,7 +10,7 @@ use std.env.{signal_on, Signal}
 
 fn noop_handler() -> Unit {}
 
-fn main() -> Unit ! Env, Console {
+fn main() -> Unit ! Env + Console {
     signal_on(Signal::SIGINT, noop_handler);
     println("ok");
 }

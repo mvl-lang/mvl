@@ -13,7 +13,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 - **Tree-sitter grammar** — Added `word` property, `unary_expr` named node, optional `;` in `use_decl`/`reexport_decl`, `::` path separator in `module_path` (#669).
 - **Pre-commit hook** — Upgraded to `set -euo pipefail`; added `make test-tree-sitter` trigger for grammar/query file changes (#669).
 - **Compiler lexer** — Removed stale `mut` and `move` keyword entries from `keyword_kind()` (#669).
-
+- **Effect-list grammar ambiguity** — Switched effect separator from `,` to `+` to restore LL(1) parsing. The comma had created a local LL(k>1) ambiguity in fn-type expressions where the parser couldn't determine at `,` whether the next identifier was another effect name or a function parameter. Using `+` (`! Effect1 + Effect2`) eliminates the ambiguity with zero lookahead since `,` remains the sole parameter/tuple separator everywhere. Grammar documentation (EBNF, Tree-sitter) and all test/example files updated (#712, closes #711).
 ## [0.97.3] — 2026-05-13
 
 ### Added

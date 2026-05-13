@@ -230,7 +230,7 @@ partial fn count_for_file(raw: Tainted[String]) -> Clean[Counts] {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-partial fn main() -> Unit ! FileRead, Console {
+partial fn main() -> Unit ! FileRead + Console {
     let dir_path: Path = match get_arg("dir") {
         None    => path("examples/log_analyzer"),
         Some(v) => dir_from_arg(v),

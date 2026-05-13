@@ -110,7 +110,7 @@ impl Parser {
         // (which would indicate function-level constraints, not type refinement).
         let return_refinement = self.try_parse_return_refinement();
 
-        // Optional effect list: `! Effect, Effect`
+        // Optional effect list: `! Effect + Effect`
         let effects = self.parse_optional_effects();
 
         // Optional where-clause constraints: `where T: Trait, U: Trait`
@@ -578,7 +578,7 @@ impl Parser {
         self.require(arrow)?;
         let return_type = Box::new(self.parse_type_expr()?);
 
-        // Optional effects: `! Console, Net`
+        // Optional effects: `! Console + Net`
         let effects = self.parse_optional_effects();
 
         // Optional trailing semicolon
@@ -798,7 +798,7 @@ mod tests {
 
     #[test]
     fn parse_fn_multiple_effects() {
-        let d = fn_decl("fn log(msg: String) -> Unit ! DB, Console { }");
+        let d = fn_decl("fn log(msg: String) -> Unit ! DB + Console { }");
         assert_eq!(
             d.effects
                 .iter()
@@ -862,7 +862,7 @@ mod tests {
     iso db: val DbConn,
     input_password: Tainted[String],
     user_id: Public[UserId]
-) -> Result[Session, AuthError] ! DB, Console { }"#;
+) -> Result[Session, AuthError] ! DB + Console { }"#;
         let d = fn_decl(src);
         assert_eq!(d.totality, Some(Totality::Total));
         assert_eq!(d.name, "authenticate");

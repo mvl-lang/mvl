@@ -25,7 +25,7 @@ fn log_message(msg: String) -> Unit ! Console {
 }
 
 // Function with multiple effects
-fn save_and_log(data: String, path: Path) -> Result[Unit, IOError] ! FileWrite, Console {
+fn save_and_log(data: String, path: Path) -> Result[Unit, IOError] ! FileWrite + Console {
     println("saving...");
     Ok(())
 }
@@ -61,7 +61,7 @@ total fn authenticate(
     iso db: val DbConn,
     input_password: Tainted[String],
     user_id: UserId,
-) -> Result[Session, AuthError] ! DB, Console {
+) -> Result[Session, AuthError] ! DB + Console {
     db.find_and_verify(user_id, input_password)?
 }
 

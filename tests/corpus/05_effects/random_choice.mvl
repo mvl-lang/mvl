@@ -7,7 +7,7 @@
 
 use std.random.{choice}
 
-fn main() -> Unit ! Random, Console {
+fn main() -> Unit ! Random + Console {
     // Single-element Int list — always Some(42).
     let xs: List[Int] = [42];
     let r: Option[Int] = choice(xs);

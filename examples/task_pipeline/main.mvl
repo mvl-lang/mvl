@@ -78,7 +78,7 @@ fn parse_error_msg(e: ParseError) -> String {
 
 // ── Main pipeline ─────────────────────────────────────────────────────────
 
-fn run() -> Result[Unit, RunError] ! FileRead, Console {
+fn run() -> Result[Unit, RunError] ! FileRead + Console {
     let args_result: Result[CliArgs, String] = parse[CliArgs]();
     match args_result {
         Err(_)   => Err(RunError::MissingArg),
@@ -126,7 +126,7 @@ fn run() -> Result[Unit, RunError] ! FileRead, Console {
     }
 }
 
-fn main() -> Unit ! FileRead, Console {
+fn main() -> Unit ! FileRead + Console {
     match run() {
         Ok(_)  => (),
         Err(e) => {

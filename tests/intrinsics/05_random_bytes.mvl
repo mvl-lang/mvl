@@ -6,7 +6,7 @@
 
 use std.random.{bytes}
 
-fn main() -> Unit ! Random, Console {
+fn main() -> Unit ! Random + Console {
     let bs8: List[Int] = bytes(8);
     assert(bs8.len() == 8);
     let bs0: List[Int] = bytes(0);

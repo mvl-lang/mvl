@@ -173,7 +173,7 @@ test fn fn_with_effects() -> Unit {
 }
 
 test fn fn_with_multiple_effects() -> Unit {
-    let p: Program = lp("fn io_fn() -> Unit ! FileRead, Console { }");
+    let p: Program = lp("fn io_fn() -> Unit ! FileRead + Console { }");
     match p.fns.get(0) {
         None    => assert_eq(true, false),
         Some(f) => assert_eq(f.effects.len(), 2)

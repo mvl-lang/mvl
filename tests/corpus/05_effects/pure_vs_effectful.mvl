@@ -59,14 +59,14 @@ fn load_config(path: Path) -> Result[String, IOError] ! FileRead {
     read_path(path)
 }
 
-fn save_and_log(path: Path, content: String) -> Result[Unit, Error] ! FileWrite, Console {
+fn save_and_log(path: Path, content: String) -> Result[Unit, Error] ! FileWrite + Console {
     write_path(path, content)?;
     emit_console("saved");
     Ok(())
 }
 
 // Caller with superset of effects (valid)
-fn full_pipeline(url: String, path: Path) -> Result[Unit, Error] ! Net, FileWrite, Console {
+fn full_pipeline(url: String, path: Path) -> Result[Unit, Error] ! Net + FileWrite + Console {
     let data: Response = fetch(url)?;
     write_path(path, data.body)?;
     emit_console("done");

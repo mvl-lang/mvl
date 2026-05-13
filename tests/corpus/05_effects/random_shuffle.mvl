@@ -7,7 +7,7 @@
 
 use std.random.{shuffle}
 
-fn main() -> Unit ! Random, Console {
+fn main() -> Unit ! Random + Console {
     // Single-element list — always returns [7].
     let xs: List[Int] = [7];
     let ys: List[Int] = shuffle(xs);

@@ -96,7 +96,7 @@ fn resolve_link(p: Path) -> Result[Tainted[String], String] ! FileRead {
 
 // ── Mixed effects (callers declare superset) ──────────────────────────────
 
-fn rotate_log(src: Path, dst: Path, new_content: Tainted[String]) -> Result[Unit, String] ! FileRead, FileWrite, FileDelete {
+fn rotate_log(src: Path, dst: Path, new_content: Tainted[String]) -> Result[Unit, String] ! FileRead + FileWrite + FileDelete {
     let old: Tainted[String] = read_to_string(src)?;
     write(dst, old)?;
     remove(src)?;
@@ -155,7 +155,7 @@ fn read_all_stdin() -> Result[Tainted[String], String] ! Console {
 
 // ── Combined I/O and Console ──────────────────────────────────────────────
 
-fn interactive_save(output_path: Path) -> Result[Unit, String] ! Console, FileWrite {
+fn interactive_save(output_path: Path) -> Result[Unit, String] ! Console + FileWrite {
     let s: Stdin = stdin();
     let _: Tainted[String] = stdin_read_to_string(s)?;
     // Write user input to a known, trusted output_path (not derived from stdin input).
