@@ -69,7 +69,7 @@ type CliArgs = struct {
 //   - args.level.map(|v: Tainted[String]| sanitize(v)) replaces the manual None/Some match.
 //   - std.log structured calls replace raw println for operational events.
 //   - Effect list extended with ! Log.
-fn run() -> Result[Unit, RunError] ! FileRead, Console, Log {
+fn run() -> Result[Unit, RunError] ! FileRead + Console + Log {
     let args_result: Result[CliArgs, String] = parse[CliArgs]();
     match args_result {
         Err(_) => Err(RunError::MissingArg),
@@ -96,7 +96,7 @@ fn run() -> Result[Unit, RunError] ! FileRead, Console, Log {
     }
 }
 
-fn main() -> Unit ! FileRead, Console, Log {
+fn main() -> Unit ! FileRead + Console + Log {
     match run() {
         Ok(_)  => (),
         Err(e) => {

@@ -84,7 +84,7 @@ fn count_tokens(raw: Tainted[String]) -> Int {
     }
 }
 
-fn main() -> Unit ! FileRead, Console {
+fn main() -> Unit ! FileRead + Console {
     // Resolve target directory: --dir arg (Tainted from CLI) or default.
     // dir_from_arg handles sanitize → join; see its comment for the transpiler workaround.
     let dir_path: Path = match get_arg("dir") {

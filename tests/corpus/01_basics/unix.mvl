@@ -148,7 +148,7 @@ fn ignore_sighup() -> Unit ! Env {
 
 // ── Mixed effects: process + env ──────────────────────────────────────────
 
-fn run_with_env_override() -> Result[Tainted[String], String] ! ProcessSpawn, Env {
+fn run_with_env_override() -> Result[Tainted[String], String] ! ProcessSpawn + Env {
     set("GREETING", "hello")?;
     let child: Child = spawn("env", [], Stdio::Devnull, Stdio::Capture, Stdio::Devnull)?;
     let out: ProcessOutput = wait(child)?;

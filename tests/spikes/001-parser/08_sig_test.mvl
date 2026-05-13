@@ -726,7 +726,7 @@ test fn fn_single_effect() -> Unit {
 // ── multiple effects ──────────────────────────────────────────────────────────
 
 test fn fn_multiple_effects() -> Unit {
-    // fn foo() -> Unit ! FileRead, Console { }
+    // fn foo() -> Unit ! FileRead + Console { }
     let tokens: List[Token] = [
         kw("fn"), id("foo"), pt("("), pt(")"),
         pt("->"), id("Unit"), pt("!"), id("FileRead"), pt(","), id("Console"),

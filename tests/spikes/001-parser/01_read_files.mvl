@@ -27,7 +27,7 @@
 
 use std.io.{read_file}
 
-partial fn main() -> Unit ! Console, FileRead {
+partial fn main() -> Unit ! Console + FileRead {
     // String literals are Public and coerce upward to Clean[String] for read_file.
     // filepath stays Public so it can be used in println below.
     let filepath: String = "examples/log_analyzer/main.mvl";

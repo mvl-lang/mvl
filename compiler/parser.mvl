@@ -396,7 +396,7 @@ partial fn parse_param_list(ps: ParserState) -> ParamsR {
     ParamsR { value: params, ps: ps_expect_punct(curr, ")") }
 }
 
-// ── Effect list: ! Eff1, Eff2[Param], ... ────────────────────────────────────
+// ── Effect list: ! Eff1 + Eff2[Param], ... ────────────────────────────────────
 
 partial fn parse_effects(ps: ParserState) -> EffectsR {
     if !ps_at_punct(ps, "!") {
@@ -514,7 +514,7 @@ partial fn parse_fn_decl(
     } else {
         empty_type_expr()
     };
-    // optional effects: ! Eff1, Eff2
+    // optional effects: ! Eff1 + Eff2
     let eff_r: EffectsR = parse_effects(curr);
     curr = eff_r.ps;
     // optional where clause

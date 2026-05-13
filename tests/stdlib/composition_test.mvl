@@ -81,7 +81,7 @@ test fn composition_sanitize_type_enforced_at_compile_time() -> Unit ! FileRead 
 
 // ── Cross-module value flow: std.args controls std.io execution path ──────
 
-test fn composition_arg_absence_routes_to_io_fallback() -> Unit ! Console, FileRead {
+test fn composition_arg_absence_routes_to_io_fallback() -> Unit ! Console + FileRead {
     // STUB: update when implemented — read_to_string always returns Err("")
     // Demonstrates actual cross-module control flow:
     // get_env (std.args) → None → read_to_string (std.io) called on fallback path.

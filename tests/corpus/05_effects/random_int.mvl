@@ -8,7 +8,7 @@
 
 use std.random.{int}
 
-fn main() -> Unit ! Random, Console {
+fn main() -> Unit ! Random + Console {
     let a: Int = int(42, 42);
     let b: Int = int(0, 0);
     println("{}", a);

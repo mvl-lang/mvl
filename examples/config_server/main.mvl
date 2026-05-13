@@ -15,7 +15,7 @@
 //   load_config()     ! FileRead    — reads and validates sample_config.json
 //   init_auth_store() —             — consumes Secret[String]; no MVL effect needed
 //   server_recv()     ! Net         — simulates an incoming HTTP request
-//   server_send()     ! Net, Console — emits the response
+//   server_send()     ! Net + Console — emits the response
 //   log_*()           ! Log         — structured operational events
 //
 // NOTE (issue #96): use imports below are module-system declarations.
@@ -94,8 +94,8 @@ extern "rust" {
     fn server_recv(index: Int) -> Option[Request] ! Net;
 
     // Emit a response (demo: prints to stdout; production: TCP send).
-    // ! Net, Console: network send + local display in the demo.
-    fn server_send(status: Int, body: Clean[String]) -> Unit ! Net, Console;
+    // ! Net + Console: network send + local display in the demo.
+    fn server_send(status: Int, body: Clean[String]) -> Unit ! Net + Console;
 }
 
 // ── Dispatch re-declarations (workaround: #96) ───────────────────────────
@@ -151,7 +151,7 @@ fn handle_delete(path: String) -> Result[Response, HandlerError] {
 
 // ── Entry point ───────────────────────────────────────────────────────────
 
-fn main() -> Unit ! FileRead, Net, Console, Log {
+fn main() -> Unit ! FileRead + Net + Console + Log {
     let load_result: Result[Config, ConfigError] = load_config("sample_config.json");
     match load_result {
         Err(_) => log_error("startup failed", {"reason": "config load error"}),
@@ -179,13 +179,13 @@ fn main() -> Unit ! FileRead, Net, Console, Log {
 //              demonstrates: the stored Secret key cannot be guessed or leaked
 //
 // In production this would be a `partial fn` with a `while true` accept loop.
-fn run_demo() -> Unit ! Net, Console, Log {
+fn run_demo() -> Unit ! Net + Console + Log {
     let r0: Unit = handle_demo_request(0);
     let r1: Unit = handle_demo_request(1);
     handle_demo_request(2)
 }
 
-fn handle_demo_request(index: Int) -> Unit ! Net, Console, Log {
+fn handle_demo_request(index: Int) -> Unit ! Net + Console + Log {
     let req_opt: Option[Request] = server_recv(index);
     match req_opt {
         None      => log_info("demo complete", {"requests": "3"}),

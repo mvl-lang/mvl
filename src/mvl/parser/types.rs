@@ -556,7 +556,7 @@ impl Parser {
         Ok(types)
     }
 
-    /// Parse `! Effect, Effect, …` if the next token is `!`.
+    /// Parse `! Effect + Effect + …` if the next token is `!`.
     pub fn parse_optional_effects(&mut self) -> Vec<Effect> {
         if !self.eat(&TokenKind::Bang) {
             return Vec::new();
@@ -564,14 +564,19 @@ impl Parser {
         self.parse_effect_list()
     }
 
-    /// Parse a non-empty comma-separated list of effect names with optional parameters.
+    /// Parse a non-empty `+`-separated list of effect names with optional parameters.
     ///
-    /// Grammar: `effect = IDENT [ "(" STRING ")" ]`
+    /// Grammar: `effect_list = effect ('+' effect)*`
+    ///          `effect      = IDENT [ "(" STRING ")" ]`
+    ///
+    /// `+` is used as the separator (not `,`) so the grammar stays LL(1): `,` is
+    /// unambiguously a parameter/tuple separator everywhere else, so the parser
+    /// can always determine the effect-list boundary with zero lookahead.
     ///
     /// Examples:
-    /// - `FileRead`               — unparametrized effect
-    /// - `FileRead("/etc/config")` — restricted to a specific path
-    /// - `Net("api.example.com")`  — restricted to a specific host
+    /// - `FileRead`                          — single unparametrized effect
+    /// - `FileRead + Console`                — two effects
+    /// - `FileRead("/etc/config") + Console` — restricted FileRead plus Console
     ///
     /// Fix #6: only plain Ident tokens are valid effect names.  Previously the
     /// fallback accepted any alphabetic token string, which incorrectly consumed
@@ -607,7 +612,7 @@ impl Parser {
                 Some(p) => Effect::with_param(name, p, span),
             };
             effects.push(effect);
-            if !self.eat(&TokenKind::Comma) {
+            if !self.eat(&TokenKind::Plus) {
                 break;
             }
         }
