@@ -208,6 +208,7 @@
   ">>"
 ] @operator
 (bitxor_op) @operator
+(unary_expr operator: "~") @operator
 
 ; Remove | from punctuation.delimiter (now classified as operator above)
 

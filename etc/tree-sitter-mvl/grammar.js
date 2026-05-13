@@ -420,11 +420,7 @@ module.exports = grammar({
           )
         ),
         // Unary operators (right-associative)
-        prec.right(PREC.UNARY, seq("!", $.expr)),
-        prec.right(PREC.UNARY, seq("~", $.expr)),
-        prec.right(PREC.UNARY, seq("-", $.expr)),
-        // "move" removed — use "consume" for ownership transfer
-        prec.right(PREC.UNARY, seq("consume", $.expr)),
+        $.unary_expr,
         // Binary operators
         prec.left(PREC.MUL, seq($.expr, choice("*", "/", "%"), $.expr)),
         prec.left(PREC.ADD, seq($.expr, choice("+", "-"), $.expr)),
@@ -441,6 +437,13 @@ module.exports = grammar({
         // Atoms
         $._atom_expr
       ),
+
+    // Unary prefix operators: ! ~ - consume
+    unary_expr: ($) =>
+      prec.right(PREC.UNARY, seq(
+        field("operator", choice("!", "~", "-", "consume")),
+        field("operand", $.expr)
+      )),
 
     // Borrow expression: `val expr` or `ref expr`
     borrow_expr: ($) =>
