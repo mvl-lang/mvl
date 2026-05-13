@@ -56,7 +56,7 @@ param_list     = param { "," param } ;
 param          = [ capability ] IDENT ":" type_expr [ "where" refinement ] ;
 capability     = "iso" | "val" | "ref" | "tag" ;
 return_type    = type_expr [ "where" refinement ] ;
-effect_list    = effect { "," effect } ;
+effect_list    = effect { "+" effect } ;
 effect         = IDENT [ "(" STRING ")" ] ;
 (* Parametrized effects restrict an effect to a specific resource.  Examples:
    ! FileRead("/etc/app/")    — read access limited to /etc/app/ and below
