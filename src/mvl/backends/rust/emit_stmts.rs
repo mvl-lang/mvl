@@ -520,7 +520,7 @@ fn emit_mcdc_if(
         return false;
     }
     let n = clauses.len();
-    let coupled = detect_coupled_pairs(&clauses);
+    let coupled = detect_coupled_pairs(&clauses, Some(&cg.mcdc_fn_field_reads));
     let Some(decision_id) = cg.alloc_mcdc_decision(line, n, DecisionKind::If, coupled) else {
         return false;
     };
@@ -575,7 +575,7 @@ fn emit_mcdc_while(
         return false;
     }
     let n = clauses.len();
-    let coupled = detect_coupled_pairs(&clauses);
+    let coupled = detect_coupled_pairs(&clauses, Some(&cg.mcdc_fn_field_reads));
     let Some(decision_id) = cg.alloc_mcdc_decision(line, n, DecisionKind::While, coupled) else {
         return false;
     };
@@ -641,7 +641,7 @@ pub fn emit_mcdc_return_expr(
         return false;
     }
     let n = clauses.len();
-    let coupled = detect_coupled_pairs(&clauses);
+    let coupled = detect_coupled_pairs(&clauses, Some(&cg.mcdc_fn_field_reads));
     let Some(decision_id) = cg.alloc_mcdc_decision(line, n, DecisionKind::Return, coupled) else {
         return false;
     };

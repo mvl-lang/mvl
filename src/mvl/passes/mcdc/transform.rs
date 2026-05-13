@@ -18,7 +18,172 @@
 //! Masked clauses are excluded from the Unique-Cause independence pair check —
 //! they are "not reachable under that input," not "tested and failed."
 
-use crate::mvl::parser::ast::Expr;
+use std::collections::{HashMap, HashSet};
+
+use crate::mvl::parser::ast::{Block, Decl, ElseBranch, Expr, MatchBody, Program, Stmt};
+
+/// Maps function name → per-parameter field-path sets.
+///
+/// Each inner `Vec` is indexed by parameter position.  Every `String` in the
+/// inner `HashSet` is a full dotted access path as it appears in the function
+/// body (e.g. `"p.color"`, `"p.vitals.pulse"`).  A bare parameter name
+/// without a field selector (e.g. `"p"`) indicates the parameter is used
+/// without field decomposition — callers should fall back to conservative
+/// (syntactic) coupling in that case.
+///
+/// Built from the current program's source by [`build_fn_field_reads`].
+/// External / cross-file functions are absent from the map; callers treat
+/// that as a signal to use conservative coupling behaviour.
+pub type FnFieldReads = HashMap<String, Vec<HashSet<String>>>;
+
+/// Walk every function in `prog` and collect, for each parameter, the set of
+/// dotted access paths (field reads) that appear anywhere in the function body.
+///
+/// The traversal is purely syntactic — it records every `Ident` or
+/// `FieldAccess` chain that `expr_to_path` can extract.  Paths are kept if
+/// their root matches a parameter name.
+pub fn build_fn_field_reads(prog: &Program) -> FnFieldReads {
+    let mut result = FnFieldReads::new();
+    for decl in &prog.declarations {
+        if let Decl::Fn(fd) = decl {
+            let mut all_paths: Vec<String> = Vec::new();
+            collect_paths_from_block(&fd.body, &mut all_paths);
+
+            let mut param_reads: Vec<HashSet<String>> =
+                fd.params.iter().map(|_| HashSet::new()).collect();
+
+            for path in all_paths {
+                for (i, param) in fd.params.iter().enumerate() {
+                    let root = &param.name;
+                    if path == *root || path.starts_with(&format!("{}.", root)) {
+                        param_reads[i].insert(path.clone());
+                    }
+                }
+            }
+            result.insert(fd.name.clone(), param_reads);
+        }
+    }
+    result
+}
+
+fn collect_paths_from_block(block: &Block, out: &mut Vec<String>) {
+    for stmt in &block.stmts {
+        collect_paths_from_stmt(stmt, out);
+    }
+}
+
+fn collect_paths_from_stmt(stmt: &Stmt, out: &mut Vec<String>) {
+    match stmt {
+        Stmt::Let { init, .. } => collect_paths_from_expr(init, out),
+        Stmt::Assign { value, .. } => collect_paths_from_expr(value, out),
+        Stmt::Return { value: Some(e), .. } => collect_paths_from_expr(e, out),
+        Stmt::Return { value: None, .. } => {}
+        Stmt::Expr { expr, .. } => collect_paths_from_expr(expr, out),
+        Stmt::If {
+            cond, then, else_, ..
+        } => {
+            collect_paths_from_expr(cond, out);
+            collect_paths_from_block(then, out);
+            if let Some(eb) = else_ {
+                match eb {
+                    ElseBranch::Block(b) => collect_paths_from_block(b, out),
+                    ElseBranch::If(s) => collect_paths_from_stmt(s, out),
+                }
+            }
+        }
+        Stmt::Match {
+            scrutinee, arms, ..
+        } => {
+            collect_paths_from_expr(scrutinee, out);
+            for arm in arms {
+                match &arm.body {
+                    MatchBody::Block(b) => collect_paths_from_block(b, out),
+                    MatchBody::Expr(e) => collect_paths_from_expr(e, out),
+                }
+            }
+        }
+        Stmt::For { iter, body, .. } => {
+            collect_paths_from_expr(iter, out);
+            collect_paths_from_block(body, out);
+        }
+        Stmt::While { cond, body, .. } => {
+            collect_paths_from_expr(cond, out);
+            collect_paths_from_block(body, out);
+        }
+    }
+}
+
+fn collect_paths_from_expr(expr: &Expr, out: &mut Vec<String>) {
+    // `expr_to_path` extracts the full dotted path for pure ident / field-access chains.
+    // Return early — don't recurse further so sub-paths aren't double-counted.
+    if let Some(path) = expr_to_path(expr) {
+        out.push(path);
+        return;
+    }
+    match expr {
+        Expr::Binary { left, right, .. } => {
+            collect_paths_from_expr(left, out);
+            collect_paths_from_expr(right, out);
+        }
+        Expr::Unary { expr: e, .. }
+        | Expr::Borrow { expr: e, .. }
+        | Expr::Propagate { expr: e, .. }
+        | Expr::Consume { expr: e, .. }
+        | Expr::Declassify { expr: e, .. }
+        | Expr::Sanitize { expr: e, .. } => collect_paths_from_expr(e, out),
+        Expr::FnCall { args, .. } => {
+            for a in args {
+                collect_paths_from_expr(a, out);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            collect_paths_from_expr(receiver, out);
+            for a in args {
+                collect_paths_from_expr(a, out);
+            }
+        }
+        Expr::If {
+            cond, then, else_, ..
+        } => {
+            collect_paths_from_expr(cond, out);
+            collect_paths_from_block(then, out);
+            if let Some(e) = else_ {
+                collect_paths_from_expr(e, out);
+            }
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            collect_paths_from_expr(scrutinee, out);
+            for arm in arms {
+                match &arm.body {
+                    MatchBody::Block(b) => collect_paths_from_block(b, out),
+                    MatchBody::Expr(e) => collect_paths_from_expr(e, out),
+                }
+            }
+        }
+        Expr::Construct { fields, .. } => {
+            for (_, e) in fields {
+                collect_paths_from_expr(e, out);
+            }
+        }
+        Expr::Lambda { body, .. } => collect_paths_from_expr(body, out),
+        Expr::Block(block) => collect_paths_from_block(block, out),
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+            for e in elems {
+                collect_paths_from_expr(e, out);
+            }
+        }
+        Expr::Map { pairs, .. } => {
+            for (k, v) in pairs {
+                collect_paths_from_expr(k, out);
+                collect_paths_from_expr(v, out);
+            }
+        }
+        // Literal, Ident already handled by expr_to_path above.
+        _ => {}
+    }
+}
 
 /// Build a dotted access path for a pure ident / field-access chain.
 /// Returns `None` for anything that involves computation (calls, operators).
@@ -44,13 +209,20 @@ fn expr_to_path(expr: &Expr) -> Option<String> {
 /// collected rather than just the root `"v"`. This prevents false coupling
 /// between clauses that share a struct parameter but access disjoint fields.
 ///
-/// Examples:
+/// When `fn_field_reads` is provided, call sites of locally-defined functions
+/// are resolved interprocedurally: a bare-variable argument `f(p)` becomes the
+/// set of field paths that `f` actually reads on `p` (e.g. `["p.color"]`),
+/// so two clauses `f(p)` and `g(p)` that read disjoint fields are **not**
+/// reported as coupled.  Functions absent from the map fall back to the
+/// conservative (syntactic) behaviour — the bare argument path is used.
+///
+/// Examples (without interprocedural reads):
 ///   `breathing_absent(v.breathing)` → ["v.breathing"]
 ///   `oxygen_low(v.oxygen_sat)`      → ["v.oxygen_sat"]
 ///   `v.systolic_bp < 90`            → ["v.systolic_bp"]
 ///   `f(a, b)`                       → ["a", "b"]
 ///   `f(v)`                          → ["v"]       (bare var, not a field)
-fn collect_access_paths(expr: &Expr, out: &mut Vec<String>) {
+fn collect_access_paths(expr: &Expr, out: &mut Vec<String>, fn_field_reads: Option<&FnFieldReads>) {
     // Try to extract a pure access path first (handles Ident and FieldAccess chains).
     if let Some(path) = expr_to_path(expr) {
         out.push(path);
@@ -59,20 +231,50 @@ fn collect_access_paths(expr: &Expr, out: &mut Vec<String>) {
     // Recurse into sub-expressions for calls, operators, etc.
     match expr {
         Expr::Binary { left, right, .. } => {
-            collect_access_paths(left, out);
-            collect_access_paths(right, out);
+            collect_access_paths(left, out, fn_field_reads);
+            collect_access_paths(right, out, fn_field_reads);
         }
-        Expr::FnCall { args, .. } => {
+        Expr::FnCall { name, args, .. } => {
+            // Interprocedural resolution: when the callee is defined in the same
+            // compilation unit and all its parameter accesses are field-level,
+            // replace the bare-var argument with the resolved field paths.
+            if let Some(param_reads) = fn_field_reads.and_then(|m| m.get(name.as_str())) {
+                if args.len() == param_reads.len() {
+                    for (i, arg) in args.iter().enumerate() {
+                        let fields = &param_reads[i];
+                        if let Some(arg_path) = expr_to_path(arg) {
+                            // Only refine when the param is accessed exclusively through
+                            // field selectors (no bare usage).  If the set contains a
+                            // bare param name (no '.') the callee may forward the whole
+                            // value, so fall back to the conservative arg path.
+                            if !fields.is_empty() && fields.iter().all(|p| p.contains('.')) {
+                                for field_path in fields {
+                                    let dot = field_path.find('.').unwrap();
+                                    out.push(format!("{}{}", arg_path, &field_path[dot..]));
+                                }
+                            } else {
+                                out.push(arg_path);
+                            }
+                        } else {
+                            collect_access_paths(arg, out, fn_field_reads);
+                        }
+                    }
+                    return;
+                }
+            }
+            // Conservative fallback: recurse into all arguments.
             for a in args {
-                collect_access_paths(a, out);
+                collect_access_paths(a, out, fn_field_reads);
             }
         }
-        Expr::FieldAccess { expr, .. } => collect_access_paths(expr, out),
-        Expr::Unary { expr, .. } | Expr::Borrow { expr, .. } => collect_access_paths(expr, out),
+        Expr::FieldAccess { expr, .. } => collect_access_paths(expr, out, fn_field_reads),
+        Expr::Unary { expr, .. } | Expr::Borrow { expr, .. } => {
+            collect_access_paths(expr, out, fn_field_reads)
+        }
         Expr::MethodCall { receiver, args, .. } => {
-            collect_access_paths(receiver, out);
+            collect_access_paths(receiver, out, fn_field_reads);
             for a in args {
-                collect_access_paths(a, out);
+                collect_access_paths(a, out, fn_field_reads);
             }
         }
         _ => {}
@@ -86,15 +288,22 @@ fn collect_access_paths(expr: &Expr, out: &mut Vec<String>) {
 /// variable like `hr`). Clauses that share a struct parameter but access
 /// disjoint fields (e.g. `v.breathing` vs `v.oxygen_sat`) are NOT flagged.
 ///
+/// When `fn_field_reads` is `Some`, call sites of locally-defined functions
+/// are resolved interprocedurally before the overlap check — see
+/// [`collect_access_paths`] for details.  Pass `None` to use purely
+/// syntactic (conservative) coupling.
+///
 /// Returns a list of `(clause_i, clause_j, shared_paths)` triples,
 /// one entry per coupled pair.
-pub fn detect_coupled_pairs(clauses: &[&Expr]) -> Vec<(usize, usize, Vec<String>)> {
-    use std::collections::HashSet;
+pub fn detect_coupled_pairs(
+    clauses: &[&Expr],
+    fn_field_reads: Option<&FnFieldReads>,
+) -> Vec<(usize, usize, Vec<String>)> {
     let paths: Vec<HashSet<String>> = clauses
         .iter()
         .map(|expr| {
             let mut v = Vec::new();
-            collect_access_paths(expr, &mut v);
+            collect_access_paths(expr, &mut v, fn_field_reads);
             v.into_iter().collect()
         })
         .collect();

@@ -19,7 +19,7 @@ use crate::mvl::parser::ast::{
 };
 use crate::mvl::parser::lexer::Span;
 use crate::mvl::passes::coverage::{BranchKind, CoverageMap};
-use crate::mvl::passes::mcdc::transform::{DecisionKind, MCDCMap};
+use crate::mvl::passes::mcdc::transform::{DecisionKind, FnFieldReads, MCDCMap};
 use crate::mvl::passes::mutation::{
     mutations_for_binary_op, mutations_for_int_literal, MutationMap,
 };
@@ -51,6 +51,10 @@ pub struct RustEmitter {
     pub coverage: Option<CoverageMap>,
     /// Active MC/DC map — `Some` when transpiling with `mvl mcdc`.
     pub mcdc: Option<MCDCMap>,
+    /// Per-function field-read sets for interprocedural MC/DC coupling analysis.
+    /// Built from the current program before emission starts; empty when MC/DC
+    /// instrumentation is inactive or for non-MC/DC transpilation passes.
+    pub mcdc_fn_field_reads: FnFieldReads,
     /// Active mutation map — `Some` when transpiling with `mvl mutate`.
     pub mutation: Option<MutationMap>,
     /// Name of the function currently being transpiled (for coverage metadata).
