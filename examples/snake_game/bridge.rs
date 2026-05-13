@@ -13,12 +13,37 @@
 //! Phase note: bridge.rs mirrors the approach in pkg/tui/bridge.rs (stty + ANSI).
 //! A future Phase 4 bridge could replace stty with crossterm for Windows support.
 
-use std::io::{Read, Write, stdin, stdout};
+use std::fs::File;
+use std::io::{Read, Write, stdout};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static RAW_MODE: AtomicBool = AtomicBool::new(false);
+
+// Run stty with the given args, using /dev/tty as stdin.
+// stty requires its stdin to be the terminal device; inheriting fd 0 fails
+// when the binary is launched through a process chain (make → mvl → binary)
+// where stdin has been redirected to a pipe or /dev/null.
+fn run_stty(args: &[&str]) -> bool {
+    let Ok(tty) = File::open("/dev/tty") else { return false };
+    Command::new("/usr/bin/stty")
+        .args(args)
+        .stdin(tty)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+// Read up to `buf.len()` bytes from /dev/tty (the controlling terminal).
+// Using /dev/tty directly ensures we get keypresses even when fd 0 is piped.
+fn read_tty(buf: &mut [u8]) -> usize {
+    File::open("/dev/tty")
+        .map(|mut f| f.read(buf).unwrap_or(0))
+        .unwrap_or(0)
+}
 
 // ── Terminal lifecycle ─────────────────────────────────────────────────────────
 
@@ -26,12 +51,7 @@ static RAW_MODE: AtomicBool = AtomicBool::new(false);
 /// Returns 1 on success, 0 on failure (e.g. stdout is not a tty).
 #[no_mangle]
 pub extern "Rust" fn tui_init() -> i64 {
-    let ok = Command::new("/usr/bin/stty")
-        .args(["-echo", "-icanon", "min", "1", "time", "0"])
-        .stdin(std::process::Stdio::inherit())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    let ok = run_stty(&["-echo", "-icanon", "min", "1", "time", "0"]);
     if !ok {
         return 0;
     }
@@ -51,11 +71,7 @@ pub extern "Rust" fn tui_drop() {
     if RAW_MODE.swap(false, Ordering::SeqCst) {
         print!("\x1b[?1049l\x1b[?25h");
         stdout().flush().ok();
-        Command::new("/usr/bin/stty")
-            .arg("sane")
-            .stdin(std::process::Stdio::inherit())
-            .status()
-            .ok();
+        run_stty(&["sane"]);
     }
 }
 
@@ -118,19 +134,11 @@ fn ansi_fg(n: i64) -> &'static str {
 pub extern "Rust" fn tui_read_key_timeout(millis: i64) -> String {
     // Use stty VTIME (1/10-second units) for timeout; granularity ~100 ms.
     let tenths = (millis / 100).clamp(0, 255) as u64;
-    Command::new("/usr/bin/stty")
-        .args(["min", "0", "time", &tenths.to_string()])
-        .stdin(std::process::Stdio::inherit())
-        .status()
-        .ok();
+    run_stty(&["min", "0", "time", &tenths.to_string()]);
     let mut b = [0u8; 1];
-    let n = stdin().read(&mut b).unwrap_or(0);
+    let n = read_tty(&mut b);
     // Restore blocking raw mode.
-    Command::new("/usr/bin/stty")
-        .args(["-echo", "-icanon", "min", "1", "time", "0"])
-        .stdin(std::process::Stdio::inherit())
-        .status()
-        .ok();
+    run_stty(&["-echo", "-icanon", "min", "1", "time", "0"]);
     if n == 0 {
         return String::new(); // timeout
     }
@@ -147,18 +155,10 @@ pub extern "Rust" fn tui_read_key_timeout(millis: i64) -> String {
 fn read_escape_sequence() -> String {
     let mut seq = [0u8; 2];
     // Allow zero-wait reads for the sequence bytes (1/10 s).
-    Command::new("/usr/bin/stty")
-        .args(["min", "0", "time", "1"])
-        .stdin(std::process::Stdio::inherit())
-        .status()
-        .ok();
-    let n = stdin().read(&mut seq).unwrap_or(0);
+    run_stty(&["min", "0", "time", "1"]);
+    let n = read_tty(&mut seq);
     // Restore raw mode.
-    Command::new("/usr/bin/stty")
-        .args(["-echo", "-icanon", "min", "1", "time", "0"])
-        .stdin(std::process::Stdio::inherit())
-        .status()
-        .ok();
+    run_stty(&["-echo", "-icanon", "min", "1", "time", "0"]);
     if n >= 2 && seq[0] == b'[' {
         return match seq[1] {
             b'A' => "Up".to_string(),
