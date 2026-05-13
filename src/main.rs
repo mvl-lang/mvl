@@ -1803,8 +1803,18 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                 vec![dir.to_path_buf(), dir.join("internal")];
             for scan_dir in dirs_to_scan {
                 if let Ok(entries) = fs::read_dir(&scan_dir) {
+                    // Symlink escape guard (#715): canonicalize the scan root once so
+                    // that symlinks pointing outside the directory are silently skipped.
+                    let canon_scan_dir = fs::canonicalize(&scan_dir).ok();
                     for entry in entries.flatten() {
                         let p = entry.path();
+                        // Skip entries that resolve outside the scanned directory.
+                        if let Some(ref canon_root) = canon_scan_dir {
+                            match fs::canonicalize(&p) {
+                                Ok(canon_p) if canon_p.starts_with(canon_root) => {}
+                                _ => continue,
+                            }
+                        }
                         let fname = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
                         if p.extension().map(|e| e == "mvl").unwrap_or(false)
                             && !fname.contains("_test")
@@ -3144,6 +3154,12 @@ fn load_pkg_modules(
                             let dir = pkg_dir.join(sub);
                             if let Ok(entries) = fs::read_dir(&dir) {
                                 for entry in entries.flatten() {
+                                    // Symlink escape guard (#715): skip symlinks so a
+                                    // malicious package cannot point outside its directory.
+                                    if entry.file_type().map(|ft| ft.is_symlink()).unwrap_or(false)
+                                    {
+                                        continue;
+                                    }
                                     let path = entry.path();
                                     if path.extension().map(|e| e == "mvl").unwrap_or(false) {
                                         if let Ok(src) = fs::read_to_string(&path) {
