@@ -266,6 +266,10 @@ impl TypeChecker {
                     }
                 }
                 // Req 8: total function must not call a partial HOF parameter.
+                // Note: hof_totality is None when the HOF param was declared via TypeExpr::Fn
+                // syntax (e.g. `f: fn(Int) -> Int`) because the parser does not yet support
+                // totality annotations in function-type expressions. In that case this guard
+                // is a no-op — a known Phase 1 gap tracked in #711.
                 if matches!(hof_totality, Some(Totality::Partial))
                     && !matches!(self.current_fn_totality, Some(Totality::Partial))
                 {

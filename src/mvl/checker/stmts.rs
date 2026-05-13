@@ -289,6 +289,9 @@ impl TypeChecker {
                 } else if ann_ty.is_linear() {
                     // Pony destructive-read rule: linear types require explicit consume().
                     // `let t: String = s` is forbidden; `let t: String = consume(s)` is required.
+                    // Note: Stmt::Let.ty is always present (MVL requires type annotations on all
+                    // let bindings), so this branch covers every linear-typed let binding —
+                    // there is no unannotated path that could bypass this check.
                     if let Expr::Ident(src, _) = init {
                         self.emit(CheckError::LinearTypeBareBind {
                             name: src.clone(),

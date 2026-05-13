@@ -167,6 +167,7 @@ impl Ty {
     /// Only the primitively heap-allocated types that the checker knows are non-Copy.
     /// Named types (structs/enums) are excluded — their linearity depends on fields
     /// and will be tracked in Phase 2 via type declarations.
+    /// TODO(#711): extend to Named once field linearity is tracked in Phase 2.
     pub fn is_linear(&self) -> bool {
         matches!(
             self.unlabeled(),
