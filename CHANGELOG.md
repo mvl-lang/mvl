@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.98.1] — 2026-05-13
+
+### Fixed
+
+- **MC/DC coupling detection false positives** — interprocedural field-sensitivity analysis now resolves bare-variable call-site arguments to the actual field paths each callee reads, so clauses like `f(p) || g(p)` where `f` reads `p.x` and `g` reads `p.y` are no longer incorrectly coupled (#562).
+
 ## [0.98.0] — 2026-05-13
 
 ### Added
