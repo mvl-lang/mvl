@@ -173,6 +173,12 @@ test-stdlib: build ## Verify stdlib runtime correctness: transpile tests/stdlib/
 test-backend-mvl: build ## Run MVL-in-MVL tests for the self-hosted compiler (compiler/*_test.mvl)
 	$(MVL) test compiler/
 
+# Spike tests are INTENTIONALLY excluded from the main `test` target and from CI.
+# They explore speculative ideas (issue #187: parser-in-MVL) and require manual invocation.
+# See tests/spikes/001-parser/Makefile for per-experiment targets.
+test-spikes: build ## Run spike 001-parser tests manually (NOT part of CI — see #683)
+	$(MVL) test tests/spikes/001-parser/
+
 test-bdd: build ## Run BDD corpus scenarios with Gherkin report (mvl test --bdd)
 	$(MVL) test tests/corpus/11_bdd/ --bdd
 
