@@ -7,7 +7,11 @@
 //! which is an unresolved syntactic form.  Conversion happens in [`resolve`].
 
 use crate::mvl::checker::ifc;
-use crate::mvl::parser::ast::{SecurityLabel, TypeExpr};
+use crate::mvl::parser::ast::{Effect, SecurityLabel, Totality, TypeExpr};
+
+/// Sentinel for an unresolved const-generic array size (e.g. `N` in `Array[T, N]`).
+/// Treated as size-compatible with any concrete size in `types_compatible`.
+pub const ARRAY_SIZE_UNKNOWN: u64 = u64::MAX;
 
 /// Resolved type used throughout the checker.
 #[derive(Debug, Clone, PartialEq)]
@@ -28,7 +32,11 @@ pub enum Ty {
     Option(Box<Ty>),
     Result(Box<Ty>, Box<Ty>),
     Ref(bool, Box<Ty>), // (mutable, inner)
-    Fn(Vec<Ty>, Box<Ty>),
+    /// Function type: params, return, declared effects, totality.
+    /// Effects are preserved from `TypeExpr::Fn` so HOF call sites can enforce Req 7/8.
+    /// `totality` is `None` unless the HOF parameter was created from a named function
+    /// reference (see `infer.rs`).
+    Fn(Vec<Ty>, Box<Ty>, Vec<Effect>, Option<Totality>),
     Tuple(Vec<Ty>),
     List(Box<Ty>),
     /// Fixed-size array: element type + compile-time size constant.
@@ -65,19 +73,32 @@ impl Ty {
             Ty::Result(ok, err) => format!("Result<{}, {}>", ok.display(), err.display()),
             Ty::Ref(true, inner) => format!("ref {}", inner.display()),
             Ty::Ref(false, inner) => format!("val {}", inner.display()),
-            Ty::Fn(params, ret) => {
+            Ty::Fn(params, ret, effects, _) => {
                 let params_str = params
                     .iter()
                     .map(Ty::display)
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("fn({params_str}) -> {}", ret.display())
+                let effects_str = if effects.is_empty() {
+                    String::new()
+                } else {
+                    let e = effects
+                        .iter()
+                        .map(|e| e.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!(" ! {e}")
+                };
+                format!("fn({params_str}) -> {}{effects_str}", ret.display())
             }
             Ty::Tuple(elems) => {
                 let elems_str = elems.iter().map(Ty::display).collect::<Vec<_>>().join(", ");
                 format!("({elems_str})")
             }
             Ty::List(inner) => format!("List<{}>", inner.display()),
+            Ty::Array(inner, size) if *size == ARRAY_SIZE_UNKNOWN => {
+                format!("Array<{}, _>", inner.display())
+            }
             Ty::Array(inner, size) => format!("Array<{}, {}>", inner.display(), size),
             Ty::Map(k, v) => format!("Map<{}, {}>", k.display(), v.display()),
             Ty::Set(t) => format!("Set<{}>", t.display()),
@@ -142,6 +163,18 @@ impl Ty {
         self.is_option() || self.is_result()
     }
 
+    /// True if this type requires explicit `consume()` for ownership transfer.
+    /// Only the primitively heap-allocated types that the checker knows are non-Copy.
+    /// Named types (structs/enums) are excluded — their linearity depends on fields
+    /// and will be tracked in Phase 2 via type declarations.
+    /// TODO(#711): extend to Named once field linearity is tracked in Phase 2.
+    pub fn is_linear(&self) -> bool {
+        matches!(
+            self.unlabeled(),
+            Ty::String | Ty::List(_) | Ty::Map(_, _) | Ty::Set(_)
+        )
+    }
+
     /// Return the success type after unwrapping Result/Option for `?`.
     pub fn propagate_inner(&self) -> Ty {
         match self.unlabeled() {
@@ -174,10 +207,11 @@ pub fn resolve(expr: &TypeExpr) -> Ty {
                     TypeExpr::IntConst { value, .. } if *value >= 0 => *value as u64,
                     // Negative literal is invalid — propagate Unknown so the caller gets an error.
                     TypeExpr::IntConst { .. } => return Ty::Unknown,
-                    // Type variable (e.g. `Array<T, N>` in a generic function): size not yet
-                    // known at resolve-time. Phase-1 limitation: treat as unresolved.
-                    // TODO(phase-2): track const-generic variables in the checker environment.
-                    _ => 0,
+                    // Type variable (e.g. `Array[T, N]` in a generic function): size is
+                    // unresolved at resolve-time. Use ARRAY_SIZE_UNKNOWN so that
+                    // types_compatible() treats it as size-flexible rather than silently
+                    // producing Array[T, 0] (which would cause incorrect mismatch errors).
+                    _ => ARRAY_SIZE_UNKNOWN,
                 };
                 Ty::Array(Box::new(elem), size)
             }
@@ -201,9 +235,17 @@ pub fn resolve(expr: &TypeExpr) -> Ty {
         TypeExpr::Refined { inner, pred, .. } => {
             Ty::Refined(Box::new(resolve(inner)), format!("{pred:?}"))
         }
-        TypeExpr::Fn { params, ret, .. } => {
-            Ty::Fn(params.iter().map(resolve).collect(), Box::new(resolve(ret)))
-        }
+        TypeExpr::Fn {
+            params,
+            ret,
+            effects,
+            ..
+        } => Ty::Fn(
+            params.iter().map(resolve).collect(),
+            Box::new(resolve(ret)),
+            effects.clone(),
+            None, // Totality not expressible in TypeExpr::Fn; use None (Phase 2: add parser support)
+        ),
         TypeExpr::Tuple { elems, .. } => Ty::Tuple(elems.iter().map(resolve).collect()),
         // Integer const generics are not standalone types — they only appear inside Array<T, N>
         TypeExpr::IntConst { .. } => Ty::Unknown,
@@ -254,7 +296,12 @@ pub fn types_compatible(a: &Ty, b: &Ty) -> bool {
             types_compatible(ao, bo) && types_compatible(ae, be)
         }
         (Ty::List(ai), Ty::List(bi)) => types_compatible(ai, bi),
-        (Ty::Array(ae, an), Ty::Array(be, bn)) => an == bn && types_compatible(ae, be),
+        (Ty::Array(ae, an), Ty::Array(be, bn)) => {
+            // ARRAY_SIZE_UNKNOWN means the size is an unresolved const-generic variable;
+            // treat it as compatible with any concrete size (both element types must match).
+            (*an == *bn || *an == ARRAY_SIZE_UNKNOWN || *bn == ARRAY_SIZE_UNKNOWN)
+                && types_compatible(ae, be)
+        }
         (Ty::Map(ak, av), Ty::Map(bk, bv)) => types_compatible(ak, bk) && types_compatible(av, bv),
         (Ty::Set(ai), Ty::Set(bi)) => types_compatible(ai, bi),
         (Ty::Ref(am, ai), Ty::Ref(bm, bi)) => am == bm && types_compatible(ai, bi),

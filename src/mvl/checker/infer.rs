@@ -85,7 +85,12 @@ impl TypeChecker {
                     // Function reference: `xs.map(double)` — ident is a known function name.
                     // Return Ty::Fn so callers like map/filter can infer the output type.
                     if let Some(fn_info) = self.env.lookup_fn(name).cloned() {
-                        return Ty::Fn(fn_info.params.clone(), Box::new(fn_info.ret.clone()));
+                        return Ty::Fn(
+                            fn_info.params.clone(),
+                            Box::new(fn_info.ret.clone()),
+                            fn_info.effects.clone(),
+                            fn_info.totality.clone(),
+                        );
                     }
                     self.emit(CheckError::UndefinedVariable {
                         name: name.clone(),
@@ -442,7 +447,7 @@ impl TypeChecker {
                 }
                 self.env.pop_scope();
                 self.lambda_scope_starts.pop();
-                Ty::Fn(param_tys, Box::new(ret_ty))
+                Ty::Fn(param_tys, Box::new(ret_ty), vec![], None)
             }
         }
     }

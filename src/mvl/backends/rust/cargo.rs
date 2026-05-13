@@ -46,25 +46,33 @@ impl<'a> CargoOptions<'a> {
 
 fn deps_section(opts: &CargoOptions<'_>) -> String {
     let mut lines = Vec::new();
+    let mut publish_unsafe = false;
+
     if opts.use_mvl_runtime {
-        // Use path dep for local development; published crate once released.
-        // Path is `./mvl_runtime` (inside the build dir) so each concurrent
-        // build has its own copy — eliminates races on shared `/tmp/mvl_runtime`.
+        // Path dep for local development — not suitable for crates.io publishing.
+        // Replace with a versioned dep (`mvl_runtime = "x.y.z"`) before publishing.
         lines.push(
             "mvl_runtime = { path = \"./mvl_runtime\" }  # MVL security labels and prelude"
                 .to_string(),
         );
+        publish_unsafe = true;
     }
     for krate in &opts.extern_crates {
-        // TODO: pin to a specific version before publishing.
+        // Version pinned to "0.1" — update to an exact version before publishing.
         lines.push(format!(
             "{krate} = \"0.1\"  # declared in extern \"rust\" block — pin version before publishing"
         ));
+        publish_unsafe = true;
     }
     if lines.is_empty() {
         String::new()
     } else {
-        format!("\n[dependencies]\n{}\n", lines.join("\n"))
+        let warning = if publish_unsafe {
+            "# PUBLISH-UNSAFE: path/unversioned deps present — pin all versions before `cargo publish`\n"
+        } else {
+            ""
+        };
+        format!("\n[dependencies]\n{warning}{}\n", lines.join("\n"))
     }
 }
 

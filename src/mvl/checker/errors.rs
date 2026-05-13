@@ -222,6 +222,13 @@ pub enum CheckError {
         name: String,
         span: Span,
     },
+    /// Linear type (String, List, Map, Set, or named struct) assigned without `consume()`.
+    /// MVL uses Pony-style destructive read: ownership transfer requires explicit `consume(x)`.
+    LinearTypeBareBind {
+        name: String,
+        ty: String,
+        span: Span,
+    },
 
     // ── Iterator trait (001-type-system/Req 11) ──────────────────────────
     /// Expression after `in` does not implement the `Iterator` trait.
@@ -422,6 +429,8 @@ impl CheckError {
             CheckError::NotIterator { .. } => 1,
             // Req 9: Generics — constraint enforcement
             CheckError::MissingConstraint { .. } => 9,
+            // Req 2: Memory Safety — linear type ownership
+            CheckError::LinearTypeBareBind { .. } => 2,
         }
     }
 
@@ -462,6 +471,7 @@ impl CheckError {
             | CheckError::UnprovenRecursion { span, .. }
             | CheckError::CapabilityViolation { span, .. }
             | CheckError::IsoAliasingViolation { span, .. }
+            | CheckError::LinearTypeBareBind { span, .. }
             | CheckError::InvalidDeclassify { span, .. }
             | CheckError::InvalidSanitize { span, .. }
             | CheckError::LoggingLabelViolation { span, .. }
@@ -605,6 +615,9 @@ impl CheckError {
             ),
             CheckError::IsoAliasingViolation { name, .. } => format!(
                 "`iso` value `{name}` aliased without `consume()` — use `consume({name})` to transfer ownership and preserve isolation"
+            ),
+            CheckError::LinearTypeBareBind { name, ty, .. } => format!(
+                "bare assignment of linear type `{ty}` — use `consume({name})` to transfer ownership (Pony destructive read semantics)"
             ),
             CheckError::InvalidDeclassify { found, .. } => format!(
                 "`declassify()` requires `Secret<T>`, found `{found}` — only Secret data can be declassified (for Tainted data use `sanitize()` instead)"

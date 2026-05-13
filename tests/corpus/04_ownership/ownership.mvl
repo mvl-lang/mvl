@@ -1,22 +1,23 @@
-// Corpus: Ownership and move semantics (Req 6)
-// Demonstrates consume(x) for explicit ownership transfer.
+// Corpus: Ownership — consume / destructive read semantics (Req 6)
+// MVL uses Pony-style destructive read: consume(x) is the sole mechanism
+// for transferring ownership of linear types (no implicit move on assignment).
 
 type Buffer = struct {
     data: String,
     size: Int,
 }
 
-// Consume a buffer — explicit move transfers ownership
+// Consume a buffer — consume() transfers ownership (destructive read)
 fn consume_buffer(b: Buffer) -> Int {
     b.size
 }
 
-// Move into a function call
+// Transfer ownership via consume() into a function call
 fn transfer(b: Buffer) -> Int {
     consume_buffer(consume(b))
 }
 
-// Immutable reference access — does not move
+// Immutable reference access — does not consume
 fn read_size(b: Buffer) -> Int {
     b.size
 }

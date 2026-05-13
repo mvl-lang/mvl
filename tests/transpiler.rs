@@ -417,6 +417,12 @@ fn extern_rust_adds_mvl_runtime_to_cargo_toml() {
         "Cargo.toml must reference mvl_runtime: {}",
         out.cargo_toml
     );
+    // #679: PUBLISH-UNSAFE warning must appear when path deps are present
+    assert!(
+        out.cargo_toml.contains("PUBLISH-UNSAFE"),
+        "Cargo.toml must warn about publish-unsafe path dep: {}",
+        out.cargo_toml
+    );
     assert_eq!(out.extern_count, 1);
 }
 

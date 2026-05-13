@@ -5975,3 +5975,142 @@ fn keywords_corpus_parses_and_checks() {
         "keywords corpus should have no serious errors, got: {serious:?}"
     );
 }
+
+// ── #676: HOF effect propagation ─────────────────────────────────────────────
+
+/// Pure HOF wrapper calling an effectful parameter must declare ! Console.
+#[test]
+fn hof_effectful_param_requires_caller_effect() {
+    // GIVEN: pure fn run accepts fn(Int) -> Int ! Console and calls it
+    // THEN: checker emits UndeclaredEffect — run must declare ! Console
+    let src = r#"
+        fn run(f: fn(Int) -> Int ! Console, x: Int) -> Int {
+            f(x)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UndeclaredEffect { .. })),
+        "expected UndeclaredEffect for HOF call with effectful param, got: {errors:?}"
+    );
+}
+
+/// HOF wrapper that declares ! Console may call effectful parameter.
+#[test]
+fn hof_effectful_param_accepted_when_caller_declares_effect() {
+    // GIVEN: fn run declares ! Console and calls fn(Int) -> Int ! Console
+    // THEN: no effect errors
+    let src = r#"
+        fn run(f: fn(Int) -> Int ! Console, x: Int) -> Int ! Console {
+            f(x)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors.iter().any(|e| matches!(
+            e,
+            CheckError::UndeclaredEffect { .. } | CheckError::MissingEffect { .. }
+        )),
+        "HOF call should be accepted when caller declares matching effect, got: {errors:?}"
+    );
+}
+
+// ── #687: Array[T, N] const-generic unknown size ──────────────────────────────
+
+/// Array[T, N] where N is a type variable resolves to unknown size, not 0.
+#[test]
+fn array_type_variable_size_is_unknown_not_zero() {
+    use mvl::mvl::checker::types::{resolve, ARRAY_SIZE_UNKNOWN};
+    use mvl::mvl::parser::ast::TypeExpr;
+    use mvl::mvl::parser::lexer::Span;
+    let span = Span::default();
+    // Simulate Array[Int, N] where N is a type variable (TypeExpr::Base with no int)
+    let expr = TypeExpr::Base {
+        name: "Array".to_string(),
+        args: vec![
+            TypeExpr::Base {
+                name: "Int".to_string(),
+                args: vec![],
+                span,
+            },
+            TypeExpr::Base {
+                name: "N".to_string(),
+                args: vec![],
+                span,
+            },
+        ],
+        span,
+    };
+    match resolve(&expr) {
+        mvl::mvl::checker::types::Ty::Array(_, size) => {
+            assert_eq!(
+                size, ARRAY_SIZE_UNKNOWN,
+                "N should resolve to ARRAY_SIZE_UNKNOWN, not {size}"
+            );
+        }
+        other => panic!("expected Ty::Array, got {other:?}"),
+    }
+}
+
+/// Array[T, _] (unknown size) is compatible with any concrete-sized array of same element type.
+#[test]
+fn array_unknown_size_compatible_with_concrete_size() {
+    use mvl::mvl::checker::types::{types_compatible, Ty, ARRAY_SIZE_UNKNOWN};
+    let unknown = Ty::Array(Box::new(Ty::Int), ARRAY_SIZE_UNKNOWN);
+    let concrete = Ty::Array(Box::new(Ty::Int), 16);
+    assert!(
+        types_compatible(&unknown, &concrete),
+        "Array[Int, _] should be compatible with Array[Int, 16]"
+    );
+    assert!(
+        types_compatible(&concrete, &unknown),
+        "Array[Int, 16] should be compatible with Array[Int, _]"
+    );
+}
+
+// ── #691: consume / destructive read semantics ───────────────────────────────
+
+/// Bare assignment of linear type String without consume() is rejected.
+#[test]
+fn bare_string_assignment_rejected() {
+    // GIVEN: let t: String = s (no consume)
+    // THEN: LinearTypeBareBind error
+    let src = r#"fn f() -> Unit { let s: String = "hello"; let t: String = s; }"#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::LinearTypeBareBind { .. })),
+        "expected LinearTypeBareBind for bare String assignment, got: {errors:?}"
+    );
+}
+
+/// Explicit consume() for String ownership transfer is accepted.
+#[test]
+fn string_assignment_with_consume_accepted() {
+    // GIVEN: let t: String = consume(s)
+    // THEN: no LinearTypeBareBind error
+    let src = r#"fn f() -> Unit { let s: String = "hello"; let t: String = consume(s); }"#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::LinearTypeBareBind { .. })),
+        "consume() should satisfy linear type requirement, got: {errors:?}"
+    );
+}
+
+/// String literal assigned directly (not from ident) is fine — no consume needed.
+#[test]
+fn string_literal_assignment_accepted() {
+    let src = r#"fn f() -> Unit { let s: String = "hello"; }"#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::LinearTypeBareBind { .. })),
+        "String literal assignment should not require consume, got: {errors:?}"
+    );
+}

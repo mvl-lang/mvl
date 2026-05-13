@@ -215,17 +215,14 @@ impl TypeChecker {
             }
             // HOF: `name` may be a local variable with a function type fn(T...) -> R.
             // This covers stdlib patterns like `map(xs, f)` where `f: fn(T) -> U`.
-            // Note: effect and totality annotations are not yet carried in Ty::Fn, so
-            // those checks (Req 7/8) cannot be enforced for HOF calls.
-            // TODO: extend Ty::Fn with Vec<Effect> and Option<Totality> to close this gap.
             if let Some(hof_fn) = self.env.lookup(name).and_then(|vi| {
-                if let Ty::Fn(pts, rt) = &vi.ty {
-                    Some((pts.clone(), *rt.clone()))
+                if let Ty::Fn(pts, rt, effects, totality) = &vi.ty {
+                    Some((pts.clone(), *rt.clone(), effects.clone(), totality.clone()))
                 } else {
                     None
                 }
             }) {
-                let (param_tys, ret_ty) = hof_fn;
+                let (param_tys, ret_ty, hof_effects, hof_totality) = hof_fn;
                 if arg_count != param_tys.len() {
                     self.emit(CheckError::WrongArgCount {
                         name: name.to_string(),
@@ -244,6 +241,42 @@ impl TypeChecker {
                             });
                         }
                     }
+                }
+                // Req 7: propagate callee effects — HOF call sites obey same rules as named calls.
+                for required in &hof_effects {
+                    let covered = self
+                        .current_fn_effects
+                        .iter()
+                        .any(|declared| effect_satisfies(declared, required));
+                    if !covered {
+                        if self.current_fn_effects.is_empty() {
+                            self.emit(CheckError::UndeclaredEffect {
+                                callee: name.to_string(),
+                                effect: required.to_string(),
+                                span,
+                            });
+                        } else {
+                            self.emit(CheckError::MissingEffect {
+                                caller: self.current_fn_name.clone(),
+                                callee: name.to_string(),
+                                effect: required.to_string(),
+                                span,
+                            });
+                        }
+                    }
+                }
+                // Req 8: total function must not call a partial HOF parameter.
+                // Note: hof_totality is None when the HOF param was declared via TypeExpr::Fn
+                // syntax (e.g. `f: fn(Int) -> Int`) because the parser does not yet support
+                // totality annotations in function-type expressions. In that case this guard
+                // is a no-op — a known Phase 1 gap tracked in #711.
+                if matches!(hof_totality, Some(Totality::Partial))
+                    && !matches!(self.current_fn_totality, Some(Totality::Partial))
+                {
+                    self.emit(CheckError::PartialCallInTotal {
+                        callee: name.to_string(),
+                        span,
+                    });
                 }
                 return ret_ty;
             }

@@ -68,8 +68,17 @@ impl<'ctx> LlvmBackend<'ctx> {
                 // the source variable — remove it from heap_locals so it is not dropped
                 // at the original scope exit (the new binding becomes the sole owner).
                 let move_src_kind = {
+                    // consume(x) is the explicit ownership-transfer form — treat it the same
+                    // as a bare ident for heap_locals removal (destructive read semantics).
                     let src = match init {
                         Expr::Ident(src, _) => Some(src.as_str()),
+                        Expr::Consume { expr, .. } => {
+                            if let Expr::Ident(src, _) = expr.as_ref() {
+                                Some(src.as_str())
+                            } else {
+                                None
+                            }
+                        }
                         _ => None,
                     };
                     src.and_then(|s| self.heap_locals.remove(s))

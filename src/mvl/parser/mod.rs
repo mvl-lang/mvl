@@ -92,6 +92,12 @@ impl Parser {
         &self.tokens[idx].kind
     }
 
+    /// Kind of the token `offset` positions ahead of the current one.
+    pub fn peek_kind_at(&self, offset: usize) -> &TokenKind {
+        let idx = (self.pos + offset).min(self.tokens.len() - 1);
+        &self.tokens[idx].kind
+    }
+
     pub fn at_eof(&self) -> bool {
         matches!(self.peek_kind(), TokenKind::Eof)
     }

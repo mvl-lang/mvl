@@ -1,15 +1,15 @@
-// L5-15: ownership-based drop — move transfers pointer, last owner frees.
-// Verifies that moving a String to another variable does not double-free.
-// corpus:skip-transpiler (LLVM-only test)
+// L5-15: ownership-based drop — consume transfers pointer, last owner frees.
+// Verifies that consuming a String into another variable does not double-free.
+// MVL uses Pony destructive-read semantics: consume() is required for ownership transfer.
 
 // expect: hello
 // expect: world
 
 fn main() -> Unit ! Console {
     let s: String = "hello";
-    let t: String = s;
+    let t: String = consume(s);
     println(t);
     let u: String = "world";
-    let v: String = u;
+    let v: String = consume(u);
     println(v);
 }
