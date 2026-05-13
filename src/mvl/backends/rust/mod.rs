@@ -41,7 +41,7 @@ pub mod mutation_emit;
 use crate::mvl::parser::ast::{Decl, Program};
 pub use crate::mvl::passes::coverage::{format_report, BranchInfo, CoverageMap};
 use crate::mvl::passes::mcdc::transform as mcdc_instr;
-pub use crate::mvl::passes::mcdc::transform::{detect_coupled_pairs, MCDCDecision};
+pub use crate::mvl::passes::mcdc::transform::{detect_coupled_pairs, FnFieldReads, MCDCDecision};
 pub use crate::mvl::passes::mutation::{format_mutation_report, MutantInfo, MutationMap};
 pub use boundary_gen::format_boundary_report;
 use cargo::CargoOptions;
@@ -711,6 +711,7 @@ pub fn transpile_mcdc_with_prelude(
     let mut cg = RustEmitter::new();
     cg.expr_types = check_result.expr_types;
     cg.mcdc = Some(mcdc_instr::MCDCMap::new(start_id));
+    cg.mcdc_fn_field_reads = mcdc_instr::build_fn_field_reads(prog);
     cg.current_file = file_stem.to_string();
     cg.emit_program_with_mods(prog, &[], prelude_progs);
 
@@ -756,6 +757,7 @@ pub fn transpile_mcdc_source_with_prelude(
     let mut cg = RustEmitter::new();
     cg.expr_types = check_result.expr_types;
     cg.mcdc = Some(mcdc_instr::MCDCMap::new(start_id));
+    cg.mcdc_fn_field_reads = mcdc_instr::build_fn_field_reads(prog);
     cg.current_file = file_stem.to_string();
     cg.test_extern_stubs = true;
     cg.emit_program_with_mods(prog, &[], prelude_progs);
@@ -1099,6 +1101,78 @@ mod tests {
         assert!(
             decisions[0].coupled_pairs.is_empty(),
             "p.vitals.pulse vs p.vitals.bp are disjoint nested paths — not coupled"
+        );
+    }
+
+    // ── Interprocedural coupling tests (#562) ─────────────────────────────
+
+    /// Callees defined in the same file reading disjoint fields via bare param → NOT coupled.
+    ///
+    /// `f(p)` reads `p.x` and `g(p)` reads `p.y`; the bare-arg `p` is resolved
+    /// to the actual field paths before the overlap check.
+    #[test]
+    fn mcdc_interproc_disjoint_fields_not_coupled() {
+        let prog = parse(
+            "fn f(p: T) -> Bool { p.x == 1 } \
+             fn g(p: T) -> Bool { p.y == 2 } \
+             fn d(p: T) -> Bool { f(p) || g(p) }",
+        );
+        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let d = decisions.iter().find(|d| d.fn_name == "d").unwrap();
+        assert!(
+            d.coupled_pairs.is_empty(),
+            "f reads p.x, g reads p.y — disjoint field reads via bare arg must not be coupled"
+        );
+    }
+
+    /// Callees reading the same field via bare param → still coupled.
+    #[test]
+    fn mcdc_interproc_shared_field_still_coupled() {
+        let prog = parse(
+            "fn f(p: T) -> Bool { p.x == 1 } \
+             fn g(p: T) -> Bool { p.x == 2 } \
+             fn d(p: T) -> Bool { f(p) && g(p) }",
+        );
+        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let d = decisions.iter().find(|d| d.fn_name == "d").unwrap();
+        assert!(
+            !d.coupled_pairs.is_empty(),
+            "both read p.x — shared field read via bare arg must still be coupled"
+        );
+        let has_px = d.coupled_pairs.iter().any(|(_, _, v)| v.contains(&"p.x".to_string()));
+        assert!(has_px, "shared path must be reported as p.x");
+    }
+
+    /// Callee forwarding the bare param (not field-decomposing it) → conservative fallback.
+    ///
+    /// When a callee passes `p` whole to another call, the field-read set contains
+    /// the bare param name, so the coupling detector falls back to the conservative
+    /// (syntactic) behaviour and still flags coupling via the raw variable.
+    #[test]
+    fn mcdc_interproc_bare_param_forwarding_falls_back_to_conservative() {
+        let prog = parse(
+            "fn h(p: T) -> Bool { helper(p) } \
+             fn k(p: T) -> Bool { helper(p) } \
+             fn d(p: T) -> Bool { h(p) && k(p) }",
+        );
+        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let d = decisions.iter().find(|d| d.fn_name == "d").unwrap();
+        assert!(
+            !d.coupled_pairs.is_empty(),
+            "callee forwards bare p — conservative coupling must be reported"
+        );
+    }
+
+    /// External callee (not defined in program) → conservative fallback, same as before.
+    #[test]
+    fn mcdc_interproc_external_callee_conservative() {
+        // `ext_a` and `ext_b` are not defined in the program → conservative coupling via "p".
+        let prog = parse("fn d(p: T) -> Bool { ext_a(p) && ext_b(p) }");
+        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let d = decisions.iter().find(|d| d.fn_name == "d").unwrap();
+        assert!(
+            !d.coupled_pairs.is_empty(),
+            "unknown callees with shared bare arg must fall back to conservative coupling"
         );
     }
 
