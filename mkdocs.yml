@@ -82,6 +82,15 @@ nav:
     - ADR-0016 LLVM Memory Runtime: adr/0016-llvm-memory-runtime.md
     - ADR-0017 Linter Hint Severity: adr/0017-linter-hint-severity-explicit-ifc-annotations.md
     - ADR-0018 Five-Stage Pipeline: adr/0018-five-stage-pipeline-passes-module.md
+    - ADR-0019 Two-Path Stdlib Architecture: adr/0019-llvm-stdlib-two-path.md
+    - ADR-0020 BDD Library Naming Convention: adr/0020-bdd-library-naming-convention.md
+    - ADR-0021 Primitives and Runtime Redesign: adr/0021-primitives-runtime-redesign.md
+    - ADR-0022 Operator Intrinsic Mapping: adr/0022-operator-intrinsic-mapping.md
+    - ADR-0023 Stdlib Profiles: adr/0023-stdlib-profiles.md
+    - ADR-0024 Label-Transparent Functions: adr/0024-label-transparent-functions.md
+    - ADR-0025 Function Contracts: adr/0025-function-contracts.md
+    - ADR-0026 Input Validation Philosophy: adr/0026-input-validation-philosophy.md
+    - ADR-0027 Multi-Backend Architecture: adr/0027-multi-backend-architecture.md
   - Specs:
     - 000 Parser: specs/000-parser.md
     - 001 Type System: specs/001-type-system.md
@@ -90,10 +99,10 @@ nav:
     - 004 Testing: specs/004-testing.md
     - 005 Modules: specs/005-modules.md
     - 006 Trust Boundary Bridge: specs/006-trust-boundary-bridge.md
-    - 007 Termination: specs/007-termination.md
     - 007 Toolchain: specs/007-toolchain.md
-    - 008 Data Race Freedom: specs/008-data-race-freedom.md
     - 008 Extended Package Model: specs/008-packages.md
+    - 013 Termination: specs/013-termination.md
+    - 014 Data Race Freedom: specs/014-data-race-freedom.md
     - 009 Transpiler & Codegen: specs/009-transpiler-codegen.md
     - 010 MC/DC Coverage: specs/010-mcdc.md
     - 011 Linter: specs/011-linter.md

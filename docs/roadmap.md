@@ -123,6 +123,15 @@ Formal metatheory in Lean 4 / Coq. Out of scope until post-1.0.
 | [ADR-0016](adr/0016-llvm-memory-runtime.md) | LLVM memory runtime (mvl_memory cdylib) |
 | [ADR-0017](adr/0017-linter-hint-severity-explicit-ifc-annotations.md) | Linter hint severity — explicit IFC annotations |
 | [ADR-0018](adr/0018-five-stage-pipeline-passes-module.md) | Five-stage pipeline — passes module |
+| [ADR-0019](adr/0019-llvm-stdlib-two-path.md) | Two-path stdlib architecture (LLVM vs Rust) |
+| [ADR-0020](adr/0020-bdd-library-naming-convention.md) | BDD as library naming convention |
+| [ADR-0021](adr/0021-primitives-runtime-redesign.md) | Primitives and runtime architecture redesign |
+| [ADR-0022](adr/0022-operator-intrinsic-mapping.md) | Operator → intrinsic mapping |
+| [ADR-0023](adr/0023-stdlib-profiles.md) | Stdlib profiles — trusted vs proven |
+| [ADR-0024](adr/0024-label-transparent-functions.md) | Label-transparent functions |
+| [ADR-0025](adr/0025-function-contracts.md) | Function contracts |
+| [ADR-0026](adr/0026-input-validation-philosophy.md) | Input validation philosophy |
+| [ADR-0027](adr/0027-multi-backend-architecture.md) | Multi-backend architecture |
 
 ---
 

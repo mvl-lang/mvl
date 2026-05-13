@@ -2,7 +2,7 @@
 
 ## Implementation Status
 
-The stdlib has 16 modules.  We are actively implementing them for both the Rust
+The stdlib has 18 modules.  We are actively implementing them for both the Rust
 transpiler backend and the LLVM backend.
 
 | Module      | MVL fns | Rust impl | Status                    |
@@ -17,12 +17,15 @@ transpiler backend and the LLVM backend.
 | lists       | 25      | no        | MVL-only stubs            |
 | log         | 4       | yes       | Partial (6 stubs)         |
 | math        | 26      | no        | MVL-only stubs            |
+| pbt         | 5       | no        | MVL-only stubs            |
 | primitives  | mixed   | yes       | Real                      |
 | process     | 8       | yes       | Real (shipped, #414)      |
 | random      | 5       | no        | MVL-only stubs            |
 | regex       | 5       | no        | MVL-only stubs            |
 | strings     | 14      | no        | MVL-only stubs            |
 | time        | 7       | no        | MVL-only stubs            |
+| profiles/trusted | —  | no        | Stdlib profile (trusted subset) |
+| profiles/proven  | —  | no        | Stdlib profile (proven subset)  |
 
 **Rust impl** means the module has a real Rust runtime implementation (via `mvl_runtime` or `mvl_runtime_c`).
 Modules marked "MVL-only stubs" have type signatures and specs but no backend implementation yet.

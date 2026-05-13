@@ -5,7 +5,7 @@ status: draft
 date: 2026-04-14
 ---
 
-# 008 — Data Race Freedom (Partial — Phase 3)
+# 014 — Data Race Freedom (Partial — Phase 3)
 
 The MVL data race freedom checker covers Requirement 9 (Data Race Freedom) from ADR-0001.
 This spec describes the Phase 3 partial proof.  The full architectural proof requires the

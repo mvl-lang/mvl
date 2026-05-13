@@ -1,6 +1,6 @@
 # MVL Language Features
 
-24 features across 7 categories. The language is deliberately small (ADR-0004) — every feature exists to increase verification density per token.
+25 features across 7 categories. The language is deliberately small (ADR-0004) — every feature exists to increase verification density per token.
 
 ---
 
@@ -134,3 +134,20 @@ No macros, no reflection. When a feature requires compile-time struct iteration 
 ### 24. One Way (ADR-0004)
 
 One error type (`Result`), one absence type (`Option`), one loop form (`for`), one branching form (`match`/`if`). Stdlib provides vocabulary, not syntax. The smallest language that enforces all 11 requirements.
+
+---
+
+## Contracts
+
+### 25. Struct Invariants — `with invariant` (Req 10, ADR-0025)
+
+Structs may carry a cross-field predicate verified at construction and mutation:
+
+```
+type DateRange = struct {
+    start: Date,
+    end: Date,
+} with invariant start <= end
+```
+
+The compiler injects a check at every construction site and every mutation of `ref`-bound struct fields. Invalid construction is a compile error for literal values; a `CheckError::InvariantViolation` at runtime for dynamic inputs. This is SPARK-style cross-field precondition checking — no proof language required, no annotation burden beyond the `with invariant` clause. Shipped in v0.97.0 (#654).

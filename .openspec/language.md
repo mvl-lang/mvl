@@ -3,7 +3,7 @@
 **Version:** 0.1.0 (draft)
 **Date:** 2026-04-11
 
-This is the complete language reference for the Minimum Verification Language. For design rationale and research, see `my-brain/study/mvl_research.md`.
+This is the complete language reference for the Minimum Verification Language. For design rationale and research, see [mvl_rationale.md](mvl_rationale.md).
 
 ## Overview
 
@@ -36,6 +36,8 @@ Three tiers: core (~30 types), standard (~200 functions), extended (packages wit
 ### The boundary
 
 Requirements define what the compiler proves. Constructs define what the programmer writes. Stdlib defines how work gets done. The boundary only moves in one direction: **stdlib grows, language doesn't.**
+
+**Input boundary policy (ADR-0026):** MVL is post-Postel. Parsers MAY accept multiple syntactic formats; validators MUST enforce refinement predicates before values enter the proven core. Invalid input is rejected, never coerced. Unvalidated input carries the `Tainted` IFC label until proven.
 
 Testing, BDD, property testing, and model checking are all tooling on top of the same AST — zero language extensions. Mocking is free because effects are explicit. The language is the minimum. Everything else is tooling or library.
 
@@ -175,7 +177,7 @@ In most languages, mocking is hard because dependencies are hidden — globals, 
 
 ```
 // Production
-fn get_user(db: val DbConn, id: UserId) -> Result<User, DbError> ! DB {
+fn get_user(db: val DbConn, id: UserId) -> Result[User, DbError] ! DB {
     db.query("SELECT ...", id)?
 }
 
@@ -200,7 +202,7 @@ type RealFS = struct {}              // production
 impl FileSystem for RealFS { ... }
 
 type StubFS = struct {               // test — stdlib provides this
-    files: Map<Path, String>
+    files: Map[Path, String]
 }
 impl FileSystem for StubFS { ... }
 ```

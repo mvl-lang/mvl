@@ -5,7 +5,7 @@ status: draft
 date: 2026-04-14
 ---
 
-# 007 — Termination Checker
+# 013 — Termination Checker
 
 The MVL termination checker covers Requirement 8 (Termination) from ADR-0001. Every `total fn`
 MUST be proven to terminate by the compiler. The checker is a post-type-check pass that analyses
