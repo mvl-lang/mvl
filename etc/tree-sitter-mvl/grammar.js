@@ -52,8 +52,6 @@ module.exports = grammar({
     // context determines which interpretation applies)
     [$.match_stmt, $.match_expr],
     [$.if_stmt, $.if_expr],
-    // effect_list: `effect ,` — continue list vs end list (outer comma)
-    [$.effect_list],
     // effect: `identifier (` — parameterized effect string vs outer expression
     [$.effect],
     // `>` inside `Public<Int where self > 0>`: could be comparison or close generic.
@@ -233,7 +231,7 @@ module.exports = grammar({
     return_type: ($) =>
       seq($.type_expr, optional(seq("where", $.refinement))),
 
-    effect_list: ($) => seq($.effect, repeat(seq(",", $.effect))),
+    effect_list: ($) => seq($.effect, repeat(seq("+", $.effect))),
 
     effect: ($) =>
       seq(
