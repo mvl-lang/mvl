@@ -870,3 +870,21 @@ fn snake_game_build_succeeds() {
         String::from_utf8_lossy(&out.stderr),
     );
 }
+
+/// Run the pure-logic tests (game_test.mvl + input.mvl) in CI.
+/// `mvl test <dir>` discovers all test functions in the directory including
+/// input.mvl tests. No terminal required.
+#[test]
+fn snake_game_tests_pass() {
+    let dir = format!("{}/examples/snake_game", env!("CARGO_MANIFEST_DIR"));
+    let out = Command::new(mvl_bin())
+        .args(["test", &dir])
+        .output()
+        .expect("failed to run mvl test");
+    assert!(
+        out.status.success(),
+        "mvl test examples/snake_game failed;\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}

@@ -26,7 +26,7 @@ static RAW_MODE: AtomicBool = AtomicBool::new(false);
 /// Returns 1 on success, 0 on failure (e.g. stdout is not a tty).
 #[no_mangle]
 pub extern "Rust" fn tui_init() -> i64 {
-    let ok = Command::new("stty")
+    let ok = Command::new("/usr/bin/stty")
         .args(["-echo", "-icanon", "min", "1", "time", "0"])
         .stdin(std::process::Stdio::inherit())
         .status()
@@ -39,6 +39,9 @@ pub extern "Rust" fn tui_init() -> i64 {
     // Hide cursor; switch to alternate screen buffer.
     print!("\x1b[?25l\x1b[?1049h");
     stdout().flush().ok();
+    // TODO: install a panic/SIGINT hook here to call tui_drop() so the terminal
+    // is restored even when the game crashes or the user presses Ctrl-C.
+    // Requires either a signal handler (libc) or a panic hook — deferred to Phase 4.
     1
 }
 
@@ -48,7 +51,7 @@ pub extern "Rust" fn tui_drop() {
     if RAW_MODE.swap(false, Ordering::SeqCst) {
         print!("\x1b[?1049l\x1b[?25h");
         stdout().flush().ok();
-        Command::new("stty")
+        Command::new("/usr/bin/stty")
             .arg("sane")
             .stdin(std::process::Stdio::inherit())
             .status()
@@ -115,7 +118,7 @@ fn ansi_fg(n: i64) -> &'static str {
 pub extern "Rust" fn tui_read_key_timeout(millis: i64) -> String {
     // Use stty VTIME (1/10-second units) for timeout; granularity ~100 ms.
     let tenths = (millis / 100).clamp(0, 255) as u64;
-    Command::new("stty")
+    Command::new("/usr/bin/stty")
         .args(["min", "0", "time", &tenths.to_string()])
         .stdin(std::process::Stdio::inherit())
         .status()
@@ -123,7 +126,7 @@ pub extern "Rust" fn tui_read_key_timeout(millis: i64) -> String {
     let mut b = [0u8; 1];
     let n = stdin().read(&mut b).unwrap_or(0);
     // Restore blocking raw mode.
-    Command::new("stty")
+    Command::new("/usr/bin/stty")
         .args(["-echo", "-icanon", "min", "1", "time", "0"])
         .stdin(std::process::Stdio::inherit())
         .status()
@@ -144,14 +147,14 @@ pub extern "Rust" fn tui_read_key_timeout(millis: i64) -> String {
 fn read_escape_sequence() -> String {
     let mut seq = [0u8; 2];
     // Allow zero-wait reads for the sequence bytes (1/10 s).
-    Command::new("stty")
+    Command::new("/usr/bin/stty")
         .args(["min", "0", "time", "1"])
         .stdin(std::process::Stdio::inherit())
         .status()
         .ok();
     let n = stdin().read(&mut seq).unwrap_or(0);
     // Restore raw mode.
-    Command::new("stty")
+    Command::new("/usr/bin/stty")
         .args(["-echo", "-icanon", "min", "1", "time", "0"])
         .stdin(std::process::Stdio::inherit())
         .status()
@@ -188,6 +191,8 @@ pub extern "Rust" fn clock_ms() -> i64 {
 #[no_mangle]
 pub extern "Rust" fn rand_next(seed: i64) -> i64 {
     let mixed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-    // Map to [0, 999_999]: add 1_000_000 to make positive, then modulo.
+    // Map to [0, 999_999]: Rust signed % truncates toward zero, so negative
+    // seeds yield a negative remainder. Adding 1_000_000 guarantees the
+    // intermediate is non-negative before the final modulo.
     (mixed % 1_000_000 + 1_000_000) % 1_000_000
 }
