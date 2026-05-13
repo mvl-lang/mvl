@@ -739,7 +739,7 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
         }
         RefExpr::Not { inner, .. } => format!("!{}", emit_ref_expr(inner, binding)),
         RefExpr::Ident { name, .. } => {
-            if name == "self" {
+            if name == "self" || name == "result" {
                 binding.to_string()
             } else {
                 name.clone()
@@ -759,7 +759,7 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
             }
         }
         RefExpr::Len { ident, .. } => {
-            if ident == "self" {
+            if ident == "self" || ident == "result" {
                 format!("{binding}.len()")
             } else {
                 format!("{ident}.len()")

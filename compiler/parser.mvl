@@ -171,7 +171,9 @@ total fn ps_at_punct(ps: ParserState, p: String) -> Bool {
     }
 }
 
-total fn ps_advance(ps: ParserState) -> ParserState {
+total fn ps_advance(ps: ParserState) -> ParserState
+  ensures result.pos == ps.pos + 1
+{
     ParserState { tokens: ps.tokens, pos: ps.pos + 1, errors: ps.errors }
 }
 
@@ -231,7 +233,9 @@ partial fn skip_body(ps: ParserState) -> ParserState {
 // At depth 0, no generic args are parsed (prevents infinite regress).
 // parse_type_expr(ps) calls with depth=5, enough for real MVL code.
 
-partial fn parse_type_expr_depth(ps: ParserState, max_depth: Int) -> TypeExprR {
+partial fn parse_type_expr_depth(ps: ParserState, max_depth: Int) -> TypeExprR
+  requires max_depth >= 0
+{
     let tok: Token = ps_current(ps);
     let sp: Span = tok.span;
     let is_eof: Bool = match tok.kind { TokenKind::Eof => true, _ => false };
@@ -520,6 +524,28 @@ partial fn parse_fn_decl(
     // optional where clause
     let con_r: ConstrR = parse_where_clause(curr);
     curr = con_r.ps;
+    // optional proof clauses (requires/ensures) — skip keyword + clause expression
+    // so the self-hosted parser can round-trip sources that carry contracts.
+    let pf_loop: ref Bool = true;
+    while pf_loop && !ps_at_eof(curr) {
+        let cur_is_req: Bool = match ps_current(curr).kind { TokenKind::KwRequires => true, _ => false };
+        let cur_is_ens: Bool = match ps_current(curr).kind { TokenKind::KwEnsures  => true, _ => false };
+        if cur_is_req || cur_is_ens {
+            curr = ps_advance(curr);
+            let cl_end: ref Bool = false;
+            while !cl_end && !ps_at_eof(curr) {
+                let nx_req: Bool = match ps_current(curr).kind { TokenKind::KwRequires => true, _ => false };
+                let nx_ens: Bool = match ps_current(curr).kind { TokenKind::KwEnsures  => true, _ => false };
+                if ps_at_punct(curr, "{") || ps_at_punct(curr, ";") || nx_req || nx_ens {
+                    cl_end = true
+                } else {
+                    curr = ps_advance(curr)
+                }
+            }
+        } else {
+            pf_loop = false
+        }
+    }
     // body or extern semicolon
     let has_body: Bool = ps_at_punct(curr, "{");
     if has_body {
@@ -1019,7 +1045,9 @@ partial fn parse_program(ps: ParserState) -> Program {
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
-pub partial fn parse(tokens: List[Token]) -> Program {
+pub partial fn parse(tokens: List[Token]) -> Program
+  requires len(tokens) >= 1
+{
     let ps: ParserState = ParserState { tokens: tokens, pos: 0, errors: [] };
     parse_program(ps)
 }

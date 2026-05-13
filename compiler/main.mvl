@@ -114,7 +114,9 @@ fn dir_from_arg(v: Tainted[String]) -> Path {
 
 // ── File processor ───────────────────────────────────────────────────────────
 
-partial fn process_file(name: String, raw: Tainted[String]) -> Clean[Program] ! Console {
+partial fn process_file(name: String, raw: Tainted[String]) -> Clean[Program] ! Console
+  requires len(name) > 0
+{
     let src: Clean[String]  = sanitize(raw);
     let prog: Clean[Program] = lex_and_parse(src);
 

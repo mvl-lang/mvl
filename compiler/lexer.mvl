@@ -108,7 +108,10 @@ fn keyword_kind(s: String) -> TokenKind {
 
 // Scan an identifier or keyword starting at pos.
 // Advances while alphanumeric/underscore; classifies via keyword_kind.
-partial fn scan_word(src: String, pos: Int, src_len: Int) -> ScanResult {
+partial fn scan_word(src: String, pos: Int, src_len: Int) -> ScanResult
+  requires pos >= 0
+  ensures result.end_pos >= pos
+{
     let p: ref Int = pos;
     while p < src_len && is_alnum(str_char_at(src, p)) {
         p = p + 1
@@ -120,7 +123,10 @@ partial fn scan_word(src: String, pos: Int, src_len: Int) -> ScanResult {
 
 // Scan an integer or float literal starting at pos.
 // Detects the float suffix: digits "." digit digits.
-partial fn scan_number(src: String, pos: Int, src_len: Int) -> ScanResult {
+partial fn scan_number(src: String, pos: Int, src_len: Int) -> ScanResult
+  requires pos >= 0
+  ensures result.end_pos >= pos
+{
     let p: ref Int = pos;
     while p < src_len && is_digit(str_char_at(src, p)) {
         p = p + 1
@@ -138,7 +144,10 @@ partial fn scan_number(src: String, pos: Int, src_len: Int) -> ScanResult {
 
 // Skip a line comment body (call after "//" is confirmed).
 // Returns end_pos pointing at the '\n' or end-of-string.
-partial fn scan_comment_end(src: String, pos: Int, src_len: Int) -> Int {
+partial fn scan_comment_end(src: String, pos: Int, src_len: Int) -> Int
+  requires pos >= 0
+  ensures result >= pos
+{
     let p: ref Int = pos;
     while p < src_len && str_char_at(src, p) != "\n" {
         p = p + 1
@@ -149,7 +158,10 @@ partial fn scan_comment_end(src: String, pos: Int, src_len: Int) -> Int {
 // Scan a string body (call after the opening '"' is consumed).
 // Returns ScanResult with kind=StrLit, lexeme=content (without quotes),
 // end_pos pointing past the closing '"'.
-partial fn scan_string_body(src: String, pos: Int, src_len: Int) -> ScanResult {
+partial fn scan_string_body(src: String, pos: Int, src_len: Int) -> ScanResult
+  requires pos >= 0
+  ensures result.end_pos >= pos
+{
     let p: ref Int = pos;
     while p < src_len && str_char_at(src, p) != "\"" {
         if str_char_at(src, p) == "\\" && p + 1 < src_len {
@@ -164,7 +176,9 @@ partial fn scan_string_body(src: String, pos: Int, src_len: Int) -> ScanResult {
 }
 
 // Return the two-char operator spelling if (c, c2) forms one; "" otherwise.
-fn two_char_punct(c: String, c2: String) -> String {
+fn two_char_punct(c: String, c2: String) -> String
+  ensures len(result) == 0 || len(result) == 2
+{
     if c == "=" && c2 == "=" { "==" }
     else if c == "!" && c2 == "=" { "!=" }
     else if c == "<" && c2 == "=" { "<=" }
@@ -184,7 +198,9 @@ fn two_char_punct(c: String, c2: String) -> String {
 // Tokenize src into a List[Token], terminated by a single Eof token.
 // Whitespace is consumed silently (not emitted as tokens).
 // Unknown characters (outside ASCII alpha/digit/punct) are emitted as Punct.
-pub partial fn lex(src: String) -> List[Token] {
+pub partial fn lex(src: String) -> List[Token]
+  ensures len(result) >= 1
+{
     let src_len: Int = src.len();
     let pos: ref Int = 0;
     let line: ref Int = 1;
