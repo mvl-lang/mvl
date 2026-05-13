@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.97.7] — 2026-05-13
+
+### Added
+
+- **Spike tests README** — `tests/spikes/README.md` documents spike test status, manual invocation, and guidance for adding new spikes (#683).
+
 ## [0.97.6] — 2026-05-13
 
 ### Added
