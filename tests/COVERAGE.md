@@ -40,22 +40,22 @@ Requirements: 1=Type Safety, 2=Memory Safety, 3=Exhaustive Match, 4=Null Elimina
 | 02_types/structs.mvl | ✓ | | | | | | | | | | | Struct declaration |
 | 02_types/unsigned_types.mvl | ✓ | | | | | | | | | ✓ | | u8/u16/u32/u64 bounds |
 | 02_types/while_loop_llvm.mvl | ✓ | | | | | | | ✓ | | | | while in partial fn |
-| **03_stdlib/** |||||||||||||
-| 03_stdlib/collections.mvl | ✓ | | | | | | | | | | | List, Map, Set |
-| 03_stdlib/crypto_operations.mvl | ✓ | | | | | | ✓ | | | | ✓ | Crypto effect + IFC labels |
-| 03_stdlib/json_operations.mvl | ✓ | | | | | | | | | | ✓ | JSON + taint tracking |
-| 03_stdlib/map_set_literals.mvl | ✓ | | | | | | | | | | | Map/Set construction |
-| 03_stdlib/pbt_operations.mvl | ✓ | | | | | | | | | | | Property-based testing stdlib |
-| 03_stdlib/random_operations.mvl | ✓ | | | | | | ✓ | | | | | Random effect |
-| 03_stdlib/range_pipeline.mvl | ✓ | | | | | | | | | | | Range + pipeline functions |
-| 03_stdlib/regex_find_all.mvl | ✓ | | | | | | | | | | ✓ | Regex + label safety |
-| 03_stdlib/regex_find.mvl | ✓ | | | | | | | | | | | Regex Option[Match] |
-| 03_stdlib/regex_operations.mvl | ✓ | | | | | | | | | | | Regex match/replace |
-| 03_stdlib/regex_replace.mvl | ✓ | | | | | | | | | | | Regex replace |
-| 03_stdlib/set_algebra.mvl | ✓ | | | | | | | | | | | Set union/intersection |
-| 03_stdlib/time_operations.mvl | ✓ | | | | | | ✓ | | | | | Time effect |
-| **04_linting/** |||||||||||||
-| 04_linting/complexity_demo.mvl | ✓ | | | | | | | | | | | Linter complexity rule |
+| **stdlib/** |||||||||||||
+| stdlib/collections.mvl | ✓ | | | | | | | | | | | List, Map, Set |
+| stdlib/crypto_operations.mvl | ✓ | | | | | | ✓ | | | | ✓ | Crypto effect + IFC labels |
+| stdlib/json_operations.mvl | ✓ | | | | | | | | | | ✓ | JSON + taint tracking |
+| stdlib/map_set_literals.mvl | ✓ | | | | | | | | | | | Map/Set construction |
+| stdlib/pbt_operations.mvl | ✓ | | | | | | | | | | | Property-based testing stdlib |
+| stdlib/random_operations.mvl | ✓ | | | | | | ✓ | | | | | Random effect |
+| stdlib/range_pipeline.mvl | ✓ | | | | | | | | | | | Range + pipeline functions |
+| stdlib/regex_find_all.mvl | ✓ | | | | | | | | | | ✓ | Regex + label safety |
+| stdlib/regex_find.mvl | ✓ | | | | | | | | | | | Regex Option[Match] |
+| stdlib/regex_operations.mvl | ✓ | | | | | | | | | | | Regex match/replace |
+| stdlib/regex_replace.mvl | ✓ | | | | | | | | | | | Regex replace |
+| stdlib/set_algebra.mvl | ✓ | | | | | | | | | | | Set union/intersection |
+| stdlib/time_operations.mvl | ✓ | | | | | | ✓ | | | | | Time effect |
+| **03_linting/** |||||||||||||
+| 03_linting/complexity_demo.mvl | ✓ | | | | | | | | | | | Linter complexity rule |
 | **04_ownership/** |||||||||||||
 | 04_ownership/ownership.mvl | | ✓ | | | | ✓ | | | | | | consume(), move semantics |
 | **05_effects/** |||||||||||||
@@ -97,31 +97,31 @@ Requirements: 1=Type Safety, 2=Memory Safety, 3=Exhaustive Match, 4=Null Elimina
 | 10_verification/effect_ifc_interaction/main.mvl | ✓ | | | | | | ✓ | | | | ✓ | Effect × IFC cross-check |
 | 10_verification/ownership_effects_interaction.mvl | ✓ | | | | | ✓ | ✓ | | | | | Ownership × effects |
 | 10_verification/refinement_totality_interaction.mvl | ✓ | | | | | | | ✓ | | ✓ | | Refinements × totality |
-| **11_programs/** |||||||||||||
-| 11_programs/auth_handler.mvl | ✓ | | | | ✓ | | | | | | ✓ | Auth: Result + IFC labels |
-| 11_programs/box_field_deref.mvl | ✓ | | | | | ✓ | | | | | | Box field deref |
-| 11_programs/bridge_ok/main.mvl | ✓ | | | | | | ✓ | | | | | Bridge + extern Rust |
-| 11_programs/calculator.mvl | ✓ | | ✓ | | | | | ✓ | | | | Total fns, match |
-| 11_programs/collections_basic.mvl | ✓ | | | | | | | | | | | List/Map/Set usage |
-| 11_programs/core_types_demo.mvl | ✓ | | | | | | | | | | | Core type showcase |
-| 11_programs/else_if_chain.mvl | ✓ | | | | | | | | | | | if/else-if/else |
-| 11_programs/generic_fns.mvl | ✓ | | | | | | | | ✓ | | | Generic fn constraints |
-| 11_programs/hello_mvl.mvl | ✓ | | ✓ | | | | | | | | | Enum match, total fn |
-| 11_programs/hello_world.mvl | ✓ | | | | | | ✓ | | | | | Minimal: fn main + println |
-| 11_programs/hof_lambdas.mvl | ✓ | | | | | | | | | | | Higher-order functions |
-| 11_programs/linked_list.mvl | ✓ | | | | | ✓ | | ✓ | | | | Recursive enum, Box, total |
-| 11_programs/password_checker.mvl | ✓ | | | | | | | | | | ✓ | IFC: password taint flow |
-| 11_programs/println_non_string_first_arg.mvl | ✓ | | | | | | ✓ | | | | | println type safety |
-| 11_programs/random_dice/main.mvl | ✓ | | | | | | ✓ | | | | | Random effect program |
-| 11_programs/safe_division.mvl | ✓ | | | | ✓ | | | | | ✓ | ✓ | Result + refinement + IFC |
-| 11_programs/shapes.mvl | ✓ | | ✓ | | | | | | | | | ADTs, multi-enum match |
-| 11_programs/struct_value_semantics.mvl | ✓ | | | | | ✓ | | | | | | Clone-on-pass |
-| **12_bdd/** |||||||||||||
-| 12_bdd/calculator_bdd_test.mvl | ✓ | | ✓ | | | | | ✓ | | | | BDD tests, total fns |
-| **13_contracts/** |||||||||||||
-| 13_contracts/basic_contracts.mvl | ✓ | | | | | | | ✓ | | ✓ | | requires/ensures contracts |
-| 13_contracts/ghost_old_contracts.mvl | ✓ | | | | | | | ✓ | | ✓ | | ghost variables, old() |
-| 13_contracts/loop_verification.mvl | ✓ | | | | | | | ✓ | | ✓ | | Loop invariants |
+| **examples/programs/** |||||||||||||
+| examples/programs/auth_handler.mvl | ✓ | | | | ✓ | | | | | | ✓ | Auth: Result + IFC labels |
+| examples/programs/box_field_deref.mvl | ✓ | | | | | ✓ | | | | | | Box field deref |
+| examples/programs/bridge_ok/main.mvl | ✓ | | | | | | ✓ | | | | | Bridge + extern Rust |
+| examples/programs/calculator.mvl | ✓ | | ✓ | | | | | ✓ | | | | Total fns, match |
+| examples/programs/collections_basic.mvl | ✓ | | | | | | | | | | | List/Map/Set usage |
+| examples/programs/core_types_demo.mvl | ✓ | | | | | | | | | | | Core type showcase |
+| examples/programs/else_if_chain.mvl | ✓ | | | | | | | | | | | if/else-if/else |
+| examples/programs/generic_fns.mvl | ✓ | | | | | | | | ✓ | | | Generic fn constraints |
+| examples/programs/hello_mvl.mvl | ✓ | | ✓ | | | | | | | | | Enum match, total fn |
+| examples/programs/hello_world.mvl | ✓ | | | | | | ✓ | | | | | Minimal: fn main + println |
+| examples/programs/hof_lambdas.mvl | ✓ | | | | | | | | | | | Higher-order functions |
+| examples/programs/linked_list.mvl | ✓ | | | | | ✓ | | ✓ | | | | Recursive enum, Box, total |
+| examples/programs/password_checker.mvl | ✓ | | | | | | | | | | ✓ | IFC: password taint flow |
+| examples/programs/println_non_string_first_arg.mvl | ✓ | | | | | | ✓ | | | | | println type safety |
+| examples/programs/random_dice/main.mvl | ✓ | | | | | | ✓ | | | | | Random effect program |
+| examples/programs/safe_division.mvl | ✓ | | | | ✓ | | | | | ✓ | ✓ | Result + refinement + IFC |
+| examples/programs/shapes.mvl | ✓ | | ✓ | | | | | | | | | ADTs, multi-enum match |
+| examples/programs/struct_value_semantics.mvl | ✓ | | | | | ✓ | | | | | | Clone-on-pass |
+| **11_bdd/** |||||||||||||
+| 11_bdd/calculator_bdd_test.mvl | ✓ | | ✓ | | | | | ✓ | | | | BDD tests, total fns |
+| **12_contracts/** |||||||||||||
+| 12_contracts/basic_contracts.mvl | ✓ | | | | | | | ✓ | | ✓ | | requires/ensures contracts |
+| 12_contracts/ghost_old_contracts.mvl | ✓ | | | | | | | ✓ | | ✓ | | ghost variables, old() |
+| 12_contracts/loop_verification.mvl | ✓ | | | | | | | ✓ | | ✓ | | Loop invariants |
 
 ---
 
@@ -163,7 +163,7 @@ Requirements: 1=Type Safety, 2=Memory Safety, 3=Exhaustive Match, 4=Null Elimina
 
 ### No negative tests at all
 
-Requirements 2, 3, 4, 5, 6, 8, 9, 10 had **zero negative corpus programs** before this audit. The initial batch of 20 is now in `tests/corpus/14_negative/` and is validated by `make test-corpus` via the `corpus:expect-fail` annotation. `tests/integration/error_messages/` covers individual error message quality but is not full-program corpus coverage.
+Requirements 2, 3, 4, 5, 6, 8, 9, 10 had **zero negative corpus programs** before this audit. The initial batch of 20 is now in `tests/corpus/13_negative/` and is validated by `make test-corpus` via the `corpus:expect-fail` annotation. `tests/integration/error_messages/` covers individual error message quality but is not full-program corpus coverage.
 
 ---
 
@@ -173,22 +173,22 @@ Priority order — fill the largest gaps first:
 
 | # | File | Req | Type | Rationale |
 |---|------|-----|------|-----------|
-| 1 | `14_negative/req02/use_after_move.mvl` | 2 | negative | First Req 2 negative program |
-| 2 | `14_negative/req02/double_consume.mvl` | 2 | negative | iso consumed twice |
-| 3 | `14_negative/req03/missing_arm.mvl` | 3 | negative | Non-exhaustive enum match |
-| 4 | `14_negative/req04/option_unwrap.mvl` | 4 | negative | Field access on Option |
-| 5 | `14_negative/req05/result_ignored.mvl` | 5 | negative | Unchecked Result |
-| 6 | `14_negative/req06/reassign_immutable.mvl` | 6 | negative | Assign to let binding |
-| 7 | `14_negative/req07/undeclared_effect.mvl` | 7 | negative | println without ! Console |
-| 8 | `14_negative/req07/missing_propagation.mvl` | 7 | negative | Caller missing callee effect |
-| 9 | `14_negative/req08/while_in_total.mvl` | 8 | negative | while in total fn |
-| 10 | `14_negative/req08/partial_call.mvl` | 8 | negative | partial fn called from total |
-| 11 | `14_negative/req09/send_ref.mvl` | 9 | negative | ref sent across actor |
-| 12 | `14_negative/req09/iso_alias.mvl` | 9 | negative | iso aliased |
-| 13 | `14_negative/req10/division_by_zero.mvl` | 10 | negative | Literal 0 to NonZero param |
-| 14 | `14_negative/req10/predicate_false.mvl` | 10 | negative | where clause violated |
-| 15 | `14_negative/req11/tainted_to_console.mvl` | 11 | negative | Tainted string to println |
-| 16 | `14_negative/req11/secret_leak.mvl` | 11 | negative | Secret to public output |
+| 1 | `13_negative/req02/use_after_move.mvl` | 2 | negative | First Req 2 negative program |
+| 2 | `13_negative/req02/double_consume.mvl` | 2 | negative | iso consumed twice |
+| 3 | `13_negative/req03/missing_arm.mvl` | 3 | negative | Non-exhaustive enum match |
+| 4 | `13_negative/req04/option_unwrap.mvl` | 4 | negative | Field access on Option |
+| 5 | `13_negative/req05/result_ignored.mvl` | 5 | negative | Unchecked Result |
+| 6 | `13_negative/req06/reassign_immutable.mvl` | 6 | negative | Assign to let binding |
+| 7 | `13_negative/req07/undeclared_effect.mvl` | 7 | negative | println without ! Console |
+| 8 | `13_negative/req07/missing_propagation.mvl` | 7 | negative | Caller missing callee effect |
+| 9 | `13_negative/req08/while_in_total.mvl` | 8 | negative | while in total fn |
+| 10 | `13_negative/req08/partial_call.mvl` | 8 | negative | partial fn called from total |
+| 11 | `13_negative/req09/send_ref.mvl` | 9 | negative | ref sent across actor |
+| 12 | `13_negative/req09/iso_alias.mvl` | 9 | negative | iso aliased |
+| 13 | `13_negative/req10/division_by_zero.mvl` | 10 | negative | Literal 0 to NonZero param |
+| 14 | `13_negative/req10/predicate_false.mvl` | 10 | negative | where clause violated |
+| 15 | `13_negative/req11/tainted_to_console.mvl` | 11 | negative | Tainted string to println |
+| 16 | `13_negative/req11/secret_leak.mvl` | 11 | negative | Secret to public output |
 | 17 | `02_types/move_sequence.mvl` | 2 | positive | Correct consume chain |
 | 18 | `02_types/option_match.mvl` | 4 | positive | Full Option match pattern |
 | 19 | `09_concurrency/iso_transfer.mvl` | 9 | positive | iso consumed and sent |
