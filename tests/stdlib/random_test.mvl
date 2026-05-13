@@ -1,0 +1,68 @@
+// tests/stdlib/random_test.mvl — random module functions
+//
+// Verifies deterministic edge cases of std.random:
+//   int(n,n) always returns n; choice([x]) always returns Some(x);
+//   shuffle([x]) length stays 1; bytes(0) is empty.
+// Run with:  mvl test tests/stdlib/
+
+use std.random.{int, float, bytes, choice, shuffle}
+
+// ── int ──────────────────────────────────────────────────────────────────────
+
+test fn random_int_single_element_range_is_deterministic() -> Unit ! Random {
+    // int(42, 42) must always return 42 — the range contains only one value.
+    assert_eq(int(42, 42), 42);
+}
+
+test fn random_int_zero_range_is_deterministic() -> Unit ! Random {
+    assert_eq(int(0, 0), 0);
+}
+
+// ── float ─────────────────────────────────────────────────────────────────────
+
+test fn random_float_in_unit_interval() -> Unit ! Random {
+    let v: Float = float();
+    assert_eq(v >= 0.0, true);
+    assert_eq(v < 1.0, true);
+}
+
+// ── bytes ─────────────────────────────────────────────────────────────────────
+
+test fn random_bytes_zero_returns_empty() -> Unit ! Random {
+    let bs: List[Int] = bytes(0);
+    assert_eq(bs.len(), 0);
+}
+
+test fn random_bytes_returns_requested_length() -> Unit ! Random {
+    let bs: List[Int] = bytes(8);
+    assert_eq(bs.len(), 8);
+}
+
+// ── choice ────────────────────────────────────────────────────────────────────
+
+test fn random_choice_single_element_returns_that_element() -> Unit ! Random {
+    let xs: List[Int] = [42];
+    assert_eq(choice(xs).unwrap_or(-1), 42);
+}
+
+test fn random_choice_empty_list_returns_none() -> Unit ! Random {
+    let xs: List[Int] = [];
+    assert_eq(is_none(choice(xs)), true);
+}
+
+// ── shuffle ───────────────────────────────────────────────────────────────────
+
+test fn random_shuffle_single_element_length_unchanged() -> Unit ! Random {
+    let xs: List[Int] = [7];
+    assert_eq(shuffle(xs).len(), 1);
+}
+
+test fn random_shuffle_empty_list_stays_empty() -> Unit ! Random {
+    let xs: List[Int] = [];
+    assert_eq(shuffle(xs).len(), 0);
+}
+
+test fn random_shuffle_length_preserved() -> Unit ! Random {
+    let xs: List[Int] = [1, 2, 3, 4, 5];
+    assert_eq(shuffle(xs).len(), 5);
+}

@@ -1,0 +1,113 @@
+// tests/stdlib/math_test.mvl — math module functions not covered by arithmetic_test.mvl
+//
+// Covers float_min, float_max, float_is_positive, float_is_negative,
+// float_is_finite, float_is_infinite, float_is_nan, int_to_float, float_to_int.
+// Run with:  mvl test tests/stdlib/
+
+use std.math.{float_min, float_max, float_is_positive, float_is_negative,
+               float_is_finite, float_is_infinite, float_is_nan,
+               int_to_float, float_to_int}
+
+// ── float_min / float_max ───────────────────────────────────────────────────
+
+test fn float_min_returns_smaller() -> Unit {
+    assert_eq(float_min(3.0, 7.0), 3.0);
+}
+
+test fn float_min_when_equal() -> Unit {
+    assert_eq(float_min(5.0, 5.0), 5.0);
+}
+
+test fn float_min_negative_values() -> Unit {
+    assert_eq(float_min(-1.0, -3.0), -3.0);
+}
+
+test fn float_max_returns_larger() -> Unit {
+    assert_eq(float_max(3.0, 7.0), 7.0);
+}
+
+test fn float_max_when_equal() -> Unit {
+    assert_eq(float_max(4.0, 4.0), 4.0);
+}
+
+test fn float_max_negative_values() -> Unit {
+    assert_eq(float_max(-1.0, -3.0), -1.0);
+}
+
+// ── float_is_positive / float_is_negative ──────────────────────────────────
+
+test fn float_is_positive_true_for_positive() -> Unit {
+    assert_eq(float_is_positive(1.5), true);
+}
+
+test fn float_is_positive_false_for_zero() -> Unit {
+    assert_eq(float_is_positive(0.0), false);
+}
+
+test fn float_is_positive_false_for_negative() -> Unit {
+    assert_eq(float_is_positive(-0.5), false);
+}
+
+test fn float_is_negative_true_for_negative() -> Unit {
+    assert_eq(float_is_negative(-2.0), true);
+}
+
+test fn float_is_negative_false_for_zero() -> Unit {
+    assert_eq(float_is_negative(0.0), false);
+}
+
+test fn float_is_negative_false_for_positive() -> Unit {
+    assert_eq(float_is_negative(1.0), false);
+}
+
+// ── float_is_finite / float_is_infinite / float_is_nan ─────────────────────
+
+test fn float_is_finite_for_normal_value() -> Unit {
+    assert_eq(float_is_finite(3.14), true);
+}
+
+test fn float_is_finite_false_for_infinity() -> Unit {
+    assert_eq(float_is_finite(1.0 / 0.0), false);
+}
+
+test fn float_is_infinite_true_for_infinity() -> Unit {
+    assert_eq(float_is_infinite(1.0 / 0.0), true);
+}
+
+test fn float_is_infinite_false_for_normal_value() -> Unit {
+    assert_eq(float_is_infinite(42.0), false);
+}
+
+test fn float_is_nan_false_for_normal_value() -> Unit {
+    assert_eq(float_is_nan(1.0), false);
+}
+
+test fn float_is_nan_true_for_nan() -> Unit {
+    assert_eq(float_is_nan(0.0 / 0.0), true);
+}
+
+// ── int_to_float / float_to_int ─────────────────────────────────────────────
+
+test fn int_to_float_positive() -> Unit {
+    assert_eq(int_to_float(3), 3.0);
+}
+
+test fn int_to_float_zero() -> Unit {
+    assert_eq(int_to_float(0), 0.0);
+}
+
+test fn int_to_float_negative() -> Unit {
+    assert_eq(int_to_float(-5), -5.0);
+}
+
+test fn float_to_int_truncates_toward_zero() -> Unit {
+    assert_eq(float_to_int(3.9), 3);
+}
+
+test fn float_to_int_negative_truncates_toward_zero() -> Unit {
+    assert_eq(float_to_int(-2.7), -2);
+}
+
+test fn float_to_int_whole_number() -> Unit {
+    assert_eq(float_to_int(7.0), 7);
+}

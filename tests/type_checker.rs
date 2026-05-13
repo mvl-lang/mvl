@@ -1560,6 +1560,44 @@ fn secret_to_unlabeled_param_rejected() {
 }
 
 #[test]
+fn secret_option_to_unlabeled_option_rejected() {
+    // GIVEN: fn foo(opt: Option[Int]) called with a Secret[Option[Int]] argument
+    // THEN: TypeMismatch — label wrapper is checked before unwrapping Option (types.rs:248)
+    // Regression for #714: confirms checker prevents bypass even when codegen
+    // suppresses .into() for Option/Result to avoid E0283 ambiguity.
+    let errors = errors_for(
+        r#"
+        fn sink(opt: Option[Int]) -> Int { opt.unwrap_or(0) }
+        fn caller(k: Secret[Option[Int]]) -> Int { sink(k) }
+    "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "Secret[Option[Int]] must not flow silently to unlabeled Option[Int] param, got: {errors:?}"
+    );
+}
+
+#[test]
+fn secret_result_to_unlabeled_result_rejected() {
+    // GIVEN: fn foo(r: Result[Int, String]) called with a Secret[Result[Int, String]] argument
+    // THEN: TypeMismatch — same label enforcement as Secret[Option[T]] (regression for #714)
+    let errors = errors_for(
+        r#"
+        fn sink(r: Result[Int, String]) -> Int { r.unwrap_or(0) }
+        fn caller(k: Secret[Result[Int, String]]) -> Int { sink(k) }
+    "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "Secret[Result[Int,String]] must not flow to unlabeled Result param, got: {errors:?}"
+    );
+}
+
+#[test]
 fn unlabeled_to_secret_param_accepted() {
     // GIVEN: function with Secret[String] param called with unlabeled String
     // THEN: accepted — unlabeled data is treated as Public, upward flow to Secret is fine

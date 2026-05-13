@@ -1,0 +1,86 @@
+// tests/stdlib/core_test.mvl — core prelude functions
+//
+// Verifies runtime behaviour of range, Option predicates, and Result predicates
+// from the implicit core prelude (std/core.mvl).
+// Run with:  mvl test tests/stdlib/
+
+// ── range ──────────────────────────────────────────────────────────────────
+
+test fn range_produces_correct_length() -> Unit {
+    let xs: List[Int] = range(0, 5);
+    assert_eq(xs.len(), 5);
+}
+
+test fn range_starts_at_given_value() -> Unit {
+    let xs: List[Int] = range(3, 7);
+    assert_eq(xs.get(0).unwrap_or(-1), 3);
+}
+
+test fn range_ends_before_upper_bound() -> Unit {
+    let xs: List[Int] = range(0, 3);
+    assert_eq(xs.get(2).unwrap_or(-1), 2);
+}
+
+test fn range_empty_when_start_equals_end() -> Unit {
+    let xs: List[Int] = range(5, 5);
+    assert_eq(xs.len(), 0);
+}
+
+test fn range_empty_when_start_exceeds_end() -> Unit {
+    let xs: List[Int] = range(10, 5);
+    assert_eq(xs.len(), 0);
+}
+
+// ── Option predicates ──────────────────────────────────────────────────────
+
+test fn is_some_returns_true_for_some() -> Unit {
+    let opt: Option[Int] = Some(42);
+    assert_eq(is_some(opt), true);
+}
+
+test fn is_some_returns_false_for_none() -> Unit {
+    let opt: Option[Int] = None;
+    assert_eq(is_some(opt), false);
+}
+
+test fn is_none_returns_true_for_none() -> Unit {
+    let opt: Option[Int] = None;
+    assert_eq(is_none(opt), true);
+}
+
+test fn is_none_returns_false_for_some() -> Unit {
+    let opt: Option[Int] = Some(1);
+    assert_eq(is_none(opt), false);
+}
+
+test fn unwrap_or_returns_value_when_some() -> Unit {
+    let opt: Option[Int] = Some(7);
+    assert_eq(unwrap_or(opt, 0), 7);
+}
+
+test fn unwrap_or_returns_default_when_none() -> Unit {
+    let opt: Option[Int] = None;
+    assert_eq(unwrap_or(opt, 99), 99);
+}
+
+// ── Result predicates ──────────────────────────────────────────────────────
+
+test fn is_ok_returns_true_for_ok() -> Unit {
+    let r: Result[Int, String] = Ok(1);
+    assert_eq(is_ok(r), true);
+}
+
+test fn is_ok_returns_false_for_err() -> Unit {
+    let r: Result[Int, String] = Err("bad");
+    assert_eq(is_ok(r), false);
+}
+
+test fn is_err_returns_true_for_err() -> Unit {
+    let r: Result[Int, String] = Err("oops");
+    assert_eq(is_err(r), true);
+}
+
+test fn is_err_returns_false_for_ok() -> Unit {
+    let r: Result[Int, String] = Ok(42);
+    assert_eq(is_err(r), false);
+}

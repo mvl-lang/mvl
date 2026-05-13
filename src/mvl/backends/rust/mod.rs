@@ -105,6 +105,16 @@ pub fn has_extern_rust_decls(prog: &Program) -> bool {
         .any(|d| matches!(d, Decl::Extern(ed) if ed.abi == "rust"))
 }
 
+/// Returns true if the program contains extern blocks or type declarations.
+/// Used to exclude pure-function demo/helper files from the stdlib-prelude
+/// when running `mvl test`, so that demo functions cannot shadow runtime
+/// primitives.  Note: only checks Extern/Type decls — not builtin fn decls.
+pub fn has_extern_or_type_decls(prog: &Program) -> bool {
+    prog.declarations
+        .iter()
+        .any(|d| matches!(d, Decl::Extern(_) | Decl::Type(_)))
+}
+
 /// Returns true if the program imports any `use std.*` stdlib modules.
 ///
 /// When a program uses stdlib functions (e.g. `use std.io.{read_file}`), the

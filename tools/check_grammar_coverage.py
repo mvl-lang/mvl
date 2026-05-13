@@ -56,6 +56,8 @@ EBNF_KNOWN_ABSENT = {
     "impl_decl": "not yet implemented in tree-sitter grammar",
     # fn_contract added to EBNF for contracts (#621); ts update pending
     "fn_contract": "not yet implemented in tree-sitter grammar",
+    # guard_expr = expr — inlined into match_arm as optional(seq("if", $.expr))
+    "guard_expr": "inlined into match_arm as optional(seq(\"if\", $.expr))",
     # Uppercase EBNF terminals map to regex patterns, not named rules
     "COMMENT": "terminal — mapped to line_comment regex",
     "DOC_COMMENT": "terminal — mapped to line_comment regex (prefix ///)",

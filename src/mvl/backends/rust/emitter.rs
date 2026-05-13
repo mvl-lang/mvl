@@ -26,10 +26,14 @@ use crate::mvl::passes::mutation::{
 
 /// Stdlib function names that shadow Rust built-ins or prelude items and must be
 /// emitted as fully-qualified paths to avoid silent name resolution to the wrong symbol (#420).
-const STDLIB_CONFLICTS: &[(&str, &[&str])] = &[(
-    "regex",
-    &["compile", "find", "find_all", "replace", "captures"],
-)];
+const STDLIB_CONFLICTS: &[(&str, &[&str])] = &[
+    (
+        "regex",
+        &["compile", "find", "find_all", "replace", "captures"],
+    ),
+    // `time::parse(s, fmt)` conflicts with `args::parse::<T>()` in the prelude.
+    ("time", &["parse"]),
+];
 
 ///// Code-generation context: accumulates Rust source text.
 #[derive(Default)]

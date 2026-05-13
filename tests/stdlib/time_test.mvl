@@ -1,0 +1,89 @@
+// tests/stdlib/time_test.mvl — time module correctness
+//
+// Covers pure time functions (seconds, millis, format_datetime, parse) and
+// the clock-dependent now() / sleep() with effect declarations.
+// Run with:  mvl test tests/stdlib/
+
+use std.time.{DateTime, Duration, Instant, seconds, millis, now, sleep,
+               format_datetime, parse}
+
+// ── Duration constructors (pure) ─────────────────────────────────────────────
+
+test fn seconds_creates_duration_with_correct_secs() -> Unit {
+    let d: Duration = seconds(30);
+    assert_eq(d.secs, 30);
+}
+
+test fn seconds_creates_duration_with_zero_nanos() -> Unit {
+    let d: Duration = seconds(5);
+    assert_eq(d.nanos, 0);
+}
+
+test fn millis_creates_duration_with_zero_secs() -> Unit {
+    let d: Duration = millis(500);
+    assert_eq(d.secs, 0);
+}
+
+test fn millis_creates_duration_with_correct_nanos() -> Unit {
+    let d: Duration = millis(1);
+    assert_eq(d.nanos, 1000000);
+}
+
+// ── format_datetime (pure) ───────────────────────────────────────────────────
+
+test fn format_datetime_fixed_value() -> Unit {
+    let dt: DateTime = DateTime {
+        year: 2024,
+        month: 3,
+        day: 15,
+        hour: 12,
+        minute: 30,
+        second: 45,
+    };
+    assert_eq(format_datetime(dt, "%Y-%m-%dT%H:%M:%S"), "2024-03-15T12:30:45");
+}
+
+test fn format_datetime_year_only() -> Unit {
+    let dt: DateTime = DateTime {
+        year: 2026,
+        month: 1,
+        day: 1,
+        hour: 0,
+        minute: 0,
+        second: 0,
+    };
+    assert_eq(format_datetime(dt, "%Y"), "2026");
+}
+
+// ── parse (pure) ─────────────────────────────────────────────────────────────
+
+test fn parse_valid_date_returns_some() -> Unit {
+    let r: Option[DateTime] = parse("2024-03-15", "%Y-%m-%d");
+    assert_eq(is_some(r), true);
+}
+
+test fn parse_invalid_date_returns_none() -> Unit {
+    let r: Option[DateTime] = parse("not-a-date", "%Y-%m-%d");
+    assert_eq(is_none(r), true);
+}
+
+test fn parse_roundtrips_year() -> Unit {
+    let r: Option[DateTime] = parse("2024-06-01", "%Y-%m-%d");
+    match r {
+        Some(dt) => assert_eq(dt.year, 2024),
+        None     => assert(false),
+    }
+}
+
+// ── now / sleep (require ! Clock) ────────────────────────────────────────────
+
+test fn time_now_returns_instant() -> Unit ! Clock {
+    // Just verifies that now() executes without error.
+    let _t: Instant = now();
+    assert_eq(true, true);
+}
+
+test fn time_sleep_zero_duration_completes() -> Unit ! Clock {
+    sleep(seconds(0));
+    assert_eq(true, true);
+}

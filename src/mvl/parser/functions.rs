@@ -1240,4 +1240,60 @@ fn main() -> String { greet(String::new()) }"#;
         let d = fn_decl("fn f(s: String) -> String { }");
         assert!(!d.is_label_transparent);
     }
+
+    // ── Contract clause tests (#688) ───────────────────────────────────────
+
+    #[test]
+    fn parse_fn_with_requires() {
+        // GIVEN: fn divide(a: Int, b: Int) -> Int requires b != 0 { }
+        // THEN: FnDecl with one requires clause; ensures is empty
+        let d = fn_decl("fn divide(a: Int, b: Int) -> Int\n  requires b != 0\n{ }");
+        assert_eq!(d.requires.len(), 1, "expected one requires clause");
+        assert!(d.ensures.is_empty(), "no ensures expected");
+        assert!(matches!(d.requires[0], RefExpr::Compare { .. }));
+    }
+
+    #[test]
+    fn parse_fn_with_ensures() {
+        // GIVEN: fn nonneg(n: Int) -> Int ensures result >= 0 { }
+        // THEN: FnDecl with one ensures clause; requires is empty
+        let d = fn_decl("fn nonneg(n: Int) -> Int\n  ensures result >= 0\n{ }");
+        assert_eq!(d.ensures.len(), 1, "expected one ensures clause");
+        assert!(d.requires.is_empty(), "no requires expected");
+        assert!(matches!(d.ensures[0], RefExpr::Compare { .. }));
+    }
+
+    #[test]
+    fn parse_fn_with_multiple_contracts() {
+        // GIVEN: fn factorial(n: Int) -> Int requires n >= 0 ensures result >= 1 { }
+        // THEN: FnDecl has both requires and ensures, one each
+        let d =
+            fn_decl("fn factorial(n: Int) -> Int\n  requires n >= 0\n  ensures result >= 1\n{ }");
+        assert_eq!(d.requires.len(), 1, "expected one requires clause");
+        assert_eq!(d.ensures.len(), 1, "expected one ensures clause");
+        assert!(matches!(d.requires[0], RefExpr::Compare { .. }));
+        assert!(matches!(d.ensures[0], RefExpr::Compare { .. }));
+    }
+
+    #[test]
+    fn parse_ghost_let_in_fn() {
+        // GIVEN: fn abs with ensures and a ghost let binding in body
+        // THEN: ensures clause present; body contains a Ghost LetKind statement
+        let src = "fn abs(n: Int) -> Int\n  ensures result >= 0\n{\n  ghost let spec_n: Int = n;\n  if n >= 0 { n } else { 0 - n }\n}";
+        let (mut p, lex_errs) = Parser::new(src);
+        assert!(lex_errs.is_empty(), "lex errors: {lex_errs:?}");
+        let d = p.parse_fn_decl().expect("parse_fn_decl failed");
+        assert!(p.errors.is_empty(), "parse errors: {:?}", p.errors);
+        assert_eq!(d.ensures.len(), 1, "expected one ensures clause");
+        let has_ghost = d.body.stmts.iter().any(|s| {
+            matches!(
+                s,
+                Stmt::Let {
+                    kind: LetKind::Ghost,
+                    ..
+                }
+            )
+        });
+        assert!(has_ghost, "expected a ghost let binding in body");
+    }
 }
