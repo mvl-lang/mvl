@@ -1,45 +1,60 @@
 #!/usr/bin/env bash
-# Install nvim-mvl: wire plugin into init.lua + compile tree-sitter parsers
+# Install nvim-mvl: copy plugin into XDG data dir + compile tree-sitter parsers
 set -euo pipefail
 
-# Resolve the main repo (not the worktree) — follow symlinks up to the real path
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-PLUGIN_DIR="$REPO_ROOT/etc/nvim-mvl"
+PLUGIN_SRC="$SCRIPT_DIR"
+NVIM_DATA="${XDG_DATA_HOME:-$HOME/.local/share}/nvim"
+INSTALL_DIR="$NVIM_DATA/site/pack/nvim-mvl/start/nvim-mvl"
 INIT_LUA="${XDG_CONFIG_HOME:-$HOME/.config}/nvim/init.lua"
 
-echo "==> Installing nvim-mvl from $PLUGIN_DIR"
+echo "==> Installing nvim-mvl into $INSTALL_DIR"
 
-# ── 1. Wire plugin into init.lua via rtp:prepend ─────────────────────────────
-# lazy.nvim resets rtp during setup, so the pack/ symlink approach doesn't
-# work. Add an explicit prepend after lazy.setup(), matching the sheerpower
-# pattern already in init.lua.
-if grep -q 'nvim-mvl' "$INIT_LUA" 2>/dev/null; then
-  echo "    init.lua already has nvim-mvl entry"
-else
-  cat >> "$INIT_LUA" <<EOF
+# ── 1. Copy plugin files into XDG pack directory ─────────────────────────────
+mkdir -p "$INSTALL_DIR"
+cp -r "$PLUGIN_SRC"/. "$INSTALL_DIR/"
+echo "    copied plugin files"
 
--- MVL language support (nvim-mvl)
-vim.opt.runtimepath:prepend(vim.fn.expand('$PLUGIN_DIR'))
-EOF
-  echo "    added rtp:prepend to $INIT_LUA"
+# ── 2. Clean up any old repo-path entries from init.lua ──────────────────────
+if [[ -f "$INIT_LUA" ]]; then
+  # Remove the lazy.nvim dir= block for nvim-mvl (multi-line)
+  perl -i -0pe 's/\n\s*--[^\n]*MVL[^\n]*\n\s*\{\n\s*dir\s*=\s*[^\n]*nvim-mvl[^\n]*\n[^}]*\},//g' "$INIT_LUA"
+  # Remove standalone rtp:prepend and require lines for nvim-mvl
+  perl -i -ne 'print unless /nvim-mvl|require\("mvl"\)|FileType.*mvl.*treesitter/' "$INIT_LUA"
+  echo "    cleaned up old init.lua entries"
 fi
 
-# ── 2. Compile parsers via headless Neovim ────────────────────────────────────
+# ── 3. Compile parsers via headless Neovim ────────────────────────────────────
 if ! command -v nvim &>/dev/null; then
   echo "    ERROR: nvim not found in PATH"
   exit 1
 fi
 
-echo "==> Compiling tree-sitter parsers (:TSInstall mvl ebnf) ..."
-nvim --headless \
-  +"lua vim.opt.runtimepath:prepend('$PLUGIN_DIR')" \
-  +"lua require('mvl').setup()" \
-  +"TSInstall! mvl" \
-  +"sleep 5000m" \
-  +qa
+# ── 4. Install pre-compiled MVL parser directly ──────────────────────────────
+PARSER_SRC="$(cd "$SCRIPT_DIR/../tree-sitter-mvl" && pwd)/parser.so"
+PARSER_DST_DIRS=(
+  "$NVIM_DATA/lazy/nvim-treesitter/parser"
+  "$NVIM_DATA/site/parser"
+)
+if [[ -f "$PARSER_SRC" ]]; then
+  echo "==> Installing pre-compiled MVL parser ..."
+  for dir in "${PARSER_DST_DIRS[@]}"; do
+    if [[ -d "$dir" ]]; then
+      cp "$PARSER_SRC" "$dir/mvl.so"
+      echo "    copied to $dir/mvl.so"
+    fi
+  done
+else
+  echo "==> Compiling MVL parser via nvim-treesitter (no pre-built parser found) ..."
+  nvim --headless \
+    +"packloadall" \
+    +"lua require('mvl').setup()" \
+    +"TSInstall! mvl" \
+    +"sleep 5000m" \
+    +qa
+fi
 
-# ebnf: install only if not already present
+echo "==> Installing ebnf parser ..."
 nvim --headless \
   +"TSInstall! ebnf" \
   +"sleep 5000m" \
