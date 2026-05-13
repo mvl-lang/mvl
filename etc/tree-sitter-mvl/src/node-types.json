@@ -279,9 +279,13 @@
     "named": true,
     "fields": {},
     "children": {
-      "multiple": false,
-      "required": false,
+      "multiple": true,
+      "required": true,
       "types": [
+        {
+          "type": "identifier",
+          "named": true
+        },
         {
           "type": "string_literal",
           "named": true
@@ -688,11 +692,6 @@
         }
       ]
     }
-  },
-  {
-    "type": "identifier",
-    "named": true,
-    "fields": {}
   },
   {
     "type": "if_expr",
@@ -1941,6 +1940,10 @@
   {
     "type": "for",
     "named": false
+  },
+  {
+    "type": "identifier",
+    "named": true
   },
   {
     "type": "if",

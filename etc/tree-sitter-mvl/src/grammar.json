@@ -1,5 +1,6 @@
 {
   "name": "mvl",
+  "word": "identifier",
   "rules": {
     "program": {
       "type": "SEQ",
@@ -998,8 +999,8 @@
       "type": "SEQ",
       "members": [
         {
-          "type": "PATTERN",
-          "value": "[a-zA-Z_][a-zA-Z0-9_]*"
+          "type": "SYMBOL",
+          "name": "identifier"
         },
         {
           "type": "CHOICE",

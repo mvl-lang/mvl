@@ -354,7 +354,8 @@ total fn greet(name: String) -> Unit ! Console {
           (base_type
             (identifier))))
       (effect_list
-        (effect))
+        (effect
+          (identifier)))
       (block
         (statement
           (expr_stmt
@@ -738,8 +739,10 @@ extern "c" {
           (base_type
             (identifier)))
         (effect_list
-          (effect)
-          (effect))))))
+          (effect
+            (identifier))
+          (effect
+            (identifier)))))))
 
 ===============================================================================
 Multiline string literal

@@ -38,6 +38,8 @@ const PREC = {
 module.exports = grammar({
   name: "mvl",
 
+  word: ($) => $.identifier,
+
   extras: ($) => [/\s/, $.line_comment],
 
   // GLR conflicts: `where` after a type_expr is ambiguous between
@@ -237,7 +239,7 @@ module.exports = grammar({
 
     effect: ($) =>
       seq(
-        /[a-zA-Z_][a-zA-Z0-9_]*/,
+        $.identifier,
         optional(seq("(", $.string_literal, ")"))
       ),
 
