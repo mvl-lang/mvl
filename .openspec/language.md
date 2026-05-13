@@ -87,7 +87,7 @@ extern "rust" {                       // foreign function interface
 
 ```
 let x: T = expr;                      // immutable binding
-let mut x: T = expr;                  // mutable binding
+let x: ref T = expr;                  // mutable binding
 x = expr;                             // assignment (mut only)
 return expr;                          // early return
 if expr { } else { }                  // branch (also an expression)

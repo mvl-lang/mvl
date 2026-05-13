@@ -91,11 +91,11 @@ Every value MUST have exactly one owner. Transfer of ownership MUST be explicit 
 - WHEN `let b = a` (ownership transferred) followed by `use(a)`
 - THEN the compiler MUST reject: "value used after move"
 
-#### Scenario: Shared and mutable borrow conflict
+#### Scenario: Simultaneous val and ref borrow conflict
 
-- GIVEN `let mut v = vec![1, 2, 3]`
-- WHEN `let r = &v[0]` followed by `v.push(4)`
-- THEN the compiler MUST reject: "cannot borrow `v` as mutable while shared borrow exists"
+- GIVEN `let v: Array[Int] = [1, 2, 3]`
+- WHEN `let r: val Array[Int] = val v` followed by `let w: ref Array[Int] = ref v`
+- THEN the compiler MUST reject: "`ref` borrow of `v` conflicts with active `val` borrow"
 
 ### Requirement 5: Refinement Types [MUST]
 
@@ -148,7 +148,7 @@ All bindings and struct fields MUST be immutable unless explicitly marked `mut`.
 
 #### Scenario: Mutable opt-in
 
-- GIVEN `let mut x = 5`
+- GIVEN `let x: ref Int = 5`
 - WHEN the caller writes `x = 6`
 - THEN the compiler MUST accept
 
@@ -379,11 +379,11 @@ The type system MUST define the `Iterator[T]` trait as the protocol for lazy, se
 
 ```mvl
 type Iterator[T] = trait {
-    fn next(mut self) -> Option[T]
+    fn next(ref self) -> Option[T]
 }
 ```
 
-`next` takes `mut self` — it advances the iterator in place and returns the next element, or `None` when exhausted. All iterators MUST be fused: once `None` is returned, every subsequent call to `next` MUST also return `None`.
+`next` takes `ref self` — it advances the iterator in place and returns the next element, or `None` when exhausted. All iterators MUST be fused: once `None` is returned, every subsequent call to `next` MUST also return `None`.
 
 #### Built-in Iterator implementations
 
@@ -445,10 +445,10 @@ fn max[T](self: Iterator[T]) -> Option[T]  where T: Ord
 Any user-defined type MAY implement `Iterator[T]`:
 
 ```mvl
-type Counter = struct { mut current: Int, limit: Int }
+type Counter = struct { ref current: Int, limit: Int }
 
 impl Iterator[Int] for Counter {
-    fn next(mut self) -> Option[Int] {
+    fn next(ref self) -> Option[Int] {
         if self.current >= self.limit {
             None
         } else {

@@ -110,7 +110,7 @@ This is the validation paper — it takes the theoretical claims of Papers 1-4 a
 
 **Working title:** *Actors, Capabilities, and WCET: A Concurrency Model Where Data Races Are Compile Errors*
 
-We present the MVL concurrency model: actors with reference capabilities (iso/val/ref/tag) for data race freedom at compile time, structured concurrency (no orphan tasks), and WCET refinements for real-time systems. The model combines Pony's deny capabilities with Rust's ownership and adds compile-time worst-case execution time bounds via refinement types.
+We present the MVL concurrency model: actors with reference capabilities (iso/val/ref/tag) for data race freedom at compile time, structured concurrency (no orphan tasks), and WCET refinements for real-time systems. The model is based on Pony's deny capabilities (iso/val/ref/tag) and adds compile-time worst-case execution time bounds via refinement types.
 
 No mainstream language combines all three. This paper formalizes the semantics and demonstrates that the combination eliminates data races, deadlocks, and timing violations as categories — not through runtime detection but through the type system.
 
