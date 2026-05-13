@@ -4,7 +4,7 @@ set -e
 
 # Skip Rust checks when only non-Rust files (e.g. etc/, docs/) are staged
 staged=$(git diff --cached --name-only)
-if ! echo "$staged" | grep -qE '\.(rs|toml)$'; then
+if ! echo "$staged" | grep -qE '\.rs$'; then
   echo "pre-commit: no Rust files changed, skipping checks"
   exit 0
 fi
