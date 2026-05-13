@@ -163,7 +163,7 @@ Requirements: 1=Type Safety, 2=Memory Safety, 3=Exhaustive Match, 4=Null Elimina
 
 ### No negative tests at all
 
-Requirements 2, 3, 4, 5, 6, 8, 9, 10 have **zero negative corpus programs** (programs that MUST be rejected). The only existing negative corpus file is `06_ifc/implicit_flow.mvl` (Req 11). Error message fixtures in `tests/integration/error_messages/` cover individual errors but are not full-program tests.
+Requirements 2, 3, 4, 5, 6, 8, 9, 10 had **zero negative corpus programs** before this audit. The initial batch of 20 is now in `tests/corpus/14_negative/` and is validated by `make test-corpus` via the `corpus:expect-fail` annotation. `tests/integration/error_messages/` covers individual error message quality but is not full-program corpus coverage.
 
 ---
 
@@ -173,23 +173,23 @@ Priority order — fill the largest gaps first:
 
 | # | File | Req | Type | Rationale |
 |---|------|-----|------|-----------|
-| 1 | `negative/req02/use_after_move.mvl` | 2 | negative | First Req 2 negative program |
-| 2 | `negative/req02/double_consume.mvl` | 2 | negative | iso consumed twice |
-| 3 | `negative/req03/missing_arm.mvl` | 3 | negative | Non-exhaustive enum match |
-| 4 | `negative/req04/option_unwrap.mvl` | 4 | negative | Field access on Option |
-| 5 | `negative/req05/result_ignored.mvl` | 5 | negative | Unchecked Result |
-| 6 | `negative/req06/reassign_immutable.mvl` | 6 | negative | Assign to let binding |
-| 7 | `negative/req07/undeclared_effect.mvl` | 7 | negative | println without ! Console |
-| 8 | `negative/req07/missing_propagation.mvl` | 7 | negative | Caller missing callee effect |
-| 9 | `negative/req08/while_in_total.mvl` | 8 | negative | while in total fn |
-| 10 | `negative/req08/partial_call.mvl` | 8 | negative | partial fn called from total |
-| 11 | `negative/req09/send_ref.mvl` | 9 | negative | ref sent across actor |
-| 12 | `negative/req09/iso_alias.mvl` | 9 | negative | iso aliased |
-| 13 | `negative/req10/division_by_zero.mvl` | 10 | negative | Literal 0 to NonZero param |
-| 14 | `negative/req10/predicate_false.mvl` | 10 | negative | where clause violated |
-| 15 | `negative/req11/tainted_to_console.mvl` | 11 | negative | Tainted string to println |
-| 16 | `negative/req11/secret_leak.mvl` | 11 | negative | Secret to public output |
-| 17 | `positive/req02/move_sequence.mvl` | 2 | positive | Correct consume chain |
-| 18 | `positive/req04/option_match.mvl` | 4 | positive | Full Option match pattern |
-| 19 | `positive/req09/iso_transfer.mvl` | 9 | positive | iso consumed and sent |
-| 20 | `positive/req10/proven_refinement.mvl` | 10 | positive | Matching refinement proven |
+| 1 | `14_negative/req02/use_after_move.mvl` | 2 | negative | First Req 2 negative program |
+| 2 | `14_negative/req02/double_consume.mvl` | 2 | negative | iso consumed twice |
+| 3 | `14_negative/req03/missing_arm.mvl` | 3 | negative | Non-exhaustive enum match |
+| 4 | `14_negative/req04/option_unwrap.mvl` | 4 | negative | Field access on Option |
+| 5 | `14_negative/req05/result_ignored.mvl` | 5 | negative | Unchecked Result |
+| 6 | `14_negative/req06/reassign_immutable.mvl` | 6 | negative | Assign to let binding |
+| 7 | `14_negative/req07/undeclared_effect.mvl` | 7 | negative | println without ! Console |
+| 8 | `14_negative/req07/missing_propagation.mvl` | 7 | negative | Caller missing callee effect |
+| 9 | `14_negative/req08/while_in_total.mvl` | 8 | negative | while in total fn |
+| 10 | `14_negative/req08/partial_call.mvl` | 8 | negative | partial fn called from total |
+| 11 | `14_negative/req09/send_ref.mvl` | 9 | negative | ref sent across actor |
+| 12 | `14_negative/req09/iso_alias.mvl` | 9 | negative | iso aliased |
+| 13 | `14_negative/req10/division_by_zero.mvl` | 10 | negative | Literal 0 to NonZero param |
+| 14 | `14_negative/req10/predicate_false.mvl` | 10 | negative | where clause violated |
+| 15 | `14_negative/req11/tainted_to_console.mvl` | 11 | negative | Tainted string to println |
+| 16 | `14_negative/req11/secret_leak.mvl` | 11 | negative | Secret to public output |
+| 17 | `02_types/move_sequence.mvl` | 2 | positive | Correct consume chain |
+| 18 | `02_types/option_match.mvl` | 4 | positive | Full Option match pattern |
+| 19 | `09_concurrency/iso_transfer.mvl` | 9 | positive | iso consumed and sent |
+| 20 | `07_refinements/proven_refinement.mvl` | 10 | positive | Matching refinement proven |

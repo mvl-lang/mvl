@@ -112,7 +112,7 @@ test-integration: ## Run integration tests
 test-corpus: ## Validate corpus examples parse and type-check
 	@pass=0; fail=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
-	for f in tests/corpus/**/*.mvl; do \
+	while IFS= read -r f; do \
 		short=$${f#tests/corpus/}; \
 		[[ "$$f" == *_test.mvl ]] && continue; \
 		if grep -q "corpus:expect-fail" "$$f" 2>/dev/null; then \
@@ -130,7 +130,7 @@ test-corpus: ## Validate corpus examples parse and type-check
 				printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1)); \
 			fi; \
 		fi; \
-	done; \
+	done < <(find tests/corpus -name "*.mvl" | sort); \
 	echo ""; \
 	if [ $$fail -eq 0 ]; then \
 		printf "  \033[32m✓  $$pass passed, 0 failed\033[0m\n\n"; \
