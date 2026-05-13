@@ -114,7 +114,7 @@ fn dir_from_arg(v: Tainted[String]) -> Path {
 
 // ── File processor ───────────────────────────────────────────────────────────
 
-transparent partial fn process_file(name: String, raw: String) -> Program ! Console {
+partial fn process_file(name: String, raw: Tainted[String]) -> Clean[Program] ! Console {
     let src: Clean[String]  = sanitize(raw);
     let prog: Clean[Program] = lex_and_parse(src);
 
@@ -124,28 +124,50 @@ transparent partial fn process_file(name: String, raw: String) -> Program ! Cons
         prog.consts.len(), prog.externs.len(), prog.impls.len(),
         prog.errors.len());
 
-    for f in prog.fns {
-        println("{}", format_fn_sig(f))
+    let i_fns: ref Int = 0;
+    while i_fns < prog.fns.len() {
+        match prog.fns.get(i_fns) {
+            Some(f) => println("{}", format_fn_sig(f)),
+            None    => ()
+        }
+        i_fns = i_fns + 1
     }
 
-    for t in prog.types {
-        let kind_str: String = match t.body_kind {
-            TypeBodyKind::IsStruct => "struct",
-            TypeBodyKind::IsEnum   => "enum",
-            TypeBodyKind::IsAlias  => "alias",
-        };
-        let vis_s: String = if t.visible { "pub " } else { "" };
-        println("  {}type {} = {} ({} fields/{} variants)",
-            vis_s, t.name, kind_str, t.fields.len(), t.variants.len())
+    let i_types: ref Int = 0;
+    while i_types < prog.types.len() {
+        match prog.types.get(i_types) {
+            Some(t) => {
+                let kind_str: String = match t.body_kind {
+                    TypeBodyKind::IsStruct => "struct",
+                    TypeBodyKind::IsEnum   => "enum",
+                    TypeBodyKind::IsAlias  => "alias",
+                };
+                let vis_s: String = if t.visible { "pub " } else { "" };
+                println("  {}type {} = {} ({} fields/{} variants)",
+                    vis_s, t.name, kind_str, t.fields.len(), t.variants.len())
+            }
+            None => ()
+        }
+        i_types = i_types + 1
     }
 
-    for u in prog.uses {
-        println("  use {}.{{{}}}",
-            format_path(u.path), format_imports(u.imports))
+    let i_uses: ref Int = 0;
+    while i_uses < prog.uses.len() {
+        match prog.uses.get(i_uses) {
+            Some(u) => println("  use {}.{{{}}}",
+                format_path(u.path), format_imports(u.imports)),
+            None => ()
+        }
+        i_uses = i_uses + 1
     }
 
-    for e in prog.errors {
-        println("  ERROR L{}: {}", e.span.line, e.message)
+    let i_errs: ref Int = 0;
+    while i_errs < prog.errors.len() {
+        match prog.errors.get(i_errs) {
+            Some(e) => println("  ERROR L{}: {}", e.span.line, e.message),
+            None    => ()
+        }
+        i_errs = i_errs + 1
     }
 
     prog
@@ -168,21 +190,28 @@ partial fn main() -> Unit ! FileRead + Console {
             let use_total: ref  Int  = 0;
             let err_total: ref  Int  = 0;
 
-            for entry in entries {
-                let name: String = to_string(entry.path);
-                if entry.is_file && name.ends_with(".mvl") {
-                    file_count = file_count + 1;
-                    match read_to_string(entry.path) {
-                        Err(_)  => (),
-                        Ok(raw) => {
-                            let prog: Program = process_file(name, raw);
-                            fn_total   = fn_total   + prog.fns.len();
-                            type_total = type_total + prog.types.len();
-                            use_total  = use_total  + prog.uses.len();
-                            err_total  = err_total  + prog.errors.len()
+            let i_entries: ref Int = 0;
+            while i_entries < entries.len() {
+                match entries.get(i_entries) {
+                    Some(entry) => {
+                        let name: String = to_string(entry.path);
+                        if entry.is_file && name.ends_with(".mvl") {
+                            file_count = file_count + 1;
+                            match read_to_string(entry.path) {
+                                Err(_)  => (),
+                                Ok(raw) => {
+                                    let prog: Clean[Program] = process_file(name, raw);
+                                    fn_total   = fn_total   + prog.fns.len();
+                                    type_total = type_total + prog.types.len();
+                                    use_total  = use_total  + prog.uses.len();
+                                    err_total  = err_total  + prog.errors.len()
+                                }
+                            }
                         }
                     }
+                    None => ()
                 }
+                i_entries = i_entries + 1
             }
 
             println("");
