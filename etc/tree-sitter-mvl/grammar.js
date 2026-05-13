@@ -97,16 +97,16 @@ module.exports = grammar({
     // Module name = filename without extension.
 
     // `use std.io.{File, Path};` — private import (top of file only)
-    use_decl: ($) => seq("use", $.module_path, ";"),
+    use_decl: ($) => seq("use", $.module_path, optional(";")),
 
     // `pub use std.io.File;` — re-export; "pub" is part of the rule so it
     // remains unambiguous with use_decl (which never has "pub").
-    reexport_decl: ($) => seq("pub", "use", $.module_path, ";"),
+    reexport_decl: ($) => seq("pub", "use", $.module_path, optional(";")),
 
     module_path: ($) =>
       seq(
         $.identifier,
-        repeat(seq(".", $.identifier)),
+        repeat(seq(choice(".", "::"), $.identifier)),
         optional(
           seq(".", "{", $.identifier, repeat(seq(",", $.identifier)), optional(","), "}")
         )
