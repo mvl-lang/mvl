@@ -17,6 +17,9 @@
   "const"
   "struct"
   "enum"
+  "impl"
+  "extern"
+  "builtin"
 ] @keyword
 
 [
@@ -57,12 +60,15 @@
 ; ============================================================
 
 [
-  "move"
   "consume"
 ] @keyword.operator
 
 (declassify_expr "declassify" @keyword.special)
 (sanitize_expr "sanitize" @keyword.special)
+
+"transparent" @keyword.modifier
+"with" @keyword
+"invariant" @keyword
 
 ; ============================================================
 ; Capability annotations (ownership/isolation)
