@@ -27,7 +27,7 @@ static RAW_MODE: AtomicBool = AtomicBool::new(false);
 fn run_stty(args: &[&str]) -> bool {
     let mut cmd_args = vec!["-f", "/dev/tty"];
     cmd_args.extend_from_slice(args);
-    let out = Command::new("/usr/bin/stty")
+    let out = Command::new("/bin/stty")
         .args(&cmd_args)
         .output();
     match out {
