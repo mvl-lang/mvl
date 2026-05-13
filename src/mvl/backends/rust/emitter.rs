@@ -113,6 +113,8 @@ pub struct RustEmitter {
     /// method-call sites can emit type-specific Rust (e.g. `.len() as i64` vs
     /// `.chars().count() as i64`) without needing trait dispatch (#554).
     pub expr_types: std::collections::HashMap<Span, Ty>,
+    /// Controls how struct invariants are enforced at runtime (issue #662).
+    pub assert_mode: crate::mvl::backends::AssertMode,
 }
 
 impl RustEmitter {
