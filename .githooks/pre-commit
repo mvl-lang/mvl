@@ -19,10 +19,10 @@ if echo "$staged" | grep -qE '\.rs$'; then
   cargo test --quiet -- --test-threads=1 || { echo "Tests must pass before committing."; exit 1; }
 fi
 
-# MVL compiler sources → test-backend-mvl
+# MVL compiler sources → test-mvl
 if echo "$staged" | grep -qE '^compiler/'; then
-  echo "pre-commit: make test-backend-mvl"
-  make test-backend-mvl || { echo "MVL compiler tests failed."; exit 1; }
+  echo "pre-commit: make test-mvl"
+  make test-mvl || { echo "MVL compiler tests failed."; exit 1; }
 fi
 
 # Example programs → test-examples

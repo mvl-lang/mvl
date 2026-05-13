@@ -1,0 +1,47 @@
+// Corpus: for-iter-antipattern linter rule (#705)
+//
+// Purpose: demonstrate the `for-iter-antipattern` lint error.
+// The while/get/match/None=>() pattern is forbidden; use `for x in list { }`.
+//
+// Run:   mvl lint tests/corpus/03_linting/for_iter_antipattern.mvl
+//
+// Expected errors:
+//   for-iter-antipattern — while loop with .get(i) / None => () body
+
+/// Sum of all elements — WRONG: uses the while/get anti-pattern.
+/// This function should be rewritten to use `for x in xs { }`.
+partial fn sum_antipattern(xs: List[Int]) -> Int {
+    let acc: ref Int = 0;
+    let i: ref Int = 0;
+    while i < xs.len() {
+        match xs.get(i) {
+            None    => (),
+            Some(v) => { acc = acc + v; }
+        }
+        i = i + 1;
+    }
+    return acc;
+}
+
+/// Sum of all elements — CORRECT: uses for-in.
+fn sum_correct(xs: List[Int]) -> Int {
+    let acc: ref Int = 0;
+    for v in xs {
+        acc = acc + v;
+    }
+    return acc;
+}
+
+/// Escape hatch: None arm has real logic — rule must NOT fire.
+partial fn find_negative(xs: List[Int]) -> Bool {
+    let found: ref Bool = false;
+    let i: ref Int = 0;
+    while i < xs.len() {
+        match xs.get(i) {
+            None    => { return false; }
+            Some(v) => { if v < 0 { found = true; } }
+        }
+        i = i + 1;
+    }
+    return found;
+}

@@ -4,6 +4,22 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.98.0] — 2026-05-13
+
+### Added
+
+- **`if let` syntax** — `if let Pat = expr { body }` desugars to `Stmt::Match` at parse time, enabling single-arm Option/Result binding without full match expressions (#704).
+- **Linter rule L042: for-iter-antipattern** — error-level diagnostic when code uses `while`/`.get(i)`/`match`/`None ⇒ ()` instead of `for x in list`; escape hatch when the `None` arm contains real logic (#705).
+- **Keyword validation tooling** — `tools/validate_keywords.py` cross-checks keyword lists across EBNF grammar, tree-sitter grammar, `compiler/lexer.mvl`, and the Rust lexer; `make validate-keywords` target and CI step added (#706).
+- **Tuple destructuring in for-in loops** — `for (a, b) in pairs` now emits LLVM GEP field extraction via `emit_for_list_tuple()`; supports wildcard patterns (#710).
+- **Corpus tests** — `tests/corpus/01_basics/if_let.mvl`, `for_tuple_pattern.mvl`, `tests/corpus/03_linting/for_iter_antipattern.mvl`.
+
+### Changed
+
+- **`if_stmt` grammar** — `docs/grammar.ebnf` and `etc/tree-sitter-mvl/grammar.js` updated to include `if let` variant.
+- **Self-hosted compiler** — `compiler/ast.mvl` and `compiler/lexer.mvl` gain missing `KwWith`, `KwGhost`, `KwDecreases`, `KwForall`, `KwExists` token variants.
+- **Makefile targets** — `test-backend-mvl` renamed to `test-mvl`; `test-llvm` renamed to `test-backend-llvm`; pre-commit hook updated accordingly.
+
 ## [0.97.7] — 2026-05-13
 
 ### Added

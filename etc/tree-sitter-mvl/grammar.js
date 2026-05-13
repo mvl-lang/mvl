@@ -199,6 +199,7 @@ module.exports = grammar({
         optional("transparent"),
         optional(choice($.totality, "builtin")),
         optional($.security_modifier),
+        optional("test"),
         "fn",
         $.identifier,
         optional($.type_params),
@@ -209,10 +210,24 @@ module.exports = grammar({
         $.return_type,
         optional(seq("!", $.effect_list)),
         optional(seq("where", $.constraints)),
+        repeat($.contract_clause),
         optional($.block) // builtin fns have no body; required for non-builtin
       ),
 
     totality: ($) => choice("total", "partial"),
+
+    // Contract clauses: `requires pred` / `ensures pred` (Phase 5, #628)
+    contract_clause: ($) =>
+      seq(choice("requires", "ensures"), $.expr),
+
+    // Ghost binding: `ghost let pat : type = expr`
+    ghost_let_stmt: ($) =>
+      seq("ghost", "let", $.pattern, ":", $.type_expr, "=", $.expr, ";"),
+
+    // Refinement keywords used in expressions/predicates
+    decreases_expr: ($) => seq("decreases", $.expr),
+    forall_expr: ($) => seq("forall", $.identifier, ":", $.type_expr, ".", $.expr),
+    exists_expr: ($) => seq("exists", $.identifier, ":", $.type_expr, ".", $.expr),
 
     security_modifier: ($) => choice("public", "tainted", "secret"),
 
@@ -362,11 +377,14 @@ module.exports = grammar({
     return_stmt: ($) => seq("return", optional($.expr), ";"),
 
     if_stmt: ($) =>
-      seq(
-        "if",
-        $.expr,
-        $.block,
-        optional(seq("else", choice($.if_stmt, $.block)))
+      choice(
+        seq(
+          "if",
+          $.expr,
+          $.block,
+          optional(seq("else", choice($.if_stmt, $.block)))
+        ),
+        seq("if", "let", $.pattern, "=", $.expr, $.block)
       ),
 
     match_stmt: ($) =>

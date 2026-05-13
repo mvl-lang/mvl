@@ -168,6 +168,11 @@ impl Parser {
         let start = self.peek_span();
         self.advance(); // consume `if`
 
+        // `if let Pat = expr { body }` — desugar to exhaustive match
+        if self.eat(&TokenKind::Let) {
+            return self.parse_if_let_stmt(start);
+        }
+
         let cond = self.parse_expr()?;
         let then = self.parse_block()?;
 
@@ -187,6 +192,49 @@ impl Parser {
             cond,
             then,
             else_,
+            span,
+        })
+    }
+
+    /// Parse `if let Pat = expr { body }` (already consumed `if` and `let`).
+    ///
+    /// Desugars to an exhaustive match so no new AST node, checker, or backend
+    /// code is required:
+    ///
+    /// ```text
+    /// match expr {
+    ///     Pat => { body },
+    ///     _   => (),
+    /// }
+    /// ```
+    fn parse_if_let_stmt(&mut self, start: crate::mvl::parser::lexer::Span) -> Result<Stmt, ()> {
+        let pattern = self.parse_pattern()?;
+
+        let eq = self.expect(&TokenKind::Eq);
+        self.require(eq)?;
+
+        let scrutinee = self.parse_expr()?;
+        let body = self.parse_block()?;
+        let span = self.span_from(start);
+
+        let arms = vec![
+            MatchArm {
+                pattern,
+                guard: None,
+                body: MatchBody::Block(body),
+                span,
+            },
+            MatchArm {
+                pattern: Pattern::Wildcard(span),
+                guard: None,
+                body: MatchBody::Expr(Expr::Literal(Literal::Unit, span)),
+                span,
+            },
+        ];
+
+        Ok(Stmt::Match {
+            scrutinee,
+            arms,
             span,
         })
     }

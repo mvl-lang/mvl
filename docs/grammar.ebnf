@@ -114,7 +114,8 @@ statement      = let_stmt | assign_stmt | return_stmt | if_stmt
 let_stmt       = "let" pattern ":" type_expr "=" expr ";" ;
 assign_stmt    = lvalue "=" expr ";" ;
 return_stmt    = "return" [ expr ] ";" ;
-if_stmt        = "if" expr block [ "else" ( if_stmt | block ) ] ;
+if_stmt        = "if" expr block [ "else" ( if_stmt | block ) ]
+               | "if" "let" pattern "=" expr block ;  (* desugars to match; see #704 *)
 match_stmt     = "match" expr "{" { match_arm } "}" ;
 match_arm      = pattern [ "if" guard_expr ] "=>" ( expr | block ) "," ;
 guard_expr     = expr ;                  (* guard pattern — see ADR-0005; parser sets guard: None until Phase 2 *)
@@ -184,7 +185,8 @@ DOC_COMMENT    = "///" { ANY_CHAR } NEWLINE ;    (* doc comment — convention, 
 (* identifiers.  User-defined names that conflict must be renamed.               *)
 (*                                                                               *)
 (* Declaration:     fn  type  const  use  pub  extern  impl  builtin            *)
-(* Totality:        total  partial                                               *)
+(*                  struct  enum                                                  *)
+(* Totality:        total  partial  test                                         *)
 (* Control flow:    if  else  for  in  while  match  return                      *)
 (* Let binding:     let  ghost                                                    *)
 (* Ownership:       iso  val  ref  tag  consume                                  *)

@@ -838,11 +838,18 @@ impl<'ctx> LlvmBackend<'ctx> {
             Expr::FnCall { name, args, .. } if name == "range" && args.len() == 2
         );
         if !is_range {
-            let var = match pattern {
-                Pattern::Ident(n, _) => n.clone(),
-                _ => return,
-            };
-            self.emit_for_list(var, iter, body);
+            match pattern {
+                Pattern::Ident(n, _) => self.emit_for_list(n.clone(), iter, body),
+                Pattern::Wildcard(_) => {
+                    // Iterate but discard the binding.
+                    self.emit_for_list("__for_discard".to_string(), iter, body);
+                }
+                Pattern::Tuple { elems, .. } => {
+                    // Destructure each field from the element slot via GEP (#710).
+                    self.emit_for_list_tuple(elems, iter, body);
+                }
+                _ => {} // complex patterns unsupported in LLVM backend
+            }
             return;
         }
 
@@ -1054,6 +1061,144 @@ impl<'ctx> LlvmBackend<'ctx> {
                 let next = self
                     .builder
                     .build_int_add(cur_idx2, one, "list_next")
+                    .unwrap();
+                self.builder.build_store(idx_alloca, next).unwrap();
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+            }
+            self.terminated = prev_terminated;
+        }
+
+        self.builder.position_at_end(exit_bb);
+    }
+
+    /// Emit `for (a, b, ...) in <list_expr> { body }` — tuple-pattern iteration (#710).
+    ///
+    /// Iterates the list the same way as `emit_for_list`, but instead of binding a single
+    /// named variable, extracts each tuple field from the element slot via GEP and binds
+    /// the corresponding pattern names as `i64` allocas.
+    ///
+    /// Each field at index `i` is accessed as `ptr[i]` (GEP with i64 stride), which is
+    /// correct for tuples of scalar MVL types (Int, Bool, String — all represented as i64).
+    fn emit_for_list_tuple(
+        &mut self,
+        elems: &[crate::mvl::parser::ast::Pattern],
+        iter_expr: &Expr,
+        body: &Block,
+    ) {
+        use inkwell::values::AnyValue;
+
+        let i64_ty = self.context.i64_type();
+
+        // Emit the list expression to get the collection pointer.
+        let list_ptr = match self.emit_expr(iter_expr) {
+            Some(BasicValueEnum::PointerValue(p)) => p,
+            _ => return,
+        };
+
+        // len = mvl_array_len(list_ptr)
+        let len_fn = self.get_mvl_array_len();
+        let len_call = self
+            .builder
+            .build_call(len_fn, &[list_ptr.into()], "list_len")
+            .unwrap();
+        let len_val = BasicValueEnum::try_from(len_call.as_any_value_enum())
+            .ok()
+            .and_then(|v| {
+                if let BasicValueEnum::IntValue(i) = v {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| i64_ty.const_int(0, false));
+
+        // i = 0
+        let idx_alloca = self.builder.build_alloca(i64_ty, "tup_for_i").unwrap();
+        self.builder
+            .build_store(idx_alloca, i64_ty.const_int(0, false))
+            .unwrap();
+
+        let parent_fn = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
+        let cond_bb = self.context.append_basic_block(parent_fn, "tup_for_cond");
+        let body_bb = self.context.append_basic_block(parent_fn, "tup_for_body");
+        let exit_bb = self.context.append_basic_block(parent_fn, "tup_for_exit");
+
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        // Condition: i < len
+        self.builder.position_at_end(cond_bb);
+        let cur_idx = self
+            .builder
+            .build_load(i64_ty, idx_alloca, "tup_for_i")
+            .unwrap()
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, cur_idx, len_val, "tup_for_lt")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body_bb, exit_bb)
+            .unwrap();
+
+        // Body: get element slot pointer, extract each field, bind to pattern names.
+        self.builder.position_at_end(body_bb);
+
+        let get_fn = self.get_mvl_array_get();
+        let elem_call = self
+            .builder
+            .build_call(get_fn, &[list_ptr.into(), cur_idx.into()], "tup_elem_ptr")
+            .unwrap();
+        let elem_ptr = BasicValueEnum::try_from(elem_call.as_any_value_enum())
+            .ok()
+            .and_then(|v| {
+                if let BasicValueEnum::PointerValue(p) = v {
+                    Some(p)
+                } else {
+                    None
+                }
+            });
+
+        if let Some(base_ptr) = elem_ptr {
+            // Bind each named element by GEP from the base pointer (i64 stride).
+            for (field_idx, pat) in elems.iter().enumerate() {
+                if let crate::mvl::parser::ast::Pattern::Ident(name, _) = pat {
+                    let field_ptr = unsafe {
+                        self.builder
+                            .build_gep(
+                                i64_ty,
+                                base_ptr,
+                                &[i64_ty.const_int(field_idx as u64, false)],
+                                &format!("tup_field_{field_idx}"),
+                            )
+                            .unwrap()
+                    };
+                    let field_val = self.builder.build_load(i64_ty, field_ptr, name).unwrap();
+                    let alloca = self.builder.build_alloca(i64_ty, name).unwrap();
+                    self.builder.build_store(alloca, field_val).unwrap();
+                    self.locals.insert(name.clone(), (alloca, i64_ty.into()));
+                }
+                // Wildcard patterns: skip without binding.
+            }
+
+            let prev_terminated = self.terminated;
+            self.terminated = false;
+            self.emit_block(body);
+            if !self.terminated {
+                // Increment: i++
+                let cur_idx2 = self
+                    .builder
+                    .build_load(i64_ty, idx_alloca, "tup_for_i_inc")
+                    .unwrap()
+                    .into_int_value();
+                let one = i64_ty.const_int(1, false);
+                let next = self
+                    .builder
+                    .build_int_add(cur_idx2, one, "tup_for_next")
                     .unwrap();
                 self.builder.build_store(idx_alloca, next).unwrap();
                 self.builder.build_unconditional_branch(cond_bb).unwrap();
