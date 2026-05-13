@@ -421,7 +421,7 @@ partial fn parse_effects(ps: ParserState) -> EffectsR {
                         ""
                     };
                     effects.push(Effect { name: eff_name, param: eff_param, span: sp });
-                    if ps_at_punct(curr, ",") {
+                    if ps_at_punct(curr, "+") || ps_at_punct(curr, ",") {
                         curr = ps_advance(curr)
                     } else {
                         done = true
