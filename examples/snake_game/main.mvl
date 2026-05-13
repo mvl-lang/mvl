@@ -4,7 +4,7 @@
 // The effect system enforces the split:
 //   game.mvl  = pure (no effects, fully testable)
 //   render.mvl = ! Terminal (drawing only)
-//   main.mvl  = ! Terminal, Clock (loop, input, random food)
+//   main.mvl  = ! Terminal, Clock (loop, input, random food, lives)
 //
 // Demonstrates:
 //   1. Req 7  (Effects):  sharp effect boundary — game logic in game.mvl has
@@ -34,6 +34,8 @@ extern "rust" {
     fn tui_init() -> Int;
     fn tui_drop() -> Unit;
     fn tui_read_key_timeout(millis: Int) -> String;
+    fn tui_set_cursor(row: Int, col: Int) -> Unit;
+    fn tui_print(text: String, bold: Bool, underline: Bool, fg_color: Int) -> Unit;
     fn clock_ms() -> Int;
     fn rand_next(seed: Int) -> Int;
 }
@@ -48,19 +50,27 @@ fn random_food(board: Board, seed: Int) -> Pos {
     Pos { x: x, y: y }
 }
 
+// ── Status display ────────────────────────────────────────────────────────────
+
+// Show a message on the row below the score line.
+fn show_status(board: Board, msg: String) -> Unit ! Terminal {
+    let _: Unit = tui_set_cursor(board.height + 4, 1);
+    tui_print(msg, true, false, 4)
+}
+
 // ── Game loop ─────────────────────────────────────────────────────────────────
 
 // Advance the game one tick at a time until the snake dies or the user quits.
-// Returns the final score.
+// Returns -1 if the user pressed 'q' / Escape; otherwise the score at death.
 //
 // Partial: the loop runs as long as game.alive is true and the user has not
 // pressed 'q' or Escape. The compiler cannot statically bound the duration.
 partial fn game_loop(game: Game, seed: Int) -> Int ! Terminal, Clock {
     if game.alive {
-        let key: String        = tui_read_key_timeout(150);
+        let key: String        = tui_read_key_timeout(275);
         let is_quit: Bool      = key == "q" || key == "Escape";
         if is_quit {
-            game.score
+            -1
         } else {
             let dir: Option[Direction] = key_to_direction(key);
             let new_seed: Int          = clock_ms();
@@ -74,6 +84,43 @@ partial fn game_loop(game: Game, seed: Int) -> Int ! Terminal, Clock {
     }
 }
 
+// ── Lives loop ────────────────────────────────────────────────────────────────
+
+// Run up to `lives` lives on `board`, accumulating score across lives.
+// Returns -1 if the user quit; otherwise the total accumulated score.
+//
+// On death with lives remaining: shows a "life lost" status line, waits for
+// any key, then starts a fresh game keeping the accumulated score.
+//
+// Partial: delegates to game_loop which is itself partial.
+partial fn lives_loop(lives: Int, board: Board, acc: Int) -> Int ! Terminal, Clock {
+    if lives <= 0 {
+        acc
+    } else {
+        let seed: Int   = clock_ms();
+        let start: Pos  = Pos { x: 10, y: 10 };
+        let food: Pos   = random_food(board, seed);
+        let game: Game  = apply_new_game(board, start, food);
+        let _: Unit     = render(game);
+        let result: Int = game_loop(game, seed);
+        if result == -1 {
+            -1
+        } else {
+            let new_acc: Int   = acc + result;
+            let remaining: Int = lives - 1;
+            if remaining <= 0 {
+                new_acc
+            } else {
+                let life_msg: String = "Life lost! ".concat(remaining.to_string())
+                    .concat(" lives left — press any key to continue");
+                let _: Unit   = show_status(board, life_msg);
+                let _: String = tui_read_key_timeout(30000);
+                lives_loop(remaining, board, new_acc)
+            }
+        }
+    }
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 partial fn main() -> Unit ! Terminal, Clock, Console {
@@ -82,13 +129,12 @@ partial fn main() -> Unit ! Terminal, Clock, Console {
         println("snake_game: failed to enter raw terminal mode (not a tty?)")
     } else {
         let board: Board = Board { width: 40, height: 20 };
-        let seed0: Int   = clock_ms();
-        let start: Pos   = Pos { x: 10, y: 10 };
-        let food: Pos    = random_food(board, seed0);
-        let game: Game   = apply_new_game(board, start, food);
-        let _: Unit      = render(game);
-        let score: Int   = game_loop(game, seed0);
+        let score: Int   = lives_loop(3, board, 0);
         let _: Unit      = tui_drop();
-        println("Game over! Final score: ".concat(score.to_string()))
+        if score < 0 {
+            println("Quit. Thanks for playing!")
+        } else {
+            println("Game over! Final score: ".concat(score.to_string()))
+        }
     }
 }
