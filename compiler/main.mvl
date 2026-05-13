@@ -167,164 +167,138 @@ partial fn process_file(name: String, raw: Tainted[String]) -> Clean[Program] ! 
     prog
 }
 
-// ── Test helper ───────────────────────────────────────────────────────────────
+// ── Test helpers ──────────────────────────────────────────────────────────────
+//
+// Tests construct AST nodes directly (no lex/parse) so they remain `total`
+// and pass `mvl check`.
 
-total fn lp(src: String) -> Program {
-    parse(lex(src))
+total fn zero_span() -> Span {
+    Span { line: 0, col: 0 }
+}
+
+total fn simple_ty(name: String) -> TypeExpr {
+    TypeExpr { name: name, args: [], span: zero_span() }
+}
+
+total fn make_param(name: String, ty_name: String) -> Param {
+    Param { capability: "", mutable: false, name: name, ty: simple_ty(ty_name), span: zero_span() }
+}
+
+total fn make_effect(name: String) -> Effect {
+    Effect { name: name, param: "", span: zero_span() }
+}
+
+total fn make_fn(visible: Bool, is_transp: Bool, totality: String, is_test: Bool,
+                 name: String, params: List[Param], ret_name: String,
+                 effects: List[Effect]) -> FnDecl {
+    FnDecl {
+        visible:     visible,
+        is_test:     is_test,
+        is_builtin:  false,
+        is_transp:   is_transp,
+        totality:    totality,
+        name:        name,
+        type_params: [],
+        params:      params,
+        ret_type:    simple_ty(ret_name),
+        effects:     effects,
+        constraints: [],
+        has_body:    true,
+        span:        zero_span()
+    }
 }
 
 // ── format_type_expr tests ─────────────────────────────────────────────────────
 
 test fn format_type_expr_simple_name() -> Unit {
-    let p: Program = lp("fn f(x: Int) -> Unit { }");
-    match p.fns.get(0) {
-        None    => assert_eq(true, false),
-        Some(f) => match f.params.get(0) {
-            None     => assert_eq(true, false),
-            Some(p0) => assert_eq(format_type_expr(p0.ty), "Int")
-        }
-    }
+    assert_eq(format_type_expr(simple_ty("Int")), "Int")
 }
 
 test fn format_type_expr_generic_one_arg() -> Unit {
-    let p: Program = lp("fn f(xs: List[Int]) -> Unit { }");
-    match p.fns.get(0) {
-        None    => assert_eq(true, false),
-        Some(f) => match f.params.get(0) {
-            None     => assert_eq(true, false),
-            Some(p0) => assert_eq(format_type_expr(p0.ty), "List[Int]")
-        }
-    }
+    let arg: TypeExpr = simple_ty("Int");
+    let ty: TypeExpr = TypeExpr { name: "List", args: [arg], span: zero_span() };
+    assert_eq(format_type_expr(ty), "List[Int]")
 }
 
 // ── format_params tests ────────────────────────────────────────────────────────
 
 test fn format_params_empty() -> Unit {
-    let p: Program = lp("fn f() -> Unit { }");
-    match p.fns.get(0) {
-        None    => assert_eq(true, false),
-        Some(f) => assert_eq(format_params(f.params), "")
-    }
+    let empty: List[Param] = [];
+    assert_eq(format_params(empty), "")
 }
 
 test fn format_params_single() -> Unit {
-    let p: Program = lp("fn f(x: Int) -> Unit { }");
-    match p.fns.get(0) {
-        None    => assert_eq(true, false),
-        Some(f) => assert_eq(format_params(f.params), "x: Int")
-    }
+    assert_eq(format_params([make_param("x", "Int")]), "x: Int")
 }
 
 test fn format_params_two() -> Unit {
-    let p: Program = lp("fn add(x: Int, y: Int) -> Int { x + y }");
-    match p.fns.get(0) {
-        None    => assert_eq(true, false),
-        Some(f) => assert_eq(format_params(f.params), "x: Int, y: Int")
-    }
+    assert_eq(format_params([make_param("x", "Int"), make_param("y", "Int")]), "x: Int, y: Int")
 }
 
 // ── format_effects tests ───────────────────────────────────────────────────────
 
 test fn format_effects_empty() -> Unit {
-    let p: Program = lp("fn f() -> Unit { }");
-    match p.fns.get(0) {
-        None    => assert_eq(true, false),
-        Some(f) => assert_eq(format_effects(f.effects), "")
-    }
+    let empty: List[Effect] = [];
+    assert_eq(format_effects(empty), "")
 }
 
 test fn format_effects_single() -> Unit {
-    let p: Program = lp("fn f() -> Unit ! Console { }");
-    match p.fns.get(0) {
-        None    => assert_eq(true, false),
-        Some(f) => assert_eq(format_effects(f.effects), " ! Console")
-    }
+    assert_eq(format_effects([make_effect("Console")]), " ! Console")
 }
 
 test fn format_effects_two() -> Unit {
-    let p: Program = lp("fn f() -> Unit ! FileRead + Console { }");
-    match p.fns.get(0) {
-        None    => assert_eq(true, false),
-        Some(f) => assert_eq(format_effects(f.effects), " ! FileRead, Console")
-    }
+    assert_eq(format_effects([make_effect("FileRead"), make_effect("Console")]), " ! FileRead, Console")
 }
 
 // ── format_fn_sig tests ────────────────────────────────────────────────────────
 
 test fn format_fn_sig_bare() -> Unit {
-    let p: Program = lp("fn foo() -> Unit { }");
-    match p.fns.get(0) {
-        None    => assert_eq(true, false),
-        Some(f) => assert_eq(format_fn_sig(f), "  fn foo() -> Unit")
-    }
+    let f: FnDecl = make_fn(false, false, "", false, "foo", [], "Unit", []);
+    assert_eq(format_fn_sig(f), "  fn foo() -> Unit")
 }
 
 test fn format_fn_sig_pub_total() -> Unit {
-    let p: Program = lp("pub total fn add(x: Int, y: Int) -> Int { x + y }");
-    match p.fns.get(0) {
-        None    => assert_eq(true, false),
-        Some(f) => assert_eq(format_fn_sig(f), "  pub total fn add(x: Int, y: Int) -> Int")
-    }
+    let params: List[Param] = [make_param("x", "Int"), make_param("y", "Int")];
+    let f: FnDecl = make_fn(true, false, "total", false, "add", params, "Int", []);
+    assert_eq(format_fn_sig(f), "  pub total fn add(x: Int, y: Int) -> Int")
 }
 
 test fn format_fn_sig_partial_with_effects() -> Unit {
-    let p: Program = lp("partial fn log(msg: String) -> Unit ! Console { }");
-    match p.fns.get(0) {
-        None    => assert_eq(true, false),
-        Some(f) => assert_eq(format_fn_sig(f), "  partial fn log(msg: String) -> Unit ! Console")
-    }
+    let f: FnDecl = make_fn(false, false, "partial", false, "log",
+                            [make_param("msg", "String")], "Unit",
+                            [make_effect("Console")]);
+    assert_eq(format_fn_sig(f), "  partial fn log(msg: String) -> Unit ! Console")
 }
 
 test fn format_fn_sig_transparent() -> Unit {
-    let p: Program = lp("transparent partial fn bridge(s: String) -> String { s }");
-    match p.fns.get(0) {
-        None    => assert_eq(true, false),
-        Some(f) => assert_eq(format_fn_sig(f), "  transparent partial fn bridge(s: String) -> String")
-    }
+    let f: FnDecl = make_fn(false, true, "partial", false, "bridge",
+                            [make_param("s", "String")], "String", []);
+    assert_eq(format_fn_sig(f), "  transparent partial fn bridge(s: String) -> String")
 }
 
 test fn format_fn_sig_test_fn() -> Unit {
-    let p: Program = lp("test fn my_test() -> Unit { assert_eq(1, 1) }");
-    match p.fns.get(0) {
-        None    => assert_eq(true, false),
-        Some(f) => assert_eq(format_fn_sig(f), "  test fn my_test() -> Unit")
-    }
+    let f: FnDecl = make_fn(false, false, "", true, "my_test", [], "Unit", []);
+    assert_eq(format_fn_sig(f), "  test fn my_test() -> Unit")
 }
 
 // ── format_path tests ──────────────────────────────────────────────────────────
 
 test fn format_path_single_segment() -> Unit {
-    let p: Program = lp("use lexer::lex;");
-    match p.uses.get(0) {
-        None    => assert_eq(true, false),
-        Some(u) => assert_eq(format_path(u.path), "lexer")
-    }
+    assert_eq(format_path(["lexer"]), "lexer")
 }
 
 test fn format_path_dotted() -> Unit {
-    let p: Program = lp("use std.io.{read_to_string}");
-    match p.uses.get(0) {
-        None    => assert_eq(true, false),
-        Some(u) => assert_eq(format_path(u.path), "std.io")
-    }
+    assert_eq(format_path(["std", "io"]), "std.io")
 }
 
 // ── format_imports tests ───────────────────────────────────────────────────────
 
 test fn format_imports_single() -> Unit {
-    let p: Program = lp("use lexer::lex;");
-    match p.uses.get(0) {
-        None    => assert_eq(true, false),
-        Some(u) => assert_eq(format_imports(u.imports), "lex")
-    }
+    assert_eq(format_imports(["lex"]), "lex")
 }
 
 test fn format_imports_multiple() -> Unit {
-    let p: Program = lp("use std.io.{path, join, read_to_string}");
-    match p.uses.get(0) {
-        None    => assert_eq(true, false),
-        Some(u) => assert_eq(format_imports(u.imports), "path, join, read_to_string")
-    }
+    assert_eq(format_imports(["path", "join", "read_to_string"]), "path, join, read_to_string")
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
