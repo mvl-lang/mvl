@@ -21,28 +21,41 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static RAW_MODE: AtomicBool = AtomicBool::new(false);
 
-// Run stty with the given args, using /dev/tty as stdin.
-// stty requires its stdin to be the terminal device; inheriting fd 0 fails
-// when the binary is launched through a process chain (make → mvl → binary)
-// where stdin has been redirected to a pipe or /dev/null.
+// Run stty on /dev/tty using the macOS -f flag.
+// Using -f lets stty open the device itself (O_RDWR), which is more reliable
+// than passing an inherited or opened fd as stdin across a process chain.
 fn run_stty(args: &[&str]) -> bool {
-    let Ok(tty) = File::open("/dev/tty") else { return false };
-    Command::new("/usr/bin/stty")
-        .args(args)
-        .stdin(tty)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    let mut cmd_args = vec!["-f", "/dev/tty"];
+    cmd_args.extend_from_slice(args);
+    let out = Command::new("/usr/bin/stty")
+        .args(&cmd_args)
+        .output();
+    match out {
+        Ok(o) if o.status.success() => true,
+        Ok(o) => {
+            eprintln!(
+                "snake_game bridge: stty {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&o.stderr).trim()
+            );
+            false
+        }
+        Err(e) => {
+            eprintln!("snake_game bridge: cannot spawn stty: {e}");
+            false
+        }
+    }
 }
 
 // Read up to `buf.len()` bytes from /dev/tty (the controlling terminal).
-// Using /dev/tty directly ensures we get keypresses even when fd 0 is piped.
 fn read_tty(buf: &mut [u8]) -> usize {
-    File::open("/dev/tty")
-        .map(|mut f| f.read(buf).unwrap_or(0))
-        .unwrap_or(0)
+    match File::open("/dev/tty") {
+        Ok(mut f) => f.read(buf).unwrap_or(0),
+        Err(e) => {
+            eprintln!("snake_game bridge: open /dev/tty for read: {e}");
+            0
+        }
+    }
 }
 
 // ── Terminal lifecycle ─────────────────────────────────────────────────────────
