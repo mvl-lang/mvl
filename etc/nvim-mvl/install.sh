@@ -41,29 +41,27 @@ if ! command -v nvim &>/dev/null; then
   exit 1
 fi
 
-# ── 4. Install pre-compiled MVL parser directly ──────────────────────────────
-PARSER_SRC="$(cd "$SCRIPT_DIR/../tree-sitter-mvl" && pwd)/parser.so"
+# ── 4. Compile and install MVL parser from source ────────────────────────────
+GRAMMAR_DIR="$(cd "$SCRIPT_DIR/../tree-sitter-mvl" && pwd)"
+PARSER_C="$GRAMMAR_DIR/src/parser.c"
+PARSER_OUT="$GRAMMAR_DIR/mvl.so"
 PARSER_DST_DIRS=(
   "$NVIM_DATA/lazy/nvim-treesitter/parser"
   "$NVIM_DATA/site/parser"
 )
-if [[ -f "$PARSER_SRC" ]]; then
-  echo "==> Installing pre-compiled MVL parser ..."
-  for dir in "${PARSER_DST_DIRS[@]}"; do
-    if [[ -d "$dir" ]]; then
-      cp "$PARSER_SRC" "$dir/mvl.so"
-      echo "    copied to $dir/mvl.so"
-    fi
-  done
-else
-  echo "==> Compiling MVL parser via nvim-treesitter (no pre-built parser found) ..."
-  nvim --headless \
-    +"packloadall" \
-    +"lua require('mvl').setup()" \
-    +"TSInstall! mvl" \
-    +"sleep 5000m" \
-    +qa
-fi
+
+echo "==> Compiling MVL parser from source ..."
+cc -o "$PARSER_OUT" -shared -fPIC -Os \
+  -I"$GRAMMAR_DIR/src" \
+  "$PARSER_C" || { echo "    ERROR: failed to compile parser"; exit 1; }
+echo "    compiled $PARSER_OUT"
+
+for dir in "${PARSER_DST_DIRS[@]}"; do
+  if [[ -d "$dir" ]]; then
+    cp "$PARSER_OUT" "$dir/mvl.so"
+    echo "    installed to $dir/mvl.so"
+  fi
+done
 
 echo "==> Installing ebnf parser ..."
 nvim --headless \
