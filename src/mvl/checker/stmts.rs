@@ -286,6 +286,16 @@ impl TypeChecker {
                         found: init_ty.display(),
                         span: init.span(),
                     });
+                } else if ann_ty.is_linear() {
+                    // Pony destructive-read rule: linear types require explicit consume().
+                    // `let t: String = s` is forbidden; `let t: String = consume(s)` is required.
+                    if let Expr::Ident(src, _) = init {
+                        self.emit(CheckError::LinearTypeBareBind {
+                            name: src.clone(),
+                            ty: ann_ty.display(),
+                            span: init.span(),
+                        });
+                    }
                 }
                 // Mutability is encoded in the type: `ref T` = mutable, everything else = immutable.
                 // Strip the `ref`/`val` wrapper so the binding carries the inner type T —

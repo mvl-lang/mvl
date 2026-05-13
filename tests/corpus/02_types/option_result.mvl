@@ -3,7 +3,7 @@
 
 // Correct: handle Option with match
 fn safe_head(xs: List[Int]) -> Option[Int] {
-    let _: List[Int] = xs;
+    let _: List[Int] = consume(xs);
     None
 }
 
