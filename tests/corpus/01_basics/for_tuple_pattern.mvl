@@ -1,0 +1,35 @@
+// Corpus: tuple destructuring in for-in loops (#710)
+// Parser, checker, and Rust backend already supported Pattern::Tuple.
+// LLVM backend now emits per-field GEP binding.
+
+fn sum_first(pairs: List[(Int, Int)]) -> Int {
+    let acc: ref Int = 0;
+    for (a, _b) in pairs {
+        acc = acc + a;
+    }
+    return acc;
+}
+
+fn sum_second(pairs: List[(Int, Int)]) -> Int {
+    let acc: ref Int = 0;
+    for (_a, b) in pairs {
+        acc = acc + b;
+    }
+    return acc;
+}
+
+fn sum_both(pairs: List[(Int, Int)]) -> Int {
+    let acc: ref Int = 0;
+    for (a, b) in pairs {
+        acc = acc + a + b;
+    }
+    return acc;
+}
+
+fn all_wildcards(pairs: List[(Int, Int)]) -> Int {
+    let count: ref Int = 0;
+    for (_, _) in pairs {
+        count = count + 1;
+    }
+    return count;
+}

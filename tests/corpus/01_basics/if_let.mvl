@@ -1,0 +1,34 @@
+// Corpus: if let — single-arm Option/Result binding (#704)
+// Desugars to exhaustive match at parse time.
+
+fn process_some(opt: Option[Int]) -> Int {
+    let result: ref Int = 0;
+    if let Some(v) = opt {
+        result = v;
+    }
+    return result;
+}
+
+fn process_ok(res: Result[String, Int]) -> String {
+    let out: ref String = "";
+    if let Ok(s) = res {
+        out = s;
+    }
+    return out;
+}
+
+fn process_err(res: Result[Int, String]) -> String {
+    let msg: ref String = "no error";
+    if let Err(e) = res {
+        msg = e;
+    }
+    return msg;
+}
+
+fn wildcard_binding(opt: Option[Int]) -> Bool {
+    let found: ref Bool = false;
+    if let Some(_) = opt {
+        found = true;
+    }
+    return found;
+}

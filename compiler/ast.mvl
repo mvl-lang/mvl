@@ -55,6 +55,11 @@ pub type TokenKind = enum {
     KwRequires,
     KwEnsures,
     KwInvariant,
+    KwWith,
+    KwGhost,
+    KwDecreases,
+    KwForall,
+    KwExists,
     // ── IFC security labels ─────────────────────────────────────────────
     KwPublic,
     KwTainted,

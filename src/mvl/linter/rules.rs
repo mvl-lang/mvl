@@ -13,8 +13,8 @@
 
 use crate::mvl::linter::{config::LintConfig, errors::LintDiag};
 use crate::mvl::parser::ast::{
-    BinaryOp, Block, Decl, ElseBranch, Expr, MatchArm, MatchBody, Pattern, Program, SecurityLabel,
-    Stmt, TypeBody, TypeExpr, VariantFields,
+    BinaryOp, Block, Decl, ElseBranch, Expr, Literal, MatchArm, MatchBody, Pattern, Program,
+    SecurityLabel, Stmt, TypeBody, TypeExpr, VariantFields,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -823,6 +823,94 @@ fn type_expr_name(ty: &TypeExpr) -> String {
         }
         _ => "<type>".to_string(),
     }
+}
+
+// ── Phase 2 (continued): for-iter-antipattern ──────────────────────────────
+
+/// Error on the `while / .get(i) / match / None => ()` anti-pattern (#705).
+///
+/// Rule id: `for-iter-antipattern`
+///
+/// The pattern:
+///
+/// ```mvl
+/// let i: ref Int = 0;
+/// while i < xs.len() {
+///     match xs.get(i) {
+///         None    => (),
+///         Some(x) => { ... }
+///     }
+///     i = i + 1
+/// }
+/// ```
+///
+/// is never correct when iterating a `List[T]`.  `for x in xs { ... }` is
+/// always equivalent, safer (no off-by-one risk), and more readable.
+/// The `None => ()` arm is a false branch that only satisfies exhaustiveness.
+///
+/// **Detection:** a `while` whose direct body contains a `match` on
+/// `<expr>.get(<args>)` where any arm is `None => ()`.
+///
+/// **Escape hatch:** if the `None` arm contains real logic (not just `()`),
+/// the rule is silent — the user is deliberately handling a missing element.
+pub fn for_iter_antipattern(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if !cfg.for_iter_antipattern {
+        return;
+    }
+    for decl in &prog.declarations {
+        if let Decl::Fn(f) = decl {
+            check_block_for_iter_antipattern(&f.body, out);
+        }
+    }
+}
+
+fn check_block_for_iter_antipattern(block: &Block, out: &mut Vec<LintDiag>) {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::While { body, span, .. } => {
+                // Check direct children of the while body for the anti-pattern.
+                for inner in &body.stmts {
+                    if let Stmt::Match {
+                        scrutinee,
+                        arms,
+                        span: match_span,
+                    } = inner
+                    {
+                        if is_get_call(scrutinee) && has_none_unit_arm(arms) {
+                            out.push(LintDiag::error(
+                                "for-iter-antipattern",
+                                "use `for x in list { }` for List[T] iteration; \
+                                 `while/.get(i)/match/None=>()` is not allowed",
+                                span.line,
+                                span.col,
+                            ));
+                            let _ = match_span; // span reported at while header
+                            break;
+                        }
+                    }
+                }
+                // Recurse to catch nested whiles.
+                check_block_for_iter_antipattern(body, out);
+            }
+            Stmt::For { body, .. } | Stmt::If { then: body, .. } => {
+                check_block_for_iter_antipattern(body, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Returns `true` if `expr` is a method call to `.get(...)`.
+fn is_get_call(expr: &Expr) -> bool {
+    matches!(expr, Expr::MethodCall { method, .. } if method == "get")
+}
+
+/// Returns `true` if any arm of the match has pattern `None` and body `()`.
+fn has_none_unit_arm(arms: &[MatchArm]) -> bool {
+    arms.iter().any(|arm| {
+        matches!(arm.pattern, Pattern::None(_))
+            && matches!(&arm.body, MatchBody::Expr(Expr::Literal(Literal::Unit, _)))
+    })
 }
 
 // ── Phase 3: LLM corpus quality rules ──────────────────────────────────────

@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-corpus test-solver test-stdlib test-backend-mvl test-bdd test-backend-rust test-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples coverage lint mvl-lint format format-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants
+.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-corpus test-solver test-stdlib test-backend-mvl test-mvl test-bdd test-backend-rust test-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples coverage validate-keywords lint mvl-lint format format-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants
 
 .DEFAULT_GOAL := help
 
@@ -170,6 +170,8 @@ test-stdlib: build ## Verify stdlib runtime correctness: transpile tests/stdlib/
 	@echo "Running stdlib correctness tests..."
 	$(MVL) test tests/stdlib/
 
+test-mvl: test-backend-mvl ## Alias for test-backend-mvl (used by pre-commit hook)
+
 test-backend-mvl: build ## Run MVL-in-MVL tests for the self-hosted compiler (compiler/*_test.mvl)
 	$(MVL) test compiler/
 
@@ -209,6 +211,9 @@ test-examples: build build-llvm-runtime ## Run `make test` for every example sub
 	@examples/test-all.sh $(if $(filter llvm,$(BACKEND)),--llvm)
 
 # === Quality ===
+
+validate-keywords: ## Cross-check keyword lists across EBNF, tree-sitter, compiler/lexer.mvl, and Rust lexer (#706)
+	python3 tools/validate_keywords.py
 
 lint: ## Lint Rust source with clippy
 	cargo clippy -- -D warnings
