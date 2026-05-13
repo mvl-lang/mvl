@@ -4,22 +4,21 @@ Spike tests explore speculative or experimental ideas and are **intentionally ex
 
 They require manual invocation and may depend on work-in-progress language features.
 
----
+## Why spikes are excluded from CI
 
-## 001-parser — Parser in MVL (issue #187)
+Spikes are time-boxed explorations. They may:
+- Depend on features not yet merged
+- Require a fully-built `mvl` binary (`cargo build` first)
+- Break intentionally as the language evolves
+- Represent abandoned experiments kept for reference
 
-Explores a self-hosted recursive-descent parser written in MVL itself.
-Nine experiments, each building on the previous.
+Adding spikes to the standard test suite would cause CI to fail on unrelated
+changes. They are excluded by design (#683).
 
-**Status:** active / exploratory
-
-**Manual invocation (from repo root):**
+## Running spike tests manually
 
 ```bash
-# Build the compiler first
-make build
-
-# Run all spike unit tests
+# Run a specific spike from the repo root
 make -C tests/spikes/001-parser test
 
 # Run a specific experiment's tests
@@ -32,15 +31,15 @@ make -C tests/spikes/001-parser check
 make -C tests/spikes/001-parser help
 ```
 
-**Why excluded from CI:**
-- Experiments may depend on speculative syntax or features not yet stabilised.
-- Failures here are expected during active exploration and should not block the main pipeline.
-- See [Makefile](001-parser/Makefile) for the full target list.
+## Spikes
 
----
+| Directory | Topic | Status | Related issue |
+|-----------|-------|--------|---------------|
+| `001-parser/` | Parser-in-MVL — recursive-descent parser written in MVL itself | Active | #187 |
 
 ## Adding a new spike
 
-1. Create `tests/spikes/NNN-name/` with a `Makefile` following the pattern in `001-parser/Makefile`.
-2. Add a section to this README describing the spike's purpose and invocation.
-3. Do **not** add spike targets to the top-level `make test` or CI workflows.
+1. Create `tests/spikes/NNN-topic/` with a `Makefile` following the pattern in `001-parser/Makefile`.
+2. Add an entry to the table above.
+3. Add a row to the `AGENTS.md` Spike Tests table.
+4. Do **not** wire it into `make test` or any CI target.
