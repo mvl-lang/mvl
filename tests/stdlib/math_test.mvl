@@ -82,6 +82,10 @@ test fn float_is_nan_false_for_normal_value() -> Unit {
     assert_eq(float_is_nan(1.0), false);
 }
 
+test fn float_is_nan_true_for_nan() -> Unit {
+    assert_eq(float_is_nan(0.0 / 0.0), true);
+}
+
 // ── int_to_float / float_to_int ─────────────────────────────────────────────
 
 test fn int_to_float_positive() -> Unit {

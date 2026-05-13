@@ -1824,7 +1824,7 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                                 // and causes compilation failures (e.g. collections.mvl defining
                                 // `fn list_get()` that shadows `list_get<T>` from mvl_runtime).
                                 if !transpiler::has_main_fn(&parsed)
-                                    && transpiler::has_library_decls(&parsed)
+                                    && transpiler::has_extern_or_type_decls(&parsed)
                                 {
                                     stdlib_prelude_progs.push(parsed);
                                 }

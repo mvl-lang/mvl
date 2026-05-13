@@ -1271,6 +1271,8 @@ fn main() -> String { greet(String::new()) }"#;
             fn_decl("fn factorial(n: Int) -> Int\n  requires n >= 0\n  ensures result >= 1\n{ }");
         assert_eq!(d.requires.len(), 1, "expected one requires clause");
         assert_eq!(d.ensures.len(), 1, "expected one ensures clause");
+        assert!(matches!(d.requires[0], RefExpr::Compare { .. }));
+        assert!(matches!(d.ensures[0], RefExpr::Compare { .. }));
     }
 
     #[test]
