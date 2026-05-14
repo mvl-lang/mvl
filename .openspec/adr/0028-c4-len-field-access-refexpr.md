@@ -66,3 +66,24 @@ FAILURE CONDITIONS:
 - `make check-compiler` or `make test-mvl` fail after the changes
 - `cargo test` fails after the parser change
 ```
+
+---
+
+## Relation to language definition
+
+This change extends the `len()` sub-expression inside refinement predicates (`requires`,
+`ensures`, `decreases`, `invariant`) to accept dotted field-access paths (e.g.
+`len(curr.tokens)`) in addition to simple identifiers.
+
+### Eleven Requirements (ADR-0001)
+
+The change directly **strengthens** Requirement 6 (Termination / totality): `decreases`
+clauses can now express structural measures over struct fields, enabling verified
+termination proofs for while-loops in the self-hosted parser. No other requirement is
+affected.
+
+### Design Principles (README)
+
+- **Verifiability** — strengthens: more termination measures can be formally expressed
+- **Minimal surface area** — consistent with: extends one RefExpr arm, no new syntax
+- All other design principles — consistent with (parser change is purely internal)
