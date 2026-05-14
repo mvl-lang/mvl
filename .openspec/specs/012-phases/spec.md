@@ -73,10 +73,10 @@ so its purpose is unambiguous.
 |-------|----------|----------------|-------------------|
 | 1–4 | **Foundation** | MVL verifies its 11 requirements at compile time | 1 (Requirements), 2 (Constructs partial) |
 | 5 | **Compiles** | MVL owns the full compilation chain (LLVM, no host compiler dependency) | 6 (Backends) |
-| 6 | **Works** | Real programs run — stdlib complete, testing matures | 3 (Stdlib), 4 (Testing) |
-| 7 | **Ships** | Packages distribute and are trustworthy | 5 (Packaging), 7 (Toolchain) |
+| 6 | **Works** | Real programs run — stdlib complete, testing matures | 3 (Stdlib), 4 (Testing), 7 (Toolchain partial) |
+| 7 | **Self-hosting** | The compiler verifies its own source — MVL is its own first customer | 2 (Constructs complete), 7 (Toolchain) |
 | 8 | **Proves** | Concurrent programs verified — actors and model checking | 8 (Verification, applied) |
-| 9 | **Proven** | Language formally verified — Lean/Coq metatheory | 8 (Verification, formal) |
+| 9 | **Proven** | Language formally verified — Lean/Coq metatheory + supply chain | 5 (Packaging), 8 (Verification, formal) |
 
 **Implementation:** Issue labels `phase-1` through `phase-9` (LAB271/mvl_language)
 
@@ -131,27 +131,35 @@ coverage including mutation, property-based, and MC/DC discipline.
 
 **Tracked issues:** #314 (epic: stdlib real implementations), #180, #179, #40, #39, #206, #326, #175, #171, #170
 
-### Requirement 5: Phase 7 — Ships [MUST]
+### Requirement 5: Phase 7 — Self-hosting [MUST]
 
-Phase 7 MUST deliver the **Packaging** and **Toolchain** pillars: a registry
-that signs, an SBOM that audits, an LSP that supports day-to-day editing, and
-an assurance pipeline that connects compile-time evidence to AAE-3 artifacts.
+Phase 7 MUST deliver **self-hosting**: the MVL compiler compiles itself. This
+proves the language is complete enough to express a real, non-trivial program
+(the compiler) and validates the toolchain end-to-end. MVL becomes its own
+first customer.
 
-**Implementation:** `src/mvl/packages/`, `tools/lsp/` (planned), `etc/registry/` (planned)
+**Implementation:** `compiler/` (MVL sources: parser, checker, linter in MVL)
 
-#### Scenario: Package distribution
+#### Scenario: Self-hosted parser
 
-- GIVEN a package authored in MVL
-- WHEN it is published to the registry
-- THEN the registry MUST verify the signature, attach an SBOM, and reject any package whose declared API does not match its compiled surface
+- GIVEN `compiler/parser.mvl`
+- WHEN compiled via the LLVM backend
+- THEN it MUST parse all files in `tests/corpus/` identically to the Rust parser
 
-#### Scenario: LSP support
+#### Scenario: Self-hosted checker
 
-- GIVEN an editor with the MVL LSP installed
-- WHEN a developer hovers a `let` binding
-- THEN the LSP MUST display the inferred (or annotated) type, security label, and effect set
+- GIVEN `compiler/checker.mvl`
+- WHEN it type-checks itself
+- THEN it MUST produce the same typed AST as the Rust checker (modulo representation)
 
-**Tracked issues:** #56, #151, #252, #251, #185, #320, #261, #259, #333, #286, #187
+#### Scenario: Bootstrapping
+
+- GIVEN the Rust-based MVL compiler (stage 0)
+- WHEN it compiles `compiler/*.mvl` (stage 1)
+- AND stage 1 compiles `compiler/*.mvl` again (stage 2)
+- THEN stage 1 and stage 2 binaries MUST be identical (reproducible bootstrap)
+
+**Tracked issues:** #187 (milestone: MVL frontend in MVL)
 
 ### Requirement 6: Phase 8 — Proves [MUST]
 
@@ -177,11 +185,21 @@ where MVL achieves its 11/11 requirement coverage at runtime.
 
 ### Requirement 7: Phase 9 — Proven [SHOULD]
 
-Phase 9 SHOULD deliver formal metatheory of the MVL type system in a proof
-assistant (Lean 4 or Coq), establishing soundness of the eleven requirements
-not just by implementation but by mechanized proof.
+Phase 9 SHOULD deliver two pillars:
 
-**Implementation:** Out of repository (planned `mvl_metatheory` companion repo)
+1. **Packaging** — registry, signing, SBOM, supply chain trust
+2. **Verification (formal)** — metatheory in Lean 4 or Coq
+
+This phase is post-1.0 and represents the full maturity of MVL as a production
+ecosystem with formally verified foundations.
+
+**Implementation:** `src/mvl/packages/`, `etc/registry/` (planned), `mvl_metatheory` companion repo
+
+#### Scenario: Package distribution
+
+- GIVEN a package authored in MVL
+- WHEN it is published to the registry
+- THEN the registry MUST verify the signature, attach an SBOM, and reject any package whose declared API does not match its compiled surface
 
 #### Scenario: Soundness theorem
 
@@ -189,7 +207,9 @@ not just by implementation but by mechanized proof.
 - WHEN the soundness theorem is proven
 - THEN every well-typed MVL program is shown to satisfy each of the eleven requirements
 
-**Status:** Not yet started. Target: post-1.0 release. Out of scope for current roadmap.
+**Tracked issues:** #56, #246, #252, #251, #185, #561, #615, #633, #635, #636, #637
+
+**Status:** Not yet started. Target: post-1.0 release.
 
 ### Requirement 8: README Alignment [MUST]
 
@@ -264,3 +284,4 @@ Each pipeline stage MUST live in its own top-level directory under `src/mvl/`. A
 
 - **2026-05-02** — initial draft (closes #406)
 - **2026-05-02** — added "Compiler Architecture — Five-Stage Pipeline" section + Requirement 9 (pipeline stage discipline) to formalize parser/resolver/checker/passes/backends layout. Tracks #443, #444.
+- **2026-05-14** — Phase 7 changed from "Ships" to "Self-hosting" per README alignment. Packaging moved to Phase 9. Self-hosting scenarios added (bootstrap, parser parity, checker parity).
