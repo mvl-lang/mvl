@@ -96,11 +96,14 @@ total fn keyword_kind(s: String) -> TokenKind {
         "Tainted"     => TokenKind::KwTainted,
         "Secret"      => TokenKind::KwSecret,
         "Clean"       => TokenKind::KwClean,
-        "iso"         => TokenKind::KwIso,
-        "val"         => TokenKind::KwVal,
-        "ref"         => TokenKind::KwRef,
-        "tag"         => TokenKind::KwTag,
-        _             => TokenKind::Ident,
+        "iso"          => TokenKind::KwIso,
+        "val"          => TokenKind::KwVal,
+        "ref"          => TokenKind::KwRef,
+        "tag"          => TokenKind::KwTag,
+        "actor"        => TokenKind::KwActor,
+        "select"       => TokenKind::KwSelect,
+        "concurrently" => TokenKind::KwConcurrently,
+        _              => TokenKind::Ident,
     }
 }
 
