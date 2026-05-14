@@ -17,7 +17,7 @@
 //! - Multiline strings `"""…"""`, raw strings `r"…"`, raw multiline `r"""…"""`
 //! - Security-flow: `move(e)`, `consume(e)`, `declassify(e)`, `sanitize(e)`
 
-use crate::mvl::parser::ast::{BinaryOp, Expr, Literal, Param, UnaryOp};
+use crate::mvl::parser::ast::{BinaryOp, Expr, Literal, Param, SelectArm, UnaryOp};
 
 /// Result of peeking inside `{` to decide whether it opens a map literal,
 /// set literal, or a plain block expression.
@@ -345,6 +345,19 @@ impl Parser {
                     fields,
                     span,
                 })
+            }
+
+            // ── select expression (Phase 8, #69) ────────────────────────────
+            // `select { [binding =] expr => { body } … [timeout(dur) => { body }] }`
+            TokenKind::Select => self.parse_select_expr(start),
+
+            // ── concurrently block (Phase 8, #69) ───────────────────────────
+            // `concurrently { … }` — structured concurrency scope
+            TokenKind::Concurrently => {
+                self.advance(); // consume `concurrently`
+                let body = self.parse_block()?;
+                let span = self.span_from(start);
+                Ok(Expr::Concurrently { body, span })
             }
 
             // ── Lambda expression ────────────────────────────────────────────
@@ -695,6 +708,76 @@ impl Parser {
         self.require(rb)?;
         let span = self.span_from(start);
         Ok(Expr::Set { elems, span })
+    }
+
+    /// Parse `select { arm* }` (Phase 8, #69).
+    ///
+    /// Each arm is one of:
+    /// - `[binding =] expr => { body }` — behavior call arm
+    /// - `timeout(duration) => { body }` — fires when no other arm is ready
+    fn parse_select_expr(&mut self, start: crate::mvl::parser::lexer::Span) -> Result<Expr, ()> {
+        self.advance(); // consume `select`
+        let lbrace = self.expect(&TokenKind::LBrace);
+        self.require(lbrace)?;
+
+        let mut arms = Vec::new();
+        while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+            let arm_start = self.peek_span();
+
+            // Detect `timeout(duration) =>` — `timeout` is a regular identifier
+            // used contextually inside `select` arms, not a reserved keyword.
+            let is_timeout =
+                matches!(self.peek_kind(), TokenKind::Ident(s) if s.as_str() == "timeout");
+
+            if is_timeout {
+                // timeout(duration) => { body }
+                self.advance(); // consume the `timeout` ident token
+                let lparen = self.expect(&TokenKind::LParen);
+                self.require(lparen)?;
+                let duration = self.parse_expr()?;
+                let rparen = self.expect(&TokenKind::RParen);
+                self.require(rparen)?;
+                let fat_arrow = self.expect(&TokenKind::FatArrow);
+                self.require(fat_arrow)?;
+                let body = self.parse_block()?;
+                arms.push(SelectArm {
+                    binding: None,
+                    expr: Box::new(duration),
+                    is_timeout: true,
+                    body,
+                    span: self.span_from(arm_start),
+                });
+            } else {
+                // Optional binding: `ident = expr =>` vs just `expr =>`
+                // Detect by peeking: Ident followed by Assign (`=`, not `=>`)
+                let binding = if matches!(self.peek_kind(), TokenKind::Ident(_))
+                    && matches!(self.peek_kind_at(1), TokenKind::Eq)
+                {
+                    let ident_result = self.expect_ident();
+                    let (name, _) = self.require(ident_result)?;
+                    self.advance(); // consume `=`
+                    Some(name)
+                } else {
+                    None
+                };
+                let expr = self.parse_expr()?;
+                let fat_arrow = self.expect(&TokenKind::FatArrow);
+                self.require(fat_arrow)?;
+                let body = self.parse_block()?;
+                arms.push(SelectArm {
+                    binding,
+                    expr: Box::new(expr),
+                    is_timeout: false,
+                    body,
+                    span: self.span_from(arm_start),
+                });
+            }
+        }
+
+        let rbrace = self.expect(&TokenKind::RBrace);
+        self.require(rbrace)?;
+        let span = self.span_from(start);
+        Ok(Expr::Select { arms, span })
     }
 }
 

@@ -196,6 +196,13 @@ fn collect_refs_expr(expr: &Expr, params: &[&str], out: &mut Vec<(String, Span)>
                 collect_refs_expr(v, params, out);
             }
         }
+        Expr::Select { arms, .. } => {
+            for arm in arms {
+                collect_refs_expr(&arm.expr, params, out);
+                collect_refs_block(&arm.body, params, out);
+            }
+        }
+        Expr::Concurrently { body, .. } => collect_refs_block(body, params, out),
     }
 }
 

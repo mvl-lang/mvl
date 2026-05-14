@@ -622,12 +622,43 @@ pub enum Expr {
         expr: Box<Expr>,
         span: Span,
     },
-    /// `spawn ActorType { field: value, … }` — spawn an actor, returns an ActorRef (Phase 8, #63).
+    /// `actor ActorType { field: value, … }` — create an actor, returns an ActorRef (Phase 8, #63).
     Spawn {
         actor_type: String,
         fields: Vec<(String, Expr)>,
         span: Span,
     },
+    /// `select { binding = expr => { body } … timeout(dur) => { body } }` (Phase 8, #69).
+    ///
+    /// Evaluates to `Unit`.  The first ready branch fires.  At most one
+    /// `timeout(duration)` arm is allowed; it fires when no other arm is ready
+    /// within the given duration.
+    Select {
+        arms: Vec<SelectArm>,
+        span: Span,
+    },
+    /// `concurrently { … }` — structured concurrency scope (Phase 8, #69).
+    ///
+    /// Actors created inside cannot outlive this block.  When the block exits,
+    /// all spawned actors are terminated.
+    Concurrently {
+        body: Block,
+        span: Span,
+    },
+}
+
+/// One arm of a `select` expression.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectArm {
+    /// Optional result binding: `result = actor.behavior()`.
+    pub binding: Option<String>,
+    /// The actor behavior call expression, or the duration for `timeout(dur)`.
+    pub expr: Box<Expr>,
+    /// `true` when this is the `timeout(duration)` arm.
+    pub is_timeout: bool,
+    /// Handler block executed when this arm fires.
+    pub body: Block,
+    pub span: Span,
 }
 
 impl Expr {
@@ -652,7 +683,9 @@ impl Expr {
             | Expr::Declassify { span, .. }
             | Expr::Sanitize { span, .. }
             | Expr::Borrow { span, .. }
-            | Expr::Spawn { span, .. } => *span,
+            | Expr::Spawn { span, .. }
+            | Expr::Select { span, .. }
+            | Expr::Concurrently { span, .. } => *span,
             Expr::Block(b) => b.span,
         }
     }

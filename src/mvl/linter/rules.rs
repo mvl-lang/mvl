@@ -717,6 +717,10 @@ fn expr_has_calls(expr: &Expr) -> bool {
         | Expr::Borrow { expr: e, .. } => expr_has_calls(e),
         Expr::Construct { fields, .. } => fields.iter().any(|(_, e)| expr_has_calls(e)),
         Expr::Spawn { fields, .. } => fields.iter().any(|(_, e)| expr_has_calls(e)),
+        Expr::Select { arms, .. } => arms
+            .iter()
+            .any(|a| expr_has_calls(&a.expr) || block_has_calls(&a.body)),
+        Expr::Concurrently { body, .. } => block_has_calls(body),
         Expr::List { elems, .. } | Expr::Set { elems, .. } => elems.iter().any(expr_has_calls),
         Expr::Map { pairs, .. } => pairs
             .iter()
@@ -1273,6 +1277,13 @@ fn cyclomatic_complexity_expr(expr: &Expr) -> usize {
             .iter()
             .map(|(_, e)| cyclomatic_complexity_expr(e))
             .sum(),
+        Expr::Select { arms, .. } => arms
+            .iter()
+            .map(|a| {
+                1 + cyclomatic_complexity_expr(&a.expr) + cyclomatic_complexity_block_inner(&a.body)
+            })
+            .sum(),
+        Expr::Concurrently { body, .. } => cyclomatic_complexity_block_inner(body),
         Expr::List { elems, .. } | Expr::Set { elems, .. } => {
             elems.iter().map(cyclomatic_complexity_expr).sum()
         }
@@ -1445,6 +1456,17 @@ fn max_match_depth_expr(expr: &Expr, depth: usize) -> usize {
         Expr::Construct { fields, .. } | Expr::Spawn { fields, .. } => fields
             .iter()
             .map(|(_, e)| max_match_depth_expr(e, depth))
+            .max()
+            .unwrap_or(depth),
+        Expr::Select { arms, .. } => arms
+            .iter()
+            .map(|a| max_match_depth_expr(&a.expr, depth))
+            .max()
+            .unwrap_or(depth),
+        Expr::Concurrently { body, .. } => body
+            .stmts
+            .iter()
+            .map(|s| max_match_depth_stmt(s, depth))
             .max()
             .unwrap_or(depth),
         Expr::List { elems, .. } | Expr::Set { elems, .. } => elems

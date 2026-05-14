@@ -308,6 +308,14 @@ fn check_expr_iso(expr: &Expr, iso_vars: &HashSet<&str>, errors: &mut Vec<CheckE
             }
         }
 
+        Expr::Select { arms, .. } => {
+            for arm in arms {
+                check_expr_iso(&arm.expr, iso_vars, errors);
+                check_block_iso(&arm.body, iso_vars, errors);
+            }
+        }
+        Expr::Concurrently { body, .. } => check_block_iso(body, iso_vars, errors),
+
         // Leaves — no aliasing possible.
         Expr::Literal(..) | Expr::Ident(..) => {}
     }

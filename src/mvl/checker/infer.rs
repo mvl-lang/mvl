@@ -405,6 +405,19 @@ impl TypeChecker {
                 Ty::Named("ActorRef".to_string(), vec![])
             }
 
+            // Phase 8: select / concurrently — type checking deferred (#695)
+            Expr::Select { arms, .. } => {
+                for arm in arms {
+                    self.infer_expr(&arm.expr);
+                    self.infer_block_type(&arm.body, None);
+                }
+                Ty::Unknown
+            }
+            Expr::Concurrently { body, .. } => {
+                self.infer_block_type(body, None);
+                Ty::Unit
+            }
+
             Expr::Lambda {
                 params,
                 ret_type,

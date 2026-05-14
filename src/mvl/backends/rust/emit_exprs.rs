@@ -960,6 +960,10 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
             // Phase 8: actor spawn codegen — not yet implemented.
             cg.push("/* actor spawn — Phase 8 */");
         }
+        Expr::Select { .. } | Expr::Concurrently { .. } => {
+            // Phase 8: select/concurrently codegen — not yet implemented (#695).
+            cg.push("/* select/concurrently — Phase 8 */");
+        }
     }
 }
 

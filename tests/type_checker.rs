@@ -1620,7 +1620,7 @@ fn if_with_labeled_bool_condition_promotes_result() {
     // GIVEN: if-condition is Secret[Bool], branch results are Public[Int]
     // THEN: result type is Secret[Int] — cannot be returned as Public[Int]
     let errors = errors_for(
-        r#"fn select(flag: Secret[Bool], a: Public[Int], b: Public[Int]) -> Public[Int] {
+        r#"fn choose_secret(flag: Secret[Bool], a: Public[Int], b: Public[Int]) -> Public[Int] {
             if flag { a } else { b }
         }"#,
     );

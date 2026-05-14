@@ -233,6 +233,14 @@ fn check_expr(expr: &Expr, ctx: &TermCtx<'_>, errors: &mut Vec<CheckError>) {
             }
         }
 
+        Expr::Select { arms, .. } => {
+            for arm in arms {
+                check_expr(&arm.expr, ctx, errors);
+                check_block(&arm.body, ctx, errors);
+            }
+        }
+        Expr::Concurrently { body, .. } => check_block(body, ctx, errors),
+
         // Leaves — nothing to recurse into.
         Expr::Literal(..) | Expr::Ident(..) => {}
     }
