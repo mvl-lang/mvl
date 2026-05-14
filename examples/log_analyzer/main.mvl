@@ -105,10 +105,16 @@ fn run_error_message(e: RunError) -> String {
     }
 }
 
+/// Handle a run-time error: log it with the human-readable reason.
+/// Effect is ! Log only — tighter than main's full effect list.
+fn handle_run_error(e: RunError) -> Unit ! Log {
+    log_error("run failed", {"reason": run_error_message(e)})
+}
+
 fn main() -> Unit ! FileRead + Console + Log {
     match run() {
         Ok(_)  => (),
-        Err(e) => log_error("run failed", {"reason": run_error_message(e)}),
+        Err(e) => handle_run_error(e),
     }
 }
 
