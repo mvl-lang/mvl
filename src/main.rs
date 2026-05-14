@@ -9,7 +9,7 @@ use mvl::mvl::checker;
 use mvl::mvl::checker::passes::{
     aggregate_verdicts, parse_req_filter, source_hash, PassRegistry, Verdict, VerdictCache,
 };
-use mvl::mvl::linter::{self, config::LintConfig};
+use mvl::mvl::linter::{self, config::LintConfig, errors::LintDiag};
 use mvl::mvl::packages;
 use mvl::mvl::parser::ast::{Decl, Program, Totality, TypeBody};
 use mvl::mvl::parser::Parser;
@@ -1480,17 +1480,47 @@ fn cmd_lint(path: &str, show_config: bool) {
 
     for file in &files {
         let file_str = file.display().to_string();
-        let (prog, src) = parse_or_exit(&file_str);
+        let src = match fs::read_to_string(file) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("{file_str}:1:1: error: [io-error] cannot read file: {e}");
+                total_errors += 1;
+                had_errors = true;
+                continue;
+            }
+        };
+        let (mut parser, lex_errors) = Parser::new(&src);
+        let prog = parser.parse_program();
+
+        // Surface lex and parse errors as lint diagnostics.
+        let mut pre_diags: Vec<LintDiag> = Vec::new();
+        for err in &lex_errors {
+            pre_diags.push(LintDiag::error(
+                "lex-error",
+                err.message.clone(),
+                err.span.line,
+                err.span.col,
+            ));
+        }
+        for err in parser.errors() {
+            pre_diags.push(LintDiag::error(
+                "parse-error",
+                err.message.clone(),
+                err.span.line,
+                err.span.col,
+            ));
+        }
+
         let result = linter::lint(&prog, &src, &cfg);
 
-        for diag in &result.diags {
+        for diag in pre_diags.iter().chain(result.diags.iter()) {
             eprintln!("{}", diag.render(&file_str));
         }
 
         total_warnings += result.warning_count();
-        total_errors += result.error_count();
+        total_errors += result.error_count() + pre_diags.len();
 
-        if !result.is_ok() {
+        if !pre_diags.is_empty() || !result.is_ok() {
             had_errors = true;
         } else if result.diags.is_empty() {
             println!("{file_str}: OK");
