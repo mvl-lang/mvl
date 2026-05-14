@@ -58,6 +58,9 @@ pub struct DecisionInfo {
     pub kind: DecisionKind,
     /// Number of atomic boolean clauses (leaf nodes of the &&/|| tree).
     pub clause_count: usize,
+    /// True when this decision is inside a function with `! effect` annotations.
+    /// Shown in the EXEMPT tier and excluded from the coverage percentage denominator.
+    pub is_effectful: bool,
 }
 
 impl DecisionInfo {
@@ -94,7 +97,13 @@ pub fn analyze_mcdc(prog: &Program, file_stem: &str, start_id: usize) -> Vec<Dec
             if fd.is_test {
                 continue;
             }
+            let before = decisions.len();
             collect_from_block(&fd.body, &fd.name, file_stem, &mut decisions, &mut next_id);
+            if !fd.effects.is_empty() {
+                for d in &mut decisions[before..] {
+                    d.is_effectful = true;
+                }
+            }
         }
     }
     decisions
@@ -135,6 +144,7 @@ fn collect_from_stmt(
                     line: span.line,
                     kind: DecisionKind::If,
                     clause_count,
+                    is_effectful: false,
                 });
                 *next_id += 1;
             }
@@ -162,6 +172,7 @@ fn collect_from_stmt(
                     line: span.line,
                     kind: DecisionKind::While,
                     clause_count,
+                    is_effectful: false,
                 });
                 *next_id += 1;
             }
@@ -183,6 +194,7 @@ fn collect_from_stmt(
                     line: span.line,
                     kind: DecisionKind::Match,
                     clause_count: arms.len(),
+                    is_effectful: false,
                 });
                 *next_id += 1;
             }
@@ -199,6 +211,7 @@ fn collect_from_stmt(
                             line: arm.span.line,
                             kind: DecisionKind::MatchGuard,
                             clause_count: n,
+                            is_effectful: false,
                         });
                         *next_id += 1;
                     }
@@ -258,6 +271,7 @@ fn collect_from_expr(
                     line: span.line,
                     kind: DecisionKind::If,
                     clause_count,
+                    is_effectful: false,
                 });
                 *next_id += 1;
             }
@@ -300,6 +314,7 @@ fn collect_from_expr(
                     line: span.line,
                     kind: DecisionKind::Match,
                     clause_count: arms.len(),
+                    is_effectful: false,
                 });
                 *next_id += 1;
             }
@@ -315,6 +330,7 @@ fn collect_from_expr(
                             line: arm.span.line,
                             kind: DecisionKind::MatchGuard,
                             clause_count: n,
+                            is_effectful: false,
                         });
                         *next_id += 1;
                     }
@@ -399,6 +415,10 @@ pub struct MCDCStats {
     pub total_clauses: usize,
     /// One independence obligation per clause across all compound decisions.
     pub total_obligations: usize,
+    /// Decisions inside effectful functions (excluded from the coverage denominator).
+    pub exempt_decisions: usize,
+    /// Obligations inside effectful functions (excluded from the coverage denominator).
+    pub exempt_obligations: usize,
 }
 
 impl MCDCStats {
@@ -410,6 +430,12 @@ impl MCDCStats {
             if d.is_compound() {
                 s.compound_decisions += 1;
                 s.total_obligations += d.clause_count;
+            }
+            if d.is_effectful {
+                s.exempt_decisions += 1;
+                if d.is_compound() {
+                    s.exempt_obligations += d.clause_count;
+                }
             }
         }
         s
