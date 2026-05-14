@@ -85,6 +85,8 @@ test: build build-llvm-runtime ## Run all test suites and print a one-line PASS/
 	}; \
 	echo ""; \
 	run_suite "Unit tests"        test-unit; \
+	run_suite "Requirements"      test-requirements; \
+	run_suite "Error messages"    test-error-messages; \
 	run_suite "Corpus"            test-corpus; \
 	run_suite "Solver"            test-solver; \
 	run_suite "Stdlib"            test-stdlib; \
@@ -111,6 +113,9 @@ test-integration: ## Run integration tests
 
 test-requirements: ## Run requirement verdict tests — one Proven + one Failed per requirement (1–11)
 	cargo test --test requirements
+
+test-error-messages: ## Run error message tests — assert exact diagnostic output for each CheckError variant
+	cargo test --test error_messages
 
 test-corpus: ## Validate corpus examples parse and type-check
 	@pass=0; fail=0; \
