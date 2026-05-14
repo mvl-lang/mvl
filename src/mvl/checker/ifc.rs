@@ -423,6 +423,11 @@ fn check_expr_flows(
                 check_expr_flows(v, pc, env, errors);
             }
         }
+        Expr::Spawn { fields, .. } => {
+            for (_, v) in fields {
+                check_expr_flows(v, pc, env, errors);
+            }
+        }
         // Leaves — no sub-expressions to walk.
         Expr::Literal(..) | Expr::Ident(..) => {}
     }
@@ -540,6 +545,11 @@ fn count_in_expr(expr: &Expr, dc: &mut usize, sc: &mut usize) {
         Expr::Map { pairs, .. } => {
             for (k, v) in pairs {
                 count_in_expr(k, dc, sc);
+                count_in_expr(v, dc, sc);
+            }
+        }
+        Expr::Spawn { fields, .. } => {
+            for (_, v) in fields {
                 count_in_expr(v, dc, sc);
             }
         }

@@ -75,6 +75,8 @@ pub enum Decl {
     Use(UseDecl),
     /// `impl Trait for Type { … }` — trait implementation.
     Impl(ImplDecl),
+    /// `actor TypeName { fields* behaviors* }` — actor type declaration (Phase 8, #63).
+    Actor(ActorDecl),
 }
 
 impl Decl {
@@ -86,6 +88,7 @@ impl Decl {
             Decl::Extern(d) => d.span,
             Decl::Use(d) => d.span,
             Decl::Impl(d) => d.span,
+            Decl::Actor(d) => d.span,
         }
     }
 }
@@ -292,6 +295,41 @@ pub struct ImplDecl {
     pub type_name: String,
     /// Methods in the impl block.
     pub methods: Vec<FnDecl>,
+    pub span: Span,
+}
+
+// ── Actor declaration ──────────────────────────────────────────────────────
+
+/// `actor TypeName { fields* behaviors* }` — an actor type declaration (Phase 8, #63).
+///
+/// Actors encapsulate private mutable state and expose it only through behaviors
+/// (async message handlers).  All inter-actor communication uses sendable capabilities
+/// (`iso`, `val`, `tag`).  See Spec 015 and ADR-0029.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActorDecl {
+    /// Whether the item is exported from this module (`pub`).
+    pub visible: bool,
+    pub name: String,
+    /// Optional generic type parameters.
+    pub type_params: Vec<GenericParam>,
+    /// Private mutable state fields.
+    pub fields: Vec<FieldDecl>,
+    /// Async message handlers (`be` methods).
+    pub behaviors: Vec<BehaviorDecl>,
+    pub span: Span,
+}
+
+/// A single behavior inside an actor declaration: `be name(params) -> Unit { body }`.
+///
+/// Behaviors are async message handlers.  Their parameters MUST have sendable capabilities
+/// (`iso`, `val`, `tag`).  The return type MUST be `Unit`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BehaviorDecl {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub return_type: Box<TypeExpr>,
+    pub effects: Vec<Effect>,
+    pub body: Block,
     pub span: Span,
 }
 
@@ -580,6 +618,12 @@ pub enum Expr {
         expr: Box<Expr>,
         span: Span,
     },
+    /// `spawn ActorType { field: value, … }` — spawn an actor, returns an ActorRef (Phase 8, #63).
+    Spawn {
+        actor_type: String,
+        fields: Vec<(String, Expr)>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -603,7 +647,8 @@ impl Expr {
             | Expr::Consume { span, .. }
             | Expr::Declassify { span, .. }
             | Expr::Sanitize { span, .. }
-            | Expr::Borrow { span, .. } => *span,
+            | Expr::Borrow { span, .. }
+            | Expr::Spawn { span, .. } => *span,
             Expr::Block(b) => b.span,
         }
     }

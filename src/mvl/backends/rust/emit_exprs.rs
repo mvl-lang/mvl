@@ -956,6 +956,10 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
             cg.push(" ");
             emit_expr(cg, body);
         }
+        Expr::Spawn { .. } => {
+            // Phase 8: actor spawn codegen — not yet implemented.
+            cg.push("/* actor spawn — Phase 8 */");
+        }
     }
 }
 

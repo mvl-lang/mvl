@@ -572,6 +572,9 @@ impl RustEmitter {
                     }
                     continue; // use decls don't get a trailing blank line
                 }
+                Decl::Actor(_) => {
+                    // Phase 8: actor codegen — stub, skipped until runtime is wired
+                }
                 Decl::Impl(id) => emit_impl_decl(self, id),
             }
             self.blank();

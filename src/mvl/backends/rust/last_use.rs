@@ -185,7 +185,7 @@ impl LastUseTracker {
             Expr::Block(b) => self.visit_block(b, in_loop),
             // Lambdas capture variables — the body may be called multiple times.
             Expr::Lambda { .. } => {}
-            Expr::Construct { fields, .. } => {
+            Expr::Construct { fields, .. } | Expr::Spawn { fields, .. } => {
                 for (_, e) in fields {
                     self.visit_expr(e, in_loop);
                 }

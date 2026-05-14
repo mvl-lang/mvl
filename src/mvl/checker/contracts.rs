@@ -307,6 +307,11 @@ fn check_requires_in_expr(
         Expr::Lambda { body, .. } => {
             check_requires_in_expr(body, fn_map, var_refs, fn_decls, errors);
         }
+        Expr::Spawn { fields, .. } => {
+            for (_, v) in fields {
+                check_requires_in_expr(v, fn_map, var_refs, fn_decls, errors);
+            }
+        }
         // Leaves: Literal, Ident — no sub-expressions.
         Expr::Literal(_, _) | Expr::Ident(_, _) => {}
     }

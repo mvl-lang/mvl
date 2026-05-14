@@ -191,6 +191,11 @@ fn collect_refs_expr(expr: &Expr, params: &[&str], out: &mut Vec<(String, Span)>
                 collect_refs_expr(v, params, out);
             }
         }
+        Expr::Spawn { fields, .. } => {
+            for (_, v) in fields {
+                collect_refs_expr(v, params, out);
+            }
+        }
     }
 }
 

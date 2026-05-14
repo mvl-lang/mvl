@@ -314,6 +314,39 @@ impl Parser {
                 })
             }
 
+            // ── Actor creation expression (Phase 8, #63) ────────────────────
+            // `actor TypeName { field: value, … }`
+            // Reuses the `actor` keyword: declaration context → ActorDecl,
+            // expression context → Expr::Spawn (actor instance creation).
+            // `spawn` is NOT a keyword — it remains the process-spawn stdlib fn.
+            TokenKind::Actor => {
+                self.advance(); // consume `actor`
+                let ident_result = self.expect_ident();
+                let (actor_type, _) = self.require(ident_result)?;
+                let lbrace = self.expect(&TokenKind::LBrace);
+                self.require(lbrace)?;
+                let mut fields = Vec::new();
+                while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+                    let fname_result = self.expect_ident();
+                    let (fname, _) = self.require(fname_result)?;
+                    let colon = self.expect(&TokenKind::Colon);
+                    self.require(colon)?;
+                    let fval = self.parse_expr()?;
+                    fields.push((fname, fval));
+                    if !self.eat(&TokenKind::Comma) {
+                        break;
+                    }
+                }
+                let rbrace = self.expect(&TokenKind::RBrace);
+                self.require(rbrace)?;
+                let span = self.span_from(start);
+                Ok(Expr::Spawn {
+                    actor_type,
+                    fields,
+                    span,
+                })
+            }
+
             // ── Lambda expression ────────────────────────────────────────────
             // `|params| body` — non-empty param list
             TokenKind::Pipe => self.parse_lambda_expr(false),

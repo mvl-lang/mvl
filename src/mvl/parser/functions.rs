@@ -11,7 +11,8 @@
 //! - Totality annotations, effect lists, and where-clause constraints
 
 use crate::mvl::parser::ast::{
-    Constraint, ExternDecl, ExternFnDecl, FnDecl, ImplDecl, Param, Totality, UseDecl,
+    ActorDecl, BehaviorDecl, Constraint, ExternDecl, ExternFnDecl, FnDecl, ImplDecl, Param,
+    Totality, UseDecl,
 };
 use crate::mvl::parser::lexer::TokenKind;
 use crate::mvl::parser::{ParseError, Parser};
@@ -390,6 +391,11 @@ impl Parser {
             }
             TokenKind::Extern => Ok(Decl::Extern(self.parse_extern_decl()?)),
             TokenKind::Impl => Ok(Decl::Impl(self.parse_impl_decl()?)),
+            TokenKind::Actor => {
+                let mut d = self.parse_actor_decl()?;
+                d.visible = visible;
+                Ok(Decl::Actor(d))
+            }
             _ => {
                 let err = ParseError {
                     message: format!("expected declaration, found `{}`", self.peek_kind()),
@@ -660,6 +666,91 @@ impl Parser {
             trait_type_args,
             type_name,
             methods,
+            span,
+        })
+    }
+
+    // ── Actor declarations (Phase 8, #63) ─────────────────────────────────
+
+    /// Parse `actor TypeName { fields* behaviors* }`.
+    pub fn parse_actor_decl(&mut self) -> Result<ActorDecl, ()> {
+        use crate::mvl::parser::ast::ActorDecl;
+        let start = self.peek_span();
+        self.advance(); // consume `actor`
+
+        let ident_result = self.expect_ident();
+        let (name, _) = self.require(ident_result)?;
+
+        let type_params = self.parse_type_params_decl();
+
+        let lbrace = self.expect(&TokenKind::LBrace);
+        self.require(lbrace)?;
+
+        // Fields: parsed until the first `be` keyword or `}`
+        let mut fields = Vec::new();
+        while !matches!(
+            self.peek_kind(),
+            TokenKind::Be | TokenKind::RBrace | TokenKind::Eof
+        ) {
+            match self.parse_field_decl() {
+                Ok(f) => {
+                    fields.push(f);
+                    self.eat(&TokenKind::Comma);
+                }
+                Err(()) => break,
+            }
+        }
+
+        // Behaviors: `be name(params) -> Unit { body }`
+        let mut behaviors = Vec::new();
+        while matches!(self.peek_kind(), TokenKind::Be) {
+            self.advance(); // consume `be`
+            match self.parse_behavior_decl() {
+                Ok(b) => behaviors.push(b),
+                Err(()) => break,
+            }
+        }
+
+        let rbrace = self.expect(&TokenKind::RBrace);
+        self.require(rbrace)?;
+
+        let span = self.span_from(start);
+        Ok(ActorDecl {
+            visible: false, // set by parse_decl when `pub` prefix is present
+            name,
+            type_params,
+            fields,
+            behaviors,
+            span,
+        })
+    }
+
+    /// Parse the body of a behavior after `be` has been consumed:
+    /// `name(params) -> ReturnType { body }`.
+    fn parse_behavior_decl(&mut self) -> Result<BehaviorDecl, ()> {
+        use crate::mvl::parser::ast::BehaviorDecl;
+        let start = self.peek_span();
+
+        let ident_result = self.expect_ident();
+        let (name, _) = self.require(ident_result)?;
+
+        let params = self.parse_param_list()?;
+
+        let arrow = self.expect(&TokenKind::Arrow);
+        self.require(arrow)?;
+        let return_type = self.parse_type_expr()?;
+
+        let effects = self.parse_optional_effects();
+
+        let body = self.parse_block()?;
+
+        let span = self.span_from(start);
+        Ok(BehaviorDecl {
+            name,
+            params,
+            return_type: Box::new(return_type),
+            effects,
+            body,
             span,
         })
     }

@@ -227,6 +227,12 @@ fn check_expr(expr: &Expr, ctx: &TermCtx<'_>, errors: &mut Vec<CheckError>) {
             // (spec 007 §Req 4)
         }
 
+        Expr::Spawn { fields, .. } => {
+            for (_, v) in fields {
+                check_expr(v, ctx, errors);
+            }
+        }
+
         // Leaves — nothing to recurse into.
         Expr::Literal(..) | Expr::Ident(..) => {}
     }

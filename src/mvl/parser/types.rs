@@ -130,7 +130,7 @@ impl Parser {
     }
 
     /// Parse a single struct field: `name: type [where pred]`.
-    fn parse_field_decl(&mut self) -> Result<FieldDecl, ()> {
+    pub(crate) fn parse_field_decl(&mut self) -> Result<FieldDecl, ()> {
         let start = self.peek_span();
         let ident_result = self.expect_ident();
         let (name, _) = self.require(ident_result)?;

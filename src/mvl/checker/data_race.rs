@@ -280,6 +280,12 @@ fn check_expr_iso(expr: &Expr, iso_vars: &HashSet<&str>, errors: &mut Vec<CheckE
             }
         }
 
+        Expr::Spawn { fields, .. } => {
+            for (_, v) in fields {
+                check_expr_iso(v, iso_vars, errors);
+            }
+        }
+
         // Leaves — no aliasing possible.
         Expr::Literal(..) | Expr::Ident(..) => {}
     }
