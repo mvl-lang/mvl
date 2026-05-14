@@ -202,29 +202,43 @@ impl TypeChecker {
         }
 
         for method in &ad.methods {
-            if !method.is_public {
-                continue; // private helpers have no sendability restriction
-            }
-            // pub fn = behavior — return type must be Unit (fire-and-forget).
-            let ret_ty = resolve(&method.return_type);
-            if !matches!(ret_ty, crate::mvl::checker::types::Ty::Unit) {
-                self.emit(CheckError::NonUnitBehaviorReturn {
-                    actor: ad.name.clone(),
-                    method: method.name.clone(),
-                    found: ret_ty.display(),
-                    span: method.span,
-                });
-            }
-            // All parameters must be sendable.
-            for param in &method.params {
-                if matches!(param.capability, Some(Capability::Ref)) {
-                    self.emit(CheckError::CapabilityViolation {
-                        param: param.name.clone(),
-                        capability: "ref".to_string(),
-                        span: param.span,
+            if method.is_public {
+                // pub fn = behavior — return type must be Unit (fire-and-forget).
+                let ret_ty = resolve(&method.return_type);
+                if !matches!(ret_ty, crate::mvl::checker::types::Ty::Unit) {
+                    self.emit(CheckError::NonUnitBehaviorReturn {
+                        actor: ad.name.clone(),
+                        method: method.name.clone(),
+                        found: ret_ty.display(),
+                        span: method.span,
                     });
                 }
+                // All parameters must be sendable.
+                for param in &method.params {
+                    if matches!(param.capability, Some(Capability::Ref)) {
+                        self.emit(CheckError::CapabilityViolation {
+                            param: param.name.clone(),
+                            capability: "ref".to_string(),
+                            span: param.span,
+                        });
+                    }
+                }
             }
+            // Type-check the method body (#742).
+            self.env.push_scope();
+            for param in &method.params {
+                let ty = resolve(&param.ty);
+                self.env.define(
+                    param.name.clone(),
+                    crate::mvl::checker::context::VarInfo::new(ty, false)
+                        .with_capability(param.capability.clone()),
+                );
+            }
+            let ret_ty = resolve(&method.return_type);
+            let prev_ret = self.current_return_ty.replace(ret_ty.clone());
+            self.infer_block_type(&method.body, Some(&ret_ty));
+            self.current_return_ty = prev_ret;
+            self.env.pop_scope();
         }
     }
 

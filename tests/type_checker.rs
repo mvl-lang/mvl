@@ -6521,6 +6521,84 @@ fn actor_valid_decl_no_errors() {
     assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
 }
 
+// ── #742: Actor body type-checking + spawn field validation ──────────────────
+
+/// GIVEN: actor spawn with wrong field type
+/// WHEN: type-checked
+/// THEN: TypeMismatch error emitted
+#[test]
+fn actor_spawn_wrong_field_type_rejected() {
+    let errors = errors_for(
+        r#"
+        actor Counter {
+            count: Int
+            pub fn tick() { }
+        }
+
+        fn bad() -> Counter {
+            actor Counter { count: "hello" }
+        }
+        "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "expected TypeMismatch for wrong spawn field type, got: {errors:?}"
+    );
+}
+
+/// GIVEN: actor spawn with missing field
+/// WHEN: type-checked
+/// THEN: MissingField error emitted
+#[test]
+fn actor_spawn_missing_field_rejected() {
+    let errors = errors_for(
+        r#"
+        actor Counter {
+            count: Int
+            label: Int
+            pub fn tick() { }
+        }
+
+        fn bad() -> Counter {
+            actor Counter { count: 0 }
+        }
+        "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::MissingField { .. })),
+        "expected MissingField for missing spawn field, got: {errors:?}"
+    );
+}
+
+/// GIVEN: actor spawn with unknown extra field
+/// WHEN: type-checked
+/// THEN: UnknownField error emitted
+#[test]
+fn actor_spawn_unknown_field_rejected() {
+    let errors = errors_for(
+        r#"
+        actor Counter {
+            count: Int
+            pub fn tick() { }
+        }
+
+        fn bad() -> Counter {
+            actor Counter { count: 0, extra: 1 }
+        }
+        "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnknownField { .. })),
+        "expected UnknownField for extra spawn field, got: {errors:?}"
+    );
+}
+
 // ── #744: ActorDecl registered in pass 1 ─────────────────────────────────────
 
 /// GIVEN: an actor declaration and a function returning that actor type
