@@ -174,8 +174,8 @@ check-compiler: build ## Verify self-hosted compiler with mvl check + lint (all 
 	$(MVL) check compiler/
 	$(MVL) lint compiler/
 
-assure-compiler: build ## Assurance report for the self-hosted compiler
-	$(MVL) assurance compiler/
+assure-compiler: build ## Assurance report for the self-hosted compiler (verbose)
+	$(MVL) assurance compiler/ --verbose
 
 test-mvl: build ## Run MVL-in-MVL tests for the self-hosted compiler (compiler/*_test.mvl)
 	$(MVL) test compiler/
