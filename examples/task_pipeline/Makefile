@@ -5,7 +5,7 @@
 # All transform functions in transform.mvl are provably pure.
 #
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl check test-solver test assurance mcdc mutate run run-threshold all clean
+.PHONY: help guard-mvl check lint test-solver test assurance mcdc mutate run run-threshold all clean
 
 .DEFAULT_GOAL := help
 
@@ -31,6 +31,9 @@ check: guard-mvl ## Type-check pure source files (main.mvl excluded: uses stdlib
 	$(MVL) check $(DIR)model.mvl
 	$(MVL) check $(DIR)parser.mvl
 	$(MVL) check $(DIR)transform.mvl
+
+lint: guard-mvl ## Lint all source files
+	$(MVL) lint $(DIR)
 
 test-solver: guard-mvl ## Show per-file solver statistics for all source files
 	@pass=0; fail=0; \

@@ -3,7 +3,7 @@
 # recursive ADTs (HuffmanTree), pure core + effect boundary.
 #
 # Run from this directory: make check, make test, make run
-.PHONY: help guard-mvl build check test-solver test test-llvm assurance mcdc mutate run run-llvm all clean
+.PHONY: help guard-mvl build check lint test-solver test test-llvm assurance mcdc mutate run run-llvm all clean
 
 .DEFAULT_GOAL := help
 
@@ -31,6 +31,9 @@ check: guard-mvl ## Type-check self-contained source modules
 	$(MVL) check $(DIR)mtf.mvl
 	$(MVL) check $(DIR)huffman.mvl
 	$(MVL) check $(DIR)bitstream.mvl
+
+lint: guard-mvl ## Lint all source files
+	$(MVL) lint $(DIR)
 
 test-solver: guard-mvl ## Show per-file solver statistics for all source files
 	@pass=0; fail=0; \
