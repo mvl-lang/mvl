@@ -343,6 +343,28 @@ pub enum CheckError {
         span: Span,
     },
 
+    // ── Actor declaration checks (#745) ──────────────────────────────────
+    /// Two fields with the same name in one actor declaration.
+    DuplicateActorField {
+        actor: String,
+        field: String,
+        span: Span,
+    },
+    /// Two methods with the same name in one actor declaration.
+    DuplicateActorMethod {
+        actor: String,
+        method: String,
+        span: Span,
+    },
+    /// A `pub fn` behavior declares a non-`Unit` return type.
+    /// Behaviors are fire-and-forget — callers cannot await a return value.
+    NonUnitBehaviorReturn {
+        actor: String,
+        method: String,
+        found: String,
+        span: Span,
+    },
+
     // ── Label-transparent function validation (ADR-0024) ─────────────────
     /// `transparent fn` declared with no parameters — label join over empty
     /// arg list is always `None`, so `transparent` has no effect (Req 11).
@@ -416,7 +438,10 @@ impl CheckError {
             // Req 9: Data Race Freedom
             CheckError::CapabilityViolation { .. }
             | CheckError::IsoAliasingViolation { .. }
-            | CheckError::RefEscapesToConcurrentContext { .. } => 9,
+            | CheckError::RefEscapesToConcurrentContext { .. }
+            | CheckError::DuplicateActorField { .. }
+            | CheckError::DuplicateActorMethod { .. }
+            | CheckError::NonUnitBehaviorReturn { .. } => 9,
             // Req 10: Refinement Types & Contracts
             CheckError::RefinementViolated { .. }
             | CheckError::PreconditionViolated { .. }
@@ -501,7 +526,10 @@ impl CheckError {
             | CheckError::InvariantNotPreserved { span, .. }
             | CheckError::DecreasesNotBounded { span, .. }
             | CheckError::DecreasesNotDecreasing { span, .. }
-            | CheckError::QuantifierOutsideGhost { span } => *span,
+            | CheckError::QuantifierOutsideGhost { span }
+            | CheckError::DuplicateActorField { span, .. }
+            | CheckError::DuplicateActorMethod { span, .. }
+            | CheckError::NonUnitBehaviorReturn { span, .. } => *span,
         }
     }
 
@@ -696,6 +724,15 @@ impl CheckError {
             CheckError::QuantifierOutsideGhost { .. } => {
                 "`forall`/`exists` quantifiers are only valid inside ghost bindings, `requires`, `ensures`, or `invariant` predicates".to_string()
             }
+            CheckError::DuplicateActorField { actor, field, .. } => format!(
+                "duplicate field `{field}` in actor `{actor}`"
+            ),
+            CheckError::DuplicateActorMethod { actor, method, .. } => format!(
+                "duplicate method `{method}` in actor `{actor}`"
+            ),
+            CheckError::NonUnitBehaviorReturn { actor, method, found, .. } => format!(
+                "`pub fn {method}` in actor `{actor}` must return `Unit` (fire-and-forget), found `{found}`"
+            ),
         }
     }
 }

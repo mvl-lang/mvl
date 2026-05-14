@@ -6435,6 +6435,92 @@ fn actor_private_fn_with_ref_not_race_free() {
     );
 }
 
+// ── #745: Actor duplicate field/method + pub fn return type ──────────────────
+
+/// GIVEN: actor with a duplicate field name
+/// WHEN: type-checked
+/// THEN: DuplicateActorField error emitted
+#[test]
+fn actor_duplicate_field_rejected() {
+    let errors = errors_for(
+        r#"
+        actor Broken {
+            count: Int
+            count: Int
+            pub fn tick() { }
+        }
+        "#,
+    );
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::DuplicateActorField { field, .. } if field == "count")
+        ),
+        "expected DuplicateActorField, got: {errors:?}"
+    );
+}
+
+/// GIVEN: actor with a duplicate method name
+/// WHEN: type-checked
+/// THEN: DuplicateActorMethod error emitted
+#[test]
+fn actor_duplicate_method_rejected() {
+    let errors = errors_for(
+        r#"
+        actor Broken {
+            x: Int
+            pub fn tick() { }
+            pub fn tick() { }
+        }
+        "#,
+    );
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::DuplicateActorMethod { method, .. } if method == "tick")
+        ),
+        "expected DuplicateActorMethod, got: {errors:?}"
+    );
+}
+
+/// GIVEN: actor pub fn with non-Unit return type
+/// WHEN: type-checked
+/// THEN: NonUnitBehaviorReturn error emitted
+#[test]
+fn actor_pub_fn_non_unit_return_rejected() {
+    let errors = errors_for(
+        r#"
+        actor Broken {
+            x: Int
+            pub fn get_x() -> Int { 0 }
+        }
+        "#,
+    );
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::NonUnitBehaviorReturn { method, .. } if method == "get_x")
+        ),
+        "expected NonUnitBehaviorReturn, got: {errors:?}"
+    );
+}
+
+/// GIVEN: actor with valid pub fn (Unit return, no duplicates)
+/// WHEN: type-checked
+/// THEN: no errors
+#[test]
+fn actor_valid_decl_no_errors() {
+    let errors = errors_for(
+        r#"
+        actor Counter {
+            count: Int
+            label: Int
+            pub fn increment(n: Int) { }
+            pub fn reset() { }
+            fn helper() -> Int { 0 }
+        }
+        "#,
+    );
+    assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
+}
+
 // ── #744: ActorDecl registered in pass 1 ─────────────────────────────────────
 
 /// GIVEN: an actor declaration and a function returning that actor type

@@ -177,11 +177,45 @@ impl TypeChecker {
     ///
     /// `fn` methods are private synchronous helpers: no sendability restriction.
     fn check_actor_decl(&mut self, ad: &ActorDecl) {
+        // Check for duplicate field names.
+        let mut seen_fields: HashSet<&str> = HashSet::new();
+        for field in &ad.fields {
+            if !seen_fields.insert(field.name.as_str()) {
+                self.emit(CheckError::DuplicateActorField {
+                    actor: ad.name.clone(),
+                    field: field.name.clone(),
+                    span: field.span,
+                });
+            }
+        }
+
+        // Check for duplicate method names.
+        let mut seen_methods: HashSet<&str> = HashSet::new();
+        for method in &ad.methods {
+            if !seen_methods.insert(method.name.as_str()) {
+                self.emit(CheckError::DuplicateActorMethod {
+                    actor: ad.name.clone(),
+                    method: method.name.clone(),
+                    span: method.span,
+                });
+            }
+        }
+
         for method in &ad.methods {
             if !method.is_public {
                 continue; // private helpers have no sendability restriction
             }
-            // pub fn = behavior — all parameters must be sendable
+            // pub fn = behavior — return type must be Unit (fire-and-forget).
+            let ret_ty = resolve(&method.return_type);
+            if !matches!(ret_ty, crate::mvl::checker::types::Ty::Unit) {
+                self.emit(CheckError::NonUnitBehaviorReturn {
+                    actor: ad.name.clone(),
+                    method: method.name.clone(),
+                    found: ret_ty.display(),
+                    span: method.span,
+                });
+            }
+            // All parameters must be sendable.
             for param in &method.params {
                 if matches!(param.capability, Some(Capability::Ref)) {
                     self.emit(CheckError::CapabilityViolation {
