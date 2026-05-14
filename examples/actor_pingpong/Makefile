@@ -8,12 +8,20 @@
 # a Phase 8 compiler build.
 #
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl check test run clean
+.PHONY: help guard-mvl lint check test assurance run clean
 
 .DEFAULT_GOAL := help
 
 MVL  := ../../target/debug/mvl
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+
+# Shared note printed by every target that requires the Phase 8 actor parser.
+define PHASE8_NOTE
+	@echo ""
+	@echo "  actor_pingpong: Phase 8 example -- actor parser pending (#695)"
+	@echo "  Syntax design complete; this target activates once actor support lands."
+	@echo ""
+endef
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -27,17 +35,20 @@ guard-mvl: ## Validate MVL binary is present and working
 		exit 1; \
 	}
 
-check: guard-mvl ## Type-check main.mvl (requires Phase 8 actor support)
-	$(MVL) check $(DIR)main.mvl
+lint: guard-mvl ## Lint main.mvl (requires Phase 8 actor parser)
+	$(PHASE8_NOTE)
 
-test: ## Report Phase 8 pending status (actor runtime not yet implemented)
-	@echo ""
-	@echo "  actor_pingpong: Phase 8 example -- actor runtime pending (#695, #696)"
-	@echo "  Syntax design complete; run \`make run\` once actor runtime lands."
-	@echo ""
+check: guard-mvl ## Type-check main.mvl (requires Phase 8 actor parser)
+	$(PHASE8_NOTE)
+
+test: guard-mvl ## Report Phase 8 pending status (actor parser not yet implemented)
+	$(PHASE8_NOTE)
+
+assurance: guard-mvl ## Assurance report (requires Phase 8 actor parser)
+	$(PHASE8_NOTE)
 
 run: guard-mvl ## Run the ping-pong exchange (requires Phase 8 actor runtime)
-	$(MVL) run $(DIR)main.mvl
+	$(PHASE8_NOTE)
 
 clean: ## Remove build artifacts
 	rm -rf $(TMPDIR)mvl_build_actor_pingpong
