@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples coverage validate-keywords lint mvl-lint format format-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants
+.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-requirements test-error-messages test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples coverage validate-keywords lint mvl-lint format format-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants
 
 .DEFAULT_GOAL := help
 
@@ -85,6 +85,8 @@ test: build build-llvm-runtime ## Run all test suites and print a one-line PASS/
 	}; \
 	echo ""; \
 	run_suite "Unit tests"        test-unit; \
+	run_suite "Requirements"      test-requirements; \
+	run_suite "Error messages"    test-error-messages; \
 	run_suite "Corpus"            test-corpus; \
 	run_suite "Solver"            test-solver; \
 	run_suite "Stdlib"            test-stdlib; \
@@ -106,8 +108,14 @@ test: build build-llvm-runtime ## Run all test suites and print a one-line PASS/
 test-unit: ## Run unit tests only
 	cargo test --lib
 
-test-integration: ## Run integration tests
-	cargo test --test '*'
+test-integration: ## Dev convenience: run all integration test binaries at once (may overlap with named targets in make test)
+	cargo test --tests
+
+test-requirements: ## Run requirement verdict tests — one Proven + one Failed per requirement (1–11)
+	cargo test --test requirements -- --test-threads=1
+
+test-error-messages: ## Run error message tests — assert exact diagnostic output for each CheckError variant
+	cargo test --test error_messages
 
 test-corpus: ## Validate corpus examples parse and type-check
 	@pass=0; fail=0; \

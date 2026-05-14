@@ -1,0 +1,26 @@
+// Corpus: refinement types — all call sites statically proven (Req 10)
+// All arguments are either proven literals or carry matching refinement predicates.
+// This file is designed to yield Verdict::Proven for Req 10.
+
+total fn safe_divide(a: Int, b: Int where b != 0) -> Int {
+    a / b
+}
+
+total fn add_positives(x: Int where x > 0, y: Int where y > 0) -> Int {
+    x + y
+}
+
+// Literal argument: 5 != 0 is statically proven
+total fn literal_call() -> Int {
+    safe_divide(100, 5)
+}
+
+// Subsumption: n carries the same refinement as b — statically proven
+total fn refined_call(n: Int where n != 0) -> Int {
+    safe_divide(42, n)
+}
+
+// Both arguments fully proven via matching refinements
+total fn composed(p: Int where p > 0, q: Int where q > 0) -> Int {
+    add_positives(p, q)
+}
