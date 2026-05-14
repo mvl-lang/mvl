@@ -4,7 +4,7 @@
 // The effect system enforces the split:
 //   game.mvl  = pure (no effects, fully testable)
 //   render.mvl = ! Terminal (drawing only)
-//   main.mvl  = ! Terminal, Clock (loop, input, random food, lives)
+//   main.mvl  = ! Terminal + Clock (loop, input, random food, lives)
 //
 // Demonstrates:
 //   1. Req 7  (Effects):  sharp effect boundary — game logic in game.mvl has
@@ -65,7 +65,7 @@ fn show_status(board: Board, msg: String) -> Unit ! Terminal {
 //
 // Partial: the loop runs as long as game.alive is true and the user has not
 // pressed 'q' or Escape. The compiler cannot statically bound the duration.
-partial fn game_loop(game: Game, seed: Int) -> Int ! Terminal, Clock {
+partial fn game_loop(game: Game, seed: Int) -> Int ! Terminal + Clock {
     if game.alive {
         let key: String        = tui_read_key_timeout(275);
         let is_quit: Bool      = key == "q" || key == "Escape";
@@ -93,7 +93,7 @@ partial fn game_loop(game: Game, seed: Int) -> Int ! Terminal, Clock {
 // any key, then starts a fresh game keeping the accumulated score.
 //
 // Partial: delegates to game_loop which is itself partial.
-partial fn lives_loop(lives: Int, board: Board, acc: Int) -> Int ! Terminal, Clock {
+partial fn lives_loop(lives: Int, board: Board, acc: Int) -> Int ! Terminal + Clock {
     if lives <= 0 {
         acc
     } else {
@@ -123,7 +123,7 @@ partial fn lives_loop(lives: Int, board: Board, acc: Int) -> Int ! Terminal, Clo
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-partial fn main() -> Unit ! Terminal, Clock, Console {
+partial fn main() -> Unit ! Terminal + Clock + Console {
     let handle: Int = tui_init();
     if handle == 0 {
         println("snake_game: failed to enter raw terminal mode (not a tty?)")
