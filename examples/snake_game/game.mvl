@@ -1,0 +1,161 @@
+// game.mvl — PURE game state and logic for snake_game.
+//
+// No effects, no extern, no I/O. Fully testable without a terminal.
+// Demonstrates:
+//   1. Req 1  (ADTs):     Direction, Pos, Board, Game as struct/enum types
+//   2. Req 3  (Totality): step_head, resolve_dir, hits_snake, is_wall, update
+//                         are all total fn — zero recursion, finite match only
+//   3. Req 4  (Null):     Option[Direction] for "no input this tick"
+//   4. Req 7  (Effects):  zero effect annotations — enforced by compiler
+//   5. Req 10 (Refinements): Board dimensions and score are constrained
+//
+// Assurance note: 0 extern blocks.
+
+use std.lists.{list_concat}
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+pub type Direction = enum { Up, Down, Left, Right }
+
+/// A cell coordinate on the board.
+/// No non-negativity constraint: step_head may transiently produce x<0 or y<0
+/// so that is_wall can catch all boundary cases uniformly.
+pub type Pos = struct {
+    x: Int,
+    y: Int,
+}
+
+pub type Board = struct {
+    width:  Int where self > 0 && self <= 200,
+    height: Int where self > 0 && self <= 60,
+}
+
+pub type Game = struct {
+    snake:     List[Pos],
+    direction: Direction,
+    food:      Pos,
+    score:     Int where self >= 0,
+    alive:     Bool,
+    board:     Board,
+}
+
+// ── Constructor ───────────────────────────────────────────────────────────────
+
+pub fn new_game(board: Board, start: Pos, food: Pos) -> Game {
+    Game {
+        snake:     [start],
+        direction: Direction::Right,
+        food:      food,
+        score:     0,
+        alive:     true,
+        board:     board,
+    }
+}
+
+// ── Movement ──────────────────────────────────────────────────────────────────
+
+// Compute the head position one step in `dir`.
+// May produce negative coords when hitting the top or left wall —
+// is_wall detects them before any Pos with negative coords is stored.
+total fn step_head(pos: Pos, dir: Direction) -> Pos {
+    match dir {
+        Direction::Up    => Pos { x: pos.x,     y: pos.y - 1 },
+        Direction::Down  => Pos { x: pos.x,     y: pos.y + 1 },
+        Direction::Left  => Pos { x: pos.x - 1, y: pos.y },
+        Direction::Right => Pos { x: pos.x + 1, y: pos.y },
+    }
+}
+
+// Apply the player's input: hold course on None, change direction on Some(d).
+// 180° reversals are blocked — pressing the opposite direction is ignored so
+// the snake continues straight (classic snake behaviour).
+// Both arms use exhaustive matches on `current` so the transpiler emits owned
+// Direction values rather than references (borrow-inference workaround).
+total fn resolve_dir(current: Direction, input: Option[Direction]) -> Direction {
+    match input {
+        Some(d) => match current {
+            Direction::Up    => match d { Direction::Down  => Direction::Up,    _ => d },
+            Direction::Down  => match d { Direction::Up    => Direction::Down,  _ => d },
+            Direction::Left  => match d { Direction::Right => Direction::Left,  _ => d },
+            Direction::Right => match d { Direction::Left  => Direction::Right, _ => d },
+        },
+        None => match current {
+            Direction::Up    => Direction::Up,
+            Direction::Down  => Direction::Down,
+            Direction::Left  => Direction::Left,
+            Direction::Right => Direction::Right,
+        },
+    }
+}
+
+// ── Collision ─────────────────────────────────────────────────────────────────
+
+/// True iff `pos` is outside the board (including negative coords).
+pub total fn is_wall(pos: Pos, board: Board) -> Bool {
+    pos.x < 0 || pos.y < 0 || pos.x >= board.width || pos.y >= board.height
+}
+
+// True iff `pos` coincides with any segment of the snake.
+total fn hits_snake(pos: Pos, snake: List[Pos]) -> Bool {
+    snake.any(|seg: Pos| seg.x == pos.x && seg.y == pos.y)
+}
+
+// ── Game step ─────────────────────────────────────────────────────────────────
+
+// Advance the game by one tick.
+//
+// `next_food` is a pre-generated candidate position; update() itself is pure.
+// If the snake eats the current food, next_food becomes the new food target.
+// This keeps update() deterministic — all randomness lives in main.mvl.
+total fn update(game: Game, input: Option[Direction], next_food: Pos) -> Game {
+    let new_dir: Direction = resolve_dir(game.direction, input);
+    let old_head: Pos = match game.snake.first() {
+        None    => Pos { x: 0, y: 0 },
+        Some(h) => h,
+    };
+    let new_head: Pos  = step_head(old_head, new_dir);
+    let wall_hit: Bool = is_wall(new_head, game.board);
+    let self_hit: Bool = hits_snake(new_head, game.snake);
+    // Extract game.food into a let binding so the emitter adds .clone()
+    // (let-binding field reads on capability params are automatically cloned).
+    let cur_food: Pos = game.food;
+    if wall_hit || self_hit {
+        Game {
+            snake:     game.snake,
+            direction: new_dir,
+            food:      cur_food,
+            score:     game.score,
+            alive:     false,
+            board:     game.board,
+        }
+    } else {
+        let grew: List[Pos]      = list_concat([new_head], game.snake);
+        let ate: Bool            = new_head.x == cur_food.x && new_head.y == cur_food.y;
+        let new_snake: List[Pos] = if ate { grew } else { grew.take(game.snake.len()) };
+        let new_food:  Pos       = if ate { next_food } else { cur_food };
+        let new_score: Int       = if ate { game.score + 1 } else { game.score };
+        Game {
+            snake:     new_snake,
+            direction: new_dir,
+            food:      new_food,
+            score:     new_score,
+            alive:     true,
+            board:     game.board,
+        }
+    }
+}
+
+// ── Call-site wrappers ────────────────────────────────────────────────────────
+// The transpiler infers &T for functions that access struct fields directly.
+// These thin wrappers don't access fields, so they receive value params,
+// allowing cross-module callers (main.mvl) to pass owned values without
+// Into<> coercions at the call site.
+// Pattern: task_pipeline/transform.mvl (apply_filter_by_amount etc.).
+
+pub total fn apply_update(game: Game, input: Option[Direction], next_food: Pos) -> Game {
+    update(game, input, next_food)
+}
+
+pub fn apply_new_game(board: Board, start: Pos, food: Pos) -> Game {
+    new_game(board, start, food)
+}

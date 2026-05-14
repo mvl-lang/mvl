@@ -846,3 +846,45 @@ fn stdlib_proven_verbose_reports_profile() {
         "expected 'stdlib profile: proven' in stderr, got:\n{stderr}"
     );
 }
+
+// ── 9. examples/snake_game (multi-file, bridge.rs, ! Terminal + Clock) ───────
+
+/// Multi-file example: snake_game uses game.mvl + input.mvl + render.mvl +
+/// main.mvl with a Rust bridge (bridge.rs). `mvl build` must succeed end-to-end.
+///
+/// `mvl run` is intentionally omitted — the game requires an interactive
+/// terminal (raw mode via stty) and does not produce machine-verifiable stdout
+/// output in a CI environment.
+///
+/// Issue #175: demonstrates pure game core with ! Terminal + Clock effects at
+/// the I/O boundary.
+#[test]
+fn snake_game_build_succeeds() {
+    let path = format!("{}/examples/snake_game", env!("CARGO_MANIFEST_DIR"));
+    let out = run_mvl_build(&path);
+    assert!(
+        out.status.success(),
+        "mvl build must succeed for examples/snake_game;\n\
+         stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+/// Run the pure-logic tests (game_test.mvl + input.mvl) in CI.
+/// `mvl test <dir>` discovers all test functions in the directory including
+/// input.mvl tests. No terminal required.
+#[test]
+fn snake_game_tests_pass() {
+    let dir = format!("{}/examples/snake_game", env!("CARGO_MANIFEST_DIR"));
+    let out = Command::new(mvl_bin())
+        .args(["test", &dir])
+        .output()
+        .expect("failed to run mvl test");
+    assert!(
+        out.status.success(),
+        "mvl test examples/snake_game failed;\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}

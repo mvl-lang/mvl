@@ -4,6 +4,18 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.104.0] — 2026-05-14
+
+### Added
+
+- `examples/snake_game` — Complete Snake game example demonstrating MVL's core thesis: pure game logic in `game.mvl` (zero effects, fully testable) with an effectful I/O shell (`main.mvl`, `render.mvl`). Demonstrates R1 (ADTs), R3 (Totality), R4 (Null), R7 (Effects), and R10 (Refinements) with 31 unit tests (#175).
+- 3-life system for snake_game with retry on death, accumulated score tracking, and "game over" screen.
+- `make assurance` target in examples/snake_game Makefile — runs `mvl assurance game.mvl` to verify pure game logic meets 8/11 requirements.
+
+### Fixed
+
+- Effect annotation syntax: `! A, B` → `! A + B` (comma was never valid; use `+` to combine multiple effects).
+
 ## [0.103.0] — 2026-05-14
 
 ### Added
