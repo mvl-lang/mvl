@@ -46,10 +46,7 @@ fn req01_type_safety_proven() {
 /// Type mismatch → Failed.
 #[test]
 fn req01_type_safety_failed() {
-    let v = run(
-        include_str!("corpus/13_negative/req01/type_mismatch.mvl"),
-        1,
-    );
+    let v = run(include_str!("negative/req01/type_mismatch.mvl"), 1);
     assert!(
         v.is_failed(),
         "Req 1 must be Failed on type mismatch corpus, got: {v:?}"
@@ -71,10 +68,7 @@ fn req02_memory_safety_proven() {
 /// Use-after-move → Failed.
 #[test]
 fn req02_memory_safety_failed() {
-    let v = run(
-        include_str!("corpus/13_negative/req02/use_after_move.mvl"),
-        2,
-    );
+    let v = run(include_str!("negative/req02/use_after_move.mvl"), 2);
     assert!(
         v.is_failed(),
         "Req 2 must be Failed on use-after-move corpus, got: {v:?}"
@@ -96,7 +90,7 @@ fn req03_totality_proven() {
 /// Non-exhaustive match → Failed.
 #[test]
 fn req03_totality_failed() {
-    let v = run(include_str!("corpus/13_negative/req03/missing_arm.mvl"), 3);
+    let v = run(include_str!("negative/req03/missing_arm.mvl"), 3);
     assert!(
         v.is_failed(),
         "Req 3 must be Failed on missing-arm corpus, got: {v:?}"
@@ -118,10 +112,7 @@ fn req04_null_elimination_proven() {
 /// Direct field access on Option → Failed.
 #[test]
 fn req04_null_elimination_failed() {
-    let v = run(
-        include_str!("corpus/13_negative/req04/option_field_access.mvl"),
-        4,
-    );
+    let v = run(include_str!("negative/req04/option_field_access.mvl"), 4);
     assert!(
         v.is_failed(),
         "Req 4 must be Failed on option field access corpus, got: {v:?}"
@@ -143,10 +134,7 @@ fn req05_error_visibility_proven() {
 /// Ignored Result → Failed.
 #[test]
 fn req05_error_visibility_failed() {
-    let v = run(
-        include_str!("corpus/13_negative/req05/result_ignored.mvl"),
-        5,
-    );
+    let v = run(include_str!("negative/req05/result_ignored.mvl"), 5);
     assert!(
         v.is_failed(),
         "Req 5 must be Failed on result_ignored corpus, got: {v:?}"
@@ -168,10 +156,7 @@ fn req06_ownership_proven() {
 /// Mutation of immutable binding → Failed.
 #[test]
 fn req06_ownership_failed() {
-    let v = run(
-        include_str!("corpus/13_negative/req06/reassign_immutable.mvl"),
-        6,
-    );
+    let v = run(include_str!("negative/req06/reassign_immutable.mvl"), 6);
     assert!(
         v.is_failed(),
         "Req 6 must be Failed on reassign_immutable corpus, got: {v:?}"
@@ -193,10 +178,7 @@ fn req07_effects_proven() {
 /// Undeclared effect → Failed.
 #[test]
 fn req07_effects_failed() {
-    let v = run(
-        include_str!("corpus/13_negative/req07/undeclared_effect.mvl"),
-        7,
-    );
+    let v = run(include_str!("negative/req07/undeclared_effect.mvl"), 7);
     assert!(
         v.is_failed(),
         "Req 7 must be Failed on undeclared_effect corpus, got: {v:?}"
@@ -221,10 +203,7 @@ fn req08_termination_proven() {
 /// While loop in total function → Failed.
 #[test]
 fn req08_termination_failed() {
-    let v = run(
-        include_str!("corpus/13_negative/req08/while_in_total.mvl"),
-        8,
-    );
+    let v = run(include_str!("negative/req08/while_in_total.mvl"), 8);
     assert!(
         v.is_failed(),
         "Req 8 must be Failed on while_in_total corpus, got: {v:?}"
@@ -246,7 +225,7 @@ fn req09_data_race_freedom_proven() {
 /// iso parameter aliased without consume() → Failed.
 #[test]
 fn req09_data_race_freedom_failed() {
-    let v = run(include_str!("corpus/13_negative/req09/iso_aliased.mvl"), 9);
+    let v = run(include_str!("negative/req09/iso_aliased.mvl"), 9);
     assert!(
         v.is_failed(),
         "Req 9 must be Failed on iso_aliased corpus, got: {v:?}"
@@ -271,10 +250,7 @@ fn req10_refinements_proven() {
 /// Literal 0 passed to NonZero parameter → Failed.
 #[test]
 fn req10_refinements_failed() {
-    let v = run(
-        include_str!("corpus/13_negative/req10/division_by_zero.mvl"),
-        10,
-    );
+    let v = run(include_str!("negative/req10/division_by_zero.mvl"), 10);
     assert!(
         v.is_failed(),
         "Req 10 must be Failed on division_by_zero corpus, got: {v:?}"
@@ -296,10 +272,7 @@ fn req11_ifc_proven() {
 /// Tainted condition controls public Console output → Failed.
 #[test]
 fn req11_ifc_failed() {
-    let v = run(
-        include_str!("corpus/13_negative/req11/tainted_to_public.mvl"),
-        11,
-    );
+    let v = run(include_str!("negative/req11/tainted_to_public.mvl"), 11);
     assert!(
         v.is_failed(),
         "Req 11 must be Failed on tainted_to_public corpus, got: {v:?}"
