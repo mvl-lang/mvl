@@ -112,7 +112,7 @@ test-integration: ## Dev convenience: run all integration test binaries at once 
 	cargo test --tests
 
 test-requirements: ## Run requirement verdict tests — one Proven + one Failed per requirement (1–11)
-	cargo test --test requirements
+	cargo test --test requirements -- --test-threads=1
 
 test-error-messages: ## Run error message tests — assert exact diagnostic output for each CheckError variant
 	cargo test --test error_messages
