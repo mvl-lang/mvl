@@ -109,15 +109,15 @@ test-unit: ## Run unit tests only
 	cargo test --lib
 
 test-integration: ## Run integration tests (error_messages and requirements have their own named targets)
-	cargo test --test type_checker
-	cargo test --test transpiler
 	cargo test --test compile_and_run
 	cargo test --test cross_backend
 	cargo test --test module_resolver
+	cargo test --test parser
 	cargo test --test stdlib
 	cargo test --test toolchain
-	cargo test --test parser
 	cargo test --test tools
+	cargo test --test transpiler
+	cargo test --test type_checker
 
 test-requirements: ## Run requirement verdict tests — one Proven + one Failed per requirement (1–11)
 	cargo test --test requirements
