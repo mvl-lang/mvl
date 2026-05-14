@@ -1,16 +1,14 @@
-// MVL stdlib — list type operations and method implementations
-//
-// The `pub builtin fn` declarations below are the list kernel —
-// the trust boundary between MVL and Rust (Category 3: type operations).
-// Each is implemented in `mvl_runtime::stdlib::primitives` and re-exported
-// via `mvl_runtime::prelude::*`.
-//
-// The pure MVL methods below compose only these builtins. Method-call syntax
-// `xs.take(n)` compiles to `take(xs, n)` via UFCS dispatch.
-//
-// Higher-order methods (filter, fold, map, etc.) were previously transpiler-only.
-// Declarations below provide the verification surface for the IFC label checker,
-// effect tracker, and totality checker (issue #341).
+//! std.lists — List type operations and method implementations.
+//!
+//! Builtin kernel functions are the trust boundary between MVL and Rust
+//! (Category 3: type operations), implemented in mvl_runtime::stdlib::primitives.
+//! Pure MVL methods compose only these builtins. UFCS: `xs.take(n)` → `take(xs, n)`.
+//! Higher-order methods (filter, fold, map, …) expose the verification surface
+//! to the IFC label checker, effect tracker, and totality checker (#341).
+//!
+//! Import: available as builtins; explicit import not required.
+//!
+//! Effects: none (all functions are pure).
 
 // ── List kernel (6 functions) ─────────────────────────────────────────────────
 

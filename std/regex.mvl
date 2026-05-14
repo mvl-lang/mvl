@@ -1,9 +1,12 @@
-// MVL standard library — regex module
-//
-// Pure regular expression matching. No I/O effects.
-// Import with: use std.regex.{Regex, Match, Captures, compile, find, find_all, replace, captures}
-// Note: the match function is named `find` to avoid collision with the `match` keyword.
-//
+//! std.regex — pure regular expression matching.
+//!
+//! No I/O effects — all functions are pure.
+//! Note: the match function is named `find` to avoid collision with the `match` keyword.
+//!
+//! Import:
+//!   use std.regex.{Regex, Match, Captures, compile, find, find_all, replace, captures}
+//!
+//! Effects: none.
 
 /// A compiled regular expression pattern.
 pub type Regex = struct {}

@@ -1,17 +1,13 @@
-// MVL standard library — args module
-//
-// Command-line argument and environment variable access.
-// Import with: use std.args.{get_arg, get_args, get_env}
-//
-//
-// Design: CLI argument access is a Console effect — it reads from the
-// process environment, which is externally controlled (untrusted) input.
-// Values returned are Tainted[String] until validated by the caller.
-//
-// IFC: CLI and environment values are Tainted[String]. Callers must
-// sanitize (validate) before use in security-sensitive contexts.
-//
-// See ADR-0006.
+//! std.args — command-line argument parsing and environment variable access.
+//!
+//! CLI values are Tainted[String] until the caller sanitizes them.
+//! Console effect required: reading args is an externally-controlled action.
+//! See ADR-0006.
+//!
+//! Import:
+//!   use std.args.{get_arg, get_args, get_env}
+//!
+//! Effects: Console (all access functions).
 
 /// Scan command-line arguments for `--<name> <value>` and return the value.
 ///

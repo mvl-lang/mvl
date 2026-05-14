@@ -1,8 +1,11 @@
-// MVL standard library — time module
-//
-// Provides wall-clock time (! Clock) and sleep (! Clock).
-// Import with: use std.time.{Instant, DateTime, Duration, now, sleep, format_instant, format_datetime}
-//
+//! std.time — wall-clock time and sleep.
+//!
+//! Provides wall-clock time (`now`) and sleep. All functions require `! Clock`.
+//!
+//! Import:
+//!   use std.time.{Instant, DateTime, Duration, now, sleep, format_instant, format_datetime}
+//!
+//! Effects: Clock (all functions).
 
 /// An opaque point in time (monotonic or wall-clock, implementation-defined).
 pub type Instant = struct {}

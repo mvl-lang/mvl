@@ -1,20 +1,14 @@
-// MVL standard library — process module
-//
-// Unix process lifecycle: spawning child processes, piped I/O, waiting for exit.
-// Import with: use std.process.{Child, ChildStdin, ChildStdout, ChildStderr,
-//                               ExitStatus, ProcessOutput, Stdio,
-//                               spawn, stdin_write, stdout_read, stderr_read,
-//                               wait, kill, is_success, exit_code}
-//
-// Backed by mvl_runtime::stdlib::process. Stub bodies in this file are dead code —
-// the transpiler emits calls to Rust prelude functions directly.
-//
-// Design: All process-spawn and process-communication operations require
-//   ! ProcessSpawn — spawning a child process or communicating with one.
-//
-// IFC: Process stdout and stderr are Tainted[String] — they come from an
-// external child process and are therefore untrusted. Callers must sanitize
-// before using output in security-sensitive contexts (paths, queries, etc.).
+//! std.process — Unix process lifecycle: spawn, piped I/O, wait, kill.
+//!
+//! Backed by mvl_runtime::stdlib::process; stub bodies are dead code.
+//! IFC: child stdout/stderr are Tainted[String] — sanitize before use.
+//!
+//! Import:
+//!   use std.process.{Child, ExitStatus, ProcessOutput, Stdio,
+//!                    spawn, stdin_write, stdout_read, stderr_read,
+//!                    wait, kill, is_success, exit_code}
+//!
+//! Effects: ProcessSpawn (all spawn and process-communication functions).
 //
 // Stdio configuration is set at spawn time via positional Stdio arguments.
 // A builder-style API (working directory, env vars per-child) is not yet implemented.

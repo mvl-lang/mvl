@@ -4,6 +4,20 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.102.0] — 2026-05-14
+
+### Added
+
+- `docs/style.md`: `.mvl` file documentation convention guide covering module headers (`//!`), item docs (`///`), requirement references, and inline comments (#727)
+- Early `--help` / `-h` check in CLI: `mvl check --help` now prints usage and exits 0 instead of treating `--help` as a path (#728)
+- Verbose output for `mvl check --verbose`: per-requirement ✓/✗/~ verdict breakdown per file, plus stdlib-profile line (#728)
+
+### Changed
+
+- `path_arg_index()`: now correctly skips leading `--flag` arguments when locating the positional path argument, enabling `mvl check --verbose compiler/` and similar usage patterns across all subcommands (#728)
+- `cmd_check()` signature: added `verbose: bool` parameter to thread verbose flag through from CLI (#728)
+- All 15 stdlib `.mvl` files: module headers converted from `// MVL standard library —` to `//! std.X —` format with canonical Import and Effects fields (#727)
+
 ## [0.101.0] — 2026-05-14
 
 ### Added

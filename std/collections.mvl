@@ -1,16 +1,13 @@
-// MVL stdlib — Map and Set real implementations (#418)
-//
-// Phase 4 (ADR-0003): pure MVL implementations using method forms dispatched
-// by the transpiler via direct Rust emission using checker type info (#554) and
-// the LLVM backend via explicit codegen in exprs.rs.
-//
-// Both the transpiler path and the LLVM backend path handle the method calls
-// (`m.get(key)`, `m.len()`, etc.) directly, making these bodies the single
-// source of truth that works on both backends.
-//
-// Scope: Map[K, V] (all key types) and Set[T].
-// LLVM: get, insert, contains_key, len, is_empty, Set.to_list covered.
-// Deferred to #436: Map.remove, Map.keys, Map.values, Set set-algebra (LLVM).
+//! std.collections — Map[K, V] and Set[T] implementations.
+//!
+//! Pure MVL implementations dispatched by both the Rust transpiler (direct
+//! Rust emission via checker type info, #554) and the LLVM backend (explicit
+//! codegen in exprs.rs). Both paths handle `m.get(key)`, `m.len()`, etc.
+//! Deferred to #436: Map.remove, Map.keys, Map.values, Set set-algebra (LLVM).
+//!
+//! Import: available as builtins; explicit import not required.
+//!
+//! Effects: none (all functions are pure).
 
 // ── Map[K, V] ────────────────────────────────────────────────────────────────
 
