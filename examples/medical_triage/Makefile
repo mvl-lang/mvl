@@ -1,6 +1,6 @@
 # medical_triage example — MC/DC coverage demonstration (IEC 62304)
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl check test-solver test test-llvm mcdc mutate run run-llvm all clean
+.PHONY: help guard-mvl check test-solver test test-llvm assurance mcdc mutate run run-llvm all clean
 
 .DEFAULT_GOAL := help
 
@@ -55,7 +55,10 @@ mcdc: guard-mvl ## Run MC/DC coverage analysis (use ARGS="--masking" to exempt c
 mutate: guard-mvl ## Run mutation testing
 	$(MVL) mutate $(DIR)
 
-all: check test mcdc ## Run full quality pipeline: check + test + mcdc
+assurance: guard-mvl ## Assurance report: spec coverage, MC/DC, mutation score (verbose)
+	$(MVL) assurance $(DIR) --verbose
+
+all: check test assurance mcdc ## Run full quality pipeline: check + test + assurance + mcdc
 
 run: guard-mvl ## Execute the demo scenarios
 	$(MVL) run $(DIR)main.mvl

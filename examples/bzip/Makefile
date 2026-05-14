@@ -3,7 +3,7 @@
 # recursive ADTs (HuffmanTree), pure core + effect boundary.
 #
 # Run from this directory: make check, make test, make run
-.PHONY: help guard-mvl build check test-solver test test-llvm run run-llvm clean
+.PHONY: help guard-mvl build check test-solver test test-llvm assurance mcdc mutate run run-llvm all clean
 
 .DEFAULT_GOAL := help
 
@@ -56,6 +56,17 @@ test: guard-mvl ## Run all inline test fn and roundtrip_test.mvl (transpiler bac
 
 test-llvm: guard-mvl ## Run tests via LLVM backend
 	$(MVL) test $(DIR) --backend=llvm
+
+assurance: guard-mvl ## Assurance report: spec coverage, MC/DC, mutation score (verbose)
+	$(MVL) assurance $(DIR) --verbose
+
+mcdc: guard-mvl ## Run MC/DC coverage analysis (ARGS="--masking" to exempt coupled clauses)
+	$(MVL) mcdc $(DIR) $(ARGS)
+
+mutate: guard-mvl ## Run mutation testing
+	$(MVL) mutate $(DIR)
+
+all: check test assurance mcdc ## Run full quality pipeline: check + test + assurance + mcdc
 
 run: guard-mvl ## Run the demo (compress a hardcoded byte sequence, print result)
 	$(MVL) run $(DIR)main.mvl

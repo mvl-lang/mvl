@@ -8,7 +8,7 @@
 #   LLVM                 — pure tests only (handler_test.mvl); extern stubs return defaults
 #
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl build check test-solver test test-llvm run clean
+.PHONY: help guard-mvl build check test-solver test test-llvm assurance mcdc mutate run all clean
 
 .DEFAULT_GOAL := help
 
@@ -60,6 +60,17 @@ test: guard-mvl ## Run all tests (transpiler backend; extern bridge required)
 
 test-llvm: guard-mvl ## Run pure tests only via LLVM backend (no extern calls)
 	$(MVL) test $(DIR)handler_test.mvl --backend=llvm
+
+assurance: guard-mvl ## Assurance report: spec coverage, MC/DC, mutation score (verbose)
+	$(MVL) assurance $(DIR) --verbose
+
+mcdc: guard-mvl ## Run MC/DC coverage analysis (ARGS="--masking" to exempt coupled clauses)
+	$(MVL) mcdc $(DIR) $(ARGS)
+
+mutate: guard-mvl ## Run mutation testing
+	$(MVL) mutate $(DIR)
+
+all: check test assurance mcdc ## Run full quality pipeline: check + test + assurance + mcdc
 
 run: guard-mvl ## Execute the demo scenario (loads sample_config.json, 3 simulated requests)
 	$(MVL) run $(DIR)main.mvl

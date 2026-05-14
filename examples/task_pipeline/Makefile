@@ -5,7 +5,7 @@
 # All transform functions in transform.mvl are provably pure.
 #
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl check test-solver test run all clean
+.PHONY: help guard-mvl check test-solver test assurance mcdc mutate run run-threshold all clean
 
 .DEFAULT_GOAL := help
 
@@ -54,13 +54,22 @@ test-solver: guard-mvl ## Show per-file solver statistics for all source files
 test: guard-mvl ## Run all unit tests (parser + transform + main)
 	$(MVL) test $(DIR)
 
+assurance: guard-mvl ## Assurance report: spec coverage, MC/DC, mutation score (verbose)
+	$(MVL) assurance $(DIR) --verbose
+
+mcdc: guard-mvl ## Run MC/DC coverage analysis (ARGS="--masking" to exempt coupled clauses)
+	$(MVL) mcdc $(DIR) $(ARGS)
+
+mutate: guard-mvl ## Run mutation testing
+	$(MVL) mutate $(DIR)
+
 run: guard-mvl ## Run the pipeline with the bundled sample CSV
 	$(MVL) run $(DIR)main.mvl -- --input $(DIR)sample.csv
 
 run-threshold: guard-mvl ## Run with a 50.0 amount threshold
 	$(MVL) run $(DIR)main.mvl -- --input $(DIR)sample.csv --threshold 50.0
 
-all: check test ## Run full quality pipeline: check + test
+all: check test assurance mcdc ## Run full quality pipeline: check + test + assurance + mcdc
 	@echo ""
 	@echo "Effect boundary check (should produce no output):"
 	@grep -n '!' $(DIR)transform.mvl | grep -v '//' || true
