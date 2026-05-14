@@ -1,0 +1,135 @@
+// actor_pingpong/main.mvl — Two actors exchanging messages.
+//
+// This is the ONLY file with Console effect.
+// The actor model enforces the split:
+//   actor Pong  = receives ping, replies with pong
+//   actor Ping  = initiates exchange, replies with ping until rounds done
+//   main()      = creates actors, starts exchange, waits for completion
+//
+// Demonstrates:
+//   1. actor keyword with private mutable state
+//   2. pub fn as async message handler (behavior)
+//      - No return type (implicit Unit)
+//      - Params must be sendable: iso, val, or tag
+//   3. fn as private helper (synchronous, internal only)
+//   4. let tag / actor <Name> { <fields> } for actor creation
+//   5. tag capability — identity-only reference, sendable, no read/write
+//   6. val capability — deeply immutable, sendable, shareable across actors
+//   7. concurrently { } — structured scope that drains all actor mailboxes
+//                         before returning
+//
+// Expected output (5 rounds):
+//   Pong  <-- ping #0
+//   Ping  --> pong #0
+//   Pong  <-- ping #1
+//   Ping  --> pong #1
+//   Pong  <-- ping #2
+//   Ping  --> pong #2
+//   Pong  <-- ping #3
+//   Ping  --> pong #3
+//   Pong  <-- ping #4
+//   Ping  --> pong #4
+//   Done -- 5 ping-pong rounds complete.
+//
+// Usage:
+//   mvl run examples/actor_pingpong/main.mvl
+//   make run   (from examples/actor_pingpong/)
+//
+// Phase 8 feature: requires actor runtime (#695).
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MESSAGE TYPES
+// val = deeply immutable, safe to share across actors without copying.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Sent by Ping to Pong.  seq is the round counter, starting at 0.
+type PingMsg = struct { seq: Int }
+
+// Sent by Pong to Ping.  seq echoes the round counter back.
+type PongMsg = struct { seq: Int }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PONG ACTOR
+//
+// Waits for PingMsg messages, logs each one, and replies with a PongMsg.
+// Does not initiate any communication — purely reactive.
+// ═══════════════════════════════════════════════════════════════════════════
+
+actor Pong {
+    // Private mutable state — visible only inside this actor.
+    received: Int
+
+    // Private helper: synchronous, never called from outside.
+    fn log(seq: Int) -> Unit ! Console {
+        print("Pong  <-- ping #" + int_to_string(seq))
+    }
+
+    // Behavior (async message handler).
+    //
+    //   val msg     — immutable PingMsg; no ownership transfer needed
+    //   tag sender  — identity-only ActorRef; Pong cannot read Ping's state,
+    //                 but can send messages to it
+    pub fn ping(val msg: PingMsg, tag sender: ActorRef) {
+        self.received = self.received + 1
+        log(msg.seq)
+        sender.pong(PongMsg { seq: msg.seq })
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PING ACTOR
+//
+// Kicks off the exchange and keeps replying until `rounds` messages have
+// been sent.  Stops cleanly when the round limit is reached.
+// ═══════════════════════════════════════════════════════════════════════════
+
+actor Ping {
+    // Private mutable state.
+    rounds:  Int           // stop after this many rounds
+    sent:    Int           // how many pings have been sent so far
+    partner: tag ActorRef  // tag: identity-only reference to the Pong actor
+
+    // Private helper: synchronous, never called from outside.
+    fn log(seq: Int) -> Unit ! Console {
+        print("Ping  --> pong #" + int_to_string(seq))
+    }
+
+    // Behavior: send the first ping to kick off the exchange.
+    pub fn start() {
+        self.sent = self.sent + 1
+        self.partner.ping(PingMsg { seq: 0 }, self)
+    }
+
+    // Behavior: receive a pong reply and send the next ping, if rounds remain.
+    //
+    //   val msg — immutable PongMsg; seq echoes the round we just completed
+    pub fn pong(val msg: PongMsg) {
+        log(msg.seq)
+        if self.sent < self.rounds {
+            self.sent = self.sent + 1
+            self.partner.ping(PingMsg { seq: msg.seq + 1 }, self)
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ENTRY POINT
+//
+// concurrently { } is structured concurrency: the block does NOT return until
+// every actor spawned inside it has drained its mailbox and terminated.
+// All actors are garbage-collected when the block exits.
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn main() -> Unit ! Console {
+    concurrently {
+        // Spawn Pong first — Ping holds a tag reference to it.
+        let tag pong: ActorRef = actor Pong { received: 0 }
+
+        // Spawn Ping with a reference to Pong and the round limit.
+        let tag ping: ActorRef = actor Ping { rounds: 5, sent: 0, partner: pong }
+
+        // Fire the first message.  All subsequent messages are actor-driven.
+        ping.start()
+    }
+    print("Done -- 5 ping-pong rounds complete.")
+}
