@@ -4,6 +4,18 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.0] — 2026-05-14
+
+### Added
+
+- `RefinementsPass` now returns `Proven` when all functions with refinements are fully verified, with per-function coverage evidence (#733)
+- `invariants: Vec<RefExpr>` field on `Stmt::For` AST node; parser handles `invariant pred*` clauses in for-loops (#733)
+- `count_fully_verified_fns(prog)` helper for aggregating SMT verdicts by function (#733)
+
+### Changed
+
+- `RefinementsPass::run()` verdict: `Proven` when all functions fully verified, `Unchecked` with per-function coverage otherwise (#733)
+
 ## [0.100.0] — 2026-05-14
 
 ### Added

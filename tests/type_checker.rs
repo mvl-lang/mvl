@@ -2686,6 +2686,86 @@ fn refinement_stale_after_reassignment_is_not_proven() {
     );
 }
 
+/// Coverage report: verdict evidence includes "N/M functions fully verified".
+#[test]
+fn refinement_pass_verdict_includes_coverage_report() {
+    use mvl::mvl::checker::passes::PassRegistry;
+    use mvl::mvl::parser::Parser;
+
+    // GIVEN: all call sites statically proven
+    let src = r#"
+        total fn safe_divide(a: Int, b: Int where b != 0) -> Int { a / b }
+        total fn caller(x: Int, y: Int where y != 0) -> Int { safe_divide(x, y) }
+    "#;
+    let (mut p, _) = Parser::new(src);
+    let prog = p.parse_program();
+    let result = check(&prog);
+    let registry = PassRegistry::default_registry();
+    let verdict = registry.run_req(10, &prog, &result);
+    assert!(
+        verdict.is_proven(),
+        "fully-verified program must yield Proven, got: {verdict:?}"
+    );
+    let evidence = format!("{verdict:?}");
+    assert!(
+        evidence.contains("1/1"),
+        "evidence must include N/M coverage report, got: {evidence}"
+    );
+}
+
+/// Partial coverage: some functions runtime-checked yields Unchecked with coverage report.
+#[test]
+fn refinement_pass_partial_coverage_yields_unchecked_with_report() {
+    use mvl::mvl::checker::passes::PassRegistry;
+    use mvl::mvl::parser::Parser;
+
+    // GIVEN: one caller fully proven, one has a runtime-checked site (stale refinement)
+    let src = r#"
+        total fn positive_only(b: Int where b > 0) -> Int { b }
+        total fn proven_caller(x: Int where x > 0) -> Int { positive_only(x) }
+        total fn stale_caller(ref y: Int where y > 0) -> Int {
+            y = 0;
+            positive_only(y)
+        }
+    "#;
+    let (mut p, _) = Parser::new(src);
+    let prog = p.parse_program();
+    let result = check(&prog);
+    let registry = PassRegistry::default_registry();
+    let verdict = registry.run_req(10, &prog, &result);
+    assert!(
+        !verdict.is_proven(),
+        "partially-verified program must not yield Proven, got: {verdict:?}"
+    );
+    let evidence = format!("{verdict:?}");
+    assert!(
+        evidence.contains("1/2"),
+        "reason must include N/M coverage report, got: {evidence}"
+    );
+}
+
+/// For-loop `invariant` clause is parsed and accepted without errors.
+#[test]
+fn for_loop_with_invariant_clause_accepted() {
+    // GIVEN: a for loop with an invariant clause
+    // WHEN: parsed and checked
+    // THEN: no errors and the invariant is recorded in the AST
+    let src = r#"
+        total fn sum_positives(items: [Int]) -> Int {
+            let result: Int = 0;
+            for item in items invariant result >= 0 {
+                result = result + item;
+            }
+            result
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.is_empty(),
+        "for loop with invariant clause must parse and check without errors, got: {errors:?}"
+    );
+}
+
 /// Compound And predicate: literal failing the left branch is caught (short-circuit).
 #[test]
 fn refinement_and_predicate_short_circuits_on_false_left() {

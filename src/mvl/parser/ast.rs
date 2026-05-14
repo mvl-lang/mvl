@@ -698,6 +698,8 @@ pub enum Stmt {
     For {
         pattern: Pattern,
         iter: Expr,
+        /// Loop invariant predicates — `invariant pred` clauses (Phase 3, #621).
+        invariants: Vec<RefExpr>,
         body: Block,
         span: Span,
     },
