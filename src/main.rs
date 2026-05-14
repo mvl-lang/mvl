@@ -2592,6 +2592,8 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
         eprintln!("No .mvl files found at: {path}");
         process::exit(1);
     }
+    let all_mvl_count = mvl_files_all(path).len();
+    let excluded_count = all_mvl_count - files.len();
 
     // Run the module resolver to surface `use` errors before reporting.
     let modules: Vec<(String, Program)> = files
@@ -2609,6 +2611,7 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
 
     let mut total_fns: usize = 0;
     let mut total_verified: usize = 0; // `total fn` (MVL-defined)
+    let mut total_explicit: usize = 0; // `total fn` with explicit `total` keyword
     let mut total_partial: usize = 0; // `partial fn` (MVL-defined)
     let mut _total_pub: usize = 0; // `pub fn` — always 0 until module resolver (#96) is merged
     let mut total_extern: usize = 0; // extern fn signatures (trust boundaries)
@@ -2666,6 +2669,7 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
 
         total_fns += stats.fn_count;
         total_verified += stats.total_fn_count;
+        total_explicit += stats.explicit_total_fn_count;
         total_partial += stats.partial_fn_count;
         _total_pub += stats.pub_fn_count;
         total_extern += stats.extern_fn_count; // fn signatures, not block count
@@ -2770,20 +2774,28 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
     } else {
         println!("MVL Assurance Report");
         println!("====================");
-        println!("Files checked:       {file_count}");
+        if excluded_count > 0 {
+            println!("Files checked:       {file_count} source files  ({excluded_count} *_test.mvl excluded)");
+        } else {
+            println!("Files checked:       {file_count}");
+        }
         println!("Functions:           {total_fns}");
-        println!("  total fn:          {total_verified} ({verified_pct}% of implemented)");
+        let total_implicit = total_verified - total_explicit;
+        println!("  total fn:          {total_verified} ({total_explicit} explicit, {total_implicit} implicit) — {verified_pct}% of implemented");
         println!("  partial fn:        {total_partial}");
         println!("  extern fn:         {total_extern} ({extern_pct}% trust boundary)");
         println!("  kernel builtins:   {kernel_extern_count} (stdlib strings.mvl + lists.mvl)");
         println!("  implemented:       {implemented}");
         println!("  test fn:           {total_test_fns}");
         println!();
-        println!("Requirements verified:  {proven_count}/11 proven");
+        let violated_count = (1..=11usize).filter(|&i| req_errors[i] > 0).count();
+        let not_proven_count = 11 - proven_count - violated_count;
+        println!("Requirements verified:  {proven_count} proven, {not_proven_count} not proven, {violated_count} violated");
         print_req_row(
             1,
             "Type safety",
             &req_errors,
+            project_verdicts[1].is_proven(),
             &format!(
                 "{} types ({} struct, {} enum), {} errors",
                 total_struct_types + total_enum_types,
@@ -2796,6 +2808,7 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
             2,
             "Memory safety",
             &req_errors,
+            project_verdicts[2].is_proven(),
             if req_errors[2] == 0 {
                 "no violations".to_string()
             } else {
@@ -2807,6 +2820,7 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
             3,
             "Totality",
             &req_errors,
+            project_verdicts[3].is_proven(),
             &format!(
                 "{} total fn, {} non-exhaustive match",
                 total_verified, req_errors[3]
@@ -2816,24 +2830,28 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
             4,
             "Null elimination",
             &req_errors,
+            project_verdicts[4].is_proven(),
             &format!("{} direct Option access", req_errors[4]),
         );
         print_req_row(
             5,
             "Error visibility",
             &req_errors,
+            project_verdicts[5].is_proven(),
             &format!("{} unhandled Result", req_errors[5]),
         );
         print_req_row(
             6,
             "Ownership",
             &req_errors,
+            project_verdicts[6].is_proven(),
             &format!("{} immutability violations", req_errors[6]),
         );
         print_req_row(
             7,
             "Effects",
             &req_errors,
+            project_verdicts[7].is_proven(),
             &format!(
                 "{} fns declare effects, {} undeclared",
                 total_effects_fns, req_errors[7]
@@ -2843,6 +2861,7 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
             8,
             "Termination",
             &req_errors,
+            project_verdicts[8].is_proven(),
             &format!(
                 "{} total fn, {} partial fn, {} violations",
                 total_verified, total_partial, req_errors[8]
@@ -2852,6 +2871,7 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
             9,
             "Data race freedom",
             &req_errors,
+            project_verdicts[9].is_proven(),
             &format!(
                 "{} fns use capabilities, {} violations",
                 total_capabilities_fns, req_errors[9]
@@ -2861,6 +2881,7 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
             10,
             "Refinements",
             &req_errors,
+            project_verdicts[10].is_proven(),
             &format!(
                 "{} fns with refinements, {} violations",
                 total_refinements_fns, req_errors[10]
@@ -2870,6 +2891,7 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
             11,
             "IFC",
             &req_errors,
+            project_verdicts[11].is_proven(),
             &format!(
                 "{} extern (trust boundary), {} flow violations",
                 total_extern, req_errors[11]
@@ -2940,12 +2962,14 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
     }
 }
 
-fn print_req_row(req: u8, name: &str, req_errors: &[usize; 12], detail: &str) {
+fn print_req_row(req: u8, name: &str, req_errors: &[usize; 12], proven: bool, detail: &str) {
     debug_assert!((1..=11).contains(&req), "req must be 1–11, got {req}");
-    let status = if req_errors[req as usize] == 0 {
+    let status = if req_errors[req as usize] > 0 {
+        "✗"
+    } else if proven {
         "✓"
     } else {
-        "✗"
+        "–"
     };
     println!("  Req {:>2}  {:<20} {}  {}", req, name, status, detail);
 }
@@ -2955,6 +2979,7 @@ fn print_req_row(req: u8, name: &str, req_errors: &[usize; 12], detail: &str) {
 struct AssuranceStats {
     fn_count: usize,
     total_fn_count: usize,
+    explicit_total_fn_count: usize,
     partial_fn_count: usize,
     // NOTE(#96): pub_fn_count populated once module resolver is merged; always 0 for now.
     pub_fn_count: usize,
@@ -2989,6 +3014,7 @@ fn collect_assurance_stats(prog: &Program, collect_details: bool) -> AssuranceSt
     let mut stats = AssuranceStats {
         fn_count: 0,
         total_fn_count: 0,
+        explicit_total_fn_count: 0,
         partial_fn_count: 0,
         pub_fn_count: 0,
         extern_fn_count: 0,
@@ -3010,13 +3036,18 @@ fn collect_stats_from_decls(decls: &[Decl], stats: &mut AssuranceStats, collect_
             Decl::Fn(fd) => {
                 let has_caps = fd.params.iter().any(|p| p.capability.is_some());
                 let has_refs = fd.return_refinement.is_some()
-                    || fd.params.iter().any(|p| p.refinement.is_some());
+                    || fd.params.iter().any(|p| p.refinement.is_some())
+                    || !fd.requires.is_empty()
+                    || !fd.ensures.is_empty();
                 if fd.is_test {
                     stats.test_fn_count += 1;
                 } else {
                     stats.fn_count += 1;
                     match fd.totality {
-                        Some(Totality::Total) => stats.total_fn_count += 1,
+                        Some(Totality::Total) => {
+                            stats.total_fn_count += 1;
+                            stats.explicit_total_fn_count += 1;
+                        }
                         Some(Totality::Partial) => stats.partial_fn_count += 1,
                         None => stats.total_fn_count += 1, // implicitly total
                     }
