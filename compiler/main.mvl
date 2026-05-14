@@ -107,7 +107,7 @@ transparent partial fn lex_and_parse(src: String) -> Program {
 
 // ── Argument helpers ──────────────────────────────────────────────────────────
 
-fn dir_from_arg(v: Tainted[String]) -> Path {
+total fn dir_from_arg(v: Tainted[String]) -> Path {
     let clean_dir: Clean[String] = sanitize(v);
     join(path("."), clean_dir)
 }

@@ -36,25 +36,25 @@ type ScanResult = struct {
 
 // ── Character classification ─────────────────────────────────────────────────
 
-fn is_digit(c: String) -> Bool {
+total fn is_digit(c: String) -> Bool {
     c != "" && "0123456789".contains(c)
 }
 
-fn is_alpha(c: String) -> Bool {
+total fn is_alpha(c: String) -> Bool {
     c != "" && "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_".contains(c)
 }
 
-fn is_alnum(c: String) -> Bool {
+total fn is_alnum(c: String) -> Bool {
     c != "" && "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789".contains(c)
 }
 
-fn is_whitespace(c: String) -> Bool {
+total fn is_whitespace(c: String) -> Bool {
     c == " " || c == "\t" || c == "\n" || c == "\r"
 }
 
 // ── Keyword lookup ───────────────────────────────────────────────────────────
 
-fn keyword_kind(s: String) -> TokenKind {
+total fn keyword_kind(s: String) -> TokenKind {
     match s {
         "fn"          => TokenKind::KwFn,
         "let"         => TokenKind::KwLet,
@@ -183,7 +183,7 @@ partial fn scan_string_body(src: String, pos: Int, src_len: Int) -> ScanResult
 }
 
 // Return the two-char operator spelling if (c, c2) forms one; "" otherwise.
-fn two_char_punct(c: String, c2: String) -> String
+total fn two_char_punct(c: String, c2: String) -> String
   ensures len(result) == 0 || len(result) == 2
 {
     if c == "=" && c2 == "=" { "==" }

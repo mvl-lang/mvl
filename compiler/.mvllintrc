@@ -7,3 +7,4 @@
 
 max_cyclomatic_complexity = 50
 max_fn_length = 700
+require_explicit_totality = true

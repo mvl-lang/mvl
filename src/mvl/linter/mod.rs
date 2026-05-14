@@ -94,6 +94,7 @@ pub fn lint(prog: &Program, src: &str, cfg: &LintConfig) -> LintResult {
     rules::redundant_effects(prog, cfg, &mut diags);
     rules::redundant_ifc_labels(prog, cfg, &mut diags);
     rules::missing_annotations(prog, cfg, &mut diags);
+    rules::missing_totality(prog, cfg, &mut diags);
     rules::for_iter_antipattern(prog, cfg, &mut diags);
 
     // Phase 3: LLM corpus quality rules

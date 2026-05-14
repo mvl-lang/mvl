@@ -618,6 +618,33 @@ pub fn missing_annotations(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintD
     }
 }
 
+/// Warn on non-test, non-extern functions that have no explicit `total` or
+/// `partial` keyword (implicit total, shown as `total*` in assurance reports).
+///
+/// Opt-in: enable with `require_explicit_totality = true` in `.mvllintrc`.
+pub fn missing_totality(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if !cfg.require_explicit_totality {
+        return;
+    }
+    for decl in &prog.declarations {
+        if let Decl::Fn(f) = decl {
+            if f.is_test || f.is_builtin || f.totality.is_some() {
+                continue;
+            }
+            out.push(LintDiag::warning(
+                "missing-totality",
+                format!(
+                    "function `{}` has no explicit `total` or `partial` keyword \
+                     — add one to document the termination contract",
+                    f.name,
+                ),
+                f.span.line,
+                f.span.col,
+            ));
+        }
+    }
+}
+
 /// Return `true` if `block` (or any nested block/expression) contains at
 /// least one function or method call.
 fn block_has_calls(block: &Block) -> bool {

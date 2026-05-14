@@ -43,8 +43,9 @@
 //! | `redundant_match`      | `true`  | Flag `match` with a single irrefutable arm           |
 //! | `redundant_effects`    | `true`  | Flag effect declarations on call-free functions      |
 //! | `redundant_ifc_labels` | `true`  | Flag `Public<T>` annotations (redundant base label)  |
-//! | `missing_annotations`  | `false` | Warn on functions with calls but no effect annotation (opt-in) |
-//! | `for_iter_antipattern` | `true`  | Error on `while/.get(i)/match/None=>()` list-iteration anti-pattern (#705) |
+//! | `missing_annotations`       | `false` | Warn on functions with calls but no effect annotation (opt-in) |
+//! | `require_explicit_totality` | `false` | Warn on non-test fns missing explicit `total`/`partial` keyword (opt-in) |
+//! | `for_iter_antipattern`      | `true`  | Error on `while/.get(i)/match/None=>()` list-iteration anti-pattern (#705) |
 //!
 //! ### Phase 3 — LLM corpus quality rules
 //!
@@ -103,6 +104,9 @@ pub struct LintConfig {
     /// Warn on functions that have calls but no declared effects (opt-in; default off).
     /// Enable with `missing_annotations = true` in `.mvllintrc`.
     pub missing_annotations: bool,
+    /// Warn on non-test functions with no explicit `total` or `partial` keyword (opt-in; default off).
+    /// Enable with `require_explicit_totality = true` in `.mvllintrc`.
+    pub require_explicit_totality: bool,
     /// Error on `while / .get(i) / match / None => ()` iteration anti-pattern.
     /// Always use `for x in list { }` instead (rule `for-iter-antipattern`, #705).
     pub for_iter_antipattern: bool,
@@ -151,6 +155,7 @@ impl Default for LintConfig {
             redundant_effects: true,
             redundant_ifc_labels: true,
             missing_annotations: false,
+            require_explicit_totality: false,
             for_iter_antipattern: true,
             consistent_comment_style: false,
             require_doc_comments: true,
@@ -281,6 +286,7 @@ fn load_from(path: &Path) -> Option<LintConfig> {
             "redundant_effects" => cfg.redundant_effects = parse_bool(val),
             "redundant_ifc_labels" => cfg.redundant_ifc_labels = parse_bool(val),
             "missing_annotations" => cfg.missing_annotations = parse_bool(val),
+            "require_explicit_totality" => cfg.require_explicit_totality = parse_bool(val),
             "for_iter_antipattern" => cfg.for_iter_antipattern = parse_bool(val),
             "consistent_comment_style" => cfg.consistent_comment_style = parse_bool(val),
             "require_doc_comments" => cfg.require_doc_comments = parse_bool(val),
