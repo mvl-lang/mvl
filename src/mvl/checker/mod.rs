@@ -90,6 +90,7 @@ pub fn check_with_two_preludes(
     checker.check_program(prog);
     termination::check_structural_recursion(prog, &mut checker.errors);
     data_race::check_iso_aliasing(prog, &mut checker.errors);
+    data_race::check_ref_escape_to_spawn(prog, &mut checker.errors);
     ifc::check_implicit_flows(prog, &mut checker.errors);
     refinements::check_refinements(prog, &mut checker.errors);
     contracts::check_contracts(prog, &mut checker.errors);

@@ -222,6 +222,14 @@ pub enum CheckError {
         name: String,
         span: Span,
     },
+    /// `ref` parameter used as a field value in a `spawn` expression — would
+    /// give the new actor a reference to a mutably aliased value, creating a
+    /// data race between the spawner and the spawned actor (Req 9).
+    RefEscapesToConcurrentContext {
+        name: String,
+        actor_type: String,
+        span: Span,
+    },
     /// Linear type (String, List, Map, Set, or named struct) assigned without `consume()`.
     /// MVL uses Pony-style destructive read: ownership transfer requires explicit `consume(x)`.
     LinearTypeBareBind {
@@ -406,7 +414,9 @@ impl CheckError {
             | CheckError::DecreasesNotBounded { .. }
             | CheckError::DecreasesNotDecreasing { .. } => 8,
             // Req 9: Data Race Freedom
-            CheckError::CapabilityViolation { .. } | CheckError::IsoAliasingViolation { .. } => 9,
+            CheckError::CapabilityViolation { .. }
+            | CheckError::IsoAliasingViolation { .. }
+            | CheckError::RefEscapesToConcurrentContext { .. } => 9,
             // Req 10: Refinement Types & Contracts
             CheckError::RefinementViolated { .. }
             | CheckError::PreconditionViolated { .. }
@@ -471,6 +481,7 @@ impl CheckError {
             | CheckError::UnprovenRecursion { span, .. }
             | CheckError::CapabilityViolation { span, .. }
             | CheckError::IsoAliasingViolation { span, .. }
+            | CheckError::RefEscapesToConcurrentContext { span, .. }
             | CheckError::LinearTypeBareBind { span, .. }
             | CheckError::InvalidDeclassify { span, .. }
             | CheckError::InvalidSanitize { span, .. }
@@ -615,6 +626,11 @@ impl CheckError {
             ),
             CheckError::IsoAliasingViolation { name, .. } => format!(
                 "`iso` value `{name}` aliased without `consume()` — use `consume({name})` to transfer ownership and preserve isolation"
+            ),
+            CheckError::RefEscapesToConcurrentContext {
+                name, actor_type, ..
+            } => format!(
+                "`ref` value `{name}` escapes to concurrent actor `{actor_type}` — use `iso` or `val` for actor field initialization"
             ),
             CheckError::LinearTypeBareBind { name, ty, .. } => format!(
                 "bare assignment of linear type `{ty}` — use `consume({name})` to transfer ownership (Pony destructive read semantics)"

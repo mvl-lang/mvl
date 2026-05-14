@@ -31,6 +31,197 @@ use crate::mvl::parser::ast::{
 
 // ── Public entry points ───────────────────────────────────────────────────────
 
+/// Walk every function in `prog` and emit
+/// [`CheckError::RefEscapesToConcurrentContext`] for any `ref` parameter that
+/// appears (directly by name) as a field value in a `spawn` expression.
+///
+/// A `ref` value passed to a `spawn` would give the new actor a mutable alias
+/// to the same data the spawner still holds, creating a data race.  The
+/// canonical fix is to pass only `iso` (consumed ownership) or `val`
+/// (immutable) values to actor initial fields.
+///
+/// This is a Phase 3 direct-use check: transitive data flow through helper
+/// functions is deferred to Phase 6 inter-procedural analysis.
+pub fn check_ref_escape_to_spawn(prog: &Program, errors: &mut Vec<CheckError>) {
+    for decl in &prog.declarations {
+        match decl {
+            Decl::Fn(fd) => check_fn_ref_escape(&fd.params, &fd.body, errors),
+            Decl::Actor(ad) => {
+                for method in &ad.methods {
+                    check_fn_ref_escape(&method.params, &method.body, errors);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn check_fn_ref_escape(params: &[Param], body: &Block, errors: &mut Vec<CheckError>) {
+    let ref_params: HashSet<&str> = params
+        .iter()
+        .filter(|p| matches!(p.capability, Some(Capability::Ref)))
+        .map(|p| p.name.as_str())
+        .collect();
+
+    if ref_params.is_empty() {
+        return;
+    }
+
+    check_block_ref_escape(body, &ref_params, errors);
+}
+
+fn check_block_ref_escape(block: &Block, ref_vars: &HashSet<&str>, errors: &mut Vec<CheckError>) {
+    for stmt in &block.stmts {
+        check_stmt_ref_escape(stmt, ref_vars, errors);
+    }
+}
+
+fn check_stmt_ref_escape(stmt: &Stmt, ref_vars: &HashSet<&str>, errors: &mut Vec<CheckError>) {
+    match stmt {
+        Stmt::Let { init, .. } => check_expr_ref_escape(init, ref_vars, errors),
+        Stmt::Assign { value, .. } => check_expr_ref_escape(value, ref_vars, errors),
+        Stmt::Expr { expr, .. } => check_expr_ref_escape(expr, ref_vars, errors),
+        Stmt::Return { value: Some(e), .. } => check_expr_ref_escape(e, ref_vars, errors),
+        Stmt::Return { value: None, .. } => {}
+        Stmt::If {
+            cond, then, else_, ..
+        } => {
+            check_expr_ref_escape(cond, ref_vars, errors);
+            check_block_ref_escape(then, ref_vars, errors);
+            if let Some(eb) = else_ {
+                check_else_ref_escape(eb, ref_vars, errors);
+            }
+        }
+        Stmt::Match {
+            scrutinee, arms, ..
+        } => {
+            check_expr_ref_escape(scrutinee, ref_vars, errors);
+            for arm in arms {
+                match &arm.body {
+                    MatchBody::Expr(e) => check_expr_ref_escape(e, ref_vars, errors),
+                    MatchBody::Block(b) => check_block_ref_escape(b, ref_vars, errors),
+                }
+            }
+        }
+        Stmt::For { iter, body, .. } => {
+            check_expr_ref_escape(iter, ref_vars, errors);
+            check_block_ref_escape(body, ref_vars, errors);
+        }
+        Stmt::While { cond, body, .. } => {
+            check_expr_ref_escape(cond, ref_vars, errors);
+            check_block_ref_escape(body, ref_vars, errors);
+        }
+    }
+}
+
+fn check_else_ref_escape(eb: &ElseBranch, ref_vars: &HashSet<&str>, errors: &mut Vec<CheckError>) {
+    match eb {
+        ElseBranch::Block(b) => check_block_ref_escape(b, ref_vars, errors),
+        ElseBranch::If(stmt) => check_stmt_ref_escape(stmt, ref_vars, errors),
+    }
+}
+
+fn check_expr_ref_escape(expr: &Expr, ref_vars: &HashSet<&str>, errors: &mut Vec<CheckError>) {
+    match expr {
+        Expr::Spawn {
+            actor_type,
+            fields,
+            span,
+        } => {
+            for (_, val) in fields {
+                if let Expr::Ident(name, _) = val {
+                    if ref_vars.contains(name.as_str()) {
+                        errors.push(CheckError::RefEscapesToConcurrentContext {
+                            name: name.clone(),
+                            actor_type: actor_type.clone(),
+                            span: *span,
+                        });
+                    }
+                }
+                // recurse in case of nested spawn or complex sub-expressions
+                check_expr_ref_escape(val, ref_vars, errors);
+            }
+        }
+        Expr::FnCall { args, .. } => {
+            for arg in args {
+                check_expr_ref_escape(arg, ref_vars, errors);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            check_expr_ref_escape(receiver, ref_vars, errors);
+            for arg in args {
+                check_expr_ref_escape(arg, ref_vars, errors);
+            }
+        }
+        Expr::Unary { expr: inner, .. }
+        | Expr::Propagate { expr: inner, .. }
+        | Expr::FieldAccess { expr: inner, .. }
+        | Expr::Declassify { expr: inner, .. }
+        | Expr::Sanitize { expr: inner, .. }
+        | Expr::Borrow { expr: inner, .. }
+        | Expr::Consume { expr: inner, .. } => check_expr_ref_escape(inner, ref_vars, errors),
+        Expr::Binary { left, right, .. } => {
+            check_expr_ref_escape(left, ref_vars, errors);
+            check_expr_ref_escape(right, ref_vars, errors);
+        }
+        Expr::If {
+            cond, then, else_, ..
+        } => {
+            check_expr_ref_escape(cond, ref_vars, errors);
+            check_block_ref_escape(then, ref_vars, errors);
+            if let Some(e) = else_ {
+                check_expr_ref_escape(e, ref_vars, errors);
+            }
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            check_expr_ref_escape(scrutinee, ref_vars, errors);
+            for arm in arms {
+                match &arm.body {
+                    MatchBody::Expr(e) => check_expr_ref_escape(e, ref_vars, errors),
+                    MatchBody::Block(b) => check_block_ref_escape(b, ref_vars, errors),
+                }
+            }
+        }
+        Expr::Block(b) => check_block_ref_escape(b, ref_vars, errors),
+        Expr::Construct { fields, .. } => {
+            for (_, v) in fields {
+                check_expr_ref_escape(v, ref_vars, errors);
+            }
+        }
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+            for e in elems {
+                check_expr_ref_escape(e, ref_vars, errors);
+            }
+        }
+        Expr::Map { pairs, .. } => {
+            for (k, v) in pairs {
+                check_expr_ref_escape(k, ref_vars, errors);
+                check_expr_ref_escape(v, ref_vars, errors);
+            }
+        }
+        Expr::Lambda { params, body, .. } => {
+            let inner_ref_vars: HashSet<&str> = ref_vars
+                .iter()
+                .copied()
+                .filter(|name| !params.iter().any(|p| p.name.as_str() == *name))
+                .collect();
+            if !inner_ref_vars.is_empty() {
+                check_expr_ref_escape(body, &inner_ref_vars, errors);
+            }
+        }
+        Expr::Select { arms, .. } => {
+            for arm in arms {
+                check_expr_ref_escape(&arm.expr, ref_vars, errors);
+                check_block_ref_escape(&arm.body, ref_vars, errors);
+            }
+        }
+        Expr::Concurrently { body, .. } => check_block_ref_escape(body, ref_vars, errors),
+        Expr::Literal(..) | Expr::Ident(..) => {}
+    }
+}
+
 /// Walk every function in `prog` and emit [`CheckError::IsoAliasingViolation`]
 /// for any `iso` variable that is bound to a new `let` binding without
 /// `consume()`.
