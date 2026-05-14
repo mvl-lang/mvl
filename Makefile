@@ -108,9 +108,7 @@ test: build build-llvm-runtime ## Run all test suites and print a one-line PASS/
 test-unit: ## Run unit tests only
 	cargo test --lib
 
-test-integration: ## Run integration tests (error_messages and requirements have their own named targets)
-	cargo test --test compile_and_run
-	cargo test --test cross_backend
+test-integration: ## Run integration tests (compile_and_run→test-backend-rust, cross_backend→test-cross-backend, error_messages/requirements have own targets)
 	cargo test --test module_resolver
 	cargo test --test parser
 	cargo test --test stdlib
