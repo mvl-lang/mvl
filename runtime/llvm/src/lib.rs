@@ -41,6 +41,7 @@
 #[macro_use]
 pub mod macros;
 pub mod abi;
+pub mod actors;
 pub mod memory;
 pub mod memory_ops;
 pub mod stdlib;

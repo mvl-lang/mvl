@@ -19,6 +19,7 @@
 //!   L5-11: match → LLVM switch + phi nodes
 //!   L5-12: while + for (range) loops; ? propagation on Result[T,E]
 
+mod actors;
 mod builtins;
 mod exprs;
 mod memory;
@@ -38,7 +39,7 @@ use inkwell::{
 use std::collections::{HashMap, HashSet};
 
 use crate::mvl::parser::ast::{
-    Block, Decl, Expr, ExternDecl, ExternFnDecl, FnDecl, Param, Program, Stmt, TypeExpr,
+    ActorDecl, Block, Decl, Expr, ExternDecl, ExternFnDecl, FnDecl, Param, Program, Stmt, TypeExpr,
 };
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -452,6 +453,11 @@ struct LlvmBackend<'ctx> {
     lambda_counter: u32,
     /// Controls how struct invariants are enforced in emitted IR (issue #662).
     assert_mode: crate::mvl::backends::AssertMode,
+
+    // ── Phase 8 / #696: actor declarations ───────────────────────────────────
+    /// Actor declarations keyed by actor type name (e.g. `"Counter"`).
+    /// Used to detect actor method calls and to emit dispatch functions.
+    actor_decls: HashMap<String, ActorDecl>,
 }
 
 impl<'ctx> LlvmBackend<'ctx> {
@@ -483,6 +489,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             expr_types: HashMap::new(),
             lambda_counter: 0,
             assert_mode: crate::mvl::backends::AssertMode::Always,
+            actor_decls: HashMap::new(),
         }
     }
 
@@ -497,6 +504,18 @@ impl<'ctx> LlvmBackend<'ctx> {
         for decl in &prog.declarations {
             if let Decl::Type(td) = decl {
                 self.register_type_decl(td);
+            }
+            // Phase 8 / #696: register actor state structs alongside regular struct types.
+            if let Decl::Actor(ad) = decl {
+                self.actor_decls.insert(ad.name.clone(), ad.clone());
+                let state_name = format!("{}State", ad.name);
+                self.struct_fields.insert(
+                    state_name,
+                    ad.fields
+                        .iter()
+                        .map(|f| (f.name.clone(), f.ty.clone()))
+                        .collect(),
+                );
             }
         }
         self.build_llvm_types();
@@ -555,6 +574,16 @@ impl<'ctx> LlvmBackend<'ctx> {
                 }
             }
         }
+        // Phase 8 / #696: actor pass — emit behavior functions + dispatch functions.
+        // Runs after type building so actor state struct types are available.
+        if !self.actor_decls.is_empty() {
+            self.declare_actor_runtime_fns();
+            let actors: Vec<ActorDecl> = self.actor_decls.values().cloned().collect();
+            for ad in actors {
+                self.emit_actor_decl(&ad);
+            }
+        }
+
         // Third pass: wire extern blocks — emit LLVM IR bodies for `extern "rust"` functions.
         for decl in &prog.declarations {
             if let Decl::Extern(ext) = decl {
