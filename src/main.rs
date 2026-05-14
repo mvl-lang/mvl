@@ -2639,6 +2639,8 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
         .collect();
     let assurance_prelude =
         load_stdlib_prelude(parsed_assurance.iter().map(|(_, p, _)| p), &stdlib_dir);
+    let all_assurance_progs: Vec<Program> =
+        parsed_assurance.iter().map(|(_, p, _)| p.clone()).collect();
 
     // Count kernel builtins from the implicit stdlib prelude (strings.mvl, lists.mvl).
     // These are always part of the trust boundary for any MVL program, even though they
@@ -2654,10 +2656,13 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
         })
         .count();
 
-    for (file_str, prog, src) in &parsed_assurance {
+    for (idx, (file_str, prog, src)) in parsed_assurance.iter().enumerate() {
         let file_str = file_str.as_str();
         let stats = collect_assurance_stats(prog, verbose);
-        let result = checker::check_with_prelude(&assurance_prelude, prog);
+        let (before, after_with_self) = all_assurance_progs.split_at(idx);
+        let after = &after_with_self[1..];
+        let user_prelude: Vec<&Program> = before.iter().chain(after.iter()).collect();
+        let result = checker::check_with_two_preludes(&assurance_prelude, &user_prelude, prog);
 
         total_fns += stats.fn_count;
         total_verified += stats.total_fn_count;
