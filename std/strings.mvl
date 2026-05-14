@@ -1,12 +1,12 @@
-// MVL stdlib — string type operations and method implementations
-//
-// The `pub builtin fn` declarations below are the string kernel —
-// the trust boundary between MVL and Rust (Category 3: type operations).
-// Each is implemented in `mvl_runtime::stdlib::primitives` and re-exported
-// via `mvl_runtime::prelude::*`.
-//
-// The pure MVL wrappers below compose only these builtins. Method-call syntax
-// `s.trim()` is compiled to `trim(s)` by the transpiler's UFCS dispatch.
+//! std.strings — String type operations and method implementations.
+//!
+//! Builtin kernel functions are the trust boundary between MVL and Rust
+//! (Category 3: type operations), implemented in mvl_runtime::stdlib::primitives.
+//! Pure MVL wrappers compose only these builtins. UFCS: `s.trim()` → `trim(s)`.
+//!
+//! Import: available as builtins; explicit import not required.
+//!
+//! Effects: none (all functions are pure).
 
 // ── String kernel (17 functions) ─────────────────────────────────────────────
 

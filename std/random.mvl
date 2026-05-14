@@ -1,9 +1,11 @@
-// MVL standard library — random module
-//
-// Non-deterministic pseudo-random generation. Requires `! Random`.
-// NOT cryptographically secure — use std.crypto.crypto_random_bytes for that.
-// Import with: use std.random.{int, float, bytes, choice, shuffle}
-//
+//! std.random — non-deterministic pseudo-random number generation.
+//!
+//! NOT cryptographically secure — use std.crypto.crypto_random_bytes for CSPRNG.
+//!
+//! Import:
+//!   use std.random.{int, float, bytes, choice, shuffle}
+//!
+//! Effects: Random (all functions).
 
 /// Returns a random integer in [min, max] (inclusive). Requires `! Random`.
 pub builtin fn int(min: Int, max: Int) -> Int ! Random

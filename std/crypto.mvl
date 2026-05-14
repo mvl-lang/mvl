@@ -1,15 +1,16 @@
-// MVL standard library — crypto module
-//
-// Hash functions (pure) and cryptographically secure random (! CryptoRandom).
-// Available as tier-1 builtins without an explicit import — sha256/sha512/
-// crypto_random_bytes are re-exported via mvl_runtime::prelude::* (#180).
-// Explicit import still works: use std.crypto.{sha256, sha512, crypto_random_bytes}
-//
-// Implemented: mvl_runtime::stdlib::crypto — sha256/sha512 via sha2 + hex;
-//              crypto_random_bytes via getrandom (OS CSPRNG, not PRNG).
-// IFC: crypto_random_bytes returns Secret[List[Int]] — cannot be logged directly.
-//      sha256/sha512 accept String (unlabeled); passing Secret[String] is a
-//      compile error (Secret cannot flow to unlabeled — interim until #179 lands).
+//! std.crypto — hash functions (pure) and cryptographically secure random.
+//!
+//! sha256/sha512/crypto_random_bytes are tier-1 builtins available without
+//! an explicit import (re-exported via mvl_runtime::prelude::*, #180).
+//! Backed by sha2 + hex (hashes) and getrandom (OS CSPRNG, not PRNG).
+//!
+//! IFC: crypto_random_bytes returns Secret[List[Int]] — cannot be logged.
+//! sha256/sha512 accept unlabeled String; Secret[String] is a compile error.
+//!
+//! Import (optional — builtins are already in scope):
+//!   use std.crypto.{sha256, sha512, crypto_random_bytes}
+//!
+//! Effects: CryptoRandom (crypto_random_bytes only); hash functions are pure.
 
 /// Returns the SHA-256 digest of the input bytes as a hex string.
 /// Pure — hashing is deterministic.

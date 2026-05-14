@@ -1,26 +1,16 @@
-// MVL standard library — log module
-//
-// Structured logging with compile-time IFC enforcement.
-// Import with: use std.log.{log_debug, log_info, log_warn, log_error}
-//
-//
-// Design: one effect, four severity levels.
-//   - ! Log   — required by all logging functions
-//
-// A function without `! Log` in its signature provably never logs.
-// The compiler enforces this statically — no runtime check needed.
-//
-// IFC: Secret[T] arguments are rejected at compile time (Req 6, #54).
-// "Don't log secrets" is not a code review rule in MVL — it's a type error.
-// This covers OWASP A07 (information leakage in errors) by construction.
-//
-// Structured key-value pairs prevent accidental secret inclusion via
-// string interpolation. Each field value is checked individually.
-//
-// Output format (JSON, text, etc.) is configurable at runtime via the
-// log sink injected by the host — the module itself is format-agnostic.
-//
-// See #54, ADR-0006.
+//! std.log — structured logging with compile-time IFC enforcement.
+//!
+//! Four severity levels: debug, info, warn, error.
+//! A function without `! Log` in its signature provably never logs — the
+//! compiler enforces this statically; no runtime check needed.
+//! IFC: Secret[T] arguments are rejected at compile time (R6, #54).
+//! "Don't log secrets" is not a code review rule in MVL — it's a type error.
+//! Output format is configurable at runtime via the host log sink.
+//!
+//! Import:
+//!   use std.log.{log_debug, log_info, log_warn, log_error}
+//!
+//! Effects: Log (all functions). See #54, ADR-0006.
 
 // ── Functions ──────────────────────────────────────────────────────────────
 

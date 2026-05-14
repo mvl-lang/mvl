@@ -1,14 +1,13 @@
-// MVL stdlib — numeric method declarations for Int and Float
-//
-// These declarations make arithmetic and predicate methods visible to the
-// IFC label checker, effect tracker, and totality checker (issue #341).
-// The transpiler handles actual code generation at call sites via dedicated
-// emit arms (pow → direct Rust via checker type info (#554), clamp → emit_safe_clamp, is_zero → == 0, etc.)
-// or the generic Rust method fallthrough (abs, sqrt, ceil, …).
-//
-// Where the method can be expressed in pure MVL, a real implementation is
-// provided. Where the method requires a Rust trait or cast, the body is a
-// minimal stub that compiles to valid Rust.
+//! std.math — numeric methods for Int and Float.
+//!
+//! Declarations make arithmetic and predicate methods visible to the IFC
+//! label checker, effect tracker, and totality checker (#341).
+//! Pure MVL methods have real implementations; Rust-trait methods are stubs
+//! replaced at call sites by the transpiler (pow, clamp, abs, sqrt, …).
+//!
+//! Import: available as builtins; explicit import not required.
+//!
+//! Effects: none (all functions are pure).
 
 // ── Int ───────────────────────────────────────────────────────────────────────
 

@@ -1,27 +1,21 @@
-// MVL standard library — property-based testing (PBT)
-//
-// Phase A (#40): generators, combinators, property_check (with shrinking),
-//               verbose stats variants, counterexample persistence.
-// Phase B (#425): mutation operators, targeted property checking, verbose stats.
-// Fuzz (#617): raw-input generators and fuzz_check for trust-boundary testing.
-//
-// Import with: use std.pbt.{gen_int, gen_bool, property_check_int, ...}
-//
-// Design: concrete generator types per value kind (IntGen, BoolGen, etc.)
-// encode the generation strategy as data; property_check functions pattern-
-// match on the strategy and sample using std.random.* builtins.
-//
-// Range conventions: integer ranges are inclusive [min, max]; float ranges are
-// half-open [min, max). This mirrors Rust's rand crate conventions.
-//
-// Shrinking: on first failure the library searches for a smaller value that
-// still fails the property (Int: toward 0; String: drop characters; List:
-// drop elements). The minimal failing case is reported in the panic message.
-//
-// TODO (#40): gen_pair, gen_struct_of — deferred until generic closures land
-// TODO (#40): compile-time codegen for generators from refinement-typed params
-// TODO (#40): counterexample replay on next run (needs sorted read of regressions file)
-// TODO (#617): fuzz_check timeout/OOM detection — requires OS process control
+//! std.pbt — property-based testing: generators, property_check, shrinking.
+//!
+//! Phase A (#40): generators, combinators, property_check with shrinking.
+//! Phase B (#425): mutation operators, targeted checking, verbose stats.
+//! Fuzz (#617): raw-input generators and fuzz_check for trust-boundary testing.
+//!
+//! Generators are concrete types (IntGen, BoolGen, …) encoding strategy as
+//! data. Range conventions: Int inclusive [min, max]; Float half-open [min, max).
+//! On first failure the library searches for a smaller failing value (Int →
+//! toward 0; String → drop characters; List → drop elements).
+//!
+//! Import:
+//!   use std.pbt.{gen_int, gen_bool, property_check_int, ...}
+//!
+//! Effects: Random (generators sample via std.random).
+//!
+//! TODO (#40): gen_pair, gen_struct_of — deferred until generic closures land.
+//! TODO (#617): fuzz_check timeout/OOM detection — requires OS process control.
 
 use std.random.{int, float, bytes, choice}
 use std.io.{Path, path, create_dir_all, append}

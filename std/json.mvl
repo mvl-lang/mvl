@@ -1,10 +1,12 @@
-// MVL standard library — json module
-//
-// Pure JSON encode/decode in native MVL. Zero external crates.
-// Both backends benefit automatically once their underlying primitives are in
-// place; no C-ABI wrappers are needed (#437 only needs str_chars LLVM support).
-//
-// Import with: use std.json.{Value, encode, decode}
+//! std.json — pure JSON encode/decode in native MVL.
+//!
+//! Zero external crates. Both backends benefit automatically once their
+//! underlying primitives are in place; no C-ABI wrappers needed (#437).
+//!
+//! Import:
+//!   use std.json.{Value, encode, decode}
+//!
+//! Effects: none (pure).
 
 /// A dynamically-typed JSON value.
 pub type Value = enum {
