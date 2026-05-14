@@ -108,14 +108,8 @@ test: build build-llvm-runtime ## Run all test suites and print a one-line PASS/
 test-unit: ## Run unit tests only
 	cargo test --lib
 
-test-integration: ## Run integration tests (compile_and_run→test-backend-rust, cross_backend→test-cross-backend, error_messages/requirements have own targets)
-	cargo test --test module_resolver
-	cargo test --test parser
-	cargo test --test stdlib
-	cargo test --test toolchain
-	cargo test --test tools
-	cargo test --test transpiler
-	cargo test --test type_checker
+test-integration: ## Dev convenience: run all integration test binaries at once (may overlap with named targets in make test)
+	cargo test --tests
 
 test-requirements: ## Run requirement verdict tests — one Proven + one Failed per requirement (1–11)
 	cargo test --test requirements
