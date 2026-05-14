@@ -1049,6 +1049,14 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
     // finds the correct line for stdlib decisions.
     module_sources.extend(prelude_sources);
 
+    // Build exempt set: decisions inside functions with ! effects are shown in
+    // the EXEMPT tier and excluded from the coverage percentage denominator.
+    let exempt_ids: std::collections::HashSet<usize> = all_static_decisions
+        .iter()
+        .filter(|d| d.is_effectful)
+        .map(|d| d.id)
+        .collect();
+
     let total_decisions = all_decisions.len();
 
     if total_decisions == 0 {
@@ -1067,13 +1075,30 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
 
     if !quiet && !json {
         // all_decisions contains only compound decisions (clause_count > 1)
-        let total_obligations: usize = all_decisions.iter().map(|d| d.clause_count).sum();
-        println!(
-            "Found {} test file(s), {} compound decisions, {} obligations",
-            test_files.len(),
-            total_decisions,
-            total_obligations,
-        );
+        let pure_obligations: usize = all_decisions
+            .iter()
+            .filter(|d| !exempt_ids.contains(&d.id))
+            .map(|d| d.clause_count)
+            .sum();
+        let exempt_count = exempt_ids.len();
+        let pure_count = total_decisions - exempt_count;
+        if exempt_count > 0 {
+            println!(
+                "Found {} test file(s), {} compound decisions ({} pure, {} exempt), {} pure obligations",
+                test_files.len(),
+                total_decisions,
+                pure_count,
+                exempt_count,
+                pure_obligations,
+            );
+        } else {
+            println!(
+                "Found {} test file(s), {} compound decisions, {} obligations",
+                test_files.len(),
+                total_decisions,
+                pure_obligations,
+            );
+        }
     }
 
     // Build combined lib.rs.
@@ -1190,6 +1215,7 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
     let mut coupled_missed = 0usize;
 
     for decision in &all_decisions {
+        let is_exempt = exempt_ids.contains(&decision.id);
         let obs = observations
             .get(decision.id)
             .map(|v| v.as_slice())
@@ -1201,9 +1227,11 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
             for arm_idx in 0..decision.clause_count {
                 let ok = is_match_arm_covered(arm_idx, obs);
                 clause_results.push(ok);
-                total_obligations += 1;
-                if ok {
-                    covered += 1;
+                if !is_exempt {
+                    total_obligations += 1;
+                    if ok {
+                        covered += 1;
+                    }
                 }
                 // Match arms are never "coupled" in the boolean-condition sense.
             }
@@ -1211,17 +1239,19 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
             for clause_bit in 0..decision.clause_count {
                 let ok = is_clause_covered(decision.clause_count, clause_bit, obs);
                 clause_results.push(ok);
-                total_obligations += 1;
-                if ok {
-                    covered += 1;
-                } else {
-                    // Count as coupled-missed if this clause appears in any coupled pair.
-                    let is_coupled = decision
-                        .coupled_pairs
-                        .iter()
-                        .any(|(i, j, _)| *i == clause_bit || *j == clause_bit);
-                    if is_coupled {
-                        coupled_missed += 1;
+                if !is_exempt {
+                    total_obligations += 1;
+                    if ok {
+                        covered += 1;
+                    } else {
+                        // Count as coupled-missed if this clause appears in any coupled pair.
+                        let is_coupled = decision
+                            .coupled_pairs
+                            .iter()
+                            .any(|(i, j, _)| *i == clause_bit || *j == clause_bit);
+                        if is_coupled {
+                            coupled_missed += 1;
+                        }
                     }
                 }
             }
@@ -1233,11 +1263,22 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
     let effective_missed = (total_obligations - covered) - if masking { coupled_missed } else { 0 };
 
     // Report.
+    let exempt_obligation_count: usize = all_decisions
+        .iter()
+        .filter(|d| exempt_ids.contains(&d.id))
+        .map(|d| d.clause_count)
+        .sum();
     if !quiet && !json {
         let pct = (covered * 100)
             .checked_div(total_obligations)
             .unwrap_or(100);
-        println!("\nMC/DC coverage: {covered}/{total_obligations} obligations met ({pct}%)");
+        println!("\nMC/DC coverage: {covered}/{total_obligations} pure obligations met ({pct}%)");
+        if exempt_obligation_count > 0 {
+            let exempt_decision_count = exempt_ids.len();
+            println!(
+                "  {exempt_obligation_count} obligation(s) in {exempt_decision_count} effectful decision(s) exempt (! effects — integration coverage only)"
+            );
+        }
         if coupled_missed > 0 {
             if masking {
                 println!("  Coupled (structurally exempt under masking MC/DC): {coupled_missed}");
@@ -1251,7 +1292,11 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
     if verbose && !json {
         println!("\nDETAILED RESULTS");
         println!("{}", "─".repeat(60));
+        // Pure decisions (not in effectful functions).
         for (decision, (_, clause_results)) in all_decisions.iter().zip(decision_results.iter()) {
+            if exempt_ids.contains(&decision.id) {
+                continue;
+            }
             let kind_label = decision.kind.label();
             let status: Vec<&str> = clause_results
                 .iter()
@@ -1292,6 +1337,23 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
                         }
                     }
                 }
+            }
+        }
+        // Exempt decisions (inside effectful functions).
+        if !exempt_ids.is_empty() {
+            println!("\nEXEMPT (! effects — integration coverage only)");
+            for decision in all_decisions.iter().filter(|d| exempt_ids.contains(&d.id)) {
+                let kind_label = decision.kind.label();
+                let unit = if matches!(decision.kind, TransformKind::Match) {
+                    "arms"
+                } else {
+                    "clauses"
+                };
+                let dashes = vec!["—"; decision.clause_count].join(" ");
+                println!(
+                    "  {}:{:<4} {} ({} {unit}) [{}] IO-BOUNDARY",
+                    decision.file, decision.line, kind_label, decision.clause_count, dashes,
+                );
             }
         }
         println!("{}", "─".repeat(60));

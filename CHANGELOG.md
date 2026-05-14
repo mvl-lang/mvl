@@ -4,6 +4,20 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.103.0] — 2026-05-14
+
+### Added
+
+- **MC/DC EXEMPT tier** — Automatically classify decisions in effectful functions as `! effects` exempt from unit-test coverage requirements; reporting distinguishes pure obligations (unit-testable) from exempt obligations (integration-testable only) (#737).
+- `is_effectful: bool` field in MC/DC `DecisionInfo` struct to track whether a decision occurs in a function with `! Effect` annotations (#737).
+- Per-file error handler refactoring pattern in `examples/log_analyzer/main.mvl`: pure `run_error_message()` function mapping error variants to strings, separate from effectful `handle_run_error()` with tight `! Log` effect boundary (#737).
+- Help flag (`-h`, `--help`) to `examples/test-all.sh` script for improved usability (#737).
+
+### Changed
+
+- **MC/DC reporting** — Header line now shows: `Found X test file(s), Y compound decisions (N pure, M exempt), Z pure obligations` instead of total decision count; coverage summary shows `MC/DC coverage: Z/Z pure obligations met (100%)` (#737).
+- **MC/DC verbose output** — New EXEMPT section displays decisions in effectful functions with `[— —]` markers and `IO-BOUNDARY` label (#737).
+
 ## [0.102.0] — 2026-05-14
 
 ### Added

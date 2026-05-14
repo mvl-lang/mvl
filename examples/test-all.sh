@@ -15,6 +15,20 @@ for arg in "$@"; do
     case "$arg" in
         --llvm) TEST_TARGET="test-llvm" ;;
         --full) FULL=1 ;;
+        -h|--help)
+            echo ""
+            echo "Usage: test-all.sh [OPTIONS]"
+            echo ""
+            echo "Run \`make test\` for every example subdirectory."
+            echo ""
+            echo "Options:"
+            echo "  --llvm    Use LLVM backend (runs \`make test-llvm\` instead of \`make test\`)"
+            echo "  --full    Also run \`make check\`, \`make test-solver\`, and \`make run\` per example"
+            echo "  -h, --help  Show this help and exit"
+            echo ""
+            echo "The MVL compiler must be pre-built (\`make build\` from repo root)."
+            echo ""
+            exit 0 ;;
         *) echo "Unknown argument: $arg"; exit 1 ;;
     esac
 done
