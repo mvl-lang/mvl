@@ -59,7 +59,7 @@ A language is "complete" along eight independent pillars: requirements, language
 | 8 | **Proves** | Concurrent programs verified — actors and model checking |
 | 9 | **Proven** | Language formally verified — Lean/Coq metatheory |
 
-**Status (May 2026):** Foundation complete. Phase 5 shipped May 1 (LLVM Phases A–E + ownership-based drop, v0.60–v0.65). Phase 6 in progress.
+**Status (May 2026):** Foundation complete. Phase 5 shipped May 1 (LLVM Phases A–E + ownership-based drop, v0.60–v0.65). Phase 6 complete (v0.98.0). Phase 8 in progress.
 
 Full pillar/phase mapping and per-phase acceptance criteria: [spec 012](.openspec/specs/012-phases/spec.md). Architectural rationale: [ADR-0003](.openspec/adr/0003-compilation-strategy.md).
 
