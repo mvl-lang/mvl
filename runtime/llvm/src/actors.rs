@@ -77,6 +77,10 @@ pub unsafe extern "C" fn mvl_actor_spawn(
     state_ptr: *mut u8,
     state_size: i64,
 ) -> *mut u8 {
+    // Guard: reject negative sizes and null state pointer.
+    if state_size < 0 || state_ptr.is_null() {
+        return std::ptr::null_mut();
+    }
     let size = state_size as usize;
     // Deep-copy the initial state so the actor thread fully owns it.
     let mut state: Vec<u8> = std::slice::from_raw_parts(state_ptr, size).to_vec();
@@ -111,6 +115,9 @@ pub unsafe extern "C" fn mvl_actor_spawn(
 /// dropped. `args` must point to at least `argc` valid `i64` values.
 #[no_mangle]
 pub unsafe extern "C" fn mvl_actor_send(handle: *mut u8, disc: i64, argc: i64, args: *const i64) {
+    if handle.is_null() {
+        return;
+    }
     let actor = &*(handle as *const MvlActorHandle);
     let argc = (argc as usize).min(MAX_ARGS);
     let mut msg = MvlMsg {
@@ -134,5 +141,8 @@ pub unsafe extern "C" fn mvl_actor_send(handle: *mut u8, disc: i64, argc: i64, a
 /// be used after this call.
 #[no_mangle]
 pub unsafe extern "C" fn mvl_actor_drop(handle: *mut u8) {
+    if handle.is_null() {
+        return;
+    }
     drop(Box::from_raw(handle as *mut MvlActorHandle));
 }

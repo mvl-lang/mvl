@@ -23,6 +23,9 @@ use crate::mvl::parser::ast::{ActorDecl, Expr, TypeExpr};
 
 use super::LlvmBackend;
 
+/// Maximum behavior parameter count — must match `MAX_ARGS` in `runtime/llvm/src/actors.rs`.
+const MAX_ACTOR_ARGS: usize = 8;
+
 impl<'ctx> LlvmBackend<'ctx> {
     // ── Runtime declarations ──────────────────────────────────────────────────
 
@@ -184,6 +187,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         let entry = self.context.append_basic_block(dispatch_fn, "entry");
         self.builder.position_at_end(entry);
         self.locals.clear();
+        self.local_mvl_types.clear();
         self.heap_locals.clear();
         self.terminated = false;
         self.current_fn = Some(dispatch_fn);
@@ -312,8 +316,8 @@ impl<'ctx> LlvmBackend<'ctx> {
 
         let dispatch_fn = self.module.get_function(&dispatch_name)?;
         let dispatch_ptr = dispatch_fn.as_global_value().as_pointer_value();
-        let state_size = self.llvm_type_byte_size(state_ty.into()) as i64;
-        let size_val = i64_ty.const_int(state_size as u64, false);
+        let state_size = self.llvm_type_byte_size(state_ty.into()) as u64;
+        let size_val = i64_ty.const_int(state_size, false);
 
         let spawn_fn = self.module.get_function("mvl_actor_spawn")?;
         let call = self
@@ -372,6 +376,11 @@ impl<'ctx> LlvmBackend<'ctx> {
         let disc = pub_methods.iter().position(|m| m.name == method)?;
         let argc = args.len();
 
+        // Enforce MAX_ACTOR_ARGS at codegen time — the runtime clamps silently at 8.
+        if argc > MAX_ACTOR_ARGS {
+            return None; // codegen error: too many behavior parameters
+        }
+
         // Build args array on the stack (null ptr when argc == 0).
         let args_alloca = if argc > 0 {
             let arr_ty = i64_ty.array_type(argc as u32);
@@ -400,7 +409,9 @@ impl<'ctx> LlvmBackend<'ctx> {
                         .build_float_to_signed_int(fv, i64_ty, "arg_i64")
                         .ok()?
                         .into(),
-                    _ => BasicValueEnum::IntValue(i64_ty.const_zero()),
+                    // Unsupported LLVM value types (struct, array, vector) cannot be
+                    // passed as flat i64 args — fail loudly rather than silently send 0.
+                    _ => return None,
                 };
                 let gep = unsafe {
                     self.builder.build_in_bounds_gep(
