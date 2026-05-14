@@ -44,43 +44,56 @@ lifecycle and message-passing semantics; it does not duplicate the capability ta
 actor Counter {
     count: Int
 
-    // Behavior (async message handler)
-    be increment(iso delta: Int) -> Unit {
-        self.count = self.count + delta
+    // Private helper — sync, internal only
+    fn validate(delta: Int) -> Bool {
+        delta >= 0
     }
 
-    be reset() -> Unit {
+    // Behavior (async message handler) — pub fn inside actor
+    pub fn increment(iso delta: Int) {
+        if self.validate(delta) {
+            self.count = self.count + delta
+        }
+    }
+
+    pub fn reset() {
         self.count = 0
     }
 
-    be get_count(tag reply: ActorRef) -> Unit {
+    pub fn get_count(tag reply: ActorRef) {
         reply.receive(self.count)
     }
 }
 
-// Spawn an actor, receive an ActorRef (tag capability)
-let tag counter: ActorRef = spawn Counter { count: 0 }
+// Create an actor, receive an ActorRef (tag capability)
+let tag counter: ActorRef = actor Counter { count: 0 }
 
 // Send a message (behavior call)
 counter.increment(consume(delta))
 
 // Structured concurrency — scope lifetime
 concurrently {
-    let tag a: ActorRef = spawn Worker {}
+    let tag a: ActorRef = actor Worker {}
     a.run()
 }   // a is dropped here; runtime waits for pending messages to drain
 ```
+
+**Syntax design decisions:**
+- `pub fn` inside actor = behavior (async message handler). No `be` keyword needed.
+- `fn` inside actor = private helper (sync, internal only).
+- `actor Type { ... }` for creation (not `spawn` — avoids conflict with `ProcessSpawn` effect).
+- Behaviors implicitly return `Unit` — no return type annotation required.
 
 ## Requirements
 
 ### Requirement 1: Actor Declaration Syntax [MUST]
 
-The compiler MUST parse `actor TypeName { fields* behaviors* }` as a top-level declaration.
+The compiler MUST parse `actor TypeName { fields* functions* }` as a top-level declaration.
 An actor type consists of:
 - Named fields with types (the actor's private mutable state)
-- Zero or more behaviors declared with the `be` keyword
+- Zero or more functions: `pub fn` = behavior (async), `fn` = private helper (sync)
 
-The `actor` keyword is a hard-reserved keyword.
+The `actor` keyword is a hard-reserved keyword and is used for both declaration and instantiation.
 
 **Implementation:** `src/mvl/parser/ast.rs::Decl::Actor`,
 `src/mvl/parser/functions.rs::parse_actor_decl`
@@ -108,12 +121,13 @@ The `actor` keyword is a hard-reserved keyword.
 
 ### Requirement 2: Behavior Semantics [MUST]
 
-A behavior (`be`) is an asynchronous message handler.  The compiler MUST enforce:
+A behavior (`pub fn` inside an actor) is an asynchronous message handler.  The compiler MUST enforce:
 
-1. Behaviors return `Unit` — no synchronous return value (message passing is one-way)
+1. Behaviors implicitly return `Unit` — no return type annotation, no synchronous return value
 2. All parameters of a behavior MUST have sendable capabilities (`iso`, `val`, or `tag`)
 3. Behaviors have access to `self` for reading and writing the actor's private fields
 4. Behaviors MUST NOT call other behaviors synchronously — they enqueue messages
+5. Private helpers (`fn` without `pub`) are synchronous and may return any type
 
 **Implementation:** `src/mvl/checker/mod.rs::TypeChecker::check_behavior`,
 `src/mvl/backends/rust/emit_functions.rs::emit_behavior`,
@@ -124,7 +138,7 @@ A behavior (`be`) is an asynchronous message handler.  The compiler MUST enforce
 
 #### Scenario: Behavior with ref parameter rejected
 
-- GIVEN `be update(ref data: Buffer) -> Unit { self.buf = data }`
+- GIVEN `pub fn update(ref data: Buffer) { self.buf = data }`
 - WHEN the checker processes the behavior
 - THEN the compiler MUST emit `CheckError::CapabilityViolation`:
   "`ref` capability of `data` cannot be used in a behavior parameter"
@@ -133,57 +147,68 @@ A behavior (`be`) is an asynchronous message handler.  The compiler MUST enforce
 
 #### Scenario: Behavior with iso parameter accepted
 
-- GIVEN `be enqueue(iso msg: Message) -> Unit { self.queue.push(consume(msg)) }`
+- GIVEN `pub fn enqueue(iso msg: Message) { self.queue.push(consume(msg)) }`
 - WHEN the checker processes the behavior
 - THEN the compiler MUST accept the declaration
 
 **Tests:** `tests/corpus/actors/behaviors.mvl`
 
-#### Scenario: Behavior with non-Unit return rejected
+#### Scenario: Behavior with return type rejected
 
-- GIVEN `be get() -> Int { self.count }`
+- GIVEN `pub fn get() -> Int { self.count }`
 - WHEN the checker processes the behavior
-- THEN the compiler MUST emit a type error: "behavior return type must be `Unit`"
+- THEN the compiler MUST emit a type error: "behavior cannot have explicit return type"
 
 **Tests:** `tests/corpus/negative/req09_data_race/behavior_return_type.mvl`
 
+#### Scenario: Private helper with return type accepted
+
+- GIVEN `fn validate(x: Int) -> Bool { x >= 0 }` (no `pub`)
+- WHEN the checker processes the function
+- THEN the compiler MUST accept — private helpers are sync and may return values
+
+**Tests:** `tests/corpus/actors/behaviors.mvl`
+
 ---
 
-### Requirement 3: Actor Spawn and Lifecycle [MUST]
+### Requirement 3: Actor Creation and Lifecycle [MUST]
 
-The compiler MUST support `spawn ActorType { field: value, ... }` as an expression that:
+The compiler MUST support `actor ActorType { field: value, ... }` as an expression that:
 
 1. Allocates and initialises the actor's private state
 2. Starts the actor's message-processing loop
 3. Returns an `ActorRef` with `tag` capability (identity only — no field access)
 
+The `actor` keyword is reused for both declaration and instantiation (no separate `spawn` keyword —
+this avoids conflict with `ProcessSpawn` effect for OS process creation).
+
 An actor terminates when:
 - All `ActorRef` handles referring to it are dropped, AND
 - Its message queue is empty
 
-**Implementation:** `src/mvl/parser/expressions.rs::parse_spawn_expr`,
-`src/mvl/checker/mod.rs::TypeChecker::check_spawn`,
-`src/mvl/backends/rust/emit_exprs.rs::emit_spawn`,
-`src/mvl/backends/llvm/exprs.rs::emit_spawn`
+**Implementation:** `src/mvl/parser/expressions.rs::parse_actor_expr`,
+`src/mvl/checker/mod.rs::TypeChecker::check_actor_creation`,
+`src/mvl/backends/rust/emit_exprs.rs::emit_actor_creation`,
+`src/mvl/backends/llvm/exprs.rs::emit_actor_creation`
 
 **Tests:** `tests/corpus/actors/lifecycle.mvl`,
-`tests/corpus/negative/req09_data_race/spawn_field_mismatch.mvl`
+`tests/corpus/negative/req09_data_race/actor_field_mismatch.mvl`
 
-#### Scenario: Spawn returns ActorRef with tag capability
+#### Scenario: Actor creation returns ActorRef with tag capability
 
-- GIVEN `let tag counter: ActorRef = spawn Counter { count: 0 }`
-- WHEN the checker processes the spawn expression
+- GIVEN `let tag counter: ActorRef = actor Counter { count: 0 }`
+- WHEN the checker processes the actor expression
 - THEN the type of `counter` MUST be `ActorRef` with `tag` capability
 
 **Tests:** `tests/corpus/actors/lifecycle.mvl`
 
-#### Scenario: Spawn with wrong field types rejected
+#### Scenario: Actor creation with wrong field types rejected
 
-- GIVEN `spawn Counter { count: "hello" }` where `count: Int`
-- WHEN the checker processes the spawn expression
+- GIVEN `actor Counter { count: "hello" }` where `count: Int`
+- WHEN the checker processes the actor expression
 - THEN the compiler MUST emit a type error
 
-**Tests:** `tests/corpus/negative/req09_data_race/spawn_field_mismatch.mvl`
+**Tests:** `tests/corpus/negative/req09_data_race/actor_field_mismatch.mvl`
 
 ---
 
@@ -270,7 +295,7 @@ The only permitted interaction with an actor from the outside is sending a messa
 
 #### Scenario: Direct field access on ActorRef rejected
 
-- GIVEN `let tag a: ActorRef = spawn Counter { count: 0 }` and `let x = a.count`
+- GIVEN `let tag a: ActorRef = actor Counter { count: 0 }` and `let x = a.count`
 - WHEN the checker processes the field access
 - THEN the compiler MUST emit a type error:
   "actor field `count` is not accessible through `ActorRef` — send a message instead"
@@ -279,7 +304,7 @@ The only permitted interaction with an actor from the outside is sending a messa
 
 #### Scenario: Behaviors read and write own fields freely
 
-- GIVEN `be reset() -> Unit { self.count = 0 }`
+- GIVEN `pub fn reset() { self.count = 0 }`
 - WHEN the checker processes the behavior
 - THEN `self.count` field access MUST be accepted (within actor, no isolation violation)
 
@@ -289,7 +314,7 @@ The only permitted interaction with an actor from the outside is sending a messa
 
 ### Requirement 7: ActorRef Semantics — tag Capability [MUST]
 
-`spawn` returns an `ActorRef` with `tag` capability.  An `ActorRef`:
+`actor Type { ... }` returns an `ActorRef` with `tag` capability.  An `ActorRef`:
 
 - Carries the actor's identity (used to send messages)
 - Does NOT provide read or write access to any actor field
@@ -297,14 +322,14 @@ The only permitted interaction with an actor from the outside is sending a messa
 - MAY be compared for identity (`==` on two `ActorRef` values checks same actor)
 - MUST NOT be used as an `iso` or `ref` value
 
-**Implementation:** `src/mvl/checker/mod.rs::TypeChecker::check_spawn`,
+**Implementation:** `src/mvl/checker/mod.rs::TypeChecker::check_actor_creation`,
 `src/mvl/parser/ast.rs::Type::ActorRef`
 
 **Tests:** `tests/corpus/actors/actor_ref.mvl`
 
 #### Scenario: ActorRef is tag-sendable
 
-- GIVEN `tag counter: ActorRef = spawn Counter { count: 0 }` and `worker.set_target(counter)`
+- GIVEN `tag counter: ActorRef = actor Counter { count: 0 }` and `worker.set_target(counter)`
   where `set_target` expects `tag target: ActorRef`
 - WHEN the checker processes the call
 - THEN the compiler MUST accept — `tag` is sendable
@@ -323,9 +348,9 @@ The only permitted interaction with an actor from the outside is sending a messa
 
 ### Requirement 8: Structured Concurrency — Scope Lifetime [SHOULD]
 
-Actors spawned inside a `concurrently` block MUST NOT outlive that block's scope.
+Actors created inside a `concurrently` block MUST NOT outlive that block's scope.
 When the `concurrently` block exits, the runtime MUST drain all pending messages for
-actors spawned within the block before returning control to the enclosing scope.
+actors created within the block before returning control to the enclosing scope.
 
 This prevents dangling actor references and ensures that concurrent work is bounded
 by the scope in which it was created.
@@ -340,7 +365,7 @@ by the scope in which it was created.
 
 #### Scenario: Actor does not escape concurrently block
 
-- GIVEN a `concurrently { let tag a = spawn Worker {}; a.run() }` block
+- GIVEN a `concurrently { let tag a = actor Worker {}; a.run() }` block
 - WHEN the outer scope attempts to use `a` after the block
 - THEN the compiler MUST emit an error: "actor `a` does not outlive its `concurrently` block"
 
@@ -348,9 +373,9 @@ by the scope in which it was created.
 
 #### Scenario: Concurrently block drains before returning
 
-- GIVEN a `concurrently` block containing `spawn Worker {}` that processes messages
+- GIVEN a `concurrently` block containing `actor Worker {}` that processes messages
 - WHEN the block exits normally
-- THEN all pending messages for actors spawned within the block MUST be processed
+- THEN all pending messages for actors created within the block MUST be processed
   before the enclosing scope continues
 
 **Tests:** `tests/corpus/actors/structured_concurrency.mvl`
@@ -406,7 +431,7 @@ Actor semantics MUST be identical across the Rust and LLVM backends (#698):
 
 - Actor isolation (no shared state) is a checker guarantee — both backends inherit it
 - Message ordering within a single actor MUST be FIFO
-- Spawn/terminate lifecycle MUST behave identically
+- Creation/terminate lifecycle MUST behave identically
 - `select` timeout precision is backend-defined but MUST be best-effort
 
 **Tests:** `tests/corpus/actors/` — all files in this directory are run against both backends
