@@ -1,0 +1,21 @@
+// Phase 8: actor with multiple fields + val-capability behavior params (#698).
+// Exercises the iso/val sendability path on both backends.
+//
+// Expected stdout: sent
+
+actor Accumulator {
+    sum: Int
+    label: String
+
+    pub fn add(val amount: Int) { }
+    pub fn clear() { }
+}
+
+fn main() -> Unit ! Console {
+    let a: Accumulator = actor Accumulator { sum: 0, label: "acc" };
+    a.add(10);
+    a.add(20);
+    a.add(30);
+    a.clear();
+    println("sent")
+}

@@ -130,15 +130,10 @@ impl<'ctx> LlvmBackend<'ctx> {
                     let state_ptr_val = state_param.into_pointer_value();
                     for (i, (field_name, field_ty_expr)) in field_defs.iter().enumerate() {
                         if let Some(field_llvm_ty) = self.mvl_type_to_llvm(field_ty_expr) {
-                            let gep = unsafe {
-                                self.builder.build_in_bounds_gep(
-                                    state_ty,
-                                    state_ptr_val,
-                                    &[i64_ty.const_zero(), i64_ty.const_int(i as u64, false)],
-                                    field_name,
-                                )
-                            }
-                            .unwrap();
+                            let gep = self
+                                .builder
+                                .build_struct_gep(state_ty, state_ptr_val, i as u32, field_name)
+                                .unwrap();
                             self.locals.insert(field_name.clone(), (gep, field_llvm_ty));
                             self.local_mvl_types
                                 .insert(field_name.clone(), field_ty_expr.clone());
@@ -300,15 +295,15 @@ impl<'ctx> LlvmBackend<'ctx> {
         for (i, (field_name, _)) in field_defs.iter().enumerate() {
             if let Some((_, val_expr)) = fields.iter().find(|(n, _)| n == field_name) {
                 if let Some(val) = self.emit_expr(val_expr) {
-                    let gep = unsafe {
-                        self.builder.build_in_bounds_gep(
+                    let gep = self
+                        .builder
+                        .build_struct_gep(
                             state_ty,
                             state_alloca,
-                            &[i64_ty.const_zero(), i64_ty.const_int(i as u64, false)],
+                            i as u32,
                             &format!("field_{field_name}"),
                         )
-                    }
-                    .ok()?;
+                        .ok()?;
                     self.builder.build_store(gep, val).ok()?;
                 }
             }

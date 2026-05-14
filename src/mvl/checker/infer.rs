@@ -397,12 +397,16 @@ impl TypeChecker {
                 }
             }
 
-            // Phase 8: spawn expression returns ActorRef (#63)
-            Expr::Spawn { fields, .. } => {
+            // Phase 8: spawn expression returns the actor's own type name (#63/#698).
+            // `actor Counter { count: 0 }` has type `Counter`, not the generic `ActorRef`,
+            // so that `let c: Counter = actor Counter { ... }` type-checks correctly.
+            Expr::Spawn {
+                actor_type, fields, ..
+            } => {
                 for (_, val) in fields {
                     self.infer_expr(val);
                 }
-                Ty::Named("ActorRef".to_string(), vec![])
+                Ty::Named(actor_type.clone(), vec![])
             }
 
             // Phase 8: select — evaluates to Unit (fire-and-forget arms, spec 015 §8)
