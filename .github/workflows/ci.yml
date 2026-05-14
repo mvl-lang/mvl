@@ -11,6 +11,47 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  # ── Path detection ──────────────────────────────────────────────────────────
+  #
+  # Mirrors the pre-commit hook's path-aware filtering: only run a job suite
+  # when the relevant files actually changed.
+  #
+  #   rust     — .rs files or Cargo.* (triggers: fmt, clippy, build, test)
+  #   compiler — compiler/**          (triggers: check-compiler, test-mvl)
+  #   openspec — .openspec/**         (triggers: adr-check)
+  #
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      compiler: ${{ steps.filter.outputs.compiler }}
+      openspec: ${{ steps.filter.outputs.openspec }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed files
+        id: filter
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            CHANGED=$(git diff --name-only "${{ github.event.pull_request.base.sha }}" HEAD)
+          else
+            # push to main: compare with parent; fall back to all files on first commit
+            CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git ls-files)
+          fi
+          echo "$CHANGED" | grep -qE '\.rs$|^Cargo\.' && RUST=true     || RUST=false
+          echo "$CHANGED" | grep -qE '^compiler/'      && COMPILER=true || COMPILER=false
+          echo "$CHANGED" | grep -qE '^\.openspec/'    && OPENSPEC=true || OPENSPEC=false
+          echo "rust=$RUST"         >> "$GITHUB_OUTPUT"
+          echo "compiler=$COMPILER" >> "$GITHUB_OUTPUT"
+          echo "openspec=$OPENSPEC" >> "$GITHUB_OUTPUT"
+
+  # ── ISPE Assurance ──────────────────────────────────────────────────────────
+  #
+  # Overall spec-coverage metric. Runs on every PR regardless of which files
+  # changed — it measures the project as a whole.
   assurance:
     name: ISPE Assurance
     runs-on: ubuntu-latest
@@ -71,18 +112,30 @@ jobs:
               });
             }
 
+  # ── ADR structure check ─────────────────────────────────────────────────────
+  #
+  # Only needed when spec or ADR files change.
   adr-check:
     name: ADR structure check
+    needs: [changes]
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
+    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && needs.changes.outputs.openspec == 'true'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Check ADR structure
         run: python3 tools/check_adr.py --verbose
 
+  # ── Rust build + test + MVL compiler checks ─────────────────────────────────
+  #
+  # Runs when Rust sources changed OR compiler/ MVL sources changed:
+  #   - Rust changed   → fmt, clippy, cargo test, validate-keywords
+  #   - compiler/ changed → make check-compiler, make test-mvl
+  #   - Both           → all of the above (one build, binary reused)
   check:
     name: Check, lint, test
+    needs: [changes]
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.compiler == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
@@ -109,9 +162,11 @@ jobs:
           echo "Z3_SYS_Z3_HEADER=/usr/include/z3.h" >> "$GITHUB_ENV"
 
       - name: Check formatting
+        if: needs.changes.outputs.rust == 'true'
         run: cargo fmt -- --check
 
       - name: Clippy (lint)
+        if: needs.changes.outputs.rust == 'true'
         run: cargo clippy -- -D warnings
 
       - name: Build
@@ -121,7 +176,17 @@ jobs:
         run: cargo build -p mvl_runtime_c
 
       - name: Validate keyword consistency
+        if: needs.changes.outputs.rust == 'true'
         run: make validate-keywords
 
       - name: Test
+        if: needs.changes.outputs.rust == 'true'
         run: cargo test
+
+      - name: MVL check compiler
+        if: needs.changes.outputs.compiler == 'true'
+        run: make check-compiler
+
+      - name: MVL test compiler
+        if: needs.changes.outputs.compiler == 'true'
+        run: make test-mvl

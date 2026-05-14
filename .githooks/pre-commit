@@ -19,8 +19,11 @@ if echo "$staged" | grep -qE '\.rs$'; then
   cargo test --quiet -- --test-threads=1 || { echo "Tests must pass before committing."; exit 1; }
 fi
 
-# MVL compiler sources → test-mvl
+# MVL compiler sources → verify + test
 if echo "$staged" | grep -qE '^compiler/'; then
+  echo "pre-commit: make check-compiler"
+  make check-compiler || { echo "MVL compiler verification failed."; exit 1; }
+
   echo "pre-commit: make test-mvl"
   make test-mvl || { echo "MVL compiler tests failed."; exit 1; }
 fi

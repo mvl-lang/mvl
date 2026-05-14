@@ -20,6 +20,7 @@
 //! | mcdc       | `mcdc::analysis`         | `mcdc::transform`          |
 //! | mutation   | —                        | `mutation::transform`      |
 
+pub mod complexity;
 pub mod coverage;
 pub mod ghost_erasure;
 pub mod mcdc;

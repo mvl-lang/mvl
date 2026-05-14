@@ -1186,7 +1186,14 @@ pub partial fn greet(n: Int) -> String {
     let prelude = vec![parse_prog(prelude_src)];
     let user_prog = parse_prog(user_src);
 
-    let out = transpile_project("crate", &user_prog, &[], &prelude, Default::default());
+    let out = transpile_project(
+        "crate",
+        &user_prog,
+        &[],
+        &prelude,
+        Default::default(),
+        Default::default(),
+    );
     assert!(
         out.main_rs.contains("// ── stdlib prelude"),
         "prelude section header must appear:\n{}",
@@ -1207,7 +1214,14 @@ fn prelude_stub_with_empty_body_is_skipped() {
     let prelude = vec![parse_prog(prelude_src)];
     let user_prog = parse_prog(user_src);
 
-    let out = transpile_project("crate", &user_prog, &[], &prelude, Default::default());
+    let out = transpile_project(
+        "crate",
+        &user_prog,
+        &[],
+        &prelude,
+        Default::default(),
+        Default::default(),
+    );
     assert!(
         !out.main_rs.contains("// ── stdlib prelude"),
         "stub-only prelude must not emit section header:\n{}",
@@ -1229,7 +1243,14 @@ fn macro_handled_names_are_excluded_from_prelude() {
     let prelude = vec![parse_prog(prelude_src)];
     let user_prog = parse_prog(user_src);
 
-    let out = transpile_project("crate", &user_prog, &[], &prelude, Default::default());
+    let out = transpile_project(
+        "crate",
+        &user_prog,
+        &[],
+        &prelude,
+        Default::default(),
+        Default::default(),
+    );
     assert!(
         !out.main_rs.contains("fn println("),
         "macro-handled fn must not appear as a regular function:\n{}",
@@ -1243,7 +1264,14 @@ fn empty_prelude_progs_emits_no_prelude_section() {
     let user_src = "fn f() -> Unit { }";
     let user_prog = parse_prog(user_src);
 
-    let out = transpile_project("crate", &user_prog, &[], &[], Default::default());
+    let out = transpile_project(
+        "crate",
+        &user_prog,
+        &[],
+        &[],
+        Default::default(),
+        Default::default(),
+    );
     assert!(
         !out.main_rs.contains("// ── stdlib prelude"),
         "no prelude section must appear when prelude_progs is empty:\n{}",
@@ -1267,7 +1295,14 @@ fn main() -> Unit { }
     let prelude = vec![parse_prog(prelude_src)];
     let user_prog = parse_prog(user_src);
 
-    let out = transpile_project("crate", &user_prog, &[], &prelude, Default::default());
+    let out = transpile_project(
+        "crate",
+        &user_prog,
+        &[],
+        &prelude,
+        Default::default(),
+        Default::default(),
+    );
     let count = out.main_rs.matches("fn my_fn(").count();
     assert_eq!(
         count, 1,
@@ -2496,7 +2531,14 @@ fn prelude_builtin_fn_is_not_emitted() {
     let prelude = vec![parse_prog(prelude_src)];
     let user_prog = parse_prog(user_src);
 
-    let out = transpile_project("crate", &user_prog, &[], &prelude, Default::default());
+    let out = transpile_project(
+        "crate",
+        &user_prog,
+        &[],
+        &prelude,
+        Default::default(),
+        Default::default(),
+    );
     assert!(
         !out.main_rs.contains("fn len("),
         "builtin fn must not be emitted into Rust output:\n{}",
@@ -2514,7 +2556,14 @@ fn prelude_builtin_fn_does_not_produce_todo_stub() {
     let prelude = vec![parse_prog(prelude_src)];
     let user_prog = parse_prog(user_src);
 
-    let out = transpile_project("crate", &user_prog, &[], &prelude, Default::default());
+    let out = transpile_project(
+        "crate",
+        &user_prog,
+        &[],
+        &prelude,
+        Default::default(),
+        Default::default(),
+    );
     assert!(
         !out.main_rs.contains("todo!"),
         "builtin fn must not produce a todo! stub:\n{}",

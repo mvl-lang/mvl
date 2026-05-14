@@ -17,6 +17,23 @@
 //     forward declaration is needed.
 //   - IFC bridge: transparent partial fn call_parse(src) → Program.
 //
+// Termination argument (Req 8):
+//   Two patterns cover every loop and recursive call in this file:
+//
+//   1. Token-position loops — any while loop with !ps_at_eof(curr) in the guard:
+//      Every branch either advances curr via ps_advance (pos += 1) or sets a
+//      boolean flag that exits the loop.  The token list is finite and immutable,
+//      so curr.pos reaches tokens.len() in at most O(n) steps.
+//      Formal measure:  len(curr.tokens) - curr.pos
+//      Written as:      decreases len(curr.tokens) - curr.pos
+//      (#726: len() now accepts field-access arguments)
+//
+//   2. Depth-bounded recursion — parse_type_expr_depth(ps, max_depth):
+//      Every recursive call passes max_depth - 1.  The requires max_depth >= 0
+//      contract (proven at Req 10) ensures the base case is reached.
+//      No while loop in this function can increase max_depth, so both the
+//      recursion and its inner loops terminate.
+//
 // Public surface: parse(tokens: List[Token]) -> Program
 
 use ast::Token;
@@ -42,6 +59,7 @@ use lexer::lex;
 
 // ── Parser state ──────────────────────────────────────────────────────────────
 
+/// Mutable parsing cursor: token stream, current position, and accumulated errors.
 pub type ParserState = struct {
     tokens: List[Token],
     pos:    Int,
@@ -51,86 +69,103 @@ pub type ParserState = struct {
 // ── Result carriers ───────────────────────────────────────────────────────────
 // No generic user types and no tuple syntax → one carrier per return type.
 
+/// Result carrier for a `Bool` parse sub-result plus updated parser state.
 pub type BoolR = struct {
     value: Bool,
     ps:    ParserState,
 }
 
+/// Result carrier for a `String` parse sub-result plus updated parser state.
 pub type StringR = struct {
     value: String,
     ps:    ParserState,
 }
 
+/// Result carrier for a `TypeExpr` parse sub-result plus updated parser state.
 pub type TypeExprR = struct {
     value: TypeExpr,
     ps:    ParserState,
 }
 
+/// Result carrier for a list of `TypeExpr` parse sub-results plus updated parser state.
 pub type TypeExprsR = struct {
     value: List[TypeExpr],
     ps:    ParserState,
 }
 
+/// Result carrier for a list of `GenericParam` parse sub-results plus updated parser state.
 pub type GenParamsR = struct {
     value: List[GenericParam],
     ps:    ParserState,
 }
 
+/// Result carrier for a single `Param` parse sub-result plus updated parser state.
 pub type ParamR = struct {
     value: Param,
     ps:    ParserState,
 }
 
+/// Result carrier for a list of `Param` parse sub-results plus updated parser state.
 pub type ParamsR = struct {
     value: List[Param],
     ps:    ParserState,
 }
 
+/// Result carrier for a list of `Effect` parse sub-results plus updated parser state.
 pub type EffectsR = struct {
     value: List[Effect],
     ps:    ParserState,
 }
 
+/// Result carrier for a list of `Constraint` parse sub-results plus updated parser state.
 pub type ConstrR = struct {
     value: List[Constraint],
     ps:    ParserState,
 }
 
+/// Result carrier for a list of `FieldDecl` parse sub-results plus updated parser state.
 pub type FieldsR = struct {
     value: List[FieldDecl],
     ps:    ParserState,
 }
 
+/// Result carrier for a `FnDecl` parse sub-result plus updated parser state.
 pub type FnDeclR = struct {
     value: FnDecl,
     ps:    ParserState,
 }
 
+/// Result carrier for a `TypeDecl` parse sub-result plus updated parser state.
 pub type TypeDeclR = struct {
     value: TypeDecl,
     ps:    ParserState,
 }
 
+/// Result carrier for a `UseDecl` parse sub-result plus updated parser state.
 pub type UseDeclR = struct {
     value: UseDecl,
     ps:    ParserState,
 }
 
+/// Result carrier for a `ConstDecl` parse sub-result plus updated parser state.
 pub type ConstDeclR = struct {
     value: ConstDecl,
     ps:    ParserState,
 }
 
+/// Result carrier for an `ExternFnDecl` parse sub-result plus updated parser state.
 pub type ExtFnR = struct {
     value: ExternFnDecl,
     ps:    ParserState,
 }
 
+/// Result carrier for an `ExternDecl` parse sub-result plus updated parser state.
 pub type ExternR = struct {
     value: ExternDecl,
     ps:    ParserState,
 }
 
+/// Result carrier for an `ImplDecl` parse sub-result plus updated parser state.
 pub type ImplR = struct {
     value: ImplDecl,
     ps:    ParserState,
@@ -171,7 +206,9 @@ total fn ps_at_punct(ps: ParserState, p: String) -> Bool {
     }
 }
 
-total fn ps_advance(ps: ParserState) -> ParserState {
+total fn ps_advance(ps: ParserState) -> ParserState
+  ensures result.pos == ps.pos + 1
+{
     ParserState { tokens: ps.tokens, pos: ps.pos + 1, errors: ps.errors }
 }
 
@@ -211,7 +248,9 @@ total fn ps_expect_name(ps: ParserState) -> StringR {
 partial fn skip_body(ps: ParserState) -> ParserState {
     let curr: ref ParserState = ps_expect_punct(ps, "{");
     let depth: ref Int = 1;
-    while depth > 0 && !ps_at_eof(curr) {
+    // Termination: curr.pos strictly increases each iteration (ps_advance).
+    // depth changes but is bounded by curr.pos (each '{' or '}' costs 1 token).
+    while depth > 0 && !ps_at_eof(curr) decreases len(curr.tokens) - curr.pos {
         if ps_at_punct(curr, "{") {
             depth = depth + 1;
             curr = ps_advance(curr)
@@ -231,7 +270,14 @@ partial fn skip_body(ps: ParserState) -> ParserState {
 // At depth 0, no generic args are parsed (prevents infinite regress).
 // parse_type_expr(ps) calls with depth=5, enough for real MVL code.
 
-partial fn parse_type_expr_depth(ps: ParserState, max_depth: Int) -> TypeExprR {
+// Termination: two orthogonal measures.
+//   Recursion: every recursive call passes max_depth - 1; requires max_depth >= 0
+//              guarantees the base case (no generic args parsed at depth 0).
+//   Inner loops: each loop body calls ps_advance (pos += 1) every iteration;
+//                bounded by len(ps.tokens) - curr.pos.
+partial fn parse_type_expr_depth(ps: ParserState, max_depth: Int) -> TypeExprR
+  requires max_depth >= 0
+{
     let tok: Token = ps_current(ps);
     let sp: Span = tok.span;
     let is_eof: Bool = match tok.kind { TokenKind::Eof => true, _ => false };
@@ -270,7 +316,9 @@ partial fn parse_type_expr_depth(ps: ParserState, max_depth: Int) -> TypeExprR {
     if name_is_fn && ps_at_punct(curr, "(") {
         curr = ps_advance(curr); // consume '('
         let paren_depth: ref Int = 1;
-        while paren_depth > 0 && !ps_at_eof(curr) {
+        // Termination: curr.pos advances by 1 every iteration (all three branches
+        // call ps_advance).
+        while paren_depth > 0 && !ps_at_eof(curr) decreases len(curr.tokens) - curr.pos {
             if ps_at_punct(curr, "(") {
                 paren_depth = paren_depth + 1; curr = ps_advance(curr)
             } else if ps_at_punct(curr, ")") {
@@ -289,7 +337,9 @@ partial fn parse_type_expr_depth(ps: ParserState, max_depth: Int) -> TypeExprR {
     if max_depth > 0 && !name_is_fn && ps_at_punct(curr, "[") {
         curr = ps_advance(curr);
         let args: ref List[TypeExpr] = [];
-        while !ps_at_eof(curr) && !ps_at_punct(curr, "]") {
+        // Termination: each iteration advances curr past at least one token;
+        // recursive calls use max_depth - 1 (bounded by requires max_depth >= 0).
+        while !ps_at_eof(curr) && !ps_at_punct(curr, "]") decreases len(curr.tokens) - curr.pos {
             let arg_r: TypeExprR = parse_type_expr_depth(curr, max_depth - 1);
             args.push(arg_r.value);
             curr = arg_r.ps;
@@ -520,6 +570,32 @@ partial fn parse_fn_decl(
     // optional where clause
     let con_r: ConstrR = parse_where_clause(curr);
     curr = con_r.ps;
+    // optional proof clauses (requires/ensures) — skip keyword + clause expression
+    // so the self-hosted parser can round-trip sources that carry contracts.
+    let pf_loop: ref Bool = true;
+    // Termination (outer): each requires/ensures keyword consumes ≥1 token; the
+    // non-keyword branch sets pf_loop = false and exits in one step.
+    // Termination (inner): cl_end is set on '{', ';', next proof kw, or Eof;
+    // the else branch advances curr (pos += 1). Measure: len(ps.tokens) - curr.pos.
+    while pf_loop && !ps_at_eof(curr) {
+        let cur_is_req: Bool = match ps_current(curr).kind { TokenKind::KwRequires => true, _ => false };
+        let cur_is_ens: Bool = match ps_current(curr).kind { TokenKind::KwEnsures  => true, _ => false };
+        if cur_is_req || cur_is_ens {
+            curr = ps_advance(curr);
+            let cl_end: ref Bool = false;
+            while !cl_end && !ps_at_eof(curr) {
+                let nx_req: Bool = match ps_current(curr).kind { TokenKind::KwRequires => true, _ => false };
+                let nx_ens: Bool = match ps_current(curr).kind { TokenKind::KwEnsures  => true, _ => false };
+                if ps_at_punct(curr, "{") || ps_at_punct(curr, ";") || nx_req || nx_ens {
+                    cl_end = true
+                } else {
+                    curr = ps_advance(curr)
+                }
+            }
+        } else {
+            pf_loop = false
+        }
+    }
     // body or extern semicolon
     let has_body: Bool = ps_at_punct(curr, "{");
     if has_body {
@@ -871,6 +947,10 @@ partial fn collect_mod_flags(ps: ParserState) -> ModFlags {
 
 // ── Top-level program parser ───────────────────────────────────────────────────
 
+// Termination: every match arm either delegates to a parse_X helper (which
+// advances curr past at least one token) or falls to the default skip arm
+// (curr = ps_advance(curr), pos += 1).  ps_at_eof(curr) becomes true when
+// curr.pos == len(curr.tokens).
 partial fn parse_program(ps: ParserState) -> Program {
     let curr: ref ParserState = ps;
     let fns: ref     List[FnDecl]     = [];
@@ -880,7 +960,7 @@ partial fn parse_program(ps: ParserState) -> Program {
     let externs: ref List[ExternDecl] = [];
     let impls: ref   List[ImplDecl]   = [];
 
-    while !ps_at_eof(curr) {
+    while !ps_at_eof(curr) decreases len(curr.tokens) - curr.pos {
         let tok: Token = ps_current(curr);
         match tok.kind {
             TokenKind::KwUse => {
@@ -1019,7 +1099,11 @@ partial fn parse_program(ps: ParserState) -> Program {
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
-pub partial fn parse(tokens: List[Token]) -> Program {
+/// Parse a token stream produced by `lex` into a `Program` AST.
+/// Parse errors are accumulated in `Program.errors` rather than aborting.
+pub partial fn parse(tokens: List[Token]) -> Program
+  requires len(tokens) >= 1
+{
     let ps: ParserState = ParserState { tokens: tokens, pos: 0, errors: [] };
     parse_program(ps)
 }

@@ -200,12 +200,22 @@ fn emit_struct(
                 field_inits.join(", ")
             ));
             let inv_str = emit_ref_expr_for_assert(inv, "_mvl_val");
-            // Always enforce invariants — debug_assert! is silent in release builds.
-            // TODO (#662): replace with AssertMode once both Rust and LLVM backends
-            // support configurable enforcement levels (rust/llvm parity).
-            cg.line(&format!(
-                "assert!({inv_str}, \"struct invariant violated for `{name}`\");"
-            ));
+            // Enforce invariant according to the active AssertMode (#662).
+            let inv_stmt = match cg.assert_mode {
+                crate::mvl::backends::AssertMode::Always => {
+                    format!("assert!({inv_str}, \"struct invariant violated for `{name}`\");")
+                }
+                crate::mvl::backends::AssertMode::DebugOnly => {
+                    format!("debug_assert!({inv_str}, \"struct invariant violated for `{name}`\");")
+                }
+                crate::mvl::backends::AssertMode::Assume => {
+                    // Assume mode: omit runtime check entirely.
+                    String::new()
+                }
+            };
+            if !inv_stmt.is_empty() {
+                cg.line(&inv_stmt);
+            }
             cg.line("_mvl_val");
         } else {
             cg.line(&format!("Self {{ {} }}", field_inits.join(", ")));
@@ -729,7 +739,7 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
         }
         RefExpr::Not { inner, .. } => format!("!{}", emit_ref_expr(inner, binding)),
         RefExpr::Ident { name, .. } => {
-            if name == "self" {
+            if name == "self" || name == "result" {
                 binding.to_string()
             } else {
                 name.clone()
@@ -749,7 +759,7 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
             }
         }
         RefExpr::Len { ident, .. } => {
-            if ident == "self" {
+            if ident == "self" || ident == "result" {
                 format!("{binding}.len()")
             } else {
                 format!("{ident}.len()")

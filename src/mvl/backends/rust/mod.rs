@@ -196,6 +196,7 @@ pub fn transpile_project(
         crate::mvl::parser::lexer::Span,
         crate::mvl::checker::types::Ty,
     >,
+    assert_mode: crate::mvl::backends::AssertMode,
 ) -> ProjectOutput {
     let has_main = has_main_fn(entry_prog);
     let extern_count = count_extern_decls(entry_prog);
@@ -212,6 +213,7 @@ pub fn transpile_project(
     let sibling_names: Vec<&str> = siblings.iter().map(|(n, _)| n.as_str()).collect();
     let mut cg = RustEmitter::new();
     cg.expr_types = expr_types;
+    cg.assert_mode = assert_mode;
     cg.emit_program_with_mods(entry_prog, &sibling_names, prelude_progs);
     let main_rs = cg.finish();
 
@@ -224,6 +226,7 @@ pub fn transpile_project(
             let sibling_check = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
             let mut cg = RustEmitter::new();
             cg.expr_types = sibling_check.expr_types;
+            cg.assert_mode = assert_mode;
             if entry_uses_runtime {
                 cg.emit_sibling_module(prog, prelude_progs);
             } else {

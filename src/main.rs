@@ -4,14 +4,16 @@
 #[cfg(feature = "llvm")]
 use mvl::mvl::backends::llvm as codegen;
 use mvl::mvl::backends::rust as transpiler;
+use mvl::mvl::backends::AssertMode;
 use mvl::mvl::checker;
 use mvl::mvl::checker::passes::{
     aggregate_verdicts, parse_req_filter, source_hash, PassRegistry, Verdict, VerdictCache,
 };
-use mvl::mvl::linter::{self, config::LintConfig};
+use mvl::mvl::linter::{self, config::LintConfig, errors::LintDiag};
 use mvl::mvl::packages;
 use mvl::mvl::parser::ast::{Decl, Program, Totality, TypeBody};
 use mvl::mvl::parser::Parser;
+use mvl::mvl::passes::complexity;
 use mvl::mvl::passes::mcdc::analysis::{analyze_mcdc, DecisionInfo};
 use mvl::mvl::resolver;
 use mvl::mvl::stdlib;
@@ -70,16 +72,18 @@ fn main() {
             let req_filter = parse_req_filter_or_exit(&args);
             let error_limit = parse_error_limit(&args);
             let stdlib_profile = parse_stdlib_profile(&args);
+            let format_json = args.iter().any(|a| a == "--format=json");
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
             if verbose {
                 eprintln!("stdlib profile: {stdlib_profile}");
             }
-            cmd_check(&path, req_filter, error_limit, stdlib_profile);
+            cmd_check(&path, req_filter, error_limit, stdlib_profile, format_json);
         }
         "build" => {
             let path = require_path_arg(&args, "build");
             let backend = parse_backend(&args);
             let stdlib_profile = parse_stdlib_profile(&args);
+            let assert_mode = parse_assert_mode_or_exit(&args);
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
             if verbose {
                 eprintln!("stdlib profile: {stdlib_profile}");
@@ -87,20 +91,21 @@ fn main() {
             maybe_check_proven_stdlib_or_exit(stdlib_profile);
             if backend == "llvm" {
                 #[cfg(feature = "llvm")]
-                build_project_llvm(&path);
+                build_project_llvm(&path, assert_mode);
                 #[cfg(not(feature = "llvm"))]
                 {
                     eprintln!("error: --backend=llvm requires the `llvm` feature (rebuild with --features llvm)");
                     process::exit(1);
                 }
             } else {
-                build_project(&path, false, &[]);
+                build_project(&path, false, &[], assert_mode);
             }
         }
         "run" => {
             let path = require_path_arg(&args, "run");
             let backend = parse_backend(&args);
             let stdlib_profile = parse_stdlib_profile(&args);
+            let assert_mode = parse_assert_mode_or_exit(&args);
             maybe_check_proven_stdlib_or_exit(stdlib_profile);
             let path_idx = path_arg_index(&args);
             let run_args: Vec<String> = args[path_idx + 1..]
@@ -111,14 +116,14 @@ fn main() {
                 .collect();
             if backend == "llvm" {
                 #[cfg(feature = "llvm")]
-                run_project_llvm(&path);
+                run_project_llvm(&path, assert_mode);
                 #[cfg(not(feature = "llvm"))]
                 {
                     eprintln!("error: --backend=llvm requires the `llvm` feature (rebuild with --features llvm)");
                     process::exit(1);
                 }
             } else {
-                build_project(&path, true, &run_args);
+                build_project(&path, true, &run_args, assert_mode);
             }
         }
         "transpile" => {
@@ -163,6 +168,11 @@ fn main() {
             let masking = args.iter().any(|a| a == "--masking");
             let json = args.iter().any(|a| a == "--json");
             cmd_mcdc(&path, quiet, verbose, masking, json);
+        }
+        "complexity" => {
+            let path = require_path_arg(&args, "complexity");
+            let format_json = args.iter().any(|a| a == "--format=json");
+            cmd_complexity(&path, format_json);
         }
         "lint" => {
             let path = require_path_arg(&args, "lint");
@@ -215,7 +225,8 @@ fn print_usage() {
     eprintln!("  mvl check <file|dir>               — parse and type-check");
     eprintln!(
         "  mvl check <file|dir> --req <N>     — run only the Req N verification pass
-  mvl check <file|dir> --error-limit=N — stop after N errors (default 10; 0 = show all)"
+  mvl check <file|dir> --error-limit=N — stop after N errors (default 10; 0 = show all)
+  mvl check <file|dir> --format=json  — emit errors as machine-readable JSON"
     );
     eprintln!("  mvl build <file|dir>               — transpile to Rust and run cargo build");
     eprintln!("  mvl run   [--] <file.mvl>          — transpile, build, and execute");
@@ -229,8 +240,15 @@ fn print_usage() {
   mvl build <file|dir> --backend=llvm  — compile to LLVM IR and invoke lli (requires --features llvm)
   mvl run   <file|dir> --backend=llvm  — compile and run via LLVM lli (requires --features llvm)
   mvl build|run|check|test <file|dir> --stdlib=trusted — stdlib profile: trusted (default, 95 builtins)
-  mvl build|run|check|test <file|dir> --stdlib=proven  — proven profile: verifies stdlib before user code (ADR-0023)"
+  mvl build|run|check|test <file|dir> --stdlib=proven  — proven profile: verifies stdlib before user code (ADR-0023)
+  mvl build|run <file|dir> --assert-mode=always     — enforce invariants unconditionally (default)
+  mvl build|run <file|dir> --assert-mode=debug-only — enforce invariants in debug builds only
+  mvl build|run <file|dir> --assert-mode=assume     — emit llvm.assume hint; no runtime trap"
     );
+    eprintln!(
+        "  mvl complexity <file|dir>           — static complexity analysis (CC, fan-out, traits)"
+    );
+    eprintln!("  mvl complexity <file|dir> --format=json — JSON complexity report");
     eprintln!("  mvl mutate <file|dir>               — behavioral mutation testing (ADR-0014)");
     eprintln!("  mvl mutate <file|dir> -q            — quiet: only show mutation score");
     eprintln!(
@@ -270,6 +288,25 @@ fn parse_error_limit(args: &[String]) -> usize {
         .find_map(|a| a.strip_prefix("--error-limit="))
         .and_then(|s| s.parse().ok())
         .unwrap_or(10)
+}
+
+/// Parse `--assert-mode=<mode>` from args; defaults to `AssertMode::Always`.
+///
+/// Supported modes (issue #662):
+/// - `always`     — enforce invariants unconditionally (default, current behaviour).
+/// - `debug-only` — enforce only in debug builds (`debug_assert!` / conditional trap).
+/// - `assume`     — emit optimizer hint only; no runtime check.
+fn parse_assert_mode_or_exit(args: &[String]) -> AssertMode {
+    let mode_str = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--assert-mode="))
+        .unwrap_or("always");
+    AssertMode::parse(mode_str).unwrap_or_else(|| {
+        eprintln!(
+            "error: unknown assert-mode '{mode_str}' (supported: always, debug-only, assume)"
+        );
+        process::exit(1);
+    })
 }
 
 /// Parse `--backend=<name>` from args; defaults to `"rust"`.
@@ -518,7 +555,13 @@ fn maybe_check_proven_stdlib_or_exit(profile: &str) {
 ///
 /// When `req_filter` is `Some(N)`, only the verification pass for Req N is run
 /// and its verdict is printed; errors for other requirements are suppressed.
-fn cmd_check(path: &str, req_filter: Option<u8>, error_limit: usize, stdlib_profile: &str) {
+fn cmd_check(
+    path: &str,
+    req_filter: Option<u8>,
+    error_limit: usize,
+    stdlib_profile: &str,
+    format_json: bool,
+) {
     let files = mvl_files(path, false);
     if files.is_empty() {
         eprintln!("No .mvl files found at: {path}");
@@ -611,6 +654,9 @@ fn cmd_check(path: &str, req_filter: Option<u8>, error_limit: usize, stdlib_prof
     // explicitly-checked files call and must therefore be visible to the checker.
     let all_user_progs: Vec<Program> = parsed.iter().map(|(_, p, _)| p.clone()).collect();
 
+    // Collect errors across all files for JSON output (when --format=json).
+    let mut json_error_items: Vec<String> = Vec::new();
+
     // Only run the checker on explicitly requested files (not resolver-only siblings).
     for (idx, (file_str, prog, _src)) in parsed.iter().take(check_count).enumerate() {
         // Build per-file prelude: stdlib + all OTHER user modules so that
@@ -642,6 +688,29 @@ fn cmd_check(path: &str, req_filter: Option<u8>, error_limit: usize, stdlib_prof
             }
             if verdict.is_failed() {
                 had_errors = true;
+            }
+        } else if format_json {
+            // JSON output mode: accumulate errors; emit a single document at end.
+            if !result.is_ok() {
+                had_errors = true;
+                let display_count = if error_limit == 0 {
+                    result.errors.len()
+                } else {
+                    error_limit.min(result.errors.len())
+                };
+                for err in result.errors.iter().take(display_count) {
+                    let span = err.span();
+                    let req = err.requirement_number();
+                    let item = format!(
+                        "    {{\n      \"code\": \"E{req:04}\",\n      \"requirement\": {req},\n      \"message\": \"{msg}\",\n      \"location\": {{ \"file\": \"{file}\", \"line\": {line}, \"column\": {col} }}\n    }}",
+                        req = req,
+                        msg = json_escape(&err.message()),
+                        file = json_escape(file_str),
+                        line = span.line,
+                        col = span.col,
+                    );
+                    json_error_items.push(item);
+                }
             }
         } else {
             // Full check mode: report type errors then show verdict summary.
@@ -683,8 +752,49 @@ fn cmd_check(path: &str, req_filter: Option<u8>, error_limit: usize, stdlib_prof
         }
     }
 
+    // Emit JSON document after processing all files.
+    if format_json && req_filter.is_none() {
+        let error_count = json_error_items.len();
+        println!("{{");
+        println!("  \"errors\": [");
+        for (i, item) in json_error_items.iter().enumerate() {
+            let comma = if i + 1 < error_count { "," } else { "" };
+            println!("{item}{comma}");
+        }
+        println!("  ],");
+        println!("  \"warnings\": [],");
+        println!("  \"summary\": {{ \"errors\": {error_count}, \"warnings\": 0 }}");
+        println!("}}");
+    }
+
     if had_errors {
         process::exit(1);
+    }
+}
+
+/// Static complexity analysis (`mvl complexity`).
+///
+/// Computes per-function and per-module complexity metrics from the AST (issue #208):
+/// - Cyclomatic complexity, function length, nested match depth, effect width
+/// - Module fan-out, trait impl/fan-out counts, extern ratio
+fn cmd_complexity(path: &str, format_json: bool) {
+    let files = mvl_files(path, false);
+    if files.is_empty() {
+        eprintln!("No .mvl files found at: {path}");
+        process::exit(1);
+    }
+    let mut reports = Vec::new();
+    for f in &files {
+        let file_str = f.display().to_string();
+        let (prog, _src) = parse_or_exit(&file_str);
+        reports.push(complexity::analyze(&file_str, &prog));
+    }
+    if format_json {
+        complexity::print_json(&reports);
+    } else {
+        for report in &reports {
+            complexity::print_human(report);
+        }
     }
 }
 
@@ -1370,17 +1480,47 @@ fn cmd_lint(path: &str, show_config: bool) {
 
     for file in &files {
         let file_str = file.display().to_string();
-        let (prog, src) = parse_or_exit(&file_str);
+        let src = match fs::read_to_string(file) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("{file_str}:1:1: error: [io-error] cannot read file: {e}");
+                total_errors += 1;
+                had_errors = true;
+                continue;
+            }
+        };
+        let (mut parser, lex_errors) = Parser::new(&src);
+        let prog = parser.parse_program();
+
+        // Surface lex and parse errors as lint diagnostics.
+        let mut pre_diags: Vec<LintDiag> = Vec::new();
+        for err in &lex_errors {
+            pre_diags.push(LintDiag::error(
+                "lex-error",
+                err.message.clone(),
+                err.span.line,
+                err.span.col,
+            ));
+        }
+        for err in parser.errors() {
+            pre_diags.push(LintDiag::error(
+                "parse-error",
+                err.message.clone(),
+                err.span.line,
+                err.span.col,
+            ));
+        }
+
         let result = linter::lint(&prog, &src, &cfg);
 
-        for diag in &result.diags {
+        for diag in pre_diags.iter().chain(result.diags.iter()) {
             eprintln!("{}", diag.render(&file_str));
         }
 
         total_warnings += result.warning_count();
-        total_errors += result.error_count();
+        total_errors += result.error_count() + pre_diags.len();
 
-        if !result.is_ok() {
+        if !pre_diags.is_empty() || !result.is_ok() {
             had_errors = true;
         } else if result.diags.is_empty() {
             println!("{file_str}: OK");
@@ -1452,7 +1592,7 @@ fn inject_mod_bridge(source: &str) -> String {
 /// binary is executed with its working directory set to the source file's
 /// parent directory so that relative paths in args (e.g. `--file logs.jsonl`)
 /// resolve correctly.
-fn build_project(path: &str, run: bool, run_args: &[String]) {
+fn build_project(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) {
     let stdlib_dir = stdlib::ensure_stdlib();
     // For directory inputs, use the directory stem as the crate name and
     // concatenate all .mvl files (simple Phase 1 approach: single-crate multi-file).
@@ -1538,6 +1678,7 @@ fn build_project(path: &str, run: bool, run_args: &[String]) {
         &sibling_modules,
         &stdlib_prelude_progs,
         all_expr_types,
+        assert_mode,
     );
 
     // Write to a per-crate workspace so each build gets its own mvl_runtime copy.
@@ -2481,6 +2622,8 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
         eprintln!("No .mvl files found at: {path}");
         process::exit(1);
     }
+    let all_mvl_count = mvl_files_all(path).len();
+    let excluded_count = all_mvl_count - files.len();
 
     // Run the module resolver to surface `use` errors before reporting.
     let modules: Vec<(String, Program)> = files
@@ -2498,6 +2641,7 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
 
     let mut total_fns: usize = 0;
     let mut total_verified: usize = 0; // `total fn` (MVL-defined)
+    let mut total_explicit: usize = 0; // `total fn` with explicit `total` keyword
     let mut total_partial: usize = 0; // `partial fn` (MVL-defined)
     let mut _total_pub: usize = 0; // `pub fn` — always 0 until module resolver (#96) is merged
     let mut total_extern: usize = 0; // extern fn signatures (trust boundaries)
@@ -2528,6 +2672,8 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
         .collect();
     let assurance_prelude =
         load_stdlib_prelude(parsed_assurance.iter().map(|(_, p, _)| p), &stdlib_dir);
+    let all_assurance_progs: Vec<Program> =
+        parsed_assurance.iter().map(|(_, p, _)| p.clone()).collect();
 
     // Count kernel builtins from the implicit stdlib prelude (strings.mvl, lists.mvl).
     // These are always part of the trust boundary for any MVL program, even though they
@@ -2543,13 +2689,17 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
         })
         .count();
 
-    for (file_str, prog, src) in &parsed_assurance {
+    for (idx, (file_str, prog, src)) in parsed_assurance.iter().enumerate() {
         let file_str = file_str.as_str();
         let stats = collect_assurance_stats(prog, verbose);
-        let result = checker::check_with_prelude(&assurance_prelude, prog);
+        let (before, after_with_self) = all_assurance_progs.split_at(idx);
+        let after = &after_with_self[1..];
+        let user_prelude: Vec<&Program> = before.iter().chain(after.iter()).collect();
+        let result = checker::check_with_two_preludes(&assurance_prelude, &user_prelude, prog);
 
         total_fns += stats.fn_count;
         total_verified += stats.total_fn_count;
+        total_explicit += stats.explicit_total_fn_count;
         total_partial += stats.partial_fn_count;
         _total_pub += stats.pub_fn_count;
         total_extern += stats.extern_fn_count; // fn signatures, not block count
@@ -2654,20 +2804,28 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
     } else {
         println!("MVL Assurance Report");
         println!("====================");
-        println!("Files checked:       {file_count}");
+        if excluded_count > 0 {
+            println!("Files checked:       {file_count} source files  ({excluded_count} *_test.mvl excluded)");
+        } else {
+            println!("Files checked:       {file_count}");
+        }
         println!("Functions:           {total_fns}");
-        println!("  total fn:          {total_verified} ({verified_pct}% of implemented)");
+        let total_implicit = total_verified - total_explicit;
+        println!("  total fn:          {total_verified} ({total_explicit} explicit, {total_implicit} implicit) — {verified_pct}% of implemented");
         println!("  partial fn:        {total_partial}");
         println!("  extern fn:         {total_extern} ({extern_pct}% trust boundary)");
         println!("  kernel builtins:   {kernel_extern_count} (stdlib strings.mvl + lists.mvl)");
         println!("  implemented:       {implemented}");
         println!("  test fn:           {total_test_fns}");
         println!();
-        println!("Requirements verified:  {proven_count}/11 proven");
+        let violated_count = (1..=11usize).filter(|&i| req_errors[i] > 0).count();
+        let not_proven_count = 11 - proven_count - violated_count;
+        println!("Requirements verified:  {proven_count} proven, {not_proven_count} not proven, {violated_count} violated");
         print_req_row(
             1,
             "Type safety",
             &req_errors,
+            project_verdicts[1].is_proven(),
             &format!(
                 "{} types ({} struct, {} enum), {} errors",
                 total_struct_types + total_enum_types,
@@ -2680,6 +2838,7 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
             2,
             "Memory safety",
             &req_errors,
+            project_verdicts[2].is_proven(),
             if req_errors[2] == 0 {
                 "no violations".to_string()
             } else {
@@ -2691,6 +2850,7 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
             3,
             "Totality",
             &req_errors,
+            project_verdicts[3].is_proven(),
             &format!(
                 "{} total fn, {} non-exhaustive match",
                 total_verified, req_errors[3]
@@ -2700,24 +2860,28 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
             4,
             "Null elimination",
             &req_errors,
+            project_verdicts[4].is_proven(),
             &format!("{} direct Option access", req_errors[4]),
         );
         print_req_row(
             5,
             "Error visibility",
             &req_errors,
+            project_verdicts[5].is_proven(),
             &format!("{} unhandled Result", req_errors[5]),
         );
         print_req_row(
             6,
             "Ownership",
             &req_errors,
+            project_verdicts[6].is_proven(),
             &format!("{} immutability violations", req_errors[6]),
         );
         print_req_row(
             7,
             "Effects",
             &req_errors,
+            project_verdicts[7].is_proven(),
             &format!(
                 "{} fns declare effects, {} undeclared",
                 total_effects_fns, req_errors[7]
@@ -2727,6 +2891,7 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
             8,
             "Termination",
             &req_errors,
+            project_verdicts[8].is_proven(),
             &format!(
                 "{} total fn, {} partial fn, {} violations",
                 total_verified, total_partial, req_errors[8]
@@ -2736,6 +2901,7 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
             9,
             "Data race freedom",
             &req_errors,
+            project_verdicts[9].is_proven(),
             &format!(
                 "{} fns use capabilities, {} violations",
                 total_capabilities_fns, req_errors[9]
@@ -2745,6 +2911,7 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
             10,
             "Refinements",
             &req_errors,
+            project_verdicts[10].is_proven(),
             &format!(
                 "{} fns with refinements, {} violations",
                 total_refinements_fns, req_errors[10]
@@ -2754,6 +2921,7 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
             11,
             "IFC",
             &req_errors,
+            project_verdicts[11].is_proven(),
             &format!(
                 "{} extern (trust boundary), {} flow violations",
                 total_extern, req_errors[11]
@@ -2824,12 +2992,14 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
     }
 }
 
-fn print_req_row(req: u8, name: &str, req_errors: &[usize; 12], detail: &str) {
+fn print_req_row(req: u8, name: &str, req_errors: &[usize; 12], proven: bool, detail: &str) {
     debug_assert!((1..=11).contains(&req), "req must be 1–11, got {req}");
-    let status = if req_errors[req as usize] == 0 {
+    let status = if req_errors[req as usize] > 0 {
+        "✗"
+    } else if proven {
         "✓"
     } else {
-        "✗"
+        "–"
     };
     println!("  Req {:>2}  {:<20} {}  {}", req, name, status, detail);
 }
@@ -2839,6 +3009,7 @@ fn print_req_row(req: u8, name: &str, req_errors: &[usize; 12], detail: &str) {
 struct AssuranceStats {
     fn_count: usize,
     total_fn_count: usize,
+    explicit_total_fn_count: usize,
     partial_fn_count: usize,
     // NOTE(#96): pub_fn_count populated once module resolver is merged; always 0 for now.
     pub_fn_count: usize,
@@ -2873,6 +3044,7 @@ fn collect_assurance_stats(prog: &Program, collect_details: bool) -> AssuranceSt
     let mut stats = AssuranceStats {
         fn_count: 0,
         total_fn_count: 0,
+        explicit_total_fn_count: 0,
         partial_fn_count: 0,
         pub_fn_count: 0,
         extern_fn_count: 0,
@@ -2894,13 +3066,18 @@ fn collect_stats_from_decls(decls: &[Decl], stats: &mut AssuranceStats, collect_
             Decl::Fn(fd) => {
                 let has_caps = fd.params.iter().any(|p| p.capability.is_some());
                 let has_refs = fd.return_refinement.is_some()
-                    || fd.params.iter().any(|p| p.refinement.is_some());
+                    || fd.params.iter().any(|p| p.refinement.is_some())
+                    || !fd.requires.is_empty()
+                    || !fd.ensures.is_empty();
                 if fd.is_test {
                     stats.test_fn_count += 1;
                 } else {
                     stats.fn_count += 1;
                     match fd.totality {
-                        Some(Totality::Total) => stats.total_fn_count += 1,
+                        Some(Totality::Total) => {
+                            stats.total_fn_count += 1;
+                            stats.explicit_total_fn_count += 1;
+                        }
                         Some(Totality::Partial) => stats.partial_fn_count += 1,
                         None => stats.total_fn_count += 1, // implicitly total
                     }
@@ -3540,10 +3717,11 @@ fn prepare_llvm(
 /// Compile an MVL file to LLVM IR and write the .ll file to the current directory.
 /// `mvl build --backend=llvm <file>`
 #[cfg(feature = "llvm")]
-fn build_project_llvm(path: &str) {
+fn build_project_llvm(path: &str, assert_mode: AssertMode) {
     let (prog, _src) = parse_or_exit(path);
     let module_name = stem(path);
-    let (prelude, compiler) = prepare_llvm(&prog);
+    let (prelude, mut compiler) = prepare_llvm(&prog);
+    compiler.assert_mode = assert_mode;
     match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
         Ok(ir) => {
             let out_path = format!("{module_name}.ll");
@@ -3563,7 +3741,7 @@ fn build_project_llvm(path: &str) {
 /// Compile an MVL file to LLVM IR and execute it via `lli`.
 /// `mvl run --backend=llvm <file>`
 #[cfg(feature = "llvm")]
-fn run_project_llvm(path: &str) {
+fn run_project_llvm(path: &str, assert_mode: AssertMode) {
     let lli = codegen::find_lli().unwrap_or_else(|| {
         eprintln!("error: `lli` not found — install LLVM 22 (brew install llvm)");
         process::exit(1);
@@ -3571,7 +3749,8 @@ fn run_project_llvm(path: &str) {
 
     let (prog, _src) = parse_or_exit(path);
     let module_name = stem(path);
-    let (prelude, compiler) = prepare_llvm(&prog);
+    let (prelude, mut compiler) = prepare_llvm(&prog);
+    compiler.assert_mode = assert_mode;
     let ir = match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
         Ok(ir) => ir,
         Err(e) => {

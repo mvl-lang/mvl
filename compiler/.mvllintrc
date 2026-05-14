@@ -1,0 +1,10 @@
+# Lint configuration for the self-hosted MVL compiler.
+#
+# Parser and lexer functions are inherently complex: keyword_kind dispatches
+# over 40+ keywords, parse_program handles all top-level declaration forms,
+# and skip_body must mirror the full grammar to skip balanced braces.
+# These limits are raised accordingly rather than suppressing the rules.
+
+max_cyclomatic_complexity = 50
+max_fn_length = 700
+require_explicit_totality = true

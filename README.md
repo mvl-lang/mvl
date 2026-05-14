@@ -55,7 +55,7 @@ A language is "complete" along eight independent pillars: requirements, language
 | 1–4 | **Foundation** | MVL verifies its 11 requirements at compile time |
 | 5 | **Compiles** | MVL owns the full compilation chain (LLVM, no host compiler) |
 | 6 | **Works** | Real programs run — stdlib complete, testing matures |
-| 7 | **Ships** | Packages distribute and are trustworthy |
+| 7 | **Self-hosting** | The compiler verifies its own source — MVL is its own first customer |
 | 8 | **Proves** | Concurrent programs verified — actors and model checking |
 | 9 | **Proven** | Language formally verified — Lean/Coq metatheory |
 

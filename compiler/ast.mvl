@@ -15,6 +15,7 @@
 
 // ── Source location ─────────────────────────────────────────────────────────
 
+/// Source location (line + column) within a source file, one-based.
 pub type Span = struct {
     line: Int,
     col:  Int,
@@ -22,6 +23,7 @@ pub type Span = struct {
 
 // ── Token classification ─────────────────────────────────────────────────────
 
+/// Lexical category of a token produced by the lexer.
 pub type TokenKind = enum {
     // ── Declaration keywords ────────────────────────────────────────────
     KwFn,
@@ -88,6 +90,7 @@ pub type TokenKind = enum {
 
 // ── Token ────────────────────────────────────────────────────────────────────
 
+/// A single lexical token with its category, raw text, and source location.
 pub type Token = struct {
     kind:   TokenKind,
     lexeme: String,
@@ -96,6 +99,7 @@ pub type Token = struct {
 
 // ── Parse error ──────────────────────────────────────────────────────────────
 
+/// A parse error with a human-readable message and the span where it occurred.
 pub type ParseError = struct {
     message: String,
     span:    Span,
@@ -103,6 +107,7 @@ pub type ParseError = struct {
 
 // ── Type expression (self-referential via heap-allocated List) ────────────────
 
+/// A type expression: a name with optional generic arguments (e.g. `List[Int]`).
 pub type TypeExpr = struct {
     name: String,
     args: List[TypeExpr],
@@ -111,6 +116,7 @@ pub type TypeExpr = struct {
 
 // ── Generic type parameter ────────────────────────────────────────────────────
 
+/// A generic type parameter with an optional trait bound (e.g. `T: Display`).
 pub type GenericParam = struct {
     name:  String,
     bound: String,
@@ -119,6 +125,7 @@ pub type GenericParam = struct {
 
 // ── Effect annotation ─────────────────────────────────────────────────────────
 
+/// An effect annotation on a function signature (e.g. `! IO`, `! DB[conn]`).
 pub type Effect = struct {
     name:  String,
     param: String,
@@ -127,6 +134,7 @@ pub type Effect = struct {
 
 // ── Where-clause constraint ───────────────────────────────────────────────────
 
+/// A where-clause constraint binding a generic parameter to a trait bound.
 pub type Constraint = struct {
     param: String,
     bound: String,
@@ -135,6 +143,7 @@ pub type Constraint = struct {
 
 // ── Function parameter ────────────────────────────────────────────────────────
 
+/// A function parameter with optional capability marker, mutability flag, name, and type.
 pub type Param = struct {
     capability: String,
     mutable:    Bool,
@@ -145,6 +154,7 @@ pub type Param = struct {
 
 // ── Function declaration ──────────────────────────────────────────────────────
 
+/// A function declaration including visibility, totality, signature, and body flag.
 pub type FnDecl = struct {
     visible:     Bool,
     is_test:     Bool,
@@ -163,6 +173,7 @@ pub type FnDecl = struct {
 
 // ── Struct field declaration ──────────────────────────────────────────────────
 
+/// A struct field declaration: name, type, and source span.
 pub type FieldDecl = struct {
     name: String,
     ty:   TypeExpr,
@@ -171,10 +182,12 @@ pub type FieldDecl = struct {
 
 // ── Type declaration body kind ────────────────────────────────────────────────
 
+/// Discriminates struct, enum, and type-alias declarations.
 pub type TypeBodyKind = enum { IsStruct, IsEnum, IsAlias }
 
 // ── Type declaration ──────────────────────────────────────────────────────────
 
+/// A type declaration: struct, enum, or type alias with optional generic parameters.
 pub type TypeDecl = struct {
     visible:     Bool,
     name:        String,
@@ -188,6 +201,7 @@ pub type TypeDecl = struct {
 
 // ── Use declaration ───────────────────────────────────────────────────────────
 
+/// A use declaration importing names from a module path (e.g. `use ast::{Token}`).
 pub type UseDecl = struct {
     visible: Bool,
     path:    List[String],
@@ -197,6 +211,7 @@ pub type UseDecl = struct {
 
 // ── Const declaration ─────────────────────────────────────────────────────────
 
+/// A constant declaration with a name, type, and literal value.
 pub type ConstDecl = struct {
     visible: Bool,
     name:    String,
@@ -207,6 +222,7 @@ pub type ConstDecl = struct {
 
 // ── Extern declarations ───────────────────────────────────────────────────────
 
+/// An extern function signature declaring a trust-boundary foreign function.
 pub type ExternFnDecl = struct {
     name:    String,
     params:  List[Param],
@@ -215,6 +231,7 @@ pub type ExternFnDecl = struct {
     span:    Span,
 }
 
+/// An extern block grouping foreign function signatures for a target language.
 pub type ExternDecl = struct {
     lang: String,
     fns:  List[ExternFnDecl],
@@ -223,6 +240,7 @@ pub type ExternDecl = struct {
 
 // ── Impl block declaration ────────────────────────────────────────────────────
 
+/// A trait implementation block for a concrete type.
 pub type ImplDecl = struct {
     ty:          TypeExpr,
     trait_name:  String,
@@ -233,6 +251,7 @@ pub type ImplDecl = struct {
 
 // ── Top-level program (separate lists per declaration kind) ───────────────────
 
+/// The top-level parsed program, with separate lists for each declaration kind.
 pub type Program = struct {
     fns:     List[FnDecl],
     types:   List[TypeDecl],

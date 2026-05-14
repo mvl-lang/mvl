@@ -36,25 +36,25 @@ type ScanResult = struct {
 
 // ── Character classification ─────────────────────────────────────────────────
 
-fn is_digit(c: String) -> Bool {
+total fn is_digit(c: String) -> Bool {
     c != "" && "0123456789".contains(c)
 }
 
-fn is_alpha(c: String) -> Bool {
+total fn is_alpha(c: String) -> Bool {
     c != "" && "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_".contains(c)
 }
 
-fn is_alnum(c: String) -> Bool {
+total fn is_alnum(c: String) -> Bool {
     c != "" && "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789".contains(c)
 }
 
-fn is_whitespace(c: String) -> Bool {
+total fn is_whitespace(c: String) -> Bool {
     c == " " || c == "\t" || c == "\n" || c == "\r"
 }
 
 // ── Keyword lookup ───────────────────────────────────────────────────────────
 
-fn keyword_kind(s: String) -> TokenKind {
+total fn keyword_kind(s: String) -> TokenKind {
     match s {
         "fn"          => TokenKind::KwFn,
         "let"         => TokenKind::KwLet,
@@ -108,9 +108,14 @@ fn keyword_kind(s: String) -> TokenKind {
 
 // Scan an identifier or keyword starting at pos.
 // Advances while alphanumeric/underscore; classifies via keyword_kind.
-partial fn scan_word(src: String, pos: Int, src_len: Int) -> ScanResult {
+partial fn scan_word(src: String, pos: Int, src_len: Int) -> ScanResult
+  requires pos >= 0
+  ensures result.end_pos >= pos
+{
     let p: ref Int = pos;
-    while p < src_len && is_alnum(str_char_at(src, p)) {
+    // Termination: p advances by 1 each step; loop exits when p == src_len or
+    // char is not alphanumeric. Measure src_len - p decreases monotonically.
+    while p < src_len && is_alnum(str_char_at(src, p)) decreases src_len - p {
         p = p + 1
     }
     let lexeme: String = src.substring(pos, p);
@@ -120,14 +125,19 @@ partial fn scan_word(src: String, pos: Int, src_len: Int) -> ScanResult {
 
 // Scan an integer or float literal starting at pos.
 // Detects the float suffix: digits "." digit digits.
-partial fn scan_number(src: String, pos: Int, src_len: Int) -> ScanResult {
+partial fn scan_number(src: String, pos: Int, src_len: Int) -> ScanResult
+  requires pos >= 0
+  ensures result.end_pos >= pos
+{
     let p: ref Int = pos;
-    while p < src_len && is_digit(str_char_at(src, p)) {
+    // Termination: p strictly increases each step (by 1); bounded above by src_len.
+    while p < src_len && is_digit(str_char_at(src, p)) decreases src_len - p {
         p = p + 1
     }
     if p < src_len && str_char_at(src, p) == "." && is_digit(str_char_at(src, p + 1)) {
         p = p + 1;
-        while p < src_len && is_digit(str_char_at(src, p)) {
+        // Termination: same argument — p increases, bounded by src_len.
+        while p < src_len && is_digit(str_char_at(src, p)) decreases src_len - p {
             p = p + 1
         }
         ScanResult { kind: TokenKind::FloatLit, lexeme: src.substring(pos, p), end_pos: p }
@@ -138,9 +148,13 @@ partial fn scan_number(src: String, pos: Int, src_len: Int) -> ScanResult {
 
 // Skip a line comment body (call after "//" is confirmed).
 // Returns end_pos pointing at the '\n' or end-of-string.
-partial fn scan_comment_end(src: String, pos: Int, src_len: Int) -> Int {
+partial fn scan_comment_end(src: String, pos: Int, src_len: Int) -> Int
+  requires pos >= 0
+  ensures result >= pos
+{
     let p: ref Int = pos;
-    while p < src_len && str_char_at(src, p) != "\n" {
+    // Termination: p increases by 1 per step; exits at '\n' or when p == src_len.
+    while p < src_len && str_char_at(src, p) != "\n" decreases src_len - p {
         p = p + 1
     }
     p
@@ -149,9 +163,14 @@ partial fn scan_comment_end(src: String, pos: Int, src_len: Int) -> Int {
 // Scan a string body (call after the opening '"' is consumed).
 // Returns ScanResult with kind=StrLit, lexeme=content (without quotes),
 // end_pos pointing past the closing '"'.
-partial fn scan_string_body(src: String, pos: Int, src_len: Int) -> ScanResult {
+partial fn scan_string_body(src: String, pos: Int, src_len: Int) -> ScanResult
+  requires pos >= 0
+  ensures result.end_pos >= pos
+{
     let p: ref Int = pos;
-    while p < src_len && str_char_at(src, p) != "\"" {
+    // Termination: p advances by 1 or 2 each step (escape sequences advance by 2).
+    // Both increments are positive, so src_len - p strictly decreases each iteration.
+    while p < src_len && str_char_at(src, p) != "\"" decreases src_len - p {
         if str_char_at(src, p) == "\\" && p + 1 < src_len {
             p = p + 2
         } else {
@@ -164,7 +183,9 @@ partial fn scan_string_body(src: String, pos: Int, src_len: Int) -> ScanResult {
 }
 
 // Return the two-char operator spelling if (c, c2) forms one; "" otherwise.
-fn two_char_punct(c: String, c2: String) -> String {
+total fn two_char_punct(c: String, c2: String) -> String
+  ensures len(result) == 0 || len(result) == 2
+{
     if c == "=" && c2 == "=" { "==" }
     else if c == "!" && c2 == "=" { "!=" }
     else if c == "<" && c2 == "=" { "<=" }
@@ -181,17 +202,21 @@ fn two_char_punct(c: String, c2: String) -> String {
 
 // ── Public entry point ───────────────────────────────────────────────────────
 
-// Tokenize src into a List[Token], terminated by a single Eof token.
-// Whitespace is consumed silently (not emitted as tokens).
-// Unknown characters (outside ASCII alpha/digit/punct) are emitted as Punct.
-pub partial fn lex(src: String) -> List[Token] {
+/// Tokenize `src` into a `List[Token]`, terminated by a single `Eof` token.
+/// Whitespace is consumed silently. Unknown characters are emitted as `Punct`.
+pub partial fn lex(src: String) -> List[Token]
+  ensures len(result) >= 1
+{
     let src_len: Int = src.len();
     let pos: ref Int = 0;
     let line: ref Int = 1;
     let col: ref Int = 1;
     let tokens: ref List[Token] = [];
 
-    while pos < src_len {
+    // Termination: every branch in the loop body advances pos by at least 1
+    // (scan_word/scan_number/scan_string_body may advance by more). The guard
+    // pos < src_len is thus falsified in at most src_len iterations.
+    while pos < src_len decreases src_len - pos {
         let c: String = str_char_at(src, pos);
         let c2: String = str_char_at(src, pos + 1);
         let span: Span = Span { line: line, col: col };

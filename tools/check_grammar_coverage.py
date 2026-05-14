@@ -54,8 +54,9 @@ EBNF_KNOWN_ABSENT = {
     # borrow_expr and impl_decl added to EBNF (hardening #384); ts update pending
     "borrow_expr": "not yet implemented in tree-sitter grammar",
     "impl_decl": "not yet implemented in tree-sitter grammar",
-    # fn_contract added to EBNF for contracts (#621); ts update pending
-    "fn_contract": "not yet implemented in tree-sitter grammar",
+    # fn_contract covers both requires/ensures and ghost let as a unit;
+    # tree-sitter splits it into contract_clause + ghost_let_stmt instead
+    "fn_contract": "split in tree-sitter into contract_clause and ghost_let_stmt",
     # guard_expr = expr — inlined into match_arm as optional(seq("if", $.expr))
     "guard_expr": "inlined into match_arm as optional(seq(\"if\", $.expr))",
     # Uppercase EBNF terminals map to regex patterns, not named rules

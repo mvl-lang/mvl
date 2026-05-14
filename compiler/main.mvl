@@ -83,7 +83,7 @@ total fn format_fn_sig(f: FnDecl) -> String {
         format(" -> {}", format_type_expr(f.ret_type))
     } else { "" };
     let effs: String   = format_effects(f.effects);
-    format("  {}{}{}{}fn {}({}){}{}", vis, tot, tran, test_s, f.name, params, ret, effs)
+    format("  {}{}{}{}fn {}({}){}{}", vis, tran, tot, test_s, f.name, params, ret, effs)
 }
 
 total fn format_path(segs: List[String]) -> String {
@@ -107,14 +107,16 @@ transparent partial fn lex_and_parse(src: String) -> Program {
 
 // ── Argument helpers ──────────────────────────────────────────────────────────
 
-fn dir_from_arg(v: Tainted[String]) -> Path {
+total fn dir_from_arg(v: Tainted[String]) -> Path {
     let clean_dir: Clean[String] = sanitize(v);
     join(path("."), clean_dir)
 }
 
 // ── File processor ───────────────────────────────────────────────────────────
 
-transparent partial fn process_file(name: String, raw: String) -> Program ! Console {
+partial fn process_file(name: String, raw: Tainted[String]) -> Clean[Program] ! Console
+  requires len(name) > 0
+{
     let src: Clean[String]  = sanitize(raw);
     let prog: Clean[Program] = lex_and_parse(src);
 
@@ -124,31 +126,181 @@ transparent partial fn process_file(name: String, raw: String) -> Program ! Cons
         prog.consts.len(), prog.externs.len(), prog.impls.len(),
         prog.errors.len());
 
-    for f in prog.fns {
-        println("{}", format_fn_sig(f))
+    let i_fns: ref Int = 0;
+    while i_fns < prog.fns.len() {
+        if let Some(f) = prog.fns.get(i_fns) {
+            println("{}", format_fn_sig(f))
+        }
+        i_fns = i_fns + 1
     }
 
-    for t in prog.types {
-        let kind_str: String = match t.body_kind {
-            TypeBodyKind::IsStruct => "struct",
-            TypeBodyKind::IsEnum   => "enum",
-            TypeBodyKind::IsAlias  => "alias",
-        };
-        let vis_s: String = if t.visible { "pub " } else { "" };
-        println("  {}type {} = {} ({} fields/{} variants)",
-            vis_s, t.name, kind_str, t.fields.len(), t.variants.len())
+    let i_types: ref Int = 0;
+    while i_types < prog.types.len() {
+        if let Some(t) = prog.types.get(i_types) {
+            let kind_str: String = match t.body_kind {
+                TypeBodyKind::IsStruct => "struct",
+                TypeBodyKind::IsEnum   => "enum",
+                TypeBodyKind::IsAlias  => "alias",
+            };
+            let vis_s: String = if t.visible { "pub " } else { "" };
+            println("  {}type {} = {} ({} fields/{} variants)",
+                vis_s, t.name, kind_str, t.fields.len(), t.variants.len())
+        }
+        i_types = i_types + 1
     }
 
-    for u in prog.uses {
-        println("  use {}.{{{}}}",
-            format_path(u.path), format_imports(u.imports))
+    let i_uses: ref Int = 0;
+    while i_uses < prog.uses.len() {
+        if let Some(u) = prog.uses.get(i_uses) {
+            println("  use {}.{{{}}}",
+                format_path(u.path), format_imports(u.imports))
+        }
+        i_uses = i_uses + 1
     }
 
-    for e in prog.errors {
-        println("  ERROR L{}: {}", e.span.line, e.message)
+    let i_errs: ref Int = 0;
+    while i_errs < prog.errors.len() {
+        if let Some(e) = prog.errors.get(i_errs) {
+            println("  ERROR L{}: {}", e.span.line, e.message)
+        }
+        i_errs = i_errs + 1
     }
 
     prog
+}
+
+// ── Test helpers ──────────────────────────────────────────────────────────────
+//
+// Tests construct AST nodes directly (no lex/parse) so they remain `total`
+// and pass `mvl check`.
+
+total fn zero_span() -> Span {
+    Span { line: 0, col: 0 }
+}
+
+total fn simple_ty(name: String) -> TypeExpr {
+    TypeExpr { name: name, args: [], span: zero_span() }
+}
+
+total fn make_param(name: String, ty_name: String) -> Param {
+    Param { capability: "", mutable: false, name: name, ty: simple_ty(ty_name), span: zero_span() }
+}
+
+total fn make_effect(name: String) -> Effect {
+    Effect { name: name, param: "", span: zero_span() }
+}
+
+total fn make_fn(visible: Bool, is_transp: Bool, totality: String, is_test: Bool,
+                 name: String, params: List[Param], ret_name: String,
+                 effects: List[Effect]) -> FnDecl {
+    FnDecl {
+        visible:     visible,
+        is_test:     is_test,
+        is_builtin:  false,
+        is_transp:   is_transp,
+        totality:    totality,
+        name:        name,
+        type_params: [],
+        params:      params,
+        ret_type:    simple_ty(ret_name),
+        effects:     effects,
+        constraints: [],
+        has_body:    true,
+        span:        zero_span()
+    }
+}
+
+// ── format_type_expr tests ─────────────────────────────────────────────────────
+
+test fn format_type_expr_simple_name() -> Unit {
+    assert_eq(format_type_expr(simple_ty("Int")), "Int")
+}
+
+test fn format_type_expr_generic_one_arg() -> Unit {
+    let arg: TypeExpr = simple_ty("Int");
+    let ty: TypeExpr = TypeExpr { name: "List", args: [arg], span: zero_span() };
+    assert_eq(format_type_expr(ty), "List[Int]")
+}
+
+// ── format_params tests ────────────────────────────────────────────────────────
+
+test fn format_params_empty() -> Unit {
+    let empty: List[Param] = [];
+    assert_eq(format_params(empty), "")
+}
+
+test fn format_params_single() -> Unit {
+    assert_eq(format_params([make_param("x", "Int")]), "x: Int")
+}
+
+test fn format_params_two() -> Unit {
+    assert_eq(format_params([make_param("x", "Int"), make_param("y", "Int")]), "x: Int, y: Int")
+}
+
+// ── format_effects tests ───────────────────────────────────────────────────────
+
+test fn format_effects_empty() -> Unit {
+    let empty: List[Effect] = [];
+    assert_eq(format_effects(empty), "")
+}
+
+test fn format_effects_single() -> Unit {
+    assert_eq(format_effects([make_effect("Console")]), " ! Console")
+}
+
+test fn format_effects_two() -> Unit {
+    assert_eq(format_effects([make_effect("FileRead"), make_effect("Console")]), " ! FileRead, Console")
+}
+
+// ── format_fn_sig tests ────────────────────────────────────────────────────────
+
+test fn format_fn_sig_bare() -> Unit {
+    let f: FnDecl = make_fn(false, false, "", false, "foo", [], "Unit", []);
+    assert_eq(format_fn_sig(f), "  fn foo() -> Unit")
+}
+
+test fn format_fn_sig_pub_total() -> Unit {
+    let params: List[Param] = [make_param("x", "Int"), make_param("y", "Int")];
+    let f: FnDecl = make_fn(true, false, "total", false, "add", params, "Int", []);
+    assert_eq(format_fn_sig(f), "  pub total fn add(x: Int, y: Int) -> Int")
+}
+
+test fn format_fn_sig_partial_with_effects() -> Unit {
+    let f: FnDecl = make_fn(false, false, "partial", false, "log",
+                            [make_param("msg", "String")], "Unit",
+                            [make_effect("Console")]);
+    assert_eq(format_fn_sig(f), "  partial fn log(msg: String) -> Unit ! Console")
+}
+
+test fn format_fn_sig_transparent() -> Unit {
+    let f: FnDecl = make_fn(false, true, "partial", false, "bridge",
+                            [make_param("s", "String")], "String", []);
+    assert_eq(format_fn_sig(f), "  transparent partial fn bridge(s: String) -> String")
+}
+
+test fn format_fn_sig_test_fn() -> Unit {
+    let f: FnDecl = make_fn(false, false, "", true, "my_test", [], "Unit", []);
+    assert_eq(format_fn_sig(f), "  test fn my_test() -> Unit")
+}
+
+// ── format_path tests ──────────────────────────────────────────────────────────
+
+test fn format_path_single_segment() -> Unit {
+    assert_eq(format_path(["lexer"]), "lexer")
+}
+
+test fn format_path_dotted() -> Unit {
+    assert_eq(format_path(["std", "io"]), "std.io")
+}
+
+// ── format_imports tests ───────────────────────────────────────────────────────
+
+test fn format_imports_single() -> Unit {
+    assert_eq(format_imports(["lex"]), "lex")
+}
+
+test fn format_imports_multiple() -> Unit {
+    assert_eq(format_imports(["path", "join", "read_to_string"]), "path, join, read_to_string")
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
@@ -168,21 +320,25 @@ partial fn main() -> Unit ! FileRead + Console {
             let use_total: ref  Int  = 0;
             let err_total: ref  Int  = 0;
 
-            for entry in entries {
-                let name: String = to_string(entry.path);
-                if entry.is_file && name.ends_with(".mvl") {
-                    file_count = file_count + 1;
-                    match read_to_string(entry.path) {
-                        Err(_)  => (),
-                        Ok(raw) => {
-                            let prog: Program = process_file(name, raw);
-                            fn_total   = fn_total   + prog.fns.len();
-                            type_total = type_total + prog.types.len();
-                            use_total  = use_total  + prog.uses.len();
-                            err_total  = err_total  + prog.errors.len()
+            let i_entries: ref Int = 0;
+            while i_entries < entries.len() {
+                if let Some(entry) = entries.get(i_entries) {
+                    let name: String = to_string(entry.path);
+                    if entry.is_file && name.ends_with(".mvl") {
+                        file_count = file_count + 1;
+                        match read_to_string(entry.path) {
+                            Err(_)  => (),
+                            Ok(raw) => {
+                                let prog: Clean[Program] = process_file(name, raw);
+                                fn_total   = fn_total   + prog.fns.len();
+                                type_total = type_total + prog.types.len();
+                                use_total  = use_total  + prog.uses.len();
+                                err_total  = err_total  + prog.errors.len()
+                            }
                         }
                     }
                 }
+                i_entries = i_entries + 1
             }
 
             println("");

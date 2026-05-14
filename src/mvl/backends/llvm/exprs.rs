@@ -337,26 +337,47 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
         }
 
-        // Phase 6 (#670): emit invariant check via conditional branch + llvm.trap.
+        // Phase 6 (#670): emit invariant check according to AssertMode (#662).
         if let Some(inv) = self.struct_invariants.get(name).cloned() {
             let field_info_copy = field_info.clone();
             if let Some(cond) = self.emit_ref_expr_bool(&inv, alloca, struct_ty, &field_info_copy) {
-                let cur_block = self.builder.get_insert_block().unwrap();
-                let cur_fn = cur_block.get_parent().unwrap();
-                let trap_bb = self.context.append_basic_block(cur_fn, "inv_fail");
-                let ok_bb = self.context.append_basic_block(cur_fn, "inv_ok");
-                self.builder
-                    .build_conditional_branch(cond, ok_bb, trap_bb)
-                    .unwrap();
-                self.builder.position_at_end(trap_bb);
-                let trap_ty = self.context.void_type().fn_type(&[], false);
-                let trap_fn = self
-                    .module
-                    .get_function("llvm.trap")
-                    .unwrap_or_else(|| self.module.add_function("llvm.trap", trap_ty, None));
-                self.builder.build_call(trap_fn, &[], "trap").unwrap();
-                self.builder.build_unreachable().unwrap();
-                self.builder.position_at_end(ok_bb);
+                match self.assert_mode {
+                    crate::mvl::backends::AssertMode::Always
+                    | crate::mvl::backends::AssertMode::DebugOnly => {
+                        // Always or DebugOnly: emit conditional branch + llvm.trap.
+                        // (DebugOnly parity with Rust's debug_assert! is achieved by the
+                        //  caller selecting AssertMode from the build profile.)
+                        let cur_block = self.builder.get_insert_block().unwrap();
+                        let cur_fn = cur_block.get_parent().unwrap();
+                        let trap_bb = self.context.append_basic_block(cur_fn, "inv_fail");
+                        let ok_bb = self.context.append_basic_block(cur_fn, "inv_ok");
+                        self.builder
+                            .build_conditional_branch(cond, ok_bb, trap_bb)
+                            .unwrap();
+                        self.builder.position_at_end(trap_bb);
+                        let trap_ty = self.context.void_type().fn_type(&[], false);
+                        let trap_fn = self.module.get_function("llvm.trap").unwrap_or_else(|| {
+                            self.module.add_function("llvm.trap", trap_ty, None)
+                        });
+                        self.builder.build_call(trap_fn, &[], "trap").unwrap();
+                        self.builder.build_unreachable().unwrap();
+                        self.builder.position_at_end(ok_bb);
+                    }
+                    crate::mvl::backends::AssertMode::Assume => {
+                        // Assume mode: emit llvm.assume(cond) — optimizer hint, no trap.
+                        let assume_ty = self
+                            .context
+                            .void_type()
+                            .fn_type(&[self.context.bool_type().into()], false);
+                        let assume_fn =
+                            self.module.get_function("llvm.assume").unwrap_or_else(|| {
+                                self.module.add_function("llvm.assume", assume_ty, None)
+                            });
+                        self.builder
+                            .build_call(assume_fn, &[cond.into()], "inv_assume")
+                            .unwrap();
+                    }
+                }
             }
         }
 

@@ -17,6 +17,38 @@ pub mod rust;
 
 use crate::mvl::parser::ast::Program;
 
+/// Controls how struct invariants and refinement conditions are enforced at runtime.
+///
+/// Both the Rust and LLVM backends respect this setting for parity (issue #662).
+///
+/// | Mode        | Rust backend      | LLVM backend                        |
+/// |-------------|-------------------|-------------------------------------|
+/// | `Always`    | `assert!`         | `icmp + llvm.trap()`                |
+/// | `DebugOnly` | `debug_assert!`   | conditional on `debug_assertions`   |
+/// | `Assume`    | omit check        | `llvm.assume()` (optimizer hint)    |
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AssertMode {
+    /// Enforce invariants unconditionally in all build modes (default).
+    #[default]
+    Always,
+    /// Enforce invariants only in debug builds; elided in release.
+    DebugOnly,
+    /// Omit runtime check; emit as optimizer hint (`llvm.assume`) where supported.
+    Assume,
+}
+
+impl AssertMode {
+    /// Parse from a CLI flag value (e.g. `--assert-mode=debug-only`).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "always" => Some(AssertMode::Always),
+            "debug-only" => Some(AssertMode::DebugOnly),
+            "assume" => Some(AssertMode::Assume),
+            _ => None,
+        }
+    }
+}
+
 /// Common interface shared by all MVL code-generation backends.
 ///
 /// Each backend receives a checked program (plus any prelude programs) and

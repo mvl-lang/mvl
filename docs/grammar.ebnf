@@ -48,6 +48,9 @@ fn_decl        = [ "transparent" ] ( [ totality ] | "builtin" ) [ security ] "fn
                  ( block | (* empty — builtin only *) ) ;
 fn_contract    = ( "requires" | "ensures" ) refinement      (* Phase 1, #621 *)
                | "ghost" "let" IDENT "=" ref_expr ";" ;    (* Phase 4, #627 — erased before codegen *)
+(* tree-sitter splits fn_contract into two named rules: *)
+contract_clause = ( "requires" | "ensures" ) ref_expr ;    (* Phase 5, #628 — tree-sitter form of requires/ensures *)
+ghost_let_stmt  = "ghost" "let" pattern ":" type_expr "=" ref_expr ";" ; (* Phase 4, #627 — tree-sitter form *)
 totality       = "total" | "partial" ;
 (* builtin fn: runtime-provided implementation; body is forbidden *)
 (* transparent fn: label-transparent — checker joins arg labels and applies to return type (ADR-0024) *)
@@ -102,10 +105,12 @@ ref_atom       = IDENT { "." IDENT }                               (* field acce
                | INTEGER | FLOAT
                | "len" "(" IDENT ")"
                | "old" "(" ref_expr ")"                          (* Phase 4, #627 — entry-time value in ensures *)
-               | "forall" IDENT ":" type_expr "," ref_expr       (* Phase 5, #628 — universal quantifier *)
-               | "exists" IDENT ":" type_expr "," ref_expr       (* Phase 5, #628 — existential quantifier *)
+               | forall_expr                                      (* Phase 5, #628 — universal quantifier *)
+               | exists_expr                                      (* Phase 5, #628 — existential quantifier *)
                | "(" ref_expr ")" | "!" ref_atom
                | ref_atom ( "+" | "-" | "*" | "/" | "%" ) ref_atom ;
+forall_expr    = "forall" IDENT ":" type_expr "." ref_expr ; (* Phase 5, #628 — tree-sitter form uses "." separator *)
+exists_expr    = "exists" IDENT ":" type_expr "." ref_expr ; (* Phase 5, #628 — tree-sitter form uses "." separator *)
 
 (* === Statements === *)
 block          = "{" { statement } "}" ;
@@ -122,8 +127,9 @@ guard_expr     = expr ;                  (* guard pattern — see ADR-0005; pars
 for_stmt       = "for" pattern "in" expr block ;
 while_stmt     = "while" expr
                  { "invariant" refinement }        (* Phase 3, #621 — checked at entry and after each iteration *)
-                 [ "decreases" ref_expr ]          (* Phase 5, #628 — termination measure; required in total fns *)
+                 [ decreases_expr ]                (* Phase 5, #628 — termination measure; required in total fns *)
                  block ;
+decreases_expr  = "decreases" ref_expr ;           (* Phase 5, #628 — named form used in tree-sitter *)
 expr_stmt      = expr ";" ;
 
 (* === Expressions === *)

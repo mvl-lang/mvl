@@ -67,6 +67,8 @@ fn is_inlined_builtin(name: &str) -> bool {
 /// the overhead of allocating a new LLVM context on every compilation.
 pub struct LlvmCompiler {
     context: Context,
+    /// Controls invariant enforcement level in emitted IR (issue #662).
+    pub assert_mode: crate::mvl::backends::AssertMode,
 }
 
 impl LlvmCompiler {
@@ -74,6 +76,7 @@ impl LlvmCompiler {
     pub fn new() -> Self {
         Self {
             context: Context::create(),
+            assert_mode: crate::mvl::backends::AssertMode::Always,
         }
     }
 
@@ -116,6 +119,7 @@ impl LlvmCompiler {
         let check_result = crate::mvl::checker::check(&merged);
         let mut backend = LlvmBackend::new(&self.context, module_name);
         backend.expr_types = check_result.expr_types;
+        backend.assert_mode = self.assert_mode;
         backend.emit_program(&merged);
         backend.verify()?;
         Ok(backend.to_ir_string())
@@ -446,6 +450,8 @@ struct LlvmBackend<'ctx> {
     // ── #588: lambda lowering ─────────────────────────────────────────────────
     /// Counter for generating unique names for lambda functions (`__lambda_N`).
     lambda_counter: u32,
+    /// Controls how struct invariants are enforced in emitted IR (issue #662).
+    assert_mode: crate::mvl::backends::AssertMode,
 }
 
 impl<'ctx> LlvmBackend<'ctx> {
@@ -476,6 +482,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             stdlib_imports: HashMap::new(),
             expr_types: HashMap::new(),
             lambda_counter: 0,
+            assert_mode: crate::mvl::backends::AssertMode::Always,
         }
     }
 
