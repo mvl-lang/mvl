@@ -59,6 +59,7 @@ use lexer::lex;
 
 // ── Parser state ──────────────────────────────────────────────────────────────
 
+/// Mutable parsing cursor: token stream, current position, and accumulated errors.
 pub type ParserState = struct {
     tokens: List[Token],
     pos:    Int,
@@ -68,86 +69,103 @@ pub type ParserState = struct {
 // ── Result carriers ───────────────────────────────────────────────────────────
 // No generic user types and no tuple syntax → one carrier per return type.
 
+/// Result carrier for a `Bool` parse sub-result plus updated parser state.
 pub type BoolR = struct {
     value: Bool,
     ps:    ParserState,
 }
 
+/// Result carrier for a `String` parse sub-result plus updated parser state.
 pub type StringR = struct {
     value: String,
     ps:    ParserState,
 }
 
+/// Result carrier for a `TypeExpr` parse sub-result plus updated parser state.
 pub type TypeExprR = struct {
     value: TypeExpr,
     ps:    ParserState,
 }
 
+/// Result carrier for a list of `TypeExpr` parse sub-results plus updated parser state.
 pub type TypeExprsR = struct {
     value: List[TypeExpr],
     ps:    ParserState,
 }
 
+/// Result carrier for a list of `GenericParam` parse sub-results plus updated parser state.
 pub type GenParamsR = struct {
     value: List[GenericParam],
     ps:    ParserState,
 }
 
+/// Result carrier for a single `Param` parse sub-result plus updated parser state.
 pub type ParamR = struct {
     value: Param,
     ps:    ParserState,
 }
 
+/// Result carrier for a list of `Param` parse sub-results plus updated parser state.
 pub type ParamsR = struct {
     value: List[Param],
     ps:    ParserState,
 }
 
+/// Result carrier for a list of `Effect` parse sub-results plus updated parser state.
 pub type EffectsR = struct {
     value: List[Effect],
     ps:    ParserState,
 }
 
+/// Result carrier for a list of `Constraint` parse sub-results plus updated parser state.
 pub type ConstrR = struct {
     value: List[Constraint],
     ps:    ParserState,
 }
 
+/// Result carrier for a list of `FieldDecl` parse sub-results plus updated parser state.
 pub type FieldsR = struct {
     value: List[FieldDecl],
     ps:    ParserState,
 }
 
+/// Result carrier for a `FnDecl` parse sub-result plus updated parser state.
 pub type FnDeclR = struct {
     value: FnDecl,
     ps:    ParserState,
 }
 
+/// Result carrier for a `TypeDecl` parse sub-result plus updated parser state.
 pub type TypeDeclR = struct {
     value: TypeDecl,
     ps:    ParserState,
 }
 
+/// Result carrier for a `UseDecl` parse sub-result plus updated parser state.
 pub type UseDeclR = struct {
     value: UseDecl,
     ps:    ParserState,
 }
 
+/// Result carrier for a `ConstDecl` parse sub-result plus updated parser state.
 pub type ConstDeclR = struct {
     value: ConstDecl,
     ps:    ParserState,
 }
 
+/// Result carrier for an `ExternFnDecl` parse sub-result plus updated parser state.
 pub type ExtFnR = struct {
     value: ExternFnDecl,
     ps:    ParserState,
 }
 
+/// Result carrier for an `ExternDecl` parse sub-result plus updated parser state.
 pub type ExternR = struct {
     value: ExternDecl,
     ps:    ParserState,
 }
 
+/// Result carrier for an `ImplDecl` parse sub-result plus updated parser state.
 pub type ImplR = struct {
     value: ImplDecl,
     ps:    ParserState,
@@ -1081,6 +1099,8 @@ partial fn parse_program(ps: ParserState) -> Program {
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
+/// Parse a token stream produced by `lex` into a `Program` AST.
+/// Parse errors are accumulated in `Program.errors` rather than aborting.
 pub partial fn parse(tokens: List[Token]) -> Program
   requires len(tokens) >= 1
 {

@@ -202,9 +202,8 @@ fn two_char_punct(c: String, c2: String) -> String
 
 // ── Public entry point ───────────────────────────────────────────────────────
 
-// Tokenize src into a List[Token], terminated by a single Eof token.
-// Whitespace is consumed silently (not emitted as tokens).
-// Unknown characters (outside ASCII alpha/digit/punct) are emitted as Punct.
+/// Tokenize `src` into a `List[Token]`, terminated by a single `Eof` token.
+/// Whitespace is consumed silently. Unknown characters are emitted as `Punct`.
 pub partial fn lex(src: String) -> List[Token]
   ensures len(result) >= 1
 {
