@@ -1,6 +1,6 @@
 # flight_clearance example — MC/DC coverage demonstration
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl check test-solver test test-llvm mcdc mutate run run-llvm all clean
+.PHONY: help guard-mvl check lint test-solver test test-llvm assurance mcdc mutate run run-llvm all clean
 
 .DEFAULT_GOAL := help
 
@@ -23,6 +23,9 @@ check: guard-mvl ## Type-check all source files
 	$(MVL) check $(DIR)model.mvl
 	$(MVL) check $(DIR)clearance.mvl
 	$(MVL) check $(DIR)main.mvl
+
+lint: guard-mvl ## Lint all source files
+	$(MVL) lint $(DIR)
 
 test-solver: guard-mvl ## Show per-file solver statistics for all source files
 	@pass=0; fail=0; \
@@ -50,12 +53,15 @@ test-llvm: guard-mvl ## Run unit tests via LLVM backend
 	$(MVL) test $(DIR) --backend=llvm
 
 mcdc: guard-mvl ## Run MC/DC coverage analysis (56/57 unique-cause; coupled clause exempt)
-	$(MVL) mcdc $(DIR) --masking $(ARGS)
+	$(MVL) mcdc $(DIR) --verbose --masking $(ARGS)
 
 mutate: guard-mvl ## Run mutation testing
 	$(MVL) mutate $(DIR)
 
-all: check test mcdc ## Run full quality pipeline: check + test + mcdc
+assurance: guard-mvl ## Assurance report: spec coverage, MC/DC, mutation score (verbose)
+	$(MVL) assurance $(DIR) --verbose
+
+all: check test assurance mcdc ## Run full quality pipeline: check + test + assurance + mcdc
 
 run: guard-mvl ## Execute the demo scenarios
 	$(MVL) run $(DIR)main.mvl

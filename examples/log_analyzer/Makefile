@@ -1,6 +1,6 @@
 # log_analyzer example — MVL Phase 4 demonstration
 # Run from this directory: make build, make test, etc.
-.PHONY: help guard-mvl build check test-solver test test-llvm generate run run-llvm clean
+.PHONY: help guard-mvl build check lint test-solver test test-llvm assurance mcdc mutate generate run run-llvm all clean
 
 .DEFAULT_GOAL := help
 
@@ -27,6 +27,9 @@ check: guard-mvl ## Type-check all three source files
 	$(MVL) check $(DIR)parser.mvl
 	$(MVL) check $(DIR)utils.mvl
 
+lint: guard-mvl ## Lint all source files
+	$(MVL) lint $(DIR)
+
 test-solver: guard-mvl ## Show per-file solver statistics for all source files
 	@pass=0; fail=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
@@ -51,6 +54,17 @@ test: guard-mvl ## Run all standalone _test.mvl files (18 tests)
 
 test-llvm: guard-mvl ## Run tests via LLVM backend
 	$(MVL) test $(DIR) --backend=llvm
+
+assurance: guard-mvl ## Assurance report: spec coverage, MC/DC, mutation score (verbose)
+	$(MVL) assurance $(DIR) --verbose
+
+mcdc: guard-mvl ## Run MC/DC coverage analysis (ARGS="--masking" to exempt coupled clauses)
+	$(MVL) mcdc $(DIR) --verbose $(ARGS)
+
+mutate: guard-mvl ## Run mutation testing
+	$(MVL) mutate $(DIR)
+
+all: check test assurance mcdc ## Run full quality pipeline: check + test + assurance + mcdc
 
 generate: ## Generate sample log data (logs.jsonl, 200 entries)
 	python3 $(DIR)log_generator.py -o logs.jsonl

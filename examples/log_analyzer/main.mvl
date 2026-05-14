@@ -96,17 +96,25 @@ fn run() -> Result[Unit, RunError] ! FileRead + Console + Log {
     }
 }
 
+/// Map a `RunError` to a human-readable message string (pure — no effects).
+fn run_error_message(e: RunError) -> String {
+    match e {
+        RunError::MissingArg     => "missing --file argument",
+        RunError::IOFailure      => "failed to read log file",
+        RunError::PipelineFailed => "analysis pipeline failed",
+    }
+}
+
+/// Handle a run-time error: log it with the human-readable reason.
+/// Effect is ! Log only — tighter than main's full effect list.
+fn handle_run_error(e: RunError) -> Unit ! Log {
+    log_error("run failed", {"reason": run_error_message(e)})
+}
+
 fn main() -> Unit ! FileRead + Console + Log {
     match run() {
         Ok(_)  => (),
-        Err(e) => {
-            let msg: String = match e {
-                RunError::MissingArg     => "missing --file argument",
-                RunError::IOFailure      => "failed to read log file",
-                RunError::PipelineFailed => "analysis pipeline failed",
-            };
-            log_error("run failed", {"reason": msg})
-        },
+        Err(e) => handle_run_error(e),
     }
 }
 

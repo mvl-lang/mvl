@@ -1,6 +1,6 @@
 # access_control example — MVL Phase 4 security demonstration
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl build check test-solver test test-llvm run run-llvm clean
+.PHONY: help guard-mvl build check lint test-solver test test-llvm assurance mcdc mutate run run-llvm all clean
 
 .DEFAULT_GOAL := help
 
@@ -29,6 +29,9 @@ check: guard-mvl ## Type-check all source files
 	$(MVL) check $(DIR)audit.mvl
 	$(MVL) check $(DIR)main.mvl
 
+lint: guard-mvl ## Lint all source files
+	$(MVL) lint $(DIR)
+
 test-solver: guard-mvl ## Show per-file solver statistics for all source files
 	@pass=0; fail=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
@@ -53,6 +56,17 @@ test: guard-mvl ## Run all standalone _test.mvl files
 
 test-llvm: guard-mvl ## Run tests via LLVM backend
 	$(MVL) test $(DIR) --backend=llvm
+
+assurance: guard-mvl ## Assurance report: spec coverage, MC/DC, mutation score (verbose)
+	$(MVL) assurance $(DIR) --verbose
+
+mcdc: guard-mvl ## Run MC/DC coverage analysis (ARGS="--masking" to exempt coupled clauses)
+	$(MVL) mcdc $(DIR) --verbose $(ARGS)
+
+mutate: guard-mvl ## Run mutation testing
+	$(MVL) mutate $(DIR)
+
+all: check test assurance mcdc ## Run full quality pipeline: check + test + assurance + mcdc
 
 run: guard-mvl ## Execute the demo scenario (RBAC decisions + auth flow)
 	$(MVL) run $(DIR)main.mvl
