@@ -897,7 +897,20 @@ fn check_invariants_in_stmt(
                 }
             }
         }
-        Stmt::For { body, .. } => {
+        Stmt::For {
+            invariants,
+            body,
+            span,
+            ..
+        } => {
+            for inv_pred in invariants {
+                check_invariant_at_entry(fn_name, inv_pred, var_refs, fn_decls, errors, *span);
+                // Phase 5: also verify the invariant is preserved across iterations.
+                check_invariant_preserved(
+                    fn_name, inv_pred, body, var_refs, fn_decls, errors, *span,
+                );
+            }
+            // Recurse into the body for nested loops.
             check_invariants_in_block(body, fn_name, var_refs, fn_decls, errors);
         }
         Stmt::Match { arms, .. } => {

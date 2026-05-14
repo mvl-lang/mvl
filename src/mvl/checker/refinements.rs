@@ -136,6 +136,51 @@ pub fn count_refinements(prog: &Program) -> RefinementCounts {
     counts
 }
 
+/// Count functions where every refined call site is statically proven.
+///
+/// Returns `(fully_verified, fn_total)` where:
+/// - `fn_total`: functions that have at least one refined call site
+/// - `fully_verified`: subset where all refined call sites are `Proven` (none runtime-checked)
+///
+/// Used by [`crate::mvl::checker::passes::RefinementsPass`] to build the coverage report.
+pub fn count_fully_verified_fns(prog: &Program) -> (usize, usize) {
+    let fn_params = build_fn_param_refinements(prog);
+    let type_refs = build_type_alias_refinements(prog);
+    let fn_decls = build_pure_fn_decls(prog);
+    let mut fn_total = 0usize;
+    let mut fully_verified = 0usize;
+
+    for decl in &prog.declarations {
+        let fns: Vec<&FnDecl> = match decl {
+            Decl::Fn(fd) => vec![fd],
+            Decl::Impl(id) => id.methods.iter().collect(),
+            _ => vec![],
+        };
+        for fd in fns {
+            let mut var_refs = param_refinements(fd, &type_refs);
+            let mut errors = Vec::new();
+            let mut counts = RefinementCounts::default();
+            analyze_block(
+                &fd.body,
+                &mut var_refs,
+                &fn_params,
+                &type_refs,
+                &fn_decls,
+                &mut errors,
+                &mut counts,
+            );
+            let total = counts.proven + counts.runtime_checked + counts.failed;
+            if total > 0 {
+                fn_total += 1;
+                if counts.runtime_checked == 0 && counts.failed == 0 {
+                    fully_verified += 1;
+                }
+            }
+        }
+    }
+    (fully_verified, fn_total)
+}
+
 // ── Lookup table builders ─────────────────────────────────────────────────────
 
 /// Maps pure function name → `FnDecl` for compile-time constant folding.

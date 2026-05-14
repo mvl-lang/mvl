@@ -281,12 +281,24 @@ impl Parser {
         self.require(in_kw)?;
 
         let iter = self.parse_expr()?;
+
+        // Optional invariant clauses: `invariant pred`* (Phase 3, #621)
+        let mut invariants: Vec<RefExpr> = Vec::new();
+        while matches!(self.peek_kind(), TokenKind::Invariant) {
+            self.advance(); // consume `invariant`
+            match self.parse_ref_expr() {
+                Ok(pred) => invariants.push(pred),
+                Err(()) => break,
+            }
+        }
+
         let body = self.parse_block()?;
 
         let span = self.span_from(start);
         Ok(Stmt::For {
             pattern,
             iter,
+            invariants,
             body,
             span,
         })

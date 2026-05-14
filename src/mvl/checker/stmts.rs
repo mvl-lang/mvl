@@ -470,6 +470,7 @@ impl TypeChecker {
                 iter,
                 body,
                 span,
+                ..
             } => {
                 // Req 8: `for` loops are bounded (total) — reject in `partial` functions.
                 if matches!(self.current_fn_totality, Some(Totality::Partial)) {

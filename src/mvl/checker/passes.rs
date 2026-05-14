@@ -267,28 +267,30 @@ impl VerificationPass for RefinementsPass {
             };
         }
 
+        let (fully_verified, fn_total) = refinements::count_fully_verified_fns(prog);
         let counts = refinements::count_refinements(prog);
         let total = counts.proven + counts.runtime_checked + counts.failed;
 
-        if total == 0 {
+        if fn_total == 0 {
             Verdict::Unchecked {
                 reason: "no refined call sites found; full SMT analysis pending (Phase 6)"
                     .to_string(),
             }
-        } else if counts.proven > 0 && counts.failed == 0 {
+        } else if fully_verified == fn_total {
             Verdict::Proven {
                 evidence: format!(
-                    "{} proven, {} runtime-checked out of {total} refined call site(s); \
-                     full SMT analysis pending (Phase 6)",
+                    "{fully_verified}/{fn_total} function(s) fully verified; \
+                     {} proven, {} runtime-checked out of {total} refined call site(s)",
                     counts.proven, counts.runtime_checked,
                 ),
             }
         } else {
             Verdict::Unchecked {
                 reason: format!(
-                    "0 proven, {} runtime-checked, {} failed out of {total} refined call site(s); \
+                    "{fully_verified}/{fn_total} function(s) fully verified; \
+                     {} proven, {} runtime-checked out of {total} refined call site(s); \
                      full SMT analysis pending (Phase 6)",
-                    counts.runtime_checked, counts.failed,
+                    counts.proven, counts.runtime_checked,
                 ),
             }
         }
