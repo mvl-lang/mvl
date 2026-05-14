@@ -314,17 +314,21 @@ pub struct ActorDecl {
     pub type_params: Vec<GenericParam>,
     /// Private mutable state fields.
     pub fields: Vec<FieldDecl>,
-    /// Async message handlers (`be` methods).
-    pub behaviors: Vec<BehaviorDecl>,
+    /// Methods: `pub fn` = async behavior, `fn` = private sync helper.
+    pub methods: Vec<ActorMethod>,
     pub span: Span,
 }
 
-/// A single behavior inside an actor declaration: `be name(params) -> Unit { body }`.
+/// A method inside an actor declaration.
 ///
-/// Behaviors are async message handlers.  Their parameters MUST have sendable capabilities
-/// (`iso`, `val`, `tag`).  The return type MUST be `Unit`.
+/// - `pub fn name(params) { … }` — public async behavior (message handler).
+///   Parameters MUST carry sendable capabilities (`iso`, `val`, `tag`).
+///   Return type defaults to `Unit` when omitted.
+/// - `fn name(params) -> T { … }` — private synchronous helper (no async).
 #[derive(Debug, Clone, PartialEq)]
-pub struct BehaviorDecl {
+pub struct ActorMethod {
+    /// `true` for `pub fn` (async behavior), `false` for `fn` (private helper).
+    pub is_public: bool,
     pub name: String,
     pub params: Vec<Param>,
     pub return_type: Box<TypeExpr>,

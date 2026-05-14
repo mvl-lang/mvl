@@ -944,6 +944,8 @@ fn keyword_or_ident(s: String) -> TokenKind {
         "test" => TokenKind::Test,
         "impl" => TokenKind::Impl,
         "actor" => TokenKind::Actor,
+        // `be` is reserved for future use but not active in the current actor syntax.
+        // Actor methods use `pub fn` (async behavior) and `fn` (private helper) instead.
         "be" => TokenKind::Be,
         // `spawn` is intentionally NOT a keyword — it is a stdlib function name
         // (std.process.spawn).  Actor creation uses `actor TypeName { ... }` in

@@ -11,7 +11,7 @@
 //! - Totality annotations, effect lists, and where-clause constraints
 
 use crate::mvl::parser::ast::{
-    ActorDecl, BehaviorDecl, Constraint, ExternDecl, ExternFnDecl, FnDecl, ImplDecl, Param,
+    ActorDecl, ActorMethod, Constraint, ExternDecl, ExternFnDecl, FnDecl, ImplDecl, Param,
     Totality, UseDecl,
 };
 use crate::mvl::parser::lexer::TokenKind;
@@ -672,9 +672,14 @@ impl Parser {
 
     // ── Actor declarations (Phase 8, #63) ─────────────────────────────────
 
-    /// Parse `actor TypeName { fields* behaviors* }`.
+    /// Parse `actor TypeName { fields* methods* }`.
+    ///
+    /// Inside an actor body:
+    /// - `pub fn name(params) { … }` — public async behavior (message handler)
+    /// - `fn name(params) -> T { … }` — private synchronous helper
+    ///
+    /// Fields come first (unambiguous: they have no `fn`/`pub` prefix), then methods.
     pub fn parse_actor_decl(&mut self) -> Result<ActorDecl, ()> {
-        use crate::mvl::parser::ast::ActorDecl;
         let start = self.peek_span();
         self.advance(); // consume `actor`
 
@@ -686,28 +691,37 @@ impl Parser {
         let lbrace = self.expect(&TokenKind::LBrace);
         self.require(lbrace)?;
 
-        // Fields: parsed until the first `be` keyword or `}`
         let mut fields = Vec::new();
-        while !matches!(
-            self.peek_kind(),
-            TokenKind::Be | TokenKind::RBrace | TokenKind::Eof
-        ) {
-            match self.parse_field_decl() {
-                Ok(f) => {
-                    fields.push(f);
-                    self.eat(&TokenKind::Comma);
-                }
-                Err(()) => break,
-            }
-        }
+        let mut methods = Vec::new();
 
-        // Behaviors: `be name(params) -> Unit { body }`
-        let mut behaviors = Vec::new();
-        while matches!(self.peek_kind(), TokenKind::Be) {
-            self.advance(); // consume `be`
-            match self.parse_behavior_decl() {
-                Ok(b) => behaviors.push(b),
-                Err(()) => break,
+        while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+            match self.peek_kind() {
+                // `pub fn` — public async behavior
+                TokenKind::Pub => {
+                    self.advance(); // consume `pub`
+                    let fn_tok = self.expect(&TokenKind::Fn);
+                    self.require(fn_tok)?;
+                    match self.parse_actor_method(true) {
+                        Ok(m) => methods.push(m),
+                        Err(()) => break,
+                    }
+                }
+                // `fn` — private synchronous helper
+                TokenKind::Fn => {
+                    self.advance(); // consume `fn`
+                    match self.parse_actor_method(false) {
+                        Ok(m) => methods.push(m),
+                        Err(()) => break,
+                    }
+                }
+                // anything else: try to parse a field declaration
+                _ => match self.parse_field_decl() {
+                    Ok(f) => {
+                        fields.push(f);
+                        self.eat(&TokenKind::Comma);
+                    }
+                    Err(()) => break,
+                },
             }
         }
 
@@ -720,15 +734,16 @@ impl Parser {
             name,
             type_params,
             fields,
-            behaviors,
+            methods,
             span,
         })
     }
 
-    /// Parse the body of a behavior after `be` has been consumed:
-    /// `name(params) -> ReturnType { body }`.
-    fn parse_behavior_decl(&mut self) -> Result<BehaviorDecl, ()> {
-        use crate::mvl::parser::ast::BehaviorDecl;
+    /// Parse an actor method after `fn` (or `pub fn`) has been consumed:
+    /// `name(params) [-> ReturnType] [! Effects] { body }`.
+    ///
+    /// Return type defaults to `Unit` when the `->` arrow is absent.
+    fn parse_actor_method(&mut self, is_public: bool) -> Result<ActorMethod, ()> {
         let start = self.peek_span();
 
         let ident_result = self.expect_ident();
@@ -736,16 +751,25 @@ impl Parser {
 
         let params = self.parse_param_list()?;
 
-        let arrow = self.expect(&TokenKind::Arrow);
-        self.require(arrow)?;
-        let return_type = self.parse_type_expr()?;
+        // Optional return type; default to Unit when absent.
+        let return_type = if matches!(self.peek_kind(), TokenKind::Arrow) {
+            self.advance(); // consume `->`
+            self.parse_type_expr()?
+        } else {
+            crate::mvl::parser::ast::TypeExpr::Base {
+                name: "Unit".to_string(),
+                args: vec![],
+                span: self.peek_span(),
+            }
+        };
 
         let effects = self.parse_optional_effects();
 
         let body = self.parse_block()?;
 
         let span = self.span_from(start);
-        Ok(BehaviorDecl {
+        Ok(ActorMethod {
+            is_public,
             name,
             params,
             return_type: Box::new(return_type),
