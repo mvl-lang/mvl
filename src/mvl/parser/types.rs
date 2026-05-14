@@ -12,7 +12,7 @@
 
 use crate::mvl::parser::ast::{
     ArithOp, Capability, CmpOp, Effect, FieldDecl, GenericParam, LogicOp, RefExpr, SecurityLabel,
-    TypeBody, TypeDecl, TypeExpr, Variant, VariantFields,
+    SessionOp, TypeBody, TypeDecl, TypeExpr, Variant, VariantFields,
 };
 use crate::mvl::parser::lexer::{Span, TokenKind};
 use crate::mvl::parser::{ParseError, Parser};
@@ -333,6 +333,17 @@ impl Parser {
                 })
             }
 
+            // Session type: `&{ l: S, ... }` — external choice (other side selects branch).
+            // Falls through to the Rust-borrow error for `&T` (non-brace lookahead).
+            TokenKind::Amp if matches!(self.peek_kind_at(1), TokenKind::LBrace) => {
+                let op = self.parse_session_op()?;
+                let span = self.span_from(start);
+                Ok(TypeExpr::Session {
+                    op: Box::new(op),
+                    span,
+                })
+            }
+
             // Reject Rust-style borrow syntax with helpful error
             TokenKind::Amp => {
                 self.advance();
@@ -345,6 +356,36 @@ impl Parser {
                 };
                 self.push_recover(err);
                 Err(())
+            }
+
+            // Session type: `!T. S` — send T then continue as S.
+            TokenKind::Bang => {
+                let op = self.parse_session_op()?;
+                let span = self.span_from(start);
+                Ok(TypeExpr::Session {
+                    op: Box::new(op),
+                    span,
+                })
+            }
+
+            // Session type: `?T. S` — receive T then continue as S.
+            TokenKind::Question => {
+                let op = self.parse_session_op()?;
+                let span = self.span_from(start);
+                Ok(TypeExpr::Session {
+                    op: Box::new(op),
+                    span,
+                })
+            }
+
+            // Session type: `+{ l: S, ... }` — internal choice (this side selects branch).
+            TokenKind::Plus if matches!(self.peek_kind_at(1), TokenKind::LBrace) => {
+                let op = self.parse_session_op()?;
+                let span = self.span_from(start);
+                Ok(TypeExpr::Session {
+                    op: Box::new(op),
+                    span,
+                })
             }
 
             // fn(A, B) -> C  [! Effects]
@@ -888,6 +929,125 @@ impl Parser {
             _ => None,
         }
     }
+
+    // ── Session type parser (Honda 1993) ──────────────────────────────────
+
+    /// Parse a session type operation.
+    ///
+    /// Grammar (right-recursive to encode left-to-right sequencing):
+    /// ```text
+    /// session_op =
+    ///     '!' type_expr '.' session_op        -- send
+    ///   | '?' type_expr '.' session_op        -- receive
+    ///   | '+' '{' choice_branches '}'         -- internal choice
+    ///   | '&' '{' choice_branches '}'         -- external choice
+    ///   | 'end'                               -- protocol termination
+    ///
+    /// choice_branches = ident ':' session_op (',' ident ':' session_op)*
+    /// ```
+    pub(crate) fn parse_session_op(&mut self) -> Result<SessionOp, ()> {
+        let start = self.peek_span();
+        match self.peek_kind().clone() {
+            // `!T. S` — send
+            TokenKind::Bang => {
+                self.advance(); // consume `!`
+                let msg = self.parse_type_expr()?;
+                let dot = self.expect(&TokenKind::Dot);
+                self.require(dot)?;
+                let cont = self.parse_session_op()?;
+                let span = self.span_from(start);
+                Ok(SessionOp::Send {
+                    msg: Box::new(msg),
+                    cont: Box::new(cont),
+                    span,
+                })
+            }
+
+            // `?T. S` — receive
+            TokenKind::Question => {
+                self.advance(); // consume `?`
+                let msg = self.parse_type_expr()?;
+                let dot = self.expect(&TokenKind::Dot);
+                self.require(dot)?;
+                let cont = self.parse_session_op()?;
+                let span = self.span_from(start);
+                Ok(SessionOp::Receive {
+                    msg: Box::new(msg),
+                    cont: Box::new(cont),
+                    span,
+                })
+            }
+
+            // `+{ l1: S1, l2: S2, ... }` — internal choice
+            TokenKind::Plus => {
+                self.advance(); // consume `+`
+                let branches = self.parse_session_choice_branches()?;
+                let span = self.span_from(start);
+                Ok(SessionOp::InternalChoice { branches, span })
+            }
+
+            // `&{ l1: S1, l2: S2, ... }` — external choice
+            TokenKind::Amp => {
+                self.advance(); // consume `&`
+                let branches = self.parse_session_choice_branches()?;
+                let span = self.span_from(start);
+                Ok(SessionOp::ExternalChoice { branches, span })
+            }
+
+            // `end` — protocol termination
+            TokenKind::Ident(name) if name == "end" => {
+                self.advance();
+                let span = self.span_from(start);
+                Ok(SessionOp::End { span })
+            }
+
+            _ => {
+                let err = ParseError {
+                    message: format!(
+                        "expected session type operation (`!`, `?`, `+{{`, `&{{`, or `end`), found `{}`",
+                        self.peek_kind()
+                    ),
+                    span: start,
+                };
+                self.push_recover(err);
+                Err(())
+            }
+        }
+    }
+
+    /// Parse `{ l1: S1, l2: S2, ... }` for choice branches.
+    fn parse_session_choice_branches(&mut self) -> Result<Vec<(String, SessionOp)>, ()> {
+        let lb = self.expect(&TokenKind::LBrace);
+        self.require(lb)?;
+
+        let mut branches = Vec::new();
+        while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+            let label_result = self.expect_ident();
+            let (label, _) = self.require(label_result)?;
+            let colon = self.expect(&TokenKind::Colon);
+            self.require(colon)?;
+            let op = self.parse_session_op()?;
+            branches.push((label, op));
+
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+
+        let rb = self.expect(&TokenKind::RBrace);
+        self.require(rb)?;
+
+        if branches.is_empty() {
+            let err = ParseError {
+                message: "session type choice must have at least one branch".to_string(),
+                span: self.peek_span(),
+            };
+            self.push_recover(err);
+            return Err(());
+        }
+
+        Ok(branches)
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -1386,5 +1546,69 @@ mod tests {
             !p.errors.is_empty(),
             "type Foo<T> should produce a parse error (ADR-0005: use type Foo[T])"
         );
+    }
+
+    // ── Session type parsing ──────────────────────────────────────────────
+
+    fn parse_session_type(src: &str) -> TypeExpr {
+        let full = format!("type P = {src}");
+        let (mut p, lex_errs) = Parser::new(&full);
+        assert!(lex_errs.is_empty(), "lex errors: {lex_errs:?}");
+        let td = p.parse_type_decl().expect("parse_type_decl failed");
+        assert!(p.errors.is_empty(), "parse errors: {:?}", p.errors);
+        match td.body {
+            TypeBody::Alias(te) => *te,
+            other => panic!("expected alias, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn session_send_int_end() {
+        let te = parse_session_type("!Int. end");
+        assert!(matches!(te, TypeExpr::Session { .. }));
+    }
+
+    #[test]
+    fn session_receive_bool_end() {
+        let te = parse_session_type("?Bool. end");
+        assert!(matches!(te, TypeExpr::Session { .. }));
+    }
+
+    #[test]
+    fn session_send_receive_sequence() {
+        let te = parse_session_type("!Int. ?Bool. end");
+        assert!(matches!(te, TypeExpr::Session { .. }));
+    }
+
+    #[test]
+    fn session_internal_choice() {
+        let te = parse_session_type("+{ accept: !Int. end, reject: end }");
+        assert!(matches!(te, TypeExpr::Session { .. }));
+        if let TypeExpr::Session { op, .. } = te {
+            assert!(matches!(*op, SessionOp::InternalChoice { .. }));
+        }
+    }
+
+    #[test]
+    fn session_external_choice() {
+        let te = parse_session_type("&{ ok: ?String. end, err: end }");
+        assert!(matches!(te, TypeExpr::Session { .. }));
+        if let TypeExpr::Session { op, .. } = te {
+            assert!(matches!(*op, SessionOp::ExternalChoice { .. }));
+        }
+    }
+
+    #[test]
+    fn session_nested_choices() {
+        // !Request. ?Quote. +{ accept: !Payment. ?Receipt. end, reject: end }
+        let te = parse_session_type("!Int. ?Bool. +{ yes: !String. end, no: end }");
+        assert!(matches!(te, TypeExpr::Session { .. }));
+    }
+
+    #[test]
+    fn session_type_in_alias_declaration() {
+        let td = type_decl("type BuyProtocol = !Int. ?Bool. end");
+        let is_session = matches!(&td.body, TypeBody::Alias(te) if matches!(te.as_ref(), TypeExpr::Session { .. }));
+        assert!(is_session, "expected session type alias, got {:?}", td.body);
     }
 }

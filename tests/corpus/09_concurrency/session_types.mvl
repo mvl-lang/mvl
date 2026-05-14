@@ -1,0 +1,62 @@
+// Corpus: session type declarations (Phase 8, issue #260)
+//
+// Session types (Honda 1993) describe typed communication protocols.
+// The notation:
+//   !T.S  — send a value of type T, then continue as S
+//   ?T.S  — receive a value of type T, then continue as S
+//   +{l:S,...}  — internal choice: this side selects a branch
+//   &{l:S,...}  — external choice: the other side selects
+//   end   — protocol terminated
+
+// ── Simple protocols ──────────────────────────────────────────────────────
+
+// Ping: send an Int, receive a Bool, done.
+type Ping = !Int. ?Bool. end
+
+// Pong: the dual — receive an Int, send a Bool, done.
+type Pong = ?Int. !Bool. end
+
+// Echo: send a String and receive it back.
+type Echo = !String. ?String. end
+
+// ── Structs used as message types ─────────────────────────────────────────
+
+type Request  = struct { amount: Int }
+type Quote    = struct { price: Int }
+type Payment  = struct { card: String }
+type Receipt  = struct { id: Int }
+
+// ── Protocol with internal choice (client side) ───────────────────────────
+//
+// BuyProtocol describes what the buyer does:
+//   1. Send a Request
+//   2. Receive a Quote
+//   3. Choose: either accept (send Payment, receive Receipt, done)
+//              or reject (done)
+type BuyProtocol = !Request. ?Quote. +{
+    accept: !Payment. ?Receipt. end,
+    reject: end
+}
+
+// SellProtocol: the server's view — the dual of BuyProtocol.
+//   1. Receive a Request
+//   2. Send a Quote
+//   3. Wait for the client's choice (external choice)
+type SellProtocol = ?Request. !Quote. &{
+    accept: ?Payment. !Receipt. end,
+    reject: end
+}
+
+// ── Nested choices ────────────────────────────────────────────────────────
+
+type CommandProtocol = +{
+    read:  ?String. end,
+    write: !String. ?Bool. end,
+    close: end
+}
+
+type ServerProtocol = &{
+    read:  !String. end,
+    write: ?String. !Bool. end,
+    close: end
+}

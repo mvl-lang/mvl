@@ -7,7 +7,7 @@
 //! which is an unresolved syntactic form.  Conversion happens in [`resolve`].
 
 use crate::mvl::checker::ifc;
-use crate::mvl::parser::ast::{Effect, SecurityLabel, Totality, TypeExpr};
+use crate::mvl::parser::ast::{Effect, SecurityLabel, SessionOp, Totality, TypeExpr};
 
 /// Sentinel for an unresolved const-generic array size (e.g. `N` in `Array[T, N]`).
 /// Treated as size-compatible with any concrete size in `types_compatible`.
@@ -47,8 +47,86 @@ pub enum Ty {
     Refined(Box<Ty>, String),
     // Security label wrapper: label + inner type (Requirement 11)
     Labeled(SecurityLabel, Box<Ty>),
+    // Session type: typed communication protocol (Honda 1993, Phase 8)
+    Session(Box<SessionTy>),
     // Placeholder for inference failures (error propagation)
     Unknown,
+}
+
+// ── Session type representation (Honda 1993) ──────────────────────────────
+
+/// Resolved session type used in the checker.
+///
+/// Describes the sequence of messages exchanged on a typed channel.
+/// Every session type has a dual: `!T.S` is dual to `?T.S'`, `+{...}` is
+/// dual to `&{...}`, and `end` is self-dual.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SessionTy {
+    /// `!T. S` — send T, then continue as S.
+    Send(Box<Ty>, Box<SessionTy>),
+    /// `?T. S` — receive T, then continue as S.
+    Receive(Box<Ty>, Box<SessionTy>),
+    /// `+{ l1: S1, ... }` — internal choice: this side picks a branch.
+    InternalChoice(Vec<(String, SessionTy)>),
+    /// `&{ l1: S1, ... }` — external choice: the other side picks a branch.
+    ExternalChoice(Vec<(String, SessionTy)>),
+    /// `end` — protocol complete; channel closed.
+    End,
+}
+
+impl SessionTy {
+    /// Compute the dual of this session type.
+    ///
+    /// Rules: `!` ↔ `?`, `+` ↔ `&`, `end` ↔ `end`.
+    /// Used to verify that two protocol participants are complementary.
+    pub fn dual(&self) -> SessionTy {
+        match self {
+            SessionTy::Send(t, cont) => SessionTy::Receive(t.clone(), Box::new(cont.dual())),
+            SessionTy::Receive(t, cont) => SessionTy::Send(t.clone(), Box::new(cont.dual())),
+            SessionTy::InternalChoice(branches) => SessionTy::ExternalChoice(
+                branches
+                    .iter()
+                    .map(|(l, s)| (l.clone(), s.dual()))
+                    .collect(),
+            ),
+            SessionTy::ExternalChoice(branches) => SessionTy::InternalChoice(
+                branches
+                    .iter()
+                    .map(|(l, s)| (l.clone(), s.dual()))
+                    .collect(),
+            ),
+            SessionTy::End => SessionTy::End,
+        }
+    }
+
+    /// True if `other` is the dual of `self`.
+    pub fn is_dual_of(&self, other: &SessionTy) -> bool {
+        &self.dual() == other
+    }
+
+    pub fn display(&self) -> String {
+        match self {
+            SessionTy::Send(t, cont) => format!("!{}. {}", t.display(), cont.display()),
+            SessionTy::Receive(t, cont) => format!("?{}. {}", t.display(), cont.display()),
+            SessionTy::InternalChoice(branches) => {
+                let bs = branches
+                    .iter()
+                    .map(|(l, s)| format!("{l}: {}", s.display()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("+{{ {bs} }}")
+            }
+            SessionTy::ExternalChoice(branches) => {
+                let bs = branches
+                    .iter()
+                    .map(|(l, s)| format!("{l}: {}", s.display()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("&{{ {bs} }}")
+            }
+            SessionTy::End => "end".to_string(),
+        }
+    }
 }
 
 impl Ty {
@@ -106,6 +184,7 @@ impl Ty {
             Ty::Labeled(label, inner) => {
                 format!("{}<{}>", ifc::label_name(*label), inner.display())
             }
+            Ty::Session(s) => s.display(),
             Ty::Unknown => "<unknown>".to_string(),
         }
     }
@@ -249,6 +328,33 @@ pub fn resolve(expr: &TypeExpr) -> Ty {
         TypeExpr::Tuple { elems, .. } => Ty::Tuple(elems.iter().map(resolve).collect()),
         // Integer const generics are not standalone types — they only appear inside Array<T, N>
         TypeExpr::IntConst { .. } => Ty::Unknown,
+        // Session types: resolve the AST SessionOp tree into a SessionTy tree.
+        TypeExpr::Session { op, .. } => Ty::Session(Box::new(resolve_session_op(op))),
+    }
+}
+
+/// Convert an AST [`SessionOp`] to a checker [`SessionTy`].
+pub fn resolve_session_op(op: &SessionOp) -> SessionTy {
+    match op {
+        SessionOp::Send { msg, cont, .. } => {
+            SessionTy::Send(Box::new(resolve(msg)), Box::new(resolve_session_op(cont)))
+        }
+        SessionOp::Receive { msg, cont, .. } => {
+            SessionTy::Receive(Box::new(resolve(msg)), Box::new(resolve_session_op(cont)))
+        }
+        SessionOp::InternalChoice { branches, .. } => SessionTy::InternalChoice(
+            branches
+                .iter()
+                .map(|(l, s)| (l.clone(), resolve_session_op(s)))
+                .collect(),
+        ),
+        SessionOp::ExternalChoice { branches, .. } => SessionTy::ExternalChoice(
+            branches
+                .iter()
+                .map(|(l, s)| (l.clone(), resolve_session_op(s)))
+                .collect(),
+        ),
+        SessionOp::End { .. } => SessionTy::End,
     }
 }
 
@@ -322,8 +428,43 @@ pub fn types_compatible(a: &Ty, b: &Ty) -> bool {
                     .zip(ba.iter())
                     .all(|(x, y)| types_compatible(x, y))
         }
+        // Session types are compatible when structurally equal.
+        // Duality is checked separately (both sides must be declared as duals).
+        (Ty::Session(sa), Ty::Session(sb)) => session_types_compatible(sa, sb),
         _ => a == b,
     }
+}
+
+/// Structural compatibility for session types.
+/// Two session types are compatible when they have the same structure and payload types.
+pub fn session_types_compatible(a: &SessionTy, b: &SessionTy) -> bool {
+    match (a, b) {
+        (SessionTy::Send(ta, ca), SessionTy::Send(tb, cb)) => {
+            types_compatible(ta, tb) && session_types_compatible(ca, cb)
+        }
+        (SessionTy::Receive(ta, ca), SessionTy::Receive(tb, cb)) => {
+            types_compatible(ta, tb) && session_types_compatible(ca, cb)
+        }
+        (SessionTy::InternalChoice(bsa), SessionTy::InternalChoice(bsb)) => {
+            session_branches_compatible(bsa, bsb)
+        }
+        (SessionTy::ExternalChoice(bsa), SessionTy::ExternalChoice(bsb)) => {
+            session_branches_compatible(bsa, bsb)
+        }
+        (SessionTy::End, SessionTy::End) => true,
+        _ => false,
+    }
+}
+
+fn session_branches_compatible(a: &[(String, SessionTy)], b: &[(String, SessionTy)]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().all(|(la, sa)| {
+        b.iter()
+            .find(|(lb, _)| lb == la)
+            .is_some_and(|(_, sb)| session_types_compatible(sa, sb))
+    })
 }
 
 #[cfg(test)]
@@ -695,5 +836,112 @@ mod tests {
         assert!(!types_compatible(&Ty::Int, &Ty::UInt));
         assert!(!types_compatible(&Ty::Byte, &Ty::UByte));
         assert!(!types_compatible(&Ty::UInt, &Ty::Int));
+    }
+
+    // ── Session type tests ────────────────────────────────────────────────
+
+    fn send_int_end() -> SessionTy {
+        SessionTy::Send(Box::new(Ty::Int), Box::new(SessionTy::End))
+    }
+
+    fn recv_int_end() -> SessionTy {
+        SessionTy::Receive(Box::new(Ty::Int), Box::new(SessionTy::End))
+    }
+
+    #[test]
+    fn session_send_dual_is_receive() {
+        let s = send_int_end();
+        assert_eq!(s.dual(), recv_int_end());
+    }
+
+    #[test]
+    fn session_receive_dual_is_send() {
+        let s = recv_int_end();
+        assert_eq!(s.dual(), send_int_end());
+    }
+
+    #[test]
+    fn session_end_dual_is_end() {
+        assert_eq!(SessionTy::End.dual(), SessionTy::End);
+    }
+
+    #[test]
+    fn session_internal_choice_dual_is_external() {
+        let s = SessionTy::InternalChoice(vec![
+            ("ok".to_string(), SessionTy::End),
+            ("err".to_string(), SessionTy::End),
+        ]);
+        let d = s.dual();
+        assert!(matches!(d, SessionTy::ExternalChoice(_)));
+    }
+
+    #[test]
+    fn session_external_choice_dual_is_internal() {
+        let s = SessionTy::ExternalChoice(vec![("go".to_string(), SessionTy::End)]);
+        assert!(matches!(s.dual(), SessionTy::InternalChoice(_)));
+    }
+
+    #[test]
+    fn session_is_dual_of_roundtrip() {
+        let ping = SessionTy::Send(
+            Box::new(Ty::Int),
+            Box::new(SessionTy::Receive(
+                Box::new(Ty::Bool),
+                Box::new(SessionTy::End),
+            )),
+        );
+        let pong = ping.dual();
+        assert!(ping.is_dual_of(&pong));
+        assert!(pong.is_dual_of(&ping));
+    }
+
+    #[test]
+    fn session_types_compatible_same() {
+        assert!(session_types_compatible(&send_int_end(), &send_int_end()));
+    }
+
+    #[test]
+    fn session_types_incompatible_different_dir() {
+        assert!(!session_types_compatible(&send_int_end(), &recv_int_end()));
+    }
+
+    #[test]
+    fn session_display_send() {
+        let s = send_int_end();
+        assert_eq!(s.display(), "!Int. end");
+    }
+
+    #[test]
+    fn session_display_receive() {
+        let s = recv_int_end();
+        assert_eq!(s.display(), "?Int. end");
+    }
+
+    #[test]
+    fn session_display_internal_choice() {
+        let s = SessionTy::InternalChoice(vec![
+            ("accept".to_string(), SessionTy::End),
+            ("reject".to_string(), SessionTy::End),
+        ]);
+        let d = s.display();
+        assert!(d.starts_with("+{"));
+        assert!(d.contains("accept: end"));
+        assert!(d.contains("reject: end"));
+    }
+
+    #[test]
+    fn resolve_session_send_int_end() {
+        use crate::mvl::parser::ast::SessionOp;
+        let op = SessionOp::Send {
+            msg: Box::new(TypeExpr::Base {
+                name: "Int".to_string(),
+                args: vec![],
+                span: s(),
+            }),
+            cont: Box::new(SessionOp::End { span: s() }),
+            span: s(),
+        };
+        let ty = resolve_session_op(&op);
+        assert_eq!(ty, send_int_end());
     }
 }

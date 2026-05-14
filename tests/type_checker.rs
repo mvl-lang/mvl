@@ -1026,6 +1026,19 @@ fn capabilities_corpus_parses_and_checks() {
 }
 
 #[test]
+fn session_types_corpus_parses_and_checks() {
+    // GIVEN: session type declarations (Phase 8, #260)
+    // THEN: all session type aliases parse and type-check cleanly
+    let src = include_str!("corpus/09_concurrency/session_types.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "session types corpus should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
 fn sending_ref_param_rejected() {
     // GIVEN: fn with `ref` param attempts channel.send(param)
     // THEN: CapabilityViolation reported

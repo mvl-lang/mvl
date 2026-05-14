@@ -824,6 +824,8 @@ fn check_type_expr_ifc(ty: &TypeExpr, out: &mut Vec<LintDiag>) {
             }
         }
         TypeExpr::IntConst { .. } => {}
+        // Session types have no IFC label — no check needed.
+        TypeExpr::Session { .. } => {}
     }
 }
 

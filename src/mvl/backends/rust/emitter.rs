@@ -815,6 +815,27 @@ fn collect_types_in_type_expr(ty: &TypeExpr, out: &mut std::collections::HashSet
             }
         }
         TypeExpr::IntConst { .. } => {}
+        // Session type payloads may reference named types — recurse into all message types.
+        TypeExpr::Session { op, .. } => collect_types_in_session_op(op, out),
+    }
+}
+
+fn collect_types_in_session_op(
+    op: &crate::mvl::parser::ast::SessionOp,
+    out: &mut std::collections::HashSet<String>,
+) {
+    use crate::mvl::parser::ast::SessionOp;
+    match op {
+        SessionOp::Send { msg, cont, .. } | SessionOp::Receive { msg, cont, .. } => {
+            collect_types_in_type_expr(msg, out);
+            collect_types_in_session_op(cont, out);
+        }
+        SessionOp::InternalChoice { branches, .. } | SessionOp::ExternalChoice { branches, .. } => {
+            for (_, s) in branches {
+                collect_types_in_session_op(s, out);
+            }
+        }
+        SessionOp::End { .. } => {}
     }
 }
 
