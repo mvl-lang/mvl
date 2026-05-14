@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.106.0] — 2026-05-15
+
+### Added
+
+- **Req 9 Data Race Freedom upgrade to Proven** — Phase 3 ref-escape-to-spawn check closes final concurrent escape path for `ref` parameters. Three interlocking layers now guarantee data race freedom: (1) type checker rejects `channel.send(ref)`, (2) type checker rejects actor `pub fn(ref param)`, (3) new check rejects `actor ActorType { field: ref_var }`. When all three layers pass, the pass returns `Proven` instead of `Unchecked` (#723).
+
 ## [0.105.0] — 2026-05-14
 
 ### Added

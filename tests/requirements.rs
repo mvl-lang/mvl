@@ -242,6 +242,16 @@ fn req09_data_race_freedom_failed() {
     );
 }
 
+/// ref parameter escapes to spawned actor field → Failed.
+#[test]
+fn req09_data_race_freedom_ref_escapes_to_actor_failed() {
+    let v = run(include_str!("negative/req09/ref_escapes_to_actor.mvl"), 9);
+    assert!(
+        v.is_failed(),
+        "Req 9 must be Failed when ref escapes to actor spawn, got: {v:?}"
+    );
+}
+
 // ── Req 10: Refinement Types ──────────────────────────────────────────────────
 
 /// All refined call sites statically proven → Proven.

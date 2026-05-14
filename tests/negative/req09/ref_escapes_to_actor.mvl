@@ -1,0 +1,28 @@
+// corpus:expect-fail
+// expect-requirement: 9
+// Scenario: a ref-capability parameter is passed as a spawn field value, giving
+//           the newly created actor a mutable alias to data the caller still holds.
+//           This creates a potential data race between the spawner and the actor.
+// Triggers: CheckError::RefEscapesToConcurrentContext (req9)
+
+type Buffer = struct {
+    data: String,
+}
+
+actor Worker {
+    buf: Buffer
+
+    pub fn process() { }
+}
+
+fn start_worker(ref buf: Buffer) -> Unit ! Console {
+    // BUG: `buf` is `ref` (aliased, mutable) — spawning Worker with it would give
+    // the actor a concurrent alias to the same data the caller still holds.
+    let w = actor Worker { buf: buf };
+    println("worker started");
+}
+
+fn main() -> Unit ! Console {
+    let b: Buffer = Buffer { data: "hello" };
+    start_worker(b);
+}
