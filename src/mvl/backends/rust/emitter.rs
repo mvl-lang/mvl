@@ -7,6 +7,7 @@
 //! All other `emit_*` modules take `&mut RustEmitter` and append to it.
 
 use crate::mvl::backends::rust::capability_params::build_capability_params_map;
+use crate::mvl::backends::rust::emit_actors::emit_actor_decl;
 use crate::mvl::backends::rust::emit_functions::emit_fn_decl;
 use crate::mvl::backends::rust::emit_impls::emit_impl_decl;
 use crate::mvl::backends::rust::emit_types::emit_type_decl;
@@ -572,9 +573,7 @@ impl RustEmitter {
                     }
                     continue; // use decls don't get a trailing blank line
                 }
-                Decl::Actor(_) => {
-                    // Phase 8: actor codegen — stub, skipped until runtime is wired
-                }
+                Decl::Actor(ad) => emit_actor_decl(self, ad),
                 Decl::Impl(id) => emit_impl_decl(self, id),
             }
             self.blank();
