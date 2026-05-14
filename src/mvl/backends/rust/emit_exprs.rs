@@ -956,6 +956,25 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
             cg.push(" ");
             emit_expr(cg, body);
         }
+        Expr::Spawn {
+            actor_type, fields, ..
+        } => {
+            // Phase 8: `actor Counter { count: 0 }` → `_start_counter(CounterState { count: 0 })`
+            let snake = crate::mvl::backends::rust::emit_actors::actor_name_to_snake(actor_type);
+            cg.push(&format!("_start_{snake}({actor_type}State {{"));
+            for (i, (field_name, val)) in fields.iter().enumerate() {
+                if i > 0 {
+                    cg.push(", ");
+                }
+                cg.push(&format!("{field_name}: "));
+                emit_expr(cg, val);
+            }
+            cg.push("})");
+        }
+        Expr::Select { .. } | Expr::Concurrently { .. } => {
+            // Phase 8: select/concurrently codegen — not yet implemented (#695).
+            cg.push("/* select/concurrently — Phase 8 */");
+        }
     }
 }
 

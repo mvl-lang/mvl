@@ -11,7 +11,8 @@
 //! - Totality annotations, effect lists, and where-clause constraints
 
 use crate::mvl::parser::ast::{
-    Constraint, ExternDecl, ExternFnDecl, FnDecl, ImplDecl, Param, Totality, UseDecl,
+    ActorDecl, ActorMethod, Constraint, ExternDecl, ExternFnDecl, FnDecl, ImplDecl, Param,
+    Totality, UseDecl,
 };
 use crate::mvl::parser::lexer::TokenKind;
 use crate::mvl::parser::{ParseError, Parser};
@@ -390,6 +391,11 @@ impl Parser {
             }
             TokenKind::Extern => Ok(Decl::Extern(self.parse_extern_decl()?)),
             TokenKind::Impl => Ok(Decl::Impl(self.parse_impl_decl()?)),
+            TokenKind::Actor => {
+                let mut d = self.parse_actor_decl()?;
+                d.visible = visible;
+                Ok(Decl::Actor(d))
+            }
             _ => {
                 let err = ParseError {
                     message: format!("expected declaration, found `{}`", self.peek_kind()),
@@ -660,6 +666,115 @@ impl Parser {
             trait_type_args,
             type_name,
             methods,
+            span,
+        })
+    }
+
+    // ── Actor declarations (Phase 8, #63) ─────────────────────────────────
+
+    /// Parse `actor TypeName { fields* methods* }`.
+    ///
+    /// Inside an actor body:
+    /// - `pub fn name(params) { … }` — public async behavior (message handler)
+    /// - `fn name(params) -> T { … }` — private synchronous helper
+    ///
+    /// Fields come first (unambiguous: they have no `fn`/`pub` prefix), then methods.
+    pub fn parse_actor_decl(&mut self) -> Result<ActorDecl, ()> {
+        let start = self.peek_span();
+        self.advance(); // consume `actor`
+
+        let ident_result = self.expect_ident();
+        let (name, _) = self.require(ident_result)?;
+
+        let type_params = self.parse_type_params_decl();
+
+        let lbrace = self.expect(&TokenKind::LBrace);
+        self.require(lbrace)?;
+
+        let mut fields = Vec::new();
+        let mut methods = Vec::new();
+
+        while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+            match self.peek_kind() {
+                // `pub fn` — public async behavior
+                TokenKind::Pub => {
+                    self.advance(); // consume `pub`
+                    let fn_tok = self.expect(&TokenKind::Fn);
+                    self.require(fn_tok)?;
+                    match self.parse_actor_method(true) {
+                        Ok(m) => methods.push(m),
+                        Err(()) => break,
+                    }
+                }
+                // `fn` — private synchronous helper
+                TokenKind::Fn => {
+                    self.advance(); // consume `fn`
+                    match self.parse_actor_method(false) {
+                        Ok(m) => methods.push(m),
+                        Err(()) => break,
+                    }
+                }
+                // anything else: try to parse a field declaration
+                _ => match self.parse_field_decl() {
+                    Ok(f) => {
+                        fields.push(f);
+                        self.eat(&TokenKind::Comma);
+                    }
+                    Err(()) => break,
+                },
+            }
+        }
+
+        let rbrace = self.expect(&TokenKind::RBrace);
+        self.require(rbrace)?;
+
+        let span = self.span_from(start);
+        Ok(ActorDecl {
+            visible: false, // set by parse_decl when `pub` prefix is present
+            name,
+            type_params,
+            fields,
+            methods,
+            span,
+        })
+    }
+
+    /// Parse an actor method after `fn` (or `pub fn`) has been consumed:
+    /// `name(params) [-> ReturnType] [! Effects] { body }`.
+    ///
+    /// Return type defaults to `Unit` when the `->` arrow is absent.
+    fn parse_actor_method(&mut self, is_public: bool) -> Result<ActorMethod, ()> {
+        let start = self.peek_span();
+
+        let ident_result = self.expect_ident();
+        let (name, _) = self.require(ident_result)?;
+
+        let params = self.parse_param_list()?;
+
+        // Optional return type; default to Unit when absent.
+        let return_type = if matches!(self.peek_kind(), TokenKind::Arrow) {
+            self.advance(); // consume `->`
+            self.parse_type_expr()?
+        } else {
+            crate::mvl::parser::ast::TypeExpr::Base {
+                name: "Unit".to_string(),
+                args: vec![],
+                span: self.peek_span(),
+            }
+        };
+
+        let effects = self.parse_optional_effects();
+
+        let body = self.parse_block()?;
+
+        let span = self.span_from(start);
+        Ok(ActorMethod {
+            is_public,
+            name,
+            params,
+            return_type: Box::new(return_type),
+            effects,
+            body,
             span,
         })
     }

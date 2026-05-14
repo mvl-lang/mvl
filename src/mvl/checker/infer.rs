@@ -397,6 +397,27 @@ impl TypeChecker {
                 }
             }
 
+            // Phase 8: spawn expression returns ActorRef (#63)
+            Expr::Spawn { fields, .. } => {
+                for (_, val) in fields {
+                    self.infer_expr(val);
+                }
+                Ty::Named("ActorRef".to_string(), vec![])
+            }
+
+            // Phase 8: select — evaluates to Unit (fire-and-forget arms, spec 015 §8)
+            Expr::Select { arms, .. } => {
+                for arm in arms {
+                    self.infer_expr(&arm.expr);
+                    self.infer_block_type(&arm.body, None);
+                }
+                Ty::Unit
+            }
+            Expr::Concurrently { body, .. } => {
+                self.infer_block_type(body, None);
+                Ty::Unit
+            }
+
             Expr::Lambda {
                 params,
                 ret_type,

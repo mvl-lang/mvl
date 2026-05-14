@@ -981,6 +981,26 @@ fn analyze_expr(
                 analyze_expr(v, var_refs, fn_params, type_refs, fn_decls, errors, counts);
             }
         }
+        Expr::Spawn { fields, .. } => {
+            for (_, v) in fields {
+                analyze_expr(v, var_refs, fn_params, type_refs, fn_decls, errors, counts);
+            }
+        }
+        Expr::Select { arms, .. } => {
+            for arm in arms {
+                analyze_expr(
+                    &arm.expr, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+                );
+                analyze_block(
+                    &arm.body, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+                );
+            }
+        }
+        Expr::Concurrently { body, .. } => {
+            analyze_block(
+                body, var_refs, fn_params, type_refs, fn_decls, errors, counts,
+            );
+        }
         // Leaves: Literal, Ident — no sub-expressions to walk.
         Expr::Literal(_, _) | Expr::Ident(_, _) => {}
     }

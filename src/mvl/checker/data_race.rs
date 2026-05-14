@@ -26,7 +26,7 @@ use std::collections::HashSet;
 
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::parser::ast::{
-    Block, Capability, Decl, ElseBranch, Expr, FnDecl, MatchBody, Program, Stmt,
+    Block, Capability, Decl, ElseBranch, Expr, FnDecl, MatchBody, Param, Program, Stmt,
 };
 
 // ── Public entry points ───────────────────────────────────────────────────────
@@ -45,8 +45,14 @@ use crate::mvl::parser::ast::{
 /// standard actor-boundary transfer idiom.
 pub fn check_iso_aliasing(prog: &Program, errors: &mut Vec<CheckError>) {
     for decl in &prog.declarations {
-        if let Decl::Fn(fd) = decl {
-            check_fn_iso(fd, errors);
+        match decl {
+            Decl::Fn(fd) => check_fn_iso(fd, errors),
+            Decl::Actor(ad) => {
+                for method in &ad.methods {
+                    check_params_and_body_iso(&method.params, &method.body, errors);
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -68,15 +74,37 @@ pub fn count_race_free_fns(prog: &Program) -> (usize, usize) {
     let mut total = 0usize;
     let mut race_free = 0usize;
     for decl in &prog.declarations {
-        if let Decl::Fn(fd) = decl {
-            total += 1;
-            let has_ref_param = fd
-                .params
-                .iter()
-                .any(|p| matches!(p.capability, Some(Capability::Ref)));
-            if !has_ref_param {
-                race_free += 1;
+        match decl {
+            Decl::Fn(fd) => {
+                total += 1;
+                let has_ref_param = fd
+                    .params
+                    .iter()
+                    .any(|p| matches!(p.capability, Some(Capability::Ref)));
+                if !has_ref_param {
+                    race_free += 1;
+                }
             }
+            Decl::Actor(ad) => {
+                for method in &ad.methods {
+                    total += 1;
+                    if method.is_public {
+                        // pub fn behaviors are checked by check_actor_decl: if they
+                        // compile, they have only sendable params — proven race-free.
+                        race_free += 1;
+                    } else {
+                        // private helpers: race-free iff no ref param
+                        let has_ref_param = method
+                            .params
+                            .iter()
+                            .any(|p| matches!(p.capability, Some(Capability::Ref)));
+                        if !has_ref_param {
+                            race_free += 1;
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
     (race_free, total)
@@ -85,8 +113,13 @@ pub fn count_race_free_fns(prog: &Program) -> (usize, usize) {
 // ── Per-function iso aliasing check ──────────────────────────────────────────
 
 fn check_fn_iso(fd: &FnDecl, errors: &mut Vec<CheckError>) {
-    let iso_params: HashSet<&str> = fd
-        .params
+    check_params_and_body_iso(&fd.params, &fd.body, errors);
+}
+
+/// Check iso aliasing given a parameter list and body block.
+/// Used for both top-level `fn` declarations and actor methods.
+fn check_params_and_body_iso(params: &[Param], body: &Block, errors: &mut Vec<CheckError>) {
+    let iso_params: HashSet<&str> = params
         .iter()
         .filter(|p| matches!(p.capability, Some(Capability::Iso)))
         .map(|p| p.name.as_str())
@@ -96,7 +129,7 @@ fn check_fn_iso(fd: &FnDecl, errors: &mut Vec<CheckError>) {
         return; // no iso params — nothing to alias-check
     }
 
-    check_block_iso(&fd.body, &iso_params, errors);
+    check_block_iso(body, &iso_params, errors);
 }
 
 // ── Block / statement walker ──────────────────────────────────────────────────
@@ -279,6 +312,20 @@ fn check_expr_iso(expr: &Expr, iso_vars: &HashSet<&str>, errors: &mut Vec<CheckE
                 check_expr_iso(body, &inner_iso_vars, errors);
             }
         }
+
+        Expr::Spawn { fields, .. } => {
+            for (_, v) in fields {
+                check_expr_iso(v, iso_vars, errors);
+            }
+        }
+
+        Expr::Select { arms, .. } => {
+            for arm in arms {
+                check_expr_iso(&arm.expr, iso_vars, errors);
+                check_block_iso(&arm.body, iso_vars, errors);
+            }
+        }
+        Expr::Concurrently { body, .. } => check_block_iso(body, iso_vars, errors),
 
         // Leaves — no aliasing possible.
         Expr::Literal(..) | Expr::Ident(..) => {}

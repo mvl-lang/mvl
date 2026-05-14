@@ -222,6 +222,16 @@ fn req09_data_race_freedom_proven() {
     );
 }
 
+/// Actor pub fn behaviors (sendable params only) counted as race-free → Proven (#63/#506).
+#[test]
+fn req09_data_race_freedom_actors_proven() {
+    let v = run(include_str!("corpus/09_concurrency/actors.mvl"), 9);
+    assert!(
+        v.is_proven(),
+        "Req 9 must be Proven on actors corpus, got: {v:?}"
+    );
+}
+
 /// iso parameter aliased without consume() → Failed.
 #[test]
 fn req09_data_race_freedom_failed() {

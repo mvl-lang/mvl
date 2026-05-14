@@ -126,7 +126,7 @@ pub fn analyze(file: &str, prog: &Program) -> ComplexityReport {
                     .join("::");
                 fan_out_modules.insert(module_key);
             }
-            Decl::Type(_) | Decl::Const(_) => {}
+            Decl::Type(_) | Decl::Const(_) | Decl::Actor(_) => {}
         }
     }
 

@@ -78,6 +78,14 @@ pub enum TokenKind {
     Test,
     /// `impl` — introduces a trait implementation block (`impl Trait for Type { … }`)
     Impl,
+    /// `actor` — actor type declaration (Phase 8, #63)
+    Actor,
+    /// `spawn` — spawn an actor, returns an ActorRef (Phase 8, #63)
+    Spawn,
+    /// `select` — select expression: first-ready actor behavior arm (Phase 8, #69)
+    Select,
+    /// `concurrently` — structured concurrency block; actors don't outlive scope (Phase 8, #69)
+    Concurrently,
     /// `builtin` — marks a function as having a runtime-provided implementation.
     /// `builtin fn` declarations have no body; the compiler trusts the runtime.
     Builtin,
@@ -203,6 +211,10 @@ impl fmt::Display for TokenKind {
             TokenKind::Use => write!(f, "use"),
             TokenKind::Test => write!(f, "test"),
             TokenKind::Impl => write!(f, "impl"),
+            TokenKind::Actor => write!(f, "actor"),
+            TokenKind::Spawn => write!(f, "spawn"),
+            TokenKind::Select => write!(f, "select"),
+            TokenKind::Concurrently => write!(f, "concurrently"),
             TokenKind::Builtin => write!(f, "builtin"),
             TokenKind::Transparent => write!(f, "transparent"),
             TokenKind::Requires => write!(f, "requires"),
@@ -934,6 +946,13 @@ fn keyword_or_ident(s: String) -> TokenKind {
         "use" => TokenKind::Use,
         "test" => TokenKind::Test,
         "impl" => TokenKind::Impl,
+        "actor" => TokenKind::Actor,
+        "select" => TokenKind::Select,
+        "concurrently" => TokenKind::Concurrently,
+        // `spawn` is intentionally NOT a keyword — it is a stdlib function name
+        // (std.process.spawn).  Actor creation uses `actor TypeName { ... }` in
+        // expression context.  `TokenKind::Spawn` is reserved in the enum for
+        // possible future use but never produced by the lexer (Phase 8, #63).
         "builtin" => TokenKind::Builtin,
         "transparent" => TokenKind::Transparent,
         "requires" => TokenKind::Requires,

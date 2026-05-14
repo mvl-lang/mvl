@@ -423,6 +423,24 @@ fn check_expr_flows(
                 check_expr_flows(v, pc, env, errors);
             }
         }
+        Expr::Spawn { fields, .. } => {
+            for (_, v) in fields {
+                check_expr_flows(v, pc, env, errors);
+            }
+        }
+        Expr::Select { arms, .. } => {
+            for arm in arms {
+                check_expr_flows(&arm.expr, pc, env, errors);
+                for stmt in &arm.body.stmts {
+                    check_stmt_flows(stmt, pc, env, errors);
+                }
+            }
+        }
+        Expr::Concurrently { body, .. } => {
+            for stmt in &body.stmts {
+                check_stmt_flows(stmt, pc, env, errors);
+            }
+        }
         // Leaves — no sub-expressions to walk.
         Expr::Literal(..) | Expr::Ident(..) => {}
     }
@@ -543,6 +561,18 @@ fn count_in_expr(expr: &Expr, dc: &mut usize, sc: &mut usize) {
                 count_in_expr(v, dc, sc);
             }
         }
+        Expr::Spawn { fields, .. } => {
+            for (_, v) in fields {
+                count_in_expr(v, dc, sc);
+            }
+        }
+        Expr::Select { arms, .. } => {
+            for arm in arms {
+                count_in_expr(&arm.expr, dc, sc);
+                count_in_block(&arm.body, dc, sc);
+            }
+        }
+        Expr::Concurrently { body, .. } => count_in_block(body, dc, sc),
         Expr::Literal(..) | Expr::Ident(..) => {}
     }
 }

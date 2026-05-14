@@ -75,6 +75,8 @@ pub enum Decl {
     Use(UseDecl),
     /// `impl Trait for Type { … }` — trait implementation.
     Impl(ImplDecl),
+    /// `actor TypeName { fields* behaviors* }` — actor type declaration (Phase 8, #63).
+    Actor(ActorDecl),
 }
 
 impl Decl {
@@ -86,6 +88,7 @@ impl Decl {
             Decl::Extern(d) => d.span,
             Decl::Use(d) => d.span,
             Decl::Impl(d) => d.span,
+            Decl::Actor(d) => d.span,
         }
     }
 }
@@ -292,6 +295,45 @@ pub struct ImplDecl {
     pub type_name: String,
     /// Methods in the impl block.
     pub methods: Vec<FnDecl>,
+    pub span: Span,
+}
+
+// ── Actor declaration ──────────────────────────────────────────────────────
+
+/// `actor TypeName { fields* behaviors* }` — an actor type declaration (Phase 8, #63).
+///
+/// Actors encapsulate private mutable state and expose it only through behaviors
+/// (async message handlers).  All inter-actor communication uses sendable capabilities
+/// (`iso`, `val`, `tag`).  See Spec 015 and ADR-0029.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActorDecl {
+    /// Whether the item is exported from this module (`pub`).
+    pub visible: bool,
+    pub name: String,
+    /// Optional generic type parameters.
+    pub type_params: Vec<GenericParam>,
+    /// Private mutable state fields.
+    pub fields: Vec<FieldDecl>,
+    /// Methods: `pub fn` = async behavior, `fn` = private sync helper.
+    pub methods: Vec<ActorMethod>,
+    pub span: Span,
+}
+
+/// A method inside an actor declaration.
+///
+/// - `pub fn name(params) { … }` — public async behavior (message handler).
+///   Parameters MUST carry sendable capabilities (`iso`, `val`, `tag`).
+///   Return type defaults to `Unit` when omitted.
+/// - `fn name(params) -> T { … }` — private synchronous helper (no async).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActorMethod {
+    /// `true` for `pub fn` (async behavior), `false` for `fn` (private helper).
+    pub is_public: bool,
+    pub name: String,
+    pub params: Vec<Param>,
+    pub return_type: Box<TypeExpr>,
+    pub effects: Vec<Effect>,
+    pub body: Block,
     pub span: Span,
 }
 
@@ -580,6 +622,43 @@ pub enum Expr {
         expr: Box<Expr>,
         span: Span,
     },
+    /// `actor ActorType { field: value, … }` — create an actor, returns an ActorRef (Phase 8, #63).
+    Spawn {
+        actor_type: String,
+        fields: Vec<(String, Expr)>,
+        span: Span,
+    },
+    /// `select { binding = expr => { body } … timeout(dur) => { body } }` (Phase 8, #69).
+    ///
+    /// Evaluates to `Unit`.  The first ready branch fires.  At most one
+    /// `timeout(duration)` arm is allowed; it fires when no other arm is ready
+    /// within the given duration.
+    Select {
+        arms: Vec<SelectArm>,
+        span: Span,
+    },
+    /// `concurrently { … }` — structured concurrency scope (Phase 8, #69).
+    ///
+    /// Actors created inside cannot outlive this block.  When the block exits,
+    /// all spawned actors are terminated.
+    Concurrently {
+        body: Block,
+        span: Span,
+    },
+}
+
+/// One arm of a `select` expression.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectArm {
+    /// Optional result binding: `result = actor.behavior()`.
+    pub binding: Option<String>,
+    /// The actor behavior call expression, or the duration for `timeout(dur)`.
+    pub expr: Box<Expr>,
+    /// `true` when this is the `timeout(duration)` arm.
+    pub is_timeout: bool,
+    /// Handler block executed when this arm fires.
+    pub body: Block,
+    pub span: Span,
 }
 
 impl Expr {
@@ -603,7 +682,10 @@ impl Expr {
             | Expr::Consume { span, .. }
             | Expr::Declassify { span, .. }
             | Expr::Sanitize { span, .. }
-            | Expr::Borrow { span, .. } => *span,
+            | Expr::Borrow { span, .. }
+            | Expr::Spawn { span, .. }
+            | Expr::Select { span, .. }
+            | Expr::Concurrently { span, .. } => *span,
             Expr::Block(b) => b.span,
         }
     }

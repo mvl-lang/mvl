@@ -11,7 +11,9 @@ use crate::mvl::checker::context::{
 };
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
-use crate::mvl::parser::ast::{ConstDecl, Decl, ExternDecl, FnDecl, ImplDecl, TypeBody, TypeDecl};
+use crate::mvl::parser::ast::{
+    ActorDecl, Capability, ConstDecl, Decl, ExternDecl, FnDecl, ImplDecl, TypeBody, TypeDecl,
+};
 use crate::mvl::parser::lexer::Span;
 use std::collections::{HashMap, HashSet};
 
@@ -28,6 +30,7 @@ impl TypeChecker {
                 Decl::Extern(ed) => self.register_extern(ed),
                 Decl::Use(_) => {} // resolved by the module resolver, not the type checker
                 Decl::Impl(id) => self.register_impl(id),
+                Decl::Actor(_) => {} // Phase 8: actor registration deferred (#63)
             }
         }
     }
@@ -149,6 +152,32 @@ impl TypeChecker {
             Decl::Extern(ed) => self.check_extern_decl(ed),
             Decl::Use(_) => {} // resolved by the module resolver, not the type checker
             Decl::Impl(_) => {} // bodies not yet type-checked; registration done in collect_declarations
+            Decl::Actor(ad) => self.check_actor_decl(ad),
+        }
+    }
+
+    /// Verify actor behavior parameter sendability (Spec 015 Req 2, #506).
+    ///
+    /// `pub fn` methods are async behaviors: every parameter MUST carry a
+    /// sendable capability (`iso`, `val`, `tag`, or unannotated/default).
+    /// `ref` parameters are not sendable and are rejected at the declaration.
+    ///
+    /// `fn` methods are private synchronous helpers: no sendability restriction.
+    fn check_actor_decl(&mut self, ad: &ActorDecl) {
+        for method in &ad.methods {
+            if !method.is_public {
+                continue; // private helpers have no sendability restriction
+            }
+            // pub fn = behavior — all parameters must be sendable
+            for param in &method.params {
+                if matches!(param.capability, Some(Capability::Ref)) {
+                    self.emit(CheckError::CapabilityViolation {
+                        param: param.name.clone(),
+                        capability: "ref".to_string(),
+                        span: param.span,
+                    });
+                }
+            }
         }
     }
 

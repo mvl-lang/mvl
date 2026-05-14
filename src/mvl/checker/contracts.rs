@@ -307,6 +307,20 @@ fn check_requires_in_expr(
         Expr::Lambda { body, .. } => {
             check_requires_in_expr(body, fn_map, var_refs, fn_decls, errors);
         }
+        Expr::Spawn { fields, .. } => {
+            for (_, v) in fields {
+                check_requires_in_expr(v, fn_map, var_refs, fn_decls, errors);
+            }
+        }
+        Expr::Select { arms, .. } => {
+            for arm in arms {
+                check_requires_in_expr(&arm.expr, fn_map, var_refs, fn_decls, errors);
+                check_requires_in_block(&arm.body, fn_map, var_refs, fn_decls, errors);
+            }
+        }
+        Expr::Concurrently { body, .. } => {
+            check_requires_in_block(body, fn_map, var_refs, fn_decls, errors);
+        }
         // Leaves: Literal, Ident — no sub-expressions.
         Expr::Literal(_, _) | Expr::Ident(_, _) => {}
     }

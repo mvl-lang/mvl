@@ -1620,7 +1620,7 @@ fn if_with_labeled_bool_condition_promotes_result() {
     // GIVEN: if-condition is Secret[Bool], branch results are Public[Int]
     // THEN: result type is Secret[Int] — cannot be returned as Public[Int]
     let errors = errors_for(
-        r#"fn select(flag: Secret[Bool], a: Public[Int], b: Public[Int]) -> Public[Int] {
+        r#"fn choose_secret(flag: Secret[Bool], a: Public[Int], b: Public[Int]) -> Public[Int] {
             if flag { a } else { b }
         }"#,
     );
@@ -6230,5 +6230,207 @@ fn string_literal_assignment_accepted() {
             .iter()
             .any(|e| matches!(e, CheckError::LinearTypeBareBind { .. })),
         "String literal assignment should not require consume, got: {errors:?}"
+    );
+}
+
+// ── #506: Actor behavior parameter sendability ────────────────────────────────
+
+/// `pub fn` behavior with `ref` parameter is rejected — ref is not sendable.
+#[test]
+fn actor_behavior_ref_param_rejected() {
+    // GIVEN: actor with pub fn behavior that takes a ref parameter
+    // THEN: CapabilityViolation for the ref param
+    let src = r#"
+        actor Counter {
+            count: Int
+            pub fn increment(ref delta: Int) {
+                self.count = self.count + delta
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::CapabilityViolation { param, capability, .. }
+                if param == "delta" && capability == "ref")
+        ),
+        "ref param in actor behavior should be rejected, got: {errors:?}"
+    );
+}
+
+/// `pub fn` behavior with `iso` parameter is accepted — iso is sendable.
+#[test]
+fn actor_behavior_iso_param_accepted() {
+    // GIVEN: actor with pub fn behavior that takes an iso parameter
+    // THEN: no CapabilityViolation
+    let src = r#"
+        actor Counter {
+            count: Int
+            pub fn increment(iso delta: Int) {}
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::CapabilityViolation { .. })),
+        "iso param in actor behavior should be accepted, got: {errors:?}"
+    );
+}
+
+/// `pub fn` behavior with `val` parameter is accepted — val is sendable.
+#[test]
+fn actor_behavior_val_param_accepted() {
+    // GIVEN: actor with pub fn behavior that takes a val parameter
+    // THEN: no CapabilityViolation
+    let src = r#"
+        actor Counter {
+            count: Int
+            pub fn reset(val new_count: Int) {}
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::CapabilityViolation { .. })),
+        "val param in actor behavior should be accepted, got: {errors:?}"
+    );
+}
+
+/// `pub fn` behavior with `tag` parameter is accepted — tag is sendable.
+#[test]
+fn actor_behavior_tag_param_accepted() {
+    // GIVEN: actor with pub fn behavior that takes a tag parameter
+    // THEN: no CapabilityViolation
+    let src = r#"
+        actor Counter {
+            count: Int
+            pub fn observe(tag handle: Int) {}
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::CapabilityViolation { .. })),
+        "tag param in actor behavior should be accepted, got: {errors:?}"
+    );
+}
+
+/// Private `fn` helper with `ref` parameter is accepted — no sendability restriction.
+#[test]
+fn actor_private_fn_ref_param_accepted() {
+    // GIVEN: actor with private fn helper (not pub) that takes a ref parameter
+    // THEN: no CapabilityViolation (private helpers are synchronous, no boundary crossing)
+    let src = r#"
+        actor Counter {
+            count: Int
+            fn validate(ref x: Int) -> Bool { x >= 0 }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::CapabilityViolation { .. })),
+        "ref param in private actor fn should be accepted, got: {errors:?}"
+    );
+}
+
+// ── #69: select expression and concurrently block ─────────────────────────────
+
+/// GIVEN: a select expression in a function body
+/// WHEN: type-checked
+/// THEN: no panics; any errors are type errors, not internal crashes
+#[test]
+fn select_expr_in_fn_body_type_checks() {
+    let errors = errors_for(
+        r#"fn wait(ch: Channel) -> Unit {
+            select {
+                ch.recv() => { }
+                timeout(5) => { }
+            }
+        }"#,
+    );
+    // Must not panic. Only type errors (e.g. unknown Channel type) are allowed.
+    let _ = errors;
+}
+
+/// GIVEN: a select expression with a binding
+/// WHEN: type-checked
+/// THEN: no panics
+#[test]
+fn select_expr_with_binding_type_checks() {
+    let errors = errors_for(
+        r#"fn wait(ch: Channel) -> Unit {
+            select {
+                msg = ch.recv() => { }
+            }
+        }"#,
+    );
+    let _ = errors;
+}
+
+/// GIVEN: a concurrently block in a function body
+/// WHEN: type-checked
+/// THEN: no panics
+#[test]
+fn concurrently_block_type_checks() {
+    let errors = errors_for(
+        r#"fn run() -> Unit {
+            concurrently {
+                let x: Int = 1;
+            }
+        }"#,
+    );
+    let _ = errors;
+}
+
+// ── #63/#506: Actor race-free counting ────────────────────────────────────────
+
+/// GIVEN: an actor with only pub fn behaviors (no ref params)
+/// WHEN: req 9 is evaluated via the requirements runner
+/// THEN: pub fn behaviors are counted as race-free (proven by construction)
+#[test]
+fn actor_pub_fn_behaviors_counted_as_race_free() {
+    use mvl::mvl::checker::data_race::count_race_free_fns;
+    use mvl::mvl::parser::Parser;
+
+    let src = r#"
+        actor Counter {
+            count: Int
+            pub fn increment(val n: Int) { }
+            pub fn reset() { }
+        }
+    "#;
+    let (mut p, _) = Parser::new(src);
+    let prog = p.parse_program();
+    let (race_free, total) = count_race_free_fns(&prog);
+    assert_eq!(total, 2, "expected 2 methods counted (2 pub fn)");
+    assert_eq!(race_free, 2, "both pub fn behaviors should be race-free");
+}
+
+/// GIVEN: an actor with a private fn helper that has a ref param
+/// WHEN: race-free count is computed
+/// THEN: that helper is NOT counted as race-free
+#[test]
+fn actor_private_fn_with_ref_not_race_free() {
+    use mvl::mvl::checker::data_race::count_race_free_fns;
+    use mvl::mvl::parser::Parser;
+
+    let src = r#"
+        actor Counter {
+            count: Int
+            fn validate(ref x: Int) -> Bool { 0 }
+        }
+    "#;
+    let (mut p, _) = Parser::new(src);
+    let prog = p.parse_program();
+    let (race_free, total) = count_race_free_fns(&prog);
+    assert_eq!(total, 1, "expected 1 method counted");
+    assert_eq!(
+        race_free, 0,
+        "private fn with ref param should not be race-free"
     );
 }

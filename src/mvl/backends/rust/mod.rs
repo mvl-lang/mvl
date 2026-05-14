@@ -28,6 +28,7 @@ pub mod boundary_gen;
 pub mod capability_params;
 pub mod cargo;
 pub mod coverage_emit;
+pub mod emit_actors;
 pub mod emit_exprs;
 pub mod emit_functions;
 pub mod emit_impls;

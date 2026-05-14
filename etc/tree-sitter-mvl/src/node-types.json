@@ -1,5 +1,130 @@
 [
   {
+    "type": "actor_create_expr",
+    "named": true,
+    "fields": {
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "actor_field_init",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "actor_decl",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "actor_field",
+          "named": true
+        },
+        {
+          "type": "actor_method",
+          "named": true
+        },
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "type_params",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "actor_field",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "field_decl",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "actor_field_init",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "expr",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "actor_method",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "block",
+          "named": true
+        },
+        {
+          "type": "effect_list",
+          "named": true
+        },
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "param_list",
+          "named": true
+        },
+        {
+          "type": "type_expr",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "arg_list",
     "named": true,
     "fields": {},
@@ -111,6 +236,21 @@
     "type": "char_literal",
     "named": true,
     "fields": {}
+  },
+  {
+    "type": "concurrently_expr",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "block",
+          "named": true
+        }
+      ]
+    }
   },
   {
     "type": "const_decl",
@@ -225,6 +365,21 @@
     }
   },
   {
+    "type": "contract_clause",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "expr",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "declaration",
     "named": true,
     "fields": {},
@@ -232,6 +387,10 @@
       "multiple": false,
       "required": true,
       "types": [
+        {
+          "type": "actor_decl",
+          "named": true
+        },
         {
           "type": "const_decl",
           "named": true
@@ -398,11 +557,19 @@
       "required": false,
       "types": [
         {
+          "type": "actor_create_expr",
+          "named": true
+        },
+        {
           "type": "block_expr",
           "named": true
         },
         {
           "type": "borrow_expr",
+          "named": true
+        },
+        {
+          "type": "concurrently_expr",
           "named": true
         },
         {
@@ -451,6 +618,10 @@
         },
         {
           "type": "sanitize_expr",
+          "named": true
+        },
+        {
+          "type": "select_expr",
           "named": true
         },
         {
@@ -602,6 +773,10 @@
           "named": true
         },
         {
+          "type": "contract_clause",
+          "named": true
+        },
+        {
           "type": "effect_list",
           "named": true
         },
@@ -730,6 +905,10 @@
         },
         {
           "type": "if_stmt",
+          "named": true
+        },
+        {
+          "type": "pattern",
           "named": true
         }
       ]
@@ -922,10 +1101,6 @@
         },
         {
           "type": "pattern",
-          "named": true
-        },
-        {
-          "type": "refinement",
           "named": true
         }
       ]
@@ -1340,6 +1515,44 @@
     "type": "security_modifier",
     "named": true,
     "fields": {}
+  },
+  {
+    "type": "select_arm",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "block",
+          "named": true
+        },
+        {
+          "type": "expr",
+          "named": true
+        },
+        {
+          "type": "identifier",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "select_expr",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "select_arm",
+          "named": true
+        }
+      ]
+    }
   },
   {
     "type": "set_literal",
@@ -1898,7 +2111,15 @@
     "named": false
   },
   {
+    "type": "actor",
+    "named": false
+  },
+  {
     "type": "builtin",
+    "named": false
+  },
+  {
+    "type": "concurrently",
     "named": false
   },
   {
@@ -1914,11 +2135,23 @@
     "named": false
   },
   {
+    "type": "decreases",
+    "named": false
+  },
+  {
     "type": "else",
     "named": false
   },
   {
+    "type": "ensures",
+    "named": false
+  },
+  {
     "type": "enum",
+    "named": false
+  },
+  {
+    "type": "exists",
     "named": false
   },
   {
@@ -1939,6 +2172,14 @@
   },
   {
     "type": "for",
+    "named": false
+  },
+  {
+    "type": "forall",
+    "named": false
+  },
+  {
+    "type": "ghost",
     "named": false
   },
   {
@@ -2018,6 +2259,10 @@
     "named": false
   },
   {
+    "type": "requires",
+    "named": false
+  },
+  {
     "type": "return",
     "named": false
   },
@@ -2030,6 +2275,10 @@
     "named": false
   },
   {
+    "type": "select",
+    "named": false
+  },
+  {
     "type": "struct",
     "named": false
   },
@@ -2039,6 +2288,14 @@
   },
   {
     "type": "tainted",
+    "named": false
+  },
+  {
+    "type": "test",
+    "named": false
+  },
+  {
+    "type": "timeout",
     "named": false
   },
   {

@@ -4,6 +4,34 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.105.0] — 2026-05-14
+
+### Added
+
+- **Phase 8 Actor Runtime (Rust backend)** — Full actor infrastructure: `{Name}State` struct, `{Name}Msg` enum, dispatch loop, fire-and-forget method wrappers, thread spawning via `std::sync::mpsc::sync_channel(256)` (#695).
+- **Phase 8 Actor Runtime (LLVM backend)** — C-ABI runtime functions (`mvl_actor_spawn`, `mvl_actor_send`, `mvl_actor_drop`) for standalone LLVM IR execution; behavior functions with dispatch switch (#696).
+- **Actor sendability enforcement** — Type checker validates that `pub fn` behavior parameters carry only sendable capabilities (`iso`, `val`, `tag`, or unannotated); rejects `ref` at declaration time (#506).
+- **Actor grammar & tree-sitter** — Full actor syntax in EBNF and tree-sitter: actor declarations with fields and methods, `pub fn` async behaviors, `fn` private helpers, `actor Expr` creation expressions (#63, #706).
+- **Select expression and concurrently block** — AST nodes and parsing for structured concurrency: `select { arm => { } timeout(dur) => { } }` and `concurrently { }` scope blocks (#69).
+- **ADR-0029** — Documented architectural decisions behind Pony's reference capability adaptation for MVL: capability set, iso recovery, Capability/TypeExpr split, cross-backend applicability, Phase 3/8 boundary.
+- **Spec 015** — Complete actor model specification covering 9 requirements: declaration syntax, behavior semantics, spawn/lifecycle, iso ownership transfer, sendability rules, actor isolation, ActorRef tag semantics, structured concurrency scope lifetimes, select with timeout.
+- **Safety hardening** — Null/negative-size guards in LLVM runtime (`mvl_actor_spawn`, `mvl_actor_send`, `mvl_actor_drop`); codegen-time MAX_ARGS enforcement; iso aliasing checks extended to actor method bodies.
+
+### Fixed
+
+- **Select type inference** — Returns `Ty::Unit` (not `Ty::Unknown`), aligning with spec 015 §8.
+- **Tag capability sendability** — Aligned `check_send_capability` with ADR-0029: `tag` is sendable (identity-only reference); only `ref` is rejected.
+- **LLVM dispatch function preamble** — Added missing `local_mvl_types.clear()` to prevent stale type bindings from leaking between behaviors.
+- **State size casting** — Fixed double-cast `usize→i64→u64` to direct `usize→u64` in `emit_actor_spawn`.
+
+### Known Gaps (Tracked)
+
+See issues #742–#745 for remaining Phase 8 work:
+- Actor body type-checking (method bodies never inferred) (#742)
+- Select/concurrently codegen (AST only, no executable output) (#743)
+- Actor type registration in type env (spawn returns unparameterized `ActorRef`) (#744)
+- Actor checker completeness (duplicate names, non-Unit behavior return) (#745)
+
 ## [0.104.0] — 2026-05-14
 
 ### Added

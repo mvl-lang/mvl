@@ -1,0 +1,38 @@
+// Corpus: actor declarations and race-free counting (Phase 8, issues #63/#506)
+//
+// All pub fn behaviors have only sendable parameters (iso, val, or unannotated)
+// → Req 9 verdict: Proven for the actor methods counted here.
+
+type Payload = struct { data: String }
+type Config  = struct { key: String, value: Int }
+
+// Actor with pub fn behaviors (async, sendable params) and a private fn helper.
+actor Counter {
+    count: Int
+
+    // pub fn = async behavior — parameters must be sendable → race-free
+    pub fn increment(val n: Int) { }
+    pub fn reset() { }
+
+    // fn = private sync helper — no sendability restriction
+    fn get_count() -> Int { 0 }
+}
+
+// Actor with iso parameter — isolated ownership, proven sendable
+actor Forwarder {
+    channel: Channel
+
+    pub fn forward(iso payload: Payload) { }
+}
+
+// Actor with val parameter — immutable, freely shareable
+actor Broadcaster {
+    channel: Channel
+
+    pub fn broadcast(val cfg: Config) { }
+}
+
+// Plain race-free functions (for mixed-mode Proven verdict)
+fn add(a: Int, b: Int) -> Int {
+    a + b
+}

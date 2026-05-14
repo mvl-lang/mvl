@@ -40,7 +40,8 @@ impl TypeChecker {
 
     /// Verify that an argument to `channel.send()` has a sendable capability.
     ///
-    /// Only `iso` and `val` may cross actor boundaries; `ref` and `tag` may not.
+    /// Only `iso` and `val` may cross actor boundaries via `channel.send()`; `ref` may not.
+    /// `tag` is sendable per ADR-0029 (identity-only, no read/write access).
     /// `consume` wrapping is detected by looking for `Expr::Consume` (or equivalent).
     ///
     /// # Scope limitation
@@ -50,23 +51,13 @@ impl TypeChecker {
     pub(super) fn check_send_capability(&mut self, arg: &Expr, span: Span) {
         if let Expr::Ident(name, _) = arg {
             if let Some(info) = self.env.lookup(name).cloned() {
-                match &info.capability {
-                    Some(Capability::Ref) => {
-                        self.emit(CheckError::CapabilityViolation {
-                            param: name.clone(),
-                            capability: "ref".to_string(),
-                            span,
-                        });
-                    }
-                    Some(Capability::Tag) => {
-                        self.emit(CheckError::CapabilityViolation {
-                            param: name.clone(),
-                            capability: "tag".to_string(),
-                            span,
-                        });
-                    }
-                    // iso and val are sendable; None (default) is treated as val
-                    _ => {}
+                // Only ref is non-sendable; iso, val, tag, and unannotated are sendable (ADR-0029 §1)
+                if let Some(Capability::Ref) = &info.capability {
+                    self.emit(CheckError::CapabilityViolation {
+                        param: name.clone(),
+                        capability: "ref".to_string(),
+                        span,
+                    });
                 }
             }
         }
@@ -191,6 +182,18 @@ fn collect_refs_expr(expr: &Expr, params: &[&str], out: &mut Vec<(String, Span)>
                 collect_refs_expr(v, params, out);
             }
         }
+        Expr::Spawn { fields, .. } => {
+            for (_, v) in fields {
+                collect_refs_expr(v, params, out);
+            }
+        }
+        Expr::Select { arms, .. } => {
+            for arm in arms {
+                collect_refs_expr(&arm.expr, params, out);
+                collect_refs_block(&arm.body, params, out);
+            }
+        }
+        Expr::Concurrently { body, .. } => collect_refs_block(body, params, out),
     }
 }
 

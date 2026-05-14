@@ -81,6 +81,15 @@ impl<'ctx> LlvmBackend<'ctx> {
                 span,
             } => self.emit_lambda(params, ret_type.as_deref(), body, *span),
 
+            // Phase 8 / #696: actor creation expression
+            // `actor Counter { count: 0 }` → call _start_counter / mvl_actor_spawn
+            Expr::Spawn {
+                actor_type, fields, ..
+            } => self.emit_actor_spawn(actor_type, fields),
+
+            // Phase 8 / #69: select / concurrently — stub (not yet implemented in LLVM)
+            Expr::Select { .. } | Expr::Concurrently { .. } => None,
+
             _other => {
                 // Unhandled Expr variant: return None so the caller can propagate failure.
                 // In debug builds, print a notice to help catch missing codegen arms early.
@@ -1708,7 +1717,7 @@ impl<'ctx> LlvmBackend<'ctx> {
     // ── Collection literals ──────────────────────────────────────────────────
 
     /// Return the byte size of an LLVM basic type on a 64-bit platform.
-    fn llvm_type_byte_size(&self, ty: BasicTypeEnum<'ctx>) -> usize {
+    pub(crate) fn llvm_type_byte_size(&self, ty: BasicTypeEnum<'ctx>) -> usize {
         match ty {
             BasicTypeEnum::IntType(it) => it.get_bit_width().div_ceil(8) as usize,
             BasicTypeEnum::FloatType(ft) => {
@@ -2748,7 +2757,15 @@ impl<'ctx> LlvmBackend<'ctx> {
                 self.emit_fn_call("fold", &all_args)
             }
 
-            _ => None,
+            // Phase 8 / #696: actor behavior calls
+            // Detect: receiver is a local of an actor type, method is a public behavior.
+            _ => {
+                if let Some(actor_name) = self.resolve_actor_type_name(receiver) {
+                    self.emit_actor_method_call(recv_val, &actor_name, method, args)
+                } else {
+                    None
+                }
+            }
         }
     }
 

@@ -84,7 +84,8 @@ module.exports = grammar({
             $.fn_decl,
             $.const_decl,
             $.extern_decl,
-            $.impl_decl
+            $.impl_decl,
+            $.actor_decl
           )
         ),
         $.reexport_decl
@@ -121,6 +122,36 @@ module.exports = grammar({
         "{",
         repeat($.fn_decl),
         "}"
+      ),
+
+    // Actor declaration (Phase 8, #63):
+    // `actor Name { field: Type, …  pub fn behavior(…) { … }  fn helper(…) -> T { … } }`
+    actor_decl: ($) =>
+      seq(
+        "actor",
+        $.identifier,
+        optional($.type_params),
+        "{",
+        repeat($.actor_field),
+        repeat($.actor_method),
+        "}"
+      ),
+
+    // A field declaration inside an actor body (matches EBNF `actor_field`).
+    // field_decl already includes optional(",") so no extra separator needed.
+    actor_field: ($) => $.field_decl,
+
+    actor_method: ($) =>
+      seq(
+        optional("pub"),
+        "fn",
+        $.identifier,
+        "(",
+        optional($.param_list),
+        ")",
+        optional(seq("->", $.type_expr)),
+        optional(seq("!", $.effect_list)),
+        $.block
       ),
 
     // Extern trust boundary: `extern "rust" { fn foo(...) -> T; }`
@@ -478,6 +509,9 @@ module.exports = grammar({
         $.declassify_expr,
         $.sanitize_expr,
         $.construct_expr,
+        $.actor_create_expr,
+        $.select_expr,
+        $.concurrently_expr,
         $.fn_call_expr,
         $.grouped_expr,
         $.path_expr,
@@ -541,6 +575,43 @@ module.exports = grammar({
     declassify_expr: ($) => seq("declassify", "(", $.expr, ")"),
 
     sanitize_expr: ($) => seq("sanitize", "(", $.expr, ")"),
+
+    // Phase 8, #63: `actor TypeName { field: expr, … }` — create actor, returns ActorRef
+    actor_create_expr: ($) =>
+      prec(
+        -1,
+        seq(
+          "actor",
+          field("type", $.identifier),
+          "{",
+          repeat(seq($.actor_field_init, optional(","))),
+          "}"
+        )
+      ),
+
+    // A field initializer inside an actor creation expression (matches EBNF `actor_field_init`).
+    actor_field_init: ($) =>
+      seq(field("name", $.identifier), ":", field("value", $.expr)),
+
+    // Phase 8, #69: `select { arm … }` — wait on first ready channel arm
+    select_expr: ($) =>
+      seq("select", "{", repeat($.select_arm), "}"),
+
+    select_arm: ($) =>
+      choice(
+        // Regular arm: `[binding =] expr => block`
+        seq(
+          optional(seq($.identifier, "=")),
+          $.expr,
+          "=>",
+          $.block
+        ),
+        // Timeout arm: `timeout(duration) => block`
+        seq("timeout", "(", $.expr, ")", "=>", $.block)
+      ),
+
+    // Phase 8, #69: `concurrently { … }` — structured concurrency scope
+    concurrently_expr: ($) => seq("concurrently", $.block),
 
     // === Patterns ===
 

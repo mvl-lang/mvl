@@ -29,3 +29,4 @@
 | [0025](0025-function-contracts.md) | Function contracts — `requires`/`ensures`, `ghost`, `invariant`, `decreases`, `forall`/`exists` (Phases 1–5) | Accepted |
 | [0026](0026-input-validation-philosophy.md) | Input validation philosophy — post-Postel strictness | Accepted |
 | [0027](0027-multi-backend-architecture.md) | Multi-backend architecture — `backends/` namespace, `Backend` trait, merged runtime | Accepted |
+| [0029](0029-pony-reference-capability-adaptation.md) | Pony reference capability adaptation — iso/val/ref/tag for MVL actors | Accepted |

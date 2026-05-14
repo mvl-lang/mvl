@@ -748,7 +748,7 @@ Extern block — C ABI with effects
 ===============================================================================
 
 extern "c" {
-    fn read_file(path: String) -> String ! IO, FileRead;
+    fn read_file(path: String) -> String ! IO + FileRead;
 }
 
 -------------------------------------------------------------------------------

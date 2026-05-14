@@ -19,7 +19,7 @@
 program        = { use_decl } { declaration } ;
 declaration    = [ "pub" ] decl_body ;
 decl_body      = type_decl | fn_decl | const_decl | reexport_decl
-               | extern_decl | impl_decl ;
+               | extern_decl | impl_decl | actor_decl ;
 
 (* === Modules and imports === *)
 (* One file = one module. Module name = filename without extension. *)
@@ -71,6 +71,15 @@ constraints    = constraint { "," constraint } ;
 constraint     = IDENT ":" trait_bound ;
 (* Phase 1 trait bounds — one bound per constraint; "+" compound bounds deferred to Phase 2 *)
 trait_bound    = IDENT ;
+
+(* === Actor declarations (Phase 8, #63) === *)
+(* `pub fn` = async behavior (message handler); parameters must be sendable.  *)
+(* `fn`     = private synchronous helper; no sendability restriction.          *)
+(* Return type defaults to Unit when `->` is omitted on pub fn behaviors.      *)
+actor_decl     = "actor" IDENT [ type_params ] "{" { actor_field } { actor_method } "}" ;
+actor_field    = field_decl [ "," ] ;
+actor_method   = [ "pub" ] "fn" IDENT "(" [ param_list ] ")" [ "->" return_type ]
+                 [ "!" effect_list ] block ;
 
 (* === Extern blocks === *)
 (* Declares foreign functions.  "c" ABI: thin C-linkage declarations (linker provides body). *)
@@ -137,7 +146,17 @@ expr           = literal | IDENT | field_access | fn_call | method_call
                | unary_expr | binary_expr | borrow_expr | if_expr | match_expr
                | lambda | block_expr | propagate | construct
                | "consume" expr
-               | "declassify" "(" expr ")" | "sanitize" "(" expr ")" ;
+               | "declassify" "(" expr ")" | "sanitize" "(" expr ")"
+               | actor_create_expr | select_expr | concurrently_expr ;
+(* Phase 8, #63: actor creation — `actor TypeName { field: expr, … }` — returns ActorRef *)
+actor_create_expr = "actor" IDENT "{" [ actor_field_init { "," actor_field_init } ] "}" ;
+actor_field_init  = IDENT ":" expr ;
+(* Phase 8, #69: select — waits on the first ready arm; at most one timeout arm allowed *)
+select_expr    = "select" "{" { select_arm } "}" ;
+select_arm     = [ IDENT "=" ] expr "=>" block    (* regular arm; optional result binding *)
+               | "timeout" "(" expr ")" "=>" block ; (* timeout arm — fires after duration *)
+(* Phase 8, #69: concurrently — structured scope; spawned actors cannot outlive the block *)
+concurrently_expr = "concurrently" block ;
 unary_expr     = unary_op expr ;
 binary_expr    = expr binary_op expr ;
 unary_op       = "-" | "!" | "~" | "*" ;          (* neg, logical-not, bitwise-not, deref *)
@@ -191,9 +210,9 @@ DOC_COMMENT    = "///" { ANY_CHAR } NEWLINE ;    (* doc comment — convention, 
 (* identifiers.  User-defined names that conflict must be renamed.               *)
 (*                                                                               *)
 (* Declaration:     fn  type  const  use  pub  extern  impl  builtin            *)
-(*                  struct  enum                                                  *)
+(*                  struct  enum  actor                                           *)
 (* Totality:        total  partial  test                                         *)
-(* Control flow:    if  else  for  in  while  match  return                      *)
+(* Control flow:    if  else  for  in  while  match  return  select  concurrently *)
 (* Let binding:     let  ghost                                                    *)
 (* Ownership:       iso  val  ref  tag  consume                                  *)
 (* IFC labels:      Tainted  Clean  Secret  Public                               *)
