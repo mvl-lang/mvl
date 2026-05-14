@@ -60,6 +60,12 @@ fn main() {
         }
     }
 
+    // --help / -h anywhere after the subcommand → print full usage and exit (#728).
+    if args.iter().skip(2).any(|a| a == "--help" || a == "-h") {
+        print_usage();
+        process::exit(0);
+    }
+
     match cmd.as_str() {
         "--version" | "-V" | "version" => {
             println!("mvl {}", env!("CARGO_PKG_VERSION"));
@@ -74,10 +80,14 @@ fn main() {
             let stdlib_profile = parse_stdlib_profile(&args);
             let format_json = args.iter().any(|a| a == "--format=json");
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
-            if verbose {
-                eprintln!("stdlib profile: {stdlib_profile}");
-            }
-            cmd_check(&path, req_filter, error_limit, stdlib_profile, format_json);
+            cmd_check(
+                &path,
+                req_filter,
+                error_limit,
+                stdlib_profile,
+                format_json,
+                verbose,
+            );
         }
         "build" => {
             let path = require_path_arg(&args, "build");
@@ -426,13 +436,24 @@ fn parse_req_filter_or_exit(args: &[String]) -> Option<u8> {
     })
 }
 
-/// Returns the index of the path argument, skipping an optional `--` separator.
+/// Returns the index of the path argument, skipping flags and an optional `--` separator.
+///
+/// Handles `mvl check --verbose compiler/` (flags before path) and
+/// `mvl check -- compiler/` (explicit separator) for all subcommands (#728).
+/// Stops at the first non-flag argument so that trailing separators like
+/// `mvl run dir/ -- --program-arg` are not mistaken for the `--` separator.
 fn path_arg_index(args: &[String]) -> usize {
-    if args.get(2).map(|s| s.as_str()) == Some("--") {
-        3
-    } else {
-        2
+    let mut idx = 2;
+    while idx < args.len() {
+        if args[idx] == "--" {
+            return idx + 1; // explicit separator: path follows immediately
+        }
+        if !args[idx].starts_with('-') {
+            return idx; // first non-flag is the path
+        }
+        idx += 1; // skip this flag
     }
+    idx // past the end; require_path_arg will handle the missing-arg error
 }
 
 fn require_path_arg(args: &[String], cmd: &str) -> String {
@@ -561,7 +582,11 @@ fn cmd_check(
     error_limit: usize,
     stdlib_profile: &str,
     format_json: bool,
+    verbose: bool,
 ) {
+    if verbose {
+        eprintln!("stdlib profile: {stdlib_profile}");
+    }
     let files = mvl_files(path, false);
     if files.is_empty() {
         eprintln!("No .mvl files found at: {path}");
@@ -748,6 +773,19 @@ fn cmd_check(
                     .filter(|&i| verdicts[i as usize].is_failed())
                     .count();
                 eprintln!("{file_str}: FAIL  ({proven}/11 proven, {failed} failed)");
+            }
+            if verbose {
+                for req in 1u8..=11 {
+                    let name = registry.pass_name(req).unwrap_or("unknown");
+                    let v = &verdicts[req as usize];
+                    eprintln!(
+                        "  {} Req {:2} ({}): {}",
+                        v.status_char(),
+                        req,
+                        name,
+                        v.detail()
+                    );
+                }
             }
         }
     }
