@@ -742,13 +742,19 @@ impl Parser {
         let start = self.peek_span();
         let kind = self.peek_kind().clone();
         match kind {
-            // len(ident)
+            // len(ident) or len(a.b.c) — field-access paths allowed (#726)
             TokenKind::Ident(ref s) if s == "len" => {
                 self.advance();
                 let lp = self.expect(&TokenKind::LParen);
                 self.require(lp)?;
                 let ident_result = self.expect_ident();
-                let (ident, _) = self.require(ident_result)?;
+                let (mut ident, _) = self.require(ident_result)?;
+                while matches!(self.peek_kind(), TokenKind::Dot) {
+                    self.advance(); // consume '.'
+                    let field_result = self.expect_ident();
+                    let (field, _) = self.require(field_result)?;
+                    ident = format!("{ident}.{field}");
+                }
                 let rp = self.expect(&TokenKind::RParen);
                 self.require(rp)?;
                 let span = self.span_from(start);
@@ -1250,6 +1256,25 @@ mod tests {
             panic!()
         };
         assert!(matches!(pred, RefExpr::Compare { op: CmpOp::Lt, .. }));
+    }
+
+    #[test]
+    fn parse_refinement_len_field_access() {
+        // len(ps.tokens) — dotted path inside len() (#726)
+        let d = type_decl("type T = String where len(ps.tokens) < 256");
+        let TypeBody::Alias(ty) = d.body else {
+            panic!()
+        };
+        let TypeExpr::Refined { pred, .. } = *ty else {
+            panic!()
+        };
+        let RefExpr::Compare { left, .. } = pred else {
+            panic!("expected Compare")
+        };
+        assert!(
+            matches!(*left, RefExpr::Len { ref ident, .. } if ident == "ps.tokens"),
+            "expected Len with ident 'ps.tokens'"
+        );
     }
 
     #[test]
