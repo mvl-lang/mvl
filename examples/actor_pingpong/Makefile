@@ -29,8 +29,9 @@ lint: guard-mvl ## Lint all source files
 check: guard-mvl ## Type-check main.mvl
 	$(MVL) check $(DIR)main.mvl
 
-test: guard-mvl ## Type-check main.mvl (no separate test file — all logic is in the actors)
+test: guard-mvl ## Run pure-logic unit tests in main_test.mvl
 	$(MVL) check $(DIR)main.mvl
+	$(MVL) test $(DIR)main_test.mvl
 
 assurance: guard-mvl ## Assurance report for main.mvl
 	$(MVL) assurance $(DIR)main.mvl

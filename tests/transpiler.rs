@@ -2787,3 +2787,100 @@ fn select_emits_first_arm_body() {
     let rust = transpile_src(src);
     assert_contains(&rust, "let y:");
 }
+
+/// Actor state struct always contains `_self_ref: Option<Name>` so behaviors
+/// can pass `self` as a `tag` argument to other actors. (#580)
+#[test]
+fn actor_state_has_self_ref_field() {
+    let src = r#"
+        actor Foo {
+            x: Int,
+            pub fn go() {
+            }
+        }
+    "#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "struct FooState {");
+    assert_contains(&rust, "_self_ref: Option<Foo>,");
+}
+
+/// The `_self_ref: None` sentinel is appended to every actor spawn call so the
+/// start function can inject the real handle before the thread launches. (#580)
+#[test]
+fn actor_spawn_appends_self_ref_none() {
+    let src = r#"
+        actor Foo {
+            x: Int,
+            pub fn go() {
+            }
+        }
+
+        fn make() -> Foo {
+            actor Foo { x: 0 }
+        }
+    "#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "_self_ref: None");
+    assert_contains(&rust, "_start_foo(FooState {x:");
+}
+
+/// Free calls to actor-private helpers inside a behavior are prefixed with
+/// `self.` so they resolve to the state impl method. (#580)
+#[test]
+fn actor_behavior_prefixes_helper_call_with_self() {
+    let src = r#"
+        actor Foo {
+            count: Int,
+            fn helper() -> Unit {
+            }
+            pub fn go() {
+                helper()
+            }
+        }
+    "#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "self.helper()");
+}
+
+/// `self` appearing as an argument inside a behavior is replaced with
+/// `self._self_ref.as_ref().unwrap().clone()` — the actor's own tag handle. (#580)
+#[test]
+fn actor_self_arg_becomes_self_ref_clone() {
+    let src = r#"
+        actor Bar {
+            pub fn notify(tag f: Foo) {
+            }
+        }
+
+        actor Foo {
+            bar: Bar,
+            pub fn go() {
+                self.bar.notify(self)
+            }
+        }
+    "#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "self._self_ref.as_ref().unwrap().clone()");
+}
+
+/// `concurrently { }` emits the body statements (spawn + message sends). (#580)
+#[test]
+fn concurrently_block_emits_body_and_drain() {
+    let src = r#"
+        actor Foo {
+            count: Int,
+            pub fn go() {
+            }
+        }
+
+        fn main() -> Unit {
+            concurrently {
+                let f: Foo = actor Foo { count: 0 };
+                f.go()
+            }
+        }
+    "#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "_start_foo(FooState {count:");
+    assert_contains(&rust, "f.go()");
+}

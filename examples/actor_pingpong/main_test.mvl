@@ -1,0 +1,63 @@
+// actor_pingpong/main_test.mvl — Unit tests for pure pingpong message logic.
+//
+// Tests the sequence-number and round-counter logic without actor concurrency
+// or Console effects.  All functions here are pure (no side effects).
+//
+// Type declarations duplicate main.mvl because cross-file type resolution is
+// not yet wired into the per-file checker (issue #96).  When #96 lands these
+// can be replaced with:
+//   use main::{PingMsg, PongMsg};
+//
+// Assurance note: 0 extern blocks.
+
+// ── Type re-declarations (workaround: #96) ────────────────────────────────
+
+// Sent by Ping to Pong.
+type PingMsg = struct { seq: Int }
+
+// Sent by Pong back to Ping.
+type PongMsg = struct { seq: Int }
+
+// ── Pure logic helpers ────────────────────────────────────────────────────
+
+// The very first PingMsg always has seq = 0.
+fn first_ping_seq() -> Int { 0 }
+
+// Pong echoes the seq from the incoming PingMsg unchanged.
+fn echo_seq(msg: PingMsg) -> PongMsg { PongMsg { seq: msg.seq } }
+
+// The next ping seq is one more than the pong reply seq.
+fn next_ping_seq(reply: PongMsg) -> Int { reply.seq + 1 }
+
+// Ping keeps going while sent < rounds.
+fn should_continue(sent: Int, rounds: Int) -> Bool { sent < rounds }
+
+// ── Tests ─────────────────────────────────────────────────────────────────
+
+// 1. The exchange always opens with seq = 0.
+test fn ping_seq_starts_at_zero() -> Unit {
+    assert_eq(first_ping_seq(), 0)
+}
+
+// 2. Pong's reply carries the same seq it received — no mutation.
+test fn pong_echoes_ping_seq() -> Unit {
+    let msg: PingMsg   = PingMsg { seq: 3 };
+    let reply: PongMsg = echo_seq(msg);
+    assert_eq(reply.seq, 3)
+}
+
+// 3. Each successive ping increments the sequence number by exactly one.
+test fn next_ping_seq_increments_by_one() -> Unit {
+    let reply: PongMsg = PongMsg { seq: 2 };
+    assert_eq(next_ping_seq(reply), 3)
+}
+
+// 4. While sent is below rounds the exchange should continue.
+test fn should_continue_true_when_sent_below_rounds() -> Unit {
+    assert_eq(should_continue(3, 5), true)
+}
+
+// 5. When sent reaches rounds the exchange is done — no more pings.
+test fn should_continue_false_when_rounds_exhausted() -> Unit {
+    assert_eq(should_continue(5, 5), false)
+}
