@@ -50,7 +50,7 @@ test-llvm: guard-mvl ## Run unit tests via LLVM backend
 	$(MVL) test $(DIR) --backend=llvm
 
 mcdc: guard-mvl ## Run MC/DC coverage analysis (56/57 unique-cause; coupled clause exempt)
-	$(MVL) mcdc $(DIR) --masking $(ARGS)
+	$(MVL) mcdc $(DIR) --verbose --masking $(ARGS)
 
 mutate: guard-mvl ## Run mutation testing
 	$(MVL) mutate $(DIR)

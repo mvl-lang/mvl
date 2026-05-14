@@ -56,7 +56,7 @@ assurance: guard-mvl ## Assurance report: spec coverage, MC/DC, mutation score (
 	$(MVL) assurance $(DIR) --verbose
 
 mcdc: guard-mvl ## Run MC/DC coverage analysis (ARGS="--masking" to exempt coupled clauses)
-	$(MVL) mcdc $(DIR) $(ARGS)
+	$(MVL) mcdc $(DIR) --verbose $(ARGS)
 
 mutate: guard-mvl ## Run mutation testing
 	$(MVL) mutate $(DIR)
