@@ -2680,7 +2680,8 @@ fn actor_decl_emits_runtime_infrastructure() {
     assert_contains(&rust, "struct CounterState {");
     assert_contains(&rust, "count: i64,");
     // Message enum with one variant per pub behavior
-    assert_contains(&rust, "enum CounterMsg {");
+    // Named {Name}Mailbox to avoid colliding with user-defined message structs.
+    assert_contains(&rust, "enum CounterMailbox {");
     assert_contains(&rust, "Increment { n: i64 },");
     assert_contains(&rust, "Reset,");
     // State impl (all methods run on actor thread)
@@ -2690,22 +2691,34 @@ fn actor_decl_emits_runtime_infrastructure() {
     assert_contains(&rust, "fn get_count(&mut self)");
     // Actor handle
     assert_contains(&rust, "struct Counter {");
-    assert_contains(&rust, "_sender: std::sync::mpsc::SyncSender<CounterMsg>,");
+    assert_contains(
+        &rust,
+        "_sender: std::sync::mpsc::SyncSender<CounterMailbox>,",
+    );
     // Handle impl: fire-and-forget wrappers for pub behaviors only
     assert_contains(&rust, "impl Counter {");
     assert_contains(&rust, "pub fn increment(&self, n: i64)");
     assert_contains(
         &rust,
-        "let _ = self._sender.try_send(CounterMsg::Increment { n });",
+        "let _ = self._sender.try_send(CounterMailbox::Increment { n });",
     );
     assert_contains(&rust, "pub fn reset(&self)");
-    assert_contains(&rust, "let _ = self._sender.try_send(CounterMsg::Reset);");
-    // Start function
-    assert_contains(&rust, "fn _start_counter(state: CounterState) -> Counter {");
+    assert_contains(
+        &rust,
+        "let _ = self._sender.try_send(CounterMailbox::Reset);",
+    );
+    // Start function: takes `mut state` so _self_ref can be injected.
+    assert_contains(
+        &rust,
+        "fn _start_counter(mut state: CounterState) -> Counter {",
+    );
     assert_contains(&rust, "std::sync::mpsc::sync_channel(256)");
     assert_contains(&rust, "std::thread::spawn");
-    assert_contains(&rust, "CounterMsg::Increment { n } => actor.increment(n),");
-    assert_contains(&rust, "CounterMsg::Reset => actor.reset(),");
+    assert_contains(
+        &rust,
+        "CounterMailbox::Increment { n } => actor.increment(n),",
+    );
+    assert_contains(&rust, "CounterMailbox::Reset => actor.reset(),");
 }
 
 /// Actor with `pub` visibility emits `pub struct` handle. (#695)
@@ -2738,7 +2751,10 @@ fn actor_spawn_expr_emits_start_call() {
         }
     "#;
     let rust = transpile_src(src);
-    assert_contains(&rust, "fn _start_counter(state: CounterState) -> Counter {");
+    assert_contains(
+        &rust,
+        "fn _start_counter(mut state: CounterState) -> Counter {",
+    );
     assert_contains(&rust, "_start_counter(CounterState {count:");
 }
 

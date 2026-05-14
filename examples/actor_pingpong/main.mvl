@@ -65,9 +65,9 @@ actor Pong {
     // Behavior (async message handler).
     //
     //   val msg     — immutable PingMsg; no ownership transfer needed
-    //   tag sender  — identity-only ActorRef; Pong cannot read Ping's state,
+    //   tag sender  — identity-only Ping handle; Pong cannot read Ping's state,
     //                 but can send messages to it
-    pub fn ping(val msg: PingMsg, tag sender: ActorRef) ! Console {
+    pub fn ping(val msg: PingMsg, tag sender: Ping) ! Console {
         self.received = self.received + 1
         log(msg.seq)
         sender.pong(PongMsg { seq: msg.seq })
@@ -83,9 +83,9 @@ actor Pong {
 
 actor Ping {
     // Private mutable state.
-    rounds:  Int       // stop after this many rounds
-    sent:    Int       // how many pings have been sent so far
-    partner: ActorRef  // identity-only (tag) reference to the Pong actor
+    rounds:  Int   // stop after this many rounds
+    sent:    Int   // how many pings have been sent so far
+    partner: Pong  // tag-capability reference to the Pong actor
 
     // Private helper: synchronous, never called from outside.
     fn log(seq: Int) -> Unit ! Console {
@@ -120,11 +120,11 @@ actor Ping {
 
 fn main() -> Unit ! Console {
     concurrently {
-        // Spawn Pong first — Ping holds an ActorRef to it.
-        let pong: ActorRef = actor Pong { received: 0 };
+        // Spawn Pong first — Ping holds a Pong handle as its partner.
+        let pong: Pong = actor Pong { received: 0 };
 
         // Spawn Ping with a reference to Pong and the round limit.
-        let ping: ActorRef = actor Ping { rounds: 5, sent: 0, partner: pong };
+        let ping: Ping = actor Ping { rounds: 5, sent: 0, partner: pong };
 
         // Fire the first message.  All subsequent messages are actor-driven.
         ping.start()
