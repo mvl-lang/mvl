@@ -80,8 +80,6 @@ pub enum TokenKind {
     Impl,
     /// `actor` — actor type declaration (Phase 8, #63)
     Actor,
-    /// `be` — behavior (async message handler inside an actor, Phase 8, #63)
-    Be,
     /// `spawn` — spawn an actor, returns an ActorRef (Phase 8, #63)
     Spawn,
     /// `builtin` — marks a function as having a runtime-provided implementation.
@@ -210,7 +208,6 @@ impl fmt::Display for TokenKind {
             TokenKind::Test => write!(f, "test"),
             TokenKind::Impl => write!(f, "impl"),
             TokenKind::Actor => write!(f, "actor"),
-            TokenKind::Be => write!(f, "be"),
             TokenKind::Spawn => write!(f, "spawn"),
             TokenKind::Builtin => write!(f, "builtin"),
             TokenKind::Transparent => write!(f, "transparent"),
@@ -944,9 +941,6 @@ fn keyword_or_ident(s: String) -> TokenKind {
         "test" => TokenKind::Test,
         "impl" => TokenKind::Impl,
         "actor" => TokenKind::Actor,
-        // `be` is reserved for future use but not active in the current actor syntax.
-        // Actor methods use `pub fn` (async behavior) and `fn` (private helper) instead.
-        "be" => TokenKind::Be,
         // `spawn` is intentionally NOT a keyword — it is a stdlib function name
         // (std.process.spawn).  Actor creation uses `actor TypeName { ... }` in
         // expression context.  `TokenKind::Spawn` is reserved in the enum for
