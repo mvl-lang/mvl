@@ -1,0 +1,19 @@
+// corpus:expect-fail
+// expect-requirement: 11
+// Scenario: Tainted[Bool] condition controls a public Console output.
+//           The branch condition leaks whether the input was truthy —
+//           a classic implicit (control-flow) information leak.
+// Triggers: CheckError::ImplicitFlowViolation (req11)
+
+fn validate_input(ok: Tainted[Bool]) -> Unit ! Console {
+    // VIOLATION: println fires inside a Tainted-controlled branch.
+    // Even though the printed string is a literal, the fact that it prints
+    // at all leaks the value of `ok` to a public observer.
+    if ok {
+        println("input accepted");
+    }
+}
+
+fn main() -> Unit ! Console {
+    validate_input(true);
+}

@@ -1,0 +1,27 @@
+// Corpus: data-race freedom — functions with only iso/val/no-capability params (Req 9)
+// No ref parameters anywhere → all functions provably race-free → Verdict::Proven.
+
+type Payload = struct { data: String }
+type Message = struct { content: String }
+type Config  = struct { key: String, value: Int }
+
+// Pure total function — no capabilities at all
+total fn add(a: Int, b: Int) -> Int {
+    a + b
+}
+
+// iso: isolated ownership, sendable — race-free
+fn send_payload(channel: Channel, iso p: Payload) -> Unit {
+    channel.send(consume(p))
+}
+
+// val: immutable, freely shareable — race-free
+fn broadcast_message(ch1: Channel, ch2: Channel, val msg: Message) -> Unit {
+    ch1.send(msg);
+    ch2.send(msg)
+}
+
+// val config — no mutation, no aliasing concern
+fn configure(channel: Channel, val cfg: Config) -> Unit {
+    channel.send(cfg)
+}
