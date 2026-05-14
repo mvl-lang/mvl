@@ -31,7 +31,8 @@ check: guard-mvl ## Type-check all source files
 test: guard-mvl ## Run game logic tests (no terminal required)
 	$(MVL) test $(DIR)game_test.mvl
 
-assurance: check test ## Type-check all sources and run all tests
+assurance: guard-mvl ## Run MVL assurance report for the pure game logic
+	$(MVL) assurance $(DIR)game.mvl
 
 run: guard-mvl ## Run the snake game (requires an interactive terminal)
 	$(MVL) run $(DIR)main.mvl
