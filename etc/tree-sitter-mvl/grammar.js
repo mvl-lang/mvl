@@ -132,10 +132,14 @@ module.exports = grammar({
         $.identifier,
         optional($.type_params),
         "{",
-        repeat(seq($.field_decl, optional(","))),
+        repeat($.actor_field),
         repeat($.actor_method),
         "}"
       ),
+
+    // A field declaration inside an actor body (matches EBNF `actor_field`).
+    // field_decl already includes optional(",") so no extra separator needed.
+    actor_field: ($) => $.field_decl,
 
     actor_method: ($) =>
       seq(
@@ -580,10 +584,14 @@ module.exports = grammar({
           "actor",
           field("type", $.identifier),
           "{",
-          repeat(seq(field("field", $.identifier), ":", $.expr, optional(","))),
+          repeat(seq($.actor_field_init, optional(","))),
           "}"
         )
       ),
+
+    // A field initializer inside an actor creation expression (matches EBNF `actor_field_init`).
+    actor_field_init: ($) =>
+      seq(field("name", $.identifier), ":", field("value", $.expr)),
 
     // Phase 8, #69: `select { arm … }` — wait on first ready channel arm
     select_expr: ($) =>
