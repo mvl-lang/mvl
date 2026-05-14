@@ -6232,3 +6232,108 @@ fn string_literal_assignment_accepted() {
         "String literal assignment should not require consume, got: {errors:?}"
     );
 }
+
+// ── #506: Actor behavior parameter sendability ────────────────────────────────
+
+/// `pub fn` behavior with `ref` parameter is rejected — ref is not sendable.
+#[test]
+fn actor_behavior_ref_param_rejected() {
+    // GIVEN: actor with pub fn behavior that takes a ref parameter
+    // THEN: CapabilityViolation for the ref param
+    let src = r#"
+        actor Counter {
+            count: Int
+            pub fn increment(ref delta: Int) {
+                self.count = self.count + delta
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::CapabilityViolation { param, capability, .. }
+                if param == "delta" && capability == "ref")
+        ),
+        "ref param in actor behavior should be rejected, got: {errors:?}"
+    );
+}
+
+/// `pub fn` behavior with `iso` parameter is accepted — iso is sendable.
+#[test]
+fn actor_behavior_iso_param_accepted() {
+    // GIVEN: actor with pub fn behavior that takes an iso parameter
+    // THEN: no CapabilityViolation
+    let src = r#"
+        actor Counter {
+            count: Int
+            pub fn increment(iso delta: Int) {}
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::CapabilityViolation { .. })),
+        "iso param in actor behavior should be accepted, got: {errors:?}"
+    );
+}
+
+/// `pub fn` behavior with `val` parameter is accepted — val is sendable.
+#[test]
+fn actor_behavior_val_param_accepted() {
+    // GIVEN: actor with pub fn behavior that takes a val parameter
+    // THEN: no CapabilityViolation
+    let src = r#"
+        actor Counter {
+            count: Int
+            pub fn reset(val new_count: Int) {}
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::CapabilityViolation { .. })),
+        "val param in actor behavior should be accepted, got: {errors:?}"
+    );
+}
+
+/// `pub fn` behavior with `tag` parameter is accepted — tag is sendable.
+#[test]
+fn actor_behavior_tag_param_accepted() {
+    // GIVEN: actor with pub fn behavior that takes a tag parameter
+    // THEN: no CapabilityViolation
+    let src = r#"
+        actor Counter {
+            count: Int
+            pub fn observe(tag handle: Int) {}
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::CapabilityViolation { .. })),
+        "tag param in actor behavior should be accepted, got: {errors:?}"
+    );
+}
+
+/// Private `fn` helper with `ref` parameter is accepted — no sendability restriction.
+#[test]
+fn actor_private_fn_ref_param_accepted() {
+    // GIVEN: actor with private fn helper (not pub) that takes a ref parameter
+    // THEN: no CapabilityViolation (private helpers are synchronous, no boundary crossing)
+    let src = r#"
+        actor Counter {
+            count: Int
+            fn validate(ref x: Int) -> Bool { x >= 0 }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::CapabilityViolation { .. })),
+        "ref param in private actor fn should be accepted, got: {errors:?}"
+    );
+}

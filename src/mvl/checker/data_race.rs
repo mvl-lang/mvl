@@ -68,15 +68,37 @@ pub fn count_race_free_fns(prog: &Program) -> (usize, usize) {
     let mut total = 0usize;
     let mut race_free = 0usize;
     for decl in &prog.declarations {
-        if let Decl::Fn(fd) = decl {
-            total += 1;
-            let has_ref_param = fd
-                .params
-                .iter()
-                .any(|p| matches!(p.capability, Some(Capability::Ref)));
-            if !has_ref_param {
-                race_free += 1;
+        match decl {
+            Decl::Fn(fd) => {
+                total += 1;
+                let has_ref_param = fd
+                    .params
+                    .iter()
+                    .any(|p| matches!(p.capability, Some(Capability::Ref)));
+                if !has_ref_param {
+                    race_free += 1;
+                }
             }
+            Decl::Actor(ad) => {
+                for method in &ad.methods {
+                    total += 1;
+                    if method.is_public {
+                        // pub fn behaviors are checked by check_actor_decl: if they
+                        // compile, they have only sendable params — proven race-free.
+                        race_free += 1;
+                    } else {
+                        // private helpers: race-free iff no ref param
+                        let has_ref_param = method
+                            .params
+                            .iter()
+                            .any(|p| matches!(p.capability, Some(Capability::Ref)));
+                        if !has_ref_param {
+                            race_free += 1;
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
     (race_free, total)
