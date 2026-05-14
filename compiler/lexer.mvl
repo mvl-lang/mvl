@@ -113,7 +113,9 @@ partial fn scan_word(src: String, pos: Int, src_len: Int) -> ScanResult
   ensures result.end_pos >= pos
 {
     let p: ref Int = pos;
-    while p < src_len && is_alnum(str_char_at(src, p)) {
+    // Termination: p advances by 1 each step; loop exits when p == src_len or
+    // char is not alphanumeric. Measure src_len - p decreases monotonically.
+    while p < src_len && is_alnum(str_char_at(src, p)) decreases src_len - p {
         p = p + 1
     }
     let lexeme: String = src.substring(pos, p);
@@ -128,12 +130,14 @@ partial fn scan_number(src: String, pos: Int, src_len: Int) -> ScanResult
   ensures result.end_pos >= pos
 {
     let p: ref Int = pos;
-    while p < src_len && is_digit(str_char_at(src, p)) {
+    // Termination: p strictly increases each step (by 1); bounded above by src_len.
+    while p < src_len && is_digit(str_char_at(src, p)) decreases src_len - p {
         p = p + 1
     }
     if p < src_len && str_char_at(src, p) == "." && is_digit(str_char_at(src, p + 1)) {
         p = p + 1;
-        while p < src_len && is_digit(str_char_at(src, p)) {
+        // Termination: same argument — p increases, bounded by src_len.
+        while p < src_len && is_digit(str_char_at(src, p)) decreases src_len - p {
             p = p + 1
         }
         ScanResult { kind: TokenKind::FloatLit, lexeme: src.substring(pos, p), end_pos: p }
@@ -149,7 +153,8 @@ partial fn scan_comment_end(src: String, pos: Int, src_len: Int) -> Int
   ensures result >= pos
 {
     let p: ref Int = pos;
-    while p < src_len && str_char_at(src, p) != "\n" {
+    // Termination: p increases by 1 per step; exits at '\n' or when p == src_len.
+    while p < src_len && str_char_at(src, p) != "\n" decreases src_len - p {
         p = p + 1
     }
     p
@@ -163,7 +168,9 @@ partial fn scan_string_body(src: String, pos: Int, src_len: Int) -> ScanResult
   ensures result.end_pos >= pos
 {
     let p: ref Int = pos;
-    while p < src_len && str_char_at(src, p) != "\"" {
+    // Termination: p advances by 1 or 2 each step (escape sequences advance by 2).
+    // Both increments are positive, so src_len - p strictly decreases each iteration.
+    while p < src_len && str_char_at(src, p) != "\"" decreases src_len - p {
         if str_char_at(src, p) == "\\" && p + 1 < src_len {
             p = p + 2
         } else {
@@ -207,7 +214,10 @@ pub partial fn lex(src: String) -> List[Token]
     let col: ref Int = 1;
     let tokens: ref List[Token] = [];
 
-    while pos < src_len {
+    // Termination: every branch in the loop body advances pos by at least 1
+    // (scan_word/scan_number/scan_string_body may advance by more). The guard
+    // pos < src_len is thus falsified in at most src_len iterations.
+    while pos < src_len decreases src_len - pos {
         let c: String = str_char_at(src, pos);
         let c2: String = str_char_at(src, pos + 1);
         let span: Span = Span { line: line, col: col };

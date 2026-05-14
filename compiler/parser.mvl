@@ -17,6 +17,24 @@
 //     forward declaration is needed.
 //   - IFC bridge: transparent partial fn call_parse(src) → Program.
 //
+// Termination argument (Req 8):
+//   Two patterns cover every loop and recursive call in this file:
+//
+//   1. Token-position loops — any while loop with !ps_at_eof(curr) in the guard:
+//      Every branch either advances curr via ps_advance (pos += 1) or sets a
+//      boolean flag that exits the loop.  The token list is finite and immutable,
+//      so curr.pos reaches tokens.len() in at most O(n) steps.
+//      Formal measure:  len(ps.tokens) - curr.pos
+//      Note: `len()` in decreases does not yet accept field-access arguments
+//      (len(ps.tokens)), so the decreases clause on these loops is left as a
+//      doc-comment until that RefExpr form is supported.
+//
+//   2. Depth-bounded recursion — parse_type_expr_depth(ps, max_depth):
+//      Every recursive call passes max_depth - 1.  The requires max_depth >= 0
+//      contract (proven at Req 10) ensures the base case is reached.
+//      No while loop in this function can increase max_depth, so both the
+//      recursion and its inner loops terminate.
+//
 // Public surface: parse(tokens: List[Token]) -> Program
 
 use ast::Token;
@@ -213,6 +231,9 @@ total fn ps_expect_name(ps: ParserState) -> StringR {
 partial fn skip_body(ps: ParserState) -> ParserState {
     let curr: ref ParserState = ps_expect_punct(ps, "{");
     let depth: ref Int = 1;
+    // Termination: curr.pos strictly increases each iteration (ps_advance).
+    // depth changes but is bounded by curr.pos (each '{' or '}' costs 1 token).
+    // Formal measure: len(ps.tokens) - curr.pos  (pending len-of-field support).
     while depth > 0 && !ps_at_eof(curr) {
         if ps_at_punct(curr, "{") {
             depth = depth + 1;
@@ -233,6 +254,11 @@ partial fn skip_body(ps: ParserState) -> ParserState {
 // At depth 0, no generic args are parsed (prevents infinite regress).
 // parse_type_expr(ps) calls with depth=5, enough for real MVL code.
 
+// Termination: two orthogonal measures.
+//   Recursion: every recursive call passes max_depth - 1; requires max_depth >= 0
+//              guarantees the base case (no generic args parsed at depth 0).
+//   Inner loops: each loop body calls ps_advance (pos += 1) every iteration;
+//                bounded by len(ps.tokens) - curr.pos.
 partial fn parse_type_expr_depth(ps: ParserState, max_depth: Int) -> TypeExprR
   requires max_depth >= 0
 {
@@ -274,6 +300,8 @@ partial fn parse_type_expr_depth(ps: ParserState, max_depth: Int) -> TypeExprR
     if name_is_fn && ps_at_punct(curr, "(") {
         curr = ps_advance(curr); // consume '('
         let paren_depth: ref Int = 1;
+        // Termination: curr.pos advances by 1 every iteration (all three branches
+        // call ps_advance). Bounded by len(ps.tokens) - curr.pos.
         while paren_depth > 0 && !ps_at_eof(curr) {
             if ps_at_punct(curr, "(") {
                 paren_depth = paren_depth + 1; curr = ps_advance(curr)
@@ -293,6 +321,8 @@ partial fn parse_type_expr_depth(ps: ParserState, max_depth: Int) -> TypeExprR
     if max_depth > 0 && !name_is_fn && ps_at_punct(curr, "[") {
         curr = ps_advance(curr);
         let args: ref List[TypeExpr] = [];
+        // Termination: each iteration recurses with max_depth - 1 (bounded by
+        // requires max_depth >= 0) and advances curr past at least one token.
         while !ps_at_eof(curr) && !ps_at_punct(curr, "]") {
             let arg_r: TypeExprR = parse_type_expr_depth(curr, max_depth - 1);
             args.push(arg_r.value);
@@ -527,6 +557,10 @@ partial fn parse_fn_decl(
     // optional proof clauses (requires/ensures) — skip keyword + clause expression
     // so the self-hosted parser can round-trip sources that carry contracts.
     let pf_loop: ref Bool = true;
+    // Termination (outer): each requires/ensures keyword consumes ≥1 token; the
+    // non-keyword branch sets pf_loop = false and exits in one step.
+    // Termination (inner): cl_end is set on '{', ';', next proof kw, or Eof;
+    // the else branch advances curr (pos += 1). Measure: len(ps.tokens) - curr.pos.
     while pf_loop && !ps_at_eof(curr) {
         let cur_is_req: Bool = match ps_current(curr).kind { TokenKind::KwRequires => true, _ => false };
         let cur_is_ens: Bool = match ps_current(curr).kind { TokenKind::KwEnsures  => true, _ => false };
@@ -897,6 +931,10 @@ partial fn collect_mod_flags(ps: ParserState) -> ModFlags {
 
 // ── Top-level program parser ───────────────────────────────────────────────────
 
+// Termination: every match arm either delegates to a parse_X helper (which
+// advances curr past at least one token) or falls to the default skip arm
+// (curr = ps_advance(curr), pos += 1).  ps_at_eof(curr) becomes true when
+// curr.pos == len(ps.tokens).  Formal measure: len(ps.tokens) - curr.pos.
 partial fn parse_program(ps: ParserState) -> Program {
     let curr: ref ParserState = ps;
     let fns: ref     List[FnDecl]     = [];
