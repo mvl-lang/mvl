@@ -13,6 +13,10 @@
 //!                         also serves as the cdylib load smoke test (#431 AC):
 //!                         proves libmvl_runtime_c loads and symbols resolve via lli
 //!   5. crypto_sha256.mvl — sha256/sha512 NIST vectors (#180 Rust path; #438 LLVM path)
+//!
+//! Phase 8 actor parity tests (#698):
+//!   6. actor_spawn.mvl — minimal actor spawn + fire-and-forget behaviors
+//!   7. actor_send.mvl  — multi-field actor with val-capability params
 
 #![cfg(feature = "llvm")]
 
@@ -872,6 +876,36 @@ fn stdlib_proven_profile_falls_back_to_trusted() {
         trusted_out, proven_out,
         "--stdlib=proven fallback output must match --stdlib=trusted until #538 is implemented"
     );
+}
+
+// ── #698: Phase 8 actor parity (spawn + fire-and-forget send) ────────────────
+
+/// Minimal actor spawn: `actor Counter { count: 0 }` + two behaviors + reset.
+/// Both backends must compile the actor infrastructure and produce "ok" from main.
+/// Behavior bodies are empty stubs — main output is deterministic regardless of
+/// message delivery timing.
+#[test]
+fn cross_backend_actor_spawn() {
+    assert_backends_agree("actor_spawn.mvl");
+    // Also assert exact output so the test stays pinned even if run_transpiler
+    // filtering changes.
+    let file = corpus("actor_spawn.mvl");
+    assert_eq!(run_transpiler(&file).trim(), "ok");
+    if let Some(out) = run_llvm(&file) {
+        assert_eq!(out.trim(), "ok");
+    }
+}
+
+/// Multi-field actor with `val`-capability behavior params.
+/// Exercises the iso/val sendability path on both backends.
+#[test]
+fn cross_backend_actor_send() {
+    assert_backends_agree("actor_send.mvl");
+    let file = corpus("actor_send.mvl");
+    assert_eq!(run_transpiler(&file).trim(), "sent");
+    if let Some(out) = run_llvm(&file) {
+        assert_eq!(out.trim(), "sent");
+    }
 }
 
 /// #670: LLVM backend emits `llvm.trap` for structs with `with invariant` (#670).

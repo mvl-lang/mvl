@@ -1,0 +1,20 @@
+// Phase 8: actor spawn + fire-and-forget behavior calls (#698).
+// Both backends must compile actor infrastructure, spawn a handle,
+// accept behavior messages, and produce identical deterministic stdout.
+//
+// Expected stdout: ok
+
+actor Counter {
+    count: Int
+
+    pub fn increment(n: Int) { }
+    pub fn reset() { }
+}
+
+fn main() -> Unit ! Console {
+    let c: Counter = actor Counter { count: 0 };
+    c.increment(1);
+    c.increment(2);
+    c.reset();
+    println("ok")
+}
