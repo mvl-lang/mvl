@@ -170,8 +170,9 @@ test-stdlib: build ## Verify stdlib runtime correctness: transpile tests/stdlib/
 	@echo "Running stdlib correctness tests..."
 	$(MVL) test tests/stdlib/
 
-check-compiler: build ## Verify self-hosted compiler with mvl check (all 4 source files)
+check-compiler: build ## Verify self-hosted compiler with mvl check + lint (all 4 source files)
 	$(MVL) check compiler/
+	$(MVL) lint compiler/
 
 test-mvl: build ## Run MVL-in-MVL tests for the self-hosted compiler (compiler/*_test.mvl)
 	$(MVL) test compiler/
