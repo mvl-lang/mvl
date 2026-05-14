@@ -4,6 +4,26 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.100.0] — 2026-05-14
+
+### Added
+
+- `missing-totality` lint rule flags functions with no explicit `total`/`partial` keyword; enabled via `require_explicit_totality = true` in `.mvllintrc` (#729)
+- `make assure-compiler` target runs the assurance report for the self-hosted compiler in verbose mode
+- EBNF named productions for `contract_clause`, `ghost_let_stmt`, `decreases_expr`, `forall_expr`, `exists_expr` matching tree-sitter grammar rules
+
+### Changed
+
+- `mvl assurance` now uses cross-file user prelude for multi-file projects, matching `mvl check` behaviour (#732)
+- Assurance report shows correct verdict categories (proven ✓ / not proven – / violated ✗), split explicit vs implicit total fn count, and files-found vs files-checked (#729–#731)
+- `mvl lint` reports lex/parse errors as diagnostics instead of aborting
+- `make check-compiler` now also runs `mvl lint compiler/`
+
+### Fixed
+
+- `mvl assurance` false positives on multi-file projects due to missing cross-file prelude (#732)
+- `make test-grammar-coverage` failure caused by 5 undocumented tree-sitter rules added by decreases/proof commits
+
 ## [0.99.0] — 2026-05-14
 
 ### Changed
