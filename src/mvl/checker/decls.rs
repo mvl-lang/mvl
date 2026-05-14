@@ -30,7 +30,7 @@ impl TypeChecker {
                 Decl::Extern(ed) => self.register_extern(ed),
                 Decl::Use(_) => {} // resolved by the module resolver, not the type checker
                 Decl::Impl(id) => self.register_impl(id),
-                Decl::Actor(_) => {} // Phase 8: actor registration deferred (#63)
+                Decl::Actor(ad) => self.register_actor(ad),
             }
         }
     }
@@ -49,6 +49,19 @@ impl TypeChecker {
             TypeInfo {
                 params: td.params.clone(),
                 body: body_info,
+            },
+        );
+    }
+
+    fn register_actor(&mut self, ad: &ActorDecl) {
+        self.env.define_type(
+            ad.name.clone(),
+            TypeInfo {
+                params: ad.type_params.clone(),
+                body: TypeBodyInfo::Struct {
+                    fields: field_infos(&ad.fields),
+                    invariant: None,
+                },
             },
         );
     }

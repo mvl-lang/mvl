@@ -6434,3 +6434,26 @@ fn actor_private_fn_with_ref_not_race_free() {
         "private fn with ref param should not be race-free"
     );
 }
+
+// ── #744: ActorDecl registered in pass 1 ─────────────────────────────────────
+
+/// GIVEN: an actor declaration and a function returning that actor type
+/// WHEN: type-checked
+/// THEN: no TypeMismatch or UnknownType errors (actor type is registered)
+#[test]
+fn actor_type_registered_in_pass1() {
+    let errors = errors_for(
+        r#"
+        actor Counter {
+            count: Int
+            pub fn increment(n: Int) { }
+            pub fn reset() { }
+        }
+
+        fn make_counter() -> Counter {
+            actor Counter { count: 0 }
+        }
+        "#,
+    );
+    assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
+}
