@@ -4,6 +4,13 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.109.0] — 2026-05-15
+
+### Added
+
+- **`std.args.parse[T]()`** — struct-driven CLI argument parsing. The struct IS the argument spec: `Positional[T]` fields parse leading argv tokens, `Bool` fields become presence flags, `Option[T]` fields are optional named flags, all other fields are required named flags. Auto-generates `-h/--help` usage. Defaults via `Option[T]` + `.unwrap_or(default)`. (`#752`)
+- `unwrap_or_exit<T>()` in the args runtime — prints error to stderr and exits 1 on `Err`, providing uniform CLI error handling.
+
 ## [0.108.0] — 2026-05-15
 
 ### Added
