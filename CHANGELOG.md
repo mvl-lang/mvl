@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.110.1] — 2026-05-15
+
+### Fixed
+
+- Remove stale Phase 6 annotations from Req 10/11 assurance messages.
+
 ## [0.110.0] — 2026-05-15
 
 ### Added
