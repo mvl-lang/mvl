@@ -6879,6 +6879,115 @@ fn actor_behavior_iso_aliasing_rejected() {
     );
 }
 
+// ── D2: Actor protocol bounded model checker (#37) ───────────────────────────
+
+// ── D2: Actor protocol bounded model checker (#37) ───────────────────────────
+
+/// GIVEN: actor with a refined field (`count: Int where self >= 0`) initialized
+/// with a value that violates the refinement (count = -1)
+/// WHEN: type-checked
+/// THEN: RefinementViolated error emitted for the bad initial value
+#[test]
+fn actor_field_refinement_violated_at_spawn() {
+    let errors = errors_for(
+        r#"
+        actor Counter {
+            count: Int where self >= 0
+
+            pub fn tick() { }
+        }
+
+        fn make_bad() -> Unit {
+            let c = actor Counter { count: -1 }
+        }
+        "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "expected RefinementViolated for count = -1 violating self >= 0, got: {errors:?}"
+    );
+}
+
+/// GIVEN: actor with a refined field initialized with a valid value
+/// WHEN: type-checked
+/// THEN: no RefinementViolated error
+#[test]
+fn actor_field_refinement_satisfied_at_spawn() {
+    let errors = errors_for(
+        r#"
+        actor Counter {
+            count: Int where self >= 0
+
+            pub fn tick() { }
+        }
+
+        fn make_good() -> Unit {
+            let c = actor Counter { count: 0 }
+        }
+        "#,
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "expected no RefinementViolated for count = 0, got: {errors:?}"
+    );
+}
+
+/// GIVEN: actor behavior body calls a function with a refined parameter using a
+/// literal argument that violates the refinement (0 violates self > 0)
+/// WHEN: type-checked
+/// THEN: RefinementViolated error emitted
+#[test]
+fn actor_behavior_body_requires_checked() {
+    let src = r#"
+        fn positive_only(x: Int where self > 0) -> Int { x }
+
+        actor Worker {
+            data: Int
+
+            pub fn run() {
+                let r: Int = positive_only(0);
+            }
+        }
+        "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "expected RefinementViolated for positive_only(0) inside behavior, got: {errors:?}"
+    );
+}
+
+/// GIVEN: actor behavior body calls a function with a satisfied refined parameter
+/// WHEN: type-checked
+/// THEN: no RefinementViolated errors
+#[test]
+fn actor_behavior_body_requires_satisfied() {
+    let errors = errors_for(
+        r#"
+        fn positive_only(x: Int where self > 0) -> Int { x }
+
+        actor Worker {
+            data: Int
+
+            pub fn run() {
+                let r: Int = positive_only(5);
+            }
+        }
+        "#,
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "unexpected RefinementViolated for positive_only(5) inside behavior: {errors:?}"
+    );
+}
+
 // ── #744: ActorDecl registered in pass 1 ─────────────────────────────────────
 
 /// GIVEN: an actor declaration and a function returning that actor type

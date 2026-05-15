@@ -32,7 +32,7 @@ use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::solver::{binary_op_to_cmp, dummy_span, RefResult, RefinementSolver};
 use crate::mvl::parser::ast::{
     ArithOp, BinaryOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, LValue, Literal, LogicOp,
-    MatchArm, MatchBody, Pattern, Program, RefExpr, Stmt, TypeBody, TypeExpr,
+    MatchArm, MatchBody, Param, Pattern, Program, RefExpr, Stmt, TypeBody, TypeExpr,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -87,6 +87,23 @@ pub fn check_refinements(prog: &Program, errors: &mut Vec<CheckError>) {
                     );
                 }
             }
+            // D2 (Phase 8, #37): Check refinements inside actor behavior bodies.
+            // Behaviors may call functions with `where` refinements on their
+            // parameters; the same 5-layer solver applies.
+            Decl::Actor(ad) => {
+                for method in &ad.methods {
+                    let mut var_refs = params_to_var_refs(&method.params, &type_refs);
+                    analyze_block(
+                        &method.body,
+                        &mut var_refs,
+                        &fn_params,
+                        &type_refs,
+                        &fn_decls,
+                        errors,
+                        &mut counts,
+                    );
+                }
+            }
             _ => {}
         }
     }
@@ -119,6 +136,20 @@ pub fn count_refinements(prog: &Program) -> RefinementCounts {
             Decl::Impl(impl_decl) => {
                 for method in &impl_decl.methods {
                     let mut var_refs = param_refinements(method, &type_refs);
+                    analyze_block(
+                        &method.body,
+                        &mut var_refs,
+                        &fn_params,
+                        &type_refs,
+                        &fn_decls,
+                        &mut errors,
+                        &mut counts,
+                    );
+                }
+            }
+            Decl::Actor(ad) => {
+                for method in &ad.methods {
+                    let mut var_refs = params_to_var_refs(&method.params, &type_refs);
                     analyze_block(
                         &method.body,
                         &mut var_refs,
@@ -282,8 +313,16 @@ fn param_refinements(
     fd: &FnDecl,
     type_refs: &HashMap<String, Option<RefExpr>>,
 ) -> HashMap<String, Option<RefExpr>> {
+    params_to_var_refs(&fd.params, type_refs)
+}
+
+/// Build var_refs from a slice of parameters (used for both `FnDecl` and `ActorMethod`).
+fn params_to_var_refs(
+    params: &[Param],
+    type_refs: &HashMap<String, Option<RefExpr>>,
+) -> HashMap<String, Option<RefExpr>> {
     let mut map = HashMap::new();
-    for p in &fd.params {
+    for p in params {
         // Inline refinement takes priority; normalise param name → "self".
         let pred = p
             .refinement
