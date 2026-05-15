@@ -7,7 +7,7 @@
 //! All other `emit_*` modules take `&mut RustEmitter` and append to it.
 
 use crate::mvl::backends::rust::capability_params::build_capability_params_map;
-use crate::mvl::backends::rust::emit_actors::emit_actor_decl;
+use crate::mvl::backends::rust::emit_actors::{emit_actor_decl, emit_actor_runtime_preamble};
 use crate::mvl::backends::rust::emit_functions::emit_fn_decl;
 use crate::mvl::backends::rust::emit_impls::emit_impl_decl;
 use crate::mvl::backends::rust::emit_types::emit_type_decl;
@@ -554,6 +554,16 @@ impl RustEmitter {
                     self.blank();
                 }
             }
+        }
+
+        // Emit actor runtime preamble (join-handle registry) once if program has actors.
+        if prog
+            .declarations
+            .iter()
+            .any(|d| matches!(d, Decl::Actor(_)))
+        {
+            emit_actor_runtime_preamble(self);
+            self.blank();
         }
 
         // Top-level declarations (non-test)

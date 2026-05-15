@@ -983,13 +983,19 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
             cg.push("})");
         }
         // Phase 8 (#743): concurrently { body } — structured concurrency scope.
-        // Sequential fallback: emit body as a plain block.  Full thread::scope
-        // isolation is deferred until the actor scheduler is complete.
+        // Actor handles created in the inner block are dropped when it exits,
+        // closing all sender channels.  _mvl_join_actors() then waits for every
+        // actor thread to drain its mailbox and terminate before returning.
         Expr::Concurrently { body, .. } => {
             cg.push("{");
             cg.nl();
             cg.push_indent();
+            cg.line("{");
+            cg.push_indent();
             emit_block_stmts(cg, &body.stmts);
+            cg.pop_indent();
+            cg.line("}");
+            cg.line("_mvl_join_actors();");
             cg.pop_indent();
             cg.indent();
             cg.push("}");
