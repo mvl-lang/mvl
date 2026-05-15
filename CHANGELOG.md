@@ -4,6 +4,14 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.112.0] — 2026-05-15
+
+### Added
+
+- **Spec 018 — Layered Refinement Solver** — documents the 5-layer proof architecture (trivial → intervals → symbolic → Cooper's QE → Z3) for `where` predicate verification; links all 9 sub-tickets to epic #545.
+
+---
+
 ## [0.111.0] — 2026-05-15
 
 ### Added
