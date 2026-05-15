@@ -6612,6 +6612,79 @@ fn actor_spawn_unknown_field_rejected() {
     );
 }
 
+// ── #742: Refinement checking inside actor method bodies ─────────────────────
+
+/// GIVEN: actor private helper calls a refined function with a param that has the right refinement
+/// WHEN: refinement checker runs on the actor method body
+/// THEN: no RefinementViolated error (proven statically via subsumption)
+#[test]
+fn actor_method_body_refinement_proven() {
+    let errors = errors_for(
+        r#"
+        fn require_positive(n: Int where self > 0) -> Int { n }
+
+        actor Counter {
+            count: Int
+            fn check_positive(n: Int where self > 0) -> Int {
+                require_positive(n)
+            }
+        }
+        "#,
+    );
+    assert!(
+        errors.is_empty(),
+        "actor private helper with valid refinement should pass, got: {errors:?}"
+    );
+}
+
+/// GIVEN: actor private helper calls a refined function with a literal that violates the predicate
+/// WHEN: refinement checker runs on the actor method body
+/// THEN: RefinementViolated error is emitted
+#[test]
+fn actor_method_body_refinement_violation_caught() {
+    let errors = errors_for(
+        r#"
+        fn require_positive(n: Int where self > 0) -> Int { n }
+
+        actor Counter {
+            count: Int
+            fn bad_call() -> Int {
+                require_positive(0)
+            }
+        }
+        "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "expected RefinementViolated inside actor private helper body, got: {errors:?}"
+    );
+}
+
+/// GIVEN: actor private helper calls a function with a requires clause, arg satisfies it
+/// WHEN: contract checker runs on the actor method body
+/// THEN: no error (requires predicate proven at call site)
+#[test]
+fn actor_private_method_requires_satisfied() {
+    let errors = errors_for(
+        r#"
+        fn divide(a: Int, b: Int) -> Int requires b != 0 { a }
+
+        actor Calculator {
+            value: Int
+            fn safe_div(a: Int, b: Int where self != 0) -> Int {
+                divide(a, b)
+            }
+        }
+        "#,
+    );
+    assert!(
+        errors.is_empty(),
+        "actor private helper satisfying requires should pass, got: {errors:?}"
+    );
+}
+
 // ── #744: ActorDecl registered in pass 1 ─────────────────────────────────────
 
 /// GIVEN: an actor declaration and a function returning that actor type

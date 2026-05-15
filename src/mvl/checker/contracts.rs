@@ -101,6 +101,21 @@ pub fn check_contracts(prog: &Program, errors: &mut Vec<CheckError>) {
                     );
                 }
             }
+            // Actor methods don't declare requires/ensures, but their bodies
+            // may call functions that do — check those call sites (#742).
+            Decl::Actor(ad) => {
+                for method in &ad.methods {
+                    let var_refs = build_param_var_refs(&method.params);
+                    check_requires_in_block(&method.body, &fn_map, &var_refs, &fn_decls, errors);
+                    check_invariants_in_block(
+                        &method.body,
+                        &method.name,
+                        &var_refs,
+                        &fn_decls,
+                        errors,
+                    );
+                }
+            }
             _ => {}
         }
     }

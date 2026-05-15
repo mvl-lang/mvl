@@ -32,7 +32,7 @@ use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::solver::{binary_op_to_cmp, dummy_span, RefResult, RefinementSolver};
 use crate::mvl::parser::ast::{
     ArithOp, BinaryOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, LValue, Literal, LogicOp,
-    MatchArm, MatchBody, Pattern, Program, RefExpr, Stmt, TypeBody, TypeExpr,
+    MatchArm, MatchBody, Param, Pattern, Program, RefExpr, Stmt, TypeBody, TypeExpr,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -87,6 +87,20 @@ pub fn check_refinements(prog: &Program, errors: &mut Vec<CheckError>) {
                     );
                 }
             }
+            Decl::Actor(ad) => {
+                for method in &ad.methods {
+                    let mut var_refs = param_refinements_slice(&method.params, &type_refs);
+                    analyze_block(
+                        &method.body,
+                        &mut var_refs,
+                        &fn_params,
+                        &type_refs,
+                        &fn_decls,
+                        errors,
+                        &mut counts,
+                    );
+                }
+            }
             _ => {}
         }
     }
@@ -119,6 +133,20 @@ pub fn count_refinements(prog: &Program) -> RefinementCounts {
             Decl::Impl(impl_decl) => {
                 for method in &impl_decl.methods {
                     let mut var_refs = param_refinements(method, &type_refs);
+                    analyze_block(
+                        &method.body,
+                        &mut var_refs,
+                        &fn_params,
+                        &type_refs,
+                        &fn_decls,
+                        &mut errors,
+                        &mut counts,
+                    );
+                }
+            }
+            Decl::Actor(ad) => {
+                for method in &ad.methods {
+                    let mut var_refs = param_refinements_slice(&method.params, &type_refs);
                     analyze_block(
                         &method.body,
                         &mut var_refs,
@@ -177,6 +205,30 @@ pub fn count_fully_verified_fns(prog: &Program) -> (usize, usize) {
                 }
             }
         }
+        // Actor methods share the same `Vec<Param>` layout but are not `FnDecl`.
+        if let Decl::Actor(ad) = decl {
+            for method in &ad.methods {
+                let mut var_refs = param_refinements_slice(&method.params, &type_refs);
+                let mut errors = Vec::new();
+                let mut counts = RefinementCounts::default();
+                analyze_block(
+                    &method.body,
+                    &mut var_refs,
+                    &fn_params,
+                    &type_refs,
+                    &fn_decls,
+                    &mut errors,
+                    &mut counts,
+                );
+                let total = counts.proven + counts.runtime_checked + counts.failed;
+                if total > 0 {
+                    fn_total += 1;
+                    if counts.runtime_checked == 0 && counts.failed == 0 {
+                        fully_verified += 1;
+                    }
+                }
+            }
+        }
     }
     (fully_verified, fn_total)
 }
@@ -228,6 +280,11 @@ fn build_fn_param_refinements(prog: &Program) -> HashMap<String, Vec<(String, Op
                     map.insert(method.name.clone(), param_ref_vec(method));
                 }
             }
+            Decl::Actor(ad) => {
+                for method in &ad.methods {
+                    map.insert(method.name.clone(), param_ref_vec_params(&method.params));
+                }
+            }
             _ => {}
         }
     }
@@ -235,7 +292,11 @@ fn build_fn_param_refinements(prog: &Program) -> HashMap<String, Vec<(String, Op
 }
 
 fn param_ref_vec(fd: &FnDecl) -> Vec<(String, Option<RefExpr>)> {
-    fd.params
+    param_ref_vec_params(&fd.params)
+}
+
+fn param_ref_vec_params(params: &[Param]) -> Vec<(String, Option<RefExpr>)> {
+    params
         .iter()
         .map(|p| {
             // Normalise the parameter name to "self" so that predicates written
@@ -282,8 +343,19 @@ fn param_refinements(
     fd: &FnDecl,
     type_refs: &HashMap<String, Option<RefExpr>>,
 ) -> HashMap<String, Option<RefExpr>> {
+    param_refinements_slice(&fd.params, type_refs)
+}
+
+/// Build the variable-refinement map from a bare parameter slice.
+///
+/// Used for actor methods, which share the same `Vec<Param>` layout as
+/// `FnDecl` but are not `FnDecl` instances.
+fn param_refinements_slice(
+    params: &[Param],
+    type_refs: &HashMap<String, Option<RefExpr>>,
+) -> HashMap<String, Option<RefExpr>> {
     let mut map = HashMap::new();
-    for p in &fd.params {
+    for p in params {
         // Inline refinement takes priority; normalise param name → "self".
         let pred = p
             .refinement
