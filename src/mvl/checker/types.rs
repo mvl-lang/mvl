@@ -420,6 +420,15 @@ pub fn types_compatible(a: &Ty, b: &Ty) -> bool {
                     .zip(bes.iter())
                     .all(|(x, y)| types_compatible(x, y))
         }
+        // Positional[T] is a CLI annotation — transparent in the type system.
+        // Strip it in both directions so `Positional[Int]` satisfies an `Int` slot and
+        // an `Int` literal satisfies a `Positional[Int]` field (e.g. unwrap_or default).
+        (Ty::Named(an, aa), _) if an == "Positional" && aa.len() == 1 => {
+            types_compatible(&aa[0], b)
+        }
+        (_, Ty::Named(bn, ba)) if bn == "Positional" && ba.len() == 1 => {
+            types_compatible(a, &ba[0])
+        }
         (Ty::Named(an, aa), Ty::Named(bn, ba)) => {
             an == bn
                 && aa.len() == ba.len()
