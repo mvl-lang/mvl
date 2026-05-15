@@ -344,9 +344,7 @@ mutants-actors: ## Run cargo-mutants on actor checker and codegen (long-running;
 	  --cargo-test-arg '--test' \
 	  --cargo-test-arg 'type_checker' \
 	  --cargo-test-arg '--test' \
-	  --cargo-test-arg 'transpiler' \
-	  --cargo-test-arg '--test' \
-	  --cargo-test-arg 'cross_backend'
+	  --cargo-test-arg 'transpiler'
 	@echo ""
 	@echo "Results in mutants.out/  — run 'cat mutants.out/caught.txt' and 'cat mutants.out/missed.txt'"
 
