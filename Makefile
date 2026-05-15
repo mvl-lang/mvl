@@ -25,6 +25,7 @@ setup: ## Install git hooks, verify tooling, and install tree-sitter npm deps
 	@command -v cargo >/dev/null 2>&1 || { echo "cargo not found — install Rust: https://rustup.rs"; exit 1; }
 	@command -v node >/dev/null 2>&1 || { echo "node not found — install Node.js: https://nodejs.org"; exit 1; }
 	cd etc/tree-sitter-mvl && npm install
+	cargo install cargo-mutants --locked
 	@echo "Ready."
 
 doctor: ## Check that all dev tools are available
@@ -311,7 +312,6 @@ fuzz-diff: ## [Phase 3] Differential fuzzing: Rust vs LLVM backends (subprocess 
 	@echo "All clear — no divergences found."
 
 # === Mutation testing (long-running — not part of per-PR CI) ===
-# Requires: cargo install cargo-mutants
 # Scores transpiler emit_*.rs modules; target: ≥80% mutation score.
 # Results written to mutants.out/ — see mutants.out/outcomes.json for triage.
 # Ref: #206
@@ -319,7 +319,6 @@ fuzz-diff: ## [Phase 3] Differential fuzzing: Rust vs LLVM backends (subprocess 
 MUTANTS_TIMEOUT ?= 120  # seconds per mutant; raise for slow machines
 
 mutants: ## Run cargo-mutants on transpiler emit modules (long-running; ~1-2 h)
-	@command -v cargo-mutants >/dev/null 2>&1 || { echo "Install first: cargo install cargo-mutants"; exit 1; }
 	cargo mutants \
 	  --file 'src/mvl/transpiler/emit_exprs.rs' \
 	  --file 'src/mvl/transpiler/emit_stmts.rs' \
@@ -334,7 +333,6 @@ mutants: ## Run cargo-mutants on transpiler emit modules (long-running; ~1-2 h)
 # Scores actor checker + backend codegen; target: ≥85% mutation score.
 # Ref: #703
 mutants-actors: ## Run cargo-mutants on actor checker and codegen (long-running; ~1-2 h)
-	@command -v cargo-mutants >/dev/null 2>&1 || { echo "Install first: cargo install cargo-mutants"; exit 1; }
 	cargo mutants \
 	  --file 'src/mvl/checker/capabilities.rs' \
 	  --file 'src/mvl/checker/decls.rs' \
