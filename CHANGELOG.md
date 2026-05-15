@@ -4,6 +4,19 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.110.0] — 2026-05-15
+
+### Added
+
+- **Closure lowering on LLVM backend** (#588) — lambdas can now capture variables from enclosing scopes and be passed as first-class values to higher-order functions (`filter`, `map`, `fold`, etc.). Universal closure struct representation `{ fn_ptr, env_ptr }` with trampoline calling convention; non-capturing lambdas use null `env_ptr`; capturing lambdas use stack-allocated environment structs. All three HOF scenarios (filter/map/fold) verified via cross-backend test parity.
+
+### Fixed
+
+- Closure capture analysis: let-bound names in lambda body now properly shadow outer bindings (C2).
+- Closure capture analysis: else-if chains arbitrarily deep now properly walked for captures (C1).
+- Closure capture analysis: function-typed variables used as callees now included in captures (C3).
+- Wrapper function generation: type mismatch now fails loudly (unreachable) instead of silently returning undefined (W1).
+
 ## [0.109.0] — 2026-05-15
 
 ### Added
