@@ -101,6 +101,8 @@ The 20+ `transpile_*` function variants MUST be consolidated into a single
 
 **Implementation:** `src/mvl/backends/rust/config.rs` (new)
 
+**Tests:** `tests/transpiler.rs::transpile_with_prelude_produces_valid_output`, `tests/transpiler.rs::transpile_covered_instruments_branches`, `tests/transpiler.rs::transpile_covered_with_prelude_instruments_branches`, `tests/transpiler.rs::transpile_mutated_with_prelude_mutates_non_test_fn_bodies`
+
 #### Scenario: Basic transpilation
 
 - GIVEN a program and crate name
@@ -158,6 +160,8 @@ The emit functions MAY be refactored to use a visitor pattern, enabling
 cleaner composition of instrumentation passes.
 
 **Implementation:** `src/mvl/backends/rust/visitor.rs` (future)
+
+**Tests:** `src/mvl/backends/rust/visitor.rs::tests::base_if_no_else`, `src/mvl/backends/rust/visitor.rs::tests::coverage_if_injects_true_branch_hit`, `src/mvl/backends/rust/visitor.rs::tests::coverage_if_with_else_injects_both_branches`
 
 #### Scenario: Base emission
 
