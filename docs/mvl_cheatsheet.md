@@ -10,10 +10,10 @@
 | Keyword | Usage | Example |
 |---------|-------|---------|
 | `fn` | Function | `fn add(a: Int, b: Int) -> Int { a + b }` |
-| `struct` | Product type | `struct Point { x: Float64, y: Float64 }` |
-| `enum` | Sum type | `enum Option[T] { Some(T), None }` |
-| `type` | Alias | `type Meters = Float64` |
-| `const` | Constant | `const MAX: Int = 100` |
+| `type` | Type definition | `type Point = struct { x: Float64, y: Float64 }` |
+| `struct` | Product type (inside `type`) | `type Cfg = struct { key: String }` |
+| `enum` | Sum type (inside `type`) | `type Option[T] = enum { Some(T), None }` |
+| `const` | Compile-time constant | `const MAX: Int = 100` |
 | `actor` | Actor type | `actor Counter { count: Int; pub fn inc() { } }` |
 
 > **Note:** `trait` and `impl` are **NOT SUPPORTED** in MVL.
