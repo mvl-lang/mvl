@@ -71,6 +71,33 @@ type QueryResult = struct {
     data: String,
 }
 
+// ── Display helpers ──────────────────────────────────────────────────────
+
+fn method_name(method: Method) -> String {
+    match method {
+        Method::Get     => "GET",
+        Method::Post    => "POST",
+        Method::Delete  => "DELETE",
+        Method::Unknown => "UNKNOWN",
+    }
+}
+
+fn route_path(route: Route) -> String {
+    match route {
+        Route::Users   => "/users",
+        Route::Health  => "/health",
+        Route::Unknown => "/unknown",
+    }
+}
+
+fn route_name(route: Route) -> String {
+    match route {
+        Route::Users   => "Users",
+        Route::Health  => "Health",
+        Route::Unknown => "Unknown",
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // DB POOL ACTOR
 //
@@ -91,7 +118,7 @@ actor DbPool {
     // tag caller  — identity-only handle; pool can reply, but cannot read handler state.
     pub fn query(val sql: String, val req_id: Int, tag caller: RequestHandler) ! Console {
         println("DbPool: query '".concat(sql).concat("' for req #").concat(req_id.to_string()))
-        let result: QueryResult = QueryResult { data: "[{name: Alice}, {name: Bob}]" }
+        let result: QueryResult = QueryResult { data: "[{name: Alice}, {name: Bob}]" };
         caller.query_done(result, req_id)
     }
 }
@@ -112,7 +139,7 @@ actor RequestHandler {
     // Once handle() fires, the Listener no longer holds the Request.
     // No other actor can observe or mutate req while this handler processes it.
     pub fn handle(iso req: Request) ! Console {
-        println("Handler: routing ".concat(req.route.to_string()).concat(" (req #").concat(req.id.to_string()).concat(")"))
+        println("Handler: routing ".concat(route_name(req.route)).concat(" (req #").concat(req.id.to_string()).concat(")"))
         match req.route {
             Route::Users  => self.db.query("SELECT * FROM users", req.id, self),
             Route::Health => println("Handler: 200 OK (req #".concat(req.id.to_string()).concat(") — ok")),
@@ -145,7 +172,7 @@ actor Listener {
     //               Listener immediately forwards it to the handler; req is gone.
     // tag handler — identity-only handle; Listener cannot read handler state.
     pub fn accept(iso req: Request, tag handler: RequestHandler) ! Console {
-        println("Listener: accepted ".concat(req.method.to_string()).concat(" /").concat(req.route.to_string().to_lowercase()).concat(" (req #").concat(req.id.to_string()).concat(")"))
+        println("Listener: accepted ".concat(method_name(req.method)).concat(" ").concat(route_path(req.route)).concat(" (req #").concat(req.id.to_string()).concat(")"))
         handler.handle(req)
     }
 }
@@ -161,17 +188,17 @@ actor Listener {
 fn main() -> Unit ! Console {
     concurrently {
         // One shared DbPool — all handlers hold a tag reference to it.
-        let db: DbPool = actor DbPool { connections: 10 }
+        let db: DbPool = actor DbPool { connections: 10 };
 
         // Listener holds a tag reference to the pool.
-        let listener: Listener = actor Listener { port: 8080, db: db }
+        let listener: Listener = actor Listener { port: 8080, db: db };
 
         // Pre-spawn one handler per simulated request.
         // Each handler gets a tag reference to the same DbPool.
         // In Erlang/Akka style, these would be spawned dynamically inside Listener.
-        let h1: RequestHandler = actor RequestHandler { db: db }
-        let h2: RequestHandler = actor RequestHandler { db: db }
-        let h3: RequestHandler = actor RequestHandler { db: db }
+        let h1: RequestHandler = actor RequestHandler { db: db };
+        let h2: RequestHandler = actor RequestHandler { db: db };
+        let h3: RequestHandler = actor RequestHandler { db: db };
 
         // Simulate three incoming HTTP requests.
         // iso Request: ownership moves from this scope → Listener → RequestHandler.
