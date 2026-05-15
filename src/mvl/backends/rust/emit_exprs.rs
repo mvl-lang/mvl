@@ -656,6 +656,11 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                 if is_extern {
                     cg.push("unsafe { ");
                 }
+                // Phase 8: free calls to actor methods from within the actor state
+                // impl must be prefixed with `self.` (e.g. `log(seq)` → `self.log(seq)`).
+                if !is_extern && cg.actor_methods.contains(name.as_str()) {
+                    cg.push("self.");
+                }
                 // #420: Use fully-qualified path for stdlib functions that would
                 // otherwise be shadowed by a locally-defined built-in of the same name.
                 if let Some(qualified) = cg.stdlib_fn_qualified.get(name.as_str()).cloned() {
@@ -959,7 +964,7 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
         Expr::Spawn {
             actor_type, fields, ..
         } => {
-            // Phase 8: `actor Counter { count: 0 }` → `_start_counter(CounterState { count: 0 })`
+            // Phase 8: `actor Counter { count: 0 }` → `_start_counter(CounterState { count: 0, _self_ref: None })`
             let snake = crate::mvl::backends::rust::emit_actors::actor_name_to_snake(actor_type);
             cg.push(&format!("_start_{snake}({actor_type}State {{"));
             for (i, (field_name, val)) in fields.iter().enumerate() {
@@ -969,6 +974,12 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                 cg.push(&format!("{field_name}: "));
                 emit_expr(cg, val);
             }
+            // `_self_ref` is always None at construction; `_start_<name>` sets it
+            // after the channel is created (so the handle can be cloned into state).
+            if !fields.is_empty() {
+                cg.push(", ");
+            }
+            cg.push("_self_ref: None");
             cg.push("})");
         }
         // Phase 8 (#743): concurrently { body } — structured concurrency scope.
@@ -1163,6 +1174,11 @@ fn emit_expr_as_arg(cg: &mut RustEmitter, expr: &Expr) {
         Expr::Literal(Literal::Str(s), _) => {
             cg.push(&format!("\"{}\".to_string().into()", escape_str(s)));
         }
+        // Phase 8: `self` used as a tag argument inside an actor behavior.
+        // The actor's own handle is stored in `_self_ref`; clone it to pass.
+        Expr::Ident(name, _) if name == "self" && !cg.actor_self_type.is_empty() => {
+            cg.push("self._self_ref.as_ref().unwrap().clone()");
+        }
         // Identifiers: check if this is the last use — if so, move instead of clone.
         Expr::Ident(_, span) => {
             emit_expr(cg, expr);
@@ -1195,6 +1211,10 @@ fn emit_expr_as_fn_arg(cg: &mut RustEmitter, expr: &Expr) {
     match expr {
         Expr::Literal(Literal::Str(s), _) => {
             cg.push(&format!("\"{}\".to_string().into()", escape_str(s)));
+        }
+        // Phase 8: `self` used as a tag argument inside an actor behavior.
+        Expr::Ident(name, _) if name == "self" && !cg.actor_self_type.is_empty() => {
+            cg.push("self._self_ref.as_ref().unwrap().clone()");
         }
         // Function-typed identifiers (callbacks, named function references) must NOT
         // get `.into()` — Rust function items do not implement `Into<_>` generically.

@@ -116,6 +116,19 @@ pub struct RustEmitter {
     pub expr_types: std::collections::HashMap<Span, Ty>,
     /// Controls how struct invariants are enforced at runtime (issue #662).
     pub assert_mode: crate::mvl::backends::AssertMode,
+    /// Names of all methods (pub fn and fn) in the actor currently being emitted.
+    ///
+    /// Set by `emit_actor_decl` before emitting method bodies; cleared after.
+    /// When non-empty, free calls to any name in this set are prefixed with
+    /// `self.` so that `log(seq)` in an actor body becomes `self.log(seq)`.
+    pub actor_methods: std::collections::HashSet<String>,
+    /// Name of the actor handle struct being emitted (e.g. `"Pong"`).
+    ///
+    /// Non-empty only while emitting actor method bodies.  When non-empty,
+    /// `Expr::Ident("self")` used as a call argument is replaced with
+    /// `self._self_ref.as_ref().unwrap().clone()` — the actor's own handle
+    /// stored in the state by `_start_<name>`.
+    pub actor_self_type: String,
 }
 
 impl RustEmitter {

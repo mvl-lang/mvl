@@ -97,7 +97,9 @@ pub fn actor_name_to_snake(s: &str) -> String {
 pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     let name = &ad.name;
     let state_name = format!("{name}State");
-    let msg_name = format!("{name}Msg");
+    // Mailbox enum is named `{Name}Mailbox` (not `{Name}Msg`) to avoid
+    // colliding with user-defined message struct types like `PingMsg`.
+    let msg_name = format!("{name}Mailbox");
     let start_fn = format!("_start_{}", actor_name_to_snake(name));
 
     let pub_methods: Vec<_> = ad.methods.iter().filter(|m| m.is_public).collect();
@@ -108,6 +110,12 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     for field in &ad.fields {
         let ty_str = emit_type_expr(&field.ty);
         cg.line(&format!("{}: {ty_str},", field.name));
+    }
+    if !pub_methods.is_empty() {
+        // `_self_ref` holds the actor's own handle so that behaviors can pass
+        // `self` as a `tag` argument to other actors.  Initialised to `None`
+        // at construction; set by `_start_<name>` before the thread is spawned.
+        cg.line(&format!("_self_ref: Option<{name}>,"));
     }
     cg.pop_indent();
     cg.line("}");
@@ -137,6 +145,11 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
 
     // ── 3. State impl (all methods — behaviors and helpers run on actor thread) ──
     if !ad.methods.is_empty() {
+        // Expose actor method names and handle type so emit_exprs can:
+        //   - prefix free calls to these names with `self.` (e.g. log → self.log)
+        //   - replace `Expr::Ident("self")` arguments with `self._self_ref.as_ref().unwrap().clone()`
+        cg.actor_methods = ad.methods.iter().map(|m| m.name.clone()).collect();
+        cg.actor_self_type = name.clone();
         cg.line(&format!("impl {state_name} {{"));
         cg.push_indent();
         for m in &ad.methods {
@@ -189,6 +202,9 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
         cg.pop_indent();
         cg.line("}");
         cg.blank();
+        // Clear actor context after the impl block.
+        cg.actor_methods.clear();
+        cg.actor_self_type.clear();
     }
 
     // ── 4, 5, 6: actor handle, dispatch impl, start fn ────────────────────
@@ -244,10 +260,18 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     cg.line("}");
     cg.blank();
 
-    // 6. Start function: spawn actor thread, return handle
-    cg.line(&format!("fn {start_fn}(state: {state_name}) -> {name} {{"));
+    // 6. Start function: spawn actor thread, return handle.
+    //    Takes `mut state` so we can inject `_self_ref` after creating the
+    //    channel — the actor needs a clone of its own sender to pass `self`
+    //    as a `tag` argument inside behaviors.
+    cg.line(&format!(
+        "fn {start_fn}(mut state: {state_name}) -> {name} {{"
+    ));
     cg.push_indent();
     cg.line("let (tx, rx) = std::sync::mpsc::sync_channel(256);");
+    cg.line(&format!(
+        "state._self_ref = Some({name} {{ _sender: tx.clone() }});"
+    ));
     cg.line("std::thread::spawn(move || {");
     cg.push_indent();
     cg.line("let mut actor = state;");
