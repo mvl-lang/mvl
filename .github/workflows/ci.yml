@@ -67,10 +67,10 @@ jobs:
         run: |
           # Threshold ratchet (issue #36):
           #   Epic 1 complete (parser):          --min 0.25
-          #   Epic 2 complete (type checker):    --min 0.50  ← current
-          #   Epic 3+4 complete (effects + IFC): --min 0.75
+          #   Epic 2 complete (type checker):    --min 0.50
+          #   Epic 3+4 complete (effects + IFC): --min 0.75  ← current (Phase 8 actors)
           #   Epic 5 complete (transpiler):      --min 0.90
-          OUTPUT=$(python3 tools/assurance.py --min 0.50 2>&1)
+          OUTPUT=$(python3 tools/assurance.py --min 0.75 2>&1)
           EXIT_CODE=$?
           CLEAN=$(echo "$OUTPUT" | sed 's/\x1b\[[0-9;]*m//g')
           DELIM=$(openssl rand -hex 16)

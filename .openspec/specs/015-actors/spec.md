@@ -101,6 +101,8 @@ The `actor` keyword is a hard-reserved keyword and is used for both declaration 
 **Tests:** `tests/corpus/actors/basic_actor.mvl`,
 `tests/corpus/negative/req09_data_race/actor_syntax_errors.mvl`
 
+**Corpus:** `tests/corpus/09_concurrency/actors.mvl`, `examples/programs/actor_spawn.mvl`
+
 #### Scenario: Actor type parses correctly
 
 - GIVEN an `actor` declaration with fields and behaviors
@@ -135,6 +137,8 @@ A behavior (`pub fn` inside an actor) is an asynchronous message handler.  The c
 
 **Tests:** `tests/corpus/actors/behaviors.mvl`,
 `tests/corpus/negative/req09_data_race/behavior_ref_param.mvl`
+
+**Corpus:** `tests/corpus/09_concurrency/actors.mvl`, `examples/programs/actor_send.mvl`
 
 #### Scenario: Behavior with ref parameter rejected
 
@@ -194,6 +198,8 @@ An actor terminates when:
 **Tests:** `tests/corpus/actors/lifecycle.mvl`,
 `tests/corpus/negative/req09_data_race/actor_field_mismatch.mvl`
 
+**Corpus:** `examples/programs/actor_spawn.mvl`, `examples/programs/actor_send.mvl`
+
 #### Scenario: Actor creation returns ActorRef with tag capability
 
 - GIVEN `let tag counter: ActorRef = actor Counter { count: 0 }`
@@ -225,6 +231,8 @@ The compiler MUST reject a behavior call that passes an `iso` value without cons
 
 **Tests:** `tests/corpus/actors/message_send.mvl`,
 `tests/corpus/negative/req09_data_race/iso_send_without_consume.mvl`
+
+**Corpus:** `tests/corpus/09_concurrency/actors.mvl`, `examples/programs/actor_send.mvl`
 
 #### Scenario: iso message send requires consume
 
@@ -270,6 +278,8 @@ These rules extend the channel-send rules from Spec 014 (Req 1) to actor behavio
 **Tests:** `tests/type_checker.rs::sending_ref_param_rejected`,
 `tests/corpus/negative/req09_data_race/behavior_ref_param.mvl`
 
+**Corpus:** `tests/negative/req09/send_ref_across_actor.mvl`
+
 #### Scenario: ref capability rejected at behavior call
 
 - GIVEN `ref buf: Buffer` and `actor_ref.write(buf)`
@@ -292,6 +302,8 @@ The only permitted interaction with an actor from the outside is sending a messa
 **Implementation:** `src/mvl/checker/mod.rs::TypeChecker::check_field_access`
 
 **Tests:** `tests/corpus/negative/req09_data_race/actor_field_access.mvl`
+
+**Corpus:** `tests/negative/req09/ref_escapes_to_actor.mvl`
 
 #### Scenario: Direct field access on ActorRef rejected
 
