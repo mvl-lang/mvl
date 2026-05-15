@@ -96,7 +96,6 @@
 | `..` | Range | `0..10` |
 | `::` | Path separator | `std::io::File` |
 | `.` | Field/method access | `point.x` |
-| `|>` | Pipe | `x |> f |> g` |
 
 ---
 
