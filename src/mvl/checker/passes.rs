@@ -273,8 +273,7 @@ impl VerificationPass for RefinementsPass {
 
         if fn_total == 0 {
             Verdict::Unchecked {
-                reason: "no refined call sites found; full SMT analysis pending (Phase 6)"
-                    .to_string(),
+                reason: "no refined types used in this file".to_string(),
             }
         } else if fully_verified == fn_total {
             Verdict::Proven {
@@ -289,7 +288,7 @@ impl VerificationPass for RefinementsPass {
                 reason: format!(
                     "{fully_verified}/{fn_total} function(s) fully verified; \
                      {} proven, {} runtime-checked out of {total} refined call site(s); \
-                     full SMT analysis pending (Phase 6)",
+                     full SMT analysis pending",
                     counts.proven, counts.runtime_checked,
                 ),
             }
@@ -359,7 +358,7 @@ impl VerificationPass for IFCPass {
                 evidence: format!(
                     "no direct or implicit information flow violations; \
                      {dc} declassif{} point(s), {sc} sanitiz{} point(s) auditable; \
-                     cross-function flow analysis pending (Phase 6)",
+                     cross-function flow analysis pending",
                     if dc == 1 { "ication" } else { "ications" },
                     if sc == 1 { "ation" } else { "ations" },
                 ),
