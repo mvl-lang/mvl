@@ -1,0 +1,63 @@
+// LLVM smoke test: actor_webserver routing and response logic.
+// expect: 200 /users [{name: Alice}, {name: Bob}]
+// expect: 200 /health ok
+// expect: 404 /unknown
+
+// Workaround: cross-file type resolution is not yet wired (#96).
+type Method = enum { Get, Post, Delete, Unknown }
+type Route  = enum { Users, Health, Unknown }
+
+type Request = struct {
+    id:     Int,
+    method: Method,
+    route:  Route,
+}
+
+type Response = struct {
+    status: Int,
+    body:   String,
+}
+
+// ── Pure routing: mirrors RequestHandler.handle + DbPool.query ───────────────
+
+fn route_path(route: Route) -> String {
+    match route {
+        Route::Users   => "/users",
+        Route::Health  => "/health",
+        Route::Unknown => "/unknown",
+    }
+}
+
+fn db_response() -> String {
+    "[{name: Alice}, {name: Bob}]"
+}
+
+fn handle(req: Request) -> Response {
+    match req.route {
+        Route::Users   => Response { status: 200, body: db_response() },
+        Route::Health  => Response { status: 200, body: "ok" },
+        Route::Unknown => Response { status: 404, body: "" },
+    }
+}
+
+// ── Output ────────────────────────────────────────────────────────────────────
+
+fn print_response(req: Request, resp: Response) -> Unit ! Console {
+    let line: String = resp.status.to_string()
+        .concat(" ")
+        .concat(route_path(req.route));
+    if resp.status == 200 && resp.body.len() > 0 {
+        println(line.concat(" ").concat(resp.body))
+    } else {
+        println(line)
+    }
+}
+
+fn main() -> Unit ! Console {
+    let r1: Request = Request { id: 1, method: Method::Get,    route: Route::Users   };
+    let r2: Request = Request { id: 2, method: Method::Get,    route: Route::Health  };
+    let r3: Request = Request { id: 3, method: Method::Delete, route: Route::Unknown };
+    print_response(r1, handle(r1));
+    print_response(r2, handle(r2));
+    print_response(r3, handle(r3))
+}
