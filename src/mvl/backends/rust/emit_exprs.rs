@@ -972,7 +972,7 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     cg.push(", ");
                 }
                 cg.push(&format!("{field_name}: "));
-                emit_expr(cg, val);
+                emit_expr_as_arg(cg, val);
             }
             // `_self_ref` is always None at construction; `_start_<name>` sets it
             // after the channel is created (so the handle can be cloned into state).
