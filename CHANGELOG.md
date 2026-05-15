@@ -4,6 +4,20 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.111.0] — 2026-05-15
+
+### Added
+
+- **Mutation testing for actor checker and codegen** (#703) — cargo-mutants integrated into CI and `make setup`; actor checker and LLVM actor IR covered by mutation test suites.
+
+### Fixed
+
+- CI: fetch base SHA before PR diff to fix "Detect changed paths" (#703).
+- Move LLVM actor IR tests to transpiler suite; drop `cross_backend` from mutants-actors (#703).
+- Install `cargo-mutants` in `make setup`, drop manual guards (#703).
+
+---
+
 ## [0.110.0] — 2026-05-15
 
 ### Added
