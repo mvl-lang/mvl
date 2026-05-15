@@ -14,7 +14,7 @@ pub fn run(path: &str, format_json: bool) {
     let mut reports = Vec::new();
     for f in &files {
         let file_str = f.display().to_string();
-        let (prog, _src) = loader::parse_or_exit(&file_str);
+        let (prog, _src) = super::parse_or_exit(&file_str);
         reports.push(complexity::analyze(&file_str, &prog));
     }
     if format_json {

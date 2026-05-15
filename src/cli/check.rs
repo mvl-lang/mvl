@@ -123,7 +123,7 @@ pub fn run(
         .iter()
         .map(|f| {
             let file_str = f.display().to_string();
-            let (prog, src) = loader::parse_or_exit(&file_str);
+            let (prog, src) = super::parse_or_exit(&file_str);
             (file_str, prog, src)
         })
         .collect();
@@ -145,7 +145,7 @@ pub fn run(
                 let sib_path = entry_dir.join(format!("{mod_name}.mvl"));
                 if sib_path.exists() {
                     let sib_str = sib_path.display().to_string();
-                    let (sib_prog, sib_src) = loader::parse_or_exit(&sib_str);
+                    let (sib_prog, sib_src) = super::parse_or_exit(&sib_str);
                     parsed.push((sib_str, sib_prog, sib_src));
                 }
             }

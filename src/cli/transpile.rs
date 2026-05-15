@@ -5,7 +5,7 @@ use mvl::mvl::backends::rust as transpiler;
 use mvl::mvl::loader;
 
 pub fn run(path: &str) {
-    let (prog, _src) = loader::parse_or_exit(path);
+    let (prog, _src) = super::parse_or_exit(path);
     let crate_name = loader::stem(path);
     let out = transpiler::transpile(&prog, transpiler::TranspileConfig::new(&crate_name)).output;
     println!("// === Cargo.toml ===");

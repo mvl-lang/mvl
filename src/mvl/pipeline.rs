@@ -103,6 +103,10 @@ impl Pipeline {
     ///
     /// Returns a [`TranspileResult`] with the Rust source and any instrumentation
     /// metadata (branches, mutants, decisions) depending on which modes are active.
+    ///
+    /// **Single-file builds only.** Coverage and MC/DC counters always start at ID 0.
+    /// For multi-file coverage runs, use [`TranspileConfig::with_coverage(offset)`] directly
+    /// and track the offset across files via `result.branches.len()`.
     pub fn build(
         &self,
         prog: &Program,

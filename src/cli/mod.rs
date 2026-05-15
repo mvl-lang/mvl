@@ -15,7 +15,9 @@ pub mod mutate;
 pub mod test;
 pub mod transpile;
 
+use mvl::mvl::loader;
 use mvl::mvl::packages;
+use mvl::mvl::parser::ast::Program;
 use mvl::mvl::toolchain;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -200,13 +202,23 @@ pub(super) fn dispatch(args: &[String]) {
     }
 }
 
+/// Parse the given `.mvl` file, printing errors and exiting on failure.
+pub(super) fn parse_or_exit(path: &str) -> (Program, String) {
+    loader::parse_file(path).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        process::exit(1);
+    })
+}
+
 pub(super) fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let ty = entry.file_type()?;
         let dest_path = dst.join(entry.file_name());
-        if ty.is_dir() {
+        if ty.is_symlink() {
+            // Skip symlinks — prevents escaping the source tree (#715).
+        } else if ty.is_dir() {
             copy_dir_recursive(&entry.path(), &dest_path)?;
         } else {
             fs::copy(entry.path(), dest_path)?;
@@ -227,6 +239,8 @@ pub(super) fn json_escape(s: &str) -> String {
             c if (c as u32) < 0x20 => {
                 out.push_str(&format!("\\u{:04x}", c as u32));
             }
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
             c => out.push(c),
         }
     }

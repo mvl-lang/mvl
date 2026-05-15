@@ -37,25 +37,25 @@ use crate::mvl::parser::ast::Program;
 /// Build with [`TranspileConfig::new`] and the fluent builder methods.
 pub struct TranspileConfig {
     /// Crate name used in `Cargo.toml` generation.
-    pub crate_name: String,
+    pub(crate) crate_name: String,
     /// File stem for instrumentation reports (coverage, mutation, MC/DC).
-    pub file_stem: String,
+    pub(crate) file_stem: String,
     /// Prelude programs prepended before type-checking and emission.
-    pub prelude_progs: Vec<Program>,
+    pub(crate) prelude_progs: Vec<Program>,
     /// Coverage instrumentation start counter ID, if enabled.
-    pub coverage_start_id: Option<usize>,
+    pub(crate) coverage_start_id: Option<usize>,
     /// MC/DC instrumentation start counter ID, if enabled.
-    pub mcdc_start_id: Option<usize>,
+    pub(crate) mcdc_start_id: Option<usize>,
     /// Enable mutation instrumentation.
-    pub mutation: bool,
+    pub(crate) mutation: bool,
     /// Emit `todo!()` stubs for `extern "rust"` blocks (used for source files
     /// compiled into the test crate, where the real FFI dependency is absent).
-    pub test_extern_stubs: bool,
+    pub(crate) test_extern_stubs: bool,
     /// Mark this file as a test file (`*_test.mvl`). Enables `current_file_is_test`
     /// in the emitter, which controls mutation instrumentation scope.
-    pub is_test_file: bool,
+    pub(crate) is_test_file: bool,
     /// How refinement predicates are emitted (`assert!`, `debug_assert!`, or assume).
-    pub assert_mode: AssertMode,
+    pub(crate) assert_mode: AssertMode,
 }
 
 impl TranspileConfig {

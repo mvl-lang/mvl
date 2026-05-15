@@ -8,7 +8,6 @@ use crate::mvl::parser::Parser;
 use crate::mvl::stdlib;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process;
 
 const IMPLICIT_PRELUDE_STEMS: &[&str] = &["core", "strings", "lists"];
 
@@ -50,7 +49,8 @@ fn collect_mvl_files_recursive(dir: &Path, test_only: bool, out: &mut Vec<PathBu
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+        if is_dir {
             collect_mvl_files_recursive(&path, test_only, out);
         } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
             if name.ends_with(".mvl") {
@@ -91,28 +91,27 @@ pub fn mvl_files_all(path: &str) -> Vec<PathBuf> {
     result
 }
 
-/// Parse the given `.mvl` file or exit with an error message.
-pub fn parse_or_exit(path: &str) -> (Program, String) {
-    let src = fs::read_to_string(path).unwrap_or_else(|e| {
-        eprintln!("Cannot read {path}: {e}");
-        process::exit(1);
-    });
+/// Parse the given `.mvl` file, returning `Err` with a human-readable message on failure.
+pub fn parse_file(path: &str) -> Result<(Program, String), String> {
+    let src = fs::read_to_string(path).map_err(|e| format!("Cannot read {path}: {e}"))?;
     let (mut parser, lex_errors) = Parser::new(&src);
     if !lex_errors.is_empty() {
-        for err in &lex_errors {
-            eprintln!("lex error: {err:?}");
-        }
-        process::exit(1);
+        let lines: Vec<_> = lex_errors
+            .iter()
+            .map(|e| format!("lex error: {e:?}"))
+            .collect();
+        return Err(lines.join("\n"));
     }
     let prog = parser.parse_program();
     let parse_errors = parser.errors();
     if !parse_errors.is_empty() {
-        for err in parse_errors {
-            eprintln!("parse error: {err:?}");
-        }
-        process::exit(1);
+        let lines: Vec<_> = parse_errors
+            .iter()
+            .map(|e| format!("parse error: {e:?}"))
+            .collect();
+        return Err(lines.join("\n"));
     }
-    (prog, src)
+    Ok((prog, src))
 }
 
 /// Collect unique top-level module names referenced by `use` declarations in `prog`,

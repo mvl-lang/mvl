@@ -63,7 +63,7 @@ pub fn run(path: &str, quiet: bool, gen_boundary: bool, limit: Option<usize>) {
 
     for test_file in &test_files {
         let file_str = test_file.display().to_string();
-        let (prog, _src) = loader::parse_or_exit(&file_str);
+        let (prog, _src) = super::parse_or_exit(&file_str);
         let s = loader::stem(&file_str);
         let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
         let result = transpiler::transpile(
@@ -103,7 +103,7 @@ pub fn run(path: &str, quiet: bool, gen_boundary: bool, limit: Option<usize>) {
         if covered_stems.contains(&module_name) {
             continue;
         }
-        let (prog, _src) = loader::parse_or_exit(&file_str);
+        let (prog, _src) = super::parse_or_exit(&file_str);
         let has_tests = prog
             .declarations
             .iter()

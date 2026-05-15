@@ -65,7 +65,7 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
         path.to_string()
     };
 
-    let (prog, _src) = loader::parse_or_exit(&file_path);
+    let (prog, _src) = super::parse_or_exit(&file_path);
     let crate_name = loader::stem(path);
 
     // Collect sibling modules referenced via `use module::item` declarations.
@@ -81,7 +81,7 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
             if !sib_path.exists() {
                 return None;
             }
-            let (sib_prog, _) = loader::parse_or_exit(&sib_path.display().to_string());
+            let (sib_prog, _) = super::parse_or_exit(&sib_path.display().to_string());
             Some((mod_name, sib_prog))
         })
         .collect();
@@ -255,7 +255,10 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
             );
             process::exit(1);
         }
-        super::copy_dir_recursive(&runtime_src, &runtime_dst).expect("copy mvl_runtime");
+        super::copy_dir_recursive(&runtime_src, &runtime_dst).unwrap_or_else(|e| {
+            eprintln!("error: failed to copy mvl_runtime: {e}");
+            process::exit(1);
+        });
     }
 
     println!("Transpiled to: {}", tmp_dir.display());

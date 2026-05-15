@@ -107,7 +107,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
 
     for test_file in &test_files {
         let file_str = test_file.display().to_string();
-        let (prog, src) = loader::parse_or_exit(&file_str);
+        let (prog, src) = super::parse_or_exit(&file_str);
         let s = loader::stem(&file_str);
         let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
         module_sources.insert(module_name.clone(), src.lines().map(String::from).collect());
@@ -156,7 +156,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
         if covered_stems.contains(&module_name) {
             continue;
         }
-        let (prog, src) = loader::parse_or_exit(&file_str);
+        let (prog, src) = super::parse_or_exit(&file_str);
         let has_tests = prog
             .declarations
             .iter()
@@ -203,7 +203,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
             let file_str = src_file.display().to_string();
             let s = loader::stem(&file_str);
             let module_name = s.replace('-', "_");
-            let (prog, _src) = loader::parse_or_exit(&file_str);
+            let (prog, _src) = super::parse_or_exit(&file_str);
             for decl in &prog.declarations {
                 if let Decl::Fn(fd) = decl {
                     if !fd.is_test {

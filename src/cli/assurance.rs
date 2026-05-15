@@ -27,7 +27,7 @@ pub fn run(path: &str, json: bool, verbose: bool) {
         .iter()
         .map(|f| {
             let file_str = f.display().to_string();
-            let (prog, _) = loader::parse_or_exit(&file_str);
+            let (prog, _) = super::parse_or_exit(&file_str);
             (loader::stem(&file_str), prog)
         })
         .collect();
@@ -63,7 +63,7 @@ pub fn run(path: &str, json: bool, verbose: bool) {
         .iter()
         .map(|f| {
             let file_str = f.display().to_string();
-            let (prog, src) = loader::parse_or_exit(&file_str);
+            let (prog, src) = super::parse_or_exit(&file_str);
             (file_str, prog, src)
         })
         .collect();

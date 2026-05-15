@@ -72,7 +72,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     {
         let all_test_progs: Vec<_> = test_files
             .iter()
-            .map(|f| loader::parse_or_exit(&f.display().to_string()).0)
+            .map(|f| super::parse_or_exit(&f.display().to_string()).0)
             .collect();
         stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_test_progs));
         let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -149,7 +149,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
 
     for test_file in &test_files {
         let file_str = test_file.display().to_string();
-        let (prog, _src) = loader::parse_or_exit(&file_str);
+        let (prog, _src) = super::parse_or_exit(&file_str);
         let s = loader::stem(&file_str);
         let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
         if bdd {
@@ -213,7 +213,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         if covered_stems.contains(&module_name) {
             continue; // already covered by a *_test.mvl file
         }
-        let (prog, _src) = loader::parse_or_exit(&file_str);
+        let (prog, _src) = super::parse_or_exit(&file_str);
         // Only include if the file has at least one test fn.
         let has_tests = prog.declarations.iter().any(|d| {
             if let Decl::Fn(fd) = d {

@@ -19,7 +19,7 @@
 //! let mut v = CoverageVisitor::new(BaseEmitter, 0);
 //! let code = v.visit_if("x > 0", "{ return 1 }", Some("{ return 0 }"));
 //! assert!(code.contains("__mvl_cov::hit(0)"));
-//! assert_eq!(v.branch_count(), 2);
+//! assert_eq!(v.next_counter_id(), 2);
 //! ```
 //!
 //! # Migration plan
@@ -104,8 +104,8 @@ impl EmitVisitor for BaseEmitter {
 /// calls at the entry of each branch body.
 ///
 /// Counters are allocated sequentially from `start_id` upward.
-/// Call [`branch_count`](CoverageVisitor::branch_count) after emission to get
-/// the total number of branches instrumented (needed for the cov preamble).
+/// Call [`next_counter_id`](CoverageVisitor::next_counter_id) after emission to get
+/// the next available counter ID (for the cov preamble and multi-file offset).
 pub struct CoverageVisitor<V: EmitVisitor> {
     inner: V,
     next_id: usize,
@@ -120,8 +120,11 @@ impl<V: EmitVisitor> CoverageVisitor<V> {
         }
     }
 
-    /// Return the number of branch counters allocated so far.
-    pub fn branch_count(&self) -> usize {
+    /// Return the next counter ID to be allocated.
+    ///
+    /// Equals `start_id + number_of_branches_instrumented`. Pass this as the
+    /// `start_id` for the next file's visitor in multi-file coverage runs.
+    pub fn next_counter_id(&self) -> usize {
         self.next_id
     }
 
@@ -220,7 +223,7 @@ mod tests {
             out.contains("__mvl_cov::hit(0)"),
             "expected hit(0) in true branch: {out}"
         );
-        assert_eq!(v.branch_count(), 1);
+        assert_eq!(v.next_counter_id(), 1);
     }
 
     #[test]
@@ -232,7 +235,7 @@ mod tests {
             out.contains("__mvl_cov::hit(1)"),
             "missing false branch hit"
         );
-        assert_eq!(v.branch_count(), 2);
+        assert_eq!(v.next_counter_id(), 2);
     }
 
     #[test]
@@ -241,7 +244,7 @@ mod tests {
         let out = v.visit_if("flag", "a()", Some("b()"));
         assert!(out.contains("__mvl_cov::hit(10)"));
         assert!(out.contains("__mvl_cov::hit(11)"));
-        assert_eq!(v.branch_count(), 12); // 10 start + 2 allocated
+        assert_eq!(v.next_counter_id(), 12); // 10 start + 2 allocated
     }
 
     #[test]
@@ -249,7 +252,7 @@ mod tests {
         let mut v = CoverageVisitor::new(BaseEmitter, 5);
         let out = v.visit_match_arm("Ok(x)", "x", 0);
         assert!(out.contains("__mvl_cov::hit(5)"));
-        assert_eq!(v.branch_count(), 6);
+        assert_eq!(v.next_counter_id(), 6);
     }
 
     #[test]
@@ -257,7 +260,7 @@ mod tests {
         let mut v = CoverageVisitor::new(BaseEmitter, 0);
         let out = v.visit_for("i", "0..10", "sum += i");
         assert!(out.contains("__mvl_cov::hit(0)"));
-        assert_eq!(v.branch_count(), 1);
+        assert_eq!(v.next_counter_id(), 1);
     }
 
     #[test]
@@ -265,7 +268,7 @@ mod tests {
         let mut v = CoverageVisitor::new(BaseEmitter, 3);
         let out = v.visit_while("!done", "tick()");
         assert!(out.contains("__mvl_cov::hit(3)"));
-        assert_eq!(v.branch_count(), 4);
+        assert_eq!(v.next_counter_id(), 4);
     }
 
     #[test]
@@ -274,7 +277,7 @@ mod tests {
         v.visit_if("a", "x", None);
         v.visit_match_arm("B", "y", 0);
         v.visit_if("c", "z", Some("w"));
-        assert_eq!(v.branch_count(), 4); // 1 + 1 + 2
+        assert_eq!(v.next_counter_id(), 4); // 1 + 1 + 2
     }
 
     #[test]

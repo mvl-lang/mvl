@@ -22,7 +22,7 @@ pub(super) fn prepare_llvm(
 /// Compile an MVL file to LLVM IR and write the .ll file to the current directory.
 /// `mvl build --backend=llvm <file>`
 pub(super) fn build_project_llvm(path: &str, assert_mode: AssertMode) {
-    let (prog, _src) = loader::parse_or_exit(path);
+    let (prog, _src) = super::parse_or_exit(path);
     let module_name = loader::stem(path);
     let (prelude, mut compiler) = prepare_llvm(&prog);
     compiler.assert_mode = assert_mode;
@@ -50,7 +50,7 @@ pub(super) fn run_project_llvm(path: &str, assert_mode: AssertMode) {
         process::exit(1);
     });
 
-    let (prog, _src) = loader::parse_or_exit(path);
+    let (prog, _src) = super::parse_or_exit(path);
     let module_name = loader::stem(path);
     let (prelude, mut compiler) = prepare_llvm(&prog);
     compiler.assert_mode = assert_mode;
@@ -135,7 +135,7 @@ pub(super) fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
     for (file, expected, is_pattern) in &test_cases {
         let file_str = file.display().to_string();
         let module_name = loader::stem(&file_str);
-        let (prog, _src) = loader::parse_or_exit(&file_str);
+        let (prog, _src) = super::parse_or_exit(&file_str);
         let ok = run_llvm_prog(
             &lli,
             &prog,
