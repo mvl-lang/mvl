@@ -18,12 +18,6 @@
 //   7. concurrently { } — structured scope that drains all actor mailboxes
 //                         before returning
 //
-// Correctness annotations:
-//   - Req 10 (Refinements): seq parameters carry `where self >= 0` refinement
-//     to document the protocol invariant that sequence numbers are non-negative.
-//   - Req 11 (IFC): parse_rounds reads process args (Tainted[String]) and
-//     sanitizes them before use — the trust boundary is properly guarded.
-//
 // Expected output (5 rounds):
 //   Pong  <-- ping #0
 //   Ping  --> pong #0
@@ -66,7 +60,6 @@ actor Pong {
     received: Int
 
     // Private helper: synchronous, never called from outside.
-    // Refinement: seq >= 0 is a protocol invariant — sequence numbers never go negative.
     fn log(seq: Int where self >= 0) -> Unit ! Console {
         println("Pong  <-- ping #".concat(seq.to_string()))
     }
@@ -97,7 +90,6 @@ actor Ping {
     partner: Pong  // tag-capability reference to the Pong actor
 
     // Private helper: synchronous, never called from outside.
-    // Refinement: seq >= 0 is a protocol invariant — sequence numbers never go negative.
     fn log(seq: Int where self >= 0) -> Unit ! Console {
         println("Ping  --> pong #".concat(seq.to_string()))
     }
@@ -121,23 +113,13 @@ actor Ping {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ROUNDS CONFIGURATION
-//
-// IFC trust boundary: process arguments arrive as Tainted[String] (external
-// data of unknown origin).  parse_rounds sanitizes the first argument before
-// use, satisfying the IFC lattice (Req 11).  If no argument is supplied the
-// default of 5 is used without any tainted data reaching the actors.
+// ROUNDS CONFIGURATION  (optional first arg — default 5)
 // ═══════════════════════════════════════════════════════════════════════════
 
-// IFC boundary function: accepts a Tainted arg and sanitizes it.
-// Having a Tainted[String] parameter in the signature is what makes the IFC
-// lattice exercised (Req 11).  The sanitize() call is the auditable trust point.
-//
-// Refinement: default > 0 ensures a positive round count (Req 10).
+// Parse the round count from the first user argument, falling back to `default`.
+// External args arrive as Tainted[String] and are sanitized before use.
 fn sanitize_rounds_arg(raw: Tainted[String], default: Int where self > 0) -> Int {
     let clean: Clean[String] = sanitize(raw);
-    // IFC: clean has been sanitized from tainted input.
-    // parse_int on Clean[String] extracts the inner value safely.
     match clean.parse_int() {
         Err(_) => default,
         Ok(n)  => if n > 0 { n } else { default }
@@ -146,7 +128,6 @@ fn sanitize_rounds_arg(raw: Tainted[String], default: Int where self > 0) -> Int
 
 fn parse_rounds(default: Int where self > 0) -> Int ! Env {
     let argv: List[Tainted[String]] = args();
-    // args()[0] is the binary name; args()[1] is the first user argument.
     match argv.get(1) {
         None      => default,
         Some(raw) => sanitize_rounds_arg(raw, default)
