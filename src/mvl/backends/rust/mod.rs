@@ -39,6 +39,7 @@ pub mod emitter;
 pub mod last_use;
 pub mod mcdc_emit;
 pub mod mutation_emit;
+pub mod visitor;
 
 use crate::mvl::parser::ast::{Decl, Program};
 pub use crate::mvl::passes::coverage::{format_report, BranchInfo, CoverageMap};
