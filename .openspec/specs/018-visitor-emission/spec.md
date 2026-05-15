@@ -47,6 +47,8 @@ the nodes where coverage, MC/DC, and mutation inject calls.
 
 **Implementation:** `src/mvl/backends/rust/visitor.rs::EmitVisitor`
 
+**Tests:** `src/mvl/backends/rust/visitor.rs::tests::base_if_no_else`, `src/mvl/backends/rust/visitor.rs::tests::base_if_with_else`, `src/mvl/backends/rust/visitor.rs::tests::base_match_arm`, `src/mvl/backends/rust/visitor.rs::tests::base_for_loop`, `src/mvl/backends/rust/visitor.rs::tests::base_while_loop`
+
 #### Scenario: Base emission without instrumentation
 
 - GIVEN a `BaseEmitter` implementing `EmitVisitor`
@@ -67,6 +69,8 @@ Instrumentation visitors MUST compose via generic wrapping: `CoverageVisitor<MCD
 
 **Implementation:** `src/mvl/backends/rust/visitor.rs::CoverageVisitor`
 
+**Tests:** `src/mvl/backends/rust/visitor.rs::tests::coverage_if_injects_true_branch_hit`, `src/mvl/backends/rust/visitor.rs::tests::coverage_if_with_else_injects_both_branches`, `src/mvl/backends/rust/visitor.rs::tests::coverage_match_arm_injects_hit`, `src/mvl/backends/rust/visitor.rs::tests::coverage_counters_increment_across_calls`
+
 #### Scenario: Stacked decorators
 
 - GIVEN `CoverageVisitor::new(BaseEmitter, 0)`
@@ -78,6 +82,10 @@ Instrumentation visitors MUST compose via generic wrapping: `CoverageVisitor<MCD
 
 `BaseEmitter` with no wrapping MUST produce identical output to the current
 inline emission for the same inputs.
+
+**Implementation:** `src/mvl/backends/rust/visitor.rs::BaseEmitter`
+
+**Tests:** `src/mvl/backends/rust/visitor.rs::tests::coverage_preserves_base_structure`, `src/mvl/backends/rust/visitor.rs::tests::coverage_cfg_test_gated`
 
 #### Scenario: No overhead on plain transpile
 
