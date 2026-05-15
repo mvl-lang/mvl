@@ -556,7 +556,7 @@
       "members": [
         {
           "type": "STRING",
-          "value": "<"
+          "value": "["
         },
         {
           "type": "SYMBOL",
@@ -580,7 +580,7 @@
         },
         {
           "type": "STRING",
-          "value": ">"
+          "value": "]"
         }
       ]
     },
@@ -1428,6 +1428,22 @@
         },
         {
           "type": "SYMBOL",
+          "name": "session_send_type"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "session_receive_type"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "session_internal_choice"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "session_external_choice"
+        },
+        {
+          "type": "SYMBOL",
           "name": "base_type"
         }
       ]
@@ -1447,7 +1463,7 @@
               "members": [
                 {
                   "type": "STRING",
-                  "value": "<"
+                  "value": "["
                 },
                 {
                   "type": "SYMBOL",
@@ -1455,7 +1471,7 @@
                 },
                 {
                   "type": "STRING",
-                  "value": ">"
+                  "value": "]"
                 }
               ]
             },
@@ -1475,7 +1491,7 @@
         },
         {
           "type": "STRING",
-          "value": "<"
+          "value": "["
         },
         {
           "type": "SYMBOL",
@@ -1483,7 +1499,7 @@
         },
         {
           "type": "STRING",
-          "value": ">"
+          "value": "]"
         }
       ]
     },
@@ -1496,7 +1512,7 @@
         },
         {
           "type": "STRING",
-          "value": "<"
+          "value": "["
         },
         {
           "type": "SYMBOL",
@@ -1512,7 +1528,7 @@
         },
         {
           "type": "STRING",
-          "value": ">"
+          "value": "]"
         }
       ]
     },
@@ -1547,7 +1563,7 @@
         },
         {
           "type": "STRING",
-          "value": "<"
+          "value": "["
         },
         {
           "type": "SYMBOL",
@@ -1555,7 +1571,7 @@
         },
         {
           "type": "STRING",
-          "value": ">"
+          "value": "]"
         }
       ]
     },
@@ -1706,6 +1722,157 @@
               }
             ]
           }
+        }
+      ]
+    },
+    "session_send_type": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "!"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "type_expr"
+        },
+        {
+          "type": "STRING",
+          "value": "."
+        },
+        {
+          "type": "SYMBOL",
+          "name": "session_op"
+        }
+      ]
+    },
+    "session_receive_type": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "?"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "type_expr"
+        },
+        {
+          "type": "STRING",
+          "value": "."
+        },
+        {
+          "type": "SYMBOL",
+          "name": "session_op"
+        }
+      ]
+    },
+    "session_internal_choice": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "+"
+        },
+        {
+          "type": "STRING",
+          "value": "{"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "session_branches"
+        },
+        {
+          "type": "STRING",
+          "value": "}"
+        }
+      ]
+    },
+    "session_external_choice": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "&"
+        },
+        {
+          "type": "STRING",
+          "value": "{"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "session_branches"
+        },
+        {
+          "type": "STRING",
+          "value": "}"
+        }
+      ]
+    },
+    "session_op": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "session_send_type"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "session_receive_type"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "session_internal_choice"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "session_external_choice"
+        },
+        {
+          "type": "STRING",
+          "value": "end"
+        }
+      ]
+    },
+    "session_branches": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "session_branch"
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "STRING",
+                "value": ","
+              },
+              {
+                "type": "SYMBOL",
+                "name": "session_branch"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "session_branch": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "identifier"
+        },
+        {
+          "type": "STRING",
+          "value": ":"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "session_op"
         }
       ]
     },
@@ -4024,6 +4191,9 @@
     [
       "ref_expr",
       "option_type"
+    ],
+    [
+      "base_type"
     ]
   ],
   "precedences": [],

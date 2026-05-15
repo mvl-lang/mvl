@@ -56,12 +56,14 @@ module.exports = grammar({
     [$.if_stmt, $.if_expr],
     // effect: `identifier (` — parameterized effect string vs outer expression
     [$.effect],
-    // `>` inside `Public<Int where self > 0>`: could be comparison or close generic.
+    // `]` inside `Public[Int where self > 0]`: close generic vs comparison (> 0).
     // GLR explores both; only the one that closes the generic succeeds.
     [$.ref_expr, $.labeled_type],
     [$.ref_expr, $.base_type],
     [$.ref_expr, $.result_type],
     [$.ref_expr, $.option_type],
+    // `[` after identifier in base_type: generic args vs other uses of `[`
+    [$.base_type],
   ],
 
   rules: {
@@ -178,7 +180,7 @@ module.exports = grammar({
       seq("type", $.identifier, optional($.type_params), "=", $.type_body),
 
     type_params: ($) =>
-      seq("<", $.identifier, repeat(seq(",", $.identifier)), ">"),
+      seq("[", $.identifier, repeat(seq(",", $.identifier)), "]"),
 
     type_body: ($) => choice($.struct_body, $.enum_body, $.type_expr),
 
@@ -313,16 +315,16 @@ module.exports = grammar({
       ),
 
     base_type: ($) =>
-      seq($.identifier, optional(seq("<", $.type_list, ">"))),
+      seq($.identifier, optional(seq("[", $.type_list, "]"))),
 
-    option_type: ($) => seq("Option", "<", $.type_expr, ">"),
+    option_type: ($) => seq("Option", "[", $.type_expr, "]"),
 
     result_type: ($) =>
-      seq("Result", "<", $.type_expr, ",", $.type_expr, ">"),
+      seq("Result", "[", $.type_expr, ",", $.type_expr, "]"),
 
     ref_type: ($) => seq(choice("val", "ref"), $.type_expr),
 
-    labeled_type: ($) => seq($.security_label, "<", $.type_expr, ">"),
+    labeled_type: ($) => seq($.security_label, "[", $.type_expr, "]"),
 
     security_label: ($) => choice("Public", "Tainted", "Secret", "Clean"),
 
@@ -566,9 +568,9 @@ module.exports = grammar({
         seq($.identifier, "::", $.identifier)
       ),
 
-    // Note: explicit type arguments at call sites (e.g. foo<T>(x)) are omitted
-    // to avoid the classic `<` ambiguity (generic vs comparison operator).
-    // MVL type arguments at call sites are always inferred in practice.
+    // Note: explicit type arguments at call sites use square brackets: foo[T](x)
+    // This avoids the classic `<` ambiguity (generic vs comparison operator).
+    // See ADR-0005 — MVL uses [T] for all generic syntax (LL(1) requirement).
     // prec(1): prefer fn_call_expr over bare identifier when `(` follows.
     fn_call_expr: ($) =>
       prec(1, seq(

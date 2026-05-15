@@ -228,7 +228,7 @@ type Shape = enum {
 Type — generic parameters
 ===============================================================================
 
-type Pair<A, B> = struct {
+type Pair[A, B] = struct {
   first: A,
   second: B,
 }
@@ -260,8 +260,8 @@ Security-labeled field
 ===============================================================================
 
 type Credentials = struct {
-  username: Public<String>,
-  password: Secret<String>,
+  username: Public[String],
+  password: Secret[String],
 }
 
 -------------------------------------------------------------------------------
@@ -445,7 +445,7 @@ total fn example() -> Unit {
 Match — None and Some patterns
 ===============================================================================
 
-total fn unwrap_or(v: Option<Int>, def: Int) -> Int {
+total fn unwrap_or(v: Option[Int], def: Int) -> Int {
   match v {
     None => def,
     Some(x) => x,
@@ -498,7 +498,7 @@ total fn unwrap_or(v: Option<Int>, def: Int) -> Int {
 Result propagation with ?
 ===============================================================================
 
-total fn parse_id(s: String) -> Result<Int, String> {
+total fn parse_id(s: String) -> Result[Int, String] {
   let n: Int = parse(s)?;
   Ok(n)
 }
@@ -607,8 +607,8 @@ total fn apply(f: fn(Int) -> Int, x: Int) -> Int {
 sanitize and declassify
 ===============================================================================
 
-total fn process(raw: Tainted<String>) -> Clean<String> {
-  let clean: Clean<String> = sanitize(raw);
+total fn process(raw: Tainted[String]) -> Clean[String] {
+  let clean: Clean[String] = sanitize(raw);
   return clean;
 }
 
@@ -837,7 +837,7 @@ line two""";
 Map literal
 ===============================================================================
 
-const SCORES: Map<String, Int> = {"alice": 10, "bob": 20};
+const SCORES: Map[String, Int] = {"alice": 10, "bob": 20};
 
 -------------------------------------------------------------------------------
 
@@ -875,7 +875,7 @@ const SCORES: Map<String, Int> = {"alice": 10, "bob": 20};
 Set literal
 ===============================================================================
 
-const PRIMES: Set<Int> = {2, 3, 5};
+const PRIMES: Set[Int] = {2, 3, 5};
 
 -------------------------------------------------------------------------------
 
