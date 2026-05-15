@@ -194,77 +194,37 @@ generic functions across backends.
 
 ### Epic: Phase 8 — Compiler Architecture Refactor
 
-#### Milestone 1: Foundation (Week 1-2)
+**8 tickets, 4 weeks.**
 
-| Issue | Title | Size | Depends |
-|-------|-------|------|---------|
-| #801 | Create `src/mvl/loader.rs` with `Loader` struct | M | — |
-| #802 | Extract `load_implicit_prelude()` to Loader | S | #801 |
-| #803 | Extract `load_stdlib_prelude()` to Loader | S | #801 |
-| #804 | Extract `load_mvl_native_stdlib_extras()` to Loader | S | #801 |
-| #805 | Extract `load_pkg_modules()` to Loader | S | #801 |
-| #806 | Extract `mvl_files()` and file discovery to Loader | S | #801 |
-| #807 | Add `Loader::resolve_imports()` for transitive deps | M | #802-806 |
+| # | Title | Scope | Size | Depends |
+|---|-------|-------|------|---------|
+| **#801** | Create `Loader` module | Extract all 7 file-loading functions from main.rs into `src/mvl/loader.rs`. Single `Loader` struct with `load_file()`, `load_dir()`, `resolve_imports()`. Handles implicit prelude, stdlib, pkg modules, sibling resolution. | L | — |
+| **#802** | Create `Pipeline` abstraction | New `src/mvl/pipeline.rs` with `Pipeline::check()`, `Pipeline::build()`. Modifiers `.with_coverage()`, `.with_mcdc()`, `.with_mutation()`. Orchestrates Loader → checker → transpiler flow. | L | #801 |
+| **#803** | Introduce `TranspileConfig` builder | Create `backends/rust/config.rs`. Builder pattern: `.with_prelude()`, `.with_coverage(start_id)`, `.with_mcdc(start_id)`, `.with_mutation()`, `.for_test_crate()`. | M | — |
+| **#804** | Consolidate transpile functions | Replace 20+ `transpile_*` variants with single `transpile(prog, config) -> TranspileResult`. Delete all deprecated functions. Update all call sites. | L | #803 |
+| **#805** | Extract CLI commands | Move `cmd_check`, `cmd_build`, `cmd_test`, `cmd_mcdc`, `cmd_mutate`, `cmd_assurance`, `cmd_lint`, `cmd_complexity` to `src/cli/` modules. Each command uses Loader + Pipeline. | L | #801, #802 |
+| **#806** | Slim main.rs to dispatch | Reduce main.rs to arg parsing + command dispatch (~50 lines). All logic delegated to `cli::` modules. | M | #805 |
+| **#807** | Documentation + cleanup | Update ARCHITECTURE.md with new module structure. Add doc comments to Loader, Pipeline, TranspileConfig public APIs. Run clippy, fix warnings, verify all tests pass. | M | #806 |
+| **#808** | (Future) Visitor-based emission | Tracking issue for emit visitor pattern refactor. Design doc only — not blocking Phase 8 completion. | S | — |
 
-#### Milestone 2: Pipeline (Week 2-3)
+### Dependency Graph
 
-| Issue | Title | Size | Depends |
-|-------|-------|------|---------|
-| #810 | Create `src/mvl/pipeline.rs` with `Pipeline` struct | M | #807 |
-| #811 | Implement `Pipeline::check()` using Loader | M | #810 |
-| #812 | Implement `Pipeline::build()` with transpile | M | #811 |
-| #813 | Add `Pipeline::with_coverage()` modifier | S | #812 |
-| #814 | Add `Pipeline::with_mcdc()` modifier | S | #812 |
-| #815 | Add `Pipeline::with_mutation()` modifier | S | #812 |
+```
+#803 TranspileConfig ──→ #804 Consolidate transpile
+                                    │
+#801 Loader ────┐                   │
+                ├──→ #805 CLI ──→ #806 Slim main.rs ──→ #807 Cleanup
+#802 Pipeline ──┘
+```
 
-#### Milestone 3: TranspileConfig (Week 3-4)
+### Timeline
 
-| Issue | Title | Size | Depends |
-|-------|-------|------|---------|
-| #820 | Create `TranspileConfig` builder in `backends/rust/config.rs` | M | — |
-| #821 | Add `.with_prelude()` to TranspileConfig | S | #820 |
-| #822 | Add `.with_coverage()` to TranspileConfig | S | #820 |
-| #823 | Add `.with_mcdc()` to TranspileConfig | S | #820 |
-| #824 | Add `.with_mutation()` to TranspileConfig | S | #820 |
-| #825 | Add `.for_test_crate()` to TranspileConfig | S | #820 |
-| #826 | Consolidate `transpile_*` variants to single function | L | #821-825 |
-| #827 | Delete deprecated `transpile_*` functions | S | #826 |
-
-#### Milestone 4: CLI Extraction (Week 4-5)
-
-| Issue | Title | Size | Depends |
-|-------|-------|------|---------|
-| #830 | Create `src/cli/mod.rs` with command enum | S | — |
-| #831 | Extract `cmd_check` to `src/cli/check.rs` | M | #811, #830 |
-| #832 | Extract `cmd_build` to `src/cli/build.rs` | M | #812, #830 |
-| #833 | Extract `cmd_test` to `src/cli/test.rs` | M | #812, #830 |
-| #834 | Extract `cmd_mcdc` to `src/cli/mcdc.rs` | M | #814, #830 |
-| #835 | Extract `cmd_mutate` to `src/cli/mutate.rs` | M | #815, #830 |
-| #836 | Extract `cmd_assurance` to `src/cli/assurance.rs` | S | #830 |
-| #837 | Extract `cmd_lint` to `src/cli/lint.rs` | S | #830 |
-| #838 | Extract `cmd_complexity` to `src/cli/complexity.rs` | S | #830 |
-| #839 | Slim down main.rs to dispatch-only (~50 lines) | S | #831-838 |
-
-#### Milestone 5: Cleanup & Documentation (Week 5-6)
-
-| Issue | Title | Size | Depends |
-|-------|-------|------|---------|
-| #840 | Update ARCHITECTURE.md with new module structure | M | #839 |
-| #841 | Add doc comments to Loader public API | S | #807 |
-| #842 | Add doc comments to Pipeline public API | S | #815 |
-| #843 | Add doc comments to TranspileConfig public API | S | #826 |
-| #844 | Run clippy and fix new warnings | S | #839 |
-| #845 | Verify all tests pass with new architecture | M | #839 |
-
-#### Milestone 6: Future (Post-Phase 8)
-
-| Issue | Title | Size | Depends |
-|-------|-------|------|---------|
-| #850 | Design visitor-based emission pattern | L | #826 |
-| #851 | Implement `BaseEmitVisitor` | L | #850 |
-| #852 | Implement `CoverageVisitor` wrapper | M | #851 |
-| #853 | Design explicit monomorphization pass | L | — |
-| #854 | Implement `passes/monomorphize.rs` | XL | #853 |
+| Week | Focus | Tickets |
+|------|-------|---------|
+| 1 | Foundation | #801 Loader, #803 TranspileConfig |
+| 2 | Abstraction | #802 Pipeline, #804 Consolidate |
+| 3 | Extraction | #805 CLI commands, #806 Slim main.rs |
+| 4 | Polish | #807 Documentation + cleanup |
 
 ---
 
