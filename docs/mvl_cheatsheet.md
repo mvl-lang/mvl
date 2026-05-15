@@ -11,7 +11,7 @@
 |---------|-------|---------|
 | `fn` | Function | `fn add(a: Int, b: Int) -> Int { a + b }` |
 | `struct` | Product type | `struct Point { x: Float64, y: Float64 }` |
-| `enum` | Sum type | `enum Option<T> { Some(T), None }` |
+| `enum` | Sum type | `enum Option[T] { Some(T), None }` |
 | `type` | Alias | `type Meters = Float64` |
 | `const` | Constant | `const MAX: Int = 100` |
 | `actor` | Actor type | `actor Counter { count: Int; pub fn inc() { } }` |
@@ -119,24 +119,26 @@
 | Type | Description | Example |
 |------|-------------|---------|
 | `String` | UTF-8 text | `"hello"` |
-| `Option<T>` | Maybe value | `Some(42)`, `None` |
-| `Result<T, E>` | Success or error | `Ok(v)`, `Err(e)` |
-| `Array<T>` | Fixed-size array | `[1, 2, 3]` |
-| `List<T>` | Dynamic list | `List::new()` |
-| `Map<K, V>` | Hash map | `Map::new()` |
-| `Set<T>` | Hash set | `Set::new()` |
+| `Option[T]` | Maybe value | `Some(42)`, `None` |
+| `Result[T, E]` | Success or error | `Ok(v)`, `Err(e)` |
+| `Array[T]` | Fixed-size array | `[1, 2, 3]` |
+| `List[T]` | Dynamic list | `List::new()` |
+| `Map[K, V]` | Hash map | `Map::new()` |
+| `Set[T]` | Hash set | `Set::new()` |
 | `(T, U, ...)` | Tuple | `(1, "a", true)` |
 
 ### Generics Syntax
 
-MVL uses different brackets for declaration vs instantiation:
+MVL uses square brackets `[T]` everywhere — declarations, type expressions, and call sites:
 
-| Context | Syntax | Example |
-|---------|--------|---------|
-| Declaration | `<T>` | `fn identity<T>(x: T) -> T` |
-| Call site | `[T]` | `identity[Int](42)` |
+```mvl
+fn identity[T](x: T) -> T { x }           // Declaration
+type Option[T] = enum { Some(T), None }   // Type declaration
+let x: Option[String] = Some("hi")        // Type expression
+let y = identity[Int](42)                 // Call site
+```
 
-This avoids parsing ambiguity with comparison operators (`<`, `>`).
+**Why not `<T>`?** Angle brackets break LL(1) parsing — `foo<T>` is ambiguous with `foo < T` (comparison). Square brackets are unambiguous. Same choice as Go, Scala, Nim. See ADR-0005.
 
 ### Generic Bounds (Built-in Only)
 
@@ -144,9 +146,9 @@ MVL provides built-in bounds for common operations. These are **not user-extensi
 
 | Bound | Meaning | Example |
 |-------|---------|---------|
-| `cloneable` | Can be deep-copied | `fn dup<T: cloneable>(x: T) -> T` |
-| `comparable` | Supports `==`, `<`, etc. | `fn max<T: comparable>(a: T, b: T) -> T` |
-| `hashable` | Can be used as map key | `fn index<K: hashable, V>(m: Map<K,V>, k: K)` |
+| `cloneable` | Can be deep-copied | `fn dup[T](x: T) -> T where T: cloneable` |
+| `comparable` | Supports `==`, `<`, etc. | `fn max[T](a: T, b: T) -> T where T: comparable` |
+| `hashable` | Can be used as map key | `fn index[K, V](m: Map[K,V], k: K) where K: hashable` |
 
 Call site with bounds: `max[Int](a, b)` — bounds checked at compile time.
 
@@ -165,10 +167,10 @@ fn divide(a: Int, b: NonZero) -> Int { a / b }
 ### Security Labels (IFC)
 | Type | Flows to | Use case |
 |------|----------|----------|
-| `Tainted<T>` | Must sanitize | External input |
-| `Secret<T>` | Cannot output | Passwords, keys |
-| `Public<T>` | Anywhere | Safe data |
-| `Clean<T>` | DB, output | Sanitized input |
+| `Tainted[T]` | Must sanitize | External input |
+| `Secret[T]` | Cannot output | Passwords, keys |
+| `Public[T]` | Anywhere | Safe data |
+| `Clean[T]` | DB, output | Sanitized input |
 
 ---
 
@@ -227,7 +229,7 @@ fn process(
     ref buffer: Buffer,    // Mutable, cannot escape
     iso payload: Data,     // Ownership transferred in
     tag handle: ActorRef   // Identity only
-) -> Result<Output, Error> { }
+) -> Result[Output, Error] { }
 ```
 
 ### Ownership Transfer
@@ -340,7 +342,7 @@ pub total fn process(
     val config: Config,      // immutable, shareable
     ref buffer: Buffer,      // mutable, local only
     iso data: Payload        // transferable ownership
-) -> Result<Output, Error> ! FileRead + Net {
+) -> Result[Output, Error] ! FileRead + Net {
     // ...
 }
 ```
@@ -356,7 +358,7 @@ match value {
 
 ### Error Handling
 ```mvl
-fn fallible() -> Result<Int, Error> {
+fn fallible() -> Result[Int, Error] {
     let x = may_fail()?;   // Propagate error
     Ok(x + 1)
 }
