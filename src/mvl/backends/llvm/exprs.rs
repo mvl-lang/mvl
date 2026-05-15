@@ -407,7 +407,9 @@ impl<'ctx> LlvmBackend<'ctx> {
                     if let Ok(ret_val) = BasicValueEnum::try_from(call.as_any_value_enum()) {
                         self.builder.build_return(Some(&ret_val)).unwrap();
                     } else {
-                        self.builder.build_return(None).unwrap();
+                        // The call result cannot be lowered to a BasicValue — this indicates
+                        // an IR type mismatch that should never occur for a well-typed program.
+                        self.builder.build_unreachable().unwrap();
                     }
                 }
             }
@@ -588,7 +590,17 @@ impl<'ctx> LlvmBackend<'ctx> {
             Expr::Unary { expr, .. } => {
                 self.walk_expr_for_captures(expr, exclude, seen, captures);
             }
-            Expr::FnCall { args, .. } => {
+            Expr::FnCall { name, args, .. } => {
+                // The callee may itself be a captured function-typed variable (e.g. `f(x)`
+                // where `f` is a local closure).  Check it the same way as Expr::Ident.
+                if !exclude.contains(name) && !seen.contains(name) {
+                    if let (Some((_, llvm_ty)), Some(mvl_ty)) =
+                        (self.locals.get(name), self.local_mvl_types.get(name))
+                    {
+                        seen.insert(name.clone());
+                        captures.push((name.clone(), mvl_ty.clone(), *llvm_ty));
+                    }
+                }
                 for arg in args {
                     self.walk_expr_for_captures(arg, exclude, seen, captures);
                 }
@@ -677,68 +689,106 @@ impl<'ctx> LlvmBackend<'ctx> {
         seen: &mut std::collections::HashSet<String>,
         captures: &mut Vec<(String, TypeExpr, BasicTypeEnum<'ctx>)>,
     ) {
-        use crate::mvl::parser::ast::{ElseBranch, MatchBody, Stmt};
+        use crate::mvl::parser::ast::{MatchBody, Pattern, Stmt};
+        // Clone the exclusion set so we can accumulate let-bound names without
+        // modifying the caller's set.  Names introduced by `let` in this block
+        // shadow outer bindings and must not be treated as captures.
+        let mut local_exclude = exclude.clone();
         for stmt in &block.stmts {
             match stmt {
-                Stmt::Let { init, .. } => {
-                    self.walk_expr_for_captures(init, exclude, seen, captures);
+                Stmt::Let { pattern, init, .. } => {
+                    self.walk_expr_for_captures(init, &local_exclude, seen, captures);
+                    // Add the bound name(s) so subsequent statements don't
+                    // capture a shadowed outer variable with the same name.
+                    fn add_pattern_names(
+                        pat: &Pattern,
+                        ex: &mut std::collections::HashSet<String>,
+                    ) {
+                        match pat {
+                            Pattern::Ident(name, _) => {
+                                ex.insert(name.clone());
+                            }
+                            Pattern::Tuple { elems, .. } => {
+                                for e in elems {
+                                    add_pattern_names(e, ex);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    add_pattern_names(pattern, &mut local_exclude);
                 }
                 Stmt::Assign { value, .. } => {
-                    self.walk_expr_for_captures(value, exclude, seen, captures);
+                    self.walk_expr_for_captures(value, &local_exclude, seen, captures);
                 }
                 Stmt::Return { value, .. } => {
                     if let Some(v) = value {
-                        self.walk_expr_for_captures(v, exclude, seen, captures);
+                        self.walk_expr_for_captures(v, &local_exclude, seen, captures);
                     }
                 }
                 Stmt::If {
                     cond, then, else_, ..
                 } => {
-                    self.walk_expr_for_captures(cond, exclude, seen, captures);
-                    self.walk_block_for_captures(then, exclude, seen, captures);
+                    self.walk_expr_for_captures(cond, &local_exclude, seen, captures);
+                    self.walk_block_for_captures(then, &local_exclude, seen, captures);
                     if let Some(branch) = else_ {
-                        match branch {
-                            ElseBranch::Block(b) => {
-                                self.walk_block_for_captures(b, exclude, seen, captures);
-                            }
-                            ElseBranch::If(s) => {
-                                if let Stmt::If {
-                                    cond, then, else_, ..
-                                } = s.as_ref()
-                                {
-                                    self.walk_expr_for_captures(cond, exclude, seen, captures);
-                                    self.walk_block_for_captures(then, exclude, seen, captures);
-                                    let _ = else_;
-                                }
-                            }
-                        }
+                        self.walk_else_branch_for_captures(branch, &local_exclude, seen, captures);
                     }
                 }
                 Stmt::Match {
                     scrutinee, arms, ..
                 } => {
-                    self.walk_expr_for_captures(scrutinee, exclude, seen, captures);
+                    self.walk_expr_for_captures(scrutinee, &local_exclude, seen, captures);
                     for arm in arms {
                         match &arm.body {
                             MatchBody::Expr(e) => {
-                                self.walk_expr_for_captures(e, exclude, seen, captures);
+                                self.walk_expr_for_captures(e, &local_exclude, seen, captures);
                             }
                             MatchBody::Block(b) => {
-                                self.walk_block_for_captures(b, exclude, seen, captures);
+                                self.walk_block_for_captures(b, &local_exclude, seen, captures);
                             }
                         }
                     }
                 }
                 Stmt::For { iter, body, .. } => {
-                    self.walk_expr_for_captures(iter, exclude, seen, captures);
-                    self.walk_block_for_captures(body, exclude, seen, captures);
+                    self.walk_expr_for_captures(iter, &local_exclude, seen, captures);
+                    self.walk_block_for_captures(body, &local_exclude, seen, captures);
                 }
                 Stmt::While { cond, body, .. } => {
-                    self.walk_expr_for_captures(cond, exclude, seen, captures);
-                    self.walk_block_for_captures(body, exclude, seen, captures);
+                    self.walk_expr_for_captures(cond, &local_exclude, seen, captures);
+                    self.walk_block_for_captures(body, &local_exclude, seen, captures);
                 }
                 Stmt::Expr { expr, .. } => {
-                    self.walk_expr_for_captures(expr, exclude, seen, captures);
+                    self.walk_expr_for_captures(expr, &local_exclude, seen, captures);
+                }
+            }
+        }
+    }
+
+    /// Recursively walk an `else` branch for captures, handling both
+    /// `else { block }` and arbitrarily-deep `else if` chains.
+    fn walk_else_branch_for_captures(
+        &self,
+        branch: &crate::mvl::parser::ast::ElseBranch,
+        exclude: &std::collections::HashSet<String>,
+        seen: &mut std::collections::HashSet<String>,
+        captures: &mut Vec<(String, TypeExpr, BasicTypeEnum<'ctx>)>,
+    ) {
+        use crate::mvl::parser::ast::{ElseBranch, Stmt};
+        match branch {
+            ElseBranch::Block(b) => {
+                self.walk_block_for_captures(b, exclude, seen, captures);
+            }
+            ElseBranch::If(s) => {
+                if let Stmt::If {
+                    cond, then, else_, ..
+                } = s.as_ref()
+                {
+                    self.walk_expr_for_captures(cond, exclude, seen, captures);
+                    self.walk_block_for_captures(then, exclude, seen, captures);
+                    if let Some(nested) = else_ {
+                        self.walk_else_branch_for_captures(nested, exclude, seen, captures);
+                    }
                 }
             }
         }

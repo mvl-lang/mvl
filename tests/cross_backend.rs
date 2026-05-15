@@ -190,6 +190,15 @@ fn cross_backend_hof_lambdas() {
 #[test]
 fn cross_backend_closure_lambdas() {
     assert_backends_agree("closure_lambdas.mvl");
+    // Pin the expected output so symmetric bugs (both backends produce the same
+    // wrong value) are still caught.
+    let file = corpus("closure_lambdas.mvl");
+    let expected = "above_threshold=3\nmap_with_offset=36\nfold_with_base=65\n";
+    assert_eq!(
+        run_transpiler(&file),
+        expected,
+        "closure_lambdas.mvl: transpiler output mismatch"
+    );
 }
 
 // ── Phase C: heap allocation tests (LLVM-only) ────────────────────────────────
