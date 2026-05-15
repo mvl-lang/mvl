@@ -151,14 +151,32 @@ mvl_language/
 │   ├── references.md       # validated academic references
 │   ├── adr/                # architectural decision records
 │   └── specs/              # behavioral specifications
-├── src/mvl/
-│   ├── parser/             # stage 1: MVL source → AST
-│   ├── checker/            # stage 3: typed AST, 11 requirements
-│   ├── passes/             # stage 4: coverage, MC/DC, mutation, linting
-│   └── backends/           # stage 5: code generation (ADR-0027)
-│       ├── mod.rs          # Backend trait
-│       ├── rust/           # stage 5a: typed AST → Rust source
-│       └── llvm/           # stage 5b: typed AST → LLVM IR
+├── src/
+│   ├── main.rs             # entry point: version resolution + dispatch
+│   ├── cli/                # CLI command modules (one file per subcommand)
+│   │   ├── mod.rs          # shared helpers + dispatch()
+│   │   ├── args.rs         # argument parsing utilities
+│   │   ├── check.rs        # mvl check
+│   │   ├── build.rs        # mvl build / run
+│   │   ├── test.rs         # mvl test
+│   │   ├── mutate.rs       # mvl mutate
+│   │   ├── mcdc.rs         # mvl mcdc
+│   │   ├── lint.rs         # mvl lint
+│   │   ├── assurance.rs    # mvl assurance
+│   │   ├── complexity.rs   # mvl complexity
+│   │   ├── transpile.rs    # mvl transpile
+│   │   ├── meta.rs         # mvl init / self / add
+│   │   └── llvm.rs         # mvl build|run|test --backend=llvm
+│   └── mvl/
+│       ├── loader.rs       # stage 2: file loading, stdlib wiring
+│       ├── pipeline.rs     # orchestrates loader → checker → transpiler
+│       ├── parser/         # stage 1: MVL source → AST
+│       ├── checker/        # stage 3: typed AST, 11 requirements
+│       ├── passes/         # stage 4: coverage, MC/DC, mutation, linting
+│       └── backends/       # stage 5: code generation (ADR-0027)
+│           ├── mod.rs      # Backend trait + AssertMode
+│           ├── rust/       # stage 5a: typed AST → Rust source
+│           └── llvm/       # stage 5b: typed AST → LLVM IR
 ├── tests/
 │   ├── corpus/             # MVL example programs (LLM training seed)
 │   ├── integration/        # end-to-end: .mvl → compile → run → verify
