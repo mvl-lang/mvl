@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.107.1] — 2026-05-15
+
+### Fixed
+
+- Missing `DuplicateActorField`, `DuplicateActorMethod`, and `NonUnitBehaviorReturn` variants in `CheckError` enum that were emitted by actor checker but not defined, causing compile error after session types merge (#745).
+
 ## [0.107.0] — 2026-05-15
 
 ### Added
