@@ -47,9 +47,25 @@ pub use crate::mvl::passes::mcdc::transform::{detect_coupled_pairs, FnFieldReads
 pub use crate::mvl::passes::mutation::{format_mutation_report, MutantInfo, MutationMap};
 pub use boundary_gen::format_boundary_report;
 use cargo::CargoOptions;
+pub use config::TranspileConfig;
 pub use coverage_emit::{emit_cov_preamble, emit_cov_report_test};
 use emitter::RustEmitter;
 pub use mcdc_emit::{emit_mcdc_preamble, emit_mcdc_report_test};
+
+/// Combined result of a transpilation pass.
+///
+/// Instrumentation metadata fields are non-empty only when the corresponding
+/// mode was enabled via [`TranspileConfig`].
+pub struct TranspileResult {
+    /// The main transpile output (Rust source + Cargo.toml).
+    pub output: TranspileOutput,
+    /// Branch coverage metadata, non-empty when `coverage_start_id` was set.
+    pub branches: Vec<BranchInfo>,
+    /// Mutation testing metadata, non-empty when `mutation` was enabled.
+    pub mutants: Vec<MutantInfo>,
+    /// MC/DC decision metadata, non-empty when `mcdc_start_id` was set.
+    pub decisions: Vec<MCDCDecision>,
+}
 
 /// Output of a successful transpilation.
 pub struct TranspileOutput {
@@ -260,471 +276,75 @@ pub fn transpile_project(
     }
 }
 
-/// Transpile a parsed [`Program`] to Rust source, prepending non-stub stdlib
-/// prelude functions so callers like `range` resolve without a hardcoded mapping.
-pub fn transpile_with_prelude(
-    prog: &Program,
-    crate_name: &str,
-    prelude_progs: &[Program],
-) -> TranspileOutput {
-    let check_result = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
+/// Transpile a parsed [`Program`] to Rust source using the given configuration.
+///
+/// This single function replaces the previous `transpile_*` variant family.
+/// Use [`TranspileConfig`] to configure prelude, instrumentation, and emit options.
+///
+/// Instrumentation metadata in the returned [`TranspileResult`] is non-empty only
+/// when the corresponding mode was enabled in the config.
+pub fn transpile(prog: &Program, config: TranspileConfig) -> TranspileResult {
     let has_main = has_main_fn(prog);
     let extern_count = count_extern_decls(prog);
     let has_extern_rust = has_extern_rust_decls(prog);
-    let use_runtime =
-        extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
+    let has_prelude = !config.prelude_progs.is_empty();
+    let use_runtime = extern_count > 0
+        || has_std_imports(prog)
+        || (has_prelude && prelude_requires_runtime(&config.prelude_progs));
 
-    let mut cg = RustEmitter::new();
-    let mut all_expr_types = crate::mvl::checker::collect_prelude_expr_types(prelude_progs);
-    all_expr_types.extend(check_result.expr_types);
-    cg.expr_types = all_expr_types;
-    // `*_test.mvl` files are compiled without bridge.rs — emit safe stubs for
-    // any `extern "rust"` blocks in the prelude (e.g. pkg.tui's ffi.mvl).
-    if prelude_progs.iter().any(|p| {
-        p.declarations
-            .iter()
-            .any(|d| matches!(d, crate::mvl::parser::ast::Decl::Extern(_)))
-    }) {
-        cg.test_extern_stubs = true;
-    }
-    cg.emit_program_with_mods(prog, &[], prelude_progs);
-    let lib_rs = cg.finish();
-
-    let opts = CargoOptions {
-        crate_name,
-        use_mvl_runtime: use_runtime,
-        extern_crates: Vec::new(),
-    };
-    let cargo_toml = if has_main {
-        cargo::emit_cargo_toml_binary_opts(&opts)
+    let check_result = if has_prelude {
+        crate::mvl::checker::check_with_prelude(&config.prelude_progs, prog)
     } else {
-        cargo::emit_cargo_toml_library_opts(&opts)
+        crate::mvl::checker::check(prog)
     };
-    TranspileOutput {
-        lib_rs,
-        cargo_toml,
-        has_main,
-        extern_count,
-        has_extern_rust,
-    }
-}
 
-/// Transpile a source [`Program`] (not a `*_test.mvl`) with prelude, for inclusion
-/// in the test crate as an inline-test module.
-///
-/// Sets `test_extern_stubs = true` so `extern "rust"` blocks become `todo!()` stubs
-/// and cross-module `use` imports are suppressed — the sibling modules in the test
-/// crate come from `*_test.mvl` files and may not export the same items.
-pub fn transpile_source_with_prelude(
-    prog: &Program,
-    crate_name: &str,
-    prelude_progs: &[Program],
-) -> TranspileOutput {
-    let has_main = has_main_fn(prog);
-    let extern_count = count_extern_decls(prog);
-    let has_extern_rust = has_extern_rust_decls(prog);
-    let use_runtime =
-        extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
-
-    let check_result = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
-    let mut cg = RustEmitter::new();
-    cg.test_extern_stubs = true;
-    let mut all_expr_types = crate::mvl::checker::collect_prelude_expr_types(prelude_progs);
-    all_expr_types.extend(check_result.expr_types);
-    cg.expr_types = all_expr_types;
-    cg.emit_program_with_mods(prog, &[], prelude_progs);
-    let lib_rs = cg.finish();
-
-    let opts = CargoOptions {
-        crate_name,
-        use_mvl_runtime: use_runtime,
-        extern_crates: Vec::new(),
-    };
-    let cargo_toml = if has_main {
-        cargo::emit_cargo_toml_binary_opts(&opts)
+    let expr_types = if has_prelude {
+        let mut types = crate::mvl::checker::collect_prelude_expr_types(&config.prelude_progs);
+        types.extend(check_result.expr_types);
+        types
     } else {
-        cargo::emit_cargo_toml_library_opts(&opts)
+        check_result.expr_types
     };
-    TranspileOutput {
-        lib_rs,
-        cargo_toml,
-        has_main,
-        extern_count,
-        has_extern_rust,
-    }
-}
-
-/// Transpile a parsed [`Program`] to Rust source.
-///
-/// Always succeeds in Phase 1 — unknown constructs fall back to `todo!()`.
-pub fn transpile(prog: &Program, crate_name: &str) -> TranspileOutput {
-    let check_result = crate::mvl::checker::check(prog);
-    let has_main = has_main_fn(prog);
-    let extern_count = count_extern_decls(prog);
-    let has_extern_rust = has_extern_rust_decls(prog);
-    // Link mvl_runtime when extern "rust" is used OR when stdlib is imported.
-    let use_runtime = extern_count > 0 || has_std_imports(prog);
 
     let mut cg = RustEmitter::new();
-    cg.expr_types = check_result.expr_types;
-    cg.emit_program(prog);
-    let lib_rs = cg.finish();
+    cg.expr_types = expr_types;
+    cg.assert_mode = config.assert_mode;
+    cg.current_file = config.file_stem.clone();
+    // Set test_extern_stubs: explicitly from config OR when prelude contains extern blocks.
+    // Extern blocks in the prelude (e.g. pkg FFI bindings) cannot be linked in test
+    // crates, so they are replaced with `todo!()` stubs.
+    cg.test_extern_stubs = config.test_extern_stubs
+        || (has_prelude
+            && config
+                .prelude_progs
+                .iter()
+                .any(|p| p.declarations.iter().any(|d| matches!(d, Decl::Extern(_)))));
+    cg.current_file_is_test = config.is_test_file;
 
-    let opts = CargoOptions {
-        crate_name,
-        use_mvl_runtime: use_runtime,
-        extern_crates: Vec::new(),
-    };
-    let cargo_toml = if has_main {
-        cargo::emit_cargo_toml_binary_opts(&opts)
+    if let Some(start_id) = config.coverage_start_id {
+        cg.coverage = Some(CoverageMap::new(start_id));
+    }
+    if let Some(start_id) = config.mcdc_start_id {
+        cg.mcdc = Some(mcdc_instr::MCDCMap::new(start_id));
+        cg.mcdc_fn_field_reads = mcdc_instr::build_fn_field_reads(prog);
+    }
+    if config.mutation {
+        cg.mutation = Some(MutationMap::new());
+    }
+
+    if has_prelude {
+        cg.emit_program_with_mods(prog, &[], &config.prelude_progs);
     } else {
-        cargo::emit_cargo_toml_library_opts(&opts)
-    };
-    TranspileOutput {
-        lib_rs,
-        cargo_toml,
-        has_main,
-        extern_count,
-        has_extern_rust,
+        cg.emit_program(prog);
     }
-}
-
-/// Transpile a [`Program`] with branch coverage instrumentation, prepending
-/// non-stub stdlib prelude functions so callers like `range` resolve without
-/// a hardcoded mapping.
-///
-/// `file_stem` is the source file name without extension (used in coverage reports).
-/// `start_id` is the first counter index to allocate (allows combining multiple files).
-///
-/// Returns the transpile output plus all registered branch metadata.
-pub fn transpile_covered_with_prelude(
-    prog: &Program,
-    crate_name: &str,
-    file_stem: &str,
-    start_id: usize,
-    prelude_progs: &[Program],
-) -> (TranspileOutput, Vec<BranchInfo>) {
-    let has_main = has_main_fn(prog);
-    let extern_count = count_extern_decls(prog);
-    let has_extern_rust = has_extern_rust_decls(prog);
-    let use_runtime =
-        extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
-
-    let check_result = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
-    let mut cg = RustEmitter::new();
-    cg.expr_types = check_result.expr_types;
-    cg.coverage = Some(CoverageMap::new(start_id));
-    cg.current_file = file_stem.to_string();
-    cg.emit_program_with_mods(prog, &[], prelude_progs);
 
     let branches = cg.coverage.take().map(|c| c.branches).unwrap_or_default();
-    let lib_rs = cg.finish();
-
-    let opts = CargoOptions {
-        crate_name,
-        use_mvl_runtime: use_runtime,
-        extern_crates: Vec::new(),
-    };
-    let cargo_toml = if has_main {
-        cargo::emit_cargo_toml_binary_opts(&opts)
-    } else {
-        cargo::emit_cargo_toml_library_opts(&opts)
-    };
-    let out = TranspileOutput {
-        lib_rs,
-        cargo_toml,
-        has_main,
-        extern_count,
-        has_extern_rust,
-    };
-    (out, branches)
-}
-
-/// Transpile a [`Program`] with branch coverage instrumentation.
-///
-/// `file_stem` is the source file name without extension (used in coverage reports).
-/// `start_id` is the first counter index to allocate (allows combining multiple files).
-///
-/// Returns the transpile output plus all registered branch metadata.
-pub fn transpile_covered(
-    prog: &Program,
-    crate_name: &str,
-    file_stem: &str,
-    start_id: usize,
-) -> (TranspileOutput, Vec<BranchInfo>) {
-    let has_main = has_main_fn(prog);
-    let extern_count = count_extern_decls(prog);
-    let has_extern_rust = has_extern_rust_decls(prog);
-    let use_runtime = extern_count > 0 || has_std_imports(prog);
-
-    let check_result = crate::mvl::checker::check(prog);
-    let mut cg = RustEmitter::new();
-    cg.expr_types = check_result.expr_types;
-    cg.coverage = Some(CoverageMap::new(start_id));
-    cg.current_file = file_stem.to_string();
-    cg.emit_program(prog);
-
-    let branches = cg.coverage.take().map(|c| c.branches).unwrap_or_default();
-    let lib_rs = cg.finish();
-
-    let opts = CargoOptions {
-        crate_name,
-        use_mvl_runtime: use_runtime,
-        extern_crates: Vec::new(),
-    };
-    let cargo_toml = if has_main {
-        cargo::emit_cargo_toml_binary_opts(&opts)
-    } else {
-        cargo::emit_cargo_toml_library_opts(&opts)
-    };
-    let out = TranspileOutput {
-        lib_rs,
-        cargo_toml,
-        has_main,
-        extern_count,
-        has_extern_rust,
-    };
-    (out, branches)
-}
-
-/// Transpile a source [`Program`] (not a `*_test.mvl` file) with branch coverage
-/// instrumentation and stdlib prelude for inclusion in the test crate.
-///
-/// Unlike [`transpile_covered`], this variant sets `test_extern_stubs = true` so
-/// `extern "rust"` blocks are replaced by `todo!()` stubs.  This allows source
-/// files that depend on external Rust crates (e.g. `extern "rust" { fn analyze… }`)
-/// to compile inside the test crate without the real dependency being present.
-pub fn transpile_covered_source_with_prelude(
-    prog: &Program,
-    crate_name: &str,
-    file_stem: &str,
-    start_id: usize,
-    prelude_progs: &[Program],
-) -> (TranspileOutput, Vec<BranchInfo>) {
-    let has_main = has_main_fn(prog);
-    let extern_count = count_extern_decls(prog);
-    let has_extern_rust = has_extern_rust_decls(prog);
-    let use_runtime =
-        extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
-
-    let check_result = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
-    let mut cg = RustEmitter::new();
-    cg.expr_types = check_result.expr_types;
-    cg.coverage = Some(CoverageMap::new(start_id));
-    cg.current_file = file_stem.to_string();
-    cg.test_extern_stubs = true;
-    cg.emit_program_with_mods(prog, &[], prelude_progs);
-
-    let branches = cg.coverage.take().map(|c| c.branches).unwrap_or_default();
-    let lib_rs = cg.finish();
-
-    let opts = cargo::CargoOptions {
-        crate_name,
-        use_mvl_runtime: use_runtime,
-        extern_crates: Vec::new(),
-    };
-    let cargo_toml = if has_main {
-        cargo::emit_cargo_toml_binary_opts(&opts)
-    } else {
-        cargo::emit_cargo_toml_library_opts(&opts)
-    };
-    let out = TranspileOutput {
-        lib_rs,
-        cargo_toml,
-        has_main,
-        extern_count,
-        has_extern_rust,
-    };
-    (out, branches)
-}
-
-/// Transpile a source [`Program`] (not a `*_test.mvl` file) with branch coverage
-/// instrumentation for inclusion in the test crate.
-///
-/// Unlike [`transpile_covered`], this variant sets `test_extern_stubs = true` so
-/// `extern "rust"` blocks are replaced by `todo!()` stubs.  This allows source
-/// files that depend on external Rust crates (e.g. `extern "rust" { fn analyze… }`)
-/// to compile inside the test crate without the real dependency being present.
-pub fn transpile_covered_source(
-    prog: &Program,
-    crate_name: &str,
-    file_stem: &str,
-    start_id: usize,
-) -> (TranspileOutput, Vec<BranchInfo>) {
-    let has_main = has_main_fn(prog);
-    let extern_count = count_extern_decls(prog);
-    let has_extern_rust = has_extern_rust_decls(prog);
-    let use_runtime = extern_count > 0 || has_std_imports(prog);
-
-    let check_result = crate::mvl::checker::check(prog);
-    let mut cg = RustEmitter::new();
-    cg.expr_types = check_result.expr_types;
-    cg.coverage = Some(CoverageMap::new(start_id));
-    cg.current_file = file_stem.to_string();
-    cg.test_extern_stubs = true;
-    cg.emit_program(prog);
-
-    let branches = cg.coverage.take().map(|c| c.branches).unwrap_or_default();
-    let lib_rs = cg.finish();
-
-    let opts = cargo::CargoOptions {
-        crate_name,
-        use_mvl_runtime: use_runtime,
-        extern_crates: Vec::new(),
-    };
-    let cargo_toml = if has_main {
-        cargo::emit_cargo_toml_binary_opts(&opts)
-    } else {
-        cargo::emit_cargo_toml_library_opts(&opts)
-    };
-    let out = TranspileOutput {
-        lib_rs,
-        cargo_toml,
-        has_main,
-        extern_count,
-        has_extern_rust,
-    };
-    (out, branches)
-}
-
-// ── Mutation transpile variants ────────────────────────────────────────────
-
-/// Transpile a test [`Program`] with mutation instrumentation, prepending
-/// stdlib prelude functions.
-///
-/// `file_stem` identifies the source file in mutation reports.
-///
-/// Returns `(TranspileOutput, Vec<MutantInfo>)` — the output Rust source and
-/// all registered mutation variants.  The `MutationMap` encodes every
-/// mutation point as a match arm keyed by `MVL_MUTANT` env var.
-pub fn transpile_mutated_with_prelude(
-    prog: &Program,
-    crate_name: &str,
-    file_stem: &str,
-    prelude_progs: &[Program],
-) -> (TranspileOutput, Vec<MutantInfo>) {
-    let has_main = has_main_fn(prog);
-    let extern_count = count_extern_decls(prog);
-    let has_extern_rust = has_extern_rust_decls(prog);
-    let use_runtime =
-        extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
-
-    let check_result = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
-    let mut cg = RustEmitter::new();
-    cg.expr_types = check_result.expr_types;
-    cg.mutation = Some(MutationMap::new());
-    cg.current_file = file_stem.to_string();
-    cg.current_file_is_test = true;
-    cg.emit_program_with_mods(prog, &[], prelude_progs);
-
     let mutants = cg.mutation.take().map(|m| m.mutants).unwrap_or_default();
-    let lib_rs = cg.finish();
-
-    let opts = CargoOptions {
-        crate_name,
-        use_mvl_runtime: use_runtime,
-        extern_crates: Vec::new(),
-    };
-    let cargo_toml = if has_main {
-        cargo::emit_cargo_toml_binary_opts(&opts)
-    } else {
-        cargo::emit_cargo_toml_library_opts(&opts)
-    };
-    let out = TranspileOutput {
-        lib_rs,
-        cargo_toml,
-        has_main,
-        extern_count,
-        has_extern_rust,
-    };
-    (out, mutants)
-}
-
-/// Transpile a source [`Program`] (not a `*_test.mvl`) with mutation
-/// instrumentation for inclusion in the test crate.
-///
-/// Sets `test_extern_stubs = true` so `extern "rust"` blocks become `todo!()`
-/// stubs, allowing the test crate to link without the real external dependency.
-///
-/// **Invariant:** must NOT set `current_file_is_test = true`.  That flag is
-/// reserved for [`transpile_mutated_with_prelude`] (the `_test.mvl` path).
-/// Setting it here would suppress MC/DC instrumentation in source functions.
-pub fn transpile_mutated_source_with_prelude(
-    prog: &Program,
-    crate_name: &str,
-    file_stem: &str,
-    prelude_progs: &[Program],
-) -> (TranspileOutput, Vec<MutantInfo>) {
-    let has_main = has_main_fn(prog);
-    let extern_count = count_extern_decls(prog);
-    let has_extern_rust = has_extern_rust_decls(prog);
-    let use_runtime =
-        extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
-
-    let check_result = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
-    let mut cg = RustEmitter::new();
-    cg.expr_types = check_result.expr_types;
-    cg.mutation = Some(MutationMap::new());
-    cg.current_file = file_stem.to_string();
-    cg.test_extern_stubs = true;
-    cg.emit_program_with_mods(prog, &[], prelude_progs);
-
-    let mutants = cg.mutation.take().map(|m| m.mutants).unwrap_or_default();
-    let lib_rs = cg.finish();
-
-    let opts = CargoOptions {
-        crate_name,
-        use_mvl_runtime: use_runtime,
-        extern_crates: Vec::new(),
-    };
-    let cargo_toml = if has_main {
-        cargo::emit_cargo_toml_binary_opts(&opts)
-    } else {
-        cargo::emit_cargo_toml_library_opts(&opts)
-    };
-    let out = TranspileOutput {
-        lib_rs,
-        cargo_toml,
-        has_main,
-        extern_count,
-        has_extern_rust,
-    };
-    (out, mutants)
-}
-
-// ── MC/DC transpilation ───────────────────────────────────────────────────
-
-/// Transpile a test [`Program`] with MC/DC condition instrumentation.
-///
-/// Injects per-clause tracking for every compound `&&`/`||` condition in
-/// non-test functions.  Returns the transpile output plus metadata for all
-/// instrumented decisions.
-pub fn transpile_mcdc_with_prelude(
-    prog: &Program,
-    crate_name: &str,
-    file_stem: &str,
-    start_id: usize,
-    prelude_progs: &[Program],
-) -> (TranspileOutput, Vec<MCDCDecision>) {
-    let has_main = has_main_fn(prog);
-    let extern_count = count_extern_decls(prog);
-    let has_extern_rust = has_extern_rust_decls(prog);
-    let use_runtime =
-        extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
-
-    let check_result = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
-    let mut cg = RustEmitter::new();
-    cg.expr_types = check_result.expr_types;
-    cg.mcdc = Some(mcdc_instr::MCDCMap::new(start_id));
-    cg.mcdc_fn_field_reads = mcdc_instr::build_fn_field_reads(prog);
-    cg.current_file = file_stem.to_string();
-    cg.emit_program_with_mods(prog, &[], prelude_progs);
-
     let decisions = cg.mcdc.take().map(|m| m.decisions).unwrap_or_default();
     let lib_rs = cg.finish();
 
     let opts = CargoOptions {
-        crate_name,
+        crate_name: &config.crate_name,
         use_mvl_runtime: use_runtime,
         extern_crates: Vec::new(),
     };
@@ -733,61 +353,19 @@ pub fn transpile_mcdc_with_prelude(
     } else {
         cargo::emit_cargo_toml_library_opts(&opts)
     };
-    let out = TranspileOutput {
-        lib_rs,
-        cargo_toml,
-        has_main,
-        extern_count,
-        has_extern_rust,
-    };
-    (out, decisions)
-}
 
-/// Transpile a source [`Program`] (not a `*_test.mvl` file) with MC/DC
-/// instrumentation for inclusion in the test crate.
-pub fn transpile_mcdc_source_with_prelude(
-    prog: &Program,
-    crate_name: &str,
-    file_stem: &str,
-    start_id: usize,
-    prelude_progs: &[Program],
-) -> (TranspileOutput, Vec<MCDCDecision>) {
-    let has_main = has_main_fn(prog);
-    let extern_count = count_extern_decls(prog);
-    let has_extern_rust = has_extern_rust_decls(prog);
-    let use_runtime =
-        extern_count > 0 || has_std_imports(prog) || prelude_requires_runtime(prelude_progs);
-
-    let check_result = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
-    let mut cg = RustEmitter::new();
-    cg.expr_types = check_result.expr_types;
-    cg.mcdc = Some(mcdc_instr::MCDCMap::new(start_id));
-    cg.mcdc_fn_field_reads = mcdc_instr::build_fn_field_reads(prog);
-    cg.current_file = file_stem.to_string();
-    cg.test_extern_stubs = true;
-    cg.emit_program_with_mods(prog, &[], prelude_progs);
-
-    let decisions = cg.mcdc.take().map(|m| m.decisions).unwrap_or_default();
-    let lib_rs = cg.finish();
-
-    let opts = CargoOptions {
-        crate_name,
-        use_mvl_runtime: use_runtime,
-        extern_crates: Vec::new(),
-    };
-    let cargo_toml = if has_main {
-        cargo::emit_cargo_toml_binary_opts(&opts)
-    } else {
-        cargo::emit_cargo_toml_library_opts(&opts)
-    };
-    let out = TranspileOutput {
-        lib_rs,
-        cargo_toml,
-        has_main,
-        extern_count,
-        has_extern_rust,
-    };
-    (out, decisions)
+    TranspileResult {
+        output: TranspileOutput {
+            lib_rs,
+            cargo_toml,
+            has_main,
+            extern_count,
+            has_extern_rust,
+        },
+        branches,
+        mutants,
+        decisions,
+    }
 }
 
 // ── has_extern_rust unit tests ─────────────────────────────────────────────
@@ -852,7 +430,7 @@ mod tests {
     #[test]
     fn transpile_emits_stdlib_use_for_std_import() {
         let prog = parse("use std.env.{getuid}\nfn main() -> Unit ! Env { }");
-        let out = transpile(&prog, "crate");
+        let out = transpile(&prog, TranspileConfig::new("crate")).output;
         assert!(
             out.lib_rs.contains("use mvl_runtime::stdlib::env::*"),
             "emitted Rust must contain targeted stdlib import, got:\n{}",
@@ -866,7 +444,13 @@ mod tests {
     #[test]
     fn mcdc_if_emits_clause_locals_and_record() {
         let prog = parse("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
-        let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let result = transpile(
+            &prog,
+            TranspileConfig::new("crate")
+                .with_file_stem("test")
+                .with_mcdc(0),
+        );
+        let (out, decisions) = (result.output, result.decisions);
         assert_eq!(decisions.len(), 1, "one compound decision");
         assert_eq!(decisions[0].kind, mcdc_instr::DecisionKind::If);
         let rs = &out.lib_rs;
@@ -896,7 +480,13 @@ mod tests {
     #[test]
     fn mcdc_if_recomposed_uses_clause_vars() {
         let prog = parse("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
-        let (out, _) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let result = transpile(
+            &prog,
+            TranspileConfig::new("crate")
+                .with_file_stem("test")
+                .with_mcdc(0),
+        );
+        let out = result.output;
         let rs = &out.lib_rs;
         // Short-circuit: left evaluated first, right only if left is true
         assert!(
@@ -914,7 +504,13 @@ mod tests {
     fn mcdc_if_three_clauses_emits_three_locals() {
         let prog =
             parse("fn f(a: Bool, b: Bool, c: Bool) -> Int { if a || b || c { 1 } else { 0 } }");
-        let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let result = transpile(
+            &prog,
+            TranspileConfig::new("crate")
+                .with_file_stem("test")
+                .with_mcdc(0),
+        );
+        let (out, decisions) = (result.output, result.decisions);
         assert_eq!(decisions[0].clause_count, 3);
         let rs = &out.lib_rs;
         assert!(rs.contains("let mut __d0_c = [false; 3]"), "{rs}");
@@ -925,7 +521,13 @@ mod tests {
     #[test]
     fn mcdc_record_encoding_present() {
         let prog = parse("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
-        let (out, _) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let result = transpile(
+            &prog,
+            TranspileConfig::new("crate")
+                .with_file_stem("test")
+                .with_mcdc(0),
+        );
+        let out = result.output;
         let rs = &out.lib_rs;
         // Clause vals: bits 0 and 1; eval flags: bits 2 and 3; outcome: bit 4
         assert!(
@@ -960,7 +562,13 @@ mod tests {
         let prog = parse(
             "partial fn f(a: Bool, b: Bool) -> Int { let x: ref Int = 0; while a && b { x = x + 1; } x }",
         );
-        let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let result = transpile(
+            &prog,
+            TranspileConfig::new("crate")
+                .with_file_stem("test")
+                .with_mcdc(0),
+        );
+        let (out, decisions) = (result.output, result.decisions);
         assert_eq!(decisions.len(), 1);
         assert_eq!(decisions[0].kind, mcdc_instr::DecisionKind::While);
         let rs = &out.lib_rs;
@@ -977,7 +585,13 @@ mod tests {
     #[test]
     fn mcdc_simple_condition_not_instrumented() {
         let prog = parse("fn f(x: Int) -> Int { if x > 0 { 1 } else { 0 } }");
-        let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let result = transpile(
+            &prog,
+            TranspileConfig::new("crate")
+                .with_file_stem("test")
+                .with_mcdc(0),
+        );
+        let (out, decisions) = (result.output, result.decisions);
         assert!(
             decisions.is_empty(),
             "simple condition must not be instrumented"
@@ -990,7 +604,13 @@ mod tests {
     fn mcdc_test_fn_excluded() {
         let prog =
             parse("test fn t(a: Bool, b: Bool) -> Bool { if a && b { true } else { false } }");
-        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let result = transpile(
+            &prog,
+            TranspileConfig::new("crate")
+                .with_file_stem("test")
+                .with_mcdc(0),
+        );
+        let decisions = result.decisions;
         assert!(
             decisions.is_empty(),
             "test fn must not generate MC/DC decisions"
@@ -1002,7 +622,13 @@ mod tests {
     #[test]
     fn mcdc_bool_return_expr_instrumented() {
         let prog = parse("fn f(a: Bool, b: Bool) -> Bool { a && b }");
-        let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let result = transpile(
+            &prog,
+            TranspileConfig::new("crate")
+                .with_file_stem("test")
+                .with_mcdc(0),
+        );
+        let (out, decisions) = (result.output, result.decisions);
         assert_eq!(decisions.len(), 1, "compound bool return is one decision");
         assert_eq!(decisions[0].kind, mcdc_instr::DecisionKind::Return);
         assert_eq!(decisions[0].clause_count, 2);
@@ -1024,7 +650,13 @@ mod tests {
     #[test]
     fn mcdc_non_bool_return_not_instrumented() {
         let prog = parse("fn f(a: Int, b: Int) -> Int { a + b }");
-        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let result = transpile(
+            &prog,
+            TranspileConfig::new("crate")
+                .with_file_stem("test")
+                .with_mcdc(0),
+        );
+        let decisions = result.decisions;
         assert!(
             decisions.is_empty(),
             "non-Bool return must not be instrumented"
@@ -1038,7 +670,13 @@ mod tests {
         // h(b) and g(a, b) both take `b` — also coupled.
         let prog =
             parse("fn d(a: Bool, b: Bool, c: Bool) -> Bool { f(a) && g(a, b) && h(b) && k(c) }");
-        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let result = transpile(
+            &prog,
+            TranspileConfig::new("crate")
+                .with_file_stem("test")
+                .with_mcdc(0),
+        );
+        let decisions = result.decisions;
         assert_eq!(decisions.len(), 1);
         // Expect at least: (0,1) via "a" and (1,2) via "b"
         let pairs = &decisions[0].coupled_pairs;
@@ -1059,7 +697,13 @@ mod tests {
     #[test]
     fn mcdc_independent_clauses_not_coupled() {
         let prog = parse("fn f(a: Bool, b: Bool) -> Bool { a && b }");
-        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let result = transpile(
+            &prog,
+            TranspileConfig::new("crate")
+                .with_file_stem("test")
+                .with_mcdc(0),
+        );
+        let decisions = result.decisions;
         assert_eq!(decisions.len(), 1);
         assert!(
             decisions[0].coupled_pairs.is_empty(),
@@ -1072,7 +716,13 @@ mod tests {
     fn mcdc_disjoint_field_access_not_coupled() {
         // f(v.breathing) and g(v.oxygen_sat) share param `v` but access different fields.
         let prog = parse("fn d(v: Vitals) -> Bool { f(v.breathing) && g(v.oxygen_sat) }");
-        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let result = transpile(
+            &prog,
+            TranspileConfig::new("crate")
+                .with_file_stem("test")
+                .with_mcdc(0),
+        );
+        let decisions = result.decisions;
         assert_eq!(decisions.len(), 1);
         assert!(
             decisions[0].coupled_pairs.is_empty(),
@@ -1085,7 +735,13 @@ mod tests {
     fn mcdc_shared_field_access_is_coupled() {
         // Both clauses use v.bp — toggling it affects both simultaneously.
         let prog = parse("fn d(v: V) -> Bool { f(v.bp) && g(v.bp) }");
-        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let result = transpile(
+            &prog,
+            TranspileConfig::new("crate")
+                .with_file_stem("test")
+                .with_mcdc(0),
+        );
+        let decisions = result.decisions;
         assert_eq!(decisions.len(), 1);
         let pairs = &decisions[0].coupled_pairs;
         assert_eq!(pairs.len(), 1, "one coupled pair expected");
@@ -1101,7 +757,13 @@ mod tests {
     #[test]
     fn mcdc_nested_field_access_not_coupled() {
         let prog = parse("fn d(p: Patient) -> Bool { f(p.vitals.pulse) && g(p.vitals.bp) }");
-        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let result = transpile(
+            &prog,
+            TranspileConfig::new("crate")
+                .with_file_stem("test")
+                .with_mcdc(0),
+        );
+        let decisions = result.decisions;
         assert_eq!(decisions.len(), 1);
         assert!(
             decisions[0].coupled_pairs.is_empty(),
@@ -1122,7 +784,13 @@ mod tests {
              fn g(p: T) -> Bool { p.y == 2 } \
              fn d(p: T) -> Bool { f(p) || g(p) }",
         );
-        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let result = transpile(
+            &prog,
+            TranspileConfig::new("crate")
+                .with_file_stem("test")
+                .with_mcdc(0),
+        );
+        let decisions = result.decisions;
         let d = decisions.iter().find(|d| d.fn_name == "d").unwrap();
         assert!(
             d.coupled_pairs.is_empty(),
@@ -1138,7 +806,13 @@ mod tests {
              fn g(p: T) -> Bool { p.x == 2 } \
              fn d(p: T) -> Bool { f(p) && g(p) }",
         );
-        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let result = transpile(
+            &prog,
+            TranspileConfig::new("crate")
+                .with_file_stem("test")
+                .with_mcdc(0),
+        );
+        let decisions = result.decisions;
         let d = decisions.iter().find(|d| d.fn_name == "d").unwrap();
         assert!(
             !d.coupled_pairs.is_empty(),
@@ -1163,7 +837,13 @@ mod tests {
              fn k(p: T) -> Bool { helper(p) } \
              fn d(p: T) -> Bool { h(p) && k(p) }",
         );
-        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let result = transpile(
+            &prog,
+            TranspileConfig::new("crate")
+                .with_file_stem("test")
+                .with_mcdc(0),
+        );
+        let decisions = result.decisions;
         let d = decisions.iter().find(|d| d.fn_name == "d").unwrap();
         assert!(
             !d.coupled_pairs.is_empty(),
@@ -1176,7 +856,13 @@ mod tests {
     fn mcdc_interproc_external_callee_conservative() {
         // `ext_a` and `ext_b` are not defined in the program → conservative coupling via "p".
         let prog = parse("fn d(p: T) -> Bool { ext_a(p) && ext_b(p) }");
-        let (_, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 0, &[]);
+        let result = transpile(
+            &prog,
+            TranspileConfig::new("crate")
+                .with_file_stem("test")
+                .with_mcdc(0),
+        );
+        let decisions = result.decisions;
         let d = decisions.iter().find(|d| d.fn_name == "d").unwrap();
         assert!(
             !d.coupled_pairs.is_empty(),
@@ -1188,7 +874,13 @@ mod tests {
     #[test]
     fn mcdc_start_id_offset_applied() {
         let prog = parse("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
-        let (out, decisions) = transpile_mcdc_with_prelude(&prog, "crate", "test", 5, &[]);
+        let result = transpile(
+            &prog,
+            TranspileConfig::new("crate")
+                .with_file_stem("test")
+                .with_mcdc(5),
+        );
+        let (out, decisions) = (result.output, result.decisions);
         assert_eq!(decisions[0].id, 5, "decision ID should be start_id");
         assert!(
             out.lib_rs.contains("__mvl_mcdc::record(5usize,"),
@@ -1201,7 +893,11 @@ mod tests {
     fn has_extern_rust_true_for_rust_abi() {
         let prog = parse(r#"extern "rust" { fn foo() -> Int; }"#);
         assert!(has_extern_rust_decls(&prog));
-        assert!(transpile(&prog, "crate").has_extern_rust);
+        assert!(
+            transpile(&prog, TranspileConfig::new("crate"))
+                .output
+                .has_extern_rust
+        );
     }
 
     /// `has_extern_rust` is `false` when program has no extern blocks at all.
@@ -1209,7 +905,7 @@ mod tests {
     fn has_extern_rust_false_on_plain_program() {
         let prog = parse("fn add(a: Int, b: Int) -> Int { a + b }");
         assert!(!has_extern_rust_decls(&prog));
-        let out = transpile(&prog, "crate");
+        let out = transpile(&prog, TranspileConfig::new("crate")).output;
         assert!(!out.has_extern_rust);
         // Regression guard: `mod bridge;` must NOT appear in output for non-extern programs.
         assert!(
@@ -1223,14 +919,18 @@ mod tests {
     fn has_extern_rust_false_for_c_abi() {
         let prog = parse(r#"extern "c" { fn bar() -> Int; }"#);
         assert!(!has_extern_rust_decls(&prog));
-        assert!(!transpile(&prog, "crate").has_extern_rust);
+        assert!(
+            !transpile(&prog, TranspileConfig::new("crate"))
+                .output
+                .has_extern_rust
+        );
     }
 
     /// `has_extern_rust` is `false` when only `extern "c"` is present; `extern_count` is non-zero.
     #[test]
     fn extern_count_nonzero_but_has_extern_rust_false() {
         let prog = parse(r#"extern "c" { fn baz() -> Int; }"#);
-        let out = transpile(&prog, "crate");
+        let out = transpile(&prog, TranspileConfig::new("crate")).output;
         assert_eq!(out.extern_count, 1);
         assert!(!out.has_extern_rust);
     }
@@ -1251,6 +951,8 @@ impl crate::mvl::backends::Backend for RustBackend {
     }
 
     fn emit_program(&self, prog: &crate::mvl::parser::ast::Program, crate_name: &str) -> String {
-        transpile(prog, crate_name).lib_rs
+        transpile(prog, TranspileConfig::new(crate_name))
+            .output
+            .lib_rs
     }
 }

@@ -847,8 +847,7 @@ fn cmd_complexity(path: &str, format_json: bool) {
 ///   5. Report — score + optional verbose covered/missed table
 fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
     use mvl::mvl::backends::rust::{
-        emit_mcdc_preamble, emit_mcdc_report_test, transpile_mcdc_source_with_prelude,
-        transpile_mcdc_with_prelude, MCDCDecision,
+        emit_mcdc_preamble, emit_mcdc_report_test, MCDCDecision, TranspileConfig,
     };
     use std::collections::HashSet;
 
@@ -939,14 +938,15 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
         let start_id = all_decisions.len();
         let static_d = analyze_mcdc(&prog, &module_name, start_id);
         all_static_decisions.extend(static_d);
-        let (out, decisions) = transpile_mcdc_with_prelude(
+        let result = transpiler::transpile(
             &prog,
-            &module_name,
-            &module_name,
-            start_id,
-            &stdlib_prelude_progs,
+            TranspileConfig::new(&module_name)
+                .with_file_stem(&module_name)
+                .with_prelude(stdlib_prelude_progs.clone())
+                .with_mcdc(start_id),
         );
-        let _ = out;
+        let out = result.output;
+        let decisions = result.decisions;
         all_decisions.extend(decisions);
         file_stems.push(module_name.clone());
         let module_content: String = out
@@ -982,14 +982,16 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
         let start_id = all_decisions.len();
         let static_d = analyze_mcdc(&prog, &module_name, start_id);
         all_static_decisions.extend(static_d);
-        let (out, decisions) = transpile_mcdc_source_with_prelude(
+        let result = transpiler::transpile(
             &prog,
-            &module_name,
-            &module_name,
-            start_id,
-            &stdlib_prelude_progs,
+            TranspileConfig::new(&module_name)
+                .with_file_stem(&module_name)
+                .with_prelude(stdlib_prelude_progs.clone())
+                .with_mcdc(start_id)
+                .for_test_crate(),
         );
-        let _ = out;
+        let out = result.output;
+        let decisions = result.decisions;
         all_decisions.extend(decisions);
         file_stems.push(module_name.clone());
         let module_content: String = out
@@ -1646,7 +1648,7 @@ fn cmd_lint(path: &str, show_config: bool) {
 fn cmd_transpile(path: &str) {
     let (prog, _src) = loader::parse_or_exit(path);
     let crate_name = loader::stem(path);
-    let out = transpiler::transpile(&prog, &crate_name);
+    let out = transpiler::transpile(&prog, transpiler::TranspileConfig::new(&crate_name)).output;
     println!("// === Cargo.toml ===");
     println!("{}", out.cargo_toml);
     let file_label = if out.has_main {
@@ -2115,16 +2117,24 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
             }
         }
         let (out, branches) = if coverage {
-            transpiler::transpile_covered_with_prelude(
-                &prog,
-                &module_name,
-                &module_name,
-                next_branch_id,
-                &stdlib_prelude_progs,
-            )
+            {
+                let r = transpiler::transpile(
+                    &prog,
+                    transpiler::TranspileConfig::new(&module_name)
+                        .with_file_stem(&module_name)
+                        .with_prelude(stdlib_prelude_progs.clone())
+                        .with_coverage(next_branch_id),
+                );
+                (r.output, r.branches)
+            }
         } else {
             (
-                transpiler::transpile_with_prelude(&prog, &module_name, &stdlib_prelude_progs),
+                transpiler::transpile(
+                    &prog,
+                    transpiler::TranspileConfig::new(&module_name)
+                        .with_prelude(stdlib_prelude_progs.clone()),
+                )
+                .output,
                 Vec::new(),
             )
         };
@@ -2174,20 +2184,26 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
             println!("  (inline tests) {file_str}");
         }
         let (out, branches) = if coverage {
-            transpiler::transpile_covered_source_with_prelude(
-                &prog,
-                &module_name,
-                &module_name,
-                next_branch_id,
-                &stdlib_prelude_progs,
-            )
+            {
+                let r = transpiler::transpile(
+                    &prog,
+                    transpiler::TranspileConfig::new(&module_name)
+                        .with_file_stem(&module_name)
+                        .with_prelude(stdlib_prelude_progs.clone())
+                        .with_coverage(next_branch_id)
+                        .for_test_crate(),
+                );
+                (r.output, r.branches)
+            }
         } else {
             (
-                transpiler::transpile_source_with_prelude(
+                transpiler::transpile(
                     &prog,
-                    &module_name,
-                    &stdlib_prelude_progs,
-                ),
+                    transpiler::TranspileConfig::new(&module_name)
+                        .with_prelude(stdlib_prelude_progs.clone())
+                        .for_test_crate(),
+                )
+                .output,
                 Vec::new(),
             )
         };
@@ -2442,12 +2458,15 @@ fn cmd_mutate(path: &str, quiet: bool, gen_boundary: bool, limit: Option<usize>)
         let (prog, _src) = loader::parse_or_exit(&file_str);
         let s = loader::stem(&file_str);
         let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
-        let (out, mutants) = transpiler::transpile_mutated_with_prelude(
+        let result = transpiler::transpile(
             &prog,
-            &module_name,
-            &module_name,
-            &stdlib_prelude_progs,
+            transpiler::TranspileConfig::new(&module_name)
+                .with_file_stem(&module_name)
+                .with_prelude(stdlib_prelude_progs.clone())
+                .with_mutation()
+                .for_test_file(),
         );
+        let (out, mutants) = (result.output, result.mutants);
         if out.has_extern_rust || transpiler::has_std_imports(&prog) {
             need_mvl_runtime = true;
         }
@@ -2484,12 +2503,15 @@ fn cmd_mutate(path: &str, quiet: bool, gen_boundary: bool, limit: Option<usize>)
         if !has_tests {
             continue;
         }
-        let (out, mutants) = transpiler::transpile_mutated_source_with_prelude(
+        let result = transpiler::transpile(
             &prog,
-            &module_name,
-            &module_name,
-            &stdlib_prelude_progs,
+            transpiler::TranspileConfig::new(&module_name)
+                .with_file_stem(&module_name)
+                .with_prelude(stdlib_prelude_progs.clone())
+                .with_mutation()
+                .for_test_crate(),
         );
+        let (out, mutants) = (result.output, result.mutants);
         if out.has_extern_rust || transpiler::has_std_imports(&prog) {
             need_mvl_runtime = true;
         }

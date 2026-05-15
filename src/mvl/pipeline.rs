@@ -1,0 +1,157 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
+//! Compilation pipeline — orchestrates Loader → Checker → Transpiler.
+//!
+//! [`Pipeline`] is the single entry point for check, build, test, and
+//! analysis commands.  Build it with the fluent modifier methods, then
+//! call [`check`](Pipeline::check) or [`build`](Pipeline::build).
+//!
+//! # Example
+//!
+//! ```
+//! use mvl::mvl::pipeline::Pipeline;
+//! use mvl::mvl::parser::ast::Program;
+//!
+//! // let prog: Program = …;
+//! // let prelude: Vec<Program> = loader::load_implicit_prelude();
+//! // let result = Pipeline::new().check(&prelude, &[prog]);
+//! ```
+
+use crate::mvl::backends::rust::{transpile, transpile_project, TranspileConfig, TranspileResult};
+use crate::mvl::backends::AssertMode;
+use crate::mvl::checker::{self, CheckResult};
+use crate::mvl::parser::ast::Program;
+
+/// Compilation pipeline with composable instrumentation.
+///
+/// Constructed with [`Pipeline::new`] and configured via builder methods.
+/// Provides [`check`](Self::check) and [`build`](Self::build) entry points.
+pub struct Pipeline {
+    coverage: bool,
+    mcdc: bool,
+    mutation: bool,
+    assert_mode: AssertMode,
+}
+
+/// Result of a [`Pipeline::check`] call — one entry per checked program.
+pub struct CheckResults {
+    /// Per-program check results, in the same order as the input programs.
+    pub results: Vec<CheckResult>,
+}
+
+impl CheckResults {
+    /// Returns true when every program passed type-checking without errors.
+    pub fn all_ok(&self) -> bool {
+        self.results.iter().all(|r| r.is_ok())
+    }
+
+    /// Returns the total number of type errors across all programs.
+    pub fn error_count(&self) -> usize {
+        self.results.iter().map(|r| r.errors.len()).sum()
+    }
+}
+
+impl Pipeline {
+    /// Create a new pipeline with default settings: no instrumentation, assert mode = Always.
+    pub fn new() -> Self {
+        Self {
+            coverage: false,
+            mcdc: false,
+            mutation: false,
+            assert_mode: AssertMode::Always,
+        }
+    }
+
+    /// Enable branch coverage instrumentation.
+    pub fn with_coverage(mut self) -> Self {
+        self.coverage = true;
+        self
+    }
+
+    /// Enable MC/DC condition instrumentation.
+    pub fn with_mcdc(mut self) -> Self {
+        self.mcdc = true;
+        self
+    }
+
+    /// Enable mutation testing instrumentation.
+    pub fn with_mutation(mut self) -> Self {
+        self.mutation = true;
+        self
+    }
+
+    /// Set the assert mode for refinement predicate emission.
+    pub fn with_assert_mode(mut self, mode: AssertMode) -> Self {
+        self.assert_mode = mode;
+        self
+    }
+
+    /// Type-check a set of programs with a shared prelude.
+    ///
+    /// Each program is checked independently against the same prelude.
+    /// Returns aggregated [`CheckResults`] with one entry per program.
+    pub fn check(&self, prelude: &[Program], programs: &[Program]) -> CheckResults {
+        let results = programs
+            .iter()
+            .map(|prog| checker::check_with_prelude(prelude, prog))
+            .collect();
+        CheckResults { results }
+    }
+
+    /// Transpile a single program using this pipeline's instrumentation settings.
+    ///
+    /// Returns a [`TranspileResult`] with the Rust source and any instrumentation
+    /// metadata (branches, mutants, decisions) depending on which modes are active.
+    pub fn build(
+        &self,
+        prog: &Program,
+        crate_name: impl Into<String>,
+        prelude: Vec<Program>,
+    ) -> TranspileResult {
+        let mut config = TranspileConfig::new(crate_name).with_prelude(prelude);
+        if self.coverage {
+            config = config.with_coverage(0);
+        }
+        if self.mcdc {
+            config = config.with_mcdc(0);
+        }
+        if self.mutation {
+            config = config.with_mutation();
+        }
+        config = config.with_assert_mode(self.assert_mode);
+        transpile(prog, config)
+    }
+
+    /// Transpile a multi-file project using this pipeline's settings.
+    ///
+    /// Delegates to [`transpile_project`] with the pipeline's assert mode.
+    /// Instrumentation (coverage, MC/DC, mutation) is not supported for
+    /// multi-file project builds — use [`build`](Self::build) per file instead.
+    pub fn build_project(
+        &self,
+        entry_name: &str,
+        entry_prog: &Program,
+        siblings: &[(String, Program)],
+        prelude: &[Program],
+        expr_types: std::collections::HashMap<
+            crate::mvl::parser::lexer::Span,
+            crate::mvl::checker::types::Ty,
+        >,
+    ) -> crate::mvl::backends::rust::ProjectOutput {
+        transpile_project(
+            entry_name,
+            entry_prog,
+            siblings,
+            prelude,
+            expr_types,
+            self.assert_mode,
+        )
+    }
+}
+
+impl Default for Pipeline {
+    fn default() -> Self {
+        Self::new()
+    }
+}

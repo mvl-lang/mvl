@@ -8,7 +8,7 @@
 //! Fix: hoist left/right into temp `let` bindings before the match block so each
 //! sub-expression is emitted — and its mutations allocated — exactly once.
 
-use mvl::mvl::backends::rust::transpile_mutated_source_with_prelude;
+use mvl::mvl::backends::rust::{transpile, TranspileConfig};
 use mvl::mvl::parser::Parser;
 
 fn parse(src: &str) -> mvl::mvl::parser::ast::Program {
@@ -28,7 +28,14 @@ fn parse(src: &str) -> mvl::mvl::parser::ast::Program {
 fn binary_with_int_literal_rhs_produces_exact_mutation_count() {
     let src = "fn f(x: Int) -> Bool { x < 92 }";
     let prog = parse(src);
-    let (_out, mutants) = transpile_mutated_source_with_prelude(&prog, "my_crate", "f", &[]);
+    let r = transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("f")
+            .with_mutation()
+            .for_test_crate(),
+    );
+    let (_out, mutants) = (r.output, r.mutants);
 
     // Verify no duplicate mutation IDs (a symptom of the inflation bug).
     let ids: Vec<&str> = mutants.iter().map(|m| m.id.as_str()).collect();
@@ -64,7 +71,14 @@ fn binary_with_int_literal_rhs_produces_exact_mutation_count() {
 fn compound_binary_expression_produces_exact_mutation_count() {
     let src = "fn f(a: Int, b: Int) -> Bool { (a < b) || (a > 0) }";
     let prog = parse(src);
-    let (_out, mutants) = transpile_mutated_source_with_prelude(&prog, "my_crate", "f", &[]);
+    let r = transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("f")
+            .with_mutation()
+            .for_test_crate(),
+    );
+    let (_out, mutants) = (r.output, r.mutants);
 
     let ids: Vec<&str> = mutants.iter().map(|m| m.id.as_str()).collect();
     let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();
@@ -98,7 +112,14 @@ fn compound_binary_expression_produces_exact_mutation_count() {
 fn three_level_arithmetic_binary_produces_exact_mutation_count() {
     let src = "fn f(a: Int, b: Int, c: Int, d: Int) -> Bool { (a + b) < (c - d) }";
     let prog = parse(src);
-    let (_out, mutants) = transpile_mutated_source_with_prelude(&prog, "my_crate", "f", &[]);
+    let r = transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("f")
+            .with_mutation()
+            .for_test_crate(),
+    );
+    let (_out, mutants) = (r.output, r.mutants);
 
     let ids: Vec<&str> = mutants.iter().map(|m| m.id.as_str()).collect();
     let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();
@@ -131,7 +152,14 @@ fn three_level_arithmetic_binary_produces_exact_mutation_count() {
 fn integer_literal_on_lhs_produces_exact_mutation_count() {
     let src = "fn f(x: Int) -> Bool { 5 < x }";
     let prog = parse(src);
-    let (_out, mutants) = transpile_mutated_source_with_prelude(&prog, "my_crate", "f", &[]);
+    let r = transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("f")
+            .with_mutation()
+            .for_test_crate(),
+    );
+    let (_out, mutants) = (r.output, r.mutants);
 
     let ids: Vec<&str> = mutants.iter().map(|m| m.id.as_str()).collect();
     let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();
@@ -164,7 +192,14 @@ fn integer_literal_on_lhs_produces_exact_mutation_count() {
 fn left_associative_chain_produces_exact_mutation_count() {
     let src = "fn f(a: Int, b: Int, c: Int) -> Int { a + b + c }";
     let prog = parse(src);
-    let (_out, mutants) = transpile_mutated_source_with_prelude(&prog, "my_crate", "f", &[]);
+    let r = transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("f")
+            .with_mutation()
+            .for_test_crate(),
+    );
+    let (_out, mutants) = (r.output, r.mutants);
 
     let ids: Vec<&str> = mutants.iter().map(|m| m.id.as_str()).collect();
     let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();
@@ -192,7 +227,14 @@ fn left_associative_chain_produces_exact_mutation_count() {
 fn single_variant_operator_produces_exact_mutation_count() {
     let src = "fn f(a: Bool, b: Bool) -> Bool { a && b }";
     let prog = parse(src);
-    let (_out, mutants) = transpile_mutated_source_with_prelude(&prog, "my_crate", "f", &[]);
+    let r = transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("f")
+            .with_mutation()
+            .for_test_crate(),
+    );
+    let (_out, mutants) = (r.output, r.mutants);
 
     let ids: Vec<&str> = mutants.iter().map(|m| m.id.as_str()).collect();
     let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();

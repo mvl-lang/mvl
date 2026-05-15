@@ -8,6 +8,7 @@ pub mod loader;
 pub mod packages;
 pub mod parser;
 pub mod passes;
+pub mod pipeline;
 pub mod resolver;
 pub mod stdlib;
 pub mod toolchain;
