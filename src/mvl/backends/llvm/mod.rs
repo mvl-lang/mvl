@@ -2514,8 +2514,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         // Mirrors the Rust backend's `assert!(pred, "requires: ...")`.
         if !fd.requires.is_empty() {
             // Build a name → loaded-i64 map for all Int parameters.
-            let mut param_vals: std::collections::HashMap<String, inkwell::values::IntValue> =
-                std::collections::HashMap::new();
+            let mut param_vals: HashMap<String, inkwell::values::IntValue> = HashMap::new();
             for (i, param) in fd.params.iter().enumerate() {
                 if let Some(inkwell::values::BasicValueEnum::IntValue(iv)) =
                     fn_val.get_nth_param(i as u32)
@@ -2530,6 +2529,10 @@ impl<'ctx> LlvmBackend<'ctx> {
             for req_pred in &fd.requires {
                 if let Some(cond) = self.emit_requires_pred_bool(req_pred, &param_vals) {
                     match self.assert_mode {
+                        // Note: LLVM IR has no concept of `debug_assertions`, so
+                        // DebugOnly emits the same unconditional trap as Always.
+                        // TODO(#627): Distinguish at link time via a separate IR
+                        // module compiled under a debug-flavoured target triple.
                         crate::mvl::backends::AssertMode::Always
                         | crate::mvl::backends::AssertMode::DebugOnly => {
                             let cur_block = self.builder.get_insert_block().unwrap();

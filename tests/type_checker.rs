@@ -6111,9 +6111,11 @@ fn precondition_violated_counterexample_field_is_none() {
         errors
     );
     if let Some(CheckError::PreconditionViolated { counterexample, .. }) = error {
+        // TODO(#627): invert this assertion once Z3 model extraction is implemented
+        // and the Sat branch in layer5 returns Failed { counterexample: Some(...) }.
         assert!(
             counterexample.is_none(),
-            "counterexample should be None in Phase 4 (no Z3 extraction yet)"
+            "counterexample should be None until Phase 4 Z3 extraction is implemented"
         );
     }
 }
@@ -7035,10 +7037,118 @@ fn z3_counterexample_field_in_error_structs() {
     // Layer 1 catches this literal violation, so counterexample is None.
     // When Z3 extracts counterexamples from SAT results (Phase 4), it will set Some.
     if let Some(CheckError::RefinementViolated { counterexample, .. }) = violation {
-        // Verify the field is present (None for Layer 1, will be Some for Z3 cases)
+        // TODO(#627): invert this assertion once Z3 model extraction is implemented.
+        // Layer 1 catches literal violations and sets counterexample: None; the Z3
+        // Sat branch will set Some(...) when Phase 4 is complete.
         assert!(
             counterexample.is_none(),
             "Layer 1 doesn't extract counterexamples yet"
         );
     }
+}
+
+// ── Counterexample field in PostconditionViolated / InvariantViolated (#627) ──
+
+#[test]
+fn postcondition_violated_has_counterexample_field() {
+    // GIVEN: fn with `ensures result >= 0` returning -1 (statically violates)
+    // THEN: PostconditionViolated error carries the counterexample field
+    let src = r#"
+        fn bad_post() -> Int ensures result >= 0 { -1 }
+    "#;
+    let errors = errors_for(src);
+    let violation = errors
+        .iter()
+        .find(|e| matches!(e, CheckError::PostconditionViolated { .. }));
+    assert!(
+        violation.is_some(),
+        "expected PostconditionViolated, got: {errors:?}"
+    );
+    if let Some(CheckError::PostconditionViolated { counterexample, .. }) = violation {
+        // TODO(#627): assert Some(...) once Z3 extraction is wired up.
+        let _ = counterexample; // field is present — structural check passes
+    }
+}
+
+#[test]
+fn invariant_violated_has_counterexample_field() {
+    // GIVEN: constant-false loop invariant (1 < 0 is always false)
+    // THEN: InvariantViolated error carries the counterexample field
+    let src = r#"
+        partial fn server() -> Unit {
+            while true invariant 1 < 0 { }
+        }
+    "#;
+    let errors = errors_for(src);
+    let violation = errors
+        .iter()
+        .find(|e| matches!(e, CheckError::InvariantViolated { .. }));
+    assert!(
+        violation.is_some(),
+        "expected InvariantViolated, got: {errors:?}"
+    );
+    if let Some(CheckError::InvariantViolated { counterexample, .. }) = violation {
+        // TODO(#627): assert Some(...) once Z3 extraction is wired up.
+        let _ = counterexample; // field is present — structural check passes
+    }
+}
+
+// ── check_dual SessionDualityMismatch fallback (#134) ─────────────────────────
+
+#[test]
+fn session_duality_mismatch_non_deadlock_returns_mismatch_error() {
+    // GIVEN: two types that are structurally incompatible but NOT a deadlock
+    // (both start with Send — no mutual blocking — but are not duals of each other)
+    // THEN: check_dual returns SessionDualityMismatch, not SessionDeadlock
+    use mvl::mvl::checker::session::check_dual;
+    use mvl::mvl::checker::types::SessionTy;
+    use mvl::mvl::checker::types::Ty;
+
+    let dummy = mvl::mvl::parser::lexer::Span {
+        line: 1,
+        col: 1,
+        offset: 0,
+        len: 0,
+    };
+
+    // Both sides Send — neither is blocked waiting, but they're not duals.
+    let a = SessionTy::Send(Box::new(Ty::Int), Box::new(SessionTy::End));
+    let b = SessionTy::Send(Box::new(Ty::Int), Box::new(SessionTy::End));
+    let err = check_dual(&a, &b, dummy);
+    assert!(
+        matches!(
+            err,
+            Some(mvl::mvl::checker::errors::CheckError::SessionDualityMismatch { .. })
+        ),
+        "expected SessionDualityMismatch for (Send, Send), got: {:?}",
+        err
+    );
+}
+
+// ── Spawn inside impl block triggers field refinement check (#37) ─────────────
+
+#[test]
+fn actor_field_refinement_violated_from_impl_method() {
+    // GIVEN: a spawn with a bad field value inside an impl method body
+    // THEN: RefinementViolated error is emitted for the spawn
+    let errors = errors_for(
+        r#"
+        actor Counter {
+            count: Int where self >= 0
+            pub fn tick() { }
+        }
+        type Builder = struct {}
+        impl Builder {
+            fn make_bad() -> Unit {
+                let c = actor Counter { count: -5 }
+            }
+        }
+        "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "expected RefinementViolated for spawn inside impl method, got: {errors:?}"
+    );
 }

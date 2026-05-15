@@ -112,6 +112,9 @@ fn check_duplicate_labels(
 /// Returns `Some(error)` on the first deadlock found, `None` if the pair is
 /// deadlock-free (or if the types are structurally incompatible — duality
 /// mismatches are handled separately by [`check_dual`]).
+// Note: `SessionTy` is acyclic (there is no mu-binder / recursive type alias in the
+// current type system), so this recursion always terminates.  If recursive session
+// types are ever introduced, add a visited-state set or depth counter here.
 pub fn check_no_mutual_blocking(a: &SessionTy, b: &SessionTy, span: Span) -> Option<CheckError> {
     match (a, b) {
         // Both sides waiting to receive — nobody sends first: deadlock.
@@ -125,7 +128,10 @@ pub fn check_no_mutual_blocking(a: &SessionTy, b: &SessionTy, span: Span) -> Opt
         (SessionTy::Receive(_, a_cont), SessionTy::Send(_, b_cont)) => {
             check_no_mutual_blocking(a_cont, b_cont, span)
         }
-        // a picks a branch (internal), b handles it (external): walk all branches.
+        // One side picks a branch (internal), the other handles it (external).
+        // Walk only labels present in both sides; labels present in one side but
+        // absent from the other are a structural mismatch caught by check_dual,
+        // not a deadlock.
         (SessionTy::InternalChoice(a_branches), SessionTy::ExternalChoice(b_branches))
         | (SessionTy::ExternalChoice(a_branches), SessionTy::InternalChoice(b_branches)) => {
             for (label, a_sub) in a_branches {

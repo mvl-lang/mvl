@@ -208,6 +208,30 @@ pub fn count_fully_verified_fns(prog: &Program) -> (usize, usize) {
                 }
             }
         }
+        // Actor behavior methods must also be counted.
+        if let Decl::Actor(ad) = decl {
+            for method in &ad.methods {
+                let mut var_refs = params_to_var_refs(&method.params, &type_refs);
+                let mut errors = Vec::new();
+                let mut counts = RefinementCounts::default();
+                analyze_block(
+                    &method.body,
+                    &mut var_refs,
+                    &fn_params,
+                    &type_refs,
+                    &fn_decls,
+                    &mut errors,
+                    &mut counts,
+                );
+                let total = counts.proven + counts.runtime_checked + counts.failed;
+                if total > 0 {
+                    fn_total += 1;
+                    if counts.runtime_checked == 0 && counts.failed == 0 {
+                        fully_verified += 1;
+                    }
+                }
+            }
+        }
     }
     (fully_verified, fn_total)
 }

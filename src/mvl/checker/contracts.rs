@@ -1478,6 +1478,8 @@ fn check_actor_behavior_contracts(
     for method in &ad.methods {
         let var_refs = build_param_var_refs(&method.params);
         check_requires_in_block(&method.body, fn_map, &var_refs, fn_decls, errors);
+        // Note: `ensures` checking is omitted because `ActorMethod` has no `ensures`
+        // field today. If ensures support is added to actor methods, wire it in here.
         check_invariants_in_block(&method.body, &method.name, &var_refs, fn_decls, errors);
     }
 }
@@ -1494,11 +1496,13 @@ pub fn check_actor_field_refinements(prog: &Program, errors: &mut Vec<CheckError
         return; // Fast path: no actor has refined fields.
     }
     let fn_decls = build_fn_decls_for_solver(prog);
-    let var_refs: HashMap<String, Option<RefExpr>> = HashMap::new();
 
     for decl in &prog.declarations {
         match decl {
             Decl::Fn(fd) => {
+                // Seed var_refs from function parameters so the solver can use
+                // where-refinements on parameter variables as hypotheses.
+                let var_refs = build_param_var_refs(&fd.params);
                 check_spawn_refinements_in_block(
                     &fd.body,
                     &actor_fields,
@@ -1509,6 +1513,7 @@ pub fn check_actor_field_refinements(prog: &Program, errors: &mut Vec<CheckError
             }
             Decl::Impl(impl_d) => {
                 for method in &impl_d.methods {
+                    let var_refs = build_param_var_refs(&method.params);
                     check_spawn_refinements_in_block(
                         &method.body,
                         &actor_fields,
@@ -1520,6 +1525,7 @@ pub fn check_actor_field_refinements(prog: &Program, errors: &mut Vec<CheckError
             }
             Decl::Actor(ad) => {
                 for method in &ad.methods {
+                    let var_refs = build_param_var_refs(&method.params);
                     check_spawn_refinements_in_block(
                         &method.body,
                         &actor_fields,

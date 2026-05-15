@@ -95,13 +95,15 @@ fn impl_z3(
     match solver.check() {
         SatResult::Unsat => Some(RefResult::Proven),
         SatResult::Sat => {
-            // Z3 found a counterexample showing the predicate can fail. Extract model values.
-            // Phase 4 (#627): Surface counterexample as diagnostic hint for RuntimeCheck.
-            // Note: this could indicate either definite violation (constrained vars) or
-            // potential violation (unconstrained vars).  For now, extract for diagnostics.
-            let _model = solver.get_model()?;
-            // Counterexample extraction deferred to full Phase 4 implementation.
-            // For now, return None to fall through to RuntimeCheck.
+            // Z3 found a satisfying assignment for ¬pred, meaning pred can fail for some
+            // input.  This may be a definite violation (constrained literal arg) or a
+            // potential violation (unconstrained variable arg).  We return None here so
+            // the solver cascade falls through to RuntimeCheck rather than Failed.
+            //
+            // TODO(#627): In Phase 4, split this into:
+            //   - Sat on a fully-constrained arg → Failed { counterexample: Some(...) }
+            //   - Sat on a symbolic arg          → None (RuntimeCheck, deferred)
+            // Use solver.get_model() to extract the witness at that point.
             None
         }
         _ => None,
