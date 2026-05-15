@@ -4,6 +4,33 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.114.0] — 2026-05-15
+
+### Added
+
+- **Phase 8 compiler architecture refactor** (#774) — complete restructuring of the monolithic 4000-line main.rs into layered, composable modules:
+  - `Loader` module (#766) — unified file loading with 10 extracted functions (parse, stdlib, packages).
+  - `Pipeline` abstraction (#767) — orchestrator for Loader → Checker → Transpiler phases with composable instrumentation.
+  - `TranspileConfig` builder (#768) — consolidates 20+ transpile_* variants into single `transpile(prog, config)`.
+  - CLI command extraction (#770) — split monolithic main.rs into 13 focused modules (check, build, test, mcdc, mutate, etc.).
+  - Main.rs dispatch (#771) — reduced from 4000 to 55 lines; version resolution chain (ADR-0009).
+  - Documentation updates (#772) — module structure, public API docs, tests passing (890 unit + 366 integration).
+
+### Fixed
+
+- **Library design** — `parse_or_exit` moved from library to CLI layer; library now exposes pure `parse_file() -> Result<…>`.
+- **Symlink escape** — `collect_mvl_files_recursive` now uses `entry.file_type()` (lstat) instead of `path.is_dir()` (follows symlinks).
+- **Error handling** — `copy_dir_recursive` skips symlinks; build.rs uses structured error output instead of `panic!`.
+- **JSON escaping** — `json_escape` now handles U+2028 and U+2029 (Unicode line terminators).
+- **Type encapsulation** — `TranspileConfig` fields now `pub(crate)` to enforce builder-only construction.
+
+### Changed
+
+- `CoverageVisitor::branch_count()` renamed to `next_counter_id()` — clearer semantics (returns `start_id + allocated`, not count).
+- `Pipeline::build()` documented as single-file-only; for multi-file coverage, use `TranspileConfig::with_coverage(offset)` directly.
+
+---
+
 ## [0.113.0] — 2026-05-15
 
 ### Added
