@@ -924,6 +924,34 @@ fn cross_backend_actor_send() {
     }
 }
 
+/// Req 10 / Phase 4 (#627): LLVM backend emits `llvm.trap` for `requires` predicates.
+///
+/// Verifies that a function with a `requires` clause generates a conditional
+/// branch to `call void @llvm.trap()` in the LLVM IR (runtime guard parity
+/// with the Rust backend's `assert!(pred, "requires: ...")`).
+#[test]
+#[cfg(feature = "llvm")]
+fn llvm_requires_clause_emits_trap() {
+    let src = r#"
+fn safe_divide(a: Int, b: Int) -> Int requires b != 0 { a / b }
+fn main() -> Unit { println("ok") }
+"#;
+    let (mut parser, lex_errors) = mvl::mvl::parser::Parser::new(src);
+    assert!(lex_errors.is_empty(), "lex errors: {lex_errors:?}");
+    let prog = parser.parse_program();
+    assert!(
+        parser.errors().is_empty(),
+        "parse errors: {:?}",
+        parser.errors()
+    );
+    let ir =
+        mvl::mvl::backends::llvm::compile_to_ir(&prog, "test_req").expect("IR generation failed");
+    assert!(
+        ir.contains("llvm.trap"),
+        "LLVM IR for fn with `requires` must contain llvm.trap.\nIR:\n{ir}"
+    );
+}
+
 /// #670: LLVM backend emits `llvm.trap` for structs with `with invariant` (#670).
 ///
 /// Verifies backend parity: the LLVM IR for a struct constructor with an invariant
