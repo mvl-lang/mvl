@@ -112,7 +112,18 @@ impl<'ctx> LlvmBackend<'ctx> {
                 if let Some(v) = ret_val {
                     self.builder.build_return(Some(&v)).unwrap();
                 } else {
-                    self.builder.build_return(None).unwrap();
+                    // If the enclosing function is `main` (i32 return), emit `ret i32 0`
+                    // so a bare `return` inside main produces valid LLVM IR.
+                    let is_i32_fn = self.current_fn.map(|f| {
+                        use inkwell::types::BasicTypeEnum;
+                        matches!(f.get_type().get_return_type(), Some(BasicTypeEnum::IntType(it)) if it.get_bit_width() == 32)
+                    }).unwrap_or(false);
+                    if is_i32_fn {
+                        let zero = self.context.i32_type().const_int(0, false);
+                        self.builder.build_return(Some(&zero)).unwrap();
+                    } else {
+                        self.builder.build_return(None).unwrap();
+                    }
                 }
                 self.terminated = true;
                 None

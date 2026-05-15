@@ -454,6 +454,28 @@ fn cross_backend_log_stderr() {
     );
 }
 
+// ── #779: std.net — both backends ────────────────────────────────────────────
+
+/// Actor connects to listener, writes "net ok", main reads and prints it.
+/// Verifies that both backends correctly wire tcp_listen, tcp_connect,
+/// tcp_accept, tcp_read, tcp_write, tcp_close_* via `! Net` effect.
+#[test]
+fn cross_backend_net_basic() {
+    let file = corpus_stdlib("net_basic.mvl");
+    let transpiler_out = run_transpiler(&file);
+    assert_eq!(
+        transpiler_out.trim(),
+        "net ok",
+        "net_basic.mvl: unexpected output from transpiler backend"
+    );
+    if let Some(llvm_out) = run_llvm(&file) {
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "net_basic.mvl: LLVM and transpiler backends must produce identical output"
+        );
+    }
+}
+
 // ── #417 + #435: io stdlib — both backends ────────────────────────────────────
 
 /// Write+read roundtrip, append, create_dir, remove.

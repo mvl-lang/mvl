@@ -1208,6 +1208,16 @@ impl<'ctx> LlvmBackend<'ctx> {
         obj: &Expr,
         field: &str,
     ) -> Option<BasicValueEnum<'ctx>> {
+        // Actor method shortcut: `self.field` resolves via pre-registered field locals.
+        // emit_actor_decl registers each state field as (gep_ptr, llvm_ty) in self.locals.
+        if let Expr::Ident(name, _) = obj {
+            if name == "self" {
+                if let Some(&(alloca, ty)) = self.locals.get(field) {
+                    return Some(self.builder.build_load(ty, alloca, field).unwrap());
+                }
+            }
+        }
+
         let obj_val = self.emit_expr(obj)?;
         let BasicValueEnum::StructValue(sv) = obj_val else {
             return None;
@@ -2225,6 +2235,27 @@ impl<'ctx> LlvmBackend<'ctx> {
                             let a = self.emit_expr(&args[0])?;
                             let b = self.emit_expr(&args[1])?;
                             return self.emit_stdlib_call_result_unit_ptr_i64_args(&sym, a, b);
+                        }
+                        // #779: ptr → {i8, ptr} — tcp_listener_port(listener)
+                        // C encodes the i64 port as a raw pointer value (ptrtoint trick).
+                        // We ptrtoint the payload ptr → i64, alloca it, and return {i8, slot}.
+                        StdlibSig::ResultI64OnePtrArg(sym) if args.len() == 1 => {
+                            let sym = sym.clone();
+                            let arg = self.emit_expr(&args[0])?;
+                            return self.emit_stdlib_call_result_i64_one_ptr_arg(&sym, arg);
+                        }
+                        // #779: (ptr, i64) → {i8, ptr} — tcp_listen(host, port)
+                        StdlibSig::ResultPtrPtrI64Args(sym) if args.len() == 2 => {
+                            let sym = sym.clone();
+                            let a = self.emit_expr(&args[0])?;
+                            let b = self.emit_expr(&args[1])?;
+                            return self.emit_stdlib_call_result_ptr_i64_args(&sym, a, b);
+                        }
+                        // #779: ptr → void — tcp_close_listener / tcp_close_stream
+                        StdlibSig::VoidOnePtrArg(sym) if args.len() == 1 => {
+                            let sym = sym.clone();
+                            let arg = self.emit_expr(&args[0])?;
+                            return self.emit_stdlib_call_void_one_ptr(&sym, arg);
                         }
                         // #536: i64 → void/noreturn (exit)
                         StdlibSig::VoidI64Arg(sym) if args.len() == 1 => {

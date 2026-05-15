@@ -380,6 +380,18 @@ pub(crate) enum StdlibSig {
     /// `(i8, ptr) → void` — signal_on(sig, handler).
     /// Second arg is a function pointer (non-capturing named fn).
     VoidI8FnPtrArg(String),
+
+    // ── #779: std.net ─────────────────────────────────────────────────────────
+    /// `(ptr, i64) → {i8, ptr}` — one ptr + one i64 arg, returns Result[OpaqueHandle, String].
+    /// Used for `tcp_listen(host: String, port: Int) → Result[TcpListener, String]`.
+    ResultPtrPtrI64Args(String),
+    /// `(ptr) → void` — one opaque-pointer arg, no return.
+    /// Used for `tcp_close_listener` and `tcp_close_stream`.
+    VoidOnePtrArg(String),
+    /// `(ptr) → {i8, i64}` — one ptr arg, Ok payload is an i64 value (not a ptr-to-i64).
+    /// The C function encodes the i64 directly in the `payload` field of `LlvmResult`
+    /// via pointer-sized cast.  Used for `tcp_listener_port`.
+    ResultI64OnePtrArg(String),
 }
 
 // ── Backend struct ────────────────────────────────────────────────────────────
@@ -559,6 +571,17 @@ impl<'ctx> LlvmBackend<'ctx> {
                 }
             }
         }
+        // Phase 8 / #696: actor pass — emit behavior functions + dispatch functions.
+        // Must run before the second pass so that dispatch function symbols are declared
+        // when `emit_actor_spawn` is called inside user function bodies (e.g. main).
+        if !self.actor_decls.is_empty() {
+            self.declare_actor_runtime_fns();
+            let actors: Vec<ActorDecl> = self.actor_decls.values().cloned().collect();
+            for ad in actors {
+                self.emit_actor_decl(&ad);
+            }
+        }
+
         // Second pass: emit bodies for non-generic functions only.
         // Generic functions are emitted on-demand when their call sites are reached.
         // Prelude stubs for inlined builtins are skipped — their call sites emit
@@ -572,15 +595,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                 {
                     self.emit_fn(fd);
                 }
-            }
-        }
-        // Phase 8 / #696: actor pass — emit behavior functions + dispatch functions.
-        // Runs after type building so actor state struct types are available.
-        if !self.actor_decls.is_empty() {
-            self.declare_actor_runtime_fns();
-            let actors: Vec<ActorDecl> = self.actor_decls.values().cloned().collect();
-            for ad in actors {
-                self.emit_actor_decl(&ad);
             }
         }
 
@@ -749,8 +763,10 @@ impl<'ctx> LlvmBackend<'ctx> {
             ("Int", 2) if p0 == "Int" && p1 == "Int" => Some(StdlibSig::I64TwoI64Args(symbol)),
             // ── Void/Never returns ────────────────────────────────────────────
             ("Unit" | "Never", 1) if p0 == "Int" => Some(StdlibSig::VoidI64Arg(symbol)),
-            // ── #586: Signal (unit enum, i8 at C-ABI boundary) ───────────────
+            // ── #586: Signal (unit enum, i8 at C-ABI boundary) — must precede VoidOnePtrArg ─
             ("Unit", 1) if p0 == "Signal" => Some(StdlibSig::VoidI8Arg(symbol)),
+            // ── #779: opaque ptr → void (tcp_close_listener, tcp_close_stream) ─
+            ("Unit", 1) if Self::is_ptr_type(p0) => Some(StdlibSig::VoidOnePtrArg(symbol)),
             ("Unit", 2) if p0 == "Signal" => Some(StdlibSig::VoidI8FnPtrArg(symbol)),
             ("Unit", 1) if p0 == "Duration" => Some(StdlibSig::VoidDurationArg(symbol)),
             ("Unit", 2) if p0 == "String" && p1 == "Map" => {
@@ -767,6 +783,9 @@ impl<'ctx> LlvmBackend<'ctx> {
                 };
                 if ok_base == "Unit" && Self::is_ptr_type(p0) {
                     Some(StdlibSig::ResultUnitOnePtrArg(symbol))
+                } else if ok_base == "Int" && Self::is_ptr_type(p0) {
+                    // e.g. tcp_listener_port(listener) → Result[Int, String]
+                    Some(StdlibSig::ResultI64OnePtrArg(symbol))
                 } else if Self::is_ptr_type(ok_base) && Self::is_ptr_type(p0) {
                     Some(StdlibSig::ResultStringOnePtrArg(symbol))
                 } else {
@@ -781,6 +800,9 @@ impl<'ctx> LlvmBackend<'ctx> {
                 };
                 if ok_base == "Unit" && Self::is_ptr_type(p0) {
                     Some(StdlibSig::ResultUnitPtrI64Args(symbol))
+                } else if Self::is_ptr_type(ok_base) && Self::is_ptr_type(p0) {
+                    // e.g. tcp_listen(host: String, port: Int) → Result[TcpListener, String]
+                    Some(StdlibSig::ResultPtrPtrI64Args(symbol))
                 } else {
                     None
                 }
@@ -1080,6 +1102,55 @@ impl<'ctx> LlvmBackend<'ctx> {
                         ("second".into(), int_ty.clone()),
                     ]
                 });
+        }
+
+        // #779: Register return types for net stdlib functions so that `?` propagation
+        // and match arms can infer the Ok payload type (TcpListener/TcpStream = opaque ptr).
+        // net.mvl is Rust-backed and never loaded into the LLVM prelude.
+        let imports_net = prog.declarations.iter().any(|d| {
+            if let Decl::Use(ud) = d {
+                ud.path.len() >= 2 && ud.path[0] == "std" && ud.path[1] == "net"
+            } else {
+                false
+            }
+        });
+        if imports_net {
+            use crate::mvl::parser::lexer::Span;
+            let s = Span::default();
+            let mk_base = |name: &str| TypeExpr::Base {
+                name: name.to_string(),
+                args: vec![],
+                span: s,
+            };
+            let string_ty = mk_base("String");
+            let listener_ty = mk_base("TcpListener");
+            let stream_ty = mk_base("TcpStream");
+            let int_ty = mk_base("Int");
+            let mk_result = |ok: TypeExpr| TypeExpr::Result {
+                ok: Box::new(ok),
+                err: Box::new(string_ty.clone()),
+                span: s,
+            };
+            // tcp_listen(host, port) → Result[TcpListener, String]
+            self.fn_return_types
+                .entry("tcp_listen".into())
+                .or_insert_with(|| mk_result(listener_ty.clone()));
+            // tcp_connect(host, port) → Result[TcpStream, String]
+            self.fn_return_types
+                .entry("tcp_connect".into())
+                .or_insert_with(|| mk_result(stream_ty.clone()));
+            // tcp_accept(listener) → Result[TcpStream, String]
+            self.fn_return_types
+                .entry("tcp_accept".into())
+                .or_insert_with(|| mk_result(stream_ty.clone()));
+            // tcp_read(stream) → Result[Tainted[String], String]
+            self.fn_return_types
+                .entry("tcp_read".into())
+                .or_insert_with(|| mk_result(string_ty.clone()));
+            // tcp_listener_port(listener) → Result[Int, String]
+            self.fn_return_types
+                .entry("tcp_listener_port".into())
+                .or_insert_with(|| mk_result(int_ty));
         }
 
         // #586: Register Signal enum variants for programs that import std.env.
@@ -2067,11 +2138,135 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
     }
 
-    /// Wrap a C-ABI `{i8, ptr}` result into the internal double-indirected format.
+    /// Emit `(ptr, i64) → {i8, ptr}` — used for `tcp_listen(host, port)`.
     ///
-    /// The C function returns `{ disc: i8, direct_payload: ptr }`.  This helper:
-    /// 1. Extracts `disc` and `direct_payload` from the C result.
-    /// 2. Creates a stack alloca `slot` and stores `direct_payload` in it.
+    /// The C function signature is `LlvmResult fn(*const MvlString, i64)`.
+    /// Same wrapping as `emit_stdlib_call_result_one_ptr_arg`.
+    pub(crate) fn emit_stdlib_call_result_ptr_i64_args(
+        &mut self,
+        symbol: &str,
+        ptr_arg: inkwell::values::BasicValueEnum<'ctx>,
+        i64_arg: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        use inkwell::types::BasicMetadataTypeEnum;
+        use inkwell::values::BasicMetadataValueEnum;
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let result_ty = self
+            .context
+            .struct_type(&[self.context.i8_type().into(), ptr_ty.into()], false);
+        let fn_val = self.module.get_function(symbol).unwrap_or_else(|| {
+            let fn_ty = result_ty.fn_type(
+                &[
+                    BasicMetadataTypeEnum::from(ptr_ty),
+                    BasicMetadataTypeEnum::from(i64_ty),
+                ],
+                false,
+            );
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        });
+        let call = self
+            .builder
+            .build_call(
+                fn_val,
+                &[
+                    BasicMetadataValueEnum::from(ptr_arg),
+                    BasicMetadataValueEnum::from(i64_arg),
+                ],
+                "net_c_call",
+            )
+            .ok()?;
+        use inkwell::values::AnyValue;
+        let c_val = inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
+        self.wrap_c_result_with_slot(c_val, result_ty)
+    }
+
+    /// Emit `(ptr) → {i8, ptr}` for `tcp_listener_port` — Result[Int, String].
+    ///
+    /// The C function encodes the i64 port as a raw `*mut c_void` integer cast.
+    /// We ptrtoint the payload ptr to i64, store it in a stack slot, then return
+    /// `{i8, ptr→i64}` so `bind_pattern_vars` can load the port with `build_load(i64, slot)`.
+    pub(crate) fn emit_stdlib_call_result_i64_one_ptr_arg(
+        &mut self,
+        symbol: &str,
+        arg: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let i8_ty = self.context.i8_type();
+        let i64_ty = self.context.i64_type();
+        let c_result_ty = self
+            .context
+            .struct_type(&[i8_ty.into(), ptr_ty.into()], false);
+        let fn_val = self.module.get_function(symbol).unwrap_or_else(|| {
+            let fn_ty = c_result_ty.fn_type(&[ptr_ty.into()], false);
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        });
+        let call = self
+            .builder
+            .build_call(fn_val, &[arg.into()], "net_port_call")
+            .ok()?;
+        use inkwell::values::AnyValue;
+        let c_val = inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
+        let disc = self
+            .builder
+            .build_extract_value(c_val.into_struct_value(), 0, "port_disc")
+            .ok()?;
+        let payload_ptr = self
+            .builder
+            .build_extract_value(c_val.into_struct_value(), 1, "port_payload_ptr")
+            .ok()?;
+        // ptrtoint: convert the pointer-sized integer back to i64.
+        let port_i64 = self
+            .builder
+            .build_ptr_to_int(payload_ptr.into_pointer_value(), i64_ty, "port_i64")
+            .ok()?;
+        // Store the i64 in a stack slot so bind_pattern_vars can load it.
+        let slot = self.builder.build_alloca(i64_ty, "port_slot").unwrap();
+        self.builder.build_store(slot, port_i64).unwrap();
+        // Build {i8, ptr} where field 1 points to the i64 slot.
+        let result_ty = self
+            .context
+            .struct_type(&[i8_ty.into(), ptr_ty.into()], false);
+        let wrapped = self.builder.build_alloca(result_ty, "port_result").unwrap();
+        let disc_ptr = self
+            .builder
+            .build_struct_gep(result_ty, wrapped, 0, "port_disc_ptr")
+            .unwrap();
+        self.builder.build_store(disc_ptr, disc).unwrap();
+        let payload_slot_ptr = self
+            .builder
+            .build_struct_gep(result_ty, wrapped, 1, "port_payload_slot_ptr")
+            .unwrap();
+        self.builder.build_store(payload_slot_ptr, slot).unwrap();
+        Some(
+            self.builder
+                .build_load(result_ty, wrapped, "port_wrapped")
+                .unwrap(),
+        )
+    }
+
+    /// Emit `(ptr) → void` — used for `tcp_close_listener` / `tcp_close_stream`.
+    pub(crate) fn emit_stdlib_call_void_one_ptr(
+        &mut self,
+        symbol: &str,
+        arg: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let void_ty = self.context.void_type();
+        let fn_val = self.module.get_function(symbol).unwrap_or_else(|| {
+            let fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+            self.module
+                .add_function(symbol, fn_ty, Some(Linkage::External))
+        });
+        self.builder
+            .build_call(fn_val, &[arg.into()], "net_close_call")
+            .ok()?;
+        // Unit return — emit the unit value the LLVM backend convention expects.
+        Some(self.context.i8_type().const_zero().into())
+    }
+
     /// 3. Returns a new `{i8, ptr}` struct where field 1 = `slot`.
     ///
     /// This matches the internal format produced by `emit_result_variant` where

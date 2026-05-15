@@ -1,0 +1,81 @@
+//! std.net — TCP networking.
+//!
+//! Programs declare `! Net` to bind sockets, accept connections, and exchange
+//! data.  All received data is `Tainted[String]` — the runtime cannot verify
+//! the origin of bytes on a wire.
+//!
+//! Import:
+//!   use std.net.{TcpListener, TcpStream, tcp_listen, tcp_accept,
+//!                tcp_read, tcp_write, tcp_close_listener, tcp_close_stream}
+//!
+//! Effects:
+//!   Net — any operation that touches a network socket.
+//!
+//! IFC: bytes received from a remote peer are Tainted[String].
+//!      Sanitize before using in security-sensitive contexts.
+//!
+//! Ownership notes:
+//!   TcpListener is an opaque handle backed by an i64 identifier.
+//!   It is `Copy` in generated Rust code — passing it to `tcp_accept`
+//!   does not invalidate the handle; the listener stays open until
+//!   `tcp_close_listener` is called or the program exits.
+//!   TcpStream is likewise `Copy`.
+
+// ── Handle types ──────────────────────────────────────────────────────────────
+
+/// A bound TCP listener — call `tcp_accept` to obtain a connection.
+///
+/// Created by `tcp_listen`.  The listener stays open across multiple
+/// `tcp_accept` calls.  Release with `tcp_close_listener` when done.
+pub type TcpListener = struct {}
+
+/// A connected TCP stream — call `tcp_read` / `tcp_write` to exchange data.
+///
+/// Created by `tcp_accept`.  Release with `tcp_close_stream` when done,
+/// or let it drop at the end of scope.
+pub type TcpStream = struct {}
+
+// ── Functions ─────────────────────────────────────────────────────────────────
+
+/// Bind a TCP listener on `host:port` and start accepting connections.
+///
+/// Returns `Err` if the address is already in use or the port is privileged
+/// and the process lacks the required capability.
+pub builtin fn tcp_listen(host: String, port: Int) -> Result[TcpListener, String] ! Net
+
+/// Connect to a remote TCP server at `host:port`.
+///
+/// Blocks until the connection is established or fails.
+pub builtin fn tcp_connect(host: String, port: Int) -> Result[TcpStream, String] ! Net
+
+/// Accept the next incoming connection on `listener`.
+///
+/// Blocks until a client connects.  `listener` remains valid after the call —
+/// call `tcp_accept` again to accept further connections.
+pub builtin fn tcp_accept(listener: TcpListener) -> Result[TcpStream, String] ! Net
+
+/// Read all available bytes from `stream` as a string.
+///
+/// Returns `Tainted[String]` because the content originates from an untrusted
+/// remote peer.  Blocks until the remote side closes the write half.
+pub builtin fn tcp_read(stream: TcpStream) -> Result[Tainted[String], String] ! Net
+
+/// Write `data` to `stream`.
+///
+/// Blocks until all bytes are written or an error occurs.
+pub builtin fn tcp_write(stream: TcpStream, data: String) -> Result[Unit, String] ! Net
+
+/// Return the local port the listener is bound to.
+///
+/// Useful when binding on port 0 to let the OS assign a free port.
+pub builtin fn tcp_listener_port(listener: TcpListener) -> Result[Int, String]
+
+/// Close a listener and release its port.
+///
+/// No-op if the handle is already closed.
+pub builtin fn tcp_close_listener(listener: TcpListener) -> Unit
+
+/// Close a stream and release its resources.
+///
+/// No-op if the handle is already closed.
+pub builtin fn tcp_close_stream(stream: TcpStream) -> Unit
