@@ -1,0 +1,518 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
+use mvl::mvl::backends::rust as transpiler;
+use mvl::mvl::loader;
+use mvl::mvl::parser::ast::Decl;
+use mvl::mvl::parser::Parser;
+use std::fs;
+use std::path::PathBuf;
+use std::process;
+
+pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
+    if quiet && verbose {
+        eprintln!(
+            "warning: --quiet and --verbose are mutually exclusive; --verbose takes precedence"
+        );
+    }
+    let quiet = quiet && !verbose;
+
+    let test_files = loader::mvl_files(path, true); // test_only=true
+    if test_files.is_empty() {
+        eprintln!("No *_test.mvl files found at: {path}");
+        process::exit(1);
+    }
+
+    if !quiet {
+        println!("Found {} test file(s):", test_files.len());
+        for f in &test_files {
+            println!("  {}", f.display());
+        }
+    }
+
+    // Check for duplicate module names before generating output.
+    let mut seen: std::collections::HashMap<String, PathBuf> = std::collections::HashMap::new();
+    for test_file in &test_files {
+        let file_str = test_file.display().to_string();
+        let s = loader::stem(&file_str);
+        let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
+        if let Some(prev) = seen.get(&module_name) {
+            eprintln!(
+                "error: duplicate test module name `{module_name}` from:\n  {}\n  {}",
+                prev.display(),
+                test_file.display()
+            );
+            process::exit(1);
+        }
+        seen.insert(module_name, test_file.clone());
+    }
+
+    // Use a per-invocation temp directory to avoid concurrent-run collisions.
+    let crate_name = "mvl_test";
+    let tmp_dir = std::env::temp_dir().join(format!("mvl_test_{}", process::id()));
+    let src_dir = tmp_dir.join("src");
+
+    // Remove any stale directory from a previous run at this path, then recreate.
+    if tmp_dir.exists() {
+        fs::remove_dir_all(&tmp_dir).unwrap_or_else(|e| {
+            eprintln!("Cannot clean temp dir {}: {e}", tmp_dir.display());
+            process::exit(1);
+        });
+    }
+    fs::create_dir_all(&src_dir).unwrap_or_else(|e| {
+        eprintln!("Cannot create temp dir {}: {e}", src_dir.display());
+        process::exit(1);
+    });
+
+    // Load the implicit stdlib prelude (core + Phase 4 stdlib files).
+    let mut stdlib_prelude_progs = loader::load_implicit_prelude();
+    // Pre-scan all test files to discover pure-MVL stdlib imports (e.g. json) and
+    // extend the prelude so their types/functions are available during transpilation.
+    // Also load any pkg.* package modules referenced by the test files.
+    {
+        let all_test_progs: Vec<_> = test_files
+            .iter()
+            .map(|f| loader::parse_or_exit(&f.display().to_string()).0)
+            .collect();
+        stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_test_progs));
+        let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        stdlib_prelude_progs.extend(loader::load_pkg_modules(&all_test_progs, &project_root));
+
+        // For packages tested from their own src/ directory, also load sibling
+        // .mvl files (non-test, including internal/) so types and extern
+        // declarations are in scope during transpilation.
+        // Track already-loaded paths so that multiple test files in the same
+        // directory don't add the same library file multiple times.
+        let mut loaded_prelude_paths: std::collections::HashSet<std::path::PathBuf> =
+            std::collections::HashSet::new();
+        for f in &test_files {
+            let dir = f.parent().unwrap_or_else(|| std::path::Path::new("."));
+            // Scan src/ and src/internal/ (package convention per ADR-0012).
+            let dirs_to_scan: Vec<std::path::PathBuf> =
+                vec![dir.to_path_buf(), dir.join("internal")];
+            for scan_dir in dirs_to_scan {
+                if let Ok(entries) = fs::read_dir(&scan_dir) {
+                    // Symlink escape guard (#715): canonicalize the scan root once so
+                    // that symlinks pointing outside the directory are silently skipped.
+                    let canon_scan_dir = fs::canonicalize(&scan_dir).ok();
+                    for entry in entries.flatten() {
+                        let p = entry.path();
+                        // Skip entries that resolve outside the scanned directory.
+                        if let Some(ref canon_root) = canon_scan_dir {
+                            match fs::canonicalize(&p) {
+                                Ok(canon_p) if canon_p.starts_with(canon_root) => {}
+                                _ => continue,
+                            }
+                        }
+                        let fname = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                        if p.extension().map(|e| e == "mvl").unwrap_or(false)
+                            && !fname.contains("_test")
+                            && p != **f
+                            && loaded_prelude_paths.insert(p.clone())
+                        {
+                            if let Ok(src) = fs::read_to_string(&p) {
+                                let (mut pp, _) = Parser::new(&src);
+                                let parsed = pp.parse_program();
+                                // Skip entry-point files (those defining `main`) — they are
+                                // programs, not library modules.  Including them in the prelude
+                                // causes duplicate type/function definitions when combined with
+                                // test-local re-declarations.
+                                //
+                                // Also skip pure-function helper/demo files (no extern blocks
+                                // or type declarations): loading them shadows runtime primitives
+                                // and causes compilation failures (e.g. collections.mvl defining
+                                // `fn list_get()` that shadows `list_get<T>` from mvl_runtime).
+                                if !transpiler::has_main_fn(&parsed)
+                                    && transpiler::has_extern_or_type_decls(&parsed)
+                                {
+                                    stdlib_prelude_progs.push(parsed);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Build a combined Rust test file from all test modules.
+    // Each entry: (module_name, display_label, content)
+    let mut modules: Vec<(String, String, String)> = Vec::new();
+    let mut all_branches: Vec<transpiler::BranchInfo> = Vec::new();
+    let mut next_branch_id = 0usize;
+    let mut file_stems: Vec<String> = Vec::new(); // ordered list for the coverage report
+                                                  // BDD: collect scenario names (fn names starting with "scenario_") for Gherkin report.
+    let mut scenarios: Vec<String> = Vec::new();
+    // The stdlib prelude (strings.mvl, lists.mvl, …) uses extern "rust" blocks,
+    // so the runtime crate is always needed when the prelude is loaded.
+    let mut need_mvl_runtime = transpiler::prelude_requires_runtime(&stdlib_prelude_progs);
+
+    for test_file in &test_files {
+        let file_str = test_file.display().to_string();
+        let (prog, _src) = loader::parse_or_exit(&file_str);
+        let s = loader::stem(&file_str);
+        let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
+        if bdd {
+            for decl in &prog.declarations {
+                if let Decl::Fn(fd) = decl {
+                    if fd.is_test && fd.name.starts_with("scenario_") {
+                        scenarios.push(fd.name.clone());
+                    }
+                }
+            }
+        }
+        let (out, branches) = if coverage {
+            {
+                let r = transpiler::transpile(
+                    &prog,
+                    transpiler::TranspileConfig::new(&module_name)
+                        .with_file_stem(&module_name)
+                        .with_prelude(stdlib_prelude_progs.clone())
+                        .with_coverage(next_branch_id),
+                );
+                (r.output, r.branches)
+            }
+        } else {
+            (
+                transpiler::transpile(
+                    &prog,
+                    transpiler::TranspileConfig::new(&module_name)
+                        .with_prelude(stdlib_prelude_progs.clone()),
+                )
+                .output,
+                Vec::new(),
+            )
+        };
+        if out.has_extern_rust || transpiler::has_std_imports(&prog) {
+            need_mvl_runtime = true;
+        }
+        next_branch_id += branches.len();
+        all_branches.extend(branches);
+        file_stems.push(module_name.clone());
+        // Strip per-file inner #![allow] — they're invalid inside mod blocks and
+        // we already have the file-level allow at the top.
+        let module_content: String = out
+            .lib_rs
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("#![allow("))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        modules.push((module_name, file_str, module_content));
+    }
+
+    // Also include source .mvl files that contain `test fn` declarations but
+    // have no corresponding `*_test.mvl` counterpart.  This lets inline tests
+    // (e.g. in `main.mvl`) run and appear in the coverage report.
+    let covered_stems: std::collections::HashSet<String> = file_stems.iter().cloned().collect();
+    let source_files = loader::mvl_files(path, false); // non-test files
+    for src_file in &source_files {
+        let file_str = src_file.display().to_string();
+        let s = loader::stem(&file_str);
+        let module_name = s.replace('-', "_");
+        if covered_stems.contains(&module_name) {
+            continue; // already covered by a *_test.mvl file
+        }
+        let (prog, _src) = loader::parse_or_exit(&file_str);
+        // Only include if the file has at least one test fn.
+        let has_tests = prog.declarations.iter().any(|d| {
+            if let Decl::Fn(fd) = d {
+                fd.is_test
+            } else {
+                false
+            }
+        });
+        if !has_tests {
+            continue;
+        }
+        if !quiet {
+            println!("  (inline tests) {file_str}");
+        }
+        let (out, branches) = if coverage {
+            {
+                let r = transpiler::transpile(
+                    &prog,
+                    transpiler::TranspileConfig::new(&module_name)
+                        .with_file_stem(&module_name)
+                        .with_prelude(stdlib_prelude_progs.clone())
+                        .with_coverage(next_branch_id)
+                        .for_test_crate(),
+                );
+                (r.output, r.branches)
+            }
+        } else {
+            (
+                transpiler::transpile(
+                    &prog,
+                    transpiler::TranspileConfig::new(&module_name)
+                        .with_prelude(stdlib_prelude_progs.clone())
+                        .for_test_crate(),
+                )
+                .output,
+                Vec::new(),
+            )
+        };
+        if out.has_extern_rust || transpiler::has_std_imports(&prog) {
+            need_mvl_runtime = true;
+        }
+        next_branch_id += branches.len();
+        all_branches.extend(branches);
+        file_stems.push(module_name.clone());
+        let module_content: String = out
+            .lib_rs
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("#![allow("))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        modules.push((module_name, file_str, module_content));
+    }
+
+    let total_branches = next_branch_id;
+    let mut combined_rs = String::new();
+    combined_rs.push_str("// MVL test runner — generated by `mvl test`\n");
+    combined_rs.push_str("// Do not edit; regenerate with `mvl test`.\n");
+    // File-level allow — inner attributes must appear at the top of the file,
+    // before any items.  We strip per-module copies below.
+    combined_rs.push_str(
+        "#![allow(dead_code, unused_variables, unused_imports, unused_parens, unused_unsafe)]\n\n",
+    );
+
+    if coverage {
+        combined_rs.push_str(&transpiler::emit_cov_preamble(total_branches));
+    }
+
+    for (module_name, label, module_content) in &modules {
+        combined_rs.push_str(&format!("// === {label} ===\n"));
+        combined_rs.push_str("#[cfg(test)]\n");
+        combined_rs.push_str(&format!("mod {module_name} {{\n"));
+        combined_rs.push_str("    #[allow(unused)]\n");
+        combined_rs.push_str("    use super::*;\n");
+        combined_rs.push_str(module_content);
+        combined_rs.push_str("}\n\n");
+    }
+
+    if coverage {
+        combined_rs.push_str(&transpiler::emit_cov_report_test(total_branches));
+    }
+
+    // Write Cargo.toml for the test runner, adding mvl_runtime if any module needs it.
+    let mvl_runtime_dep = if need_mvl_runtime {
+        "mvl_runtime = { path = \"./mvl_runtime\" }  # MVL security labels and prelude\n"
+    } else {
+        ""
+    };
+    let cargo_toml = format!(
+        "[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n{mvl_runtime_dep}"
+    );
+    fs::write(tmp_dir.join("Cargo.toml"), &cargo_toml).unwrap_or_else(|e| {
+        eprintln!("Cannot write Cargo.toml: {e}");
+        process::exit(1);
+    });
+
+    // Copy mvl_runtime into the temp dir if needed (parallel builds each get their own copy).
+    if need_mvl_runtime {
+        let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("runtime")
+            .join("rust");
+        let runtime_dst = tmp_dir.join("mvl_runtime");
+        if !runtime_src.exists() {
+            eprintln!(
+                "error: mvl_runtime not found at {} — cannot build test crate with stdlib/extern",
+                runtime_src.display()
+            );
+            process::exit(1);
+        }
+        super::copy_dir_recursive(&runtime_src, &runtime_dst).unwrap_or_else(|e| {
+            eprintln!("error: cannot copy mvl_runtime: {e}");
+            process::exit(1);
+        });
+    }
+    fs::write(src_dir.join("lib.rs"), &combined_rs).unwrap_or_else(|e| {
+        eprintln!("Cannot write lib.rs: {e}");
+        process::exit(1);
+    });
+
+    if verbose {
+        println!("Transpiled tests to: {}", tmp_dir.display());
+    }
+    if !quiet {
+        println!("Running: cargo test");
+    }
+
+    let cov_out_path = tmp_dir.join("mvl_cov.txt");
+
+    let mut cmd = process::Command::new("cargo");
+    cmd.arg("test").arg("--lib").current_dir(&tmp_dir);
+    if quiet && !coverage {
+        cmd.arg("-q");
+    }
+    if verbose || coverage {
+        // Coverage requires --nocapture so the report test's println! reaches us.
+        // With --coverage we also serialize tests to guarantee report runs last.
+        cmd.arg("--").arg("--nocapture");
+        if coverage {
+            cmd.arg("--test-threads=1");
+        }
+    }
+    if coverage {
+        cmd.env("MVL_COV_OUT", &cov_out_path);
+    }
+
+    let status = if coverage {
+        // Pipe stdout so we can filter out the internal `zzz_mvl_cov_report` test
+        // line — it's an implementation detail, not a real user test.
+        use std::io::{BufRead, BufReader};
+        cmd.stdout(process::Stdio::piped());
+        let mut child = cmd.spawn().unwrap_or_else(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                eprintln!(
+                    "error: `cargo` not found in PATH — install Rust from https://rustup.rs/"
+                );
+            } else {
+                eprintln!("error: failed to run cargo: {e}");
+            }
+            process::exit(1);
+        });
+        if let Some(stdout) = child.stdout.take() {
+            for line in BufReader::new(stdout).lines() {
+                let line = line.unwrap_or_default();
+                if !line.contains("zzz_mvl_cov_report") {
+                    println!("{line}");
+                }
+            }
+        }
+        child.wait().unwrap_or_else(|e| {
+            eprintln!("error: failed to wait for cargo: {e}");
+            process::exit(1);
+        })
+    } else {
+        cmd.status().unwrap_or_else(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                eprintln!(
+                    "error: `cargo` not found in PATH — install Rust from https://rustup.rs/"
+                );
+            } else {
+                eprintln!("error: failed to run cargo: {e}");
+            }
+            process::exit(1);
+        })
+    };
+
+    if !status.success() {
+        eprintln!("cargo test failed");
+        process::exit(1);
+    }
+
+    if !quiet {
+        println!("All tests passed.");
+    }
+
+    // ── BDD report ────────────────────────────────────────────────────────
+    if bdd && !scenarios.is_empty() {
+        println!();
+        println!("BDD scenarios:");
+        for name in &scenarios {
+            let label = name
+                .strip_prefix("scenario_")
+                .unwrap_or(name)
+                .replace('_', " ");
+            println!("  Scenario: {label} ... ok");
+        }
+    }
+
+    // ── Coverage report ───────────────────────────────────────────────────
+    if coverage && !all_branches.is_empty() {
+        let hits: Vec<u64> = match fs::read_to_string(&cov_out_path) {
+            Ok(raw) => raw
+                .lines()
+                .filter_map(|l| l.trim().parse::<u64>().ok())
+                .collect(),
+            Err(_) => {
+                eprintln!("warning: coverage data not found (report test may have been skipped)");
+                Vec::new()
+            }
+        };
+        let stems: Vec<&str> = file_stems.iter().map(|s| s.as_str()).collect();
+        print!(
+            "{}",
+            transpiler::format_report(&all_branches, &hits, &stems)
+        );
+    }
+}
+
+/// Native behavioral mutation testing (ADR-0014).
+///
+/// Execution model: single compile embeds all mutants behind `MVL_MUTANT` env-var
+/// dispatch; N parallel test-binary runs determine which mutants are killed.
+pub(super) fn find_test_binary_from_cargo_output(output: &[u8]) -> Option<std::path::PathBuf> {
+    let text = String::from_utf8_lossy(output);
+    for line in text.lines() {
+        if line.contains(r#""compiler-artifact""#) && line.contains(r#""executable""#) {
+            // Find `"executable":"<path>"` — Cargo JSON uses no spaces around `:`.
+            if let Some(pos) = line.find(r#""executable":""#) {
+                let rest = &line[pos + 14..]; // skip `"executable":"`
+                if let Some(end) = rest.find('"') {
+                    // Unescape backslash sequences on Windows paths
+                    let raw = rest[..end].replace("\\\\", "\\");
+                    return Some(std::path::PathBuf::from(raw));
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod find_test_binary_tests {
+    use super::find_test_binary_from_cargo_output;
+
+    fn cargo_artifact_line(executable: &str) -> String {
+        format!(
+            r#"{{"reason":"compiler-artifact","package_id":"mvl_mutate 0.1.0","executable":"{executable}","features":[]}}"#
+        )
+    }
+
+    #[test]
+    fn happy_path_returns_path() {
+        let line = cargo_artifact_line("/tmp/mvl_mutate/target/debug/mvl_mutate-abc123");
+        let out = find_test_binary_from_cargo_output(line.as_bytes());
+        assert_eq!(
+            out.unwrap().to_str().unwrap(),
+            "/tmp/mvl_mutate/target/debug/mvl_mutate-abc123"
+        );
+    }
+
+    #[test]
+    fn no_matching_line_returns_none() {
+        let line = r#"{"reason":"build-script-executed","package_id":"foo"}"#;
+        assert!(find_test_binary_from_cargo_output(line.as_bytes()).is_none());
+    }
+
+    #[test]
+    fn empty_input_returns_none() {
+        assert!(find_test_binary_from_cargo_output(b"").is_none());
+    }
+
+    #[test]
+    fn compiler_artifact_without_executable_string_returns_none() {
+        let line = r#"{"reason":"compiler-artifact","executable":null}"#;
+        assert!(find_test_binary_from_cargo_output(line.as_bytes()).is_none());
+    }
+
+    #[test]
+    fn first_matching_line_wins() {
+        let line1 = cargo_artifact_line("/tmp/first");
+        let line2 = cargo_artifact_line("/tmp/second");
+        let input = format!("{line1}\n{line2}\n");
+        let out = find_test_binary_from_cargo_output(input.as_bytes());
+        assert_eq!(out.unwrap().to_str().unwrap(), "/tmp/first");
+    }
+
+    #[test]
+    fn windows_backslash_unescaping() {
+        let line = cargo_artifact_line("C:\\\\tmp\\\\mvl\\\\test.exe");
+        let out = find_test_binary_from_cargo_output(line.as_bytes());
+        assert_eq!(out.unwrap().to_str().unwrap(), "C:\\tmp\\mvl\\test.exe");
+    }
+}
