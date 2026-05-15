@@ -230,6 +230,26 @@ pub enum CheckError {
         actor_type: String,
         span: Span,
     },
+    /// An actor declares two fields with the same name.
+    DuplicateActorField {
+        actor: String,
+        field: String,
+        span: Span,
+    },
+    /// An actor declares two methods with the same name.
+    DuplicateActorMethod {
+        actor: String,
+        method: String,
+        span: Span,
+    },
+    /// A `pub fn` (behavior) on an actor declares a non-`Unit` return type.
+    /// Actor behaviors are fire-and-forget; they must return `Unit`.
+    NonUnitBehaviorReturn {
+        actor: String,
+        method: String,
+        found: String,
+        span: Span,
+    },
     /// Linear type (String, List, Map, Set, or named struct) assigned without `consume()`.
     /// MVL uses Pony-style destructive read: ownership transfer requires explicit `consume(x)`.
     LinearTypeBareBind {
@@ -520,6 +540,9 @@ impl CheckError {
             | CheckError::CapabilityViolation { span, .. }
             | CheckError::IsoAliasingViolation { span, .. }
             | CheckError::RefEscapesToConcurrentContext { span, .. }
+            | CheckError::DuplicateActorField { span, .. }
+            | CheckError::DuplicateActorMethod { span, .. }
+            | CheckError::NonUnitBehaviorReturn { span, .. }
             | CheckError::LinearTypeBareBind { span, .. }
             | CheckError::InvalidDeclassify { span, .. }
             | CheckError::InvalidSanitize { span, .. }
@@ -673,6 +696,15 @@ impl CheckError {
                 name, actor_type, ..
             } => format!(
                 "`ref` value `{name}` escapes to concurrent actor `{actor_type}` — use `iso` or `val` for actor field initialization"
+            ),
+            CheckError::DuplicateActorField { actor, field, .. } => format!(
+                "actor `{actor}` declares duplicate field `{field}`"
+            ),
+            CheckError::DuplicateActorMethod { actor, method, .. } => format!(
+                "actor `{actor}` declares duplicate method `{method}`"
+            ),
+            CheckError::NonUnitBehaviorReturn { actor, method, found, .. } => format!(
+                "actor `{actor}` behavior `{method}` must return `Unit` (fire-and-forget), found `{found}`"
             ),
             CheckError::LinearTypeBareBind { name, ty, .. } => format!(
                 "bare assignment of linear type `{ty}` — use `consume({name})` to transfer ownership (Pony destructive read semantics)"
