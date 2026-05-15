@@ -44,8 +44,8 @@ use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::refinements::check_arg_against_pred;
 use crate::mvl::checker::solver::RefResult;
 use crate::mvl::parser::ast::{
-    ArithOp, BinaryOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, LValue, LetKind, Literal,
-    LogicOp, MatchBody, Param, Program, RefExpr, Stmt, UnaryOp,
+    ActorDecl, ArithOp, BinaryOp, Block, CmpOp, Decl, ElseBranch, Expr, FieldDecl, FnDecl, LValue,
+    LetKind, Literal, LogicOp, MatchBody, Param, Program, RefExpr, Stmt, UnaryOp,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -100,6 +100,12 @@ pub fn check_contracts(prog: &Program, errors: &mut Vec<CheckError>) {
                         errors,
                     );
                 }
+            }
+            // D2 (Phase 8, #37): Actor behavior bodies must satisfy the same contract
+            // rules as regular functions — `requires` clauses on called functions are
+            // checked, and loop invariants within behavior bodies are verified.
+            Decl::Actor(ad) => {
+                check_actor_behavior_contracts(ad, &fn_map, &fn_decls, errors);
             }
             _ => {}
         }
@@ -358,12 +364,12 @@ fn check_requires_at_call(
                 let normalized = normalize_pred(req_pred, &param_name);
                 let arg = &args[param_idx];
                 let outcome = check_arg_against_pred(arg, &normalized, var_refs, fn_decls);
-                if outcome == RefResult::Failed {
+                if let RefResult::Failed { counterexample } = outcome {
                     errors.push(CheckError::PreconditionViolated {
                         fn_name: fn_name.to_string(),
                         pred: display_pred(req_pred),
                         span: call_span,
-                        counterexample: None,
+                        counterexample,
                     });
                 }
                 // Proven or RuntimeCheck: silent at compile time.
@@ -508,12 +514,12 @@ fn check_ensures_for_return(
         // Let the solver decide: Proven (silent), Failed (emit error),
         // or RuntimeCheck (silent — deferred to runtime).
         let outcome = check_arg_against_pred(ret_expr, &normalized, &var_refs, fn_decls);
-        if outcome == RefResult::Failed {
+        if let RefResult::Failed { counterexample } = outcome {
             errors.push(CheckError::PostconditionViolated {
                 fn_name: fn_name.to_string(),
                 pred: display_pred(ens_pred),
                 span: ret_span,
-                counterexample: None,
+                counterexample,
             });
         }
     }
@@ -841,12 +847,12 @@ fn check_multi_param_requires_literal(
     }
 
     let outcome = check_arg_against_pred(&args[*primary_idx], &modified_pred, var_refs, fn_decls);
-    if outcome == RefResult::Failed {
+    if let RefResult::Failed { counterexample } = outcome {
         errors.push(CheckError::PreconditionViolated {
             fn_name: fn_name.to_string(),
             pred: display_pred(pred),
             span: call_span,
-            counterexample: None,
+            counterexample,
         });
     }
 }
@@ -972,12 +978,12 @@ fn check_invariant_at_entry(
             // Layer 1 will const-fold the comparison directly.
             let dummy = Expr::Literal(Literal::Integer(0), loop_span);
             let outcome = check_arg_against_pred(&dummy, inv_pred, var_refs, fn_decls);
-            if outcome == RefResult::Failed {
+            if let RefResult::Failed { counterexample } = outcome {
                 errors.push(CheckError::InvariantViolated {
                     fn_name: fn_name.to_string(),
                     pred: display_pred(inv_pred),
                     span: loop_span,
-                    counterexample: None,
+                    counterexample,
                 });
             }
         }
@@ -986,12 +992,12 @@ fn check_invariant_at_entry(
             let normalized = normalize_pred(inv_pred, var_name);
             let ident_expr = Expr::Ident(var_name.clone(), loop_span);
             let outcome = check_arg_against_pred(&ident_expr, &normalized, var_refs, fn_decls);
-            if outcome == RefResult::Failed {
+            if let RefResult::Failed { counterexample } = outcome {
                 errors.push(CheckError::InvariantViolated {
                     fn_name: fn_name.to_string(),
                     pred: display_pred(inv_pred),
                     span: loop_span,
-                    counterexample: None,
+                    counterexample,
                 });
             }
             // Proven or RuntimeCheck: silent at compile time.
@@ -1453,4 +1459,327 @@ fn check_invariant_preserved(
         });
     }
     // RuntimeCheck or Failed (positive case — invariant IS preserved): silent.
+}
+
+// ── D2: Actor protocol bounded model checker (Phase 8, #37) ──────────────────
+
+/// Check that `requires` clauses and loop invariants are satisfied within all
+/// behavior and helper-method bodies of an actor declaration.
+///
+/// Actor behaviors are async message handlers, but their bodies contain the same
+/// kinds of function calls and loop constructs as regular functions — the same
+/// contract rules therefore apply.
+fn check_actor_behavior_contracts(
+    ad: &ActorDecl,
+    fn_map: &HashMap<String, FnContracts>,
+    fn_decls: &HashMap<String, FnDecl>,
+    errors: &mut Vec<CheckError>,
+) {
+    for method in &ad.methods {
+        let var_refs = build_param_var_refs(&method.params);
+        check_requires_in_block(&method.body, fn_map, &var_refs, fn_decls, errors);
+        // Note: `ensures` checking is omitted because `ActorMethod` has no `ensures`
+        // field today. If ensures support is added to actor methods, wire it in here.
+        check_invariants_in_block(&method.body, &method.name, &var_refs, fn_decls, errors);
+    }
+}
+
+/// Check that every `actor ActorType { field: value, … }` expression provides
+/// initial values that satisfy the declared field refinements.
+///
+/// Uses the same 5-layer solver as refinement types.  A field without a
+/// refinement is always accepted.
+pub fn check_actor_field_refinements(prog: &Program, errors: &mut Vec<CheckError>) {
+    // Build a map: actor_name → field declarations (only those with refinements).
+    let actor_fields = build_actor_field_map(prog);
+    if actor_fields.is_empty() {
+        return; // Fast path: no actor has refined fields.
+    }
+    let fn_decls = build_fn_decls_for_solver(prog);
+
+    for decl in &prog.declarations {
+        match decl {
+            Decl::Fn(fd) => {
+                // Seed var_refs from function parameters so the solver can use
+                // where-refinements on parameter variables as hypotheses.
+                let var_refs = build_param_var_refs(&fd.params);
+                check_spawn_refinements_in_block(
+                    &fd.body,
+                    &actor_fields,
+                    &var_refs,
+                    &fn_decls,
+                    errors,
+                );
+            }
+            Decl::Impl(impl_d) => {
+                for method in &impl_d.methods {
+                    let var_refs = build_param_var_refs(&method.params);
+                    check_spawn_refinements_in_block(
+                        &method.body,
+                        &actor_fields,
+                        &var_refs,
+                        &fn_decls,
+                        errors,
+                    );
+                }
+            }
+            Decl::Actor(ad) => {
+                for method in &ad.methods {
+                    let var_refs = build_param_var_refs(&method.params);
+                    check_spawn_refinements_in_block(
+                        &method.body,
+                        &actor_fields,
+                        &var_refs,
+                        &fn_decls,
+                        errors,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Build a map from actor type name → its field declarations.
+fn build_actor_field_map(prog: &Program) -> HashMap<String, Vec<FieldDecl>> {
+    let mut map = HashMap::new();
+    for decl in &prog.declarations {
+        if let Decl::Actor(ad) = decl {
+            let refined: Vec<FieldDecl> = ad
+                .fields
+                .iter()
+                .filter(|f| f.refinement.is_some())
+                .cloned()
+                .collect();
+            if !refined.is_empty() {
+                map.insert(ad.name.clone(), refined);
+            }
+        }
+    }
+    map
+}
+
+/// Walk a block recursively, checking `Expr::Spawn` field-init values against
+/// field refinements.
+fn check_spawn_refinements_in_block(
+    block: &Block,
+    actor_fields: &HashMap<String, Vec<FieldDecl>>,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
+    errors: &mut Vec<CheckError>,
+) {
+    for stmt in &block.stmts {
+        check_spawn_refinements_in_stmt(stmt, actor_fields, var_refs, fn_decls, errors);
+    }
+}
+
+fn check_spawn_refinements_in_stmt(
+    stmt: &Stmt,
+    actor_fields: &HashMap<String, Vec<FieldDecl>>,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
+    errors: &mut Vec<CheckError>,
+) {
+    match stmt {
+        Stmt::Let { init, .. } => {
+            check_spawn_refinements_in_expr(init, actor_fields, var_refs, fn_decls, errors);
+        }
+        Stmt::Assign { value, .. } => {
+            check_spawn_refinements_in_expr(value, actor_fields, var_refs, fn_decls, errors);
+        }
+        Stmt::Return { value: Some(e), .. } => {
+            check_spawn_refinements_in_expr(e, actor_fields, var_refs, fn_decls, errors);
+        }
+        Stmt::Return { value: None, .. } => {}
+        Stmt::Expr { expr, .. } => {
+            check_spawn_refinements_in_expr(expr, actor_fields, var_refs, fn_decls, errors);
+        }
+        Stmt::If {
+            cond, then, else_, ..
+        } => {
+            check_spawn_refinements_in_expr(cond, actor_fields, var_refs, fn_decls, errors);
+            check_spawn_refinements_in_block(then, actor_fields, var_refs, fn_decls, errors);
+            if let Some(eb) = else_ {
+                match eb {
+                    ElseBranch::Block(b) => check_spawn_refinements_in_block(
+                        b,
+                        actor_fields,
+                        var_refs,
+                        fn_decls,
+                        errors,
+                    ),
+                    ElseBranch::If(s) => {
+                        check_spawn_refinements_in_stmt(s, actor_fields, var_refs, fn_decls, errors)
+                    }
+                }
+            }
+        }
+        Stmt::While { cond, body, .. } => {
+            check_spawn_refinements_in_expr(cond, actor_fields, var_refs, fn_decls, errors);
+            check_spawn_refinements_in_block(body, actor_fields, var_refs, fn_decls, errors);
+        }
+        Stmt::For { iter, body, .. } => {
+            check_spawn_refinements_in_expr(iter, actor_fields, var_refs, fn_decls, errors);
+            check_spawn_refinements_in_block(body, actor_fields, var_refs, fn_decls, errors);
+        }
+        Stmt::Match {
+            scrutinee, arms, ..
+        } => {
+            check_spawn_refinements_in_expr(scrutinee, actor_fields, var_refs, fn_decls, errors);
+            for arm in arms {
+                match &arm.body {
+                    MatchBody::Expr(e) => {
+                        check_spawn_refinements_in_expr(e, actor_fields, var_refs, fn_decls, errors)
+                    }
+                    MatchBody::Block(b) => check_spawn_refinements_in_block(
+                        b,
+                        actor_fields,
+                        var_refs,
+                        fn_decls,
+                        errors,
+                    ),
+                }
+            }
+        }
+    }
+}
+
+fn check_spawn_refinements_in_expr(
+    expr: &Expr,
+    actor_fields: &HashMap<String, Vec<FieldDecl>>,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
+    errors: &mut Vec<CheckError>,
+) {
+    match expr {
+        // The key case: actor creation expression.
+        Expr::Spawn {
+            actor_type,
+            fields,
+            span,
+        } => {
+            if let Some(refined_fields) = actor_fields.get(actor_type) {
+                for (init_name, init_expr) in fields {
+                    // Find the matching field declaration (if it has a refinement).
+                    if let Some(field_decl) = refined_fields.iter().find(|f| &f.name == init_name) {
+                        if let Some(pred) = &field_decl.refinement {
+                            let outcome =
+                                check_arg_against_pred(init_expr, pred, var_refs, fn_decls);
+                            if let RefResult::Failed { counterexample } = outcome {
+                                errors.push(CheckError::RefinementViolated {
+                                    pred: format!(
+                                        "{actor_type}.{init_name}: {}",
+                                        display_pred(pred)
+                                    ),
+                                    counterexample,
+                                    span: *span,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            // Recurse into field-init expressions.
+            for (_, v) in fields {
+                check_spawn_refinements_in_expr(v, actor_fields, var_refs, fn_decls, errors);
+            }
+        }
+        Expr::FnCall { args, .. } => {
+            for arg in args {
+                check_spawn_refinements_in_expr(arg, actor_fields, var_refs, fn_decls, errors);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            check_spawn_refinements_in_expr(receiver, actor_fields, var_refs, fn_decls, errors);
+            for arg in args {
+                check_spawn_refinements_in_expr(arg, actor_fields, var_refs, fn_decls, errors);
+            }
+        }
+        Expr::Block(b) => {
+            check_spawn_refinements_in_block(b, actor_fields, var_refs, fn_decls, errors);
+        }
+        Expr::If {
+            cond, then, else_, ..
+        } => {
+            check_spawn_refinements_in_expr(cond, actor_fields, var_refs, fn_decls, errors);
+            check_spawn_refinements_in_block(then, actor_fields, var_refs, fn_decls, errors);
+            if let Some(e) = else_ {
+                check_spawn_refinements_in_expr(e, actor_fields, var_refs, fn_decls, errors);
+            }
+        }
+        Expr::Binary { left, right, .. } => {
+            check_spawn_refinements_in_expr(left, actor_fields, var_refs, fn_decls, errors);
+            check_spawn_refinements_in_expr(right, actor_fields, var_refs, fn_decls, errors);
+        }
+        Expr::Borrow { expr, .. }
+        | Expr::Unary { expr, .. }
+        | Expr::Consume { expr, .. }
+        | Expr::Declassify { expr, .. }
+        | Expr::Sanitize { expr, .. }
+        | Expr::Propagate { expr, .. }
+        | Expr::FieldAccess { expr, .. } => {
+            check_spawn_refinements_in_expr(expr, actor_fields, var_refs, fn_decls, errors);
+        }
+        Expr::Construct { fields, .. } => {
+            for (_, e) in fields {
+                check_spawn_refinements_in_expr(e, actor_fields, var_refs, fn_decls, errors);
+            }
+        }
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+            for e in elems {
+                check_spawn_refinements_in_expr(e, actor_fields, var_refs, fn_decls, errors);
+            }
+        }
+        Expr::Map { pairs, .. } => {
+            for (k, v) in pairs {
+                check_spawn_refinements_in_expr(k, actor_fields, var_refs, fn_decls, errors);
+                check_spawn_refinements_in_expr(v, actor_fields, var_refs, fn_decls, errors);
+            }
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            check_spawn_refinements_in_expr(scrutinee, actor_fields, var_refs, fn_decls, errors);
+            for arm in arms {
+                match &arm.body {
+                    MatchBody::Expr(e) => {
+                        check_spawn_refinements_in_expr(e, actor_fields, var_refs, fn_decls, errors)
+                    }
+                    MatchBody::Block(b) => check_spawn_refinements_in_block(
+                        b,
+                        actor_fields,
+                        var_refs,
+                        fn_decls,
+                        errors,
+                    ),
+                }
+            }
+        }
+        Expr::Lambda { body, .. } => {
+            check_spawn_refinements_in_expr(body, actor_fields, var_refs, fn_decls, errors);
+        }
+        Expr::Select { arms, .. } => {
+            for arm in arms {
+                check_spawn_refinements_in_expr(
+                    &arm.expr,
+                    actor_fields,
+                    var_refs,
+                    fn_decls,
+                    errors,
+                );
+                check_spawn_refinements_in_block(
+                    &arm.body,
+                    actor_fields,
+                    var_refs,
+                    fn_decls,
+                    errors,
+                );
+            }
+        }
+        Expr::Concurrently { body, .. } => {
+            check_spawn_refinements_in_block(body, actor_fields, var_refs, fn_decls, errors);
+        }
+        // Leaves: no sub-expressions to walk.
+        Expr::Literal(_, _) | Expr::Ident(_, _) => {}
+    }
 }

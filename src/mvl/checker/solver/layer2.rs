@@ -325,7 +325,9 @@ pub(super) fn try_interval(
     let iv = interval_from_ref_expr(hyp)?;
     match interval_satisfies_pred(iv, pred) {
         Some(true) => Some(RefResult::Proven),
-        Some(false) => Some(RefResult::Failed),
+        Some(false) => Some(RefResult::Failed {
+            counterexample: None,
+        }),
         None => None,
     }
 }

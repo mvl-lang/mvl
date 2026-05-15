@@ -28,14 +28,15 @@ use crate::mvl::parser::lexer::Span;
 // ── Outcome type ──────────────────────────────────────────────────────────────
 
 /// Three-way outcome for a single refinement predicate check at a call site.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RefResult {
     /// The argument statically satisfies the predicate — no runtime check needed.
     Proven,
     /// Cannot be proven statically — a runtime assertion must be emitted.
     RuntimeCheck,
     /// The argument statically violates the predicate — a compile-time error.
-    Failed,
+    /// Optionally includes a counterexample extracted by Z3 (Phase 4, #627).
+    Failed { counterexample: Option<String> },
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────

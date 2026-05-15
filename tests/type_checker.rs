@@ -1038,6 +1038,207 @@ fn session_types_corpus_parses_and_checks() {
     );
 }
 
+// ── Session type model checker (D1, #134) ────────────────────────────────────
+
+#[test]
+fn session_duplicate_label_in_internal_choice_is_rejected() {
+    // GIVEN: internal choice with two branches sharing the same label
+    // THEN: SessionDuplicateLabel error reported
+    let src = r#"
+        type BadChoice = +{
+            ok: end,
+            ok: !Int. end
+        }
+    "#;
+    let result = check_src(src);
+    let has_dup = result.errors.iter().any(|e| {
+        matches!(e, mvl::mvl::checker::errors::CheckError::SessionDuplicateLabel { label, .. } if label == "ok")
+    });
+    assert!(
+        has_dup,
+        "expected SessionDuplicateLabel for `ok`, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn session_duplicate_label_in_external_choice_is_rejected() {
+    // GIVEN: external choice with a repeated branch label
+    // THEN: SessionDuplicateLabel error reported
+    let src = r#"
+        type BadServer = &{
+            read: !String. end,
+            write: ?String. end,
+            read: end
+        }
+    "#;
+    let result = check_src(src);
+    let has_dup = result.errors.iter().any(|e| {
+        matches!(e, mvl::mvl::checker::errors::CheckError::SessionDuplicateLabel { label, .. } if label == "read")
+    });
+    assert!(
+        has_dup,
+        "expected SessionDuplicateLabel for `read`, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn session_unique_labels_accepted() {
+    // GIVEN: choice with all-distinct labels
+    // THEN: no duplicate-label errors
+    let src = r#"
+        type GoodChoice = +{
+            left: end,
+            right: end,
+            middle: !Int. end
+        }
+    "#;
+    let result = check_src(src);
+    let has_dup = result.errors.iter().any(|e| {
+        matches!(
+            e,
+            mvl::mvl::checker::errors::CheckError::SessionDuplicateLabel { .. }
+        )
+    });
+    assert!(
+        !has_dup,
+        "unexpected duplicate-label error: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn session_mutual_blocking_detected_by_check_dual() {
+    // GIVEN: two types that both start with Receive (both wait, neither sends)
+    // THEN: check_dual returns SessionDeadlock
+    use mvl::mvl::checker::session::check_dual;
+    use mvl::mvl::checker::types::SessionTy;
+    use mvl::mvl::checker::types::Ty;
+
+    let dummy = mvl::mvl::parser::lexer::Span {
+        line: 1,
+        col: 1,
+        offset: 0,
+        len: 0,
+    };
+
+    // Both sides receive an Int first — deadlock.
+    let a = SessionTy::Receive(Box::new(Ty::Int), Box::new(SessionTy::End));
+    let b = SessionTy::Receive(Box::new(Ty::Int), Box::new(SessionTy::End));
+    let err = check_dual(&a, &b, dummy);
+    assert!(
+        matches!(
+            err,
+            Some(mvl::mvl::checker::errors::CheckError::SessionDeadlock { .. })
+        ),
+        "expected SessionDeadlock, got: {:?}",
+        err
+    );
+}
+
+#[test]
+fn session_proper_duals_no_deadlock() {
+    // GIVEN: Ping = !Int. ?Bool. end  and  Pong = ?Int. !Bool. end (proper duals)
+    // THEN: check_dual returns None
+    use mvl::mvl::checker::session::check_dual;
+    use mvl::mvl::checker::types::SessionTy;
+    use mvl::mvl::checker::types::Ty;
+
+    let dummy = mvl::mvl::parser::lexer::Span {
+        line: 1,
+        col: 1,
+        offset: 0,
+        len: 0,
+    };
+
+    let ping = SessionTy::Send(
+        Box::new(Ty::Int),
+        Box::new(SessionTy::Receive(
+            Box::new(Ty::Bool),
+            Box::new(SessionTy::End),
+        )),
+    );
+    let pong = SessionTy::Receive(
+        Box::new(Ty::Int),
+        Box::new(SessionTy::Send(
+            Box::new(Ty::Bool),
+            Box::new(SessionTy::End),
+        )),
+    );
+    assert_eq!(check_dual(&ping, &pong, dummy), None);
+}
+
+#[test]
+fn session_check_no_mutual_blocking_direct() {
+    // GIVEN: one side sends, other receives — no deadlock
+    use mvl::mvl::checker::session::check_no_mutual_blocking;
+    use mvl::mvl::checker::types::SessionTy;
+    use mvl::mvl::checker::types::Ty;
+
+    let dummy = mvl::mvl::parser::lexer::Span {
+        line: 1,
+        col: 1,
+        offset: 0,
+        len: 0,
+    };
+
+    let sender = SessionTy::Send(Box::new(Ty::Int), Box::new(SessionTy::End));
+    let recver = SessionTy::Receive(Box::new(Ty::Int), Box::new(SessionTy::End));
+    assert_eq!(check_no_mutual_blocking(&sender, &recver, dummy), None);
+
+    // Both receive — deadlock
+    let r1 = SessionTy::Receive(Box::new(Ty::Int), Box::new(SessionTy::End));
+    let r2 = SessionTy::Receive(Box::new(Ty::Int), Box::new(SessionTy::End));
+    assert!(matches!(
+        check_no_mutual_blocking(&r1, &r2, dummy),
+        Some(mvl::mvl::checker::errors::CheckError::SessionDeadlock { .. })
+    ));
+}
+
+#[test]
+fn session_deadlock_in_choice_branch_detected() {
+    // GIVEN: InternalChoice/ExternalChoice pair where one branch has mutual blocking
+    // THEN: check_no_mutual_blocking reports SessionDeadlock
+    use mvl::mvl::checker::session::check_no_mutual_blocking;
+    use mvl::mvl::checker::types::SessionTy;
+    use mvl::mvl::checker::types::Ty;
+
+    let dummy = mvl::mvl::parser::lexer::Span {
+        line: 1,
+        col: 1,
+        offset: 0,
+        len: 0,
+    };
+
+    // a: +{ ok: !Int. end, bad: ?String. end }
+    // b: &{ ok: ?Int. end, bad: ?String. end }  ← bad branch: both receive
+    let a = SessionTy::InternalChoice(vec![
+        (
+            "ok".to_string(),
+            SessionTy::Send(Box::new(Ty::Int), Box::new(SessionTy::End)),
+        ),
+        (
+            "bad".to_string(),
+            SessionTy::Receive(Box::new(Ty::String), Box::new(SessionTy::End)),
+        ),
+    ]);
+    let b = SessionTy::ExternalChoice(vec![
+        (
+            "ok".to_string(),
+            SessionTy::Receive(Box::new(Ty::Int), Box::new(SessionTy::End)),
+        ),
+        (
+            "bad".to_string(),
+            SessionTy::Receive(Box::new(Ty::String), Box::new(SessionTy::End)),
+        ),
+    ]);
+    assert!(matches!(
+        check_no_mutual_blocking(&a, &b, dummy),
+        Some(mvl::mvl::checker::errors::CheckError::SessionDeadlock { .. })
+    ));
+}
+
 #[test]
 fn sending_ref_param_rejected() {
     // GIVEN: fn with `ref` param attempts channel.send(param)
@@ -5910,9 +6111,11 @@ fn precondition_violated_counterexample_field_is_none() {
         errors
     );
     if let Some(CheckError::PreconditionViolated { counterexample, .. }) = error {
+        // TODO(#627): invert this assertion once Z3 model extraction is implemented
+        // and the Sat branch in layer5 returns Failed { counterexample: Some(...) }.
         assert!(
             counterexample.is_none(),
-            "counterexample should be None in Phase 4 (no Z3 extraction yet)"
+            "counterexample should be None until Phase 4 Z3 extraction is implemented"
         );
     }
 }
@@ -6678,6 +6881,115 @@ fn actor_behavior_iso_aliasing_rejected() {
     );
 }
 
+// ── D2: Actor protocol bounded model checker (#37) ───────────────────────────
+
+// ── D2: Actor protocol bounded model checker (#37) ───────────────────────────
+
+/// GIVEN: actor with a refined field (`count: Int where self >= 0`) initialized
+/// with a value that violates the refinement (count = -1)
+/// WHEN: type-checked
+/// THEN: RefinementViolated error emitted for the bad initial value
+#[test]
+fn actor_field_refinement_violated_at_spawn() {
+    let errors = errors_for(
+        r#"
+        actor Counter {
+            count: Int where self >= 0
+
+            pub fn tick() { }
+        }
+
+        fn make_bad() -> Unit {
+            let c = actor Counter { count: -1 }
+        }
+        "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "expected RefinementViolated for count = -1 violating self >= 0, got: {errors:?}"
+    );
+}
+
+/// GIVEN: actor with a refined field initialized with a valid value
+/// WHEN: type-checked
+/// THEN: no RefinementViolated error
+#[test]
+fn actor_field_refinement_satisfied_at_spawn() {
+    let errors = errors_for(
+        r#"
+        actor Counter {
+            count: Int where self >= 0
+
+            pub fn tick() { }
+        }
+
+        fn make_good() -> Unit {
+            let c = actor Counter { count: 0 }
+        }
+        "#,
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "expected no RefinementViolated for count = 0, got: {errors:?}"
+    );
+}
+
+/// GIVEN: actor behavior body calls a function with a refined parameter using a
+/// literal argument that violates the refinement (0 violates self > 0)
+/// WHEN: type-checked
+/// THEN: RefinementViolated error emitted
+#[test]
+fn actor_behavior_body_requires_checked() {
+    let src = r#"
+        fn positive_only(x: Int where self > 0) -> Int { x }
+
+        actor Worker {
+            data: Int
+
+            pub fn run() {
+                let r: Int = positive_only(0);
+            }
+        }
+        "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "expected RefinementViolated for positive_only(0) inside behavior, got: {errors:?}"
+    );
+}
+
+/// GIVEN: actor behavior body calls a function with a satisfied refined parameter
+/// WHEN: type-checked
+/// THEN: no RefinementViolated errors
+#[test]
+fn actor_behavior_body_requires_satisfied() {
+    let errors = errors_for(
+        r#"
+        fn positive_only(x: Int where self > 0) -> Int { x }
+
+        actor Worker {
+            data: Int
+
+            pub fn run() {
+                let r: Int = positive_only(5);
+            }
+        }
+        "#,
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "unexpected RefinementViolated for positive_only(5) inside behavior: {errors:?}"
+    );
+}
+
 // ── #744: ActorDecl registered in pass 1 ─────────────────────────────────────
 
 /// GIVEN: an actor declaration and a function returning that actor type
@@ -6699,4 +7011,144 @@ fn actor_type_registered_in_pass1() {
         "#,
     );
     assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
+}
+
+// ── #627: Z3 counterexample extraction ────────────────────────────────────────
+
+/// GIVEN: a refinement that Layer 1 proves violated (literal 0 violates self > 0)
+/// WHEN: type-checked
+/// THEN: RefinementViolated error includes counterexample field (Phase 4, #627)
+#[test]
+fn z3_counterexample_field_in_error_structs() {
+    let src = r#"
+        total fn require_positive(x: Int where self > 0) -> Int { x }
+        total fn bad() -> Int { require_positive(0) }
+    "#;
+    let errors = errors_for(src);
+    let violation = errors
+        .iter()
+        .find(|e| matches!(e, CheckError::RefinementViolated { .. }));
+    assert!(
+        violation.is_some(),
+        "expected RefinementViolated error, got: {errors:?}"
+    );
+
+    // The RefinementViolated error has a counterexample field (added for Phase 4, #627).
+    // Layer 1 catches this literal violation, so counterexample is None.
+    // When Z3 extracts counterexamples from SAT results (Phase 4), it will set Some.
+    if let Some(CheckError::RefinementViolated { counterexample, .. }) = violation {
+        // TODO(#627): invert this assertion once Z3 model extraction is implemented.
+        // Layer 1 catches literal violations and sets counterexample: None; the Z3
+        // Sat branch will set Some(...) when Phase 4 is complete.
+        assert!(
+            counterexample.is_none(),
+            "Layer 1 doesn't extract counterexamples yet"
+        );
+    }
+}
+
+// ── Counterexample field in PostconditionViolated / InvariantViolated (#627) ──
+
+#[test]
+fn postcondition_violated_has_counterexample_field() {
+    // GIVEN: fn with `ensures result >= 0` returning -1 (statically violates)
+    // THEN: PostconditionViolated error carries the counterexample field
+    let src = r#"
+        fn bad_post() -> Int ensures result >= 0 { -1 }
+    "#;
+    let errors = errors_for(src);
+    let violation = errors
+        .iter()
+        .find(|e| matches!(e, CheckError::PostconditionViolated { .. }));
+    assert!(
+        violation.is_some(),
+        "expected PostconditionViolated, got: {errors:?}"
+    );
+    if let Some(CheckError::PostconditionViolated { counterexample, .. }) = violation {
+        // TODO(#627): assert Some(...) once Z3 extraction is wired up.
+        let _ = counterexample; // field is present — structural check passes
+    }
+}
+
+#[test]
+fn invariant_violated_has_counterexample_field() {
+    // GIVEN: constant-false loop invariant (1 < 0 is always false)
+    // THEN: InvariantViolated error carries the counterexample field
+    let src = r#"
+        partial fn server() -> Unit {
+            while true invariant 1 < 0 { }
+        }
+    "#;
+    let errors = errors_for(src);
+    let violation = errors
+        .iter()
+        .find(|e| matches!(e, CheckError::InvariantViolated { .. }));
+    assert!(
+        violation.is_some(),
+        "expected InvariantViolated, got: {errors:?}"
+    );
+    if let Some(CheckError::InvariantViolated { counterexample, .. }) = violation {
+        // TODO(#627): assert Some(...) once Z3 extraction is wired up.
+        let _ = counterexample; // field is present — structural check passes
+    }
+}
+
+// ── check_dual SessionDualityMismatch fallback (#134) ─────────────────────────
+
+#[test]
+fn session_duality_mismatch_non_deadlock_returns_mismatch_error() {
+    // GIVEN: two types that are structurally incompatible but NOT a deadlock
+    // (both start with Send — no mutual blocking — but are not duals of each other)
+    // THEN: check_dual returns SessionDualityMismatch, not SessionDeadlock
+    use mvl::mvl::checker::session::check_dual;
+    use mvl::mvl::checker::types::SessionTy;
+    use mvl::mvl::checker::types::Ty;
+
+    let dummy = mvl::mvl::parser::lexer::Span {
+        line: 1,
+        col: 1,
+        offset: 0,
+        len: 0,
+    };
+
+    // Both sides Send — neither is blocked waiting, but they're not duals.
+    let a = SessionTy::Send(Box::new(Ty::Int), Box::new(SessionTy::End));
+    let b = SessionTy::Send(Box::new(Ty::Int), Box::new(SessionTy::End));
+    let err = check_dual(&a, &b, dummy);
+    assert!(
+        matches!(
+            err,
+            Some(mvl::mvl::checker::errors::CheckError::SessionDualityMismatch { .. })
+        ),
+        "expected SessionDualityMismatch for (Send, Send), got: {:?}",
+        err
+    );
+}
+
+// ── Spawn inside impl block triggers field refinement check (#37) ─────────────
+
+#[test]
+fn actor_field_refinement_violated_from_impl_method() {
+    // GIVEN: a spawn with a bad field value inside an impl method body
+    // THEN: RefinementViolated error is emitted for the spawn
+    let errors = errors_for(
+        r#"
+        actor Counter {
+            count: Int where self >= 0
+            pub fn tick() { }
+        }
+        type Builder = struct {}
+        impl Builder {
+            fn make_bad() -> Unit {
+                let c = actor Counter { count: -5 }
+            }
+        }
+        "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::RefinementViolated { .. })),
+        "expected RefinementViolated for spawn inside impl method, got: {errors:?}"
+    );
 }

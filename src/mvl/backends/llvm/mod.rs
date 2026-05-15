@@ -2510,6 +2510,66 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
         }
 
+        // Req 10 / Phase 4 (#627): emit runtime requires-clause guards.
+        // Mirrors the Rust backend's `assert!(pred, "requires: ...")`.
+        if !fd.requires.is_empty() {
+            // Build a name → loaded-i64 map for all Int parameters.
+            let mut param_vals: HashMap<String, inkwell::values::IntValue> = HashMap::new();
+            for (i, param) in fd.params.iter().enumerate() {
+                if let Some(inkwell::values::BasicValueEnum::IntValue(iv)) =
+                    fn_val.get_nth_param(i as u32)
+                {
+                    param_vals.insert(param.name.clone(), iv);
+                    // Also bind "self" → single-param shortcut used in normalised preds.
+                    if fd.params.len() == 1 {
+                        param_vals.insert("self".to_string(), iv);
+                    }
+                }
+            }
+            for req_pred in &fd.requires {
+                if let Some(cond) = self.emit_requires_pred_bool(req_pred, &param_vals) {
+                    match self.assert_mode {
+                        // Note: LLVM IR has no concept of `debug_assertions`, so
+                        // DebugOnly emits the same unconditional trap as Always.
+                        // TODO(#627): Distinguish at link time via a separate IR
+                        // module compiled under a debug-flavoured target triple.
+                        crate::mvl::backends::AssertMode::Always
+                        | crate::mvl::backends::AssertMode::DebugOnly => {
+                            let cur_block = self.builder.get_insert_block().unwrap();
+                            let cur_fn = cur_block.get_parent().unwrap();
+                            let trap_bb = self.context.append_basic_block(cur_fn, "req_fail");
+                            let ok_bb = self.context.append_basic_block(cur_fn, "req_ok");
+                            self.builder
+                                .build_conditional_branch(cond, ok_bb, trap_bb)
+                                .unwrap();
+                            self.builder.position_at_end(trap_bb);
+                            let trap_ty = self.context.void_type().fn_type(&[], false);
+                            let trap_fn =
+                                self.module.get_function("llvm.trap").unwrap_or_else(|| {
+                                    self.module.add_function("llvm.trap", trap_ty, None)
+                                });
+                            self.builder.build_call(trap_fn, &[], "trap").unwrap();
+                            self.builder.build_unreachable().unwrap();
+                            self.builder.position_at_end(ok_bb);
+                        }
+                        crate::mvl::backends::AssertMode::Assume => {
+                            let assume_ty = self
+                                .context
+                                .void_type()
+                                .fn_type(&[self.context.bool_type().into()], false);
+                            let assume_fn =
+                                self.module.get_function("llvm.assume").unwrap_or_else(|| {
+                                    self.module.add_function("llvm.assume", assume_ty, None)
+                                });
+                            self.builder
+                                .build_call(assume_fn, &[cond.into()], "req_assume")
+                                .unwrap();
+                        }
+                    }
+                }
+            }
+        }
+
         let body_val = self.emit_block(&fd.body);
 
         // Emit return terminator if the block didn't already terminate.

@@ -56,8 +56,10 @@ pub fn check_session_types(prog: &Program, errors: &mut Vec<CheckError>) {
 }
 
 /// Check that a `SessionTy` is well-formed.
-/// Currently: verifies that choices have at least one branch (the parser also
-/// enforces this, so this is a defence-in-depth check).
+///
+/// Checks:
+/// 1. Choices have at least one branch (defence-in-depth; parser also enforces this).
+/// 2. No duplicate branch labels within a single choice block.
 fn check_session_well_formed(s: &SessionTy, span: Span, errors: &mut Vec<CheckError>) {
     match s {
         SessionTy::Send(_, cont) | SessionTy::Receive(_, cont) => {
@@ -71,11 +73,80 @@ fn check_session_well_formed(s: &SessionTy, span: Span, errors: &mut Vec<CheckEr
                     span,
                 });
             }
+            check_duplicate_labels(branches, span, errors);
             for (_, sub) in branches {
                 check_session_well_formed(sub, span, errors);
             }
         }
         SessionTy::End => {}
+    }
+}
+
+/// Detect duplicate branch labels within a choice block.
+///
+/// Duplicate labels produce unreachable states: only the first matching label
+/// is ever selected, making subsequent identical labels dead code.
+fn check_duplicate_labels(
+    branches: &[(String, SessionTy)],
+    span: Span,
+    errors: &mut Vec<CheckError>,
+) {
+    use std::collections::HashSet;
+    let mut seen: HashSet<&str> = HashSet::new();
+    for (label, _) in branches {
+        if !seen.insert(label.as_str()) {
+            errors.push(CheckError::SessionDuplicateLabel {
+                label: label.clone(),
+                span,
+            });
+        }
+    }
+}
+
+/// Check that a declared dual pair `(a, b)` has no mutual-blocking deadlock.
+///
+/// Walks the product state `(a, b)` and reports [`CheckError::SessionDeadlock`]
+/// if there is any reachable state where both sides are simultaneously in
+/// `Receive` (neither will send first → infinite wait).
+///
+/// Returns `Some(error)` on the first deadlock found, `None` if the pair is
+/// deadlock-free (or if the types are structurally incompatible — duality
+/// mismatches are handled separately by [`check_dual`]).
+// Note: `SessionTy` is acyclic (there is no mu-binder / recursive type alias in the
+// current type system), so this recursion always terminates.  If recursive session
+// types are ever introduced, add a visited-state set or depth counter here.
+pub fn check_no_mutual_blocking(a: &SessionTy, b: &SessionTy, span: Span) -> Option<CheckError> {
+    match (a, b) {
+        // Both sides waiting to receive — nobody sends first: deadlock.
+        (SessionTy::Receive(..), SessionTy::Receive(..)) => {
+            Some(CheckError::SessionDeadlock { span })
+        }
+        // Normal progress: a sends while b receives, or vice versa.
+        (SessionTy::Send(_, a_cont), SessionTy::Receive(_, b_cont)) => {
+            check_no_mutual_blocking(a_cont, b_cont, span)
+        }
+        (SessionTy::Receive(_, a_cont), SessionTy::Send(_, b_cont)) => {
+            check_no_mutual_blocking(a_cont, b_cont, span)
+        }
+        // One side picks a branch (internal), the other handles it (external).
+        // Walk only labels present in both sides; labels present in one side but
+        // absent from the other are a structural mismatch caught by check_dual,
+        // not a deadlock.
+        (SessionTy::InternalChoice(a_branches), SessionTy::ExternalChoice(b_branches))
+        | (SessionTy::ExternalChoice(a_branches), SessionTy::InternalChoice(b_branches)) => {
+            for (label, a_sub) in a_branches {
+                if let Some((_, b_sub)) = b_branches.iter().find(|(l, _)| l == label) {
+                    if let Some(e) = check_no_mutual_blocking(a_sub, b_sub, span) {
+                        return Some(e);
+                    }
+                }
+            }
+            None
+        }
+        // Both sides complete — no deadlock.
+        (SessionTy::End, SessionTy::End) => None,
+        // Structural mismatch: caught by check_dual, not a deadlock.
+        _ => None,
     }
 }
 
@@ -90,17 +161,21 @@ fn extract_session_ty(te: &TypeExpr) -> Option<SessionTy> {
 /// Verify that `a` and `b` are duals of each other.
 ///
 /// Returns `Some(error)` if the duality check fails, `None` if they are duals.
-/// Callers use this when they have two session types that should be complementary
-/// (e.g. client/server sides of a protocol).
+/// When the pair is not dual, a more specific [`CheckError::SessionDeadlock`]
+/// is returned if both sides mutually block (both in `Receive`); otherwise
+/// [`CheckError::SessionDualityMismatch`] is returned.
 pub fn check_dual(a: &SessionTy, b: &SessionTy, span: Span) -> Option<CheckError> {
     let expected_dual = a.dual();
     if session_types_compatible(&expected_dual, b) {
         None
     } else {
-        Some(CheckError::SessionDualityMismatch {
-            side_a: Ty::Session(Box::new(a.clone())).display(),
-            side_b: Ty::Session(Box::new(b.clone())).display(),
-            span,
+        // Prefer the more specific deadlock error when the failure is mutual blocking.
+        check_no_mutual_blocking(a, b, span).or_else(|| {
+            Some(CheckError::SessionDualityMismatch {
+                side_a: Ty::Session(Box::new(a.clone())).display(),
+                side_b: Ty::Session(Box::new(b.clone())).display(),
+                span,
+            })
         })
     }
 }

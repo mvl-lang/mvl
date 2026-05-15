@@ -4,6 +4,23 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.113.0] — 2026-05-15
+
+### Added
+
+- **Counterexample infrastructure** (#627) — `RefResult::Failed` now carries `Option<String>` counterexample propagated through all 5 solver layers and all error types (`RefinementViolated`, `PreconditionViolated`, `PostconditionViolated`, `InvariantViolated`).
+- **LLVM requires-clause runtime guards** (#627) — LLVM backend emits `llvm.trap` (Always/DebugOnly) or `llvm.assume` (Assume mode) for `requires` predicates at function entry, matching the Rust backend's `assert!` guards.
+- **Session type model checker** (#134) — duplicate branch label detection (`SessionDuplicateLabel`) and mutual-blocking deadlock detection (`SessionDeadlock`) for session type declarations.
+- **Actor protocol bounded model checker** (#37) — field refinement checking at `spawn` sites and full refinement/contract checking inside actor behavior bodies.
+
+### Fixed
+
+- `check_actor_field_refinements`: seed `var_refs` per-body from function parameters so parameter where-refinements are available as solver hypotheses.
+- `count_fully_verified_fns`: actor behavior methods now included in assurance coverage reports.
+- `layer5.rs`: removed spurious `get_model()` call in the Sat branch.
+
+---
+
 ## [0.112.0] — 2026-05-15
 
 ### Added

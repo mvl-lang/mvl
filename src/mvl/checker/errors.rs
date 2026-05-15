@@ -167,6 +167,8 @@ pub enum CheckError {
     RefinementViolated {
         pred: String,
         span: Span,
+        /// Counterexample witness value, if the solver extracted one (Phase 4, #627).
+        counterexample: Option<String>,
     },
 
     // ── Effect checking (#19) ────────────────────────────────────────────
@@ -392,6 +394,20 @@ pub enum CheckError {
     SessionAfterEnd {
         span: Span,
     },
+    /// Both sides of a declared dual pair are simultaneously in `Receive` state.
+    ///
+    /// Neither side will send first, so neither can make progress: deadlock.
+    SessionDeadlock {
+        span: Span,
+    },
+    /// A session type choice block contains duplicate branch labels.
+    ///
+    /// Duplicate labels produce unreachable states because only the first
+    /// matching label is ever selected.
+    SessionDuplicateLabel {
+        label: String,
+        span: Span,
+    },
 
     // ── Label-transparent function validation (ADR-0024) ─────────────────
     /// `transparent fn` declared with no parameters — label join over empty
@@ -481,7 +497,9 @@ impl CheckError {
             CheckError::SessionProtocolMismatch { .. }
             | CheckError::SessionDualityMismatch { .. }
             | CheckError::SessionUnknownBranch { .. }
-            | CheckError::SessionAfterEnd { .. } => 1,
+            | CheckError::SessionAfterEnd { .. }
+            | CheckError::SessionDeadlock { .. }
+            | CheckError::SessionDuplicateLabel { .. } => 1,
             // Req 11: Information Flow Control
             CheckError::InvalidDeclassify { .. }
             | CheckError::InvalidSanitize { .. }
@@ -566,7 +584,9 @@ impl CheckError {
             | CheckError::SessionProtocolMismatch { span, .. }
             | CheckError::SessionDualityMismatch { span, .. }
             | CheckError::SessionUnknownBranch { span, .. }
-            | CheckError::SessionAfterEnd { span } => *span,
+            | CheckError::SessionAfterEnd { span }
+            | CheckError::SessionDeadlock { span }
+            | CheckError::SessionDuplicateLabel { span, .. } => *span,
         }
     }
 
@@ -653,8 +673,9 @@ impl CheckError {
             CheckError::DoubleMutableBorrow { name, .. } => format!(
                 "cannot create `ref` to `{name}` more than once at a time — only one mutable reference is allowed"
             ),
-            CheckError::RefinementViolated { pred, .. } => {
-                format!("refinement predicate violated: `{pred}`")
+            CheckError::RefinementViolated { pred, counterexample, .. } => {
+                let cx = counterexample.as_deref().map(|c| format!(" (counterexample: {c})")).unwrap_or_default();
+                format!("refinement predicate violated: `{pred}`{cx}")
             }
             CheckError::InvalidEffectName { name, .. } => format!(
                 "unknown effect `{name}` — valid effects are: Console, FileRead, FileWrite, FileDelete, Net, DB, ProcessSpawn, Random, CryptoRandom, Clock, Env, Log, Async, Terminal"
@@ -786,6 +807,12 @@ impl CheckError {
             }
             CheckError::SessionAfterEnd { .. } => {
                 "session protocol already reached `end`; no further operations are allowed".to_string()
+            }
+            CheckError::SessionDeadlock { .. } => {
+                "session protocol deadlock: both sides are simultaneously in `receive` state (mutual blocking)".to_string()
+            }
+            CheckError::SessionDuplicateLabel { label, .. } => {
+                format!("session protocol unreachable state: duplicate branch label `{label}`")
             }
         }
     }

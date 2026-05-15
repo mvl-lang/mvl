@@ -924,6 +924,34 @@ fn cross_backend_actor_send() {
     }
 }
 
+/// Req 10 / Phase 4 (#627): LLVM backend emits `llvm.trap` for `requires` predicates.
+///
+/// Verifies that a function with a `requires` clause generates a conditional
+/// branch to `call void @llvm.trap()` in the LLVM IR (runtime guard parity
+/// with the Rust backend's `assert!(pred, "requires: ...")`).
+#[test]
+#[cfg(feature = "llvm")]
+fn llvm_requires_clause_emits_trap() {
+    let src = r#"
+fn safe_divide(a: Int, b: Int) -> Int requires b != 0 { a / b }
+fn main() -> Unit { println("ok") }
+"#;
+    let (mut parser, lex_errors) = mvl::mvl::parser::Parser::new(src);
+    assert!(lex_errors.is_empty(), "lex errors: {lex_errors:?}");
+    let prog = parser.parse_program();
+    assert!(
+        parser.errors().is_empty(),
+        "parse errors: {:?}",
+        parser.errors()
+    );
+    let ir =
+        mvl::mvl::backends::llvm::compile_to_ir(&prog, "test_req").expect("IR generation failed");
+    assert!(
+        ir.contains("llvm.trap"),
+        "LLVM IR for fn with `requires` must contain llvm.trap.\nIR:\n{ir}"
+    );
+}
+
 /// #670: LLVM backend emits `llvm.trap` for structs with `with invariant` (#670).
 ///
 /// Verifies backend parity: the LLVM IR for a struct constructor with an invariant
@@ -950,5 +978,67 @@ fn main() -> Unit {
     assert!(
         ir.contains("llvm.trap"),
         "LLVM IR for struct with `with invariant` must contain llvm.trap.\nIR:\n{ir}"
+    );
+}
+
+/// Req 10 / Phase 4 (#627): `AssertMode::Assume` emits `llvm.assume` instead of `llvm.trap`.
+///
+/// Verifies that when the compiler is configured with `AssertMode::Assume`, a `requires`
+/// predicate is lowered to `llvm.assume` (hint to the optimizer) rather than a trap guard.
+#[test]
+#[cfg(feature = "llvm")]
+fn llvm_requires_clause_assume_mode_emits_assume() {
+    let src = r#"
+fn safe_divide(a: Int, b: Int) -> Int requires b != 0 { a / b }
+fn main() -> Unit { println("ok") }
+"#;
+    let (mut parser, lex_errors) = mvl::mvl::parser::Parser::new(src);
+    assert!(lex_errors.is_empty(), "lex errors: {lex_errors:?}");
+    let prog = parser.parse_program();
+    assert!(
+        parser.errors().is_empty(),
+        "parse errors: {:?}",
+        parser.errors()
+    );
+    let mut compiler = mvl::mvl::backends::llvm::LlvmCompiler::new();
+    compiler.assert_mode = mvl::mvl::backends::AssertMode::Assume;
+    let ir = compiler
+        .compile_to_ir(&prog, "test_assume")
+        .expect("IR generation failed");
+    assert!(
+        ir.contains("llvm.assume"),
+        "LLVM IR with AssertMode::Assume must contain llvm.assume.\nIR:\n{ir}"
+    );
+    assert!(
+        !ir.contains("llvm.trap"),
+        "LLVM IR with AssertMode::Assume must NOT contain llvm.trap.\nIR:\n{ir}"
+    );
+}
+
+/// Req 10 / Phase 4 (#627): single-parameter `requires` predicate with `self` alias binding.
+///
+/// When a function has exactly one Int parameter, the LLVM backend also binds it under
+/// the `"self"` alias so that normalised predicates using `self` can be evaluated.
+/// Verifies the guard is emitted for the single-parameter case.
+#[test]
+#[cfg(feature = "llvm")]
+fn llvm_requires_single_param_self_normalised_emits_trap() {
+    let src = r#"
+fn check_positive(x: Int) -> Int requires x > 0 { x }
+fn main() -> Unit { println("ok") }
+"#;
+    let (mut parser, lex_errors) = mvl::mvl::parser::Parser::new(src);
+    assert!(lex_errors.is_empty(), "lex errors: {lex_errors:?}");
+    let prog = parser.parse_program();
+    assert!(
+        parser.errors().is_empty(),
+        "parse errors: {:?}",
+        parser.errors()
+    );
+    let ir = mvl::mvl::backends::llvm::compile_to_ir(&prog, "test_self_req")
+        .expect("IR generation failed");
+    assert!(
+        ir.contains("llvm.trap"),
+        "LLVM IR for single-param `requires x > 0` must contain llvm.trap.\nIR:\n{ir}"
     );
 }

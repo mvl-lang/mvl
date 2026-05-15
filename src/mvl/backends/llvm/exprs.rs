@@ -1052,6 +1052,89 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
     }
 
+    // ── Req 10 / Phase 4 (#627): RefExpr evaluator for requires-clause checks ──
+
+    /// Evaluate a `RefExpr` predicate as an LLVM i1 boolean, given a map from
+    /// variable names to loaded LLVM i64 integer values.
+    ///
+    /// Used to emit runtime requires-clause guards at function entry.
+    /// Returns `None` for unsupported shapes (div, rem, float, len, quantifiers);
+    /// the caller silently skips the check in that case.
+    pub(crate) fn emit_requires_pred_bool(
+        &mut self,
+        pred: &RefExpr,
+        vars: &std::collections::HashMap<String, inkwell::values::IntValue<'ctx>>,
+    ) -> Option<inkwell::values::IntValue<'ctx>> {
+        match pred {
+            RefExpr::Compare {
+                op, left, right, ..
+            } => {
+                let lv = self.emit_requires_pred_int(left, vars)?;
+                let rv = self.emit_requires_pred_int(right, vars)?;
+                let pred_op = match op {
+                    CmpOp::Eq => IntPredicate::EQ,
+                    CmpOp::Ne => IntPredicate::NE,
+                    CmpOp::Lt => IntPredicate::SLT,
+                    CmpOp::Gt => IntPredicate::SGT,
+                    CmpOp::Le => IntPredicate::SLE,
+                    CmpOp::Ge => IntPredicate::SGE,
+                };
+                Some(
+                    self.builder
+                        .build_int_compare(pred_op, lv, rv, "req_cmp")
+                        .unwrap(),
+                )
+            }
+            RefExpr::LogicOp {
+                op, left, right, ..
+            } => {
+                let lv = self.emit_requires_pred_bool(left, vars)?;
+                let rv = self.emit_requires_pred_bool(right, vars)?;
+                Some(match op {
+                    LogicOp::And => self.builder.build_and(lv, rv, "req_and").unwrap(),
+                    LogicOp::Or => self.builder.build_or(lv, rv, "req_or").unwrap(),
+                })
+            }
+            RefExpr::Not { inner, .. } => {
+                let v = self.emit_requires_pred_bool(inner, vars)?;
+                Some(self.builder.build_not(v, "req_not").unwrap())
+            }
+            RefExpr::Grouped { inner, .. } => self.emit_requires_pred_bool(inner, vars),
+            _ => None,
+        }
+    }
+
+    /// Evaluate a `RefExpr` as an LLVM i64 integer, given parameter bindings.
+    fn emit_requires_pred_int(
+        &mut self,
+        pred: &RefExpr,
+        vars: &std::collections::HashMap<String, inkwell::values::IntValue<'ctx>>,
+    ) -> Option<inkwell::values::IntValue<'ctx>> {
+        match pred {
+            RefExpr::Integer { value, .. } => {
+                Some(self.context.i64_type().const_int(*value as u64, true))
+            }
+            RefExpr::Ident { name, .. } => {
+                // "self" resolves to the first (and only) parameter for single-param predicates.
+                vars.get(name.as_str()).copied()
+            }
+            RefExpr::ArithOp {
+                op, left, right, ..
+            } => {
+                let lv = self.emit_requires_pred_int(left, vars)?;
+                let rv = self.emit_requires_pred_int(right, vars)?;
+                Some(match op {
+                    ArithOp::Add => self.builder.build_int_add(lv, rv, "req_add").unwrap(),
+                    ArithOp::Sub => self.builder.build_int_sub(lv, rv, "req_sub").unwrap(),
+                    ArithOp::Mul => self.builder.build_int_mul(lv, rv, "req_mul").unwrap(),
+                    _ => return None, // div/rem: skip (may trap; conservative)
+                })
+            }
+            RefExpr::Grouped { inner, .. } => self.emit_requires_pred_int(inner, vars),
+            _ => None,
+        }
+    }
+
     /// Emit a struct-variant enum construction: `AuthError::AccountLocked { attempts: 3 }`.
     pub(crate) fn emit_enum_struct_variant(
         &mut self,
