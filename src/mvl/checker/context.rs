@@ -781,6 +781,25 @@ pub fn field_infos(fields: &[FieldDecl]) -> Vec<FieldInfo> {
         .collect()
 }
 
+/// Like `field_infos` but marks every field mutable — used for actor state fields,
+/// which are always privately mutable by design (Spec 015).
+pub fn actor_field_infos(fields: &[FieldDecl]) -> Vec<FieldInfo> {
+    fields
+        .iter()
+        .map(|f| FieldInfo {
+            name: f.name.clone(),
+            ty: {
+                let r = resolve(&f.ty);
+                match r {
+                    crate::mvl::checker::types::Ty::Ref(_, inner) => *inner,
+                    other => other,
+                }
+            },
+            mutable: true,
+        })
+        .collect()
+}
+
 pub fn variant_infos(variants: &[Variant]) -> Vec<VariantInfo> {
     use crate::mvl::parser::ast::VariantFields;
     variants

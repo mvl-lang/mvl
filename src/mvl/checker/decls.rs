@@ -7,7 +7,7 @@
 //! Pass 2: `check_fn_decl`, `check_extern_decl`, `check_const_decl` verify bodies.
 
 use crate::mvl::checker::context::{
-    field_infos, variant_infos, FnInfo, TypeBodyInfo, TypeInfo, VarInfo,
+    actor_field_infos, field_infos, variant_infos, FnInfo, TypeBodyInfo, TypeInfo, VarInfo,
 };
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
@@ -54,12 +54,14 @@ impl TypeChecker {
     }
 
     fn register_actor(&mut self, ad: &ActorDecl) {
+        // Actor fields are always mutable state — use actor_field_infos so that
+        // `self.field = …` assignments inside method bodies pass the req6 check.
         self.env.define_type(
             ad.name.clone(),
             TypeInfo {
                 params: ad.type_params.clone(),
                 body: TypeBodyInfo::Struct {
-                    fields: field_infos(&ad.fields),
+                    fields: actor_field_infos(&ad.fields),
                     invariant: None,
                 },
             },
@@ -201,6 +203,30 @@ impl TypeChecker {
             }
         }
 
+        // Register private helper methods temporarily so calls within method
+        // bodies (e.g. `log(seq)`) resolve without "undefined function" errors.
+        let private_method_names: Vec<String> = ad
+            .methods
+            .iter()
+            .filter(|m| !m.is_public)
+            .map(|m| m.name.clone())
+            .collect();
+        for method in ad.methods.iter().filter(|m| !m.is_public) {
+            let params: Vec<Ty> = method.params.iter().map(|p| resolve(&p.ty)).collect();
+            let ret = resolve(&method.return_type);
+            self.env.define_fn(
+                method.name.clone(),
+                FnInfo {
+                    params,
+                    ret,
+                    effects: method.effects.clone(),
+                    totality: None,
+                    type_params: HashSet::new(),
+                    label_transparent: false,
+                },
+            );
+        }
+
         for method in &ad.methods {
             if method.is_public {
                 // pub fn = behavior — return type must be Unit (fire-and-forget).
@@ -226,19 +252,34 @@ impl TypeChecker {
             }
             // Type-check the method body (#742).
             self.env.push_scope();
+            // Define `self` so `self.field` field accesses resolve correctly.
+            self.env.define(
+                "self".to_string(),
+                VarInfo::new(Ty::Named(ad.name.clone(), vec![]), true),
+            );
             for param in &method.params {
                 let ty = resolve(&param.ty);
                 self.env.define(
                     param.name.clone(),
-                    crate::mvl::checker::context::VarInfo::new(ty, false)
-                        .with_capability(param.capability.clone()),
+                    VarInfo::new(ty, false).with_capability(param.capability.clone()),
                 );
             }
+            // Set effect/name context so effect checking (req7) works correctly.
+            let prev_fn_name = std::mem::replace(&mut self.current_fn_name, method.name.clone());
+            let prev_effects =
+                std::mem::replace(&mut self.current_fn_effects, method.effects.clone());
             let ret_ty = resolve(&method.return_type);
             let prev_ret = self.current_return_ty.replace(ret_ty.clone());
             self.infer_block_type(&method.body, Some(&ret_ty));
             self.current_return_ty = prev_ret;
+            self.current_fn_name = prev_fn_name;
+            self.current_fn_effects = prev_effects;
             self.env.pop_scope();
+        }
+
+        // Remove temporary private helper registrations from the global fn table.
+        for name in &private_method_names {
+            self.env.fns.remove(name);
         }
     }
 
