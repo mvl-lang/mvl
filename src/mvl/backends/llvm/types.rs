@@ -215,6 +215,7 @@ impl<'ctx> LlvmBackend<'ctx> {
     ///
     /// Type-parameter substitutions in `self.type_subs` are respected, so this
     /// works correctly inside monomorphized function bodies.
+    #[allow(dead_code)]
     pub(crate) fn fn_type_to_llvm(
         &self,
         params: &[TypeExpr],

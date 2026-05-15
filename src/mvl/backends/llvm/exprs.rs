@@ -8,7 +8,9 @@
 //! method calls, `if` expressions, `?` propagation, and Option/Result helpers.
 
 use inkwell::{
-    types::BasicTypeEnum, values::BasicValueEnum, AddressSpace, FloatPredicate, IntPredicate,
+    types::{BasicType, BasicTypeEnum},
+    values::{BasicValue, BasicValueEnum},
+    AddressSpace, FloatPredicate, IntPredicate,
 };
 
 use crate::mvl::parser::ast::{
@@ -146,10 +148,10 @@ impl<'ctx> LlvmBackend<'ctx> {
             return self.emit_enum_variant_construct(&etype, name, &[]);
         }
 
-        // #421: named function reference — return the function's pointer value
-        // so it can be stored in a local and passed to HOF as a fn-ptr argument.
-        if let Some(fn_val) = self.module.get_function(name) {
-            return Some(fn_val.as_global_value().as_pointer_value().into());
+        // #421/#588: named function reference — wrap in a { wrapper_ptr, null_env } closure
+        // struct so that HOF call sites use the uniform closure calling convention.
+        if self.module.get_function(name).is_some() {
+            return self.make_named_fn_closure(name);
         }
 
         None
@@ -157,16 +159,17 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     // ── #588: lambda lowering ────────────────────────────────────────────────
 
-    /// Emit a lambda expression as a named top-level LLVM function.
+    /// Emit a lambda expression.
     ///
-    /// Non-capturing lambdas (the common case for HOF like `filter`, `map`,
-    /// `fold`) are emitted as bare function pointers — no closure struct needed.
-    /// The caller-side value is a `ptr` (function pointer) that can be stored
-    /// in a local alloca and called indirectly via `emit_fn_call`.
+    /// All lambdas — capturing or not — are lowered using the uniform closure
+    /// calling convention: the generated trampoline takes `(ptr env_ptr, params…)`
+    /// and the returned value is a stack-allocated `{ ptr fn_ptr, ptr env_ptr }`
+    /// closure struct (as a pointer).
     ///
-    /// Capturing lambdas are NOT supported in this pass; the body references to
-    /// captured variables from the enclosing scope will fail to emit and return
-    /// `None` (tracked as future work in issue #588).
+    /// For non-capturing lambdas `env_ptr` is null and the trampoline ignores it.
+    /// For capturing lambdas an environment struct is heap-stack-allocated in the
+    /// enclosing scope, populated with the captured values, and its address passed
+    /// as `env_ptr`; the trampoline loads each captured variable from the struct.
     fn emit_lambda(
         &mut self,
         params: &[crate::mvl::parser::ast::Param],
@@ -206,7 +209,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
         };
 
-        // Wrap the body expression in a block so emit_fn can consume it.
+        // Wrap the body expression in a block so emit_lambda_fn can consume it.
         let block = Block {
             stmts: vec![Stmt::Expr {
                 expr: body.clone(),
@@ -234,8 +237,47 @@ impl<'ctx> LlvmBackend<'ctx> {
             span: zero,
         };
 
+        // Capture analysis: find free variables referenced in the body.
+        let lambda_param_names: std::collections::HashSet<String> =
+            params.iter().map(|p| p.name.clone()).collect();
+        let captures = self.collect_lambda_captures(body, &lambda_param_names);
+
+        // Build the environment struct for captured variables in the OUTER function's context.
+        // This must happen BEFORE we save/clear locals, so the captured values can be read.
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let env_ptr: inkwell::values::PointerValue<'ctx> = if captures.is_empty() {
+            ptr_ty.const_null()
+        } else {
+            let env_field_tys: Vec<BasicTypeEnum<'ctx>> =
+                captures.iter().map(|(_, _, t)| *t).collect();
+            let env_struct_ty = self.context.struct_type(&env_field_tys, false);
+            let env_alloca = self
+                .builder
+                .build_alloca(env_struct_ty, "closure_env")
+                .unwrap();
+            for (i, (cap_name, _, cap_llvm_ty)) in captures.iter().enumerate() {
+                if let Some((src_alloca, _)) = self.locals.get(cap_name).copied() {
+                    let cap_val = self
+                        .builder
+                        .build_load(*cap_llvm_ty, src_alloca, cap_name)
+                        .unwrap();
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            env_struct_ty,
+                            env_alloca,
+                            i as u32,
+                            &format!("{cap_name}_env"),
+                        )
+                        .unwrap();
+                    self.builder.build_store(field_ptr, cap_val).unwrap();
+                }
+            }
+            env_alloca
+        };
+
         // Save the current function context so we can restore it after emitting
-        // the lambda as a separate top-level function.
+        // the lambda trampoline as a separate top-level function.
         let saved_block = self.builder.get_insert_block();
         let saved_locals = std::mem::take(&mut self.locals);
         let saved_mvl_types = std::mem::take(&mut self.local_mvl_types);
@@ -243,7 +285,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         let saved_terminated = self.terminated;
         let saved_fn = self.current_fn;
 
-        self.emit_fn(&fd);
+        self.emit_lambda_fn(&fd, &captures);
 
         // Restore enclosing function context.
         self.locals = saved_locals;
@@ -255,9 +297,451 @@ impl<'ctx> LlvmBackend<'ctx> {
             self.builder.position_at_end(block);
         }
 
-        // Return the function pointer as the lambda value.
+        // Build closure struct { fn_ptr, env_ptr } on the stack and return a pointer to it.
         let fn_val = self.module.get_function(&lambda_name)?;
-        Some(fn_val.as_global_value().as_pointer_value().into())
+        let fn_ptr_val = fn_val.as_global_value().as_pointer_value();
+        let closure_ty = self.closure_struct_type();
+        let closure_alloca = self.builder.build_alloca(closure_ty, "closure").unwrap();
+        let fn_field = self
+            .builder
+            .build_struct_gep(closure_ty, closure_alloca, 0, "cl_fn")
+            .unwrap();
+        self.builder.build_store(fn_field, fn_ptr_val).unwrap();
+        let env_field = self
+            .builder
+            .build_struct_gep(closure_ty, closure_alloca, 1, "cl_env")
+            .unwrap();
+        self.builder.build_store(env_field, env_ptr).unwrap();
+
+        Some(closure_alloca.as_basic_value_enum())
+    }
+
+    // ── #588: closure helpers ────────────────────────────────────────────────
+
+    /// Returns the LLVM struct type used for all closure values: `{ ptr fn_ptr, ptr env_ptr }`.
+    ///
+    /// All function-typed locals are stored as pointers to this struct.
+    /// `env_ptr` is null for non-capturing lambdas and named-function wrappers.
+    fn closure_struct_type(&self) -> inkwell::types::StructType<'ctx> {
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        self.context
+            .struct_type(&[ptr_ty.into(), ptr_ty.into()], false)
+    }
+
+    /// Returns the LLVM function type for a closure trampoline:
+    /// `ret_ty (ptr env_ptr, param_types…)`.
+    ///
+    /// ALL lambda/trampoline functions share this calling convention — the first
+    /// parameter is always the environment pointer (null for non-capturing).
+    fn closure_fn_type_to_llvm(
+        &self,
+        params: &[TypeExpr],
+        ret: &TypeExpr,
+    ) -> inkwell::types::FunctionType<'ctx> {
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let mut param_tys: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = vec![ptr_ty.into()];
+        param_tys.extend(
+            params
+                .iter()
+                .filter_map(|p| self.mvl_type_to_llvm(p))
+                .map(|t| -> inkwell::types::BasicMetadataTypeEnum<'ctx> { t.into() }),
+        );
+        if self.is_unit_type(ret) {
+            self.context.void_type().fn_type(&param_tys, false)
+        } else if let Some(ret_ty) = self.mvl_type_to_llvm(ret) {
+            ret_ty.fn_type(&param_tys, false)
+        } else {
+            self.context.void_type().fn_type(&param_tys, false)
+        }
+    }
+
+    /// Wrap a named (module-level) function in a `{ wrapper_ptr, null_env }` closure struct.
+    ///
+    /// Lazily generates a trampoline `__closure_wrap_NAME(ptr env, params…) → ret` that
+    /// ignores `env` and delegates to the original function. Returns a pointer to a
+    /// stack-allocated closure struct compatible with the uniform closure calling convention.
+    fn make_named_fn_closure(&mut self, name: &str) -> Option<BasicValueEnum<'ctx>> {
+        let orig_fn = self.module.get_function(name)?;
+        let wrapper_name = format!("__closure_wrap_{name}");
+
+        if self.module.get_function(&wrapper_name).is_none() {
+            let orig_fn_ty = orig_fn.get_type();
+            let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+
+            // Wrapper signature: prepend `ptr env` to the original parameter list.
+            let mut wrapper_params: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> =
+                vec![ptr_ty.into()];
+            wrapper_params.extend(orig_fn_ty.get_param_types());
+
+            let wrapper_fn_ty = match orig_fn_ty.get_return_type() {
+                None => self.context.void_type().fn_type(&wrapper_params, false),
+                Some(ret_ty) => ret_ty.fn_type(&wrapper_params, false),
+            };
+
+            let saved_block = self.builder.get_insert_block();
+            let saved_fn = self.current_fn;
+            let saved_terminated = self.terminated;
+
+            let wrapper_fn = self.module.add_function(&wrapper_name, wrapper_fn_ty, None);
+            let entry_bb = self.context.append_basic_block(wrapper_fn, "entry");
+            self.builder.position_at_end(entry_bb);
+            self.terminated = false;
+            self.current_fn = Some(wrapper_fn);
+
+            // Forward call: skip env (param 0), pass the rest to the original function.
+            let call_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = (1..wrapper_fn
+                .count_params())
+                .filter_map(|i| wrapper_fn.get_nth_param(i).map(Into::into))
+                .collect();
+            let call = self
+                .builder
+                .build_call(orig_fn, &call_args, "delegated")
+                .unwrap();
+
+            match orig_fn_ty.get_return_type() {
+                None => {
+                    self.builder.build_return(None).unwrap();
+                }
+                Some(_) => {
+                    use inkwell::values::AnyValue;
+                    if let Ok(ret_val) = BasicValueEnum::try_from(call.as_any_value_enum()) {
+                        self.builder.build_return(Some(&ret_val)).unwrap();
+                    } else {
+                        self.builder.build_return(None).unwrap();
+                    }
+                }
+            }
+
+            self.current_fn = saved_fn;
+            self.terminated = saved_terminated;
+            if let Some(bb) = saved_block {
+                self.builder.position_at_end(bb);
+            }
+        }
+
+        let wrapper_fn = self.module.get_function(&wrapper_name)?;
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let closure_ty = self.closure_struct_type();
+        let closure_alloca = self
+            .builder
+            .build_alloca(closure_ty, "named_closure")
+            .unwrap();
+
+        let fn_field = self
+            .builder
+            .build_struct_gep(closure_ty, closure_alloca, 0, "ncl_fn")
+            .unwrap();
+        self.builder
+            .build_store(fn_field, wrapper_fn.as_global_value().as_pointer_value())
+            .unwrap();
+
+        let env_field = self
+            .builder
+            .build_struct_gep(closure_ty, closure_alloca, 1, "ncl_env")
+            .unwrap();
+        self.builder
+            .build_store(env_field, ptr_ty.const_null())
+            .unwrap();
+
+        Some(closure_alloca.as_basic_value_enum())
+    }
+
+    /// Emit a lambda trampoline function using the closure calling convention.
+    ///
+    /// The generated LLVM function has signature `ret_ty (ptr env_ptr, params…)`.
+    /// If `captures` is non-empty, `env_ptr` is treated as a pointer to the
+    /// captures struct and each captured variable is loaded into a fresh alloca
+    /// before the body is emitted.  For non-capturing lambdas `env_ptr` is unused.
+    fn emit_lambda_fn(
+        &mut self,
+        fd: &crate::mvl::parser::ast::FnDecl,
+        captures: &[(String, TypeExpr, BasicTypeEnum<'ctx>)],
+    ) {
+        let param_tys: Vec<TypeExpr> = fd.params.iter().map(|p| p.ty.clone()).collect();
+        let fn_ty = self.closure_fn_type_to_llvm(&param_tys, &fd.return_type);
+        let fn_val = self.module.add_function(&fd.name, fn_ty, None);
+
+        let entry = self.context.append_basic_block(fn_val, "entry");
+        self.builder.position_at_end(entry);
+        self.locals.clear();
+        self.local_mvl_types.clear();
+        self.heap_locals.clear();
+        self.terminated = false;
+        self.current_fn = Some(fn_val);
+
+        // Param 0 is env_ptr; user params start at index 1.
+        for (i, param) in fd.params.iter().enumerate() {
+            if let Some(param_val) = fn_val.get_nth_param((i as u32) + 1) {
+                param_val.set_name(&param.name);
+                if let Some(ty) = self.mvl_type_to_llvm(&param.ty) {
+                    let alloca = self.builder.build_alloca(ty, &param.name).unwrap();
+                    self.builder.build_store(alloca, param_val).unwrap();
+                    self.locals.insert(param.name.clone(), (alloca, ty));
+                    self.maybe_register_heap_param(param, ty);
+                }
+                self.local_mvl_types
+                    .insert(param.name.clone(), param.ty.clone());
+            }
+        }
+
+        // Load captured variables from env_ptr into fresh allocas.
+        if !captures.is_empty() {
+            let env_ptr = fn_val.get_nth_param(0).unwrap().into_pointer_value();
+            let env_field_tys: Vec<BasicTypeEnum<'ctx>> =
+                captures.iter().map(|(_, _, t)| *t).collect();
+            let env_struct_ty = self.context.struct_type(&env_field_tys, false);
+            for (i, (cap_name, cap_mvl_ty, cap_llvm_ty)) in captures.iter().enumerate() {
+                let field_ptr = self
+                    .builder
+                    .build_struct_gep(env_struct_ty, env_ptr, i as u32, &format!("{cap_name}_ptr"))
+                    .unwrap();
+                let cap_val = self
+                    .builder
+                    .build_load(*cap_llvm_ty, field_ptr, cap_name)
+                    .unwrap();
+                let alloca = self.builder.build_alloca(*cap_llvm_ty, cap_name).unwrap();
+                self.builder.build_store(alloca, cap_val).unwrap();
+                self.locals.insert(cap_name.clone(), (alloca, *cap_llvm_ty));
+                self.local_mvl_types
+                    .insert(cap_name.clone(), cap_mvl_ty.clone());
+            }
+        }
+
+        let body_val = self.emit_block(&fd.body);
+
+        if !self.terminated {
+            let ret_name = self.heap_return_ident(&fd.body);
+            self.emit_heap_drops_except(ret_name);
+            if self.is_unit_type(&fd.return_type) {
+                self.builder.build_return(None).unwrap();
+            } else if let Some(val) = body_val {
+                self.builder.build_return(Some(&val)).unwrap();
+            } else {
+                let fallback = self.mvl_type_to_llvm(&fd.return_type);
+                match fallback {
+                    Some(BasicTypeEnum::IntType(it)) => {
+                        self.builder.build_return(Some(&it.const_zero())).unwrap();
+                    }
+                    Some(BasicTypeEnum::FloatType(ft)) => {
+                        self.builder.build_return(Some(&ft.const_zero())).unwrap();
+                    }
+                    Some(BasicTypeEnum::PointerType(pt)) => {
+                        self.builder.build_return(Some(&pt.const_null())).unwrap();
+                    }
+                    Some(BasicTypeEnum::StructType(st)) => {
+                        self.builder.build_return(Some(&st.const_zero())).unwrap();
+                    }
+                    _ => {
+                        self.builder.build_unreachable().unwrap();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Collect the free variables captured by a lambda body from the enclosing scope.
+    ///
+    /// Returns `(name, mvl_type, llvm_type)` for each distinct variable in
+    /// `self.locals` that is referenced in `body` but not listed in `lambda_param_names`.
+    fn collect_lambda_captures(
+        &self,
+        body: &Expr,
+        lambda_param_names: &std::collections::HashSet<String>,
+    ) -> Vec<(String, TypeExpr, BasicTypeEnum<'ctx>)> {
+        let mut seen = std::collections::HashSet::new();
+        let mut captures = vec![];
+        self.walk_expr_for_captures(body, lambda_param_names, &mut seen, &mut captures);
+        captures
+    }
+
+    fn walk_expr_for_captures(
+        &self,
+        expr: &Expr,
+        exclude: &std::collections::HashSet<String>,
+        seen: &mut std::collections::HashSet<String>,
+        captures: &mut Vec<(String, TypeExpr, BasicTypeEnum<'ctx>)>,
+    ) {
+        use crate::mvl::parser::ast::MatchBody;
+        match expr {
+            Expr::Ident(name, _) => {
+                if !exclude.contains(name) && !seen.contains(name) {
+                    if let (Some((_, llvm_ty)), Some(mvl_ty)) =
+                        (self.locals.get(name), self.local_mvl_types.get(name))
+                    {
+                        seen.insert(name.clone());
+                        captures.push((name.clone(), mvl_ty.clone(), *llvm_ty));
+                    }
+                }
+            }
+            Expr::Lambda { params, body, .. } => {
+                // Nested lambda — extend the exclusion set with its own params.
+                let mut nested_exclude = exclude.clone();
+                for p in params {
+                    nested_exclude.insert(p.name.clone());
+                }
+                self.walk_expr_for_captures(body, &nested_exclude, seen, captures);
+            }
+            Expr::Binary { left, right, .. } => {
+                self.walk_expr_for_captures(left, exclude, seen, captures);
+                self.walk_expr_for_captures(right, exclude, seen, captures);
+            }
+            Expr::Unary { expr, .. } => {
+                self.walk_expr_for_captures(expr, exclude, seen, captures);
+            }
+            Expr::FnCall { args, .. } => {
+                for arg in args {
+                    self.walk_expr_for_captures(arg, exclude, seen, captures);
+                }
+            }
+            Expr::MethodCall { receiver, args, .. } => {
+                self.walk_expr_for_captures(receiver, exclude, seen, captures);
+                for arg in args {
+                    self.walk_expr_for_captures(arg, exclude, seen, captures);
+                }
+            }
+            Expr::FieldAccess { expr, .. } => {
+                self.walk_expr_for_captures(expr, exclude, seen, captures);
+            }
+            Expr::If {
+                cond, then, else_, ..
+            } => {
+                self.walk_expr_for_captures(cond, exclude, seen, captures);
+                self.walk_block_for_captures(then, exclude, seen, captures);
+                if let Some(e) = else_ {
+                    self.walk_expr_for_captures(e, exclude, seen, captures);
+                }
+            }
+            Expr::Match {
+                scrutinee, arms, ..
+            } => {
+                self.walk_expr_for_captures(scrutinee, exclude, seen, captures);
+                for arm in arms {
+                    match &arm.body {
+                        MatchBody::Expr(e) => {
+                            self.walk_expr_for_captures(e, exclude, seen, captures);
+                        }
+                        MatchBody::Block(b) => {
+                            self.walk_block_for_captures(b, exclude, seen, captures);
+                        }
+                    }
+                }
+            }
+            Expr::Block(block) => {
+                self.walk_block_for_captures(block, exclude, seen, captures);
+            }
+            Expr::Propagate { expr, .. }
+            | Expr::Consume { expr, .. }
+            | Expr::Declassify { expr, .. }
+            | Expr::Sanitize { expr, .. }
+            | Expr::Borrow { expr, .. } => {
+                self.walk_expr_for_captures(expr, exclude, seen, captures);
+            }
+            Expr::Construct { fields, .. } => {
+                for (_, val) in fields {
+                    self.walk_expr_for_captures(val, exclude, seen, captures);
+                }
+            }
+            Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+                for e in elems {
+                    self.walk_expr_for_captures(e, exclude, seen, captures);
+                }
+            }
+            Expr::Map { pairs, .. } => {
+                for (k, v) in pairs {
+                    self.walk_expr_for_captures(k, exclude, seen, captures);
+                    self.walk_expr_for_captures(v, exclude, seen, captures);
+                }
+            }
+            Expr::Spawn { fields, .. } => {
+                for (_, val) in fields {
+                    self.walk_expr_for_captures(val, exclude, seen, captures);
+                }
+            }
+            Expr::Select { arms, .. } => {
+                for arm in arms {
+                    self.walk_expr_for_captures(&arm.expr, exclude, seen, captures);
+                    self.walk_block_for_captures(&arm.body, exclude, seen, captures);
+                }
+            }
+            Expr::Concurrently { body, .. } => {
+                self.walk_block_for_captures(body, exclude, seen, captures);
+            }
+            Expr::Literal(_, _) => {}
+        }
+    }
+
+    fn walk_block_for_captures(
+        &self,
+        block: &crate::mvl::parser::ast::Block,
+        exclude: &std::collections::HashSet<String>,
+        seen: &mut std::collections::HashSet<String>,
+        captures: &mut Vec<(String, TypeExpr, BasicTypeEnum<'ctx>)>,
+    ) {
+        use crate::mvl::parser::ast::{ElseBranch, MatchBody, Stmt};
+        for stmt in &block.stmts {
+            match stmt {
+                Stmt::Let { init, .. } => {
+                    self.walk_expr_for_captures(init, exclude, seen, captures);
+                }
+                Stmt::Assign { value, .. } => {
+                    self.walk_expr_for_captures(value, exclude, seen, captures);
+                }
+                Stmt::Return { value, .. } => {
+                    if let Some(v) = value {
+                        self.walk_expr_for_captures(v, exclude, seen, captures);
+                    }
+                }
+                Stmt::If {
+                    cond, then, else_, ..
+                } => {
+                    self.walk_expr_for_captures(cond, exclude, seen, captures);
+                    self.walk_block_for_captures(then, exclude, seen, captures);
+                    if let Some(branch) = else_ {
+                        match branch {
+                            ElseBranch::Block(b) => {
+                                self.walk_block_for_captures(b, exclude, seen, captures);
+                            }
+                            ElseBranch::If(s) => {
+                                if let Stmt::If {
+                                    cond, then, else_, ..
+                                } = s.as_ref()
+                                {
+                                    self.walk_expr_for_captures(cond, exclude, seen, captures);
+                                    self.walk_block_for_captures(then, exclude, seen, captures);
+                                    let _ = else_;
+                                }
+                            }
+                        }
+                    }
+                }
+                Stmt::Match {
+                    scrutinee, arms, ..
+                } => {
+                    self.walk_expr_for_captures(scrutinee, exclude, seen, captures);
+                    for arm in arms {
+                        match &arm.body {
+                            MatchBody::Expr(e) => {
+                                self.walk_expr_for_captures(e, exclude, seen, captures);
+                            }
+                            MatchBody::Block(b) => {
+                                self.walk_block_for_captures(b, exclude, seen, captures);
+                            }
+                        }
+                    }
+                }
+                Stmt::For { iter, body, .. } => {
+                    self.walk_expr_for_captures(iter, exclude, seen, captures);
+                    self.walk_block_for_captures(body, exclude, seen, captures);
+                }
+                Stmt::While { cond, body, .. } => {
+                    self.walk_expr_for_captures(cond, exclude, seen, captures);
+                    self.walk_block_for_captures(body, exclude, seen, captures);
+                }
+                Stmt::Expr { expr, .. } => {
+                    self.walk_expr_for_captures(expr, exclude, seen, captures);
+                }
+            }
+        }
     }
 
     pub(crate) fn emit_if_expr(
@@ -1641,8 +2125,9 @@ impl<'ctx> LlvmBackend<'ctx> {
                     }
                 }
 
-                // #588: indirect call through a local function-typed variable.
-                // Handles `f(x)` where `f: fn(T) -> U` is a parameter or local binding.
+                // #588: indirect call through a local function-typed variable (closure
+                // calling convention).  The stored value is a ptr to { fn_ptr, env_ptr };
+                // extract both and call fn_ptr(env_ptr, args…).
                 if let Some(TypeExpr::Fn {
                     params: fn_params,
                     ret,
@@ -1650,17 +2135,47 @@ impl<'ctx> LlvmBackend<'ctx> {
                 }) = self.local_mvl_types.get(name).cloned()
                 {
                     if let Some((alloca, _)) = self.locals.get(name).copied() {
-                        let fn_ty = self.fn_type_to_llvm(&fn_params, &ret);
                         let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
-                        let fn_ptr = self
+                        let closure_ty = self.closure_struct_type();
+
+                        // Load the pointer-to-closure-struct from the local alloca.
+                        let closure_ptr = self
                             .builder
-                            .build_load(ptr_ty, alloca, "fn_ptr")
+                            .build_load(ptr_ty, alloca, "closure_ptr")
                             .unwrap()
                             .into_pointer_value();
-                        let meta_args: Vec<inkwell::values::BasicMetadataValueEnum> = args
-                            .iter()
-                            .map(|a| self.emit_expr(a).map(Into::into))
-                            .collect::<Option<Vec<_>>>()?;
+
+                        // Extract fn_ptr (field 0) and env_ptr (field 1).
+                        let fn_ptr_gep = self
+                            .builder
+                            .build_struct_gep(closure_ty, closure_ptr, 0, "fn_ptr_gep")
+                            .unwrap();
+                        let fn_ptr = self
+                            .builder
+                            .build_load(ptr_ty, fn_ptr_gep, "fn_ptr")
+                            .unwrap()
+                            .into_pointer_value();
+                        let env_ptr_gep = self
+                            .builder
+                            .build_struct_gep(closure_ty, closure_ptr, 1, "env_ptr_gep")
+                            .unwrap();
+                        let env_ptr = self
+                            .builder
+                            .build_load(ptr_ty, env_ptr_gep, "env_ptr")
+                            .unwrap();
+
+                        // Closure fn type: (ptr env, T args…) → U
+                        let fn_ty = self.closure_fn_type_to_llvm(&fn_params, &ret);
+
+                        // Prepend env_ptr to the argument list.
+                        let mut meta_args: Vec<inkwell::values::BasicMetadataValueEnum> =
+                            vec![env_ptr.into()];
+                        meta_args.extend(
+                            args.iter()
+                                .map(|a| self.emit_expr(a).map(Into::into))
+                                .collect::<Option<Vec<inkwell::values::BasicMetadataValueEnum>>>(
+                                )?,
+                        );
                         let call = self
                             .builder
                             .build_indirect_call(fn_ty, fn_ptr, &meta_args, "indirect_call")

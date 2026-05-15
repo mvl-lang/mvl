@@ -185,6 +185,13 @@ fn cross_backend_hof_lambdas() {
     assert_backends_agree("hof_lambdas.mvl");
 }
 
+/// Both backends must produce identical output when lambdas capture variables
+/// from the enclosing scope (closure lowering, #588).
+#[test]
+fn cross_backend_closure_lambdas() {
+    assert_backends_agree("closure_lambdas.mvl");
+}
+
 // ── Phase C: heap allocation tests (LLVM-only) ────────────────────────────────
 
 #[test]
