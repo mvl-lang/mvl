@@ -40,7 +40,7 @@
 // REQUEST / RESPONSE TYPES
 // ═══════════════════════════════════════════════════════════════════════════
 
-// HTTP method — enum allows match dispatch without string comparison.
+/// HTTP method — enum allows match dispatch without string comparison.
 pub type Method = enum {
     Get,
     Post,
@@ -48,8 +48,8 @@ pub type Method = enum {
     Unknown,
 }
 
-// Route decoded from the request path.
-// Using an enum keeps match exhaustive and avoids string literal arms.
+/// Route decoded from the request path.
+/// Using an enum keeps match exhaustive and avoids string literal arms.
 pub type Route = enum {
     Users,    // /users — backed by database
     Health,   // /health — no database needed
