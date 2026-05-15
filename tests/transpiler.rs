@@ -10,7 +10,7 @@ use mvl::mvl::parser::Parser;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-use mvl::mvl::backends::rust::TranspileOutput;
+use mvl::mvl::backends::rust::{TranspileConfig, TranspileOutput};
 
 fn transpile_src(src: &str) -> String {
     transpile_full(src).lib_rs
@@ -25,7 +25,7 @@ fn transpile_full(src: &str) -> TranspileOutput {
         "parse errors: {:?}",
         parser.errors()
     );
-    transpile(&prog, "test_crate")
+    transpile(&prog, TranspileConfig::new("test_crate")).output
 }
 
 fn assert_contains(src: &str, snippet: &str) {
@@ -411,7 +411,7 @@ fn extern_rust_adds_mvl_runtime_to_cargo_toml() {
 }"#;
     let (mut p, _) = mvl::mvl::parser::Parser::new(src);
     let prog = p.parse_program();
-    let out = transpile(&prog, "my_crate");
+    let out = transpile(&prog, TranspileConfig::new("my_crate")).output;
     assert!(
         out.cargo_toml.contains("mvl_runtime"),
         "Cargo.toml must reference mvl_runtime: {}",
@@ -448,7 +448,7 @@ fn full_program_password_checker_transpiles() {
         "should have 1 extern trust boundary"
     );
 
-    let out = transpile(&prog, "password_checker");
+    let out = transpile(&prog, TranspileConfig::new("password_checker")).output;
     assert_contains(&out.lib_rs, "use mvl_runtime::prelude::*");
     assert_contains(&out.lib_rs, "extern \"Rust\"");
     // `pub` is not valid inside Rust extern blocks
@@ -1945,12 +1945,7 @@ fn type_args_in_fn_call_emit_turbofish() {
 
 // ── transpiler/mod.rs: uncovered entry points ─────────────────────────────────
 
-use mvl::mvl::backends::rust::{
-    has_main_fn, has_std_imports, transpile_covered, transpile_covered_source,
-    transpile_covered_source_with_prelude, transpile_covered_with_prelude,
-    transpile_mutated_source_with_prelude, transpile_mutated_with_prelude,
-    transpile_source_with_prelude, transpile_with_prelude,
-};
+use mvl::mvl::backends::rust::{has_main_fn, has_std_imports};
 
 #[test]
 fn has_main_fn_true_when_main_present() {
@@ -1979,7 +1974,7 @@ fn has_std_imports_false_for_non_std_use() {
 #[test]
 fn transpile_with_prelude_produces_valid_output() {
     let prog = parse_prog("fn f(x: Int) -> Int { x }");
-    let out = transpile_with_prelude(&prog, "my_crate", &[]);
+    let out = transpile(&prog, TranspileConfig::new("my_crate")).output;
     assert_contains(&out.lib_rs, "fn f(");
     assert!(!out.has_main);
     assert_contains(&out.cargo_toml, "my_crate");
@@ -1988,7 +1983,7 @@ fn transpile_with_prelude_produces_valid_output() {
 #[test]
 fn transpile_with_prelude_has_main_sets_binary() {
     let prog = parse_prog("fn main() -> Unit { }");
-    let out = transpile_with_prelude(&prog, "my_app", &[]);
+    let out = transpile(&prog, TranspileConfig::new("my_app")).output;
     assert!(out.has_main);
     assert!(
         !out.cargo_toml.contains("[lib]"),
@@ -1999,7 +1994,7 @@ fn transpile_with_prelude_has_main_sets_binary() {
 #[test]
 fn transpile_source_with_prelude_produces_valid_output() {
     let prog = parse_prog("fn f(x: Int) -> Int { x }");
-    let out = transpile_source_with_prelude(&prog, "my_crate", &[]);
+    let out = transpile(&prog, TranspileConfig::new("my_crate").for_test_crate()).output;
     assert_contains(&out.lib_rs, "fn f(");
     assert!(!out.has_main);
 }
@@ -2008,7 +2003,13 @@ fn transpile_source_with_prelude_produces_valid_output() {
 fn transpile_covered_instruments_branches() {
     let src = "fn f(n: Int) -> Int { if n > 0 { 1 } else { 0 } }";
     let prog = parse_prog(src);
-    let (out, branches) = transpile_covered(&prog, "my_crate", "f", 0);
+    let r = transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("f")
+            .with_coverage(0),
+    );
+    let (out, branches) = (r.output, r.branches);
     assert!(!branches.is_empty(), "expected branch coverage entries");
     assert_contains(&out.lib_rs, "fn f(");
 }
@@ -2017,7 +2018,13 @@ fn transpile_covered_instruments_branches() {
 fn transpile_covered_with_prelude_instruments_branches() {
     let src = "fn f(n: Int) -> Int { if n > 0 { 1 } else { 0 } }";
     let prog = parse_prog(src);
-    let (out, branches) = transpile_covered_with_prelude(&prog, "my_crate", "f", 0, &[]);
+    let r = transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("f")
+            .with_coverage(0),
+    );
+    let (out, branches) = (r.output, r.branches);
     assert!(!branches.is_empty(), "expected branch coverage entries");
     assert_contains(&out.lib_rs, "fn f(");
 }
@@ -2026,7 +2033,14 @@ fn transpile_covered_with_prelude_instruments_branches() {
 fn transpile_covered_source_instruments_branches() {
     let src = "fn f(n: Int) -> Int { match n { 0 => 0, _ => 1 } }";
     let prog = parse_prog(src);
-    let (out, branches) = transpile_covered_source(&prog, "my_crate", "f", 0);
+    let r = transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("f")
+            .with_coverage(0)
+            .for_test_crate(),
+    );
+    let (out, branches) = (r.output, r.branches);
     assert!(!branches.is_empty(), "expected branch coverage entries");
     assert_contains(&out.lib_rs, "fn f(");
 }
@@ -2035,7 +2049,14 @@ fn transpile_covered_source_instruments_branches() {
 fn transpile_covered_source_with_prelude_instruments_branches() {
     let src = "fn f(n: Int) -> Int { match n { 0 => 0, _ => 1 } }";
     let prog = parse_prog(src);
-    let (out, branches) = transpile_covered_source_with_prelude(&prog, "my_crate", "f", 0, &[]);
+    let r = transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("f")
+            .with_coverage(0)
+            .for_test_crate(),
+    );
+    let (out, branches) = (r.output, r.branches);
     assert!(!branches.is_empty());
     assert_contains(&out.lib_rs, "fn f(");
 }
@@ -2048,7 +2069,14 @@ fn transpile_mutated_with_prelude_mutates_non_test_fn_bodies() {
     // non-test fn re-declarations.
     let src = "fn f(a: Int, b: Int) -> Int { a + b }";
     let prog = parse_prog(src);
-    let (out, mutants) = transpile_mutated_with_prelude(&prog, "my_crate", "f", &[]);
+    let r = transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("f")
+            .with_mutation()
+            .for_test_file(),
+    );
+    let (out, mutants) = (r.output, r.mutants);
     assert!(
         !mutants.is_empty(),
         "non-test fn bodies in test files must produce mutants"
@@ -2060,7 +2088,14 @@ fn transpile_mutated_with_prelude_mutates_non_test_fn_bodies() {
 fn transpile_mutated_source_with_prelude_produces_mutants() {
     let src = "fn f(a: Int, b: Int) -> Int { a + b }";
     let prog = parse_prog(src);
-    let (out, mutants) = transpile_mutated_source_with_prelude(&prog, "my_crate", "f", &[]);
+    let r = transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("f")
+            .with_mutation()
+            .for_test_crate(),
+    );
+    let (out, mutants) = (r.output, r.mutants);
     assert!(!mutants.is_empty(), "expected mutation variants");
     assert_contains(&out.lib_rs, "fn f(");
 }
@@ -2071,7 +2106,14 @@ fn transpile_mutated_with_prelude_mutates_bool_literal_in_non_test_fn() {
     // source function re-declarations that cmd_mutate relies on for mutation points).
     let src = "fn flag() -> Bool { true }";
     let prog = parse_prog(src);
-    let (_out, mutants) = transpile_mutated_with_prelude(&prog, "my_crate", "flag", &[]);
+    let r = transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("flag")
+            .with_mutation()
+            .for_test_file(),
+    );
+    let (_out, mutants) = (r.output, r.mutants);
     assert!(
         !mutants.is_empty(),
         "bool literal in non-test fn of test file must produce mutants"
@@ -2084,7 +2126,14 @@ fn transpile_mutated_with_prelude_mutates_int_literal_in_non_test_fn() {
     // source function re-declarations that cmd_mutate relies on for mutation points).
     let src = "fn answer() -> Int { 42 }";
     let prog = parse_prog(src);
-    let (_out, mutants) = transpile_mutated_with_prelude(&prog, "my_crate", "answer", &[]);
+    let r = transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("answer")
+            .with_mutation()
+            .for_test_file(),
+    );
+    let (_out, mutants) = (r.output, r.mutants);
     assert!(
         !mutants.is_empty(),
         "int literal in non-test fn of test file must produce mutants"
@@ -2102,7 +2151,14 @@ fn transpile_mutated_with_prelude_mixed_file_non_test_fn_produces_mutants() {
     let src =
         "fn f(a: Int, b: Int) -> Int { a + b }\ntest fn check_f() -> Unit { let _x: Int = 1 + 2; }";
     let prog = parse_prog(src);
-    let (_out, mutants) = transpile_mutated_with_prelude(&prog, "my_crate", "my_test_file", &[]);
+    let r = transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("my_test_file")
+            .with_mutation()
+            .for_test_file(),
+    );
+    let (_out, mutants) = (r.output, r.mutants);
     let non_test_mutants: Vec<_> = mutants.iter().filter(|m| m.fn_name == "f").collect();
     assert!(
         !non_test_mutants.is_empty(),

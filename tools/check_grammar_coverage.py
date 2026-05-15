@@ -114,6 +114,14 @@ TS_KNOWN_EXTENSIONS = {
     "module_decl",
     "extern_decl",
     "extern_fn_decl",
+    # Session type support (#37, #134): BMC for protocol deadlocks
+    "session_branch",
+    "session_branches",
+    "session_external_choice",
+    "session_internal_choice",
+    "session_op",
+    "session_receive_type",
+    "session_send_type",
 }
 
 

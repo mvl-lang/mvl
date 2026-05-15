@@ -10,7 +10,7 @@
 //! - `move_*`    — Phase A: callee NOT inferred (returned, etc.) → last use is a move
 //! - `clone_*`   — cases where Phase B cannot infer a borrow, so Phase A still applies
 
-use mvl::mvl::backends::rust::transpile;
+use mvl::mvl::backends::rust::{transpile, TranspileConfig};
 use mvl::mvl::parser::Parser;
 
 fn transpile_src(src: &str) -> String {
@@ -22,7 +22,9 @@ fn transpile_src(src: &str) -> String {
         "parse errors: {:?}",
         parser.errors()
     );
-    transpile(&prog, "test_crate").lib_rs
+    transpile(&prog, TranspileConfig::new("test_crate"))
+        .output
+        .lib_rs
 }
 
 fn assert_contains(src: &str, snippet: &str) {
