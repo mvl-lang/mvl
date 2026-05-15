@@ -1038,6 +1038,207 @@ fn session_types_corpus_parses_and_checks() {
     );
 }
 
+// ── Session type model checker (D1, #134) ────────────────────────────────────
+
+#[test]
+fn session_duplicate_label_in_internal_choice_is_rejected() {
+    // GIVEN: internal choice with two branches sharing the same label
+    // THEN: SessionDuplicateLabel error reported
+    let src = r#"
+        type BadChoice = +{
+            ok: end,
+            ok: !Int. end
+        }
+    "#;
+    let result = check_src(src);
+    let has_dup = result.errors.iter().any(|e| {
+        matches!(e, mvl::mvl::checker::errors::CheckError::SessionDuplicateLabel { label, .. } if label == "ok")
+    });
+    assert!(
+        has_dup,
+        "expected SessionDuplicateLabel for `ok`, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn session_duplicate_label_in_external_choice_is_rejected() {
+    // GIVEN: external choice with a repeated branch label
+    // THEN: SessionDuplicateLabel error reported
+    let src = r#"
+        type BadServer = &{
+            read: !String. end,
+            write: ?String. end,
+            read: end
+        }
+    "#;
+    let result = check_src(src);
+    let has_dup = result.errors.iter().any(|e| {
+        matches!(e, mvl::mvl::checker::errors::CheckError::SessionDuplicateLabel { label, .. } if label == "read")
+    });
+    assert!(
+        has_dup,
+        "expected SessionDuplicateLabel for `read`, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn session_unique_labels_accepted() {
+    // GIVEN: choice with all-distinct labels
+    // THEN: no duplicate-label errors
+    let src = r#"
+        type GoodChoice = +{
+            left: end,
+            right: end,
+            middle: !Int. end
+        }
+    "#;
+    let result = check_src(src);
+    let has_dup = result.errors.iter().any(|e| {
+        matches!(
+            e,
+            mvl::mvl::checker::errors::CheckError::SessionDuplicateLabel { .. }
+        )
+    });
+    assert!(
+        !has_dup,
+        "unexpected duplicate-label error: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn session_mutual_blocking_detected_by_check_dual() {
+    // GIVEN: two types that both start with Receive (both wait, neither sends)
+    // THEN: check_dual returns SessionDeadlock
+    use mvl::mvl::checker::session::check_dual;
+    use mvl::mvl::checker::types::SessionTy;
+    use mvl::mvl::checker::types::Ty;
+
+    let dummy = mvl::mvl::parser::lexer::Span {
+        line: 1,
+        col: 1,
+        offset: 0,
+        len: 0,
+    };
+
+    // Both sides receive an Int first — deadlock.
+    let a = SessionTy::Receive(Box::new(Ty::Int), Box::new(SessionTy::End));
+    let b = SessionTy::Receive(Box::new(Ty::Int), Box::new(SessionTy::End));
+    let err = check_dual(&a, &b, dummy);
+    assert!(
+        matches!(
+            err,
+            Some(mvl::mvl::checker::errors::CheckError::SessionDeadlock { .. })
+        ),
+        "expected SessionDeadlock, got: {:?}",
+        err
+    );
+}
+
+#[test]
+fn session_proper_duals_no_deadlock() {
+    // GIVEN: Ping = !Int. ?Bool. end  and  Pong = ?Int. !Bool. end (proper duals)
+    // THEN: check_dual returns None
+    use mvl::mvl::checker::session::check_dual;
+    use mvl::mvl::checker::types::SessionTy;
+    use mvl::mvl::checker::types::Ty;
+
+    let dummy = mvl::mvl::parser::lexer::Span {
+        line: 1,
+        col: 1,
+        offset: 0,
+        len: 0,
+    };
+
+    let ping = SessionTy::Send(
+        Box::new(Ty::Int),
+        Box::new(SessionTy::Receive(
+            Box::new(Ty::Bool),
+            Box::new(SessionTy::End),
+        )),
+    );
+    let pong = SessionTy::Receive(
+        Box::new(Ty::Int),
+        Box::new(SessionTy::Send(
+            Box::new(Ty::Bool),
+            Box::new(SessionTy::End),
+        )),
+    );
+    assert_eq!(check_dual(&ping, &pong, dummy), None);
+}
+
+#[test]
+fn session_check_no_mutual_blocking_direct() {
+    // GIVEN: one side sends, other receives — no deadlock
+    use mvl::mvl::checker::session::check_no_mutual_blocking;
+    use mvl::mvl::checker::types::SessionTy;
+    use mvl::mvl::checker::types::Ty;
+
+    let dummy = mvl::mvl::parser::lexer::Span {
+        line: 1,
+        col: 1,
+        offset: 0,
+        len: 0,
+    };
+
+    let sender = SessionTy::Send(Box::new(Ty::Int), Box::new(SessionTy::End));
+    let recver = SessionTy::Receive(Box::new(Ty::Int), Box::new(SessionTy::End));
+    assert_eq!(check_no_mutual_blocking(&sender, &recver, dummy), None);
+
+    // Both receive — deadlock
+    let r1 = SessionTy::Receive(Box::new(Ty::Int), Box::new(SessionTy::End));
+    let r2 = SessionTy::Receive(Box::new(Ty::Int), Box::new(SessionTy::End));
+    assert!(matches!(
+        check_no_mutual_blocking(&r1, &r2, dummy),
+        Some(mvl::mvl::checker::errors::CheckError::SessionDeadlock { .. })
+    ));
+}
+
+#[test]
+fn session_deadlock_in_choice_branch_detected() {
+    // GIVEN: InternalChoice/ExternalChoice pair where one branch has mutual blocking
+    // THEN: check_no_mutual_blocking reports SessionDeadlock
+    use mvl::mvl::checker::session::check_no_mutual_blocking;
+    use mvl::mvl::checker::types::SessionTy;
+    use mvl::mvl::checker::types::Ty;
+
+    let dummy = mvl::mvl::parser::lexer::Span {
+        line: 1,
+        col: 1,
+        offset: 0,
+        len: 0,
+    };
+
+    // a: +{ ok: !Int. end, bad: ?String. end }
+    // b: &{ ok: ?Int. end, bad: ?String. end }  ← bad branch: both receive
+    let a = SessionTy::InternalChoice(vec![
+        (
+            "ok".to_string(),
+            SessionTy::Send(Box::new(Ty::Int), Box::new(SessionTy::End)),
+        ),
+        (
+            "bad".to_string(),
+            SessionTy::Receive(Box::new(Ty::String), Box::new(SessionTy::End)),
+        ),
+    ]);
+    let b = SessionTy::ExternalChoice(vec![
+        (
+            "ok".to_string(),
+            SessionTy::Receive(Box::new(Ty::Int), Box::new(SessionTy::End)),
+        ),
+        (
+            "bad".to_string(),
+            SessionTy::Receive(Box::new(Ty::String), Box::new(SessionTy::End)),
+        ),
+    ]);
+    assert!(matches!(
+        check_no_mutual_blocking(&a, &b, dummy),
+        Some(mvl::mvl::checker::errors::CheckError::SessionDeadlock { .. })
+    ));
+}
+
 #[test]
 fn sending_ref_param_rejected() {
     // GIVEN: fn with `ref` param attempts channel.send(param)
