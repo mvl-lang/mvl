@@ -6612,6 +6612,72 @@ fn actor_spawn_unknown_field_rejected() {
     );
 }
 
+/// `pub fn` behavior with an unannotated parameter is accepted — no capability means sendable.
+#[test]
+fn actor_behavior_unannotated_param_accepted() {
+    // GIVEN: actor pub fn with no capability annotation on the parameter
+    // THEN: no CapabilityViolation (unannotated = sendable by default)
+    let src = r#"
+        actor Counter {
+            count: Int
+            pub fn increment(n: Int) { }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::CapabilityViolation { .. })),
+        "unannotated param in actor pub fn should be accepted, got: {errors:?}"
+    );
+}
+
+/// Multiple `pub fn` parameters: one `ref` among valid params — only the `ref` is rejected.
+#[test]
+fn actor_behavior_ref_among_multiple_params_rejected() {
+    // GIVEN: actor pub fn with a mix of valid and ref params
+    // THEN: CapabilityViolation only for the ref param
+    let src = r#"
+        actor Counter {
+            count: Int
+            pub fn update(n: Int, ref bad: Int, iso good: Int) { }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::CapabilityViolation { param, capability, .. }
+                if param == "bad" && capability == "ref")
+        ),
+        "ref param should be rejected among mixed params, got: {errors:?}"
+    );
+    assert!(
+        !errors.iter().any(
+            |e| matches!(e, CheckError::CapabilityViolation { param, .. } if param == "n" || param == "good")
+        ),
+        "non-ref params should not be rejected, got: {errors:?}"
+    );
+}
+
+/// Actor with iso param and body: iso linearity enforced — aliasing without consume rejected.
+#[test]
+fn actor_behavior_iso_aliasing_rejected() {
+    // GIVEN: actor pub fn receives an iso param and aliases it without consume
+    // THEN: IsoAliasingViolation (or CapabilityViolation) for the alias
+    let src = r#"
+        actor Relay {
+            pub fn forward(iso payload: Int) {
+                let alias: Int = payload;
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors.is_empty(),
+        "iso aliasing in actor behavior should be rejected, got no errors"
+    );
+}
+
 // ── #744: ActorDecl registered in pass 1 ─────────────────────────────────────
 
 /// GIVEN: an actor declaration and a function returning that actor type
