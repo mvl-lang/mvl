@@ -29,8 +29,8 @@ lint: guard-mvl ## Lint all source files
 check: guard-mvl ## Type-check main.mvl
 	$(MVL) check $(DIR)main.mvl --verbose
 
-test: guard-mvl ## (WIP) actor body features pending — check skipped until #695 complete
-	@echo "actor_webserver: skipped — actor runtime not yet implemented (#695)"
+test: guard-mvl ## Run unit tests (pure routing logic; actor runtime tests pending #695)
+	$(MVL) test $(DIR)
 
 assurance: guard-mvl ## Assurance report for main.mvl
 	$(MVL) assurance $(DIR)main.mvl
