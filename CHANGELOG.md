@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.107.0] — 2026-05-15
+
+### Added
+
+- **Phase 8 Session Types (Honda 1993)** — First-class typed communication protocols. Session types (`!T.S`, `?T.S`, `+{l:S,...}`, `&{l:S,...}`, `end`) describe the exact sequence of messages exchanged on a channel. Compiler verifies both sides follow the declared protocol; missing/wrong/out-of-order messages are compile errors. Full duality support: `dual(S)` flips `!`↔`?` and `+`↔`&`. Includes well-formedness checking, error reporting, tree-sitter grammar, comprehensive tests, and specification (#260).
+
 ## [0.106.0] — 2026-05-15
 
 ### Added

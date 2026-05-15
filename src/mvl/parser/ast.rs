@@ -384,6 +384,11 @@ pub enum TypeExpr {
     Tuple { elems: Vec<TypeExpr>, span: Span },
     /// Integer literal used as a const generic argument: `Array<T, 16>`
     IntConst { value: i64, span: Span },
+    /// Session type (Honda 1993): typed communication protocol.
+    ///
+    /// Describes the sequence of messages exchanged on a channel.
+    /// Example: `!Request. ?Quote. +{ accept: !Payment. ?Receipt. end, reject: end }`
+    Session { op: Box<SessionOp>, span: Span },
 }
 
 impl TypeExpr {
@@ -397,7 +402,58 @@ impl TypeExpr {
             | TypeExpr::Refined { span, .. }
             | TypeExpr::Fn { span, .. }
             | TypeExpr::Tuple { span, .. }
-            | TypeExpr::IntConst { span, .. } => *span,
+            | TypeExpr::IntConst { span, .. }
+            | TypeExpr::Session { span, .. } => *span,
+        }
+    }
+}
+
+// ── Session types (Honda 1993) ──────────────────────────────────────────────
+
+/// A session type operation describing one step (or branching point) in a
+/// typed communication protocol.
+///
+/// The `.` combinator chains operations: `!Int. ?Bool. end` means
+/// "send an Int, then receive a Bool, then the protocol terminates".
+///
+/// Duality: every protocol has two complementary sides.
+/// `!T` pairs with `?T`, `+{...}` pairs with `&{...}`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SessionOp {
+    /// `!T. S` — send a value of type `T`, then continue as `S`.
+    Send {
+        msg: Box<TypeExpr>,
+        cont: Box<SessionOp>,
+        span: Span,
+    },
+    /// `?T. S` — receive a value of type `T`, then continue as `S`.
+    Receive {
+        msg: Box<TypeExpr>,
+        cont: Box<SessionOp>,
+        span: Span,
+    },
+    /// `+{ l1: S1, l2: S2, ... }` — internal choice: this side selects a branch.
+    InternalChoice {
+        branches: Vec<(String, SessionOp)>,
+        span: Span,
+    },
+    /// `&{ l1: S1, l2: S2, ... }` — external choice: the other side selects.
+    ExternalChoice {
+        branches: Vec<(String, SessionOp)>,
+        span: Span,
+    },
+    /// `end` — protocol terminated; the channel is closed.
+    End { span: Span },
+}
+
+impl SessionOp {
+    pub fn span(&self) -> Span {
+        match self {
+            SessionOp::Send { span, .. }
+            | SessionOp::Receive { span, .. }
+            | SessionOp::InternalChoice { span, .. }
+            | SessionOp::ExternalChoice { span, .. }
+            | SessionOp::End { span } => *span,
         }
     }
 }

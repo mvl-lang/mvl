@@ -305,6 +305,10 @@ module.exports = grammar({
         $.result_type,
         $.ref_type,
         $.labeled_type,
+        $.session_send_type,
+        $.session_receive_type,
+        $.session_internal_choice,
+        $.session_external_choice,
         $.base_type
       ),
 
@@ -338,6 +342,41 @@ module.exports = grammar({
     tuple_type: ($) => seq("(", $.type_expr, ",", $.type_list, ")"),
 
     type_list: ($) => seq($.type_expr, repeat(seq(",", $.type_expr))),
+
+    // === Session types (Honda 1993) ===
+
+    // `!T. S` — send T, then continue as S
+    session_send_type: ($) => seq("!", $.type_expr, ".", $.session_op),
+
+    // `?T. S` — receive T, then continue as S
+    session_receive_type: ($) => seq("?", $.type_expr, ".", $.session_op),
+
+    // `+{ l1: S1, l2: S2, ... }` — internal choice (this side selects)
+    session_internal_choice: ($) =>
+      seq("+", "{", $.session_branches, "}"),
+
+    // `&{ l1: S1, l2: S2, ... }` — external choice (other side selects)
+    session_external_choice: ($) =>
+      seq("&", "{", $.session_branches, "}"),
+
+    // One step of a session protocol (used in continuations)
+    session_op: ($) =>
+      choice(
+        $.session_send_type,
+        $.session_receive_type,
+        $.session_internal_choice,
+        $.session_external_choice,
+        "end"
+      ),
+
+    // Comma-separated labelled branches: `label: session_op`
+    session_branches: ($) =>
+      seq(
+        $.session_branch,
+        repeat(seq(",", $.session_branch))
+      ),
+
+    session_branch: ($) => seq($.identifier, ":", $.session_op),
 
     // === Refinement predicates ===
     // Structured with precedence to avoid left-recursion conflicts.

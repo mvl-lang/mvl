@@ -31,6 +31,7 @@ mod method_types;
 pub mod passes;
 mod patterns;
 pub mod refinements;
+pub mod session;
 pub(crate) mod solver;
 mod stmts;
 pub mod termination;
@@ -94,6 +95,7 @@ pub fn check_with_two_preludes(
     ifc::check_implicit_flows(prog, &mut checker.errors);
     refinements::check_refinements(prog, &mut checker.errors);
     contracts::check_contracts(prog, &mut checker.errors);
+    session::check_session_types(prog, &mut checker.errors);
     let mut req_errors = [0usize; 12];
     for e in &checker.errors {
         let req = e.requirement_number() as usize;

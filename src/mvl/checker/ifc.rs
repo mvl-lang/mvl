@@ -177,7 +177,8 @@ fn label_of_type_expr(te: &TypeExpr) -> Option<SecurityLabel> {
         | TypeExpr::Result { .. }
         | TypeExpr::Ref { .. }
         | TypeExpr::Fn { .. }
-        | TypeExpr::IntConst { .. } => None,
+        | TypeExpr::IntConst { .. }
+        | TypeExpr::Session { .. } => None,
     }
 }
 

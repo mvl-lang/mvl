@@ -265,6 +265,8 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
             Ty::Labeled(_, inner) | Ty::Refined(inner, _) => self.ty_to_llvm(inner),
             Ty::Unknown | Ty::Tuple(_) => Some(self.context.i64_type().into()),
+            // Session types have no direct runtime representation (protocol is compile-time only).
+            Ty::Session(_) => None,
         }
     }
 

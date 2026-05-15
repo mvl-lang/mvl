@@ -343,25 +343,33 @@ pub enum CheckError {
         span: Span,
     },
 
-    // ── Actor declaration checks (#745) ──────────────────────────────────
-    /// Two fields with the same name in one actor declaration.
-    DuplicateActorField {
-        actor: String,
-        field: String,
-        span: Span,
-    },
-    /// Two methods with the same name in one actor declaration.
-    DuplicateActorMethod {
-        actor: String,
-        method: String,
-        span: Span,
-    },
-    /// A `pub fn` behavior declares a non-`Unit` return type.
-    /// Behaviors are fire-and-forget — callers cannot await a return value.
-    NonUnitBehaviorReturn {
-        actor: String,
-        method: String,
+    // ── Session type errors (Phase 8, #260) ──────────────────────────────
+    /// A session type protocol is violated: the operation performed does not
+    /// match what the declared protocol expects at this point.
+    SessionProtocolMismatch {
+        /// The session type operation that was expected.
+        expected: String,
+        /// What was actually found / attempted.
         found: String,
+        span: Span,
+    },
+    /// Both sides of a channel are annotated with session types that are not
+    /// duals of each other. Both must be declared for the check to fire.
+    SessionDualityMismatch {
+        /// The protocol declared for one side.
+        side_a: String,
+        /// The protocol declared for the other side.
+        side_b: String,
+        span: Span,
+    },
+    /// A session type choice branch label is not part of the declared protocol.
+    SessionUnknownBranch {
+        label: String,
+        available: Vec<String>,
+        span: Span,
+    },
+    /// A session-typed channel was used after the protocol reached `end`.
+    SessionAfterEnd {
         span: Span,
     },
 
@@ -449,6 +457,11 @@ impl CheckError {
             | CheckError::InvariantViolated { .. }
             | CheckError::InvariantNotPreserved { .. }
             | CheckError::QuantifierOutsideGhost { .. } => 10,
+            // Req 1: Type Safety — session type protocol errors
+            CheckError::SessionProtocolMismatch { .. }
+            | CheckError::SessionDualityMismatch { .. }
+            | CheckError::SessionUnknownBranch { .. }
+            | CheckError::SessionAfterEnd { .. } => 1,
             // Req 11: Information Flow Control
             CheckError::InvalidDeclassify { .. }
             | CheckError::InvalidSanitize { .. }
@@ -527,9 +540,10 @@ impl CheckError {
             | CheckError::DecreasesNotBounded { span, .. }
             | CheckError::DecreasesNotDecreasing { span, .. }
             | CheckError::QuantifierOutsideGhost { span }
-            | CheckError::DuplicateActorField { span, .. }
-            | CheckError::DuplicateActorMethod { span, .. }
-            | CheckError::NonUnitBehaviorReturn { span, .. } => *span,
+            | CheckError::SessionProtocolMismatch { span, .. }
+            | CheckError::SessionDualityMismatch { span, .. }
+            | CheckError::SessionUnknownBranch { span, .. }
+            | CheckError::SessionAfterEnd { span } => *span,
         }
     }
 
@@ -724,15 +738,23 @@ impl CheckError {
             CheckError::QuantifierOutsideGhost { .. } => {
                 "`forall`/`exists` quantifiers are only valid inside ghost bindings, `requires`, `ensures`, or `invariant` predicates".to_string()
             }
-            CheckError::DuplicateActorField { actor, field, .. } => format!(
-                "duplicate field `{field}` in actor `{actor}`"
-            ),
-            CheckError::DuplicateActorMethod { actor, method, .. } => format!(
-                "duplicate method `{method}` in actor `{actor}`"
-            ),
-            CheckError::NonUnitBehaviorReturn { actor, method, found, .. } => format!(
-                "`pub fn {method}` in actor `{actor}` must return `Unit` (fire-and-forget), found `{found}`"
-            ),
+            CheckError::SessionProtocolMismatch { expected, found, .. } => {
+                format!("session protocol mismatch: expected `{expected}`, found `{found}`")
+            }
+            CheckError::SessionDualityMismatch { side_a, side_b, .. } => {
+                format!(
+                    "session type duality violation: `{side_a}` and `{side_b}` are not duals of each other"
+                )
+            }
+            CheckError::SessionUnknownBranch { label, available, .. } => {
+                let avail = available.join(", ");
+                format!(
+                    "unknown session branch `{label}`; available branches are: {avail}"
+                )
+            }
+            CheckError::SessionAfterEnd { .. } => {
+                "session protocol already reached `end`; no further operations are allowed".to_string()
+            }
         }
     }
 }

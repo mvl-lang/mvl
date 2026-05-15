@@ -642,6 +642,8 @@ pub fn emit_type_expr(ty: &TypeExpr) -> String {
             let elems_str: Vec<String> = elems.iter().map(emit_type_expr).collect();
             format!("({})", elems_str.join(", "))
         }
+        // Session types are compile-time protocol descriptors with no runtime representation.
+        TypeExpr::Session { .. } => "/* session type */()".to_string(),
     }
 }
 
