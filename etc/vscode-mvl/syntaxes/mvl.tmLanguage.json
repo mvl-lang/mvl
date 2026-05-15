@@ -86,11 +86,11 @@
     },
 
     "security-labels": {
-      "comment": "Type-level security labels — Public<T>, Tainted<T>, Secret<T>, Clean<T>",
+      "comment": "Type-level security labels — Public[T], Tainted[T], Secret[T], Clean[T]",
       "patterns": [
         {
           "name": "storage.type.security-label.mvl",
-          "match": "\\b(Public|Tainted|Secret|Clean)(?=\\s*<)"
+          "match": "\\b(Public|Tainted|Secret|Clean)(?=\\s*\\[)"
         }
       ]
     },

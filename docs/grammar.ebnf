@@ -30,7 +30,7 @@ module_path    = IDENT { ( "." | "::" ) IDENT } [ "." "{" IDENT { "," IDENT } "}
 
 (* === Type declarations === *)
 type_decl      = "type" IDENT [ type_params ] "=" type_body ;
-type_params    = "<" IDENT { "," IDENT } ">" ;
+type_params    = "[" IDENT { "," IDENT } "]" ;
 type_body      = struct_body | enum_body | alias_type ;
 struct_body    = "struct" "{" { field_decl } "}" [ "with" "invariant" refinement ] ;
                  (* "with invariant" adds a cross-field predicate checked at construction and mutation — Phase 6, #654 *)
@@ -95,11 +95,11 @@ impl_decl      = "impl" IDENT [ "[" type_list "]" ] "for" IDENT "{" { fn_decl } 
 (* === Type expressions === *)
 type_expr      = base_type | option_type | result_type | ref_type
                | labeled_type | refined_type | fn_type | tuple_type ;
-base_type      = IDENT [ "<" type_list ">" ] ;
-option_type    = "Option" "<" type_expr ">" ;
-result_type    = "Result" "<" type_expr "," type_expr ">" ;
+base_type      = IDENT [ "[" type_list "]" ] ;
+option_type    = "Option" "[" type_expr "]" ;
+result_type    = "Result" "[" type_expr "," type_expr "]" ;
 ref_type       = ( "val" | "ref" ) type_expr ;
-labeled_type   = security_label "<" type_expr ">" ;
+labeled_type   = security_label "[" type_expr "]" ;
 security_label = "Public" | "Tainted" | "Secret" ;
 refined_type   = type_expr "where" refinement ;
 fn_type        = "fn" "(" type_list ")" "->" type_expr [ "!" effect_list ] ;
@@ -192,7 +192,7 @@ literal        = INTEGER | FLOAT | STRING | CHAR | "true" | "false"
 list_literal   = "[" [ expr { "," expr } ] "]" ;
 map_literal    = "{" expr ":" expr { "," expr ":" expr } "}" ;
 set_literal    = "{" expr { "," expr } "}" ;
-(* Note: empty "{}" is ambiguous — requires type annotation: let m: Map<K,V> = {} *)
+(* Note: empty "{}" is ambiguous — requires type annotation: let m: Map[K,V] = {} *)
 
 (* === Constants === *)
 const_decl     = "const" IDENT ":" type_expr "=" expr ";" ;

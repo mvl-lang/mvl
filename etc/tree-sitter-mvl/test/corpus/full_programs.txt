@@ -46,9 +46,9 @@ Function with effects and security labels
 ===============================================================================
 
 total fn safe_divide(
-    numerator: Public<Amount>,
-    denominator: Public<NonZero>,
-) -> Public<Float> {
+    numerator: Public[Amount],
+    denominator: Public[NonZero],
+) -> Public[Float] {
     numerator / denominator
 }
 
@@ -126,8 +126,8 @@ Struct type with security-labeled fields
 ===============================================================================
 
 type Session = struct {
-    token: Secret<String>,
-    user_id: Public<UserId>,
+    token: Secret[String],
+    user_id: Public[UserId],
 }
 
 -------------------------------------------------------------------------------
@@ -159,7 +159,7 @@ type Session = struct {
 Function with match and path expressions
 ===============================================================================
 
-total fn classify(v: Option<Int>) -> String {
+total fn classify(v: Option[Int]) -> String {
     match v {
         None => "empty",
         Some(x) => "found"
