@@ -35,7 +35,18 @@
 //   mvl run examples/actor_pingpong/main.mvl
 //   make run   (from examples/actor_pingpong/)
 
-use std.env.{args, exit}
+use std.args.{parse}
+use std.env.{exit}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CLI ARGUMENTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// `rounds` is an optional positional: first bare argument on the command line.
+// If absent, unwrap_or(5) provides the default.
+type PingPongArgs = struct {
+    rounds: Option[Positional[Int]]
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MESSAGE TYPES
@@ -113,29 +124,6 @@ actor Ping {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ROUNDS CONFIGURATION  (optional first arg — default 5)
-// ═══════════════════════════════════════════════════════════════════════════
-
-// Parse the round count from the first user argument, falling back to `default`.
-// External args arrive as Tainted[String] and are sanitized before use.
-// Exits with an error message if the argument is not a positive integer.
-fn sanitize_rounds_arg(raw: Tainted[String], default: Int where self > 0) -> Int ! Console + Env {
-    let clean: Clean[String] = sanitize(raw);
-    match clean.parse_int() {
-        Err(_) => { eprintln("error: rounds must be a positive integer"); exit(1) }
-        Ok(n)  => if n > 0 { n } else { eprintln("error: rounds must be a positive integer"); exit(1) }
-    }
-}
-
-fn parse_rounds(default: Int where self > 0) -> Int ! Console + Env {
-    let argv: List[Tainted[String]] = args();
-    match argv.get(1) {
-        None      => default,
-        Some(raw) => sanitize_rounds_arg(raw, default)
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 // ENTRY POINT
 //
 // concurrently { } is structured concurrency: the block does NOT return until
@@ -144,7 +132,12 @@ fn parse_rounds(default: Int where self > 0) -> Int ! Console + Env {
 // ═══════════════════════════════════════════════════════════════════════════
 
 fn main() -> Unit ! Console + Env {
-    let rounds: Int = parse_rounds(5);
+    let cfg: PingPongArgs = parse[PingPongArgs]().unwrap_or_exit();
+    let rounds: Int = cfg.rounds.unwrap_or(5);
+    if rounds <= 0 {
+        eprintln("error: rounds must be a positive integer")
+        exit(1)
+    }
     concurrently {
         // Spawn Pong first — Ping holds a Pong handle as its partner.
         let pong: Pong = actor Pong { received: 0 };
