@@ -135,14 +135,19 @@ actor Ping {
 //
 // Refinement: default > 0 ensures a positive round count (Req 10).
 fn sanitize_rounds_arg(raw: Tainted[String], default: Int where self > 0) -> Int {
-    let _: Clean[String] = sanitize(raw);
-    // Simplified: parse_int deferred to stdlib extension; fall back to default.
-    default
+    let clean: Clean[String] = sanitize(raw);
+    // IFC: clean has been sanitized from tainted input.
+    // parse_int on Clean[String] extracts the inner value safely.
+    match clean.parse_int() {
+        Err(_) => default,
+        Ok(n)  => if n > 0 { n } else { default }
+    }
 }
 
 fn parse_rounds(default: Int where self > 0) -> Int ! Env {
     let argv: List[Tainted[String]] = args();
-    match argv.first() {
+    // args()[0] is the binary name; args()[1] is the first user argument.
+    match argv.get(1) {
         None      => default,
         Some(raw) => sanitize_rounds_arg(raw, default)
     }
