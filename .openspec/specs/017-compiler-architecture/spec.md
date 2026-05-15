@@ -198,33 +198,33 @@ generic functions across backends.
 
 | # | Title | Scope | Size | Depends |
 |---|-------|-------|------|---------|
-| **#801** | Create `Loader` module | Extract all 7 file-loading functions from main.rs into `src/mvl/loader.rs`. Single `Loader` struct with `load_file()`, `load_dir()`, `resolve_imports()`. Handles implicit prelude, stdlib, pkg modules, sibling resolution. | L | — |
-| **#802** | Create `Pipeline` abstraction | New `src/mvl/pipeline.rs` with `Pipeline::check()`, `Pipeline::build()`. Modifiers `.with_coverage()`, `.with_mcdc()`, `.with_mutation()`. Orchestrates Loader → checker → transpiler flow. | L | #801 |
-| **#803** | Introduce `TranspileConfig` builder | Create `backends/rust/config.rs`. Builder pattern: `.with_prelude()`, `.with_coverage(start_id)`, `.with_mcdc(start_id)`, `.with_mutation()`, `.for_test_crate()`. | M | — |
-| **#804** | Consolidate transpile functions | Replace 20+ `transpile_*` variants with single `transpile(prog, config) -> TranspileResult`. Delete all deprecated functions. Update all call sites. | L | #803 |
-| **#805** | Extract CLI commands | Move `cmd_check`, `cmd_build`, `cmd_test`, `cmd_mcdc`, `cmd_mutate`, `cmd_assurance`, `cmd_lint`, `cmd_complexity` to `src/cli/` modules. Each command uses Loader + Pipeline. | L | #801, #802 |
-| **#806** | Slim main.rs to dispatch | Reduce main.rs to arg parsing + command dispatch (~50 lines). All logic delegated to `cli::` modules. | M | #805 |
-| **#807** | Documentation + cleanup | Update ARCHITECTURE.md with new module structure. Add doc comments to Loader, Pipeline, TranspileConfig public APIs. Run clippy, fix warnings, verify all tests pass. | M | #806 |
-| **#808** | (Future) Visitor-based emission | Tracking issue for emit visitor pattern refactor. Design doc only — not blocking Phase 8 completion. | S | — |
+| **#766** | Create `Loader` module | Extract all 7 file-loading functions from main.rs into `src/mvl/loader.rs`. Single `Loader` struct with `load_file()`, `load_dir()`, `resolve_imports()`. Handles implicit prelude, stdlib, pkg modules, sibling resolution. | L | — |
+| **#767** | Create `Pipeline` abstraction | New `src/mvl/pipeline.rs` with `Pipeline::check()`, `Pipeline::build()`. Modifiers `.with_coverage()`, `.with_mcdc()`, `.with_mutation()`. Orchestrates Loader → checker → transpiler flow. | L | #766 |
+| **#768** | Introduce `TranspileConfig` builder | Create `backends/rust/config.rs`. Builder pattern: `.with_prelude()`, `.with_coverage(start_id)`, `.with_mcdc(start_id)`, `.with_mutation()`, `.for_test_crate()`. | M | — |
+| **#769** | Consolidate transpile functions | Replace 20+ `transpile_*` variants with single `transpile(prog, config) -> TranspileResult`. Delete all deprecated functions. Update all call sites. | L | #768 |
+| **#770** | Extract CLI commands | Move `cmd_check`, `cmd_build`, `cmd_test`, `cmd_mcdc`, `cmd_mutate`, `cmd_assurance`, `cmd_lint`, `cmd_complexity` to `src/cli/` modules. Each command uses Loader + Pipeline. | L | #766, #767 |
+| **#771** | Slim main.rs to dispatch | Reduce main.rs to arg parsing + command dispatch (~50 lines). All logic delegated to `cli::` modules. | M | #770 |
+| **#772** | Documentation + cleanup | Update ARCHITECTURE.md with new module structure. Add doc comments to Loader, Pipeline, TranspileConfig public APIs. Run clippy, fix warnings, verify all tests pass. | M | #771 |
+| **#773** | (Future) Visitor-based emission | Tracking issue for emit visitor pattern refactor. Design doc only — not blocking Phase 8 completion. | S | — |
 
 ### Dependency Graph
 
 ```
-#803 TranspileConfig ──→ #804 Consolidate transpile
+#768 TranspileConfig ──→ #769 Consolidate transpile
                                     │
-#801 Loader ────┐                   │
-                ├──→ #805 CLI ──→ #806 Slim main.rs ──→ #807 Cleanup
-#802 Pipeline ──┘
+#766 Loader ────┐                   │
+                ├──→ #770 CLI ──→ #771 Slim main.rs ──→ #772 Cleanup
+#767 Pipeline ──┘
 ```
 
 ### Timeline
 
 | Week | Focus | Tickets |
 |------|-------|---------|
-| 1 | Foundation | #801 Loader, #803 TranspileConfig |
-| 2 | Abstraction | #802 Pipeline, #804 Consolidate |
-| 3 | Extraction | #805 CLI commands, #806 Slim main.rs |
-| 4 | Polish | #807 Documentation + cleanup |
+| 1 | Foundation | #766 Loader, #768 TranspileConfig |
+| 2 | Abstraction | #767 Pipeline, #769 Consolidate |
+| 3 | Extraction | #770 CLI commands, #771 Slim main.rs |
+| 4 | Polish | #772 Documentation + cleanup |
 
 ---
 
