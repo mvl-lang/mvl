@@ -6434,3 +6434,190 @@ fn actor_private_fn_with_ref_not_race_free() {
         "private fn with ref param should not be race-free"
     );
 }
+
+// ── #745: Actor duplicate field/method + pub fn return type ──────────────────
+
+/// GIVEN: actor with a duplicate field name
+/// WHEN: type-checked
+/// THEN: DuplicateActorField error emitted
+#[test]
+fn actor_duplicate_field_rejected() {
+    let errors = errors_for(
+        r#"
+        actor Broken {
+            count: Int
+            count: Int
+            pub fn tick() { }
+        }
+        "#,
+    );
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::DuplicateActorField { field, .. } if field == "count")
+        ),
+        "expected DuplicateActorField, got: {errors:?}"
+    );
+}
+
+/// GIVEN: actor with a duplicate method name
+/// WHEN: type-checked
+/// THEN: DuplicateActorMethod error emitted
+#[test]
+fn actor_duplicate_method_rejected() {
+    let errors = errors_for(
+        r#"
+        actor Broken {
+            x: Int
+            pub fn tick() { }
+            pub fn tick() { }
+        }
+        "#,
+    );
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::DuplicateActorMethod { method, .. } if method == "tick")
+        ),
+        "expected DuplicateActorMethod, got: {errors:?}"
+    );
+}
+
+/// GIVEN: actor pub fn with non-Unit return type
+/// WHEN: type-checked
+/// THEN: NonUnitBehaviorReturn error emitted
+#[test]
+fn actor_pub_fn_non_unit_return_rejected() {
+    let errors = errors_for(
+        r#"
+        actor Broken {
+            x: Int
+            pub fn get_x() -> Int { 0 }
+        }
+        "#,
+    );
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::NonUnitBehaviorReturn { method, .. } if method == "get_x")
+        ),
+        "expected NonUnitBehaviorReturn, got: {errors:?}"
+    );
+}
+
+/// GIVEN: actor with valid pub fn (Unit return, no duplicates)
+/// WHEN: type-checked
+/// THEN: no errors
+#[test]
+fn actor_valid_decl_no_errors() {
+    let errors = errors_for(
+        r#"
+        actor Counter {
+            count: Int
+            label: Int
+            pub fn increment(n: Int) { }
+            pub fn reset() { }
+            fn helper() -> Int { 0 }
+        }
+        "#,
+    );
+    assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
+}
+
+// ── #742: Actor body type-checking + spawn field validation ──────────────────
+
+/// GIVEN: actor spawn with wrong field type
+/// WHEN: type-checked
+/// THEN: TypeMismatch error emitted
+#[test]
+fn actor_spawn_wrong_field_type_rejected() {
+    let errors = errors_for(
+        r#"
+        actor Counter {
+            count: Int
+            pub fn tick() { }
+        }
+
+        fn bad() -> Counter {
+            actor Counter { count: "hello" }
+        }
+        "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "expected TypeMismatch for wrong spawn field type, got: {errors:?}"
+    );
+}
+
+/// GIVEN: actor spawn with missing field
+/// WHEN: type-checked
+/// THEN: MissingField error emitted
+#[test]
+fn actor_spawn_missing_field_rejected() {
+    let errors = errors_for(
+        r#"
+        actor Counter {
+            count: Int
+            label: Int
+            pub fn tick() { }
+        }
+
+        fn bad() -> Counter {
+            actor Counter { count: 0 }
+        }
+        "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::MissingField { .. })),
+        "expected MissingField for missing spawn field, got: {errors:?}"
+    );
+}
+
+/// GIVEN: actor spawn with unknown extra field
+/// WHEN: type-checked
+/// THEN: UnknownField error emitted
+#[test]
+fn actor_spawn_unknown_field_rejected() {
+    let errors = errors_for(
+        r#"
+        actor Counter {
+            count: Int
+            pub fn tick() { }
+        }
+
+        fn bad() -> Counter {
+            actor Counter { count: 0, extra: 1 }
+        }
+        "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UnknownField { .. })),
+        "expected UnknownField for extra spawn field, got: {errors:?}"
+    );
+}
+
+// ── #744: ActorDecl registered in pass 1 ─────────────────────────────────────
+
+/// GIVEN: an actor declaration and a function returning that actor type
+/// WHEN: type-checked
+/// THEN: no TypeMismatch or UnknownType errors (actor type is registered)
+#[test]
+fn actor_type_registered_in_pass1() {
+    let errors = errors_for(
+        r#"
+        actor Counter {
+            count: Int
+            pub fn increment(n: Int) { }
+            pub fn reset() { }
+        }
+
+        fn make_counter() -> Counter {
+            actor Counter { count: 0 }
+        }
+        "#,
+    );
+    assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
+}

@@ -971,9 +971,31 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
             }
             cg.push("})");
         }
-        Expr::Select { .. } | Expr::Concurrently { .. } => {
-            // Phase 8: select/concurrently codegen — not yet implemented (#695).
-            cg.push("/* select/concurrently — Phase 8 */");
+        // Phase 8 (#743): concurrently { body } — structured concurrency scope.
+        // Sequential fallback: emit body as a plain block.  Full thread::scope
+        // isolation is deferred until the actor scheduler is complete.
+        Expr::Concurrently { body, .. } => {
+            cg.push("{");
+            cg.nl();
+            cg.push_indent();
+            emit_block_stmts(cg, &body.stmts);
+            cg.pop_indent();
+            cg.indent();
+            cg.push("}");
+        }
+        // Phase 8 (#743): select { arm => { body } … } — first-ready-wins stub.
+        // Emits the first arm's handler body; full scheduler (try_recv polling)
+        // is deferred until bidirectional channel receive is implemented.
+        Expr::Select { arms, .. } => {
+            cg.push("{");
+            cg.nl();
+            cg.push_indent();
+            if let Some(first) = arms.first() {
+                emit_block_stmts(cg, &first.body.stmts);
+            }
+            cg.pop_indent();
+            cg.indent();
+            cg.push("}");
         }
     }
 }

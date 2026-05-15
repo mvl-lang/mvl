@@ -30,7 +30,7 @@ impl TypeChecker {
                 Decl::Extern(ed) => self.register_extern(ed),
                 Decl::Use(_) => {} // resolved by the module resolver, not the type checker
                 Decl::Impl(id) => self.register_impl(id),
-                Decl::Actor(_) => {} // Phase 8: actor registration deferred (#63)
+                Decl::Actor(ad) => self.register_actor(ad),
             }
         }
     }
@@ -49,6 +49,19 @@ impl TypeChecker {
             TypeInfo {
                 params: td.params.clone(),
                 body: body_info,
+            },
+        );
+    }
+
+    fn register_actor(&mut self, ad: &ActorDecl) {
+        self.env.define_type(
+            ad.name.clone(),
+            TypeInfo {
+                params: ad.type_params.clone(),
+                body: TypeBodyInfo::Struct {
+                    fields: field_infos(&ad.fields),
+                    invariant: None,
+                },
             },
         );
     }
@@ -164,20 +177,68 @@ impl TypeChecker {
     ///
     /// `fn` methods are private synchronous helpers: no sendability restriction.
     fn check_actor_decl(&mut self, ad: &ActorDecl) {
-        for method in &ad.methods {
-            if !method.is_public {
-                continue; // private helpers have no sendability restriction
+        // Check for duplicate field names.
+        let mut seen_fields: HashSet<&str> = HashSet::new();
+        for field in &ad.fields {
+            if !seen_fields.insert(field.name.as_str()) {
+                self.emit(CheckError::DuplicateActorField {
+                    actor: ad.name.clone(),
+                    field: field.name.clone(),
+                    span: field.span,
+                });
             }
-            // pub fn = behavior — all parameters must be sendable
-            for param in &method.params {
-                if matches!(param.capability, Some(Capability::Ref)) {
-                    self.emit(CheckError::CapabilityViolation {
-                        param: param.name.clone(),
-                        capability: "ref".to_string(),
-                        span: param.span,
+        }
+
+        // Check for duplicate method names.
+        let mut seen_methods: HashSet<&str> = HashSet::new();
+        for method in &ad.methods {
+            if !seen_methods.insert(method.name.as_str()) {
+                self.emit(CheckError::DuplicateActorMethod {
+                    actor: ad.name.clone(),
+                    method: method.name.clone(),
+                    span: method.span,
+                });
+            }
+        }
+
+        for method in &ad.methods {
+            if method.is_public {
+                // pub fn = behavior — return type must be Unit (fire-and-forget).
+                let ret_ty = resolve(&method.return_type);
+                if !matches!(ret_ty, crate::mvl::checker::types::Ty::Unit) {
+                    self.emit(CheckError::NonUnitBehaviorReturn {
+                        actor: ad.name.clone(),
+                        method: method.name.clone(),
+                        found: ret_ty.display(),
+                        span: method.span,
                     });
                 }
+                // All parameters must be sendable.
+                for param in &method.params {
+                    if matches!(param.capability, Some(Capability::Ref)) {
+                        self.emit(CheckError::CapabilityViolation {
+                            param: param.name.clone(),
+                            capability: "ref".to_string(),
+                            span: param.span,
+                        });
+                    }
+                }
             }
+            // Type-check the method body (#742).
+            self.env.push_scope();
+            for param in &method.params {
+                let ty = resolve(&param.ty);
+                self.env.define(
+                    param.name.clone(),
+                    crate::mvl::checker::context::VarInfo::new(ty, false)
+                        .with_capability(param.capability.clone()),
+                );
+            }
+            let ret_ty = resolve(&method.return_type);
+            let prev_ret = self.current_return_ty.replace(ret_ty.clone());
+            self.infer_block_type(&method.body, Some(&ret_ty));
+            self.current_return_ty = prev_ret;
+            self.env.pop_scope();
         }
     }
 

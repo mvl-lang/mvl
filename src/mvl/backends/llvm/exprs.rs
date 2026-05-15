@@ -87,8 +87,19 @@ impl<'ctx> LlvmBackend<'ctx> {
                 actor_type, fields, ..
             } => self.emit_actor_spawn(actor_type, fields),
 
-            // Phase 8 / #69: select / concurrently — stub (not yet implemented in LLVM)
-            Expr::Select { .. } | Expr::Concurrently { .. } => None,
+            // Phase 8 (#743): concurrently { body } — sequential fallback.
+            // Full structured-concurrency scoping is deferred.
+            Expr::Concurrently { body, .. } => self.emit_block(body),
+
+            // Phase 8 (#743): select { arm => { body } … } — first-arm-wins stub.
+            // Full scheduler deferred until bidirectional channel receive is available.
+            Expr::Select { arms, .. } => {
+                if let Some(first) = arms.first() {
+                    self.emit_block(&first.body)
+                } else {
+                    None
+                }
+            }
 
             _other => {
                 // Unhandled Expr variant: return None so the caller can propagate failure.

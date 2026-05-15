@@ -2741,3 +2741,33 @@ fn actor_spawn_expr_emits_start_call() {
     assert_contains(&rust, "fn _start_counter(state: CounterState) -> Counter {");
     assert_contains(&rust, "_start_counter(CounterState {count:");
 }
+
+// ── #743: select / concurrently codegen ──────────────────────────────────────
+
+/// `concurrently { stmts }` emits a plain block containing the body statements.
+#[test]
+fn concurrently_block_emits_plain_block() {
+    let src = r#"
+        fn run() -> Unit {
+            concurrently {
+                let x: Int = 1;
+            }
+        }
+    "#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "let x:");
+}
+
+/// `select { arm => { body } }` emits the first arm's body as a plain block.
+#[test]
+fn select_emits_first_arm_body() {
+    let src = r#"
+        fn run() -> Unit {
+            select {
+                timeout(100) => { let y: Int = 2; }
+            }
+        }
+    "#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "let y:");
+}
