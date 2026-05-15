@@ -10,6 +10,7 @@ use mvl::mvl::checker::passes::{
     aggregate_verdicts, parse_req_filter, source_hash, PassRegistry, Verdict, VerdictCache,
 };
 use mvl::mvl::linter::{self, config::LintConfig, errors::LintDiag};
+use mvl::mvl::loader;
 use mvl::mvl::packages;
 use mvl::mvl::parser::ast::{Decl, Program, Totality, TypeBody};
 use mvl::mvl::parser::Parser;
@@ -587,7 +588,7 @@ fn cmd_check(
     if verbose {
         eprintln!("stdlib profile: {stdlib_profile}");
     }
-    let files = mvl_files(path, false);
+    let files = loader::mvl_files(path, false);
     if files.is_empty() {
         eprintln!("No .mvl files found at: {path}");
         process::exit(1);
@@ -624,7 +625,7 @@ fn cmd_check(
         .iter()
         .map(|f| {
             let file_str = f.display().to_string();
-            let (prog, src) = parse_or_exit(&file_str);
+            let (prog, src) = loader::parse_or_exit(&file_str);
             (file_str, prog, src)
         })
         .collect();
@@ -635,10 +636,10 @@ fn cmd_check(
     let check_count = parsed.len();
     if Path::new(path).is_file() {
         let already_loaded: std::collections::HashSet<String> =
-            parsed.iter().map(|(f, _, _)| stem(f)).collect();
+            parsed.iter().map(|(f, _, _)| loader::stem(f)).collect();
         let entry_dir = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
         if let Some((_, entry_prog, _)) = parsed.first() {
-            let extra_mods = collect_imported_module_names(entry_prog);
+            let extra_mods = loader::collect_imported_module_names(entry_prog);
             for mod_name in extra_mods {
                 if already_loaded.contains(&mod_name) {
                     continue;
@@ -646,7 +647,7 @@ fn cmd_check(
                 let sib_path = entry_dir.join(format!("{mod_name}.mvl"));
                 if sib_path.exists() {
                     let sib_str = sib_path.display().to_string();
-                    let (sib_prog, sib_src) = parse_or_exit(&sib_str);
+                    let (sib_prog, sib_src) = loader::parse_or_exit(&sib_str);
                     parsed.push((sib_str, sib_prog, sib_src));
                 }
             }
@@ -656,7 +657,7 @@ fn cmd_check(
     // Run the module resolver across all files, wiring in the extracted stdlib.
     let modules: Vec<(String, Program)> = parsed
         .iter()
-        .map(|(file_str, prog, _)| (stem(file_str), prog.clone()))
+        .map(|(file_str, prog, _)| (loader::stem(file_str), prog.clone()))
         .collect();
     let resolve_result = resolver::resolve_project(modules, Some(&stdlib_dir));
     let mut had_errors = !resolve_result.is_ok() || stdlib_proven_failed;
@@ -668,7 +669,7 @@ fn cmd_check(
 
     // Pre-parse stdlib files imported by user programs so the checker knows
     // about their types and functions.  This covers `use std.io.{...}` etc.
-    let stdlib_prelude = load_stdlib_prelude(
+    let stdlib_prelude = loader::load_stdlib_prelude(
         parsed.iter().take(check_count).map(|(_, p, _)| p),
         &stdlib_dir,
     );
@@ -816,7 +817,7 @@ fn cmd_check(
 /// - Cyclomatic complexity, function length, nested match depth, effect width
 /// - Module fan-out, trait impl/fan-out counts, extern ratio
 fn cmd_complexity(path: &str, format_json: bool) {
-    let files = mvl_files(path, false);
+    let files = loader::mvl_files(path, false);
     if files.is_empty() {
         eprintln!("No .mvl files found at: {path}");
         process::exit(1);
@@ -824,7 +825,7 @@ fn cmd_complexity(path: &str, format_json: bool) {
     let mut reports = Vec::new();
     for f in &files {
         let file_str = f.display().to_string();
-        let (prog, _src) = parse_or_exit(&file_str);
+        let (prog, _src) = loader::parse_or_exit(&file_str);
         reports.push(complexity::analyze(&file_str, &prog));
     }
     if format_json {
@@ -851,7 +852,7 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
     };
     use std::collections::HashSet;
 
-    let test_files = mvl_files(path, true);
+    let test_files = loader::mvl_files(path, true);
     if test_files.is_empty() {
         eprintln!("No *_test.mvl files found at: {path}");
         process::exit(1);
@@ -870,7 +871,7 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
         process::exit(1);
     });
 
-    let stdlib_prelude_progs = load_implicit_prelude();
+    let stdlib_prelude_progs = loader::load_implicit_prelude();
 
     // The implicit prelude always has `pub builtin fn` declarations (strings.mvl,
     // lists.mvl), so mvl_runtime is always required for MC/DC instrumented builds.
@@ -878,7 +879,7 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
 
     // Build a fn_name → prelude_stem map and preload prelude source lines so
     // that JSON source-fragment lookup works for decisions in stdlib functions.
-    // IMPLICIT_STEMS must mirror load_implicit_prelude().
+    // IMPLICIT_STEMS must mirror loader::load_implicit_prelude().
     const IMPLICIT_STEMS: &[&str] = &["core", "strings", "lists"];
     const IMPLICIT_FILES: &[&str] = &["core.mvl", "strings.mvl", "lists.mvl"];
     let mut prelude_fn_to_stem: std::collections::HashMap<String, String> =
@@ -920,8 +921,8 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
 
     for test_file in &test_files {
         let file_str = test_file.display().to_string();
-        let (prog, src) = parse_or_exit(&file_str);
-        let s = stem(&file_str);
+        let (prog, src) = loader::parse_or_exit(&file_str);
+        let s = loader::stem(&file_str);
         let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
         module_sources.insert(module_name.clone(), src.lines().map(String::from).collect());
         // Record non-test function start lines (needed for line-offset patching below).
@@ -960,15 +961,15 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
 
     // Include source files that contain inline test fns.
     let covered_stems: HashSet<String> = file_stems.iter().cloned().collect();
-    let source_files = mvl_files(path, false);
+    let source_files = loader::mvl_files(path, false);
     for src_file in &source_files {
         let file_str = src_file.display().to_string();
-        let s = stem(&file_str);
+        let s = loader::stem(&file_str);
         let module_name = s.replace('-', "_");
         if covered_stems.contains(&module_name) {
             continue;
         }
-        let (prog, src) = parse_or_exit(&file_str);
+        let (prog, src) = loader::parse_or_exit(&file_str);
         let has_tests = prog
             .declarations
             .iter()
@@ -1011,9 +1012,9 @@ fn cmd_mcdc(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
         let mut source_fn_lines: HashMap<(String, String), u32> = HashMap::new();
         for src_file in &source_files {
             let file_str = src_file.display().to_string();
-            let s = stem(&file_str);
+            let s = loader::stem(&file_str);
             let module_name = s.replace('-', "_");
-            let (prog, _src) = parse_or_exit(&file_str);
+            let (prog, _src) = loader::parse_or_exit(&file_str);
             for decl in &prog.declarations {
                 if let Decl::Fn(fd) = decl {
                     if !fd.is_test {
@@ -1568,7 +1569,7 @@ fn cmd_lint(path: &str, show_config: bool) {
         return;
     }
 
-    let files = mvl_files(path, false);
+    let files = loader::mvl_files(path, false);
     if files.is_empty() {
         eprintln!("No .mvl files found at: {path}");
         process::exit(1);
@@ -1643,8 +1644,8 @@ fn cmd_lint(path: &str, show_config: bool) {
 
 /// Transpile a .mvl file to Rust and print the output to stdout.
 fn cmd_transpile(path: &str) {
-    let (prog, _src) = parse_or_exit(path);
-    let crate_name = stem(path);
+    let (prog, _src) = loader::parse_or_exit(path);
+    let crate_name = loader::stem(path);
     let out = transpiler::transpile(&prog, &crate_name);
     println!("// === Cargo.toml ===");
     println!("{}", out.cargo_toml);
@@ -1718,15 +1719,15 @@ fn build_project(path: &str, run: bool, run_args: &[String], assert_mode: Assert
         path.to_string()
     };
 
-    let (prog, _src) = parse_or_exit(&file_path);
-    let crate_name = stem(path);
+    let (prog, _src) = loader::parse_or_exit(&file_path);
+    let crate_name = loader::stem(path);
 
     // Collect sibling modules referenced via `use module::item` declarations.
     // Only load files that are actually imported — not all .mvl files in the directory.
     let entry_dir = Path::new(&file_path)
         .parent()
         .unwrap_or_else(|| Path::new("."));
-    let imported_mod_names = collect_imported_module_names(&prog);
+    let imported_mod_names = loader::collect_imported_module_names(&prog);
     let mut sibling_modules: Vec<(String, mvl::mvl::parser::ast::Program)> = imported_mod_names
         .into_iter()
         .filter_map(|mod_name| {
@@ -1734,7 +1735,7 @@ fn build_project(path: &str, run: bool, run_args: &[String], assert_mode: Assert
             if !sib_path.exists() {
                 return None;
             }
-            let (sib_prog, _) = parse_or_exit(&sib_path.display().to_string());
+            let (sib_prog, _) = loader::parse_or_exit(&sib_path.display().to_string());
             Some((mod_name, sib_prog))
         })
         .collect();
@@ -1755,17 +1756,17 @@ fn build_project(path: &str, run: bool, run_args: &[String], assert_mode: Assert
     // (strings.mvl, lists.mvl). Non-stub MVL functions
     // (e.g. range(), trim()) are transpiled from source rather than relying
     // on hardcoded Rust mappings in the transpiler. Embedded at compile time.
-    let mut stdlib_prelude_progs = load_implicit_prelude();
+    let mut stdlib_prelude_progs = loader::load_implicit_prelude();
     // Extend with any pure-MVL stdlib modules imported by this program (e.g. json.mvl).
     let all_progs: Vec<_> = std::iter::once(&prog)
         .chain(sibling_modules.iter().map(|(_, p)| p))
         .cloned()
         .collect();
-    stdlib_prelude_progs.extend(load_mvl_native_stdlib_extras(&all_progs));
+    stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_progs));
 
     // Load MVL source files from any `pkg.*` packages referenced by the program.
     let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    stdlib_prelude_progs.extend(load_pkg_modules(&all_progs, &project_root));
+    stdlib_prelude_progs.extend(loader::load_pkg_modules(&all_progs, &project_root));
 
     // Collect expression types from ALL programs (prelude + user) for the
     // transpiler to emit type-specific Rust at method-call sites (#554).
@@ -1830,7 +1831,7 @@ fn build_project(path: &str, run: bool, run_args: &[String], assert_mode: Assert
 
     if out.has_extern_rust && bridge_path.is_none() {
         // No user bridge.rs — check if a pkg.* package provides one.
-        bridge_path = find_pkg_bridge(&all_progs, &project_root);
+        bridge_path = loader::find_pkg_bridge(&all_progs, &project_root);
     }
 
     if out.has_extern_rust && bridge_path.is_none() {
@@ -1969,7 +1970,7 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     }
     let quiet = quiet && !verbose;
 
-    let test_files = mvl_files(path, true); // test_only=true
+    let test_files = loader::mvl_files(path, true); // test_only=true
     if test_files.is_empty() {
         eprintln!("No *_test.mvl files found at: {path}");
         process::exit(1);
@@ -1986,7 +1987,7 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     let mut seen: std::collections::HashMap<String, PathBuf> = std::collections::HashMap::new();
     for test_file in &test_files {
         let file_str = test_file.display().to_string();
-        let s = stem(&file_str);
+        let s = loader::stem(&file_str);
         let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
         if let Some(prev) = seen.get(&module_name) {
             eprintln!(
@@ -2017,18 +2018,18 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     });
 
     // Load the implicit stdlib prelude (core + Phase 4 stdlib files).
-    let mut stdlib_prelude_progs = load_implicit_prelude();
+    let mut stdlib_prelude_progs = loader::load_implicit_prelude();
     // Pre-scan all test files to discover pure-MVL stdlib imports (e.g. json) and
     // extend the prelude so their types/functions are available during transpilation.
     // Also load any pkg.* package modules referenced by the test files.
     {
         let all_test_progs: Vec<_> = test_files
             .iter()
-            .map(|f| parse_or_exit(&f.display().to_string()).0)
+            .map(|f| loader::parse_or_exit(&f.display().to_string()).0)
             .collect();
-        stdlib_prelude_progs.extend(load_mvl_native_stdlib_extras(&all_test_progs));
+        stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_test_progs));
         let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        stdlib_prelude_progs.extend(load_pkg_modules(&all_test_progs, &project_root));
+        stdlib_prelude_progs.extend(loader::load_pkg_modules(&all_test_progs, &project_root));
 
         // For packages tested from their own src/ directory, also load sibling
         // .mvl files (non-test, including internal/) so types and extern
@@ -2101,8 +2102,8 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
 
     for test_file in &test_files {
         let file_str = test_file.display().to_string();
-        let (prog, _src) = parse_or_exit(&file_str);
-        let s = stem(&file_str);
+        let (prog, _src) = loader::parse_or_exit(&file_str);
+        let s = loader::stem(&file_str);
         let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
         if bdd {
             for decl in &prog.declarations {
@@ -2149,15 +2150,15 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     // have no corresponding `*_test.mvl` counterpart.  This lets inline tests
     // (e.g. in `main.mvl`) run and appear in the coverage report.
     let covered_stems: std::collections::HashSet<String> = file_stems.iter().cloned().collect();
-    let source_files = mvl_files(path, false); // non-test files
+    let source_files = loader::mvl_files(path, false); // non-test files
     for src_file in &source_files {
         let file_str = src_file.display().to_string();
-        let s = stem(&file_str);
+        let s = loader::stem(&file_str);
         let module_name = s.replace('-', "_");
         if covered_stems.contains(&module_name) {
             continue; // already covered by a *_test.mvl file
         }
-        let (prog, _src) = parse_or_exit(&file_str);
+        let (prog, _src) = loader::parse_or_exit(&file_str);
         // Only include if the file has at least one test fn.
         let has_tests = prog.declarations.iter().any(|d| {
             if let Decl::Fn(fd) = d {
@@ -2384,7 +2385,7 @@ fn cmd_test(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
 /// Execution model: single compile embeds all mutants behind `MVL_MUTANT` env-var
 /// dispatch; N parallel test-binary runs determine which mutants are killed.
 fn cmd_mutate(path: &str, quiet: bool, gen_boundary: bool, limit: Option<usize>) {
-    let test_files = mvl_files(path, true);
+    let test_files = loader::mvl_files(path, true);
     if test_files.is_empty() {
         eprintln!("No *_test.mvl files found at: {path}");
         process::exit(1);
@@ -2394,7 +2395,7 @@ fn cmd_mutate(path: &str, quiet: bool, gen_boundary: bool, limit: Option<usize>)
     let mut seen: std::collections::HashMap<String, PathBuf> = std::collections::HashMap::new();
     for test_file in &test_files {
         let file_str = test_file.display().to_string();
-        let s = stem(&file_str);
+        let s = loader::stem(&file_str);
         let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
         if let Some(prev) = seen.get(&module_name) {
             eprintln!(
@@ -2423,7 +2424,7 @@ fn cmd_mutate(path: &str, quiet: bool, gen_boundary: bool, limit: Option<usize>)
     });
 
     // Load the implicit stdlib prelude (core + Phase 4 stdlib files).
-    let stdlib_prelude_progs = load_implicit_prelude();
+    let stdlib_prelude_progs = loader::load_implicit_prelude();
 
     // Transpile all test files with mutation instrumentation
     let mut modules: Vec<(String, String, String)> = Vec::new();
@@ -2438,8 +2439,8 @@ fn cmd_mutate(path: &str, quiet: bool, gen_boundary: bool, limit: Option<usize>)
 
     for test_file in &test_files {
         let file_str = test_file.display().to_string();
-        let (prog, _src) = parse_or_exit(&file_str);
-        let s = stem(&file_str);
+        let (prog, _src) = loader::parse_or_exit(&file_str);
+        let s = loader::stem(&file_str);
         let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
         let (out, mutants) = transpiler::transpile_mutated_with_prelude(
             &prog,
@@ -2467,15 +2468,15 @@ fn cmd_mutate(path: &str, quiet: bool, gen_boundary: bool, limit: Option<usize>)
 
     // Include source files with inline test fns
     let covered_stems: std::collections::HashSet<String> = file_stems.iter().cloned().collect();
-    let source_files = mvl_files(path, false);
+    let source_files = loader::mvl_files(path, false);
     for src_file in &source_files {
         let file_str = src_file.display().to_string();
-        let s = stem(&file_str);
+        let s = loader::stem(&file_str);
         let module_name = s.replace('-', "_");
         if covered_stems.contains(&module_name) {
             continue;
         }
-        let (prog, _src) = parse_or_exit(&file_str);
+        let (prog, _src) = loader::parse_or_exit(&file_str);
         let has_tests = prog
             .declarations
             .iter()
@@ -2717,12 +2718,12 @@ fn find_test_binary_from_cargo_output(output: &[u8]) -> Option<std::path::PathBu
 /// Emit an assurance report for a file or directory.
 fn cmd_assurance(path: &str, json: bool, verbose: bool) {
     let stdlib_dir = stdlib::ensure_stdlib();
-    let files = mvl_files(path, false);
+    let files = loader::mvl_files(path, false);
     if files.is_empty() {
         eprintln!("No .mvl files found at: {path}");
         process::exit(1);
     }
-    let all_mvl_count = mvl_files_all(path).len();
+    let all_mvl_count = loader::mvl_files_all(path).len();
     let excluded_count = all_mvl_count - files.len();
 
     // Run the module resolver to surface `use` errors before reporting.
@@ -2730,8 +2731,8 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
         .iter()
         .map(|f| {
             let file_str = f.display().to_string();
-            let (prog, _) = parse_or_exit(&file_str);
-            (stem(&file_str), prog)
+            let (prog, _) = loader::parse_or_exit(&file_str);
+            (loader::stem(&file_str), prog)
         })
         .collect();
     let resolve_result = resolver::resolve_project(modules, Some(&stdlib_dir));
@@ -2766,12 +2767,12 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
         .iter()
         .map(|f| {
             let file_str = f.display().to_string();
-            let (prog, src) = parse_or_exit(&file_str);
+            let (prog, src) = loader::parse_or_exit(&file_str);
             (file_str, prog, src)
         })
         .collect();
     let assurance_prelude =
-        load_stdlib_prelude(parsed_assurance.iter().map(|(_, p, _)| p), &stdlib_dir);
+        loader::load_stdlib_prelude(parsed_assurance.iter().map(|(_, p, _)| p), &stdlib_dir);
     let all_assurance_progs: Vec<Program> =
         parsed_assurance.iter().map(|(_, p, _)| p.clone()).collect();
 
@@ -2779,7 +2780,7 @@ fn cmd_assurance(path: &str, json: bool, verbose: bool) {
     // These are always part of the trust boundary for any MVL program, even though they
     // are not declared in user code. ADR-0006: trust boundaries must be declared and
     // countable — this surfaces the kernel builtin count in every assurance report.
-    let kernel_extern_count: usize = load_implicit_prelude()
+    let kernel_extern_count: usize = loader::load_implicit_prelude()
         .iter()
         .flat_map(|p| p.declarations.iter())
         .filter(|d| {
@@ -3231,350 +3232,6 @@ fn collect_stats_from_decls(decls: &[Decl], stats: &mut AssuranceStats, collect_
     }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────
-
-/// Collect .mvl files from a file path or directory.
-///
-/// If `test_only` is true, only returns files ending in `_test.mvl`.
-/// Otherwise returns all `.mvl` files (excluding test files).
-fn mvl_files(path: &str, test_only: bool) -> Vec<PathBuf> {
-    let p = Path::new(path);
-    if p.is_file() {
-        let is_test = p
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|n| n.ends_with("_test.mvl"))
-            .unwrap_or(false);
-        if test_only && !is_test {
-            return vec![];
-        }
-        if !test_only && is_test {
-            return vec![];
-        }
-        return vec![p.to_path_buf()];
-    }
-
-    if p.is_dir() {
-        let mut files: Vec<PathBuf> = Vec::new();
-        collect_mvl_files_recursive(p, test_only, &mut files);
-        files.sort();
-        return files;
-    }
-
-    vec![]
-}
-
-fn collect_mvl_files_recursive(dir: &Path, test_only: bool, out: &mut Vec<PathBuf>) {
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("Cannot read directory {}: {e}", dir.display());
-            return;
-        }
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_mvl_files_recursive(&path, test_only, out);
-        } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if name.ends_with(".mvl") {
-                let is_test = name.ends_with("_test.mvl");
-                if test_only == is_test {
-                    out.push(path);
-                }
-            }
-        }
-    }
-}
-
-/// Parse the given .mvl file or exit with an error message.
-fn parse_or_exit(path: &str) -> (mvl::mvl::parser::ast::Program, String) {
-    let src = fs::read_to_string(path).unwrap_or_else(|e| {
-        eprintln!("Cannot read {path}: {e}");
-        process::exit(1);
-    });
-    let (mut parser, lex_errors) = Parser::new(&src);
-    if !lex_errors.is_empty() {
-        for err in &lex_errors {
-            eprintln!("lex error: {err:?}");
-        }
-        process::exit(1);
-    }
-    let prog = parser.parse_program();
-    let parse_errors = parser.errors();
-    if !parse_errors.is_empty() {
-        for err in parse_errors {
-            eprintln!("parse error: {err:?}");
-        }
-        process::exit(1);
-    }
-    (prog, src)
-}
-
-/// Collect unique top-level module names referenced by `use` declarations in `prog`.
-///
-/// For `use utils::clamp_display;` this returns `"utils"`.
-/// The `std` namespace is excluded — it is provided by the runtime, not a sibling file.
-/// Parse the stdlib files imported by the given programs and return them as
-/// prelude programs for the checker.  For `use std.io.{...}` the path stored
-/// Build the implicit prelude: core.mvl + Phase 4 stdlib files (strings, lists).
-/// Every compile path loads these three files so that the string/list kernel
-/// builtins and method implementations are always visible without requiring
-/// an explicit `use std.*` in user programs.
-///
-/// Panics (via `process::exit`) if any embedded file fails to parse, since
-/// that would be a compiler bug.
-fn load_implicit_prelude() -> Vec<mvl::mvl::parser::ast::Program> {
-    const IMPLICIT: &[&str] = &["core.mvl", "strings.mvl", "lists.mvl"];
-    let mut progs = Vec::new();
-    for name in IMPLICIT {
-        let content = stdlib::stdlib_content(name)
-            .unwrap_or_else(|| panic!("{name} is embedded at compile time and must be present"));
-        let (mut parser, _) = Parser::new(content);
-        progs.push(parser.parse_program());
-    }
-    progs
-}
-
-use transpiler::RUST_BACKED_STDLIB;
-
-/// Modules already in the implicit prelude — never loaded twice.
-const IMPLICIT_PRELUDE_STEMS: &[&str] = &["core", "strings", "lists"];
-
-/// Load pure-MVL stdlib modules (e.g. json, collections) imported by `progs`
-/// into the prelude so the emitter can inline their types and functions.
-///
-/// Resolves transitive dependencies: if a loaded module itself imports another
-/// pure-MVL stdlib module, that module is loaded too.
-///
-/// Rust-backed modules (io, env, …) and the four always-implicit modules are
-/// excluded: the former come from `mvl_runtime::stdlib`, the latter are already
-/// in the base prelude returned by `load_implicit_prelude`.
-fn load_mvl_native_stdlib_extras(
-    progs: &[mvl::mvl::parser::ast::Program],
-) -> Vec<mvl::mvl::parser::ast::Program> {
-    use mvl::mvl::parser::ast::Decl;
-    use std::collections::HashSet;
-    let mut loaded: HashSet<String> = HashSet::new();
-    let mut extras: Vec<mvl::mvl::parser::ast::Program> = Vec::new();
-
-    // seed work queue with user programs
-    let mut pending: Vec<mvl::mvl::parser::ast::Program> = progs.to_vec();
-
-    while !pending.is_empty() {
-        let mut next_pending = Vec::new();
-        for prog in &pending {
-            for decl in &prog.declarations {
-                if let Decl::Use(ud) = decl {
-                    if ud.path.first().map(|s| s == "std").unwrap_or(false) {
-                        if let Some(module) = ud.path.get(1) {
-                            let m = module.as_str();
-                            if RUST_BACKED_STDLIB.contains(&m)
-                                || IMPLICIT_PRELUDE_STEMS.contains(&m)
-                            {
-                                continue;
-                            }
-                            if loaded.insert(module.clone()) {
-                                let filename = format!("{m}.mvl");
-                                if let Some(content) = stdlib::stdlib_content(&filename) {
-                                    let (mut p, _) = Parser::new(content);
-                                    let loaded_prog = p.parse_program();
-                                    next_pending.push(loaded_prog.clone());
-                                    extras.push(loaded_prog);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        pending = next_pending;
-    }
-
-    extras
-}
-
-/// Load MVL source files from `pkg.*` packages referenced by user programs.
-///
-/// For each `use pkg.X` declaration, looks up the package in:
-///   1. `<project_root>/.mvl/pkg/X/` (local override)
-///   2. `$XDG_DATA_HOME/mvl/pkg/X/<version>/` (global cache)
-///
-/// Loads every `.mvl` file found in `src/` and `src/internal/` so that
-/// type declarations and extern "rust" blocks are available to the transpiler.
-fn load_pkg_modules(
-    progs: &[mvl::mvl::parser::ast::Program],
-    project_root: &std::path::Path,
-) -> Vec<mvl::mvl::parser::ast::Program> {
-    use mvl::mvl::parser::ast::Decl;
-    use std::collections::HashSet;
-
-    let mut loaded: HashSet<String> = HashSet::new();
-    let mut result: Vec<mvl::mvl::parser::ast::Program> = Vec::new();
-
-    for prog in progs {
-        for decl in &prog.declarations {
-            if let Decl::Use(ud) = decl {
-                if ud.path.first().map(|s| s == "pkg").unwrap_or(false) {
-                    if let Some(pkg_name) = ud.path.get(1) {
-                        if !loaded.insert(pkg_name.clone()) {
-                            continue;
-                        }
-                        // Resolve package directory (local override takes precedence)
-                        let pkg_dir =
-                            mvl::mvl::packages::fetch::local_override_dir(project_root, pkg_name);
-                        if !pkg_dir.exists() {
-                            continue; // package not installed — checker will surface errors
-                        }
-                        // Load src/*.mvl and src/internal/*.mvl
-                        for sub in &["src", "src/internal"] {
-                            let dir = pkg_dir.join(sub);
-                            if let Ok(entries) = fs::read_dir(&dir) {
-                                for entry in entries.flatten() {
-                                    // Symlink escape guard (#715): skip symlinks so a
-                                    // malicious package cannot point outside its directory.
-                                    if entry.file_type().map(|ft| ft.is_symlink()).unwrap_or(false)
-                                    {
-                                        continue;
-                                    }
-                                    let path = entry.path();
-                                    if path.extension().map(|e| e == "mvl").unwrap_or(false) {
-                                        if let Ok(src) = fs::read_to_string(&path) {
-                                            let (mut p, _) = Parser::new(&src);
-                                            result.push(p.parse_program());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    result
-}
-
-/// Find a `bridge.rs` from a `pkg.*` package used by the given programs.
-///
-/// Returns the path to the first package bridge.rs found, or None.
-/// Used as a fallback when the user program has no bridge.rs of its own.
-fn find_pkg_bridge(
-    progs: &[mvl::mvl::parser::ast::Program],
-    project_root: &std::path::Path,
-) -> Option<std::path::PathBuf> {
-    use mvl::mvl::parser::ast::Decl;
-
-    // Canonicalize the package root once; reject any bridge that escapes it
-    // (same symlink-escape guard applied to user-supplied bridge.rs at line 1572).
-    let canon_pkg_root = match fs::canonicalize(project_root.join(".mvl").join("pkg")) {
-        Ok(p) => p,
-        Err(_) => return None,
-    };
-
-    for prog in progs {
-        for decl in &prog.declarations {
-            if let Decl::Use(ud) = decl {
-                if ud.path.first().map(|s| s == "pkg").unwrap_or(false) {
-                    if let Some(pkg_name) = ud.path.get(1) {
-                        let pkg_dir =
-                            mvl::mvl::packages::fetch::local_override_dir(project_root, pkg_name);
-                        let bridge = pkg_dir.join("bridge.rs");
-                        if let Ok(canon_bridge) = fs::canonicalize(&bridge) {
-                            if canon_bridge.starts_with(&canon_pkg_root) {
-                                return Some(canon_bridge);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-/// is `["std", "io"]`, so we look for `<stdlib_dir>/io.mvl`.
-/// Errors (missing file, parse failure) are silently ignored — the checker
-/// will surface "undefined function" errors for any symbol that wasn't loaded.
-fn load_stdlib_prelude<'a>(
-    progs: impl Iterator<Item = &'a mvl::mvl::parser::ast::Program>,
-    stdlib_dir: &Path,
-) -> Vec<mvl::mvl::parser::ast::Program> {
-    use mvl::mvl::parser::ast::Decl;
-    use std::collections::HashSet;
-    let mut loaded: HashSet<String> = HashSet::new();
-    let mut prelude = Vec::new();
-    for prog in progs {
-        for decl in &prog.declarations {
-            if let Decl::Use(ud) = decl {
-                // `use std.X.{...}` stores path = ["std", "X", ...]
-                if ud.path.first().map(|s| s == "std").unwrap_or(false) {
-                    if let Some(module) = ud.path.get(1) {
-                        if loaded.insert(module.clone()) {
-                            let filename = format!("{module}.mvl");
-                            let stdlib_file = stdlib_dir.join(&filename);
-                            // Prefer the on-disk file; fall back to the embedded copy so
-                            // the prelude is populated even when the stdlib has not been
-                            // extracted (read-only CI, missing MVL_HOME, etc.).
-                            let src_opt = fs::read_to_string(&stdlib_file).ok().or_else(|| {
-                                mvl::mvl::stdlib::STDLIB_FILES
-                                    .iter()
-                                    .find(|(name, _)| *name == filename)
-                                    .map(|(_, content)| content.to_string())
-                            });
-                            if let Some(src) = src_opt {
-                                let (mut p, _) = Parser::new(&src);
-                                prelude.push(p.parse_program());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    prelude
-}
-
-fn collect_imported_module_names(prog: &mvl::mvl::parser::ast::Program) -> Vec<String> {
-    use mvl::mvl::parser::ast::Decl;
-    use std::collections::HashSet;
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut names: Vec<String> = Vec::new();
-    for decl in &prog.declarations {
-        if let Decl::Use(ud) = decl {
-            if ud.path.len() >= 2 {
-                let mod_name = &ud.path[0];
-                if mod_name != "std" && seen.insert(mod_name.clone()) {
-                    names.push(mod_name.clone());
-                }
-            }
-        }
-    }
-    names
-}
-
-/// Extract the file or directory stem from a path.
-fn stem(path: &str) -> String {
-    let p = Path::new(path);
-    let raw = if p.is_dir() {
-        p.file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("mvl_program")
-            .to_string()
-    } else {
-        p.file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("mvl_program")
-            .to_string()
-    };
-    // Rust package names must not start with a digit.
-    if raw.starts_with(|c: char| c.is_ascii_digit()) {
-        format!("mvl_{raw}")
-    } else {
-        raw
-    }
-}
-
 /// Recursively copy a directory tree.
 fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dst)?;
@@ -3809,8 +3466,10 @@ mod find_test_binary_tests {
 fn prepare_llvm(
     prog: &mvl::mvl::parser::ast::Program,
 ) -> (Vec<mvl::mvl::parser::ast::Program>, codegen::LlvmCompiler) {
-    let mut prelude = load_implicit_prelude();
-    prelude.extend(load_mvl_native_stdlib_extras(std::slice::from_ref(prog)));
+    let mut prelude = loader::load_implicit_prelude();
+    prelude.extend(loader::load_mvl_native_stdlib_extras(std::slice::from_ref(
+        prog,
+    )));
     (prelude, codegen::LlvmCompiler::new())
 }
 
@@ -3818,8 +3477,8 @@ fn prepare_llvm(
 /// `mvl build --backend=llvm <file>`
 #[cfg(feature = "llvm")]
 fn build_project_llvm(path: &str, assert_mode: AssertMode) {
-    let (prog, _src) = parse_or_exit(path);
-    let module_name = stem(path);
+    let (prog, _src) = loader::parse_or_exit(path);
+    let module_name = loader::stem(path);
     let (prelude, mut compiler) = prepare_llvm(&prog);
     compiler.assert_mode = assert_mode;
     match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
@@ -3847,8 +3506,8 @@ fn run_project_llvm(path: &str, assert_mode: AssertMode) {
         process::exit(1);
     });
 
-    let (prog, _src) = parse_or_exit(path);
-    let module_name = stem(path);
+    let (prog, _src) = loader::parse_or_exit(path);
+    let module_name = loader::stem(path);
     let (prelude, mut compiler) = prepare_llvm(&prog);
     compiler.assert_mode = assert_mode;
     let ir = match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
@@ -3901,7 +3560,7 @@ fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
 
     // Collect all .mvl files with expect annotations + fn main.
     // Each entry: (file, expected_text, is_pattern)
-    let all_mvl = mvl_files_all(path);
+    let all_mvl = loader::mvl_files_all(path);
     let mut test_cases: Vec<(PathBuf, String, bool)> = Vec::new();
     // *_test.mvl files with `test fn` declarations — harness synthesized at run time.
     let mut harness_cases: Vec<PathBuf> = Vec::new();
@@ -3945,9 +3604,9 @@ fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
 
     for (file, expected, is_pattern) in &test_cases {
         let file_str = file.display().to_string();
-        let module_name = stem(&file_str);
+        let module_name = loader::stem(&file_str);
 
-        let (prog, _src) = parse_or_exit(&file_str);
+        let (prog, _src) = loader::parse_or_exit(&file_str);
         let ok = run_llvm_prog(
             &lli,
             &prog,
@@ -3967,7 +3626,7 @@ fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
 
     for file in &harness_cases {
         let file_str = file.display().to_string();
-        let module_name = stem(&file_str);
+        let module_name = loader::stem(&file_str);
 
         let src = match fs::read_to_string(file) {
             Ok(s) => s,
@@ -4131,33 +3790,4 @@ fn synthesize_test_harness(src: &str, test_fns: &[String]) -> String {
         .map(|name| format!("    {name}();\n"))
         .collect();
     format!("{body}\nfn main() -> Unit ! Console {{\n{calls}    println(\"ok\")\n}}\n")
-}
-
-/// Recursively find all `.mvl` files under `path` (both test and non-test).
-#[cfg(feature = "llvm")]
-fn mvl_files_all(path: &str) -> Vec<PathBuf> {
-    let root = Path::new(path);
-    if root.is_file() {
-        if root.extension().map(|e| e == "mvl").unwrap_or(false) {
-            return vec![root.to_path_buf()];
-        }
-        return vec![];
-    }
-    let mut result = Vec::new();
-    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(entries) = fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir() {
-                walk(&p, out);
-            } else if p.extension().map(|e| e == "mvl").unwrap_or(false) {
-                out.push(p);
-            }
-        }
-    }
-    walk(root, &mut result);
-    result.sort();
-    result
 }

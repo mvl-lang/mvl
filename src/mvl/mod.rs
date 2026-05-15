@@ -4,6 +4,7 @@
 pub mod backends;
 pub mod checker;
 pub mod linter;
+pub mod loader;
 pub mod packages;
 pub mod parser;
 pub mod passes;
