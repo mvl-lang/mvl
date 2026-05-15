@@ -4,7 +4,7 @@
 # tag DbPool, structured concurrency.
 #
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl lint check test assurance run clean
+.PHONY: help guard-mvl lint check test test-llvm assurance run clean
 
 .DEFAULT_GOAL := help
 
@@ -31,6 +31,9 @@ check: guard-mvl ## Type-check main.mvl
 
 test: guard-mvl ## Run unit tests (pure routing logic; actor runtime tests pending #695)
 	$(MVL) test $(DIR)
+
+test-llvm: guard-mvl ## Run smoke tests via LLVM backend (checks // expect: annotations)
+	$(MVL) test $(DIR) --backend=llvm
 
 assurance: guard-mvl ## Assurance report for main.mvl
 	$(MVL) assurance $(DIR)main.mvl
