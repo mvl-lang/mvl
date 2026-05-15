@@ -88,12 +88,22 @@ fn impl_z3(
     let arg_int = expr_to_int(&ctx, arg, &vars)?;
 
     // Assert the negation of pred(arg).  Unsat ↔ pred holds for all satisfying
-    // assignments ↔ Proven.
+    // assignments ↔ Proven.  Sat ↔ counterexample exists showing pred fails.
     let z3_pred = ref_to_bool(&ctx, pred, &arg_int, &vars)?;
     solver.assert(&z3_pred.not());
 
     match solver.check() {
         SatResult::Unsat => Some(RefResult::Proven),
+        SatResult::Sat => {
+            // Z3 found a counterexample showing the predicate can fail. Extract model values.
+            // Phase 4 (#627): Surface counterexample as diagnostic hint for RuntimeCheck.
+            // Note: this could indicate either definite violation (constrained vars) or
+            // potential violation (unconstrained vars).  For now, extract for diagnostics.
+            let _model = solver.get_model()?;
+            // Counterexample extraction deferred to full Phase 4 implementation.
+            // For now, return None to fall through to RuntimeCheck.
+            None
+        }
         _ => None,
     }
 }
@@ -304,7 +314,7 @@ mod tests {
         let pred = self_gt(0); // self > 0
         let arg = int_lit(0);
         let var_refs = HashMap::new();
-        // Z3 returns Sat (not UNSAT), so try_z3 returns None (cannot prove).
+        // Z3 returns Sat (not UNSAT), so try_z3 returns None (cannot prove, RuntimeCheck).
         assert_eq!(try_z3(&pred, &arg, &var_refs), None);
     }
 

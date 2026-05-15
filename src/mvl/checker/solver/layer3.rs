@@ -125,7 +125,9 @@ pub(super) fn try_symbolic(
 
         match result {
             Some(RefResult::Proven) => {}
-            Some(RefResult::Failed) => return Some(RefResult::Failed),
+            Some(RefResult::Failed { counterexample }) => {
+                return Some(RefResult::Failed { counterexample })
+            }
             Some(RefResult::RuntimeCheck) | None => any_undecided = true,
         }
     }

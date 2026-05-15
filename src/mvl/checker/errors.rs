@@ -167,6 +167,8 @@ pub enum CheckError {
     RefinementViolated {
         pred: String,
         span: Span,
+        /// Counterexample witness value, if the solver extracted one (Phase 4, #627).
+        counterexample: Option<String>,
     },
 
     // ── Effect checking (#19) ────────────────────────────────────────────
@@ -653,8 +655,9 @@ impl CheckError {
             CheckError::DoubleMutableBorrow { name, .. } => format!(
                 "cannot create `ref` to `{name}` more than once at a time — only one mutable reference is allowed"
             ),
-            CheckError::RefinementViolated { pred, .. } => {
-                format!("refinement predicate violated: `{pred}`")
+            CheckError::RefinementViolated { pred, counterexample, .. } => {
+                let cx = counterexample.as_deref().map(|c| format!(" (counterexample: {c})")).unwrap_or_default();
+                format!("refinement predicate violated: `{pred}`{cx}")
             }
             CheckError::InvalidEffectName { name, .. } => format!(
                 "unknown effect `{name}` — valid effects are: Console, FileRead, FileWrite, FileDelete, Net, DB, ProcessSpawn, Random, CryptoRandom, Clock, Env, Log, Async, Terminal"

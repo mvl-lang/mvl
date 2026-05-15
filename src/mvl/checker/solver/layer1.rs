@@ -37,7 +37,9 @@ pub(super) fn try_trivial(
         return Some(RefResult::Proven);
     }
     if is_contradiction(pred) {
-        return Some(RefResult::Failed);
+        return Some(RefResult::Failed {
+            counterexample: None,
+        });
     }
 
     // ── Argument-level analysis ───────────────────────────────────────────
@@ -226,7 +228,9 @@ fn bounds_contradictory((op_a, v_a): (CmpOp, i64), (op_b, v_b): (CmpOp, i64)) ->
 pub(super) fn eval_pred_int(self_val: i64, pred: &RefExpr) -> RefResult {
     match eval_bool_int(self_val, pred) {
         Some(true) => RefResult::Proven,
-        Some(false) => RefResult::Failed,
+        Some(false) => RefResult::Failed {
+            counterexample: None,
+        },
         None => RefResult::RuntimeCheck,
     }
 }
@@ -235,7 +239,9 @@ pub(super) fn eval_pred_int(self_val: i64, pred: &RefExpr) -> RefResult {
 pub(super) fn eval_pred_float(self_val: f64, pred: &RefExpr) -> RefResult {
     match eval_bool_float(self_val, pred) {
         Some(true) => RefResult::Proven,
-        Some(false) => RefResult::Failed,
+        Some(false) => RefResult::Failed {
+            counterexample: None,
+        },
         None => RefResult::RuntimeCheck,
     }
 }
@@ -762,7 +768,12 @@ mod tests {
     #[test]
     fn trivial_literal_failed() {
         let result = try_trivial(&self_gt(0), &int_arg(-1), &HashMap::new(), &HashMap::new());
-        assert_eq!(result, Some(RefResult::Failed));
+        assert_eq!(
+            result,
+            Some(RefResult::Failed {
+                counterexample: None
+            })
+        );
     }
 
     #[test]
@@ -782,7 +793,12 @@ mod tests {
         // `self > 0 && self < 0` fails regardless of arg
         let pred = and(self_gt(0), self_lt(0));
         let result = try_trivial(&pred, &int_arg(0), &HashMap::new(), &HashMap::new());
-        assert_eq!(result, Some(RefResult::Failed));
+        assert_eq!(
+            result,
+            Some(RefResult::Failed {
+                counterexample: None
+            })
+        );
     }
 
     #[test]

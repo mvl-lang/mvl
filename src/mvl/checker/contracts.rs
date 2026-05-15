@@ -358,12 +358,12 @@ fn check_requires_at_call(
                 let normalized = normalize_pred(req_pred, &param_name);
                 let arg = &args[param_idx];
                 let outcome = check_arg_against_pred(arg, &normalized, var_refs, fn_decls);
-                if outcome == RefResult::Failed {
+                if let RefResult::Failed { counterexample } = outcome {
                     errors.push(CheckError::PreconditionViolated {
                         fn_name: fn_name.to_string(),
                         pred: display_pred(req_pred),
                         span: call_span,
-                        counterexample: None,
+                        counterexample,
                     });
                 }
                 // Proven or RuntimeCheck: silent at compile time.
@@ -508,12 +508,12 @@ fn check_ensures_for_return(
         // Let the solver decide: Proven (silent), Failed (emit error),
         // or RuntimeCheck (silent — deferred to runtime).
         let outcome = check_arg_against_pred(ret_expr, &normalized, &var_refs, fn_decls);
-        if outcome == RefResult::Failed {
+        if let RefResult::Failed { counterexample } = outcome {
             errors.push(CheckError::PostconditionViolated {
                 fn_name: fn_name.to_string(),
                 pred: display_pred(ens_pred),
                 span: ret_span,
-                counterexample: None,
+                counterexample,
             });
         }
     }
@@ -841,12 +841,12 @@ fn check_multi_param_requires_literal(
     }
 
     let outcome = check_arg_against_pred(&args[*primary_idx], &modified_pred, var_refs, fn_decls);
-    if outcome == RefResult::Failed {
+    if let RefResult::Failed { counterexample } = outcome {
         errors.push(CheckError::PreconditionViolated {
             fn_name: fn_name.to_string(),
             pred: display_pred(pred),
             span: call_span,
-            counterexample: None,
+            counterexample,
         });
     }
 }
@@ -972,12 +972,12 @@ fn check_invariant_at_entry(
             // Layer 1 will const-fold the comparison directly.
             let dummy = Expr::Literal(Literal::Integer(0), loop_span);
             let outcome = check_arg_against_pred(&dummy, inv_pred, var_refs, fn_decls);
-            if outcome == RefResult::Failed {
+            if let RefResult::Failed { counterexample } = outcome {
                 errors.push(CheckError::InvariantViolated {
                     fn_name: fn_name.to_string(),
                     pred: display_pred(inv_pred),
                     span: loop_span,
-                    counterexample: None,
+                    counterexample,
                 });
             }
         }
@@ -986,12 +986,12 @@ fn check_invariant_at_entry(
             let normalized = normalize_pred(inv_pred, var_name);
             let ident_expr = Expr::Ident(var_name.clone(), loop_span);
             let outcome = check_arg_against_pred(&ident_expr, &normalized, var_refs, fn_decls);
-            if outcome == RefResult::Failed {
+            if let RefResult::Failed { counterexample } = outcome {
                 errors.push(CheckError::InvariantViolated {
                     fn_name: fn_name.to_string(),
                     pred: display_pred(inv_pred),
                     span: loop_span,
-                    counterexample: None,
+                    counterexample,
                 });
             }
             // Proven or RuntimeCheck: silent at compile time.

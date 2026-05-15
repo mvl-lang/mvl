@@ -6700,3 +6700,35 @@ fn actor_type_registered_in_pass1() {
     );
     assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
 }
+
+// ── #627: Z3 counterexample extraction ────────────────────────────────────────
+
+/// GIVEN: a refinement that Layer 1 proves violated (literal 0 violates self > 0)
+/// WHEN: type-checked
+/// THEN: RefinementViolated error includes counterexample field (Phase 4, #627)
+#[test]
+fn z3_counterexample_field_in_error_structs() {
+    let src = r#"
+        total fn require_positive(x: Int where self > 0) -> Int { x }
+        total fn bad() -> Int { require_positive(0) }
+    "#;
+    let errors = errors_for(src);
+    let violation = errors
+        .iter()
+        .find(|e| matches!(e, CheckError::RefinementViolated { .. }));
+    assert!(
+        violation.is_some(),
+        "expected RefinementViolated error, got: {errors:?}"
+    );
+
+    // The RefinementViolated error has a counterexample field (added for Phase 4, #627).
+    // Layer 1 catches this literal violation, so counterexample is None.
+    // When Z3 extracts counterexamples from SAT results (Phase 4), it will set Some.
+    if let Some(CheckError::RefinementViolated { counterexample, .. }) = violation {
+        // Verify the field is present (None for Layer 1, will be Some for Z3 cases)
+        assert!(
+            counterexample.is_none(),
+            "Layer 1 doesn't extract counterexamples yet"
+        );
+    }
+}

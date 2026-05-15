@@ -1025,7 +1025,7 @@ fn check_call_site(
         match outcome {
             RefResult::Proven => counts.proven += 1,
             RefResult::RuntimeCheck => counts.runtime_checked += 1,
-            RefResult::Failed => {
+            RefResult::Failed { counterexample } => {
                 counts.failed += 1;
                 errors.push(CheckError::RefinementViolated {
                     pred: format!(
@@ -1033,6 +1033,7 @@ fn check_call_site(
                         display_pred(pred)
                     ),
                     span: call_span,
+                    counterexample,
                 });
             }
         }
