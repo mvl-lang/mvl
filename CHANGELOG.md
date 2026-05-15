@@ -4,6 +4,14 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.108.0] — 2026-05-15
+
+### Added
+
+- **Actor pingpong example** — End-to-end Phase 8 actor model demonstration: two actors (`Ping`, `Pong`) exchanging messages for a configurable number of rounds. Demonstrates `actor` keyword, `pub fn` behaviors, `tag`/`val` capabilities, `concurrently {}` structured concurrency, and `Tainted[String]` sanitization for CLI args. Achieves 11/11 assurance requirements (#580).
+- Rust codegen fixes for actor creation expressions and `concurrently {}` blocks so `make run` works end-to-end.
+- Transpiler unit tests for actor state `_self_ref` field, spawn init, helper call prefix, and self-as-tag-handle.
+
 ## [0.107.1] — 2026-05-15
 
 ### Fixed
