@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-requirements test-error-messages test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples coverage validate-keywords lint mvl-lint format format-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants
+.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-requirements test-error-messages test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples coverage validate-keywords lint mvl-lint format format-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -328,6 +328,27 @@ mutants: ## Run cargo-mutants on transpiler emit modules (long-running; ~1-2 h)
 	  --jobs 4 \
 	  --cargo-test-arg '--test' \
 	  --cargo-test-arg 'transpiler'
+	@echo ""
+	@echo "Results in mutants.out/  — run 'cat mutants.out/caught.txt' and 'cat mutants.out/missed.txt'"
+
+# Scores actor checker + backend codegen; target: ≥85% mutation score.
+# Ref: #703
+mutants-actors: ## Run cargo-mutants on actor checker and codegen (long-running; ~1-2 h)
+	@command -v cargo-mutants >/dev/null 2>&1 || { echo "Install first: cargo install cargo-mutants"; exit 1; }
+	cargo mutants \
+	  --file 'src/mvl/checker/capabilities.rs' \
+	  --file 'src/mvl/checker/decls.rs' \
+	  --file 'src/mvl/checker/data_race.rs' \
+	  --file 'src/mvl/backends/rust/emit_actors.rs' \
+	  --file 'src/mvl/backends/llvm/actors.rs' \
+	  --timeout $(MUTANTS_TIMEOUT) \
+	  --jobs 4 \
+	  --cargo-test-arg '--test' \
+	  --cargo-test-arg 'type_checker' \
+	  --cargo-test-arg '--test' \
+	  --cargo-test-arg 'transpiler' \
+	  --cargo-test-arg '--test' \
+	  --cargo-test-arg 'cross_backend'
 	@echo ""
 	@echo "Results in mutants.out/  — run 'cat mutants.out/caught.txt' and 'cat mutants.out/missed.txt'"
 

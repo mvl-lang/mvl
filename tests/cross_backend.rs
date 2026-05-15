@@ -952,3 +952,98 @@ fn main() -> Unit {
         "LLVM IR for struct with `with invariant` must contain llvm.trap.\nIR:\n{ir}"
     );
 }
+
+// ── #703: LLVM actor IR structural tests ─────────────────────────────────────
+
+fn parse_prog(src: &str) -> mvl::mvl::parser::ast::Program {
+    let (mut parser, lex_errors) = mvl::mvl::parser::Parser::new(src);
+    assert!(lex_errors.is_empty(), "lex errors: {lex_errors:?}");
+    let prog = parser.parse_program();
+    assert!(
+        parser.errors().is_empty(),
+        "parse errors: {:?}",
+        parser.errors()
+    );
+    prog
+}
+
+/// Actor declaration emits a per-behavior function and a dispatch function in LLVM IR.
+/// Kills mutations in `LlvmBackend::emit_actor_decl` that alter dispatch logic or
+/// behavior function names. (#703)
+#[test]
+fn llvm_actor_emits_dispatch_and_behavior_fns() {
+    let src = r#"
+actor Counter {
+    count: Int,
+    pub fn increment(n: Int) { }
+    pub fn reset() { }
+}
+fn main() -> Unit { }
+"#;
+    let prog = parse_prog(src);
+    let ir = mvl::mvl::backends::llvm::compile_to_ir(&prog, "test_actor_dispatch")
+        .expect("IR generation failed");
+    assert!(
+        ir.contains("counter_increment") || ir.contains("Counter_increment"),
+        "LLVM IR must contain behavior function for `increment`.\nIR:\n{ir}"
+    );
+    assert!(
+        ir.contains("counter_dispatch") || ir.contains("Counter_dispatch"),
+        "LLVM IR must contain dispatch function.\nIR:\n{ir}"
+    );
+    assert!(
+        ir.contains("mvl_actor_spawn"),
+        "LLVM IR must declare mvl_actor_spawn runtime call.\nIR:\n{ir}"
+    );
+    assert!(
+        ir.contains("mvl_actor_send"),
+        "LLVM IR must declare mvl_actor_send runtime call.\nIR:\n{ir}"
+    );
+}
+
+/// Actor spawn expression emits a call to `mvl_actor_spawn` in LLVM IR.
+/// Kills mutations in `LlvmBackend::emit_actor_spawn` that drop or alter the spawn call.
+/// (#703)
+#[test]
+fn llvm_actor_spawn_emits_runtime_call() {
+    let src = r#"
+actor Ping {
+    count: Int,
+    pub fn tick() { }
+}
+fn main() -> Unit {
+    let p: Ping = actor Ping { count: 0 };
+}
+"#;
+    let prog = parse_prog(src);
+    let ir = mvl::mvl::backends::llvm::compile_to_ir(&prog, "test_actor_spawn")
+        .expect("IR generation failed");
+    assert!(
+        ir.contains("mvl_actor_spawn"),
+        "actor spawn expression must emit mvl_actor_spawn call.\nIR:\n{ir}"
+    );
+}
+
+/// Actor behavior call emits `mvl_actor_send` with correct discriminant slot in LLVM IR.
+/// Kills mutations in `LlvmBackend::emit_actor_method_call` that corrupt discriminant
+/// or argument packing. (#703)
+#[test]
+fn llvm_actor_behavior_call_emits_send() {
+    let src = r#"
+actor Counter {
+    count: Int,
+    pub fn increment(n: Int) { }
+}
+fn main() -> Unit {
+    let c: Counter = actor Counter { count: 0 };
+    c.increment(1);
+}
+"#;
+    let prog = parse_prog(src);
+    let ir = mvl::mvl::backends::llvm::compile_to_ir(&prog, "test_actor_send")
+        .expect("IR generation failed");
+    assert!(
+        ir.contains("mvl_actor_send"),
+        "actor behavior call must emit mvl_actor_send.\nIR:\n{ir}"
+    );
+}
