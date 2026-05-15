@@ -34,11 +34,17 @@ pub builtin fn get_env(name: Clean[String]) -> Option[Tainted[String]] ! Console
 /// Parse command-line arguments into a struct `T`.
 ///
 /// The struct IS the argument specification:
-/// - Field names become flag names (`--<field>`)
+/// - `Positional[T]` fields are parsed from leading non-flag argv tokens
+///   in field-declaration order (`rounds: Positional[Int]` → first bare arg)
 /// - `Bool` fields are presence flags (no value needed: `--verbose`)
-/// - `Option[T]` fields are optional (absent flag → `None`)
-/// - All other fields are required (absent flag → `Err`)
+/// - `Option[T]` fields are optional named flags (absent → `None`)
+/// - `Option[Positional[T]]` fields are optional positionals (absent → `None`)
+/// - All other fields are required named flags (absent → `Err`)
 /// - Refinement predicates are validated at parse time
+/// - `-h` / `--help` prints auto-generated usage to stdout and exits 0
+///
+/// Defaults are expressed via `Option[T]` and `.unwrap_or(default)` on the
+/// parsed struct — no special syntax needed.
 ///
 /// The compiler derives the parser from the struct shape at monomorphization time.
 /// No DSL, no builder, no macros — the type is the spec.

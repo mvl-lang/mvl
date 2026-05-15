@@ -755,12 +755,27 @@ fn collect_undefined_types(prog: &Program, prelude_progs: &[Program]) -> Vec<Str
 
     // MVL built-in primitive types (already mapped in emit_type_expr)
     let builtins: std::collections::HashSet<&str> = [
-        "Int", "Float", "Bool", "String", "Char", "Byte", "Unit", "Never", "List",
+        "Int",
+        "Float",
+        "Bool",
+        "String",
+        "Char",
+        "Byte",
+        "Unit",
+        "Never",
+        "List",
         // Security labels (handled by preamble)
-        "Public", "Tainted", "Secret", "Clean", // Common Rust types that may appear
-        "Option", "Result", "Vec",
+        "Public",
+        "Tainted",
+        "Secret",
+        "Clean", // Common Rust types that may appear
+        "Option",
+        "Result",
+        "Vec",
         // Rust built-ins used directly in MVL (Box<T> for recursive ADTs)
         "Box",
+        // CLI annotation wrapper — transparent at runtime, stripped by emit_type_expr
+        "Positional",
     ]
     .iter()
     .copied()

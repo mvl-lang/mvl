@@ -24,10 +24,11 @@ use crate::ifc::{Clean, Tainted};
 ///
 /// Implemented automatically by the MVL transpiler for every concrete struct
 /// whose fields all have parseable types (`Int`, `Float`, `String`, `Bool`,
-/// `Option<T>`, and refined variants of the above).
+/// `Positional<T>`, `Option<T>`, and refined variants of the above).
 ///
 /// Field names map directly to flag names: `port` → `--port`.
 /// `Bool` fields become presence flags; `Option<T>` fields are optional.
+/// `Positional<T>` fields parse leading non-flag argv tokens in declaration order.
 pub trait ParseFromArgs: Sized {
     /// Parse `Self` from the process's command-line arguments.
     ///
@@ -44,6 +45,20 @@ pub trait ParseFromArgs: Sized {
 /// Implements the Rust backing for `std/args.mvl::parse`.
 pub fn parse<T: ParseFromArgs>() -> Result<T, String> {
     T::parse_from_args()
+}
+
+/// Unwrap a `Result`, or print the error to stderr and exit with code 1.
+///
+/// Implements the Rust backing for `Result[T, String].unwrap_or_exit()`.
+/// Provides the uniform exit-on-error behaviour expected from CLI parsers.
+pub fn unwrap_or_exit<T>(result: Result<T, String>) -> T {
+    match result {
+        Ok(v) => v,
+        Err(msg) => {
+            eprintln!("error: {}", msg);
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Scan command-line arguments for `--<name> <value>` or `--<name>=<value>`

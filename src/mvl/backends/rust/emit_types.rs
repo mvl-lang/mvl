@@ -232,8 +232,13 @@ fn emit_struct(
 /// Emit `impl ParseFromArgs for StructName` for concrete structs whose fields
 /// all have parseable types.
 ///
-/// Parseable field types: `Int`, `Float`, `String`, `Bool`, `Option<Int>`,
-/// `Option<Float>`, `Option<String>`, and refined variants of the above.
+/// Parseable field types: `Int`, `Float`, `String`, `Bool`, `Positional<T>`,
+/// `Option<Int>`, `Option<Float>`, `Option<String>`, `Option<Positional<T>>`,
+/// and refined variants of the above.
+///
+/// Positional fields (`Positional<T>`) are parsed from the leading non-flag
+/// argv tokens (in field-declaration order). Flag fields are parsed from
+/// named `--flag value` tokens. `-h`/`--help` is handled automatically.
 ///
 /// Skipped when any field has an unsupported type (e.g. nested structs,
 /// generic params, security labels) — callers receive a Rust type-error if
@@ -254,8 +259,32 @@ pub(crate) fn emit_parse_from_args_impl(
     cg.line("fn parse_from_args() -> Result<Self, String> {");
     cg.push_indent();
 
+    // Emit compile-time usage string (struct name + field summary).
+    emit_usage_string(cg, name, fields);
+
+    // Auto-handle -h / --help before any parsing.
+    cg.line("if std::env::args().any(|__a| __a == \"-h\" || __a == \"--help\") {");
+    cg.push_indent();
+    cg.line("print!(\"{}\", __usage);");
+    cg.line("std::process::exit(0);");
+    cg.pop_indent();
+    cg.line("}");
+
+    // Collect leading non-flag arguments as positionals (convention: positionals
+    // precede flags). A token starting with '-' stops positional collection.
+    let has_positionals = fields.iter().any(|f| is_positional_type(&f.ty));
+    if has_positionals {
+        cg.line("let __positionals: Vec<String> = std::env::args().skip(1).take_while(|__a| !__a.starts_with('-')).collect();");
+    }
+
+    let mut pos_idx: usize = 0;
     for field in fields {
-        emit_field_parse(cg, field);
+        if is_positional_type(&field.ty) {
+            emit_positional_field_parse(cg, field, pos_idx);
+            pos_idx += 1;
+        } else {
+            emit_field_parse(cg, field);
+        }
     }
 
     let field_names: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
@@ -269,6 +298,215 @@ pub(crate) fn emit_parse_from_args_impl(
     cg.line("}");
     cg.pop_indent();
     cg.line("}");
+}
+
+/// Emit a `let __usage` string summarising the struct's CLI interface.
+///
+/// Format:
+/// ```text
+/// Usage: <program> <pos1> [<pos2>] [--flag] [--opt <opt>]
+///
+/// Arguments:
+///   <pos1>         Int (required)
+///   --flag         Bool (flag)
+///   --opt <val>    String (optional)
+///   -h, --help     Show this message and exit
+/// ```
+fn emit_usage_string(cg: &mut RustEmitter, struct_name: &str, fields: &[FieldDecl]) {
+    // Build synopsis tokens and argument description lines at transpile time.
+    let mut synopsis_tokens: Vec<String> = Vec::new();
+    let mut arg_lines: Vec<String> = Vec::new();
+
+    for field in fields {
+        let fname = &field.name;
+        let base = unwrap_refined_ty(&field.ty);
+
+        if is_positional_type(&field.ty) {
+            // Positional field
+            match base {
+                TypeExpr::Base { name, args, .. } if name == "Positional" && args.len() == 1 => {
+                    let inner_ty_label = scalar_type_label(unwrap_refined_ty(&args[0]));
+                    synopsis_tokens.push(format!("<{fname}>"));
+                    arg_lines.push(format!("  <{fname}>  {inner_ty_label} (required)"));
+                }
+                TypeExpr::Option { inner, .. } => {
+                    if let TypeExpr::Base { name, args, .. } = unwrap_refined_ty(inner) {
+                        if name == "Positional" && args.len() == 1 {
+                            let inner_ty_label = scalar_type_label(unwrap_refined_ty(&args[0]));
+                            synopsis_tokens.push(format!("[<{fname}>]"));
+                            arg_lines.push(format!("  <{fname}>  {inner_ty_label} (optional)"));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        } else {
+            // Flag field
+            match base {
+                TypeExpr::Base {
+                    name: ty_name,
+                    args,
+                    ..
+                } if ty_name == "Bool" && args.is_empty() => {
+                    synopsis_tokens.push(format!("[--{fname}]"));
+                    arg_lines.push(format!("  --{fname}  flag"));
+                }
+                TypeExpr::Option { .. } => {
+                    synopsis_tokens.push(format!("[--{fname} <{fname}>]"));
+                    arg_lines.push(format!("  --{fname} <val>  optional"));
+                }
+                _ => {
+                    synopsis_tokens.push(format!("--{fname} <{fname}>"));
+                    arg_lines.push(format!("  --{fname} <val>  required"));
+                }
+            }
+        }
+    }
+
+    arg_lines.push("  -h, --help         Show this message and exit".to_string());
+
+    let synopsis = synopsis_tokens.join(" ");
+    let args_block = arg_lines.join("\\n");
+
+    // Embed struct name for context; program name is filled in at runtime.
+    cg.line(&format!(
+        "let __usage = format!(\"Usage: {{}} {synopsis}\\n\\n{struct_name} arguments:\\n{args_block}\\n\", \
+         std::env::args().next().unwrap_or_else(|| \"program\".to_string()));"
+    ));
+}
+
+/// Return a short type label for a scalar type expression (used in usage lines).
+fn scalar_type_label(ty: &TypeExpr) -> &'static str {
+    match ty {
+        TypeExpr::Base { name, args, .. } if args.is_empty() => match name.as_str() {
+            "Int" => "Int",
+            "Float" => "Float",
+            "String" => "String",
+            "Bool" => "Bool",
+            _ => "value",
+        },
+        _ => "value",
+    }
+}
+
+/// Emit the parsing code for a single `Positional[T]` or `Option[Positional[T]]`
+/// field from the pre-collected `__positionals` vec.
+///
+/// `pos_idx` is the 0-based index into `__positionals`.
+fn emit_positional_field_parse(cg: &mut RustEmitter, field: &FieldDecl, pos_idx: usize) {
+    let name = &field.name;
+    assert_safe_identifier(name);
+
+    let base_ty = unwrap_refined_ty(&field.ty);
+
+    match base_ty {
+        // Required positional: Positional[T]
+        TypeExpr::Base {
+            name: wrapper,
+            args,
+            ..
+        } if wrapper == "Positional" && args.len() == 1 => {
+            let inner = unwrap_refined_ty(&args[0]);
+            emit_required_positional(cg, name, inner, pos_idx);
+        }
+        // Optional positional: Option[Positional[T]]
+        TypeExpr::Option { inner, .. } => {
+            let inner_base = unwrap_refined_ty(inner);
+            if let TypeExpr::Base {
+                name: wrapper,
+                args,
+                ..
+            } = inner_base
+            {
+                if wrapper == "Positional" && args.len() == 1 {
+                    let pos_inner = unwrap_refined_ty(&args[0]);
+                    emit_optional_positional(cg, name, pos_inner, pos_idx);
+                }
+            }
+        }
+        _ => unreachable!("emit_positional_field_parse: non-positional type for field `{name}`"),
+    }
+
+    // Emit runtime refinement check (same pattern as flag fields).
+    if let Some(pred) = &field.refinement {
+        let pred_str = emit_ref_expr_for_assert(pred, name);
+        cg.line(&format!(
+            "if !({pred_str}) {{ return Err(format!(\"<{name}>: refinement violated: {{}}\\n\\n{{}}\", {name}, __usage)); }}"
+        ));
+    }
+}
+
+fn emit_required_positional(cg: &mut RustEmitter, name: &str, inner: &TypeExpr, pos_idx: usize) {
+    match inner {
+        TypeExpr::Base {
+            name: ty_name,
+            args,
+            ..
+        } if args.is_empty() => match ty_name.as_str() {
+            "Int" => {
+                let raw = format!("__raw_{}", name.trim_start_matches('_'));
+                cg.line(&format!(
+                    "let {raw} = __positionals.get({pos_idx}).ok_or_else(|| format!(\"missing required argument: <{name}>\\n\\n{{}}\", __usage))?;"
+                ));
+                cg.line(&format!(
+                    "let {name} = {raw}.parse::<i64>().map_err(|_| format!(\"<{name}>: expected integer\\n\\n{{}}\", __usage))?;"
+                ));
+            }
+            "Float" => {
+                let raw = format!("__raw_{}", name.trim_start_matches('_'));
+                cg.line(&format!(
+                    "let {raw} = __positionals.get({pos_idx}).ok_or_else(|| format!(\"missing required argument: <{name}>\\n\\n{{}}\", __usage))?;"
+                ));
+                cg.line(&format!(
+                    "let {name} = {raw}.parse::<f64>().map_err(|_| format!(\"<{name}>: expected float\\n\\n{{}}\", __usage))?;"
+                ));
+            }
+            "String" => {
+                cg.line(&format!(
+                    "let {name} = __positionals.get({pos_idx}).ok_or_else(|| format!(\"missing required argument: <{name}>\\n\\n{{}}\", __usage))?.clone();"
+                ));
+            }
+            "Bool" => {
+                let raw = format!("__raw_{}", name.trim_start_matches('_'));
+                cg.line(&format!(
+                    "let {raw} = __positionals.get({pos_idx}).ok_or_else(|| format!(\"missing required argument: <{name}>\\n\\n{{}}\", __usage))?;"
+                ));
+                cg.line(&format!(
+                    "let {name} = match {raw}.as_str() {{ \"true\" => true, \"false\" => false, _ => return Err(format!(\"<{name}>: expected true or false\\n\\n{{}}\", __usage)) }};"
+                ));
+            }
+            _ => unreachable!("emit_required_positional: unsupported inner type for `{name}`"),
+        },
+        _ => unreachable!("emit_required_positional: non-scalar inner type for `{name}`"),
+    }
+}
+
+fn emit_optional_positional(cg: &mut RustEmitter, name: &str, inner: &TypeExpr, pos_idx: usize) {
+    match inner {
+        TypeExpr::Base {
+            name: ty_name,
+            args,
+            ..
+        } if args.is_empty() => match ty_name.as_str() {
+            "Int" => {
+                cg.line(&format!(
+                    "let {name} = __positionals.get({pos_idx}).map(|__v| __v.parse::<i64>().map_err(|_| format!(\"<{name}>: expected integer\"))).transpose()?;"
+                ));
+            }
+            "Float" => {
+                cg.line(&format!(
+                    "let {name} = __positionals.get({pos_idx}).map(|__v| __v.parse::<f64>().map_err(|_| format!(\"<{name}>: expected float\"))).transpose()?;"
+                ));
+            }
+            "String" => {
+                cg.line(&format!(
+                    "let {name} = __positionals.get({pos_idx}).cloned();"
+                ));
+            }
+            _ => unreachable!("emit_optional_positional: unsupported inner type for `{name}`"),
+        },
+        _ => unreachable!("emit_optional_positional: non-scalar inner type for `{name}`"),
+    }
 }
 
 /// Emit the parsing code for a single struct field.
@@ -424,11 +662,11 @@ fn assert_safe_identifier(name: &str) {
     );
 }
 
-/// Returns `true` when the MVL type can be parsed from a CLI flag string.
+/// Returns `true` when the MVL type can be parsed from CLI arguments.
 ///
-/// Parseable: Int, Float, String, Bool, Tainted<String>, Option<Int>,
-/// Option<Float>, Option<String>, Option<Tainted<String>>,
-/// and refined wrappers of the above.
+/// Parseable: Int, Float, String, Bool, Tainted<String>, Positional<T>,
+/// Option<Int>, Option<Float>, Option<String>, Option<Tainted<String>>,
+/// Option<Positional<T>>, and refined wrappers of the above.
 fn is_parseable_field_type(ty: &TypeExpr) -> bool {
     let base = unwrap_refined_ty(ty);
     if is_tainted_string(base) {
@@ -436,17 +674,51 @@ fn is_parseable_field_type(ty: &TypeExpr) -> bool {
     }
     match base {
         TypeExpr::Base { name, args, .. } => {
-            args.is_empty() && matches!(name.as_str(), "Int" | "Float" | "String" | "Bool")
+            if args.is_empty() && matches!(name.as_str(), "Int" | "Float" | "String" | "Bool") {
+                return true;
+            }
+            // Positional[T] where T is a parseable scalar
+            if name == "Positional" && args.len() == 1 {
+                let inner = unwrap_refined_ty(&args[0]);
+                return matches!(inner, TypeExpr::Base { name: n, args: a, .. }
+                    if a.is_empty() && matches!(n.as_str(), "Int" | "Float" | "String" | "Bool"));
+            }
+            false
         }
         TypeExpr::Option { inner, .. } => {
             let inner_base = unwrap_refined_ty(inner);
-            is_tainted_string(inner_base)
-                || matches!(
-                    inner_base,
-                    TypeExpr::Base { name, args, .. }
-                        if args.is_empty()
-                        && matches!(name.as_str(), "Int" | "Float" | "String")
-                )
+            if is_tainted_string(inner_base) {
+                return true;
+            }
+            // Option[Positional[T]]
+            if let TypeExpr::Base { name, args, .. } = inner_base {
+                if name == "Positional" && args.len() == 1 {
+                    let pos_inner = unwrap_refined_ty(&args[0]);
+                    return matches!(pos_inner, TypeExpr::Base { name: n, args: a, .. }
+                        if a.is_empty() && matches!(n.as_str(), "Int" | "Float" | "String"));
+                }
+            }
+            matches!(
+                inner_base,
+                TypeExpr::Base { name, args, .. }
+                    if args.is_empty()
+                    && matches!(name.as_str(), "Int" | "Float" | "String")
+            )
+        }
+        _ => false,
+    }
+}
+
+/// Returns `true` when the field should be parsed as a positional argument
+/// (i.e. its type is `Positional[T]` or `Option[Positional[T]]`).
+fn is_positional_type(ty: &TypeExpr) -> bool {
+    let base = unwrap_refined_ty(ty);
+    match base {
+        TypeExpr::Base { name, args, .. } => name == "Positional" && args.len() == 1,
+        TypeExpr::Option { inner, .. } => {
+            let inner_base = unwrap_refined_ty(inner);
+            matches!(inner_base, TypeExpr::Base { name, args, .. }
+                if name == "Positional" && args.len() == 1)
         }
         _ => false,
     }
@@ -607,6 +879,10 @@ pub fn emit_type_expr(ty: &TypeExpr) -> String {
                 let size = emit_type_expr(&args[1]);
                 return format!("[{elem}; {size}]");
             }
+            // Positional<T> is a CLI annotation — transparent at runtime, emit just T
+            if name == "Positional" && args.len() == 1 {
+                return emit_type_expr(&args[0]);
+            }
             let rust_name = map_base_type(name);
             if args.is_empty() {
                 rust_name.to_string()
@@ -615,7 +891,16 @@ pub fn emit_type_expr(ty: &TypeExpr) -> String {
                 format!("{}<{}>", rust_name, args_str.join(", "))
             }
         }
-        TypeExpr::Option { inner, .. } => format!("Option<{}>", emit_type_expr(inner)),
+        TypeExpr::Option { inner, .. } => {
+            // Option[Positional[T]] → Option<T> (Positional is transparent at runtime)
+            let inner_base = unwrap_refined_ty(inner);
+            if let TypeExpr::Base { name, args, .. } = inner_base {
+                if name == "Positional" && args.len() == 1 {
+                    return format!("Option<{}>", emit_type_expr(&args[0]));
+                }
+            }
+            format!("Option<{}>", emit_type_expr(inner))
+        }
         TypeExpr::Result { ok, err, .. } => {
             format!("Result<{}, {}>", emit_type_expr(ok), emit_type_expr(err))
         }

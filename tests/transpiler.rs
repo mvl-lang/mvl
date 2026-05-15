@@ -2884,3 +2884,129 @@ fn concurrently_block_emits_body_and_drain() {
     assert_contains(&rust, "_start_foo(FooState {count:");
     assert_contains(&rust, "f.go()");
 }
+
+// ── #752: std.argparse — Positional[T] codegen ───────────────────────────────
+
+/// `Positional[Int]` field emits positional argv parsing from `__positionals[0]`. (#752)
+#[test]
+fn positional_int_field_parses_from_argv() {
+    let src = r#"
+        use std.args.{parse}
+        type Args = struct {
+            count: Positional[Int],
+        }
+    "#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "impl ParseFromArgs for Args");
+    assert_contains(&rust, "__positionals");
+    assert_contains(&rust, "parse::<i64>()");
+    assert_contains(&rust, "missing required argument: <count>");
+}
+
+/// `Positional[String]` field emits `.clone()` from `__positionals`. (#752)
+#[test]
+fn positional_string_field_parses_from_argv() {
+    let src = r#"
+        use std.args.{parse}
+        type Args = struct {
+            path: Positional[String],
+        }
+    "#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "impl ParseFromArgs for Args");
+    assert_contains(&rust, "__positionals.get(0)");
+    assert_contains(&rust, ".clone()");
+}
+
+/// Two `Positional` fields use indices 0 and 1 respectively. (#752)
+#[test]
+fn two_positional_fields_use_sequential_indices() {
+    let src = r#"
+        use std.args.{parse}
+        type Args = struct {
+            src: Positional[String],
+            dst: Positional[String],
+        }
+    "#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "__positionals.get(0)");
+    assert_contains(&rust, "__positionals.get(1)");
+}
+
+/// `Option[Positional[Int]]` field emits optional positional (map + transpose). (#752)
+#[test]
+fn optional_positional_int_field_emits_map_transpose() {
+    let src = r#"
+        use std.args.{parse}
+        type Args = struct {
+            count: Option[Positional[Int]],
+        }
+    "#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "impl ParseFromArgs for Args");
+    assert_contains(&rust, ".map(|__v|");
+    assert_contains(&rust, ".transpose()");
+}
+
+/// Mixed struct: positional + Bool flag + Option flag all emit correctly. (#752)
+#[test]
+fn mixed_positional_and_flag_fields() {
+    let src = r#"
+        use std.args.{parse}
+        type Args = struct {
+            rounds: Positional[Int],
+            verbose: Bool,
+            output: Option[String],
+        }
+    "#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "impl ParseFromArgs for Args");
+    assert_contains(&rust, "__positionals");
+    assert_contains(&rust, "any(|__a| __a == \"--verbose\")");
+    assert_contains(&rust, "get_arg(Clean(\"output\"");
+}
+
+/// Auto-help: generated impl checks for `-h` / `--help` before parsing. (#752)
+#[test]
+fn parse_from_args_checks_help_flag() {
+    let src = r#"
+        use std.args.{parse}
+        type Args = struct {
+            rounds: Positional[Int],
+        }
+    "#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "\"-h\"");
+    assert_contains(&rust, "\"--help\"");
+    assert_contains(&rust, "std::process::exit(0)");
+}
+
+/// Usage string is emitted as a local `__usage` variable. (#752)
+#[test]
+fn parse_from_args_emits_usage_string() {
+    let src = r#"
+        use std.args.{parse}
+        type Args = struct {
+            rounds: Positional[Int],
+            verbose: Bool,
+        }
+    "#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "__usage");
+    assert_contains(&rust, "<rounds>");
+    assert_contains(&rust, "--verbose");
+}
+
+/// Refinement on a positional field is checked after parsing and includes usage. (#752)
+#[test]
+fn positional_refinement_checked_after_parse() {
+    let src = r#"
+        use std.args.{parse}
+        type Args = struct {
+            rounds: Positional[Int] where self > 0,
+        }
+    "#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "refinement violated");
+    assert_contains(&rust, "__usage");
+}
