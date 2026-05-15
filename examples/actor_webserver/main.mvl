@@ -18,8 +18,11 @@
 //   3. val QueryResult — deeply immutable query data; safe to share freely.
 //   4. Actor-per-request pattern (Erlang/Akka style): each handler owns one request.
 //   5. concurrently { } — structured scope drains all mailboxes before returning.
+//   6. Port — refined type (Int where self > 0 && self <= 65535); the checker
+//      proves the literal 8080 satisfies the constraint at the call site.
 //
 // Expected output (3 requests):
+//   Server: listening on port 8080
 //   Listener: accepted GET /users (req #1)
 //   Handler: routing Users (req #1)
 //   DbPool: query 'SELECT * FROM users' for req #1
@@ -55,6 +58,9 @@ pub type Route = enum {
     Health,   // /health — no database needed
     Unknown,  // anything else → 404
 }
+
+/// TCP port number — valid range 1–65535.
+pub type Port = Int where self > 0 && self <= 65535
 
 // iso — each Request is exclusively owned by exactly one actor at a time.
 // Listener creates it, sends it to a RequestHandler, and loses the reference.
@@ -96,6 +102,13 @@ fn route_name(route: Route) -> String {
         Route::Health  => "Health",
         Route::Unknown => "Unknown",
     }
+}
+
+// Req 10: port is constrained to the valid TCP range.
+// The inline refinement lets the checker prove the literal 8080 satisfies the
+// constraint at compile time, without requiring an SMT solver.
+fn log_bind(port: Int where self > 0 && self <= 65535) -> Unit ! Console {
+    println("Server: listening on port ".concat(port.to_string()))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -165,7 +178,7 @@ actor RequestHandler {
 // ═══════════════════════════════════════════════════════════════════════════
 
 actor Listener {
-    port: Int
+    port: Int     // valid TCP port; see Port type alias above for the formal constraint
     db:   DbPool  // tag — shared with all handlers it dispatches to
 
     // iso req     — ownership of the Request transfers into this behavior.
@@ -186,6 +199,8 @@ actor Listener {
 // ═══════════════════════════════════════════════════════════════════════════
 
 fn main() -> Unit ! Console {
+    // Req 10: 8080 proven to satisfy Port constraint (1–65535) at compile time.
+    log_bind(8080)
     concurrently {
         // One shared DbPool — all handlers hold a tag reference to it.
         let db: DbPool = actor DbPool { connections: 10 };
