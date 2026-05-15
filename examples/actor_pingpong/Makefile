@@ -27,7 +27,7 @@ lint: guard-mvl ## Lint all source files
 	$(MVL) lint $(DIR)main.mvl
 
 check: guard-mvl ## Type-check main.mvl
-	$(MVL) check $(DIR)main.mvl
+	$(MVL) check $(DIR)main.mvl --verbose
 
 test: guard-mvl ## Run pure-logic unit tests in main_test.mvl
 	$(MVL) check $(DIR)main.mvl

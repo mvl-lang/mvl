@@ -35,7 +35,7 @@
 //   mvl run examples/actor_pingpong/main.mvl
 //   make run   (from examples/actor_pingpong/)
 
-use std.env.{args}
+use std.env.{args, exit}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MESSAGE TYPES
@@ -118,15 +118,16 @@ actor Ping {
 
 // Parse the round count from the first user argument, falling back to `default`.
 // External args arrive as Tainted[String] and are sanitized before use.
-fn sanitize_rounds_arg(raw: Tainted[String], default: Int where self > 0) -> Int {
+// Exits with an error message if the argument is not a positive integer.
+fn sanitize_rounds_arg(raw: Tainted[String], default: Int where self > 0) -> Int ! Console + Env {
     let clean: Clean[String] = sanitize(raw);
     match clean.parse_int() {
-        Err(_) => default,
-        Ok(n)  => if n > 0 { n } else { default }
+        Err(_) => { eprintln("error: rounds must be a positive integer"); exit(1) }
+        Ok(n)  => if n > 0 { n } else { eprintln("error: rounds must be a positive integer"); exit(1) }
     }
 }
 
-fn parse_rounds(default: Int where self > 0) -> Int ! Env {
+fn parse_rounds(default: Int where self > 0) -> Int ! Console + Env {
     let argv: List[Tainted[String]] = args();
     match argv.get(1) {
         None      => default,
