@@ -244,7 +244,14 @@ pub fn transpile_project(
         .map(|(name, prog)| {
             let sibling_check = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
             let mut cg = RustEmitter::new();
-            cg.expr_types = sibling_check.expr_types;
+            // Include prelude expr_types so prelude functions emitted inside the
+            // sibling module (via emit_sibling_module) have correct type information.
+            // Without this, generic operations like map indexing fall back to the
+            // integer-array pattern instead of the correct string-key HashMap access.
+            let mut sibling_expr_types =
+                crate::mvl::checker::collect_prelude_expr_types(prelude_progs);
+            sibling_expr_types.extend(sibling_check.expr_types);
+            cg.expr_types = sibling_expr_types;
             cg.assert_mode = assert_mode;
             if entry_uses_runtime {
                 cg.emit_sibling_module(prog, prelude_progs);

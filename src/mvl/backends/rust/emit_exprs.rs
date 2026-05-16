@@ -1392,7 +1392,10 @@ fn emit_match_arm(
                     "#[cfg(test)] crate::__mvl_mcdc::record({mid}usize, {arm_idx}u32);"
                 ));
             }
-            emit_block_stmts(cg, &block.stmts);
+            // Use emit_block_as_value so the final Stmt::Expr is a tail
+            // expression (no semicolon) and becomes the arm's return value.
+            // Mirrors the same fix in emit_stmts.rs for Stmt::Match arms.
+            emit_block_as_value(cg, &block.stmts);
             cg.pop_indent();
             cg.indent();
             cg.push("},");

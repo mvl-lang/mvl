@@ -116,13 +116,17 @@ pub fn parse_file(path: &str) -> Result<(Program, String), String> {
 
 /// Collect unique top-level module names referenced by `use` declarations in `prog`,
 /// excluding `std` (which is provided by the runtime, not sibling files).
+///
+/// Handles both forms:
+/// - `use mod::item;`           → path = ["mod", "item"]  (len 2)
+/// - `use mod::{A, B, C}`      → path = ["mod"]           (len 1, brace group)
 pub fn collect_imported_module_names(prog: &Program) -> Vec<String> {
     use std::collections::HashSet;
     let mut seen: HashSet<String> = HashSet::new();
     let mut names: Vec<String> = Vec::new();
     for decl in &prog.declarations {
         if let Decl::Use(ud) = decl {
-            if ud.path.len() >= 2 {
+            if !ud.path.is_empty() {
                 let mod_name = &ud.path[0];
                 if mod_name != "std" && seen.insert(mod_name.clone()) {
                     names.push(mod_name.clone());
@@ -493,6 +497,37 @@ mod tests {
     fn find_module_file_returns_none_when_absent() {
         let dir = tmpdir();
         assert!(find_module_file(dir.path(), "missing").is_none());
+    }
+
+    // collect_imported_module_names: brace-style import `use mod::{A, B}` is collected.
+    // Regression for the `use config::{...}` case where path.len() == 1.
+    #[test]
+    fn collect_imported_module_names_brace_import() {
+        let src = "use config::{ServerConfig, load_config}";
+        let (mut p, _) = crate::mvl::parser::Parser::new(src);
+        let prog = p.parse_program();
+        let names = collect_imported_module_names(&prog);
+        assert_eq!(names, vec!["config".to_string()]);
+    }
+
+    // collect_imported_module_names: `use mod::item;` form is still collected.
+    #[test]
+    fn collect_imported_module_names_dotted_import() {
+        let src = "use parser::parse_line;";
+        let (mut p, _) = crate::mvl::parser::Parser::new(src);
+        let prog = p.parse_program();
+        let names = collect_imported_module_names(&prog);
+        assert_eq!(names, vec!["parser".to_string()]);
+    }
+
+    // collect_imported_module_names: `use std.io.{...}` must NOT appear in sibling list.
+    #[test]
+    fn collect_imported_module_names_excludes_std() {
+        let src = "use std.io.{read_file}";
+        let (mut p, _) = crate::mvl::parser::Parser::new(src);
+        let prog = p.parse_program();
+        let names = collect_imported_module_names(&prog);
+        assert!(names.is_empty());
     }
 }
 
