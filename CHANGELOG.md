@@ -4,6 +4,11 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.119.1] — 2026-05-16
+
+### Fixed
+- Add missing doc comments to `IoError`, `NetError`, `ProcessError`, and `RegexError` variants in `mvl_runtime` — silences `missing_docs` warnings that polluted stderr and caused `log_output_formats_correctly` to fail (#813)
+
 ## [0.119.0] — 2026-05-16
 
 ### Added
