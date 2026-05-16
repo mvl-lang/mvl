@@ -1,6 +1,6 @@
 //! std.config — pure MVL configuration loading with XDG convention and env overlay.
 //!
-//! Zero builtins. Uses std.env, std.io, and std.json as building blocks.
+//! Zero builtins. Uses std.env, std.io, std.json, and std.toml as building blocks.
 //! Both backends benefit automatically; no Rust crate or C-ABI wrappers needed.
 //!
 //! Import:
@@ -17,7 +17,8 @@
 //!                    (e.g. prefix "MYAPP", key "port" → MYAPP_PORT)
 //!
 //! File format detected from extension (.toml default, .json supported).
-//! JSON parsing delegates to std.json (already pure MVL).
+//! JSON parsing delegates to std.json; TOML parsing delegates to std.toml.
+//! Both are pure MVL — symmetric pipelines: decode() → to_config() → ConfigValue.
 //! IFC: config file content is untrusted — callers must sanitize before sensitive use.
 //!
 //! Security: relative paths containing ".." are rejected. Config files larger
@@ -26,6 +27,7 @@
 use std.env
 use std.io
 use std.json
+use std.toml
 
 // ── Error type ────────────────────────────────────────────────────────────────
 
@@ -207,23 +209,68 @@ fn read_config_file(path: String) -> Result[String, ConfigError] ! FileRead {
 }
 
 // ── Format dispatch ───────────────────────────────────────────────────────────
+//
+// Symmetric pipelines:
+//   TOML: toml.decode(content) → toml.Value → toml_to_config() → ConfigValue
+//   JSON: json.decode(content) → json.Value → json_to_config() → ConfigValue
 
 fn parse_config(path: String, content: String) -> Result[ConfigValue, ConfigError] {
     if str_ends_with(path, ".json") {
-        parse_json_config(content)
+        match json.decode(content) {
+            Err(json.JsonError::ParseError(msg)) => Err(ConfigError::ParseError { msg: msg, line: 0, col: 0 }),
+            Ok(v)                                => Ok(json_to_config(v)),
+        }
     } else {
-        parse_toml(content)
+        match toml.decode(content) {
+            Err(toml.TomlError::ParseError { msg, line }) => Err(ConfigError::ParseError { msg: msg, line: line, col: 0 }),
+            Ok(v)                                         => Ok(toml_to_config(v)),
+        }
+    }
+}
+
+// ── TOML bridge ───────────────────────────────────────────────────────────────
+
+fn toml_to_config(v: toml.Value) -> ConfigValue {
+    match v {
+        toml.Value::Null       => ConfigValue::Null,
+        toml.Value::Bool(b)    => ConfigValue::Bool(b),
+        toml.Value::Int(n)     => ConfigValue::Int(n),
+        toml.Value::Float(f)   => ConfigValue::Float(f),
+        toml.Value::Str(s)     => ConfigValue::Str(s),
+        toml.Value::Array(a)   => {
+            let result: ref List[ConfigValue] = []
+            let i: ref Int = 0
+            let len = list_len(a)
+            while i < len {
+                match list_get(a, i) {
+                    Some(item) => { result = list_push(result, toml_to_config(item)) },
+                    None       => {},
+                }
+                i = i + 1
+            }
+            ConfigValue::Array(result)
+        },
+        toml.Value::Table(t)   => {
+            let result: ref Map[String, ConfigValue] = {}
+            let keys = t.keys()
+            let i: ref Int = 0
+            let len = list_len(keys)
+            while i < len {
+                match list_get(keys, i) {
+                    Some(k) => match t.get(k) {
+                        Some(val) => { result.insert(k, toml_to_config(val)) },
+                        None      => {},
+                    },
+                    None => {},
+                }
+                i = i + 1
+            }
+            ConfigValue::Table(result)
+        },
     }
 }
 
 // ── JSON bridge ───────────────────────────────────────────────────────────────
-
-fn parse_json_config(content: String) -> Result[ConfigValue, ConfigError] {
-    match json.decode(content) {
-        Err(json.JsonError::ParseError(msg)) => Err(ConfigError::ParseError { msg: msg, line: 0, col: 0 }),
-        Ok(v)                                => Ok(json_to_config(v)),
-    }
-}
 
 fn json_to_config(v: json.Value) -> ConfigValue {
     match v {
@@ -269,228 +316,6 @@ fn json_to_config(v: json.Value) -> ConfigValue {
             ConfigValue::Table(result)
         },
     }
-}
-
-// ── TOML parser ───────────────────────────────────────────────────────────────
-//
-// Supports: scalars (bool, int, float, string), sections [name] and [a.b],
-// inline comments (#). Does not support: [[array-of-tables]], inline tables,
-// multi-line strings, datetime.
-
-// Parser position helpers (same pattern as std.json)
-type ScalarResult = enum { SROk(ConfigValue), SRErr(String) }
-type SectionResult = enum { SecOk(List[String]), SecErr(String) }
-
-pub partial fn parse_toml(input: String) -> Result[ConfigValue, ConfigError] {
-    let lines = str_split(input, "\n")
-    let len = list_len(lines)
-    let root: ref Map[String, ConfigValue] = {}
-    let section: ref List[String] = []
-    let i: ref Int = 0
-    let err: ref String = ""
-    let had_err: ref Bool = false
-
-    while i < len && had_err == false {
-        let raw = match list_get(lines, i) { Some(l) => l, None => "" }
-        let line = str_trim(strip_toml_comment(raw))
-        let line_no = i + 1
-
-        if str_len(line) == 0 {
-            // blank or comment-only line
-        } else if str_starts_with(line, "[[") {
-            had_err = true
-            err = "array-of-tables '[[...]]' is not supported"
-        } else if str_starts_with(line, "[") {
-            match parse_section_header(line, line_no) {
-                SectionResult::SecErr(e) => { had_err = true; err = e },
-                SectionResult::SecOk(s)  => {
-                    section = s
-                    ensure_nested_table(root, section)
-                },
-            }
-        } else if str_contains(line, "=") {
-            let eq_pos = find_eq(line)
-            let key = str_trim(str_substring(line, 0, eq_pos))
-            let raw_val = str_trim(str_substring(line, eq_pos + 1, str_len(line)))
-            if str_len(key) == 0 {
-                had_err = true
-                err = str_concat("empty key at line ", int_to_string(line_no))
-            } else {
-                match parse_toml_scalar(raw_val, line_no) {
-                    SRErr(e)  => { had_err = true; err = e },
-                    SROk(val) => { insert_at(root, section, key, val) },
-                }
-            }
-        } else {
-            had_err = true
-            err = str_concat("expected 'key = value' at line ", int_to_string(line_no))
-        }
-        i = i + 1
-    }
-
-    if had_err {
-        Err(ConfigError::ParseError { msg: err, line: 0, col: 0 })
-    } else {
-        Ok(ConfigValue::Table(root))
-    }
-}
-
-fn find_eq(line: String) -> Int {
-    let chars = str_chars(line)
-    let len = list_len(chars)
-    let i: ref Int = 0
-    let in_str: ref Bool = false
-    let found: ref Int = -1
-    while i < len && found == -1 {
-        match list_get(chars, i) {
-            Some(c) => {
-                if c == "\"" { in_str = !in_str }
-                else if c == "=" && in_str == false { found = i }
-                else {}
-            },
-            None => {},
-        }
-        i = i + 1
-    }
-    found
-}
-
-fn strip_toml_comment(line: String) -> String {
-    let chars = str_chars(line)
-    let len = list_len(chars)
-    let i: ref Int = 0
-    let in_str: ref Bool = false
-    let esc: ref Bool = false
-    let cut: ref Int = len
-    let go: ref Bool = true
-    while i < len && go {
-        match list_get(chars, i) {
-            None    => { go = false },
-            Some(c) => {
-                if esc {
-                    esc = false
-                } else if c == "\\" && in_str {
-                    esc = true
-                } else if c == "\"" {
-                    in_str = !in_str
-                } else if c == "#" && in_str == false {
-                    cut = i
-                    go = false
-                } else {}
-            },
-        }
-        i = i + 1
-    }
-    str_substring(line, 0, cut)
-}
-
-fn parse_section_header(line: String, line_no: Int) -> SectionResult {
-    let inner = str_trim(str_substring(line, 1, str_len(line) - 1))
-    if str_len(inner) == 0 {
-        SectionResult::SecErr(str_concat("empty section header at line ", int_to_string(line_no)))
-    } else {
-        let parts = str_split(inner, ".")
-        let trimmed: ref List[String] = []
-        let i: ref Int = 0
-        let len = list_len(parts)
-        while i < len {
-            match list_get(parts, i) {
-                Some(p) => { trimmed = list_push(trimmed, str_trim(p)) },
-                None    => {},
-            }
-            i = i + 1
-        }
-        SectionResult::SecOk(trimmed)
-    }
-}
-
-fn ensure_nested_table(root: ref Map[String, ConfigValue], path: List[String]) -> Unit {
-    let len = list_len(path)
-    if len == 0 { return () } else {}
-    match list_get(path, 0) {
-        None    => {},
-        Some(k) => {
-            match root.get(k) {
-                None => { root.insert(k, ConfigValue::Table({})) },
-                Some(_) => {},
-            }
-            if len > 1 {
-                match root.get(k) {
-                    Some(ConfigValue::Table(sub)) => {
-                        ensure_nested_table(sub, list_slice(path, 1, len))
-                    },
-                    _ => {},
-                }
-            } else {}
-        },
-    }
-}
-
-fn insert_at(root: ref Map[String, ConfigValue], section: List[String], key: String, value: ConfigValue) -> Unit {
-    let len = list_len(section)
-    if len == 0 {
-        root.insert(key, value)
-    } else {
-        match list_get(section, 0) {
-            None    => { root.insert(key, value) },
-            Some(s) => match root.get(s) {
-                Some(ConfigValue::Table(sub)) => {
-                    insert_at(sub, list_slice(section, 1, len), key, value)
-                },
-                _ => { root.insert(key, value) },
-            },
-        }
-    }
-}
-
-fn parse_toml_scalar(s: String, line_no: Int) -> ScalarResult {
-    if s == "true"  { return SROk(ConfigValue::Bool(true))  } else {}
-    if s == "false" { return SROk(ConfigValue::Bool(false)) } else {}
-    if str_starts_with(s, "\"") && str_ends_with(s, "\"") && str_len(s) >= 2 {
-        return SROk(ConfigValue::Str(toml_unescape(str_substring(s, 1, str_len(s) - 1))))
-    } else {}
-    if str_contains(s, ".") {
-        match str_parse_float(s) {
-            Some(f) => { return SROk(ConfigValue::Float(f)) },
-            None    => {},
-        }
-    } else {}
-    match str_parse_int(s) {
-        Some(n) => SROk(ConfigValue::Int(n)),
-        None    => SRErr(str_concat("unrecognised value at line ", int_to_string(line_no))),
-    }
-}
-
-partial fn toml_unescape(s: String) -> String {
-    let chars = str_chars(s)
-    let len = list_len(chars)
-    let out: ref String = ""
-    let i: ref Int = 0
-    while i < len {
-        match list_get(chars, i) {
-            None    => {},
-            Some(c) => {
-                if c == "\\" && i + 1 < len {
-                    match list_get(chars, i + 1) {
-                        Some(esc) => {
-                            if      esc == "n"  { out = str_concat(out, "\n") }
-                            else if esc == "t"  { out = str_concat(out, "\t") }
-                            else if esc == "r"  { out = str_concat(out, "\r") }
-                            else if esc == "\"" { out = str_concat(out, "\"") }
-                            else if esc == "\\" { out = str_concat(out, "\\") }
-                            else                { out = str_concat(out, str_concat("\\", esc)) }
-                            i = i + 2
-                        },
-                        None => { out = str_concat(out, c); i = i + 1 },
-                    }
-                } else {
-                    out = str_concat(out, c)
-                    i = i + 1
-                }
-            },
-        }
-    }
-    out
 }
 
 // ── Env overlay ───────────────────────────────────────────────────────────────

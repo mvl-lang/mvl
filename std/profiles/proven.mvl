@@ -43,9 +43,15 @@
 //   trim, to_upper, to_lower, chars, concat, starts_with, ends_with, find,
 //   replace, split, substring, parse_int, parse_float
 
-// std/config.mvl — load_config, parse_toml, json_to_config, apply_env_overlay (pure MVL)
+// std/toml.mvl — decode (pure MVL TOML parser, symmetric with std.json)
+//   All parser logic (decode, strip_toml_comment, parse_section_header,
+//   ensure_nested_table, insert_at, parse_scalar, toml_unescape) is pure MVL.
+//   Same status as std/json.mvl.
+
+// std/config.mvl — load_config, toml_to_config, json_to_config, apply_env_overlay (pure MVL)
 //   The parsing and overlay logic is fully verified. Only the std.io and std.env
 //   builtins it calls (file read, env var read) are OS-backed and remain trusted.
+//   TOML path delegates to std.toml; JSON path delegates to std.json.
 //   This is the same status as std/json.mvl.
 
 // ── Pending proven implementations ────────────────────────────────────────────

@@ -1,0 +1,260 @@
+//! std.toml — pure TOML decode in native MVL.
+//!
+//! Zero external crates. Symmetric with std.json: both expose a Value enum
+//! and a `decode` function so callers (e.g. std.config) can use the same
+//! pipeline regardless of format.
+//!
+//! Import:
+//!   use std.toml.{Value, decode}
+//!
+//! Effects: none (pure).
+//!
+//! Supported: scalars (bool, int, float, string), sections [name] and [a.b],
+//! inline comments (#).
+//! Not supported: [[array-of-tables]], inline tables, multi-line strings, datetime.
+
+// ── Error type ────────────────────────────────────────────────────────────────
+
+pub type TomlError = enum {
+    ParseError { msg: String, line: Int },
+}
+
+// ── Value type ────────────────────────────────────────────────────────────────
+
+/// A parsed TOML value.
+///
+/// Unlike std.json which collapses Int and Float into Number(Float), TOML
+/// distinguishes integers from floats — so we preserve both exactly.
+pub type Value = enum {
+    Null,
+    Bool(Bool),
+    Int(Int),
+    Float(Float),
+    Str(String),
+    Array(List[Value]),
+    Table(Map[String, Value]),
+}
+
+// ── Internal parser helpers ───────────────────────────────────────────────────
+
+type ScalarResult  = enum { SROk(Value), SRErr(String) }
+type SectionResult = enum { SecOk(List[String]), SecErr(String) }
+
+// ── decode ────────────────────────────────────────────────────────────────────
+
+/// Parse a TOML string into a Value tree.
+///
+/// Returns Err(TomlError::ParseError) on the first syntax error encountered.
+pub partial fn decode(input: String) -> Result[Value, TomlError] {
+    let lines = str_split(input, "\n")
+    let len = list_len(lines)
+    let root: ref Map[String, Value] = {}
+    let section: ref List[String] = []
+    let i: ref Int = 0
+    let err: ref String = ""
+    let had_err: ref Bool = false
+
+    while i < len && had_err == false {
+        let raw = match list_get(lines, i) { Some(l) => l, None => "" }
+        let line = str_trim(strip_toml_comment(raw))
+        let line_no = i + 1
+
+        if str_len(line) == 0 {
+            // blank or comment-only line
+        } else if str_starts_with(line, "[[") {
+            had_err = true
+            err = "array-of-tables '[[...]]' is not supported"
+        } else if str_starts_with(line, "[") {
+            match parse_section_header(line, line_no) {
+                SectionResult::SecErr(e) => { had_err = true; err = e },
+                SectionResult::SecOk(s)  => {
+                    section = s
+                    ensure_nested_table(root, section)
+                },
+            }
+        } else if str_contains(line, "=") {
+            let eq_pos = find_eq(line)
+            let key = str_trim(str_substring(line, 0, eq_pos))
+            let raw_val = str_trim(str_substring(line, eq_pos + 1, str_len(line)))
+            if str_len(key) == 0 {
+                had_err = true
+                err = str_concat("empty key at line ", int_to_string(line_no))
+            } else {
+                match parse_scalar(raw_val, line_no) {
+                    SRErr(e)  => { had_err = true; err = e },
+                    SROk(val) => { insert_at(root, section, key, val) },
+                }
+            }
+        } else {
+            had_err = true
+            err = str_concat("expected 'key = value' at line ", int_to_string(line_no))
+        }
+        i = i + 1
+    }
+
+    if had_err {
+        Err(TomlError::ParseError { msg: err, line: 0 })
+    } else {
+        Ok(Value::Table(root))
+    }
+}
+
+// ── Parser internals ──────────────────────────────────────────────────────────
+
+fn find_eq(line: String) -> Int {
+    let chars = str_chars(line)
+    let len = list_len(chars)
+    let i: ref Int = 0
+    let in_str: ref Bool = false
+    let found: ref Int = -1
+    while i < len && found == -1 {
+        match list_get(chars, i) {
+            Some(c) => {
+                if c == "\"" { in_str = !in_str }
+                else if c == "=" && in_str == false { found = i }
+                else {}
+            },
+            None => {},
+        }
+        i = i + 1
+    }
+    found
+}
+
+fn strip_toml_comment(line: String) -> String {
+    let chars = str_chars(line)
+    let len = list_len(chars)
+    let i: ref Int = 0
+    let in_str: ref Bool = false
+    let esc: ref Bool = false
+    let cut: ref Int = len
+    let go: ref Bool = true
+    while i < len && go {
+        match list_get(chars, i) {
+            None    => { go = false },
+            Some(c) => {
+                if esc {
+                    esc = false
+                } else if c == "\\" && in_str {
+                    esc = true
+                } else if c == "\"" {
+                    in_str = !in_str
+                } else if c == "#" && in_str == false {
+                    cut = i
+                    go = false
+                } else {}
+            },
+        }
+        i = i + 1
+    }
+    str_substring(line, 0, cut)
+}
+
+fn parse_section_header(line: String, line_no: Int) -> SectionResult {
+    let inner = str_trim(str_substring(line, 1, str_len(line) - 1))
+    if str_len(inner) == 0 {
+        SectionResult::SecErr(str_concat("empty section header at line ", int_to_string(line_no)))
+    } else {
+        let parts = str_split(inner, ".")
+        let trimmed: ref List[String] = []
+        let i: ref Int = 0
+        let len = list_len(parts)
+        while i < len {
+            match list_get(parts, i) {
+                Some(p) => { trimmed = list_push(trimmed, str_trim(p)) },
+                None    => {},
+            }
+            i = i + 1
+        }
+        SectionResult::SecOk(trimmed)
+    }
+}
+
+fn ensure_nested_table(root: ref Map[String, Value], path: List[String]) -> Unit {
+    let len = list_len(path)
+    if len == 0 { return () } else {}
+    match list_get(path, 0) {
+        None    => {},
+        Some(k) => {
+            match root.get(k) {
+                None => { root.insert(k, Value::Table({})) },
+                Some(_) => {},
+            }
+            if len > 1 {
+                match root.get(k) {
+                    Some(Value::Table(sub)) => {
+                        ensure_nested_table(sub, list_slice(path, 1, len))
+                    },
+                    _ => {},
+                }
+            } else {}
+        },
+    }
+}
+
+fn insert_at(root: ref Map[String, Value], section: List[String], key: String, value: Value) -> Unit {
+    let len = list_len(section)
+    if len == 0 {
+        root.insert(key, value)
+    } else {
+        match list_get(section, 0) {
+            None    => { root.insert(key, value) },
+            Some(s) => match root.get(s) {
+                Some(Value::Table(sub)) => {
+                    insert_at(sub, list_slice(section, 1, len), key, value)
+                },
+                _ => { root.insert(key, value) },
+            },
+        }
+    }
+}
+
+fn parse_scalar(s: String, line_no: Int) -> ScalarResult {
+    if s == "true"  { return SROk(Value::Bool(true))  } else {}
+    if s == "false" { return SROk(Value::Bool(false)) } else {}
+    if str_starts_with(s, "\"") && str_ends_with(s, "\"") && str_len(s) >= 2 {
+        return SROk(Value::Str(toml_unescape(str_substring(s, 1, str_len(s) - 1))))
+    } else {}
+    if str_contains(s, ".") {
+        match str_parse_float(s) {
+            Some(f) => { return SROk(Value::Float(f)) },
+            None    => {},
+        }
+    } else {}
+    match str_parse_int(s) {
+        Some(n) => SROk(Value::Int(n)),
+        None    => SRErr(str_concat("unrecognised value at line ", int_to_string(line_no))),
+    }
+}
+
+partial fn toml_unescape(s: String) -> String {
+    let chars = str_chars(s)
+    let len = list_len(chars)
+    let out: ref String = ""
+    let i: ref Int = 0
+    while i < len {
+        match list_get(chars, i) {
+            None    => {},
+            Some(c) => {
+                if c == "\\" && i + 1 < len {
+                    match list_get(chars, i + 1) {
+                        Some(esc) => {
+                            if      esc == "n"  { out = str_concat(out, "\n") }
+                            else if esc == "t"  { out = str_concat(out, "\t") }
+                            else if esc == "r"  { out = str_concat(out, "\r") }
+                            else if esc == "\"" { out = str_concat(out, "\"") }
+                            else if esc == "\\" { out = str_concat(out, "\\") }
+                            else                { out = str_concat(out, str_concat("\\", esc)) }
+                            i = i + 2
+                        },
+                        None => { out = str_concat(out, c); i = i + 1 },
+                    }
+                } else {
+                    out = str_concat(out, c)
+                    i = i + 1
+                }
+            },
+        }
+    }
+    out
+}
