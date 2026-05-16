@@ -19,6 +19,7 @@ pub mod crypto;
 pub mod env;
 pub mod io;
 pub mod log;
+pub mod net;
 pub mod primitives;
 pub mod process;
 pub mod random;

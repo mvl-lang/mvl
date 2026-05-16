@@ -153,7 +153,7 @@ pub fn has_std_imports(prog: &Program) -> bool {
 /// Pure-MVL modules (json, collections, strings, lists, math, …) are excluded:
 /// their symbols arrive via the prelude and need no `use mvl_runtime::stdlib::X::*` import.
 pub const RUST_BACKED_STDLIB: &[&str] = &[
-    "args", "crypto", "env", "io", "log", "process", "random", "regex", "time",
+    "args", "crypto", "env", "io", "log", "net", "process", "random", "regex", "time",
 ];
 
 /// Returns the deduplicated list of `std.*` sub-module names used in this program

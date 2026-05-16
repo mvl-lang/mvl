@@ -1,0 +1,59 @@
+// Cross-backend smoke test for std.net (#779).
+//
+// Binds on port 0 (OS-assigned), queries the actual port via tcp_listener_port,
+// passes it to a Connector actor that connects and sends "net ok".
+// The main thread accepts, reads the message, and prints it.
+//
+// expect: net ok
+
+use std.net.{TcpListener, TcpStream, tcp_listen, tcp_listener_port, tcp_connect, tcp_accept, tcp_read, tcp_write, tcp_close_listener, tcp_close_stream}
+
+actor Connector {
+    port: Int
+
+    pub fn connect() ! Net + Console {
+        let result: Result[TcpStream, String] = tcp_connect("127.0.0.1", self.port);
+        match result {
+            Ok(stream) => {
+                let written: Result[Unit, String] = tcp_write(stream, "net ok");
+                tcp_close_stream(stream)
+            },
+            Err(e) => println("connect error: ".concat(e)),
+        }
+    }
+}
+
+fn main() -> Unit ! Console + Net {
+    let listener: TcpListener = match tcp_listen("127.0.0.1", 0) {
+        Ok(l) => l,
+        Err(e) => {
+            println("listen error: ".concat(e));
+            return
+        },
+    };
+    let port: Int = match tcp_listener_port(listener) {
+        Ok(p) => p,
+        Err(e) => {
+            println("port error: ".concat(e));
+            return
+        },
+    };
+    concurrently {
+        let c: Connector = actor Connector { port: port };
+        c.connect();
+        let server_stream: TcpStream = match tcp_accept(listener) {
+            Ok(s) => s,
+            Err(e) => {
+                println("accept error: ".concat(e));
+                return
+            },
+        };
+        let read_result: Result[Tainted[String], String] = tcp_read(server_stream);
+        tcp_close_stream(server_stream);
+        tcp_close_listener(listener);
+        match read_result {
+            Ok(msg) => println(msg),
+            Err(e) => println("read error: ".concat(e)),
+        }
+    }
+}

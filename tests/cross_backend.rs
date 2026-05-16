@@ -148,6 +148,23 @@ fn assert_backends_agree(name: &str) {
     }
 }
 
+/// Assert that both backends produce `expected` stdout for an arbitrary file path.
+/// Use with `corpus_stdlib`, `corpus_effects`, etc.
+fn assert_parity(file: &str, expected: &str) {
+    let transpiler_out = run_transpiler(file);
+    assert_eq!(
+        transpiler_out.trim(),
+        expected,
+        "{file}: unexpected output from transpiler backend"
+    );
+    if let Some(llvm_out) = run_llvm(file) {
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "{file}: LLVM and transpiler backends must produce identical output"
+        );
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -452,6 +469,17 @@ fn cross_backend_log_stderr() {
         log_lines(&t_stderr),
         log_lines(&l_stderr),
     );
+}
+
+// ── #779: std.net — both backends ────────────────────────────────────────────
+
+/// Actor connects to listener, writes "net ok", main reads and prints it.
+/// Verifies that both backends correctly wire tcp_listen, tcp_connect,
+/// tcp_accept, tcp_read, tcp_write, tcp_close_* via `! Net` effect.
+/// Error-path coverage lives in tests/stdlib/net_test.mvl (test-stdlib suite).
+#[test]
+fn cross_backend_net_basic() {
+    assert_parity(&corpus_stdlib("net_basic.mvl"), "net ok");
 }
 
 // ── #417 + #435: io stdlib — both backends ────────────────────────────────────
