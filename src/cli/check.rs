@@ -3,6 +3,7 @@
 
 use mvl::mvl::checker;
 use mvl::mvl::checker::passes::PassRegistry;
+use mvl::mvl::checker::SolverMode;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Program;
 use mvl::mvl::parser::Parser;
@@ -71,18 +72,29 @@ pub fn maybe_check_proven_stdlib_or_exit(profile: &str) {
     process::exit(1);
 }
 
+/// Options for the `mvl check` command.
+pub struct CheckOptions {
+    pub error_limit: usize,
+    pub stdlib_profile: &'static str,
+    pub format_json: bool,
+    pub verbose: bool,
+    pub solver_mode: SolverMode,
+    pub refinement_stats: bool,
+}
+
 /// Parse and type-check a .mvl file or all .mvl files in a directory.
 ///
 /// When `req_filter` is `Some(N)`, only the verification pass for Req N is run
 /// and its verdict is printed; errors for other requirements are suppressed.
-pub fn run(
-    path: &str,
-    req_filter: Option<u8>,
-    error_limit: usize,
-    stdlib_profile: &str,
-    format_json: bool,
-    verbose: bool,
-) {
+pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
+    let CheckOptions {
+        error_limit,
+        stdlib_profile,
+        format_json,
+        verbose,
+        solver_mode,
+        refinement_stats,
+    } = opts;
     if verbose {
         eprintln!("stdlib profile: {stdlib_profile}");
     }
@@ -180,6 +192,11 @@ pub fn run(
 
     // Collect errors across all files for JSON output (when --format=json).
     let mut json_error_items: Vec<String> = Vec::new();
+    // Accumulate refinement stats across all checked files.
+    let mut total_proven: usize = 0;
+    let mut total_runtime: usize = 0;
+    let mut total_failed: usize = 0;
+    let mut total_by_layer = [0usize; 6];
 
     // Only run the checker on explicitly requested files (not resolver-only siblings).
     for (idx, (file_str, prog, _src)) in parsed.iter().take(check_count).enumerate() {
@@ -191,7 +208,28 @@ pub fn run(
         let (before, after_with_self) = all_user_progs.split_at(idx);
         let after = &after_with_self[1..];
         let user_prelude: Vec<&Program> = before.iter().chain(after.iter()).collect();
-        let result = checker::check_with_two_preludes(&stdlib_prelude, &user_prelude, prog);
+        let result = checker::check_with_two_preludes_mode(
+            &stdlib_prelude,
+            &user_prelude,
+            prog,
+            solver_mode,
+        );
+        let rc = &result.refinement_counts;
+        total_proven += rc.proven;
+        total_runtime += rc.runtime_checked;
+        total_failed += rc.failed;
+        for (dst, src) in total_by_layer[1..=5]
+            .iter_mut()
+            .zip(rc.by_layer[1..=5].iter())
+        {
+            *dst += src;
+        }
+        if solver_mode == SolverMode::Layered && rc.by_layer[5] > 0 {
+            eprintln!(
+                "warning: {file_str}: {} refinement(s) required Z3 — consider simplifying predicates",
+                rc.by_layer[5]
+            );
+        }
 
         if let Some(req) = req_filter {
             // Single-requirement mode: run only the requested pass.
@@ -283,6 +321,33 @@ pub fn run(
                         req,
                         name,
                         v.detail()
+                    );
+                }
+            }
+        }
+    }
+
+    // Print per-layer refinement stats when requested.
+    if refinement_stats {
+        let total = total_proven + total_runtime + total_failed;
+        eprintln!("refinement stats (solver: {}):", solver_mode.as_str());
+        eprintln!("  proven:        {total_proven}");
+        eprintln!("  runtime-check: {total_runtime}");
+        eprintln!("  failed:        {total_failed}");
+        eprintln!("  total:         {total}");
+        if total_proven > 0 {
+            let layer_names = [
+                "L1:trivial",
+                "L2:interval",
+                "L3:symbolic",
+                "L4:cooper",
+                "L5:z3",
+            ];
+            for (name, count) in layer_names.iter().zip(total_by_layer[1..=5].iter()) {
+                if *count > 0 {
+                    eprintln!(
+                        "  {name}: {count} ({:.0}% of proven)",
+                        100.0 * *count as f64 / total_proven as f64
                     );
                 }
             }

@@ -60,10 +60,14 @@ pub(super) fn dispatch(args: &[String]) {
             check::run(
                 &path,
                 req_filter,
-                error_limit,
-                stdlib_profile,
-                format_json,
-                verbose,
+                check::CheckOptions {
+                    error_limit,
+                    stdlib_profile,
+                    format_json,
+                    verbose,
+                    solver_mode: args::parse_solver_mode_or_exit(args),
+                    refinement_stats: args.iter().any(|a| a == "--refinement-stats"),
+                },
             );
         }
         "build" => {

@@ -25,6 +25,37 @@ use std::collections::HashMap;
 use crate::mvl::parser::ast::{BinaryOp, CmpOp, Expr, FnDecl, RefExpr};
 use crate::mvl::parser::lexer::Span;
 
+// ── Solver mode ───────────────────────────────────────────────────────────────
+
+/// Controls which layers the refinement solver activates.
+///
+/// | Mode      | Layers active          | Typical use                     |
+/// |-----------|------------------------|---------------------------------|
+/// | Layered   | 1 → 2 → 3 → 4 → 5    | Default: full cascade           |
+/// | Z3Only    | 5 only                 | Debug: force Z3 for every check |
+/// | FastOnly  | 1 → 2 only             | Fast CI: skip symbolic/SMT      |
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SolverMode {
+    /// Run all layers in order until one decides (default).
+    #[default]
+    Layered,
+    /// Skip Layers 1–4; delegate every check directly to Z3 (feature = z3).
+    Z3Only,
+    /// Run only Layers 1–2 (trivial + interval); never invoke symbolic or SMT.
+    FastOnly,
+}
+
+impl SolverMode {
+    /// Canonical CLI string for this mode (matches `--refinement-solver=<value>`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SolverMode::Layered => "layered",
+            SolverMode::Z3Only => "z3-only",
+            SolverMode::FastOnly => "fast-only",
+        }
+    }
+}
+
 // ── Outcome type ──────────────────────────────────────────────────────────────
 
 /// Three-way outcome for a single refinement predicate check at a call site.
