@@ -46,6 +46,8 @@ pub enum LogFormat {
     Json,
 }
 
+// TODO(#841): encoding is fragile — adding variants requires updating both the enum
+// and the match arms below.  Consider a higher-level MVL abstraction.
 static FORMAT: AtomicU8 = AtomicU8::new(0); // 0=Plain, 1=Logfmt, 2=Json
 
 /// Returns the current log output format (process-global).
@@ -84,6 +86,7 @@ pub enum LogLevel {
     Error = 3,
 }
 
+// TODO(#841): same encoding fragility as FORMAT above.
 static MIN_LEVEL: AtomicU8 = AtomicU8::new(0); // 0=Debug, 1=Info, 2=Warn, 3=Error
 
 /// Returns the current minimum log level (process-global).
