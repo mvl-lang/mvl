@@ -1,0 +1,111 @@
+// actor_webserver/config.mvl — layered server configuration.
+//
+// Implements the Defaults → TOML → Env → CLI layered config pattern.
+// See: .openspec/patterns/001-config.md
+//
+// Import from main.mvl:
+//   use config::{ServerConfig, ConfigLoadError, load_config}
+
+use std.config.{ConfigValue, ConfigError, merge, with_env, get_path,
+                as_int, as_string, as_bool, from_toml}
+use std.toml.{toml_decode}
+use std.io.{read_file}
+use std.args.{get_arg}
+use std.strings.{str_concat, str_parse_int}
+
+// ── Types ──────────────────────────────────────────────────────────────────────
+
+/// Resolved server configuration.
+pub type ServerConfig = struct {
+    host:  String,
+    port:  Int,
+    debug: Bool,
+}
+
+/// Errors that can occur while loading configuration.
+pub type ConfigLoadError = enum {
+    Config(ConfigError),
+}
+
+// ── Layer 1: compiled-in defaults ─────────────────────────────────────────────
+
+fn defaults() -> ConfigValue {
+    ConfigValue::Map({
+        "host":  ConfigValue::String("127.0.0.1"),
+        "port":  ConfigValue::Int(8080),
+        "debug": ConfigValue::Bool(false),
+    })
+}
+
+// ── Layer 2: TOML file ────────────────────────────────────────────────────────
+
+fn load_toml_layer(path: String, base: ConfigValue) -> ConfigValue ! FileRead {
+    match read_file(path) {
+        Err(_) => base,
+        Ok(raw) => {
+            // IFC: config files are operator-controlled — coerce Tainted→String.
+            let s: String = str_concat(raw, "");
+            match toml_decode(s) {
+                Err(_)   => base,
+                Ok(toml) => merge(base, from_toml(toml)),
+            }
+        },
+    }
+}
+
+// ── Layer 4: CLI args ─────────────────────────────────────────────────────────
+
+fn merge_cli_args(cfg: ConfigValue) -> ConfigValue ! Console {
+    // --host
+    let cfg: ConfigValue = match get_arg("host") {
+        Some(v) => merge(cfg, ConfigValue::Map({
+            "host": ConfigValue::String(str_concat(v, "")),
+        })),
+        None => cfg,
+    };
+    // --port
+    let cfg: ConfigValue = match get_arg("port") {
+        Some(v) => match str_parse_int(str_concat(v, "")) {
+            Ok(n)  => merge(cfg, ConfigValue::Map({"port": ConfigValue::Int(n)})),
+            Err(_) => cfg,
+        },
+        None => cfg,
+    };
+    // --debug (presence flag)
+    let cfg: ConfigValue = match get_arg("debug") {
+        Some(_) => merge(cfg, ConfigValue::Map({"debug": ConfigValue::Bool(true)})),
+        None    => cfg,
+    };
+    cfg
+}
+
+// ── Extract typed struct ───────────────────────────────────────────────────────
+
+fn extract(cfg: ConfigValue) -> Result[ServerConfig, ConfigError] {
+    Ok(ServerConfig {
+        host:  as_string(get_path(cfg, "host").unwrap_or(ConfigValue::String("127.0.0.1")))?,
+        port:  as_int(get_path(cfg, "port").unwrap_or(ConfigValue::Int(8080)))?,
+        debug: as_bool(get_path(cfg, "debug").unwrap_or(ConfigValue::Bool(false))).unwrap_or(false),
+    })
+}
+
+// ── Public entry point ────────────────────────────────────────────────────────
+
+/// Load configuration from all layers in priority order:
+///   compiled defaults < config.toml < WEBSERVER_* env vars < CLI args
+///
+/// Missing TOML file or unset env vars are silently skipped.
+/// Returns Err only when a present value has the wrong type.
+pub fn load_config() -> Result[ServerConfig, ConfigLoadError] ! Env + FileRead + Console {
+    let cfg: ConfigValue = defaults();
+    let cfg: ConfigValue = load_toml_layer("config.toml", cfg);
+    let cfg: ConfigValue = match with_env(cfg, "WEBSERVER") {
+        Ok(c)  => c,
+        Err(_) => cfg,
+    };
+    let cfg: ConfigValue = merge_cli_args(cfg);
+    match extract(cfg) {
+        Ok(c)  => Ok(c),
+        Err(e) => Err(ConfigLoadError::Config(e)),
+    }
+}

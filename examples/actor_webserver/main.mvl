@@ -1,7 +1,7 @@
-// actor_webserver/server.mvl — real HTTP server on port 8080.
+// actor_webserver/main.mvl — real HTTP server with layered config.
 //
-// Binds to 127.0.0.1:8080 and loops accepting connections indefinitely.
-// Each request is handled sequentially (one connection at a time).
+// Config is loaded in layers: defaults → config.toml → WEBSERVER_* env vars → CLI args.
+// See: config.mvl and .openspec/patterns/001-config.md
 //
 // Routes:
 //   GET /health  → 200 ok
@@ -9,10 +9,11 @@
 //   *            → 404 Not Found
 //
 // Usage:
-//   make run   (from examples/actor_webserver/)
-//   curl http://localhost:8080/health
-//   curl http://localhost:8080/users
+//   make run                              (reads config.toml, defaults to 127.0.0.1:8080)
+//   WEBSERVER_PORT=9090 make run          (env override)
+//   ../../target/debug/mvl run main.mvl -- --port 9090  (CLI override)
 
+use config::{ServerConfig, ConfigLoadError, load_config}
 use std.net.{TcpListener, TcpStream, tcp_listen, tcp_accept, tcp_read_request, tcp_write,
              tcp_close_listener, tcp_close_stream, http_request_path, net_error_msg,
              NetError}
@@ -66,9 +67,16 @@ partial fn serve(listener: TcpListener) -> Unit ! Console + Net {
     }
 }
 
-partial fn main() -> Unit ! Console + Net {
-    println("listening on http://127.0.0.1:8080  (Ctrl-C to stop)");
-    match tcp_listen("127.0.0.1", 8080) {
+partial fn main() -> Unit ! Env + FileRead + Console + Net {
+    let cfg: ServerConfig = match load_config() {
+        Err(_) => {
+            println("config error — using defaults");
+            ServerConfig { host: "127.0.0.1", port: 8080, debug: false }
+        },
+        Ok(c) => c,
+    };
+    println("listening on http://".concat(cfg.host).concat(":").concat(cfg.port.to_string()).concat("  (Ctrl-C to stop)"));
+    match tcp_listen(cfg.host, cfg.port) {
         Err(e)       => println("listen failed: ".concat(net_error_msg(e))),
         Ok(listener) => serve(listener),
     }

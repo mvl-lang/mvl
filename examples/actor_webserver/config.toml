@@ -1,0 +1,8 @@
+# actor_webserver — local configuration
+# Overrides compiled-in defaults.
+# Env vars (WEBSERVER_HOST, WEBSERVER_PORT, WEBSERVER_DEBUG) take the next layer.
+# CLI args (--host, --port, --debug) take the highest priority.
+
+host  = "127.0.0.1"
+port  = 8080
+debug = false
