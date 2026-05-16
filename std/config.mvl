@@ -1,0 +1,577 @@
+//! std.config — layered configuration loading with validation.
+//!
+//! Implements the Defaults → File → Env → CLI args layered config pattern.
+//! Type safety comes from struct construction, not from parsing:
+//!
+//!   let cfg = ServerConfig {
+//!       port: as_int(get_path(merged, "port").unwrap_or(ConfigValue::Int(8080)))?,
+//!       host: as_string(get_path(merged, "host").unwrap_or(ConfigValue::String("localhost")))?,
+//!   };
+//!
+//! Import:
+//!   use std.config.{ConfigValue, ConfigError, merge, with_env, get_path,
+//!                   as_int, as_string, as_bool, as_float, as_list, as_map,
+//!                   from_json, from_toml,
+//!                   find_config, xdg_config_home, xdg_data_home, xdg_cache_home}
+//!
+//! Effects:
+//!   Env            — with_env, xdg_config_home, xdg_data_home, xdg_cache_home
+//!   Env + FileRead — find_config
+
+use std.env.{env_var}
+use std.io.{path, path_exists}
+use std.json.{Value}
+use std.toml.{TomlValue}
+use std.collections.{map_get, map_put, map_keys, map_len}
+
+// ── Error type ────────────────────────────────────────────────────────────────
+
+/// Errors produced by config helpers.
+///
+/// `MissingKey(key)` — a required key was absent.
+/// `TypeMismatch(msg)` — value was present but had the wrong type.
+/// `EnvError(msg)` — environment variable could not be processed.
+pub type ConfigError = enum {
+    MissingKey(String),
+    TypeMismatch(String),
+    EnvError(String),
+}
+
+// ── ConfigValue ───────────────────────────────────────────────────────────────
+
+/// A unified, dynamically-typed configuration value.
+///
+/// Serves as the common interchange type between TOML, JSON, env-var, and
+/// CLI-arg config sources. Type safety is enforced at struct construction time
+/// via the `as_*` helpers and refinement types on struct fields.
+pub type ConfigValue = enum {
+    Null,
+    Bool(Bool),
+    Int(Int),
+    Float(Float),
+    String(String),
+    List(List[ConfigValue]),
+    Map(Map[String, ConfigValue]),
+}
+
+// ── Empty map helper ──────────────────────────────────────────────────────────
+
+// `{}` in MVL parses as an empty block expression `()`, not an empty map
+// literal.  Workaround: create a one-entry sentinel map and remove the key.
+// Identical to `empty_object()` in std.json and `toml_empty_table()` in
+// std.toml — each module carries its own typed variant.
+fn empty_config_map() -> Map[String, ConfigValue] {
+    let m: ref Map[String, ConfigValue] = {"__mvl_cfg_init__": ConfigValue::Null};
+    m.remove("__mvl_cfg_init__");
+    m
+}
+
+// ── Conversion: from std.json.Value ──────────────────────────────────────────
+
+/// Convert a parsed JSON `Value` into a `ConfigValue`.
+///
+/// `Value::Number` is stored as `Int` when it has no fractional part,
+/// otherwise as `Float`. All other variants map 1-to-1.
+pub transparent partial fn from_json(v: Value) -> ConfigValue {
+    match v {
+        Value::Null      => ConfigValue::Null,
+        Value::Bool(b)   => ConfigValue::Bool(b),
+        Value::Number(n) => {
+            let i: Int = n.to_int();
+            if i.to_float() == n {
+                ConfigValue::Int(i)
+            } else {
+                ConfigValue::Float(n)
+            }
+        },
+        Value::String(s) => ConfigValue::String(s),
+        Value::Array(a)  => ConfigValue::List(from_json_list(a)),
+        Value::Object(o) => ConfigValue::Map(from_json_map(o)),
+    }
+}
+
+partial fn from_json_list(arr: List[Value]) -> List[ConfigValue] {
+    let len: Int = list_len(arr);
+    let out: ref List[ConfigValue] = [];
+    let i: ref Int = 0;
+    while i < len {
+        match list_get(arr, i) {
+            Some(v) => { out = list_push(out, from_json(v)) },
+            None    => {},
+        }
+        i = i + 1
+    }
+    out
+}
+
+partial fn from_json_map(obj: Map[String, Value]) -> Map[String, ConfigValue] {
+    let keys: List[String] = map_keys(obj);
+    let len: Int = list_len(keys);
+    let out: ref Map[String, ConfigValue] = empty_config_map();
+    let i: ref Int = 0;
+    while i < len {
+        match list_get(keys, i) {
+            Some(k) => {
+                match map_get(obj, k) {
+                    Some(v) => { out = map_put(out, k, from_json(v)) },
+                    None    => {},
+                }
+            },
+            None => {},
+        }
+        i = i + 1
+    }
+    out
+}
+
+// ── Conversion: from std.toml.TomlValue ──────────────────────────────────────
+
+/// Convert a parsed TOML `TomlValue` into a `ConfigValue`.
+///
+/// TOML integers become `Int`, TOML floats become `Float`, TOML datetime
+/// strings become `String`. All other variants map 1-to-1.
+pub transparent partial fn from_toml(v: TomlValue) -> ConfigValue {
+    match v {
+        TomlValue::TStr(s)      => ConfigValue::String(s),
+        TomlValue::TInt(n)      => ConfigValue::Int(n),
+        TomlValue::TFloat(f)    => ConfigValue::Float(f),
+        TomlValue::TBool(b)     => ConfigValue::Bool(b),
+        TomlValue::TDateTime(s) => ConfigValue::String(s),
+        TomlValue::TArray(a)    => ConfigValue::List(from_toml_list(a)),
+        TomlValue::TTable(t)    => ConfigValue::Map(from_toml_map(t)),
+    }
+}
+
+partial fn from_toml_list(arr: List[TomlValue]) -> List[ConfigValue] {
+    let len: Int = list_len(arr);
+    let out: ref List[ConfigValue] = [];
+    let i: ref Int = 0;
+    while i < len {
+        match list_get(arr, i) {
+            Some(v) => { out = list_push(out, from_toml(v)) },
+            None    => {},
+        }
+        i = i + 1
+    }
+    out
+}
+
+partial fn from_toml_map(tbl: Map[String, TomlValue]) -> Map[String, ConfigValue] {
+    let keys: List[String] = map_keys(tbl);
+    let len: Int = list_len(keys);
+    let out: ref Map[String, ConfigValue] = empty_config_map();
+    let i: ref Int = 0;
+    while i < len {
+        match list_get(keys, i) {
+            Some(k) => {
+                match map_get(tbl, k) {
+                    Some(v) => { out = map_put(out, k, from_toml(v)) },
+                    None    => {},
+                }
+            },
+            None => {},
+        }
+        i = i + 1
+    }
+    out
+}
+
+// ── merge ─────────────────────────────────────────────────────────────────────
+
+/// Deep-merge two config values. Overlay values win on conflict.
+///
+/// When both `base` and `overlay` are `Map`, keys are merged recursively:
+/// overlay keys replace base keys, but nested Maps are merged rather than
+/// replaced wholesale. For all other combinations the overlay value wins.
+///
+/// Example:
+///   merge(
+///     Map { "port": Int(8080), "db": Map { "pool": Int(5) } },
+///     Map { "db": Map { "pool": Int(20) } }
+///   )
+///   // → Map { "port": Int(8080), "db": Map { "pool": Int(20) } }
+pub transparent partial fn merge(base: ConfigValue, overlay: ConfigValue) -> ConfigValue {
+    match base {
+        ConfigValue::Map(b) => {
+            match overlay {
+                ConfigValue::Map(o) => ConfigValue::Map(merge_maps(b, o)),
+                _                   => overlay,
+            }
+        },
+        _ => overlay,
+    }
+}
+
+partial fn merge_maps(
+    base: Map[String, ConfigValue],
+    overlay: Map[String, ConfigValue],
+) -> Map[String, ConfigValue] {
+    let keys: List[String] = map_keys(overlay);
+    let len: Int = list_len(keys);
+    let out: ref Map[String, ConfigValue] = base;
+    let i: ref Int = 0;
+    while i < len {
+        match list_get(keys, i) {
+            Some(k) => {
+                match map_get(overlay, k) {
+                    Some(ov) => {
+                        let merged_val: ConfigValue = match map_get(out, k) {
+                            Some(bv) => merge(bv, ov),
+                            None     => ov,
+                        };
+                        out = map_put(out, k, merged_val)
+                    },
+                    None => {},
+                }
+            },
+            None => {},
+        }
+        i = i + 1
+    }
+    out
+}
+
+// ── get_path ──────────────────────────────────────────────────────────────────
+
+/// Get a nested value by dot-separated path.
+///
+/// Returns `None` if any segment along the path is missing or if a non-Map
+/// value is encountered before the path is exhausted.
+///
+/// Example:
+///   get_path(cfg, "database.pool_size")  // → Some(Int(10))
+///   get_path(cfg, "missing")             // → None
+pub transparent partial fn get_path(cfg: ConfigValue, key_path: String) -> Option[ConfigValue] {
+    let parts: List[String] = str_split(key_path, ".");
+    get_path_parts(cfg, parts, 0)
+}
+
+partial fn get_path_parts(cfg: ConfigValue, parts: List[String], idx: Int) -> Option[ConfigValue] {
+    let len: Int = list_len(parts);
+    if idx >= len {
+        Some(cfg)
+    } else {
+        match cfg {
+            ConfigValue::Map(m) => {
+                match list_get(parts, idx) {
+                    Some(key) => {
+                        match map_get(m, key) {
+                            Some(v) => get_path_parts(v, parts, idx + 1),
+                            None    => None,
+                        }
+                    },
+                    None => None,
+                }
+            },
+            _ => None,
+        }
+    }
+}
+
+// ── Type extraction helpers ───────────────────────────────────────────────────
+
+/// Extract an `Int` from a `ConfigValue`.
+///
+/// Accepts `Int` directly, and also coerces `String` values by attempting
+/// integer parsing (useful for env-var overlay values).
+/// `Bool` is coerced to 0 / 1.
+pub fn as_int(v: ConfigValue) -> Result[Int, ConfigError] {
+    match v {
+        ConfigValue::Int(n)    => Ok(n),
+        ConfigValue::Bool(b)   => Ok(if b { 1 } else { 0 }),
+        ConfigValue::String(s) => {
+            match str_parse_int(str_trim(s)) {
+                Ok(n)  => Ok(n),
+                Err(_) => Err(ConfigError::TypeMismatch(
+                    str_concat("expected Int, got String: ", s)
+                )),
+            }
+        },
+        ConfigValue::Float(_)  => Err(ConfigError::TypeMismatch("expected Int, got Float")),
+        ConfigValue::Null      => Err(ConfigError::MissingKey("null")),
+        _                      => Err(ConfigError::TypeMismatch("expected Int")),
+    }
+}
+
+/// Extract a `String` from a `ConfigValue`.
+///
+/// Accepts `String` directly. Also converts `Int`, `Float`, and `Bool` to
+/// their string representations for convenience.
+pub fn as_string(v: ConfigValue) -> Result[String, ConfigError] {
+    match v {
+        ConfigValue::String(s) => Ok(s),
+        ConfigValue::Int(n)    => Ok(n.to_string()),
+        ConfigValue::Float(f)  => Ok(f.to_string()),
+        ConfigValue::Bool(b)   => Ok(if b { "true" } else { "false" }),
+        ConfigValue::Null      => Err(ConfigError::MissingKey("null")),
+        _                      => Err(ConfigError::TypeMismatch("expected String")),
+    }
+}
+
+/// Extract a `Bool` from a `ConfigValue`.
+///
+/// Accepts `Bool` directly. Also coerces `String` values "true" and "false"
+/// (case-insensitive).
+pub fn as_bool(v: ConfigValue) -> Result[Bool, ConfigError] {
+    match v {
+        ConfigValue::Bool(b)   => Ok(b),
+        ConfigValue::String(s) => {
+            let lower: String = str_to_lower(str_trim(s));
+            if lower == "true" {
+                Ok(true)
+            } else if lower == "false" {
+                Ok(false)
+            } else {
+                Err(ConfigError::TypeMismatch(
+                    str_concat("expected Bool (true/false), got: ", s)
+                ))
+            }
+        },
+        ConfigValue::Null      => Err(ConfigError::MissingKey("null")),
+        _                      => Err(ConfigError::TypeMismatch("expected Bool")),
+    }
+}
+
+/// Extract a `Float` from a `ConfigValue`.
+///
+/// Accepts `Float` and `Int` (which is widened losslessly). Also coerces
+/// `String` values by attempting float parsing.
+pub fn as_float(v: ConfigValue) -> Result[Float, ConfigError] {
+    match v {
+        ConfigValue::Float(f)  => Ok(f),
+        ConfigValue::Int(n)    => Ok(n.to_float()),
+        ConfigValue::String(s) => {
+            match str_parse_float(str_trim(s)) {
+                Ok(f)  => Ok(f),
+                Err(_) => Err(ConfigError::TypeMismatch(
+                    str_concat("expected Float, got String: ", s)
+                )),
+            }
+        },
+        ConfigValue::Null      => Err(ConfigError::MissingKey("null")),
+        _                      => Err(ConfigError::TypeMismatch("expected Float")),
+    }
+}
+
+/// Extract a `List[ConfigValue]` from a `ConfigValue`.
+pub fn as_list(v: ConfigValue) -> Result[List[ConfigValue], ConfigError] {
+    match v {
+        ConfigValue::List(xs) => Ok(xs),
+        ConfigValue::Null     => Err(ConfigError::MissingKey("null")),
+        _                     => Err(ConfigError::TypeMismatch("expected List")),
+    }
+}
+
+/// Extract a `Map[String, ConfigValue]` from a `ConfigValue`.
+pub fn as_map(v: ConfigValue) -> Result[Map[String, ConfigValue], ConfigError] {
+    match v {
+        ConfigValue::Map(m) => Ok(m),
+        ConfigValue::Null   => Err(ConfigError::MissingKey("null")),
+        _                   => Err(ConfigError::TypeMismatch("expected Map")),
+    }
+}
+
+// ── Environment variable overlay ──────────────────────────────────────────────
+
+/// Parse a raw string (from an env var) into a typed `ConfigValue`.
+///
+/// Tries Bool ("true"/"false"), then Int, then Float, then falls back to
+/// String. All comparisons are case-insensitive for Bool.
+fn parse_env_value(raw: Tainted[String]) -> ConfigValue {
+    // Coerce Tainted[String] → String via str_concat (identifier arg gets .into()).
+    let s: String = str_concat(raw, "");
+    let lower: String = str_to_lower(str_trim(s));
+    if lower == "true" {
+        ConfigValue::Bool(true)
+    } else if lower == "false" {
+        ConfigValue::Bool(false)
+    } else {
+        match str_parse_int(str_trim(s)) {
+            Ok(n)  => ConfigValue::Int(n),
+            Err(_) => {
+                match str_parse_float(str_trim(s)) {
+                    Ok(f)  => ConfigValue::Float(f),
+                    Err(_) => ConfigValue::String(s),
+                }
+            },
+        }
+    }
+}
+
+/// Recursively build a config overlay from environment variables.
+///
+/// For each leaf key in `cfg`, constructs the env var name as:
+///   PREFIX_PARENT_KEY  (all uppercase, parent path joined by "_")
+/// If the env var is set, the value is parsed and placed in the overlay map.
+/// Nested Maps are processed recursively.
+partial fn build_env_overlay(
+    cfg: ConfigValue,
+    prefix: String,
+    parent_path: String,
+) -> ConfigValue ! Env {
+    match cfg {
+        ConfigValue::Map(m) => {
+            let keys: List[String] = map_keys(m);
+            let len: Int = list_len(keys);
+            let overlay: ref Map[String, ConfigValue] = empty_config_map();
+            let i: ref Int = 0;
+            while i < len {
+                match list_get(keys, i) {
+                    Some(k) => {
+                        let upper_k: String = str_to_upper(k);
+                        let env_key: String = if str_len(parent_path) == 0 {
+                            str_concat(prefix, str_concat("_", upper_k))
+                        } else {
+                            str_concat(prefix, str_concat("_",
+                                str_concat(parent_path, str_concat("_", upper_k))))
+                        };
+                        match map_get(m, k) {
+                            Some(child) => {
+                                match child {
+                                    ConfigValue::Map(_) => {
+                                        let child_path: String = if str_len(parent_path) == 0 {
+                                            upper_k
+                                        } else {
+                                            str_concat(parent_path, str_concat("_", upper_k))
+                                        };
+                                        let child_overlay: ConfigValue =
+                                            build_env_overlay(child, prefix, child_path);
+                                        overlay = map_put(overlay, k, child_overlay)
+                                    },
+                                    _ => {
+                                        match env_var(env_key) {
+                                            Some(raw) => {
+                                                overlay = map_put(overlay, k,
+                                                    parse_env_value(raw))
+                                            },
+                                            None => {},
+                                        }
+                                    },
+                                }
+                            },
+                            None => {},
+                        }
+                    },
+                    None => {},
+                }
+                i = i + 1
+            }
+            ConfigValue::Map(overlay)
+        },
+        _ => ConfigValue::Map(empty_config_map()),
+    }
+}
+
+/// Overlay environment variables matching `prefix` onto `cfg`.
+///
+/// For each leaf key in `cfg`, looks up an env var named:
+///   PREFIX_KEY             for top-level keys
+///   PREFIX_SECTION_KEY     for one level of nesting
+///
+/// Values are type-inferred: "true"/"false" → Bool, integers → Int,
+/// decimals → Float, everything else → String.
+///
+/// Example:
+///   // cfg has { "port": Int(8080), "database": { "pool_size": Int(5) } }
+///   // env: MYAPP_PORT=9090, MYAPP_DATABASE_POOL_SIZE=20
+///   with_env(cfg, "MYAPP")
+///   // → { "port": Int(9090), "database": { "pool_size": Int(20) } }
+pub partial fn with_env(cfg: ConfigValue, prefix: String) -> Result[ConfigValue, ConfigError] ! Env {
+    let env_overlay: ConfigValue = build_env_overlay(cfg, prefix, "");
+    Ok(merge(cfg, env_overlay))
+}
+
+// ── XDG path helpers ──────────────────────────────────────────────────────────
+
+/// Return the XDG config home directory.
+///
+/// Uses $XDG_CONFIG_HOME if set, otherwise falls back to $HOME/.config.
+/// Falls back to the literal "~/.config" when HOME is also unset.
+pub fn xdg_config_home() -> String ! Env {
+    match env_var("XDG_CONFIG_HOME") {
+        Some(v) => str_concat(v, ""),
+        None    => {
+            match env_var("HOME") {
+                Some(h) => str_concat(h, "/.config"),
+                None    => "~/.config",
+            }
+        },
+    }
+}
+
+/// Return the XDG data home directory.
+///
+/// Uses $XDG_DATA_HOME if set, otherwise $HOME/.local/share.
+pub fn xdg_data_home() -> String ! Env {
+    match env_var("XDG_DATA_HOME") {
+        Some(v) => str_concat(v, ""),
+        None    => {
+            match env_var("HOME") {
+                Some(h) => str_concat(h, "/.local/share"),
+                None    => "~/.local/share",
+            }
+        },
+    }
+}
+
+/// Return the XDG cache home directory.
+///
+/// Uses $XDG_CACHE_HOME if set, otherwise $HOME/.cache.
+pub fn xdg_cache_home() -> String ! Env {
+    match env_var("XDG_CACHE_HOME") {
+        Some(v) => str_concat(v, ""),
+        None    => {
+            match env_var("HOME") {
+                Some(h) => str_concat(h, "/.cache"),
+                None    => "~/.cache",
+            }
+        },
+    }
+}
+
+// ── Config file discovery ─────────────────────────────────────────────────────
+
+/// Find a config file using the standard search order.
+///
+/// Returns the first path that exists, or `None` if the file is not found.
+///
+/// Search order (most specific first):
+///   1. ./filename                          (current directory)
+///   2. ./.app_name/filename                (local hidden dir)
+///   3. $XDG_CONFIG_HOME/app_name/filename  (user config, XDG)
+///   4. /etc/app_name/filename              (system config, Linux)
+///
+/// Note: requires `path_exists` runtime support. As of this writing
+/// `path_exists` is a stub — once implemented, this function will work
+/// automatically on both backends.
+pub fn find_config(app_name: String, filename: String) -> Option[String] ! Env + FileRead {
+    // 1. Current directory
+    if path_exists(path(filename)) {
+        Some(filename)
+    } else {
+        // 2. Local hidden directory
+        let local_hidden: String =
+            str_concat(".", str_concat(app_name, str_concat("/", filename)));
+        if path_exists(path(local_hidden)) {
+            Some(local_hidden)
+        } else {
+            // 3. XDG config home
+            let xdg_dir: String = xdg_config_home();
+            let xdg_cfg: String =
+                str_concat(xdg_dir, str_concat("/",
+                    str_concat(app_name, str_concat("/", filename))));
+            if path_exists(path(xdg_cfg)) {
+                Some(xdg_cfg)
+            } else {
+                // 4. System config
+                let sys_cfg: String =
+                    str_concat("/etc/", str_concat(app_name, str_concat("/", filename)));
+                if path_exists(path(sys_cfg)) {
+                    Some(sys_cfg)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+}
