@@ -216,6 +216,12 @@ pub fn run(
         {
             *dst += src;
         }
+        if solver_mode == SolverMode::Layered && rc.by_layer[5] > 0 {
+            eprintln!(
+                "warning: {file_str}: {} refinement(s) required Z3 — consider simplifying predicates",
+                rc.by_layer[5]
+            );
+        }
 
         if let Some(req) = req_filter {
             // Single-requirement mode: run only the requested pass.
@@ -316,12 +322,7 @@ pub fn run(
     // Print per-layer refinement stats when requested.
     if refinement_stats {
         let total = total_proven + total_runtime + total_failed;
-        let mode_label = match solver_mode {
-            SolverMode::Layered => "layered",
-            SolverMode::Z3Only => "z3-only",
-            SolverMode::FastOnly => "fast-only",
-        };
-        eprintln!("refinement stats (solver: {mode_label}):");
+        eprintln!("refinement stats (solver: {}):", solver_mode.as_str());
         eprintln!("  proven:        {total_proven}");
         eprintln!("  runtime-check: {total_runtime}");
         eprintln!("  failed:        {total_failed}");

@@ -1182,12 +1182,11 @@ pub(crate) fn check_arg_against_pred(
     var_refs: &HashMap<String, Option<RefExpr>>,
     fn_decls: &HashMap<String, FnDecl>,
 ) -> RefResult {
-    RefinementSolver::try_trivial(pred, arg, var_refs, fn_decls)
-        .or_else(|| RefinementSolver::try_interval(pred, arg, var_refs))
-        .or_else(|| RefinementSolver::try_symbolic(pred, arg, var_refs, fn_decls))
-        .or_else(|| RefinementSolver::try_cooper(pred, arg, var_refs))
-        .or_else(|| RefinementSolver::try_z3(pred, arg, var_refs))
-        .unwrap_or(RefResult::RuntimeCheck)
+    let mut counts = RefinementCounts {
+        mode: SolverMode::Layered,
+        ..Default::default()
+    };
+    check_arg_against_pred_counted(arg, pred, var_refs, fn_decls, &mut counts)
 }
 
 // ── Predicate display ─────────────────────────────────────────────────────────
@@ -1337,6 +1336,89 @@ mod tests {
         }
         // Layers 1–4 must NOT have been credited.
         assert_eq!(counts.by_layer[1..5].iter().sum::<usize>(), 0);
+    }
+
+    #[test]
+    fn failed_outcome_does_not_credit_by_layer() {
+        // pred: self > 0, arg: 0 — Layer 1 definitively refutes this.
+        // by_layer must stay all-zero: we only count proofs, not failures.
+        let pred = self_gt(0);
+        let arg = int_lit(0);
+        let var_refs = HashMap::new();
+        let fn_decls = HashMap::new();
+        for mode in [SolverMode::Layered, SolverMode::FastOnly] {
+            let mut counts = make_counts(mode);
+            let result =
+                check_arg_against_pred_counted(&arg, &pred, &var_refs, &fn_decls, &mut counts);
+            assert!(
+                matches!(result, RefResult::Failed { .. }),
+                "mode {mode:?}: expected Failed for 0 > 0"
+            );
+            assert_eq!(
+                counts.by_layer.iter().sum::<usize>(),
+                0,
+                "mode {mode:?}: by_layer should be zero for Failed results"
+            );
+        }
+    }
+
+    #[test]
+    fn layered_mode_credits_layer2_for_interval_proof() {
+        // Variable `x` carries hypothesis `self >= 1`, callee requires `self > 0`.
+        // Layer 1 (trivial) cannot prove this from hypothesis alone; Layer 2 (interval) can.
+        use crate::mvl::parser::ast::CmpOp;
+        let pred = self_gt(0); // requires self > 0
+        let arg = Expr::Ident("x".into(), dummy_span());
+        // Hypothesis: x >= 1  (i.e. self >= 1)
+        let hypothesis = RefExpr::Compare {
+            op: CmpOp::Ge,
+            left: Box::new(RefExpr::Ident {
+                name: "self".into(),
+                span: dummy_span(),
+            }),
+            right: Box::new(RefExpr::Integer {
+                value: 1,
+                span: dummy_span(),
+            }),
+            span: dummy_span(),
+        };
+        let mut var_refs = HashMap::new();
+        var_refs.insert("x".into(), Some(hypothesis));
+        let fn_decls = HashMap::new();
+        let mut counts = make_counts(SolverMode::Layered);
+        let result = check_arg_against_pred_counted(&arg, &pred, &var_refs, &fn_decls, &mut counts);
+        assert_eq!(
+            result,
+            RefResult::Proven,
+            "Layer 2 should prove x>=1 satisfies self>0"
+        );
+        assert_eq!(counts.by_layer[2], 1, "Layer 2 should be credited");
+        assert_eq!(counts.by_layer[1], 0, "Layer 1 should not have resolved it");
+        // FastOnly also includes Layer 2
+        let mut counts2 = make_counts(SolverMode::FastOnly);
+        var_refs.insert(
+            "x".into(),
+            Some(RefExpr::Compare {
+                op: CmpOp::Ge,
+                left: Box::new(RefExpr::Ident {
+                    name: "self".into(),
+                    span: dummy_span(),
+                }),
+                right: Box::new(RefExpr::Integer {
+                    value: 1,
+                    span: dummy_span(),
+                }),
+                span: dummy_span(),
+            }),
+        );
+        let result2 =
+            check_arg_against_pred_counted(&arg, &pred, &var_refs, &fn_decls, &mut counts2);
+        assert_eq!(
+            result2,
+            RefResult::Proven,
+            "FastOnly Layer 2 should also prove it"
+        );
+        assert_eq!(counts2.by_layer[2], 1);
     }
 
     #[test]

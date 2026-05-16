@@ -335,3 +335,107 @@ fn req11_invalid_declassify_names_the_actual_type() {
         &["error[req11]", "declassify", "`Int`"],
     );
 }
+
+// ── Refinement solver CLI flags ───────────────────────────────────────────────
+
+fn corpus(name: &str) -> String {
+    format!("{}/tests/corpus/{name}", env!("CARGO_MANIFEST_DIR"))
+}
+
+/// Run `mvl check` with extra args on a file; assert it *succeeds* (exit 0).
+/// Returns stderr so callers can assert on diagnostic output.
+fn check_ok_with_args(path: &str, extra_args: &[&str]) -> String {
+    let mut cmd = Command::new(mvl_bin());
+    cmd.arg("check").arg(path);
+    for arg in extra_args {
+        cmd.arg(arg);
+    }
+    let out = cmd
+        .output()
+        .unwrap_or_else(|e| panic!("failed to run mvl check: {e}"));
+    assert!(
+        out.status.success(),
+        "expected check to succeed but it failed.\nstderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+/// Run `mvl check` with extra args on a file; assert it *fails* (non-zero exit).
+/// Returns stderr.
+fn check_fails_with_args(path: &str, extra_args: &[&str]) -> String {
+    let mut cmd = Command::new(mvl_bin());
+    cmd.arg("check").arg(path);
+    for arg in extra_args {
+        cmd.arg(arg);
+    }
+    let out = cmd
+        .output()
+        .unwrap_or_else(|e| panic!("failed to run mvl check: {e}"));
+    assert!(
+        !out.status.success(),
+        "expected check to fail but it succeeded"
+    );
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+#[test]
+fn refinement_solver_bogus_mode_exits_with_error() {
+    let stderr = check_fails_with_args(
+        &corpus("07_refinements/refinements_fully_proven.mvl"),
+        &["--refinement-solver=bogus"],
+    );
+    assert_contains(
+        &stderr,
+        "--refinement-solver=bogus",
+        &["unknown refinement-solver", "bogus"],
+    );
+}
+
+#[test]
+fn refinement_stats_prints_header_and_layer_for_proven_file() {
+    let stderr = check_ok_with_args(
+        &corpus("07_refinements/refinements_fully_proven.mvl"),
+        &["--refinement-stats"],
+    );
+    assert_contains(
+        &stderr,
+        "--refinement-stats proven",
+        &[
+            "refinement stats (solver: layered)",
+            "proven:",
+            "L1:trivial",
+        ],
+    );
+}
+
+#[test]
+fn refinement_stats_respects_solver_mode_label() {
+    let stderr = check_ok_with_args(
+        &corpus("07_refinements/refinements_fully_proven.mvl"),
+        &["--refinement-stats", "--refinement-solver=fast-only"],
+    );
+    assert_contains(
+        &stderr,
+        "--refinement-stats fast-only",
+        &["refinement stats (solver: fast-only)"],
+    );
+}
+
+#[test]
+fn refinement_stats_no_layer_lines_when_zero_proven() {
+    // A file with no refinement call sites should print stats but no layer lines.
+    let stderr = check_ok_with_args(
+        &corpus("01_basics/expressions.mvl"),
+        &["--refinement-stats"],
+    );
+    assert_contains(
+        &stderr,
+        "--refinement-stats zero-proven",
+        &["refinement stats (solver: layered)", "proven:"],
+    );
+    assert!(
+        !stderr.contains("L1:trivial"),
+        "expected no layer line when proven=0, got:\n{stderr}"
+    );
+}

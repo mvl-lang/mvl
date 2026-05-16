@@ -45,6 +45,17 @@ pub enum SolverMode {
     FastOnly,
 }
 
+impl SolverMode {
+    /// Canonical CLI string for this mode (matches `--refinement-solver=<value>`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SolverMode::Layered => "layered",
+            SolverMode::Z3Only => "z3-only",
+            SolverMode::FastOnly => "fast-only",
+        }
+    }
+}
+
 // ── Outcome type ──────────────────────────────────────────────────────────────
 
 /// Three-way outcome for a single refinement predicate check at a call site.
