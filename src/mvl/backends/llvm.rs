@@ -617,6 +617,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                         params: fd.params.clone(),
                         return_type: fd.return_type.clone(),
                         effects: fd.effects.clone(),
+                        totality: fd.totality.clone(),
                         span: fd.span,
                     };
                     self.emit_extern_rust_fn_body(&efn, i64_ty, ptr_ty);

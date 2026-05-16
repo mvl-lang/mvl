@@ -47,10 +47,24 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         seen.insert(module_name, test_file.clone());
     }
 
-    // Use a per-invocation temp directory to avoid concurrent-run collisions.
+    // Use a per-invocation temp directory for source files — avoids concurrent
+    // collision when multiple `mvl test` processes run on the same input.
+    // A stable CARGO_TARGET_DIR (keyed on the canonical input path) is shared
+    // across runs so compiled dependencies are cached between invocations.
     let crate_name = "mvl_test";
+    let path_hash = {
+        use std::hash::{Hash, Hasher};
+        let canonical =
+            std::fs::canonicalize(path).unwrap_or_else(|_| std::path::PathBuf::from(path));
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        canonical.hash(&mut h);
+        h.finish()
+    };
     let tmp_dir = std::env::temp_dir().join(format!("mvl_test_{}", process::id()));
     let src_dir = tmp_dir.join("src");
+    // Stable target dir shared across runs: compiled deps are reused even when
+    // source files are regenerated (e.g. on every `make test` invocation).
+    let cargo_target_dir = std::env::temp_dir().join(format!("mvl_test_target_{path_hash:016x}"));
 
     // Remove any stale directory from a previous run at this path, then recreate.
     if tmp_dir.exists() {
@@ -296,26 +310,13 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         combined_rs.push_str(&transpiler::emit_cov_report_test(total_branches));
     }
 
-    // Write Cargo.toml for the test runner, adding mvl_runtime if any module needs it.
+    // Write Cargo.toml for the test runner, pointing mvl_runtime at its absolute
+    // source path so no per-invocation copy is needed (and the shared target dir
+    // caches the compiled crate across runs).
+    let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("runtime")
+        .join("rust");
     let mvl_runtime_dep = if need_mvl_runtime {
-        "mvl_runtime = { path = \"./mvl_runtime\" }  # MVL security labels and prelude\n"
-    } else {
-        ""
-    };
-    let cargo_toml = format!(
-        "[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n{mvl_runtime_dep}"
-    );
-    fs::write(tmp_dir.join("Cargo.toml"), &cargo_toml).unwrap_or_else(|e| {
-        eprintln!("Cannot write Cargo.toml: {e}");
-        process::exit(1);
-    });
-
-    // Copy mvl_runtime into the temp dir if needed (parallel builds each get their own copy).
-    if need_mvl_runtime {
-        let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("runtime")
-            .join("rust");
-        let runtime_dst = tmp_dir.join("mvl_runtime");
         if !runtime_src.exists() {
             eprintln!(
                 "error: mvl_runtime not found at {} — cannot build test crate with stdlib/extern",
@@ -323,12 +324,23 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
             );
             process::exit(1);
         }
-        super::copy_dir_recursive(&runtime_src, &runtime_dst).unwrap_or_else(|e| {
-            eprintln!("error: cannot copy mvl_runtime: {e}");
-            process::exit(1);
-        });
-    }
-    fs::write(src_dir.join("lib.rs"), &combined_rs).unwrap_or_else(|e| {
+        format!(
+            "mvl_runtime = {{ path = \"{}\" }}  # MVL security labels and prelude\n",
+            runtime_src.display()
+        )
+    } else {
+        String::new()
+    };
+    let cargo_toml = format!(
+        "[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n{mvl_runtime_dep}"
+    );
+
+    fs::write(tmp_dir.join("Cargo.toml"), &cargo_toml).unwrap_or_else(|e| {
+        eprintln!("Cannot write Cargo.toml: {e}");
+        process::exit(1);
+    });
+    let lib_rs_path = src_dir.join("lib.rs");
+    fs::write(&lib_rs_path, &combined_rs).unwrap_or_else(|e| {
         eprintln!("Cannot write lib.rs: {e}");
         process::exit(1);
     });
@@ -343,7 +355,11 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     let cov_out_path = tmp_dir.join("mvl_cov.txt");
 
     let mut cmd = process::Command::new("cargo");
-    cmd.arg("test").arg("--lib").current_dir(&tmp_dir);
+    cmd.arg("test")
+        .arg("--lib")
+        .arg("--target-dir")
+        .arg(&cargo_target_dir)
+        .current_dir(&tmp_dir);
     if quiet && !coverage {
         cmd.arg("-q");
     }

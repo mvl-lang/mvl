@@ -503,18 +503,18 @@ impl RustEmitter {
             let saved_coverage = self.coverage.take();
             let saved_mutation = self.mutation.take();
             let saved_mcdc = self.mcdc.take(); // don't instrument stdlib prelude
+                                               // Emit extern blocks first so extern_fns is populated before any
+                                               // prelude function bodies that call those extern functions are emitted.
+            for ed in prelude_externs {
+                emit_extern_decl(self, ed);
+                self.blank();
+            }
             for td in prelude_types {
                 emit_type_decl(self, td);
                 self.blank();
             }
             for fd in prelude_fns {
                 emit_fn_decl(self, fd);
-                self.blank();
-            }
-            // Emit extern "rust" blocks from packages (pkg.*) so that call sites
-            // can reference the declared functions and calls are wrapped in unsafe{}.
-            for ed in prelude_externs {
-                emit_extern_decl(self, ed);
                 self.blank();
             }
             self.coverage = saved_coverage;
@@ -574,7 +574,10 @@ impl RustEmitter {
                     // Use `crate::` prefix for Rust 2018 edition path clarity.
                     if ud.path.len() > 1 {
                         let source_mod = ud.path[..ud.path.len() - 1].join("::");
-                        if source_mod != "std" {
+                        let is_std = source_mod == "std"
+                            || ud.path.first().map(|s| s == "std").unwrap_or(false);
+                        let is_pkg = ud.path.first().map(|s| s == "pkg").unwrap_or(false);
+                        if !is_std && !is_pkg {
                             // In test-stub mode (source file included in test crate) skip
                             // cross-module imports — the test crate re-declares types locally
                             // (workaround for #96) and emitting `use crate::mod::Type` for a

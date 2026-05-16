@@ -152,6 +152,195 @@ pub fn check_implicit_flows(prog: &Program, errors: &mut Vec<CheckError>) {
 }
 
 /// Count all `declassify()` and `sanitize()` call sites in the program.
+/// Returns `true` if any prelude function that is called from `prog` carries
+/// IFC-labeled parameters or a labeled return type.
+///
+/// Used to populate [`crate::mvl::checker::CheckResult::has_prelude_ifc_boundary`]
+/// so the IFC pass recognises cross-module security lattice exercise (e.g.
+/// `main.mvl` calling `execute(db, sql: Clean[String])`).
+pub fn prelude_has_ifc_boundary(
+    prelude_a: &[Program],
+    prelude_b: &[&Program],
+    prog: &Program,
+) -> bool {
+    let called = collect_called_fn_names(prog);
+    let fn_has_label = |params: &[crate::mvl::parser::ast::Param], ret: &TypeExpr| -> bool {
+        params.iter().any(|p| label_of_type_expr(&p.ty).is_some())
+            || label_of_type_expr(ret).is_some()
+    };
+    prelude_a
+        .iter()
+        .chain(prelude_b.iter().copied())
+        .flat_map(|p| p.declarations.iter())
+        .any(|d| match d {
+            Decl::Fn(fd) => called.contains(&fd.name) && fn_has_label(&fd.params, &fd.return_type),
+            Decl::Extern(ed) => ed
+                .fns
+                .iter()
+                .any(|ef| called.contains(&ef.name) && fn_has_label(&ef.params, &ef.return_type)),
+            _ => false,
+        })
+}
+
+/// Collect all function names called anywhere in `prog`'s function bodies.
+fn collect_called_fn_names(prog: &Program) -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+    for decl in &prog.declarations {
+        match decl {
+            Decl::Fn(fd) => collect_calls_in_block(&fd.body, &mut names),
+            Decl::Impl(id) => {
+                for m in &id.methods {
+                    collect_calls_in_block(&m.body, &mut names);
+                }
+            }
+            Decl::Actor(ad) => {
+                for m in &ad.methods {
+                    collect_calls_in_block(&m.body, &mut names);
+                }
+            }
+            _ => {}
+        }
+    }
+    names
+}
+
+fn collect_calls_in_block(block: &Block, names: &mut std::collections::HashSet<String>) {
+    for stmt in &block.stmts {
+        collect_calls_in_stmt(stmt, names);
+    }
+}
+
+fn collect_calls_in_stmt(
+    stmt: &crate::mvl::parser::ast::Stmt,
+    names: &mut std::collections::HashSet<String>,
+) {
+    match stmt {
+        crate::mvl::parser::ast::Stmt::Let { init, .. } => collect_calls_in_expr(init, names),
+        crate::mvl::parser::ast::Stmt::Assign { value, .. } => collect_calls_in_expr(value, names),
+        crate::mvl::parser::ast::Stmt::Return { value: Some(e), .. } => {
+            collect_calls_in_expr(e, names)
+        }
+        crate::mvl::parser::ast::Stmt::Return { value: None, .. } => {}
+        crate::mvl::parser::ast::Stmt::Expr { expr, .. } => collect_calls_in_expr(expr, names),
+        crate::mvl::parser::ast::Stmt::If {
+            cond, then, else_, ..
+        } => {
+            collect_calls_in_expr(cond, names);
+            collect_calls_in_block(then, names);
+            match else_ {
+                Some(crate::mvl::parser::ast::ElseBranch::Block(b)) => {
+                    collect_calls_in_block(b, names)
+                }
+                Some(crate::mvl::parser::ast::ElseBranch::If(s)) => collect_calls_in_stmt(s, names),
+                None => {}
+            }
+        }
+        crate::mvl::parser::ast::Stmt::Match {
+            scrutinee, arms, ..
+        } => {
+            collect_calls_in_expr(scrutinee, names);
+            for arm in arms {
+                match &arm.body {
+                    crate::mvl::parser::ast::MatchBody::Expr(e) => collect_calls_in_expr(e, names),
+                    crate::mvl::parser::ast::MatchBody::Block(b) => {
+                        collect_calls_in_block(b, names)
+                    }
+                }
+            }
+        }
+        crate::mvl::parser::ast::Stmt::For { iter, body, .. } => {
+            collect_calls_in_expr(iter, names);
+            collect_calls_in_block(body, names);
+        }
+        crate::mvl::parser::ast::Stmt::While { cond, body, .. } => {
+            collect_calls_in_expr(cond, names);
+            collect_calls_in_block(body, names);
+        }
+    }
+}
+
+fn collect_calls_in_expr(expr: &Expr, names: &mut std::collections::HashSet<String>) {
+    match expr {
+        Expr::FnCall { name, args, .. } => {
+            names.insert(name.clone());
+            for a in args {
+                collect_calls_in_expr(a, names);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            collect_calls_in_expr(receiver, names);
+            for a in args {
+                collect_calls_in_expr(a, names);
+            }
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            collect_calls_in_expr(scrutinee, names);
+            for arm in arms {
+                match &arm.body {
+                    crate::mvl::parser::ast::MatchBody::Expr(e) => collect_calls_in_expr(e, names),
+                    crate::mvl::parser::ast::MatchBody::Block(b) => {
+                        collect_calls_in_block(b, names)
+                    }
+                }
+            }
+        }
+        Expr::If {
+            cond, then, else_, ..
+        } => {
+            collect_calls_in_expr(cond, names);
+            collect_calls_in_block(then, names);
+            if let Some(e) = else_ {
+                collect_calls_in_expr(e, names);
+            }
+        }
+        Expr::Block(b) => collect_calls_in_block(b, names),
+        Expr::Binary { left, right, .. } => {
+            collect_calls_in_expr(left, names);
+            collect_calls_in_expr(right, names);
+        }
+        Expr::Unary { expr, .. }
+        | Expr::Propagate { expr, .. }
+        | Expr::Consume { expr, .. }
+        | Expr::Declassify { expr, .. }
+        | Expr::Sanitize { expr, .. }
+        | Expr::Borrow { expr, .. } => collect_calls_in_expr(expr, names),
+        Expr::FieldAccess { expr, .. } => collect_calls_in_expr(expr, names),
+        Expr::Construct { fields, .. } => {
+            for (_, e) in fields {
+                collect_calls_in_expr(e, names);
+            }
+        }
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+            for e in elems {
+                collect_calls_in_expr(e, names);
+            }
+        }
+        Expr::Map { pairs, .. } => {
+            for (k, v) in pairs {
+                collect_calls_in_expr(k, names);
+                collect_calls_in_expr(v, names);
+            }
+        }
+        Expr::Lambda { body, .. } => collect_calls_in_expr(body, names),
+        Expr::Spawn { fields, .. } => {
+            for (_, e) in fields {
+                collect_calls_in_expr(e, names);
+            }
+        }
+        Expr::Select { arms, .. } => {
+            for arm in arms {
+                collect_calls_in_expr(&arm.expr, names);
+                collect_calls_in_block(&arm.body, names);
+            }
+        }
+        Expr::Concurrently { body, .. } => collect_calls_in_block(body, names),
+        // Leaf expressions — no sub-expressions.
+        Expr::Literal(..) | Expr::Ident(..) => {}
+    }
+}
+
 /// Used by the IFC pass to include the audit trail in the `Proven` evidence.
 ///
 /// Returns `(declassify_count, sanitize_count)`.

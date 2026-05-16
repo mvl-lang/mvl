@@ -184,9 +184,36 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
         }
     };
 
+    let mut bridge_from_pkg = false;
     if out.has_extern_rust && bridge_path.is_none() {
         // No user bridge.rs — check if a pkg.* package provides one.
         bridge_path = loader::find_pkg_bridge(&all_progs, &project_root);
+        bridge_from_pkg = bridge_path.is_some();
+    }
+
+    // If the bridge came from a pkg.* package, re-emit Cargo.toml with that
+    // package's native dependencies (from its mvl.toml [native] section).
+    // Skip this when the bridge is a user-supplied sibling bridge.rs to avoid
+    // injecting unexpected deps into unrelated builds.
+    if bridge_from_pkg {
+        let native_dep_lines = loader::collect_pkg_native_dep_lines(&all_progs, &project_root);
+        if !native_dep_lines.is_empty() {
+            let opts = transpiler::cargo::CargoOptions {
+                crate_name: &crate_name,
+                use_mvl_runtime: out.use_mvl_runtime,
+                extern_crates: Vec::new(),
+                native_dep_lines,
+            };
+            let patched = if out.has_main {
+                transpiler::cargo::emit_cargo_toml_binary_opts(&opts)
+            } else {
+                transpiler::cargo::emit_cargo_toml_library_opts(&opts)
+            };
+            fs::write(&cargo_toml_path, &patched).unwrap_or_else(|e| {
+                eprintln!("Cannot write Cargo.toml: {e}");
+                process::exit(1);
+            });
+        }
     }
 
     if out.has_extern_rust && bridge_path.is_none() {

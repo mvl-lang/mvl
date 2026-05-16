@@ -267,10 +267,20 @@ pub fn load_pkg_modules(progs: &[Program], project_root: &Path) -> Vec<Program> 
                         if !loaded.insert(pkg_name.clone()) {
                             continue;
                         }
-                        let pkg_dir = packages::fetch::local_override_dir(project_root, pkg_name);
-                        if !pkg_dir.exists() {
-                            continue;
-                        }
+                        // Resolve package source directory.
+                        // Order: installed (.mvl/pkg/<name>/) then in-repo dev (pkg/<name>/).
+                        let installed_dir =
+                            packages::fetch::local_override_dir(project_root, pkg_name);
+                        let pkg_dir = if installed_dir.exists() {
+                            installed_dir
+                        } else {
+                            let dev_dir = project_root.join("pkg").join(pkg_name.as_str());
+                            if dev_dir.exists() {
+                                dev_dir
+                            } else {
+                                continue;
+                            }
+                        };
                         for sub in &["src", "src/internal"] {
                             let dir = pkg_dir.join(sub);
                             if let Ok(entries) = fs::read_dir(&dir) {
@@ -301,21 +311,37 @@ pub fn load_pkg_modules(progs: &[Program], project_root: &Path) -> Vec<Program> 
 
 /// Find a `bridge.rs` from a `pkg.*` package used by `progs`.
 /// Returns the path to the first valid package bridge found, or `None`.
+///
+/// Search order:
+///   1. `.mvl/pkg/<name>/bridge.rs` — installed / cached package (must stay under `.mvl/pkg/`)
+///   2. `pkg/<name>/bridge.rs`      — in-repo development package
 pub fn find_pkg_bridge(progs: &[Program], project_root: &Path) -> Option<PathBuf> {
-    let canon_pkg_root = match fs::canonicalize(project_root.join(".mvl").join("pkg")) {
-        Ok(p) => p,
-        Err(_) => return None,
-    };
+    let canon_pkg_root = fs::canonicalize(project_root.join(".mvl").join("pkg")).ok();
 
     for prog in progs {
         for decl in &prog.declarations {
             if let Decl::Use(ud) = decl {
                 if ud.path.first().map(|s| s == "pkg").unwrap_or(false) {
                     if let Some(pkg_name) = ud.path.get(1) {
+                        // 1. Local override / cached install under .mvl/pkg/<name>/
                         let pkg_dir = packages::fetch::local_override_dir(project_root, pkg_name);
                         let bridge = pkg_dir.join("bridge.rs");
                         if let Ok(canon_bridge) = fs::canonicalize(&bridge) {
-                            if canon_bridge.starts_with(&canon_pkg_root) {
+                            if canon_pkg_root
+                                .as_ref()
+                                .map(|r| canon_bridge.starts_with(r))
+                                .unwrap_or(false)
+                            {
+                                return Some(canon_bridge);
+                            }
+                        }
+
+                        // 2. In-repo development package at pkg/<name>/bridge.rs
+                        let dev_bridge = project_root.join("pkg").join(pkg_name).join("bridge.rs");
+                        if let Ok(canon_bridge) = fs::canonicalize(&dev_bridge) {
+                            let canon_pkg = fs::canonicalize(project_root.join("pkg"))
+                                .unwrap_or_else(|_| project_root.join("pkg"));
+                            if canon_bridge.starts_with(&canon_pkg) {
                                 return Some(canon_bridge);
                             }
                         }
@@ -325,6 +351,80 @@ pub fn find_pkg_bridge(progs: &[Program], project_root: &Path) -> Option<PathBuf
         }
     }
     None
+}
+
+/// Collect raw Cargo dep lines from the `[native]` section of `mvl.toml` for
+/// any `pkg.*` package referenced by `progs`. Returns lines like:
+///   `rusqlite = { version = "0.31", features = ["bundled"] }`
+/// ready for inclusion in a generated `Cargo.toml`.
+///
+/// Search order mirrors `find_pkg_bridge`:
+///   1. `.mvl/pkg/<name>/mvl.toml` — installed / cached package
+///   2. `pkg/<name>/mvl.toml`      — in-repo development package
+pub fn collect_pkg_native_dep_lines(progs: &[Program], project_root: &Path) -> Vec<String> {
+    use std::collections::HashSet;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut lines: Vec<String> = Vec::new();
+
+    for prog in progs {
+        for decl in &prog.declarations {
+            if let Decl::Use(ud) = decl {
+                if ud.path.first().map(|s| s == "pkg").unwrap_or(false) {
+                    if let Some(pkg_name) = ud.path.get(1) {
+                        if !seen.insert(pkg_name.clone()) {
+                            continue;
+                        }
+                        let pkg_dir = packages::fetch::local_override_dir(project_root, pkg_name);
+                        // Try installed/cached package first; fall back to in-repo dev package.
+                        // Use read_to_string directly to avoid TOCTOU race from .exists() checks.
+                        let content = fs::read_to_string(pkg_dir.join("mvl.toml")).or_else(|_| {
+                            fs::read_to_string(
+                                project_root.join("pkg").join(pkg_name).join("mvl.toml"),
+                            )
+                        });
+                        if let Ok(content) = content {
+                            lines.extend(extract_native_dep_lines(&content));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    lines
+}
+
+/// Extract raw key=value lines from the `[native]` section of a `mvl.toml` string.
+///
+/// Only lines whose key is a valid Cargo crate name (`[a-zA-Z0-9_-]+`) are
+/// accepted. This prevents a malicious mvl.toml from injecting arbitrary TOML
+/// sections (e.g. `[patch.crates-io]`) into the generated Cargo.toml.
+fn extract_native_dep_lines(content: &str) -> Vec<String> {
+    let mut in_native = false;
+    let mut result = Vec::new();
+    for raw in content.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') {
+            in_native = line == "[native]";
+            continue;
+        }
+        if in_native {
+            if let Some(eq_pos) = line.find('=') {
+                let key = line[..eq_pos].trim();
+                // Accept only valid Cargo crate name characters to prevent injection.
+                if !key.is_empty()
+                    && key
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+                {
+                    result.push(line.to_string());
+                }
+            }
+        }
+    }
+    result
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────

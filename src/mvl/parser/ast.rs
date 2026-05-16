@@ -276,6 +276,9 @@ pub struct ExternFnDecl {
     pub return_type: Box<TypeExpr>,
     /// Declared effects — enforced on the MVL caller side.
     pub effects: Vec<Effect>,
+    /// Optional totality annotation: `total fn foo(…)` inside an extern block.
+    /// `None` means implicitly total (same as non-extern `fn` without keyword).
+    pub totality: Option<Totality>,
     pub span: Span,
 }
 

@@ -54,6 +54,11 @@ pub struct RefinementCounts {
     /// Per-layer proof counts: `by_layer[n]` = number of proofs by Layer n.
     /// Index 0 is unused (layers are 1–5).
     pub by_layer: [usize; 6],
+    /// Functions in this program that have at least one refined call site
+    /// (including calls to imported refined functions from prelude modules).
+    pub fn_total: usize,
+    /// Subset of `fn_total` where ALL refined call sites are statically proven.
+    pub fully_verified_fns: usize,
 }
 
 // ── Entry points ──────────────────────────────────────────────────────────────
@@ -61,8 +66,13 @@ pub struct RefinementCounts {
 /// Emit [`CheckError::RefinementViolated`] for every definite predicate violation.
 ///
 /// Called from `checker::check()` after the main type-checking pass.
+/// Accepts prelude slices so that calls to imported functions with refined
+/// parameters are checked — `fn_total` / `fully_verified_fns` then count
+/// cross-module call sites, not just same-file ones.
 /// Returns aggregated counts of proven / runtime-checked / failed checks.
 pub fn check_refinements(
+    prelude_a: &[Program],
+    prelude_b: &[&Program],
     prog: &Program,
     errors: &mut Vec<CheckError>,
     mode: SolverMode,
@@ -71,7 +81,14 @@ pub fn check_refinements(
         mode,
         ..Default::default()
     };
-    let fn_params = build_fn_param_refinements(prog);
+    // Build fn_params from ALL programs so cross-module refined call sites
+    // (e.g. calling a prelude function with `where` params) are checked.
+    let all_progs: Vec<&Program> = prelude_a
+        .iter()
+        .chain(prelude_b.iter().copied())
+        .chain(std::iter::once(prog))
+        .collect();
+    let fn_params = build_fn_param_refinements_combined(&all_progs);
     let type_refs = build_type_alias_refinements(prog);
     let fn_decls = build_pure_fn_decls(prog);
     for decl in &prog.declarations {
@@ -122,6 +139,62 @@ pub fn check_refinements(
             _ => {}
         }
     }
+
+    // Compute fn_total / fully_verified_fns: per-function counts using the
+    // same combined fn_params so cross-module refined call sites are counted.
+    for decl in &prog.declarations {
+        let fns: Vec<&FnDecl> = match decl {
+            Decl::Fn(fd) => vec![fd],
+            Decl::Impl(id) => id.methods.iter().collect(),
+            _ => vec![],
+        };
+        for fd in fns {
+            let mut var_refs = param_refinements(fd, &type_refs);
+            let mut per_fn_errors = Vec::new();
+            let mut per_fn_counts = RefinementCounts::default();
+            analyze_block(
+                &fd.body,
+                &mut var_refs,
+                &fn_params,
+                &type_refs,
+                &fn_decls,
+                &mut per_fn_errors,
+                &mut per_fn_counts,
+            );
+            let total = per_fn_counts.proven + per_fn_counts.runtime_checked + per_fn_counts.failed;
+            if total > 0 {
+                counts.fn_total += 1;
+                if per_fn_counts.runtime_checked == 0 && per_fn_counts.failed == 0 {
+                    counts.fully_verified_fns += 1;
+                }
+            }
+        }
+        if let Decl::Actor(ad) = decl {
+            for method in &ad.methods {
+                let mut var_refs = params_to_var_refs(&method.params, &type_refs);
+                let mut per_fn_errors = Vec::new();
+                let mut per_fn_counts = RefinementCounts::default();
+                analyze_block(
+                    &method.body,
+                    &mut var_refs,
+                    &fn_params,
+                    &type_refs,
+                    &fn_decls,
+                    &mut per_fn_errors,
+                    &mut per_fn_counts,
+                );
+                let total =
+                    per_fn_counts.proven + per_fn_counts.runtime_checked + per_fn_counts.failed;
+                if total > 0 {
+                    counts.fn_total += 1;
+                    if per_fn_counts.runtime_checked == 0 && per_fn_counts.failed == 0 {
+                        counts.fully_verified_fns += 1;
+                    }
+                }
+            }
+        }
+    }
+
     counts
 }
 
@@ -288,21 +361,31 @@ fn build_pure_fn_decls(prog: &Program) -> HashMap<String, FnDecl> {
 
 /// Maps function name → `Vec<(param_name, Option<RefExpr>)>` for top-level functions.
 fn build_fn_param_refinements(prog: &Program) -> HashMap<String, Vec<(String, Option<RefExpr>)>> {
+    build_fn_param_refinements_combined(&[prog])
+}
+
+/// Build the refinement parameter map from multiple programs (e.g. prelude + prog).
+/// Used by [`check_refinements`] to enable cross-module refined call-site checking.
+fn build_fn_param_refinements_combined(
+    progs: &[&Program],
+) -> HashMap<String, Vec<(String, Option<RefExpr>)>> {
     let mut map = HashMap::new();
-    for decl in &prog.declarations {
-        match decl {
-            Decl::Fn(fd) => {
-                map.insert(fd.name.clone(), param_ref_vec(fd));
-            }
-            Decl::Impl(impl_decl) => {
-                for method in &impl_decl.methods {
-                    // Methods are registered under their bare name for simplicity;
-                    // collision between methods on different types is acceptable
-                    // at this phase — the analysis is conservative.
-                    map.insert(method.name.clone(), param_ref_vec(method));
+    for prog in progs {
+        for decl in &prog.declarations {
+            match decl {
+                Decl::Fn(fd) => {
+                    map.insert(fd.name.clone(), param_ref_vec(fd));
                 }
+                Decl::Impl(impl_decl) => {
+                    for method in &impl_decl.methods {
+                        // Methods are registered under their bare name for simplicity;
+                        // collision between methods on different types is acceptable
+                        // at this phase — the analysis is conservative.
+                        map.insert(method.name.clone(), param_ref_vec(method));
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
     map
@@ -1428,7 +1511,7 @@ mod tests {
         let (mut parser, _) = crate::mvl::parser::Parser::new(src);
         let prog = parser.parse_program();
         let mut errors = Vec::new();
-        let counts = check_refinements(&prog, &mut errors, SolverMode::FastOnly);
+        let counts = check_refinements(&[], &[], &prog, &mut errors, SolverMode::FastOnly);
         assert_eq!(counts.mode, SolverMode::FastOnly);
         // pos(1) — literal 1 satisfies self > 0, proven by Layer 1.
         assert_eq!(counts.proven, 1);

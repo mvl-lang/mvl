@@ -293,6 +293,16 @@ impl Resolver {
 
                 // Req 3: module must exist
                 if !source_module.is_empty() {
+                    // pkg.* imports are external packages loaded at build time;
+                    // skip resolver validation and let the type checker handle them.
+                    if source_module.first().map(|s| s == "pkg").unwrap_or(false) {
+                        imports.push(ResolvedImport {
+                            item,
+                            source_path: use_decl.path.clone(),
+                            reexport: use_decl.reexport,
+                        });
+                        continue;
+                    }
                     let source_key = source_module.join("::");
                     if !modules.contains_key(&source_key) {
                         errors.push(ResolveError::MissingModule {

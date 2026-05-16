@@ -520,14 +520,32 @@ impl Parser {
         while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
             match self.peek_kind() {
                 TokenKind::Fn => {
-                    if let Ok(f) = self.parse_extern_fn_decl() {
+                    if let Ok(f) = self.parse_extern_fn_decl(None) {
                         fns.push(f);
+                    }
+                }
+                TokenKind::Total => {
+                    self.advance(); // consume `total`
+                    if matches!(self.peek_kind(), TokenKind::Fn) {
+                        if let Ok(f) = self.parse_extern_fn_decl(Some(Totality::Total)) {
+                            fns.push(f);
+                        }
+                    } else {
+                        let err = ParseError {
+                            message: format!(
+                                "expected `fn` after `total` inside extern block, found `{}`",
+                                self.peek_kind()
+                            ),
+                            span: self.peek_span(),
+                        };
+                        self.push_recover(err);
+                        self.advance();
                     }
                 }
                 _ => {
                     let err = ParseError {
                         message: format!(
-                            "expected `fn` inside extern block, found `{}`",
+                            "expected `fn` or `total fn` inside extern block, found `{}`",
                             self.peek_kind()
                         ),
                         span: self.peek_span(),
@@ -544,9 +562,10 @@ impl Parser {
         Ok(ExternDecl { abi, fns, span })
     }
 
-    /// Parse a single `fn foo(params) -> RetType [! Effects]` inside an extern block.
+    /// Parse a single `[total] fn foo(params) -> RetType [! Effects]` inside an extern block.
+    /// `totality` is passed in by the caller after consuming an optional `total` token.
     /// Note: no body (terminated by `;` or end of signature before next `fn`/`}`).
-    fn parse_extern_fn_decl(&mut self) -> Result<ExternFnDecl, ()> {
+    fn parse_extern_fn_decl(&mut self, totality: Option<Totality>) -> Result<ExternFnDecl, ()> {
         let start = self.peek_span();
         self.advance(); // consume `fn`
 
@@ -598,6 +617,7 @@ impl Parser {
             params,
             return_type,
             effects,
+            totality,
             span,
         })
     }

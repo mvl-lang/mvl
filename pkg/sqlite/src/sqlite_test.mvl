@@ -1,0 +1,119 @@
+// pkg.sqlite — unit tests for pure functions
+//
+// Tests cover the MVL-only helpers that do not call extern "rust" functions.
+// The extern functions (sqlite_open, sqlite_query, …) are replaced with
+// `todo!()` stubs during `mvl test`, so only logic that avoids them is
+// exercisable here.  End-to-end integration is covered by
+//   examples/sqlite_basic/  (make run)
+//
+// Assurance note: blob_to_wire / wire_to_blob are pure; all other package
+// functions cross the extern "rust" boundary and are covered by integration.
+
+use std.strings.{str_split, str_parse_int}
+use std.lists.{list_push}
+
+// ── Type re-declarations (workaround: #96) ────────────────────────────────
+
+type Value = enum {
+    Null,
+    Bool(Bool),
+    Int(Int),
+    Float(Float),
+    Text(String),
+    Blob(List[Int]),
+}
+
+type SqliteError = enum {
+    NotFound,
+    ConstraintViolation(String),
+    InvalidSql(String),
+    Busy,
+    Other(String),
+}
+
+// ── Function re-declarations (workaround: #96) ────────────────────────────
+
+fn blob_to_wire(bytes: List[Int]) -> String {
+    if bytes.len() == 0 {
+        ""
+    } else {
+        let first: String = bytes.get(0).unwrap_or(0).to_string();
+        bytes.skip(1).fold(first, |acc: String, b: Int| acc.concat(",").concat(b.to_string()))
+    }
+}
+
+fn wire_to_blob(csv: String) -> List[Int] {
+    if csv == "" {
+        []
+    } else {
+        str_split(csv, ",").map(|s: String| str_parse_int(s).unwrap_or(0))
+    }
+}
+
+// ── blob_to_wire ──────────────────────────────────────────────────────────
+
+test fn blob_to_wire_empty_list_returns_empty_string() -> Unit {
+    assert_eq(blob_to_wire([]), "")
+}
+
+test fn blob_to_wire_single_byte() -> Unit {
+    assert_eq(blob_to_wire([42]), "42")
+}
+
+test fn blob_to_wire_multiple_bytes_comma_separated() -> Unit {
+    assert_eq(blob_to_wire([1, 2, 3]), "1,2,3")
+}
+
+test fn blob_to_wire_zero_byte() -> Unit {
+    assert_eq(blob_to_wire([0]), "0")
+}
+
+test fn blob_to_wire_large_byte_value() -> Unit {
+    assert_eq(blob_to_wire([255]), "255")
+}
+
+// ── wire_to_blob ──────────────────────────────────────────────────────────
+
+test fn wire_to_blob_empty_string_returns_empty_list() -> Unit {
+    assert_eq(wire_to_blob("").len(), 0)
+}
+
+test fn wire_to_blob_single_value() -> Unit {
+    let result: List[Int] = wire_to_blob("42");
+    assert_eq(result.len(), 1);
+    assert_eq(result.get(0).unwrap_or(-1), 42)
+}
+
+test fn wire_to_blob_multiple_values() -> Unit {
+    let result: List[Int] = wire_to_blob("1,2,3");
+    assert_eq(result.len(), 3);
+    assert_eq(result.get(0).unwrap_or(-1), 1);
+    assert_eq(result.get(1).unwrap_or(-1), 2);
+    assert_eq(result.get(2).unwrap_or(-1), 3)
+}
+
+test fn wire_to_blob_zero_value() -> Unit {
+    let result: List[Int] = wire_to_blob("0");
+    assert_eq(result.get(0).unwrap_or(-1), 0)
+}
+
+// ── round-trip ────────────────────────────────────────────────────────────
+
+test fn roundtrip_empty() -> Unit {
+    assert_eq(wire_to_blob(blob_to_wire([])).len(), 0)
+}
+
+test fn roundtrip_single() -> Unit {
+    let original: List[Int] = [99];
+    let result: List[Int] = wire_to_blob(blob_to_wire(original));
+    assert_eq(result.get(0).unwrap_or(-1), 99)
+}
+
+test fn roundtrip_multi() -> Unit {
+    let original: List[Int] = [10, 20, 30];
+    let result: List[Int] = wire_to_blob(blob_to_wire(original));
+    assert_eq(result.len(), 3);
+    assert_eq(result.get(0).unwrap_or(-1), 10);
+    assert_eq(result.get(1).unwrap_or(-1), 20);
+    assert_eq(result.get(2).unwrap_or(-1), 30)
+}

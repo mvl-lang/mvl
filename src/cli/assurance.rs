@@ -51,8 +51,6 @@ pub fn run(path: &str, json: bool, verbose: bool) {
     let mut total_struct_types: usize = 0;
     let mut total_enum_types: usize = 0;
     let mut total_effects_fns: usize = 0;
-    let mut total_capabilities_fns: usize = 0;
-    let mut total_refinements_fns: usize = 0;
     let mut all_fn_details: Vec<FnDetail> = Vec::new();
     // Verification pass infrastructure.
     let registry = PassRegistry::default_registry();
@@ -67,10 +65,17 @@ pub fn run(path: &str, json: bool, verbose: bool) {
             (file_str, prog, src)
         })
         .collect();
-    let assurance_prelude =
+    let mut assurance_prelude =
         loader::load_stdlib_prelude(parsed_assurance.iter().map(|(_, p, _)| p), &stdlib_dir);
     let all_assurance_progs: Vec<Program> =
         parsed_assurance.iter().map(|(_, p, _)| p.clone()).collect();
+    // Load any `pkg.*` package modules referenced by the checked files so the
+    // checker can resolve their types and functions (mirrors check.rs behaviour).
+    let project_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    assurance_prelude.extend(loader::load_pkg_modules(
+        &all_assurance_progs,
+        &project_root,
+    ));
 
     // Count kernel builtins from the implicit stdlib prelude (strings.mvl, lists.mvl).
     // These are always part of the trust boundary for any MVL program, even though they
@@ -105,8 +110,6 @@ pub fn run(path: &str, json: bool, verbose: bool) {
         total_struct_types += stats.struct_type_count;
         total_enum_types += stats.enum_type_count;
         total_effects_fns += stats.effects_fn_count;
-        total_capabilities_fns += stats.capabilities_fn_count;
-        total_refinements_fns += stats.refinements_fn_count;
         for (i, count) in result.req_errors.iter().enumerate().skip(1) {
             req_errors[i] += count;
         }
@@ -299,30 +302,21 @@ pub fn run(path: &str, json: bool, verbose: bool) {
             "Data race freedom",
             &req_errors,
             project_verdicts[9].is_proven(),
-            &format!(
-                "{} fns use capabilities, {} violations",
-                total_capabilities_fns, req_errors[9]
-            ),
+            project_verdicts[9].detail(),
         );
         print_req_row(
             10,
             "Refinements",
             &req_errors,
             project_verdicts[10].is_proven(),
-            &format!(
-                "{} fns with refinements, {} violations",
-                total_refinements_fns, req_errors[10]
-            ),
+            project_verdicts[10].detail(),
         );
         print_req_row(
             11,
             "IFC",
             &req_errors,
             project_verdicts[11].is_proven(),
-            &format!(
-                "{} extern (trust boundary), {} flow violations",
-                total_extern, req_errors[11]
-            ),
+            project_verdicts[11].detail(),
         );
         println!();
         println!("Prover verdicts:");
@@ -338,7 +332,7 @@ pub fn run(path: &str, json: bool, verbose: bool) {
             );
         }
         println!();
-        println!("  ✓ proven  ✗ failed  ~ unchecked (Phase 3 prover pending)");
+        println!("  ✓ proven  ✗ failed  ~ unchecked (SMT prover active; some call sites deferred to runtime)");
         println!();
         println!("Type errors:         {check_errors}");
         if check_errors == 0 {
@@ -504,11 +498,18 @@ fn collect_stats_from_decls(decls: &[Decl], stats: &mut AssuranceStats, collect_
                 // Each signature inside an extern block is a trust-boundary function.
                 stats.extern_fn_count += ed.fns.len();
                 stats.fn_count += ed.fns.len();
-                if collect_details {
-                    for ef in &ed.fns {
+                for ef in &ed.fns {
+                    match ef.totality {
+                        Some(Totality::Total) => {
+                            stats.total_fn_count += 1;
+                            stats.explicit_total_fn_count += 1;
+                        }
+                        _ => stats.total_fn_count += 1, // implicitly total
+                    }
+                    if collect_details {
                         stats.fn_details.push(FnDetail {
                             name: ef.name.clone(),
-                            totality: None,
+                            totality: ef.totality.clone(),
                             effects: ef.effects.iter().map(|e| e.to_string()).collect(),
                             has_capabilities: false,
                             has_refinements: false,

@@ -178,16 +178,22 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
 
     // Pre-parse stdlib files imported by user programs so the checker knows
     // about their types and functions.  This covers `use std.io.{...}` etc.
-    let stdlib_prelude = loader::load_stdlib_prelude(
+    let mut stdlib_prelude = loader::load_stdlib_prelude(
         parsed.iter().take(check_count).map(|(_, p, _)| p),
         &stdlib_dir,
     );
+
+    // Load any `pkg.*` package modules referenced by the user programs so the
+    // checker can resolve their types and functions (mirrors build behaviour).
+    let all_parsed_progs: Vec<Program> = parsed.iter().map(|(_, p, _)| p.clone()).collect();
+    let project_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    stdlib_prelude.extend(loader::load_pkg_modules(&all_parsed_progs, &project_root));
 
     // Snapshot all parsed user programs for cross-module prelude building.
     // Intentionally includes resolver-only siblings (auto-loaded to satisfy imports,
     // not explicitly requested): they may define types or functions that the
     // explicitly-checked files call and must therefore be visible to the checker.
-    let all_user_progs: Vec<Program> = parsed.iter().map(|(_, p, _)| p.clone()).collect();
+    let all_user_progs: Vec<Program> = all_parsed_progs;
 
     // Collect errors across all files for JSON output (when --format=json).
     let mut json_error_items: Vec<String> = Vec::new();

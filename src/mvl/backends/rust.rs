@@ -259,6 +259,7 @@ pub fn transpile_project(
         crate_name: entry_name,
         use_mvl_runtime: use_runtime,
         extern_crates: Vec::new(),
+        native_dep_lines: Vec::new(),
     };
     let cargo_toml = if has_main {
         cargo::emit_cargo_toml_binary_opts(&opts)
@@ -348,6 +349,7 @@ pub fn transpile(prog: &Program, config: TranspileConfig) -> TranspileResult {
         crate_name: &config.crate_name,
         use_mvl_runtime: use_runtime,
         extern_crates: Vec::new(),
+        native_dep_lines: Vec::new(),
     };
     let cargo_toml = if has_main {
         cargo::emit_cargo_toml_binary_opts(&opts)
