@@ -1,0 +1,84 @@
+// examples/sqlite_basic — pkg.sqlite usage demonstration
+//
+// Creates an in-memory SQLite database, inserts rows, and queries them back.
+// Demonstrates typed Value parameters, error matching, and Row iteration.
+//
+// Run: mvl run examples/sqlite_basic/main.mvl
+
+use pkg.sqlite.{SqliteDb, SqliteError, open, execute, query, close}
+use std.db.{Value}
+use std.io.{println}
+use std.collections.{map_get}
+
+type User = struct { id: Int, name: String, age: Int }
+
+fn main() -> Unit ! DB + FileRead + FileWrite + Console {
+    let db: SqliteDb = match open(":memory:") {
+        Err(SqliteError::Other(msg)) => {
+            println("failed to open db: ".concat(msg));
+            return
+        }
+        Err(_) => {
+            println("failed to open db");
+            return
+        }
+        Ok(db) => db,
+    };
+
+    match execute(db, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)", []) {
+        Err(SqliteError::InvalidSql(msg)) => { println("bad sql: ".concat(msg)); return }
+        Err(_) => { println("create failed"); return }
+        Ok(_) => (),
+    }
+
+    let users: List[User] = [
+        User { id: 1, name: "Alice", age: 30 },
+        User { id: 2, name: "Bob",   age: 25 },
+        User { id: 3, name: "Carol", age: 35 },
+    ];
+
+    for u in users {
+        match execute(db,
+            "INSERT INTO users (id, name, age) VALUES (?, ?, ?)",
+            [Value::Int(u.id), Value::Text(u.name), Value::Int(u.age)]) {
+            Err(_) => println("insert failed"),
+            Ok(_)  => (),
+        }
+    }
+
+    let rows: List[Map[String, Value]] = match query(db, "SELECT id, name, age FROM users WHERE age > ?",
+                                      [Value::Int(26)]) {
+        Err(SqliteError::NotFound)      => { println("no such table"); return }
+        Err(SqliteError::InvalidSql(m)) => { println("bad query: ".concat(m)); return }
+        Err(_)                          => { println("query failed"); return }
+        Ok(rows)                        => rows,
+    };
+
+    println("Users older than 26:");
+    for row in rows {
+        let id: String = match map_get(row, "id") {
+            None => "?",
+            Some(cell) => match cell {
+                Value::Int(v) => v.to_string(),
+                _ => "?",
+            },
+        };
+        let name: String = match map_get(row, "name") {
+            None => "?",
+            Some(cell) => match cell {
+                Value::Text(v) => v,
+                _ => "?",
+            },
+        };
+        let age: String = match map_get(row, "age") {
+            None => "?",
+            Some(cell) => match cell {
+                Value::Int(v) => v.to_string(),
+                _ => "?",
+            },
+        };
+        println("  id=".concat(id).concat(" name=").concat(name).concat(" age=").concat(age));
+    }
+
+    close(db)
+}

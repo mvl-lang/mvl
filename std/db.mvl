@@ -1,0 +1,50 @@
+//! std.db — shared database value types.
+//!
+//! Provides `Value`, `ParseError`, and `Row` used by all database packages
+//! (pkg.sqlite, pkg.postgres, pkg.redis, pkg.sled).
+//!
+//! Transpiler helpers (to_params[T], from_row[T], field_names[T],
+//! field_values[T]) are deferred to #790.
+//!
+//! Import:
+//!   use std.db.{Value, Row}
+//!   use std.db.{ParseError}
+//!
+//! Effects: none (pure types, no I/O).
+//!
+//! See #790, ADR-0007.
+
+// ── Value ─────────────────────────────────────────────────────────────────────
+
+/// A typed value that can be stored in or read from any database.
+///
+/// Variant discriminants (0-based) are stable and shared across all packages.
+/// All pkg.* database drivers must map to these discriminants in their
+/// C-ABI layer (llvm.rs):
+///   0 = Null, 1 = Bool, 2 = Int, 3 = Float, 4 = Text, 5 = Blob
+pub type Value = enum {
+    Null,
+    Bool(Bool),
+    Int(Int),
+    Float(Float),
+    Text(String),
+    Blob(List[Int]),
+}
+
+// ── ParseError ────────────────────────────────────────────────────────────────
+
+/// Errors produced by from_row[T] when mapping a database row to a struct.
+///
+/// Deferred: from_row[T] transpiler helper is pending #790.
+/// ParseError is defined here so packages can reference it in their types.
+pub type ParseError = enum {
+    TypeMismatch(String),
+    MissingField(String),
+    NullNotAllowed(String),
+}
+
+// ── Row ───────────────────────────────────────────────────────────────────────
+
+// Row = Map[String, Value] is the intended type alias but generic type aliases
+// are not yet supported by the checker (deferred to #790).
+// Database drivers use Map[String, Value] directly in their public API.
