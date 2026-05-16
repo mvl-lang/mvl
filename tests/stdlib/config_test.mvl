@@ -1,0 +1,347 @@
+// tests/stdlib/config_test.mvl — std.config correctness (#804)
+//
+// Verifies ConfigValue construction, merge semantics, get_path navigation,
+// type extraction helpers, env-var parsing, and from_json / from_toml
+// conversions.
+
+use std.config.{
+    ConfigValue, ConfigError,
+    merge, get_path,
+    as_int, as_string, as_bool, as_float, as_list, as_map,
+    from_json, from_toml,
+    with_env, xdg_config_home,
+}
+use std.json.{Value, decode}
+use std.toml.{TomlValue}
+use std.env.{set, remove_var}
+
+// ── merge: scalar overlay ─────────────────────────────────────────────────────
+
+test fn config_merge_scalar_overlay_wins() -> Unit {
+    let base: ConfigValue = ConfigValue::Int(8080);
+    let overlay: ConfigValue = ConfigValue::Int(9090);
+    let result: ConfigValue = merge(base, overlay);
+    assert_eq(as_int(result).unwrap_or(0), 9090)
+}
+
+test fn config_merge_null_overlay_wins() -> Unit {
+    let base: ConfigValue = ConfigValue::Int(42);
+    let result: ConfigValue = merge(base, ConfigValue::Null);
+    match result {
+        ConfigValue::Null => assert(true),
+        _                 => assert(false),
+    }
+}
+
+// ── merge: map deep merge ─────────────────────────────────────────────────────
+
+test fn config_merge_maps_additive() -> Unit {
+    let base: ConfigValue = ConfigValue::Map({"port": ConfigValue::Int(8080)});
+    let overlay: ConfigValue = ConfigValue::Map({"host": ConfigValue::String("prod")});
+
+    let result: ConfigValue = merge(base, overlay);
+    match result {
+        ConfigValue::Map(m) => {
+            let port_ok: Bool = match map_get(m, "port") {
+                Some(ConfigValue::Int(n)) => n == 8080,
+                _                         => false,
+            };
+            let host_ok: Bool = match map_get(m, "host") {
+                Some(ConfigValue::String(s)) => s == "prod",
+                _                            => false,
+            };
+            assert_eq(port_ok, true);
+            assert_eq(host_ok, true)
+        },
+        _ => assert(false),
+    }
+}
+
+test fn config_merge_maps_overlay_wins_on_conflict() -> Unit {
+    let base_m: Map[String, ConfigValue] = {"port": ConfigValue::Int(8080)};
+    let over_m: Map[String, ConfigValue] = {"port": ConfigValue::Int(9090)};
+    let result: ConfigValue = merge(ConfigValue::Map(base_m), ConfigValue::Map(over_m));
+    match result {
+        ConfigValue::Map(m) => {
+            assert_eq(match map_get(m, "port") {
+                Some(ConfigValue::Int(n)) => n,
+                _                         => 0,
+            }, 9090)
+        },
+        _ => assert(false),
+    }
+}
+
+test fn config_merge_nested_maps_deep() -> Unit {
+    // base: { db: { pool: 5, host: "localhost" } }
+    let inner_base: Map[String, ConfigValue] = map_put(
+        {"pool": ConfigValue::Int(5)},
+        "host", ConfigValue::String("localhost")
+    );
+    let base: ConfigValue = ConfigValue::Map({"db": ConfigValue::Map(inner_base)});
+
+    // overlay: { db: { pool: 20 } }  — should not erase "host"
+    let inner_over: Map[String, ConfigValue] = {"pool": ConfigValue::Int(20)};
+    let overlay: ConfigValue = ConfigValue::Map({"db": ConfigValue::Map(inner_over)});
+
+    let result: ConfigValue = merge(base, overlay);
+    match result {
+        ConfigValue::Map(m) => {
+            match map_get(m, "db") {
+                Some(ConfigValue::Map(db)) => {
+                    let pool: Int = match map_get(db, "pool") {
+                        Some(ConfigValue::Int(n)) => n,
+                        _                         => 0,
+                    };
+                    let host: String = match map_get(db, "host") {
+                        Some(ConfigValue::String(s)) => s,
+                        _                            => "",
+                    };
+                    assert_eq(pool, 20);
+                    assert_eq(host, "localhost")
+                },
+                _ => assert(false),
+            }
+        },
+        _ => assert(false),
+    }
+}
+
+// ── get_path ──────────────────────────────────────────────────────────────────
+
+test fn config_get_path_top_level() -> Unit {
+    let m: Map[String, ConfigValue] = {"port": ConfigValue::Int(8080)};
+    let cfg: ConfigValue = ConfigValue::Map(m);
+    match get_path(cfg, "port") {
+        Some(ConfigValue::Int(n)) => assert_eq(n, 8080),
+        _                         => assert(false),
+    }
+}
+
+test fn config_get_path_missing_returns_none() -> Unit {
+    // {} is an empty block in MVL; use sentinel-and-remove to get an empty map.
+    let m_empty: ref Map[String, ConfigValue] = {"__init__": ConfigValue::Null};
+    m_empty.remove("__init__");
+    let cfg: ConfigValue = ConfigValue::Map(m_empty);
+    match get_path(cfg, "missing") {
+        None    => assert(true),
+        Some(_) => assert(false),
+    }
+}
+
+test fn config_get_path_nested() -> Unit {
+    let inner: Map[String, ConfigValue] = {"pool_size": ConfigValue::Int(10)};
+    let outer: Map[String, ConfigValue] = {"database": ConfigValue::Map(inner)};
+    let cfg: ConfigValue = ConfigValue::Map(outer);
+    match get_path(cfg, "database.pool_size") {
+        Some(ConfigValue::Int(n)) => assert_eq(n, 10),
+        _                         => assert(false),
+    }
+}
+
+test fn config_get_path_mid_missing_returns_none() -> Unit {
+    let cfg: ConfigValue = ConfigValue::Map({"port": ConfigValue::Int(8080)});
+    match get_path(cfg, "missing.key") {
+        None    => assert(true),
+        Some(_) => assert(false),
+    }
+}
+
+// ── as_int ────────────────────────────────────────────────────────────────────
+
+test fn config_as_int_from_int() -> Unit {
+    assert_eq(as_int(ConfigValue::Int(42)).unwrap_or(0), 42)
+}
+
+test fn config_as_int_from_string() -> Unit {
+    assert_eq(as_int(ConfigValue::String("99")).unwrap_or(0), 99)
+}
+
+test fn config_as_int_from_bool_true() -> Unit {
+    assert_eq(as_int(ConfigValue::Bool(true)).unwrap_or(0), 1)
+}
+
+test fn config_as_int_from_bool_false() -> Unit {
+    assert_eq(as_int(ConfigValue::Bool(false)).unwrap_or(0), 0)
+}
+
+test fn config_as_int_from_invalid_string_is_err() -> Unit {
+    assert_eq(as_int(ConfigValue::String("not-a-number")).is_err(), true)
+}
+
+test fn config_as_int_from_null_is_err() -> Unit {
+    assert_eq(as_int(ConfigValue::Null).is_err(), true)
+}
+
+// ── as_string ────────────────────────────────────────────────────────────────
+
+test fn config_as_string_from_string() -> Unit {
+    assert_eq(as_string(ConfigValue::String("hello")).unwrap_or(""), "hello")
+}
+
+test fn config_as_string_from_int() -> Unit {
+    assert_eq(as_string(ConfigValue::Int(42)).unwrap_or(""), "42")
+}
+
+test fn config_as_string_from_bool() -> Unit {
+    assert_eq(as_string(ConfigValue::Bool(true)).unwrap_or(""), "true")
+}
+
+test fn config_as_string_from_null_is_err() -> Unit {
+    assert_eq(as_string(ConfigValue::Null).is_err(), true)
+}
+
+// ── as_bool ──────────────────────────────────────────────────────────────────
+
+test fn config_as_bool_from_bool() -> Unit {
+    assert_eq(as_bool(ConfigValue::Bool(true)).unwrap_or(false), true)
+}
+
+test fn config_as_bool_from_string_true() -> Unit {
+    assert_eq(as_bool(ConfigValue::String("true")).unwrap_or(false), true)
+}
+
+test fn config_as_bool_from_string_false() -> Unit {
+    assert_eq(as_bool(ConfigValue::String("false")).unwrap_or(true), false)
+}
+
+test fn config_as_bool_from_string_upper() -> Unit {
+    assert_eq(as_bool(ConfigValue::String("TRUE")).unwrap_or(false), true)
+}
+
+test fn config_as_bool_from_invalid_is_err() -> Unit {
+    assert_eq(as_bool(ConfigValue::String("yes")).is_err(), true)
+}
+
+// ── as_float ─────────────────────────────────────────────────────────────────
+
+test fn config_as_float_from_float() -> Unit {
+    assert_eq(as_float(ConfigValue::Float(3.14)).unwrap_or(0.0) > 3.0, true)
+}
+
+test fn config_as_float_from_int() -> Unit {
+    assert_eq(as_float(ConfigValue::Int(5)).unwrap_or(0.0), 5.0)
+}
+
+test fn config_as_float_from_string() -> Unit {
+    assert_eq(as_float(ConfigValue::String("2.5")).unwrap_or(0.0), 2.5)
+}
+
+// ── from_json ─────────────────────────────────────────────────────────────────
+
+test fn config_from_json_null() -> Unit {
+    match from_json(Value::Null) {
+        ConfigValue::Null => assert(true),
+        _                 => assert(false),
+    }
+}
+
+test fn config_from_json_bool() -> Unit {
+    match from_json(Value::Bool(true)) {
+        ConfigValue::Bool(b) => assert_eq(b, true),
+        _                    => assert(false),
+    }
+}
+
+test fn config_from_json_integer_number_becomes_int() -> Unit {
+    match from_json(Value::Number(42.0)) {
+        ConfigValue::Int(n) => assert_eq(n, 42),
+        _                   => assert(false),
+    }
+}
+
+test fn config_from_json_fractional_number_becomes_float() -> Unit {
+    match from_json(Value::Number(1.5)) {
+        ConfigValue::Float(_) => assert(true),
+        _                     => assert(false),
+    }
+}
+
+test fn config_from_json_string() -> Unit {
+    match from_json(Value::String("hello")) {
+        ConfigValue::String(s) => assert_eq(s, "hello"),
+        _                      => assert(false),
+    }
+}
+
+// ── from_toml ─────────────────────────────────────────────────────────────────
+
+test fn config_from_toml_int() -> Unit {
+    match from_toml(TomlValue::TInt(8080)) {
+        ConfigValue::Int(n) => assert_eq(n, 8080),
+        _                   => assert(false),
+    }
+}
+
+test fn config_from_toml_bool() -> Unit {
+    match from_toml(TomlValue::TBool(false)) {
+        ConfigValue::Bool(b) => assert_eq(b, false),
+        _                    => assert(false),
+    }
+}
+
+test fn config_from_toml_string() -> Unit {
+    match from_toml(TomlValue::TStr("world")) {
+        ConfigValue::String(s) => assert_eq(s, "world"),
+        _                      => assert(false),
+    }
+}
+
+test fn config_from_toml_datetime_becomes_string() -> Unit {
+    match from_toml(TomlValue::TDateTime("2024-01-01T00:00:00Z")) {
+        ConfigValue::String(s) => assert_eq(s, "2024-01-01T00:00:00Z"),
+        _                      => assert(false),
+    }
+}
+
+// ── with_env ──────────────────────────────────────────────────────────────────
+
+fn setup_env_cfg() -> ConfigValue {
+    let m: Map[String, ConfigValue] = map_put(
+        {"port": ConfigValue::Int(8080)},
+        "verbose", ConfigValue::Bool(false)
+    );
+    ConfigValue::Map(m)
+}
+
+test fn config_with_env_overrides_int() -> Unit ! Env {
+    let _: Unit = set("CFG_TEST_PORT", "9090").unwrap_or(());
+    let cfg: ConfigValue = setup_env_cfg();
+    let result: ConfigValue = with_env(cfg, "CFG_TEST").unwrap_or(ConfigValue::Null);
+    remove_var("CFG_TEST_PORT");
+    match get_path(result, "port") {
+        Some(ConfigValue::Int(n)) => assert_eq(n, 9090),
+        _                         => assert(false),
+    }
+}
+
+test fn config_with_env_overrides_bool() -> Unit ! Env {
+    let _: Unit = set("CFG_TEST2_VERBOSE", "true").unwrap_or(());
+    let m: Map[String, ConfigValue] = {"verbose": ConfigValue::Bool(false)};
+    let cfg: ConfigValue = ConfigValue::Map(m);
+    let result: ConfigValue = with_env(cfg, "CFG_TEST2").unwrap_or(ConfigValue::Null);
+    remove_var("CFG_TEST2_VERBOSE");
+    match get_path(result, "verbose") {
+        Some(ConfigValue::Bool(b)) => assert_eq(b, true),
+        _                          => assert(false),
+    }
+}
+
+test fn config_with_env_no_match_keeps_base() -> Unit ! Env {
+    let cfg: ConfigValue = setup_env_cfg();
+    // Use a prefix unlikely to match any real env var
+    let result: ConfigValue = with_env(cfg, "MVLTEST_NOENV_XYZ987").unwrap_or(ConfigValue::Null);
+    match get_path(result, "port") {
+        Some(ConfigValue::Int(n)) => assert_eq(n, 8080),
+        _                         => assert(false),
+    }
+}
+
+// ── xdg helpers ──────────────────────────────────────────────────────────────
+
+test fn config_xdg_config_home_uses_override() -> Unit ! Env {
+    let _: Unit = set("XDG_CONFIG_HOME", "/custom/config").unwrap_or(());
+    let result: String = xdg_config_home();
+    remove_var("XDG_CONFIG_HOME");
+    assert_eq(result, "/custom/config")
+}

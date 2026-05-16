@@ -67,6 +67,15 @@ pub fn get(name: Clean<String>) -> Option<Tainted<String>> {
     std::env::var(&**name).ok().map(Tainted)
 }
 
+/// Read an environment variable by name.
+///
+/// Alias for `get` with a collision-free name for use in modules that also
+/// import list-related functions (where the generic `get(xs, i)` list-index
+/// function would shadow `env::get` in the generated Rust scope).
+pub fn env_var(name: Clean<String>) -> Option<Tainted<String>> {
+    std::env::var(&**name).ok().map(Tainted)
+}
+
 /// Set an environment variable for the current process.
 ///
 /// Returns `Err` if `name` contains `=` or a NUL byte (both are invalid on POSIX).
