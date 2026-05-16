@@ -504,11 +504,18 @@ fn collect_stats_from_decls(decls: &[Decl], stats: &mut AssuranceStats, collect_
                 // Each signature inside an extern block is a trust-boundary function.
                 stats.extern_fn_count += ed.fns.len();
                 stats.fn_count += ed.fns.len();
-                if collect_details {
-                    for ef in &ed.fns {
+                for ef in &ed.fns {
+                    match ef.totality {
+                        Some(Totality::Total) => {
+                            stats.total_fn_count += 1;
+                            stats.explicit_total_fn_count += 1;
+                        }
+                        _ => stats.total_fn_count += 1, // implicitly total
+                    }
+                    if collect_details {
                         stats.fn_details.push(FnDetail {
                             name: ef.name.clone(),
-                            totality: None,
+                            totality: ef.totality.clone(),
                             effects: ef.effects.iter().map(|e| e.to_string()).collect(),
                             has_capabilities: false,
                             has_refinements: false,
