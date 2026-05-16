@@ -36,8 +36,8 @@ pub(super) const PROVEN_STDLIB_FILES: &[&str] = &[
     "math.mvl",
     "collections.mvl",
     "json.mvl",
-    // toml.mvl: excluded pending checker fix — proven-mode conflates TomlValue with
-    // json::Value when both modules are in scope (shared variant names: Bool, Array, String)
+    // toml.mvl: excluded pending verified string model (#314) — requires
+    // str_chars, list_len, and other string/list kernel functions
     // pbt.mvl: excluded pending checker fix for while-loop return type in
     // generic match arms (#538 follow-up, tracked separately)
 ];
