@@ -197,3 +197,47 @@ jobs:
       - name: MVL test compiler
         if: needs.changes.outputs.compiler == 'true'
         run: make test-mvl
+
+  # ── Refinement solver benchmarks ────────────────────────────────────────────
+  #
+  # Runs when Rust sources change. Uses a small sample count so CI completes
+  # in ~2 minutes; results are uploaded as an artifact for regression tracking.
+  # Use `--output-format bencher` to produce machine-readable output that can
+  # be diffed across runs to detect performance regressions.
+  benchmark:
+    name: Refinement solver benchmarks
+    needs: [changes]
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+
+      - name: Install LLVM 22 and Z3
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-22.list
+          sudo apt-get update -qq
+          sudo apt-get install -y llvm-22-dev libclang-22-dev libpolly-22-dev libz3-dev
+          echo "LLVM_SYS_221_PREFIX=$(llvm-config-22 --prefix)" >> "$GITHUB_ENV"
+          echo "Z3_SYS_Z3_HEADER=/usr/include/z3.h" >> "$GITHUB_ENV"
+
+      - name: Run benchmarks
+        run: |
+          cargo bench --bench refinement_solver \
+            -- --output-format bencher 2>&1 | tee bench-results.txt
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: refinement-bench-results
+          path: bench-results.txt
+          retention-days: 90
