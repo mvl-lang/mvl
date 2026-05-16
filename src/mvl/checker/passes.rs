@@ -300,21 +300,19 @@ impl VerificationPass for RefinementsPass {
 
 // ── IFC pass (Req 11 — Phase 3 partial proof) ────────────────────────────────
 
-/// Phase 3 information flow control pass for Req 11.
+/// Phase 3 + interprocedural information flow control pass for Req 11.
 ///
-/// Combines Phase 1 direct-flow violations (from the type checker) with the
-/// Phase 3 implicit-flow analysis ([`ifc::check_implicit_flows`]) to produce
-/// a verdict:
+/// Combines:
+/// - Phase 1 direct-flow violations (from the type checker)
+/// - Phase 3 implicit-flow analysis ([`ifc::check_implicit_flows`])
+/// - Interprocedural violations from forward label propagation (#830/#831/#833)
 ///
-/// - **Failed** — any violation (direct or implicit flow) was found.
+/// Verdicts:
+/// - **Failed** — any violation (direct, implicit, or interprocedural) was found.
 /// - **Proven** — no violations and the program has IFC-annotated types;
 ///   evidence includes the declassification and sanitization counts so that
 ///   auditors can verify every downgrade point.
-/// - **Unchecked** — no violations but no labeled types either; there is
-///   nothing to prove because the program has no security lattice.
-///
-/// Cross-function implicit flows and label inference through unannotated
-/// intermediaries remain deferred to a future phase (see spec §Known Limitations).
+/// - **Unchecked** — no violations but no labeled types; IFC lattice not exercised.
 struct IFCPass;
 
 impl VerificationPass for IFCPass {
@@ -370,9 +368,8 @@ impl VerificationPass for IFCPass {
         if has_ifc {
             Verdict::Proven {
                 evidence: format!(
-                    "no direct or implicit information flow violations; \
-                     {dc} declassif{} point(s), {sc} sanitiz{} point(s) auditable; \
-                     cross-function flow analysis pending",
+                    "no direct, implicit, or interprocedural information flow violations; \
+                     {dc} declassif{} point(s), {sc} sanitiz{} point(s) auditable",
                     if dc == 1 { "ication" } else { "ications" },
                     if sc == 1 { "ation" } else { "ations" },
                 ),

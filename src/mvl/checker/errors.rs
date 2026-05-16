@@ -429,6 +429,28 @@ pub enum CheckError {
         name: String,
         span: Span,
     },
+    /// Interprocedural IFC violation (#831): inferred arg label cannot flow to
+    /// the required parameter label through a chain of unannotated functions.
+    ///
+    /// The direct type checker missed this because the arg's declared type is
+    /// unlabeled (treated as Public), but forward label propagation (#830/#833)
+    /// reveals the actual inferred label is higher.
+    InterprocFlowViolation {
+        /// Name of the function being called.
+        callee: String,
+        /// Zero-based index of the offending parameter.
+        param_idx: usize,
+        /// Label required by the parameter (e.g. "Clean").
+        required_label: String,
+        /// Label inferred for the argument (e.g. "Tainted").
+        inferred_label: String,
+        /// Simplified call chain tracing the labeled data to its source.
+        chain: Vec<String>,
+        /// Name of the function containing this call site.
+        caller: String,
+        /// Source location of the call expression.
+        span: Span,
+    },
 }
 
 impl CheckError {
@@ -507,7 +529,8 @@ impl CheckError {
             | CheckError::ImplicitFlowViolation { .. }
             | CheckError::TransparentFnNoParams { .. }
             | CheckError::TransparentFnLabeledReturn { .. }
-            | CheckError::TransparentFnGeneric { .. } => 11,
+            | CheckError::TransparentFnGeneric { .. }
+            | CheckError::InterprocFlowViolation { .. } => 11,
             // Req 1: Type Safety (declaration-level — malformed extern ABI is a type/decl error,
             // not an IFC violation; grouping it under Req 11 would pollute IFC metrics).
             CheckError::UnsupportedExternAbi { .. } => 1,
@@ -586,7 +609,8 @@ impl CheckError {
             | CheckError::SessionUnknownBranch { span, .. }
             | CheckError::SessionAfterEnd { span }
             | CheckError::SessionDeadlock { span }
-            | CheckError::SessionDuplicateLabel { span, .. } => *span,
+            | CheckError::SessionDuplicateLabel { span, .. }
+            | CheckError::InterprocFlowViolation { span, .. } => *span,
         }
     }
 
@@ -813,6 +837,26 @@ impl CheckError {
             }
             CheckError::SessionDuplicateLabel { label, .. } => {
                 format!("session protocol unreachable state: duplicate branch label `{label}`")
+            }
+            CheckError::InterprocFlowViolation {
+                callee,
+                param_idx,
+                required_label,
+                inferred_label,
+                chain,
+                caller,
+                ..
+            } => {
+                let chain_str = if chain.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (via {})", chain.join(" \u{2192} "))
+                };
+                format!(
+                    "interprocedural IFC: {inferred_label} data from `{caller}` reaches \
+                     `{callee}` parameter {param_idx} requiring {required_label}; \
+                     use sanitize() or declassify(){chain_str}"
+                )
             }
         }
     }

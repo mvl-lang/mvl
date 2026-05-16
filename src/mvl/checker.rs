@@ -159,9 +159,13 @@ pub fn check_with_two_preludes_mode(
         .collect();
     let call_graph = call_graph::build(&all_prog_refs, &checker.env);
 
-    // Forward label propagation (#830/#833): build the inferred label table.
-    // Runs after the call graph is built so the full TypeEnv is available.
+    // Interprocedural IFC: forward label propagation (#830/#833) then violation
+    // detection (#831).  Runs after the call graph is built so that both the
+    // full TypeEnv and the call topology are available.
     let inferred_labels = ifc_propagation::propagate(&[prog], &checker.env);
+    let interproc_violations =
+        ifc_propagation::detect_violations(prog, &checker.env, &inferred_labels);
+    checker.errors.extend(interproc_violations);
 
     let mut req_errors = [0usize; 12];
     for e in &checker.errors {

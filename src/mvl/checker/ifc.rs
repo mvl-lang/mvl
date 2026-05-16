@@ -133,8 +133,8 @@ pub fn label_name(label: SecurityLabel) -> &'static str {
 ///
 /// **Phase 3 scope:** This pass handles the main implicit-flow pattern —
 /// a branching condition that carries a high security label, with a public
-/// output sink inside the body.  Indirect implicit flows through deeply nested
-/// data structures or cross-function call chains are deferred to a future phase.
+/// output sink inside the body.  Cross-function direct flows are handled by
+/// the interprocedural analysis in `ifc_propagation` (#831).
 pub fn check_implicit_flows(prog: &Program, errors: &mut Vec<CheckError>) {
     for decl in &prog.declarations {
         if let Decl::Fn(fd) = decl {

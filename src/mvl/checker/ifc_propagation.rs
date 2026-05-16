@@ -42,10 +42,12 @@
 use std::collections::HashMap;
 
 use crate::mvl::checker::context::TypeEnv;
+use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
 use crate::mvl::parser::ast::{
     Block, Decl, ElseBranch, Expr, MatchBody, Program, SecurityLabel, Stmt, TypeExpr,
 };
+use crate::mvl::parser::lexer::Span;
 
 // ── External taint source registry (#833) ─────────────────────────────────────
 
@@ -319,6 +321,306 @@ fn tail_label_of_block(
     })
 }
 
+// ── Violation detection (#831) ────────────────────────────────────────────────
+
+/// Detect interprocedural IFC violations in `prog`.
+///
+/// For each `FnCall callee(args)` where `callee` has labeled parameters in
+/// `type_env`, computes the inferred label of each arg via [`infer_label_extended`]
+/// and checks whether it can flow to the required parameter label.
+///
+/// Reports violations that the direct type checker missed because the arg's
+/// *declared* type is unlabeled (treated as Public) but its *inferred* label
+/// is higher — e.g., an unannotated wrapper returning data from `stdin_read_line`.
+///
+/// Returns [`CheckError::InterprocFlowViolation`] values (Req 11) ready to
+/// append to `CheckResult.errors`.
+pub fn detect_violations(
+    prog: &Program,
+    type_env: &TypeEnv,
+    inferred: &InferredLabels,
+) -> Vec<CheckError> {
+    let mut errors = Vec::new();
+    for decl in &prog.declarations {
+        if let Decl::Fn(fd) = decl {
+            let mut param_env: HashMap<String, SecurityLabel> = HashMap::new();
+            for param in &fd.params {
+                if let Some(l) = label_of_type_expr(&param.ty) {
+                    param_env.insert(param.name.clone(), l);
+                }
+            }
+            collect_violations_in_block(
+                &fd.body,
+                &fd.name,
+                &param_env,
+                type_env,
+                inferred,
+                &mut errors,
+            );
+        }
+    }
+    errors
+}
+
+fn collect_violations_in_block(
+    block: &Block,
+    caller: &str,
+    env: &HashMap<String, SecurityLabel>,
+    type_env: &TypeEnv,
+    inferred: &InferredLabels,
+    errors: &mut Vec<CheckError>,
+) {
+    let mut local_env = env.clone();
+    for stmt in &block.stmts {
+        collect_violations_in_stmt(stmt, caller, &mut local_env, type_env, inferred, errors);
+    }
+}
+
+fn collect_violations_in_stmt(
+    stmt: &Stmt,
+    caller: &str,
+    env: &mut HashMap<String, SecurityLabel>,
+    type_env: &TypeEnv,
+    inferred: &InferredLabels,
+    errors: &mut Vec<CheckError>,
+) {
+    match stmt {
+        Stmt::Let { pattern, init, .. } => {
+            collect_violations_in_expr(init, caller, env, type_env, inferred, errors);
+            // Track let-bound variable labels for subsequent stmts in this block.
+            if let crate::mvl::parser::ast::Pattern::Ident(name, _) = pattern {
+                if let Some(l) = infer_label_extended(init, env, &inferred.0) {
+                    env.insert(name.clone(), l);
+                }
+            }
+        }
+        Stmt::Assign { value, .. } => {
+            collect_violations_in_expr(value, caller, env, type_env, inferred, errors);
+        }
+        Stmt::Return { value: Some(e), .. } => {
+            collect_violations_in_expr(e, caller, env, type_env, inferred, errors);
+        }
+        Stmt::Return { value: None, .. } => {}
+        Stmt::Expr { expr, .. } => {
+            collect_violations_in_expr(expr, caller, env, type_env, inferred, errors);
+        }
+        Stmt::If {
+            cond, then, else_, ..
+        } => {
+            collect_violations_in_expr(cond, caller, env, type_env, inferred, errors);
+            collect_violations_in_block(then, caller, env, type_env, inferred, errors);
+            match else_ {
+                Some(ElseBranch::Block(b)) => {
+                    collect_violations_in_block(b, caller, env, type_env, inferred, errors);
+                }
+                Some(ElseBranch::If(s)) => {
+                    let mut else_env = env.clone();
+                    collect_violations_in_stmt(
+                        s,
+                        caller,
+                        &mut else_env,
+                        type_env,
+                        inferred,
+                        errors,
+                    );
+                }
+                None => {}
+            }
+        }
+        Stmt::Match {
+            scrutinee, arms, ..
+        } => {
+            collect_violations_in_expr(scrutinee, caller, env, type_env, inferred, errors);
+            for arm in arms {
+                let arm_env = env.clone();
+                match &arm.body {
+                    MatchBody::Expr(e) => {
+                        collect_violations_in_expr(e, caller, &arm_env, type_env, inferred, errors)
+                    }
+                    MatchBody::Block(b) => {
+                        collect_violations_in_block(b, caller, &arm_env, type_env, inferred, errors)
+                    }
+                }
+            }
+        }
+        Stmt::While { cond, body, .. } => {
+            collect_violations_in_expr(cond, caller, env, type_env, inferred, errors);
+            collect_violations_in_block(body, caller, env, type_env, inferred, errors);
+        }
+        Stmt::For { iter, body, .. } => {
+            collect_violations_in_expr(iter, caller, env, type_env, inferred, errors);
+            collect_violations_in_block(body, caller, env, type_env, inferred, errors);
+        }
+    }
+}
+
+fn collect_violations_in_expr(
+    expr: &Expr,
+    caller: &str,
+    env: &HashMap<String, SecurityLabel>,
+    type_env: &TypeEnv,
+    inferred: &InferredLabels,
+    errors: &mut Vec<CheckError>,
+) {
+    match expr {
+        Expr::FnCall {
+            name, args, span, ..
+        } => {
+            check_call_violations(name, args, *span, caller, env, type_env, inferred, errors);
+            for arg in args {
+                collect_violations_in_expr(arg, caller, env, type_env, inferred, errors);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            collect_violations_in_expr(receiver, caller, env, type_env, inferred, errors);
+            for arg in args {
+                collect_violations_in_expr(arg, caller, env, type_env, inferred, errors);
+            }
+        }
+        Expr::Binary { left, right, .. } => {
+            collect_violations_in_expr(left, caller, env, type_env, inferred, errors);
+            collect_violations_in_expr(right, caller, env, type_env, inferred, errors);
+        }
+        Expr::Unary { expr, .. }
+        | Expr::Propagate { expr, .. }
+        | Expr::Consume { expr, .. }
+        | Expr::Declassify { expr, .. }
+        | Expr::Sanitize { expr, .. }
+        | Expr::Borrow { expr, .. }
+        | Expr::FieldAccess { expr, .. } => {
+            collect_violations_in_expr(expr, caller, env, type_env, inferred, errors);
+        }
+        Expr::If {
+            cond, then, else_, ..
+        } => {
+            collect_violations_in_expr(cond, caller, env, type_env, inferred, errors);
+            collect_violations_in_block(then, caller, env, type_env, inferred, errors);
+            if let Some(e) = else_ {
+                collect_violations_in_expr(e, caller, env, type_env, inferred, errors);
+            }
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            collect_violations_in_expr(scrutinee, caller, env, type_env, inferred, errors);
+            for arm in arms {
+                let arm_env = env.clone();
+                match &arm.body {
+                    MatchBody::Expr(e) => {
+                        collect_violations_in_expr(e, caller, &arm_env, type_env, inferred, errors)
+                    }
+                    MatchBody::Block(b) => {
+                        collect_violations_in_block(b, caller, &arm_env, type_env, inferred, errors)
+                    }
+                }
+            }
+        }
+        Expr::Block(b) => collect_violations_in_block(b, caller, env, type_env, inferred, errors),
+        Expr::Lambda { body, .. } => {
+            collect_violations_in_expr(body, caller, env, type_env, inferred, errors)
+        }
+        Expr::Construct { fields, .. } | Expr::Spawn { fields, .. } => {
+            for (_, e) in fields {
+                collect_violations_in_expr(e, caller, env, type_env, inferred, errors);
+            }
+        }
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+            for e in elems {
+                collect_violations_in_expr(e, caller, env, type_env, inferred, errors);
+            }
+        }
+        Expr::Map { pairs, .. } => {
+            for (k, v) in pairs {
+                collect_violations_in_expr(k, caller, env, type_env, inferred, errors);
+                collect_violations_in_expr(v, caller, env, type_env, inferred, errors);
+            }
+        }
+        Expr::Select { arms, .. } => {
+            for arm in arms {
+                collect_violations_in_expr(&arm.expr, caller, env, type_env, inferred, errors);
+                collect_violations_in_block(&arm.body, caller, env, type_env, inferred, errors);
+            }
+        }
+        Expr::Concurrently { body, .. } => {
+            collect_violations_in_block(body, caller, env, type_env, inferred, errors)
+        }
+        Expr::Literal(..) | Expr::Ident(..) => {}
+    }
+}
+
+/// Check a single call site for interprocedural IFC violations.
+#[allow(clippy::too_many_arguments)]
+fn check_call_violations(
+    callee_name: &str,
+    args: &[Expr],
+    call_span: Span,
+    caller: &str,
+    env: &HashMap<String, SecurityLabel>,
+    type_env: &TypeEnv,
+    inferred: &InferredLabels,
+    errors: &mut Vec<CheckError>,
+) {
+    let Some(fn_info) = type_env.lookup_fn(callee_name) else {
+        return;
+    };
+    // Skip variadic builtins (empty params is the sentinel).
+    if fn_info.params.is_empty() {
+        return;
+    }
+    // Skip generic functions (monomorphization deferred to #838).
+    if !fn_info.type_params.is_empty() {
+        return;
+    }
+
+    for (param_idx, (arg, param_ty)) in args.iter().zip(fn_info.params.iter()).enumerate() {
+        let Some(required) = ifc::label_of(param_ty) else {
+            continue; // Param has no label requirement.
+        };
+        let Some(arg_label) = infer_label_extended(arg, env, &inferred.0) else {
+            continue; // Cannot determine arg label.
+        };
+        if ifc::can_flow(arg_label, required) {
+            continue; // No violation.
+        }
+        // Build a simplified call chain for the error message.
+        let chain = extract_chain(arg, &inferred.0);
+        errors.push(CheckError::InterprocFlowViolation {
+            callee: callee_name.to_string(),
+            param_idx,
+            required_label: ifc::label_name(required).to_string(),
+            inferred_label: ifc::label_name(arg_label).to_string(),
+            chain,
+            caller: caller.to_string(),
+            span: call_span,
+        });
+    }
+}
+
+/// Extract a simplified call chain from an arg expression for error messages.
+///
+/// Returns function/variable names from outermost to innermost, tracing the
+/// path through which labeled data flows into the violation.
+fn extract_chain(expr: &Expr, table: &HashMap<String, SecurityLabel>) -> Vec<String> {
+    match expr {
+        Expr::FnCall { name, args, .. } => {
+            let mut chain = vec![name.clone()];
+            // Descend into the first arg that contributes a label.
+            for arg in args {
+                if infer_label_extended(arg, &HashMap::new(), table).is_some() {
+                    let sub = extract_chain(arg, table);
+                    if !sub.is_empty() {
+                        chain.extend(sub);
+                    }
+                    break;
+                }
+            }
+            chain
+        }
+        Expr::Ident(name, _) => vec![name.clone()],
+        _ => vec![],
+    }
+}
+
 // ── Label extraction from TypeExpr ───────────────────────────────────────────
 
 /// Extract the outermost security label from a `TypeExpr`, if any.
@@ -444,5 +746,56 @@ mod tests {
         let env = TypeEnv::default();
         let labels = propagate(&[&prog], &env);
         assert_eq!(labels.get("wrapper"), Some(SecurityLabel::Tainted));
+    }
+
+    // ── Violation detection tests ─────────────────────────────────────────
+
+    #[test]
+    fn no_violations_on_clean_flow() {
+        // fn wrapper() -> String { source() }
+        // fn caller() -> Unit { sink(wrapper()) }  — Tainted → Clean[String]: violation!
+        // But here we test the CLEAN case: calling with a non-tainted value
+        let prog = parse("fn caller() -> Unit { sink(\"safe\") }");
+        let env = env_with_taint_source();
+        let inferred = propagate(&[&prog], &env);
+        let violations = detect_violations(&prog, &env, &inferred);
+        assert!(
+            violations.is_empty(),
+            "literal arg to Clean sink should not violate"
+        );
+    }
+
+    #[test]
+    fn violation_detected_tainted_to_clean_sink() {
+        // fn wrapper() -> String { source() }   ← inferred Tainted
+        // fn caller() -> Unit { sink(wrapper()) }  ← Tainted → Clean param
+        let prog =
+            parse("fn wrapper() -> String { source() } fn caller() -> Unit { sink(wrapper()) }");
+        let env = env_with_taint_source();
+        let inferred = propagate(&[&prog], &env);
+        let violations = detect_violations(&prog, &env, &inferred);
+        assert!(
+            !violations.is_empty(),
+            "Tainted arg to Clean[String] param should produce a violation"
+        );
+        // Verify the error is tagged as Req 11
+        for v in &violations {
+            assert_eq!(v.requirement_number(), 11);
+        }
+    }
+
+    #[test]
+    fn violation_chain_extracted() {
+        let prog =
+            parse("fn wrapper() -> String { source() } fn caller() -> Unit { sink(wrapper()) }");
+        let env = env_with_taint_source();
+        let inferred = propagate(&[&prog], &env);
+        let violations = detect_violations(&prog, &env, &inferred);
+        if let Some(CheckError::InterprocFlowViolation { chain, .. }) = violations.first() {
+            assert!(
+                chain.contains(&"wrapper".to_string()),
+                "chain should include wrapper, got {chain:?}"
+            );
+        }
     }
 }
