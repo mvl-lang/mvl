@@ -95,7 +95,7 @@ All items (functions, types, constants) MUST be private by default. An item MUST
 
 Imports MUST use the `use` keyword with a fully-qualified path ending in a specific item name. Wildcard imports (`use module::*`) MUST NOT be permitted. All `use` declarations MUST appear at the top of the file, before any other declarations.
 
-**Implementation:** `src/mvl/parser/mod.rs`, `src/mvl/resolver/mod.rs`
+**Implementation:** `src/mvl/parser.rs`, `src/mvl/resolver.rs`
 
 **Tests:** `tests/module_resolver.rs::use_at_top`, `tests/module_resolver.rs::wildcard_rejected`, `tests/module_resolver.rs::name_collision_rejected`, `tests/module_resolver.rs::missing_module_rejected`
 
@@ -139,7 +139,7 @@ Imports MUST use the `use` keyword with a fully-qualified path ending in a speci
 
 A module MAY re-export items from its sub-modules using `pub use path::Item;`. Re-exported items MUST satisfy the same visibility rules as direct exports. Re-exporting a private item from another module MUST be rejected.
 
-**Implementation:** `src/mvl/resolver/mod.rs`
+**Implementation:** `src/mvl/resolver.rs`
 
 **Tests:** `tests/module_resolver.rs::reexport_public`, `tests/module_resolver.rs::reexport_private_rejected`
 
@@ -185,7 +185,7 @@ The compiler MUST detect and reject circular module dependencies at compile time
 
 The MVL standard library MUST be organized as a module tree rooted at `std`. All standard library items MUST be imported explicitly using `use std::...`. There MUST be no implicit imports (no Haskell-style Prelude auto-import).
 
-**Implementation:** `src/mvl/stdlib/mod.rs` *(Deferred — Phase 2)* Phase 1 uses `extern "rust"` wrappers via the transpiler; the verified MVL `std` module tree is a Phase 2 goal. Tracked in #67.
+**Implementation:** `src/mvl/stdlib.rs` *(Deferred — Phase 2)* Phase 1 uses `extern "rust"` wrappers via the transpiler; the verified MVL `std` module tree is a Phase 2 goal. Tracked in #67.
 
 **Tests:** `tests/module_resolver.rs::stdlib_explicit_import` *(Deferred — Phase 2)*
 

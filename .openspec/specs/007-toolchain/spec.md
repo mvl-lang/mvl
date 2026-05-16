@@ -156,7 +156,7 @@ Each project MUST store build artifacts in a `.mvl/` directory at the project ro
 
 `use` statements MUST resolve from three locations based on prefix: project root (no prefix), stdlib (`std.*`), packages (`pkg.*`).
 
-**Implementation:** `src/mvl/resolver/mod.rs` (existing, needs filesystem integration)
+**Implementation:** `src/mvl/resolver.rs` (existing, needs filesystem integration)
 
 #### Scenario: use std.fs resolves from toolchain stdlib
 

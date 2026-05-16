@@ -21,7 +21,7 @@ Types are proofs. A program that compiles has proven structural properties about
 
 The type system MUST support sum types (enums) and product types (structs) as first-class constructs. All domain states MUST be representable. Impossible states MUST be unrepresentable.
 
-**Implementation:** `src/mvl/checker/mod.rs`
+**Implementation:** `src/mvl/checker.rs`
 
 **Tests:** `tests/type_checker.rs::adt_corpus_parses_and_checks`, `tests/type_checker.rs::struct_extra_field_rejected`, `tests/type_checker.rs::field_access_on_struct_valid`, `tests/compile_and_run.rs::linked_list_check_passes`, `tests/compile_and_run.rs::linked_list_runs_and_produces_expected_output` (#194)
 
@@ -41,7 +41,7 @@ The type system MUST support sum types (enums) and product types (structs) as fi
 
 The type system MUST NOT have a null, nil, or undefined value. Absence MUST be represented by `Option[T]` (either `Some(value)` or `None`). Accessing the value inside an `Option` MUST require pattern matching or explicit unwrapping.
 
-**Implementation:** `src/mvl/checker/mod.rs`
+**Implementation:** `src/mvl/checker.rs`
 
 **Tests:** `tests/type_checker.rs::option_field_access_rejected`, `tests/type_checker.rs::option_result_corpus_parses_and_checks`
 
@@ -61,7 +61,7 @@ The type system MUST NOT have a null, nil, or undefined value. Absence MUST be r
 
 Functions that can fail MUST return `Result[T, E]`. Error types MUST be visible in the function signature. The caller MUST handle the error (via `match`, `?` propagation, or combinators).
 
-**Implementation:** `src/mvl/checker/mod.rs`
+**Implementation:** `src/mvl/checker.rs`
 
 **Tests:** `tests/type_checker.rs::result_in_stmt_without_use_rejected`, `tests/type_checker.rs::result_match_missing_ok_rejected`, `tests/compile_and_run.rs::safe_division_check_passes`, `tests/compile_and_run.rs::safe_division_runs_and_produces_expected_output` (#191)
 
@@ -83,7 +83,7 @@ Every value MUST have exactly one owner. Transfer of ownership MUST be explicit 
 
 This is Design Principle 9 ("Ownership, not GC"). Deterministic deallocation eliminates garbage-collection pauses and enables real-time guarantees that GC languages cannot provide.
 
-**Implementation:** `src/mvl/checker/mod.rs`
+**Implementation:** `src/mvl/checker.rs`
 
 **Tests:** `tests/type_checker.rs::use_after_explicit_move_rejected`, `tests/type_checker.rs::ownership_corpus_parses`
 
@@ -114,7 +114,7 @@ See ADR-0025 for the full contract system design and phased implementation.
 
 This is Design Principle 10 ("Refinement types inline"). `x: Int where x > 0` is a first-class type — the predicate is part of the type, not merely a runtime assertion.
 
-**Implementation:** `src/mvl/checker/mod.rs`, `src/mvl/checker/contracts.rs`, `src/mvl/checker/refinements.rs`
+**Implementation:** `src/mvl/checker.rs`, `src/mvl/checker/contracts.rs`, `src/mvl/checker/refinements.rs`
 
 **Tests:** `tests/type_checker.rs::refinements_corpus_parses`, `tests/compile_and_run.rs::safe_division_check_passes`, `tests/compile_and_run.rs::safe_division_runs_and_produces_expected_output` (#191); `tests/type_checker.rs::loop_verification_corpus_parses_and_checks` (#628)
 
@@ -142,7 +142,7 @@ All bindings and struct fields MUST be immutable unless explicitly marked `mut`.
 
 This is Design Principle 5 ("Immutable by default"). `mut` is the explicit opt-in for mutation, not the default.
 
-**Implementation:** `src/mvl/checker/mod.rs`
+**Implementation:** `src/mvl/checker.rs`
 
 **Tests:** `tests/type_checker.rs::immutable_binding_assignment_rejected`, `tests/type_checker.rs::immutable_field_mutation_rejected`, `tests/type_checker.rs::immutability_corpus_parses_and_checks`
 
@@ -162,7 +162,7 @@ This is Design Principle 5 ("Immutable by default"). `mut` is the explicit opt-i
 
 Every `match` expression MUST cover all variants of the matched type. The compiler MUST reject non-exhaustive matches.
 
-**Implementation:** `src/mvl/checker/mod.rs`
+**Implementation:** `src/mvl/checker.rs`
 
 **Tests:** `tests/type_checker.rs::enum_match_missing_variant_rejected`, `tests/type_checker.rs::exhaustive_match_corpus_parses_and_checks`
 
@@ -244,7 +244,7 @@ where T: Eq, E: Display
 - `Iterator[T]` — lazy iteration protocol (see Requirement 11)
 - User-defined traits (declared in the module system)
 
-**Implementation:** `src/mvl/parser/ast.rs::GenericParam`, `src/mvl/checker/mod.rs`
+**Implementation:** `src/mvl/parser/ast.rs::GenericParam`, `src/mvl/checker.rs`
 
 **Tests:** `tests/type_checker.rs::generic_identity_parses`, `tests/type_checker.rs::generic_type_decl_parses`, `tests/type_checker.rs::generic_pair_type_parses`, `tests/type_checker.rs::generic_with_constraint_parses`, `tests/type_checker.rs::generic_multiple_constraints_parse`, `tests/compile_and_run.rs::linked_list_check_passes`, `tests/compile_and_run.rs::linked_list_runs_and_produces_expected_output` (#194)
 
@@ -379,7 +379,7 @@ Float literals MUST support scientific notation (`1.5e10`, `2.0e-3`).
 
 The type system MUST define the `Iterator[T]` trait as the protocol for lazy, sequential element access. Every type used in a `for...in` loop MUST implement `Iterator[T]`. Collection operations that transform sequences (`map`, `filter`, `flat_map`) MUST return `Iterator[U]` rather than a concrete collection — evaluation is deferred until elements are consumed.
 
-**Implementation:** `src/mvl/checker/mod.rs`, `src/mvl/backends/rust/emit_impls.rs`, `src/mvl/backends/rust/emit_stmts.rs`
+**Implementation:** `src/mvl/checker.rs`, `src/mvl/backends/rust/emit_impls.rs`, `src/mvl/backends/rust/emit_stmts.rs`
 
 #### Iterator trait definition
 
@@ -590,7 +590,7 @@ No other iteration, conditional, or error-propagation constructs are permitted. 
 
 This is Design Principle 2 ("One way to do each thing"). Cross-references: Requirement 3 (Result), Requirement 8 (no throw/catch/try), Spec 002 Requirement 5 (total/partial distinction).
 
-**Implementation:** `src/mvl/parser/statements.rs`, `src/mvl/checker/mod.rs`
+**Implementation:** `src/mvl/parser/statements.rs`, `src/mvl/checker.rs`
 
 **Tests:** `tests/type_checker.rs::while_loop_in_total_function_rejected`, `tests/type_checker.rs::while_loop_in_implicit_total_function_rejected`, `src/mvl/parser/statements.rs::throw_is_rejected`, `src/mvl/parser/statements.rs::try_is_rejected`, `src/mvl/parser/statements.rs::catch_is_rejected`
 

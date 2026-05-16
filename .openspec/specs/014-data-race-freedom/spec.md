@@ -58,7 +58,7 @@ Phase 6 (actor model) will extend this to:
 Only `iso` and `val` values MAY cross actor boundaries.  The compiler MUST emit
 `CheckError::CapabilityViolation` when a `ref` or `tag` value is passed to `channel.send()`.
 
-**Implementation:** `src/mvl/checker/mod.rs::TypeChecker::check_send_capability`
+**Implementation:** `src/mvl/checker.rs::TypeChecker::check_send_capability`
 
 **Tests:** `tests/type_checker.rs::sending_ref_param_rejected`,
 `tests/type_checker.rs::sending_iso_param_accepted`,

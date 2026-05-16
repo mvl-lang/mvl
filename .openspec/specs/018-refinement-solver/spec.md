@@ -227,7 +227,7 @@ The solver layers MUST be wired into the checker as a unified dispatch that
 tries layers in order and emits `RuntimeCheck` only when all layers are
 exhausted.
 
-**Implementation:** `src/mvl/checker/refinements.rs`, `src/mvl/checker/solver/mod.rs`
+**Implementation:** `src/mvl/checker/refinements.rs`, `src/mvl/checker/solver.rs`
 
 **Issue:** #594
 

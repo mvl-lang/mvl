@@ -131,9 +131,9 @@ A behavior (`pub fn` inside an actor) is an asynchronous message handler.  The c
 4. Behaviors MUST NOT call other behaviors synchronously — they enqueue messages
 5. Private helpers (`fn` without `pub`) are synchronous and may return any type
 
-**Implementation:** `src/mvl/checker/mod.rs::TypeChecker::check_behavior`,
+**Implementation:** `src/mvl/checker.rs::TypeChecker::check_behavior`,
 `src/mvl/backends/rust/emit_functions.rs::emit_behavior`,
-`src/mvl/backends/llvm/mod.rs::emit_behavior`
+`src/mvl/backends/llvm.rs::emit_behavior`
 
 **Tests:** `tests/corpus/actors/behaviors.mvl`,
 `tests/corpus/negative/req09_data_race/behavior_ref_param.mvl`
@@ -191,7 +191,7 @@ An actor terminates when:
 - Its message queue is empty
 
 **Implementation:** `src/mvl/parser/expressions.rs::parse_actor_expr`,
-`src/mvl/checker/mod.rs::TypeChecker::check_actor_creation`,
+`src/mvl/checker.rs::TypeChecker::check_actor_creation`,
 `src/mvl/backends/rust/emit_exprs.rs::emit_actor_creation`,
 `src/mvl/backends/llvm/exprs.rs::emit_actor_creation`
 
@@ -227,7 +227,7 @@ The compiler MUST reject a behavior call that passes an `iso` value without cons
 (this would alias the isolated reference across the actor boundary).
 
 **Implementation:** `src/mvl/checker/capabilities.rs::check_send_capability`,
-`src/mvl/checker/mod.rs::TypeChecker::check_behavior_call`
+`src/mvl/checker.rs::TypeChecker::check_behavior_call`
 
 **Tests:** `tests/corpus/actors/message_send.mvl`,
 `tests/corpus/negative/req09_data_race/iso_send_without_consume.mvl`
@@ -273,7 +273,7 @@ The compiler MUST enforce at every behavior call site:
 These rules extend the channel-send rules from Spec 014 (Req 1) to actor behavior calls.
 
 **Implementation:** `src/mvl/checker/capabilities.rs::check_send_capability`,
-`src/mvl/checker/mod.rs::TypeChecker::check_behavior_call`
+`src/mvl/checker.rs::TypeChecker::check_behavior_call`
 
 **Tests:** `tests/type_checker.rs::sending_ref_param_rejected`,
 `tests/corpus/negative/req09_data_race/behavior_ref_param.mvl`
@@ -299,7 +299,7 @@ MUST reject any expression that attempts to read or write an actor field through
 The only permitted interaction with an actor from the outside is sending a message
 (behavior call).  Field access on an `ActorRef` MUST produce a compile error.
 
-**Implementation:** `src/mvl/checker/mod.rs::TypeChecker::check_field_access`
+**Implementation:** `src/mvl/checker.rs::TypeChecker::check_field_access`
 
 **Tests:** `tests/corpus/negative/req09_data_race/actor_field_access.mvl`
 
@@ -334,7 +334,7 @@ The only permitted interaction with an actor from the outside is sending a messa
 - MAY be compared for identity (`==` on two `ActorRef` values checks same actor)
 - MUST NOT be used as an `iso` or `ref` value
 
-**Implementation:** `src/mvl/checker/mod.rs::TypeChecker::check_actor_creation`,
+**Implementation:** `src/mvl/checker.rs::TypeChecker::check_actor_creation`,
 `src/mvl/parser/ast.rs::Type::ActorRef`
 
 **Tests:** `tests/corpus/actors/actor_ref.mvl`
@@ -368,7 +368,7 @@ This prevents dangling actor references and ensures that concurrent work is boun
 by the scope in which it was created.
 
 **Implementation:** `src/mvl/parser/expressions.rs::parse_concurrently_expr`,
-`src/mvl/checker/mod.rs::TypeChecker::check_concurrently`,
+`src/mvl/checker.rs::TypeChecker::check_concurrently`,
 `src/mvl/backends/rust/emit_exprs.rs::emit_concurrently`,
 `src/mvl/backends/llvm/exprs.rs::emit_concurrently`
 
@@ -412,7 +412,7 @@ The `select` expression:
 - MUST use `timeout` as an explicit branch, not an implicit behaviour
 
 **Implementation:** `src/mvl/parser/expressions.rs::parse_select_expr`,
-`src/mvl/checker/mod.rs::TypeChecker::check_select`,
+`src/mvl/checker.rs::TypeChecker::check_select`,
 `src/mvl/backends/rust/emit_exprs.rs::emit_select`,
 `src/mvl/backends/llvm/exprs.rs::emit_select`
 

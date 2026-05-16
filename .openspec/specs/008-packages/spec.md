@@ -43,7 +43,7 @@ Every extended package MUST have a `mvl.toml` in its root with `[package]` field
 
 The compiler MUST enforce that files under `src/internal/` within a package are inaccessible from outside the package. A `use pkg.NAME.internal.*` import from user code MUST be rejected at resolve time.
 
-**Implementation:** `src/mvl/resolver/mod.rs` (planned — add `internal/` path check)
+**Implementation:** `src/mvl/resolver.rs` (planned — add `internal/` path check)
 
 #### Scenario: Internal module not importable from user code
 
@@ -74,7 +74,7 @@ The compiler MUST enforce that files under `src/internal/` within a package are 
 
 The resolved version MUST match the version pinned in `mvl.lock`.
 
-**Implementation:** `src/mvl/resolver/mod.rs` (planned — third resolution path)
+**Implementation:** `src/mvl/resolver.rs` (planned — third resolution path)
 
 #### Scenario: pkg.* resolves to global cache
 

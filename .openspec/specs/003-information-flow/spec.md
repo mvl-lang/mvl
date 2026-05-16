@@ -80,7 +80,7 @@ Lowering a security label MUST require an explicit function call. The declassifi
 
 These functions MUST be auditable — `grep declassify` and `grep sanitize` finds every point where the security boundary is crossed.
 
-**Implementation:** `src/mvl/checker/mod.rs`
+**Implementation:** `src/mvl/checker.rs`
 
 **Tests:** `tests/type_checker.rs::sanitize_tainted_returns_clean`, `tests/type_checker.rs::declassify_secret_returns_public`, `tests/type_checker.rs::sanitize_on_non_tainted_rejected`, `tests/type_checker.rs::declassify_on_non_secret_rejected`, `tests/type_checker.rs::direct_tainted_to_clean_without_sanitize_rejected`
 
@@ -100,7 +100,7 @@ These functions MUST be auditable — `grep declassify` and `grep sanitize` find
 
 Functions that process secrets MUST return secrets. The label MUST propagate through computation.
 
-**Implementation:** `src/mvl/checker/mod.rs`, `src/mvl/checker/ifc.rs`
+**Implementation:** `src/mvl/checker.rs`, `src/mvl/checker/ifc.rs`
 
 **Tests:** `tests/type_checker.rs::arithmetic_label_join_propagates`, `tests/type_checker.rs::arithmetic_label_join_downgrade_rejected`, `tests/type_checker.rs::propagation_ifc_corpus_parses_and_checks`, `tests/compile_and_run.rs::safe_division_check_passes`, `tests/compile_and_run.rs::safe_division_runs_and_produces_expected_output` (#191)
 
@@ -138,7 +138,7 @@ Error types containing `Secret` fields MUST NOT be sendable to `Public` channels
 
 Logging functions MUST accept only `Public[T]` arguments. Logging a `Secret` or `Tainted` value MUST be a compile error.
 
-**Implementation:** `src/mvl/checker/mod.rs` (`infer_fn_call` — IFC label check for `println`/`print`/`log_*`), `std/log.mvl`, `src/mvl/checker/ifc.rs` (`PUBLIC_SINKS`)
+**Implementation:** `src/mvl/checker.rs` (`infer_fn_call` — IFC label check for `println`/`print`/`log_*`), `std/log.mvl`, `src/mvl/checker/ifc.rs` (`PUBLIC_SINKS`)
 
 **Tests:** `tests/type_checker.rs::println_rejects_secret_argument`, `tests/type_checker.rs::println_rejects_tainted_argument`, `tests/type_checker.rs::println_accepts_public_argument`, `tests/type_checker.rs::log_debug_rejects_secret_argument`, `tests/type_checker.rs::log_info_rejects_secret_argument`, `tests/type_checker.rs::log_error_rejects_tainted_argument`, `tests/type_checker.rs::log_warn_rejects_clean_argument`, `tests/type_checker.rs::log_info_rejects_secret_value_in_fields_map`, `tests/type_checker.rs::log_info_accepts_public_argument`, `tests/type_checker.rs::caller_missing_log_effect_rejected`, `tests/type_checker.rs::caller_missing_log_effect_with_other_effects_rejected`, `tests/compile_and_run.rs::safe_division_check_passes`, `tests/compile_and_run.rs::safe_division_runs_and_produces_expected_output` (#191)
 
@@ -176,7 +176,7 @@ The compiler MUST detect implicit information flows via control flow (Program Co
 
 > **Rationale:** Whether a print fires reveals the value of the controlling condition. This is a covert channel — information leaks through control flow rather than data flow.
 
-**Implementation:** `src/mvl/checker/ifc.rs` (`check_implicit_flows`), `src/mvl/checker/mod.rs`
+**Implementation:** `src/mvl/checker/ifc.rs` (`check_implicit_flows`), `src/mvl/checker.rs`
 
 **Tests:** `tests/type_checker.rs::implicit_flow_secret_if_condition_rejected`, `tests/type_checker.rs::implicit_flow_tainted_if_condition_rejected`, `tests/type_checker.rs::implicit_flow_public_condition_accepted`, `tests/type_checker.rs::implicit_flow_print_sink_rejected`, `tests/type_checker.rs::implicit_flow_else_branch_rejected`, `tests/type_checker.rs::implicit_flow_label_propagated_through_let`, `tests/type_checker.rs::implicit_flow_while_secret_condition_rejected`, `src/mvl/checker/passes.rs::req11_proven_for_labeled_types_with_no_violations`
 

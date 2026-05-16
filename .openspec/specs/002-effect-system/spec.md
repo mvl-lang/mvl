@@ -23,7 +23,7 @@ Functions with side effects MUST declare them in the signature using `! Effect` 
 
 This is Design Principle 6 ("Effects in signatures"). Pure is the default; every side effect is an explicit, visible opt-in in the function's type.
 
-**Implementation:** `src/mvl/checker/mod.rs`
+**Implementation:** `src/mvl/checker.rs`
 
 **Tests:** `tests/type_checker.rs::pure_function_calling_effectful_rejected`, `tests/type_checker.rs::effectful_function_with_correct_declaration_accepted`, `tests/type_checker.rs::caller_missing_callee_effect_rejected`, `tests/compile_and_run.rs::safe_division_check_passes`, `tests/compile_and_run.rs::safe_division_runs_and_produces_expected_output` (#191)
 
@@ -52,7 +52,7 @@ This is Design Principle 6 ("Effects in signatures"). Pure is the default; every
 
 Effects MUST be fine-grained, not a single `IO` bucket. The minimum set of effect categories:
 
-**Implementation:** `src/mvl/checker/mod.rs` (constant `VALID_EFFECT_NAMES`; validated in `check_fn_decl`)
+**Implementation:** `src/mvl/checker.rs` (constant `VALID_EFFECT_NAMES`; validated in `check_fn_decl`)
 
 **Tests:** `tests/type_checker.rs::invalid_effect_name_rejected`, `tests/type_checker.rs::valid_effect_names_accepted`, `tests/type_checker.rs::caller_missing_callee_effect_rejected`, `tests/type_checker.rs::caller_declaring_effect_union_accepted`
 
@@ -106,7 +106,7 @@ Effects SHOULD support parameterization for fine-grained access control:
 
 Effects MUST compose. A function calling two effectful functions MUST declare the union of their effects.
 
-**Implementation:** `src/mvl/checker/mod.rs`
+**Implementation:** `src/mvl/checker.rs`
 
 **Tests:** `tests/type_checker.rs::caller_declaring_effect_union_accepted`, `tests/type_checker.rs::caller_missing_callee_effect_rejected`
 
@@ -132,7 +132,7 @@ Non-terminating functions MUST be marked `partial`. Total functions (the default
 
 This is Design Principle 4 ("Total by default"). Functions terminate unless they explicitly opt out with `partial`.
 
-**Implementation:** `src/mvl/checker/mod.rs`, `src/mvl/parser/ast.rs::Totality`
+**Implementation:** `src/mvl/checker.rs`, `src/mvl/parser/ast.rs::Totality`
 
 **Tests:** `tests/type_checker.rs::for_loop_in_total_function_accepted`, `tests/type_checker.rs::while_loop_in_total_function_rejected`, `tests/type_checker.rs::while_loop_in_implicit_total_function_rejected`, `tests/type_checker.rs::while_loop_in_partial_function_accepted`, `tests/type_checker.rs::partial_call_in_total_function_rejected`, `tests/compile_and_run.rs::safe_division_check_passes`, `tests/compile_and_run.rs::safe_division_runs_and_produces_expected_output` (#191), `tests/compile_and_run.rs::linked_list_check_passes`, `tests/compile_and_run.rs::linked_list_runs_and_produces_expected_output` (#194)
 
@@ -163,7 +163,7 @@ Spawning tasks and sending/receiving on channels MUST be effects. The effect sys
 
 This is Design Principle 8 ("Actors, not threads"). No shared mutable state, no locks, no deadlocks — the concurrency model is a directed graph of actors communicating via capability-checked channels.
 
-**Implementation:** `src/mvl/checker/mod.rs`, `src/mvl/parser/ast.rs::Capability`
+**Implementation:** `src/mvl/checker.rs`, `src/mvl/parser/ast.rs::Capability`
 
 **Tests:** `tests/type_checker.rs::sending_ref_param_rejected`, `tests/type_checker.rs::sending_iso_param_accepted`, `tests/type_checker.rs::sending_val_param_accepted`, `tests/type_checker.rs::capabilities_corpus_parses_and_checks`
 

@@ -114,9 +114,9 @@ warnings do not affect `is_ok`).
 
 `warning_count()` MUST count only `Warning`-severity diagnostics, not hints.
 
-**Implementation:** `src/mvl/linter/mod.rs::LintResult`
+**Implementation:** `src/mvl/linter.rs::LintResult`
 
-**Tests:** `src/mvl/linter/mod.rs` (inline tests for `hint_count`, `warning_count`, `is_ok`)
+**Tests:** `src/mvl/linter.rs` (inline tests for `hint_count`, `warning_count`, `is_ok`)
 
 #### Scenario: Hint-only result is ok
 
