@@ -267,10 +267,20 @@ pub fn load_pkg_modules(progs: &[Program], project_root: &Path) -> Vec<Program> 
                         if !loaded.insert(pkg_name.clone()) {
                             continue;
                         }
-                        let pkg_dir = packages::fetch::local_override_dir(project_root, pkg_name);
-                        if !pkg_dir.exists() {
-                            continue;
-                        }
+                        // Resolve package source directory.
+                        // Order: installed (.mvl/pkg/<name>/) then in-repo dev (pkg/<name>/).
+                        let installed_dir =
+                            packages::fetch::local_override_dir(project_root, pkg_name);
+                        let pkg_dir = if installed_dir.exists() {
+                            installed_dir
+                        } else {
+                            let dev_dir = project_root.join("pkg").join(pkg_name.as_str());
+                            if dev_dir.exists() {
+                                dev_dir
+                            } else {
+                                continue;
+                            }
+                        };
                         for sub in &["src", "src/internal"] {
                             let dir = pkg_dir.join(sub);
                             if let Ok(entries) = fs::read_dir(&dir) {
