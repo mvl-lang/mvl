@@ -1,0 +1,548 @@
+//! std.toml — pure TOML encode/decode in native MVL.
+//!
+//! Zero external crates. Both backends benefit automatically once their
+//! underlying primitives are in place; no C-ABI wrappers needed.
+//!
+//! Import:
+//!   use std.toml.{TomlValue, toml_encode, toml_decode}
+//!
+//! Effects: none (pure).
+
+// ── Error type ────────────────────────────────────────────────────────────────
+
+/// Structured error returned by `toml_decode`.
+pub type TomlError = enum {
+    ParseError(String),
+}
+
+/// A dynamically-typed TOML value.
+///
+/// All function/type names are prefixed with `toml_` to avoid collisions with
+/// std.json symbols when both modules appear in the same compilation unit.
+pub type TomlValue = enum {
+    TStr(String),
+    TInt(Int),
+    TFloat(Float),
+    TBool(Bool),
+    TDateTime(String),
+    TArray(List[TomlValue]),
+    TTable(Map[String, TomlValue]),
+}
+
+// ── Internal parser position types ───────────────────────────────────────────
+// MVL has no tuple-construction syntax, so each parser helper returns a
+// dedicated enum pairing the parsed value with the new position.
+
+type TVPos  = enum { TVP(TomlValue, Int), TVPErr(String) }
+type TSPos  = enum { TSP(String, Int), TSPErr(String) }
+type TNPos  = enum { TNIP(Int, Int), TNFP(Float, Int), TNPErr(String) }
+type TKPos  = enum { TKP(String, Int), TKPErr(String) }
+
+// ── encode ────────────────────────────────────────────────────────────────────
+
+/// Serialises a TomlValue to a TOML string.
+pub transparent partial fn toml_encode(v: TomlValue) -> String {
+    match v {
+        TomlValue::TBool(b)     => if b { "true" } else { "false" },
+        TomlValue::TInt(n)      => n.to_string(),
+        TomlValue::TFloat(f)    => f.to_string(),
+        TomlValue::TStr(s)      => str_concat("\"", str_concat(toml_escape(s), "\"")),
+        TomlValue::TDateTime(s) => s,
+        TomlValue::TArray(a)    => toml_encode_array(a),
+        TomlValue::TTable(t)    => toml_encode_table(t),
+    }
+}
+
+partial fn toml_escape(s: String) -> String {
+    let chars: List[String] = str_chars(s);
+    let len: Int = list_len(chars);
+    let out: ref String = "";
+    let i: ref Int = 0;
+    while i < len {
+        match list_get(chars, i) {
+            None    => {},
+            Some(c) => {
+                if      c == "\"" { out = str_concat(out, "\\\"") }
+                else if c == "\\" { out = str_concat(out, "\\\\") }
+                else if c == "\n" { out = str_concat(out, "\\n")  }
+                else if c == "\r" { out = str_concat(out, "\\r")  }
+                else if c == "\t" { out = str_concat(out, "\\t")  }
+                else              { out = str_concat(out, c)      }
+            }
+        }
+        i = i + 1
+    }
+    out
+}
+
+partial fn toml_encode_array(arr: List[TomlValue]) -> String {
+    let len: Int = list_len(arr);
+    if len == 0 {
+        "[]"
+    } else {
+        let out: ref String = "[";
+        let i: ref Int = 0;
+        while i < len {
+            if i > 0 { out = str_concat(out, ", ") } else {}
+            match list_get(arr, i) {
+                Some(v) => { out = str_concat(out, toml_encode(v)) },
+                None    => {},
+            }
+            i = i + 1
+        }
+        str_concat(out, "]")
+    }
+}
+
+partial fn toml_encode_table(tbl: Map[String, TomlValue]) -> String {
+    let keys: List[String] = tbl.keys();
+    let len: Int = list_len(keys);
+    if len == 0 {
+        ""
+    } else {
+        let out: ref String = "";
+        let i: ref Int = 0;
+        while i < len {
+            match list_get(keys, i) {
+                None    => {},
+                Some(k) => {
+                    match tbl.get(k) {
+                        None    => {},
+                        Some(v) => {
+                            out = str_concat(out, str_concat(k, str_concat(" = ", str_concat(toml_encode(v), "\n"))))
+                        },
+                    }
+                },
+            }
+            i = i + 1
+        }
+        out
+    }
+}
+
+// ── decode ────────────────────────────────────────────────────────────────────
+
+/// Parses a TOML string into a TomlValue (always TTable at the top level).
+/// Returns Err if the input is not valid TOML.
+pub transparent partial fn toml_decode(s: String) -> Result[TomlValue, TomlError] {
+    let chars: List[String] = str_chars(s);
+    match toml_parse_document(chars) {
+        TVPos::TVPErr(e) => Err(TomlError::ParseError(e)),
+        TVPos::TVP(v, _) => Ok(v),
+    }
+}
+
+// ── Parser helpers ────────────────────────────────────────────────────────────
+
+fn toml_is_digit(c: String) -> Bool {
+    c == "0" || c == "1" || c == "2" || c == "3" || c == "4" ||
+    c == "5" || c == "6" || c == "7" || c == "8" || c == "9"
+}
+
+fn toml_digit_of(c: String) -> Int {
+    if      c == "0" { 0 } else if c == "1" { 1 }
+    else if c == "2" { 2 } else if c == "3" { 3 }
+    else if c == "4" { 4 } else if c == "5" { 5 }
+    else if c == "6" { 6 } else if c == "7" { 7 }
+    else if c == "8" { 8 } else if c == "9" { 9 }
+    else { 0 }
+}
+
+fn toml_char_at(chars: List[String], pos: Int) -> String {
+    match list_get(chars, pos) {
+        Some(c) => c,
+        None    => "",
+    }
+}
+
+fn toml_is_ws(c: String) -> Bool {
+    c == " " || c == "\t"
+}
+
+fn toml_is_newline(c: String) -> Bool {
+    c == "\n" || c == "\r"
+}
+
+fn toml_is_alpha_lower(c: String) -> Bool {
+    c == "a" || c == "b" || c == "c" || c == "d" || c == "e" || c == "f" ||
+    c == "g" || c == "h" || c == "i" || c == "j" || c == "k" || c == "l" ||
+    c == "m" || c == "n" || c == "o" || c == "p" || c == "q" || c == "r" ||
+    c == "s" || c == "t" || c == "u" || c == "v" || c == "w" || c == "x" ||
+    c == "y" || c == "z"
+}
+
+fn toml_is_alpha_upper(c: String) -> Bool {
+    c == "A" || c == "B" || c == "C" || c == "D" || c == "E" || c == "F" ||
+    c == "G" || c == "H" || c == "I" || c == "J" || c == "K" || c == "L" ||
+    c == "M" || c == "N" || c == "O" || c == "P" || c == "Q" || c == "R" ||
+    c == "S" || c == "T" || c == "U" || c == "V" || c == "W" || c == "X" ||
+    c == "Y" || c == "Z"
+}
+
+fn toml_is_bare_key_char(c: String) -> Bool {
+    toml_is_alpha_lower(c) || toml_is_alpha_upper(c) || toml_is_digit(c) || c == "-" || c == "_"
+}
+
+// Skip inline whitespace (space and tab, not newlines).
+partial fn toml_skip_ws(chars: List[String], pos: Int) -> Int {
+    let len: Int = list_len(chars);
+    let cur: ref Int = pos;
+    let go: ref Bool = true;
+    while go && cur < len {
+        let c: String = toml_char_at(chars, cur);
+        if toml_is_ws(c) { cur = cur + 1 } else { go = false }
+    }
+    cur
+}
+
+// Skip whitespace, newlines, and # comments.
+partial fn toml_skip_ws_comments(chars: List[String], pos: Int) -> Int {
+    let len: Int = list_len(chars);
+    let cur: ref Int = pos;
+    let go: ref Bool = true;
+    while go && cur < len {
+        let c: String = toml_char_at(chars, cur);
+        if toml_is_ws(c) || toml_is_newline(c) {
+            cur = cur + 1
+        } else if c == "#" {
+            cur = cur + 1;
+            let cgo: ref Bool = true;
+            while cgo && cur < len {
+                let cc: String = toml_char_at(chars, cur);
+                if toml_is_newline(cc) { cgo = false } else { cur = cur + 1 }
+            }
+        } else {
+            go = false
+        }
+    }
+    cur
+}
+
+// Skip to end of line (not consuming the newline).
+partial fn toml_skip_to_eol(chars: List[String], pos: Int) -> Int {
+    let len: Int = list_len(chars);
+    let cur: ref Int = pos;
+    let go: ref Bool = true;
+    while go && cur < len {
+        let c: String = toml_char_at(chars, cur);
+        if toml_is_newline(c) { go = false } else { cur = cur + 1 }
+    }
+    cur
+}
+
+// ── Key parsing ───────────────────────────────────────────────────────────────
+
+partial fn toml_parse_bare_key(chars: List[String], pos: Int) -> TKPos {
+    let len: Int = list_len(chars);
+    let cur: ref Int = pos;
+    let out: ref String = "";
+    let has_char: ref Bool = false;
+    let go: ref Bool = true;
+    while go && cur < len {
+        let c: String = toml_char_at(chars, cur);
+        if toml_is_bare_key_char(c) {
+            out = str_concat(out, c);
+            has_char = true;
+            cur = cur + 1
+        } else {
+            go = false
+        }
+    }
+    if has_char { TKPos::TKP(out, cur) } else { TKPos::TKPErr("expected key") }
+}
+
+partial fn toml_parse_key(chars: List[String], pos: Int) -> TKPos {
+    let c: String = toml_char_at(chars, pos);
+    if c == "\"" {
+        match toml_parse_basic_string(chars, pos) {
+            TSPos::TSPErr(e)  => TKPos::TKPErr(e),
+            TSPos::TSP(s, np) => TKPos::TKP(s, np),
+        }
+    } else if c == "'" {
+        match toml_parse_literal_string(chars, pos) {
+            TSPos::TSPErr(e)  => TKPos::TKPErr(e),
+            TSPos::TSP(s, np) => TKPos::TKP(s, np),
+        }
+    } else {
+        toml_parse_bare_key(chars, pos)
+    }
+}
+
+// ── String parsing ────────────────────────────────────────────────────────────
+
+partial fn toml_parse_basic_string(chars: List[String], pos: Int) -> TSPos {
+    let len: Int = list_len(chars);
+    let cur: ref Int = pos + 1;
+    let out: ref String = "";
+    let done: ref Bool = false;
+    let err: ref String = "";
+    let had_err: ref Bool = false;
+    while done == false && had_err == false && cur < len {
+        let c: String = toml_char_at(chars, cur);
+        if c == "\"" {
+            done = true;
+            cur  = cur + 1
+        } else if c == "\\" {
+            if cur + 1 >= len {
+                had_err = true;
+                err = "escape at end of input"
+            } else {
+                let esc: String = toml_char_at(chars, cur + 1);
+                if      esc == "\"" { out = str_concat(out, "\"") }
+                else if esc == "\\" { out = str_concat(out, "\\") }
+                else if esc == "n"  { out = str_concat(out, "\n") }
+                else if esc == "r"  { out = str_concat(out, "\r") }
+                else if esc == "t"  { out = str_concat(out, "\t") }
+                else                { out = str_concat(out, esc)  }
+                cur = cur + 2
+            }
+        } else {
+            out = str_concat(out, c);
+            cur = cur + 1
+        }
+    }
+    if had_err            { TSPos::TSPErr(err) }
+    else if done == false { TSPos::TSPErr("unterminated string") }
+    else                  { TSPos::TSP(out, cur) }
+}
+
+// Literal strings: single-quoted, no escape sequences.
+partial fn toml_parse_literal_string(chars: List[String], pos: Int) -> TSPos {
+    let len: Int = list_len(chars);
+    let cur: ref Int = pos + 1;
+    let out: ref String = "";
+    let done: ref Bool = false;
+    let err: ref String = "";
+    let had_err: ref Bool = false;
+    while done == false && had_err == false && cur < len {
+        let c: String = toml_char_at(chars, cur);
+        if c == "'" {
+            done = true;
+            cur  = cur + 1
+        } else if toml_is_newline(c) {
+            had_err = true;
+            err = "newline in literal string"
+        } else {
+            out = str_concat(out, c);
+            cur = cur + 1
+        }
+    }
+    if had_err            { TSPos::TSPErr(err) }
+    else if done == false { TSPos::TSPErr("unterminated literal string") }
+    else                  { TSPos::TSP(out, cur) }
+}
+
+// ── Number parsing ────────────────────────────────────────────────────────────
+
+// Returns TNIP for integer, TNFP for float, TNPErr on failure.
+partial fn toml_parse_number(chars: List[String], pos: Int) -> TNPos {
+    let len: Int = list_len(chars);
+    let cur: ref Int = pos;
+
+    let negative: ref Bool = false;
+    if toml_char_at(chars, cur) == "-" { negative = true; cur = cur + 1 } else {}
+
+    let int_val: ref Int = 0;
+    let has_digit: ref Bool = false;
+    let go: ref Bool = true;
+    while go && cur < len {
+        let c: String = toml_char_at(chars, cur);
+        if toml_is_digit(c) {
+            int_val   = int_val * 10 + toml_digit_of(c);
+            has_digit = true;
+            cur       = cur + 1
+        } else {
+            go = false
+        }
+    }
+    if has_digit == false { return TNPos::TNPErr("expected digit in number") } else {}
+
+    if toml_char_at(chars, cur) == "." {
+        cur = cur + 1;
+        let frac: ref Float = 0.0;
+        let denom: ref Float = 10.0;
+        let fgo: ref Bool = true;
+        while fgo && cur < len {
+            let fc: String = toml_char_at(chars, cur);
+            if toml_is_digit(fc) {
+                frac  = frac + toml_digit_of(fc).to_float() / denom;
+                denom = denom * 10.0;
+                cur   = cur + 1
+            } else {
+                fgo = false
+            }
+        }
+        let result: ref Float = int_val.to_float() + frac;
+        if negative { result = 0.0 - result } else {}
+        TNPos::TNFP(result, cur)
+    } else {
+        let result: ref Int = int_val;
+        if negative { result = 0 - result } else {}
+        TNPos::TNIP(result, cur)
+    }
+}
+
+// ── Value parsing ─────────────────────────────────────────────────────────────
+
+partial fn toml_parse_value(chars: List[String], pos: Int) -> TVPos {
+    let cur: Int = toml_skip_ws(chars, pos);
+    let len: Int = list_len(chars);
+    if cur >= len {
+        TVPos::TVPErr("unexpected end of input")
+    } else {
+        let c: String = toml_char_at(chars, cur);
+        if c == "\"" {
+            match toml_parse_basic_string(chars, cur) {
+                TSPos::TSPErr(e)  => TVPos::TVPErr(e),
+                TSPos::TSP(s, np) => TVPos::TVP(TomlValue::TStr(s), np),
+            }
+        } else if c == "'" {
+            match toml_parse_literal_string(chars, cur) {
+                TSPos::TSPErr(e)  => TVPos::TVPErr(e),
+                TSPos::TSP(s, np) => TVPos::TVP(TomlValue::TStr(s), np),
+            }
+        } else if c == "[" {
+            toml_parse_array(chars, cur)
+        } else if c == "t" {
+            if toml_char_at(chars, cur)     == "t" &&
+               toml_char_at(chars, cur + 1) == "r" &&
+               toml_char_at(chars, cur + 2) == "u" &&
+               toml_char_at(chars, cur + 3) == "e" {
+                TVPos::TVP(TomlValue::TBool(true), cur + 4)
+            } else {
+                TVPos::TVPErr(str_concat("unexpected value starting with: ", c))
+            }
+        } else if c == "f" {
+            if toml_char_at(chars, cur)     == "f" &&
+               toml_char_at(chars, cur + 1) == "a" &&
+               toml_char_at(chars, cur + 2) == "l" &&
+               toml_char_at(chars, cur + 3) == "s" &&
+               toml_char_at(chars, cur + 4) == "e" {
+                TVPos::TVP(TomlValue::TBool(false), cur + 5)
+            } else {
+                TVPos::TVPErr(str_concat("unexpected value starting with: ", c))
+            }
+        } else if c == "-" || toml_is_digit(c) {
+            match toml_parse_number(chars, cur) {
+                TNPos::TNPErr(e)   => TVPos::TVPErr(e),
+                TNPos::TNIP(n, np) => TVPos::TVP(TomlValue::TInt(n), np),
+                TNPos::TNFP(f, np) => TVPos::TVP(TomlValue::TFloat(f), np),
+            }
+        } else {
+            TVPos::TVPErr(str_concat("unexpected character in value: ", c))
+        }
+    }
+}
+
+partial fn toml_parse_array(chars: List[String], pos: Int) -> TVPos {
+    let len: Int = list_len(chars);
+    let cur: ref Int = toml_skip_ws_comments(chars, pos + 1);
+    if cur >= len { return TVPos::TVPErr("unterminated array") } else {}
+    if toml_char_at(chars, cur) == "]" { return TVPos::TVP(TomlValue::TArray([]), cur + 1) } else {}
+
+    let result: ref List[TomlValue] = [];
+    let go: ref Bool = true;
+    let err: ref String = "";
+    let had_err: ref Bool = false;
+    while go {
+        cur = toml_skip_ws_comments(chars, cur);
+        match toml_parse_value(chars, cur) {
+            TVPos::TVPErr(e)  => { had_err = true; err = e; go = false },
+            TVPos::TVP(v, np) => {
+                result = list_push(result, v);
+                cur = toml_skip_ws_comments(chars, np);
+                let sep: String = toml_char_at(chars, cur);
+                if      sep == "]" { cur = cur + 1; go = false }
+                else if sep == "," { cur = cur + 1 }
+                else { had_err = true; err = str_concat("expected ',' or ']' in array, got: ", sep); go = false }
+            }
+        }
+    }
+    if had_err { TVPos::TVPErr(err) } else { TVPos::TVP(TomlValue::TArray(result), cur) }
+}
+
+// ── Document parsing ──────────────────────────────────────────────────────────
+
+fn toml_empty_table() -> Map[String, TomlValue] {
+    // {} parses as an empty block in MVL, not an empty map literal.
+    // Workaround: create a sentinel entry then remove it.
+    let m: ref Map[String, TomlValue] = {"__mvl_toml_init__": TomlValue::TBool(false)};
+    m.remove("__mvl_toml_init__");
+    m
+}
+
+// Parse a full TOML document. Returns TomlValue::TTable.
+partial fn toml_parse_document(chars: List[String]) -> TVPos {
+    let len: Int = list_len(chars);
+    let cur: ref Int = toml_skip_ws_comments(chars, 0);
+    let root: ref Map[String, TomlValue] = toml_empty_table();
+
+    // Current [section] state: collect key/values into section_map, then
+    // flush into root when hitting a new [header] or end of input.
+    let section_name: ref String = "";
+    let section_map: ref Map[String, TomlValue] = toml_empty_table();
+    let in_section: ref Bool = false;
+
+    let had_err: ref Bool = false;
+    let err: ref String = "";
+
+    while had_err == false && cur < len {
+        cur = toml_skip_ws_comments(chars, cur);
+        if cur >= len { } else {
+            let c: String = toml_char_at(chars, cur);
+            if c == "[" {
+                // Flush current section into root before switching.
+                if in_section { root.insert(section_name, TomlValue::TTable(section_map)) } else {}
+
+                // Parse [section_name].
+                cur = cur + 1;
+                match toml_parse_key(chars, cur) {
+                    TKPos::TKPErr(e)      => { had_err = true; err = e },
+                    TKPos::TKP(name, np)  => {
+                        cur = toml_skip_ws(chars, np);
+                        if toml_char_at(chars, cur) != "]" {
+                            had_err = true;
+                            err = str_concat("expected ']' after table name, got: ", toml_char_at(chars, cur))
+                        } else {
+                            cur = cur + 1;
+                            section_name = name;
+                            section_map  = toml_empty_table();
+                            in_section   = true
+                        }
+                    }
+                }
+            } else {
+                // key = value line.
+                match toml_parse_key(chars, cur) {
+                    TKPos::TKPErr(e)     => { had_err = true; err = e },
+                    TKPos::TKP(key, np)  => {
+                        let ac: Int = toml_skip_ws(chars, np);
+                        if toml_char_at(chars, ac) != "=" {
+                            had_err = true;
+                            err = str_concat("expected '=' after key, got: ", toml_char_at(chars, ac))
+                        } else {
+                            match toml_parse_value(chars, ac + 1) {
+                                TVPos::TVPErr(e)   => { had_err = true; err = e },
+                                TVPos::TVP(v, np2) => {
+                                    cur = toml_skip_to_eol(chars, np2);
+                                    if in_section {
+                                        section_map.insert(key, v)
+                                    } else {
+                                        root.insert(key, v)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Flush last section.
+    if had_err == false && in_section {
+        root.insert(section_name, TomlValue::TTable(section_map))
+    } else {}
+
+    if had_err { TVPos::TVPErr(err) } else { TVPos::TVP(TomlValue::TTable(root), cur) }
+}

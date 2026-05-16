@@ -4,6 +4,11 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.120.0] — 2026-05-16
+
+### Added
+- **`std.toml`**: pure MVL TOML parser — `toml_encode`/`toml_decode`, `TomlValue` enum (TStr, TInt, TFloat, TBool, TDateTime, TArray, TTable), 36 tests (#819)
+
 ## [0.119.1] — 2026-05-16
 
 ### Fixed
