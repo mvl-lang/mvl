@@ -22,7 +22,8 @@ use crate::mvl::backends::rust::emit_types::{emit_ref_expr_for_assert, emit_type
 use crate::mvl::backends::rust::emitter::RustEmitter;
 use crate::mvl::backends::rust::mcdc_instr::{detect_coupled_pairs, DecisionKind};
 use crate::mvl::parser::ast::{
-    BinaryOp, ElseBranch, Expr, LValue, LetKind, LogicOp, MatchBody, RefExpr, Stmt, TypeExpr,
+    BinaryOp, ElseBranch, Expr, LValue, LetKind, Literal, LogicOp, MatchBody, RefExpr, Stmt,
+    TypeExpr,
 };
 use crate::mvl::passes::coverage::BranchKind;
 use crate::mvl::passes::mcdc::analysis::{collect_clauses, count_clauses_ref};
@@ -305,9 +306,15 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &Stmt) {
                 // MC/DC instrumented emission handled the full while-loop.
             } else {
                 cg.indent();
-                cg.push("while ");
-                emit_expr(cg, cond);
-                cg.push(" {");
+                // `while true { … }` → `loop { … }` to avoid the Rust while_true lint.
+                let is_unconditional = matches!(cond, Expr::Literal(Literal::Bool(true), _));
+                if is_unconditional {
+                    cg.push("loop {");
+                } else {
+                    cg.push("while ");
+                    emit_expr(cg, cond);
+                    cg.push(" {");
+                }
                 cg.nl();
                 cg.push_indent();
                 if let Some(id) = while_id {

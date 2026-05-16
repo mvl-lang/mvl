@@ -4,7 +4,7 @@
 # tag DbPool, structured concurrency.
 #
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl lint check test test-llvm test-llvm-net assurance run run-net build-net clean
+.PHONY: help guard-mvl lint check test test-llvm test-llvm-net assurance run run-net clean
 
 .DEFAULT_GOAL := help
 
@@ -23,32 +23,29 @@ guard-mvl: ## Validate MVL binary is present and working
 		exit 1; \
 	}
 
-lint: guard-mvl ## Lint all source files
-	$(MVL) lint $(DIR)main.mvl
+lint: guard-mvl ## Lint server.mvl
+	$(MVL) lint $(DIR)server.mvl
 
-check: guard-mvl ## Type-check main.mvl
-	$(MVL) check $(DIR)main.mvl --verbose
+check: guard-mvl ## Type-check server.mvl
+	$(MVL) check $(DIR)server.mvl
 
-test: guard-mvl ## Run unit tests (pure routing logic; actor runtime tests pending #695)
+test: guard-mvl ## Run unit tests (pure routing logic)
 	$(MVL) test $(DIR)
 
 test-llvm: guard-mvl ## Run smoke tests via LLVM backend (checks // expect: annotations)
 	$(MVL) test $(DIR) --backend=llvm
 
-assurance: guard-mvl ## Assurance report for main.mvl
-	$(MVL) assurance $(DIR)main.mvl
+assurance: guard-mvl ## Assurance report for server.mvl
+	$(MVL) assurance $(DIR)server.mvl
 
-run: guard-mvl ## Run the webserver simulation
-	$(MVL) run $(DIR)main.mvl
+run: guard-mvl ## Start the HTTP server on 127.0.0.1:8080 (Ctrl-C to stop)
+	$(MVL) run $(DIR)server.mvl
 
-test-llvm-net: guard-mvl ## Run the real-TCP webserver smoke test via LLVM backend
+test-llvm-net: guard-mvl ## Run the self-test TCP server smoke test via LLVM backend
 	$(MVL) run $(DIR)net_main.mvl --backend=llvm
 
-run-net: guard-mvl ## Build the real-TCP webserver (net_main.mvl) — blocks waiting for clients
-	$(MVL) build $(DIR)net_main.mvl
-
-build-net: guard-mvl ## Compile-check net_main.mvl via the Rust backend
-	$(MVL) build $(DIR)net_main.mvl
+run-net: guard-mvl ## Run the self-test TCP server (fires 3 requests and exits)
+	$(MVL) run $(DIR)net_main.mvl
 
 clean: ## Remove build artifacts
 	rm -rf $(TMPDIR)mvl_build_actor_webserver

@@ -302,6 +302,10 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     cg.line("let __handle = std::thread::spawn(move || {");
     cg.push_indent();
     cg.line("let mut actor = state;");
+    // Drop self-ref so the channel closes when all external handles are dropped.
+    // This allows `_mvl_join_actors()` to complete in `concurrently {}` blocks.
+    // TODO: restore _self_ref during dispatch once weak-sender support is added.
+    cg.line("actor._self_ref = None;");
     cg.line("while let Ok(msg) = rx.recv() {");
     cg.push_indent();
     cg.line("match msg {");

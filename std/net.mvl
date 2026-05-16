@@ -75,6 +75,13 @@ pub builtin fn tcp_accept(listener: TcpListener) -> Result[TcpStream, NetError] 
 /// remote peer.  Blocks until the remote side closes the write half.
 pub builtin fn tcp_read(stream: TcpStream) -> Result[Tainted[String], NetError] ! Net
 
+/// Read one HTTP request from `stream` — returns after the blank line after headers.
+///
+/// Unlike `tcp_read`, this does NOT wait for the client to close the connection.
+/// Suitable for use in HTTP servers where the client keeps the socket open.
+/// Caps at 8 KiB; returns `Tainted[String]` (network input, untrusted).
+pub builtin fn tcp_read_request(stream: TcpStream) -> Result[Tainted[String], NetError] ! Net
+
 /// Write `data` to `stream`.
 ///
 /// Blocks until all bytes are written or an error occurs.
@@ -94,3 +101,26 @@ pub builtin fn tcp_close_listener(listener: TcpListener) -> Unit
 ///
 /// No-op if the handle is already closed.
 pub builtin fn tcp_close_stream(stream: TcpStream) -> Unit
+
+/// Parse the URL path from a raw HTTP/1.x request.
+///
+/// Extracts the path token from `"METHOD /path HTTP/..."`.
+/// Falls back to `"/"` on malformed input.
+///
+/// IFC trust boundary: converts `Tainted[String]` network input to a plain
+/// `String` path suitable for routing decisions only.  Do not pass the
+/// result to SQL queries, file paths, or shell commands without further
+/// validation.
+pub builtin fn http_request_path(raw: Tainted[String]) -> String ! Net
+
+/// Format a NetError as a human-readable string (useful for logging).
+pub fn net_error_msg(e: NetError) -> String {
+    match e {
+        NetError::ConnectionRefused => "connection refused",
+        NetError::ConnectionReset   => "connection reset",
+        NetError::Timeout           => "timeout",
+        NetError::AddressInUse      => "address already in use",
+        NetError::HostUnreachable   => "host unreachable",
+        NetError::Other(msg)        => msg,
+    }
+}
