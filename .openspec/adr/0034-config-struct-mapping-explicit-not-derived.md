@@ -1,4 +1,4 @@
-# ADR-0034: Config struct mapping — explicit construction, not derived
+# ADR-0034: Struct mapping — explicit construction, not derived
 
 **Status:** Accepted
 **Date:** 2026-05-16
@@ -8,32 +8,43 @@
 
 ## Context
 
-When implementing `std.config`, the question arose whether to provide a generic
-`load_config[T: FromConfig](path, prefix) -> Result[T, ConfigError]` that
-automatically deserializes a config file into a user-defined struct `T`, or to
-return an untyped `ConfigValue` tree that callers map to their struct manually.
+Several stdlib functions return an untyped value tree (`ConfigValue`, `JsonValue`,
+a database `Row`, etc.) that the caller wants to map into a typed struct:
 
-The `load_config[T]` approach requires either:
+```mvl
+// config
+let cfg = load_config(None, "MYAPP")?
 
-1. **Derive macros / codegen** — the compiler generates field-by-field extraction
-   code for every struct annotated with `derive(FromConfig)`.
-2. **A `FromConfig` protocol** — callers implement a conversion trait; the compiler
-   enforces the bound but cannot auto-generate the impl.
+// database
+let row = db.query_one("SELECT port, host FROM settings")?
 
-MVL currently has neither mechanism (see ADR-0013: no macros, no reflection).
-Adding either would be a significant language extension, not a stdlib addition.
+// json
+let val = json.parse(raw)?
+```
 
-More critically: the safety argument for `load_config[T]` does not hold.
+A recurring temptation is to make these generic over the target type:
+
+```mvl
+let cfg  = load_config[Config](None, "MYAPP")?
+let row  = db.query_one[Settings]("SELECT ...")?
+let val  = json.parse[Config](raw)?
+```
+
+This pattern requires the compiler or runtime to **derive** the field-by-field
+extraction code for `T` — mapping string keys to struct fields, coercing value
+types, and surfacing errors for missing or mistyped fields.
+
+The question: is derived extraction a **type safety** feature, or a **convenience** feature?
 
 ---
 
 ## Decision
 
-1. `load_config` returns `ConfigValue` (an untyped value tree, same pattern as
-   `std.json`'s `Value`). No generic parameter. No `FromConfig` protocol.
+1. MVL does not provide derived struct construction hidden behind a generic
+   parameter. There is no `FromConfig`, `FromRow`, `FromJson`, or equivalent
+   auto-derive protocol.
 
-2. Callers construct their target struct **explicitly** from the returned
-   `ConfigValue`, using field accessors:
+2. Callers construct their target struct **explicitly** from the returned value tree:
 
    ```mvl
    let val = load_config(None, "MYAPP")?
@@ -43,55 +54,58 @@ More critically: the safety argument for `load_config[T]` does not hold.
    }
    ```
 
-3. `load_config[T]` syntax is **aspirational only** — noted in the issue and
-   stdlib docstring as a future ergonomics improvement, not a safety requirement.
+3. The struct constructor is the validation point. Refinements (`where self > 0`)
+   are enforced there regardless of how the struct is populated. Derive does not
+   add a new safety boundary — it only moves the same check behind generated code.
 
-4. Struct construction is the validation point. Refinements (`where self > 0`)
-   are checked there regardless of how the struct is populated.
+4. Generic deserialization syntax (e.g. `load_config[T]`) is **aspirational** —
+   a future ergonomics improvement contingent on MVL gaining a `derive` or
+   structural typeclass mechanism. It is not a safety requirement and must not
+   drive language or stdlib design before that mechanism exists.
 
 ---
 
 ## Consequences
 
 **Positive:**
-- Ships immediately. No language changes required.
-- Explicit field access makes the mapping visible and auditable.
-- Type safety is not compromised: the struct constructor enforces refinements
-  whether the value comes from `ConfigValue` or a derived impl.
-- Consistent with `std.json` — users already know the `Value` access pattern.
+- No language extension required. Ships with what MVL has today.
+- Explicit field access is visible and auditable — the mapping is in the source,
+  not in generated code.
+- Type safety is not compromised: refinements are checked at construction in
+  both approaches.
+- Consistent across domains: config, JSON, database all use the same pattern.
 
 **Negative:**
-- Boilerplate: callers repeat field names as string literals (`"port"`, `"host"`).
-  Typos are runtime errors, not compile errors.
-- No exhaustiveness check: a forgotten required field is caught at construction
-  time (missing field error), not statically.
+- Boilerplate: field names appear as string literals (`"port"`, `"host"`).
+  Typos are runtime errors, not compile-time errors.
+- No static exhaustiveness check for required fields — a forgotten field is
+  caught at construction time, not earlier.
 
-These are ergonomic gaps, not safety gaps. They are acceptable at this stage of
-the language.
+These are ergonomic gaps, not safety gaps.
 
 ---
 
 ## Rejected Alternatives
 
-### `load_config[T: FromConfig]` with derive
+### `fn load_x[T: FromX]` with compiler-generated impls (derive)
 
-Requires the compiler to generate `impl FromConfig for T` by introspecting T's
-fields at compile time — field names and types. This needs either macro expansion
-or a `derive` mechanism, neither of which exists in MVL (ADR-0013). Even if it
-did, the safety gain over explicit construction is zero: refinements are validated
-at struct construction in both cases. Rejected as premature language complexity.
+Requires the compiler to introspect T's fields (names and types) at compile time
+and emit extraction code. MVL has no `derive` mechanism (ADR-0013: no macros,
+no reflection). Even when this exists, the type safety gain is zero: refinements
+are validated at struct construction either way. Rejected as premature language
+complexity — add when boilerplate is actually painful at scale.
 
-### `load_config[T: FromConfig]` with manual impl
+### `fn load_x[T: FromX]` with manual protocol impls
 
-Users implement `FromConfig for Config` manually. This is identical boilerplate
-to explicit construction, just wrapped in a protocol impl. No ergonomic gain.
-Adds a protocol to the stdlib with no present benefit. Rejected.
+Users implement `FromX for Config` by hand. Identical boilerplate to explicit
+construction, just indirected through a protocol. Adds a protocol with no present
+benefit. Rejected.
 
-### Protocol-based structural introspection
+### Runtime reflection / structural introspection
 
-Require T to expose field names/types via a reflection protocol. This conflicts
-with MVL's "no runtime reflection" stance (ADR-0001, requirement: predictable
-resource usage). Rejected.
+Inspect T's field layout at runtime to drive extraction. Conflicts with MVL's
+predictable resource usage requirement (ADR-0001) and the no-reflection stance
+(ADR-0013). Rejected.
 
 ---
 
@@ -100,24 +114,23 @@ resource usage). Rejected.
 ### Eleven Requirements (ADR-0001)
 
 - **Predictable resource usage** — strengthened: no runtime reflection, no
-  generated dispatch tables. Explicit field access has constant overhead.
-- **Type safety** — unchanged: struct construction validates refinements either
-  way. This decision neither adds nor removes a safety guarantee.
+  generated dispatch tables. Explicit construction has constant, visible overhead.
+- **Type safety** — unchanged: struct constructors validate refinements in both
+  approaches. This decision neither adds nor removes a safety guarantee.
 - All other requirements: consistent with.
 
 ### Design Principles (README)
 
 - **Minimum viable** — strengthened: ships the smallest thing that works.
-  Derive/protocol can follow when boilerplate becomes painful at scale.
-- **Explicit over implicit** — strengthened: field mapping is written out; the
-  programmer sees exactly what keys map to what fields.
-- **No macros, no reflection** (ADR-0013) — consistent with: no codegen,
-  no runtime reflection used.
-- **Consistency** — consistent with: mirrors `std.json`'s `Value` access pattern.
+  Derive follows when boilerplate becomes genuinely painful.
+- **Explicit over implicit** — strengthened: field mapping is written out;
+  the programmer sees exactly what keys map to what fields.
+- **No macros, no reflection** (ADR-0013) — consistent with.
+- **Consistency** — strengthened: one pattern across config, JSON, database,
+  and any future source of untyped value trees.
 - All other principles: consistent with.
 
 ### Specifications
 
-No specs in `.openspec/specs/` currently cover `std.config`. The `std.config`
-module and its `load_config` signature are documented in `std/config.mvl`.
-No spec updates required.
+No existing specs are affected. This decision applies to all stdlib modules that
+return untyped value trees (`std.config`, `std.json`, future `std.db`).
