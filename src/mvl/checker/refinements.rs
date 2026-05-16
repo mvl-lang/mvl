@@ -59,6 +59,36 @@ pub struct RefinementCounts {
     pub fn_total: usize,
     /// Subset of `fn_total` where ALL refined call sites are statically proven.
     pub fully_verified_fns: usize,
+    /// Per-call-site proof records, populated during the first analysis pass.
+    pub sites: Vec<ProofSite>,
+}
+
+// ── Per-call-site proof records ───────────────────────────────────────────────
+
+/// Outcome of a single call-site refinement check.
+#[derive(Debug, Clone)]
+pub enum ProofOutcome {
+    /// Proven statically at the given solver layer (1–5).
+    Proven { layer: usize },
+    /// Could not prove statically; a runtime assertion will be emitted.
+    RuntimeCheck,
+    /// Statically violated — the argument provably breaks the predicate.
+    Failed,
+}
+
+/// Per-call-site record of a refinement proof attempt.
+#[derive(Debug, Clone)]
+pub struct ProofSite {
+    /// Name of the function being called.
+    pub fn_name: String,
+    /// Name of the refined parameter whose predicate was checked.
+    pub param_name: String,
+    /// Human-readable predicate string (e.g. `"self > 0"`).
+    pub predicate: String,
+    /// Source location of the call expression.
+    pub span: Span,
+    /// What the solver determined for this site.
+    pub outcome: ProofOutcome,
 }
 
 // ── Entry points ──────────────────────────────────────────────────────────────
@@ -1184,12 +1214,19 @@ fn check_call_site(
     errors: &mut Vec<CheckError>,
     counts: &mut RefinementCounts,
 ) {
-    for (arg, (_, param_pred)) in args.iter().zip(param_refs.iter()) {
+    for (arg, (param_name, param_pred)) in args.iter().zip(param_refs.iter()) {
         let Some(pred) = param_pred else { continue };
-        let outcome = check_arg_against_pred_counted(arg, pred, var_refs, fn_decls, counts);
-        match outcome {
-            RefResult::Proven => counts.proven += 1,
-            RefResult::RuntimeCheck => counts.runtime_checked += 1,
+        let (outcome, layer) =
+            check_arg_against_pred_counted(arg, pred, var_refs, fn_decls, counts);
+        let proof_outcome = match outcome {
+            RefResult::Proven => {
+                counts.proven += 1;
+                ProofOutcome::Proven { layer }
+            }
+            RefResult::RuntimeCheck => {
+                counts.runtime_checked += 1;
+                ProofOutcome::RuntimeCheck
+            }
             RefResult::Failed { counterexample } => {
                 counts.failed += 1;
                 errors.push(CheckError::RefinementViolated {
@@ -1200,8 +1237,16 @@ fn check_call_site(
                     span: call_span,
                     counterexample,
                 });
+                ProofOutcome::Failed
             }
-        }
+        };
+        counts.sites.push(ProofSite {
+            fn_name: fn_name.to_string(),
+            param_name: param_name.clone(),
+            predicate: display_pred(pred),
+            span: call_span,
+            outcome: proof_outcome,
+        });
     }
 }
 
@@ -1210,6 +1255,8 @@ fn check_call_site(
 /// Mode-aware dispatch used by `check_call_site`.
 ///
 /// Records which layer resolved the check in `counts.by_layer[n]`.
+/// Returns `(result, layer)` where `layer` is 1–5 for a `Proven` result,
+/// or 0 for `RuntimeCheck` / `Failed` (no layer resolved it).
 /// Contracts callers use the public `check_arg_against_pred` (always Layered).
 fn check_arg_against_pred_counted(
     arg: &Expr,
@@ -1217,14 +1264,15 @@ fn check_arg_against_pred_counted(
     var_refs: &HashMap<String, Option<RefExpr>>,
     fn_decls: &HashMap<String, FnDecl>,
     counts: &mut RefinementCounts,
-) -> RefResult {
+) -> (RefResult, usize) {
     macro_rules! try_layer {
         ($n:expr, $call:expr) => {
             if let Some(r) = $call {
                 if matches!(r, RefResult::Proven) {
                     counts.by_layer[$n] += 1;
+                    return (r, $n);
                 }
-                return r;
+                return (r, 0);
             }
         };
     }
@@ -1253,7 +1301,7 @@ fn check_arg_against_pred_counted(
             try_layer!(5, RefinementSolver::try_z3(pred, arg, var_refs));
         }
     }
-    RefResult::RuntimeCheck
+    (RefResult::RuntimeCheck, 0)
 }
 
 /// Check a call-site argument against a refinement predicate (always Layered mode).
@@ -1269,7 +1317,9 @@ pub(crate) fn check_arg_against_pred(
         mode: SolverMode::Layered,
         ..Default::default()
     };
-    check_arg_against_pred_counted(arg, pred, var_refs, fn_decls, &mut counts)
+    let (result, _layer) =
+        check_arg_against_pred_counted(arg, pred, var_refs, fn_decls, &mut counts);
+    result
 }
 
 // ── Predicate display ─────────────────────────────────────────────────────────
@@ -1367,7 +1417,8 @@ mod tests {
         let var_refs = HashMap::new();
         let fn_decls = HashMap::new();
         let mut counts = make_counts(SolverMode::Layered);
-        let result = check_arg_against_pred_counted(&arg, &pred, &var_refs, &fn_decls, &mut counts);
+        let (result, _) =
+            check_arg_against_pred_counted(&arg, &pred, &var_refs, &fn_decls, &mut counts);
         assert_eq!(result, RefResult::Proven);
         assert_eq!(counts.by_layer[1], 1, "Layer 1 should record the proof");
         assert_eq!(counts.by_layer[2..].iter().sum::<usize>(), 0);
@@ -1381,7 +1432,8 @@ mod tests {
         let var_refs = HashMap::new();
         let fn_decls = HashMap::new();
         let mut counts = make_counts(SolverMode::FastOnly);
-        let result = check_arg_against_pred_counted(&arg, &pred, &var_refs, &fn_decls, &mut counts);
+        let (result, _) =
+            check_arg_against_pred_counted(&arg, &pred, &var_refs, &fn_decls, &mut counts);
         assert_eq!(result, RefResult::Proven);
         assert_eq!(counts.by_layer[1], 1);
     }
@@ -1395,7 +1447,8 @@ mod tests {
         var_refs.insert("x".into(), None::<RefExpr>);
         let fn_decls = HashMap::new();
         let mut counts = make_counts(SolverMode::FastOnly);
-        let result = check_arg_against_pred_counted(&arg, &pred, &var_refs, &fn_decls, &mut counts);
+        let (result, _) =
+            check_arg_against_pred_counted(&arg, &pred, &var_refs, &fn_decls, &mut counts);
         // FastOnly skips Layer 3+ — must fall through to RuntimeCheck.
         assert_eq!(result, RefResult::RuntimeCheck);
         assert_eq!(counts.by_layer.iter().sum::<usize>(), 0);
@@ -1410,7 +1463,8 @@ mod tests {
         let var_refs = HashMap::new();
         let fn_decls = HashMap::new();
         let mut counts = make_counts(SolverMode::Z3Only);
-        let result = check_arg_against_pred_counted(&arg, &pred, &var_refs, &fn_decls, &mut counts);
+        let (result, _) =
+            check_arg_against_pred_counted(&arg, &pred, &var_refs, &fn_decls, &mut counts);
         // With Z3 feature: Proven (by_layer[5] = 1). Without: RuntimeCheck.
         match result {
             RefResult::Proven => assert_eq!(counts.by_layer[5], 1),
@@ -1431,7 +1485,7 @@ mod tests {
         let fn_decls = HashMap::new();
         for mode in [SolverMode::Layered, SolverMode::FastOnly] {
             let mut counts = make_counts(mode);
-            let result =
+            let (result, _layer) =
                 check_arg_against_pred_counted(&arg, &pred, &var_refs, &fn_decls, &mut counts);
             assert!(
                 matches!(result, RefResult::Failed { .. }),
@@ -1469,7 +1523,8 @@ mod tests {
         var_refs.insert("x".into(), Some(hypothesis));
         let fn_decls = HashMap::new();
         let mut counts = make_counts(SolverMode::Layered);
-        let result = check_arg_against_pred_counted(&arg, &pred, &var_refs, &fn_decls, &mut counts);
+        let (result, _) =
+            check_arg_against_pred_counted(&arg, &pred, &var_refs, &fn_decls, &mut counts);
         assert_eq!(
             result,
             RefResult::Proven,
@@ -1494,7 +1549,7 @@ mod tests {
                 span: dummy_span(),
             }),
         );
-        let result2 =
+        let (result2, _) =
             check_arg_against_pred_counted(&arg, &pred, &var_refs, &fn_decls, &mut counts2);
         assert_eq!(
             result2,

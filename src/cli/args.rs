@@ -19,6 +19,11 @@ pub fn print_usage() {
   mvl check <file|dir> --refinement-solver=layered|z3-only|fast-only — solver strategy (default: layered)
   mvl check <file|dir> --refinement-stats — print per-layer refinement proof counts"
     );
+    eprintln!("  mvl prove <file|dir>               — show per-call-site refinement proof layer breakdown");
+    eprintln!(
+        "  mvl prove <file|dir> --verbose     — include predicate text for each site
+  mvl prove <file|dir> --stdlib=proven — verify stdlib before reporting proof sites"
+    );
     eprintln!("  mvl build <file|dir>               — transpile to Rust and run cargo build");
     eprintln!("  mvl run   [--] <file.mvl>          — transpile, build, and execute");
     eprintln!("  mvl run   [--] <file.mvl> -- ...   — pass args to the compiled binary");

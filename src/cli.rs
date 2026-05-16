@@ -12,6 +12,7 @@ pub mod llvm;
 pub mod mcdc;
 pub mod meta;
 pub mod mutate;
+pub mod prove;
 pub mod test;
 pub mod transpile;
 
@@ -161,6 +162,12 @@ pub(super) fn dispatch(args: &[String]) {
             let masking = args.iter().any(|a| a == "--masking");
             let json = args.iter().any(|a| a == "--json");
             mcdc::run(&path, quiet, verbose, masking, json);
+        }
+        "prove" => {
+            let path = args::require_path_arg(args, "prove");
+            let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
+            let stdlib_profile = args::parse_stdlib_profile(args);
+            prove::run(&path, verbose, stdlib_profile);
         }
         "complexity" => {
             let path = args::require_path_arg(args, "complexity");
