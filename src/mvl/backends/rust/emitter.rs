@@ -7,7 +7,7 @@
 //! All other `emit_*` modules take `&mut RustEmitter` and append to it.
 
 use crate::mvl::backends::rust::capability_params::build_capability_params_map;
-use crate::mvl::backends::rust::emit_actors::emit_actor_decl;
+use crate::mvl::backends::rust::emit_actors::{emit_actor_decl, emit_actor_runtime_preamble};
 use crate::mvl::backends::rust::emit_functions::emit_fn_decl;
 use crate::mvl::backends::rust::emit_impls::emit_impl_decl;
 use crate::mvl::backends::rust::emit_types::emit_type_decl;
@@ -556,6 +556,16 @@ impl RustEmitter {
             }
         }
 
+        // Emit actor runtime preamble (join-handle registry) once if program has actors.
+        if prog
+            .declarations
+            .iter()
+            .any(|d| matches!(d, Decl::Actor(_)))
+        {
+            emit_actor_runtime_preamble(self);
+            self.blank();
+        }
+
         // Top-level declarations (non-test)
         for decl in &prog.declarations {
             match decl {
@@ -726,16 +736,29 @@ fn collect_undefined_types(prog: &Program, prelude_progs: &[Program]) -> Vec<Str
     // Collect defined type names
     let mut defined: std::collections::HashSet<String> = std::collections::HashSet::new();
     for decl in &prog.declarations {
-        if let Decl::Type(td) = decl {
-            defined.insert(td.name.clone());
+        match decl {
+            Decl::Type(td) => {
+                defined.insert(td.name.clone());
+            }
+            // Actor names are emitted as handle structs — never stub them.
+            Decl::Actor(ad) => {
+                defined.insert(ad.name.clone());
+            }
+            _ => {}
         }
     }
     // Types defined in prelude programs are already emitted before this module;
     // skip them so we never emit a conflicting `pub struct Foo;` stub.
     for pp in prelude_progs {
         for decl in &pp.declarations {
-            if let Decl::Type(td) = decl {
-                defined.insert(td.name.clone());
+            match decl {
+                Decl::Type(td) => {
+                    defined.insert(td.name.clone());
+                }
+                Decl::Actor(ad) => {
+                    defined.insert(ad.name.clone());
+                }
+                _ => {}
             }
         }
     }

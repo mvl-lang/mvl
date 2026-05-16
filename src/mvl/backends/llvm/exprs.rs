@@ -132,6 +132,16 @@ impl<'ctx> LlvmBackend<'ctx> {
             return Some(val);
         }
 
+        // `self` used as a value (e.g. passing the current actor handle to another actor).
+        // Returns the current actor's own handle via the thread-local set by mvl_actor_spawn.
+        if name == "self" {
+            if let Some(self_fn) = self.module.get_function("mvl_actor_self") {
+                let call = self.builder.build_call(self_fn, &[], "self_handle").ok()?;
+                use inkwell::values::AnyValue;
+                return BasicValueEnum::try_from(call.as_any_value_enum()).ok();
+            }
+        }
+
         // L5-08: None as an expression → { disc=1, payload=null_ptr }
         if name == "None" {
             return self.emit_none_val();

@@ -56,13 +56,19 @@ use crate::mvl::backends::rust::emitter::RustEmitter;
 use crate::mvl::backends::rust::last_use::compute_last_uses;
 use crate::mvl::parser::ast::{ActorDecl, Stmt};
 
-/// Capitalize the first character of a string, leaving the rest unchanged.
-fn capitalize(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(c) => c.to_uppercase().to_string() + chars.as_str(),
-    }
+/// Convert a `snake_case` name to `PascalCase` for Rust enum variant names.
+///
+/// `query_done` → `QueryDone`, `handle` → `Handle`.
+fn snake_to_pascal(s: &str) -> String {
+    s.split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+            }
+        })
+        .collect()
 }
 
 /// Convert a `PascalCase` name to `snake_case` for function names.
@@ -83,6 +89,27 @@ pub fn actor_name_to_snake(s: &str) -> String {
         }
     }
     out
+}
+
+/// Emit the thread_local join-handle registry used by `concurrently {}`.
+///
+/// Called once per program that contains at least one actor.  Registers a
+/// `thread_local!` vec of `JoinHandle`s plus two helpers:
+/// - `_mvl_register_actor(h)` — called by each `_start_*` function
+/// - `_mvl_join_actors()`     — called at the end of every `concurrently {}` block
+pub fn emit_actor_runtime_preamble(cg: &mut RustEmitter) {
+    cg.line("thread_local! {");
+    cg.line(
+        "    static _MVL_ACTOR_HANDLES: std::cell::RefCell<Vec<std::thread::JoinHandle<()>>> =",
+    );
+    cg.line("        std::cell::RefCell::new(Vec::new());");
+    cg.line("}");
+    cg.line("fn _mvl_register_actor(h: std::thread::JoinHandle<()>) {");
+    cg.line("    _MVL_ACTOR_HANDLES.with(|v| v.borrow_mut().push(h));");
+    cg.line("}");
+    cg.line("fn _mvl_join_actors() {");
+    cg.line("    _MVL_ACTOR_HANDLES.with(|v| { for h in v.borrow_mut().drain(..) { let _ = h.join(); } });");
+    cg.line("}");
 }
 
 /// Emit the complete Rust runtime infrastructure for an MVL actor declaration.
@@ -126,7 +153,7 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
         cg.line(&format!("enum {msg_name} {{"));
         cg.push_indent();
         for m in &pub_methods {
-            let variant = capitalize(&m.name);
+            let variant = snake_to_pascal(&m.name);
             if m.params.is_empty() {
                 cg.line(&format!("{variant},"));
             } else {
@@ -233,7 +260,7 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     cg.line(&format!("impl {name} {{"));
     cg.push_indent();
     for m in &pub_methods {
-        let variant = capitalize(&m.name);
+        let variant = snake_to_pascal(&m.name);
         let param_strs: Vec<String> = m
             .params
             .iter()
@@ -272,15 +299,19 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     cg.line(&format!(
         "state._self_ref = Some({name} {{ _sender: tx.clone() }});"
     ));
-    cg.line("std::thread::spawn(move || {");
+    cg.line("let __handle = std::thread::spawn(move || {");
     cg.push_indent();
     cg.line("let mut actor = state;");
+    // Drop self-ref so the channel closes when all external handles are dropped.
+    // This allows `_mvl_join_actors()` to complete in `concurrently {}` blocks.
+    // TODO: restore _self_ref during dispatch once weak-sender support is added.
+    cg.line("actor._self_ref = None;");
     cg.line("while let Ok(msg) = rx.recv() {");
     cg.push_indent();
     cg.line("match msg {");
     cg.push_indent();
     for m in &pub_methods {
-        let variant = capitalize(&m.name);
+        let variant = snake_to_pascal(&m.name);
         if m.params.is_empty() {
             cg.line(&format!("{msg_name}::{variant} => actor.{}(),", m.name));
         } else {
@@ -298,6 +329,7 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     cg.line("}");
     cg.pop_indent();
     cg.line("});");
+    cg.line("_mvl_register_actor(__handle);");
     cg.line(&format!("{name} {{ _sender: tx }}"));
     cg.pop_indent();
     cg.line("}");

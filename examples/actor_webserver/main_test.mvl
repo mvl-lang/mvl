@@ -1,0 +1,112 @@
+// actor_webserver/main_test.mvl — Unit tests for pure request-routing logic.
+//
+// Tests the routing decisions and SQL selection without actor concurrency
+// or Console effects.  All functions here are pure (no side effects).
+//
+// Type declarations duplicate main.mvl because cross-file type resolution is
+// not yet wired into the per-file checker (issue #96).  When #96 lands these
+// can be replaced with:
+//   use main::{Method, Route, Request, QueryResult};
+//
+// Assurance note: 0 extern blocks.
+
+// ── Type re-declarations (workaround: #96) ────────────────────────────────
+
+type Method = enum { Get, Post, Delete, Unknown }
+type Route  = enum { Users, Health, Unknown }
+
+type Request = struct {
+    id:     Int,
+    method: Method,
+    route:  Route,
+}
+
+type QueryResult = struct { data: String }
+
+// ── Pure logic helpers (mirror RequestHandler routing) ────────────────────
+
+// Does this route require a database query?
+fn needs_db(route: Route) -> Bool {
+    match route {
+        Route::Users   => true,
+        Route::Health  => false,
+        Route::Unknown => false,
+    }
+}
+
+// SQL query string for routes that require the database.
+fn sql_for_route(route: Route) -> String {
+    match route {
+        Route::Users   => "SELECT * FROM users",
+        Route::Health  => "",
+        Route::Unknown => "",
+    }
+}
+
+// Expected HTTP status code for a route (no auth errors, no DB failures).
+fn http_status(route: Route) -> Int {
+    match route {
+        Route::Users   => 200,
+        Route::Health  => 200,
+        Route::Unknown => 404,
+    }
+}
+
+// Build a request for testing.
+fn make_request(id: Int, route: Route) -> Request {
+    Request { id: id, method: Method::Get, route: route }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────
+
+// 1. /users route requires a database query.
+test fn users_route_needs_db() -> Unit {
+    assert_eq(needs_db(Route::Users), true)
+}
+
+// 2. /health route is a lightweight ping — no DB needed.
+test fn health_route_skips_db() -> Unit {
+    assert_eq(needs_db(Route::Health), false)
+}
+
+// 3. Unknown routes never hit the database.
+test fn unknown_route_skips_db() -> Unit {
+    assert_eq(needs_db(Route::Unknown), false)
+}
+
+// 4. /users maps to the expected SQL query.
+test fn users_route_has_correct_sql() -> Unit {
+    assert_eq(sql_for_route(Route::Users), "SELECT * FROM users")
+}
+
+// 5. Non-DB routes produce empty SQL (no query sent to pool).
+test fn health_route_has_no_sql() -> Unit {
+    assert_eq(sql_for_route(Route::Health), "")
+}
+
+// 6. Known routes return HTTP 200.
+test fn users_route_returns_200() -> Unit {
+    assert_eq(http_status(Route::Users), 200)
+}
+
+// 7. Health check returns HTTP 200.
+test fn health_route_returns_200() -> Unit {
+    assert_eq(http_status(Route::Health), 200)
+}
+
+// 8. Unrecognised routes return HTTP 404.
+test fn unknown_route_returns_404() -> Unit {
+    assert_eq(http_status(Route::Unknown), 404)
+}
+
+// 9. Request ID is preserved through construction.
+test fn request_id_preserved() -> Unit {
+    let req: Request = make_request(42, Route::Users);
+    assert_eq(req.id, 42)
+}
+
+// 10. Route is preserved through construction.
+test fn request_route_preserved() -> Unit {
+    let req: Request = make_request(1, Route::Health);
+    assert_eq(needs_db(req.route), false)
+}

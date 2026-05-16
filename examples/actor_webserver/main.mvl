@@ -1,0 +1,75 @@
+// actor_webserver/server.mvl — real HTTP server on port 8080.
+//
+// Binds to 127.0.0.1:8080 and loops accepting connections indefinitely.
+// Each request is handled sequentially (one connection at a time).
+//
+// Routes:
+//   GET /health  → 200 ok
+//   GET /users   → 200 [{name: Alice}, {name: Bob}]
+//   *            → 404 Not Found
+//
+// Usage:
+//   make run   (from examples/actor_webserver/)
+//   curl http://localhost:8080/health
+//   curl http://localhost:8080/users
+
+use std.net.{TcpListener, TcpStream, tcp_listen, tcp_accept, tcp_read_request, tcp_write,
+             tcp_close_listener, tcp_close_stream, http_request_path, net_error_msg,
+             NetError}
+use std.strings.{str_starts_with}
+
+fn ok_response(body: String) -> String {
+    "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: "
+        .concat(body.len().to_string())
+        .concat("\r\n\r\n")
+        .concat(body)
+}
+
+fn not_found_response() -> String {
+    "HTTP/1.0 404 Not Found\r\nContent-Length: 0\r\n\r\n"
+}
+
+fn route(path: String) -> String {
+    if str_starts_with(path, "/health") {
+        ok_response("ok")
+    } else if str_starts_with(path, "/users") {
+        ok_response("[{name: Alice}, {name: Bob}]")
+    } else {
+        not_found_response()
+    }
+}
+
+fn handle(stream: TcpStream) -> Unit ! Console + Net {
+    match tcp_read_request(stream) {
+        Err(e) => println("read error: ".concat(net_error_msg(e))),
+        Ok(raw) => {
+            let path: String = http_request_path(raw);
+            println("  → ".concat(path));
+            let resp: String = route(path);
+            match tcp_write(stream, resp) {
+                Ok(_)  => tcp_close_stream(stream),
+                Err(e) => {
+                    println("write error: ".concat(net_error_msg(e)));
+                    tcp_close_stream(stream)
+                },
+            }
+        },
+    }
+}
+
+partial fn serve(listener: TcpListener) -> Unit ! Console + Net {
+    while true {
+        match tcp_accept(listener) {
+            Err(e)     => println("accept error: ".concat(net_error_msg(e))),
+            Ok(stream) => handle(stream),
+        }
+    }
+}
+
+partial fn main() -> Unit ! Console + Net {
+    println("listening on http://127.0.0.1:8080  (Ctrl-C to stop)");
+    match tcp_listen("127.0.0.1", 8080) {
+        Err(e)       => println("listen failed: ".concat(net_error_msg(e))),
+        Ok(listener) => serve(listener),
+    }
+}

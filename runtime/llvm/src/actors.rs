@@ -25,6 +25,7 @@
 //!
 //! Phase 8, #696.
 
+use std::cell::Cell;
 use std::sync::mpsc;
 use std::thread;
 
@@ -90,7 +91,9 @@ pub unsafe extern "C" fn mvl_actor_spawn(
     let handle = Box::new(MvlActorHandle { sender: tx });
     let handle_ptr = Box::into_raw(handle);
 
+    let handle_addr = handle_ptr as usize;
     thread::spawn(move || {
+        CURRENT_ACTOR_HANDLE.with(|cell| cell.set(handle_addr));
         let state_ptr = state.as_mut_ptr();
         while let Ok(msg) = rx.recv() {
             dispatch(state_ptr, msg.disc, msg.args.as_ptr());
@@ -129,6 +132,20 @@ pub unsafe extern "C" fn mvl_actor_send(handle: *mut u8, disc: i64, argc: i64, a
         msg.args[..argc].copy_from_slice(src);
     }
     let _ = actor.sender.try_send(msg);
+}
+
+// Thread-local that each actor thread sets to its own handle before processing messages.
+thread_local! {
+    static CURRENT_ACTOR_HANDLE: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Return the current actor's own handle (for passing `self` to other actors).
+///
+/// Must only be called from within a behavior dispatch. Returns null if called
+/// from a non-actor thread.
+#[no_mangle]
+pub extern "C" fn mvl_actor_self() -> *mut u8 {
+    CURRENT_ACTOR_HANDLE.with(|cell| cell.get() as *mut u8)
 }
 
 /// Drop an actor handle, disconnecting the sender.

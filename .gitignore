@@ -25,6 +25,10 @@ AGENTS.md
 librust_out.rlib
 *.profraw
 
+# LLVM IR/bitcode — generated build artifacts
+*.ll
+*.bc
+
 # Fuzzing runtime artifacts (cargo-fuzz)
 fuzz/corpus/
 fuzz/artifacts/

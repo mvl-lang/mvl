@@ -61,6 +61,13 @@ impl<'ctx> LlvmBackend<'ctx> {
             self.module
                 .add_function("mvl_actor_drop", drop_ty, Some(Linkage::External));
         }
+
+        // mvl_actor_self: () -> ptr — returns the current actor's own handle
+        if self.module.get_function("mvl_actor_self").is_none() {
+            let self_ty = ptr_ty.fn_type(&[], false);
+            self.module
+                .add_function("mvl_actor_self", self_ty, Some(Linkage::External));
+        }
     }
 
     // ── Actor declaration emission ────────────────────────────────────────────
@@ -239,16 +246,28 @@ impl<'ctx> LlvmBackend<'ctx> {
                     .builder
                     .build_load(i64_ty, gep, &format!("raw_{j}"))
                     .unwrap();
-                // Cast ptr-typed params from their i64 representation.
-                let coerced = if let Some(BasicTypeEnum::PointerType(pt)) =
-                    self.mvl_type_to_llvm(&param.ty)
-                {
-                    self.builder
+                // Rehydrate the arg to the expected param type.
+                let coerced = match self.mvl_type_to_llvm(&param.ty) {
+                    Some(BasicTypeEnum::PointerType(pt)) => self
+                        .builder
                         .build_int_to_ptr(raw.into_int_value(), pt, &format!("ptr_{j}"))
                         .unwrap()
-                        .into()
-                } else {
-                    raw
+                        .into(),
+                    Some(BasicTypeEnum::StructType(st)) => {
+                        // Struct args were heap-allocated by the sender; load the value back.
+                        let heap_ptr = self
+                            .builder
+                            .build_int_to_ptr(
+                                raw.into_int_value(),
+                                self.context.ptr_type(inkwell::AddressSpace::default()),
+                                &format!("arg_ptr_{j}"),
+                            )
+                            .unwrap();
+                        self.builder
+                            .build_load(st, heap_ptr, &format!("arg_val_{j}"))
+                            .unwrap()
+                    }
+                    _ => raw,
                 };
                 call_args.push(coerced);
             }
@@ -334,17 +353,33 @@ impl<'ctx> LlvmBackend<'ctx> {
     ///
     /// Returns `Some(actor_type_name)` if the receiver is an identifier whose
     /// tracked MVL type is a known actor, `None` otherwise.
+    /// Also handles `self.field` — state fields of actor type are registered
+    /// directly in `local_mvl_types` by `emit_actor_decl`.
     pub(crate) fn resolve_actor_type_name(&self, receiver: &Expr) -> Option<String> {
-        let Expr::Ident(name, _) = receiver else {
-            return None;
-        };
-        let ty = self.local_mvl_types.get(name.as_str())?;
-        let TypeExpr::Base { name: tn, .. } = ty else {
-            return None;
+        let type_name = match receiver {
+            Expr::Ident(name, _) => {
+                let ty = self.local_mvl_types.get(name.as_str())?;
+                let TypeExpr::Base { name: tn, .. } = ty else {
+                    return None;
+                };
+                tn.clone()
+            }
+            // self.field where field holds an actor handle
+            Expr::FieldAccess { expr, field, .. } => {
+                if !matches!(expr.as_ref(), Expr::Ident(n, _) if n == "self") {
+                    return None;
+                }
+                let ty = self.local_mvl_types.get(field.as_str())?;
+                let TypeExpr::Base { name: tn, .. } = ty else {
+                    return None;
+                };
+                tn.clone()
+            }
+            _ => return None,
         };
         self.actor_decls
-            .contains_key(tn.as_str())
-            .then(|| tn.clone())
+            .contains_key(type_name.as_str())
+            .then_some(type_name)
     }
 
     /// Emit an actor method call `actor_handle.behavior(args...)` as:
@@ -404,8 +439,27 @@ impl<'ctx> LlvmBackend<'ctx> {
                         .build_float_to_signed_int(fv, i64_ty, "arg_i64")
                         .ok()?
                         .into(),
-                    // Unsupported LLVM value types (struct, array, vector) cannot be
-                    // passed as flat i64 args — fail loudly rather than silently send 0.
+                    // Struct values (iso/val args): heap-allocate and pass as ptr-as-i64.
+                    BasicValueEnum::StructValue(sv) => {
+                        let struct_ty = sv.get_type();
+                        let size = self.llvm_type_byte_size(struct_ty.into()) as u64;
+                        let size_val = i64_ty.const_int(size, false);
+                        let box_new_fn = self.get_mvl_box_new();
+                        let call = self
+                            .builder
+                            .build_call(box_new_fn, &[size_val.into()], "arg_box")
+                            .ok()?;
+                        use inkwell::values::AnyValue;
+                        let raw_ptr = BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
+                        let BasicValueEnum::PointerValue(heap_ptr) = raw_ptr else {
+                            return None;
+                        };
+                        self.builder.build_store(heap_ptr, sv).ok()?;
+                        self.builder
+                            .build_ptr_to_int(heap_ptr, i64_ty, "arg_i64")
+                            .ok()?
+                            .into()
+                    }
                     _ => return None,
                 };
                 let gep = unsafe {
@@ -429,7 +483,16 @@ impl<'ctx> LlvmBackend<'ctx> {
         let send_fn = self.module.get_function("mvl_actor_send")?;
         let disc_val = i64_ty.const_int(disc as u64, false);
         let argc_val = i64_ty.const_int(argc as u64, false);
-        let handle_ptr = handle_val.into_pointer_value();
+        // Actor handles are stored in i64-typed locals (fallback in mvl_type_to_llvm)
+        // because actor names aren't in llvm_struct_types. Cast back to ptr when needed.
+        let handle_ptr = match handle_val {
+            BasicValueEnum::PointerValue(pv) => pv,
+            BasicValueEnum::IntValue(iv) => self
+                .builder
+                .build_int_to_ptr(iv, ptr_ty, "handle_ptr")
+                .ok()?,
+            _ => return None,
+        };
 
         self.builder
             .build_call(
