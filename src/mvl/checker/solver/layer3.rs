@@ -36,7 +36,7 @@ use crate::mvl::parser::ast::{
     BinaryOp, Block, ElseBranch, Expr, FnDecl, Literal, LogicOp, RefExpr, Stmt,
 };
 
-use super::{binary_op_to_cmp, dummy_span, layer1, layer2, RefResult};
+use super::{binary_op_to_cmp, dummy_span, layer1, layer2, rewrite, RefResult};
 
 /// Functions with this many or more execution paths fall back to `None`.
 const MAX_PATHS: usize = 32;
@@ -75,6 +75,17 @@ pub(super) fn try_symbolic(
     var_refs: &HashMap<String, Option<RefExpr>>,
     fn_decls: &HashMap<String, FnDecl>,
 ) -> Option<RefResult> {
+    // Apply builtin rewrite rules to method calls on known receivers (#596).
+    // If the rewrite reduces a MethodCall to a simpler expression, try the
+    // fast layers on the result before falling through to symbolic execution.
+    if matches!(arg, Expr::MethodCall { .. }) {
+        let rewritten = rewrite::rewrite_expr(arg);
+        if !matches!(rewritten, Expr::MethodCall { .. }) {
+            return layer1::try_trivial(pred, &rewritten, var_refs, fn_decls)
+                .or_else(|| layer2::try_interval(pred, &rewritten, var_refs));
+        }
+    }
+
     let (fn_name, actual_args) = match arg {
         Expr::FnCall { name, args, .. } => (name.as_str(), args),
         _ => return None,
@@ -118,8 +129,9 @@ pub(super) fn try_symbolic(
             inject_condition(&cond_subst, &mut path_var_refs, 0);
         }
 
-        // Substitute parameters in the return expression, then check against pred.
-        let return_expr = substitute_expr(&path.return_expr, &bindings);
+        // Substitute parameters in the return expression, apply rewrite rules,
+        // then check against pred.
+        let return_expr = rewrite::rewrite_expr(&substitute_expr(&path.return_expr, &bindings));
         let result = layer1::try_trivial(pred, &return_expr, &path_var_refs, fn_decls)
             .or_else(|| layer2::try_interval(pred, &return_expr, &path_var_refs));
 
@@ -398,6 +410,17 @@ fn substitute_expr(expr: &Expr, bindings: &HashMap<&str, &Expr>) -> Expr {
         } => Expr::FnCall {
             name: name.clone(),
             type_args: type_args.clone(),
+            args: args.iter().map(|a| substitute_expr(a, bindings)).collect(),
+            span: *span,
+        },
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            span,
+        } => Expr::MethodCall {
+            receiver: Box::new(substitute_expr(receiver, bindings)),
+            method: method.clone(),
             args: args.iter().map(|a| substitute_expr(a, bindings)).collect(),
             span: *span,
         },
