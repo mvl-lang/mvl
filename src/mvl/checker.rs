@@ -27,6 +27,7 @@ pub mod data_race;
 mod decls;
 pub mod errors;
 pub mod ifc;
+pub mod ifc_propagation;
 mod infer;
 mod method_types;
 pub mod passes;
@@ -43,6 +44,7 @@ pub use crate::mvl::checker::solver::SolverMode;
 use crate::mvl::checker::call_graph::CallGraph;
 use crate::mvl::checker::context::TypeEnv;
 use crate::mvl::checker::errors::CheckError;
+use crate::mvl::checker::ifc_propagation::InferredLabels;
 use crate::mvl::checker::refinements::RefinementCounts;
 use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{Effect, Program, Totality};
@@ -79,6 +81,10 @@ pub struct CheckResult {
     /// Built from the AST post type-checking; edges are `FnCall` expressions only
     /// (MethodCall resolution deferred to post-monomorphization pass #838).
     pub call_graph: CallGraph,
+    /// Inferred security labels for function return types — built by the
+    /// forward label propagation pass (#830/#833).  Supplements TypeEnv's
+    /// explicit annotations for unannotated wrapper functions.
+    pub inferred_labels: InferredLabels,
 }
 
 impl CheckResult {
@@ -153,6 +159,10 @@ pub fn check_with_two_preludes_mode(
         .collect();
     let call_graph = call_graph::build(&all_prog_refs, &checker.env);
 
+    // Forward label propagation (#830/#833): build the inferred label table.
+    // Runs after the call graph is built so the full TypeEnv is available.
+    let inferred_labels = ifc_propagation::propagate(&[prog], &checker.env);
+
     let mut req_errors = [0usize; 12];
     for e in &checker.errors {
         let req = e.requirement_number() as usize;
@@ -176,6 +186,7 @@ pub fn check_with_two_preludes_mode(
         has_prelude_ifc_boundary,
         type_env: checker.env,
         call_graph,
+        inferred_labels,
     }
 }
 
