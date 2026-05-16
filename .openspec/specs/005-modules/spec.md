@@ -7,7 +7,7 @@ date: 2026-04-12
 
 # 005 — Module System
 
-The MVL module system provides the unit of compilation and namespace management for multi-file programs. It follows ADR-0002 (language contraction): one import syntax, one visibility rule, no complex hierarchies.
+The MVL module system provides the unit of compilation and namespace management for multi-file programs. It follows ADR-0002 (language contraction): one import syntax, one visibility rule, no complex hierarchies. Directory module entry files use the sibling-file pattern per ADR-0033.
 
 ## Philosophy
 
