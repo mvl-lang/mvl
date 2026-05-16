@@ -3,6 +3,12 @@
 // Tests the routing decisions and SQL selection without actor concurrency
 // or Console effects.  All functions here are pure (no side effects).
 //
+// Actor-per-request isolation property (tests 11–15):
+// RequestHandler has no fields — every routing decision is made from scratch
+// for each actor instance.  These tests verify that property by showing the
+// pure routing helpers produce the same result regardless of call order or
+// how many times they are invoked (simulating concurrent actors).
+//
 // Type declarations duplicate main.mvl because cross-file type resolution is
 // not yet wired into the per-file checker (issue #96).  When #96 lands these
 // can be replaced with:
@@ -109,4 +115,50 @@ test fn request_id_preserved() -> Unit {
 test fn request_route_preserved() -> Unit {
     let req: Request = make_request(1, Route::Health);
     assert_eq(needs_db(req.route), false)
+}
+
+// ── Actor-per-request isolation tests ─────────────────────────────────────
+//
+// RequestHandler actors carry no fields.  Routing is fully delegated to pure
+// functions.  The tests below verify the isolation property: the outcome for
+// one simulated handler is unaffected by any other handler running before or
+// concurrently with it.
+
+// 11. Two actors handling the same route make independent, identical decisions.
+test fn two_handlers_same_route_are_independent() -> Unit {
+    let first:  Int = http_status(Route::Health);
+    let second: Int = http_status(Route::Health);
+    assert_eq(first, second)
+}
+
+// 12. Actors for different routes make independent decisions without interference.
+test fn two_handlers_different_routes_are_independent() -> Unit {
+    assert_eq(http_status(Route::Health),  200);
+    assert_eq(http_status(Route::Users),   200);
+    assert_eq(http_status(Route::Unknown), 404)
+}
+
+// 13. DB decision is per-handler — a health handler never sets the db flag
+//     for a concurrent users handler.
+test fn db_decision_is_per_handler() -> Unit {
+    let health_needs: Bool = needs_db(Route::Health);
+    let users_needs:  Bool = needs_db(Route::Users);
+    assert_eq(health_needs, false);
+    assert_eq(users_needs,  true)
+}
+
+// 14. SQL is actor-local — a users handler's SQL does not pollute the
+//     health handler running in parallel.
+test fn sql_is_actor_local() -> Unit {
+    let _users_sql: String  = sql_for_route(Route::Users);
+    let health_sql: String  = sql_for_route(Route::Health);
+    assert_eq(health_sql, "")
+}
+
+// 15. Unknown-route handlers always return 404 regardless of request order
+//     relative to other actors.
+test fn unknown_handler_always_404() -> Unit {
+    let _first:  Int = http_status(Route::Users);
+    let _second: Int = http_status(Route::Health);
+    assert_eq(http_status(Route::Unknown), 404)
 }

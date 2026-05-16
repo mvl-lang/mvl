@@ -1,4 +1,8 @@
-// actor_webserver/main.mvl — real HTTP server with layered config.
+// actor_webserver/main.mvl — concurrent HTTP server with actor-per-request.
+//
+// Each accepted connection is handed to a fresh RequestHandler actor.
+// The actor owns the TcpStream exclusively (iso capability) and terminates
+// after writing the response — no shared mutable state between requests.
 //
 // Config is loaded in layers: defaults → config.toml → WEBSERVER_* env vars → CLI args.
 // See: config.mvl and .openspec/patterns/001-config.md
@@ -40,29 +44,51 @@ fn route(path: String) -> String {
     }
 }
 
-fn handle(stream: TcpStream) -> Unit ! Console + Net {
-    match tcp_read_request(stream) {
-        Err(e) => println("read error: ".concat(net_error_msg(e))),
-        Ok(raw) => {
-            let path: String = http_request_path(raw);
-            println("  → ".concat(path));
-            let resp: String = route(path);
-            match tcp_write(stream, resp) {
-                Ok(_)  => tcp_close_stream(stream),
-                Err(e) => {
-                    println("write error: ".concat(net_error_msg(e)));
-                    tcp_close_stream(stream)
-                },
-            }
-        },
+// ── Actor-per-request ─────────────────────────────────────────────────────
+//
+// Each RequestHandler owns exactly one TcpStream (iso — no aliasing).
+// It reads the request, routes it, writes the response, closes the stream,
+// and then terminates.  No state persists between requests.
+
+actor RequestHandler {
+    // No fields — each actor is stateless.  All data lives on the stack.
+
+    // Behavior: read one HTTP request, route it, reply, close.
+    //
+    //   iso stream — ownership of the socket transferred from the accept loop.
+    //                Compiler guarantees no other actor or thread touches it.
+    pub fn handle(iso stream: TcpStream) ! Console + Net {
+        match tcp_read_request(stream) {
+            Err(e) => println("read error: ".concat(net_error_msg(e))),
+            Ok(raw) => {
+                let path: String = http_request_path(raw);
+                println("  → ".concat(path));
+                let resp: String = route(path);
+                match tcp_write(stream, resp) {
+                    Ok(_)  => tcp_close_stream(stream),
+                    Err(e) => {
+                        println("write error: ".concat(net_error_msg(e)));
+                        tcp_close_stream(stream)
+                    },
+                }
+            },
+        }
     }
 }
+
+// ── Accept loop ───────────────────────────────────────────────────────────
 
 partial fn serve(listener: TcpListener) -> Unit ! Console + Net {
     while true {
         match tcp_accept(listener) {
             Err(e)     => println("accept error: ".concat(net_error_msg(e))),
-            Ok(stream) => handle(stream),
+            Ok(stream) => {
+                // Spawn a fresh actor and transfer stream ownership.
+                // The handle is immediately dropped; the actor terminates
+                // after its one message is processed.
+                let h: RequestHandler = actor RequestHandler {};
+                h.handle(consume(stream))
+            },
         }
     }
 }

@@ -1,7 +1,11 @@
-# actor_webserver — HTTP server with actor-per-request pattern (issue #581)
+# actor_webserver — concurrent HTTP server with actor-per-request pattern
 #
-# Demonstrates Phase 8 actor model: iso/tag/val capabilities, actor-per-request,
-# tag DbPool, structured concurrency.
+# Each accepted TCP connection is handed to a fresh RequestHandler actor that
+# owns the socket exclusively (iso capability).  The actor reads the request,
+# routes it, writes the response, and terminates — no shared mutable state.
+#
+# Demonstrates Phase 8 actor model: iso capability, fire-and-forget actors,
+# and layered configuration (defaults → TOML → env → CLI).
 #
 # Run from this directory or from the repo root.
 .PHONY: help guard-mvl lint check test test-llvm assurance run clean
