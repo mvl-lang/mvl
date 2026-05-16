@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.123.0] — 2026-05-16
+
+### Added
+- **Refinement solver benchmarks**: Criterion benchmark suite (`benches/refinement_solver.rs`) measuring all three solver modes across micro-programs and corpus files; layered solver is **127x faster** than Z3-only on typical refinement programs; CI job uploads results as artifact (#595)
+- **Refinement performance docs**: `docs/refinement-performance.md` with real benchmark numbers and regression tracking guide
+
 ## [0.122.0] — 2026-05-16
 
 ### Added
