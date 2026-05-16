@@ -175,6 +175,14 @@ impl<'ctx> LlvmBackend<'ctx> {
                         if let Some(&st) = self.llvm_struct_types.get(name.as_str()) {
                             return Some(st.into());
                         }
+                        // Actor handle types are opaque heap pointers.
+                        if self.actor_decls.contains_key(name.as_str()) {
+                            return Some(
+                                self.context
+                                    .ptr_type(inkwell::AddressSpace::default())
+                                    .into(),
+                            );
+                        }
                         // Unknown: fall back to i64
                         Some(self.context.i64_type().into())
                     }

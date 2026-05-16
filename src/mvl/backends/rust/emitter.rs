@@ -736,16 +736,29 @@ fn collect_undefined_types(prog: &Program, prelude_progs: &[Program]) -> Vec<Str
     // Collect defined type names
     let mut defined: std::collections::HashSet<String> = std::collections::HashSet::new();
     for decl in &prog.declarations {
-        if let Decl::Type(td) = decl {
-            defined.insert(td.name.clone());
+        match decl {
+            Decl::Type(td) => {
+                defined.insert(td.name.clone());
+            }
+            // Actor names are emitted as handle structs — never stub them.
+            Decl::Actor(ad) => {
+                defined.insert(ad.name.clone());
+            }
+            _ => {}
         }
     }
     // Types defined in prelude programs are already emitted before this module;
     // skip them so we never emit a conflicting `pub struct Foo;` stub.
     for pp in prelude_progs {
         for decl in &pp.declarations {
-            if let Decl::Type(td) = decl {
-                defined.insert(td.name.clone());
+            match decl {
+                Decl::Type(td) => {
+                    defined.insert(td.name.clone());
+                }
+                Decl::Actor(ad) => {
+                    defined.insert(ad.name.clone());
+                }
+                _ => {}
             }
         }
     }

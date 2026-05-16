@@ -4,7 +4,7 @@
 # tag DbPool, structured concurrency.
 #
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl lint check test test-llvm assurance run clean
+.PHONY: help guard-mvl lint check test test-llvm test-llvm-net assurance run run-net build-net clean
 
 .DEFAULT_GOAL := help
 
@@ -40,6 +40,15 @@ assurance: guard-mvl ## Assurance report for main.mvl
 
 run: guard-mvl ## Run the webserver simulation
 	$(MVL) run $(DIR)main.mvl
+
+test-llvm-net: guard-mvl ## Run the real-TCP webserver smoke test via LLVM backend
+	$(MVL) run $(DIR)net_main.mvl --backend=llvm
+
+run-net: guard-mvl ## Build the real-TCP webserver (net_main.mvl) — blocks waiting for clients
+	$(MVL) build $(DIR)net_main.mvl
+
+build-net: guard-mvl ## Compile-check net_main.mvl via the Rust backend
+	$(MVL) build $(DIR)net_main.mvl
 
 clean: ## Remove build artifacts
 	rm -rf $(TMPDIR)mvl_build_actor_webserver
