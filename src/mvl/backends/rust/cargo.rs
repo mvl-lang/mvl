@@ -27,6 +27,9 @@ pub struct CargoOptions<'a> {
     pub use_mvl_runtime: bool,
     /// Extra crate names declared in `extern "rust"` blocks.
     pub extern_crates: Vec<String>,
+    /// Raw Cargo dep lines from `[native]` sections of `mvl.toml` files,
+    /// e.g. `rusqlite = { version = "0.31", features = ["bundled"] }`.
+    pub native_dep_lines: Vec<String>,
 }
 
 impl<'a> CargoOptions<'a> {
@@ -35,6 +38,7 @@ impl<'a> CargoOptions<'a> {
             crate_name,
             use_mvl_runtime: false,
             extern_crates: Vec::new(),
+            native_dep_lines: Vec::new(),
         }
     }
 
@@ -62,6 +66,10 @@ fn deps_section(opts: &CargoOptions<'_>) -> String {
         lines.push(format!(
             "{krate} = \"0.1\"  # declared in extern \"rust\" block — pin version before publishing"
         ));
+        publish_unsafe = true;
+    }
+    for dep_line in &opts.native_dep_lines {
+        lines.push(dep_line.clone());
         publish_unsafe = true;
     }
     if lines.is_empty() {

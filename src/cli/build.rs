@@ -189,6 +189,29 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
         bridge_path = loader::find_pkg_bridge(&all_progs, &project_root);
     }
 
+    // If a pkg.* bridge was found, re-emit Cargo.toml with the package's
+    // native dependencies (from its mvl.toml [native] section).
+    if bridge_path.is_some() {
+        let native_dep_lines = loader::collect_pkg_native_dep_lines(&all_progs, &project_root);
+        if !native_dep_lines.is_empty() {
+            let opts = transpiler::cargo::CargoOptions {
+                crate_name: &crate_name,
+                use_mvl_runtime: out.use_mvl_runtime,
+                extern_crates: Vec::new(),
+                native_dep_lines,
+            };
+            let patched = if out.has_main {
+                transpiler::cargo::emit_cargo_toml_binary_opts(&opts)
+            } else {
+                transpiler::cargo::emit_cargo_toml_library_opts(&opts)
+            };
+            fs::write(&cargo_toml_path, &patched).unwrap_or_else(|e| {
+                eprintln!("Cannot write Cargo.toml: {e}");
+                process::exit(1);
+            });
+        }
+    }
+
     if out.has_extern_rust && bridge_path.is_none() {
         eprintln!(
             "error: bridge.rs not found — {file_path} declares extern \"rust\" blocks but no bridge.rs exists at {}",

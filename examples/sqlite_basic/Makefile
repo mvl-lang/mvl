@@ -3,8 +3,9 @@
 
 .DEFAULT_GOAL := help
 
-MVL := ../../target/debug/mvl
-DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+MVL      := ../../target/debug/mvl
+DIR      := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+REPO_ROOT := $(abspath $(DIR)../..)
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -17,8 +18,8 @@ check: guard-mvl ## Type-check pkg.sqlite source (main.mvl requires mvl build â€
 
 test: check ## Alias for check
 
-run: guard-mvl ## Run the example
-	$(MVL) run $(DIR)main.mvl
+run: guard-mvl ## Run the example (runs from repo root so pkg.* resolution finds .mvl/pkg/sqlite)
+	cd $(REPO_ROOT) && $(abspath $(MVL)) run $(DIR)main.mvl
 
 clean: ## Remove build artifacts
 	rm -rf $(TMPDIR)mvl_build_sqlite_basic
