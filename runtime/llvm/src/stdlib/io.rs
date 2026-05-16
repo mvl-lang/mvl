@@ -29,8 +29,24 @@
 
 use std::slice;
 
+use crate::abi::LlvmEnumError;
 use crate::memory::{mvl_string_new, MvlString};
 use libc::c_void;
+
+// ── IoError discriminants (must match variant order in std/io.mvl) ────────────
+const IO_ERR_NOT_FOUND: u8 = 0;
+const IO_ERR_PERMISSION_DENIED: u8 = 1;
+const IO_ERR_ALREADY_EXISTS: u8 = 2;
+const IO_ERR_OTHER: u8 = 3;
+
+fn io_error_enum(e: &std::io::Error) -> *mut c_void {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => LlvmEnumError::unit(IO_ERR_NOT_FOUND),
+        std::io::ErrorKind::PermissionDenied => LlvmEnumError::unit(IO_ERR_PERMISSION_DENIED),
+        std::io::ErrorKind::AlreadyExists => LlvmEnumError::unit(IO_ERR_ALREADY_EXISTS),
+        _ => LlvmEnumError::with_str(IO_ERR_OTHER, &e.to_string()),
+    }
+}
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -56,21 +72,12 @@ fn new_mvl_str(s: &str) -> *mut c_void {
     unsafe { mvl_string_new(bytes.as_ptr(), bytes.len()) as *mut c_void }
 }
 
-/// Map a `std::io::Error` to one of three IFC-safe categories.
-fn sanitize_io_error(e: &std::io::Error) -> &'static str {
-    match e.kind() {
-        std::io::ErrorKind::NotFound => "file not found",
-        std::io::ErrorKind::PermissionDenied => "permission denied",
-        _ => "I/O error",
-    }
-}
-
 // ── C-ABI Result type ─────────────────────────────────────────────────────────
 
 /// `{i8, ptr}` — matches the LLVM internal `Result[T,E]` layout.
 ///
 /// `tag = 0` → Ok  — `payload` is null (Unit) or `*mut MvlString` (String).
-/// `tag = 1` → Err — `payload` is `*mut MvlString` (error message).
+/// `tag = 1` → Err — `payload` is `*mut LlvmEnumError` (enum error value).
 #[repr(C)]
 pub struct LlvmResult {
     pub tag: u8,
@@ -93,7 +100,7 @@ impl LlvmResult {
     fn err(e: &std::io::Error) -> Self {
         LlvmResult {
             tag: 1,
-            payload: new_mvl_str(sanitize_io_error(e)),
+            payload: io_error_enum(e),
         }
     }
 }
@@ -275,7 +282,10 @@ pub unsafe extern "C" fn _mvl_io_create_symlink(
         let _ = (t, l);
         LlvmResult {
             tag: 1,
-            payload: new_mvl_str("symlinks not supported on this platform"),
+            payload: LlvmEnumError::with_str(
+                IO_ERR_OTHER,
+                "symlinks not supported on this platform",
+            ),
         }
     }
 }

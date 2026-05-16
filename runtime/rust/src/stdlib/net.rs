@@ -48,23 +48,34 @@ fn next_handle() -> i64 {
     NEXT_HANDLE.fetch_add(1, Ordering::SeqCst)
 }
 
-// ── Error sanitization ────────────────────────────────────────────────────────
+// ── Error type ────────────────────────────────────────────────────────────────
 
-fn sanitize_net_error(e: &std::io::Error) -> String {
+/// Mirrors the `NetError` enum declared in `std/net.mvl`.
+/// Variant order and names must stay in sync with the MVL definition.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NetError {
+    ConnectionRefused,
+    ConnectionReset,
+    Timeout,
+    AddressInUse,
+    HostUnreachable,
+    Other(String),
+}
+
+fn sanitize_net_error(e: &std::io::Error) -> NetError {
     match e.kind() {
-        std::io::ErrorKind::AddrInUse => "address already in use".to_string(),
-        std::io::ErrorKind::ConnectionRefused => "connection refused".to_string(),
-        std::io::ErrorKind::ConnectionReset => "connection reset".to_string(),
-        std::io::ErrorKind::TimedOut => "connection timed out".to_string(),
-        std::io::ErrorKind::BrokenPipe => "broken pipe".to_string(),
-        _ => "network error".to_string(),
+        std::io::ErrorKind::ConnectionRefused => NetError::ConnectionRefused,
+        std::io::ErrorKind::ConnectionReset => NetError::ConnectionReset,
+        std::io::ErrorKind::TimedOut => NetError::Timeout,
+        std::io::ErrorKind::AddrInUse => NetError::AddressInUse,
+        _ => NetError::Other(e.to_string()),
     }
 }
 
 // ── Stdlib functions ──────────────────────────────────────────────────────────
 
 /// Bind a TCP listener on `host:port`.
-pub fn tcp_listen(host: String, port: i64) -> Result<TcpListener, String> {
+pub fn tcp_listen(host: String, port: i64) -> Result<TcpListener, NetError> {
     let addr = format!("{}:{}", host, port);
     std::net::TcpListener::bind(&addr)
         .map_err(|e| sanitize_net_error(&e))
@@ -76,7 +87,7 @@ pub fn tcp_listen(host: String, port: i64) -> Result<TcpListener, String> {
 }
 
 /// Connect to a remote TCP server at `host:port`.
-pub fn tcp_connect(host: String, port: i64) -> Result<TcpStream, String> {
+pub fn tcp_connect(host: String, port: i64) -> Result<TcpStream, NetError> {
     let addr = format!("{}:{}", host, port);
     std::net::TcpStream::connect(&addr)
         .map_err(|e| sanitize_net_error(&e))
@@ -90,11 +101,11 @@ pub fn tcp_connect(host: String, port: i64) -> Result<TcpStream, String> {
 /// Accept the next incoming connection on `listener`.
 ///
 /// The listener remains open — call `tcp_accept` again for the next connection.
-pub fn tcp_accept(listener: TcpListener) -> Result<TcpStream, String> {
+pub fn tcp_accept(listener: TcpListener) -> Result<TcpStream, NetError> {
     let guard = listeners().lock().unwrap();
     guard
         .get(&listener.0)
-        .ok_or_else(|| "invalid listener handle".to_string())
+        .ok_or_else(|| NetError::Other("invalid listener handle".to_string()))
         .and_then(|l| l.accept().map_err(|e| sanitize_net_error(&e)))
         .map(|(stream, _addr)| {
             let h = next_handle();
@@ -105,10 +116,10 @@ pub fn tcp_accept(listener: TcpListener) -> Result<TcpStream, String> {
 }
 
 /// Read all available bytes from `stream`.
-pub fn tcp_read(stream: TcpStream) -> Result<Tainted<String>, String> {
+pub fn tcp_read(stream: TcpStream) -> Result<Tainted<String>, NetError> {
     let mut guard = streams().lock().unwrap();
     match guard.get_mut(&stream.0) {
-        None => Err("invalid stream handle".to_string()),
+        None => Err(NetError::Other("invalid stream handle".to_string())),
         Some(s) => {
             let mut buf = Vec::new();
             s.read_to_end(&mut buf)
@@ -119,10 +130,10 @@ pub fn tcp_read(stream: TcpStream) -> Result<Tainted<String>, String> {
 }
 
 /// Write `data` to `stream`.
-pub fn tcp_write(stream: TcpStream, data: String) -> Result<(), String> {
+pub fn tcp_write(stream: TcpStream, data: String) -> Result<(), NetError> {
     let mut guard = streams().lock().unwrap();
     match guard.get_mut(&stream.0) {
-        None => Err("invalid stream handle".to_string()),
+        None => Err(NetError::Other("invalid stream handle".to_string())),
         Some(s) => s
             .write_all(data.as_bytes())
             .map_err(|e| sanitize_net_error(&e)),
@@ -130,11 +141,11 @@ pub fn tcp_write(stream: TcpStream, data: String) -> Result<(), String> {
 }
 
 /// Return the port the listener is bound to.
-pub fn tcp_listener_port(listener: TcpListener) -> Result<i64, String> {
+pub fn tcp_listener_port(listener: TcpListener) -> Result<i64, NetError> {
     let guard = listeners().lock().unwrap();
     guard
         .get(&listener.0)
-        .ok_or_else(|| "invalid listener handle".to_string())
+        .ok_or_else(|| NetError::Other("invalid listener handle".to_string()))
         .and_then(|l| {
             l.local_addr()
                 .map(|a| a.port() as i64)

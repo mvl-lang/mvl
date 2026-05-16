@@ -12,15 +12,15 @@
 // call `extern "rust"` primitives that declare matching or more-specific
 // effects, forming an explicit trust-boundary chain.
 
-use std.io.{ Path, path, read_to_string, write }
+use std.io.{ Path, path, IoError, read_to_string, write }
 
 // ── Unparametrized effects still work (backward compat) ───────────────────
 
-fn read_any(p: Path) -> Result[Tainted[String], String] ! FileRead {
+fn read_any(p: Path) -> Result[Tainted[String], IoError] ! FileRead {
     read_to_string(p)
 }
 
-fn write_any(p: Path, data: Tainted[String]) -> Result[Unit, String] ! FileWrite {
+fn write_any(p: Path, data: Tainted[String]) -> Result[Unit, IoError] ! FileWrite {
     write(p, data)
 }
 

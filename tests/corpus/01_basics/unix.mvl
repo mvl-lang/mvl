@@ -6,7 +6,7 @@
 
 use std.process.{
     Child, ChildStdin, ChildStdout, ChildStderr,
-    ExitStatus, ProcessOutput, Stdio,
+    ExitStatus, ProcessOutput, ProcessError, Stdio,
     spawn, stdin_write, stdout_read, stderr_read,
     wait, kill, is_success, exit_code,
 }
@@ -33,15 +33,15 @@ total fn code_of(status: ExitStatus) -> Int {
 // captured stdout/stderr alongside the exit status. No access to `child`
 // after `wait` is needed.
 
-fn run_echo() -> Result[Tainted[String], String] ! ProcessSpawn {
+fn run_echo() -> Result[Tainted[String], ProcessError] ! ProcessSpawn {
     let child: Child = spawn("echo", ["hello, mvl"], Stdio::Inherit, Stdio::Capture, Stdio::Capture)?;
     let out: ProcessOutput = wait(child)?;
     match out.status {
         ExitStatus::Success => match out.stdout {
             Some(data) => Ok(data),
-            None => Err("no stdout captured"),
+            None => Err(ProcessError::Other("no stdout captured")),
         },
-        ExitStatus::Failed(_) => Err("echo failed"),
+        ExitStatus::Failed(_) => Err(ProcessError::Other("echo failed")),
     }
 }
 
@@ -49,7 +49,7 @@ fn run_echo() -> Result[Tainted[String], String] ! ProcessSpawn {
 // child.stdin is Option[ChildStdin]; Phase 3 will require unwrapping before
 // passing to stdin_write. In Phase 2 the checker does not yet enforce this,
 // but using the Option directly is a type mismatch until then.
-fn run_with_stdin_pipe() -> Result[ExitStatus, String] ! ProcessSpawn {
+fn run_with_stdin_pipe() -> Result[ExitStatus, ProcessError] ! ProcessSpawn {
     let child: Child = spawn("cat", [], Stdio::Pipe, Stdio::Capture, Stdio::Inherit)?;
     let out: ProcessOutput = wait(child)?;
     Ok(out.status)
@@ -58,28 +58,28 @@ fn run_with_stdin_pipe() -> Result[ExitStatus, String] ! ProcessSpawn {
 // Shows stdin_write usage: spawns a process with Pipe stdin, writes to it.
 // Accepts the already-extracted ChildStdin handle from Child.stdin (unwrapped
 // by the caller); this avoids partial-move issues in Phase 2.
-fn write_stdin(handle: ChildStdin, child: Child) -> Result[ExitStatus, String] ! ProcessSpawn {
+fn write_stdin(handle: ChildStdin, child: Child) -> Result[ExitStatus, ProcessError] ! ProcessSpawn {
     stdin_write(handle, "hello from parent\n")?;
     let out: ProcessOutput = wait(child)?;
     Ok(out.status)
 }
 
-fn run_and_capture_stderr() -> Result[Tainted[String], String] ! ProcessSpawn {
+fn run_and_capture_stderr() -> Result[Tainted[String], ProcessError] ! ProcessSpawn {
     let child: Child = spawn("ls", ["/nonexistent"], Stdio::Devnull, Stdio::Devnull, Stdio::Capture)?;
     let out: ProcessOutput = wait(child)?;
     match out.stderr {
         Some(data) => Ok(data),
-        None => Err("no stderr captured"),
+        None => Err(ProcessError::Other("no stderr captured")),
     }
 }
 
 // `kill` returns the Child so it can be passed to `wait` for reaping.
-fn run_and_kill() -> Result[Unit, String] ! ProcessSpawn {
+fn run_and_kill() -> Result[Unit, ProcessError] ! ProcessSpawn {
     let child: Child = spawn("sleep", ["60"], Stdio::Devnull, Stdio::Devnull, Stdio::Devnull)?;
     let child: Child = kill(child)?;
     let out: ProcessOutput = wait(child)?;
     match out.status {
-        ExitStatus::Success => Err("expected non-zero after kill"),
+        ExitStatus::Success => Err(ProcessError::Other("expected non-zero after kill")),
         ExitStatus::Failed(_) => Ok(()),
     }
 }
@@ -148,20 +148,20 @@ fn ignore_sighup() -> Unit ! Env {
 
 // ── Mixed effects: process + env ──────────────────────────────────────────
 
-fn run_with_env_override() -> Result[Tainted[String], String] ! ProcessSpawn + Env {
-    set("GREETING", "hello")?;
+fn run_with_env_override() -> Result[Tainted[String], ProcessError] ! ProcessSpawn + Env {
+    let _: Result[Unit, String] = set("GREETING", "hello");
     let child: Child = spawn("env", [], Stdio::Devnull, Stdio::Capture, Stdio::Devnull)?;
     let out: ProcessOutput = wait(child)?;
     match out.stdout {
         Some(data) => Ok(data),
-        None => Err("no stdout captured"),
+        None => Err(ProcessError::Other("no stdout captured")),
     }
 }
 
 // ── IFC: Tainted output must not be used as a path without sanitization ───
 
 // cmd must be Clean[String]; this function receives a validated command path.
-fn capture_output_safely(cmd: Clean[String]) -> Result[Bool, String] ! ProcessSpawn {
+fn capture_output_safely(cmd: Clean[String]) -> Result[Bool, ProcessError] ! ProcessSpawn {
     let child: Child = spawn(cmd, [], Stdio::Devnull, Stdio::Capture, Stdio::Devnull)?;
     let out: ProcessOutput = wait(child)?;
     // out.stdout is Tainted[String] — we only inspect success, not the data,

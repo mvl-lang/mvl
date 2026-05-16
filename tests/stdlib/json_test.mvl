@@ -3,7 +3,7 @@
 // Verifies the native-MVL JSON implementation: encode produces well-formed
 // JSON strings; decode round-trips them back; error cases return Err.
 
-use std.json.{Value, encode, decode}
+use std.json.{Value, JsonError, encode, decode}
 use std.collections.{map_len, map_get, list_len}
 
 // ── encode: primitives ────────────────────────────────────────────────────────
@@ -230,5 +230,14 @@ test fn decode_exponent() -> Unit {
     match decode("1e2") {
         Ok(Value::Number(n)) => assert_eq(n, 100.0),
         _                    => assert(false),
+    }
+}
+
+// ── JsonError variant matching ────────────────────────────────────────────────
+
+test fn decode_invalid_returns_parse_error() -> Unit {
+    match decode("hello") {
+        Ok(_) => assert(false),
+        Err(JsonError::ParseError(_)) => assert(true),
     }
 }

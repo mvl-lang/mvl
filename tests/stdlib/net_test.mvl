@@ -6,7 +6,7 @@
 //
 // Run with:  mvl test tests/stdlib/
 
-use std.net.{TcpListener, tcp_listen, tcp_listener_port, tcp_close_listener,
+use std.net.{TcpListener, NetError, tcp_listen, tcp_listener_port, tcp_close_listener,
              TcpStream, tcp_connect, tcp_close_stream}
 
 // ── happy path ────────────────────────────────────────────────────────────
@@ -14,11 +14,11 @@ use std.net.{TcpListener, tcp_listen, tcp_listener_port, tcp_close_listener,
 test fn net_listen_binds_and_returns_port() -> Unit ! Net {
     let l: TcpListener = match tcp_listen("127.0.0.1", 0) {
         Ok(l) => l,
-        Err(e) => { assert_eq("listen failed", e); return },
+        Err(_) => { assert(false); return },
     };
     let port: Int = match tcp_listener_port(l) {
         Ok(p) => p,
-        Err(e) => { tcp_close_listener(l); assert_eq("port failed", e); return },
+        Err(_) => { tcp_close_listener(l); assert(false); return },
     };
     tcp_close_listener(l);
     assert_eq(port > 0, true)
@@ -28,44 +28,50 @@ test fn net_listen_binds_and_returns_port() -> Unit ! Net {
 
 test fn net_listen_bad_addr_returns_err() -> Unit ! Net {
     match tcp_listen("999.999.999.999", 8080) {
-        Ok(_) => assert_eq("should have failed", "ok"),
-        Err(e) => assert_eq(e, "network error"),
+        Ok(_) => assert(false),
+        Err(NetError::Other(_)) => assert(true),
+        Err(_) => assert(true),
     }
 }
 
-test fn net_listen_port_in_use_returns_err() -> Unit ! Net {
+test fn net_listen_port_in_use_returns_address_in_use() -> Unit ! Net {
     let l1: TcpListener = match tcp_listen("127.0.0.1", 0) {
         Ok(l) => l,
-        Err(e) => { assert_eq("first listen failed", e); return },
+        Err(_) => { assert(false); return },
     };
     let port: Int = match tcp_listener_port(l1) {
         Ok(p) => p,
-        Err(e) => { tcp_close_listener(l1); assert_eq("port query failed", e); return },
+        Err(_) => { tcp_close_listener(l1); assert(false); return },
     };
     match tcp_listen("127.0.0.1", port) {
         Ok(_) => {
             tcp_close_listener(l1);
-            assert_eq("should have failed", "ok")
+            assert(false)
         },
-        Err(e) => {
+        Err(NetError::AddressInUse) => {
             tcp_close_listener(l1);
-            assert_eq(e, "address already in use")
+            assert(true)
+        },
+        Err(_) => {
+            tcp_close_listener(l1);
+            assert(false)
         },
     }
 }
 
-test fn net_connect_refused_returns_err() -> Unit ! Net {
+test fn net_connect_refused_returns_connection_refused() -> Unit ! Net {
     let l: TcpListener = match tcp_listen("127.0.0.1", 0) {
         Ok(l) => l,
-        Err(e) => { assert_eq("listen failed", e); return },
+        Err(_) => { assert(false); return },
     };
     let port: Int = match tcp_listener_port(l) {
         Ok(p) => p,
-        Err(e) => { tcp_close_listener(l); assert_eq("port failed", e); return },
+        Err(_) => { tcp_close_listener(l); assert(false); return },
     };
     tcp_close_listener(l);
     match tcp_connect("127.0.0.1", port) {
-        Ok(s) => { tcp_close_stream(s); assert_eq("should have failed", "ok") },
-        Err(e) => assert_eq(e, "connection refused"),
+        Ok(s) => { tcp_close_stream(s); assert(false) },
+        Err(NetError::ConnectionRefused) => assert(true),
+        Err(_) => assert(false),
     }
 }

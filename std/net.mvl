@@ -21,6 +21,21 @@
 //!   `tcp_close_listener` is called or the program exits.
 //!   TcpStream is likewise `Copy`.
 
+// ── Error type ────────────────────────────────────────────────────────────────
+
+/// Structured errors returned by TCP stdlib functions.
+///
+/// Use `Other(msg)` for OS-level errors not covered by the named variants.
+/// Variant discriminants (0-based) match the Rust mirror in `mvl_runtime::stdlib::net`.
+pub type NetError = enum {
+    ConnectionRefused,
+    ConnectionReset,
+    Timeout,
+    AddressInUse,
+    HostUnreachable,
+    Other(String),
+}
+
 // ── Handle types ──────────────────────────────────────────────────────────────
 
 /// A bound TCP listener — call `tcp_accept` to obtain a connection.
@@ -41,34 +56,34 @@ pub type TcpStream = struct {}
 ///
 /// Returns `Err` if the address is already in use or the port is privileged
 /// and the process lacks the required capability.
-pub builtin fn tcp_listen(host: String, port: Int) -> Result[TcpListener, String] ! Net
+pub builtin fn tcp_listen(host: String, port: Int) -> Result[TcpListener, NetError] ! Net
 
 /// Connect to a remote TCP server at `host:port`.
 ///
 /// Blocks until the connection is established or fails.
-pub builtin fn tcp_connect(host: String, port: Int) -> Result[TcpStream, String] ! Net
+pub builtin fn tcp_connect(host: String, port: Int) -> Result[TcpStream, NetError] ! Net
 
 /// Accept the next incoming connection on `listener`.
 ///
 /// Blocks until a client connects.  `listener` remains valid after the call —
 /// call `tcp_accept` again to accept further connections.
-pub builtin fn tcp_accept(listener: TcpListener) -> Result[TcpStream, String] ! Net
+pub builtin fn tcp_accept(listener: TcpListener) -> Result[TcpStream, NetError] ! Net
 
 /// Read all available bytes from `stream` as a string.
 ///
 /// Returns `Tainted[String]` because the content originates from an untrusted
 /// remote peer.  Blocks until the remote side closes the write half.
-pub builtin fn tcp_read(stream: TcpStream) -> Result[Tainted[String], String] ! Net
+pub builtin fn tcp_read(stream: TcpStream) -> Result[Tainted[String], NetError] ! Net
 
 /// Write `data` to `stream`.
 ///
 /// Blocks until all bytes are written or an error occurs.
-pub builtin fn tcp_write(stream: TcpStream, data: String) -> Result[Unit, String] ! Net
+pub builtin fn tcp_write(stream: TcpStream, data: String) -> Result[Unit, NetError] ! Net
 
 /// Return the local port the listener is bound to.
 ///
 /// Useful when binding on port 0 to let the OS assign a free port.
-pub builtin fn tcp_listener_port(listener: TcpListener) -> Result[Int, String]
+pub builtin fn tcp_listener_port(listener: TcpListener) -> Result[Int, NetError]
 
 /// Close a listener and release its port.
 ///

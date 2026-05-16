@@ -22,11 +22,13 @@
 
 use std::slice;
 
+use crate::abi::{LlvmEnumError, LlvmResult};
 use crate::memory::{mvl_string_drop, mvl_string_new, MvlString};
 use libc::c_void;
 use mvl_runtime::stdlib::regex as rt;
 
-use crate::abi::LlvmResult;
+// ── RegexError discriminants (must match variant order in std/regex.mvl) ──────
+const REGEX_ERR_INVALID_PATTERN: u8 = 0;
 
 // ── MvlString helpers ─────────────────────────────────────────────────────────
 
@@ -69,7 +71,9 @@ pub unsafe extern "C" fn _mvl_regex_compile(pattern: *const MvlString) -> LlvmRe
             let ptr = Box::into_raw(Box::new(re)) as *mut c_void;
             LlvmResult::ok_ptr(ptr)
         }
-        Err(e) => LlvmResult::err_mvl(new_mvl_str(&e)),
+        Err(rt::RegexError::InvalidPattern(msg)) => {
+            LlvmResult::err_mvl(LlvmEnumError::with_str(REGEX_ERR_INVALID_PATTERN, &msg))
+        }
     }
 }
 
@@ -242,8 +246,8 @@ mod tests {
         let r = unsafe { _mvl_regex_compile(mvl_str(r"[unclosed")) };
         assert_eq!(r.tag, 1, "invalid pattern must return Err");
         assert!(!r.payload.is_null());
-        // Free the error MvlString payload to avoid leaking in tests.
-        unsafe { mvl_string_drop(r.payload as *mut MvlString) };
+        // Free the LlvmEnumError box (inner MvlString string leaks — acceptable for MVP).
+        unsafe { drop(Box::from_raw(r.payload as *mut LlvmEnumError)) };
     }
 
     #[test]

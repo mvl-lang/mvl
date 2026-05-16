@@ -9,6 +9,17 @@
 use crate::ifc::{Clean, Tainted};
 use std::io::{Read, Write};
 
+// ── Error type ────────────────────────────────────────────────────────────
+
+/// Mirrors the `ProcessError` enum declared in `std/process.mvl`.
+/// Variant order and names must stay in sync with the MVL definition.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProcessError {
+    NotFound,
+    PermissionDenied,
+    Other(String),
+}
+
 // ── Stdio configuration ────────────────────────────────────────────────────
 
 /// Configures how a child process's stdio stream is connected.
@@ -98,7 +109,7 @@ pub fn spawn(
     stdin_mode: Stdio,
     stdout_mode: Stdio,
     stderr_mode: Stdio,
-) -> Result<Child, String> {
+) -> Result<Child, ProcessError> {
     let stdout_capture = stdout_mode == Stdio::Capture;
     let stderr_capture = stderr_mode == Stdio::Capture;
 
@@ -129,38 +140,38 @@ pub fn spawn(
     })
 }
 
-fn sanitize_spawn_error(kind: std::io::ErrorKind) -> String {
+fn sanitize_spawn_error(kind: std::io::ErrorKind) -> ProcessError {
     match kind {
-        std::io::ErrorKind::NotFound => "command not found".to_string(),
-        std::io::ErrorKind::PermissionDenied => "permission denied".to_string(),
-        _ => "spawn failed".to_string(),
+        std::io::ErrorKind::NotFound => ProcessError::NotFound,
+        std::io::ErrorKind::PermissionDenied => ProcessError::PermissionDenied,
+        _ => ProcessError::Other("spawn failed".to_string()),
     }
 }
 
 // ── Pipe I/O ────────────────────────────────────────────────────────────────
 
 /// Write bytes to the child's stdin pipe.
-pub fn stdin_write(handle: ChildStdin, data: String) -> Result<(), String> {
+pub fn stdin_write(handle: ChildStdin, data: String) -> Result<(), ProcessError> {
     let mut h = handle.0;
     h.write_all(data.as_bytes())
-        .map_err(|_| "stdin write failed".to_string())
+        .map_err(|_| ProcessError::Other("stdin write failed".to_string()))
 }
 
 /// Read all available output from the child's stdout pipe.
-pub fn stdout_read(handle: ChildStdout) -> Result<Tainted<String>, String> {
+pub fn stdout_read(handle: ChildStdout) -> Result<Tainted<String>, ProcessError> {
     let mut h = handle.0;
     let mut buf = String::new();
     h.read_to_string(&mut buf)
-        .map_err(|_| "stdout read failed".to_string())?;
+        .map_err(|_| ProcessError::Other("stdout read failed".to_string()))?;
     Ok(Tainted(buf))
 }
 
 /// Read all available output from the child's stderr pipe.
-pub fn stderr_read(handle: ChildStderr) -> Result<Tainted<String>, String> {
+pub fn stderr_read(handle: ChildStderr) -> Result<Tainted<String>, ProcessError> {
     let mut h = handle.0;
     let mut buf = String::new();
     h.read_to_string(&mut buf)
-        .map_err(|_| "stderr read failed".to_string())?;
+        .map_err(|_| ProcessError::Other("stderr read failed".to_string()))?;
     Ok(Tainted(buf))
 }
 
@@ -170,7 +181,7 @@ pub fn stderr_read(handle: ChildStderr) -> Result<Tainted<String>, String> {
 ///
 /// Closes stdin before waiting. Buffers stdout/stderr into `ProcessOutput`
 /// when the corresponding mode was `Stdio::Capture`; otherwise drops the pipe.
-pub fn wait(mut child: Child) -> Result<ProcessOutput, String> {
+pub fn wait(mut child: Child) -> Result<ProcessOutput, ProcessError> {
     drop(child.stdin.take());
 
     let stdout_data = if child.stdout_capture {
@@ -197,7 +208,10 @@ pub fn wait(mut child: Child) -> Result<ProcessOutput, String> {
         None
     };
 
-    let status = child.inner.wait().map_err(|_| "wait failed".to_string())?;
+    let status = child
+        .inner
+        .wait()
+        .map_err(|_| ProcessError::Other("wait failed".to_string()))?;
     let exit_status = if status.success() {
         ExitStatus::Success
     } else {
@@ -214,8 +228,11 @@ pub fn wait(mut child: Child) -> Result<ProcessOutput, String> {
 /// Send SIGKILL (Unix) or TerminateProcess (Windows) to the child.
 ///
 /// Returns the `Child` handle so it can be passed to `wait` for reaping.
-pub fn kill(mut child: Child) -> Result<Child, String> {
-    child.inner.kill().map_err(|_| "kill failed".to_string())?;
+pub fn kill(mut child: Child) -> Result<Child, ProcessError> {
+    child
+        .inner
+        .kill()
+        .map_err(|_| ProcessError::Other("kill failed".to_string()))?;
     Ok(child)
 }
 

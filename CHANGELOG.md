@@ -4,6 +4,13 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.116.0] — 2026-05-16
+
+### Added
+- Stdlib structured error enums: `NetError`, `IoError`, `RegexError`, `JsonError`, `ProcessError` replacing `Result[T, String]` across all stdlib modules (#782)
+- `LlvmEnumError` ABI struct for LLVM runtime enum error encoding
+- ADR-0032: Stdlib structured error enums
+
 ## [0.115.0] — 2026-05-16
 
 ### Added

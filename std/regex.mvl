@@ -8,6 +8,15 @@
 //!
 //! Effects: none.
 
+// ── Error type ────────────────────────────────────────────────────────────
+
+/// Structured error returned by `compile`.
+///
+/// Variant discriminant (0-based) matches the Rust mirror in `mvl_runtime::stdlib::regex`.
+pub type RegexError = enum {
+    InvalidPattern(String),
+}
+
 /// A compiled regular expression pattern.
 pub type Regex = struct {}
 
@@ -26,7 +35,7 @@ pub type Captures = struct {
 
 /// Compiles a regex pattern. Returns Err if the pattern is invalid.
 /// Pure — compilation is deterministic.
-pub builtin fn compile(pattern: String) -> Result[Regex, String]
+pub builtin fn compile(pattern: String) -> Result[Regex, RegexError]
 
 /// Returns the first match of re in s, or None.
 /// Named `find` (not `match`) to avoid collision with the `match` keyword.

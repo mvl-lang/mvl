@@ -25,6 +25,7 @@ use crate::memory::{mvl_string_new, MvlString};
 use libc::c_void;
 
 use super::io::LlvmResult;
+use crate::abi::LlvmEnumError;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -49,15 +50,26 @@ fn new_mvl_str(s: &str) -> *mut c_void {
     }
 }
 
-fn sanitize_net_error(e: &std::io::Error) -> &'static str {
+// ── NetError discriminants (must match variant order in std/net.mvl) ──────────
+const NET_ERR_CONNECTION_REFUSED: u8 = 0;
+const NET_ERR_CONNECTION_RESET: u8 = 1;
+const NET_ERR_TIMEOUT: u8 = 2;
+const NET_ERR_ADDRESS_IN_USE: u8 = 3;
+// HostUnreachable = 4
+const NET_ERR_OTHER: u8 = 5;
+
+fn net_error_enum(e: &std::io::Error) -> *mut c_void {
     match e.kind() {
-        std::io::ErrorKind::AddrInUse => "address already in use",
-        std::io::ErrorKind::ConnectionRefused => "connection refused",
-        std::io::ErrorKind::ConnectionReset => "connection reset",
-        std::io::ErrorKind::TimedOut => "connection timed out",
-        std::io::ErrorKind::BrokenPipe => "broken pipe",
-        _ => "network error",
+        std::io::ErrorKind::ConnectionRefused => LlvmEnumError::unit(NET_ERR_CONNECTION_REFUSED),
+        std::io::ErrorKind::ConnectionReset => LlvmEnumError::unit(NET_ERR_CONNECTION_RESET),
+        std::io::ErrorKind::TimedOut => LlvmEnumError::unit(NET_ERR_TIMEOUT),
+        std::io::ErrorKind::AddrInUse => LlvmEnumError::unit(NET_ERR_ADDRESS_IN_USE),
+        _ => LlvmEnumError::with_str(NET_ERR_OTHER, &e.to_string()),
     }
+}
+
+fn net_error_other(msg: &str) -> *mut c_void {
+    LlvmEnumError::with_str(NET_ERR_OTHER, msg)
 }
 
 // ── C-ABI exports ─────────────────────────────────────────────────────────────
@@ -81,12 +93,12 @@ pub unsafe extern "C" fn _mvl_net_tcp_listen(host: *const MvlString, port: i64) 
         },
         Err(e) => LlvmResult {
             tag: 1,
-            payload: new_mvl_str(sanitize_net_error(&e)),
+            payload: net_error_enum(&e),
         },
     }
 }
 
-/// `tcp_connect(host: String, port: Int) → Result[TcpStream, String]`
+/// `tcp_connect(host: String, port: Int) → Result[TcpStream, NetError]`
 ///
 /// Connects to a remote TCP server at `host:port`.
 ///
@@ -104,12 +116,12 @@ pub unsafe extern "C" fn _mvl_net_tcp_connect(host: *const MvlString, port: i64)
         },
         Err(e) => LlvmResult {
             tag: 1,
-            payload: new_mvl_str(sanitize_net_error(&e)),
+            payload: net_error_enum(&e),
         },
     }
 }
 
-/// `tcp_accept(listener: TcpListener) → Result[TcpStream, String]`
+/// `tcp_accept(listener: TcpListener) → Result[TcpStream, NetError]`
 ///
 /// Accepts the next connection on the listener.  `listener_ptr` is the raw
 /// pointer returned by `_mvl_net_tcp_listen`.  The listener stays open.
@@ -128,12 +140,12 @@ pub unsafe extern "C" fn _mvl_net_tcp_accept(listener_ptr: *mut c_void) -> LlvmR
         },
         Err(e) => LlvmResult {
             tag: 1,
-            payload: new_mvl_str(sanitize_net_error(&e)),
+            payload: net_error_enum(&e),
         },
     }
 }
 
-/// `tcp_read(stream: TcpStream) → Result[Tainted[String], String]`
+/// `tcp_read(stream: TcpStream) → Result[Tainted[String], NetError]`
 ///
 /// Reads all available bytes from the stream.  Blocks until the remote side
 /// closes the write half.  Returns `Tainted[String]` (at the C level: an
@@ -156,12 +168,12 @@ pub unsafe extern "C" fn _mvl_net_tcp_read(stream_ptr: *mut c_void) -> LlvmResul
         }
         Err(e) => LlvmResult {
             tag: 1,
-            payload: new_mvl_str(sanitize_net_error(&e)),
+            payload: net_error_enum(&e),
         },
     }
 }
 
-/// `tcp_write(stream: TcpStream, data: String) → Result[Unit, String]`
+/// `tcp_write(stream: TcpStream, data: String) → Result[Unit, NetError]`
 ///
 /// Writes all bytes of `data` to the stream.
 ///
@@ -183,12 +195,12 @@ pub unsafe extern "C" fn _mvl_net_tcp_write(
         },
         Err(e) => LlvmResult {
             tag: 1,
-            payload: new_mvl_str(sanitize_net_error(&e)),
+            payload: net_error_enum(&e),
         },
     }
 }
 
-/// `tcp_listener_port(listener: TcpListener) → Result[Int, String]`
+/// `tcp_listener_port(listener: TcpListener) → Result[Int, NetError]`
 ///
 /// Returns the local port as an i64 wrapped in LlvmResult.
 ///
@@ -200,7 +212,7 @@ pub unsafe extern "C" fn _mvl_net_tcp_listener_port(listener_ptr: *mut c_void) -
     if listener_ptr.is_null() {
         return LlvmResult {
             tag: 1,
-            payload: new_mvl_str("invalid listener handle"),
+            payload: net_error_other("invalid listener handle"),
         };
     }
     let listener = &*(listener_ptr as *mut std::net::TcpListener);
@@ -214,7 +226,7 @@ pub unsafe extern "C" fn _mvl_net_tcp_listener_port(listener_ptr: *mut c_void) -
         }
         Err(e) => LlvmResult {
             tag: 1,
-            payload: new_mvl_str(sanitize_net_error(&e)),
+            payload: net_error_enum(&e),
         },
     }
 }

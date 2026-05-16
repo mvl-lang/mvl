@@ -6,6 +6,15 @@
 //! Backed by the `regex` crate. All functions are pure — no I/O or side effects.
 //! `Regex` is an opaque compiled pattern; pass it to `find`, `replace`, etc.
 
+// ── Error type ────────────────────────────────────────────────────────────
+
+/// Mirrors the `RegexError` enum declared in `std/regex.mvl`.
+/// Variant order and names must stay in sync with the MVL definition.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RegexError {
+    InvalidPattern(String),
+}
+
 /// A compiled regular expression. Mirrors `type Regex = struct {}` in `std/regex.mvl`.
 pub struct Regex(pub(crate) ::regex::Regex);
 
@@ -61,10 +70,10 @@ pub struct Captures {
 }
 
 /// Compiles a regex pattern. Returns `Err` if the pattern is invalid.
-pub fn compile(pattern: String) -> Result<Regex, String> {
+pub fn compile(pattern: String) -> Result<Regex, RegexError> {
     ::regex::Regex::new(&pattern)
         .map(Regex)
-        .map_err(|e| e.to_string())
+        .map_err(|e| RegexError::InvalidPattern(e.to_string()))
 }
 
 /// Returns the first match of `re` in `s`, or `None`.

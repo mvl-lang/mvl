@@ -21,6 +21,16 @@ use mvl_runtime::stdlib::process::{self, Child, ProcessOutput, Stdio};
 
 use crate::abi::{c_to_string, string_to_c, MvlOption, MvlResult};
 
+// TODO #782: LLVM process uses MvlResult (string errors) — full enum ABI deferred
+// until the process LLVM path is migrated to LlvmResult.
+fn process_error_to_string(e: &process::ProcessError) -> String {
+    match e {
+        process::ProcessError::NotFound => "command not found".to_string(),
+        process::ProcessError::PermissionDenied => "permission denied".to_string(),
+        process::ProcessError::Other(msg) => msg.clone(),
+    }
+}
+
 // ── Stdio mode encoding ─────────────────────────────────────────────────────
 // Encoded as i8 at the C boundary:
 //   0 = Pipe, 1 = Capture, 2 = Inherit, 3 = Devnull
@@ -85,7 +95,7 @@ pub extern "C" fn _mvl_process_spawn(
                 err: std::ptr::null_mut(),
             }
         }
-        Err(e) => MvlResult::err_str(&e),
+        Err(e) => MvlResult::err_str(&process_error_to_string(&e)),
     }
 }
 
@@ -113,7 +123,7 @@ pub extern "C" fn _mvl_process_wait(child_ptr: *mut libc::c_void) -> MvlResult {
                 err: std::ptr::null_mut(),
             }
         }
-        Err(e) => MvlResult::err_str(&e),
+        Err(e) => MvlResult::err_str(&process_error_to_string(&e)),
     }
 }
 
@@ -149,7 +159,7 @@ pub extern "C" fn _mvl_process_kill(child_ptr: *mut libc::c_void) -> MvlResult {
             }
         }
         // child was moved into process::kill and dropped on error — no handle to return.
-        Err(e) => MvlResult::err_str(&e),
+        Err(e) => MvlResult::err_str(&process_error_to_string(&e)),
     }
 }
 

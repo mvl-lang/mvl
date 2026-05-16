@@ -147,6 +147,57 @@ impl LlvmResult {
     }
 }
 
+// ── Enum error ABI ─────────────────────────────────────────────────────────
+
+/// Heap-allocated enum error value for the LLVM stdlib error path.
+///
+/// Layout matches the LLVM IR type `{ i8, [8 x i8] }` that the codegen
+/// generates for payload enums where the largest variant payload is one
+/// pointer (8 bytes).  Both fields have alignment 1, so there is no padding.
+///
+/// - `disc`    — variant discriminant (0-based, matches MVL enum declaration order)
+/// - `payload` — pointer-sized payload bytes; zeroed for unit variants,
+///               contains a `*mut MvlString` (little-endian) for `Other(String)`.
+///
+/// The LLVM codegen receives this via `LlvmResult { tag=1, payload=*mut LlvmEnumError }`.
+/// It follows the pointer, reads the discriminant at field 0, and optionally
+/// reads the string pointer from field 1 for the `Other` variant.
+#[repr(C)]
+pub struct LlvmEnumError {
+    pub disc: u8,
+    pub payload: [u8; 8],
+}
+
+impl LlvmEnumError {
+    /// Allocate a unit variant (no payload).  `disc` is the 0-based variant index.
+    #[inline]
+    #[allow(unsafe_code)]
+    pub fn unit(disc: u8) -> *mut c_void {
+        Box::into_raw(Box::new(LlvmEnumError {
+            disc,
+            payload: [0u8; 8],
+        })) as *mut c_void
+    }
+
+    /// Allocate a variant whose sole payload is a `String` (stored as `*mut MvlString`).
+    /// `disc` is the 0-based variant index.  `msg` is copied into a new `MvlString`.
+    ///
+    /// # Safety
+    /// The caller is responsible for the lifetime of the returned pointer.
+    /// The `MvlString` embedded in the payload is heap-allocated and currently
+    /// leaked (acceptable for MVP error paths).
+    #[inline]
+    #[allow(unsafe_code)]
+    pub fn with_str(disc: u8, msg: &str) -> *mut c_void {
+        use crate::memory::mvl_string_new;
+        let bytes = msg.as_bytes();
+        let str_ptr = unsafe { mvl_string_new(bytes.as_ptr(), bytes.len()) as usize };
+        let mut payload = [0u8; 8];
+        payload.copy_from_slice(&str_ptr.to_ne_bytes());
+        Box::into_raw(Box::new(LlvmEnumError { disc, payload })) as *mut c_void
+    }
+}
+
 // ── String conversion helpers ───────────────────────────────────────────────
 
 /// Convert a Rust `&str` to a heap-allocated `*mut c_char`.

@@ -4,17 +4,17 @@
 // All regex operations are pure — no effects required.
 // Run with:  mvl test tests/stdlib/
 
-use std.regex.{Regex, Match, compile, find, find_all, replace}
+use std.regex.{Regex, Match, RegexError, compile, find, find_all, replace}
 
 // ── compile ──────────────────────────────────────────────────────────────────
 
 test fn regex_compile_valid_pattern_returns_ok() -> Unit {
-    let r: Result[Regex, String] = compile("[0-9]+");
+    let r: Result[Regex, RegexError] = compile("[0-9]+");
     assert_eq(r.is_ok(), true);
 }
 
 test fn regex_compile_invalid_pattern_returns_err() -> Unit {
-    let r: Result[Regex, String] = compile("[invalid");
+    let r: Result[Regex, RegexError] = compile("[invalid");
     assert_eq(r.is_err(), true);
 }
 
@@ -81,4 +81,13 @@ test fn regex_replace_no_match_returns_original() -> Unit {
 
 test fn regex_replace_multiple_occurrences() -> Unit {
     assert_eq(replace_digits("1 2 3"), "N N N");
+}
+
+// ── RegexError variant matching ───────────────────────────────────────────────
+
+test fn regex_compile_invalid_returns_invalid_pattern() -> Unit {
+    match compile("[unclosed") {
+        Ok(_) => assert(false),
+        Err(RegexError::InvalidPattern(_)) => assert(true),
+    }
 }
