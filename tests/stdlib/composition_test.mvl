@@ -13,7 +13,7 @@
 // Run with:  mvl test tests/stdlib/
 
 use std.args.{get_arg, get_env}
-use std.io.{Path, path, join, to_string, read_to_string, read_file}
+use std.io.{Path, path, join, to_string, IoError, read_to_string, read_file}
 
 // ── Cross-module import: both modules usable in same file ─────────────────
 
@@ -75,7 +75,7 @@ test fn composition_sanitize_type_enforced_at_compile_time() -> Unit ! FileRead 
     // read_file requires Clean[String]; passing a literal String is legal because
     // String (Public) can be used where Clean[String] is expected (upward coercion).
     // This confirms the compiler enforces the Clean[String] boundary at the call site.
-    let result: Result[Tainted[String], String] = read_file("/tmp/mvl_nonexistent_ifc_test_xyz");
+    let result: Result[Tainted[String], IoError] = read_file("/tmp/mvl_nonexistent_ifc_test_xyz");
     assert_eq(result.is_err(), true);
 }
 
@@ -89,7 +89,7 @@ test fn composition_arg_absence_routes_to_io_fallback() -> Unit ! Console + File
     let config: Option[Tainted[String]] = get_env("MVL_NONEXISTENT_CONFIG_FILE_XYZ");
     // Both branches call std.io; args result controls which path is used.
     // Non-stub runtime: Some branch would sanitize(_tainted) and call read_file(clean).
-    let result: Result[Tainted[String], String] = match config {
+    let result: Result[Tainted[String], IoError] = match config {
         Some(_) => read_to_string(path("/tmp/mvl_nonexistent_config_a_xyz")),
         None => read_to_string(path("/tmp/mvl_nonexistent_config_b_xyz")),
     };
@@ -101,7 +101,7 @@ test fn composition_arg_absence_routes_to_io_fallback() -> Unit ! Console + File
 
 test fn composition_read_to_string_gives_tainted_on_err() -> Unit ! FileRead {
     // STUB: update when implemented — read_to_string always returns Err
-    let result: Result[Tainted[String], String] = read_to_string(path("/tmp/mvl_nonexistent_composition_xyz"));
+    let result: Result[Tainted[String], IoError] = read_to_string(path("/tmp/mvl_nonexistent_composition_xyz"));
     // Err path confirms the function was called with correct signature
     assert_eq(result.is_ok(), false);
 }

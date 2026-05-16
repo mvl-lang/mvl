@@ -8,7 +8,7 @@
 // in MVL corpus tests (see ADR-0010).
 
 use std.io.{
-    File, Path, BufReader, BufWriter, DirEntry, Metadata, Stdin,
+    File, Path, BufReader, BufWriter, DirEntry, Metadata, Stdin, IoError,
     path, join, to_string, path_exists, is_file, is_dir,
     open, close, read_to_string, write, append,
     buf_reader, buf_writer, read_line, write_line,
@@ -33,11 +33,11 @@ total fn path_as_string() -> String {
 
 // ── File read (! FileRead) ─────────────────────────────────────────────────
 
-fn load_config() -> Result[Tainted[String], String] ! FileRead {
+fn load_config() -> Result[Tainted[String], IoError] ! FileRead {
     read_to_string(config_path())
 }
 
-fn first_line_of(p: Path) -> Result[Tainted[String], String] ! FileRead {
+fn first_line_of(p: Path) -> Result[Tainted[String], IoError] ! FileRead {
     let f: File = open(p)?;
     let r: BufReader = buf_reader(f);
     // Note: buf_reader consumes f, so close is called on the BufReader's underlying
@@ -47,15 +47,15 @@ fn first_line_of(p: Path) -> Result[Tainted[String], String] ! FileRead {
 
 // ── File write (! FileWrite) ───────────────────────────────────────────────
 
-fn save_report(p: Path, content: Tainted[String]) -> Result[Unit, String] ! FileWrite {
+fn save_report(p: Path, content: Tainted[String]) -> Result[Unit, IoError] ! FileWrite {
     write(p, content)
 }
 
-fn append_log_line(p: Path, line: Tainted[String]) -> Result[Unit, String] ! FileWrite {
+fn append_log_line(p: Path, line: Tainted[String]) -> Result[Unit, IoError] ! FileWrite {
     append(p, line)
 }
 
-fn write_lines(p: Path) -> Result[Unit, String] ! FileWrite {
+fn write_lines(p: Path) -> Result[Unit, IoError] ! FileWrite {
     let f: File = open(p)?;
     let w: BufWriter = buf_writer(f);
     write_line(w, "header")
@@ -63,32 +63,32 @@ fn write_lines(p: Path) -> Result[Unit, String] ! FileWrite {
 
 // ── Filesystem operations ─────────────────────────────────────────────────
 
-fn ensure_log_dir() -> Result[Unit, String] ! FileWrite {
+fn ensure_log_dir() -> Result[Unit, IoError] ! FileWrite {
     create_dir_all(log_dir())
 }
 
-fn cleanup(p: Path) -> Result[Unit, String] ! FileDelete {
+fn cleanup(p: Path) -> Result[Unit, IoError] ! FileDelete {
     remove(p)
 }
 
-fn list_configs(dir: Path) -> Result[List[DirEntry], String] ! FileRead {
+fn list_configs(dir: Path) -> Result[List[DirEntry], IoError] ! FileRead {
     read_dir(dir)
 }
 
-fn file_size(p: Path) -> Result[Int, String] ! FileRead {
+fn file_size(p: Path) -> Result[Int, IoError] ! FileRead {
     let m: Metadata = metadata(p)?;
     Ok(m.len)
 }
 
-fn make_executable(p: Path) -> Result[Unit, String] ! FileWrite {
+fn make_executable(p: Path) -> Result[Unit, IoError] ! FileWrite {
     chmod(p, 0o755)
 }
 
-fn link_config(target: Path, link: Path) -> Result[Unit, String] ! FileWrite {
+fn link_config(target: Path, link: Path) -> Result[Unit, IoError] ! FileWrite {
     create_symlink(target, link)
 }
 
-fn resolve_link(p: Path) -> Result[Tainted[String], String] ! FileRead {
+fn resolve_link(p: Path) -> Result[Tainted[String], IoError] ! FileRead {
     // read_link returns Tainted[String] — symlink targets are external data.
     // Callers must sanitize before constructing a Path.
     read_link(p)
@@ -96,7 +96,7 @@ fn resolve_link(p: Path) -> Result[Tainted[String], String] ! FileRead {
 
 // ── Mixed effects (callers declare superset) ──────────────────────────────
 
-fn rotate_log(src: Path, dst: Path, new_content: Tainted[String]) -> Result[Unit, String] ! FileRead + FileWrite + FileDelete {
+fn rotate_log(src: Path, dst: Path, new_content: Tainted[String]) -> Result[Unit, IoError] ! FileRead + FileWrite + FileDelete {
     let old: Tainted[String] = read_to_string(src)?;
     write(dst, old)?;
     remove(src)?;
@@ -135,27 +135,27 @@ fn process_file_contents(data: Tainted[String]) -> Bool {
     true
 }
 
-fn read_and_process(p: Path) -> Result[Bool, String] ! FileRead {
+fn read_and_process(p: Path) -> Result[Bool, IoError] ! FileRead {
     let contents: Tainted[String] = read_to_string(p)?;
     Ok(process_file_contents(contents))
 }
 
 // ── Standard input (! Console) ────────────────────────────────────────────
 
-fn prompt(msg: String) -> Result[Tainted[String], String] ! Console {
+fn prompt(msg: String) -> Result[Tainted[String], IoError] ! Console {
     println(msg);
     let s: Stdin = stdin();
     stdin_read_line(s)
 }
 
-fn read_all_stdin() -> Result[Tainted[String], String] ! Console {
+fn read_all_stdin() -> Result[Tainted[String], IoError] ! Console {
     let s: Stdin = stdin();
     stdin_read_to_string(s)
 }
 
 // ── Combined I/O and Console ──────────────────────────────────────────────
 
-fn interactive_save(output_path: Path) -> Result[Unit, String] ! Console + FileWrite {
+fn interactive_save(output_path: Path) -> Result[Unit, IoError] ! Console + FileWrite {
     let s: Stdin = stdin();
     let _: Tainted[String] = stdin_read_to_string(s)?;
     // Write user input to a known, trusted output_path (not derived from stdin input).

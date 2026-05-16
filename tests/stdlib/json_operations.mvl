@@ -17,11 +17,11 @@ fn json_encode_null() -> String {
     encode(v)
 }
 
-fn json_decode_valid(s: String) -> Result[Value, String] {
+fn json_decode_valid(s: String) -> Result[Value, JsonError] {
     decode(s)
 }
 
-fn json_round_trip(s: String) -> Result[String, String] {
+fn json_round_trip(s: String) -> Result[String, JsonError] {
     let v: Value = decode(s)?;
     Ok(encode(v))
 }

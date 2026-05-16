@@ -8,6 +8,15 @@
 //!
 //! Effects: none (pure).
 
+// ── Error type ────────────────────────────────────────────────────────────────
+
+/// Structured error returned by `decode`.
+///
+/// Wraps the parser error message produced by the pure-MVL parser.
+pub type JsonError = enum {
+    ParseError(String),
+}
+
 /// A dynamically-typed JSON value.
 pub type Value = enum {
     Null,
@@ -126,10 +135,10 @@ partial fn encode_object(obj: Map[String, Value]) -> String {
 /// `decode(tainted_str)` returns `Result[Tainted[Value], String]`.
 /// Future: migrate to `decode[L](s: L[String]) -> Result[L[Value], String]`
 /// when label-polymorphic generics land (phase 7+).
-pub transparent partial fn decode(s: String) -> Result[Value, String] {
+pub transparent partial fn decode(s: String) -> Result[Value, JsonError] {
     let chars: List[String] = str_chars(s);
     match parse_value(chars, 0) {
-        ValuePos::VPErr(e)   => Err(e),
+        ValuePos::VPErr(e)   => Err(JsonError::ParseError(e)),
         ValuePos::VP(v, _)   => Ok(v),
     }
 }

@@ -141,15 +141,15 @@ pub fn is_dir(p: Path) -> bool {
 
 /// Open a file for reading and writing, creating it if it does not exist.
 ///
-/// Returns a [`File`] handle on success, or a sanitized error string on failure.
-pub fn open(p: Path) -> Result<File, String> {
+/// Returns a [`File`] handle on success, or an `IoError` on failure.
+pub fn open(p: Path) -> Result<File, IoError> {
     std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .open(&p.inner)
         .map(|f| File { inner: f })
-        .map_err(|e| sanitize_io_error(e.kind()))
+        .map_err(|e| sanitize_io_error(&e))
 }
 
 /// Close a file handle and release the file descriptor.
@@ -164,37 +164,37 @@ pub fn close(_f: File) -> () {
 /// Read the entire contents of a file into a string.
 ///
 /// Returns `Ok(Tainted<String>)` on success.
-/// Returns `Err(String)` with a sanitized error category on failure.
-pub fn read_to_string(p: Path) -> Result<Tainted<String>, String> {
+/// Returns `Err(IoError)` on failure.
+pub fn read_to_string(p: Path) -> Result<Tainted<String>, IoError> {
     std::fs::read_to_string(p.as_str())
         .map(Tainted)
-        .map_err(|e| sanitize_io_error(e.kind()))
+        .map_err(|e| sanitize_io_error(&e))
 }
 
 /// Read the entire contents of a file given a validated (Clean) path string.
 ///
 /// Convenience variant of [`read_to_string`] that accepts a `Clean<String>`
 /// path directly.
-pub fn read_file(p: Clean<String>) -> Result<Tainted<String>, String> {
+pub fn read_file(p: Clean<String>) -> Result<Tainted<String>, IoError> {
     std::fs::read_to_string(&*p)
         .map(Tainted)
-        .map_err(|e| sanitize_io_error(e.kind()))
+        .map_err(|e| sanitize_io_error(&e))
 }
 
 /// Write a string to a file, truncating it if it already exists.
-pub fn write(p: Path, content: Tainted<String>) -> Result<(), String> {
-    std::fs::write(&p.inner, content.0.as_bytes()).map_err(|e| sanitize_io_error(e.kind()))
+pub fn write(p: Path, content: Tainted<String>) -> Result<(), IoError> {
+    std::fs::write(&p.inner, content.0.as_bytes()).map_err(|e| sanitize_io_error(&e))
 }
 
 /// Append a string to a file, creating it if it does not exist.
-pub fn append(p: Path, content: Tainted<String>) -> Result<(), String> {
+pub fn append(p: Path, content: Tainted<String>) -> Result<(), IoError> {
     use std::io::Write as _;
     std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&p.inner)
         .and_then(|mut f| f.write_all(content.0.as_bytes()))
-        .map_err(|e| sanitize_io_error(e.kind()))
+        .map_err(|e| sanitize_io_error(&e))
 }
 
 /// Wrap a [`File`] handle in a [`BufReader`] for line-oriented reading.
@@ -215,16 +215,16 @@ pub fn buf_writer(f: File) -> BufWriter {
 ///
 /// Returns `Ok(Tainted<String>)` on success.
 /// Returns `Ok(Tainted(""))` at end-of-file.
-/// Returns `Err(String)` on I/O failure.
+/// Returns `Err(IoError)` on I/O failure.
 ///
 /// Single-use in Phase 2 — the reader is consumed after this call.
-pub fn read_line(r: BufReader) -> Result<Tainted<String>, String> {
+pub fn read_line(r: BufReader) -> Result<Tainted<String>, IoError> {
     use std::io::BufRead as _;
     let mut inner = r.inner;
     let mut line = String::new();
     match inner.read_line(&mut line) {
         Ok(_) => Ok(Tainted(line)),
-        Err(e) => Err(sanitize_io_error(e.kind())),
+        Err(e) => Err(sanitize_io_error(&e)),
     }
 }
 
@@ -232,12 +232,12 @@ pub fn read_line(r: BufReader) -> Result<Tainted<String>, String> {
 ///
 /// Flushes the buffer before returning.
 /// Single-use in Phase 2 — the writer is consumed after this call.
-pub fn write_line(w: BufWriter, line: String) -> Result<(), String> {
+pub fn write_line(w: BufWriter, line: String) -> Result<(), IoError> {
     use std::io::Write as _;
     let mut inner = w.inner;
     writeln!(inner, "{}", line)
         .and_then(|_| inner.flush())
-        .map_err(|e| sanitize_io_error(e.kind()))
+        .map_err(|e| sanitize_io_error(&e))
 }
 
 // ── Filesystem operations ──────────────────────────────────────────────────
@@ -245,12 +245,12 @@ pub fn write_line(w: BufWriter, line: String) -> Result<(), String> {
 /// Create a directory and all its missing parents.
 ///
 /// No-op if the directory already exists.
-pub fn create_dir_all(p: Path) -> Result<(), String> {
-    std::fs::create_dir_all(&p.inner).map_err(|e| sanitize_io_error(e.kind()))
+pub fn create_dir_all(p: Path) -> Result<(), IoError> {
+    std::fs::create_dir_all(&p.inner).map_err(|e| sanitize_io_error(&e))
 }
 
 /// Remove a file or empty directory.
-pub fn remove(p: Path) -> Result<(), String> {
+pub fn remove(p: Path) -> Result<(), IoError> {
     let is_dir = std::fs::symlink_metadata(&p.inner)
         .map(|m| m.is_dir())
         .unwrap_or(false);
@@ -259,16 +259,16 @@ pub fn remove(p: Path) -> Result<(), String> {
     } else {
         std::fs::remove_file(&p.inner)
     }
-    .map_err(|e| sanitize_io_error(e.kind()))
+    .map_err(|e| sanitize_io_error(&e))
 }
 
 /// List the entries in a directory.
-pub fn read_dir(p: Path) -> Result<Vec<DirEntry>, String> {
-    let entries = std::fs::read_dir(&p.inner).map_err(|e| sanitize_io_error(e.kind()))?;
+pub fn read_dir(p: Path) -> Result<Vec<DirEntry>, IoError> {
+    let entries = std::fs::read_dir(&p.inner).map_err(|e| sanitize_io_error(&e))?;
     entries
         .map(|entry| {
-            let entry = entry.map_err(|e| sanitize_io_error(e.kind()))?;
-            let meta = entry.metadata().map_err(|e| sanitize_io_error(e.kind()))?;
+            let entry = entry.map_err(|e| sanitize_io_error(&e))?;
+            let meta = entry.metadata().map_err(|e| sanitize_io_error(&e))?;
             Ok(DirEntry {
                 path: Path {
                     inner: entry.path().to_string_lossy().into_owned(),
@@ -282,8 +282,8 @@ pub fn read_dir(p: Path) -> Result<Vec<DirEntry>, String> {
 }
 
 /// Return metadata for a path without following symbolic links (`lstat` semantics).
-pub fn metadata(p: Path) -> Result<Metadata, String> {
-    let m = std::fs::symlink_metadata(&p.inner).map_err(|e| sanitize_io_error(e.kind()))?;
+pub fn metadata(p: Path) -> Result<Metadata, IoError> {
+    let m = std::fs::symlink_metadata(&p.inner).map_err(|e| sanitize_io_error(&e))?;
     #[cfg(unix)]
     let permissions = {
         use std::os::unix::fs::PermissionsExt as _;
@@ -303,12 +303,12 @@ pub fn metadata(p: Path) -> Result<Metadata, String> {
 /// Set the Unix permission bits of a file or directory.
 ///
 /// No-op (returns `Ok(())`) on non-Unix platforms.
-pub fn chmod(p: Path, mode: i64) -> Result<(), String> {
+pub fn chmod(p: Path, mode: i64) -> Result<(), IoError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
         let perms = std::fs::Permissions::from_mode(mode as u32);
-        std::fs::set_permissions(&p.inner, perms).map_err(|e| sanitize_io_error(e.kind()))
+        std::fs::set_permissions(&p.inner, perms).map_err(|e| sanitize_io_error(&e))
     }
     #[cfg(not(unix))]
     {
@@ -320,26 +320,27 @@ pub fn chmod(p: Path, mode: i64) -> Result<(), String> {
 /// Create a symbolic link: `link` will point to `target`.
 ///
 /// Returns an error on non-Unix platforms.
-pub fn create_symlink(target: Path, link: Path) -> Result<(), String> {
+pub fn create_symlink(target: Path, link: Path) -> Result<(), IoError> {
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(&target.inner, &link.inner)
-            .map_err(|e| sanitize_io_error(e.kind()))
+        std::os::unix::fs::symlink(&target.inner, &link.inner).map_err(|e| sanitize_io_error(&e))
     }
     #[cfg(not(unix))]
     {
         let _ = (target, link);
-        Err("symlinks not supported on this platform".to_string())
+        Err(IoError::Other(
+            "symlinks not supported on this platform".to_string(),
+        ))
     }
 }
 
 /// Read the target path of a symbolic link.
 ///
 /// Returns `Tainted<String>` — symlink targets are external data.
-pub fn read_link(p: Path) -> Result<Tainted<String>, String> {
+pub fn read_link(p: Path) -> Result<Tainted<String>, IoError> {
     std::fs::read_link(&p.inner)
         .map(|pb| Tainted(pb.to_string_lossy().into_owned()))
-        .map_err(|e| sanitize_io_error(e.kind()))
+        .map_err(|e| sanitize_io_error(&e))
 }
 
 // ── Standard input (! Console) ─────────────────────────────────────────────
@@ -357,39 +358,48 @@ pub fn stdin() -> Stdin {
 ///
 /// Returns `Ok(Tainted<String>)` on success.
 /// Returns `Ok(Tainted(""))` at end-of-file.
-pub fn stdin_read_line(s: Stdin) -> Result<Tainted<String>, String> {
+pub fn stdin_read_line(s: Stdin) -> Result<Tainted<String>, IoError> {
     use std::io::BufRead as _;
     let mut line = String::new();
     match s.inner.lock().read_line(&mut line) {
         Ok(_) => Ok(Tainted(line)),
-        Err(e) => Err(sanitize_io_error(e.kind())),
+        Err(e) => Err(sanitize_io_error(&e)),
     }
 }
 
 /// Read all of stdin into a string.
 ///
 /// Returns `Ok(Tainted<String>)` on success.
-pub fn stdin_read_to_string(s: Stdin) -> Result<Tainted<String>, String> {
+pub fn stdin_read_to_string(s: Stdin) -> Result<Tainted<String>, IoError> {
     use std::io::Read as _;
     let mut buf = String::new();
     s.inner
         .lock()
         .read_to_string(&mut buf)
         .map(|_| Tainted(buf))
-        .map_err(|e| sanitize_io_error(e.kind()))
+        .map_err(|e| sanitize_io_error(&e))
+}
+
+// ── Error type ────────────────────────────────────────────────────────────
+
+/// Mirrors the `IoError` enum declared in `std/io.mvl`.
+/// Variant order and names must stay in sync with the MVL definition.
+#[derive(Debug, Clone, PartialEq)]
+pub enum IoError {
+    NotFound,
+    PermissionDenied,
+    AlreadyExists,
+    Other(String),
 }
 
 // ── Internal helpers ───────────────────────────────────────────────────────
 
-/// Convert an I/O error to a sanitized category string.
-///
-/// Returns a fixed string that does not include the file path or OS-level
-/// details, preventing information disclosure.
-fn sanitize_io_error(kind: std::io::ErrorKind) -> String {
-    match kind {
-        std::io::ErrorKind::NotFound => "file not found".to_string(),
-        std::io::ErrorKind::PermissionDenied => "permission denied".to_string(),
-        _ => "I/O error".to_string(),
+fn sanitize_io_error(e: &std::io::Error) -> IoError {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => IoError::NotFound,
+        std::io::ErrorKind::PermissionDenied => IoError::PermissionDenied,
+        std::io::ErrorKind::AlreadyExists => IoError::AlreadyExists,
+        _ => IoError::Other(e.kind().to_string()),
     }
 }
 

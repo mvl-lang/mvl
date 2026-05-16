@@ -77,8 +77,7 @@ fn run() -> Result[Unit, RunError] ! FileRead + Console + Log {
             let file_path: Clean[String] = sanitize(args.file);
             // Option.map: sanitize each Some(v) without an explicit match ladder.
             let level_opt: Option[Clean[String]] = args.level.map(|v: Tainted[String]| sanitize(v));
-            let file_result: Result[Tainted[String], String] = read_file(file_path);
-            match file_result {
+            match read_file(file_path) {
                 Err(_) => Err(RunError::IOFailure),
                 Ok(content) => {
                     let pipeline_result: Result[String, PipelineError] = analyze_and_format(content, level_opt);
