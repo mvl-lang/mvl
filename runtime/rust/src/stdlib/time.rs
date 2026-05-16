@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn format_instant_iso8601() {
         let t = Instant(UNIX_EPOCH + StdDuration::from_secs(1_710_505_845));
-        let s = format_instant(t, "%Y-%m-%dT%H:%M:%S");
+        let s = format_instant(t, "%Y-%m-%dT%H:%M:%S".to_string());
         assert_eq!(s, "2024-03-15T12:30:45");
     }
 

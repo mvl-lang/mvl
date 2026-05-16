@@ -5,12 +5,36 @@
 //! compiler enforces this statically; no runtime check needed.
 //! IFC: Secret[T] arguments are rejected at compile time (R6, #54).
 //! "Don't log secrets" is not a code review rule in MVL — it's a type error.
-//! Output format is configurable at runtime via the host log sink.
+//! Output format is configurable at runtime via log_set_format (#801).
 //!
 //! Import:
-//!   use std.log.{log_debug, log_info, log_warn, log_error}
+//!   use std.log.{log_debug, log_info, log_warn, log_error,
+//!                LogFormat, log_set_format}
 //!
-//! Effects: Log (all functions). See #54, ADR-0006.
+//! Effects: Log (emit functions). log_set_format has no effect (pure config).
+//! See #54, ADR-0006.
+
+// ── Output format ──────────────────────────────────────────────────────────
+
+/// Selects the output format for all subsequent log calls in this process.
+///
+/// Plain   — `2026-05-16 14:32:00 INFO  msg key=value` (default; human-readable)
+/// Logfmt  — `level=INFO ts=2026-05-16T14:32:00Z msg="msg" key=value`
+/// Json    — `{"level":"INFO","ts":"...","msg":"msg","key":"value"}`
+///
+/// Used by std.runtime.log_manifest (#803) to emit the startup manifest
+/// in the same format as the rest of the application's log stream.
+pub type LogFormat = enum {
+    Plain,   // human-readable console output (default)
+    Logfmt,  // structured key=value, grep-friendly
+    Json,    // machine-readable JSONL
+}
+
+/// Set the output format for all subsequent log calls.
+///
+/// Process-global (thread-local). Default is Plain.
+/// No effect required — this is pure runtime configuration.
+pub builtin fn log_set_format(fmt: LogFormat) -> Unit
 
 // ── Functions ──────────────────────────────────────────────────────────────
 
