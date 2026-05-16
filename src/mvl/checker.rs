@@ -17,6 +17,7 @@
 //!                 └─ check_block / check_stmt / infer_expr
 //! ```
 
+pub mod call_graph;
 mod calls;
 mod capabilities;
 pub mod const_eval;
@@ -39,6 +40,7 @@ pub mod types;
 
 pub use crate::mvl::checker::solver::SolverMode;
 
+use crate::mvl::checker::call_graph::CallGraph;
 use crate::mvl::checker::context::TypeEnv;
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::refinements::RefinementCounts;
@@ -68,6 +70,15 @@ pub struct CheckResult {
     /// IFC-labeled parameters — indicates the security lattice is exercised via
     /// cross-module function calls (e.g. `execute(db, sql: Clean[String])`).
     pub has_prelude_ifc_boundary: bool,
+    /// Full type environment produced by the checker — function signatures, type
+    /// declarations, and impl registrations.  Exposed for downstream consumers
+    /// such as the call graph and interprocedural analysis passes (#829, #825).
+    pub type_env: TypeEnv,
+    /// Whole-program call graph — function call topology for interprocedural
+    /// analysis (IFC #830, refinement contract propagation #830, data race #9).
+    /// Built from the AST post type-checking; edges are `FnCall` expressions only
+    /// (MethodCall resolution deferred to post-monomorphization pass #838).
+    pub call_graph: CallGraph,
 }
 
 impl CheckResult {
@@ -132,6 +143,16 @@ pub fn check_with_two_preludes_mode(
     // even when `prog` itself defines no labeled functions.
     let has_prelude_ifc_boundary = ifc::prelude_has_ifc_boundary(prelude_a, prelude_b, prog);
 
+    // Build the whole-program call graph from all visible programs + the
+    // resolved type environment.  Must happen before checker fields are moved
+    // into CheckResult.
+    let all_prog_refs: Vec<&Program> = prelude_a
+        .iter()
+        .chain(prelude_b.iter().copied())
+        .chain(std::iter::once(prog))
+        .collect();
+    let call_graph = call_graph::build(&all_prog_refs, &checker.env);
+
     let mut req_errors = [0usize; 12];
     for e in &checker.errors {
         let req = e.requirement_number() as usize;
@@ -153,6 +174,8 @@ pub fn check_with_two_preludes_mode(
         expr_types: checker.expr_types,
         refinement_counts,
         has_prelude_ifc_boundary,
+        type_env: checker.env,
+        call_graph,
     }
 }
 

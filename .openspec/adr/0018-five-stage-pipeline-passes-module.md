@@ -47,9 +47,30 @@ src/mvl/passes/
 ```
 parser    → per-file:        text → AST                    (parallelizable)
 resolver  → whole-project:   ASTs → module graph           (sequential)
-checker   → per-program:     graph → typed AST             (semantic checking)
-passes    → per-program:     typed AST → instrumented AST  (optional, composable)
+checker   → per-program:     graph → CheckResult           (semantic checking)
+             └─ CheckResult exposes: errors, type_env, call_graph, expr_types
+passes    → per-program:     CheckResult → Verdict[]       (verification, optional)
 backends  → per-program:     AST → Rust source / LLVM IR   (codegen)
+```
+
+**`CheckResult` (checker output) now includes (#829, ADR-0034):**
+- `type_env: TypeEnv` — full type environment (function signatures, declared types,
+  `From` impl registry). Exposed so downstream passes and tools have proper access
+  to the type system's output without coupling to checker internals.
+- `call_graph: CallGraph` — whole-program function call topology.  Built as a simple
+  AST walk over `Expr::FnCall` after type checking.  Precise for MVL because there
+  is no virtual dispatch, no function pointers, and closures are statically typed.
+  `MethodCall` edges are deferred until the explicit monomorphization pass (#838).
+- `expr_types: HashMap<Span, Ty>` — resolved type of every expression (unchanged).
+
+**Interim pipeline (until ADR-0034 monomorphization pass, #838):**
+```
+parser → resolver → checker(TypeCheck + CallGraph) → passes → backends
+```
+
+**Target pipeline (post #838):**
+```
+parser → resolver → TypeCheck → Monomorphize → [CallGraph, passes] → backends
 ```
 
 The `transpiler/` and `codegen/` modules are now both backends in this model.
