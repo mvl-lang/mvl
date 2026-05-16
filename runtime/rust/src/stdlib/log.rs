@@ -11,7 +11,7 @@
 //!   Logfmt  — `level=INFO ts=2026-05-16T14:32:00Z msg="msg" key=value`
 //!   Json    — `{"level":"INFO","ts":"...","msg":"msg","key":"value"}`
 //!
-//! Format is process-global (thread-local Cell); default is Plain.
+//! Format and min-level are process-global atomics; defaults are Plain / Debug.
 //! `log_set_format()` / `get_current_format()` are pub(crate) for use by
 //! future std.runtime manifest logging (#803).
 //!
@@ -26,8 +26,8 @@
 //! and is intentionally exempt from the `! Clock` effect declaration for
 //! Phase A. Phase 3 may revisit this when a configurable sink is introduced.
 
-use std::cell::Cell;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::stdlib::time::{format_instant, now};
 
@@ -46,18 +46,25 @@ pub enum LogFormat {
     Json,
 }
 
-thread_local! {
-    static FORMAT: Cell<LogFormat> = const { Cell::new(LogFormat::Plain) };
-}
+static FORMAT: AtomicU8 = AtomicU8::new(0); // 0=Plain, 1=Logfmt, 2=Json
 
-/// Returns the current log output format for this thread.
+/// Returns the current log output format (process-global).
 pub fn get_current_format() -> LogFormat {
-    FORMAT.with(Cell::get)
+    match FORMAT.load(Ordering::Relaxed) {
+        1 => LogFormat::Logfmt,
+        2 => LogFormat::Json,
+        _ => LogFormat::Plain,
+    }
 }
 
-/// Sets the log output format for all subsequent log calls in this process.
+/// Sets the log output format for all subsequent log calls (process-global).
 pub fn log_set_format(fmt: LogFormat) {
-    FORMAT.with(|f| f.set(fmt));
+    let v = match fmt {
+        LogFormat::Plain => 0,
+        LogFormat::Logfmt => 1,
+        LogFormat::Json => 2,
+    };
+    FORMAT.store(v, Ordering::Relaxed);
 }
 
 // ── Level filtering ───────────────────────────────────────────────────────────
@@ -77,18 +84,22 @@ pub enum LogLevel {
     Error = 3,
 }
 
-thread_local! {
-    static MIN_LEVEL: Cell<LogLevel> = const { Cell::new(LogLevel::Debug) };
-}
+static MIN_LEVEL: AtomicU8 = AtomicU8::new(0); // 0=Debug, 1=Info, 2=Warn, 3=Error
 
-/// Returns the current minimum log level for this thread.
+/// Returns the current minimum log level (process-global).
 pub fn get_min_level() -> LogLevel {
-    MIN_LEVEL.with(Cell::get)
+    match MIN_LEVEL.load(Ordering::Relaxed) {
+        1 => LogLevel::Info,
+        2 => LogLevel::Warn,
+        3 => LogLevel::Error,
+        _ => LogLevel::Debug,
+    }
 }
 
 /// Sets the minimum log level.  Records below this level are silently dropped.
+/// Process-global — visible to all threads including actor threads.
 pub fn log_set_min_level(level: LogLevel) {
-    MIN_LEVEL.with(|l| l.set(level));
+    MIN_LEVEL.store(level as u8, Ordering::Relaxed);
 }
 
 // ── Parsing helpers ───────────────────────────────────────────────────────────
