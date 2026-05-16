@@ -8,13 +8,15 @@ One file = one module. The filename is the module name.
 src/
   main.mvl              // module: main
   geometry.mvl          // module: geometry
+  math.mvl              // module: math (entry — re-exports from sub-modules)
   math/
-    mod.mvl             // module: math (entry — re-exports from sub-modules)
     stats.mvl           // module: math::stats
     linalg.mvl          // module: math::linalg
 ```
 
-A directory module needs a `mod.mvl` entry file that controls what the directory exposes.
+A directory module uses a sibling file as its entry point: `math.mvl` sits alongside the `math/` directory and controls what the directory exposes. This is the Rust 2018 module style.
+
+> **Deprecated:** `math/mod.mvl` is also accepted for backward compatibility but will be removed in a future release. Rename it to `math.mvl` alongside the directory.
 
 ### Binary vs library
 
@@ -62,10 +64,10 @@ Wildcards are not permitted. Name each item explicitly — the LLM must be preci
 
 ## 13.4 Re-exports
 
-A `mod.mvl` entry file assembles a module's public surface:
+The module entry file assembles its public surface:
 
 ```mvl
-// math/mod.mvl
+// math.mvl  (alongside math/ directory)
 pub use stats::mean;
 pub use stats::variance;
 pub use linalg::Matrix;

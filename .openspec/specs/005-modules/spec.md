@@ -21,7 +21,7 @@ Modules are namespaces, not encapsulation strategies. The module system exists s
 | Visibility default | Private by default; `pub` exports | Explicit over implicit — matches MVL's "no hidden state" principle |
 | Import syntax | `use path::to::Item;` | One syntax, one meaning; qualified path resolves name unambiguously |
 | Wildcard imports | Not allowed | Forces explicit imports; LLM-generated code must name what it uses |
-| Directory modules | Directories as module groups | `src/geometry/` → `geometry` module, `mod.mvl` is the entry point |
+| Directory modules | Directories as module groups | `src/geometry/` → `geometry` module; entry is `geometry.mvl` (sibling file, preferred) or `geometry/mod.mvl` (deprecated) |
 | Re-exports | `pub use sub::Item;` | Allowed, explicit, one mechanism |
 | Circular imports | Rejected at compile time | Acyclicity required for layer ordering and totality checking |
 
@@ -29,9 +29,13 @@ Modules are namespaces, not encapsulation strategies. The module system exists s
 
 ### Requirement 1: File-Module Correspondence [MUST]
 
-Each `.mvl` source file MUST correspond to exactly one module. The module name MUST be the filename without extension (e.g., `geometry.mvl` → module `geometry`). A directory module MUST have a `mod.mvl` entry file that declares which sub-modules are visible.
+Each `.mvl` source file MUST correspond to exactly one module. The module name MUST be the filename without extension (e.g., `geometry.mvl` → module `geometry`). A directory module MUST use the sibling-file pattern: `math.mvl` alongside `math/` is the entry for the `math` module (Rust 2018 style). The compiler MUST also accept `math/mod.mvl` for backward compatibility but MUST emit a deprecation warning.
 
-**Implementation:** `src/mvl/resolver/mod.rs`
+**Resolution order:**
+1. `{mod_name}.mvl` — preferred (sibling file, Rust 2018 style)
+2. `{mod_name}/mod.mvl` — deprecated; accepted with a warning
+
+**Implementation:** `src/mvl/loader.rs::find_module_file`, `src/mvl/loader.rs::stem`
 
 **Tests:** `tests/module_resolver.rs::file_module_correspondence`
 
@@ -41,11 +45,18 @@ Each `.mvl` source file MUST correspond to exactly one module. The module name M
 - WHEN the compiler resolves modules
 - THEN the module name MUST be `stats`, accessible as `math::stats`
 
-#### Scenario: Directory module entry
+#### Scenario: Directory module entry — sibling file (preferred)
 
-- GIVEN a directory `math/` with `mod.mvl` and `stats.mvl`
+- GIVEN a file `math.mvl` alongside a directory `math/` containing `stats.mvl`
+- WHEN `math.mvl` contains `pub use stats::mean;`
+- THEN `mean` MUST be accessible as `math::mean` from outside
+
+#### Scenario: Directory module entry — legacy `mod.mvl` (deprecated)
+
+- GIVEN a directory `math/` with `mod.mvl` and `stats.mvl` (no sibling `math.mvl`)
 - WHEN `mod.mvl` contains `pub use stats::mean;`
-- THEN `mean` MUST be accessible as `math::mean` from outside the directory
+- THEN `mean` MUST be accessible as `math::mean` AND the compiler MUST emit a deprecation warning
+- AND the warning MUST say: "`math/mod.mvl` is deprecated; rename to `math.mvl` alongside the `math/` directory"
 
 ### Requirement 2: Visibility [MUST]
 
@@ -134,14 +145,14 @@ A module MAY re-export items from its sub-modules using `pub use path::Item;`. R
 
 #### Scenario: Re-export from sub-module
 
-- GIVEN `mod.mvl` containing `pub use stats::mean;` and `stats.mvl` with `pub fn mean(...)`
+- GIVEN `math.mvl` containing `pub use stats::mean;` and `math/stats.mvl` with `pub fn mean(...)`
 - WHEN an external module writes `use math::mean;`
 - THEN `mean` MUST resolve to `stats::mean`
 
 #### Scenario: Re-export of private item rejected
 
-- GIVEN `stats.mvl` with `fn internal_helper() -> Int`
-- WHEN `mod.mvl` contains `pub use stats::internal_helper;`
+- GIVEN `math/stats.mvl` with `fn internal_helper() -> Int`
+- WHEN `math.mvl` contains `pub use stats::internal_helper;`
 - THEN the compiler MUST reject: "`internal_helper` is private in `stats`"
 
 ### Requirement 5: Circular Import Rejection [MUST]
@@ -254,15 +265,15 @@ total fn main() -> Int {
 
 ```
 src/
+  math.mvl          ← entry point (sibling file, Rust 2018 style)
   math/
-    mod.mvl       ← entry point, re-exports
-    stats.mvl     ← statistics functions
-    linalg.mvl    ← linear algebra
+    stats.mvl       ← statistics functions
+    linalg.mvl      ← linear algebra
   main.mvl
 ```
 
 ```mvl
-// file: src/math/mod.mvl
+// file: src/math.mvl  (entry — re-exports from sub-modules)
 pub use stats::mean;
 pub use stats::variance;
 pub use linalg::Matrix;

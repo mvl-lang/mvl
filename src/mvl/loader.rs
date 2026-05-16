@@ -135,6 +135,9 @@ pub fn collect_imported_module_names(prog: &Program) -> Vec<String> {
 
 /// Extract the file or directory stem from a path.
 /// Prefixes the stem with `mvl_` if it starts with a digit (Rust package name constraint).
+///
+/// Special case: `foo/mod.mvl` returns `"foo"` (the directory name) rather than `"mod"`,
+/// matching the Rust 2018 module naming convention where the directory gives the module name.
 pub fn stem(path: &str) -> String {
     let p = Path::new(path);
     let raw = if p.is_dir() {
@@ -143,16 +146,53 @@ pub fn stem(path: &str) -> String {
             .unwrap_or("mvl_program")
             .to_string()
     } else {
-        p.file_stem()
+        let file_stem = p
+            .file_stem()
             .and_then(|s| s.to_str())
-            .unwrap_or("mvl_program")
-            .to_string()
+            .unwrap_or("mvl_program");
+        // foo/mod.mvl → module name is "foo" (the directory), not "mod"
+        if file_stem == "mod" {
+            if let Some(dir_name) = p
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+            {
+                dir_name.to_string()
+            } else {
+                file_stem.to_string()
+            }
+        } else {
+            file_stem.to_string()
+        }
     };
     if raw.starts_with(|c: char| c.is_ascii_digit()) {
         format!("mvl_{raw}")
     } else {
         raw
     }
+}
+
+/// Locate the `.mvl` source file for a module named `mod_name` relative to `entry_dir`.
+///
+/// Resolution order (Rust 2018 style, Spec 005):
+/// 1. `{entry_dir}/{mod_name}.mvl`        — preferred (sibling file)
+/// 2. `{entry_dir}/{mod_name}/mod.mvl`    — deprecated; emits a warning and still works
+///
+/// Returns `None` if neither path exists.
+pub fn find_module_file(entry_dir: &Path, mod_name: &str) -> Option<PathBuf> {
+    let sibling = entry_dir.join(format!("{mod_name}.mvl"));
+    if sibling.exists() {
+        return Some(sibling);
+    }
+    let legacy = entry_dir.join(mod_name).join("mod.mvl");
+    if legacy.exists() {
+        eprintln!(
+            "warning: `{mod_name}/mod.mvl` is deprecated; \
+             rename to `{mod_name}.mvl` alongside the `{mod_name}/` directory"
+        );
+        return Some(legacy);
+    }
+    None
 }
 
 /// Build the implicit prelude: `core.mvl` + `strings.mvl` + `lists.mvl`.
@@ -285,6 +325,75 @@ pub fn find_pkg_bridge(progs: &[Program], project_root: &Path) -> Option<PathBuf
         }
     }
     None
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn tmpdir() -> TempDir {
+        tempfile::tempdir().expect("failed to create temp dir")
+    }
+
+    // stem: regular .mvl file
+    #[test]
+    fn stem_regular_file() {
+        assert_eq!(stem("src/geometry.mvl"), "geometry");
+        assert_eq!(stem("main.mvl"), "main");
+    }
+
+    // stem: foo/mod.mvl → "foo" (Rust 2018 module naming)
+    #[test]
+    fn stem_mod_mvl_returns_parent_dir_name() {
+        assert_eq!(stem("math/mod.mvl"), "math");
+        assert_eq!(stem("src/utils/mod.mvl"), "utils");
+    }
+
+    // stem: bare mod.mvl with no directory → "mod" (no parent to derive from)
+    #[test]
+    fn stem_bare_mod_mvl() {
+        assert_eq!(stem("mod.mvl"), "mod");
+    }
+
+    // find_module_file: sibling .mvl preferred
+    #[test]
+    fn find_module_file_prefers_sibling() {
+        let dir = tmpdir();
+        let sibling = dir.path().join("math.mvl");
+        let legacy = dir.path().join("math").join("mod.mvl");
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(&sibling, "").unwrap();
+        fs::write(&legacy, "").unwrap();
+
+        let found = find_module_file(dir.path(), "math").expect("should find a file");
+        assert_eq!(
+            found, sibling,
+            "sibling .mvl must be preferred over mod.mvl"
+        );
+    }
+
+    // find_module_file: falls back to mod.mvl when no sibling exists
+    #[test]
+    fn find_module_file_falls_back_to_mod_mvl() {
+        let dir = tmpdir();
+        let legacy = dir.path().join("math").join("mod.mvl");
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(&legacy, "").unwrap();
+
+        let found = find_module_file(dir.path(), "math").expect("should find mod.mvl");
+        assert_eq!(found, legacy);
+    }
+
+    // find_module_file: returns None when neither exists
+    #[test]
+    fn find_module_file_returns_none_when_absent() {
+        let dir = tmpdir();
+        assert!(find_module_file(dir.path(), "missing").is_none());
+    }
 }
 
 /// Load stdlib prelude files for all `use std.X` declarations found in `progs`.

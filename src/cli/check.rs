@@ -154,11 +154,10 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
                 if already_loaded.contains(&mod_name) {
                     continue;
                 }
-                let sib_path = entry_dir.join(format!("{mod_name}.mvl"));
-                if sib_path.exists() {
-                    let sib_str = sib_path.display().to_string();
-                    let (sib_prog, sib_src) = super::parse_or_exit(&sib_str);
-                    parsed.push((sib_str, sib_prog, sib_src));
+                if let Some(mod_path) = loader::find_module_file(entry_dir, &mod_name) {
+                    let mod_str = mod_path.display().to_string();
+                    let (sib_prog, sib_src) = super::parse_or_exit(&mod_str);
+                    parsed.push((mod_str, sib_prog, sib_src));
                 }
             }
         }
