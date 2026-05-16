@@ -4,6 +4,14 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.115.0] — 2026-05-16
+
+### Added
+
+- **std.net TCP stdlib** (#779) — TcpListener and TcpStream types with tcp_listen, tcp_connect, tcp_accept, tcp_read, tcp_write, tcp_listener_port, and close functions; implemented for both Rust transpiler and LLVM backends via C-ABI FFI; includes error handling for bind failures, connection refusal, and invalid addresses; cross-backend integration test using actor spawn.
+
+---
+
 ## [0.114.0] — 2026-05-15
 
 ### Added
