@@ -60,7 +60,8 @@
 
 // std/config.mvl — load_config
 //   The FileRead boundary (open, read) is an OS builtin and stays trusted.
-//   The TOML and JSON parsers are pure computation and can become proven MVL
-//   once a verified string/byte model exists (#314). Until then the entire
-//   function delegates to the Rust runtime.
-//   Blocked on: verified string/byte model (#314)
+//   The TOML parser is pure computation; a proven MVL implementation can follow
+//   the same pattern as std/json.mvl (which is already 100% pure MVL).
+//   The JSON branch of load_config can delegate to std.json directly once
+//   the config module is refactored to use it.
+//   Blocked on: refactor to use std.json for JSON parsing; write TOML parser in MVL
