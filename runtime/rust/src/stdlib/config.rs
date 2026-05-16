@@ -111,14 +111,9 @@ fn resolve_path(path: Option<&str>) -> Result<PathBuf, ConfigError> {
     match path {
         // Absolute path: use directly
         Some(p) if Path::new(p).is_absolute() => {
-            let pb = PathBuf::from(p);
-            if pb.exists() {
-                Ok(pb)
-            } else {
-                Err(ConfigError::FileNotFound {
-                    path: p.to_string(),
-                })
-            }
+            std::fs::canonicalize(p).map_err(|_| ConfigError::FileNotFound {
+                path: p.to_string(),
+            })
         }
         // Relative or None: search XDG then local
         Some(p) => {
@@ -153,8 +148,8 @@ fn resolve_path(path: Option<&str>) -> Result<PathBuf, ConfigError> {
 
 fn find_first_existing(candidates: &[PathBuf]) -> Result<PathBuf, ConfigError> {
     for c in candidates {
-        if c.exists() {
-            return Ok(c.clone());
+        if let Ok(canonical) = std::fs::canonicalize(c) {
+            return Ok(canonical);
         }
     }
     let last = candidates
