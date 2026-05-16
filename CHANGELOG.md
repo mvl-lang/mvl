@@ -4,6 +4,20 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.121.0] — 2026-05-16
+
+### Added
+- **`pkg.sqlite`**: embedded SQLite driver with `std.db` types, `Open`/`Query`/`Execute` effects, refinement-typed API, and `examples/sqlite_basic` (#785)
+- **Cross-module refinement checking**: `check_refinements` now scans prelude programs so calls to package functions with `where` clauses are fully verified
+- **Cross-module IFC boundary detection**: IFC pass recognises prelude functions with labeled params called from user code, enabling 11/11 assurance for sqlite example
+- **`RefinementCounts.fn_total`/`fully_verified_fns`**: accurate per-function verification statistics
+
+### Fixed
+- Assurance Req 9/10/11 summary rows now use prover verdict detail strings, eliminating mismatch between summary table and Prover Verdicts section
+- `mvl assurance` loads `pkg.*` modules to resolve types (mirrors `mvl check`)
+- `mvl test` uses stable `CARGO_TARGET_DIR` per source path to avoid recompilation on every run
+- `cross_backend_net_basic` marked `#[ignore]` pending actor concurrency fix (#826)
+
 ## [0.120.0] — 2026-05-16
 
 ### Added
