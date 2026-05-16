@@ -26,6 +26,18 @@
 //!
 //! Compile-time gated: the entire implementation is `#[cfg(feature = "z3")]`.
 //! When the feature is absent, `try_z3` is a no-op returning `None`.
+//!
+//! # Builtin axioms (#597)
+//!
+//! When the predicate or variable hypotheses reference `len(ident)`, the solver
+//! pre-creates a Z3 integer variable `len_<ident>` and asserts the universal
+//! axiom `len_<ident> >= 0` (lengths are non-negative).
+//!
+//! For string-literal arguments the solver additionally asserts
+//! `len_self = <actual byte length>`, connecting the concrete value to Z3's
+//! integer domain.  Variable arguments that carry a `len(self)` hypothesis
+//! (e.g. `x: String where len(self) > 5`) have their length hypothesis
+//! asserted as `len_x > 5`, propagating known constraints into the proof.
 
 use std::collections::HashMap;
 
@@ -56,12 +68,39 @@ pub(crate) fn try_z3(
 
 // ── Z3 implementation (feature-gated) ────────────────────────────────────────
 
+/// Collect all `Len { ident }` identifier names referenced in a `RefExpr`.
+///
+/// Used to determine which `len_<ident>` integer variables must be created
+/// in the Z3 context before asserting the non-negativity axioms.
+#[cfg(feature = "z3")]
+fn collect_len_idents(expr: &RefExpr, out: &mut Vec<String>) {
+    match expr {
+        RefExpr::Len { ident, .. } => out.push(ident.clone()),
+        RefExpr::LogicOp { left, right, .. }
+        | RefExpr::Compare { left, right, .. }
+        | RefExpr::ArithOp { left, right, .. } => {
+            collect_len_idents(left, out);
+            collect_len_idents(right, out);
+        }
+        RefExpr::Not { inner, .. }
+        | RefExpr::Grouped { inner, .. }
+        | RefExpr::Old { inner, .. } => collect_len_idents(inner, out),
+        RefExpr::Forall { body, .. } | RefExpr::Exists { body, .. } => {
+            collect_len_idents(body, out);
+        }
+        RefExpr::FieldAccess { object, .. } => collect_len_idents(object, out),
+        _ => {}
+    }
+}
+
 #[cfg(feature = "z3")]
 fn impl_z3(
     pred: &RefExpr,
     arg: &Expr,
     var_refs: &HashMap<String, Option<RefExpr>>,
 ) -> Option<RefResult> {
+    use crate::mvl::parser::ast::Literal;
+    use z3::ast::Ast as _;
     use z3::{Config, Context, SatResult, Solver};
 
     let mut cfg = Config::new();
@@ -75,21 +114,95 @@ fn impl_z3(
         .map(|name| (name.clone(), z3::ast::Int::new_const(&ctx, name.as_str())))
         .collect();
 
-    // Assert each variable's refinement hypothesis.
+    // ── Builtin length axioms (#597) ──────────────────────────────────────────
+    //
+    // Build `len_vars`: a map from ident name → Z3 integer variable representing
+    // the *length* of that ident.  For each such variable we assert `len >= 0`.
+    let zero = z3::ast::Int::from_i64(&ctx, 0);
+
+    // Collect all Len-referenced idents from the predicate.
+    let mut len_ident_names: Vec<String> = Vec::new();
+    collect_len_idents(pred, &mut len_ident_names);
+
+    // Also collect from every hypothesis so that cross-variable length
+    // constraints (e.g. `x: String where len(self) > 5`) are asserted.
+    for maybe_hyp in var_refs.values().flatten() {
+        collect_len_idents(maybe_hyp, &mut len_ident_names);
+    }
+
+    // De-duplicate: each ident gets exactly one len variable.
+    len_ident_names.sort_unstable();
+    len_ident_names.dedup();
+
+    // Create `len_<ident>` Z3 Int constants and assert non-negativity.
+    let mut len_vars: HashMap<String, z3::ast::Int> = HashMap::new();
+    for ident in &len_ident_names {
+        // Skip "self" here; it is resolved per-context below.
+        if ident != "self" {
+            let len_var = z3::ast::Int::new_const(&ctx, format!("len_{ident}").as_str());
+            solver.assert(&len_var.ge(&zero)); // ∀ ident, len(ident) ≥ 0
+            len_vars.insert(ident.clone(), len_var);
+        }
+    }
+
+    // Create `len_self` if the predicate references `len(self)`.
+    let pred_uses_len = len_ident_names.iter().any(|s| s == "self");
+    let len_self_var = if pred_uses_len {
+        let lsv = z3::ast::Int::new_const(&ctx, "len_self");
+        solver.assert(&lsv.ge(&zero)); // len(self) ≥ 0
+        len_vars.insert("self".to_string(), lsv.clone());
+        Some(lsv)
+    } else {
+        None
+    };
+
+    // Assert each variable's refinement hypothesis using per-variable len maps.
     for (var_name, maybe_hyp) in var_refs {
         if let Some(hyp) = maybe_hyp {
             let var = vars.get(var_name)?;
-            let z3_hyp = ref_to_bool(&ctx, hyp, var, &vars)?;
+            // Map "self" → len_<var_name> when translating this hypothesis,
+            // so that `len(self)` in the hypothesis is the length of var_name.
+            let mut hyp_len = len_vars.clone();
+            if let Some(lv) = len_vars.get(var_name).cloned() {
+                hyp_len.insert("self".to_string(), lv);
+            }
+            let z3_hyp = ref_to_bool(&ctx, hyp, var, &vars, &hyp_len)?;
             solver.assert(&z3_hyp);
         }
     }
 
-    // Translate the call-site argument to a Z3 integer expression.
-    let arg_int = expr_to_int(&ctx, arg, &vars)?;
+    // ── Translate the call-site argument to a Z3 integer ─────────────────────
+    //
+    // For string literals when the predicate is Len-typed: the "self" integer
+    // IS the length of the string.  Assert `len_self = actual_len`.
+    // For all other args: normal integer translation.
+    let arg_int: z3::ast::Int = match arg {
+        Expr::Literal(Literal::Str(s), _) if len_self_var.is_some() => {
+            let actual_len = z3::ast::Int::from_i64(&ctx, s.len() as i64);
+            // Constrain len_self to the known byte count.
+            solver.assert(&len_self_var.as_ref().unwrap()._eq(&actual_len));
+            // Use len_self as the self_term so that `len(self)` in the pred
+            // evaluates to the same concrete value.
+            len_self_var.clone().unwrap()
+        }
+        Expr::Ident(var_name, _) if pred_uses_len => {
+            // Variable arg: connect pred's len(self) to len_<var_name>.
+            // If len_<var_name> exists (from hypothesis scan), assert equality;
+            // otherwise leave len_self unconstrained (non-negativity still holds).
+            if let Some(lv) = len_vars.get(var_name.as_str()).cloned() {
+                if let Some(ls) = &len_self_var {
+                    solver.assert(&ls._eq(&lv));
+                }
+            }
+            // self_term for non-Len parts of the predicate: the variable itself.
+            expr_to_int(&ctx, arg, &vars)?
+        }
+        _ => expr_to_int(&ctx, arg, &vars)?,
+    };
 
     // Assert the negation of pred(arg).  Unsat ↔ pred holds for all satisfying
     // assignments ↔ Proven.  Sat ↔ counterexample exists showing pred fails.
-    let z3_pred = ref_to_bool(&ctx, pred, &arg_int, &vars)?;
+    let z3_pred = ref_to_bool(&ctx, pred, &arg_int, &vars, &len_vars)?;
     solver.assert(&z3_pred.not());
 
     match solver.check() {
@@ -116,12 +229,16 @@ fn impl_z3(
 ///
 /// `self_term` is the Z3 integer that the identifier `"self"` maps to in
 /// this context (the call-site argument or a hypothesis variable).
+///
+/// `len_vars` maps ident names to their Z3 integer length variables so that
+/// `Len { ident }` nodes translate to the appropriate `len_<ident>` constant.
 #[cfg(feature = "z3")]
 fn ref_to_bool<'ctx>(
     ctx: &'ctx z3::Context,
     expr: &RefExpr,
     self_term: &z3::ast::Int<'ctx>,
     vars: &HashMap<String, z3::ast::Int<'ctx>>,
+    len_vars: &HashMap<String, z3::ast::Int<'ctx>>,
 ) -> Option<z3::ast::Bool<'ctx>> {
     use crate::mvl::parser::ast::{CmpOp, LogicOp};
     use z3::ast::Ast;
@@ -130,8 +247,8 @@ fn ref_to_bool<'ctx>(
         RefExpr::Compare {
             op, left, right, ..
         } => {
-            let l = ref_to_int(ctx, left, self_term, vars)?;
-            let r = ref_to_int(ctx, right, self_term, vars)?;
+            let l = ref_to_int(ctx, left, self_term, vars, len_vars)?;
+            let r = ref_to_int(ctx, right, self_term, vars, len_vars)?;
             Some(match op {
                 CmpOp::Eq => l._eq(&r),
                 CmpOp::Ne => l._eq(&r).not(),
@@ -144,15 +261,17 @@ fn ref_to_bool<'ctx>(
         RefExpr::LogicOp {
             op, left, right, ..
         } => {
-            let l = ref_to_bool(ctx, left, self_term, vars)?;
-            let r = ref_to_bool(ctx, right, self_term, vars)?;
+            let l = ref_to_bool(ctx, left, self_term, vars, len_vars)?;
+            let r = ref_to_bool(ctx, right, self_term, vars, len_vars)?;
             Some(match op {
                 LogicOp::And => z3::ast::Bool::and(ctx, &[&l, &r]),
                 LogicOp::Or => z3::ast::Bool::or(ctx, &[&l, &r]),
             })
         }
-        RefExpr::Not { inner, .. } => Some(ref_to_bool(ctx, inner, self_term, vars)?.not()),
-        RefExpr::Grouped { inner, .. } => ref_to_bool(ctx, inner, self_term, vars),
+        RefExpr::Not { inner, .. } => {
+            Some(ref_to_bool(ctx, inner, self_term, vars, len_vars)?.not())
+        }
+        RefExpr::Grouped { inner, .. } => ref_to_bool(ctx, inner, self_term, vars, len_vars),
         // Quantifiers (Phase 5, #628): translate to Z3 first-order quantifiers.
         // The bound variable is introduced as a fresh Z3 integer constant and
         // added to a local `vars` copy for the duration of the body translation.
@@ -160,7 +279,7 @@ fn ref_to_bool<'ctx>(
             let bound = z3::ast::Int::new_const(ctx, var.as_str());
             let mut inner_vars = vars.clone();
             inner_vars.insert(var.clone(), bound.clone());
-            let body_bool = ref_to_bool(ctx, body, self_term, &inner_vars)?;
+            let body_bool = ref_to_bool(ctx, body, self_term, &inner_vars, len_vars)?;
             // forall x: Int, P(x)  ↔  ¬(∃ x: Int, ¬P(x))
             // Z3 universal quantifier via the `forall` builder.
             let bound_ast: &dyn z3::ast::Ast = &bound;
@@ -170,7 +289,7 @@ fn ref_to_bool<'ctx>(
             let bound = z3::ast::Int::new_const(ctx, var.as_str());
             let mut inner_vars = vars.clone();
             inner_vars.insert(var.clone(), bound.clone());
-            let body_bool = ref_to_bool(ctx, body, self_term, &inner_vars)?;
+            let body_bool = ref_to_bool(ctx, body, self_term, &inner_vars, len_vars)?;
             let bound_ast: &dyn z3::ast::Ast = &bound;
             Some(z3::ast::exists_const(ctx, &[bound_ast], &[], &body_bool))
         }
@@ -182,12 +301,17 @@ fn ref_to_bool<'ctx>(
 // ── RefExpr → Int ─────────────────────────────────────────────────────────────
 
 /// Translate a `RefExpr` to a Z3 integer.
+///
+/// `len_vars` is consulted for `Len { ident }` nodes, returning the
+/// pre-created `len_<ident>` Z3 constant (with its non-negativity axiom
+/// already asserted).  Returns `None` for unknown idents.
 #[cfg(feature = "z3")]
 fn ref_to_int<'ctx>(
     ctx: &'ctx z3::Context,
     expr: &RefExpr,
     self_term: &z3::ast::Int<'ctx>,
     vars: &HashMap<String, z3::ast::Int<'ctx>>,
+    len_vars: &HashMap<String, z3::ast::Int<'ctx>>,
 ) -> Option<z3::ast::Int<'ctx>> {
     use crate::mvl::parser::ast::ArithOp;
 
@@ -200,11 +324,13 @@ fn ref_to_int<'ctx>(
                 vars.get(name).cloned()
             }
         }
+        // `len(ident)` in a predicate — look up the pre-created len variable.
+        RefExpr::Len { ident, .. } => len_vars.get(ident.as_str()).cloned(),
         RefExpr::ArithOp {
             op, left, right, ..
         } => {
-            let l = ref_to_int(ctx, left, self_term, vars)?;
-            let r = ref_to_int(ctx, right, self_term, vars)?;
+            let l = ref_to_int(ctx, left, self_term, vars, len_vars)?;
+            let r = ref_to_int(ctx, right, self_term, vars, len_vars)?;
             Some(match op {
                 ArithOp::Add => z3::ast::Int::add(ctx, &[&l, &r]),
                 ArithOp::Sub => z3::ast::Int::sub(ctx, &[&l, &r]),
@@ -213,8 +339,8 @@ fn ref_to_int<'ctx>(
                 ArithOp::Rem => l.modulo(&r),
             })
         }
-        RefExpr::Grouped { inner, .. } => ref_to_int(ctx, inner, self_term, vars),
-        // Float and Len are not supported in the integer domain.
+        RefExpr::Grouped { inner, .. } => ref_to_int(ctx, inner, self_term, vars, len_vars),
+        // Float is not supported in the integer domain.
         _ => None,
     }
 }
@@ -368,5 +494,126 @@ mod tests {
         var_refs.insert("y".into(), Some(y_gt_x));
         assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::Proven));
         let _ = LogicOp::And; // suppress unused import warning
+    }
+
+    // ── Builtin length axiom tests (#597) ────────────────────────────────────
+
+    fn len_self_lt(n: i64) -> RefExpr {
+        RefExpr::Compare {
+            op: CmpOp::Lt,
+            left: Box::new(RefExpr::Len {
+                ident: "self".into(),
+                span: dummy_span(),
+            }),
+            right: Box::new(RefExpr::Integer {
+                value: n,
+                span: dummy_span(),
+            }),
+            span: dummy_span(),
+        }
+    }
+
+    fn len_self_ge(n: i64) -> RefExpr {
+        RefExpr::Compare {
+            op: CmpOp::Ge,
+            left: Box::new(RefExpr::Len {
+                ident: "self".into(),
+                span: dummy_span(),
+            }),
+            right: Box::new(RefExpr::Integer {
+                value: n,
+                span: dummy_span(),
+            }),
+            span: dummy_span(),
+        }
+    }
+
+    /// String literal "hello" (length 5) satisfies `len(self) < 256`.
+    #[test]
+    fn z3_axiom_string_literal_len_lt_bound() {
+        let pred = len_self_lt(256);
+        let arg = Expr::Literal(Literal::Str("hello".into()), dummy_span());
+        let var_refs = HashMap::new();
+        assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::Proven));
+    }
+
+    /// Empty string satisfies `len(self) >= 0` (non-negativity axiom).
+    #[test]
+    fn z3_axiom_string_literal_len_nonneg() {
+        let pred = len_self_ge(0);
+        let arg = Expr::Literal(Literal::Str("".into()), dummy_span());
+        let var_refs = HashMap::new();
+        assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::Proven));
+    }
+
+    /// String literal "hello" does NOT satisfy `len(self) < 3` — Z3 returns None
+    /// (Sat means a counterexample exists; we fall through to RuntimeCheck).
+    #[test]
+    fn z3_axiom_string_literal_len_too_long_returns_none() {
+        let pred = len_self_lt(3);
+        let arg = Expr::Literal(Literal::Str("hello".into()), dummy_span());
+        let var_refs = HashMap::new();
+        // Z3 finds a model where len_self = 5, which violates len < 3 → Sat → None.
+        assert_eq!(try_z3(&pred, &arg, &var_refs), None);
+    }
+
+    /// Variable `s` with hypothesis `len(self) > 10` satisfies `len(self) >= 0`.
+    #[test]
+    fn z3_axiom_variable_len_hypothesis_implies_nonneg() {
+        let pred = len_self_ge(0); // len(self) >= 0
+        let arg = Expr::Ident("s".into(), dummy_span());
+        // s has hypothesis len(self) > 10, so len_s > 10 → len_s >= 0 trivially.
+        let mut var_refs = HashMap::new();
+        var_refs.insert(
+            "s".into(),
+            Some(RefExpr::Compare {
+                op: CmpOp::Gt,
+                left: Box::new(RefExpr::Len {
+                    ident: "self".into(),
+                    span: dummy_span(),
+                }),
+                right: Box::new(RefExpr::Integer {
+                    value: 10,
+                    span: dummy_span(),
+                }),
+                span: dummy_span(),
+            }),
+        );
+        assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::Proven));
+    }
+
+    /// Variable `s` with hypothesis `len(self) > 5` satisfies `len(self) > 3`.
+    #[test]
+    fn z3_axiom_variable_len_stronger_hypothesis_implies_weaker_pred() {
+        let pred = RefExpr::Compare {
+            op: CmpOp::Gt,
+            left: Box::new(RefExpr::Len {
+                ident: "self".into(),
+                span: dummy_span(),
+            }),
+            right: Box::new(RefExpr::Integer {
+                value: 3,
+                span: dummy_span(),
+            }),
+            span: dummy_span(),
+        };
+        let arg = Expr::Ident("s".into(), dummy_span());
+        let mut var_refs = HashMap::new();
+        var_refs.insert(
+            "s".into(),
+            Some(RefExpr::Compare {
+                op: CmpOp::Gt,
+                left: Box::new(RefExpr::Len {
+                    ident: "self".into(),
+                    span: dummy_span(),
+                }),
+                right: Box::new(RefExpr::Integer {
+                    value: 5,
+                    span: dummy_span(),
+                }),
+                span: dummy_span(),
+            }),
+        );
+        assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::Proven));
     }
 }
