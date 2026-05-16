@@ -93,7 +93,7 @@ fn bind_params(db: Int, params: List[Value]) -> Unit {
     }
 }
 
-fn read_cell(rh: Int, row: Int, col: Int) -> Value {
+fn read_cell(rh: Int, row: Int where row >= 0, col: Int where col >= 0) -> Value {
     match sqlite_result_cell_type(rh, row, col) {
         0 => Value::Null,
         1 => Value::Bool(sqlite_result_cell_bool(rh, row, col)),
@@ -148,8 +148,10 @@ pub fn open(path: String) -> Result[SqliteDb, SqliteError] ! DB + FileRead + Fil
 
 /// Execute a write statement (INSERT, UPDATE, DELETE, CREATE, DROP).
 ///
+/// `sql` must be a trusted string literal or validated query — use `?`
+/// placeholders and `params` for untrusted values (prevents SQL injection).
 /// Returns the number of rows affected.
-pub fn execute(db: SqliteDb, sql: String, params: List[Value]) -> Result[Int, SqliteError] ! DB {
+pub fn execute(val db: SqliteDb, sql: Clean[String], params: List[Value]) -> Result[Int, SqliteError] ! DB {
     bind_params(db._handle, params);
     let affected: Int = sqlite_execute(db._handle, sql);
     if affected == -1 {
@@ -160,7 +162,9 @@ pub fn execute(db: SqliteDb, sql: String, params: List[Value]) -> Result[Int, Sq
 }
 
 /// Run a SELECT query and return all matching rows.
-pub partial fn query(db: SqliteDb, sql: String, params: List[Value]) -> Result[List[Map[String, Value]], SqliteError] ! DB {
+///
+/// `sql` must be a trusted string — use `?` placeholders for runtime values.
+pub partial fn query(val db: SqliteDb, sql: Clean[String], params: List[Value]) -> Result[List[Map[String, Value]], SqliteError] ! DB {
     bind_params(db._handle, params);
     let rh: Int = sqlite_query(db._handle, sql);
     if rh == -1 {

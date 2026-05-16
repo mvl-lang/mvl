@@ -18,6 +18,9 @@ use std::sync::{Mutex, OnceLock};
 
 use rusqlite::types::{Value as RValue, ValueRef};
 
+#[repr(transparent)]
+pub struct Clean<T>(pub T);
+
 // ── Internal value type ───────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -220,7 +223,7 @@ pub extern "Rust" fn sqlite_param_blob(db: i64, v: String) {
 // ── Execute ───────────────────────────────────────────────────────────────────
 
 #[no_mangle]
-pub extern "Rust" fn sqlite_execute(db: i64, sql: String) -> i64 {
+pub extern "Rust" fn sqlite_execute(db: i64, sql: Clean<String>) -> i64 {
     let params: Vec<RValue> = param_bufs()
         .lock()
         .unwrap()
@@ -235,7 +238,7 @@ pub extern "Rust" fn sqlite_execute(db: i64, sql: String) -> i64 {
         let Some(conn) = guard.get(&db) else {
             return -1;
         };
-        conn.execute(&sql, rusqlite::params_from_iter(params.iter()))
+        conn.execute(&sql.0, rusqlite::params_from_iter(params.iter()))
             .map(|n| n as i64)
             .map_err(|e| classify(&e))
     };
@@ -252,7 +255,7 @@ pub extern "Rust" fn sqlite_execute(db: i64, sql: String) -> i64 {
 // ── Query ─────────────────────────────────────────────────────────────────────
 
 #[no_mangle]
-pub extern "Rust" fn sqlite_query(db: i64, sql: String) -> i64 {
+pub extern "Rust" fn sqlite_query(db: i64, sql: Clean<String>) -> i64 {
     let params: Vec<RValue> = param_bufs()
         .lock()
         .unwrap()
@@ -267,7 +270,7 @@ pub extern "Rust" fn sqlite_query(db: i64, sql: String) -> i64 {
         let conn = guard
             .get(&db)
             .ok_or_else(|| (4i64, "invalid db handle".to_string()))?;
-        let mut stmt = conn.prepare(&sql).map_err(|e| classify(&e))?;
+        let mut stmt = conn.prepare(&sql.0).map_err(|e| classify(&e))?;
         let col_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
         let n_cols = col_names.len();
         let mut rows: Vec<Vec<SqliteVal>> = Vec::new();

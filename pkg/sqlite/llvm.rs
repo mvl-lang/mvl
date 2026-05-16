@@ -36,6 +36,9 @@ use std::sync::{Mutex, OnceLock};
 
 use rusqlite::types::{Value as RValue, ValueRef};
 
+#[repr(transparent)]
+pub struct Clean<T>(pub T);
+
 // ── MvlString (mirrored from runtime/llvm/src/memory.rs) ─────────────────────
 
 #[repr(C)]
@@ -270,8 +273,8 @@ pub unsafe extern "C" fn sqlite_param_blob(db: i64, v: *const MvlString) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn sqlite_execute(db: i64, sql: *const MvlString) -> i64 {
-    let sql_str = unsafe { read_str(sql) };
+pub unsafe extern "C" fn sqlite_execute(db: i64, sql: Clean<*const MvlString>) -> i64 {
+    let sql_str = unsafe { read_str(sql.0) };
     let params: Vec<RValue> = param_bufs()
         .lock()
         .unwrap()
@@ -294,8 +297,8 @@ pub unsafe extern "C" fn sqlite_execute(db: i64, sql: *const MvlString) -> i64 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn sqlite_query(db: i64, sql: *const MvlString) -> i64 {
-    let sql_str = unsafe { read_str(sql) };
+pub unsafe extern "C" fn sqlite_query(db: i64, sql: Clean<*const MvlString>) -> i64 {
+    let sql_str = unsafe { read_str(sql.0) };
     let params: Vec<RValue> = param_bufs()
         .lock()
         .unwrap()

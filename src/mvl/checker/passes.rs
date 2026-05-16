@@ -341,16 +341,23 @@ impl VerificationPass for IFCPass {
 
         // Determine whether the program has any labeled types — if not, there
         // is nothing to prove and the pass is vacuously clean.
-        let has_labeled = prog.declarations.iter().any(|d| {
-            if let crate::mvl::parser::ast::Decl::Fn(fd) = d {
-                fd.params
-                    .iter()
-                    .any(|p| ifc::label_of(&crate::mvl::checker::types::resolve(&p.ty)).is_some())
-                    || ifc::label_of(&crate::mvl::checker::types::resolve(&fd.return_type))
-                        .is_some()
-            } else {
-                false
-            }
+        // Checks both fn and extern fn declarations so that packages that
+        // declare IFC-typed FFI boundaries are recognised.
+        let fn_has_label = |params: &[crate::mvl::parser::ast::Param],
+                            ret: &crate::mvl::parser::ast::TypeExpr|
+         -> bool {
+            params
+                .iter()
+                .any(|p| ifc::label_of(&crate::mvl::checker::types::resolve(&p.ty)).is_some())
+                || ifc::label_of(&crate::mvl::checker::types::resolve(ret)).is_some()
+        };
+        let has_labeled = prog.declarations.iter().any(|d| match d {
+            crate::mvl::parser::ast::Decl::Fn(fd) => fn_has_label(&fd.params, &fd.return_type),
+            crate::mvl::parser::ast::Decl::Extern(ed) => ed
+                .fns
+                .iter()
+                .any(|ef| fn_has_label(&ef.params, &ef.return_type)),
+            _ => false,
         });
 
         if has_labeled {
@@ -558,9 +565,19 @@ pub fn aggregate_verdicts(per_file: &[[Verdict; 12]]) -> [Verdict; 12] {
             return (*failed).clone();
         }
 
-        // All proven → Proven
+        // All proven → Proven (use first evidence)
         if verdicts_for_req.iter().all(|v| v.is_proven()) {
             return verdicts_for_req[0].clone();
+        }
+
+        // Any proven + rest unchecked → Proven (requirement is satisfied by
+        // the files that use it; unchecked files are vacuously compliant)
+        let any_proven = verdicts_for_req.iter().any(|v| v.is_proven());
+        let all_non_failed = verdicts_for_req.iter().all(|v| !v.is_failed());
+        if any_proven && all_non_failed {
+            if let Some(proven) = verdicts_for_req.iter().find(|v| v.is_proven()) {
+                return (*proven).clone();
+            }
         }
 
         // First unchecked reason
@@ -1084,6 +1101,30 @@ fn alias_iso(channel: Channel, iso x: Payload) -> Unit {
         assert!(
             agg[9].is_proven(),
             "two Proven verdicts should aggregate to Proven, got: {:?}",
+            agg[9]
+        );
+    }
+
+    #[test]
+    fn aggregate_verdicts_proven_plus_unchecked_yields_proven() {
+        // GIVEN: two files — one where req 9 is Proven, one where it is Unchecked
+        // THEN: aggregate is Proven (the proven file satisfies the requirement;
+        //       the unchecked file is vacuously compliant)
+        use std::array;
+        let proven: [Verdict; 12] = array::from_fn(|i| {
+            if i == 9 {
+                Verdict::Proven {
+                    evidence: "proven".to_string(),
+                }
+            } else {
+                Verdict::default()
+            }
+        });
+        let unchecked: [Verdict; 12] = array::from_fn(|_| Verdict::default());
+        let agg = aggregate_verdicts(&[proven, unchecked]);
+        assert!(
+            agg[9].is_proven(),
+            "Proven + Unchecked should aggregate to Proven, got: {:?}",
             agg[9]
         );
     }
