@@ -1,5 +1,5 @@
 # pkg/sqlite — SQLite embedded database driver Makefile
-.PHONY: help guard-mvl check test clean
+.PHONY: help guard-mvl check test assurance clean
 
 .DEFAULT_GOAL := help
 
@@ -21,8 +21,13 @@ guard-mvl: ## Validate MVL binary is present
 check: guard-mvl ## Type-check package source files
 	$(MVL) check $(DIR)src/
 
-test: guard-mvl ## Run inline tests
+test: guard-mvl ## Run inline tests (blob_to_wire / wire_to_blob unit tests)
 	$(MVL) test $(DIR)src/
+
+assurance: guard-mvl ## Full assurance: check + tests + assurance report
+	$(MVL) check $(DIR)src/
+	$(MVL) test $(DIR)src/
+	$(MVL) assurance $(DIR)src/ --verbose
 
 clean: ## Remove build artifacts
 	rm -rf $(TMPDIR)mvl_build_sqlite
