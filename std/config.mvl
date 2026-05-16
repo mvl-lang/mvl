@@ -16,6 +16,10 @@
 //!
 //! File format detected from extension (.toml default, .json supported).
 //! IFC: config file content is untrusted — use sanitize() before sensitive use.
+//!
+//! Security: path resolution uses canonicalize() to eliminate the TOCTOU race
+//! between existence check and open. Relative paths with '..' are rejected.
+//! Symlinks are resolved before the file is read.
 
 // ── Error type ────────────────────────────────────────────────────────────────
 

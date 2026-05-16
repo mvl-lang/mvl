@@ -85,6 +85,13 @@ pub fn load_config(path: Option<String>, prefix: String) -> Result<ConfigValue, 
 /// If `path` is Some and absolute, it is used directly.
 /// If `path` is Some and relative, it is searched through XDG + local dirs.
 /// If `path` is None, searches XDG then local `./config.toml`.
+///
+/// # Security
+/// Path existence is confirmed via `std::fs::canonicalize` rather than
+/// a separate `exists()` check followed by `open`. This eliminates the
+/// TOCTOU (time-of-check/time-of-use) race where a symlink could be swapped
+/// between the check and the open. `canonicalize` resolves symlinks and
+/// verifies existence atomically — the returned path is the real inode.
 fn resolve_path(path: Option<&str>) -> Result<PathBuf, ConfigError> {
     let xdg_home = std::env::var("XDG_CONFIG_HOME")
         .ok()
