@@ -26,7 +26,7 @@
 
 extern "rust" {
     // ── Connection ──────────────────────────────────────────────────────────
-    fn sqlite_open(path: String) -> Int
+    fn sqlite_open(path: Clean[String]) -> Int
     fn sqlite_close(db: Int) -> Unit
     fn sqlite_errmsg(db: Int) -> String
     fn sqlite_errno(db: Int) -> Int

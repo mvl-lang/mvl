@@ -571,10 +571,11 @@ pub fn aggregate_verdicts(per_file: &[[Verdict; 12]]) -> [Verdict; 12] {
         }
 
         // Any proven + rest unchecked → Proven (requirement is satisfied by
-        // the files that use it; unchecked files are vacuously compliant)
+        // the files that use it; unchecked files are vacuously compliant).
+        // Note: failed verdicts are already handled by the early-return above,
+        // so any_proven here implies all_non_failed.
         let any_proven = verdicts_for_req.iter().any(|v| v.is_proven());
-        let all_non_failed = verdicts_for_req.iter().all(|v| !v.is_failed());
-        if any_proven && all_non_failed {
+        if any_proven {
             if let Some(proven) = verdicts_for_req.iter().find(|v| v.is_proven()) {
                 return (*proven).clone();
             }

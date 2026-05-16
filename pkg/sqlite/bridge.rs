@@ -61,6 +61,13 @@ fn results() -> &'static Mutex<HashMap<i64, QueryResult>> {
     R.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Maps each db handle to the result handles it has produced.
+/// Used by sqlite_close to drop all outstanding results when a connection closes.
+fn db_results() -> &'static Mutex<HashMap<i64, Vec<i64>>> {
+    static D: OnceLock<Mutex<HashMap<i64, Vec<i64>>>> = OnceLock::new();
+    D.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 fn errors() -> &'static Mutex<HashMap<i64, (i64, String)>> {
     static E: OnceLock<Mutex<HashMap<i64, (i64, String)>>> = OnceLock::new();
     E.get_or_init(|| Mutex::new(HashMap::new()))
@@ -131,8 +138,8 @@ fn from_ref(vr: ValueRef<'_>) -> SqliteVal {
 // ── Connection ────────────────────────────────────────────────────────────────
 
 #[no_mangle]
-pub extern "Rust" fn sqlite_open(path: String) -> i64 {
-    match rusqlite::Connection::open(&path) {
+pub extern "Rust" fn sqlite_open(path: Clean<String>) -> i64 {
+    match rusqlite::Connection::open(&path.0) {
         Ok(conn) => {
             let h = next_handle();
             connections().lock().unwrap().insert(h, conn);
@@ -150,6 +157,14 @@ pub extern "Rust" fn sqlite_close(db: i64) {
     connections().lock().unwrap().remove(&db);
     param_bufs().lock().unwrap().remove(&db);
     errors().lock().unwrap().remove(&db);
+    // Drop any result handles produced by this connection that were never
+    // explicitly released via sqlite_result_drop.
+    if let Some(rhs) = db_results().lock().unwrap().remove(&db) {
+        let mut r = results().lock().unwrap();
+        for rh in rhs {
+            r.remove(&rh);
+        }
+    }
 }
 
 #[no_mangle]
@@ -290,6 +305,7 @@ pub extern "Rust" fn sqlite_query(db: i64, sql: Clean<String>) -> i64 {
         Ok(qr) => {
             let rh = next_handle();
             results().lock().unwrap().insert(rh, qr);
+            db_results().lock().unwrap().entry(db).or_default().push(rh);
             rh
         }
         Err(err) => {

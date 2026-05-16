@@ -137,7 +137,11 @@ partial fn collect_rows(rh: Int) -> List[Map[String, Value]] {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Open a SQLite database at `path`, creating it if it does not exist.
-pub fn open(path: String) -> Result[SqliteDb, SqliteError] ! DB + FileRead + FileWrite {
+///
+/// `path` must be a trusted string — use a literal or a value validated by
+/// the caller. This mirrors the `Clean[String]` requirement on `execute`/`query`
+/// and prevents tainted user input from reaching the filesystem.
+pub fn open(path: Clean[String]) -> Result[SqliteDb, SqliteError] ! DB + FileRead + FileWrite {
     let h: Int = sqlite_open(path);
     if h == -1 {
         Err(make_error(-1))

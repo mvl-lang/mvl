@@ -329,7 +329,11 @@ pub fn find_pkg_bridge(progs: &[Program], project_root: &Path) -> Option<PathBuf
                         // 2. In-repo development package at pkg/<name>/bridge.rs
                         let dev_bridge = project_root.join("pkg").join(pkg_name).join("bridge.rs");
                         if let Ok(canon_bridge) = fs::canonicalize(&dev_bridge) {
-                            return Some(canon_bridge);
+                            let canon_pkg = fs::canonicalize(project_root.join("pkg"))
+                                .unwrap_or_else(|_| project_root.join("pkg"));
+                            if canon_bridge.starts_with(&canon_pkg) {
+                                return Some(canon_bridge);
+                            }
                         }
                     }
                 }
@@ -361,12 +365,14 @@ pub fn collect_pkg_native_dep_lines(progs: &[Program], project_root: &Path) -> V
                             continue;
                         }
                         let pkg_dir = packages::fetch::local_override_dir(project_root, pkg_name);
-                        let mvl_toml = if pkg_dir.join("mvl.toml").exists() {
-                            pkg_dir.join("mvl.toml")
-                        } else {
-                            project_root.join("pkg").join(pkg_name).join("mvl.toml")
-                        };
-                        if let Ok(content) = fs::read_to_string(&mvl_toml) {
+                        // Try installed/cached package first; fall back to in-repo dev package.
+                        // Use read_to_string directly to avoid TOCTOU race from .exists() checks.
+                        let content = fs::read_to_string(pkg_dir.join("mvl.toml")).or_else(|_| {
+                            fs::read_to_string(
+                                project_root.join("pkg").join(pkg_name).join("mvl.toml"),
+                            )
+                        });
+                        if let Ok(content) = content {
                             lines.extend(extract_native_dep_lines(&content));
                         }
                     }
@@ -378,6 +384,10 @@ pub fn collect_pkg_native_dep_lines(progs: &[Program], project_root: &Path) -> V
 }
 
 /// Extract raw key=value lines from the `[native]` section of a `mvl.toml` string.
+///
+/// Only lines whose key is a valid Cargo crate name (`[a-zA-Z0-9_-]+`) are
+/// accepted. This prevents a malicious mvl.toml from injecting arbitrary TOML
+/// sections (e.g. `[patch.crates-io]`) into the generated Cargo.toml.
 fn extract_native_dep_lines(content: &str) -> Vec<String> {
     let mut in_native = false;
     let mut result = Vec::new();
@@ -390,8 +400,18 @@ fn extract_native_dep_lines(content: &str) -> Vec<String> {
             in_native = line == "[native]";
             continue;
         }
-        if in_native && line.contains('=') {
-            result.push(line.to_string());
+        if in_native {
+            if let Some(eq_pos) = line.find('=') {
+                let key = line[..eq_pos].trim();
+                // Accept only valid Cargo crate name characters to prevent injection.
+                if !key.is_empty()
+                    && key
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+                {
+                    result.push(line.to_string());
+                }
+            }
         }
     }
     result
