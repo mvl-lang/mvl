@@ -168,8 +168,12 @@ fn find_first_existing(candidates: &[PathBuf]) -> Result<PathBuf, ConfigError> {
 
 // ── File parsing ──────────────────────────────────────────────────────────────
 
+/// Maximum config file size. Matches the limit documented in `std/config.mvl`.
+const MAX_CONFIG_BYTES: u64 = 1 << 20; // 1 MiB
+
 fn parse_file(path: &Path) -> Result<ConfigValue, ConfigError> {
-    let content = std::fs::read_to_string(path).map_err(|e| {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             ConfigError::FileNotFound {
                 path: path.display().to_string(),
@@ -182,6 +186,34 @@ fn parse_file(path: &Path) -> Result<ConfigValue, ConfigError> {
             }
         }
     })?;
+    if let Ok(meta) = file.metadata() {
+        if meta.len() > MAX_CONFIG_BYTES {
+            return Err(ConfigError::ParseError {
+                msg: format!(
+                    "config file too large ({} bytes, max {} bytes)",
+                    meta.len(),
+                    MAX_CONFIG_BYTES
+                ),
+                line: 0,
+                col: 0,
+            });
+        }
+    }
+    let mut content = String::new();
+    file.take(MAX_CONFIG_BYTES + 1)
+        .read_to_string(&mut content)
+        .map_err(|e| ConfigError::ParseError {
+            msg: format!("could not read file: {e}"),
+            line: 0,
+            col: 0,
+        })?;
+    if content.len() as u64 > MAX_CONFIG_BYTES {
+        return Err(ConfigError::ParseError {
+            msg: format!("config file too large (max {} bytes)", MAX_CONFIG_BYTES),
+            line: 0,
+            col: 0,
+        });
+    }
     match path.extension().and_then(|e| e.to_str()) {
         Some("json") => parse_json(&content),
         _ => parse_toml(&content),

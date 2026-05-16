@@ -20,6 +20,8 @@
 //! Security: path resolution uses canonicalize() to eliminate the TOCTOU race
 //! between existence check and open. Relative paths with '..' are rejected.
 //! Symlinks are resolved before the file is read.
+//! Config files larger than 1 MiB are rejected with ParseError to prevent
+//! unbounded memory allocation from adversarial or malformed files.
 
 // ── Error type ────────────────────────────────────────────────────────────────
 
