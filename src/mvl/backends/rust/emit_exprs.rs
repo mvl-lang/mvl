@@ -911,10 +911,13 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                 emit_expr(cg, k);
                 cg.push(", ");
                 emit_expr(cg, v);
-                // `.into()` coerces IFC-label wrappers (Clean<String>, etc.) to
+                // `.clone().into()` coerces IFC-label wrappers (Clean<String>, etc.) to
                 // their plain inner type so map values match HashMap<String, String>
                 // signatures in stdlib functions like log_info / log_warn.
-                cg.push(".into()");
+                // Clone is required because MVL strings have value semantics — the
+                // same variable may be used after the map literal (e.g. as a log field
+                // and then as a function argument).
+                cg.push(".clone().into()");
                 cg.push(")");
             }
             cg.push("])");
