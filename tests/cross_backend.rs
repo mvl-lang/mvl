@@ -476,6 +476,60 @@ fn cross_backend_net_basic() {
     }
 }
 
+/// Connection refused: closes listener then tries tcp_connect on the freed port.
+#[test]
+fn cross_backend_net_connect_refused() {
+    let file = corpus_stdlib("net_connect_refused.mvl");
+    let transpiler_out = run_transpiler(&file);
+    assert_eq!(
+        transpiler_out.trim(),
+        "ok, error connection refused caught",
+        "net_connect_refused.mvl: unexpected output from transpiler backend"
+    );
+    if let Some(llvm_out) = run_llvm(&file) {
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "net_connect_refused.mvl: LLVM and transpiler backends must produce identical output"
+        );
+    }
+}
+
+/// Port already in use: binds twice on the same port.
+#[test]
+fn cross_backend_net_listen_port_in_use() {
+    let file = corpus_stdlib("net_listen_port_in_use.mvl");
+    let transpiler_out = run_transpiler(&file);
+    assert_eq!(
+        transpiler_out.trim(),
+        "ok, error address already in use caught",
+        "net_listen_port_in_use.mvl: unexpected output from transpiler backend"
+    );
+    if let Some(llvm_out) = run_llvm(&file) {
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "net_listen_port_in_use.mvl: LLVM and transpiler backends must produce identical output"
+        );
+    }
+}
+
+/// Invalid IPv4 address: tcp_listen on "999.999.999.999".
+#[test]
+fn cross_backend_net_bad_addr() {
+    let file = corpus_stdlib("net_bad_addr.mvl");
+    let transpiler_out = run_transpiler(&file);
+    assert_eq!(
+        transpiler_out.trim(),
+        "ok, error network error caught",
+        "net_bad_addr.mvl: unexpected output from transpiler backend"
+    );
+    if let Some(llvm_out) = run_llvm(&file) {
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "net_bad_addr.mvl: LLVM and transpiler backends must produce identical output"
+        );
+    }
+}
+
 // ── #417 + #435: io stdlib — both backends ────────────────────────────────────
 
 /// Write+read roundtrip, append, create_dir, remove.

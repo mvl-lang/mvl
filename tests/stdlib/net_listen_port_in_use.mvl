@@ -1,0 +1,35 @@
+// Cross-backend error test: tcp_listen on an already-bound port (#779).
+//
+// Binds a listener on port 0, queries the actual port, then tries to bind
+// again on the same port — which the OS refuses.
+//
+// expect: ok, error address already in use caught
+
+use std.net.{TcpListener, tcp_listen, tcp_listener_port, tcp_close_listener}
+
+fn main() -> Unit ! Console + Net {
+    let l1: TcpListener = match tcp_listen("127.0.0.1", 0) {
+        Ok(l) => l,
+        Err(e) => {
+            println("first listen error: ".concat(e));
+            return
+        },
+    };
+    let port: Int = match tcp_listener_port(l1) {
+        Ok(p) => p,
+        Err(e) => {
+            println("port error: ".concat(e));
+            return
+        },
+    };
+    match tcp_listen("127.0.0.1", port) {
+        Ok(_) => {
+            tcp_close_listener(l1);
+            println("unexpected success")
+        },
+        Err(e) => {
+            tcp_close_listener(l1);
+            println("ok, error ".concat(e).concat(" caught"))
+        },
+    }
+}

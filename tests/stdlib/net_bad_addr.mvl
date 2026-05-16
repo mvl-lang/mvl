@@ -1,0 +1,15 @@
+// Cross-backend error test: tcp_listen on an invalid IPv4 address (#779).
+//
+// "999.999.999.999" is not a valid IP address; the bind call should fail
+// immediately without touching the network.
+//
+// expect: ok, error network error caught
+
+use std.net.{TcpListener, tcp_listen}
+
+fn main() -> Unit ! Console + Net {
+    match tcp_listen("999.999.999.999", 8080) {
+        Ok(_) => println("unexpected success"),
+        Err(e) => println("ok, error ".concat(e).concat(" caught")),
+    }
+}
