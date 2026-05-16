@@ -9,22 +9,27 @@
 use std.config.{ConfigValue, ConfigError, merge, get_path, as_int, as_string, as_bool,
                 from_toml}
 use std.toml.{toml_decode}
+use std.log.{LogLevel, LogFormat, parse_log_level, parse_log_format}
 
 // ── Type re-declarations (workaround: #96) ────────────────────────────────────
 
 type ServerConfig = struct {
-    host:  String,
-    port:  Int,
-    debug: Bool,
+    host:       String,
+    port:       Int,
+    debug:      Bool,
+    log_level:  LogLevel,
+    log_format: LogFormat,
 }
 
-// ── Helpers (mirror config.mvl) ───────────────────────────────────────────────
+// ── Local helpers (workaround: #96) ──────────────────────────────────────────
 
 fn defaults() -> ConfigValue {
     ConfigValue::Map({
-        "host":  ConfigValue::String("127.0.0.1"),
-        "port":  ConfigValue::Int(8080),
-        "debug": ConfigValue::Bool(false),
+        "host":       ConfigValue::String("127.0.0.1"),
+        "port":       ConfigValue::Int(8080),
+        "debug":      ConfigValue::Bool(false),
+        "log_level":  ConfigValue::String("info"),
+        "log_format": ConfigValue::String("plain"),
     })
 }
 
@@ -33,6 +38,12 @@ fn extract(cfg: ConfigValue) -> Result[ServerConfig, ConfigError] {
         host:  as_string(get_path(cfg, "host").unwrap_or(ConfigValue::String("127.0.0.1")))?,
         port:  as_int(get_path(cfg, "port").unwrap_or(ConfigValue::Int(8080)))?,
         debug: as_bool(get_path(cfg, "debug").unwrap_or(ConfigValue::Bool(false))).unwrap_or(false),
+        log_level:  parse_log_level(
+            as_string(get_path(cfg, "log_level").unwrap_or(ConfigValue::String("info"))).unwrap_or("info")
+        ),
+        log_format: parse_log_format(
+            as_string(get_path(cfg, "log_format").unwrap_or(ConfigValue::String("plain"))).unwrap_or("plain")
+        ),
     })
 }
 
@@ -150,5 +161,85 @@ test fn last_overlay_wins() -> Unit {
     match get_path(merged, "port") {
         Some(v) => assert_eq(as_int(v), Ok(8888)),
         None    => assert_eq(true, false),
+    }
+}
+
+// ── Log config tests ───────────────────────────────────────────────────────────
+
+// 11. Default log level is info.
+test fn defaults_log_level_is_info() -> Unit {
+    let result: Result[ServerConfig, ConfigError] = extract(defaults());
+    match result {
+        Ok(cfg) => assert_eq(cfg.log_level, LogLevel::Info),
+        Err(_)  => assert_eq(true, false),
+    }
+}
+
+// 12. Default log format is plain.
+test fn defaults_log_format_is_plain() -> Unit {
+    let result: Result[ServerConfig, ConfigError] = extract(defaults());
+    match result {
+        Ok(cfg) => assert_eq(cfg.log_format, LogFormat::Plain),
+        Err(_)  => assert_eq(true, false),
+    }
+}
+
+// 13. parse_log_level: "debug" → Debug.
+test fn parse_log_level_debug() -> Unit {
+    assert_eq(parse_log_level("debug"), LogLevel::Debug)
+}
+
+// 14. parse_log_level: "error" → Error.
+test fn parse_log_level_error() -> Unit {
+    assert_eq(parse_log_level("error"), LogLevel::Error)
+}
+
+// 15. parse_log_level: unknown string → Info (safe default).
+test fn parse_log_level_unknown_defaults_to_info() -> Unit {
+    assert_eq(parse_log_level("verbose"), LogLevel::Info)
+}
+
+// 16. parse_log_format: "json" → Json.
+test fn parse_log_format_json() -> Unit {
+    assert_eq(parse_log_format("json"), LogFormat::Json)
+}
+
+// 17. parse_log_format: "logfmt" → Logfmt.
+test fn parse_log_format_logfmt() -> Unit {
+    assert_eq(parse_log_format("logfmt"), LogFormat::Logfmt)
+}
+
+// 18. parse_log_format: unknown string → Plain (safe default).
+test fn parse_log_format_unknown_defaults_to_plain() -> Unit {
+    assert_eq(parse_log_format("syslog"), LogFormat::Plain)
+}
+
+// 19. TOML overlay can override log_level.
+test fn toml_layer_overrides_log_level() -> Unit {
+    let base: ConfigValue = defaults();
+    let toml_str: String = "log_level = \"warn\"\n";
+    let merged: ConfigValue = match toml_decode(toml_str) {
+        Ok(tv)  => merge(base, from_toml(tv)),
+        Err(_)  => base,
+    };
+    let result: Result[ServerConfig, ConfigError] = extract(merged);
+    match result {
+        Ok(cfg) => assert_eq(cfg.log_level, LogLevel::Warn),
+        Err(_)  => assert_eq(true, false),
+    }
+}
+
+// 20. TOML overlay can override log_format to json.
+test fn toml_layer_overrides_log_format() -> Unit {
+    let base: ConfigValue = defaults();
+    let toml_str: String = "log_format = \"json\"\n";
+    let merged: ConfigValue = match toml_decode(toml_str) {
+        Ok(tv)  => merge(base, from_toml(tv)),
+        Err(_)  => base,
+    };
+    let result: Result[ServerConfig, ConfigError] = extract(merged);
+    match result {
+        Ok(cfg) => assert_eq(cfg.log_format, LogFormat::Json),
+        Err(_)  => assert_eq(true, false),
     }
 }

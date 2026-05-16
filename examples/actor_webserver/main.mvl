@@ -22,6 +22,8 @@ use std.net.{TcpListener, TcpStream, tcp_listen, tcp_accept, tcp_read_request, t
              tcp_close_listener, tcp_close_stream, http_request_path, net_error_msg,
              NetError}
 use std.strings.{str_starts_with}
+use std.log.{LogLevel, LogFormat, log_debug, log_info, log_warn, log_error,
+             log_set_format, log_set_min_level}
 
 fn ok_response(body: String) -> String {
     "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: "
@@ -57,17 +59,17 @@ actor RequestHandler {
     //
     //   iso stream — ownership of the socket transferred from the accept loop.
     //                Compiler guarantees no other actor or thread touches it.
-    pub fn handle(iso stream: TcpStream) ! Console + Net {
+    pub fn handle(iso stream: TcpStream) ! Log + Net {
         match tcp_read_request(stream) {
-            Err(e) => println("read error: ".concat(net_error_msg(e))),
+            Err(e) => log_warn("read error", {"error": net_error_msg(e)}),
             Ok(raw) => {
                 let path: String = http_request_path(raw);
-                println("  → ".concat(path));
+                log_debug("request", {"path": path});
                 let resp: String = route(path);
                 match tcp_write(stream, resp) {
                     Ok(_)  => tcp_close_stream(stream),
                     Err(e) => {
-                        println("write error: ".concat(net_error_msg(e)));
+                        log_error("write error", {"error": net_error_msg(e)});
                         tcp_close_stream(stream)
                     },
                 }
@@ -78,10 +80,10 @@ actor RequestHandler {
 
 // ── Accept loop ───────────────────────────────────────────────────────────
 
-partial fn serve(listener: TcpListener) -> Unit ! Console + Net {
+partial fn serve(listener: TcpListener) -> Unit ! Log + Net {
     while true {
         match tcp_accept(listener) {
-            Err(e)     => println("accept error: ".concat(net_error_msg(e))),
+            Err(e)     => log_warn("accept error", {"error": net_error_msg(e)}),
             Ok(stream) => {
                 // Spawn a fresh actor and transfer stream ownership.
                 // The handle is immediately dropped; the actor terminates
@@ -93,17 +95,25 @@ partial fn serve(listener: TcpListener) -> Unit ! Console + Net {
     }
 }
 
-partial fn main() -> Unit ! Env + FileRead + Console + Net {
+partial fn main() -> Unit ! Env + FileRead + Log + Net {
     let cfg: ServerConfig = match load_config() {
-        Err(_) => {
-            println("config error — using defaults");
-            ServerConfig { host: "127.0.0.1", port: 8080, debug: false }
+        Err(_) => ServerConfig {
+            host: "127.0.0.1", port: 8080, debug: false,
+            log_level: LogLevel::Info, log_format: LogFormat::Plain,
         },
         Ok(c) => c,
     };
-    println("listening on http://".concat(cfg.host).concat(":").concat(cfg.port.to_string()).concat("  (Ctrl-C to stop)"));
+    // Initialise log subsystem from config before first log call.
+    log_set_format(cfg.log_format);
+    log_set_min_level(cfg.log_level);
+    log_info("server starting", {
+        "host":       cfg.host,
+        "port":       cfg.port.to_string(),
+        "log_level":  "from_config",
+        "log_format": "from_config",
+    });
     match tcp_listen(cfg.host, cfg.port) {
-        Err(e)       => println("listen failed: ".concat(net_error_msg(e))),
+        Err(e)       => log_error("listen failed", {"error": net_error_msg(e)}),
         Ok(listener) => serve(listener),
     }
 }

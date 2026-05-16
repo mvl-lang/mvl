@@ -6,12 +6,13 @@
 //! IFC: Secret[T] arguments are rejected at compile time (R6, #54).
 //! "Don't log secrets" is not a code review rule in MVL — it's a type error.
 //! Output format is configurable at runtime via log_set_format (#801).
+//! Minimum level is configurable at runtime via log_set_min_level.
 //!
 //! Import:
 //!   use std.log.{log_debug, log_info, log_warn, log_error,
-//!                LogFormat, log_set_format}
+//!                LogFormat, log_set_format, LogLevel, log_set_min_level}
 //!
-//! Effects: Log (emit functions). log_set_format has no effect (pure config).
+//! Effects: Log (emit functions). log_set_format/log_set_min_level have no effect (pure config).
 //! See #54, ADR-0006.
 
 // ── Output format ──────────────────────────────────────────────────────────
@@ -35,6 +36,49 @@ pub type LogFormat = enum {
 /// Process-global (thread-local). Default is Plain.
 /// No effect required — this is pure runtime configuration.
 pub builtin fn log_set_format(fmt: LogFormat) -> Unit
+
+// ── Level filtering ────────────────────────────────────────────────────────
+
+/// Minimum severity threshold for log output.
+///
+/// Records below the configured level are silently dropped at the call site.
+/// Ordered Debug < Info < Warn < Error.
+pub type LogLevel = enum {
+    Debug,  // verbose diagnostics — not emitted in production by default
+    Info,   // normal operational events (default)
+    Warn,   // recoverable anomalies
+    Error,  // operation-level failures
+}
+
+/// Set the minimum log level.  Records below this level are silently dropped.
+///
+/// Process-global (thread-local). Default is Debug (all levels emitted unless restricted).
+/// Applications call this at startup to apply their configured level.
+/// No effect required — this is pure runtime configuration.
+pub builtin fn log_set_min_level(level: LogLevel) -> Unit
+
+// ── Parsing helpers ────────────────────────────────────────────────────────
+
+/// Parse a log level from a string.
+///
+/// Case-sensitive. Recognised values: "debug", "warn", "error".
+/// Any other string (including "info") maps to Info (safe default).
+pub fn parse_log_level(s: String) -> LogLevel {
+    if s == "debug" { LogLevel::Debug }
+    else if s == "warn"  { LogLevel::Warn }
+    else if s == "error" { LogLevel::Error }
+    else { LogLevel::Info }
+}
+
+/// Parse a log format from a string.
+///
+/// Case-sensitive. Recognised values: "logfmt", "json".
+/// Any other string (including "plain") maps to Plain (safe default).
+pub fn parse_log_format(s: String) -> LogFormat {
+    if s == "logfmt" { LogFormat::Logfmt }
+    else if s == "json" { LogFormat::Json }
+    else { LogFormat::Plain }
+}
 
 // ── Functions ──────────────────────────────────────────────────────────────
 
