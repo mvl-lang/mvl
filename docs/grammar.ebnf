@@ -22,8 +22,9 @@ decl_body      = type_decl | fn_decl | const_decl | reexport_decl
                | extern_decl | impl_decl | actor_decl ;
 
 (* === Modules and imports === *)
-(* One file = one module. Module name = filename without extension. *)
-(* Directories are module groups; mod.mvl is the entry file.        *)
+(* One file = one module. Module name = filename without extension.        *)
+(* Directories are module groups; foo.mvl is the entry (Rust 2018 style). *)
+(* foo/mod.mvl is deprecated — accepted with a warning, prefer foo.mvl.   *)
 use_decl       = "use" module_path [ ";" ] ;
 reexport_decl  = "use" module_path [ ";" ] ;  (* "pub" required — enforced by type checker *)
 module_path    = IDENT { ( "." | "::" ) IDENT } [ "." "{" IDENT { "," IDENT } "}" ] ;

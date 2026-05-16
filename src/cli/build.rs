@@ -52,13 +52,19 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
             .find_map(|name| {
                 let p = dir.join(name);
                 if p.exists() {
+                    if *name == "mod.mvl" {
+                        eprintln!(
+                            "warning: `mod.mvl` as project entry is deprecated; \
+                             rename to `lib.mvl`"
+                        );
+                    }
                     Some(p.display().to_string())
                 } else {
                     None
                 }
             })
             .unwrap_or_else(|| {
-                eprintln!("No main.mvl / mod.mvl / lib.mvl found in {path}");
+                eprintln!("No main.mvl / lib.mvl found in {path}");
                 process::exit(1);
             })
     } else {
@@ -77,11 +83,8 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
     let mut sibling_modules: Vec<(String, mvl::mvl::parser::ast::Program)> = imported_mod_names
         .into_iter()
         .filter_map(|mod_name| {
-            let sib_path = entry_dir.join(format!("{mod_name}.mvl"));
-            if !sib_path.exists() {
-                return None;
-            }
-            let (sib_prog, _) = super::parse_or_exit(&sib_path.display().to_string());
+            let mod_path = loader::find_module_file(entry_dir, &mod_name)?;
+            let (sib_prog, _) = super::parse_or_exit(&mod_path.display().to_string());
             Some((mod_name, sib_prog))
         })
         .collect();

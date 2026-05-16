@@ -4,6 +4,16 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.118.0] — 2026-05-16
+
+### Added
+- **Rust 2018 sibling-file module style**: directory module entry points now use `foo.mvl` (sibling file) instead of `foo/mod.mvl` — improved editor UX and consistency with Rust 2018 convention (#794)
+- Two-step module resolution: prefer sibling file, fall back to `mod.mvl` with deprecation warning for one release cycle
+- `loader::find_module_file()` function implementing new resolution order with fallback logic
+- `loader::stem()` correctly derives module names from directory for legacy `foo/mod.mvl` paths
+- ADR-0033: Rust 2018 sibling-file module style decision and deprecation plan
+- Updated spec 005 with new module resolution order and three scenarios (single-file, sibling preferred, legacy deprecated)
+
 ## [0.117.0] — 2026-05-16
 
 ### Added
