@@ -15,8 +15,11 @@ use std::io::{Read, Write};
 /// Variant order and names must stay in sync with the MVL definition.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProcessError {
+    /// The executable was not found.
     NotFound,
+    /// The operation was denied due to insufficient permissions.
     PermissionDenied,
+    /// An unclassified process error with a description.
     Other(String),
 }
 

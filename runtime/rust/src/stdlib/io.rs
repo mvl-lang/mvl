@@ -386,9 +386,13 @@ pub fn stdin_read_to_string(s: Stdin) -> Result<Tainted<String>, IoError> {
 /// Variant order and names must stay in sync with the MVL definition.
 #[derive(Debug, Clone, PartialEq)]
 pub enum IoError {
+    /// The file or directory was not found.
     NotFound,
+    /// The operation was denied due to insufficient permissions.
     PermissionDenied,
+    /// The file or directory already exists.
     AlreadyExists,
+    /// An unclassified I/O error with a description.
     Other(String),
 }
 
