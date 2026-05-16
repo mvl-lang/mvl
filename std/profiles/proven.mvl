@@ -43,6 +43,11 @@
 //   trim, to_upper, to_lower, chars, concat, starts_with, ends_with, find,
 //   replace, split, substring, parse_int, parse_float
 
+// std/config.mvl — load_config, parse_toml, json_to_config, apply_env_overlay (pure MVL)
+//   The parsing and overlay logic is fully verified. Only the std.io and std.env
+//   builtins it calls (file read, env var read) are OS-backed and remain trusted.
+//   This is the same status as std/json.mvl.
+
 // ── Pending proven implementations ────────────────────────────────────────────
 //
 // The following require verified string/list/byte models before a pure MVL
@@ -58,10 +63,3 @@
 //   list_contains)
 //   Blocked on: verified list model (#314)
 
-// std/config.mvl — load_config
-//   The FileRead boundary (open, read) is an OS builtin and stays trusted.
-//   The TOML parser is pure computation; a proven MVL implementation can follow
-//   the same pattern as std/json.mvl (which is already 100% pure MVL).
-//   The JSON branch of load_config can delegate to std.json directly once
-//   the config module is refactored to use it.
-//   Blocked on: refactor to use std.json for JSON parsing; write TOML parser in MVL

@@ -57,14 +57,6 @@
 // compile, find, find_all, replace, captures
 // Declared as pub builtin fn in std/regex.mvl.
 
-// ── Category 3: Config (always OS-backed) ─────────────────────────────────────
-// load_config — XDG-compliant layered config loading with env overlay (#804)
-// Effect: ! FileRead (file I/O is an OS boundary — irreducibly trusted)
-// Note: the TOML/JSON parsers are pure computation. The JSON branch can
-//   delegate to std.json (already pure MVL) and the TOML parser can be
-//   rewritten in MVL, leaving only the FileRead boundary as trusted.
-// Declared as pub builtin fn in std/config.mvl.
-
 // ── Category 3: Logging (always OS-backed) ────────────────────────────────────
 // log_debug, log_info, log_warn, log_error
 // Declared as pub builtin fn in std/log.mvl.
