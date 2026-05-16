@@ -4,6 +4,16 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.122.0] — 2026-05-16
+
+### Added
+- **Layered configuration pattern**: defaults → TOML → environment variables → CLI arguments with `config::{load_config, ServerConfig}` and reference pattern doc in `.openspec/patterns/001-config.md` (#828)
+- **`std.log` level filtering**: `LogLevel` enum (Debug/Info/Warn/Error) and `log_set_min_level` to control runtime log verbosity; parse helpers `parse_log_level`/`parse_log_format` for config-driven log setup (#828)
+- **Actor-per-request concurrency**: `RequestHandler` actor in `examples/actor_webserver` demonstrates fire-and-forget pattern with `iso` capability for exclusive socket ownership (#828)
+
+### Fixed
+- **Map literal codegen**: emit `.clone().into()` instead of `.into()` for map values to preserve MVL value semantics — fixes E0382 when a variable is used in a map literal and later in the same scope (#828)
+
 ## [0.121.0] — 2026-05-16
 
 ### Added
