@@ -54,11 +54,17 @@ fn next_handle() -> i64 {
 /// Variant order and names must stay in sync with the MVL definition.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NetError {
+    /// The remote end refused the connection.
     ConnectionRefused,
+    /// The connection was reset by the peer.
     ConnectionReset,
+    /// The operation timed out before completing.
     Timeout,
+    /// The local address is already in use.
     AddressInUse,
+    /// The remote host could not be reached.
     HostUnreachable,
+    /// An unclassified network error with a description.
     Other(String),
 }
 

@@ -12,6 +12,7 @@
 /// Variant order and names must stay in sync with the MVL definition.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RegexError {
+    /// The supplied regex pattern was invalid; contains the error message.
     InvalidPattern(String),
 }
 
