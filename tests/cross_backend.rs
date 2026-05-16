@@ -148,6 +148,23 @@ fn assert_backends_agree(name: &str) {
     }
 }
 
+/// Assert that both backends produce `expected` stdout for an arbitrary file path.
+/// Use with `corpus_stdlib`, `corpus_effects`, etc.
+fn assert_parity(file: &str, expected: &str) {
+    let transpiler_out = run_transpiler(file);
+    assert_eq!(
+        transpiler_out.trim(),
+        expected,
+        "{file}: unexpected output from transpiler backend"
+    );
+    if let Some(llvm_out) = run_llvm(file) {
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "{file}: LLVM and transpiler backends must produce identical output"
+        );
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -459,75 +476,10 @@ fn cross_backend_log_stderr() {
 /// Actor connects to listener, writes "net ok", main reads and prints it.
 /// Verifies that both backends correctly wire tcp_listen, tcp_connect,
 /// tcp_accept, tcp_read, tcp_write, tcp_close_* via `! Net` effect.
+/// Error-path coverage lives in tests/stdlib/net_test.mvl (test-stdlib suite).
 #[test]
 fn cross_backend_net_basic() {
-    let file = corpus_stdlib("net_basic.mvl");
-    let transpiler_out = run_transpiler(&file);
-    assert_eq!(
-        transpiler_out.trim(),
-        "net ok",
-        "net_basic.mvl: unexpected output from transpiler backend"
-    );
-    if let Some(llvm_out) = run_llvm(&file) {
-        assert_eq!(
-            llvm_out, transpiler_out,
-            "net_basic.mvl: LLVM and transpiler backends must produce identical output"
-        );
-    }
-}
-
-/// Connection refused: closes listener then tries tcp_connect on the freed port.
-#[test]
-fn cross_backend_net_connect_refused() {
-    let file = corpus_stdlib("net_connect_refused.mvl");
-    let transpiler_out = run_transpiler(&file);
-    assert_eq!(
-        transpiler_out.trim(),
-        "ok, error connection refused caught",
-        "net_connect_refused.mvl: unexpected output from transpiler backend"
-    );
-    if let Some(llvm_out) = run_llvm(&file) {
-        assert_eq!(
-            llvm_out, transpiler_out,
-            "net_connect_refused.mvl: LLVM and transpiler backends must produce identical output"
-        );
-    }
-}
-
-/// Port already in use: binds twice on the same port.
-#[test]
-fn cross_backend_net_listen_port_in_use() {
-    let file = corpus_stdlib("net_listen_port_in_use.mvl");
-    let transpiler_out = run_transpiler(&file);
-    assert_eq!(
-        transpiler_out.trim(),
-        "ok, error address already in use caught",
-        "net_listen_port_in_use.mvl: unexpected output from transpiler backend"
-    );
-    if let Some(llvm_out) = run_llvm(&file) {
-        assert_eq!(
-            llvm_out, transpiler_out,
-            "net_listen_port_in_use.mvl: LLVM and transpiler backends must produce identical output"
-        );
-    }
-}
-
-/// Invalid IPv4 address: tcp_listen on "999.999.999.999".
-#[test]
-fn cross_backend_net_bad_addr() {
-    let file = corpus_stdlib("net_bad_addr.mvl");
-    let transpiler_out = run_transpiler(&file);
-    assert_eq!(
-        transpiler_out.trim(),
-        "ok, error network error caught",
-        "net_bad_addr.mvl: unexpected output from transpiler backend"
-    );
-    if let Some(llvm_out) = run_llvm(&file) {
-        assert_eq!(
-            llvm_out, transpiler_out,
-            "net_bad_addr.mvl: LLVM and transpiler backends must produce identical output"
-        );
-    }
+    assert_parity(&corpus_stdlib("net_basic.mvl"), "net ok");
 }
 
 // ── #417 + #435: io stdlib — both backends ────────────────────────────────────
