@@ -31,3 +31,4 @@
 | [0027](0027-multi-backend-architecture.md) | Multi-backend architecture — `backends/` namespace, `Backend` trait, merged runtime | Accepted |
 | [0029](0029-pony-reference-capability-adaptation.md) | Pony reference capability adaptation — iso/val/ref/tag for MVL actors | Accepted |
 | [0030](0030-rust-coding-conventions.md) | Rust coding conventions — edition 2021, module layout, fmt, clippy, error handling | Accepted |
+| [0031](0031-no-ufcs.md) | No Uniform Function Call Syntax (UFCS) — explicit `f(x)` over implicit `x.f()` | Accepted |
