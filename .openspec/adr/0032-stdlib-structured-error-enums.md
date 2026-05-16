@@ -1,4 +1,4 @@
-# ADR-0031: Stdlib Structured Error Enums
+# ADR-0032: Stdlib Structured Error Enums
 
 **Status:** Accepted
 **Date:** 2026-05-16
