@@ -64,6 +64,10 @@ pub struct CheckResult {
     /// Per-layer refinement proof counts from the most recent `check_refinements` run.
     /// Populated only when checked via `check_with_two_preludes_mode`.
     pub refinement_counts: RefinementCounts,
+    /// True when at least one prelude function called from this program carries
+    /// IFC-labeled parameters — indicates the security lattice is exercised via
+    /// cross-module function calls (e.g. `execute(db, sql: Clean[String])`).
+    pub has_prelude_ifc_boundary: bool,
 }
 
 impl CheckResult {
@@ -112,10 +116,22 @@ pub fn check_with_two_preludes_mode(
     data_race::check_iso_aliasing(prog, &mut checker.errors);
     data_race::check_ref_escape_to_spawn(prog, &mut checker.errors);
     ifc::check_implicit_flows(prog, &mut checker.errors);
-    let refinement_counts = refinements::check_refinements(prog, &mut checker.errors, solver_mode);
+    let refinement_counts = refinements::check_refinements(
+        prelude_a,
+        prelude_b,
+        prog,
+        &mut checker.errors,
+        solver_mode,
+    );
     contracts::check_contracts(prog, &mut checker.errors);
     session::check_session_types(prog, &mut checker.errors);
     contracts::check_actor_field_refinements(prog, &mut checker.errors);
+
+    // Determine whether any function imported from the prelude and called by
+    // `prog` carries IFC-labeled parameters — exercises the security lattice
+    // even when `prog` itself defines no labeled functions.
+    let has_prelude_ifc_boundary = ifc::prelude_has_ifc_boundary(prelude_a, prelude_b, prog);
+
     let mut req_errors = [0usize; 12];
     for e in &checker.errors {
         let req = e.requirement_number() as usize;
@@ -136,6 +152,7 @@ pub fn check_with_two_preludes_mode(
         req_errors,
         expr_types: checker.expr_types,
         refinement_counts,
+        has_prelude_ifc_boundary,
     }
 }
 

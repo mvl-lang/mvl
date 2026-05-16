@@ -26,7 +26,6 @@ use std::path::PathBuf;
 
 use crate::mvl::checker::data_race;
 use crate::mvl::checker::ifc;
-use crate::mvl::checker::refinements;
 use crate::mvl::checker::CheckResult;
 use crate::mvl::parser::ast::Program;
 use crate::mvl::parser::lexer::Span;
@@ -254,7 +253,7 @@ impl VerificationPass for RefinementsPass {
     fn requirement(&self) -> u8 {
         10
     }
-    fn run(&self, prog: &Program, result: &CheckResult) -> Verdict {
+    fn run(&self, _prog: &Program, result: &CheckResult) -> Verdict {
         let req = usize::from(self.requirement());
         let violations = result.req_errors[req];
         if violations > 0 {
@@ -268,9 +267,11 @@ impl VerificationPass for RefinementsPass {
             };
         }
 
-        let (fully_verified, fn_total) = refinements::count_fully_verified_fns(prog);
-        let counts = refinements::count_refinements(prog);
-        let total = counts.proven + counts.runtime_checked + counts.failed;
+        // Use counts pre-computed by check_refinements (includes cross-module calls).
+        let rc = &result.refinement_counts;
+        let fn_total = rc.fn_total;
+        let fully_verified = rc.fully_verified_fns;
+        let total = rc.proven + rc.runtime_checked + rc.failed;
 
         if fn_total == 0 {
             Verdict::Unchecked {
@@ -281,7 +282,7 @@ impl VerificationPass for RefinementsPass {
                 evidence: format!(
                     "{fully_verified}/{fn_total} function(s) fully verified; \
                      {} proven, {} runtime-checked out of {total} refined call site(s)",
-                    counts.proven, counts.runtime_checked,
+                    rc.proven, rc.runtime_checked,
                 ),
             }
         } else {
@@ -290,7 +291,7 @@ impl VerificationPass for RefinementsPass {
                     "{fully_verified}/{fn_total} function(s) fully verified; \
                      {} proven, {} runtime-checked out of {total} refined call site(s); \
                      some call sites deferred to runtime checks",
-                    counts.proven, counts.runtime_checked,
+                    rc.proven, rc.runtime_checked,
                 ),
             }
         }
@@ -361,7 +362,12 @@ impl VerificationPass for IFCPass {
             _ => false,
         });
 
-        if has_labeled {
+        // Also recognise programs that call imported functions with labeled
+        // parameters — the type checker already verified the constraint, so
+        // the IFC lattice IS exercised even if no local declaration uses labels.
+        let has_ifc = has_labeled || result.has_prelude_ifc_boundary;
+
+        if has_ifc {
             Verdict::Proven {
                 evidence: format!(
                     "no direct or implicit information flow violations; \
