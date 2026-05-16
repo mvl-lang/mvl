@@ -37,8 +37,11 @@ mod stmts;
 pub mod termination;
 pub mod types;
 
+pub use crate::mvl::checker::solver::SolverMode;
+
 use crate::mvl::checker::context::TypeEnv;
 use crate::mvl::checker::errors::CheckError;
+use crate::mvl::checker::refinements::RefinementCounts;
 use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{Effect, Program, Totality};
 use crate::mvl::parser::lexer::Span;
@@ -58,6 +61,9 @@ pub struct CheckResult {
     /// Inferred type for every expression in the program, keyed by span.
     /// Used by the transpiler to emit type-specific Rust code (#554).
     pub expr_types: HashMap<Span, Ty>,
+    /// Per-layer refinement proof counts from the most recent `check_refinements` run.
+    /// Populated only when checked via `check_with_two_preludes_mode`.
+    pub refinement_counts: RefinementCounts,
 }
 
 impl CheckResult {
@@ -84,6 +90,19 @@ pub fn check_with_two_preludes(
     prelude_b: &[&Program],
     prog: &Program,
 ) -> CheckResult {
+    check_with_two_preludes_mode(prelude_a, prelude_b, prog, SolverMode::Layered)
+}
+
+/// Like [`check_with_two_preludes`] but uses the given [`SolverMode`] for refinement checking.
+///
+/// Populates [`CheckResult::refinement_counts`] with per-layer proof statistics.
+/// Used by the CLI `check` command when `--refinement-solver` or `--refinement-stats` is set.
+pub fn check_with_two_preludes_mode(
+    prelude_a: &[Program],
+    prelude_b: &[&Program],
+    prog: &Program,
+    solver_mode: SolverMode,
+) -> CheckResult {
     let mut checker = TypeChecker::new();
     for p in prelude_a.iter().chain(prelude_b.iter().copied()) {
         checker.collect_declarations(&p.declarations);
@@ -93,7 +112,7 @@ pub fn check_with_two_preludes(
     data_race::check_iso_aliasing(prog, &mut checker.errors);
     data_race::check_ref_escape_to_spawn(prog, &mut checker.errors);
     ifc::check_implicit_flows(prog, &mut checker.errors);
-    refinements::check_refinements(prog, &mut checker.errors);
+    let refinement_counts = refinements::check_refinements(prog, &mut checker.errors, solver_mode);
     contracts::check_contracts(prog, &mut checker.errors);
     session::check_session_types(prog, &mut checker.errors);
     contracts::check_actor_field_refinements(prog, &mut checker.errors);
@@ -116,6 +135,7 @@ pub fn check_with_two_preludes(
         extern_count: checker.extern_count,
         req_errors,
         expr_types: checker.expr_types,
+        refinement_counts,
     }
 }
 

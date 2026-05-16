@@ -3,6 +3,7 @@
 
 use mvl::mvl::backends::AssertMode;
 use mvl::mvl::checker::passes::parse_req_filter;
+use mvl::mvl::checker::SolverMode;
 use std::process;
 
 pub fn print_usage() {
@@ -14,7 +15,9 @@ pub fn print_usage() {
     eprintln!(
         "  mvl check <file|dir> --req <N>     — run only the Req N verification pass
   mvl check <file|dir> --error-limit=N — stop after N errors (default 10; 0 = show all)
-  mvl check <file|dir> --format=json  — emit errors as machine-readable JSON"
+  mvl check <file|dir> --format=json  — emit errors as machine-readable JSON
+  mvl check <file|dir> --refinement-solver=layered|z3-only|fast-only — solver strategy (default: layered)
+  mvl check <file|dir> --refinement-stats — print per-layer refinement proof counts"
     );
     eprintln!("  mvl build <file|dir>               — transpile to Rust and run cargo build");
     eprintln!("  mvl run   [--] <file.mvl>          — transpile, build, and execute");
@@ -138,6 +141,25 @@ pub(super) fn path_arg_index(args: &[String]) -> usize {
         idx += 1;
     }
     idx
+}
+
+/// Parse `--refinement-solver=<mode>` from args; defaults to `SolverMode::Layered`.
+pub(super) fn parse_solver_mode_or_exit(args: &[String]) -> SolverMode {
+    let mode_str = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--refinement-solver="))
+        .unwrap_or("layered");
+    match mode_str {
+        "layered" => SolverMode::Layered,
+        "z3-only" => SolverMode::Z3Only,
+        "fast-only" => SolverMode::FastOnly,
+        other => {
+            eprintln!(
+                "error: unknown refinement-solver '{other}' (supported: layered, z3-only, fast-only)"
+            );
+            process::exit(1);
+        }
+    }
 }
 
 pub(super) fn require_path_arg(args: &[String], cmd: &str) -> String {

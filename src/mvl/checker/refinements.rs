@@ -29,7 +29,9 @@ use std::collections::HashMap;
 
 use crate::mvl::checker::const_eval;
 use crate::mvl::checker::errors::CheckError;
-use crate::mvl::checker::solver::{binary_op_to_cmp, dummy_span, RefResult, RefinementSolver};
+use crate::mvl::checker::solver::{
+    binary_op_to_cmp, dummy_span, RefResult, RefinementSolver, SolverMode,
+};
 use crate::mvl::parser::ast::{
     ArithOp, BinaryOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, LValue, Literal, LogicOp,
     MatchArm, MatchBody, Param, Pattern, Program, RefExpr, Stmt, TypeBody, TypeExpr,
@@ -41,12 +43,17 @@ use crate::mvl::parser::lexer::Span;
 /// Per-program refinement check outcome counts.
 #[derive(Debug, Default, Clone)]
 pub struct RefinementCounts {
+    /// Solver mode used for this run.
+    pub mode: SolverMode,
     /// Call-site arguments proven to satisfy their refinement statically.
     pub proven: usize,
     /// Call-site arguments that could not be proven; will need runtime checks.
     pub runtime_checked: usize,
     /// Call-site arguments definitively known to violate their refinement.
     pub failed: usize,
+    /// Per-layer proof counts: `by_layer[n]` = number of proofs by Layer n.
+    /// Index 0 is unused (layers are 1–5).
+    pub by_layer: [usize; 6],
 }
 
 // ── Entry points ──────────────────────────────────────────────────────────────
@@ -54,8 +61,16 @@ pub struct RefinementCounts {
 /// Emit [`CheckError::RefinementViolated`] for every definite predicate violation.
 ///
 /// Called from `checker::check()` after the main type-checking pass.
-pub fn check_refinements(prog: &Program, errors: &mut Vec<CheckError>) {
-    let mut counts = RefinementCounts::default();
+/// Returns aggregated counts of proven / runtime-checked / failed checks.
+pub fn check_refinements(
+    prog: &Program,
+    errors: &mut Vec<CheckError>,
+    mode: SolverMode,
+) -> RefinementCounts {
+    let mut counts = RefinementCounts {
+        mode,
+        ..Default::default()
+    };
     let fn_params = build_fn_param_refinements(prog);
     let type_refs = build_type_alias_refinements(prog);
     let fn_decls = build_pure_fn_decls(prog);
@@ -107,6 +122,7 @@ pub fn check_refinements(prog: &Program, errors: &mut Vec<CheckError>) {
             _ => {}
         }
     }
+    counts
 }
 
 /// Count proven / runtime-checked / failed refinement call sites.
@@ -115,7 +131,10 @@ pub fn check_refinements(prog: &Program, errors: &mut Vec<CheckError>) {
 /// to build the assurance verdict.
 pub fn count_refinements(prog: &Program) -> RefinementCounts {
     let mut errors = Vec::new();
-    let mut counts = RefinementCounts::default();
+    let mut counts = RefinementCounts {
+        mode: SolverMode::Layered,
+        ..Default::default()
+    };
     let fn_params = build_fn_param_refinements(prog);
     let type_refs = build_type_alias_refinements(prog);
     let fn_decls = build_pure_fn_decls(prog);
@@ -1084,7 +1103,7 @@ fn check_call_site(
 ) {
     for (arg, (_, param_pred)) in args.iter().zip(param_refs.iter()) {
         let Some(pred) = param_pred else { continue };
-        let outcome = check_arg_against_pred(arg, pred, var_refs, fn_decls);
+        let outcome = check_arg_against_pred_counted(arg, pred, var_refs, fn_decls, counts);
         match outcome {
             RefResult::Proven => counts.proven += 1,
             RefResult::RuntimeCheck => counts.runtime_checked += 1,
@@ -1105,6 +1124,58 @@ fn check_call_site(
 
 // ── Argument checking ─────────────────────────────────────────────────────────
 
+/// Mode-aware dispatch used by `check_call_site`.
+///
+/// Records which layer resolved the check in `counts.by_layer[n]`.
+/// Contracts callers use the public `check_arg_against_pred` (always Layered).
+fn check_arg_against_pred_counted(
+    arg: &Expr,
+    pred: &RefExpr,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
+    counts: &mut RefinementCounts,
+) -> RefResult {
+    macro_rules! try_layer {
+        ($n:expr, $call:expr) => {
+            if let Some(r) = $call {
+                if matches!(r, RefResult::Proven) {
+                    counts.by_layer[$n] += 1;
+                }
+                return r;
+            }
+        };
+    }
+    match counts.mode {
+        SolverMode::Z3Only => {
+            try_layer!(5, RefinementSolver::try_z3(pred, arg, var_refs));
+        }
+        SolverMode::FastOnly => {
+            try_layer!(
+                1,
+                RefinementSolver::try_trivial(pred, arg, var_refs, fn_decls)
+            );
+            try_layer!(2, RefinementSolver::try_interval(pred, arg, var_refs));
+        }
+        SolverMode::Layered => {
+            try_layer!(
+                1,
+                RefinementSolver::try_trivial(pred, arg, var_refs, fn_decls)
+            );
+            try_layer!(2, RefinementSolver::try_interval(pred, arg, var_refs));
+            try_layer!(
+                3,
+                RefinementSolver::try_symbolic(pred, arg, var_refs, fn_decls)
+            );
+            try_layer!(4, RefinementSolver::try_cooper(pred, arg, var_refs));
+            try_layer!(5, RefinementSolver::try_z3(pred, arg, var_refs));
+        }
+    }
+    RefResult::RuntimeCheck
+}
+
+/// Check a call-site argument against a refinement predicate (always Layered mode).
+///
+/// Used by `contracts.rs` and other callers that do not carry a `RefinementCounts`.
 pub(crate) fn check_arg_against_pred(
     arg: &Expr,
     pred: &RefExpr,
@@ -1169,5 +1240,117 @@ fn display_pred(pred: &RefExpr) -> String {
         RefExpr::FieldAccess { object, field, .. } => {
             format!("{}.{}", display_pred(object), field)
         }
+    }
+}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mvl::checker::solver::{dummy_span, RefResult};
+    use crate::mvl::parser::ast::{CmpOp, Expr, Literal, RefExpr};
+
+    fn self_gt(n: i64) -> RefExpr {
+        RefExpr::Compare {
+            op: CmpOp::Gt,
+            left: Box::new(RefExpr::Ident {
+                name: "self".into(),
+                span: dummy_span(),
+            }),
+            right: Box::new(RefExpr::Integer {
+                value: n,
+                span: dummy_span(),
+            }),
+            span: dummy_span(),
+        }
+    }
+
+    fn int_lit(v: i64) -> Expr {
+        Expr::Literal(Literal::Integer(v), dummy_span())
+    }
+
+    fn make_counts(mode: SolverMode) -> RefinementCounts {
+        RefinementCounts {
+            mode,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn layered_mode_records_layer1_for_literal() {
+        // pred: self > 0, arg: 5 — Layer 1 (trivial) proves this.
+        let pred = self_gt(0);
+        let arg = int_lit(5);
+        let var_refs = HashMap::new();
+        let fn_decls = HashMap::new();
+        let mut counts = make_counts(SolverMode::Layered);
+        let result = check_arg_against_pred_counted(&arg, &pred, &var_refs, &fn_decls, &mut counts);
+        assert_eq!(result, RefResult::Proven);
+        assert_eq!(counts.by_layer[1], 1, "Layer 1 should record the proof");
+        assert_eq!(counts.by_layer[2..].iter().sum::<usize>(), 0);
+    }
+
+    #[test]
+    fn fast_only_mode_skips_layers_3_to_5() {
+        // pred: self > 0, arg: 5 — Layer 1 still proves it in FastOnly mode.
+        let pred = self_gt(0);
+        let arg = int_lit(5);
+        let var_refs = HashMap::new();
+        let fn_decls = HashMap::new();
+        let mut counts = make_counts(SolverMode::FastOnly);
+        let result = check_arg_against_pred_counted(&arg, &pred, &var_refs, &fn_decls, &mut counts);
+        assert_eq!(result, RefResult::Proven);
+        assert_eq!(counts.by_layer[1], 1);
+    }
+
+    #[test]
+    fn fast_only_mode_falls_to_runtime_when_layers_12_cannot_decide() {
+        // A variable with no hypothesis — no layer can prove self > 0.
+        let pred = self_gt(0);
+        let arg = Expr::Ident("x".into(), dummy_span());
+        let mut var_refs = HashMap::new();
+        var_refs.insert("x".into(), None::<RefExpr>);
+        let fn_decls = HashMap::new();
+        let mut counts = make_counts(SolverMode::FastOnly);
+        let result = check_arg_against_pred_counted(&arg, &pred, &var_refs, &fn_decls, &mut counts);
+        // FastOnly skips Layer 3+ — must fall through to RuntimeCheck.
+        assert_eq!(result, RefResult::RuntimeCheck);
+        assert_eq!(counts.by_layer.iter().sum::<usize>(), 0);
+    }
+
+    #[test]
+    fn z3_only_mode_bypasses_layers_1_to_4() {
+        // pred: self > 0, arg: 5 — Z3 should prove it directly.
+        // (If Z3 feature disabled, returns RuntimeCheck — both acceptable.)
+        let pred = self_gt(0);
+        let arg = int_lit(5);
+        let var_refs = HashMap::new();
+        let fn_decls = HashMap::new();
+        let mut counts = make_counts(SolverMode::Z3Only);
+        let result = check_arg_against_pred_counted(&arg, &pred, &var_refs, &fn_decls, &mut counts);
+        // With Z3 feature: Proven (by_layer[5] = 1). Without: RuntimeCheck.
+        match result {
+            RefResult::Proven => assert_eq!(counts.by_layer[5], 1),
+            RefResult::RuntimeCheck => {} // z3 feature not enabled
+            RefResult::Failed { .. } => panic!("unexpected Failed"),
+        }
+        // Layers 1–4 must NOT have been credited.
+        assert_eq!(counts.by_layer[1..5].iter().sum::<usize>(), 0);
+    }
+
+    #[test]
+    fn check_refinements_returns_counts_with_mode() {
+        // Minimal program with one refinement call site.
+        let src = "fn pos(n: Int where self > 0) -> Int { n } fn caller() -> Int { pos(1) }";
+        let (mut parser, _) = crate::mvl::parser::Parser::new(src);
+        let prog = parser.parse_program();
+        let mut errors = Vec::new();
+        let counts = check_refinements(&prog, &mut errors, SolverMode::FastOnly);
+        assert_eq!(counts.mode, SolverMode::FastOnly);
+        // pos(1) — literal 1 satisfies self > 0, proven by Layer 1.
+        assert_eq!(counts.proven, 1);
+        assert_eq!(counts.failed, 0);
+        assert_eq!(counts.by_layer[1], 1);
     }
 }
