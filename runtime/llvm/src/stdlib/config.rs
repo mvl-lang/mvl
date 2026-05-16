@@ -12,11 +12,9 @@
 //! - tag=0 Ok:  payload = `*mut ConfigValue` (heap-allocated, free with `_mvl_config_value_drop`)
 //! - tag=1 Err: payload = `*mut MvlString`   (error message)
 
+use super::io::LlvmResult;
 use crate::memory::{mvl_string_new, MvlString};
 use libc::c_void;
-use mvl_runtime::stdlib::config::ConfigError;
-
-use super::io::LlvmResult;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -26,7 +24,18 @@ unsafe fn read_mvl_string(s: *const MvlString) -> String {
         return String::new();
     }
     let len = unsafe { (*s).len as usize };
-    if len == 0 || unsafe { (*s).ptr.is_null() } {
+    if len == 0 {
+        return String::new();
+    }
+    // Guard against malformed MvlString with inflated len (OOB read).
+    if len > (1 << 24) {
+        return String::new();
+    }
+    debug_assert!(
+        !unsafe { (*s).ptr.is_null() },
+        "MvlString invariant: ptr non-null when len > 0"
+    );
+    if unsafe { (*s).ptr.is_null() } {
         return String::new();
     }
     let bytes = unsafe { std::slice::from_raw_parts((*s).ptr as *const u8, len) };

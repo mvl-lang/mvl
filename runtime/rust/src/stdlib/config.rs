@@ -8,7 +8,7 @@
 //! No external crates — minimal hand-written TOML and JSON parsers.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 // ── ConfigError ───────────────────────────────────────────────────────────────
 
@@ -122,6 +122,11 @@ fn resolve_path(path: Option<&str>) -> Result<PathBuf, ConfigError> {
         }
         // Relative or None: search XDG then local
         Some(p) => {
+            if Path::new(p).components().any(|c| c == Component::ParentDir) {
+                return Err(ConfigError::FileNotFound {
+                    path: p.to_string(),
+                });
+            }
             let candidates: Vec<PathBuf> = xdg_home
                 .iter()
                 .map(|b| b.join(&progname).join(p))
@@ -162,8 +167,18 @@ fn find_first_existing(candidates: &[PathBuf]) -> Result<PathBuf, ConfigError> {
 // ── File parsing ──────────────────────────────────────────────────────────────
 
 fn parse_file(path: &Path) -> Result<ConfigValue, ConfigError> {
-    let content = std::fs::read_to_string(path).map_err(|_| ConfigError::FileNotFound {
-        path: path.display().to_string(),
+    let content = std::fs::read_to_string(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            ConfigError::FileNotFound {
+                path: path.display().to_string(),
+            }
+        } else {
+            ConfigError::ParseError {
+                msg: format!("could not read file: {e}"),
+                line: 0,
+                col: 0,
+            }
+        }
     })?;
     match path.extension().and_then(|e| e.to_str()) {
         Some("json") => parse_json(&content),
@@ -234,7 +249,18 @@ pub fn parse_toml(input: &str) -> Result<ConfigValue, ConfigError> {
             continue;
         }
         if line.starts_with('[') {
-            let inner = line.trim_start_matches('[').trim_end_matches(']').trim();
+            if line.starts_with("[[") {
+                return Err(ConfigError::ParseError {
+                    msg: "array-of-tables '[[...]]' is not supported".to_string(),
+                    line: line_no,
+                    col: 1,
+                });
+            }
+            let inner = line
+                .strip_prefix('[')
+                .and_then(|s| s.strip_suffix(']'))
+                .map(str::trim)
+                .unwrap_or("");
             if inner.is_empty() {
                 return Err(ConfigError::ParseError {
                     msg: "empty section header".to_string(),
@@ -363,17 +389,17 @@ pub fn parse_json(input: &str) -> Result<ConfigValue, ConfigError> {
     let bytes = input.as_bytes();
     let mut pos = 0usize;
     skip_ws(bytes, &mut pos);
-    parse_json_value(bytes, &mut pos, input).map_err(|msg| {
+    parse_json_value(bytes, &mut pos).map_err(|msg| {
         let (line, col) = byte_to_line_col(input, pos);
         ConfigError::ParseError { msg, line, col }
     })
 }
 
-fn parse_json_value(bytes: &[u8], pos: &mut usize, src: &str) -> Result<ConfigValue, String> {
+fn parse_json_value(bytes: &[u8], pos: &mut usize) -> Result<ConfigValue, String> {
     skip_ws(bytes, pos);
     match bytes.get(*pos) {
-        Some(b'{') => parse_json_object(bytes, pos, src),
-        Some(b'[') => parse_json_array(bytes, pos, src),
+        Some(b'{') => parse_json_object(bytes, pos),
+        Some(b'[') => parse_json_array(bytes, pos),
         Some(b'"') => parse_json_string(bytes, pos).map(ConfigValue::Str),
         Some(b't') => expect_lit(bytes, pos, b"true").map(|_| ConfigValue::Bool(true)),
         Some(b'f') => expect_lit(bytes, pos, b"false").map(|_| ConfigValue::Bool(false)),
@@ -384,7 +410,7 @@ fn parse_json_value(bytes: &[u8], pos: &mut usize, src: &str) -> Result<ConfigVa
     }
 }
 
-fn parse_json_object(bytes: &[u8], pos: &mut usize, src: &str) -> Result<ConfigValue, String> {
+fn parse_json_object(bytes: &[u8], pos: &mut usize) -> Result<ConfigValue, String> {
     *pos += 1;
     skip_ws(bytes, pos);
     let mut map = HashMap::new();
@@ -401,7 +427,7 @@ fn parse_json_object(bytes: &[u8], pos: &mut usize, src: &str) -> Result<ConfigV
         }
         *pos += 1;
         skip_ws(bytes, pos);
-        map.insert(key, parse_json_value(bytes, pos, src)?);
+        map.insert(key, parse_json_value(bytes, pos)?);
         skip_ws(bytes, pos);
         match bytes.get(*pos) {
             Some(b',') => {
@@ -417,7 +443,7 @@ fn parse_json_object(bytes: &[u8], pos: &mut usize, src: &str) -> Result<ConfigV
     Ok(ConfigValue::Table(map))
 }
 
-fn parse_json_array(bytes: &[u8], pos: &mut usize, src: &str) -> Result<ConfigValue, String> {
+fn parse_json_array(bytes: &[u8], pos: &mut usize) -> Result<ConfigValue, String> {
     *pos += 1;
     skip_ws(bytes, pos);
     let mut arr = Vec::new();
@@ -427,7 +453,7 @@ fn parse_json_array(bytes: &[u8], pos: &mut usize, src: &str) -> Result<ConfigVa
     }
     loop {
         skip_ws(bytes, pos);
-        arr.push(parse_json_value(bytes, pos, src)?);
+        arr.push(parse_json_value(bytes, pos)?);
         skip_ws(bytes, pos);
         match bytes.get(*pos) {
             Some(b',') => {
@@ -448,74 +474,73 @@ fn parse_json_string(bytes: &[u8], pos: &mut usize) -> Result<String, String> {
         return Err("expected '\"'".to_string());
     }
     *pos += 1;
-    let mut out = String::new();
+    let mut raw: Vec<u8> = Vec::new();
     loop {
         match bytes.get(*pos) {
             None => return Err("unterminated string".to_string()),
             Some(b'"') => {
                 *pos += 1;
-                return Ok(out);
+                return String::from_utf8(raw).map_err(|_| "invalid UTF-8 in string".to_string());
             }
             Some(b'\\') => {
                 *pos += 1;
                 match bytes.get(*pos) {
                     Some(b'"') => {
-                        out.push('"');
+                        raw.push(b'"');
                         *pos += 1;
                     }
                     Some(b'\\') => {
-                        out.push('\\');
+                        raw.push(b'\\');
                         *pos += 1;
                     }
                     Some(b'/') => {
-                        out.push('/');
+                        raw.push(b'/');
                         *pos += 1;
                     }
                     Some(b'n') => {
-                        out.push('\n');
+                        raw.push(b'\n');
                         *pos += 1;
                     }
                     Some(b't') => {
-                        out.push('\t');
+                        raw.push(b'\t');
                         *pos += 1;
                     }
                     Some(b'r') => {
-                        out.push('\r');
+                        raw.push(b'\r');
                         *pos += 1;
                     }
                     Some(b'b') => {
-                        out.push('\x08');
+                        raw.push(0x08);
                         *pos += 1;
                     }
                     Some(b'f') => {
-                        out.push('\x0C');
+                        raw.push(0x0C);
                         *pos += 1;
                     }
                     Some(b'u') => {
                         *pos += 1;
-                        let hex: Option<String> = (0..4)
-                            .map(|_| {
-                                bytes.get(*pos).map(|&b| {
-                                    *pos += 1;
-                                    b as char
-                                })
-                            })
-                            .collect();
-                        let hex = hex.ok_or("incomplete \\u escape")?;
-                        let code = u32::from_str_radix(&hex, 16)
+                        if *pos + 4 > bytes.len() {
+                            return Err("incomplete \\u escape".to_string());
+                        }
+                        let hex = std::str::from_utf8(&bytes[*pos..*pos + 4])
+                            .map_err(|_| "invalid \\u escape".to_string())?;
+                        let code = u32::from_str_radix(hex, 16)
                             .map_err(|_| format!("invalid \\u escape: {hex}"))?;
-                        out.push(char::from_u32(code).unwrap_or('\u{FFFD}'));
+                        let ch = char::from_u32(code).unwrap_or('\u{FFFD}');
+                        let mut buf = [0u8; 4];
+                        raw.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                        *pos += 4;
                     }
                     Some(&b) => {
-                        out.push('\\');
-                        out.push(b as char);
+                        raw.push(b'\\');
+                        raw.push(b);
                         *pos += 1;
                     }
                     None => return Err("unterminated escape".to_string()),
                 }
             }
             Some(&b) => {
-                out.push(b as char);
+                raw.push(b);
                 *pos += 1;
             }
         }
@@ -585,6 +610,8 @@ fn byte_to_line_col(src: &str, pos: usize) -> (i64, i64) {
 mod tests {
     use super::*;
 
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn toml_parses_scalars() {
         let src = "host = \"localhost\"\nport = 8080\nratio = 1.5\ndebug = true\n";
@@ -646,6 +673,7 @@ mod tests {
 
     #[test]
     fn env_overlay_overrides_int() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         let mut val = ConfigValue::Table({
             let mut m = HashMap::new();
             m.insert("port".to_string(), ConfigValue::Int(8080));
