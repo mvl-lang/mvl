@@ -128,10 +128,16 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
         assert_mode,
     );
 
-    // Write to a per-crate workspace so each build gets its own mvl_runtime copy.
-    // Layout: temp/mvl_build_{name}/{name}/  (crate), temp/mvl_build_{name}/mvl_runtime/ (runtime)
-    // The Cargo.toml path dep `../mvl_runtime` resolves correctly from within the crate dir.
-    let tmp_workspace = std::env::temp_dir().join(format!("mvl_build_{crate_name}"));
+    // Write to a per-crate, per-version workspace so each compiler release gets
+    // its own mvl_runtime copy. Including the compiler version prevents stale
+    // Cargo artifacts from a previous mvl release from causing type mismatches
+    // when the runtime signature changes between versions.
+    // Layout: temp/mvl_build_{version}_{name}/{name}/  (crate)
+    //         temp/mvl_build_{version}_{name}/mvl_runtime/ (runtime)
+    // The Cargo.toml path dep `./mvl_runtime` resolves from within the crate dir.
+    let compiler_version = env!("CARGO_PKG_VERSION");
+    let tmp_workspace =
+        std::env::temp_dir().join(format!("mvl_build_{compiler_version}_{crate_name}"));
     let tmp_dir = tmp_workspace.join(&crate_name);
     let src_dir = tmp_dir.join("src");
     fs::create_dir_all(&src_dir).unwrap_or_else(|e| {
