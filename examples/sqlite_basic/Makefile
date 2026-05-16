@@ -13,16 +13,16 @@ help: ## Show this help
 guard-mvl:
 	@$(MVL) --version > /dev/null 2>&1 || { echo "Run 'make build' from repo root first."; exit 1; }
 
-check: guard-mvl ## Type-check pkg.sqlite source (main.mvl requires mvl build — pkg.* not resolved by check)
-	$(MVL) check $(DIR)../../pkg/sqlite/src/
+check: guard-mvl ## Type-check example files (main.mvl + main_test.mvl)
+	cd $(REPO_ROOT) && $(abspath $(MVL)) check $(DIR)
 
-test: guard-mvl ## Build and run integration test (asserts row counts and scalar query)
-	cd $(REPO_ROOT) && $(abspath $(MVL)) run $(DIR)main.mvl
+test: guard-mvl ## Run unit tests from main_test.mvl
+	cd $(REPO_ROOT) && $(abspath $(MVL)) test $(DIR)
 
-assurance: guard-mvl ## Full assurance: pkg.sqlite check + tests + assurance report
-	$(MVL) check $(DIR)../../pkg/sqlite/src/
-	$(MVL) test $(DIR)../../pkg/sqlite/src/
-	$(MVL) assurance $(DIR)../../pkg/sqlite/src/ --verbose
+assurance: guard-mvl ## Full assurance: check + unit tests + assurance report
+	cd $(REPO_ROOT) && $(abspath $(MVL)) check $(DIR)
+	cd $(REPO_ROOT) && $(abspath $(MVL)) test $(DIR)
+	cd $(REPO_ROOT) && $(abspath $(MVL)) assurance $(DIR) --verbose
 
 run: guard-mvl ## Run the example (runs from repo root so pkg.* resolution finds .mvl/pkg/sqlite)
 	cd $(REPO_ROOT) && $(abspath $(MVL)) run $(DIR)main.mvl
