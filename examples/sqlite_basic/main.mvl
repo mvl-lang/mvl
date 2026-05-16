@@ -5,7 +5,7 @@
 //
 // Run: mvl run examples/sqlite_basic/main.mvl
 
-use pkg.sqlite.{SqliteDb, SqliteError, open, execute, query, close}
+use pkg.sqlite.{SqliteDb, SqliteError, open, execute, query, query_by_min_age, close}
 use std.db.{Value}
 use std.io.{println}
 use std.collections.{map_get}
@@ -46,8 +46,7 @@ fn main() -> Unit ! DB + FileRead + FileWrite + Console {
         }
     }
 
-    let rows: List[Map[String, Value]] = match query(db, "SELECT id, name, age FROM users WHERE age > ?",
-                                      [Value::Int(26)]) {
+    let rows: List[Map[String, Value]] = match query_by_min_age(db, 26) {
         Err(SqliteError::NotFound)      => { println("no such table"); return }
         Err(SqliteError::InvalidSql(m)) => { println("bad query: ".concat(m)); return }
         Err(_)                          => { println("query failed"); return }

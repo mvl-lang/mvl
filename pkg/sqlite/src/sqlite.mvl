@@ -180,6 +180,19 @@ pub partial fn query(val db: SqliteDb, sql: Clean[String], params: List[Value]) 
     }
 }
 
+/// Query rows where a single integer column exceeds `min_age`.
+///
+/// The refinement `min_age >= 0` documents that a negative threshold is
+/// nonsensical for any age or count field.  Z3 verifies each call site
+/// satisfies the constraint at compile time — passing a literal like `26`
+/// is provable immediately; passing an unrefined variable is a type error.
+///
+/// Example:
+///   let rows = query_by_min_age(db, 26)?;
+pub partial fn query_by_min_age(val db: SqliteDb, min_age: Int where min_age >= 0) -> Result[List[Map[String, Value]], SqliteError] ! DB {
+    query(db, "SELECT id, name, age FROM users WHERE age > ?", [Value::Int(min_age)])
+}
+
 /// Close the database and release all resources.
 pub fn close(db: SqliteDb) -> Unit {
     sqlite_close(db._handle)
