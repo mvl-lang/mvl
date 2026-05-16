@@ -4,6 +4,11 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.119.0] — 2026-05-16
+
+### Added
+- Builtin rewrite rules for Layer 3 symbolic execution: 17 rules for String `.len()`/`.is_empty()`, List `.len()`, Option `.is_some()`/`.is_none()`, and Result `.is_ok()`/`.is_err()` — enables Layers 1/2 to prove predicates previously requiring runtime checks (#596, #791)
+
 ## [0.118.0] — 2026-05-16
 
 ### Added
