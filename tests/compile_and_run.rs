@@ -595,29 +595,31 @@ fn log_output_formats_correctly() {
     let stderr = String::from_utf8_lossy(&out.stderr);
 
     assert!(
-        stderr.contains("[DEBUG "),
-        "expected [DEBUG in stderr:\n{stderr}"
+        stderr.contains("DEBUG "),
+        "expected DEBUG in stderr:\n{stderr}"
     );
     assert!(stderr.contains("v=1"), "expected v=1 in stderr:\n{stderr}");
     assert!(
-        stderr.contains("[INFO "),
-        "expected [INFO in stderr:\n{stderr}"
+        stderr.contains("INFO  "),
+        "expected INFO in stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("[WARN "),
-        "expected [WARN in stderr:\n{stderr}"
+        stderr.contains("WARN  "),
+        "expected WARN in stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("[ERROR "),
-        "expected [ERROR in stderr:\n{stderr}"
+        stderr.contains("ERROR "),
+        "expected ERROR in stderr:\n{stderr}"
     );
 
-    // ISO 8601 timestamp — at least one log line must contain NNNNThh:mm:ssZ shape
+    // Plain timestamp — YYYY-MM-DD HH:MM:SS prefix on each log line
     assert!(
         stderr.lines().any(|l| {
-            l.contains('T') && l.contains("Z]") && l.chars().any(|c| c.is_ascii_digit())
+            l.len() > 19
+                && l.chars().take(4).all(|c| c.is_ascii_digit())
+                && l.chars().nth(10) == Some(' ')
         }),
-        "expected ISO 8601 timestamp (T...Z]) on a log line in stderr:\n{stderr}"
+        "expected plain timestamp (YYYY-MM-DD HH:MM:SS) on a log line in stderr:\n{stderr}"
     );
 
     // Field key=value pairs present

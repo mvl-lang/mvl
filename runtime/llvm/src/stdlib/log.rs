@@ -22,7 +22,9 @@ use std::collections::HashMap;
 use std::slice;
 
 use crate::memory::{MvlMap, MvlString};
-use mvl_runtime::stdlib::log::{log_debug, log_error, log_info, log_warn};
+use mvl_runtime::stdlib::log::{
+    log_debug, log_error, log_info, log_set_format, log_warn, LogFormat,
+};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -85,6 +87,23 @@ unsafe fn read_mvl_map(m: *const MvlMap) -> HashMap<String, String> {
 
 // ── C-ABI exports ─────────────────────────────────────────────────────────────
 
+/// Set the output format for all subsequent log calls.
+///
+/// Enum discriminant: 0 = Plain, 1 = Logfmt, 2 = Json (matches LogFormat declaration order).
+/// Unknown discriminants default to Plain.
+///
+/// # Safety
+/// No pointers — always safe to call.
+#[no_mangle]
+pub extern "C" fn _mvl_log_set_format(fmt: i8) {
+    let format = match fmt {
+        1 => LogFormat::Logfmt,
+        2 => LogFormat::Json,
+        _ => LogFormat::Plain,
+    };
+    log_set_format(format);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,6 +138,19 @@ mod tests {
     fn read_mvl_map_null_returns_empty() {
         let m = unsafe { read_mvl_map(std::ptr::null()) };
         assert!(m.is_empty());
+    }
+
+    #[test]
+    fn set_format_discriminants() {
+        use mvl_runtime::stdlib::log::{get_current_format, LogFormat};
+        _mvl_log_set_format(0);
+        assert_eq!(get_current_format(), LogFormat::Plain);
+        _mvl_log_set_format(1);
+        assert_eq!(get_current_format(), LogFormat::Logfmt);
+        _mvl_log_set_format(2);
+        assert_eq!(get_current_format(), LogFormat::Json);
+        _mvl_log_set_format(99);
+        assert_eq!(get_current_format(), LogFormat::Plain);
     }
 
     #[test]

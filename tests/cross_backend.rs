@@ -397,7 +397,7 @@ fn cross_backend_log_stderr() {
         String::from_utf8_lossy(&transpiler.stderr)
     );
     let t_stderr = String::from_utf8_lossy(&transpiler.stderr);
-    for level in &["[DEBUG ", "[INFO ", "[WARN ", "[ERROR "] {
+    for level in &["DEBUG ", "INFO  ", "WARN  ", "ERROR "] {
         assert!(
             t_stderr.contains(level),
             "transpiler stderr missing {level}:\n{t_stderr}"
@@ -423,16 +423,20 @@ fn cross_backend_log_stderr() {
     let l_stderr = String::from_utf8_lossy(&llvm.stderr);
 
     // Both backends must emit all four level tags.
-    for level in &["[DEBUG ", "[INFO ", "[WARN ", "[ERROR "] {
+    for level in &["DEBUG ", "INFO  ", "WARN  ", "ERROR "] {
         assert!(
             l_stderr.contains(level),
             "LLVM stderr missing {level}:\n{l_stderr}"
         );
     }
 
-    // ISO 8601 shape: T separator and Z UTC suffix.
-    assert!(l_stderr.contains('T'), "LLVM stderr: missing ISO 8601 T");
-    assert!(l_stderr.contains('Z'), "LLVM stderr: missing ISO 8601 Z");
+    // Plain timestamp shape: YYYY-MM-DD HH:MM:SS prefix.
+    assert!(
+        l_stderr.lines().any(|l| l.len() > 10
+            && l.chars().take(4).all(|c| c.is_ascii_digit())
+            && l.chars().nth(10) == Some(' ')),
+        "LLVM stderr: missing plain timestamp (YYYY-MM-DD HH:MM:SS)"
+    );
 
     // Field key=value pairs.
     assert!(l_stderr.contains("v=1"), "LLVM stderr: missing v=1");
@@ -455,10 +459,10 @@ fn cross_backend_log_stderr() {
     let log_lines = |s: &str| -> usize {
         s.lines()
             .filter(|l| {
-                l.contains("[DEBUG ")
-                    || l.contains("[INFO ")
-                    || l.contains("[WARN ")
-                    || l.contains("[ERROR ")
+                l.contains("DEBUG ")
+                    || l.contains("INFO  ")
+                    || l.contains("WARN  ")
+                    || l.contains("ERROR ")
             })
             .count()
     };
