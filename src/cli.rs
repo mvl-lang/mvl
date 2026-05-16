@@ -57,17 +57,17 @@ pub(super) fn dispatch(args: &[String]) {
             let stdlib_profile = args::parse_stdlib_profile(args);
             let format_json = args.iter().any(|a| a == "--format=json");
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
-            let solver_mode = args::parse_solver_mode_or_exit(args);
-            let refinement_stats = args.iter().any(|a| a == "--refinement-stats");
             check::run(
                 &path,
                 req_filter,
-                error_limit,
-                stdlib_profile,
-                format_json,
-                verbose,
-                solver_mode,
-                refinement_stats,
+                check::CheckOptions {
+                    error_limit,
+                    stdlib_profile,
+                    format_json,
+                    verbose,
+                    solver_mode: args::parse_solver_mode_or_exit(args),
+                    refinement_stats: args.iter().any(|a| a == "--refinement-stats"),
+                },
             );
         }
         "build" => {

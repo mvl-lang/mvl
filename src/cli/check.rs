@@ -72,21 +72,29 @@ pub fn maybe_check_proven_stdlib_or_exit(profile: &str) {
     process::exit(1);
 }
 
+/// Options for the `mvl check` command.
+pub struct CheckOptions {
+    pub error_limit: usize,
+    pub stdlib_profile: &'static str,
+    pub format_json: bool,
+    pub verbose: bool,
+    pub solver_mode: SolverMode,
+    pub refinement_stats: bool,
+}
+
 /// Parse and type-check a .mvl file or all .mvl files in a directory.
 ///
 /// When `req_filter` is `Some(N)`, only the verification pass for Req N is run
 /// and its verdict is printed; errors for other requirements are suppressed.
-#[allow(clippy::too_many_arguments)]
-pub fn run(
-    path: &str,
-    req_filter: Option<u8>,
-    error_limit: usize,
-    stdlib_profile: &str,
-    format_json: bool,
-    verbose: bool,
-    solver_mode: SolverMode,
-    refinement_stats: bool,
-) {
+pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
+    let CheckOptions {
+        error_limit,
+        stdlib_profile,
+        format_json,
+        verbose,
+        solver_mode,
+        refinement_stats,
+    } = opts;
     if verbose {
         eprintln!("stdlib profile: {stdlib_profile}");
     }
