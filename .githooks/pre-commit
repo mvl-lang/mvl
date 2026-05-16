@@ -12,11 +12,10 @@ if echo "$staged" | grep -qE '\.rs$'; then
   echo "pre-commit: cargo clippy"
   cargo clippy -- -D warnings || { echo "Fix clippy warnings before committing."; exit 1; }
 
-  echo "pre-commit: cargo build -p mvl_runtime_c"
-  cargo build -p mvl_runtime_c --quiet || { echo "Failed to build mvl_runtime_c."; exit 1; }
-
-  echo "pre-commit: cargo test"
-  cargo test --quiet -- --test-threads=1 || { echo "Tests must pass before committing."; exit 1; }
+  # Fast unit tests only (926 tests in ~0.5s)
+  # Full integration tests (compile_and_run, cross_backend) run in CI
+  echo "pre-commit: cargo test --lib (unit tests)"
+  cargo test --lib --quiet || { echo "Unit tests must pass before committing."; exit 1; }
 fi
 
 # MVL compiler sources → verify + test

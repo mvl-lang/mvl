@@ -182,9 +182,13 @@ jobs:
         if: needs.changes.outputs.rust == 'true'
         run: make validate-keywords
 
-      - name: Test
+      - name: Test (fast — unit + type_checker)
         if: needs.changes.outputs.rust == 'true'
-        run: cargo test
+        run: cargo test --lib --test type_checker --test parser --test requirements
+
+      - name: Test (full — integration)
+        if: needs.changes.outputs.rust == 'true' && github.event_name == 'push'
+        run: cargo test --test compile_and_run --test cross_backend --test stdlib
 
       - name: MVL check compiler
         if: needs.changes.outputs.compiler == 'true'
