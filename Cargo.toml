@@ -4,7 +4,7 @@ exclude = ["fuzz"]
 
 [package]
 name = "mvl"
-version = "0.122.0"
+version = "0.123.0"
 edition = "2021"
 description = "MVL — Minimum Verification Language compiler"
 license = "Apache-2.0"
@@ -29,3 +29,10 @@ z3 = { version = "0.12", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "refinement_solver"
+harness = false
