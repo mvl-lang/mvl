@@ -16,7 +16,8 @@ guard-mvl:
 check: guard-mvl ## Type-check pkg.sqlite source (main.mvl requires mvl build — pkg.* not resolved by check)
 	$(MVL) check $(DIR)../../pkg/sqlite/src/
 
-test: check ## Alias for check
+test: guard-mvl ## Build and run integration test (asserts row counts and scalar query)
+	cd $(REPO_ROOT) && $(abspath $(MVL)) run $(DIR)main.mvl
 
 assurance: guard-mvl ## Full assurance: pkg.sqlite check + tests + assurance report
 	$(MVL) check $(DIR)../../pkg/sqlite/src/

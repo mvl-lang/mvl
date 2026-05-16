@@ -5,7 +5,7 @@
 //
 // Run: mvl run examples/sqlite_basic/main.mvl
 
-use pkg.sqlite.{SqliteDb, SqliteError, open, execute, query, query_by_min_age, close}
+use pkg.sqlite.{SqliteDb, SqliteError, open, execute, query, query_scalar, query_by_min_age, close}
 use std.db.{Value}
 use std.io.{println}
 use std.collections.{map_get}
@@ -53,6 +53,9 @@ fn main() -> Unit ! DB + FileRead + FileWrite + Console {
         Ok(rows)                        => rows,
     };
 
+    // Alice (30) and Carol (35) are older than 26; Bob (25) is not.
+    assert_eq(rows.len(), 2);
+
     println("Users older than 26:");
     for row in rows {
         let id: String = match map_get(row, "id") {
@@ -78,6 +81,18 @@ fn main() -> Unit ! DB + FileRead + FileWrite + Console {
         };
         println("  id=".concat(id).concat(" name=").concat(name).concat(" age=").concat(age));
     }
+
+    // Scalar query: COUNT(*) returns the total number of users inserted.
+    let count_val: Value = match query_scalar(db, "SELECT COUNT(*) FROM users", []) {
+        Err(_) => { println("count failed"); return }
+        Ok(v)  => v,
+    };
+    let count: Int = match count_val {
+        Value::Int(n) => n,
+        _             => -1,
+    };
+    assert_eq(count, 3);
+    println("Total users: ".concat(count.to_string()));
 
     close(db)
 }
