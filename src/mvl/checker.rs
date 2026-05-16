@@ -123,9 +123,9 @@ pub fn check_with_two_preludes_mode(
         &mut checker.errors,
         solver_mode,
     );
-    contracts::check_contracts(prog, &mut checker.errors);
+    contracts::check_contracts(prog, &mut checker.errors, solver_mode);
     session::check_session_types(prog, &mut checker.errors);
-    contracts::check_actor_field_refinements(prog, &mut checker.errors);
+    contracts::check_actor_field_refinements(prog, &mut checker.errors, solver_mode);
 
     // Determine whether any function imported from the prelude and called by
     // `prog` carries IFC-labeled parameters — exercises the security lattice
@@ -1284,6 +1284,44 @@ fn f(a: A, b: B) -> Bool { a == A::X && b == B::P }";
                 |e| matches!(e, CheckError::UndefinedVariable { name, .. } if name == "Status::Absent")
             ),
             "qualified enum variant as fn arg should not emit UndefinedVariable, got: {errors:?}"
+        );
+    }
+
+    // ── #798: --refinement-solver flag affects contract checking ─────────────
+
+    #[test]
+    fn solver_mode_fast_only_applies_to_requires_contract() {
+        // Verify that SolverMode flows through to contract checking.
+        // Layer 1 (trivial) proves `pos(1)` in both Layered and FastOnly.
+        // The contract path must use the supplied mode, not a hardcoded Layered.
+        let src = "fn pos(n: Int) -> Int requires n > 0 { n } fn caller() -> Int { pos(1) }";
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        let result_fast = check_with_two_preludes_mode(&[], &[], &prog, SolverMode::FastOnly);
+        let result_layered = check_with_two_preludes_mode(&[], &[], &prog, SolverMode::Layered);
+        assert!(
+            result_fast.is_ok(),
+            "FastOnly should not produce errors for simple requires: {:?}",
+            result_fast.errors
+        );
+        assert!(
+            result_layered.is_ok(),
+            "Layered should not produce errors for simple requires: {:?}",
+            result_layered.errors
+        );
+    }
+
+    #[test]
+    fn solver_mode_fast_only_applies_to_ensures_contract() {
+        // Layer 1 proves `ensures result > 0` for `return 1` in both modes.
+        let src = "fn positive() -> Int ensures result > 0 { 1 }";
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        let result = check_with_two_preludes_mode(&[], &[], &prog, SolverMode::FastOnly);
+        assert!(
+            result.is_ok(),
+            "FastOnly should not error on Layer-1-provable ensures: {:?}",
+            result.errors
         );
     }
 }
