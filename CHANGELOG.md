@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.117.0] — 2026-05-16
+
+### Added
+- Builtin SMT axioms for Z3 Layer 5 fallback: `len(self)` axioms for string/list length predicates, non-negativity axioms, and string literal grounding (#597, #792)
+- Layered refinement solver dispatch with Z3 fallback and CLI flags `--refinement-solver` and `--refinement-stats` (#594, #796)
+
 ## [0.116.0] — 2026-05-16
 
 ### Added
