@@ -4,6 +4,14 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.119.0] — 2026-05-16
+
+### Added
+
+- **std.config configuration loading** (#804) — `load_config(path: Option[String], prefix: String) -> Result[ConfigValue, ConfigError]` with XDG-compliant layered resolution: `None` searches `$XDG_CONFIG_HOME/<progname>/config.toml` then `./config.toml`, explicit paths override; env var overlay applies `<PREFIX>_<KEY>` on top of any file values; `ConfigValue` enum (Null, Bool, Int, Float, Str, Table, Array); `ConfigError` with `FileNotFound` and `ParseError` variants; minimal hand-written TOML and JSON parsers (no external crates); cross-backend support (Rust transpiler + LLVM C-ABI). The typed `load_config[T]` variant is aspirational — requires derive/protocol support not yet in MVL.
+
+---
+
 ## [0.118.0] — 2026-05-16
 
 ### Added
@@ -26,7 +34,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 - Stdlib structured error enums: `NetError`, `IoError`, `RegexError`, `JsonError`, `ProcessError` replacing `Result[T, String]` across all stdlib modules (#782)
 - `LlvmEnumError` ABI struct for LLVM runtime enum error encoding
 - ADR-0032: Stdlib structured error enums
-
 ## [0.115.0] — 2026-05-16
 
 ### Added

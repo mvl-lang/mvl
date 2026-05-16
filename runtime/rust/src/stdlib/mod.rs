@@ -15,6 +15,7 @@
 //! - Minimal dependencies — `sha2`, `hex`, `getrandom` for crypto backing; everything else uses `std` only.
 
 pub mod args;
+pub mod config;
 pub mod crypto;
 pub mod env;
 pub mod io;

@@ -1,0 +1,67 @@
+//! std.config — configuration loading with XDG convention and env overlay.
+//!
+//! Loads application config as a typed value tree. Use field accessors on
+//! the returned ConfigValue to extract what you need.
+//!
+//! Import:
+//!   use std.config.{load_config, ConfigValue, ConfigError}
+//!
+//! Effects: FileRead (reading config files).
+//!
+//! Resolution order (highest priority last wins):
+//!   1. XDG    — $XDG_CONFIG_HOME/<progname>/config.toml
+//!   2. Local  — ./config.toml
+//!   3. path   — explicit file path if Some (overrides XDG + local)
+//!   4. ENV    — <PREFIX>_<KEY> vars override any file value
+//!
+//! File format detected from extension (.toml default, .json supported).
+//! IFC: config file content is untrusted — use sanitize() before sensitive use.
+
+// ── Error type ────────────────────────────────────────────────────────────────
+
+/// Error variants returned by load_config.
+pub type ConfigError = enum {
+    /// No config file found at any searched path.
+    FileNotFound { path: String },
+    /// File content could not be parsed (TOML or JSON syntax error).
+    ParseError { msg: String, line: Int, col: Int },
+}
+
+// ── Value type ────────────────────────────────────────────────────────────────
+
+/// A parsed configuration value.
+///
+/// Pattern-match to extract the value you need:
+///
+///   let cfg = load_config(None, "MYAPP")?
+///   match cfg.get("port") {
+///     Some(ConfigValue::Int(p)) => p,
+///     _ => 8080,
+///   }
+pub type ConfigValue = enum {
+    Null,
+    Bool(Bool),
+    Int(Int),
+    Float(Float),
+    Str(String),
+    Table(Map[String, ConfigValue]),
+    Array(List[ConfigValue]),
+}
+
+// ── Config loading ────────────────────────────────────────────────────────────
+
+/// Load application configuration following the standard layered convention.
+///
+/// Resolution order (later layers override earlier ones):
+///   1. XDG config  — $XDG_CONFIG_HOME/<progname>/config.toml
+///                     (or ~/.config/<progname>/config.toml if XDG_CONFIG_HOME unset)
+///   2. Local file  — ./config.toml in the current working directory
+///   3. Explicit    — path (if Some) replaces the auto-resolved file
+///   4. Env overlay — vars matching <PREFIX>_<KEY> override any file value
+///                    (e.g. prefix "MYAPP", key "port" → MYAPP_PORT)
+///
+/// Returns Err(FileNotFound) only when no config source is found at all.
+/// Missing env vars are silently skipped; missing file keys are preserved as-is.
+///
+/// Requires ! FileRead because reading a file is an observable effect.
+pub builtin fn load_config(path: Option[String], prefix: String) -> Result[ConfigValue, ConfigError] ! FileRead
