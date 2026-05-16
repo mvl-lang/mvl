@@ -57,3 +57,10 @@
 // List kernel (list_len, list_get, list_push, list_slice, list_concat,
 //   list_contains)
 //   Blocked on: verified list model (#314)
+
+// std/config.mvl — load_config
+//   The FileRead boundary (open, read) is an OS builtin and stays trusted.
+//   The TOML and JSON parsers are pure computation and can become proven MVL
+//   once a verified string/byte model exists (#314). Until then the entire
+//   function delegates to the Rust runtime.
+//   Blocked on: verified string/byte model (#314)
