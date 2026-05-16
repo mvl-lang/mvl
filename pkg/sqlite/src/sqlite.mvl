@@ -50,7 +50,7 @@ pub type SqliteError = enum {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-fn make_error(db: Int) -> SqliteError {
+total fn make_error(db: Int) -> SqliteError {
     let code: Int = sqlite_errno(db);
     let msg: String = sqlite_errmsg(db);
     match code {
@@ -62,7 +62,7 @@ fn make_error(db: Int) -> SqliteError {
     }
 }
 
-fn blob_to_wire(bytes: List[Int]) -> String {
+total fn blob_to_wire(bytes: List[Int]) -> String {
     if bytes.len() == 0 {
         ""
     } else {
@@ -71,7 +71,7 @@ fn blob_to_wire(bytes: List[Int]) -> String {
     }
 }
 
-fn wire_to_blob(csv: String) -> List[Int] {
+total fn wire_to_blob(csv: String) -> List[Int] {
     if csv == "" {
         []
     } else {
@@ -79,7 +79,7 @@ fn wire_to_blob(csv: String) -> List[Int] {
     }
 }
 
-fn bind_params(db: Int, params: List[Value]) -> Unit {
+total fn bind_params(db: Int, params: List[Value]) -> Unit {
     sqlite_param_reset(db);
     for p in params {
         match p {
@@ -96,7 +96,7 @@ fn bind_params(db: Int, params: List[Value]) -> Unit {
 // read_cell: decode one result cell by type-code.
 // row and col are refined (>= 0) so callers with proven-literal indices
 // are fully verified by the 5-layer SMT solver (Req 10).
-fn read_cell(rh: Int, row: Int where row >= 0, col: Int where col >= 0) -> Value {
+total fn read_cell(rh: Int, row: Int where row >= 0, col: Int where col >= 0) -> Value {
     match sqlite_result_cell_type(rh, row, col) {
         0 => Value::Null,
         1 => Value::Bool(sqlite_result_cell_bool(rh, row, col)),
@@ -154,7 +154,7 @@ partial fn collect_rows(rh: Int) -> List[Map[String, Value]] {
 /// `path` must be a trusted string — use a literal or a value validated by
 /// the caller. This mirrors the `Clean[String]` requirement on `execute`/`query`
 /// and prevents tainted user input from reaching the filesystem.
-pub fn open(path: Clean[String]) -> Result[SqliteDb, SqliteError] ! DB + FileRead + FileWrite {
+pub total fn open(path: Clean[String]) -> Result[SqliteDb, SqliteError] ! DB + FileRead + FileWrite {
     let h: Int = sqlite_open(path);
     if h == -1 {
         Err(make_error(-1))
@@ -168,7 +168,7 @@ pub fn open(path: Clean[String]) -> Result[SqliteDb, SqliteError] ! DB + FileRea
 /// `sql` must be a trusted string literal or validated query — use `?`
 /// placeholders and `params` for untrusted values (prevents SQL injection).
 /// Returns the number of rows affected.
-pub fn execute(val db: SqliteDb, sql: Clean[String], params: List[Value]) -> Result[Int, SqliteError] ! DB {
+pub total fn execute(val db: SqliteDb, sql: Clean[String], params: List[Value]) -> Result[Int, SqliteError] ! DB {
     bind_params(db._handle, params);
     let affected: Int = sqlite_execute(db._handle, sql);
     if affected == -1 {
@@ -228,6 +228,6 @@ pub partial fn query_by_min_age(val db: SqliteDb, min_age: Int where min_age >= 
 }
 
 /// Close the database and release all resources.
-pub fn close(db: SqliteDb) -> Unit {
+pub total fn close(db: SqliteDb) -> Unit {
     sqlite_close(db._handle)
 }
