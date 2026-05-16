@@ -60,6 +60,64 @@ pub fn log_set_format(fmt: LogFormat) {
     FORMAT.with(|f| f.set(fmt));
 }
 
+// ── Level filtering ───────────────────────────────────────────────────────────
+
+/// Minimum severity threshold.  Records below this level are silently dropped.
+///
+/// Set via [`log_set_min_level`]. Default is [`LogLevel::Info`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LogLevel {
+    /// Verbose diagnostics — not emitted in production by default.
+    Debug = 0,
+    /// Normal operational events (default).
+    Info = 1,
+    /// Recoverable anomalies.
+    Warn = 2,
+    /// Operation-level failures.
+    Error = 3,
+}
+
+thread_local! {
+    static MIN_LEVEL: Cell<LogLevel> = const { Cell::new(LogLevel::Debug) };
+}
+
+/// Returns the current minimum log level for this thread.
+pub fn get_min_level() -> LogLevel {
+    MIN_LEVEL.with(Cell::get)
+}
+
+/// Sets the minimum log level.  Records below this level are silently dropped.
+pub fn log_set_min_level(level: LogLevel) {
+    MIN_LEVEL.with(|l| l.set(level));
+}
+
+// ── Parsing helpers ───────────────────────────────────────────────────────────
+
+/// Parse a log level from a string.
+///
+/// Case-sensitive. Recognised values: "debug", "warn", "error".
+/// Any other string (including "info") maps to `Info` (safe default).
+pub fn parse_log_level(s: String) -> LogLevel {
+    match s.as_str() {
+        "debug" => LogLevel::Debug,
+        "warn" => LogLevel::Warn,
+        "error" => LogLevel::Error,
+        _ => LogLevel::Info,
+    }
+}
+
+/// Parse a log format from a string.
+///
+/// Case-sensitive. Recognised values: "logfmt", "json".
+/// Any other string (including "plain") maps to `Plain` (safe default).
+pub fn parse_log_format(s: String) -> LogFormat {
+    match s.as_str() {
+        "logfmt" => LogFormat::Logfmt,
+        "json" => LogFormat::Json,
+        _ => LogFormat::Plain,
+    }
+}
+
 // ── Sanitization ──────────────────────────────────────────────────────────────
 
 fn sanitize(s: &str) -> String {
@@ -169,6 +227,16 @@ pub(crate) fn format_json(
 // ── Internal dispatch ─────────────────────────────────────────────────────────
 
 fn log_internal(level: &str, msg: String, fields: HashMap<String, String>) {
+    // Drop records below the configured minimum level.
+    let current = match level {
+        "DEBUG" => LogLevel::Debug,
+        "WARN" => LogLevel::Warn,
+        "ERROR" => LogLevel::Error,
+        _ => LogLevel::Info,
+    };
+    if current < get_min_level() {
+        return;
+    }
     let timestamp = format_instant(now(), "%Y-%m-%dT%H:%M:%SZ".to_string());
     let line = match get_current_format() {
         LogFormat::Plain => format_plain(level, &timestamp, &msg, &fields),

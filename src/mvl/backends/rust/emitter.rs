@@ -596,6 +596,16 @@ impl RustEmitter {
                                 self.line(&format!("use crate::{};", ud.path.join("::")));
                             }
                         }
+                    } else if ud.path.len() == 1 {
+                        // Brace-style sibling import: `use mod::{A, B, C}` → path = ["mod"].
+                        // The brace items were discarded during parsing, so emit a glob
+                        // import to bring all public items into scope.
+                        let mod_name = &ud.path[0];
+                        let is_std = mod_name == "std";
+                        let is_pkg = mod_name == "pkg";
+                        if !is_std && !is_pkg && !self.test_extern_stubs {
+                            self.line(&format!("use crate::{}::*;", mod_name));
+                        }
                     }
                     continue; // use decls don't get a trailing blank line
                 }

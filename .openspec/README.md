@@ -28,6 +28,14 @@ Run `make assurance` to validate traceability. Run `make assurance-gate` in CI.
 | [002](specs/002-effect-system/spec.md) | Effect System | Effect tracking, capabilities, purity | Draft |
 | [003](specs/003-information-flow/spec.md) | Information Flow Control | Tainted/Clean/Secret labels, security lattice, declassification | Draft |
 
+## Patterns
+
+Reusable code patterns and implementation guides for common MVL idioms.
+
+| # | Pattern | Focus |
+|---|---------|-------|
+| [001](patterns/001-config.md) | Layered Configuration | Defaults → TOML → Env → CLI → Struct |
+
 ## ADRs
 
 | # | ADR | Status |

@@ -1,7 +1,11 @@
-// actor_webserver/server.mvl — real HTTP server on port 8080.
+// actor_webserver/main.mvl — concurrent HTTP server with actor-per-request.
 //
-// Binds to 127.0.0.1:8080 and loops accepting connections indefinitely.
-// Each request is handled sequentially (one connection at a time).
+// Each accepted connection is handed to a fresh RequestHandler actor.
+// The actor owns the TcpStream exclusively (iso capability) and terminates
+// after writing the response — no shared mutable state between requests.
+//
+// Config is loaded in layers: defaults → config.toml → WEBSERVER_* env vars → CLI args.
+// See: config.mvl and .openspec/patterns/001-config.md
 //
 // Routes:
 //   GET /health  → 200 ok
@@ -9,14 +13,17 @@
 //   *            → 404 Not Found
 //
 // Usage:
-//   make run   (from examples/actor_webserver/)
-//   curl http://localhost:8080/health
-//   curl http://localhost:8080/users
+//   make run                              (reads config.toml, defaults to 127.0.0.1:8080)
+//   WEBSERVER_PORT=9090 make run          (env override)
+//   ../../target/debug/mvl run main.mvl -- --port 9090  (CLI override)
 
+use config::{ServerConfig, ConfigLoadError, load_config}
 use std.net.{TcpListener, TcpStream, tcp_listen, tcp_accept, tcp_read_request, tcp_write,
              tcp_close_listener, tcp_close_stream, http_request_path, net_error_msg,
              NetError}
 use std.strings.{str_starts_with}
+use std.log.{LogLevel, LogFormat, log_debug, log_info, log_warn, log_error,
+             log_set_format, log_set_min_level}
 
 fn ok_response(body: String) -> String {
     "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: "
@@ -39,37 +46,74 @@ fn route(path: String) -> String {
     }
 }
 
-fn handle(stream: TcpStream) -> Unit ! Console + Net {
-    match tcp_read_request(stream) {
-        Err(e) => println("read error: ".concat(net_error_msg(e))),
-        Ok(raw) => {
-            let path: String = http_request_path(raw);
-            println("  → ".concat(path));
-            let resp: String = route(path);
-            match tcp_write(stream, resp) {
-                Ok(_)  => tcp_close_stream(stream),
-                Err(e) => {
-                    println("write error: ".concat(net_error_msg(e)));
-                    tcp_close_stream(stream)
-                },
-            }
-        },
-    }
-}
+// ── Actor-per-request ─────────────────────────────────────────────────────
+//
+// Each RequestHandler owns exactly one TcpStream (iso — no aliasing).
+// It reads the request, routes it, writes the response, closes the stream,
+// and then terminates.  No state persists between requests.
 
-partial fn serve(listener: TcpListener) -> Unit ! Console + Net {
-    while true {
-        match tcp_accept(listener) {
-            Err(e)     => println("accept error: ".concat(net_error_msg(e))),
-            Ok(stream) => handle(stream),
+actor RequestHandler {
+    // No fields — each actor is stateless.  All data lives on the stack.
+
+    // Behavior: read one HTTP request, route it, reply, close.
+    //
+    //   iso stream — ownership of the socket transferred from the accept loop.
+    //                Compiler guarantees no other actor or thread touches it.
+    pub fn handle(iso stream: TcpStream) ! Log + Net {
+        match tcp_read_request(stream) {
+            Err(e) => log_warn("read error", {"error": net_error_msg(e)}),
+            Ok(raw) => {
+                let path: String = http_request_path(raw);
+                log_debug("request", {"path": path});
+                let resp: String = route(path);
+                match tcp_write(stream, resp) {
+                    Ok(_)  => tcp_close_stream(stream),
+                    Err(e) => {
+                        log_error("write error", {"error": net_error_msg(e)});
+                        tcp_close_stream(stream)
+                    },
+                }
+            },
         }
     }
 }
 
-partial fn main() -> Unit ! Console + Net {
-    println("listening on http://127.0.0.1:8080  (Ctrl-C to stop)");
-    match tcp_listen("127.0.0.1", 8080) {
-        Err(e)       => println("listen failed: ".concat(net_error_msg(e))),
+// ── Accept loop ───────────────────────────────────────────────────────────
+
+partial fn serve(listener: TcpListener) -> Unit ! Log + Net {
+    while true {
+        match tcp_accept(listener) {
+            Err(e)     => log_warn("accept error", {"error": net_error_msg(e)}),
+            Ok(stream) => {
+                // Spawn a fresh actor and transfer stream ownership.
+                // The handle is immediately dropped; the actor terminates
+                // after its one message is processed.
+                let h: RequestHandler = actor RequestHandler {};
+                h.handle(consume(stream))
+            },
+        }
+    }
+}
+
+partial fn main() -> Unit ! Env + FileRead + Log + Net {
+    let cfg: ServerConfig = match load_config() {
+        Err(_) => ServerConfig {
+            host: "127.0.0.1", port: 8080, debug: false,
+            log_level: LogLevel::Info, log_format: LogFormat::Plain,
+        },
+        Ok(c) => c,
+    };
+    // Initialise log subsystem from config before first log call.
+    log_set_format(cfg.log_format);
+    log_set_min_level(cfg.log_level);
+    log_info("server starting", {
+        "host":       cfg.host,
+        "port":       cfg.port.to_string(),
+        "log_level":  "from_config",
+        "log_format": "from_config",
+    });
+    match tcp_listen(cfg.host, cfg.port) {
+        Err(e)       => log_error("listen failed", {"error": net_error_msg(e)}),
         Ok(listener) => serve(listener),
     }
 }
