@@ -338,7 +338,7 @@ pub fn run(path: &str, json: bool, verbose: bool) {
             );
         }
         println!();
-        println!("  ✓ proven  ✗ failed  ~ unchecked (Phase 3 prover pending)");
+        println!("  ✓ proven  ✗ failed  ~ unchecked (SMT prover active; some call sites deferred to runtime)");
         println!();
         println!("Type errors:         {check_errors}");
         if check_errors == 0 {
