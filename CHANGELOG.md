@@ -4,6 +4,13 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.126.1] — 2026-05-17
+
+### Fixed
+- Grammar keyword divergence: add missing `effect` keyword to `docs/grammar.ebnf`, `compiler/lexer.mvl`, `compiler/ast.mvl`, and `etc/tree-sitter-mvl/grammar.js` to match Rust lexer ground truth (#852)
+- Grammar: add `effect_decl` production rule to EBNF and tree-sitter grammar
+- Pre-existing breakage in `compiler/main.mvl` from #844 args schema-driven refactor: migrate `get_arg()` (removed from std.args) to `std.env.{args}`; fix IoError formatting (it's an enum, not a struct)
+
 ## [0.126.0] — 2026-05-17
 
 ### Added
