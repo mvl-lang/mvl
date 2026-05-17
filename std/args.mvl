@@ -1,53 +1,410 @@
-//! std.args — command-line argument parsing and environment variable access.
+//! std.args — schema-driven CLI argument parsing.
 //!
-//! CLI values are Tainted[String] until the caller sanitizes them.
-//! Console effect required: reading args is an externally-controlled action.
-//! See ADR-0006.
+//! The schema IS the argument specification — passed as a plain `List[FieldSpec]`
+//! value.  No struct introspection, no codegen, no macros.
+//!
+//! `parse_args` never returns a `Result` — it exits the process on failure,
+//! removing the `unwrap_or_exit` ceremony from every call site.
+//!
+//! CLI input arrives as `Tainted[String]` and is sanitized internally; callers
+//! receive plain `ArgValue` variants.  See ADR-0006.
 //!
 //! Import:
-//!   use std.args.{get_arg, get_args, get_env}
+//!   use std.args.{parse_args, required, optional, flag, positional, opt_positional,
+//!                 get_str, get_str_opt, get_int, get_float, get_float_opt, get_flag,
+//!                 ArgType, FieldSpec, ArgValue}
 //!
-//! Effects: Console (all access functions).
+//! Effects: Console + Env (all parse_args callers).
 
-/// Scan command-line arguments for `--<name> <value>` and return the value.
-///
-/// Looks for the flag `--<name>` followed by a value argument.
-/// Returns `None` if the flag is absent or has no value.
-/// Returns `Tainted[String]` because CLI arguments are untrusted external input.
-pub builtin fn get_arg(name: Clean[String]) -> Option[Tainted[String]] ! Console
+use std.env.{args, exit}
+use std.collections.{map_get, map_put, map_without, map_contains_key}
 
-/// Return all command-line arguments (excluding the program name).
-///
-/// Returns `Tainted[String]` values — callers must validate each argument.
-pub builtin fn get_args() -> List[Tainted[String]] ! Console
+// ── Types ─────────────────────────────────────────────────────────────────────
 
-/// Read an environment variable by name.
+/// Declared type for a named or positional argument value.
 ///
-/// Returns `None` if the variable is not set.
-/// Returns `Tainted[String]` because environment variables are externally controlled.
-///
-/// NOTE: The `! Console` effect here is a placeholder — environment variable
-/// access is semantically distinct from console I/O. A dedicated `Env` effect
-/// exists in std.env; this function predates that split. See ADR-0007.
-pub builtin fn get_env(name: Clean[String]) -> Option[Tainted[String]] ! Console
+/// `Bool` is not an `ArgType` — boolean fields are always presence flags;
+/// use `flag(name)` in the schema.  `Flag` implies `ArgValue::Bool` in the map.
+pub type ArgType = enum { Str, Int, Float }
 
-/// Parse command-line arguments into a struct `T`.
+/// One entry in the argument schema passed to `parse_args`.
+pub type FieldSpec = enum {
+    Required      { name: String, ty: ArgType },
+    Optional      { name: String, ty: ArgType },
+    Flag          { name: String },
+    Positional    { name: String, ty: ArgType },
+    OptPositional { name: String, ty: ArgType },
+}
+
+/// A parsed argument value.  Callers pattern-match on the variant.
 ///
-/// The struct IS the argument specification:
-/// - `Positional[T]` fields are parsed from leading non-flag argv tokens
-///   in field-declaration order (`rounds: Positional[Int]` → first bare arg)
-/// - `Bool` fields are presence flags (no value needed: `--verbose`)
-/// - `Option[T]` fields are optional named flags (absent → `None`)
-/// - `Option[Positional[T]]` fields are optional positionals (absent → `None`)
-/// - All other fields are required named flags (absent → `Err`)
-/// - Refinement predicates are validated at parse time
-/// - `-h` / `--help` prints auto-generated usage to stdout and exits 0
+/// `Str` carries `Clean[String]` — the parser called `sanitize()` on every
+/// argv token before returning.  Callers may use the value directly where
+/// `String` is expected (Clean coerces to String) or pass it to functions
+/// that require `Clean[String]` without an extra sanitize call.
+pub type ArgValue = enum {
+    Str(Clean[String]),
+    Int(Int),
+    Float(Float),
+    Bool(Bool),
+}
+
+// ── Schema constructors ───────────────────────────────────────────────────────
+
+/// Required named flag: `--name <value>`.  Absent → error + exit 1.
+pub fn required(name: String, ty: ArgType) -> FieldSpec {
+    FieldSpec::Required { name: name, ty: ty }
+}
+
+/// Optional named flag: `--name <value>`.  Absent → key missing from map.
+pub fn optional(name: String, ty: ArgType) -> FieldSpec {
+    FieldSpec::Optional { name: name, ty: ty }
+}
+
+/// Boolean presence flag: `--name`.  Absent → `Bool(false)` in map.
+pub fn flag(name: String) -> FieldSpec {
+    FieldSpec::Flag { name: name }
+}
+
+/// Required positional (leading bare token).  Absent → error + exit 1.
+pub fn positional(name: String, ty: ArgType) -> FieldSpec {
+    FieldSpec::Positional { name: name, ty: ty }
+}
+
+/// Optional positional (leading bare token).  Absent → key missing from map.
+pub fn opt_positional(name: String, ty: ArgType) -> FieldSpec {
+    FieldSpec::OptPositional { name: name, ty: ty }
+}
+
+// ── Result accessors ─────────────────────────────────────────────────────────
+
+/// Extract a `Clean[String]` value; returns `sanitize(default)` if absent or wrong type.
+pub fn get_str(args: Map[String, ArgValue], name: String, default: String) -> Clean[String] {
+    match map_get(args, name) {
+        Some(ArgValue::Str(s)) => s,
+        _ => sanitize(default),
+    }
+}
+
+/// Extract an optional `Clean[String]`; returns `None` if absent.
+pub fn get_str_opt(args: Map[String, ArgValue], name: String) -> Option[Clean[String]] {
+    match map_get(args, name) {
+        Some(ArgValue::Str(s)) => Some(s),
+        _ => None,
+    }
+}
+
+/// Extract an `Int` value; returns `default` if absent or wrong type.
+pub fn get_int(args: Map[String, ArgValue], name: String, default: Int) -> Int {
+    match map_get(args, name) {
+        Some(ArgValue::Int(n)) => n,
+        _ => default,
+    }
+}
+
+/// Extract a `Float` value; returns `default` if absent or wrong type.
+pub fn get_float(args: Map[String, ArgValue], name: String, default: Float) -> Float {
+    match map_get(args, name) {
+        Some(ArgValue::Float(v)) => v,
+        _ => default,
+    }
+}
+
+/// Extract an optional `Float`; returns `None` if absent.
+pub fn get_float_opt(args: Map[String, ArgValue], name: String) -> Option[Float] {
+    match map_get(args, name) {
+        Some(ArgValue::Float(v)) => Some(v),
+        _ => None,
+    }
+}
+
+/// Extract a boolean flag value; returns `false` if absent.
+pub fn get_flag(args: Map[String, ArgValue], name: String) -> Bool {
+    match map_get(args, name) {
+        Some(ArgValue::Bool(b)) => b,
+        _ => false,
+    }
+}
+
+// ── Internal helpers ──────────────────────────────────────────────────────────
+
+// `{}` parses as an empty block in MVL — use sentinel-and-remove pattern.
+fn empty_string_map() -> Map[String, String] {
+    let m: ref Map[String, String] = {"__mvl_args_init__": ""};
+    m = map_without(m, "__mvl_args_init__");
+    m
+}
+
+fn empty_arg_map() -> Map[String, ArgValue] {
+    let m: ref Map[String, ArgValue] = {"__mvl_args_init__": ArgValue::Bool(false)};
+    m = map_without(m, "__mvl_args_init__");
+    m
+}
+
+fn empty_bool_map() -> Map[String, Bool] {
+    let m: ref Map[String, Bool] = {"__mvl_args_init__": false};
+    m = map_without(m, "__mvl_args_init__");
+    m
+}
+
+fn type_label(ty: ArgType) -> String {
+    match ty {
+        ArgType::Str   => "Str",
+        ArgType::Int   => "Int",
+        ArgType::Float => "Float",
+    }
+}
+
+/// Build a set of declared flag names for schema-aware tokenization.
+fn build_flag_set(schema: List[FieldSpec]) -> Map[String, Bool] {
+    let flags: ref Map[String, Bool] = empty_bool_map();
+    let len: Int = list_len(schema);
+    let i: ref Int = 0;
+    while i < len {
+        match list_get(schema, i) {
+            Some(f) => {
+                match f {
+                    FieldSpec::Flag { name: n } => {
+                        flags = map_put(flags, n, true)
+                    },
+                    _ => {},
+                }
+            },
+            None => {},
+        }
+        i = i + 1
+    }
+    flags
+}
+
+/// Build a runtime usage string from the schema.
+fn build_usage(schema: List[FieldSpec]) -> String {
+    let synopsis: ref String = "Usage: <program>";
+    let details: ref String = "\nArguments:\n";
+    let len: Int = list_len(schema);
+    let i: ref Int = 0;
+    while i < len {
+        match list_get(schema, i) {
+            Some(f) => {
+                match f {
+                    FieldSpec::Required { name: n, ty: t } => {
+                        synopsis = str_concat(synopsis, str_concat(" --", str_concat(n, str_concat(" <", str_concat(type_label(t), ">")))));
+                        details  = str_concat(details,  str_concat("  --", str_concat(n, str_concat(" <", str_concat(type_label(t), ">  required\n")))));
+                    },
+                    FieldSpec::Optional { name: n, ty: t } => {
+                        synopsis = str_concat(synopsis, str_concat(" [--", str_concat(n, str_concat(" <", str_concat(type_label(t), ">]")))));
+                        details  = str_concat(details,  str_concat("  [--", str_concat(n, str_concat(" <", str_concat(type_label(t), ">]  optional\n")))));
+                    },
+                    FieldSpec::Flag { name: n } => {
+                        synopsis = str_concat(synopsis, str_concat(" [--", str_concat(n, "]")));
+                        details  = str_concat(details,  str_concat("  [--", str_concat(n, "]  flag\n")));
+                    },
+                    FieldSpec::Positional { name: n, ty: t } => {
+                        synopsis = str_concat(synopsis, str_concat(" <", str_concat(n, ">")));
+                        details  = str_concat(details,  str_concat("  <", str_concat(n, str_concat(">  ", str_concat(type_label(t), " (required)\n")))));
+                    },
+                    FieldSpec::OptPositional { name: n, ty: t } => {
+                        synopsis = str_concat(synopsis, str_concat(" [<", str_concat(n, ">]")));
+                        details  = str_concat(details,  str_concat("  [<", str_concat(n, str_concat(">]  ", str_concat(type_label(t), " (optional)\n")))));
+                    },
+                }
+            },
+            None => {},
+        }
+        i = i + 1
+    }
+    str_concat(synopsis, str_concat("\n", str_concat(details, "  -h, --help  Show this message and exit\n")))
+}
+
+/// Coerce a raw string token to the declared `ArgType`.
+/// Prints an error to stderr and exits 1 on failure.
+fn coerce_arg(name: String, raw: String, ty: ArgType) -> ArgValue ! Console + Env {
+    match ty {
+        ArgType::Str => ArgValue::Str(sanitize(raw)),
+        ArgType::Int => {
+            match str_parse_int(raw) {
+                Ok(n)  => ArgValue::Int(n),
+                Err(_) => {
+                    eprintln(str_concat("error: --", str_concat(name, " expects an integer")));
+                    exit(1)
+                },
+            }
+        },
+        ArgType::Float => {
+            match str_parse_float(raw) {
+                Ok(f)  => ArgValue::Float(f),
+                Err(_) => {
+                    eprintln(str_concat("error: --", str_concat(name, " expects a float")));
+                    exit(1)
+                },
+            }
+        },
+    }
+}
+
+// ── Core function ─────────────────────────────────────────────────────────────
+
+/// Parse command-line arguments according to `schema`.
 ///
-/// Defaults are expressed via `Option[T]` and `.unwrap_or(default)` on the
-/// parsed struct — no special syntax needed.
+/// Returns a `Map[String, ArgValue]` on success.  On failure (missing required
+/// argument or type coercion error) prints an error message and usage string to
+/// stderr and exits with code 1.  Never returns `Err` — no `unwrap_or_exit`
+/// needed at call sites.
 ///
-/// The compiler derives the parser from the struct shape at monomorphization time.
-/// No DSL, no builder, no macros — the type is the spec.
+/// `-h` / `--help` prints the usage string to stdout and exits with code 0.
 ///
-/// Requires `! Console` effect (reads process arguments).
-pub builtin fn parse[T]() -> Result[T, String] ! Console
+/// Positional fields are consumed left-to-right in schema-declaration order
+/// from the leading non-flag argv tokens.
+pub fn parse_args(schema: List[FieldSpec]) -> Map[String, ArgValue] ! Console + Env {
+    let argv: List[Tainted[String]] = args();
+    let argc: Int = list_len(argv);
+
+    // ── Pre-scan for -h / --help ──────────────────────────────────────────────
+    let h: ref Int = 1;
+    while h < argc {
+        match list_get(argv, h) {
+            Some(t) => {
+                let s: Clean[String] = sanitize(t);
+                if s == "-h" || s == "--help" {
+                    println(build_usage(schema));
+                    exit(0)
+                }
+            },
+            None => {},
+        }
+        h = h + 1
+    }
+
+    let usage: String = build_usage(schema);
+    let flag_set: Map[String, Bool] = build_flag_set(schema);
+
+    // ── First pass: tokenize argv into named args and positionals ─────────────
+    //
+    // Named args: --name value  or  --name=value
+    // Flags:      --name  (declared Flag fields only — schema-aware)
+    // Positionals: bare tokens (do not start with '--')
+    //
+    // Schema-driven disambiguation: only names declared as Flag are treated as
+    // boolean flags.  Value fields always consume the next token, even when it
+    // starts with '-' (e.g. --threshold -0.5 is valid for a Float field).
+    let raw_named: ref Map[String, String] = empty_string_map();
+    let positionals: ref List[String] = [];
+    let i: ref Int = 1;
+    while i < argc {
+        match list_get(argv, i) {
+            Some(t) => {
+                let token: Clean[String] = sanitize(t);
+                if str_starts_with(token, "--") {
+                    if str_contains(token, "=") {
+                        // --name=value form: always unambiguous
+                        match str_find(token, "=") {
+                            Some(eq_idx) => {
+                                let name: String = str_substring(token, 2, eq_idx);
+                                let value: String = str_substring(token, eq_idx + 1, str_len(token));
+                                raw_named = map_put(raw_named, name, value)
+                            },
+                            None => {},
+                        }
+                        i = i + 1
+                    } else {
+                        let name: String = str_substring(token, 2, str_len(token));
+                        if map_contains_key(flag_set, name) {
+                            // Declared boolean flag: never consumes a value token
+                            raw_named = map_put(raw_named, name, "");
+                            i = i + 1
+                        } else {
+                            // Value field: next token is the value regardless of its prefix
+                            let next_idx: Int = i + 1;
+                            if next_idx < argc {
+                                match list_get(argv, next_idx) {
+                                    Some(nt) => {
+                                        let next_tok: Clean[String] = sanitize(nt);
+                                        raw_named = map_put(raw_named, name, next_tok);
+                                        i = i + 2
+                                    },
+                                    None => {
+                                        eprintln(str_concat("error: --", str_concat(name, " requires a value")));
+                                        eprintln(usage);
+                                        exit(1)
+                                    },
+                                }
+                            } else {
+                                eprintln(str_concat("error: --", str_concat(name, " requires a value")));
+                                eprintln(usage);
+                                exit(1)
+                            }
+                        }
+                    }
+                } else {
+                    positionals = list_push(positionals, token);
+                    i = i + 1
+                }
+            },
+            None => { i = i + 1 },
+        }
+    }
+
+    // ── Second pass: resolve schema against collected tokens ──────────────────
+    let result: ref Map[String, ArgValue] = empty_arg_map();
+    let pos_i: ref Int = 0;
+    let schema_len: Int = list_len(schema);
+    let si: ref Int = 0;
+    while si < schema_len {
+        match list_get(schema, si) {
+            Some(field) => {
+                match field {
+                    FieldSpec::Required { name: n, ty: t } => {
+                        match map_get(raw_named, n) {
+                            Some(raw) => {
+                                result = map_put(result, n, coerce_arg(n, raw, t))
+                            },
+                            None => {
+                                eprintln(str_concat("error: missing required flag --", n));
+                                eprintln(usage);
+                                exit(1)
+                            },
+                        }
+                    },
+                    FieldSpec::Optional { name: n, ty: t } => {
+                        match map_get(raw_named, n) {
+                            Some(raw) => {
+                                result = map_put(result, n, coerce_arg(n, raw, t))
+                            },
+                            None => {},
+                        }
+                    },
+                    FieldSpec::Flag { name: n } => {
+                        let present: Bool = map_contains_key(raw_named, n);
+                        result = map_put(result, n, ArgValue::Bool(present))
+                    },
+                    FieldSpec::Positional { name: n, ty: t } => {
+                        match list_get(positionals, pos_i) {
+                            Some(raw) => {
+                                result = map_put(result, n, coerce_arg(n, raw, t));
+                                pos_i = pos_i + 1
+                            },
+                            None => {
+                                eprintln(str_concat("error: missing required argument <", str_concat(n, ">")));
+                                eprintln(usage);
+                                exit(1)
+                            },
+                        }
+                    },
+                    FieldSpec::OptPositional { name: n, ty: t } => {
+                        match list_get(positionals, pos_i) {
+                            Some(raw) => {
+                                result = map_put(result, n, coerce_arg(n, raw, t));
+                                pos_i = pos_i + 1
+                            },
+                            None => {},
+                        }
+                    },
+                }
+            },
+            None => {},
+        }
+        si = si + 1
+    }
+
+    result
+}

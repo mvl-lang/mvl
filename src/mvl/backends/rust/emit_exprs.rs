@@ -938,7 +938,7 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
         }
         Expr::Sanitize { expr, .. } => {
             cg.push("sanitize(");
-            emit_expr(cg, expr);
+            emit_expr_as_fn_arg(cg, expr);
             cg.push(")");
         }
         Expr::Lambda {

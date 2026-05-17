@@ -189,6 +189,34 @@ impl_label_into!(Clean);
 impl_label_into!(Public);
 impl_label_into!(Secret);
 
+// ── Cross-type equality for labeled strings ────────────────────────────────
+//
+// Allows comparing a labeled string directly with a plain String, e.g.
+// `clean_val == "some_str".to_string()` from generated comparison expressions.
+// The MVL transpiler emits string literals as `.to_string()` in comparison
+// contexts, so the RHS is always a plain `String`.
+
+macro_rules! impl_label_str_eq {
+    ($Label:ident) => {
+        impl PartialEq<String> for $Label<String> {
+            #[inline]
+            fn eq(&self, other: &String) -> bool {
+                &self.0 == other
+            }
+        }
+        impl PartialEq<$Label<String>> for String {
+            #[inline]
+            fn eq(&self, other: &$Label<String>) -> bool {
+                self == &other.0
+            }
+        }
+    };
+}
+
+impl_label_str_eq!(Tainted);
+impl_label_str_eq!(Clean);
+impl_label_str_eq!(Public);
+
 // Display — intentionally omitted for Secret<T> to prevent accidental leaks.
 macro_rules! impl_display {
     ($Label:ident) => {
