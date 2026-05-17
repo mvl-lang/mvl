@@ -99,6 +99,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         // directory don't add the same library file multiple times.
         let mut loaded_prelude_paths: std::collections::HashSet<std::path::PathBuf> =
             std::collections::HashSet::new();
+        let mut sibling_progs: Vec<mvl::mvl::parser::ast::Program> = Vec::new();
         for f in &test_files {
             let dir = f.parent().unwrap_or_else(|| std::path::Path::new("."));
             // Scan src/ and src/internal/ (package convention per ADR-0012).
@@ -139,6 +140,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                                 if !transpiler::has_main_fn(&parsed)
                                     && transpiler::has_extern_or_type_decls(&parsed)
                                 {
+                                    sibling_progs.push(parsed.clone());
                                     stdlib_prelude_progs.push(parsed);
                                 }
                             }
@@ -147,6 +149,10 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                 }
             }
         }
+        // Sibling library files may import pure-MVL stdlib modules not referenced
+        // by the test files themselves (e.g. config.mvl using std.args).  Run a
+        // second pass so those stdlib modules end up in the prelude.
+        stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&sibling_progs));
     }
 
     // Build a combined Rust test file from all test modules.

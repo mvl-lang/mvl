@@ -1,69 +1,97 @@
 // tests/stdlib/args_test.mvl — std.args module correctness
 //
-// Verifies runtime behavior of the args stdlib: get_arg, get_args, get_env.
-// Run with:  mvl test tests/stdlib/
+// Verifies that the schema-driven API types and constructors are available
+// and that the result-map extraction pattern works correctly.
 //
-// Runtime behavior (real process environment access):
-//   get_arg(name)  — scan for --[name] flag; returns None when absent
-//   get_args()     — return all args (empty in test runner context)
-//   get_env(name)  — read env var; returns None for unknown variables
-//
-// All functions require ! Console (process environment access).
-// Values are Tainted[String] — untrusted external input.
-//
-// parse[T]() is not covered here: it requires a caller-defined struct and
-// is exercised by the transpiler derive tests.
+// Note: parse_args() itself cannot be exercised in unit tests because it reads
+// the actual process argv.  End-to-end tests verify the full parse path.
 
-use std.args.{get_arg, get_args, get_env}
+use std.args.{parse_args, required, optional, flag, positional, opt_positional,
+               ArgType, ArgValue, FieldSpec}
 
-// ── get_arg (! Console) ───────────────────────────────────────────────────
-// NOTE: get_arg is a real implementation that scans std::env::args() for --<name>.
-// Tests pass because flag names use unique suffixes never passed by the test runner.
-// TODO: inject a known flag via test harness and assert Some(value).
+// ── ArgType constructors ──────────────────────────────────────────────────
 
-test fn args_get_arg_unknown_flag_is_none() -> Unit ! Console {
-    // The test runner does not pass --mvl-nonexistent-flag-xyz
-    let v: Option[Tainted[String]] = get_arg("mvl-nonexistent-flag-xyz");
-    assert_eq(v.is_none(), true);
+test fn args_arg_type_variants_are_distinct() -> Unit {
+    let a: ArgType = ArgType::Str;
+    let b: ArgType = ArgType::Int;
+    let c: ArgType = ArgType::Float;
+    assert_eq(a == b, false);
+    assert_eq(a == c, false);
+    assert_eq(b == c, false);
 }
 
-test fn args_get_arg_none_unwrap_or_uses_default() -> Unit ! Console {
-    let v: Option[Tainted[String]] = get_arg("mvl-test-flag-with-default");
-    assert_eq(v.unwrap_or("fallback").is_empty(), false);
+// ── FieldSpec constructors ────────────────────────────────────────────────
+
+test fn args_required_builds_correct_variant() -> Unit {
+    let f: FieldSpec = required("host", ArgType::Str);
+    let ok: Bool = match f {
+        FieldSpec::Required { name: n, ty: t } => n == "host" && t == ArgType::Str,
+        _ => false,
+    };
+    assert_eq(ok, true)
 }
 
-// ── get_args (! Console) ──────────────────────────────────────────────────
-// NOTE: get_args is a real implementation that returns std::env::args().skip(1).
-// TODO: inject known arg values via test harness and assert their presence.
-
-test fn args_get_args_result_is_list() -> Unit ! Console {
-    let args: List[Tainted[String]] = get_args();
-    // In the test runner context the arg list may be non-empty (cargo test runner
-    // args). We only check that the call succeeds and returns a list.
-    assert_eq(args.len() == 0, args.is_empty());
+test fn args_optional_builds_correct_variant() -> Unit {
+    let f: FieldSpec = optional("port", ArgType::Int);
+    let ok: Bool = match f {
+        FieldSpec::Optional { name: n, ty: t } => n == "port" && t == ArgType::Int,
+        _ => false,
+    };
+    assert_eq(ok, true)
 }
 
-// ── get_env (! Console) ───────────────────────────────────────────────────
-// NOTE: get_env is a real implementation that calls std::env::var(name).
-// Tests pass because var names use unique suffixes never set in CI or local environments.
-// TODO: inject a known sentinel (e.g. MVL_TEST_KNOWN_VAR=sentinel)
-// via test harness and assert Some(value).
-
-test fn args_get_env_unknown_var_is_none() -> Unit ! Console {
-    // This env var is never set in CI or local test environments
-    let v: Option[Tainted[String]] = get_env("MVL_NONEXISTENT_VAR_XYZ_12345");
-    assert_eq(v.is_none(), true);
+test fn args_flag_builds_correct_variant() -> Unit {
+    let f: FieldSpec = flag("verbose");
+    let ok: Bool = match f {
+        FieldSpec::Flag { name: n } => n == "verbose",
+        _ => false,
+    };
+    assert_eq(ok, true)
 }
 
-test fn args_get_env_none_unwrap_or_returns_default() -> Unit ! Console {
-    let v: Option[Tainted[String]] = get_env("MVL_NONEXISTENT_PORT_XYZ");
-    // When None, unwrap_or returns the default
-    assert_eq(v.unwrap_or("8080").is_empty(), false);
+test fn args_positional_builds_correct_variant() -> Unit {
+    let f: FieldSpec = positional("file", ArgType::Str);
+    let ok: Bool = match f {
+        FieldSpec::Positional { name: n, ty: t } => n == "file" && t == ArgType::Str,
+        _ => false,
+    };
+    assert_eq(ok, true)
 }
 
-// ── Option[Tainted[String]] semantics ─────────────────────────────────────
+test fn args_opt_positional_builds_correct_variant() -> Unit {
+    let f: FieldSpec = opt_positional("count", ArgType::Int);
+    let ok: Bool = match f {
+        FieldSpec::OptPositional { name: n, ty: t } => n == "count" && t == ArgType::Int,
+        _ => false,
+    };
+    assert_eq(ok, true)
+}
 
-test fn args_option_none_is_none_is_true() -> Unit ! Console {
-    let flag: Option[Tainted[String]] = get_arg("mvl-test-output-xyz");
-    assert_eq(flag.is_none(), true);
+// ── ArgValue matching ─────────────────────────────────────────────────────
+
+test fn args_arg_value_str_extractable() -> Unit {
+    let v: ArgValue = ArgValue::Str("hello");
+    let s: String = match v {
+        ArgValue::Str(x) => x,
+        _ => "",
+    };
+    assert_eq(s, "hello")
+}
+
+test fn args_arg_value_int_extractable() -> Unit {
+    let v: ArgValue = ArgValue::Int(42);
+    let n: Int = match v {
+        ArgValue::Int(x) => x,
+        _ => 0,
+    };
+    assert_eq(n, 42)
+}
+
+test fn args_arg_value_bool_extractable() -> Unit {
+    let v: ArgValue = ArgValue::Bool(true);
+    let b: Bool = match v {
+        ArgValue::Bool(x) => x,
+        _ => false,
+    };
+    assert_eq(b, true)
 }

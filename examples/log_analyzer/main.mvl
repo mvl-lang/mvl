@@ -30,14 +30,14 @@ use utils::is_positive;
 
 // ── Standard library imports ────────────────────────────────────────────────
 
-use std.args.{parse}
+use std.args.{parse_args, required, optional, ArgType, ArgValue}
 use std.io.{read_file}
 use std.log.{log_info, log_error}
 
 // ── Trust boundary: domain-specific pipeline logic ──────────────────────────
 
 extern "rust" {
-    fn analyze_and_format(content: Tainted[String], level: Option[Clean[String]]) -> Result[String, PipelineError];
+    fn analyze_and_format(content: Tainted[String], level: Option[String]) -> Result[String, PipelineError];
 }
 
 // ── Domain types ───────────────────────────────────────────────────────────
@@ -53,42 +53,31 @@ type RunError = enum {
     PipelineFailed,
 }
 
-// ── CLI argument spec: the struct IS the spec (std.args.parse[T], #55) ──────
-//
-// `file` is required — parse[CliArgs]() returns Err if --file is absent.
-// `level` is optional — absent flag → None.
-
-type CliArgs = struct {
-    file: Tainted[String],
-    level: Option[Tainted[String]],
-}
-
 // ── Main pipeline ───────────────────────────────────────────────────────────
 
-// Phase 4 changes:
-//   - args.level.map(|v: Tainted[String]| sanitize(v)) replaces the manual None/Some match.
-//   - std.log structured calls replace raw println for operational events.
-//   - Effect list extended with ! Log.
 fn run() -> Result[Unit, RunError] ! FileRead + Console + Log {
-    let args_result: Result[CliArgs, String] = parse[CliArgs]();
-    match args_result {
-        Err(_) => Err(RunError::MissingArg),
-        Ok(args) => {
-            let file_path: Clean[String] = sanitize(args.file);
-            // Option.map: sanitize each Some(v) without an explicit match ladder.
-            let level_opt: Option[Clean[String]] = args.level.map(|v: Tainted[String]| sanitize(v));
-            match read_file(file_path) {
-                Err(_) => Err(RunError::IOFailure),
-                Ok(content) => {
-                    let pipeline_result: Result[String, PipelineError] = analyze_and_format(content, level_opt);
-                    match pipeline_result {
-                        Err(_) => Err(RunError::PipelineFailed),
-                        Ok(json_report) => {
-                            log_info("analysis complete", {"output": "json"});
-                            println(json_report);
-                            Ok(())
-                        }
-                    }
+    let args: Map[String, ArgValue] = parse_args([
+        required("file",  ArgType::Str),
+        optional("level", ArgType::Str),
+    ]);
+    let file_path: String = match args.get("file") {
+        Some(ArgValue::Str(s)) => s,
+        _ => "",
+    };
+    let level_opt: Option[String] = match args.get("level") {
+        Some(ArgValue::Str(s)) => Some(s),
+        _ => None,
+    };
+    match read_file(file_path) {
+        Err(_) => Err(RunError::IOFailure),
+        Ok(content) => {
+            let pipeline_result: Result[String, PipelineError] = analyze_and_format(content, level_opt);
+            match pipeline_result {
+                Err(_) => Err(RunError::PipelineFailed),
+                Ok(json_report) => {
+                    log_info("analysis complete", {"output": "json"});
+                    println(json_report);
+                    Ok(())
                 }
             }
         }

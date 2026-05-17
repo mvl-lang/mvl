@@ -15,19 +15,6 @@
 pub use crate::ifc::{declassify, sanitize, Clean, Public, Secret, Tainted};
 pub use crate::mvl_refine;
 
-// ── Struct parsing infrastructure ─────────────────────────────────────────
-//
-// ParseFromArgs is a transpiler-generated trait: the emitter synthesises
-// `impl ParseFromArgs for T` for every concrete struct with parseable fields,
-// and the generated `parse_from_args()` body calls `get_arg` and `parse`.
-// These are language infrastructure (not OS-specific) so they live in the
-// prelude rather than being gated behind `use std.args.*`. ADR-0012.
-//
-// The remaining `args` functions (get_args, get_env) are OS-level and are
-// only available after an explicit `use std.args.*` declaration (#488/#489).
-
-pub use crate::stdlib::args::{get_arg, parse, ParseFromArgs};
-
 // ── Extern kernel primitives ───────────────────────────────────────────────
 //
 // These are the `extern "rust"` trust-boundary functions declared in

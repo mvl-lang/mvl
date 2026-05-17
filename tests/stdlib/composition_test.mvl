@@ -1,73 +1,62 @@
 // tests/stdlib/composition_test.mvl — cross-module stdlib composition
 //
-// Verifies that std.args and std.io can be imported and used together,
+// Verifies that std.env and std.io can be imported and used together,
 // exercising IFC label flows across module boundaries.
 //
 // Patterns exercised:
-//   1. std.args + std.io: both modules usable in the same file (compile-time check)
-//   2. Tainted[String] values from args flow through Option correctly
+//   1. std.env + std.io: both modules usable in the same file (compile-time check)
+//   2. Tainted[String] values from env flow through Option correctly
 //   3. sanitize(tainted) → Clean[String] → read_file: full IFC pipeline at runtime
-//   4. get_arg result flows into std.io via unwrap_or fallback (cross-module value flow)
-//   5. Missing args + missing files both produce expected None/Err values
+//   4. env.get result flows into std.io via unwrap_or fallback (cross-module value flow)
+//   5. Missing env vars + missing files both produce expected None/Err values
 //
 // Run with:  mvl test tests/stdlib/
 
-use std.args.{get_arg, get_env}
+use std.env.{get, args}
 use std.io.{Path, path, join, to_string, IoError, read_to_string, read_file}
 
 // ── Cross-module import: both modules usable in same file ─────────────────
 
-test fn composition_args_and_io_both_compile_in_same_scope() -> Unit ! Console {
+test fn composition_env_and_io_both_compile_in_same_scope() -> Unit ! Console + Env {
     // Compile-time check: both module imports accepted in one file.
-    // path/to_string are real implementations; get_arg scans std::env::args() and returns None for unknown flags.
-    let flag: Option[Tainted[String]] = get_arg("mvl-nonexistent-flag-xyz");
+    // path/to_string are real implementations; get scans std::env and returns None for unknown vars.
+    let flag: Option[Tainted[String]] = get("MVL_NONEXISTENT_FLAG_XYZ");
     let p: Path = path("/tmp/mvl_test_placeholder");
     assert_eq(flag.is_none(), true);
     // "/tmp/mvl_test_placeholder" = 25 chars; proves path was stored verbatim
     assert_eq(to_string(p).len(), 25);
 }
 
-// ── Args produces Tainted; Option semantics hold ──────────────────────────
-// NOTE: get_arg/get_env are real implementations. Tests pass because flag/var names
+// ── Env produces Tainted; Option semantics hold ───────────────────────────
+// NOTE: get is a real implementation. Tests pass because env var names
 // use unique suffixes never seen in the test runner environment.
-// TODO: inject known args/env and assert Some(value).
 
-test fn composition_missing_arg_is_none() -> Unit ! Console {
-    let config: Option[Tainted[String]] = get_arg("mvl-input-file-xyz");
+test fn composition_missing_env_var_is_none() -> Unit ! Console + Env {
+    let config: Option[Tainted[String]] = get("MVL_INPUT_FILE_XYZ");
     assert_eq(config.is_none(), true);
 }
 
-test fn composition_missing_env_is_none() -> Unit ! Console {
-    let data_dir: Option[Tainted[String]] = get_env("MVL_NONEXISTENT_DATA_DIR_XYZ");
-    assert_eq(data_dir.is_none(), true);
-}
-
-test fn composition_multiple_args_all_none() -> Unit ! Console {
-    let a: Option[Tainted[String]] = get_arg("mvl-flag-alpha-xyz");
-    let b: Option[Tainted[String]] = get_arg("mvl-flag-beta-xyz");
-    let c: Option[Tainted[String]] = get_env("MVL_NONEXISTENT_FLAG_XYZ");
+test fn composition_multiple_env_vars_all_none() -> Unit ! Console + Env {
+    let a: Option[Tainted[String]] = get("MVL_FLAG_ALPHA_XYZ");
+    let b: Option[Tainted[String]] = get("MVL_FLAG_BETA_XYZ");
+    let c: Option[Tainted[String]] = get("MVL_NONEXISTENT_FLAG_XYZ");
     assert_eq(a.is_none(), true);
     assert_eq(b.is_none(), true);
     assert_eq(c.is_none(), true);
 }
 
-// ── Missing args: is_some / is_none predicates ────────────────────────────
+// ── Missing env vars: is_some / is_none predicates ────────────────────────
 
-test fn composition_arg_is_some_false_when_absent() -> Unit ! Console {
-    let v: Option[Tainted[String]] = get_arg("mvl-nonexistent-arg-xyz");
-    assert_eq(v.is_some(), false);
-}
-
-test fn composition_env_is_some_false_when_absent() -> Unit ! Console {
-    let v: Option[Tainted[String]] = get_env("MVL_NONEXISTENT_TEST_ENV_XYZ");
+test fn composition_env_is_some_false_when_absent() -> Unit ! Console + Env {
+    let v: Option[Tainted[String]] = get("MVL_NONEXISTENT_ARG_XYZ");
     assert_eq(v.is_some(), false);
 }
 
 // ── IFC: sanitize pipeline — compile-time type enforcement ───────────────
 //
 // NOTE: Tainted[String] can only originate from untrusted runtime sources
-// (get_arg / get_env / get_args). With absent flags/vars returning None,
-// runtime IFC flow through sanitize() cannot be tested in the stdlib test suite.
+// (env vars, args). With absent vars returning None, runtime IFC flow
+// through sanitize() cannot be tested in the stdlib test suite.
 // The tests below verify compile-time type annotations and the reachable runtime paths.
 
 test fn composition_sanitize_type_enforced_at_compile_time() -> Unit ! FileRead {
@@ -79,16 +68,15 @@ test fn composition_sanitize_type_enforced_at_compile_time() -> Unit ! FileRead 
     assert_eq(result.is_err(), true);
 }
 
-// ── Cross-module value flow: std.args controls std.io execution path ──────
+// ── Cross-module value flow: std.env controls std.io execution path ───────
 
-test fn composition_arg_absence_routes_to_io_fallback() -> Unit ! Console + FileRead {
+test fn composition_env_absence_routes_to_io_fallback() -> Unit ! Console + FileRead + Env {
     // STUB: update when implemented — read_to_string always returns Err("")
     // Demonstrates actual cross-module control flow:
-    // get_env (std.args) → None → read_to_string (std.io) called on fallback path.
-    // Both modules execute; the args result determines which io operation runs.
-    let config: Option[Tainted[String]] = get_env("MVL_NONEXISTENT_CONFIG_FILE_XYZ");
-    // Both branches call std.io; args result controls which path is used.
-    // Non-stub runtime: Some branch would sanitize(_tainted) and call read_file(clean).
+    // get (std.env) → None → read_to_string (std.io) called on fallback path.
+    // Both modules execute; the env result determines which io operation runs.
+    let config: Option[Tainted[String]] = get("MVL_NONEXISTENT_CONFIG_FILE_XYZ");
+    // Both branches call std.io; env result controls which path is used.
     let result: Result[Tainted[String], IoError] = match config {
         Some(_) => read_to_string(path("/tmp/mvl_nonexistent_config_a_xyz")),
         None => read_to_string(path("/tmp/mvl_nonexistent_config_b_xyz")),

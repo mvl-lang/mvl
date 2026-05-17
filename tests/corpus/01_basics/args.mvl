@@ -1,71 +1,87 @@
-// Corpus: args.parse[T]() — struct-derived CLI argument parsing (#55)
+// Corpus: std.args.parse_args() — schema-driven CLI argument parsing (#844)
 //
-// Demonstrates the MVL design principle: the struct IS the argument spec.
-// Field names become flag names; Bool fields are presence flags;
-// Option[T] fields are optional; refinements validate at parse time.
+// Demonstrates the MVL design principle: the schema IS the argument spec.
+// A plain List[FieldSpec] value drives the parser — no struct introspection,
+// no codegen.
 //
 // Usage (conceptual — actual invocation requires a live process environment):
-//   --port 8080 --host localhost --verbose
-//   --port 443 --host 0.0.0.0 --count 10
+//   prog --host localhost --port 8080 --verbose input.txt
+//   prog --host 0.0.0.0 --count 10
 
-use std.args.{parse}
+use std.args.{parse_args, required, optional, flag, positional, opt_positional,
+               ArgType, ArgValue}
 
-// ── Argument struct: the struct IS the spec ───────────────────────────────
+// ── Helper: extract a named string value from the result map ─────────────
 
-type AppArgs = struct {
-    port: Int where self > 0 && self <= 65535,
-    host: String,
-    verbose: Bool,
-    count: Option[Int],
-}
-
-// ── Functions that consume parsed args ────────────────────────────────────
-
-fn make_address(args: AppArgs) -> String {
-    format("{}:{}", args.host, args.port)
-}
-
-fn effective_count(args: AppArgs) -> Int {
-    match args.count {
-        Some(n) => n,
-        None => 1,
+fn get_str(args: Map[String, ArgValue], name: String, default: String) -> String {
+    match args.get(name) {
+        Some(ArgValue::Str(s)) => s,
+        _ => default,
     }
 }
 
-// ── Simple struct: only required fields ──────────────────────────────────
-
-type ServerConfig = struct {
-    host: String,
-    port: Int where self > 0,
-}
-
-fn config_address(cfg: ServerConfig) -> String {
-    format("{}:{}", cfg.host, cfg.port)
-}
-
-// ── Flag-only struct: all Bool fields ─────────────────────────────────────
-
-type Flags = struct {
-    verbose: Bool,
-    debug: Bool,
-    dry_run: Bool,
-}
-
-fn any_flag_set(flags: Flags) -> Bool {
-    flags.verbose || flags.debug || flags.dry_run
-}
-
-// ── Optional-only struct ───────────────────────────────────────────────────
-
-type OptArgs = struct {
-    config: Option[String],
-    timeout: Option[Int],
-    scale: Option[Float],
-}
-
-fn has_config(opts: OptArgs) -> Bool {
-    match opts.config {
-        Some(_) => true,
-        None => false,
+fn get_int(args: Map[String, ArgValue], name: String, default: Int) -> Int {
+    match args.get(name) {
+        Some(ArgValue::Int(n)) => n,
+        _ => default,
     }
+}
+
+fn get_bool(args: Map[String, ArgValue], name: String) -> Bool {
+    match args.get(name) {
+        Some(ArgValue::Bool(b)) => b,
+        _ => false,
+    }
+}
+
+// ── Example schema: mix of required, optional, flag, and positional ───────
+
+fn example_schema() -> List[FieldSpec] {
+    [
+        required("host",    ArgType::Str),
+        optional("port",    ArgType::Int),
+        optional("count",   ArgType::Int),
+        flag("verbose"),
+        positional("input", ArgType::Str),
+    ]
+}
+
+// ── Functions that consume the parsed map ─────────────────────────────────
+
+fn make_address(args: Map[String, ArgValue]) -> String {
+    let host: String = get_str(args, "host", "localhost");
+    let port: Int    = get_int(args, "port", 8080);
+    format("{}:{}", host, port)
+}
+
+fn effective_count(args: Map[String, ArgValue]) -> Int {
+    get_int(args, "count", 1)
+}
+
+fn is_verbose(args: Map[String, ArgValue]) -> Bool {
+    get_bool(args, "verbose")
+}
+
+// ── Positional-only schema ────────────────────────────────────────────────
+
+fn positional_schema() -> List[FieldSpec] {
+    [
+        positional("src",  ArgType::Str),
+        positional("dst",  ArgType::Str),
+        opt_positional("count", ArgType::Int),
+    ]
+}
+
+// ── Flag-only schema ──────────────────────────────────────────────────────
+
+fn flags_schema() -> List[FieldSpec] {
+    [
+        flag("verbose"),
+        flag("debug"),
+        flag("dry_run"),
+    ]
+}
+
+fn any_flag_set(args: Map[String, ArgValue]) -> Bool {
+    get_bool(args, "verbose") || get_bool(args, "debug") || get_bool(args, "dry_run")
 }

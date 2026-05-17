@@ -28,23 +28,11 @@ use model::Summary;
 use model::ParseError;
 
 use std.io.{read_file}
-use std.args.{parse}
-
-// ── CLI argument spec (std.args.parse[T], issue #55) ──────────────────────
-//
-// The struct IS the CLI spec:
-//   --input      required  path to the CSV file to process
-//   --threshold  optional  minimum amount to include (default: 0.0)
-
-type CliArgs = struct {
-    input:     Tainted[String],
-    threshold: Option[Tainted[String]],
-}
+use std.args.{parse_args, required, optional, ArgType, ArgValue}
 
 // ── Application errors ────────────────────────────────────────────────────
 
 type RunError = enum {
-    MissingArg,
     IOFailure,
     ParseFailed,
 }
@@ -52,12 +40,11 @@ type RunError = enum {
 // ── Internal helpers ──────────────────────────────────────────────────────
 
 /// Parse the optional threshold arg, defaulting to 0.0 on missing or invalid.
-fn threshold_or_default(opt: Option[Tainted[String]]) -> Float {
+fn threshold_or_default(opt: Option[String]) -> Float {
     match opt {
         None    => 0.0,
-        Some(t) => {
-            let clean: Clean[String] = sanitize(t);
-            let result: Result[Float, String] = clean.parse_float();
+        Some(s) => {
+            let result: Result[Float, String] = str_parse_float(s);
             match result {
                 Err(_) => 0.0,
                 Ok(v)  => if v >= 0.0 { v } else { 0.0 },
@@ -79,47 +66,49 @@ fn parse_error_msg(e: ParseError) -> String {
 // ── Main pipeline ─────────────────────────────────────────────────────────
 
 fn run() -> Result[Unit, RunError] ! FileRead + Console {
-    let args_result: Result[CliArgs, String] = parse[CliArgs]();
-    match args_result {
-        Err(_)   => Err(RunError::MissingArg),
-        Ok(args) => {
-            let file_path: Clean[String] = sanitize(args.input);
-            let threshold: Float = threshold_or_default(args.threshold);
+    let args: Map[String, ArgValue] = parse_args([
+        required("input",     ArgType::Str),
+        optional("threshold", ArgType::Str),
+    ]);
+    let file_path: String = match args.get("input") {
+        Some(ArgValue::Str(s)) => s,
+        _ => "",
+    };
+    let threshold_opt: Option[String] = match args.get("threshold") {
+        Some(ArgValue::Str(s)) => Some(s),
+        _ => None,
+    };
+    let threshold: Float = threshold_or_default(threshold_opt);
 
-            let file_result: Result[Tainted[String], String] = read_file(file_path);
-            match file_result {
-                Err(_)       => Err(RunError::IOFailure),
-                Ok(content)  => {
-                    let parse_result: Result[List[Record], ParseError] = parse_csv(content);
-                    match parse_result {
-                        Err(e)      => {
-                            println("parse error: ".concat(parse_error_msg(e)));
-                            Err(RunError::ParseFailed)
-                        },
-                        Ok(records) => {
-                            // Pure pipeline — no effects from here on.
-                            // These calls are safe to reorder, parallelize, or memoize.
-                            let filtered: List[Record] = apply_filter_by_amount(records, threshold);
-                            let enriched: List[Record] = apply_enrich_high_value(filtered, threshold * 10.0);
-                            let summary: Summary = compute_summary(enriched);
+    match read_file(file_path) {
+        Err(_)      => Err(RunError::IOFailure),
+        Ok(content) => {
+            let parse_result: Result[List[Record], ParseError] = parse_csv(content);
+            match parse_result {
+                Err(e)      => {
+                    println("parse error: ".concat(parse_error_msg(e)));
+                    Err(RunError::ParseFailed)
+                },
+                Ok(records) => {
+                    let filtered: List[Record] = apply_filter_by_amount(records, threshold);
+                    let enriched: List[Record] = apply_enrich_high_value(filtered, threshold * 10.0);
+                    let summary: Summary = compute_summary(enriched);
 
-                            println("=== task_pipeline: CSV summary ===");
-                            println("Input records:  ".concat(records.len().to_string()));
-                            println("After filter:   ".concat(filtered.len().to_string())
-                                   .concat("  (amount >= ").concat(threshold.to_string()).concat(")"));
-                            println("Count:          ".concat(summary.count.to_string()));
-                            println("Total amount:   ".concat(summary.total_amount.to_string()));
-                            println("--- records ---");
-                            let _: Unit = enriched.fold(
-                                (),
-                                |_acc: Unit, r: Record| {
-                                    println(format_record(r));
-                                    ()
-                                }
-                            );
-                            Ok(())
+                    println("=== task_pipeline: CSV summary ===");
+                    println("Input records:  ".concat(records.len().to_string()));
+                    println("After filter:   ".concat(filtered.len().to_string())
+                           .concat("  (amount >= ").concat(threshold.to_string()).concat(")"));
+                    println("Count:          ".concat(summary.count.to_string()));
+                    println("Total amount:   ".concat(summary.total_amount.to_string()));
+                    println("--- records ---");
+                    let _: Unit = enriched.fold(
+                        (),
+                        |_acc: Unit, r: Record| {
+                            println(format_record(r));
+                            ()
                         }
-                    }
+                    );
+                    Ok(())
                 }
             }
         }
@@ -131,7 +120,6 @@ fn main() -> Unit ! FileRead + Console {
         Ok(_)  => (),
         Err(e) => {
             let msg: String = match e {
-                RunError::MissingArg  => "missing --input argument (usage: --input <file.csv>)",
                 RunError::IOFailure   => "failed to read CSV file",
                 RunError::ParseFailed => "CSV parsing failed (see details above)",
             };

@@ -35,18 +35,8 @@
 //   mvl run examples/actor_pingpong/main.mvl
 //   make run   (from examples/actor_pingpong/)
 
-use std.args.{parse}
+use std.args.{parse_args, opt_positional, ArgType, ArgValue}
 use std.env.{exit}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// CLI ARGUMENTS
-// ═══════════════════════════════════════════════════════════════════════════
-
-// `rounds` is an optional positional: first bare argument on the command line.
-// If absent, unwrap_or(5) provides the default.
-type PingPongArgs = struct {
-    rounds: Option[Positional[Int]]
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MESSAGE TYPES
@@ -132,8 +122,8 @@ actor Ping {
 // ═══════════════════════════════════════════════════════════════════════════
 
 fn main() -> Unit ! Console + Env {
-    let cfg: PingPongArgs = parse[PingPongArgs]().unwrap_or_exit();
-    let rounds: Int = cfg.rounds.unwrap_or(5);
+    let args: Map[String, ArgValue] = parse_args([opt_positional("rounds", ArgType::Int)]);
+    let rounds: Int = match args.get("rounds") { Some(ArgValue::Int(n)) => n, _ => 5 };
     if rounds <= 0 {
         eprintln("error: rounds must be a positive integer")
         exit(1)
