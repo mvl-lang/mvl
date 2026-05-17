@@ -1,8 +1,8 @@
 ---
 domain: language
-version: 0.1.0
+version: 0.2.0
 status: draft
-date: 2026-04-11
+date: 2026-05-17
 ---
 
 # 002 — Effect System
@@ -14,6 +14,8 @@ The MVL effect system covers Requirement 7 (effect tracking) and supports Requir
 A function signature should tell the full truth about what the function does. If a function reads a file, it says so. If it's pure, the absence of effects proves it. Effects are the mechanism that makes Requirement 3 of the OWASP Top 10 (least privilege) a compile-time guarantee.
 
 **Origin:** Koka (Leijen, 2014) for algebraic effects. Haskell IO monad (1992) for the principle. E language (Miller, 1997) for capability-based security.
+
+**Design direction (ADR-0034):** The effect system evolves in three steps — (1) user-defined effect declarations replace the hardcoded name list, (2) effect aliases reduce signature proliferation, (3) effect masking at stdlib module boundaries allows implementation details to stay hidden. Full algebraic handlers with discharge (Koka-style `with`) are deferred to Phase 8.
 
 ## Requirements
 
@@ -50,9 +52,9 @@ This is Design Principle 6 ("Effects in signatures"). Pure is the default; every
 
 ### Requirement 2: Fine-Grained Effects [MUST]
 
-Effects MUST be fine-grained, not a single `IO` bucket. The minimum set of effect categories:
+Effects MUST be fine-grained, not a single `IO` bucket. The canonical stdlib effects are declared in `std/effects.mvl` and registered by the checker before user code is analyzed. Users MAY declare additional domain effects (see Requirement 7).
 
-**Implementation:** `src/mvl/checker.rs` (constant `VALID_EFFECT_NAMES`; validated in `check_fn_decl`)
+**Implementation:** `src/mvl/checker.rs` (effect registration pass; validated in `check_fn_decl`; replaces `VALID_EFFECT_NAMES` constant — see ADR-0034)
 
 **Tests:** `tests/type_checker.rs::invalid_effect_name_rejected`, `tests/type_checker.rs::valid_effect_names_accepted`, `tests/type_checker.rs::caller_missing_callee_effect_rejected`, `tests/type_checker.rs::caller_declaring_effect_union_accepted`
 
@@ -182,3 +184,99 @@ This is Design Principle 8 ("Actors, not threads"). No shared mutable state, no 
 - THEN the compiler MUST accept: ownership transferred via `consume`
 
 **Tests:** `tests/type_checker.rs::sending_iso_param_accepted`
+
+### Requirement 7: User-Defined Effects [MUST]
+
+Users MUST be able to declare domain-specific effects using the `effect` keyword. The compiler MUST validate effect names against the set of declared effects (stdlib + user-defined), replacing the hardcoded `VALID_EFFECT_NAMES` constant.
+
+**Implementation:** `src/mvl/checker.rs`, `std/effects.mvl` (ADR-0034 §Decision 1)
+
+```mvl
+// std/effects.mvl — canonical stdlib effects
+pub effect Console
+pub effect FileRead
+pub effect Net
+// ...
+
+// User application code
+pub effect PaymentGateway
+pub effect AuditTrail
+
+fn charge(amount: Int) -> Result[Unit, Error] ! PaymentGateway { ... }
+```
+
+Effect declarations are module-scoped and imported via the standard import mechanism. An undeclared effect name in a function signature MUST produce `CheckError::UnknownEffect`.
+
+#### Scenario: Domain effect declared and used
+
+- GIVEN `pub effect AuditTrail` declared in scope
+- WHEN `fn record(entry: Entry) -> Unit ! AuditTrail { ... }` is compiled
+- THEN the compiler MUST accept
+
+#### Scenario: Undeclared effect name rejected
+
+- GIVEN no declaration of `effect Foo` in scope
+- WHEN `fn do_foo() -> Unit ! Foo { ... }` is compiled
+- THEN the compiler MUST reject: "unknown effect `Foo` — declare it with `effect Foo`"
+
+### Requirement 8: Effect Aliases [SHOULD]
+
+Effects SHOULD support aliasing so that a named set can stand for a union of effects, reducing signature proliferation in application code.
+
+**Implementation:** `src/mvl/checker.rs` declaration pass (ADR-0034 §Decision 2)
+
+```mvl
+// Application domain module
+effect App = Log + Clock + DB + Net
+
+fn handle_request(req: Request) -> Response ! App { ... }
+// Equivalent to: -> Response ! Log + Clock + DB + Net
+```
+
+Aliases MUST expand to their constituent effects before type checking. Alias cycles (e.g., `effect A = B`, `effect B = A`) MUST be rejected at declaration time. Error messages SHOULD show the expanded effect set alongside the alias name.
+
+#### Scenario: Alias expands at call site
+
+- GIVEN `effect Observability = Log + Clock`
+- WHEN `fn f() -> Unit ! Observability { log_info("x", {}); now(); }`
+- THEN the compiler MUST accept (expanded effects are satisfied)
+
+#### Scenario: Alias cycle rejected
+
+- GIVEN `effect A = B` and `effect B = A`
+- THEN the compiler MUST reject: "effect alias cycle: A → B → A"
+
+### Requirement 9: Effect Masking [SHOULD]
+
+Public functions in `std.*` modules SHOULD be able to declare a subset of their actual effects as the public contract, hiding implementation-detail effects from callers using a `masks` clause.
+
+This formalises the Phase-A exemption currently expressed as a comment in `runtime/rust/src/stdlib/log.rs:23–27` (timestamp acquisition exempted from `! Clock`) and allows it to be expressed in MVL source. See ADR-0034 §Decision 3 and #839.
+
+**Implementation:** `src/mvl/checker/decls.rs`, `src/mvl/parser/ast.rs` (ADR-0034 §Decision 3)
+
+```mvl
+// std/log.mvl — Clock is masked: callers only see ! Log
+pub fn log_info(msg: String, fields: Map[String, String]) -> Unit ! Log
+    masks Clock {
+    let ts = now();           // ! Clock — not propagated to callers
+    log_write(format_entry(Level::Info, msg, fields, ts));
+}
+```
+
+The `masks` clause is restricted to `pub` functions in `std.*` modules. The compiler MUST verify that masked effects are actually used in the body (dead `masks` clause is an error). The compiler does NOT verify semantic safety of masking — trust is bounded to stdlib authors.
+
+#### Scenario: Masked effect not visible to caller
+
+- GIVEN `pub fn log_info(...) -> Unit ! Log masks Clock { ... }` in `std.log`
+- WHEN `fn app() -> Unit ! Log { log_info("x", {}); }`
+- THEN the compiler MUST accept (Clock not required at call site)
+
+#### Scenario: Masked effect actually used
+
+- GIVEN `pub fn log_info(...) -> Unit ! Log masks Clock { ... }` but body does not call `now()`
+- THEN the compiler MUST reject: "masked effect `Clock` is unused in body"
+
+#### Scenario: Masking outside std.* rejected
+
+- GIVEN user code `fn sneaky() -> Unit ! Log masks Net { http_get("..."); }`
+- THEN the compiler MUST reject: "`masks` is only permitted in `std.*` modules"
