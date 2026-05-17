@@ -1094,8 +1094,6 @@ mod tests {
         // fn caller() -> Unit { sink(sanitize(source())) }
         // sanitize is explicitly Clean; even though we pass a Tainted arg the
         // return is guaranteed Clean → no violation on sink(sanitize(...)).
-        use crate::mvl::checker::context::FnInfo;
-        use crate::mvl::checker::types::Ty;
         let prog = parse(
             "fn sanitize(x: String) -> Clean[String] { x } \
              fn caller() -> Unit { sink(sanitize(source())) }",
@@ -1172,8 +1170,6 @@ mod tests {
         // to call a Clean sink should be caught.
         // Note: since lambda IFC is also partially handled by ifc.rs::check_implicit_flows,
         // this test verifies the violation detection path specifically.
-        use crate::mvl::checker::context::FnInfo;
-        use crate::mvl::checker::types::Ty;
         let env = env_with_taint_source();
         // Register: fn apply(f: ..., x: String) — we simulate via a direct call.
         // For a minimal test, just verify that a non-lambda Tainted→Clean violation still fires.
