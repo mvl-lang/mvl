@@ -37,7 +37,7 @@ use std.log.{log_info, log_error}
 // ── Trust boundary: domain-specific pipeline logic ──────────────────────────
 
 extern "rust" {
-    fn analyze_and_format(content: Tainted[String], level: Option[String]) -> Result[String, PipelineError];
+    fn analyze_and_format(content: Tainted[String], level: Option[Clean[String]]) -> Result[String, PipelineError];
 }
 
 // ── Domain types ───────────────────────────────────────────────────────────
@@ -63,7 +63,7 @@ fn run() -> Result[Unit, RunError] ! FileRead + Console + Log {
         Some(ArgValue::Str(s)) => s,
         _ => "",
     };
-    let level_opt: Option[String] = match args.get("level") {
+    let level_opt: Option[Clean[String]] = match args.get("level") {
         Some(ArgValue::Str(s)) => Some(s),
         _ => None,
     };

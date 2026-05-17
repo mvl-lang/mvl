@@ -26,9 +26,9 @@ use crate::PipelineError;
 #[no_mangle]
 pub extern "Rust" fn analyze_and_format(
     content: Tainted<String>,
-    level: Option<String>,
+    level: Option<Clean<String>>,
 ) -> Result<String, PipelineError> {
-    let filter = level.as_ref().map(|l| l.to_lowercase());
+    let filter = level.as_ref().map(|l| l.as_inner().to_lowercase());
     let (mut count, mut errors, mut warnings, mut infos) = (0i64, 0i64, 0i64, 0i64);
 
     for line in content.lines() {

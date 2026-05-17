@@ -70,10 +70,10 @@ test fn args_opt_positional_builds_correct_variant() -> Unit {
 // ── ArgValue matching ─────────────────────────────────────────────────────
 
 test fn args_arg_value_str_extractable() -> Unit {
-    let v: ArgValue = ArgValue::Str("hello");
-    let s: String = match v {
+    let v: ArgValue = ArgValue::Str(sanitize("hello"));
+    let s: Clean[String] = match v {
         ArgValue::Str(x) => x,
-        _ => "",
+        _ => sanitize(""),
     };
     assert_eq(s, "hello")
 }

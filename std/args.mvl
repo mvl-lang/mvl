@@ -36,8 +36,13 @@ pub type FieldSpec = enum {
 }
 
 /// A parsed argument value.  Callers pattern-match on the variant.
+///
+/// `Str` carries `Clean[String]` — the parser called `sanitize()` on every
+/// argv token before returning.  Callers may use the value directly where
+/// `String` is expected (Clean coerces to String) or pass it to functions
+/// that require `Clean[String]` without an extra sanitize call.
 pub type ArgValue = enum {
-    Str(String),
+    Str(Clean[String]),
     Int(Int),
     Float(Float),
     Bool(Bool),
@@ -164,7 +169,7 @@ fn build_usage(schema: List[FieldSpec]) -> String {
 /// Prints an error to stderr and exits 1 on failure.
 fn coerce_arg(name: String, raw: String, ty: ArgType) -> ArgValue ! Console + Env {
     match ty {
-        ArgType::Str => ArgValue::Str(raw),
+        ArgType::Str => ArgValue::Str(sanitize(raw)),
         ArgType::Int => {
             match str_parse_int(raw) {
                 Ok(n)  => ArgValue::Int(n),
