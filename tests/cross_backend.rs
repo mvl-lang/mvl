@@ -338,6 +338,21 @@ fn cross_backend_random_float_shape() {
     }
 }
 
+// ── ADR-0034: user-defined generic function parity ────────────────────────────
+
+/// User-defined generic functions must produce identical output from both backends.
+///
+/// `generic_fns.mvl` exercises:
+///   - `identity[T]` instantiated with Int and String (two MonoFn copies)
+///   - `Option[Point]` payload — struct stored in a generic container
+///
+/// LLVM backend uses the MonoProgram pre-emit pass (ADR-0034);
+/// Rust backend emits native Rust generics. Both must agree on output.
+#[test]
+fn cross_backend_generic_fns() {
+    assert_backends_agree("generic_fns.mvl");
+}
+
 // ── #583: generic builtin parity tests (choice, shuffle) ─────────────────────
 
 /// `random.choice` on a single-element list is deterministic: always `Some(42)`.

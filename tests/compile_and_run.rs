@@ -217,6 +217,27 @@ fn safe_division_runs_and_produces_expected_output() {
     assert_run_output("safe_division.mvl", &["100 / 4 = 25"]);
 }
 
+// ── L5-08 / ADR-0034: generic_fns.mvl ────────────────────────────────────
+
+/// User-defined generic functions are monomorphized correctly via the mono pass
+/// (ADR-0034). Two instantiations of `identity[T]` (with Int and String) and
+/// `Option[Point]` payload matching must produce the expected output.
+///
+/// Expected stdout:
+///   42
+///   hello
+///   got 1 2
+///   nothing
+#[test]
+fn generic_fns_check_passes() {
+    assert_check_ok("generic_fns.mvl");
+}
+
+#[test]
+fn generic_fns_runs_and_produces_expected_output() {
+    assert_run_output("generic_fns.mvl", &["42", "hello", "got 1 2", "nothing"]);
+}
+
 // ── 7. linked_list.mvl ────────────────────────────────────────────────────
 
 #[test]

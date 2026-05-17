@@ -922,4 +922,111 @@ mod tests {
         let fns = collect_fns([&prog]);
         assert!(fns.is_empty());
     }
+
+    // ── monomorphize (integration) ───────────────────────────────────────────
+
+    fn parse(src: &str) -> Program {
+        let (mut p, _) = crate::mvl::parser::Parser::new(src);
+        let prog = p.parse_program();
+        assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+        prog
+    }
+
+    #[test]
+    fn monomorphize_identity_produces_two_instantiations() {
+        let prog = parse(
+            r#"
+fn identity[T](x: T) -> T { x }
+fn main() -> Unit {
+    let n: Int    = identity(42);
+    let s: String = identity("hello");
+}
+"#,
+        );
+        let check = crate::mvl::checker::check(&prog);
+        let all_fns = collect_fns([&prog]);
+        let mono = monomorphize(&prog, &all_fns, &check.expr_types);
+
+        let mangled_names: Vec<&str> = mono.fns.iter().map(|f| f.mangled_name.as_str()).collect();
+        assert!(
+            mangled_names.contains(&"identity_Int"),
+            "expected identity_Int in {:?}",
+            mangled_names
+        );
+        assert!(
+            mangled_names.contains(&"identity_String"),
+            "expected identity_String in {:?}",
+            mangled_names
+        );
+    }
+
+    #[test]
+    fn monomorphize_non_generic_fn_uses_original_name() {
+        let prog = parse(
+            r#"
+fn add(x: Int, y: Int) -> Int { x + y }
+fn main() -> Unit { let r: Int = add(1, 2); }
+"#,
+        );
+        let check = crate::mvl::checker::check(&prog);
+        let all_fns = collect_fns([&prog]);
+        let mono = monomorphize(&prog, &all_fns, &check.expr_types);
+
+        let add_entry = mono.fns.iter().find(|f| f.original_name == "add");
+        assert!(
+            add_entry.is_some(),
+            "non-generic fn should appear in MonoProgram"
+        );
+        let entry = add_entry.unwrap();
+        assert_eq!(entry.mangled_name, "add");
+        assert!(
+            entry.type_subs.is_empty(),
+            "non-generic fn must have empty type_subs"
+        );
+    }
+
+    #[test]
+    fn monomorphize_type_subs_recorded_correctly() {
+        let prog = parse(
+            r#"
+fn identity[T](x: T) -> T { x }
+fn main() -> Unit { let n: Int = identity(1); }
+"#,
+        );
+        let check = crate::mvl::checker::check(&prog);
+        let all_fns = collect_fns([&prog]);
+        let mono = monomorphize(&prog, &all_fns, &check.expr_types);
+
+        let inst = mono
+            .fns
+            .iter()
+            .find(|f| f.mangled_name == "identity_Int")
+            .expect("identity_Int must be in MonoProgram");
+        assert_eq!(inst.original_name, "identity");
+        let t_sub = inst.type_subs.get("T").expect("T must be in type_subs");
+        assert_eq!(*t_sub, base("Int"));
+    }
+
+    #[test]
+    fn monomorphize_same_instantiation_not_duplicated() {
+        let prog = parse(
+            r#"
+fn identity[T](x: T) -> T { x }
+fn main() -> Unit {
+    let a: Int = identity(1);
+    let b: Int = identity(2);
+}
+"#,
+        );
+        let check = crate::mvl::checker::check(&prog);
+        let all_fns = collect_fns([&prog]);
+        let mono = monomorphize(&prog, &all_fns, &check.expr_types);
+
+        let count = mono
+            .fns
+            .iter()
+            .filter(|f| f.mangled_name == "identity_Int")
+            .count();
+        assert_eq!(count, 1, "identical instantiation must not be duplicated");
+    }
 }
