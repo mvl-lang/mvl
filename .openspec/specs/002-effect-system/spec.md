@@ -38,17 +38,28 @@ Functions with side effects MUST declare them in the signature using `! Effect` 
 - GIVEN `fn a() -> Int ! FileRead { read_config()? }` and `fn b() -> Int { a() }`
 - THEN the compiler MUST reject `b`: "calls `a` which requires `! FileRead` but `b` declares no effects"
 
-### Requirement 2: Effects Defined in std [MUST]
+### Requirement 2: Effects Declared in MVL Source [MUST]
 
-Effects MUST be declared in `std/effects.mvl`, not hardcoded in the compiler. The compiler parses effect declarations and builds the effect hierarchy.
+Effects MUST be declared in MVL source, not hardcoded in the compiler. Base effects live in `std/effects.mvl`. User code MAY declare domain-specific effects that extend the hierarchy.
 
-**Implementation:** `std/effects.mvl`, `src/mvl/checker.rs`
+**Implementation:** `src/mvl/checker.rs`, `src/mvl/checker/effects.rs`
+
+The compiler uses dual-pass compilation:
+1. **Parse pass:** Parse all files, collect `EffectDecl` nodes (no validation)
+2. **Resolve pass:** Build hierarchy, validate parents exist, detect cycles
+3. **Check pass:** Type-check with complete hierarchy
 
 #### Scenario: Unknown effect
 
 - GIVEN `fn foo() ! UnknownEffect { }`
-- WHEN `UnknownEffect` is not declared in std/effects.mvl
+- WHEN `UnknownEffect` is not declared anywhere
 - THEN the compiler MUST reject: "unknown effect `UnknownEffect`"
+
+#### Scenario: User-defined domain effect
+
+- GIVEN `effect Billing > DB + Log` in user code
+- AND `fn charge(amount: Int) ! Billing { db_insert(...); log_debug(...); }`
+- THEN the compiler MUST accept: Billing subsumes DB and Log
 
 ### Requirement 3: Fine-Grained Effects [MUST]
 
@@ -84,7 +95,7 @@ Effects MUST support subsumption. If effect `A` subsumes effect `B` (`A > B`), d
 
 Syntax:
 ```
-effect_decl = "effect" IDENT [ ">" IDENT ] ;
+effect_decl = "effect" IDENT [ ">" IDENT ( "+" IDENT )* ] ;
 ```
 
 #### Scenario: Log subsumes Clock

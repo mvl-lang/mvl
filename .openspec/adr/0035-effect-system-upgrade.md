@@ -26,14 +26,12 @@ The original design intent was correct: effects track what code CAN do, for secu
 
 ## Decision
 
-### 1. Effects Defined in std/effects.mvl
+### 1. Effects Declared in MVL Source
 
-Effects are declared in MVL source, not hardcoded in the compiler:
+Effects are declared in MVL source, not hardcoded in the compiler. Base effects live in `std/effects.mvl`. User code can declare domain-specific effects.
 
 ```mvl
-// std/effects.mvl
-
-// Base effects (primitives)
+// std/effects.mvl — base effects
 effect Clock
 effect Console
 effect FileRead
@@ -44,14 +42,21 @@ effect DB
 effect ProcessSpawn
 effect Env
 effect Random
-
-// Concurrency (replaces Async)
 effect Spawn
 effect Send
 effect Recv
+
+// user code — domain effects
+effect Billing > DB + Log
+effect Notification > Net + Log
 ```
 
-The compiler parses `effect` declarations and builds the effect hierarchy. No `VALID_EFFECT_NAMES` constant.
+The compiler uses dual-pass compilation:
+1. **Parse pass:** Parse all files, collect `EffectDecl` nodes (no validation)
+2. **Resolve pass:** Build hierarchy, validate parents exist, detect cycles
+3. **Check pass:** Type-check with complete hierarchy
+
+No special ordering. `std/effects.mvl` is just another file.
 
 ### 2. Subsumption Hierarchy
 
@@ -88,12 +93,13 @@ Subsumption is transitive: `IO > Log > Clock` means `! IO` satisfies `! Clock`.
 ### 3. Syntax
 
 ```
-effect_decl = "effect" IDENT [ ">" IDENT ] ;
+effect_decl = "effect" IDENT [ ">" IDENT ( "+" IDENT )* ] ;
 ```
 
 Examples:
-- `effect Clock` — declare base effect
-- `effect Log > Clock` — declare effect that subsumes Clock
+- `effect Clock` — base effect
+- `effect Log > Clock` — subsumes Clock
+- `effect Billing > DB + Log + Clock` — subsumes multiple effects
 
 ### 4. No Aliases
 
@@ -183,6 +189,14 @@ Some effects (Log, Clock) don't propagate. Rejected because:
 - Totality is about the function's termination behavior, not operations it performs
 - Similar to `pub` or `async` — metadata about the function, not a side effect
 - Already implemented as prefix, spec was aspirational
+
+### Hardcoded std/effects.mvl Bootstrap
+
+Load std/effects.mvl specially before user code. Rejected because:
+- Dual-pass (parse first, resolve later) handles forward references naturally
+- No special ordering needed
+- std/effects.mvl is just another file
+- User-defined effects work the same way
 
 ---
 
