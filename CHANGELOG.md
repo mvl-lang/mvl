@@ -4,6 +4,26 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.124.0] — 2026-05-17
+
+### Added
+- **Interprocedural IFC analysis**: whole-program taint tracking across function call chains (#825)
+  - Call graph construction: `CallGraph` struct for whole-program function call topology (#829)
+  - Label propagation: fixed-point inference over call graphs with external taint source registry (#830, #833)
+  - Violation detection: interprocedural information flow violations with call-chain error reporting (#831)
+- **7 new unit tests** for IFC analysis: 3-hop SQL injection chain, mutual recursion termination, violation field assertions, Tainted→Public violations, let-binding taint tracking
+
+### Fixed
+- Call graph `reachable()` BFS infinite loop on cyclic calls — now correctly terminates
+- IFC return-label inference now handles `MatchBody::Expr` arms (was returning `None`)
+- IFC if-expression label inference no longer conflates implicit flow (condition) with explicit flow (value label)
+- IFC `extract_chain` now threads caller's env to capture variable-routed taint in error messages
+- Propagation and violation detection now cover `Decl::Impl` and `Decl::Actor` method bodies (previously only `Decl::Fn`)
+
+### Changed
+- `label_of_type_expr` moved to `ifc.rs` as `pub(crate)` to eliminate duplication
+- `TAINT_SOURCES` extended to include `env_var`, `read_file`, `recv`, `recv_line` (note: method-call forms deferred to #838)
+
 ## [0.123.0] — 2026-05-16
 
 ### Added
