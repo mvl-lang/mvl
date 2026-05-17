@@ -34,3 +34,4 @@
 | [0031](0031-no-ufcs.md) | No Uniform Function Call Syntax (UFCS) — explicit `f(x)` over implicit `x.f()` | Accepted |
 | [0032](0032-stdlib-structured-error-enums.md) | Stdlib structured error enums — domain-specific Result[T, XxxError] replacing Result[T, String] | Accepted |
 | [0033](0033-rust-2018-sibling-file-module-style.md) | Rust 2018 sibling-file module style — `foo.mvl` preferred over `foo/mod.mvl` | Accepted |
+| [0034](0034-monomorphization-pass.md) | Monomorphization as an explicit pre-analysis pass — `MonoProgram` between TypeCheck and analysis | Accepted |
