@@ -62,9 +62,11 @@ fn load_toml_layer(path: String, base: ConfigValue) -> ConfigValue ! FileRead {
 
 fn merge_cli_args(cfg: ConfigValue) -> ConfigValue ! Console + Env {
     let cli: Map[String, ArgValue] = parse_args([
-        optional("host",  ArgType::Str),
-        optional("port",  ArgType::Int),
+        optional("host",       ArgType::Str),
+        optional("port",       ArgType::Int),
         flag("debug"),
+        optional("log-level",  ArgType::Str),
+        optional("log-format", ArgType::Str),
     ]);
     // --host
     let cfg: ConfigValue = match cli.get("host") {
@@ -81,6 +83,16 @@ fn merge_cli_args(cfg: ConfigValue) -> ConfigValue ! Console + Env {
     // --debug (presence flag)
     let cfg: ConfigValue = match cli.get("debug") {
         Some(ArgValue::Bool(true)) => merge(cfg, ConfigValue::Map({"debug": ConfigValue::Bool(true)})),
+        _ => cfg,
+    };
+    // --log-level
+    let cfg: ConfigValue = match cli.get("log-level") {
+        Some(ArgValue::Str(v)) => merge(cfg, ConfigValue::Map({"log_level": ConfigValue::String(v)})),
+        _ => cfg,
+    };
+    // --log-format
+    let cfg: ConfigValue = match cli.get("log-format") {
+        Some(ArgValue::Str(v)) => merge(cfg, ConfigValue::Map({"log_format": ConfigValue::String(v)})),
         _ => cfg,
     };
     cfg
