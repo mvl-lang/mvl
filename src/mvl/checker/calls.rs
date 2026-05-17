@@ -9,7 +9,7 @@ use crate::mvl::checker::types::{types_compatible, Ty};
 use crate::mvl::parser::ast::{Expr, SecurityLabel, Totality};
 use crate::mvl::parser::lexer::Span;
 
-use super::{effect_satisfies, TypeChecker};
+use super::TypeChecker;
 
 impl TypeChecker {
     // ── Function calls (#11) ──────────────────────────────────────────────
@@ -114,7 +114,7 @@ impl TypeChecker {
                 let covered = self
                     .current_fn_effects
                     .iter()
-                    .any(|declared| effect_satisfies(declared, required));
+                    .any(|declared| self.effect_satisfies(declared, required));
                 if !covered {
                     if self.current_fn_effects.is_empty() {
                         // Pure function calling effectful one (#19)
@@ -247,7 +247,7 @@ impl TypeChecker {
                     let covered = self
                         .current_fn_effects
                         .iter()
-                        .any(|declared| effect_satisfies(declared, required));
+                        .any(|declared| self.effect_satisfies(declared, required));
                     if !covered {
                         if self.current_fn_effects.is_empty() {
                             self.emit(CheckError::UndeclaredEffect {

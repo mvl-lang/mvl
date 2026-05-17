@@ -18,7 +18,7 @@ use crate::mvl::parser::lexer::Span;
 use std::collections::{HashMap, HashSet};
 
 use super::capabilities::block_return_flows_from_ref_param;
-use super::{TypeChecker, VALID_EFFECT_NAMES};
+use super::TypeChecker;
 
 impl TypeChecker {
     pub(super) fn collect_declarations(&mut self, decls: &[Decl]) {
@@ -363,13 +363,17 @@ impl TypeChecker {
             }
         }
 
-        // Validate effect names against the canonical set (002-effect-system/Req 2).
-        for effect in &fd.effects {
-            if !VALID_EFFECT_NAMES.contains(&effect.name.as_str()) {
-                self.emit(CheckError::InvalidEffectName {
-                    name: effect.name.clone(),
-                    span: effect.span,
-                });
+        // Validate effect names against the hierarchy (002-effect-system/Req 2, ADR-0035).
+        // When the hierarchy is empty (tests that don't load std/effects.mvl) fall back
+        // to accepting all names — hierarchy errors are reported separately in from_decls().
+        if self.effect_hierarchy.has_any() {
+            for effect in &fd.effects {
+                if !self.effect_hierarchy.contains(&effect.name) {
+                    self.emit(CheckError::InvalidEffectName {
+                        name: effect.name.clone(),
+                        span: effect.span,
+                    });
+                }
             }
         }
 

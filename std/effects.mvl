@@ -19,6 +19,8 @@ effect ProcessSpawn // Spawn external processes — arbitrary code execution
 effect Env          // Read/write environment variables — secret leakage
 effect Random       // Non-deterministic random generation — predictable values
 
+effect Terminal     // Raw terminal control (cursor, colors, raw input) — distinct from Console
+
 // ── Concurrency Effects ───────────────────────────────────────────────────────
 
 effect Spawn        // Create actors — resource exhaustion (DoS)

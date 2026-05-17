@@ -177,6 +177,18 @@ pub enum CheckError {
         name: String,
         span: Span,
     },
+    /// An effect declaration names an unknown parent (#853).
+    UnknownEffectParent {
+        effect: String,
+        parent: String,
+        span: Span,
+    },
+    /// A cycle was detected in the effect subsumption hierarchy (#853).
+    EffectCycle {
+        /// Chain of effects forming the cycle, e.g. ["A", "B", "A"].
+        chain: Vec<String>,
+        span: Span,
+    },
     /// Pure function body calls an effectful function.
     UndeclaredEffect {
         /// The effectful callee.
@@ -492,6 +504,8 @@ impl CheckError {
             | CheckError::CaptureMutabilityViolation { .. } => 6,
             // Req 7: Effect Tracking (includes invalid names)
             CheckError::InvalidEffectName { .. }
+            | CheckError::UnknownEffectParent { .. }
+            | CheckError::EffectCycle { .. }
             | CheckError::UndeclaredEffect { .. }
             | CheckError::MissingEffect { .. } => 7,
             // Req 8: Termination
@@ -573,6 +587,8 @@ impl CheckError {
             | CheckError::DoubleMutableBorrow { span, .. }
             | CheckError::RefinementViolated { span, .. }
             | CheckError::InvalidEffectName { span, .. }
+            | CheckError::UnknownEffectParent { span, .. }
+            | CheckError::EffectCycle { span, .. }
             | CheckError::UndeclaredEffect { span, .. }
             | CheckError::MissingEffect { span, .. }
             | CheckError::UnboundedLoopInTotal { span }
@@ -701,9 +717,16 @@ impl CheckError {
                 let cx = counterexample.as_deref().map(|c| format!(" (counterexample: {c})")).unwrap_or_default();
                 format!("refinement predicate violated: `{pred}`{cx}")
             }
-            CheckError::InvalidEffectName { name, .. } => format!(
-                "unknown effect `{name}` — valid effects are: Console, FileRead, FileWrite, FileDelete, Net, DB, ProcessSpawn, Random, CryptoRandom, Clock, Env, Log, Async, Terminal"
+            CheckError::InvalidEffectName { name, .. } => {
+                format!("unknown effect `{name}`")
+            }
+            CheckError::UnknownEffectParent { effect, parent, .. } => format!(
+                "effect `{effect}` subsumes unknown effect `{parent}` — declare `{parent}` before using it as a parent"
             ),
+            CheckError::EffectCycle { chain, .. } => {
+                let path = chain.join(" > ");
+                format!("effect subsumption cycle detected: {path}")
+            }
             CheckError::UndeclaredEffect { callee, effect, .. } => {
                 format!(
                     "function has no effect declaration but calls `{callee}` which requires `! {effect}`"

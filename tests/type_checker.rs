@@ -28,6 +28,16 @@ fn errors_for(src: &str) -> Vec<CheckError> {
     check_src(src).errors
 }
 
+/// Check `src` with std/effects.mvl loaded so the effect hierarchy is populated.
+fn check_with_effects(src: &str) -> CheckResult {
+    let effects_src = include_str!("../std/effects.mvl");
+    let (mut ep, _) = Parser::new(effects_src);
+    let effects_prog = ep.parse_program();
+    let (mut p, _) = Parser::new(src);
+    let prog = p.parse_program();
+    check_with_prelude(&[effects_prog], &prog)
+}
+
 // ── #11: Basic type inference (Requirement 1) ────────────────────────────────
 
 #[test]
@@ -2424,22 +2434,25 @@ fn assert_eq_rejects_tainted_argument() {
 
 // ── 002-effect-system/Req 2: Effect name validation ──────────────────────────
 
-/// Unknown effect name MUST be rejected (002-effect-system/Req 2).
+/// Unknown effect name MUST be rejected (002-effect-system/Req 2, ADR-0035).
 #[test]
 fn invalid_effect_name_rejected() {
-    let errors = errors_for(r#"fn f() -> Unit ! IoMagic { }"#);
+    // Use std/effects.mvl prelude so the hierarchy is populated.
+    let result = check_with_effects(r#"fn f() -> Unit ! IoMagic { }"#);
     assert!(
-        errors
+        result
+            .errors
             .iter()
             .any(|e| matches!(e, CheckError::InvalidEffectName { name, .. } if name == "IoMagic")),
-        "unknown effect name should emit InvalidEffectName, got: {errors:?}"
+        "unknown effect name should emit InvalidEffectName, got: {:?}",
+        result.errors
     );
 }
 
-/// All canonical effect names MUST be accepted (002-effect-system/Req 2).
+/// All std/effects.mvl effect names MUST be accepted (002-effect-system/Req 2, ADR-0035).
 #[test]
 fn valid_effect_names_accepted() {
-    // Test all 13 canonical effect names from VALID_EFFECT_NAMES in checker/mod.rs.
+    // These are all declared in std/effects.mvl (base + composite).
     let canonical = [
         "Console",
         "FileRead",
@@ -2452,12 +2465,16 @@ fn valid_effect_names_accepted() {
         "CryptoRandom",
         "Clock",
         "Env",
+        "Spawn",
+        "Send",
+        "Recv",
         "Log",
-        "Async",
+        "IO",
+        "Actor",
     ];
     for name in &canonical {
         let src = format!("fn f() -> Unit ! {name} {{ }}");
-        let result = check_src(&src);
+        let result = check_with_effects(&src);
         let effect_errors: Vec<_> = result
             .errors
             .iter()
@@ -2470,15 +2487,32 @@ fn valid_effect_names_accepted() {
     }
 }
 
-/// The legacy `IO` catch-all bucket MUST be rejected (002-effect-system/Req 2).
+/// `Async` is no longer a valid effect — replaced by Spawn/Send/Recv (ADR-0035, #856).
 #[test]
-fn io_effect_bucket_rejected() {
-    let errors = errors_for(r#"fn f() -> Unit ! IO { }"#);
+fn async_effect_rejected_after_migration() {
+    let result = check_with_effects(r#"fn f() -> Unit ! Async { }"#);
     assert!(
-        errors
+        result
+            .errors
             .iter()
-            .any(|e| matches!(e, CheckError::InvalidEffectName { name, .. } if name == "IO")),
-        "`IO` should be rejected as a non-canonical effect bucket, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::InvalidEffectName { name, .. } if name == "Async")),
+        "`Async` should be rejected after migration to Spawn/Send/Recv, got: {:?}",
+        result.errors
+    );
+}
+
+/// `IO` is now a valid composite effect in std/effects.mvl (ADR-0035).
+#[test]
+fn io_composite_effect_accepted() {
+    let result = check_with_effects(r#"fn f() -> Unit ! IO { }"#);
+    let effect_errors: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| matches!(e, CheckError::InvalidEffectName { .. }))
+        .collect();
+    assert!(
+        effect_errors.is_empty(),
+        "`IO` is a valid composite effect in std/effects.mvl, got: {effect_errors:?}"
     );
 }
 
@@ -2512,6 +2546,128 @@ fn lambda_immutable_capture_accepted() {
     assert!(
         capture_errors.is_empty(),
         "lambda with immutable capture should not emit CaptureMutabilityViolation, got: {capture_errors:?}"
+    );
+}
+
+// ── 002-effect-system/Req 4: Effect Subsumption (ADR-0035) ───────────────────
+
+/// `! IO` satisfies `! Console` via subsumption (IO > Console in std/effects.mvl).
+#[test]
+fn io_subsumes_console() {
+    // fn effectful() -> Unit ! Console { }
+    // fn caller() -> Unit ! IO { effectful() }   — IO > Console, so this is fine
+    let src = r#"
+        fn effectful() -> Unit ! Console { }
+        fn caller() -> Unit ! IO { effectful() }
+    "#;
+    let result = check_with_effects(src);
+    let effect_errors: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                CheckError::UndeclaredEffect { .. } | CheckError::MissingEffect { .. }
+            )
+        })
+        .collect();
+    assert!(
+        effect_errors.is_empty(),
+        "! IO should satisfy ! Console via subsumption, got: {effect_errors:?}"
+    );
+}
+
+/// `! Log` satisfies `! Clock` (Log > Clock in std/effects.mvl).
+#[test]
+fn log_subsumes_clock() {
+    let src = r#"
+        fn now() -> Unit ! Clock { }
+        fn logger() -> Unit ! Log { now() }
+    "#;
+    let result = check_with_effects(src);
+    let effect_errors: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                CheckError::UndeclaredEffect { .. } | CheckError::MissingEffect { .. }
+            )
+        })
+        .collect();
+    assert!(
+        effect_errors.is_empty(),
+        "! Log should satisfy ! Clock via subsumption, got: {effect_errors:?}"
+    );
+}
+
+/// `! IO` transitively satisfies `! Clock` (IO > Log > Clock).
+#[test]
+fn io_transitively_subsumes_clock() {
+    let src = r#"
+        fn now() -> Unit ! Clock { }
+        fn main() -> Unit ! IO { now() }
+    "#;
+    let result = check_with_effects(src);
+    let effect_errors: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                CheckError::UndeclaredEffect { .. } | CheckError::MissingEffect { .. }
+            )
+        })
+        .collect();
+    assert!(
+        effect_errors.is_empty(),
+        "! IO should transitively satisfy ! Clock (IO > Log > Clock), got: {effect_errors:?}"
+    );
+}
+
+/// User-defined domain effect: `Billing` subsumes `DB` + `Log`.
+#[test]
+fn user_defined_effect_subsumption() {
+    let src = r#"
+        effect Billing > DB + Log
+        fn db_insert() -> Unit ! DB { }
+        fn log_debug() -> Unit ! Log { }
+        fn charge() -> Unit ! Billing { db_insert() log_debug() }
+    "#;
+    let result = check_with_effects(src);
+    let effect_errors: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                CheckError::UndeclaredEffect { .. }
+                    | CheckError::MissingEffect { .. }
+                    | CheckError::InvalidEffectName { .. }
+            )
+        })
+        .collect();
+    assert!(
+        effect_errors.is_empty(),
+        "user-defined Billing > DB + Log should compile, got: {effect_errors:?}"
+    );
+}
+
+/// `! Log` does NOT satisfy `! Console` (they share no subsumption).
+#[test]
+fn log_does_not_subsume_console() {
+    let src = r#"
+        fn printer() -> Unit ! Console { }
+        fn logger() -> Unit ! Log { printer() }
+    "#;
+    let result = check_with_effects(src);
+    assert!(
+        result.errors.iter().any(|e| matches!(
+            e,
+            CheckError::MissingEffect { effect, .. } if effect == "Console"
+        )),
+        "! Log should NOT satisfy ! Console, got: {:?}",
+        result.errors
     );
 }
 
