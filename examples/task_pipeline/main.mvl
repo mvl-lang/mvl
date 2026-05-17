@@ -28,7 +28,7 @@ use model::Summary;
 use model::ParseError;
 
 use std.io.{read_file}
-use std.args.{parse_args, required, optional, ArgType, ArgValue}
+use std.args.{parse_args, required, optional, get_str, get_float_opt, ArgType, ArgValue}
 
 // ── Application errors ────────────────────────────────────────────────────
 
@@ -64,14 +64,8 @@ fn run() -> Result[Unit, RunError] ! FileRead + Console {
         required("input",     ArgType::Str),
         optional("threshold", ArgType::Float),
     ]);
-    let file_path: String = match args.get("input") {
-        Some(ArgValue::Str(s)) => s,
-        _ => "",
-    };
-    let threshold_opt: Option[Float] = match args.get("threshold") {
-        Some(ArgValue::Float(v)) => Some(v),
-        _ => None,
-    };
+    let file_path: Clean[String] = get_str(args, "input", "");
+    let threshold_opt: Option[Float] = get_float_opt(args, "threshold");
     let threshold: Float = threshold_or_default(threshold_opt);
 
     match read_file(file_path) {

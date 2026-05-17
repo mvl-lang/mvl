@@ -11,6 +11,7 @@
 //!
 //! Import:
 //!   use std.args.{parse_args, required, optional, flag, positional, opt_positional,
+//!                 get_str, get_str_opt, get_int, get_float, get_float_opt, get_flag,
 //!                 ArgType, FieldSpec, ArgValue}
 //!
 //! Effects: Console + Env (all parse_args callers).
@@ -73,6 +74,56 @@ pub fn positional(name: String, ty: ArgType) -> FieldSpec {
 /// Optional positional (leading bare token).  Absent → key missing from map.
 pub fn opt_positional(name: String, ty: ArgType) -> FieldSpec {
     FieldSpec::OptPositional { name: name, ty: ty }
+}
+
+// ── Result accessors ─────────────────────────────────────────────────────────
+
+/// Extract a `Clean[String]` value; returns `sanitize(default)` if absent or wrong type.
+pub fn get_str(args: Map[String, ArgValue], name: String, default: String) -> Clean[String] {
+    match map_get(args, name) {
+        Some(ArgValue::Str(s)) => s,
+        _ => sanitize(default),
+    }
+}
+
+/// Extract an optional `Clean[String]`; returns `None` if absent.
+pub fn get_str_opt(args: Map[String, ArgValue], name: String) -> Option[Clean[String]] {
+    match map_get(args, name) {
+        Some(ArgValue::Str(s)) => Some(s),
+        _ => None,
+    }
+}
+
+/// Extract an `Int` value; returns `default` if absent or wrong type.
+pub fn get_int(args: Map[String, ArgValue], name: String, default: Int) -> Int {
+    match map_get(args, name) {
+        Some(ArgValue::Int(n)) => n,
+        _ => default,
+    }
+}
+
+/// Extract a `Float` value; returns `default` if absent or wrong type.
+pub fn get_float(args: Map[String, ArgValue], name: String, default: Float) -> Float {
+    match map_get(args, name) {
+        Some(ArgValue::Float(v)) => v,
+        _ => default,
+    }
+}
+
+/// Extract an optional `Float`; returns `None` if absent.
+pub fn get_float_opt(args: Map[String, ArgValue], name: String) -> Option[Float] {
+    match map_get(args, name) {
+        Some(ArgValue::Float(v)) => Some(v),
+        _ => None,
+    }
+}
+
+/// Extract a boolean flag value; returns `false` if absent.
+pub fn get_flag(args: Map[String, ArgValue], name: String) -> Bool {
+    match map_get(args, name) {
+        Some(ArgValue::Bool(b)) => b,
+        _ => false,
+    }
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────

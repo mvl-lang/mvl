@@ -9,16 +9,14 @@
 //   prog --host 0.0.0.0 --count 10
 
 use std.args.{parse_args, required, optional, flag, positional, opt_positional,
-               ArgType, ArgValue}
+               ArgType, ArgValue, FieldSpec}
 
-// ── Helper: extract a named string value from the result map ─────────────
-
-fn get_str(args: Map[String, ArgValue], name: String, default: String) -> String {
-    match args.get(name) {
-        Some(ArgValue::Str(s)) => s,
-        _ => default,
-    }
-}
+// ── Result accessors (inline — corpus checker does not resolve cross-module) ─
+//
+// Note: get_str is intentionally absent.  ArgValue::Str carries Clean[String]
+// and the corpus checker enforces Clean[T] ≠ T, so a String-returning helper
+// cannot be written here until the checker gains a coercion rule.
+// See tests/stdlib/args_test.mvl for the complete accessor suite.
 
 fn get_int(args: Map[String, ArgValue], name: String, default: Int) -> Int {
     match args.get(name) {
@@ -27,7 +25,7 @@ fn get_int(args: Map[String, ArgValue], name: String, default: Int) -> Int {
     }
 }
 
-fn get_bool(args: Map[String, ArgValue], name: String) -> Bool {
+fn get_flag(args: Map[String, ArgValue], name: String) -> Bool {
     match args.get(name) {
         Some(ArgValue::Bool(b)) => b,
         _ => false,
@@ -48,18 +46,12 @@ fn example_schema() -> List[FieldSpec] {
 
 // ── Functions that consume the parsed map ─────────────────────────────────
 
-fn make_address(args: Map[String, ArgValue]) -> String {
-    let host: String = get_str(args, "host", "localhost");
-    let port: Int    = get_int(args, "port", 8080);
-    format("{}:{}", host, port)
-}
-
 fn effective_count(args: Map[String, ArgValue]) -> Int {
     get_int(args, "count", 1)
 }
 
 fn is_verbose(args: Map[String, ArgValue]) -> Bool {
-    get_bool(args, "verbose")
+    get_flag(args, "verbose")
 }
 
 // ── Positional-only schema ────────────────────────────────────────────────
@@ -83,5 +75,5 @@ fn flags_schema() -> List[FieldSpec] {
 }
 
 fn any_flag_set(args: Map[String, ArgValue]) -> Bool {
-    get_bool(args, "verbose") || get_bool(args, "debug") || get_bool(args, "dry_run")
+    get_flag(args, "verbose") || get_flag(args, "debug") || get_flag(args, "dry_run")
 }

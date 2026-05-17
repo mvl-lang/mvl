@@ -30,7 +30,7 @@ use utils::is_positive;
 
 // ── Standard library imports ────────────────────────────────────────────────
 
-use std.args.{parse_args, required, optional, ArgType, ArgValue}
+use std.args.{parse_args, required, optional, get_str, get_str_opt, ArgType, ArgValue}
 use std.io.{read_file}
 use std.log.{log_info, log_error}
 
@@ -59,14 +59,8 @@ fn run() -> Result[Unit, RunError] ! FileRead + Console + Log {
         required("file",  ArgType::Str),
         optional("level", ArgType::Str),
     ]);
-    let file_path: String = match args.get("file") {
-        Some(ArgValue::Str(s)) => s,
-        _ => "",
-    };
-    let level_opt: Option[Clean[String]] = match args.get("level") {
-        Some(ArgValue::Str(s)) => Some(s),
-        _ => None,
-    };
+    let file_path: Clean[String] = get_str(args, "file", "");
+    let level_opt: Option[Clean[String]] = get_str_opt(args, "level");
     match read_file(file_path) {
         Err(_) => Err(RunError::IOFailure),
         Ok(content) => {

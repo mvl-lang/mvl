@@ -35,7 +35,7 @@
 //   mvl run examples/actor_pingpong/main.mvl
 //   make run   (from examples/actor_pingpong/)
 
-use std.args.{parse_args, opt_positional, ArgType, ArgValue}
+use std.args.{parse_args, opt_positional, get_int, ArgType, ArgValue}
 use std.env.{exit}
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -123,7 +123,7 @@ actor Ping {
 
 fn main() -> Unit ! Console + Env {
     let args: Map[String, ArgValue] = parse_args([opt_positional("rounds", ArgType::Int)]);
-    let rounds: Int = match args.get("rounds") { Some(ArgValue::Int(n)) => n, _ => 5 };
+    let rounds: Int = get_int(args, "rounds", 5);
     if rounds <= 0 {
         eprintln("error: rounds must be a positive integer")
         exit(1)

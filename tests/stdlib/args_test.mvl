@@ -7,6 +7,7 @@
 // the actual process argv.  End-to-end tests verify the full parse path.
 
 use std.args.{parse_args, required, optional, flag, positional, opt_positional,
+               get_str, get_str_opt, get_int, get_float, get_float_opt, get_flag,
                ArgType, ArgValue, FieldSpec}
 
 // ── ArgType constructors ──────────────────────────────────────────────────
@@ -87,6 +88,15 @@ test fn args_arg_value_int_extractable() -> Unit {
     assert_eq(n, 42)
 }
 
+test fn args_arg_value_float_extractable() -> Unit {
+    let v: ArgValue = ArgValue::Float(3.14);
+    let f: Float = match v {
+        ArgValue::Float(x) => x,
+        _ => 0.0,
+    };
+    assert_eq(f, 3.14)
+}
+
 test fn args_arg_value_bool_extractable() -> Unit {
     let v: ArgValue = ArgValue::Bool(true);
     let b: Bool = match v {
@@ -94,4 +104,64 @@ test fn args_arg_value_bool_extractable() -> Unit {
         _ => false,
     };
     assert_eq(b, true)
+}
+
+// ── Result accessors ──────────────────────────────────────────────────────
+
+test fn args_get_str_returns_value_when_present() -> Unit {
+    let m: ref Map[String, ArgValue] = {"k": ArgValue::Str(sanitize("hello"))};
+    let s: Clean[String] = get_str(m, "k", "default");
+    assert_eq(s, "hello")
+}
+
+test fn args_get_str_returns_default_when_absent() -> Unit {
+    let m: ref Map[String, ArgValue] = {"k": ArgValue::Str(sanitize("x"))};
+    let s: Clean[String] = get_str(m, "missing", "default");
+    assert_eq(s, "default")
+}
+
+test fn args_get_str_opt_returns_some_when_present() -> Unit {
+    let m: ref Map[String, ArgValue] = {"k": ArgValue::Str(sanitize("hi"))};
+    let opt: Option[Clean[String]] = get_str_opt(m, "k");
+    let is_some: Bool = match opt { Some(_) => true, None => false };
+    assert_eq(is_some, true)
+}
+
+test fn args_get_str_opt_returns_none_when_absent() -> Unit {
+    let m: ref Map[String, ArgValue] = {"k": ArgValue::Str(sanitize("x"))};
+    let opt: Option[Clean[String]] = get_str_opt(m, "missing");
+    let is_none: Bool = match opt { None => true, Some(_) => false };
+    assert_eq(is_none, true)
+}
+
+test fn args_get_int_returns_value_when_present() -> Unit {
+    let m: ref Map[String, ArgValue] = {"n": ArgValue::Int(42)};
+    assert_eq(get_int(m, "n", 0), 42)
+}
+
+test fn args_get_int_returns_default_when_absent() -> Unit {
+    let m: ref Map[String, ArgValue] = {"n": ArgValue::Int(1)};
+    assert_eq(get_int(m, "missing", 99), 99)
+}
+
+test fn args_get_float_returns_value_when_present() -> Unit {
+    let m: ref Map[String, ArgValue] = {"f": ArgValue::Float(1.5)};
+    assert_eq(get_float(m, "f", 0.0), 1.5)
+}
+
+test fn args_get_float_opt_returns_none_when_absent() -> Unit {
+    let m: ref Map[String, ArgValue] = {"f": ArgValue::Float(1.0)};
+    let opt: Option[Float] = get_float_opt(m, "missing");
+    let is_none: Bool = match opt { None => true, Some(_) => false };
+    assert_eq(is_none, true)
+}
+
+test fn args_get_flag_returns_true_when_set() -> Unit {
+    let m: ref Map[String, ArgValue] = {"v": ArgValue::Bool(true)};
+    assert_eq(get_flag(m, "v"), true)
+}
+
+test fn args_get_flag_returns_false_when_absent() -> Unit {
+    let m: ref Map[String, ArgValue] = {"v": ArgValue::Bool(true)};
+    assert_eq(get_flag(m, "missing"), false)
 }
