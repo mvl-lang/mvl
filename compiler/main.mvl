@@ -34,7 +34,7 @@ use ast::TypeExpr;
 use ast::Param;
 use ast::Effect;
 use std.io.{path, join, read_dir, read_to_string, to_string, Path}
-use std.args.{get_arg}
+use std.env.{args}
 
 // ── Formatting helpers ────────────────────────────────────────────────────────
 
@@ -305,14 +305,15 @@ test fn format_imports_multiple() -> Unit {
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
-partial fn main() -> Unit ! FileRead + Console {
-    let dir_path: Path = match get_arg("dir") {
+partial fn main() -> Unit ! FileRead + Console + Env {
+    let argv: List[Tainted[String]] = args();
+    let dir_path: Path = match argv.get(1) {
         None    => path("compiler"),
         Some(v) => dir_from_arg(v),
     };
 
     match read_dir(dir_path) {
-        Err(e) => println("error reading directory: {}", e),
+        Err(_) => println("error: could not read directory"),
         Ok(entries) => {
             let file_count: ref Int  = 0;
             let fn_total: ref   Int  = 0;

@@ -101,6 +101,7 @@ total fn keyword_kind(s: String) -> TokenKind {
         "ref"          => TokenKind::KwRef,
         "tag"          => TokenKind::KwTag,
         "actor"        => TokenKind::KwActor,
+        "effect"       => TokenKind::KwEffect,
         "select"       => TokenKind::KwSelect,
         "concurrently" => TokenKind::KwConcurrently,
         _              => TokenKind::Ident,

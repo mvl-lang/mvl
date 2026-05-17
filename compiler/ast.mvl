@@ -76,6 +76,8 @@ pub type TokenKind = enum {
     KwActor,
     KwSelect,
     KwConcurrently,
+    // ── Effect declarations (#852) ───────────────────────────────────────
+    KwEffect,
     // ── Boolean literals ────────────────────────────────────────────────
     KwTrue,
     KwFalse,

@@ -19,7 +19,7 @@
 program        = { use_decl } { declaration } ;
 declaration    = [ "pub" ] decl_body ;
 decl_body      = type_decl | fn_decl | const_decl | reexport_decl
-               | extern_decl | impl_decl | actor_decl ;
+               | extern_decl | impl_decl | actor_decl | effect_decl ;
 
 (* === Modules and imports === *)
 (* One file = one module. Module name = filename without extension.        *)
@@ -81,6 +81,10 @@ actor_decl     = "actor" IDENT [ type_params ] "{" { actor_field } { actor_metho
 actor_field    = field_decl [ "," ] ;
 actor_method   = [ "pub" ] "fn" IDENT "(" [ param_list ] ")" [ "->" return_type ]
                  [ "!" effect_list ] block ;
+
+(* === Effect declarations === *)
+(* `effect IO` — base effect; `effect FileIO > IO` — subsumes IO (#852). *)
+effect_decl    = "effect" IDENT [ ">" IDENT { "+" IDENT } ] ";" ;
 
 (* === Extern blocks === *)
 (* Declares foreign functions.  "c" ABI: thin C-linkage declarations (linker provides body). *)
@@ -211,7 +215,7 @@ DOC_COMMENT    = "///" { ANY_CHAR } NEWLINE ;    (* doc comment — convention, 
 (* identifiers.  User-defined names that conflict must be renamed.               *)
 (*                                                                               *)
 (* Declaration:     fn  type  const  use  pub  extern  impl  builtin            *)
-(*                  struct  enum  actor                                           *)
+(*                  struct  enum  actor  effect                                   *)
 (* Totality:        total  partial  test                                         *)
 (* Control flow:    if  else  for  in  while  match  return  select  concurrently *)
 (* Let binding:     let  ghost                                                    *)
