@@ -718,7 +718,7 @@ impl CheckError {
                 format!("refinement predicate violated: `{pred}`{cx}")
             }
             CheckError::InvalidEffectName { name, .. } => {
-                format!("unknown effect `{name}`")
+                format!("unknown effect `{name}` — valid effects are declared in std/effects.mvl")
             }
             CheckError::UnknownEffectParent { effect, parent, .. } => format!(
                 "effect `{effect}` subsumes unknown effect `{parent}` — declare `{parent}` before using it as a parent"

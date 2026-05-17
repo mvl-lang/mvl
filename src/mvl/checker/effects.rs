@@ -62,14 +62,17 @@ impl EffectHierarchy {
                 // Only report cycles that start at `name` to avoid duplicates.
                 // (The cycle is always reported at the first node alphabetically
                 //  in the chain to make error messages deterministic.)
-                let min = chain.iter().min().unwrap();
+                // Deduplicate: only report the cycle when `name` is the
+                // lexicographically smallest node in the cycle chain, so each
+                // cycle is reported exactly once regardless of traversal order.
+                let min = chain.iter().min().expect("cycle chain is always non-empty");
                 if min == name {
                     // Use the span of the effect that starts the cycle.
                     let span = decls
                         .iter()
                         .find(|d| &d.name == name)
                         .map(|d| d.span)
-                        .unwrap_or_default();
+                        .expect("cycle node must have a declaration");
                     errors.push(CheckError::EffectCycle { chain, span });
                 }
             }
@@ -100,9 +103,12 @@ impl EffectHierarchy {
         !self.effects.is_empty()
     }
 
+    /// `visited` memoises already-expanded nodes (avoids re-traversal on DAGs)
+    /// and doubles as a cycle-break guard for hierarchies built via `Default`
+    /// rather than `from_decls` (which would normally reject cycles).
     fn can_reach(&self, current: &str, target: &str, visited: &mut HashSet<String>) -> bool {
         if !visited.insert(current.to_string()) {
-            return false; // already visited — stop to avoid infinite loop on cycles
+            return false; // already expanded or cycle guard
         }
         if let Some(parents) = self.parents.get(current) {
             for parent in parents {
@@ -140,7 +146,11 @@ impl EffectHierarchy {
         if let Some(parents) = self.parents.get(node) {
             for parent in parents {
                 if on_stack.contains(parent.as_str()) {
-                    // Cycle detected — close the chain.
+                    // Cycle detected — trim path to start at the cycle entry
+                    // point so the chain contains only cycle members.
+                    if let Some(idx) = path.iter().position(|n| n == parent) {
+                        path.drain(..idx);
+                    }
                     path.push(parent.clone());
                     return true;
                 }
@@ -250,6 +260,66 @@ mod tests {
         assert!(errors
             .iter()
             .any(|e| matches!(e, CheckError::EffectCycle { .. })));
+    }
+
+    #[test]
+    fn three_node_cycle_detected() {
+        // A > B, B > C, C > A — three-node cycle
+        let decls = vec![decl("A", &["B"]), decl("B", &["C"]), decl("C", &["A"])];
+        let refs: Vec<&EffectDecl> = decls.iter().collect();
+        let (_, errors) = EffectHierarchy::from_decls(&refs);
+        assert!(!errors.is_empty(), "three-node cycle must be detected");
+        let cycle_errors: Vec<_> = errors
+            .iter()
+            .filter(|e| matches!(e, CheckError::EffectCycle { .. }))
+            .collect();
+        assert_eq!(
+            cycle_errors.len(),
+            1,
+            "cycle should be reported exactly once"
+        );
+        if let CheckError::EffectCycle { chain, .. } = &cycle_errors[0] {
+            assert!(
+                chain.len() >= 3,
+                "chain should contain the full cycle: {chain:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn duplicate_parent_names_accepted() {
+        // effect A > B + B — duplicate parent is harmless (HashMap deduplicates names)
+        let decls = vec![decl("B", &[]), decl("A", &["B", "B"])];
+        let refs: Vec<&EffectDecl> = decls.iter().collect();
+        let (h, errors) = EffectHierarchy::from_decls(&refs);
+        assert!(
+            errors.is_empty(),
+            "duplicate parent should not error: {errors:?}"
+        );
+        assert!(h.subsumes_transitive("A", "B"));
+    }
+
+    #[test]
+    fn duplicate_effect_declaration_last_wins() {
+        // Two EffectDecl nodes with the same name — last definition's parents win.
+        let decls = vec![
+            decl("Parent", &[]),
+            decl("Other", &[]),
+            decl("IO", &["Parent"]),
+            decl("IO", &["Other"]), // overwrites first IO definition
+        ];
+        let refs: Vec<&EffectDecl> = decls.iter().collect();
+        let (h, errors) = EffectHierarchy::from_decls(&refs);
+        assert!(
+            errors.is_empty(),
+            "duplicate decl should not error: {errors:?}"
+        );
+        // Last definition wins: IO > Other, not IO > Parent.
+        assert!(h.subsumes_transitive("IO", "Other"));
+        assert!(
+            !h.subsumes_transitive("IO", "Parent"),
+            "first decl was overwritten"
+        );
     }
 
     #[test]

@@ -98,16 +98,6 @@ impl CheckResult {
     }
 }
 
-/// Entry point: type-check a parsed [`Program`].
-/// Check a program with additional prelude programs whose declarations are
-/// registered (but not checked) before the user program is type-checked.
-/// Use this when stdlib files have been parsed and should be visible to the
-/// checker (e.g. `use std.io.{...}` imports in corpus / CLI check mode).
-/// Like `check_with_prelude` but accepts two prelude slices that are chained
-/// together, avoiding allocation when the caller already has programs in two
-/// separate vecs (e.g. stdlib owned + user modules borrowed).
-/// `prelude_b` holds references so callers can pass flanking slices of an
-/// existing vec without cloning individual `Program`s.
 /// Collect all `EffectDecl` nodes from a flat iterator of programs.
 fn collect_effect_decls<'a>(programs: impl Iterator<Item = &'a Program>) -> Vec<&'a EffectDecl> {
     programs
@@ -122,6 +112,13 @@ fn collect_effect_decls<'a>(programs: impl Iterator<Item = &'a Program>) -> Vec<
         .collect()
 }
 
+/// Check a program with two prelude slices chained together.
+///
+/// Prelude declarations are registered but not individually type-checked.
+/// Use this when stdlib files have been parsed and should be visible to the
+/// checker (e.g. `use std.io.{...}` imports in corpus / CLI check mode).
+/// `prelude_b` holds references so callers can pass flanking slices of an
+/// existing vec without cloning individual `Program`s.
 pub fn check_with_two_preludes(
     prelude_a: &[Program],
     prelude_b: &[&Program],
@@ -256,8 +253,6 @@ pub fn collect_prelude_expr_types(programs: &[Program]) -> HashMap<Span, Ty> {
     checker.expr_types
 }
 
-// ── Effect subsetting (002-effect-system/Req 3, ADR-0035) ────────────────────
-
 // ── TypeChecker ──────────────────────────────────────────────────────────────
 
 struct TypeChecker {
@@ -321,7 +316,7 @@ impl TypeChecker {
         self.errors.push(err);
     }
 
-    // ── Effect satisfaction (002-effect-system/Req 3, ADR-0035) ──────────
+    // ── Effect subsetting (002-effect-system/Req 3, ADR-0035) ────────────
 
     /// Returns `true` when `declared` covers `required` for effect propagation.
     ///
@@ -806,6 +801,42 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, CheckError::MissingEffect { .. })),
             "FileRead(\"/data/\") should NOT cover FileRead(\"/etc/\"), got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn no_hierarchy_does_not_emit_invalid_effect_name() {
+        // check_src uses check() which creates an empty EffectHierarchy.
+        // has_any() returns false, so unknown effect names are silently accepted.
+        let result = check_src(r#"fn f() -> Unit ! CompletelyMadeUp { }"#);
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CheckError::InvalidEffectName { .. })),
+            "empty hierarchy must not emit InvalidEffectName, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn more_specific_caller_does_not_cover_prefix_callee() {
+        // FileRead("/data/file.txt") declared by caller must NOT satisfy
+        // FileRead("/data") required by callee — caller is more specific.
+        let src = r#"
+            extern "kernel" {
+                fn read_data_dir() -> Unit ! FileRead("/data")
+            }
+            fn caller() -> Unit ! FileRead("/data/file.txt") {
+                read_data_dir()
+            }
+        "#;
+        let errors = errors_for(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, CheckError::MissingEffect { .. })),
+            "FileRead(\"/data/file.txt\") should NOT cover FileRead(\"/data\"), got: {errors:?}"
         );
     }
 

@@ -38,6 +38,21 @@ fn check_with_effects(src: &str) -> CheckResult {
     check_with_prelude(&[effects_prog], &prog)
 }
 
+/// Assert no effect propagation errors (UndeclaredEffect / MissingEffect).
+fn assert_no_effect_propagation_errors(result: &CheckResult, label: &str) {
+    let errs: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                CheckError::UndeclaredEffect { .. } | CheckError::MissingEffect { .. }
+            )
+        })
+        .collect();
+    assert!(errs.is_empty(), "{label}: got: {errs:?}");
+}
+
 // ── #11: Basic type inference (Requirement 1) ────────────────────────────────
 
 #[test]
@@ -489,20 +504,9 @@ fn subsumption_corpus_checks() {
     // GIVEN: corpus of effect subsumption patterns
     // THEN: no effect propagation errors
     let src = include_str!("corpus/05_effects/subsumption.mvl");
-    let result = check_src(src); // self-contained (no std/effects.mvl needed)
-    let effect_errors: Vec<_> = result
-        .errors
-        .iter()
-        .filter(|e| {
-            matches!(
-                e,
-                CheckError::UndeclaredEffect { .. } | CheckError::MissingEffect { .. }
-            )
-        })
-        .collect();
-    assert!(
-        effect_errors.is_empty(),
-        "subsumption corpus should compile without effect propagation errors, got: {effect_errors:?}"
+    assert_no_effect_propagation_errors(
+        &check_src(src), // self-contained (no std/effects.mvl needed)
+        "subsumption corpus should compile without effect propagation errors",
     );
 }
 
@@ -535,7 +539,7 @@ fn concurrency_effects_corpus_checks() {
     // GIVEN: corpus using Spawn, Send, Recv, Actor effects
     // THEN: no effect errors
     let src = include_str!("corpus/05_effects/concurrency_effects.mvl");
-    let result = check_with_effects(src);
+    let result = check_src(src); // corpus is self-contained: declares its own hierarchy
     let effect_errors: Vec<_> = result
         .errors
         .iter()
@@ -2650,26 +2654,13 @@ fn lambda_immutable_capture_accepted() {
 /// `! IO` satisfies `! Console` via subsumption (IO > Console in std/effects.mvl).
 #[test]
 fn io_subsumes_console() {
-    // fn effectful() -> Unit ! Console { }
-    // fn caller() -> Unit ! IO { effectful() }   — IO > Console, so this is fine
     let src = r#"
         fn effectful() -> Unit ! Console { }
         fn caller() -> Unit ! IO { effectful() }
     "#;
-    let result = check_with_effects(src);
-    let effect_errors: Vec<_> = result
-        .errors
-        .iter()
-        .filter(|e| {
-            matches!(
-                e,
-                CheckError::UndeclaredEffect { .. } | CheckError::MissingEffect { .. }
-            )
-        })
-        .collect();
-    assert!(
-        effect_errors.is_empty(),
-        "! IO should satisfy ! Console via subsumption, got: {effect_errors:?}"
+    assert_no_effect_propagation_errors(
+        &check_with_effects(src),
+        "! IO should satisfy ! Console via subsumption",
     );
 }
 
@@ -2680,20 +2671,9 @@ fn log_subsumes_clock() {
         fn now() -> Unit ! Clock { }
         fn logger() -> Unit ! Log { now() }
     "#;
-    let result = check_with_effects(src);
-    let effect_errors: Vec<_> = result
-        .errors
-        .iter()
-        .filter(|e| {
-            matches!(
-                e,
-                CheckError::UndeclaredEffect { .. } | CheckError::MissingEffect { .. }
-            )
-        })
-        .collect();
-    assert!(
-        effect_errors.is_empty(),
-        "! Log should satisfy ! Clock via subsumption, got: {effect_errors:?}"
+    assert_no_effect_propagation_errors(
+        &check_with_effects(src),
+        "! Log should satisfy ! Clock via subsumption",
     );
 }
 
@@ -2704,20 +2684,9 @@ fn io_transitively_subsumes_clock() {
         fn now() -> Unit ! Clock { }
         fn main() -> Unit ! IO { now() }
     "#;
-    let result = check_with_effects(src);
-    let effect_errors: Vec<_> = result
-        .errors
-        .iter()
-        .filter(|e| {
-            matches!(
-                e,
-                CheckError::UndeclaredEffect { .. } | CheckError::MissingEffect { .. }
-            )
-        })
-        .collect();
-    assert!(
-        effect_errors.is_empty(),
-        "! IO should transitively satisfy ! Clock (IO > Log > Clock), got: {effect_errors:?}"
+    assert_no_effect_propagation_errors(
+        &check_with_effects(src),
+        "! IO should transitively satisfy ! Clock (IO > Log > Clock)",
     );
 }
 
@@ -2730,22 +2699,9 @@ fn user_defined_effect_subsumption() {
         fn log_debug() -> Unit ! Log { }
         fn charge() -> Unit ! Billing { db_insert() log_debug() }
     "#;
-    let result = check_with_effects(src);
-    let effect_errors: Vec<_> = result
-        .errors
-        .iter()
-        .filter(|e| {
-            matches!(
-                e,
-                CheckError::UndeclaredEffect { .. }
-                    | CheckError::MissingEffect { .. }
-                    | CheckError::InvalidEffectName { .. }
-            )
-        })
-        .collect();
-    assert!(
-        effect_errors.is_empty(),
-        "user-defined Billing > DB + Log should compile, got: {effect_errors:?}"
+    assert_no_effect_propagation_errors(
+        &check_with_effects(src),
+        "user-defined Billing > DB + Log should compile",
     );
 }
 
