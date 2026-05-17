@@ -458,6 +458,102 @@ fn refinements_corpus_parses() {
     let _ = check(&prog);
 }
 
+// ── #19/#852: Effect declarations and subsumption corpus tests ───────────────
+
+#[test]
+fn effect_decl_corpus_parses_and_checks() {
+    // GIVEN: corpus of effect declarations (base, single, multi-parent)
+    // THEN: no parse or type errors
+    let src = include_str!("corpus/05_effects/effect_decl.mvl");
+    let result = check_with_effects(src);
+    let relevant_errors: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                CheckError::InvalidEffectName { .. }
+                    | CheckError::UnknownEffectParent { .. }
+                    | CheckError::EffectCycle { .. }
+            )
+        })
+        .collect();
+    assert!(
+        relevant_errors.is_empty(),
+        "effect_decl corpus should compile without effect errors, got: {relevant_errors:?}"
+    );
+}
+
+#[test]
+fn subsumption_corpus_checks() {
+    // GIVEN: corpus of effect subsumption patterns
+    // THEN: no effect propagation errors
+    let src = include_str!("corpus/05_effects/subsumption.mvl");
+    let result = check_src(src); // self-contained (no std/effects.mvl needed)
+    let effect_errors: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                CheckError::UndeclaredEffect { .. } | CheckError::MissingEffect { .. }
+            )
+        })
+        .collect();
+    assert!(
+        effect_errors.is_empty(),
+        "subsumption corpus should compile without effect propagation errors, got: {effect_errors:?}"
+    );
+}
+
+#[test]
+fn user_defined_effects_corpus_checks() {
+    // GIVEN: corpus with user-defined domain effects (Billing > DB + Log)
+    // THEN: no effect errors
+    let src = include_str!("corpus/05_effects/user_defined_effects.mvl");
+    let result = check_src(src);
+    let effect_errors: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                CheckError::InvalidEffectName { .. }
+                    | CheckError::UndeclaredEffect { .. }
+                    | CheckError::MissingEffect { .. }
+            )
+        })
+        .collect();
+    assert!(
+        effect_errors.is_empty(),
+        "user_defined_effects corpus should compile cleanly, got: {effect_errors:?}"
+    );
+}
+
+#[test]
+fn concurrency_effects_corpus_checks() {
+    // GIVEN: corpus using Spawn, Send, Recv, Actor effects
+    // THEN: no effect errors
+    let src = include_str!("corpus/05_effects/concurrency_effects.mvl");
+    let result = check_with_effects(src);
+    let effect_errors: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                CheckError::InvalidEffectName { .. }
+                    | CheckError::UndeclaredEffect { .. }
+                    | CheckError::MissingEffect { .. }
+            )
+        })
+        .collect();
+    assert!(
+        effect_errors.is_empty(),
+        "concurrency_effects corpus should compile cleanly, got: {effect_errors:?}"
+    );
+}
+
 // ── #19: Effect checking — reject side effects in pure functions ──────────────
 
 #[test]

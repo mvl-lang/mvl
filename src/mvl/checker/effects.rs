@@ -94,6 +94,12 @@ impl EffectHierarchy {
         self.effects.contains(name)
     }
 
+    /// Returns `true` if the hierarchy has at least one declared effect.
+    /// Used to skip validation when no effects.mvl was loaded (e.g. unit tests).
+    pub fn has_any(&self) -> bool {
+        !self.effects.is_empty()
+    }
+
     fn can_reach(&self, current: &str, target: &str, visited: &mut HashSet<String>) -> bool {
         if !visited.insert(current.to_string()) {
             return false; // already visited — stop to avoid infinite loop on cycles

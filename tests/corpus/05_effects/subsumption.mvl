@@ -1,0 +1,10 @@
+// Effect subsumption — hierarchy satisfaction tests (#855)
+// Verifies that callers with broader effects satisfy more-specific callees.
+
+effect Clock
+effect Log > Clock
+effect IO > Log
+
+fn now() -> Unit ! Clock { }
+fn logger() -> Unit ! Log { now() }       // Log > Clock: satisfied
+fn main_fn() -> Unit ! IO { logger() }   // IO > Log > Clock: transitively satisfied

@@ -1,0 +1,15 @@
+// User-defined domain effects (#853)
+// Shows that domain effects can be declared in user code and compose with std effects.
+
+effect DB
+effect Log
+effect Billing > DB + Log   // User-defined: Billing subsumes DB and Log
+
+fn db_insert() -> Unit ! DB { }
+fn log_debug() -> Unit ! Log { }
+
+// charge() declares ! Billing which subsumes both ! DB and ! Log
+fn charge() -> Unit ! Billing {
+    db_insert()
+    log_debug()
+}
