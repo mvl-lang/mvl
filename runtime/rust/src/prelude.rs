@@ -12,10 +12,6 @@
 //! re-exported here. The transpiler emits explicit `use mvl_runtime::stdlib::X::*`
 //! imports for each `use std.X.*` declaration in the MVL source (#488 / #489).
 
-pub use crate::effects::{
-    Alloc, Clock, Concurrent, Console, CryptoRandom, Db, Env, FileDelete, FileRead, FileWrite, Log,
-    Net, Panic, ProcessSpawn, Random, Terminal,
-};
 pub use crate::ifc::{declassify, sanitize, Clean, Public, Secret, Tainted};
 pub use crate::mvl_refine;
 

@@ -104,6 +104,8 @@ pub enum TokenKind {
     Ghost,
     /// `decreases` — loop termination measure; proves `while` terminates (Phase 5, #628).
     Decreases,
+    /// `effect` — declares a named effect, optionally with subsumption parents (#852).
+    Effect,
     /// `forall` — universal quantifier in ghost/contract predicates (Phase 5, #628).
     Forall,
     /// `exists` — existential quantifier in ghost/contract predicates (Phase 5, #628).
@@ -223,6 +225,7 @@ impl fmt::Display for TokenKind {
             TokenKind::With => write!(f, "with"),
             TokenKind::Ghost => write!(f, "ghost"),
             TokenKind::Decreases => write!(f, "decreases"),
+            TokenKind::Effect => write!(f, "effect"),
             TokenKind::Forall => write!(f, "forall"),
             TokenKind::Exists => write!(f, "exists"),
             TokenKind::Public => write!(f, "Public"),
@@ -961,6 +964,7 @@ fn keyword_or_ident(s: String) -> TokenKind {
         "with" => TokenKind::With,
         "ghost" => TokenKind::Ghost,
         "decreases" => TokenKind::Decreases,
+        "effect" => TokenKind::Effect,
         "forall" => TokenKind::Forall,
         "exists" => TokenKind::Exists,
         // Boolean literals

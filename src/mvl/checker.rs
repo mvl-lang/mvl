@@ -25,6 +25,7 @@ pub mod context;
 pub mod contracts;
 pub mod data_race;
 mod decls;
+pub mod effects;
 pub mod errors;
 pub mod ifc;
 pub mod ifc_propagation;
@@ -43,11 +44,12 @@ pub use crate::mvl::checker::solver::SolverMode;
 
 use crate::mvl::checker::call_graph::CallGraph;
 use crate::mvl::checker::context::TypeEnv;
+use crate::mvl::checker::effects::EffectHierarchy;
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc_propagation::InferredLabels;
 use crate::mvl::checker::refinements::RefinementCounts;
 use crate::mvl::checker::types::Ty;
-use crate::mvl::parser::ast::{Effect, Program, Totality};
+use crate::mvl::parser::ast::{Decl, Effect, EffectDecl, Program, Totality};
 use crate::mvl::parser::lexer::Span;
 use std::collections::{HashMap, HashSet};
 
@@ -96,14 +98,25 @@ impl CheckResult {
     }
 }
 
-/// Entry point: type-check a parsed [`Program`].
-/// Check a program with additional prelude programs whose declarations are
-/// registered (but not checked) before the user program is type-checked.
+/// Collect all `EffectDecl` nodes from a flat iterator of programs.
+fn collect_effect_decls<'a>(programs: impl Iterator<Item = &'a Program>) -> Vec<&'a EffectDecl> {
+    programs
+        .flat_map(|p| p.declarations.iter())
+        .filter_map(|d| {
+            if let Decl::EffectDecl(ed) = d {
+                Some(ed)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Check a program with two prelude slices chained together.
+///
+/// Prelude declarations are registered but not individually type-checked.
 /// Use this when stdlib files have been parsed and should be visible to the
 /// checker (e.g. `use std.io.{...}` imports in corpus / CLI check mode).
-/// Like `check_with_prelude` but accepts two prelude slices that are chained
-/// together, avoiding allocation when the caller already has programs in two
-/// separate vecs (e.g. stdlib owned + user modules borrowed).
 /// `prelude_b` holds references so callers can pass flanking slices of an
 /// existing vec without cloning individual `Program`s.
 pub fn check_with_two_preludes(
@@ -124,7 +137,18 @@ pub fn check_with_two_preludes_mode(
     prog: &Program,
     solver_mode: SolverMode,
 ) -> CheckResult {
-    let mut checker = TypeChecker::new();
+    // Dual-pass: collect all EffectDecl nodes from every parsed program, build
+    // the hierarchy (validates parents + detects cycles), then type-check.
+    let all_effect_decls = collect_effect_decls(
+        prelude_a
+            .iter()
+            .chain(prelude_b.iter().copied())
+            .chain(std::iter::once(prog)),
+    );
+    let (hierarchy, hierarchy_errors) = EffectHierarchy::from_decls(&all_effect_decls);
+
+    let mut checker = TypeChecker::new_with_hierarchy(hierarchy);
+    checker.errors.extend(hierarchy_errors);
     for p in prelude_a.iter().chain(prelude_b.iter().copied()) {
         checker.collect_declarations(&p.declarations);
     }
@@ -229,59 +253,6 @@ pub fn collect_prelude_expr_types(programs: &[Program]) -> HashMap<Span, Ty> {
     checker.expr_types
 }
 
-// ── Effect subsetting (002-effect-system/Req 3) ───────────────────────────────
-
-/// Returns `true` when `declared` covers `required` for effect propagation.
-///
-/// Rules:
-/// - Different effect names never satisfy each other.
-/// - `declared` with no param (wildcard) satisfies any `required` for that name.
-/// - `declared` with a param satisfies `required` with the same or more-specific param,
-///   using prefix matching for path-style params (e.g. `declared("/data")` covers
-///   `required("/data/config.toml")`).
-/// - `declared` with a param does NOT satisfy a `required` with no param (general
-///   access required but only restricted access declared).
-fn effect_satisfies(declared: &Effect, required: &Effect) -> bool {
-    if declared.name != required.name {
-        return false;
-    }
-    match (&declared.param, &required.param) {
-        // Wildcard declared covers everything with that name.
-        (None, _) => true,
-        // Specific declared cannot cover a general requirement.
-        (Some(_), None) => false,
-        // Both parametrized: declared must be a prefix of required (path subsetting).
-        (Some(d), Some(r)) => r.starts_with(d.as_str()),
-    }
-}
-
-// ── Valid effect names (002-effect-system/Req 2) ──────────────────────────────
-
-/// The canonical set of effect names permitted in `! Effect` declarations.
-///
-/// Per 002-effect-system/Req 2: "Effects MUST be fine-grained, not a single `IO` bucket.
-/// The minimum set: Console, FileRead, FileWrite, FileDelete, Net, DB, ProcessSpawn,
-/// Random, CryptoRandom, Clock, Env, Log, Async."
-///
-/// `Terminal` is an extended effect for raw terminal control (cursor, colors, raw key input)
-/// distinct from `Console` (line-oriented stdin/stdout). See pkg.tui / std.tui (#174).
-const VALID_EFFECT_NAMES: &[&str] = &[
-    "Console",
-    "FileRead",
-    "FileWrite",
-    "FileDelete",
-    "Net",
-    "DB",
-    "ProcessSpawn",
-    "Random",
-    "CryptoRandom",
-    "Clock",
-    "Env",
-    "Log",
-    "Async",
-    "Terminal",
-];
-
 // ── TypeChecker ──────────────────────────────────────────────────────────────
 
 struct TypeChecker {
@@ -314,10 +285,16 @@ struct TypeChecker {
     /// `infer_expr` and surfaced in [`CheckResult::expr_types`] for the
     /// transpiler to use when emitting type-specific Rust code (#554).
     expr_types: HashMap<Span, Ty>,
+    /// Resolved effect subsumption hierarchy, built from all parsed EffectDecl nodes (#853).
+    effect_hierarchy: EffectHierarchy,
 }
 
 impl TypeChecker {
     fn new() -> Self {
+        TypeChecker::new_with_hierarchy(EffectHierarchy::default())
+    }
+
+    fn new_with_hierarchy(hierarchy: EffectHierarchy) -> Self {
         TypeChecker {
             errors: Vec::new(),
             env: TypeEnv::new(),
@@ -331,11 +308,23 @@ impl TypeChecker {
             current_type_params: HashSet::new(),
             current_type_constraints: HashMap::new(),
             expr_types: HashMap::new(),
+            effect_hierarchy: hierarchy,
         }
     }
 
     fn emit(&mut self, err: CheckError) {
         self.errors.push(err);
+    }
+
+    // ── Effect subsetting (002-effect-system/Req 3, ADR-0035) ────────────
+
+    /// Returns `true` when `declared` covers `required` for effect propagation.
+    ///
+    /// Uses the hierarchy to check transitive subsumption: `IO > Log > Clock`
+    /// means `declared = IO` satisfies `required = Clock`.
+    pub(crate) fn effect_satisfies(&self, declared: &Effect, required: &Effect) -> bool {
+        self.effect_hierarchy
+            .subsumes_transitive(&declared.name, &required.name)
     }
 
     // ── Program ──────────────────────────────────────────────────────────
@@ -361,6 +350,16 @@ mod tests {
 
     fn errors_for(src: &str) -> Vec<CheckError> {
         check_src(src).errors
+    }
+
+    /// Check `src` with std/effects.mvl loaded so the effect hierarchy is populated.
+    fn check_with_effects(src: &str) -> CheckResult {
+        let effects_src = include_str!("../../std/effects.mvl");
+        let (mut ep, _) = Parser::new(effects_src);
+        let effects_prog = ep.parse_program();
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        check_with_prelude(&[effects_prog], &prog)
     }
 
     // ── Requirement 1 / Scenario: Basic type inference (#11) ─────────────
@@ -671,145 +670,57 @@ mod tests {
 
     #[test]
     fn invalid_effect_name_rejected() {
-        let src = r#"fn f() -> Unit ! Foo { println("hi"); }"#;
-        let errors = errors_for(src);
+        let result = check_with_effects(r#"fn f() -> Unit ! Foo { }"#);
         assert!(
-            errors
+            result
+                .errors
                 .iter()
                 .any(|e| matches!(e, CheckError::InvalidEffectName { name, .. } if name == "Foo")),
-            "expected InvalidEffectName for unknown effect 'Foo', got: {errors:?}"
+            "expected InvalidEffectName for unknown effect 'Foo', got: {:?}",
+            result.errors
         );
     }
 
     #[test]
     fn valid_effect_names_accepted() {
-        let src = r#"fn f() -> Unit ! Console + Net + DB + Terminal { println("hi"); }"#;
-        let errors = errors_for(src);
+        let result = check_with_effects(r#"fn f() -> Unit ! Console + Net + DB { }"#);
         assert!(
-            !errors
+            !result
+                .errors
                 .iter()
                 .any(|e| matches!(e, CheckError::InvalidEffectName { .. })),
-            "expected no InvalidEffectName for valid effects, got: {errors:?}"
-        );
-    }
-
-    #[test]
-    fn terminal_effect_name_accepted() {
-        // Terminal is a distinct effect from Console — raw terminal control (cursor,
-        // colors, single keypress) vs line-oriented I/O. See std.tui / #174.
-        let src = r#"fn f() -> Unit ! Terminal { }"#;
-        let errors = errors_for(src);
-        assert!(
-            !errors
-                .iter()
-                .any(|e| matches!(e, CheckError::InvalidEffectName { .. })),
-            "expected Terminal to be a valid effect name, got: {errors:?}"
+            "expected no InvalidEffectName for valid effects, got: {:?}",
+            result.errors
         );
     }
 
     // ── Parametrized effects (002-effect-system Req 3 / issue #290) ──────
 
     #[test]
-    fn parametrized_effect_parses_and_is_accepted() {
-        let src = r#"fn f() -> Unit ! FileRead("/etc/app/") { }"#;
-        let errors = errors_for(src);
+    fn terminal_effect_name_accepted() {
+        let result = check_with_effects(r#"fn f() -> Unit ! Terminal { }"#);
         assert!(
-            errors.is_empty(),
-            "expected no errors for parametrized effect, got: {errors:?}"
-        );
-    }
-
-    #[test]
-    fn parametrized_effect_invalid_name_rejected() {
-        let src = r#"fn f() -> Unit ! Bogus("/path") { }"#;
-        let errors = errors_for(src);
-        assert!(
-            errors.iter().any(
-                |e| matches!(e, CheckError::InvalidEffectName { name, .. } if name == "Bogus")
-            ),
-            "expected InvalidEffectName for parametrized unknown effect, got: {errors:?}"
-        );
-    }
-
-    #[test]
-    fn general_caller_covers_parametrized_callee() {
-        // Unparametrized FileRead (wildcard) covers FileRead("/etc/").
-        let src = r#"
-            extern "kernel" {
-                fn read_config() -> Unit ! FileRead("/etc/")
-            }
-            fn caller() -> Unit ! FileRead {
-                read_config()
-            }
-        "#;
-        let errors = errors_for(src);
-        assert!(
-            !errors.iter().any(|e| matches!(
-                e,
-                CheckError::UndeclaredEffect { .. } | CheckError::MissingEffect { .. }
-            )),
-            "general FileRead should cover FileRead(\"/etc/\"), got: {errors:?}"
-        );
-    }
-
-    #[test]
-    fn prefix_caller_covers_more_specific_parametrized_callee() {
-        // FileRead("/etc/") covers FileRead("/etc/app/config.toml") via prefix match.
-        let src = r#"
-            extern "kernel" {
-                fn read_file() -> Unit ! FileRead("/etc/app/config.toml")
-            }
-            fn caller() -> Unit ! FileRead("/etc/") {
-                read_file()
-            }
-        "#;
-        let errors = errors_for(src);
-        assert!(
-            !errors.iter().any(|e| matches!(
-                e,
-                CheckError::MissingEffect { .. } | CheckError::UndeclaredEffect { .. }
-            )),
-            "FileRead(\"/etc/\") should cover FileRead(\"/etc/app/config.toml\"), got: {errors:?}"
-        );
-    }
-
-    #[test]
-    fn specific_caller_does_not_cover_different_path_callee() {
-        // FileRead("/data/") must NOT satisfy FileRead("/etc/").
-        let src = r#"
-            extern "kernel" {
-                fn read_etc() -> Unit ! FileRead("/etc/")
-            }
-            fn caller() -> Unit ! FileRead("/data/") {
-                read_etc()
-            }
-        "#;
-        let errors = errors_for(src);
-        assert!(
-            errors
+            !result
+                .errors
                 .iter()
-                .any(|e| matches!(e, CheckError::MissingEffect { .. })),
-            "FileRead(\"/data/\") should NOT cover FileRead(\"/etc/\"), got: {errors:?}"
+                .any(|e| matches!(e, CheckError::InvalidEffectName { .. })),
+            "expected Terminal to be a valid effect name, got: {:?}",
+            result.errors
         );
     }
 
     #[test]
-    fn specific_caller_does_not_cover_general_callee() {
-        // FileRead("/etc/") must NOT satisfy unparametrized FileRead.
-        let src = r#"
-            extern "kernel" {
-                fn read_any() -> Unit ! FileRead
-            }
-            fn caller() -> Unit ! FileRead("/etc/") {
-                read_any()
-            }
-        "#;
-        let errors = errors_for(src);
+    fn no_hierarchy_does_not_emit_invalid_effect_name() {
+        // check_src uses check() which creates an empty EffectHierarchy.
+        // has_any() returns false, so unknown effect names are silently accepted.
+        let result = check_src(r#"fn f() -> Unit ! CompletelyMadeUp { }"#);
         assert!(
-            errors
+            !result
+                .errors
                 .iter()
-                .any(|e| matches!(e, CheckError::MissingEffect { .. })),
-            "FileRead(\"/etc/\") should NOT cover general FileRead, got: {errors:?}"
+                .any(|e| matches!(e, CheckError::InvalidEffectName { .. })),
+            "empty hierarchy must not emit InvalidEffectName, got: {:?}",
+            result.errors
         );
     }
 

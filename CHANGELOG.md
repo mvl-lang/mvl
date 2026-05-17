@@ -4,6 +4,22 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.125.0] — 2026-05-17
+
+### Added
+- **Effect system upgrade** (ADR-0035): user-defined effects with subsumption-based hierarchies (#846, #852, #853, #855, #856, #857)
+  - Effect declarations and hierarchy resolution: dual-pass compilation with cycle detection (#853)
+  - Effect subsumption (`> ` operator) and transitive satisfaction checking for effect compatibility
+  - Standard library effects: `IO`, `Log`, `Clock`, `Console`, `FileRead`, `FileWrite`, `Network`, `Actor`, `Spawn`, `Send`, `Recv`, `Terminal` (#856)
+  - Type checker integration: replace hardcoded `VALID_EFFECT_NAMES` with dynamic hierarchy queries (#855)
+  - Grammar and parser support for effect declarations in modules (#852)
+  - Corpus tests for effect propagation across concurrency, I/O, and user-defined effect declarations (#857)
+
+### Fixed
+- Effect system tests: removed parametrized effect syntax tests (feature dropped as out-of-scope for #846)
+- Cycle detection in `EffectHierarchy`: guard against panics with `.expect()` and trim cycle chains to contain only cycle members
+- Effect validation error messages: clarify that valid effects are declared in `std/effects.mvl`
+
 ## [0.124.1] — 2026-05-17
 
 ### Fixed

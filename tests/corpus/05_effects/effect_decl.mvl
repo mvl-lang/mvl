@@ -1,0 +1,24 @@
+// Effect declaration parsing — base effects and subsumption (#852, #853)
+// Tests that all forms of effect declarations parse and resolve correctly.
+
+// Base effects (no parents)
+effect Clock
+effect Console
+effect FileRead
+effect FileWrite
+effect Net
+
+// Single-parent subsumption
+effect Log > Clock
+
+// Multi-parent subsumption
+effect IO > Console + FileRead + FileWrite + Net + Log
+
+// User-defined domain effect
+effect Billing > Net + Log
+
+// Functions using declared effects
+fn now() -> Unit ! Clock { }
+fn log_msg() -> Unit ! Log { }
+fn io_fn() -> Unit ! IO { }
+fn charge() -> Unit ! Billing { }

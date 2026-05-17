@@ -1,0 +1,19 @@
+// Concurrency effects: Spawn, Send, Recv (ADR-0035, #856)
+// Fine-grained tracking replaces the monolithic ! Async effect.
+// Self-contained: declares the hierarchy it needs (mirrors std/effects.mvl).
+
+effect Spawn
+effect Send
+effect Recv
+effect Actor > Spawn + Send + Recv
+
+fn spawn_worker() -> Unit ! Spawn { }
+fn send_msg() -> Unit ! Send { }
+fn recv_msg() -> Unit ! Recv { }
+
+// Actor composite: subsumes all three concurrency effects
+fn actor_fn() -> Unit ! Actor {
+    spawn_worker()
+    send_msg()
+    recv_msg()
+}
