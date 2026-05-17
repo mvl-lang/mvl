@@ -1,19 +1,19 @@
 ---
 domain: language
-version: 0.1.0
+version: 0.2.0
 status: draft
-date: 2026-04-11
+date: 2026-05-17
 ---
 
 # 002 — Effect System
 
-The MVL effect system covers Requirement 7 (effect tracking) and supports Requirement 9 (data race freedom) and Requirement 8 (termination). Every side effect MUST be declared in the function signature. Pure is the default.
+The MVL effect system tracks side effects for security audit and functional safety. Every side effect MUST be declared in the function signature. Pure is the default. Effects enable compile-time enforcement of least privilege (OWASP A01).
 
 ## Philosophy
 
-A function signature should tell the full truth about what the function does. If a function reads a file, it says so. If it's pure, the absence of effects proves it. Effects are the mechanism that makes Requirement 3 of the OWASP Top 10 (least privilege) a compile-time guarantee.
+A function signature tells the full truth about what the function can do. If a function reads a file, it says so. If it's pure, the absence of effects proves it. The signature IS the threat model.
 
-**Origin:** Koka (Leijen, 2014) for algebraic effects. Haskell IO monad (1992) for the principle. E language (Miller, 1997) for capability-based security.
+**Purpose:** Security tracking and functional safety — not abstraction or composition. Effects propagate; they do not discharge. Closest language: Austral (capability tracking).
 
 ## Requirements
 
@@ -21,43 +21,42 @@ A function signature should tell the full truth about what the function does. If
 
 Functions with side effects MUST declare them in the signature using `! Effect` syntax. Functions without effect declarations MUST be pure — the compiler MUST reject any side-effecting operation in a pure function.
 
-This is Design Principle 6 ("Effects in signatures"). Pure is the default; every side effect is an explicit, visible opt-in in the function's type.
-
-**Implementation:** `src/mvl/checker.rs`
-
-**Tests:** `tests/type_checker.rs::pure_function_calling_effectful_rejected`, `tests/type_checker.rs::effectful_function_with_correct_declaration_accepted`, `tests/type_checker.rs::caller_missing_callee_effect_rejected`, `tests/compile_and_run.rs::safe_division_check_passes`, `tests/compile_and_run.rs::safe_division_runs_and_produces_expected_output` (#191)
+**Implementation:** `src/mvl/checker.rs`, `src/mvl/checker/calls.rs`
 
 #### Scenario: Pure function attempts I/O
 
 - GIVEN `fn add(a: Int, b: Int) -> Int { println("adding"); a + b }`
 - THEN the compiler MUST reject: "function `add` has no effect declaration but calls `println` which requires `! Console`"
 
-**Tests:** `tests/type_checker.rs::pure_function_calling_effectful_rejected`
-
 #### Scenario: Effect declared correctly
 
-- GIVEN `fn greet(name: String) -> String ! Console { println("Hello"); name }`
+- GIVEN `fn greet(name: String) -> Unit ! Console { println("Hello"); }`
 - THEN the compiler MUST accept
-
-**Tests:** `tests/type_checker.rs::effectful_function_with_correct_declaration_accepted`
 
 #### Scenario: Effect propagation
 
 - GIVEN `fn a() -> Int ! FileRead { read_config()? }` and `fn b() -> Int { a() }`
 - THEN the compiler MUST reject `b`: "calls `a` which requires `! FileRead` but `b` declares no effects"
 
-**Tests:** `tests/type_checker.rs::caller_missing_callee_effect_rejected`
+### Requirement 2: Effects Defined in std [MUST]
 
-### Requirement 2: Fine-Grained Effects [MUST]
+Effects MUST be declared in `std/effects.mvl`, not hardcoded in the compiler. The compiler parses effect declarations and builds the effect hierarchy.
 
-Effects MUST be fine-grained, not a single `IO` bucket. The minimum set of effect categories:
+**Implementation:** `std/effects.mvl`, `src/mvl/checker.rs`
 
-**Implementation:** `src/mvl/checker.rs` (constant `VALID_EFFECT_NAMES`; validated in `check_fn_decl`)
+#### Scenario: Unknown effect
 
-**Tests:** `tests/type_checker.rs::invalid_effect_name_rejected`, `tests/type_checker.rs::valid_effect_names_accepted`, `tests/type_checker.rs::caller_missing_callee_effect_rejected`, `tests/type_checker.rs::caller_declaring_effect_union_accepted`
+- GIVEN `fn foo() ! UnknownEffect { }`
+- WHEN `UnknownEffect` is not declared in std/effects.mvl
+- THEN the compiler MUST reject: "unknown effect `UnknownEffect`"
+
+### Requirement 3: Fine-Grained Effects [MUST]
+
+Effects MUST be fine-grained, not a single `IO` bucket. The base effects are:
 
 | Effect | What it permits |
 |--------|----------------|
+| `Clock` | Read system clock |
 | `Console` | Read/write stdin/stdout/stderr |
 | `FileRead` | Read from filesystem |
 | `FileWrite` | Write to filesystem |
@@ -65,13 +64,11 @@ Effects MUST be fine-grained, not a single `IO` bucket. The minimum set of effec
 | `Net` | Network access (TCP, UDP, HTTP) |
 | `DB` | Database operations |
 | `ProcessSpawn` | Spawn external processes |
-| `Random` | Non-deterministic random generation (PRNG) |
-| `CryptoRandom` | Cryptographically secure random generation (OS CSPRNG) |
-| `Clock` | Read system clock |
 | `Env` | Read/write environment variables |
-| `Log` | Write to log system |
-| `Async` | Asynchronous operations |
-| `Terminal` | Raw terminal control (cursor, colors, single-keypress input, screen clear) — distinct from `Console` (line-oriented I/O). Used by `std.tui` / future `pkg.tui` (#174) |
+| `Random` | Non-deterministic random generation |
+| `Spawn` | Create actors |
+| `Send` | Send on channels |
+| `Recv` | Receive on channels (blocking) |
 
 #### Scenario: File read without network
 
@@ -79,16 +76,61 @@ Effects MUST be fine-grained, not a single `IO` bucket. The minimum set of effec
 - WHEN the function attempts `http_get("https://...")`
 - THEN the compiler MUST reject: "requires `! Net` but function only declares `! FileRead`"
 
-**Tests:** `tests/type_checker.rs::caller_missing_callee_effect_rejected`
+### Requirement 4: Effect Subsumption [MUST]
 
-#### Scenario: Multiple effects
+Effects MUST support subsumption. If effect `A` subsumes effect `B` (`A > B`), declaring `! A` satisfies any `! B` requirement. Subsumption is transitive.
 
-- GIVEN `fn sync_data() -> Result<(), Error> ! Net, DB, Log`
-- THEN the compiler MUST accept network calls, database calls, and logging within this function
+**Implementation:** `src/mvl/checker.rs`
 
-**Tests:** `tests/type_checker.rs::caller_declaring_effect_union_accepted`
+Syntax:
+```
+effect_decl = "effect" IDENT [ ">" IDENT ] ;
+```
 
-### Requirement 3: Capability-Based Security [SHOULD]
+#### Scenario: Log subsumes Clock
+
+- GIVEN `effect Log > Clock` in std/effects.mvl
+- AND `fn now() -> Instant ! Clock`
+- AND `fn log_debug(msg: String) -> Unit ! Log { let ts = now(); ... }`
+- THEN the compiler MUST accept: `Log > Clock` means `! Log` satisfies `! Clock`
+
+#### Scenario: IO subsumes multiple effects
+
+- GIVEN `effect IO > Console`, `effect IO > FileRead`, `effect IO > Net` in std/effects.mvl
+- AND `fn main() ! IO { println("hello"); let cfg = read_file("x")?; }`
+- THEN the compiler MUST accept: `! IO` satisfies both `! Console` and `! FileRead`
+
+#### Scenario: Transitive subsumption
+
+- GIVEN `effect IO > Log` and `effect Log > Clock`
+- AND `fn foo() ! IO { let ts = now(); }`
+- THEN the compiler MUST accept: `IO > Log > Clock` means `! IO` satisfies `! Clock`
+
+#### Scenario: Subsumption cycle rejected
+
+- GIVEN `effect A > B` and `effect B > A`
+- THEN the compiler MUST reject: "effect subsumption cycle detected: A > B > A"
+
+### Requirement 5: Effect Composition [MUST]
+
+Effects MUST compose. A function calling two effectful functions MUST declare effects that satisfy both callees (either directly or via subsumption).
+
+**Implementation:** `src/mvl/checker.rs`
+
+#### Scenario: Effect union
+
+- GIVEN `fn a() -> X ! FileRead` and `fn b() -> Y ! Net`
+- WHEN `fn c() -> Z ! FileRead + Net { a(); b(); }`
+- THEN the compiler MUST accept
+
+#### Scenario: Subsumption satisfies composition
+
+- GIVEN `fn a() -> X ! FileRead` and `fn b() -> Y ! Net`
+- AND `effect IO > FileRead` and `effect IO > Net`
+- WHEN `fn c() -> Z ! IO { a(); b(); }`
+- THEN the compiler MUST accept
+
+### Requirement 6: Capability-Based Restriction [SHOULD]
 
 Effects SHOULD support parameterization for fine-grained access control:
 
@@ -96,89 +138,111 @@ Effects SHOULD support parameterization for fine-grained access control:
 - `! Net("api.example.com")` — can only access this host
 - `! DB("SELECT")` — read-only database access
 
+Path parameters use prefix matching: `! FileRead("/etc")` satisfies `! FileRead("/etc/config.toml")`.
+
 #### Scenario: Path-restricted file access
 
 - GIVEN `fn read_config() -> String ! FileRead("/etc/app/")`
 - WHEN the function attempts `read_file("/etc/shadow")`
 - THEN the compiler SHOULD reject: "file access outside declared capability `/etc/app/`"
 
-### Requirement 4: Effect Composition [MUST]
+### Requirement 7: Concurrency Effects [MUST]
 
-Effects MUST compose. A function calling two effectful functions MUST declare the union of their effects.
+Spawning actors, sending messages, and receiving messages MUST be separate effects. The `Async` effect is removed in favor of fine-grained tracking.
 
-**Implementation:** `src/mvl/checker.rs`
+| Effect | Security Concern |
+|--------|-----------------|
+| `Spawn` | Resource exhaustion (DoS) |
+| `Send` | Data exfiltration, trust boundary crossing |
+| `Recv` | Blocking, waiting |
 
-**Tests:** `tests/type_checker.rs::caller_declaring_effect_union_accepted`, `tests/type_checker.rs::caller_missing_callee_effect_rejected`
+**Implementation:** `std/effects.mvl`
 
-#### Scenario: Effect union
+#### Scenario: Spawn without send
 
-- GIVEN `fn a() -> X ! FileRead` and `fn b() -> Y ! Net`
-- WHEN `fn c() -> Z ! FileRead, Net { a(); b(); }`
-- THEN the compiler MUST accept
+- GIVEN `fn start_worker() ! Spawn { spawn(worker); }`
+- WHEN the function attempts `ch.send(data)`
+- THEN the compiler MUST reject: "requires `! Send` but function only declares `! Spawn`"
 
-**Tests:** `tests/type_checker.rs::caller_declaring_effect_union_accepted`
+### Requirement 8: No FFI Effect Hiding [MUST]
 
-#### Scenario: Missing effect in composition
+Effects MUST NOT be hidden in FFI implementations. If a builtin function uses an effect internally, it MUST either:
+1. Declare the effect explicitly, OR
+2. Have the effect subsumed by a declared effect
 
-- GIVEN `fn a() -> X ! FileRead` and `fn b() -> Y ! Net`
-- WHEN `fn c() -> Z ! FileRead { a(); b(); }`
-- THEN the compiler MUST reject: "calls `b` which requires `! Net`"
+#### Scenario: Log uses Clock via subsumption
 
-**Tests:** `tests/type_checker.rs::caller_missing_callee_effect_rejected`
+- GIVEN `effect Log > Clock`
+- AND `builtin fn log_debug(msg: String) -> Unit ! Log`
+- THEN the implementation MAY call `now()` because `Log > Clock`
+- AND the caller sees only `! Log` (Clock is subsumed, not hidden)
 
-### Requirement 5: Totality as Effect [MUST]
+## std/effects.mvl
 
-Non-terminating functions MUST be marked `partial`. Total functions (the default) MUST provably terminate. `partial` is semantically an effect — it declares that the function may not return.
+The canonical effect hierarchy:
 
-This is Design Principle 4 ("Total by default"). Functions terminate unless they explicitly opt out with `partial`.
+```mvl
+// std/effects.mvl
 
-**Implementation:** `src/mvl/checker.rs`, `src/mvl/parser/ast.rs::Totality`
+// === Base Effects (primitives) ===
+effect Clock
+effect Console  
+effect FileRead
+effect FileWrite
+effect FileDelete
+effect Net
+effect DB
+effect ProcessSpawn
+effect Env
+effect Random
 
-**Tests:** `tests/type_checker.rs::for_loop_in_total_function_accepted`, `tests/type_checker.rs::while_loop_in_total_function_rejected`, `tests/type_checker.rs::while_loop_in_implicit_total_function_rejected`, `tests/type_checker.rs::while_loop_in_partial_function_accepted`, `tests/type_checker.rs::partial_call_in_total_function_rejected`, `tests/compile_and_run.rs::safe_division_check_passes`, `tests/compile_and_run.rs::safe_division_runs_and_produces_expected_output` (#191), `tests/compile_and_run.rs::linked_list_check_passes`, `tests/compile_and_run.rs::linked_list_runs_and_produces_expected_output` (#194)
+// === Concurrency ===
+effect Spawn
+effect Send
+effect Recv
 
-#### Scenario: Total function with bounded loop
+// === Composite Effects (subsumption) ===
+effect Log > Clock
+effect CryptoRandom > Random
 
-- GIVEN `total fn sum(items: Array[Int]) -> Int { for item in items { ... } }`
-- THEN the compiler MUST accept: `for` over array is bounded
+effect IO > Clock
+effect IO > Console
+effect IO > FileRead
+effect IO > FileWrite
+effect IO > FileDelete
+effect IO > Net
+effect IO > DB
+effect IO > ProcessSpawn
+effect IO > Env
+effect IO > Log
 
-**Tests:** `tests/type_checker.rs::for_loop_in_total_function_accepted`, `tests/type_checker.rs::totality_corpus_parses_and_checks`
+effect Actor > Spawn
+effect Actor > Send
+effect Actor > Recv
+```
 
-#### Scenario: Total function with unbounded loop
+## Security Rationale
 
-- GIVEN `total fn loop() -> Never { while true { } }`
-- THEN the compiler MUST reject: "unbounded loop in total function"
+Effects track the attack surface. The signature IS the threat model:
 
-**Tests:** `tests/type_checker.rs::while_loop_in_total_function_rejected`, `tests/type_checker.rs::while_loop_in_implicit_total_function_rejected`
+| Effect | Security Concern |
+|--------|------------------|
+| `Console` | Data exfiltration (stdout), injection (stdin) |
+| `FileRead` | Read sensitive files, path traversal |
+| `FileWrite` | Overwrite files, plant malware |
+| `FileDelete` | Data destruction |
+| `Net` | Exfiltration, C2, SSRF |
+| `DB` | SQL injection, data leakage |
+| `ProcessSpawn` | Arbitrary code execution |
+| `Env` | Read secrets, config manipulation |
+| `Random` | Predictable values → crypto weakness |
+| `Clock` | Timing attacks |
+| `Spawn` | Resource exhaustion |
+| `Send` | Trust boundary crossing |
+| `Recv` | Blocking/DoS |
 
-#### Scenario: Partial function
+A pure function (no `!`) is maximally sandboxed: it cannot exfiltrate data, cannot access files, cannot hit network. Pure by default, effects are explicit opt-in to danger.
 
-- GIVEN `partial fn server() -> Never ! Net { while true { accept(); } }`
-- THEN the compiler MUST accept: explicitly partial
+## ADR
 
-**Tests:** `tests/type_checker.rs::while_loop_in_partial_function_accepted`
-
-### Requirement 6: Concurrency Effects [MUST]
-
-Spawning tasks and sending/receiving on channels MUST be effects. The effect system MUST prevent data races by requiring appropriate reference capabilities on values crossing actor boundaries.
-
-This is Design Principle 8 ("Actors, not threads"). No shared mutable state, no locks, no deadlocks — the concurrency model is a directed graph of actors communicating via capability-checked channels.
-
-**Implementation:** `src/mvl/checker.rs`, `src/mvl/parser/ast.rs::Capability`
-
-**Tests:** `tests/type_checker.rs::sending_ref_param_rejected`, `tests/type_checker.rs::sending_iso_param_accepted`, `tests/type_checker.rs::sending_val_param_accepted`, `tests/type_checker.rs::capabilities_corpus_parses_and_checks`
-
-#### Scenario: Sending non-sendable type
-
-- GIVEN a type with `ref` capability (mutable, not sendable)
-- WHEN the code attempts `channel.send(ref_value)`
-- THEN the compiler MUST reject: "`ref` capability cannot be sent across actor boundary; use `iso` or `val`"
-
-**Tests:** `tests/type_checker.rs::sending_ref_param_rejected`
-
-#### Scenario: Isolated value transfer
-
-- GIVEN a value with `iso` capability (isolated, single reference)
-- WHEN `channel.send(consume iso_value)`
-- THEN the compiler MUST accept: ownership transferred via `consume`
-
-**Tests:** `tests/type_checker.rs::sending_iso_param_accepted`
+ADR-0035 — Effect System Upgrade

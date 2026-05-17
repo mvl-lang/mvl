@@ -197,32 +197,32 @@ let b = move a;                     // ownership transferred
 
 **Side effects visible in function signatures — pure is the default.**
 
-Functions with side effects MUST declare them using `! Effect` syntax. Functions without `!` are pure — the compiler rejects any side-effecting operation in a pure function. Effects are fine-grained (not a single `IO` bucket).
+Functions with side effects MUST declare them using `! Effect` syntax. Functions without `!` are pure — the compiler rejects any side-effecting operation in a pure function. Effects are fine-grained and support subsumption hierarchies.
 
 **If dropped:** Moderate-high — can't reason locally about what functions do. Hidden I/O, hidden state mutation, hidden network calls.
 
-**Origin:** Algebraic effects (Plotkin & Pretnar, 2009). Koka (Leijen, 2014). Haskell IO monad (1992) for the principle. E language (Miller, 1997) for capability-based security. **No mainstream language enforces this.**
-
-**Industrial validation:** No direct industrial standard yet — this is the frontier. Predicts that the next generation of safety-critical failures will be in effect-related categories.
+**Industrial validation:** Aligns with OWASP least privilege (A01) and DO-178C traceability requirements.
 
 ```mvl
 fn add(a: Int, b: Int) -> Int {     // pure — no effects
     a + b
 }
 
-fn greet(name: String) -> () ! Console {  // declares Console effect
-    println("Hello, " + name);
+fn greet(name: String) -> Unit ! Console {  // declares Console effect
+    println("Hello, " + name)
 }
 
-fn add_wrong(a: Int, b: Int) -> Int {
-    println("adding");              // COMPILE ERROR: pure function calls Console
-    a + b
+fn process() -> Unit ! IO {         // IO subsumes Console, FileRead, Net, etc.
+    println("starting")             // Console satisfied by IO
+    let cfg = read_file("x")?       // FileRead satisfied by IO
 }
 ```
 
-**What it enables:** Mocking without frameworks, safe memoization, safe parallelization, local reasoning about any function.
+**The signature IS the threat model.** A pure function cannot exfiltrate data, access files, or hit the network. Effects are explicit opt-in to danger.
 
-**Manual:** [Effect System](manual/08-effects.md)
+**What it enables:** Security audit at a glance, compile-time least privilege, local reasoning about any function.
+
+**Spec:** [002-effect-system](../.openspec/specs/002-effect-system/spec.md) | **ADR:** [ADR-0035](../.openspec/adr/0035-effect-system-upgrade.md)
 
 ---
 
