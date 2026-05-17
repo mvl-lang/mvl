@@ -88,6 +88,7 @@ impl CallGraph {
     pub fn reachable(&self, from: &str, to: &str) -> bool {
         let mut visited: HashSet<&str> = HashSet::new();
         let mut queue: VecDeque<&str> = VecDeque::new();
+        visited.insert(from);
         queue.push_back(from);
         while let Some(current) = queue.pop_front() {
             for edge in self.callees(current) {
@@ -371,5 +372,25 @@ mod tests {
             g.contains("callee"),
             "callee should be a node even if not declared"
         );
+    }
+
+    #[test]
+    fn reachable_cycle_unreachable_target_does_not_loop() {
+        // a→b→c→a cycle; x is not in the graph — must terminate and return false.
+        let g = graph_from("fn a() -> Unit { b() } fn b() -> Unit { c() } fn c() -> Unit { a() }");
+        assert!(!g.reachable("a", "x"), "x is not reachable from a");
+        // Reachability within the cycle still works.
+        assert!(g.reachable("a", "c"), "a should reach c via b");
+        assert!(g.reachable("c", "b"), "c should reach b via a");
+    }
+
+    #[test]
+    fn callers_multiple() {
+        let g = graph_from(
+            "fn main() -> Unit { foo() } fn other() -> Unit { foo() } fn foo() -> Unit { }",
+        );
+        let callers = g.callers("foo");
+        assert!(callers.contains(&"main"), "main should call foo");
+        assert!(callers.contains(&"other"), "other should call foo");
     }
 }

@@ -356,7 +356,7 @@ pub fn count_declassifications(prog: &Program) -> (usize, usize) {
 }
 
 /// Extract the outermost security label from a `TypeExpr`, if any.
-fn label_of_type_expr(te: &TypeExpr) -> Option<SecurityLabel> {
+pub(crate) fn label_of_type_expr(te: &TypeExpr) -> Option<SecurityLabel> {
     match te {
         TypeExpr::Labeled { label, .. } => Some(*label),
         TypeExpr::Refined { inner, .. } => label_of_type_expr(inner),

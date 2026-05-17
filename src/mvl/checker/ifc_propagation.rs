@@ -56,7 +56,19 @@ use crate::mvl::parser::lexer::Span;
 /// This supplements TypeEnv's explicit labels (e.g., `stdin_read_line → Tainted[String]`
 /// from std.io) for environments where the full stdlib is not loaded — for example,
 /// standalone test programs or sandboxed compilation.
-const TAINT_SOURCES: &[&str] = &["read_line", "args", "read_tainted"];
+///
+/// Free-function forms only. Method-call forms (e.g. `env.get()`, `db.query()`)
+/// are dot-syntax (`Expr::MethodCall`) and cannot be registered here until
+/// method-call resolution is available post-monomorphization (ADR-0034, #838).
+const TAINT_SOURCES: &[&str] = &[
+    "read_line",
+    "args",
+    "read_tainted",
+    "env_var",
+    "read_file",
+    "recv",
+    "recv_line",
+];
 
 // ── Inferred label table ───────────────────────────────────────────────────────
 
@@ -107,27 +119,57 @@ pub fn propagate(programs: &[&Program], type_env: &TypeEnv) -> InferredLabels {
         let mut changed = false;
         for prog in programs {
             for decl in &prog.declarations {
-                if let Decl::Fn(fd) = decl {
+                // Collect all function-like items: top-level fns, impl methods, actor methods.
+                let fns: Vec<(&str, &[crate::mvl::parser::ast::Param], &TypeExpr, &Block)> =
+                    match decl {
+                        Decl::Fn(fd) => vec![(&fd.name, &fd.params, &fd.return_type, &fd.body)],
+                        Decl::Impl(id) => id
+                            .methods
+                            .iter()
+                            .map(|m| {
+                                (
+                                    m.name.as_str(),
+                                    m.params.as_slice(),
+                                    &*m.return_type,
+                                    &m.body,
+                                )
+                            })
+                            .collect(),
+                        Decl::Actor(ad) => ad
+                            .methods
+                            .iter()
+                            .map(|m| {
+                                (
+                                    m.name.as_str(),
+                                    m.params.as_slice(),
+                                    &*m.return_type,
+                                    &m.body,
+                                )
+                            })
+                            .collect(),
+                        _ => continue,
+                    };
+                for (name, params, return_type, body) in fns {
                     // Skip functions with an explicit return label — annotation wins.
-                    if label_of_type_expr(&fd.return_type).is_some() {
+                    if label_of_type_expr(return_type).is_some() {
                         continue;
                     }
                     // Build param label env from declared annotations.
                     let mut param_env: HashMap<String, SecurityLabel> = HashMap::new();
-                    for param in &fd.params {
+                    for param in params {
                         if let Some(l) = label_of_type_expr(&param.ty) {
                             param_env.insert(param.name.clone(), l);
                         }
                     }
                     // Infer return label from body return expressions.
-                    if let Some(label) = infer_return_label(&fd.body, &param_env, &table) {
-                        let current = table.get(&fd.name).copied();
+                    if let Some(label) = infer_return_label(body, &param_env, &table) {
+                        let current = table.get(name).copied();
                         let new_label = match current {
                             Some(c) => ifc::join(c, label),
                             None => label,
                         };
                         if current != Some(new_label) {
-                            table.insert(fd.name.clone(), new_label);
+                            table.insert(name.to_string(), new_label);
                             changed = true;
                         }
                     }
@@ -197,7 +239,7 @@ fn collect_returns_in_stmt(
             .iter()
             .map(|arm| match &arm.body {
                 MatchBody::Block(b) => collect_explicit_returns(b, env, table),
-                MatchBody::Expr(_) => None,
+                MatchBody::Expr(e) => infer_label_extended(e, env, table),
             })
             .fold(None, ifc::join_opt),
         Stmt::While { body, .. } | Stmt::For { body, .. } => {
@@ -247,15 +289,15 @@ pub fn infer_label_extended(
         | Expr::FieldAccess { expr, .. }
         | Expr::Consume { expr, .. }
         | Expr::Propagate { expr, .. } => infer_label_extended(expr, env, table),
-        Expr::If {
-            cond, then, else_, ..
-        } => {
-            let cond_label = infer_label_extended(cond, env, table);
+        Expr::If { then, else_, .. } => {
+            // The value label of an if-expression is the join of its branch
+            // result labels only. The condition label tracks implicit flow and
+            // is handled separately by check_implicit_flows in ifc.rs.
             let then_label = tail_label_of_block(then, env, table);
             let else_label = else_
                 .as_ref()
                 .and_then(|e| infer_label_extended(e, env, table));
-            ifc::join_opt(cond_label, ifc::join_opt(then_label, else_label))
+            ifc::join_opt(then_label, else_label)
         }
         Expr::Block(b) => tail_label_of_block(b, env, table),
         Expr::Match {
@@ -342,21 +384,29 @@ pub fn detect_violations(
 ) -> Vec<CheckError> {
     let mut errors = Vec::new();
     for decl in &prog.declarations {
-        if let Decl::Fn(fd) = decl {
+        // Check top-level fns, impl methods, and actor methods.
+        let fns: Vec<(&str, &[crate::mvl::parser::ast::Param], &Block)> = match decl {
+            Decl::Fn(fd) => vec![(&fd.name, &fd.params, &fd.body)],
+            Decl::Impl(id) => id
+                .methods
+                .iter()
+                .map(|m| (m.name.as_str(), m.params.as_slice(), &m.body))
+                .collect(),
+            Decl::Actor(ad) => ad
+                .methods
+                .iter()
+                .map(|m| (m.name.as_str(), m.params.as_slice(), &m.body))
+                .collect(),
+            _ => continue,
+        };
+        for (name, params, body) in fns {
             let mut param_env: HashMap<String, SecurityLabel> = HashMap::new();
-            for param in &fd.params {
+            for param in params {
                 if let Some(l) = label_of_type_expr(&param.ty) {
                     param_env.insert(param.name.clone(), l);
                 }
             }
-            collect_violations_in_block(
-                &fd.body,
-                &fd.name,
-                &param_env,
-                type_env,
-                inferred,
-                &mut errors,
-            );
+            collect_violations_in_block(body, name, &param_env, type_env, inferred, &mut errors);
         }
     }
     errors
@@ -583,7 +633,7 @@ fn check_call_violations(
             continue; // No violation.
         }
         // Build a simplified call chain for the error message.
-        let chain = extract_chain(arg, &inferred.0);
+        let chain = extract_chain(arg, env, &inferred.0);
         errors.push(CheckError::InterprocFlowViolation {
             callee: callee_name.to_string(),
             param_idx,
@@ -600,14 +650,18 @@ fn check_call_violations(
 ///
 /// Returns function/variable names from outermost to innermost, tracing the
 /// path through which labeled data flows into the violation.
-fn extract_chain(expr: &Expr, table: &HashMap<String, SecurityLabel>) -> Vec<String> {
+fn extract_chain(
+    expr: &Expr,
+    env: &HashMap<String, SecurityLabel>,
+    table: &HashMap<String, SecurityLabel>,
+) -> Vec<String> {
     match expr {
         Expr::FnCall { name, args, .. } => {
             let mut chain = vec![name.clone()];
             // Descend into the first arg that contributes a label.
             for arg in args {
-                if infer_label_extended(arg, &HashMap::new(), table).is_some() {
-                    let sub = extract_chain(arg, table);
+                if infer_label_extended(arg, env, table).is_some() {
+                    let sub = extract_chain(arg, env, table);
                     if !sub.is_empty() {
                         chain.extend(sub);
                     }
@@ -621,23 +675,7 @@ fn extract_chain(expr: &Expr, table: &HashMap<String, SecurityLabel>) -> Vec<Str
     }
 }
 
-// ── Label extraction from TypeExpr ───────────────────────────────────────────
-
-/// Extract the outermost security label from a `TypeExpr`, if any.
-fn label_of_type_expr(te: &TypeExpr) -> Option<SecurityLabel> {
-    match te {
-        TypeExpr::Labeled { label, .. } => Some(*label),
-        TypeExpr::Refined { inner, .. } => label_of_type_expr(inner),
-        TypeExpr::Tuple { elems, .. } => elems.iter().find_map(label_of_type_expr),
-        TypeExpr::Base { .. }
-        | TypeExpr::Option { .. }
-        | TypeExpr::Result { .. }
-        | TypeExpr::Ref { .. }
-        | TypeExpr::Fn { .. }
-        | TypeExpr::IntConst { .. }
-        | TypeExpr::Session { .. } => None,
-    }
-}
+use super::ifc::label_of_type_expr;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -797,5 +835,133 @@ mod tests {
                 "chain should include wrapper, got {chain:?}"
             );
         }
+    }
+
+    // ── New tests added by review fixes ───────────────────────────────────
+
+    #[test]
+    fn three_hop_chain_produces_violation() {
+        // Canonical SQL-injection scenario from #831:
+        // fn get_input() -> String { read_line() }      ← Tainted via registry
+        // fn build_query() -> String { get_input() }    ← inferred Tainted
+        // fn caller() -> Unit { sink(build_query()) }   ← Tainted → Clean: violation
+        let prog = parse(
+            "fn get_input() -> String { read_line() } \
+             fn build_query() -> String { get_input() } \
+             fn caller() -> Unit { sink(build_query()) }",
+        );
+        let env = env_with_taint_source();
+        let inferred = propagate(&[&prog], &env);
+        assert_eq!(inferred.get("get_input"), Some(SecurityLabel::Tainted));
+        assert_eq!(inferred.get("build_query"), Some(SecurityLabel::Tainted));
+        let violations = detect_violations(&prog, &env, &inferred);
+        assert!(
+            !violations.is_empty(),
+            "three-hop taint chain must produce a violation"
+        );
+        if let Some(CheckError::InterprocFlowViolation { callee, chain, .. }) = violations.first() {
+            assert_eq!(callee, "sink");
+            assert!(
+                chain.contains(&"build_query".to_string()),
+                "chain should trace through build_query, got {chain:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn mutual_recursion_propagation_terminates_no_taint() {
+        // fn a() -> String { b() }
+        // fn b() -> String { a() }
+        // Neither touches a taint source → neither inferred Tainted; must not hang.
+        let prog = parse("fn a() -> String { b() } fn b() -> String { a() }");
+        let env = TypeEnv::default();
+        let inferred = propagate(&[&prog], &env);
+        assert_eq!(
+            inferred.get("a"),
+            None,
+            "no taint source → a should not be Tainted"
+        );
+        assert_eq!(
+            inferred.get("b"),
+            None,
+            "no taint source → b should not be Tainted"
+        );
+    }
+
+    #[test]
+    fn mutual_recursion_with_taint_source_propagates() {
+        // fn a() -> String { b() }
+        // fn b() -> String { read_line() }  ← TAINT_SOURCES entry
+        let prog = parse("fn a() -> String { b() } fn b() -> String { read_line() }");
+        let env = TypeEnv::default();
+        let inferred = propagate(&[&prog], &env);
+        assert_eq!(inferred.get("b"), Some(SecurityLabel::Tainted));
+        assert_eq!(inferred.get("a"), Some(SecurityLabel::Tainted));
+    }
+
+    #[test]
+    fn violation_error_fields_are_correct() {
+        let prog =
+            parse("fn wrapper() -> String { source() } fn caller() -> Unit { sink(wrapper()) }");
+        let env = env_with_taint_source();
+        let inferred = propagate(&[&prog], &env);
+        let violations = detect_violations(&prog, &env, &inferred);
+        assert_eq!(violations.len(), 1);
+        match &violations[0] {
+            CheckError::InterprocFlowViolation {
+                callee,
+                param_idx,
+                required_label,
+                inferred_label,
+                caller,
+                ..
+            } => {
+                assert_eq!(callee, "sink");
+                assert_eq!(*param_idx, 0);
+                assert_eq!(required_label, "Clean");
+                assert_eq!(inferred_label, "Tainted");
+                assert_eq!(caller, "caller");
+            }
+            other => panic!("expected InterprocFlowViolation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tainted_arg_to_public_sink_is_violation() {
+        use crate::mvl::checker::context::FnInfo;
+        use crate::mvl::checker::types::Ty;
+        let prog = parse(
+            "fn wrapper() -> String { source() } fn caller() -> Unit { public_sink(wrapper()) }",
+        );
+        let mut env = env_with_taint_source();
+        env.fns.insert(
+            "public_sink".into(),
+            FnInfo {
+                params: vec![Ty::Labeled(SecurityLabel::Public, Box::new(Ty::String))],
+                ret: Ty::Unit,
+                ..Default::default()
+            },
+        );
+        let inferred = propagate(&[&prog], &env);
+        let violations = detect_violations(&prog, &env, &inferred);
+        assert!(
+            !violations.is_empty(),
+            "Tainted → Public param must be a violation"
+        );
+    }
+
+    #[test]
+    fn let_binding_taint_tracked_to_violation() {
+        // let x: String = read_line(); sink(x)  — taint flows through a let-binding
+        // MVL requires explicit type annotations on let; the inferred table is consulted
+        // for read_line's label and the binding is tracked in env for subsequent stmts.
+        let prog = parse("fn caller() -> Unit { let x: String = read_line(); sink(x) }");
+        let env = env_with_taint_source();
+        let inferred = propagate(&[&prog], &env);
+        let violations = detect_violations(&prog, &env, &inferred);
+        assert!(
+            !violations.is_empty(),
+            "taint through let binding should produce a violation (let x: String = read_line(); sink(x))"
+        );
     }
 }
