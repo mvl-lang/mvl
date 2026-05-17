@@ -4,6 +4,13 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.124.1] — 2026-05-17
+
+### Fixed
+- IFC `Stmt::Let` now consults declared type annotation before falling back to inferred init label, preventing false positives for validated bindings like `let clean: Clean[String] = validate(tainted)?` (#849)
+- IFC `collect_violations_in_stmt` now handles `Pattern::Tuple`, `TupleStruct`, `Struct`, `Some`, `Ok`, `Err` destructuring patterns — previously only tracked `Pattern::Ident` bindings (#850)
+- IFC `infer_label_extended` and `collect_violations_in_expr` now insert lambda parameters into the lambda-local env before recursing into the body, making parameter labels visible inside lambda expressions (#851)
+
 ## [0.124.0] — 2026-05-17
 
 ### Added
