@@ -47,8 +47,25 @@ pub struct Db;
 ///
 /// Named `Concurrent` rather than `Async` to avoid confusion with Rust's
 /// `async`/`await` keyword — this is a capability marker, not a syntax concept.
+/// Retained for generated-code compatibility; prefer `Spawn`/`Send`/`Recv` for
+/// new MVL-level declarations (ADR-0035, #856).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Concurrent;
+
+/// Marks a function that may create new actors (MVL `! Spawn` effect, ADR-0035).
+/// Security concern: resource exhaustion (DoS).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Spawn;
+
+/// Marks a function that may send messages on channels (MVL `! Send` effect, ADR-0035).
+/// Security concern: data exfiltration, trust boundary crossing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Send;
+
+/// Marks a function that may receive/block on channels (MVL `! Recv` effect, ADR-0035).
+/// Security concern: blocking/DoS.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Recv;
 
 /// Marks a function that may allocate heap memory (for bounded-heap analysis).
 #[derive(Debug, Clone, Copy, Default)]

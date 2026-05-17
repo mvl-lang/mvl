@@ -14,7 +14,7 @@
 
 pub use crate::effects::{
     Alloc, Clock, Concurrent, Console, CryptoRandom, Db, Env, FileDelete, FileRead, FileWrite, Log,
-    Net, Panic, ProcessSpawn, Random, Terminal,
+    Net, Panic, ProcessSpawn, Random, Recv, Send, Spawn, Terminal,
 };
 pub use crate::ifc::{declassify, sanitize, Clean, Public, Secret, Tainted};
 pub use crate::mvl_refine;
