@@ -1,0 +1,37 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// std/effects.mvl — canonical MVL effect hierarchy (ADR-0035, spec 002-effect-system)
+//
+// The signature IS the threat model. Every side effect must be declared.
+// Pure is the default — no declaration means no side effects.
+
+// ── Base Effects (primitives) ─────────────────────────────────────────────────
+
+effect Clock        // Read system clock — timing attacks
+effect Console      // Read/write stdin/stdout/stderr — exfiltration, injection
+effect FileRead     // Read from filesystem — sensitive file access, path traversal
+effect FileWrite    // Write to filesystem — overwrite files, plant malware
+effect FileDelete   // Delete from filesystem — data destruction
+effect Net          // Network access (TCP, UDP, HTTP) — exfiltration, C2, SSRF
+effect DB           // Database operations — SQL injection, data leakage
+effect ProcessSpawn // Spawn external processes — arbitrary code execution
+effect Env          // Read/write environment variables — secret leakage
+effect Random       // Non-deterministic random generation — predictable values
+
+// ── Concurrency Effects ───────────────────────────────────────────────────────
+
+effect Spawn        // Create actors — resource exhaustion (DoS)
+effect Send         // Send on channels — data exfiltration, trust boundary crossing
+effect Recv         // Receive on channels (blocking) — blocking/DoS
+
+// ── Composite Effects (subsumption) ──────────────────────────────────────────
+
+effect Log > Clock                  // Logging requires timestamps
+effect CryptoRandom > Random        // Cryptographic PRNG is a specialisation of Random
+
+// IO subsumes all I/O effects — use as convenience umbrella
+effect IO > Console + FileRead + FileWrite + FileDelete + Net + DB + ProcessSpawn + Env + Log
+
+// Actor subsumes all concurrency effects
+effect Actor > Spawn + Send + Recv
