@@ -133,8 +133,8 @@ pub fn label_name(label: SecurityLabel) -> &'static str {
 ///
 /// **Phase 3 scope:** This pass handles the main implicit-flow pattern —
 /// a branching condition that carries a high security label, with a public
-/// output sink inside the body.  Indirect implicit flows through deeply nested
-/// data structures or cross-function call chains are deferred to a future phase.
+/// output sink inside the body.  Cross-function direct flows are handled by
+/// the interprocedural analysis in `ifc_propagation` (#831).
 pub fn check_implicit_flows(prog: &Program, errors: &mut Vec<CheckError>) {
     for decl in &prog.declarations {
         if let Decl::Fn(fd) = decl {
@@ -356,7 +356,7 @@ pub fn count_declassifications(prog: &Program) -> (usize, usize) {
 }
 
 /// Extract the outermost security label from a `TypeExpr`, if any.
-fn label_of_type_expr(te: &TypeExpr) -> Option<SecurityLabel> {
+pub(crate) fn label_of_type_expr(te: &TypeExpr) -> Option<SecurityLabel> {
     match te {
         TypeExpr::Labeled { label, .. } => Some(*label),
         TypeExpr::Refined { inner, .. } => label_of_type_expr(inner),

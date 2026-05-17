@@ -192,6 +192,7 @@ impl Default for FnInfo {
 // ── Type environment ─────────────────────────────────────────────────────────
 
 /// Lexically-scoped variable environment + global type/function tables.
+#[derive(Debug)]
 pub struct TypeEnv {
     /// Stack of variable scopes (innermost last).
     scopes: Vec<HashMap<String, VarInfo>>,
