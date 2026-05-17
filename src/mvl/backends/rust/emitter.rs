@@ -611,6 +611,7 @@ impl RustEmitter {
                 }
                 Decl::Actor(ad) => emit_actor_decl(self, ad),
                 Decl::Impl(id) => emit_impl_decl(self, id),
+                Decl::EffectDecl(_) => continue, // compile-time only, no Rust emission
             }
             self.blank();
         }

@@ -11,8 +11,8 @@
 //! - Totality annotations, effect lists, and where-clause constraints
 
 use crate::mvl::parser::ast::{
-    ActorDecl, ActorMethod, Constraint, ExternDecl, ExternFnDecl, FnDecl, ImplDecl, Param,
-    Totality, UseDecl,
+    ActorDecl, ActorMethod, Constraint, EffectDecl, ExternDecl, ExternFnDecl, FnDecl, ImplDecl,
+    Param, Totality, UseDecl,
 };
 use crate::mvl::parser::lexer::TokenKind;
 use crate::mvl::parser::{ParseError, Parser};
@@ -396,6 +396,7 @@ impl Parser {
                 d.visible = visible;
                 Ok(Decl::Actor(d))
             }
+            TokenKind::Effect => Ok(Decl::EffectDecl(self.parse_effect_decl()?)),
             _ => {
                 let err = ParseError {
                     message: format!("expected declaration, found `{}`", self.peek_kind()),
@@ -479,6 +480,38 @@ impl Parser {
             name,
             ty,
             value,
+            span,
+        })
+    }
+
+    // ── Effect declaration ────────────────────────────────────────────────
+
+    /// Parse `effect Name [> Parent [+ Parent]*]` (#852).
+    /// Pre-condition: current token is `effect`.
+    pub fn parse_effect_decl(&mut self) -> Result<EffectDecl, ()> {
+        let start = self.peek_span();
+        self.advance(); // consume `effect`
+        let ident_result = self.expect_ident();
+        let (name, _) = self.require(ident_result)?;
+
+        let mut subsumes = Vec::new();
+        if self.eat(&TokenKind::Gt) {
+            // First parent (required after `>`)
+            let first_result = self.expect_ident();
+            let (first, _) = self.require(first_result)?;
+            subsumes.push(first);
+            // Additional parents separated by `+`
+            while self.eat(&TokenKind::Plus) {
+                let next_result = self.expect_ident();
+                let (next, _) = self.require(next_result)?;
+                subsumes.push(next);
+            }
+        }
+
+        let span = self.span_from(start);
+        Ok(EffectDecl {
+            name,
+            subsumes,
             span,
         })
     }
@@ -1430,5 +1463,58 @@ fn main() -> String { greet(String::new()) }"#;
             )
         });
         assert!(has_ghost, "expected a ghost let binding in body");
+    }
+
+    // ── Effect declaration tests (#852) ────────────────────────────────────
+
+    fn effect_decl(src: &str) -> EffectDecl {
+        let (mut p, lex_errs) = Parser::new(src);
+        assert!(lex_errs.is_empty(), "lex errors: {:?}", lex_errs);
+        let result = p.parse_effect_decl();
+        assert!(p.errors.is_empty(), "parse errors: {:?}", p.errors);
+        result.expect("parse_effect_decl failed")
+    }
+
+    #[test]
+    fn parse_base_effect() {
+        // GIVEN: `effect Clock`
+        // THEN: EffectDecl { name: "Clock", subsumes: [] }
+        let d = effect_decl("effect Clock");
+        assert_eq!(d.name, "Clock");
+        assert!(d.subsumes.is_empty());
+    }
+
+    #[test]
+    fn parse_effect_single_parent() {
+        // GIVEN: `effect Log > Clock`
+        // THEN: EffectDecl { name: "Log", subsumes: ["Clock"] }
+        let d = effect_decl("effect Log > Clock");
+        assert_eq!(d.name, "Log");
+        assert_eq!(d.subsumes, vec!["Clock"]);
+    }
+
+    #[test]
+    fn parse_effect_multiple_parents() {
+        // GIVEN: `effect Billing > DB + Log + Clock`
+        // THEN: EffectDecl { name: "Billing", subsumes: ["DB", "Log", "Clock"] }
+        let d = effect_decl("effect Billing > DB + Log + Clock");
+        assert_eq!(d.name, "Billing");
+        assert_eq!(d.subsumes, vec!["DB", "Log", "Clock"]);
+    }
+
+    #[test]
+    fn parse_effect_decl_as_top_level() {
+        // GIVEN: a program with an effect declaration
+        // THEN: Decl::EffectDecl node in program
+        let (mut p, lex_errs) = Parser::new("effect IO > Console + FileRead + Net");
+        assert!(lex_errs.is_empty());
+        let prog = p.parse_program();
+        assert!(p.errors.is_empty(), "parse errors: {:?}", p.errors);
+        assert_eq!(prog.declarations.len(), 1);
+        let Decl::EffectDecl(ed) = &prog.declarations[0] else {
+            panic!("expected EffectDecl, got {:?}", prog.declarations[0]);
+        };
+        assert_eq!(ed.name, "IO");
+        assert_eq!(ed.subsumes, vec!["Console", "FileRead", "Net"]);
     }
 }

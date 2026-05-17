@@ -31,6 +31,7 @@ impl TypeChecker {
                 Decl::Use(_) => {} // resolved by the module resolver, not the type checker
                 Decl::Impl(id) => self.register_impl(id),
                 Decl::Actor(ad) => self.register_actor(ad),
+                Decl::EffectDecl(_) => {} // collected by EffectHierarchy pass, not here
             }
         }
     }
@@ -168,6 +169,7 @@ impl TypeChecker {
             Decl::Use(_) => {} // resolved by the module resolver, not the type checker
             Decl::Impl(_) => {} // bodies not yet type-checked; registration done in collect_declarations
             Decl::Actor(ad) => self.check_actor_decl(ad),
+            Decl::EffectDecl(_) => {} // validated by EffectHierarchy pass
         }
     }
 

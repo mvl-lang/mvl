@@ -53,6 +53,20 @@ impl fmt::Display for Effect {
     }
 }
 
+// ── EffectDecl ─────────────────────────────────────────────────────────────
+
+/// `effect Name` or `effect Name > Parent + Parent …` (#852).
+///
+/// Declares a named effect, optionally subsuming one or more parent effects.
+/// Base effects have an empty `subsumes` list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectDecl {
+    pub name: String,
+    /// Direct parents in the subsumption hierarchy (empty = base effect).
+    pub subsumes: Vec<String>,
+    pub span: Span,
+}
+
 // ── Program ────────────────────────────────────────────────────────────────
 
 /// The root of every parse: a sequence of top-level declarations.
@@ -77,6 +91,8 @@ pub enum Decl {
     Impl(ImplDecl),
     /// `actor TypeName { fields* behaviors* }` — actor type declaration (Phase 8, #63).
     Actor(ActorDecl),
+    /// `effect Name [> Parent [+ Parent]*]` — effect declaration (#852).
+    EffectDecl(EffectDecl),
 }
 
 impl Decl {
@@ -89,6 +105,7 @@ impl Decl {
             Decl::Use(d) => d.span,
             Decl::Impl(d) => d.span,
             Decl::Actor(d) => d.span,
+            Decl::EffectDecl(d) => d.span,
         }
     }
 }
