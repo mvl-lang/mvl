@@ -39,13 +39,13 @@
 //! - #833 — return-label inference
 //! - #825 — interprocedural IFC epic
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::mvl::checker::context::TypeEnv;
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
 use crate::mvl::parser::ast::{
-    Block, Decl, ElseBranch, Expr, MatchBody, Program, SecurityLabel, Stmt, TypeExpr,
+    Block, Decl, ElseBranch, Expr, MatchBody, Pattern, Program, SecurityLabel, Stmt, TypeExpr,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -117,7 +117,7 @@ pub fn propagate(programs: &[&Program], type_env: &TypeEnv) -> InferredLabels {
     let mut table: HashMap<String, SecurityLabel> = HashMap::new();
     // Track which names were seeded explicitly (TypeEnv or TAINT_SOURCES) so we can
     // split the table into explicit vs inferred at the end (#849).
-    let mut explicit_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut explicit_names: HashSet<String> = HashSet::new();
 
     // Seed 1: explicit return labels from TypeEnv (covers stdlib taint sources).
     for (name, fn_info) in &type_env.fns {
@@ -496,24 +496,30 @@ fn collect_violations_in_stmt(
     errors: &mut Vec<CheckError>,
 ) {
     match stmt {
-        Stmt::Let { pattern, init, .. } => {
+        Stmt::Let {
+            pattern, init, ty, ..
+        } => {
             collect_violations_in_expr(init, caller, env, type_env, inferred, errors);
             // Track let-bound variable labels for subsequent stmts in this block.
             // Use split tables: explicit labels are authoritative; inferred labels join
             // with arg labels for context sensitivity (#849).
             // Fix #850: handle destructuring patterns — conservatively assign the
             // full initialiser label to every bound name.
-            use crate::mvl::parser::ast::Pattern;
+            // Prefer the declared type annotation over the inferred init label, matching
+            // ifc.rs behaviour: `label_of_type_expr(ty).or_else(|| infer_label(init, env))`.
+            // This prevents false positives for validated bindings like:
+            //   let clean: Clean[String] = validate_input(tainted)?  → clean is Clean, not Tainted
             let init_label =
                 infer_label_extended(init, env, &inferred.explicit, &inferred.inferred);
+            let effective_label = label_of_type_expr(ty).or(init_label);
             match pattern {
                 Pattern::Ident(name, _) => {
-                    if let Some(l) = init_label {
+                    if let Some(l) = effective_label {
                         env.insert(name.clone(), l);
                     }
                 }
                 Pattern::Tuple { elems, .. } => {
-                    if let Some(l) = init_label {
+                    if let Some(l) = effective_label {
                         for elem_pat in elems {
                             if let Pattern::Ident(name, _) = elem_pat {
                                 env.insert(name.clone(), l);
@@ -522,7 +528,7 @@ fn collect_violations_in_stmt(
                     }
                 }
                 Pattern::TupleStruct { fields, .. } => {
-                    if let Some(l) = init_label {
+                    if let Some(l) = effective_label {
                         for field_pat in fields {
                             if let Pattern::Ident(name, _) = field_pat {
                                 env.insert(name.clone(), l);
@@ -531,7 +537,7 @@ fn collect_violations_in_stmt(
                     }
                 }
                 Pattern::Struct { fields, .. } => {
-                    if let Some(l) = init_label {
+                    if let Some(l) = effective_label {
                         for (_, field_pat) in fields {
                             if let Pattern::Ident(name, _) = field_pat {
                                 env.insert(name.clone(), l);
@@ -542,7 +548,7 @@ fn collect_violations_in_stmt(
                 Pattern::Some { inner, .. }
                 | Pattern::Ok { inner, .. }
                 | Pattern::Err { inner, .. } => {
-                    if let Some(l) = init_label {
+                    if let Some(l) = effective_label {
                         if let Pattern::Ident(name, _) = inner.as_ref() {
                             env.insert(name.clone(), l);
                         }
@@ -1090,10 +1096,11 @@ mod tests {
     // inferred label must be joined with arg labels (not used as short-circuit).
     #[test]
     fn explicit_annotation_authoritative_over_args() {
-        // fn sanitize(x: String) -> Clean[String] { x }  ← explicit return label
-        // fn caller() -> Unit { sink(sanitize(source())) }
-        // sanitize is explicitly Clean; even though we pass a Tainted arg the
-        // return is guaranteed Clean → no violation on sink(sanitize(...)).
+        // Note: `sanitize` is a MVL built-in keyword; the parser produces
+        // Expr::Sanitize { .. } (always → Clean) rather than Expr::FnCall.
+        // The user-defined `fn sanitize` declaration is irrelevant — any call to
+        // `sanitize(x)` in MVL source is always treated as a clean-sanitize expression.
+        // This test verifies that Expr::Sanitize → Clean prevents a false positive at sink.
         let prog = parse(
             "fn sanitize(x: String) -> Clean[String] { x } \
              fn caller() -> Unit { sink(sanitize(source())) }",
@@ -1130,29 +1137,44 @@ mod tests {
     // #850: taint through tuple destructuring is tracked.
     #[test]
     fn tuple_destructure_taint_tracked() {
-        // let (a, b): ... — MVL uses typed destructuring via match, but a
-        // TupleStruct pattern in a let tracks taint conservatively.
-        // We verify via the simpler case: Pattern::Ident still works after refactor.
-        let prog = parse("fn caller() -> Unit { let x: String = source(); sink(x) }");
-        let env = env_with_taint_source();
+        // let (a, b): (String, String) = pair_source();  — Pattern::Tuple arm
+        // pair_source is registered as Tainted; both a and b must get Tainted in
+        // env so that sink(a) produces a violation.
+        use crate::mvl::checker::context::FnInfo;
+        use crate::mvl::checker::types::Ty;
+        let prog = parse(
+            "fn caller() -> Unit { \
+                 let (a, b): (String, String) = pair_source(); \
+                 sink(a) \
+             }",
+        );
+        let mut env = env_with_taint_source();
+        env.fns.insert(
+            "pair_source".into(),
+            FnInfo {
+                ret: Ty::Labeled(SecurityLabel::Tainted, Box::new(Ty::String)),
+                ..Default::default()
+            },
+        );
         let inferred = propagate(&[&prog], &env);
         let violations = detect_violations(&prog, &env, &inferred);
         assert!(
             !violations.is_empty(),
-            "taint through let Ident binding should still produce a violation"
+            "taint through Pattern::Tuple let binding (a, b) must propagate to sink(a)"
         );
     }
 
     // #851: lambda parameter label is propagated into the lambda body.
     #[test]
     fn lambda_param_label_visible_in_body() {
-        // fn caller() -> Unit { let f = |x: Tainted[String]| sink(x); f(source()) }
-        // The lambda param x is Tainted; sink requires Clean → violation on sink(x).
-        // Without fix #851, x is not in env inside the lambda body → no violation.
+        // let f: String = |x: Tainted[String]| sink(x);
+        // The lambda param x gets label Tainted in the lambda-local env.
+        // collect_violations_in_expr recurses into the lambda body with that env
+        // and detects the Tainted→Clean violation on sink(x).
+        // Without fix #851, x is absent from env inside the lambda body → no violation.
         let prog = parse(
             "fn caller() -> Unit { \
-                 let f: Tainted[String] = source(); \
-                 sink(f) \
+                 let f: String = |x: Tainted[String]| sink(x); \
              }",
         );
         let env = env_with_taint_source();
@@ -1160,43 +1182,32 @@ mod tests {
         let violations = detect_violations(&prog, &env, &inferred);
         assert!(
             !violations.is_empty(),
-            "tainted value bound to f and passed to sink should be a violation"
+            "lambda param x: Tainted[String] passed to Clean sink must produce a violation"
         );
     }
 
     #[test]
-    fn lambda_with_tainted_param_violates_clean_sink() {
-        // Directly test the lambda path: a lambda body that uses a Tainted param
-        // to call a Clean sink should be caught.
-        // Note: since lambda IFC is also partially handled by ifc.rs::check_implicit_flows,
-        // this test verifies the violation detection path specifically.
-        let env = env_with_taint_source();
-        // Register: fn apply(f: ..., x: String) — we simulate via a direct call.
-        // For a minimal test, just verify that a non-lambda Tainted→Clean violation still fires.
+    fn lambda_captures_outer_tainted_variable() {
+        // fn caller() -> Unit {
+        //   let t: String = source();
+        //   let f: String = || sink(t);
+        //   f()
+        // }
+        // t is tainted in the outer env; the lambda body is analysed with a clone of
+        // that env (fix #851), so t is visible as Tainted and sink(t) produces a violation.
         let prog = parse(
-            "fn wrapper() -> String { source() } \
-             fn caller() -> Unit { sink(wrapper()) }",
+            "fn caller() -> Unit { \
+                 let t: String = source(); \
+                 let f: String = || sink(t); \
+                 f() \
+             }",
         );
+        let env = env_with_taint_source();
         let inferred = propagate(&[&prog], &env);
         let violations = detect_violations(&prog, &env, &inferred);
         assert!(
             !violations.is_empty(),
-            "baseline: wrapper taint should reach sink"
-        );
-        // Now verify the lambda env construction: explicit labels in the lambda env
-        // table are not confused with inferred labels (regression for #849 + #851).
-        drop(violations);
-        let prog2 = parse(
-            "fn caller() -> Unit { \
-                 let x: String = read_line(); \
-                 sink(x) \
-             }",
-        );
-        let inferred2 = propagate(&[&prog2], &env);
-        let violations2 = detect_violations(&prog2, &env, &inferred2);
-        assert!(
-            !violations2.is_empty(),
-            "read_line taint through let binding must produce violation"
+            "lambda capturing outer tainted variable t must produce violation on sink(t)"
         );
     }
 }
