@@ -85,12 +85,40 @@ fn empty_arg_map() -> Map[String, ArgValue] {
     m
 }
 
+fn empty_bool_map() -> Map[String, Bool] {
+    let m: ref Map[String, Bool] = {"__mvl_args_init__": false};
+    m = map_without(m, "__mvl_args_init__");
+    m
+}
+
 fn type_label(ty: ArgType) -> String {
     match ty {
         ArgType::Str   => "Str",
         ArgType::Int   => "Int",
         ArgType::Float => "Float",
     }
+}
+
+/// Build a set of declared flag names for schema-aware tokenization.
+fn build_flag_set(schema: List[FieldSpec]) -> Map[String, Bool] {
+    let flags: ref Map[String, Bool] = empty_bool_map();
+    let len: Int = list_len(schema);
+    let i: ref Int = 0;
+    while i < len {
+        match list_get(schema, i) {
+            Some(f) => {
+                match f {
+                    FieldSpec::Flag { name: n } => {
+                        flags = map_put(flags, n, true)
+                    },
+                    _ => {},
+                }
+            },
+            None => {},
+        }
+        i = i + 1
+    }
+    flags
 }
 
 /// Build a runtime usage string from the schema.
@@ -191,14 +219,18 @@ pub fn parse_args(schema: List[FieldSpec]) -> Map[String, ArgValue] ! Console + 
         h = h + 1
     }
 
+    let usage: String = build_usage(schema);
+    let flag_set: Map[String, Bool] = build_flag_set(schema);
+
     // ── First pass: tokenize argv into named args and positionals ─────────────
     //
     // Named args: --name value  or  --name=value
-    // Flags:      --name  (no following value token)
-    // Positionals: bare tokens (do not start with '-')
+    // Flags:      --name  (declared Flag fields only — schema-aware)
+    // Positionals: bare tokens (do not start with '--')
     //
-    // Disambiguation rule: if a `--name` token is not followed by another token
-    // or the next token starts with '-', it is treated as a presence flag.
+    // Schema-driven disambiguation: only names declared as Flag are treated as
+    // boolean flags.  Value fields always consume the next token, even when it
+    // starts with '-' (e.g. --threshold -0.5 is valid for a Float field).
     let raw_named: ref Map[String, String] = empty_string_map();
     let positionals: ref List[String] = [];
     let i: ref Int = 1;
@@ -208,7 +240,7 @@ pub fn parse_args(schema: List[FieldSpec]) -> Map[String, ArgValue] ! Console + 
                 let token: Clean[String] = sanitize(t);
                 if str_starts_with(token, "--") {
                     if str_contains(token, "=") {
-                        // --name=value form
+                        // --name=value form: always unambiguous
                         match str_find(token, "=") {
                             Some(eq_idx) => {
                                 let name: String = str_substring(token, 2, eq_idx);
@@ -220,30 +252,31 @@ pub fn parse_args(schema: List[FieldSpec]) -> Map[String, ArgValue] ! Console + 
                         i = i + 1
                     } else {
                         let name: String = str_substring(token, 2, str_len(token));
-                        let next_idx: Int = i + 1;
-                        if next_idx < argc {
-                            match list_get(argv, next_idx) {
-                                Some(nt) => {
-                                    let next_tok: Clean[String] = sanitize(nt);
-                                    if str_starts_with(next_tok, "-") {
-                                        // Next is a flag token — current is a boolean flag
-                                        raw_named = map_put(raw_named, name, "");
-                                        i = i + 1
-                                    } else {
-                                        // Next token is the value
-                                        raw_named = map_put(raw_named, name, next_tok);
-                                        i = i + 2
-                                    }
-                                },
-                                None => {
-                                    raw_named = map_put(raw_named, name, "");
-                                    i = i + 1
-                                },
-                            }
-                        } else {
-                            // End of args — boolean flag
+                        if map_contains_key(flag_set, name) {
+                            // Declared boolean flag: never consumes a value token
                             raw_named = map_put(raw_named, name, "");
                             i = i + 1
+                        } else {
+                            // Value field: next token is the value regardless of its prefix
+                            let next_idx: Int = i + 1;
+                            if next_idx < argc {
+                                match list_get(argv, next_idx) {
+                                    Some(nt) => {
+                                        let next_tok: Clean[String] = sanitize(nt);
+                                        raw_named = map_put(raw_named, name, next_tok);
+                                        i = i + 2
+                                    },
+                                    None => {
+                                        eprintln(str_concat("error: --", str_concat(name, " requires a value")));
+                                        eprintln(usage);
+                                        exit(1)
+                                    },
+                                }
+                            } else {
+                                eprintln(str_concat("error: --", str_concat(name, " requires a value")));
+                                eprintln(usage);
+                                exit(1)
+                            }
                         }
                     }
                 } else {
@@ -271,7 +304,7 @@ pub fn parse_args(schema: List[FieldSpec]) -> Map[String, ArgValue] ! Console + 
                             },
                             None => {
                                 eprintln(str_concat("error: missing required flag --", n));
-                                eprintln(build_usage(schema));
+                                eprintln(usage);
                                 exit(1)
                             },
                         }
@@ -285,11 +318,8 @@ pub fn parse_args(schema: List[FieldSpec]) -> Map[String, ArgValue] ! Console + 
                         }
                     },
                     FieldSpec::Flag { name: n } => {
-                        if map_contains_key(raw_named, n) {
-                            result = map_put(result, n, ArgValue::Bool(true))
-                        } else {
-                            result = map_put(result, n, ArgValue::Bool(false))
-                        }
+                        let present: Bool = map_contains_key(raw_named, n);
+                        result = map_put(result, n, ArgValue::Bool(present))
                     },
                     FieldSpec::Positional { name: n, ty: t } => {
                         match list_get(positionals, pos_i) {
@@ -299,7 +329,7 @@ pub fn parse_args(schema: List[FieldSpec]) -> Map[String, ArgValue] ! Console + 
                             },
                             None => {
                                 eprintln(str_concat("error: missing required argument <", str_concat(n, ">")));
-                                eprintln(build_usage(schema));
+                                eprintln(usage);
                                 exit(1)
                             },
                         }

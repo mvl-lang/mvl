@@ -48,7 +48,6 @@ type PipelineError = enum {
 }
 
 type RunError = enum {
-    MissingArg,
     IOFailure,
     PipelineFailed,
 }
@@ -87,7 +86,6 @@ fn run() -> Result[Unit, RunError] ! FileRead + Console + Log {
 /// Map a `RunError` to a human-readable message string (pure — no effects).
 fn run_error_message(e: RunError) -> String {
     match e {
-        RunError::MissingArg     => "missing --file argument",
         RunError::IOFailure      => "failed to read log file",
         RunError::PipelineFailed => "analysis pipeline failed",
     }
@@ -108,48 +106,13 @@ fn main() -> Unit ! FileRead + Console + Log {
 
 // ── Internal unit tests ────────────────────────────────────────────────────
 
-test fn check_run_error_missing_arg_variant() -> Unit {
-    let err: RunError = RunError::MissingArg;
-    let is_missing: Int = match err {
-        RunError::MissingArg  => 1,
-        RunError::IOFailure   => 0,
-        RunError::PipelineFailed => 0,
-    };
-    assert_eq(is_missing, 1);
-}
-
 test fn check_run_error_io_failure_variant() -> Unit {
     let err: RunError = RunError::IOFailure;
     let is_io: Int = match err {
         RunError::IOFailure      => 1,
-        RunError::MissingArg     => 0,
         RunError::PipelineFailed => 0,
     };
     assert_eq(is_io, 1);
-}
-
-test fn check_cli_args_file_field() -> Unit {
-    let args: CliArgs = CliArgs { file: "logs.jsonl", level: None };
-    let expected: Tainted[String] = "logs.jsonl";
-    assert_eq(args.file, expected);
-}
-
-test fn check_cli_args_level_some() -> Unit {
-    let args: CliArgs = CliArgs { file: "logs.jsonl", level: Some("error") };
-    let has_level: Int = match args.level {
-        Some(_) => 1,
-        None    => 0,
-    };
-    assert_eq(has_level, 1);
-}
-
-test fn check_cli_args_level_none() -> Unit {
-    let args: CliArgs = CliArgs { file: "logs.jsonl", level: None };
-    let has_level: Int = match args.level {
-        Some(_) => 1,
-        None    => 0,
-    };
-    assert_eq(has_level, 0);
 }
 
 // Option.map: None stays None, Some(v) maps through sanitize.

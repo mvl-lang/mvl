@@ -39,17 +39,11 @@ type RunError = enum {
 
 // ── Internal helpers ──────────────────────────────────────────────────────
 
-/// Parse the optional threshold arg, defaulting to 0.0 on missing or invalid.
-fn threshold_or_default(opt: Option[String]) -> Float {
+/// Apply the optional threshold arg, defaulting to 0.0 on missing or negative.
+fn threshold_or_default(opt: Option[Float]) -> Float {
     match opt {
         None    => 0.0,
-        Some(s) => {
-            let result: Result[Float, String] = str_parse_float(s);
-            match result {
-                Err(_) => 0.0,
-                Ok(v)  => if v >= 0.0 { v } else { 0.0 },
-            }
-        }
+        Some(v) => if v >= 0.0 { v } else { 0.0 },
     }
 }
 
@@ -68,14 +62,14 @@ fn parse_error_msg(e: ParseError) -> String {
 fn run() -> Result[Unit, RunError] ! FileRead + Console {
     let args: Map[String, ArgValue] = parse_args([
         required("input",     ArgType::Str),
-        optional("threshold", ArgType::Str),
+        optional("threshold", ArgType::Float),
     ]);
     let file_path: String = match args.get("input") {
         Some(ArgValue::Str(s)) => s,
         _ => "",
     };
-    let threshold_opt: Option[String] = match args.get("threshold") {
-        Some(ArgValue::Str(s)) => Some(s),
+    let threshold_opt: Option[Float] = match args.get("threshold") {
+        Some(ArgValue::Float(v)) => Some(v),
         _ => None,
     };
     let threshold: Float = threshold_or_default(threshold_opt);
