@@ -4,6 +4,16 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.126.0] — 2026-05-17
+
+### Added
+- **std.args: schema-driven CLI argument parsing** (#844): replace struct-based `ParseFromArgs` with a `List[FieldSpec]`-driven `parse_args` — the schema IS the argument spec, no codegen required
+  - `ArgType` enum (`Str`, `Int`, `Float`), `FieldSpec` variants (`Required`, `Optional`, `Flag`, `Positional`, `OptPositional`), `ArgValue` enum carrying `Clean[String]` for `Str` (IFC-safe)
+  - Schema-aware tokenizer: pre-builds flag set so value fields consume the next token regardless of `-` prefix (enables `--threshold -0.5`)
+  - Typed result accessors: `get_str`, `get_str_opt`, `get_int`, `get_float`, `get_float_opt`, `get_flag`
+  - Auto-generated `--help` / `-h` usage string from schema; exits 0 on `--help`, 1 on error
+  - IFC: `ArgValue::Str` carries `Clean[String]` — CLI input sanitized inside `parse_args`, callers receive clean values directly
+
 ## [0.125.0] — 2026-05-17
 
 ### Added
