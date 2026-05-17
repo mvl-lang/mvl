@@ -7,20 +7,20 @@
 //   1. std.env + std.io: both modules usable in the same file (compile-time check)
 //   2. Tainted[String] values from env flow through Option correctly
 //   3. sanitize(tainted) → Clean[String] → read_file: full IFC pipeline at runtime
-//   4. env.get result flows into std.io via unwrap_or fallback (cross-module value flow)
+//   4. env.env_var result flows into std.io via unwrap_or fallback (cross-module value flow)
 //   5. Missing env vars + missing files both produce expected None/Err values
 //
 // Run with:  mvl test tests/stdlib/
 
-use std.env.{get, args}
+use std.env.{env_var, args}
 use std.io.{Path, path, join, to_string, IoError, read_to_string, read_file}
 
 // ── Cross-module import: both modules usable in same file ─────────────────
 
 test fn composition_env_and_io_both_compile_in_same_scope() -> Unit ! Console + Env {
     // Compile-time check: both module imports accepted in one file.
-    // path/to_string are real implementations; get scans std::env and returns None for unknown vars.
-    let flag: Option[Tainted[String]] = get("MVL_NONEXISTENT_FLAG_XYZ");
+    // path/to_string are real implementations; env_var scans std::env and returns None for unknown vars.
+    let flag: Option[Tainted[String]] = env_var("MVL_NONEXISTENT_FLAG_XYZ");
     let p: Path = path("/tmp/mvl_test_placeholder");
     assert_eq(flag.is_none(), true);
     // "/tmp/mvl_test_placeholder" = 25 chars; proves path was stored verbatim
@@ -28,18 +28,18 @@ test fn composition_env_and_io_both_compile_in_same_scope() -> Unit ! Console + 
 }
 
 // ── Env produces Tainted; Option semantics hold ───────────────────────────
-// NOTE: get is a real implementation. Tests pass because env var names
+// NOTE: env_var is a real implementation. Tests pass because env var names
 // use unique suffixes never seen in the test runner environment.
 
 test fn composition_missing_env_var_is_none() -> Unit ! Console + Env {
-    let config: Option[Tainted[String]] = get("MVL_INPUT_FILE_XYZ");
+    let config: Option[Tainted[String]] = env_var("MVL_INPUT_FILE_XYZ");
     assert_eq(config.is_none(), true);
 }
 
 test fn composition_multiple_env_vars_all_none() -> Unit ! Console + Env {
-    let a: Option[Tainted[String]] = get("MVL_FLAG_ALPHA_XYZ");
-    let b: Option[Tainted[String]] = get("MVL_FLAG_BETA_XYZ");
-    let c: Option[Tainted[String]] = get("MVL_NONEXISTENT_FLAG_XYZ");
+    let a: Option[Tainted[String]] = env_var("MVL_FLAG_ALPHA_XYZ");
+    let b: Option[Tainted[String]] = env_var("MVL_FLAG_BETA_XYZ");
+    let c: Option[Tainted[String]] = env_var("MVL_NONEXISTENT_FLAG_XYZ");
     assert_eq(a.is_none(), true);
     assert_eq(b.is_none(), true);
     assert_eq(c.is_none(), true);
@@ -48,7 +48,7 @@ test fn composition_multiple_env_vars_all_none() -> Unit ! Console + Env {
 // ── Missing env vars: is_some / is_none predicates ────────────────────────
 
 test fn composition_env_is_some_false_when_absent() -> Unit ! Console + Env {
-    let v: Option[Tainted[String]] = get("MVL_NONEXISTENT_ARG_XYZ");
+    let v: Option[Tainted[String]] = env_var("MVL_NONEXISTENT_ARG_XYZ");
     assert_eq(v.is_some(), false);
 }
 
@@ -73,9 +73,9 @@ test fn composition_sanitize_type_enforced_at_compile_time() -> Unit ! FileRead 
 test fn composition_env_absence_routes_to_io_fallback() -> Unit ! Console + FileRead + Env {
     // STUB: update when implemented — read_to_string always returns Err("")
     // Demonstrates actual cross-module control flow:
-    // get (std.env) → None → read_to_string (std.io) called on fallback path.
+    // env_var (std.env) → None → read_to_string (std.io) called on fallback path.
     // Both modules execute; the env result determines which io operation runs.
-    let config: Option[Tainted[String]] = get("MVL_NONEXISTENT_CONFIG_FILE_XYZ");
+    let config: Option[Tainted[String]] = env_var("MVL_NONEXISTENT_CONFIG_FILE_XYZ");
     // Both branches call std.io; env result controls which path is used.
     let result: Result[Tainted[String], IoError] = match config {
         Some(_) => read_to_string(path("/tmp/mvl_nonexistent_config_a_xyz")),
