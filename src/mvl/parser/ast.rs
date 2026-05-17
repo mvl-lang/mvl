@@ -13,16 +13,10 @@ use crate::mvl::parser::lexer::Span;
 
 // ── Effect ─────────────────────────────────────────────────────────────────
 
-/// A single effect declaration, optionally restricted to a resource parameter.
-///
-/// Examples:
-/// - `FileRead`               → `Effect { name: "FileRead", param: None }`
-/// - `FileRead("/etc/config")` → `Effect { name: "FileRead", param: Some("/etc/config") }`
-/// - `Net("api.example.com")`  → `Effect { name: "Net",      param: Some("api.example.com") }`
+/// A single effect declaration (e.g. `FileRead`, `Log`, `Net`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Effect {
     pub name: String,
-    pub param: Option<String>,
     pub span: Span,
 }
 
@@ -30,15 +24,6 @@ impl Effect {
     pub fn new(name: impl Into<String>, span: Span) -> Self {
         Effect {
             name: name.into(),
-            param: None,
-            span,
-        }
-    }
-
-    pub fn with_param(name: impl Into<String>, param: impl Into<String>, span: Span) -> Self {
-        Effect {
-            name: name.into(),
-            param: Some(param.into()),
             span,
         }
     }
@@ -46,10 +31,7 @@ impl Effect {
 
 impl fmt::Display for Effect {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.param {
-            None => write!(f, "{}", self.name),
-            Some(p) => write!(f, "{}(\"{}\")", self.name, p),
-        }
+        write!(f, "{}", self.name)
     }
 }
 

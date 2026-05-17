@@ -232,27 +232,8 @@ pub fn collect_prelude_expr_types(programs: &[Program]) -> HashMap<Span, Ty> {
 // ── Effect subsetting (002-effect-system/Req 3) ───────────────────────────────
 
 /// Returns `true` when `declared` covers `required` for effect propagation.
-///
-/// Rules:
-/// - Different effect names never satisfy each other.
-/// - `declared` with no param (wildcard) satisfies any `required` for that name.
-/// - `declared` with a param satisfies `required` with the same or more-specific param,
-///   using prefix matching for path-style params (e.g. `declared("/data")` covers
-///   `required("/data/config.toml")`).
-/// - `declared` with a param does NOT satisfy a `required` with no param (general
-///   access required but only restricted access declared).
 fn effect_satisfies(declared: &Effect, required: &Effect) -> bool {
-    if declared.name != required.name {
-        return false;
-    }
-    match (&declared.param, &required.param) {
-        // Wildcard declared covers everything with that name.
-        (None, _) => true,
-        // Specific declared cannot cover a general requirement.
-        (Some(_), None) => false,
-        // Both parametrized: declared must be a prefix of required (path subsetting).
-        (Some(d), Some(r)) => r.starts_with(d.as_str()),
-    }
+    declared.name == required.name
 }
 
 // ── Valid effect names (002-effect-system/Req 2) ──────────────────────────────
@@ -704,112 +685,6 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, CheckError::InvalidEffectName { .. })),
             "expected Terminal to be a valid effect name, got: {errors:?}"
-        );
-    }
-
-    // ── Parametrized effects (002-effect-system Req 3 / issue #290) ──────
-
-    #[test]
-    fn parametrized_effect_parses_and_is_accepted() {
-        let src = r#"fn f() -> Unit ! FileRead("/etc/app/") { }"#;
-        let errors = errors_for(src);
-        assert!(
-            errors.is_empty(),
-            "expected no errors for parametrized effect, got: {errors:?}"
-        );
-    }
-
-    #[test]
-    fn parametrized_effect_invalid_name_rejected() {
-        let src = r#"fn f() -> Unit ! Bogus("/path") { }"#;
-        let errors = errors_for(src);
-        assert!(
-            errors.iter().any(
-                |e| matches!(e, CheckError::InvalidEffectName { name, .. } if name == "Bogus")
-            ),
-            "expected InvalidEffectName for parametrized unknown effect, got: {errors:?}"
-        );
-    }
-
-    #[test]
-    fn general_caller_covers_parametrized_callee() {
-        // Unparametrized FileRead (wildcard) covers FileRead("/etc/").
-        let src = r#"
-            extern "kernel" {
-                fn read_config() -> Unit ! FileRead("/etc/")
-            }
-            fn caller() -> Unit ! FileRead {
-                read_config()
-            }
-        "#;
-        let errors = errors_for(src);
-        assert!(
-            !errors.iter().any(|e| matches!(
-                e,
-                CheckError::UndeclaredEffect { .. } | CheckError::MissingEffect { .. }
-            )),
-            "general FileRead should cover FileRead(\"/etc/\"), got: {errors:?}"
-        );
-    }
-
-    #[test]
-    fn prefix_caller_covers_more_specific_parametrized_callee() {
-        // FileRead("/etc/") covers FileRead("/etc/app/config.toml") via prefix match.
-        let src = r#"
-            extern "kernel" {
-                fn read_file() -> Unit ! FileRead("/etc/app/config.toml")
-            }
-            fn caller() -> Unit ! FileRead("/etc/") {
-                read_file()
-            }
-        "#;
-        let errors = errors_for(src);
-        assert!(
-            !errors.iter().any(|e| matches!(
-                e,
-                CheckError::MissingEffect { .. } | CheckError::UndeclaredEffect { .. }
-            )),
-            "FileRead(\"/etc/\") should cover FileRead(\"/etc/app/config.toml\"), got: {errors:?}"
-        );
-    }
-
-    #[test]
-    fn specific_caller_does_not_cover_different_path_callee() {
-        // FileRead("/data/") must NOT satisfy FileRead("/etc/").
-        let src = r#"
-            extern "kernel" {
-                fn read_etc() -> Unit ! FileRead("/etc/")
-            }
-            fn caller() -> Unit ! FileRead("/data/") {
-                read_etc()
-            }
-        "#;
-        let errors = errors_for(src);
-        assert!(
-            errors
-                .iter()
-                .any(|e| matches!(e, CheckError::MissingEffect { .. })),
-            "FileRead(\"/data/\") should NOT cover FileRead(\"/etc/\"), got: {errors:?}"
-        );
-    }
-
-    #[test]
-    fn specific_caller_does_not_cover_general_callee() {
-        // FileRead("/etc/") must NOT satisfy unparametrized FileRead.
-        let src = r#"
-            extern "kernel" {
-                fn read_any() -> Unit ! FileRead
-            }
-            fn caller() -> Unit ! FileRead("/etc/") {
-                read_any()
-            }
-        "#;
-        let errors = errors_for(src);
-        assert!(
-            errors
-                .iter()
-                .any(|e| matches!(e, CheckError::MissingEffect { .. })),
-            "FileRead(\"/etc/\") should NOT cover general FileRead, got: {errors:?}"
         );
     }
 

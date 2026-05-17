@@ -255,10 +255,12 @@ This formalises the Phase-A exemption currently expressed as a comment in `runti
 **Implementation:** `src/mvl/checker/decls.rs`, `src/mvl/parser/ast.rs` (ADR-0034 §Decision 3)
 
 ```mvl
-// std/log.mvl — Clock is masked: callers only see ! Log
+// std/log.mvl — `masks Clock` applies to the entire function body.
+// Callers only see ! Log; the Clock use inside is an implementation detail.
 pub fn log_info(msg: String, fields: Map[String, String]) -> Unit ! Log
-    masks Clock {
-    let ts = now();           // ! Clock — not propagated to callers
+    masks Clock
+{
+    let ts = now();
     log_write(format_entry(Level::Info, msg, fields, ts));
 }
 ```

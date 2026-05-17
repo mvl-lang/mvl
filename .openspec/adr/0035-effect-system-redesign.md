@@ -55,8 +55,9 @@ exemption cannot be expressed in MVL source.
 
 ### What already exists
 
-- **Parametrized effects** (`! FileRead("/etc/app/")`) — partial capability scoping,
-  implemented with prefix-match subsumption in `effect_satisfies()`.
+- **Parametrized effects** (`! FileRead("/etc/app/")`) — prefix-match subsumption in
+  `effect_satisfies()`. Structural annotation only — the Rust bridge is not verified
+  to honour the path restriction, so this provides no actual security guarantee.
 - **Pony reference capabilities** (ADR-0029) — handle data race freedom orthogonally;
   not in scope here.
 - **Effect row polymorphism for HOFs** — partially implemented in `calls.rs:245–267`
@@ -91,16 +92,11 @@ pub effect PaymentGateway
 pub effect AuditTrail
 ```
 
-Effect names remain simple identifiers. Parametrized effects (`! FileRead("/path")`)
-continue to work — the parameter is validated against the declared effect's name at
-the call site.
-
 **Compiler change:** Replace `VALID_EFFECT_NAMES` constant in `src/mvl/checker.rs`
 with a registration pass that collects `effect` declarations from imported modules.
-Undeclared effect names remain a compile error (`CheckError::UnknownEffect`).
-
-Builtin effects (those registered from `context.rs` for stdlib functions) are
-pre-registered by the checker from `std.effects` before user code is analyzed.
+`std/effects.mvl` becomes the single source of truth for canonical effects; the
+manual registrations in `context.rs` are removed. Undeclared effect names remain a
+compile error (`CheckError::UnknownEffect`).
 
 ### 2. Effect aliases
 
@@ -130,9 +126,12 @@ modules, not arbitrary user code.
 
 ```mvl
 // std/log.mvl
+// `masks Clock` is a modifier on the whole function — the entire body
+// may use ! Clock without it propagating to callers.
 pub fn log_info(msg: String, fields: Map[String, String]) -> Unit ! Log
-    masks Clock {
-    let ts = now();   // ! Clock — masked, not propagated to callers
+    masks Clock
+{
+    let ts = now();
     log_write(format_entry(Level::Info, msg, fields, ts));
 }
 ```
@@ -150,7 +149,25 @@ to `fn_info.effects`. Reject `masks` on non-`pub` and non-`std.*` functions.
 This unblocks #839 and gives a principled expression for the Phase-A Rust exemption
 that currently lives only in a comment.
 
-### 4. Full algebraic handlers — deferred to Phase 8
+### 4. Remove parametrized effects
+
+Parametrized effect syntax (`! FileRead("/path")`) is removed. The feature provides no
+actual security guarantee — the checker does prefix-match subsumption on the annotation
+but does not verify that the underlying Rust implementation respects the path
+restriction. It creates false assurance.
+
+User-defined named effects are the correct replacement:
+
+```mvl
+effect ReadAppConfig   // intent is clear; no fake path enforcement
+```
+
+**Compiler change:** Remove the `param` field from the `Effect` AST node and the
+`effect_satisfies()` prefix-match logic. Remove `Effect::with_param()` from the
+parser. Spec 002 Requirement 3 (Capability-Based Security [SHOULD]) is updated to
+note the removal and the user-defined effect alternative.
+
+### 5. Full algebraic handlers — deferred to Phase 8
 
 Koka-style `with Handler in { }` blocks with delimited continuations are explicitly
 deferred. Rationale:
@@ -171,16 +188,14 @@ must not be used for any other purpose before Phase 8.
 
 | Step | What changes | Breaking? |
 |------|-------------|-----------|
-| 1 | Add `effect` declarations to `std/effects.mvl` | No — additive |
-| 2 | Checker reads declared effects instead of hardcoded list | No — same names |
-| 3 | Add effect alias syntax | No — additive |
-| 4 | Existing `! Log + Clock + DB` signatures continue to work | No |
-| 5 | Stdlib modules adopt aliases (`effect StdObservability = Log + Clock`) | No |
-| 6 | `masks` annotation added to stdlib boundary functions | No — tightens contract |
-| 7 | User code replaces verbose unions with aliases (opt-in) | No — opt-in |
-
-No existing MVL source files require immediate changes. The migration is purely
-additive until a module author opts into aliases or `masks`.
+| 1 | Remove parametrized effect syntax (`! Effect("param")`) | Done — corpus had one file, removed |
+| 2 | Add `effect` declarations to `std/effects.mvl` | No — additive |
+| 3 | Checker reads declared effects instead of hardcoded list | No — same names |
+| 4 | Add effect alias syntax | No — additive |
+| 5 | Existing `! Log + Clock + DB` signatures continue to work | No |
+| 6 | Stdlib modules adopt aliases (`effect StdObservability = Log + Clock`) | No |
+| 7 | `masks` annotation added to stdlib boundary functions | No — tightens contract |
+| 8 | User code replaces verbose unions with aliases (opt-in) | No — opt-in |
 
 ---
 
