@@ -87,7 +87,8 @@ module.exports = grammar({
             $.const_decl,
             $.extern_decl,
             $.impl_decl,
-            $.actor_decl
+            $.actor_decl,
+            $.effect_decl
           )
         ),
         $.reexport_decl
@@ -154,6 +155,15 @@ module.exports = grammar({
         optional(seq("->", $.type_expr)),
         optional(seq("!", $.effect_list)),
         $.block
+      ),
+
+    // Effect declaration: `effect IO;` or `effect FileIO > IO + Net;` (#852)
+    effect_decl: ($) =>
+      seq(
+        "effect",
+        $.identifier,
+        optional(seq(">", $.identifier, repeat(seq("+", $.identifier)))),
+        ";"
       ),
 
     // Extern trust boundary: `extern "rust" { fn foo(...) -> T; }`
