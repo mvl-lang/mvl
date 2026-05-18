@@ -4,6 +4,16 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.127.1] — 2026-05-18
+
+### Fixed
+
+- **IFC soundness: For-loop iterator taint tracking** (#858): `Stmt::For` pattern variables now correctly receive iterator security labels; nested patterns like `for (a, b) in tainted_pairs()` now propagate taint to all bound names
+- **IFC soundness: Nested destructuring taint preservation** (#858): `Stmt::Let` with nested patterns like `let (Some(x), y) = source()` now correctly propagates taint to all identifiers in the full pattern tree (recursive `bind_pattern_labels` helper)
+- **IFC soundness: Lambda return type annotation visibility** (#858): `Expr::Lambda` with declared return types like `|| -> Tainted[String] { ... }` now correctly propagate taint at the call site; `let f = || -> Tainted[T]; f()` now marks the result as tainted
+- **IFC false positive: FnCall env lookup shadowing** (#871): local variables no longer shadow unannotated functions of the same name in taint label inference; guarded env lookup with `!inferred.contains_key(name)`
+- **Implicit-flow gap: For-loop taint propagation in ifc.rs** (#858): `check_implicit_flows` now handles for-loops over tainted iterators by extracting shared `bind_pattern_labels` helper to `ifc.rs`
+
 ## [0.127.0] — 2026-05-18
 
 ### Added
