@@ -135,6 +135,8 @@ fn process_file_contents(data: Tainted[String]) -> Bool {
     true
 }
 
+// Excess-label propagation: process_file_contents declares data: Tainted[String], so calling
+// it with Tainted[String] adds no excess label — the result is plain Bool, not Tainted[Bool].
 fn read_and_process(p: Path) -> Result[Bool, IoError] ! FileRead {
     let contents: Tainted[String] = read_to_string(p)?;
     Ok(process_file_contents(contents))

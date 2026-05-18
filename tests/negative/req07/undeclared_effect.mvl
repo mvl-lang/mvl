@@ -9,8 +9,9 @@ type Event = struct {
 }
 
 fn log_event(ev: Event) -> Unit {
-    // BUG: `println` requires `! Console` but the signature declares no effects.
-    println("[{}] severity={}", ev.name, ev.severity);
+    // BUG: `stdout_write` requires `! Console` but the signature declares no effects.
+    let h = stdout();
+    stdout_write(h, ev.name);
 }
 
 fn main() -> Unit ! Console {

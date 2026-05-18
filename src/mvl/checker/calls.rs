@@ -18,16 +18,26 @@ impl TypeChecker {
         // Infer all argument types (for side-effect error collection)
         let arg_tys: Vec<Ty> = args.iter().map(|a| self.infer_expr(a)).collect();
 
-        // 003-information-flow/Req 6: logging functions MUST accept only Public<T>.
+        // 003-information-flow/Req 6: public I/O sinks MUST accept only Public<T>.
         // Reject any argument labeled Secret, Tainted, or Clean (Clean is sanitized
-        // but not declassified — an explicit declassify() is required before logging).
-        // Covers println/print (Console) and log_debug/info/warn/error (! Log, #54).
+        // but not declassified — an explicit declassify() is required before output).
+        // stdout_write/stderr_write are the raw primitives (#839); println/print/
+        // eprintln/eprint are the user-facing wrappers — both paths are guarded here
+        // because the checker does not do interprocedural analysis into callee bodies.
+        // log_debug/info/warn/error are covered by the same rule (#54).
+        //
+        // NOTE: since ADR-0024 all functions propagate labels (label_transparent=true),
+        // format("...", secret) now returns Secret[String] and println(Secret[String])
+        // will be caught by this sink check.  The explicit allowlist below is still
+        // needed because the checker is not interprocedural.
         if matches!(
             name,
             "println"
                 | "print"
                 | "eprintln"
                 | "eprint"
+                | "stdout_write"
+                | "stderr_write"
                 | "log_debug"
                 | "log_info"
                 | "log_warn"
@@ -57,11 +67,7 @@ impl TypeChecker {
             // (above) validates each argument individually without a fixed-arity guard.
             let is_variadic_builtin = matches!(
                 name,
-                "println"
-                    | "print"
-                    | "eprintln"
-                    | "eprint"
-                    | "assert_eq"
+                "assert_eq"
                     | "assert_ne"
                     | "parse_int"
                     | "format"
@@ -145,20 +151,47 @@ impl TypeChecker {
                 });
             }
 
-            // ADR-0024: label-transparent functions propagate security labels from arguments
-            // to their return type.  Join all argument labels and apply to the declared return.
-            // This covers `format()` (always transparent) and `decode()` / other stdlib transforms.
-            if fn_info.label_transparent {
-                let arg_label = arg_tys
-                    .iter()
-                    .fold(None, |acc, ty| ifc::join_opt(acc, ifc::label_of(ty)));
-                return ifc::apply_label(arg_label, fn_info.ret.clone());
-            }
             // L5-08: for generic functions the declared return type is a type-parameter
             // name (e.g. `T`), not a concrete type.  Return Unknown so the call site
             // unifies freely with any annotation or context type.
+            // This check must come BEFORE label_transparent to avoid applying label
+            // propagation to an unresolved type variable.
             if is_generic {
                 return Ty::Unknown;
+            }
+            // ADR-0024: all functions are label-transparent by default (universal propagation).
+            //
+            // Propagate only the EXCESS label from each argument — the label that exceeds
+            // the function's declared parameter type.  This ensures:
+            //   - format("{}", secret)  → Secret[String]  (param=String, arg=Secret[String]: excess=Secret)
+            //   - write(p, tainted)     → Result[Unit,E]  (param=Tainted[String], arg=Tainted[String]: no excess)
+            //   - hash_password(clean)  → Secret[String]  (no excess from arg, but ret has Secret label)
+            //
+            // For variadic builtins (params=[]) all argument labels are propagated directly.
+            // The excess is then joined with the return type's own label, and applied to the
+            // stripped (unlabeled) return type.
+            if fn_info.label_transparent {
+                let arg_label = if fn_info.params.is_empty() || is_variadic_builtin {
+                    // Variadic: no declared params to compare against — propagate all arg labels.
+                    arg_tys
+                        .iter()
+                        .fold(None, |acc, ty| ifc::join_opt(acc, ifc::label_of(ty)))
+                } else {
+                    // Non-variadic: propagate only label excess beyond declared param types.
+                    fn_info.params.iter().zip(arg_tys.iter()).fold(
+                        None,
+                        |acc, (param_ty, arg_ty)| {
+                            let param_rank =
+                                ifc::label_of(param_ty).map(ifc::lattice_rank).unwrap_or(0);
+                            let excess = ifc::label_of(arg_ty)
+                                .filter(|&l| ifc::lattice_rank(l) > param_rank);
+                            ifc::join_opt(acc, excess)
+                        },
+                    )
+                };
+                let ret_label = ifc::label_of(&fn_info.ret);
+                let combined = ifc::join_opt(arg_label, ret_label);
+                return ifc::apply_label(combined, ifc::strip_label(&fn_info.ret).clone());
             }
             fn_info.ret.clone()
         } else {

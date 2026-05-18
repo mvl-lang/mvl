@@ -15,15 +15,15 @@ fn redact_digits(input: String) -> Result[String, RegexError] {
 
 fn main() -> Unit ! Console {
     match redact_digits("abc 123 def 456") {
-        Ok(s) => println("{}", s),
+        Ok(s) => println(format("{}", s)),
         Err(_) => println("err"),
     }
     match redact_digits("no digits here") {
-        Ok(s) => println("{}", s),
+        Ok(s) => println(format("{}", s)),
         Err(_) => println("err"),
     }
     match redact_digits("1 22 333") {
-        Ok(s) => println("{}", s),
+        Ok(s) => println(format("{}", s)),
         Err(_) => println("err"),
     }
 }

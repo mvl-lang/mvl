@@ -83,7 +83,9 @@ impl TypeChecker {
             effects: fd.effects.clone(),
             totality: fd.totality.clone(),
             type_params,
-            label_transparent: fd.is_label_transparent,
+            // ADR-0024: all functions are label-transparent by default (universal propagation).
+            // The `transparent` keyword in MVL source is accepted but now a no-op.
+            ..Default::default()
         };
         if let Some(recv_ty) = &fd.receiver_type {
             // Validate receiver type is declared (#875 review).
@@ -137,7 +139,7 @@ impl TypeChecker {
                     effects: f.effects.clone(),
                     totality: None,
                     type_params: HashSet::new(), // extern fns may or may not terminate
-                    label_transparent: false,
+                    ..Default::default()
                 },
             );
         }
@@ -255,7 +257,7 @@ impl TypeChecker {
                     effects: method.effects.clone(),
                     totality: None,
                     type_params: HashSet::new(),
-                    label_transparent: false,
+                    ..Default::default()
                 },
             );
         }

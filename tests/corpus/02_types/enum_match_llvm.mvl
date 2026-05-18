@@ -15,7 +15,7 @@ fn sides(s: Shape) -> Int {
 }
 
 fn main() -> Unit ! Console {
-    println(sides(Shape::Circle));
-    println(sides(Shape::Rectangle));
-    println(sides(Shape::Triangle));
+    println(format("{}", sides(Shape::Circle)));
+    println(format("{}", sides(Shape::Rectangle)));
+    println(format("{}", sides(Shape::Triangle)));
 }

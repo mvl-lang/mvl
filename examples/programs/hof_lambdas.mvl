@@ -19,26 +19,26 @@ fn main() -> Unit ! Console {
 
     // filter: keep even numbers → [2, 4, 6]
     let evens: List[Int] = nums.filter(is_even);
-    println("filter_len={}", evens.len());
+    println(format("filter_len={}", evens.len()));
 
     // map: double [1, 2, 3] → [2, 4, 6], then fold to sum
     let small: List[Int] = [1, 2, 3];
     let doubled: List[Int] = small.map(double);
     let map_sum: Int = doubled.fold(0, add);
-    println("map_sum={}", map_sum);
+    println(format("map_sum={}", map_sum));
 
     // fold: sum [1..5] = 15
     let five: List[Int] = [1, 2, 3, 4, 5];
     let fold_sum: Int = five.fold(0, add);
-    println("fold_sum={}", fold_sum);
+    println(format("fold_sum={}", fold_sum));
 
     // any: inline lambda — is any element even?
     let mixed: List[Int] = [1, 3, 4, 7];
     let any_even: Bool = mixed.any(|x: Int| x % 2 == 0);
-    println("any_even={}", any_even);
+    println(format("any_even={}", any_even));
 
     // any: all odd — should be false
     let odds: List[Int] = [1, 3, 5, 7];
     let any_odd_result: Bool = odds.any(|x: Int| x % 2 == 0);
-    println("any_odd={}", any_odd_result);
+    println(format("any_odd={}", any_odd_result));
 }

@@ -81,6 +81,18 @@ pub type Metadata = struct {
 /// to read user input. Input is always Tainted[String].
 pub type Stdin = struct {}
 
+/// A handle to standard output.
+///
+/// Obtained via `stdout()`. Pass to `stdout_write` to write to stdout.
+/// Symmetric with `Stdin` for consistent I/O handle patterns.
+pub type Stdout = struct {}
+
+/// A handle to standard error.
+///
+/// Obtained via `stderr()`. Pass to `stderr_write` to write to stderr.
+/// Also used internally by `std.log` as the logging sink.
+pub type Stderr = struct {}
+
 // ── Path construction (pure) ──────────────────────────────────────────────
 
 /// Construct a Path from a string.
@@ -225,3 +237,29 @@ pub builtin fn stdin_read_line(s: Stdin) -> Result[Tainted[String], IoError] ! C
 ///
 /// Returns Tainted[String] because stdin is user-controlled (untrusted) input.
 pub builtin fn stdin_read_to_string(s: Stdin) -> Result[Tainted[String], IoError] ! Console
+
+// ── Standard output / error — runtime: mvl_runtime::stdlib::io ───────────
+
+/// Return the standard output handle.
+///
+/// Note: `stdout()` itself does not require `! Console` — it is the capability
+/// entry point. Callers that write to the returned handle declare `! Console`.
+pub builtin fn stdout() -> Stdout
+
+/// Return the standard error handle.
+///
+/// Note: `stderr()` itself does not require `! Console` — it is the capability
+/// entry point. Callers that write to the returned handle declare `! Console`.
+pub builtin fn stderr() -> Stderr
+
+/// Write a string to stdout.
+///
+/// Does not append a newline. Use `println` (from the implicit prelude) for
+/// newline-terminated output.
+pub builtin fn stdout_write(s: Stdout, line: String) -> Unit ! Console
+
+/// Write a string to stderr.
+///
+/// Does not append a newline. Use `eprintln` (from the implicit prelude) for
+/// newline-terminated output.
+pub builtin fn stderr_write(s: Stderr, line: String) -> Unit ! Console

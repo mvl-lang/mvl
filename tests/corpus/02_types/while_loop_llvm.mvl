@@ -9,7 +9,7 @@
 partial fn main() -> Unit ! Console {
     let i: ref Int = 0;
     while i < 5 {
-        println(i);
+        println(format("{}", i));
         i = i + 1;
     }
 }

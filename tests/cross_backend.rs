@@ -326,7 +326,7 @@ fn cross_backend_random_float_shape() {
     let tmp = tempfile::NamedTempFile::with_suffix(".mvl").expect("tempfile");
     std::fs::write(
         tmp.path(),
-        "use std.random.{float}\nfn main() -> Unit ! Random {\n  let v: Float = float();\n  println(\"{}\", v);\n}\n",
+        "use std.random.{float}\nfn main() -> Unit ! Random {\n  let v: Float = float();\n  println(format(\"{}\", v));\n}\n",
     )
     .expect("write");
     if let Some(out) = run_llvm(&tmp.path().to_string_lossy()) {

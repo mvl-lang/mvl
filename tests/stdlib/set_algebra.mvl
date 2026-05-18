@@ -15,7 +15,7 @@ fn main() -> Unit ! Console {
     let diff: Set[Int] = set_difference(a, b);
     let uni: Set[Int] = set_union(a, b);
 
-    println("{}", set_len(inter));
-    println("{}", set_len(diff));
-    println("{}", set_len(uni));
+    println(format("{}", set_len(inter)));
+    println(format("{}", set_len(diff)));
+    println(format("{}", set_len(uni)));
 }

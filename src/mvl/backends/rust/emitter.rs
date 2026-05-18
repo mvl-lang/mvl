@@ -375,6 +375,9 @@ impl RustEmitter {
             // The prelude no longer re-exports OS modules; each module is imported explicitly.
             // Also include Rust-backed modules needed by prelude programs (e.g. pbt uses random
             // internally — #555).
+            // #839: std/core.mvl's pure-MVL println/print/eprintln/eprint call stdout_write /
+            // stderr_write from mvl_runtime::stdlib::io, so `io` must always be imported when
+            // the prelude contains functions from core.mvl (i.e. whenever mvl_runtime is in use).
             let mut all_modules = collect_stdlib_modules(prog);
             for pp in prelude_progs {
                 for m in collect_stdlib_modules(pp) {
@@ -382,6 +385,9 @@ impl RustEmitter {
                         all_modules.push(m);
                     }
                 }
+            }
+            if !all_modules.contains(&"io".to_string()) {
+                all_modules.push("io".to_string());
             }
             for module in all_modules {
                 self.line(&format!("use mvl_runtime::stdlib::{}::*;", module));
@@ -411,10 +417,12 @@ impl RustEmitter {
 
         // Emit stdlib prelude functions that have real bodies (non-stubs).
         // Stubs (empty body) are skipped; built-in names handled as Rust macros
-        // (println, print, eprintln, format) are skipped; test functions are skipped.
+        // (format, panic) are skipped; test functions are skipped.
+        // println/print/eprintln/eprint are now pure-MVL wrappers (#839) and
+        // are emitted as regular Rust functions (not excluded here).
         // Functions already declared in the user program are skipped to prevent
         // duplicate Rust definitions when the user shadows a prelude function.
-        const MACRO_HANDLED: &[&str] = &["println", "print", "eprintln", "eprint", "format"];
+        const MACRO_HANDLED: &[&str] = &["format"];
         let user_fn_names: std::collections::HashSet<&str> = prog
             .declarations
             .iter()

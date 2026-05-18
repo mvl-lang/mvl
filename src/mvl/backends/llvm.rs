@@ -48,17 +48,12 @@ use crate::mvl::parser::ast::{
 /// backend (e.g. `println` → `printf`). Their empty prelude stubs must not be
 /// emitted, as they would produce dead code that shadows the inline paths.
 fn is_inlined_builtin(name: &str) -> bool {
+    // #839: println/print/eprintln/eprint removed — they are now pure-MVL wrappers
+    // in std/core.mvl that call stdout_write(stdout(), ...) / stderr_write(stderr(), ...).
+    // Their bodies are compiled in the second pass like any other user-defined function.
     matches!(
         name,
-        "println"
-            | "print"
-            | "eprintln"
-            | "eprint"
-            | "format"
-            | "assert"
-            | "assert_eq"
-            | "assert_ne"
-            | "panic"
+        "format" | "assert" | "assert_eq" | "assert_ne" | "panic"
     )
 }
 
@@ -400,6 +395,12 @@ pub(crate) enum StdlibSig {
     /// The C function encodes the i64 directly in the `payload` field of `LlvmResult`
     /// via pointer-sized cast.  Used for `tcp_listener_port`.
     ResultI64OnePtrArg(String),
+
+    // ── #839: std.io stdout/stderr writes ─────────────────────────────────────
+    /// `(ptr, ptr) → void` — two opaque-pointer args, no return.
+    /// Used for `stdout_write(s: Stdout, line: String)` and
+    /// `stderr_write(s: Stderr, line: String)`.
+    VoidTwoPtrArgs(String),
 }
 
 // ── Backend struct ────────────────────────────────────────────────────────────
@@ -837,6 +838,10 @@ impl<'ctx> LlvmBackend<'ctx> {
             ("Unit", 2) if p0 == "String" && p1 == "Map" => {
                 Some(StdlibSig::VoidStringMapArg(symbol))
             }
+            // ── #839: (ptr, ptr) → void — stdout_write / stderr_write ─────────
+            ("Unit", 2) if Self::is_ptr_type(p0) && Self::is_ptr_type(p1) => {
+                Some(StdlibSig::VoidTwoPtrArgs(symbol))
+            }
             // ── Bool predicates: ptr → i64 ────────────────────────────────────
             ("Bool", 1) if Self::is_ptr_type(p0) => Some(StdlibSig::I64OnePtrArg(symbol)),
             // ── Result returns (must precede generic ptr patterns) ────────────
@@ -1020,6 +1025,25 @@ impl<'ctx> LlvmBackend<'ctx> {
                     {
                         self.stdlib_imports.insert(fn_name.clone(), sig);
                     }
+                }
+            }
+        }
+
+        // #839: io handle builtins — always available, no `use std.io` required.
+        // core.mvl's println/print/eprintln/eprint call these; they must be reachable
+        // without an explicit import so that the implicit prelude compiles correctly.
+        module_cache
+            .entry("io".to_string())
+            .or_insert_with(|| Self::load_module_builtins("io"));
+        for fn_name in &["stdout", "stderr", "stdout_write", "stderr_write"] {
+            if let Some(fd) = module_cache
+                .get("io")
+                .and_then(|fns| fns.iter().find(|fd| fd.name.as_str() == *fn_name))
+            {
+                if let Some(sig) =
+                    Self::stdlib_sig_from_decl("io", &fd.name, &fd.return_type, &fd.params)
+                {
+                    self.stdlib_imports.entry(fd.name.clone()).or_insert(sig);
                 }
             }
         }

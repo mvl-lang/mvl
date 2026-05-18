@@ -9,7 +9,7 @@ fn first_digit_run(input: String) -> Result[String, RegexError] {
 }
 
 fn main() -> Unit ! Console {
-    match first_digit_run("abc 123 def") { Ok(s) => println("{}", s), Err(_) => println("err") }
-    match first_digit_run("no digits") { Ok(s) => println("{}", s), Err(_) => println("err") }
-    match first_digit_run("42 is the answer") { Ok(s) => println("{}", s), Err(_) => println("err") }
+    match first_digit_run("abc 123 def") { Ok(s) => println(format("{}", s)), Err(_) => println("err") }
+    match first_digit_run("no digits") { Ok(s) => println(format("{}", s)), Err(_) => println("err") }
+    match first_digit_run("42 is the answer") { Ok(s) => println(format("{}", s)), Err(_) => println("err") }
 }

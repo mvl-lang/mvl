@@ -34,6 +34,18 @@
 //! is skipped for them in the checker; IFC label checking is applied per-argument instead.
 //! See also: ADR-0002 (language contraction — no variadic user functions), ADR-0003 (compilation).
 //!
+//! # IFC label propagation (ADR-0024)
+//!
+//! All functions are **label-transparent by default**: security labels from arguments are
+//! joined (lattice least-upper-bound) and applied to the return type.  This ensures that
+//! data derived from a `Secret[T]` argument is itself `Secret[T]` throughout the program.
+//!
+//! Labels are erased ONLY by `declassify()` (Secret → Public) and `sanitize()` (Tainted → Clean),
+//! which are dedicated AST nodes, not regular function calls.
+//!
+//! The `transparent` keyword in MVL source is accepted for explicitness but is now a no-op
+//! (all functions are transparent).  A future `opaque` keyword would opt out of propagation.
+//!
 //! # Spec links
 //!
 //! - Builtin `println` / `print` — 002-effect-system Req 1 (Console effect),
@@ -184,7 +196,10 @@ impl Default for FnInfo {
             effects: vec![],
             totality: None,
             type_params: HashSet::new(),
-            label_transparent: false,
+            // ADR-0024: all functions propagate security labels by default.
+            // Labels flow upward through all computations; only declassify()
+            // and sanitize() (AST-level nodes) erase labels explicitly.
+            label_transparent: true,
         }
     }
 }
@@ -243,47 +258,48 @@ impl TypeEnv {
     /// These correspond to the MVL standard library tier 1 (core) functions
     /// that every program has access to without an import.
     fn register_builtins(&mut self) {
-        // Console I/O — require ! Console effect (002-effect-system Req 1).
-        // params: Vec<Ty> is empty here because println/print are variadic;
-        // the checker special-cases them to skip arity checking.
+        // Console I/O primitives (#839) — the raw write builtins that back the
+        // pure-MVL println/print/eprintln/eprint wrappers in std/core.mvl.
+        //
+        // Registered globally (no `use std.io` needed) so that std/core.mvl's
+        // pure-MVL wrappers can call them without an import — same pattern as
+        // str_concat being available from std/strings.mvl.
         //
         // IFC NOTE (003-information-flow Req 6):
-        // Per spec, logging functions MUST accept only `Public<T>` arguments.
-        // println/print enforce this via LoggingLabelViolation in infer_fn_call.
-        // std.log (log_debug/info/warn/error) enforces the same constraint (#54).
+        // stdout_write / stderr_write are public sinks — reject Secret/Tainted/Clean
+        // arguments (enforced via LoggingLabelViolation in calls.rs).
+        let console_eff = vec![Effect::new("Console", Span::new(0, 0, 0, 0))];
         self.fns.insert(
-            "println".into(),
+            "stdout".into(),
             FnInfo {
                 params: vec![],
-                ret: Ty::Unit,
-                effects: vec![Effect::new("Console", Span::new(0, 0, 0, 0))],
+                ret: Ty::Named("Stdout".into(), vec![]),
                 ..Default::default()
             },
         );
         self.fns.insert(
-            "print".into(),
+            "stderr".into(),
             FnInfo {
                 params: vec![],
-                ret: Ty::Unit,
-                effects: vec![Effect::new("Console", Span::new(0, 0, 0, 0))],
+                ret: Ty::Named("Stderr".into(), vec![]),
                 ..Default::default()
             },
         );
         self.fns.insert(
-            "eprintln".into(),
+            "stdout_write".into(),
             FnInfo {
-                params: vec![],
+                params: vec![Ty::Named("Stdout".into(), vec![]), Ty::String],
                 ret: Ty::Unit,
-                effects: vec![Effect::new("Console", Span::new(0, 0, 0, 0))],
+                effects: console_eff.clone(),
                 ..Default::default()
             },
         );
         self.fns.insert(
-            "eprint".into(),
+            "stderr_write".into(),
             FnInfo {
-                params: vec![],
+                params: vec![Ty::Named("Stderr".into(), vec![]), Ty::String],
                 ret: Ty::Unit,
-                effects: vec![Effect::new("Console", Span::new(0, 0, 0, 0))],
+                effects: console_eff,
                 ..Default::default()
             },
         );
@@ -647,9 +663,10 @@ impl TypeEnv {
                     params: vec![],
                     ret: Ty::Unit,
                     effects: vec![Effect::new("Log", Span::new(0, 0, 0, 0))],
-                    totality: None,
-                    type_params: HashSet::new(),
-                    label_transparent: false,
+                    // label_transparent: true (default) — labels propagate through log fns
+                    // to their Unit return; the IFC sink check (LoggingLabelViolation) guards
+                    // against labeled data reaching Log output sinks.
+                    ..Default::default()
                 },
             );
         }

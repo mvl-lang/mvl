@@ -509,7 +509,7 @@ pub partial fn property_check_int_verbose(
     iterations: Int
 ) -> Unit ! Random + Console {
     match run_property_int(gen, prop, iterations) {
-        None => println("{}: OK, passed {} tests.", name, iterations.to_string()),
+        None => println(format("{}: OK, passed {} tests.", name, iterations.to_string())),
         Some(v) => panic(str_concat(str_concat(name, ": falsified for "), v.to_string())),
     }
 }
@@ -522,7 +522,7 @@ pub partial fn property_check_string_verbose(
     iterations: Int
 ) -> Unit ! Random + Console {
     match run_property_string(gen, prop, iterations) {
-        None => println("{}: OK, passed {} tests.", name, iterations.to_string()),
+        None => println(format("{}: OK, passed {} tests.", name, iterations.to_string())),
         Some(v) => panic(str_concat(str_concat(str_concat(name, ": falsified for \""), v), "\"")),
     }
 }
@@ -535,7 +535,7 @@ pub partial fn property_check_list_int_verbose(
     iterations: Int
 ) -> Unit ! Random + Console {
     match run_property_list_int(gen, prop, iterations) {
-        None => println("{}: OK, passed {} tests.", name, iterations.to_string()),
+        None => println(format("{}: OK, passed {} tests.", name, iterations.to_string())),
         Some(_) => panic(str_concat(name, ": falsified for a list input")),
     }
 }
@@ -789,17 +789,17 @@ pub partial fn property_check_with_mutation_int_verbose(
                 };
                 i = i + 1
             };
-            println(
+            println(format(
                 "{}: OK, {} tests ({} fresh, {} mutated).",
                 name,
                 iterations.to_string(),
                 fresh_count.to_string(),
                 mutated_count.to_string()
-            )
+            ))
         },
         _ => {
             property_check_int(name, gen, prop, iterations);
-            println("{}: OK, passed {} tests.", name, iterations.to_string())
+            println(format("{}: OK, passed {} tests.", name, iterations.to_string()))
         },
     }
 }
