@@ -498,11 +498,23 @@ fn check_stmt_flows(
             let mut body_env = env.clone();
             check_block_flows(body, body_pc, &mut body_env, errors);
         }
-        Stmt::For { iter, body, .. } => {
+        // Fix #858: bind the for-loop pattern variable to the iterator label so
+        // that uses inside the body see the correct security label.
+        Stmt::For {
+            pattern,
+            iter,
+            body,
+            ..
+        } => {
             let iter_label = infer_label(iter, env);
             let body_pc = join_opt(pc, iter_label);
             check_expr_flows(iter, pc, env, errors);
             let mut body_env = env.clone();
+            if let (Some(l), crate::mvl::parser::ast::Pattern::Ident(name, _)) =
+                (iter_label, pattern)
+            {
+                body_env.insert(name.clone(), l);
+            }
             check_block_flows(body, body_pc, &mut body_env, errors);
         }
     }
