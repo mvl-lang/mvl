@@ -701,6 +701,7 @@ impl CallCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mvl::parser::ast::{CmpOp, RefExpr};
 
     fn sp() -> Span {
         Span::default()
@@ -907,7 +908,19 @@ mod tests {
 
     #[test]
     fn ty_to_type_expr_refined_strips_predicate() {
-        let result = ty_to_type_expr(&Ty::Refined(Box::new(Ty::Int), "self > 0".into()));
+        let pred = RefExpr::Compare {
+            op: CmpOp::Gt,
+            left: Box::new(RefExpr::Ident {
+                name: "self".into(),
+                span: sp(),
+            }),
+            right: Box::new(RefExpr::Integer {
+                value: 0,
+                span: sp(),
+            }),
+            span: sp(),
+        };
+        let result = ty_to_type_expr(&Ty::Refined(Box::new(Ty::Int), Box::new(pred)));
         assert_eq!(result, base("Int"));
     }
 
