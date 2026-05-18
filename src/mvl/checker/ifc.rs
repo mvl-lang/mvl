@@ -35,7 +35,7 @@ use std::collections::HashMap;
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{
-    Block, Decl, ElseBranch, Expr, MatchBody, Program, SecurityLabel, Stmt, TypeExpr,
+    Block, Decl, ElseBranch, Expr, MatchBody, Pattern, Program, SecurityLabel, Stmt, TypeExpr,
 };
 
 /// Numeric rank for the security lattice (higher = more sensitive).
@@ -135,6 +135,40 @@ pub fn label_name(label: SecurityLabel) -> &'static str {
 /// a branching condition that carries a high security label, with a public
 /// output sink inside the body.  Cross-function direct flows are handled by
 /// the interprocedural analysis in `ifc_propagation` (#831).
+/// Recursively bind every identifier in `pat` to `label` in `env`.
+/// Handles nested patterns like `(Some(a), b)` by walking the full tree.
+pub(crate) fn bind_pattern_labels(
+    pat: &Pattern,
+    label: SecurityLabel,
+    env: &mut HashMap<String, SecurityLabel>,
+) {
+    match pat {
+        Pattern::Ident(name, _) => {
+            env.insert(name.clone(), label);
+        }
+        Pattern::Tuple { elems, .. } => {
+            for elem in elems {
+                bind_pattern_labels(elem, label, env);
+            }
+        }
+        Pattern::TupleStruct { fields, .. } => {
+            for field in fields {
+                bind_pattern_labels(field, label, env);
+            }
+        }
+        Pattern::Struct { fields, .. } => {
+            // `_` is the struct field name; the binding name is inside the sub-pattern.
+            for (_, field) in fields {
+                bind_pattern_labels(field, label, env);
+            }
+        }
+        Pattern::Some { inner, .. } | Pattern::Ok { inner, .. } | Pattern::Err { inner, .. } => {
+            bind_pattern_labels(inner, label, env);
+        }
+        Pattern::Wildcard(_) | Pattern::Literal(..) | Pattern::None(_) => {}
+    }
+}
+
 pub fn check_implicit_flows(prog: &Program, errors: &mut Vec<CheckError>) {
     for decl in &prog.declarations {
         if let Decl::Fn(fd) = decl {
@@ -438,13 +472,11 @@ fn check_stmt_flows(
         } => {
             // Walk the RHS under the current PC label.
             check_expr_flows(init, pc, env, errors);
-            // Extend the label env for simple identifier patterns.
-            // Complex patterns (tuples, structs) are treated conservatively.
-            if let crate::mvl::parser::ast::Pattern::Ident(name, _) = pattern {
-                let label = label_of_type_expr(ty).or_else(|| infer_label(init, env));
-                if let Some(l) = label {
-                    env.insert(name.clone(), l);
-                }
+            // Extend the label env; use recursive helper so nested patterns
+            // like `(Some(a), b)` are fully bound.
+            let label = label_of_type_expr(ty).or_else(|| infer_label(init, env));
+            if let Some(l) = label {
+                bind_pattern_labels(pattern, l, env);
             }
         }
         Stmt::Assign { value, .. } => {
@@ -498,11 +530,21 @@ fn check_stmt_flows(
             let mut body_env = env.clone();
             check_block_flows(body, body_pc, &mut body_env, errors);
         }
-        Stmt::For { iter, body, .. } => {
+        // Fix #858: bind the for-loop pattern variable to the iterator label so
+        // that uses inside the body see the correct security label.
+        Stmt::For {
+            pattern,
+            iter,
+            body,
+            ..
+        } => {
             let iter_label = infer_label(iter, env);
             let body_pc = join_opt(pc, iter_label);
             check_expr_flows(iter, pc, env, errors);
             let mut body_env = env.clone();
+            if let Some(l) = iter_label {
+                bind_pattern_labels(pattern, l, &mut body_env);
+            }
             check_block_flows(body, body_pc, &mut body_env, errors);
         }
     }

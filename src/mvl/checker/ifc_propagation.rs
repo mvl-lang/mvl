@@ -45,7 +45,7 @@ use crate::mvl::checker::context::TypeEnv;
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
 use crate::mvl::parser::ast::{
-    Block, Decl, ElseBranch, Expr, MatchBody, Pattern, Program, SecurityLabel, Stmt, TypeExpr,
+    Block, Decl, ElseBranch, Expr, MatchBody, Program, SecurityLabel, Stmt, TypeExpr,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -320,6 +320,15 @@ pub fn infer_label_extended(
             if let Some(label) = explicit.get(name.as_str()) {
                 return Some(*label);
             }
+            // Fix #858: local lambda variable — env holds the lambda's return label.
+            // Enables `let f = || -> Tainted[T] { ... }; f()` to propagate taint.
+            // Guard: only apply when the name is not a known function in `inferred`,
+            // to avoid a variable shadowing an unannotated function of the same name.
+            if !inferred.contains_key(name.as_str()) {
+                if let Some(&label) = env.get(name.as_str()) {
+                    return Some(label);
+                }
+            }
             // Inferred label → join with arg labels for context sensitivity.
             let base = inferred.get(name.as_str()).copied();
             let arg_join = args
@@ -390,14 +399,23 @@ pub fn infer_label_extended(
             })
             .fold(None, ifc::join_opt),
         // Fix #851: build lambda-local env with param labels before recursing.
-        Expr::Lambda { params, body, .. } => {
+        // Fix #858: also incorporate the declared return type label so that
+        // `|x| -> Tainted[String] { ... }` is visible as tainted at the call site.
+        Expr::Lambda {
+            params,
+            ret_type,
+            body,
+            ..
+        } => {
             let mut lambda_env = env.clone();
             for param in params {
                 if let Some(l) = label_of_type_expr(&param.ty) {
                     lambda_env.insert(param.name.clone(), l);
                 }
             }
-            infer_label_extended(body, &lambda_env, explicit, inferred)
+            let body_label = infer_label_extended(body, &lambda_env, explicit, inferred);
+            let ret_label = ret_type.as_deref().and_then(label_of_type_expr);
+            ifc::join_opt(body_label, ret_label)
         }
         Expr::Select { arms, .. } => arms
             .iter()
@@ -512,49 +530,9 @@ fn collect_violations_in_stmt(
             let init_label =
                 infer_label_extended(init, env, &inferred.explicit, &inferred.inferred);
             let effective_label = label_of_type_expr(ty).or(init_label);
-            match pattern {
-                Pattern::Ident(name, _) => {
-                    if let Some(l) = effective_label {
-                        env.insert(name.clone(), l);
-                    }
-                }
-                Pattern::Tuple { elems, .. } => {
-                    if let Some(l) = effective_label {
-                        for elem_pat in elems {
-                            if let Pattern::Ident(name, _) = elem_pat {
-                                env.insert(name.clone(), l);
-                            }
-                        }
-                    }
-                }
-                Pattern::TupleStruct { fields, .. } => {
-                    if let Some(l) = effective_label {
-                        for field_pat in fields {
-                            if let Pattern::Ident(name, _) = field_pat {
-                                env.insert(name.clone(), l);
-                            }
-                        }
-                    }
-                }
-                Pattern::Struct { fields, .. } => {
-                    if let Some(l) = effective_label {
-                        for (_, field_pat) in fields {
-                            if let Pattern::Ident(name, _) = field_pat {
-                                env.insert(name.clone(), l);
-                            }
-                        }
-                    }
-                }
-                Pattern::Some { inner, .. }
-                | Pattern::Ok { inner, .. }
-                | Pattern::Err { inner, .. } => {
-                    if let Some(l) = effective_label {
-                        if let Pattern::Ident(name, _) = inner.as_ref() {
-                            env.insert(name.clone(), l);
-                        }
-                    }
-                }
-                Pattern::Wildcard(_) | Pattern::Literal(..) | Pattern::None(_) => {}
+            // Fix #858 nested destructuring: use recursive helper to bind all names.
+            if let Some(l) = effective_label {
+                ifc::bind_pattern_labels(pattern, l, env);
             }
         }
         Stmt::Assign { value, .. } => {
@@ -610,9 +588,22 @@ fn collect_violations_in_stmt(
             collect_violations_in_expr(cond, caller, env, type_env, inferred, errors);
             collect_violations_in_block(body, caller, env, type_env, inferred, errors);
         }
-        Stmt::For { iter, body, .. } => {
+        // Fix #858: bind the for-loop pattern variable to the iterator's taint label
+        // so that uses of the loop variable inside the body are correctly tracked.
+        Stmt::For {
+            pattern,
+            iter,
+            body,
+            ..
+        } => {
             collect_violations_in_expr(iter, caller, env, type_env, inferred, errors);
-            collect_violations_in_block(body, caller, env, type_env, inferred, errors);
+            let iter_label =
+                infer_label_extended(iter, env, &inferred.explicit, &inferred.inferred);
+            let mut body_env = env.clone();
+            if let Some(l) = iter_label {
+                ifc::bind_pattern_labels(pattern, l, &mut body_env);
+            }
+            collect_violations_in_block(body, caller, &body_env, type_env, inferred, errors);
         }
     }
 }
@@ -1208,6 +1199,89 @@ mod tests {
         assert!(
             !violations.is_empty(),
             "lambda capturing outer tainted variable t must produce violation on sink(t)"
+        );
+    }
+
+    // #858 gap 1: for-loop iterator taint propagates to loop variable.
+    #[test]
+    fn for_loop_tainted_iterator_propagates_to_body() {
+        // for x in source_iter() { sink(x) }
+        // source_iter() is Tainted; x must receive that label so sink(x) is a violation.
+        use crate::mvl::checker::context::FnInfo;
+        use crate::mvl::checker::types::Ty;
+        let prog = parse(
+            "fn caller() -> Unit { \
+                 for x in source_iter() { sink(x) } \
+             }",
+        );
+        let mut env = env_with_taint_source();
+        env.fns.insert(
+            "source_iter".into(),
+            FnInfo {
+                ret: Ty::Labeled(SecurityLabel::Tainted, Box::new(Ty::String)),
+                ..Default::default()
+            },
+        );
+        let inferred = propagate(&[&prog], &env);
+        let violations = detect_violations(&prog, &env, &inferred);
+        assert!(
+            !violations.is_empty(),
+            "tainted iterator must propagate label to loop variable x → sink(x) is a violation"
+        );
+    }
+
+    // #858 gap 2: nested destructuring `(Some(a), b)` preserves taint.
+    #[test]
+    fn nested_destructuring_taint_tracked() {
+        // let (Some(a), b) = pair_source(); sink(a) must be a violation.
+        // The outer Tuple contains a Some pattern; the old code only handled
+        // immediate Ident sub-patterns and would silently drop the taint for `a`.
+        use crate::mvl::checker::context::FnInfo;
+        use crate::mvl::checker::types::Ty;
+        let prog = parse(
+            "fn caller() -> Unit { \
+                 let (Some(a), b): (Option[String], String) = pair_source(); \
+                 sink(a) \
+             }",
+        );
+        let mut env = env_with_taint_source();
+        env.fns.insert(
+            "pair_source".into(),
+            FnInfo {
+                ret: Ty::Labeled(SecurityLabel::Tainted, Box::new(Ty::String)),
+                ..Default::default()
+            },
+        );
+        let inferred = propagate(&[&prog], &env);
+        let violations = detect_violations(&prog, &env, &inferred);
+        assert!(
+            !violations.is_empty(),
+            "nested Pattern::Some inside Tuple must propagate taint to `a` → sink(a) is a violation"
+        );
+    }
+
+    // #858 gap 3: lambda return type annotation makes the lambda's result tainted.
+    #[test]
+    fn lambda_return_label_visible_at_call_site() {
+        // let f: Tainted[String] = || -> Tainted[String] { "safe" };
+        // f's ret_type declares Tainted; calling f() and passing the result to sink
+        // must be a violation. The explicit let annotation also labels `f` as Tainted
+        // so the intent is clear: f() must be treated as tainted at the call site.
+        let prog = parse(
+            "fn caller() -> Unit { \
+                 let f: Tainted[String] = || -> Tainted[String] { \"safe\" }; \
+                 sink(f()) \
+             }",
+        );
+        let env = env_with_taint_source();
+        let inferred = propagate(&[&prog], &env);
+        let violations = detect_violations(&prog, &env, &inferred);
+        assert!(
+            violations
+                .iter()
+                .any(|e| matches!(e, CheckError::InterprocFlowViolation { callee, .. }
+                    if callee == "sink")),
+            "lambda with ret_type Tainted[String] must make f() tainted → sink(f()) is a violation, got: {violations:?}"
         );
     }
 }
