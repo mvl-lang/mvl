@@ -158,8 +158,6 @@ The modularization documentation (`work/projects/mvl/modularization.md` in the k
 
 ---
 
----
-
 ## Amendment: Type-attached methods (#868, 2026-05-18)
 
 Alternative B was accepted. The syntax `fn TypeName::method(self, ...)` is now part of MVL.
