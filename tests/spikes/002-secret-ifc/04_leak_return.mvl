@@ -1,0 +1,6 @@
+// Spike 002-04: Secret → plain String return MUST be rejected (#872)
+// Downward flow: Secret[String] → String (unlabeled = Public)
+
+fn leak_via_return(key: Secret[String]) -> String {
+    key
+}

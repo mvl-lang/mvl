@@ -7,7 +7,7 @@
 //! backing for the stubs declared in `std/env.mvl`.
 //! Re-exported via `mvl_runtime::prelude::*`.
 
-use crate::ifc::{Clean, Secret, Tainted};
+use crate::ifc::{Clean, Tainted};
 
 // ── Signal type ────────────────────────────────────────────────────────────
 
@@ -65,14 +65,6 @@ pub fn signal_ignore(_sig: Signal) {}
 /// Read an environment variable by name.
 pub fn get(name: Clean<String>) -> Option<Tainted<String>> {
     std::env::var(&**name).ok().map(Tainted)
-}
-
-/// Read a secret environment variable by name.
-///
-/// Returns `Secret<String>` — the highest confidentiality label. Use for API keys,
-/// tokens, and credentials. The value can only exit via `declassify()`.
-pub fn get_secret(name: Clean<String>) -> Option<Secret<String>> {
-    std::env::var(&**name).ok().map(Secret)
 }
 
 /// Read an environment variable by name.

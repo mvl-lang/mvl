@@ -1,0 +1,21 @@
+// Spike 002-03: Secret in struct fields — positive flows (#872)
+// Struct with Secret field should compile; accessing it preserves the label.
+
+type ApiConfig = struct {
+    endpoint: String,
+    key: Secret[String],
+}
+
+fn build_config(key: Secret[String]) -> ApiConfig {
+    ApiConfig { endpoint: "https://api.example.com", key: key }
+}
+
+// Extract secret field — stays Secret
+fn get_key(config: ApiConfig) -> Secret[String] {
+    config.key
+}
+
+// Declassify from struct field — auditable exit
+fn declassify_from_struct(config: ApiConfig) -> String {
+    declassify(config.key)
+}
