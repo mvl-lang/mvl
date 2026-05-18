@@ -237,7 +237,7 @@ impl TypeEnv {
 
     /// Register built-in stdlib functions so the checker accepts them.
     ///
-    /// Note: `builtin_effect` is a convenience for constructing unparametrized `Effect`
+    /// Note: `builtin_effect` is a convenience for constructing `Effect`
     /// values with a zero span (builtins have no source location).
     ///
     /// These correspond to the MVL standard library tier 1 (core) functions

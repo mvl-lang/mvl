@@ -320,29 +320,11 @@ impl TypeChecker {
 
     /// Returns `true` when `declared` covers `required` for effect propagation.
     ///
-    /// Two rules apply (Req 3 / ADR-0035):
-    ///
-    /// 1. **Name subsumption** — `IO > Log > Clock` means `declared = IO`
-    ///    satisfies `required = Clock` via the hierarchy.
-    ///
-    /// 2. **Parametrized prefix subsetting** — for effects with path/host params:
-    ///    - General declared (no param) covers any specific required ✅
-    ///    - Specific declared does NOT cover general required ❌
-    ///    - Declared prefix covers more-specific required ✅ (e.g. `/etc/` covers `/etc/app/`)
-    ///    - More-specific declared does NOT cover shorter required prefix ❌
+    /// Uses the hierarchy to check transitive subsumption: `IO > Log > Clock`
+    /// means `declared = IO` satisfies `required = Clock`.
     pub(crate) fn effect_satisfies(&self, declared: &Effect, required: &Effect) -> bool {
-        if !self
-            .effect_hierarchy
+        self.effect_hierarchy
             .subsumes_transitive(&declared.name, &required.name)
-        {
-            return false;
-        }
-        // Parametrized subsetting rule.
-        match (&declared.param, &required.param) {
-            (None, _) => true,                                   // general covers any
-            (Some(_), None) => false,                            // specific ≠ general
-            (Some(dp), Some(rp)) => rp.starts_with(dp.as_str()), // prefix subsetting
-        }
     }
 
     // ── Program ──────────────────────────────────────────────────────────
