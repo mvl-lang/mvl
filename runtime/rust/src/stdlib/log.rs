@@ -105,6 +105,45 @@ pub fn log_set_min_level(level: LogLevel) {
     MIN_LEVEL.store(level as u8, Ordering::Relaxed);
 }
 
+// ── Pure-MVL getters (ADR-0024) ───────────────────────────────────────────────
+//
+// Backing for `pub builtin fn log_get_format_int`, `log_get_level_int`,
+// `log_timestamp`, and `log_write` declared in std/log.mvl.
+// The pure-MVL log_debug/info/warn/error wrappers call these to read process
+// state and then dispatch to pure-MVL formatters.
+
+/// Returns the current log format discriminant as i64 (0=Plain, 1=Logfmt, 2=Json).
+///
+/// Used by the pure-MVL `log_emit` to select the output format without
+/// returning the Rust `LogFormat` enum across the MVL ABI boundary.
+pub fn log_get_format_int() -> i64 {
+    FORMAT.load(Ordering::Relaxed) as i64
+}
+
+/// Returns the current minimum level discriminant as i64 (0=Debug..3=Error).
+///
+/// Used by the pure-MVL `log_emit` to filter records below the threshold.
+pub fn log_get_level_int() -> i64 {
+    MIN_LEVEL.load(Ordering::Relaxed) as i64
+}
+
+/// Returns a formatted ISO-8601 timestamp string for the current instant.
+///
+/// Hides the `! Clock` dependency — the timestamp is an internal detail of
+/// the `! Log` effect, not separately observable by callers.
+pub fn log_timestamp() -> String {
+    format_instant(now(), "%Y-%m-%dT%H:%M:%SZ".to_string())
+}
+
+/// Write a pre-formatted log line to stderr.
+///
+/// Backing for `pub builtin fn log_write(line: String) -> Unit ! Log` in std/log.mvl.
+/// This lets pure-MVL `log_emit` output to stderr without declaring `! Console`
+/// (the Log effect already implies a write channel — this is the trust boundary for it).
+pub fn log_write(line: String) {
+    eprintln!("{}", line);
+}
+
 // ── Parsing helpers ───────────────────────────────────────────────────────────
 
 /// Parse a log level from a string.

@@ -38,6 +38,7 @@ impl TypeChecker {
                 | "eprint"
                 | "stdout_write"
                 | "stderr_write"
+                | "log_write"
                 | "log_debug"
                 | "log_info"
                 | "log_warn"
@@ -67,17 +68,7 @@ impl TypeChecker {
             // (above) validates each argument individually without a fixed-arity guard.
             let is_variadic_builtin = matches!(
                 name,
-                "assert_eq"
-                    | "assert_ne"
-                    | "parse_int"
-                    | "format"
-                    | "choice"
-                    | "shuffle"
-                    | "float"
-                    | "log_debug"
-                    | "log_info"
-                    | "log_warn"
-                    | "log_error"
+                "assert_eq" | "assert_ne" | "parse_int" | "format" | "choice" | "shuffle" | "float" // log_* are now pure MVL with fixed params; removed from variadic list
             );
             // L5-08: Generic functions are monomorphized at the LLVM level.
             // Skip arity and type checking at call sites; the LLVM backend handles

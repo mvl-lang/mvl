@@ -389,6 +389,20 @@ impl RustEmitter {
             if !all_modules.contains(&"io".to_string()) {
                 all_modules.push("io".to_string());
             }
+            // #839: std/log.mvl's pure-MVL log_emit calls log_write / log_get_format_int
+            // / log_get_level_int / log_timestamp from mvl_runtime::stdlib::log.  These
+            // builtins are declared in log.mvl (which has no `use std.log.*` itself), so
+            // collect_stdlib_modules cannot detect the dependency.  Add the `log` import
+            // whenever log.mvl is part of the prelude (identified by the log_write builtin).
+            let prelude_has_log = prelude_progs.iter().any(|p| {
+                p.declarations.iter().any(|d| match d {
+                    Decl::Fn(fd) => fd.is_builtin && fd.name == "log_write",
+                    _ => false,
+                })
+            });
+            if prelude_has_log && !all_modules.contains(&"log".to_string()) {
+                all_modules.push("log".to_string());
+            }
             for module in all_modules {
                 self.line(&format!("use mvl_runtime::stdlib::{}::*;", module));
                 for (m, fns) in STDLIB_CONFLICTS {

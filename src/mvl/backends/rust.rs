@@ -156,7 +156,21 @@ pub fn has_std_imports(prog: &Program) -> bool {
 /// Modules that have a Rust implementation in `mvl_runtime::stdlib`.
 /// Pure-MVL modules (json, collections, strings, lists, math, …) are excluded:
 /// their symbols arrive via the prelude and need no `use mvl_runtime::stdlib::X::*` import.
+///
+/// Note: `log` is intentionally absent — `std/log.mvl` contains pure-MVL wrappers
+/// (`log_debug` etc.) that are loaded by `load_mvl_native_stdlib_extras`.  The Rust
+/// runtime provides only atomic getters/setters; see `RUST_RUNTIME_IMPORTS`.
 pub const RUST_BACKED_STDLIB: &[&str] = &[
+    "crypto", "env", "io", "net", "process", "random", "regex", "time",
+];
+
+/// Modules for which the Rust emitter must emit `use mvl_runtime::stdlib::X::*`.
+///
+/// A superset of `RUST_BACKED_STDLIB` — includes `log` because `std/log.mvl`'s
+/// pure-MVL functions call `log_get_format`, `log_get_min_level`, `log_timestamp`,
+/// `log_set_format`, `log_set_min_level`, and `LogFormat`/`LogLevel` which live in
+/// `mvl_runtime::stdlib::log`.
+pub const RUST_RUNTIME_IMPORTS: &[&str] = &[
     "crypto", "env", "io", "log", "net", "process", "random", "regex", "time",
 ];
 
@@ -173,7 +187,8 @@ pub fn collect_stdlib_modules(prog: &Program) -> Vec<String> {
         if let Decl::Use(ud) = decl {
             if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
                 let module = ud.path[1].as_str();
-                if RUST_BACKED_STDLIB.contains(&module) && !modules.contains(&module.to_string()) {
+                if RUST_RUNTIME_IMPORTS.contains(&module) && !modules.contains(&module.to_string())
+                {
                     modules.push(module.to_string());
                 }
             }
