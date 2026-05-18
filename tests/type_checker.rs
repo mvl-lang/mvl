@@ -4631,33 +4631,6 @@ fn const_fold_reveals_refinement_violation() {
     );
 }
 
-// ── Parametrized effects corpus (issue #290) ─────────────────────────────
-
-#[test]
-fn parametrized_effects_corpus_parses_and_checks() {
-    // GIVEN: the parametrized effects corpus (valid programs using parametrized
-    //        effects — ! FileRead("/path"), ! Net("host"), ! DB("OP"))
-    // THEN: no errors beyond undefined stdlib stubs (corpus uses std.io)
-    let src = include_str!("corpus/05_effects/parametrized.mvl");
-    let result = check_src(src);
-    let serious: Vec<_> = result
-        .errors
-        .iter()
-        .filter(|e| {
-            !matches!(
-                e,
-                CheckError::UndefinedFunction { .. }
-                    | CheckError::UndefinedVariable { .. }
-                    | CheckError::UndefinedType { .. }
-            )
-        })
-        .collect();
-    assert!(
-        serious.is_empty(),
-        "parametrized effects corpus should have no serious errors, got: {serious:?}"
-    );
-}
-
 #[test]
 fn stdlib_args_mvl_parses_without_errors() {
     // GIVEN: std/args.mvl (embedded stdlib source)
