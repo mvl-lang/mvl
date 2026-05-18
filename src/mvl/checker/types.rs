@@ -7,7 +7,7 @@
 //! which is an unresolved syntactic form.  Conversion happens in [`resolve`].
 
 use crate::mvl::checker::ifc;
-use crate::mvl::parser::ast::{Effect, SecurityLabel, SessionOp, Totality, TypeExpr};
+use crate::mvl::parser::ast::{Effect, RefExpr, SecurityLabel, SessionOp, Totality, TypeExpr};
 
 /// Sentinel for an unresolved const-generic array size (e.g. `N` in `Array[T, N]`).
 /// Treated as size-compatible with any concrete size in `types_compatible`.
@@ -43,8 +43,8 @@ pub enum Ty {
     Array(Box<Ty>, u64),
     Map(Box<Ty>, Box<Ty>),
     Set(Box<Ty>),
-    // Refined type wrapper: underlying type + predicate source text
-    Refined(Box<Ty>, String),
+    // Refined type wrapper: underlying type + predicate AST node
+    Refined(Box<Ty>, Box<RefExpr>),
     // Security label wrapper: label + inner type (Requirement 11)
     Labeled(SecurityLabel, Box<Ty>),
     // Session type: typed communication protocol (Honda 1993, Phase 8)
@@ -312,7 +312,7 @@ pub fn resolve(expr: &TypeExpr) -> Ty {
         // Security labels are preserved as Ty::Labeled wrappers (Requirement 11)
         TypeExpr::Labeled { label, inner, .. } => Ty::Labeled(*label, Box::new(resolve(inner))),
         TypeExpr::Refined { inner, pred, .. } => {
-            Ty::Refined(Box::new(resolve(inner)), format!("{pred:?}"))
+            Ty::Refined(Box::new(resolve(inner)), Box::new(pred.clone()))
         }
         TypeExpr::Fn {
             params,
