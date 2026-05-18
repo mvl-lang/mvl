@@ -378,8 +378,9 @@ pub fn as_map(v: ConfigValue) -> Result[Map[String, ConfigValue], ConfigError] {
 /// Tries Bool ("true"/"false"), then Int, then Float, then falls back to
 /// String. All comparisons are case-insensitive for Bool.
 fn parse_env_value(raw: Tainted[String]) -> ConfigValue {
-    // Coerce Tainted[String] → String via str_concat (identifier arg gets .into()).
-    let s: String = str_concat(raw, "");
+    // IFC: env var values are tainted (external input). Untaint explicitly
+    // after PR #882 removed From<Tainted<T>> for T.
+    let s: String = str_concat(raw.into_inner(), "");
     let lower: String = str_to_lower(str_trim(s));
     if lower == "true" {
         ConfigValue::Bool(true)
@@ -489,10 +490,10 @@ pub partial fn with_env(cfg: ConfigValue, prefix: String) -> Result[ConfigValue,
 /// Falls back to the literal "~/.config" when HOME is also unset.
 pub fn xdg_config_home() -> String ! Env {
     match env_var("XDG_CONFIG_HOME") {
-        Some(v) => str_concat(v, ""),
+        Some(v) => str_concat(v.into_inner(), ""),
         None    => {
             match env_var("HOME") {
-                Some(h) => str_concat(h, "/.config"),
+                Some(h) => str_concat(h.into_inner(), "/.config"),
                 None    => "~/.config",
             }
         },
@@ -504,10 +505,10 @@ pub fn xdg_config_home() -> String ! Env {
 /// Uses $XDG_DATA_HOME if set, otherwise $HOME/.local/share.
 pub fn xdg_data_home() -> String ! Env {
     match env_var("XDG_DATA_HOME") {
-        Some(v) => str_concat(v, ""),
+        Some(v) => str_concat(v.into_inner(), ""),
         None    => {
             match env_var("HOME") {
-                Some(h) => str_concat(h, "/.local/share"),
+                Some(h) => str_concat(h.into_inner(), "/.local/share"),
                 None    => "~/.local/share",
             }
         },
@@ -519,10 +520,10 @@ pub fn xdg_data_home() -> String ! Env {
 /// Uses $XDG_CACHE_HOME if set, otherwise $HOME/.cache.
 pub fn xdg_cache_home() -> String ! Env {
     match env_var("XDG_CACHE_HOME") {
-        Some(v) => str_concat(v, ""),
+        Some(v) => str_concat(v.into_inner(), ""),
         None    => {
             match env_var("HOME") {
-                Some(h) => str_concat(h, "/.cache"),
+                Some(h) => str_concat(h.into_inner(), "/.cache"),
                 None    => "~/.cache",
             }
         },
