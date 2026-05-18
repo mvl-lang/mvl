@@ -200,7 +200,7 @@ Load std/effects.mvl specially before user code. Rejected because:
 
 ---
 
-## Relation to Language Definition
+## Relation to language definition
 
 ### Eleven Requirements (ADR-0001)
 
