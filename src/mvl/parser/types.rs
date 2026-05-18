@@ -608,16 +608,15 @@ impl Parser {
     /// Parse a non-empty `+`-separated list of effect names with optional parameters.
     ///
     /// Grammar: `effect_list = effect ('+' effect)*`
-    ///          `effect      = IDENT [ "(" STRING ")" ]`
+    ///          `effect      = IDENT`
     ///
     /// `+` is used as the separator (not `,`) so the grammar stays LL(1): `,` is
     /// unambiguously a parameter/tuple separator everywhere else, so the parser
     /// can always determine the effect-list boundary with zero lookahead.
     ///
     /// Examples:
-    /// - `FileRead`                          — single unparametrized effect
-    /// - `FileRead + Console`                — two effects
-    /// - `FileRead("/etc/config") + Console` — restricted FileRead plus Console
+    /// - `FileRead`           — single effect
+    /// - `FileRead + Console` — two effects
     ///
     /// Fix #6: only plain Ident tokens are valid effect names.  Previously the
     /// fallback accepted any alphabetic token string, which incorrectly consumed
@@ -627,32 +626,8 @@ impl Parser {
         while let TokenKind::Ident(name) = self.peek_kind().clone() {
             let start = self.peek_span();
             self.advance();
-            // Parse optional resource parameter: `("path/or/value")`
-            let param = if self.eat(&TokenKind::LParen) {
-                match self.peek_kind().clone() {
-                    TokenKind::Str(s) => {
-                        self.advance();
-                        let _ = self.expect(&TokenKind::RParen);
-                        Some(s)
-                    }
-                    _ => {
-                        // Malformed parameter — skip to closing paren for recovery.
-                        while !matches!(self.peek_kind(), TokenKind::RParen | TokenKind::Eof) {
-                            self.advance();
-                        }
-                        let _ = self.expect(&TokenKind::RParen);
-                        None
-                    }
-                }
-            } else {
-                None
-            };
             let span = self.span_from(start);
-            let effect = match param {
-                None => Effect::new(name, span),
-                Some(p) => Effect::with_param(name, p, span),
-            };
-            effects.push(effect);
+            effects.push(Effect::new(name, span));
             if !self.eat(&TokenKind::Plus) {
                 break;
             }
