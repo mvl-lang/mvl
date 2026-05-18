@@ -12,7 +12,7 @@ fn main() -> Unit ! Random + Console {
     let xs: List[Int] = [42];
     let r: Option[Int] = choice(xs);
     match r {
-        Some(v) => println("{}", v),
+        Some(v) => println(format("{}", v)),
         None    => println("none"),
     }
 
@@ -20,7 +20,7 @@ fn main() -> Unit ! Random + Console {
     let empty: List[Int] = [];
     let r2: Option[Int] = choice(empty);
     match r2 {
-        Some(v) => println("{}", v),
+        Some(v) => println(format("{}", v)),
         None    => println("none"),
     }
 }

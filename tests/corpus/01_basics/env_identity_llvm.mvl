@@ -7,6 +7,6 @@ use std.env.{getuid, getgid}
 fn main() -> Unit ! Env + Console {
     let uid: Int = getuid();
     let gid: Int = getgid();
-    println("uid={}", uid);
-    println("gid={}", gid);
+    println(format("uid={}", uid));
+    println(format("gid={}", gid));
 }

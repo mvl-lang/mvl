@@ -375,6 +375,9 @@ impl RustEmitter {
             // The prelude no longer re-exports OS modules; each module is imported explicitly.
             // Also include Rust-backed modules needed by prelude programs (e.g. pbt uses random
             // internally — #555).
+            // #839: std/core.mvl's pure-MVL println/print/eprintln/eprint call stdout_write /
+            // stderr_write from mvl_runtime::stdlib::io, so `io` must always be imported when
+            // the prelude contains functions from core.mvl (i.e. whenever mvl_runtime is in use).
             let mut all_modules = collect_stdlib_modules(prog);
             for pp in prelude_progs {
                 for m in collect_stdlib_modules(pp) {
@@ -382,6 +385,23 @@ impl RustEmitter {
                         all_modules.push(m);
                     }
                 }
+            }
+            if !all_modules.contains(&"io".to_string()) {
+                all_modules.push("io".to_string());
+            }
+            // #839: std/log.mvl's pure-MVL log_emit calls log_write / log_get_format_int
+            // / log_get_level_int / log_timestamp from mvl_runtime::stdlib::log.  These
+            // builtins are declared in log.mvl (which has no `use std.log.*` itself), so
+            // collect_stdlib_modules cannot detect the dependency.  Add the `log` import
+            // whenever log.mvl is part of the prelude (identified by the log_write builtin).
+            let prelude_has_log = prelude_progs.iter().any(|p| {
+                p.declarations.iter().any(|d| match d {
+                    Decl::Fn(fd) => fd.is_builtin && fd.name == "log_write",
+                    _ => false,
+                })
+            });
+            if prelude_has_log && !all_modules.contains(&"log".to_string()) {
+                all_modules.push("log".to_string());
             }
             for module in all_modules {
                 self.line(&format!("use mvl_runtime::stdlib::{}::*;", module));
@@ -411,10 +431,12 @@ impl RustEmitter {
 
         // Emit stdlib prelude functions that have real bodies (non-stubs).
         // Stubs (empty body) are skipped; built-in names handled as Rust macros
-        // (println, print, eprintln, format) are skipped; test functions are skipped.
+        // (format, panic) are skipped; test functions are skipped.
+        // println/print/eprintln/eprint are now pure-MVL wrappers (#839) and
+        // are emitted as regular Rust functions (not excluded here).
         // Functions already declared in the user program are skipped to prevent
         // duplicate Rust definitions when the user shadows a prelude function.
-        const MACRO_HANDLED: &[&str] = &["println", "print", "eprintln", "eprint", "format"];
+        const MACRO_HANDLED: &[&str] = &["format"];
         let user_fn_names: std::collections::HashSet<&str> = prog
             .declarations
             .iter()

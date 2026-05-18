@@ -14,7 +14,7 @@ fn main() -> Unit ! Console {
 
     // filter with a capturing lambda — keeps elements > threshold
     let above: List[Int] = nums.filter(|x: Int| x > threshold);
-    println("above_threshold={}", above.len());
+    println(format("above_threshold={}", above.len()));
 
     // map with a capturing lambda — adds offset to each element
     let offset: Int = 10;
@@ -22,12 +22,12 @@ fn main() -> Unit ! Console {
     let shifted: List[Int] = small.map(|x: Int| x + offset);
     // shifted = [11, 12, 13]; sum = 36
     let sum: Int = shifted.fold(0, |acc: Int, x: Int| acc + x);
-    println("map_with_offset={}", sum);
+    println(format("map_with_offset={}", sum));
 
     // fold with a capturing lambda — adds base to each accumulation step
     let base: Int = 10;
     let five: List[Int] = [1, 2, 3, 4, 5];
     // step-by-step: 0→11→23→36→50→65
     let result: Int = five.fold(0, |acc: Int, x: Int| acc + x + base);
-    println("fold_with_base={}", result);
+    println(format("fold_with_base={}", result));
 }

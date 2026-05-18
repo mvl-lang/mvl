@@ -4,6 +4,39 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.129.0] — 2026-05-18
+
+### Added
+
+- **std/io: Stdout/Stderr I/O handles** (#839): new `Stdout` and `Stderr` types with builtin entry points `stdout()` and `stderr()`. Raw write primitives `stdout_write()` and `stderr_write()` enable pure MVL implementations of console output functions. Pattern mirrors existing `Stdin` for symmetric I/O design.
+- **Pure MVL print functions** (#839): `print`, `println`, `eprint`, `eprintln` now implemented as pure MVL wrappers over stdout/stderr writes instead of Rust builtins. Reduces builtin footprint while maintaining full functionality.
+- **Pure MVL log functions** (#839): `log_debug`, `log_info`, `log_warn`, `log_error` converted to pure MVL implementations. Four minimal builtins (`log_get_format_int`, `log_get_level_int`, `log_timestamp`, `log_write`) provide runtime state access and stderr writes. All format logic (plain/logfmt/json) and sanitization implemented in pure MVL.
+
+### Changed
+
+- **ADR-0024: Universal IFC label propagation** (#839): all functions now propagate security labels by default. **Before:** `format("{}", secret)` silently dropped `Secret` labels. **After:** `format("{}", secret)` returns `Secret[String]`; passing it to `println` is now a compile-time IFC error. Excess-label approach prevents double-counting — only label exceeding declared parameter type propagates. Fixes fundamental security gap in information-flow control.
+- **Type-attached methods** (#868): `fn Type::method(self, ...)` syntax for methods bound to types. Methods resolve via dot-call syntax (`x.method()`). No implicit UFCS; method resolution is unambiguous.
+
+### Builtin Reduction
+
+Consolidated 9 builtins → 4 builtins in I/O and logging subsystems:
+
+| Function | Before | After |
+|----------|--------|-------|
+| print | builtin | pure MVL |
+| println | builtin | pure MVL |
+| eprint | builtin | pure MVL |
+| eprintln | builtin | pure MVL |
+| log_debug | builtin | pure MVL |
+| log_info | builtin | pure MVL |
+| log_warn | builtin | pure MVL |
+| log_error | builtin | pure MVL |
+| log_format_entry | builtin | pure MVL (formatters) |
+| stdout | — | new builtin |
+| stderr | — | new builtin |
+| stdout_write | — | new builtin |
+| stderr_write | — | new builtin |
+
 ## [0.128.1] — 2026-05-18
 
 ### Fixed

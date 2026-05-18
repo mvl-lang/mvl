@@ -121,22 +121,24 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                 // Option/Result use .map(); List and unknown types use into_iter().collect().
                 "map" if args.len() == 1 => {
                     let receiver_ty = cg.expr_types.get(&receiver.span()).cloned();
-                    match receiver_ty.as_ref() {
-                        Some(Ty::Option(_)) | Some(Ty::Result(_, _)) => {
-                            emit_expr(cg, receiver);
-                            cg.push(".map(|__x| (");
-                            emit_expr(cg, &args[0]);
-                            cg.push(")(__x.clone()))");
-                        }
-                        _ => {
-                            // List (and unknown types) use into_iter().collect().
-                            // Set.map is not a valid MVL operation (checker returns Ty::Unknown),
-                            // so this arm is only reached for List receivers in valid programs.
-                            emit_expr(cg, receiver);
-                            cg.push(".into_iter().map(|__x| (");
-                            emit_expr(cg, &args[0]);
-                            cg.push(")(__x.clone())).collect::<Vec<_>>()");
-                        }
+                    // Use is_option/is_result which strip security labels (Labeled<Option<T>>
+                    // and Labeled<Result<T,E>> are still Option/Result for dispatch purposes).
+                    let is_opt_or_result = receiver_ty
+                        .as_ref()
+                        .is_some_and(|t| t.is_option() || t.is_result());
+                    if is_opt_or_result {
+                        emit_expr(cg, receiver);
+                        cg.push(".map(|__x| (");
+                        emit_expr(cg, &args[0]);
+                        cg.push(")(__x.clone()))");
+                    } else {
+                        // List (and unknown types) use into_iter().collect().
+                        // Set.map is not a valid MVL operation (checker returns Ty::Unknown),
+                        // so this arm is only reached for List receivers in valid programs.
+                        emit_expr(cg, receiver);
+                        cg.push(".into_iter().map(|__x| (");
+                        emit_expr(cg, &args[0]);
+                        cg.push(")(__x.clone())).collect::<Vec<_>>()");
                     }
                 }
 
@@ -621,12 +623,10 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
             args,
             ..
         } => {
-            // println!/print!/eprintln!/format! are Rust macros: first arg must be a bare string
-            // literal, not a `.to_string()` expression.
-            if matches!(
-                name.as_str(),
-                "println" | "print" | "eprintln" | "eprint" | "format" | "panic"
-            ) {
+            // format!/panic! are Rust macros: first arg must be a bare string literal,
+            // not a `.to_string()` expression.  println/print/eprintln/eprint are now
+            // pure-MVL wrappers in std/core.mvl (#839) and compile as regular functions.
+            if matches!(name.as_str(), "format" | "panic") {
                 cg.push(&format!("{name}!"));
                 cg.push("(");
                 emit_args_for_macro(cg, args);
@@ -1509,7 +1509,6 @@ fn map_ident(name: &str) -> String {
 fn map_fn_name(name: &str) -> String {
     // Built-in MVL functions mapped to Rust / stdlib equivalents
     match name {
-        "println" => "println!".to_string(),
         "panic" => "panic!".to_string(),
         "assert" => "assert!".to_string(),
         "assert_eq" => "assert_eq!".to_string(),

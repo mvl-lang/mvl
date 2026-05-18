@@ -9,5 +9,5 @@ use std.time.{Instant, now, format_instant}
 
 fn main() -> Unit ! Clock + Console {
     let t: Instant = now();
-    println("{}", format_instant(t, "%Y"));
+    println(format("{}", format_instant(t, "%Y")));
 }

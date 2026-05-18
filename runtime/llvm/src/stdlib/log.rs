@@ -21,9 +21,11 @@
 use std::collections::HashMap;
 use std::slice;
 
+use crate::memory::mvl_string_new;
+
 use crate::memory::{MvlMap, MvlString};
 use mvl_runtime::stdlib::log::{
-    log_debug, log_error, log_info, log_set_format, log_warn, LogFormat,
+    log_get_format_int, log_get_level_int, log_set_format, log_timestamp, log_write, LogFormat,
 };
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -171,43 +173,47 @@ mod tests {
     }
 }
 
-/// Emit a DEBUG-level structured log record.
+// ── Pure-MVL getter builtins (ADR-0024) ───────────────────────────────────────
+
+/// Returns the current log format discriminant as i64 (0=Plain, 1=Logfmt, 2=Json).
 ///
 /// # Safety
-/// `msg` and `fields` must be valid pointers to live `MvlString` / `MvlMap` values
-/// for the duration of the call. Null is accepted and treated as empty string / empty map.
+/// No pointers — always safe to call.
 #[no_mangle]
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn _mvl_log_debug(msg: *const MvlString, fields: *const MvlMap) {
-    log_debug(read_mvl_string(msg), read_mvl_map(fields));
+pub extern "C" fn _mvl_log_get_format_int() -> i64 {
+    log_get_format_int()
 }
 
-/// Emit an INFO-level structured log record.
+/// Returns the current minimum level discriminant as i64 (0=Debug, 1=Info, 2=Warn, 3=Error).
 ///
 /// # Safety
-/// See `_mvl_log_debug`. Null pointers are accepted and treated as empty.
+/// No pointers — always safe to call.
 #[no_mangle]
-#[allow(unsafe_code)]
-pub unsafe extern "C" fn _mvl_log_info(msg: *const MvlString, fields: *const MvlMap) {
-    log_info(read_mvl_string(msg), read_mvl_map(fields));
+pub extern "C" fn _mvl_log_get_level_int() -> i64 {
+    log_get_level_int()
 }
 
-/// Emit a WARN-level structured log record.
+/// Returns an ISO-8601 timestamp string for the current instant as an owned `MvlString*`.
+///
+/// The caller owns the returned pointer and must drop it with `mvl_string_drop`.
 ///
 /// # Safety
-/// See `_mvl_log_debug`. Null pointers are accepted and treated as empty.
+/// The returned pointer is non-null and heap-allocated.
 #[no_mangle]
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn _mvl_log_warn(msg: *const MvlString, fields: *const MvlMap) {
-    log_warn(read_mvl_string(msg), read_mvl_map(fields));
+pub unsafe extern "C" fn _mvl_log_timestamp() -> *mut crate::memory::MvlString {
+    let s = log_timestamp();
+    let bytes = s.as_bytes();
+    mvl_string_new(bytes.as_ptr(), bytes.len())
 }
 
-/// Emit an ERROR-level structured log record.
+/// Write a pre-formatted log line to stderr under the `! Log` effect.
 ///
 /// # Safety
-/// See `_mvl_log_debug`. Null pointers are accepted and treated as empty.
+/// `line` must be a valid pointer to a live `MvlString` for the duration of the call.
+/// Null is accepted and treated as an empty string.
 #[no_mangle]
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn _mvl_log_error(msg: *const MvlString, fields: *const MvlMap) {
-    log_error(read_mvl_string(msg), read_mvl_map(fields));
+pub unsafe extern "C" fn _mvl_log_write(line: *const MvlString) {
+    log_write(read_mvl_string(line));
 }

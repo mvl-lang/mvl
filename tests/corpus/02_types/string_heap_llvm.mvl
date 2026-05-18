@@ -8,9 +8,9 @@
 
 fn main() -> Unit ! Console {
     let s: String = "hello";
-    println(s.len());
+    println(format("{}", s.len()));
     let t: String = " world";
     let u: String = s.concat(t);
     println(u);
-    println(u.len());
+    println(format("{}", u.len()));
 }

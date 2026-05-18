@@ -1868,38 +1868,6 @@ impl<'ctx> LlvmBackend<'ctx> {
         args: &[Expr],
     ) -> Option<BasicValueEnum<'ctx>> {
         match name {
-            "println" => {
-                // #508: IFC invariant — static checker guarantees no Secret arg reaches println.
-                assert!(
-                    args.iter().all(|a| !self.is_secret_labeled(a)),
-                    "codegen bug: Secret-labeled value routed to println without declassify"
-                );
-                self.emit_println(args)
-            }
-            "print" => {
-                // #508: IFC invariant — same guard as println (both are public sinks).
-                assert!(
-                    args.iter().all(|a| !self.is_secret_labeled(a)),
-                    "codegen bug: Secret-labeled value routed to print without declassify"
-                );
-                self.emit_print(args)
-            }
-            "eprintln" => {
-                // #508: IFC invariant — stderr is a public sink; no Secret args allowed.
-                assert!(
-                    args.iter().all(|a| !self.is_secret_labeled(a)),
-                    "codegen bug: Secret-labeled value routed to eprintln without declassify"
-                );
-                self.emit_eprintln(args)
-            }
-            "eprint" => {
-                // #508: IFC invariant — stderr is a public sink; no Secret args allowed.
-                assert!(
-                    args.iter().all(|a| !self.is_secret_labeled(a)),
-                    "codegen bug: Secret-labeled value routed to eprint without declassify"
-                );
-                self.emit_eprint(args)
-            }
             "format" => self.emit_format(args),
             // assert(condition) — trap if condition is false.
             "assert" if args.len() == 1 => {
@@ -2267,6 +2235,13 @@ impl<'ctx> LlvmBackend<'ctx> {
                             let sym = sym.clone();
                             let arg = self.emit_expr(&args[0])?;
                             return self.emit_stdlib_call_void_one_ptr(&sym, arg);
+                        }
+                        // #839: (ptr, ptr) → void — stdout_write / stderr_write
+                        StdlibSig::VoidTwoPtrArgs(sym) if args.len() == 2 => {
+                            let sym = sym.clone();
+                            let a = self.emit_expr(&args[0])?;
+                            let b = self.emit_expr(&args[1])?;
+                            return self.emit_stdlib_call_void_string_map(&sym, a, b);
                         }
                         // #536: i64 → void/noreturn (exit)
                         StdlibSig::VoidI64Arg(sym) if args.len() == 1 => {

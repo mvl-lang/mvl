@@ -5,7 +5,7 @@
 # CLI args (--host, --port, --debug, --log-level, --log-format) take the highest priority.
 
 host       = "127.0.0.1"
-port       = 8080
+port       = 8000
 debug      = false
-log_level  = "info"    # debug | info | warn | error
-log_format = "plain"   # plain | logfmt | json
+log_level  = "debug"    # debug | info | warn | error
+log_format = "logfmt"   # plain | logfmt | json

@@ -1,4 +1,4 @@
-// Regression #198: println with non-string first arg generates valid Rust.
+// Regression #198 / #839: println with non-string values uses format() explicitly.
 //
 // Expected stdout (one line per println):
 //   hello 42
@@ -9,8 +9,8 @@ fn main() -> Unit ! Console {
     let x: Int = 42;
     let y: Int = 100;
     let msg: String = "hello";
-    println(msg, x);        // two args: String var + Int  → "{} {}", msg, x
-    println(x);             // single non-string Int arg   → "{}", x
-    println(x, y);          // two Int args                → "{} {}", x, y
-    println(x, y, msg);     // three args (Int, Int, Str)  → "{} {} {}", x, y, msg
+    println(format("{} {}", msg, x));       // String + Int
+    println(format("{}", x));               // non-string Int via format
+    println(format("{} {}", x, y));         // two Int args
+    println(format("{} {} {}", x, y, msg)); // three args (Int, Int, Str)
 }

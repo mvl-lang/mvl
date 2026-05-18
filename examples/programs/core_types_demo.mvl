@@ -34,7 +34,7 @@ fn demo_primitives() -> Unit ! Console {
     let b: Int = 7;
     let nm: Int = a.min(b);
     let mx: Int = a.max(b);
-    println("Int: abs={} min={} max={}", na, nm, mx);
+    println(format("Int: abs={} min={} max={}", na, nm, mx));
 
     // ── Float ────────────────────────────────────────────────────────────────
     let f: Float = 3.7;
@@ -42,16 +42,16 @@ fn demo_primitives() -> Unit ! Console {
     let ff: Float = f.floor();
     let g: Float = 4.0;
     let fs: Float = g.sqrt();
-    println("Float: ceil={} floor={} sqrt={}", fc, ff, fs);
+    println(format("Float: ceil={} floor={} sqrt={}", fc, ff, fs));
 
     // ── Bool ─────────────────────────────────────────────────────────────────
     let b1: Bool = true;
     let b2: Bool = false;
-    println("Bool: and={} or={} not={}", b1 && b2, b1 || b2, !b1);
+    println(format("Bool: and={} or={} not={}", b1 && b2, b1 || b2, !b1));
 
     // ── String ───────────────────────────────────────────────────────────────
     let s: String = "hello";
-    println("String: len={}", s.len());
+    println(format("String: len={}", s.len()));
 }
 
 fn main() -> Unit ! Console {
@@ -60,24 +60,24 @@ fn main() -> Unit ! Console {
     // ── List[T] ──────────────────────────────────────────────────────────────
     let xs: List[Int] = [1, 2, 3, 4, 5];
     let xfirst: Int = match xs.first() { Some(v) => v, None => 0 };
-    println("List: len={} first={}", xs.len(), xfirst);
+    println(format("List: len={} first={}", xs.len(), xfirst));
 
     // ── Map[K,V] ─────────────────────────────────────────────────────────────
     let m: Map[String, Int] = {"alice": 95, "bob": 87};
-    println("Map: len={}", m.len());
+    println(format("Map: len={}", m.len()));
 
     // ── Set[T] ───────────────────────────────────────────────────────────────
     let ss: Set[Int] = {1, 2, 3};
     let has_two: Bool = ss.contains(2);
-    println("Set: has_two={} len={}", has_two, ss.len());
+    println(format("Set: has_two={} len={}", has_two, ss.len()));
 
     // ── Option[T] ────────────────────────────────────────────────────────────
     let opt: Option[Int] = Some(42);
-    println("Option: {}", demo_option(opt));
+    println(format("Option: {}", demo_option(opt)));
 
     // ── Result[T,E] ──────────────────────────────────────────────────────────
     match safe_value(42) {
-        Ok(v)  => println("Result: value={}", v),
+        Ok(v)  => println(format("Result: value={}", v)),
         Err(_) => println("Result: error"),
     }
 }
