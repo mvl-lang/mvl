@@ -497,7 +497,6 @@ fn cross_backend_log_stderr() {
 /// tcp_accept, tcp_read, tcp_write, tcp_close_* via `! Net` effect.
 /// Error-path coverage lives in tests/stdlib/net_test.mvl (test-stdlib suite).
 #[test]
-#[ignore = "deadlock: actor connect() blocks before tcp_accept runs — see #826"]
 fn cross_backend_net_basic() {
     assert_parity(&corpus_stdlib("net_basic.mvl"), "net ok");
 }
