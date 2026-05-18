@@ -51,6 +51,13 @@ pub extern "C" fn _mvl_env_get(name: *const c_char) -> MvlOption {
     }
 }
 
+/// Collision-free alias for `_mvl_env_get` — mirrors `env_var` in `std/env.mvl`.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub extern "C" fn _mvl_env_env_var(name: *const c_char) -> MvlOption {
+    _mvl_env_get(name)
+}
+
 /// Set an environment variable.
 ///
 /// Returns `MvlResult { tag=0 }` on success, `MvlResult { tag=1, err=msg }`

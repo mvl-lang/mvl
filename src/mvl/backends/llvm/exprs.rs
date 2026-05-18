@@ -2164,6 +2164,12 @@ impl<'ctx> LlvmBackend<'ctx> {
                             let arg = self.emit_expr(&args[0])?;
                             return self.emit_stdlib_call_ptr_identity(&sym, arg);
                         }
+                        StdlibSig::OptionOnePtrArg(sym) if args.len() == 1 => {
+                            let sym = sym.clone();
+                            let arg = self.emit_expr(&args[0])?;
+                            // MvlOption has same ABI shape as MvlResult: {i8, ptr}
+                            return self.emit_stdlib_call_result_one_ptr_arg(&sym, arg);
+                        }
                         StdlibSig::ResultUnitOnePtrArg(sym) if args.len() == 1 => {
                             let sym = sym.clone();
                             let arg = self.emit_expr(&args[0])?;

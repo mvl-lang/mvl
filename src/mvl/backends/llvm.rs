@@ -360,6 +360,11 @@ pub(crate) enum StdlibSig {
     /// Used for `env.args()`, `args.get_args()`.
     PtrNoArg(String),
 
+    /// `(ptr) → {i8, ptr}` — one-ptr-arg C function returning Option[T].
+    /// The C function returns `MvlOption { tag, payload }` (`{i8, ptr}` at LLVM level).
+    /// Used for `env_var(name) → Option[Tainted[String]]`.
+    OptionOnePtrArg(String),
+
     // ── #584: regex.find_all ─────────────────────────────────────────────────
     /// `(ptr, ptr) → ptr` — two ptr args, returns an opaque pointer (MvlArray*).
     /// Used for `_mvl_regex_find_all(handle, input)`.
@@ -902,6 +907,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                     None
                 }
             }
+            // ── Option return, one ptr arg (env_var → Option[Tainted[String]]) ──
+            ("Option", 1) if Self::is_ptr_type(p0) => Some(StdlibSig::OptionOnePtrArg(symbol)),
             // ── Ptr return, int arg (crypto_random_bytes, random.bytes) ───────
             (ret, 1) if Self::is_ptr_type(ret) && p0 == "Int" => {
                 Some(StdlibSig::I64ReturnsPtrArg(symbol))
