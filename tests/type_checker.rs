@@ -2549,6 +2549,61 @@ fn invalid_effect_name_rejected() {
     );
 }
 
+/// When no EffectDecl nodes are loaded (unit tests using `check_src`), `has_any()` returns
+/// false and effect name validation is skipped — fabricated names pass silently.
+/// This is intentional: unit tests must not require the full stdlib prelude.
+#[test]
+fn no_hierarchy_skips_invalid_effect_name() {
+    // check_src uses an empty EffectHierarchy (no std/effects.mvl loaded).
+    // has_any() == false → InvalidEffectName is NOT emitted.
+    let result = check_src(r#"fn f() -> Unit ! CompletelyMadeUp { }"#);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::InvalidEffectName { .. })),
+        "empty hierarchy must not emit InvalidEffectName, got: {:?}",
+        result.errors
+    );
+}
+
+/// Actor methods with an unknown effect name MUST be rejected (ADR-0035).
+#[test]
+fn actor_method_invalid_effect_name_rejected() {
+    let src = r#"
+        actor Counter {
+            state: Int
+            pub fn increment() -> Unit ! GhostEffect { }
+        }
+    "#;
+    let result = check_with_effects(src);
+    assert!(
+        result.errors.iter().any(
+            |e| matches!(e, CheckError::InvalidEffectName { name, .. } if name == "GhostEffect")
+        ),
+        "unknown effect on actor method should emit InvalidEffectName, got: {:?}",
+        result.errors
+    );
+}
+
+/// Extern function declarations with an unknown effect name MUST be rejected (ADR-0035).
+#[test]
+fn extern_fn_invalid_effect_name_rejected() {
+    let src = r#"
+        extern "rust" {
+            fn read_file(p: String) -> String ! PhantomEffect
+        }
+    "#;
+    let result = check_with_effects(src);
+    assert!(
+        result.errors.iter().any(
+            |e| matches!(e, CheckError::InvalidEffectName { name, .. } if name == "PhantomEffect")
+        ),
+        "unknown effect on extern fn should emit InvalidEffectName, got: {:?}",
+        result.errors
+    );
+}
+
 /// All std/effects.mvl effect names MUST be accepted (002-effect-system/Req 2, ADR-0035).
 #[test]
 fn valid_effect_names_accepted() {
@@ -4574,6 +4629,54 @@ fn parametrized_effects_corpus_parses_and_checks() {
     assert!(
         serious.is_empty(),
         "parametrized effects corpus should have no serious errors, got: {serious:?}"
+    );
+}
+
+/// More-specific caller (`! FileRead("/etc/app/")`) does NOT cover a less-specific
+/// callee requirement (`! FileRead`).  Specific declared ≠ general required (ADR-0035 Req 3).
+#[test]
+fn parametrized_specific_caller_does_not_cover_general_callee() {
+    // GIVEN: callee requires unparametrized ! FileRead (general)
+    //        caller declares ! FileRead("/etc/app/") (more specific)
+    // THEN:  MissingEffect — the specific declared does NOT satisfy the general required.
+    let src = r#"
+        fn needs_general_read() -> Unit ! FileRead { }
+        fn restricted_caller() -> Unit ! FileRead("/etc/app/") { needs_general_read() }
+    "#;
+    let result = check_with_effects(src);
+    assert!(
+        result.errors.iter().any(|e| matches!(
+            e,
+            CheckError::MissingEffect { effect, .. } if effect.starts_with("FileRead")
+        )),
+        "specific ! FileRead(\"/etc/app/\") must not cover general ! FileRead, got: {:?}",
+        result.errors
+    );
+}
+
+/// General caller (`! FileRead`) DOES cover a more-specific callee (`! FileRead("/etc/app/")`).
+#[test]
+fn parametrized_general_caller_covers_specific_callee() {
+    let src = r#"
+        fn needs_specific_read() -> Unit ! FileRead("/etc/app/") { }
+        fn general_caller() -> Unit ! FileRead { needs_specific_read() }
+    "#;
+    assert_no_effect_propagation_errors(
+        &check_with_effects(src),
+        "general ! FileRead must cover specific ! FileRead(\"/etc/app/\")",
+    );
+}
+
+/// Prefix caller (`! FileRead("/etc/")`) DOES cover a more-specific callee (`! FileRead("/etc/app/")`).
+#[test]
+fn parametrized_prefix_caller_covers_specific_callee() {
+    let src = r#"
+        fn needs_app_read() -> Unit ! FileRead("/etc/app/") { }
+        fn prefix_caller() -> Unit ! FileRead("/etc/") { needs_app_read() }
+    "#;
+    assert_no_effect_propagation_errors(
+        &check_with_effects(src),
+        "prefix ! FileRead(\"/etc/\") must cover ! FileRead(\"/etc/app/\")",
     );
 }
 

@@ -252,6 +252,18 @@ impl TypeChecker {
                     }
                 }
             }
+            // Validate effect names against the hierarchy (ADR-0035).
+            if self.effect_hierarchy.has_any() {
+                for effect in &method.effects {
+                    if !self.effect_hierarchy.contains(&effect.name) {
+                        self.emit(CheckError::InvalidEffectName {
+                            name: effect.name.clone(),
+                            span: effect.span,
+                        });
+                    }
+                }
+            }
+
             // Type-check the method body (#742).
             self.env.push_scope();
             // Define `self` so `self.field` field accesses resolve correctly.
@@ -297,9 +309,19 @@ impl TypeChecker {
         }
         // Count only validated extern blocks in the assurance metric.
         self.extern_count += 1;
-        // Each extern fn must have a valid return type (basic check).
-        // Future: verify no MVL-specific types (security labels) cross the boundary
-        // without explicit wrapping — for now we accept all types.
+        // Validate effect names on each extern fn declaration (ADR-0035).
+        if self.effect_hierarchy.has_any() {
+            for f in &ed.fns {
+                for effect in &f.effects {
+                    if !self.effect_hierarchy.contains(&effect.name) {
+                        self.emit(CheckError::InvalidEffectName {
+                            name: effect.name.clone(),
+                            span: effect.span,
+                        });
+                    }
+                }
+            }
+        }
     }
 
     fn check_fn_decl(&mut self, fd: &FnDecl) {
