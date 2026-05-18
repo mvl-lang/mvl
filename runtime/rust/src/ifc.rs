@@ -160,6 +160,10 @@ impl_label!(Secret);
 //
 // The `.into()` target is inferred from the callee's parameter type.
 // Orphan rules are satisfied because `Clean`, `Public`, etc. are local types.
+//
+// NOTE: `Tainted` is intentionally excluded. A `Tainted<T>` must go through
+// `sanitize()` (→ `Clean<T>`) before it can be passed to a plain-typed
+// function. Silent laundering via `.into()` defeats IFC tracking (#863).
 
 macro_rules! impl_label_into {
     ($Label:ident) => {
@@ -184,7 +188,6 @@ macro_rules! impl_label_into {
     };
 }
 
-impl_label_into!(Tainted);
 impl_label_into!(Clean);
 impl_label_into!(Public);
 impl_label_into!(Secret);
@@ -387,5 +390,23 @@ mod tests {
         let s = Secret::new(99i64);
         assert_eq!(*s.as_inner(), 99);
         assert_eq!(s.into_inner(), 99);
+    }
+
+    #[test]
+    fn tainted_no_implicit_into_inner_type() {
+        // Tainted<T> must not silently coerce to T via .into() (#863).
+        // The only approved downcast paths are:
+        //   - sanitize(t) → Clean<T>  (preferred: validates then relabels)
+        //   - t.into_inner()          (explicit, auditable escape hatch)
+        let t = Tainted::new("user_input".to_string());
+
+        // Explicit escape hatch — caller takes responsibility.
+        let plain: String = t.into_inner();
+        assert_eq!(plain, "user_input");
+
+        // Preferred path — sanitize and relabel as Clean.
+        let t2 = Tainted::new("validated".to_string());
+        let clean: Clean<String> = sanitize(t2);
+        assert_eq!(clean.into_inner(), "validated");
     }
 }
