@@ -141,21 +141,9 @@ Effects MUST compose. A function calling two effectful functions MUST declare ef
 - WHEN `fn c() -> Z ! IO { a(); b(); }`
 - THEN the compiler MUST accept
 
-### Requirement 6: Capability-Based Restriction [SHOULD]
+### ~~Requirement 6: Capability-Based Restriction [SHOULD]~~ *(removed — #290)*
 
-Effects SHOULD support parameterization for fine-grained access control:
-
-- `! FileRead("/etc/config")` — can only read from this path
-- `! Net("api.example.com")` — can only access this host
-- `! DB("SELECT")` — read-only database access
-
-Path parameters use prefix matching: `! FileRead("/etc")` satisfies `! FileRead("/etc/config.toml")`.
-
-#### Scenario: Path-restricted file access
-
-- GIVEN `fn read_config() -> String ! FileRead("/etc/app/")`
-- WHEN the function attempts `read_file("/etc/shadow")`
-- THEN the compiler SHOULD reject: "file access outside declared capability `/etc/app/`"
+> Parametrized effects (`! FileRead("/path")`) were dropped from the design. The grammar and AST no longer support the `("string")` suffix. See #290 and #862.
 
 ### Requirement 7: Concurrency Effects [MUST]
 
