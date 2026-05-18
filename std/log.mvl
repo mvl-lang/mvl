@@ -15,6 +15,8 @@
 //! Effects: Log (emit functions). log_set_format/log_set_min_level have no effect (pure config).
 //! See #54, ADR-0006.
 
+use std.collections.{map_get, map_keys}
+
 // ── Output format ──────────────────────────────────────────────────────────
 
 /// Selects the output format for all subsequent log calls in this process.
@@ -80,7 +82,161 @@ pub fn parse_log_format(s: String) -> LogFormat {
     else { LogFormat::Plain }
 }
 
-// ── Functions ──────────────────────────────────────────────────────────────
+// ── Rust-backed primitives (ADR-0024) ──────────────────────────────────────
+
+/// Returns the current log format as an integer discriminant (0=Plain, 1=Logfmt, 2=Json).
+pub builtin fn log_get_format_int() -> Int
+
+/// Returns the current minimum level as an integer discriminant (0=Debug, 1=Info, 2=Warn, 3=Error).
+pub builtin fn log_get_level_int() -> Int
+
+/// Returns a formatted ISO-8601 timestamp string for the current instant.
+/// The wall-clock read is internal to the ! Log effect — callers need not declare ! Clock.
+pub builtin fn log_timestamp() -> String
+
+/// Write a pre-formatted log line to stderr.
+/// Requires ! Log — the only effect needed to drive log output.
+pub builtin fn log_write(line: String) -> Unit ! Log
+
+// ── Internal helpers ───────────────────────────────────────────────────────
+
+/// Map a level string to its ordinal (matches log_get_level_int discriminants).
+fn level_ord(level: String) -> Int {
+    if level == "DEBUG" { 0 }
+    else if level == "WARN" { 2 }
+    else if level == "ERROR" { 3 }
+    else { 1 }
+}
+
+/// Sanitize a string for log output: escape control characters.
+fn sanitize_log(s: String) -> String {
+    let s1: String = replace(s, "\n", "\\n");
+    let s2: String = replace(s1, "\r", "\\r");
+    let s3: String = replace(s2, "\t", "\\t");
+    replace(s3, "\0", "\\0")
+}
+
+/// Escape a string for embedding in a JSON value (escapes \, ", and control chars).
+fn json_escape(s: String) -> String {
+    let s1: String = replace(s, "\\", "\\\\");
+    let s2: String = replace(s1, "\"", "\\\"");
+    let s3: String = replace(s2, "\n", "\\n");
+    let s4: String = replace(s3, "\r", "\\r");
+    let s5: String = replace(s4, "\t", "\\t");
+    replace(s5, "\0", "\\u0000")
+}
+
+/// Pad a level name to 5 characters for plain-format column alignment.
+/// INFO and WARN (4 chars) need one trailing space; DEBUG/ERROR are already 5.
+fn pad_level(level: String) -> String {
+    if str_length(level) < 5 { str_concat(level, " ") } else { level }
+}
+
+/// Look up a map value by key, returning empty string if absent.
+fn field_or_empty(fields: Map[String, String], k: String) -> String {
+    match map_get(fields, k) {
+        Some(v) => v,
+        None => ""
+    }
+}
+
+/// Format a single plain/logfmt key=value pair with sanitization.
+fn format_kv_pair(k: String, v: String) -> String {
+    str_concat(str_concat(sanitize_log(k), "="), sanitize_log(v))
+}
+
+/// Accumulate sorted key=value pairs from a field map (sanitized).
+fn format_fields_kv(fields: Map[String, String]) -> String {
+    let keys: List[String] = map_keys(fields).sort();
+    let result: ref String = "";
+    for k in keys {
+        let pair: String = format_kv_pair(k, field_or_empty(fields, k));
+        if str_is_empty(result) {
+            result = pair
+        } else {
+            result = str_concat(str_concat(result, " "), pair)
+        }
+    };
+    result
+}
+
+// ── Format functions ───────────────────────────────────────────────────────
+
+/// Plain format: `2026-05-16 14:32:00 INFO  msg [key=value ...]`
+fn format_plain_line(level: String, ts: String, msg: String, fields: Map[String, String]) -> String {
+    // Replace 'T' separator with space; remove trailing 'Z'.
+    let ts_plain: String = replace(replace(ts, "T", " "), "Z", "");
+    let safe_msg: String = sanitize_log(msg);
+    let field_str: String = format_fields_kv(fields);
+    if str_is_empty(field_str) {
+        str_concat(str_concat(str_concat(ts_plain, " "), str_concat(pad_level(level), " ")), safe_msg)
+    } else {
+        str_concat(str_concat(str_concat(str_concat(str_concat(ts_plain, " "), str_concat(pad_level(level), " ")), safe_msg), " "), field_str)
+    }
+}
+
+/// Logfmt format: `level=INFO ts=<ISO8601> msg="<msg>" [key=value ...]`
+fn format_logfmt_line(level: String, ts: String, msg: String, fields: Map[String, String]) -> String {
+    let safe_msg: String = sanitize_log(msg);
+    let quoted_msg: String = if str_contains_sub(safe_msg, " ") {
+        str_concat(str_concat("\"", safe_msg), "\"")
+    } else {
+        safe_msg
+    };
+    let header: String = str_concat(
+        str_concat(str_concat(str_concat("level=", level), " ts="), ts),
+        str_concat(" msg=", quoted_msg)
+    );
+    let keys: List[String] = map_keys(fields).sort();
+    let result: ref String = header;
+    for k in keys {
+        let v: String = sanitize_log(field_or_empty(fields, k));
+        let qv: String = if str_contains_sub(v, " ") { str_concat(str_concat("\"", v), "\"") } else { v };
+        result = str_concat(str_concat(str_concat(str_concat(result, " "), sanitize_log(k)), "="), qv)
+    };
+    result
+}
+
+/// JSON format: `{"level":"INFO","ts":"...","msg":"...","key":"value",...}`
+fn format_json_line(level: String, ts: String, msg: String, fields: Map[String, String]) -> String {
+    let header: String = str_concat(
+        str_concat(str_concat(str_concat("{\"level\":\"", json_escape(level)), "\",\"ts\":\""), json_escape(ts)),
+        str_concat("\",\"msg\":\"", str_concat(json_escape(msg), "\""))
+    );
+    let keys: List[String] = map_keys(fields).sort();
+    let result: ref String = header;
+    for k in keys {
+        let ek: String = json_escape(k);
+        let ev: String = json_escape(field_or_empty(fields, k));
+        result = str_concat(str_concat(str_concat(str_concat(result, ",\""), ek), str_concat("\":\"", ev)), "\"")
+    };
+    str_concat(result, "}")
+}
+
+// ── Core emit ─────────────────────────────────────────────────────────────
+
+/// Emit a structured log record at the given level if it meets the minimum threshold.
+///
+/// Selects the output format from the process-global setting, formats the record,
+/// and writes it to stderr via log_write.
+fn log_emit(level: String, msg: String, fields: Map[String, String]) -> Unit ! Log {
+    let level_n: Int = level_ord(level);
+    let min_n: Int = log_get_level_int();
+    if level_n >= min_n {
+        let ts: String = log_timestamp();
+        let fmt: Int = log_get_format_int();
+        let line: String = if fmt == 1 {
+            format_logfmt_line(level, ts, msg, fields)
+        } else if fmt == 2 {
+            format_json_line(level, ts, msg, fields)
+        } else {
+            format_plain_line(level, ts, msg, fields)
+        };
+        log_write(line)
+    }
+}
+
+// ── Public API ─────────────────────────────────────────────────────────────
 
 /// Emit a DEBUG-level structured log record.
 ///
@@ -91,25 +247,33 @@ pub fn parse_log_format(s: String) -> LogFormat {
 /// in its own signature is a compile error.
 ///
 /// IFC: Secret[T] or Tainted[T] arguments are rejected at compile time.
-pub builtin fn log_debug(msg: String, fields: Map[String, String]) -> Unit ! Log
+pub fn log_debug(msg: String, fields: Map[String, String]) -> Unit ! Log {
+    log_emit("DEBUG", msg, fields)
+}
 
 /// Emit an INFO-level structured log record.
 ///
 /// Use for normal operational events (server started, request handled, etc.).
 ///
 /// Requires `! Log`. IFC: Secret[T] or Tainted[T] arguments cause a compile error.
-pub builtin fn log_info(msg: String, fields: Map[String, String]) -> Unit ! Log
+pub fn log_info(msg: String, fields: Map[String, String]) -> Unit ! Log {
+    log_emit("INFO", msg, fields)
+}
 
 /// Emit a WARN-level structured log record.
 ///
 /// Use for recoverable anomalies that may need attention.
 ///
 /// Requires `! Log`. IFC: Secret[T] or Tainted[T] arguments cause a compile error.
-pub builtin fn log_warn(msg: String, fields: Map[String, String]) -> Unit ! Log
+pub fn log_warn(msg: String, fields: Map[String, String]) -> Unit ! Log {
+    log_emit("WARN", msg, fields)
+}
 
 /// Emit an ERROR-level structured log record.
 ///
 /// Use for failures that affect a specific operation but not the whole process.
 ///
 /// Requires `! Log`. IFC: Secret[T] or Tainted[T] arguments cause a compile error.
-pub builtin fn log_error(msg: String, fields: Map[String, String]) -> Unit ! Log
+pub fn log_error(msg: String, fields: Map[String, String]) -> Unit ! Log {
+    log_emit("ERROR", msg, fields)
+}

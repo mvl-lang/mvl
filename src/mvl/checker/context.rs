@@ -650,26 +650,49 @@ impl TypeEnv {
                 ..Default::default()
             },
         );
-        // std.log — structured logging with ! Log effect (#54, 003-information-flow Req 6).
-        // IFC: log_* functions accept only Public<T> arguments.
-        // Secret<T> / Tainted<T> / Clean<T> arguments are rejected by the IFC check in
-        // `infer_fn_call` (see LoggingLabelViolation).  The `fields` map uses variadic
-        // treatment (empty params sentinel) so callers may pass any Map<String,String>
-        // literal; the IFC label check validates each argument individually.
-        for log_fn in &["log_debug", "log_info", "log_warn", "log_error"] {
-            self.fns.insert(
-                (*log_fn).into(),
-                FnInfo {
-                    params: vec![],
-                    ret: Ty::Unit,
-                    effects: vec![Effect::new("Log", Span::new(0, 0, 0, 0))],
-                    // label_transparent: true (default) — labels propagate through log fns
-                    // to their Unit return; the IFC sink check (LoggingLabelViolation) guards
-                    // against labeled data reaching Log output sinks.
-                    ..Default::default()
-                },
-            );
-        }
+        // std.log — atomic getters and write primitive (ADR-0024).
+        // log_debug/info/warn/error are now pure MVL in std/log.mvl and are NOT
+        // registered here — they come in via load_mvl_native_stdlib_extras.
+        // These four builtins provide the irreducible Rust-backed primitives:
+        //   log_get_format_int() — reads AtomicU8 FORMAT as Int (0=Plain,1=Logfmt,2=Json)
+        //   log_get_level_int()  — reads AtomicU8 MIN_LEVEL as Int (0=Debug..3=Error)
+        //   log_timestamp()      — returns ISO-8601 now() string (hides ! Clock internally)
+        //   log_write(line)      — writes a pre-formatted line to stderr under ! Log
+        self.fns.insert(
+            "log_get_format_int".into(),
+            FnInfo {
+                params: vec![],
+                ret: Ty::Int,
+                ..Default::default()
+            },
+        );
+        self.fns.insert(
+            "log_get_level_int".into(),
+            FnInfo {
+                params: vec![],
+                ret: Ty::Int,
+                ..Default::default()
+            },
+        );
+        self.fns.insert(
+            "log_timestamp".into(),
+            FnInfo {
+                params: vec![],
+                ret: Ty::String,
+                ..Default::default()
+            },
+        );
+        // log_write — writes a pre-formatted line to stderr under the ! Log effect.
+        // Lets pure-MVL log_emit output to stderr without declaring ! Console.
+        self.fns.insert(
+            "log_write".into(),
+            FnInfo {
+                params: vec![Ty::String],
+                ret: Ty::Unit,
+                effects: vec![Effect::new("Log", Span::new(0, 0, 0, 0))],
+                ..Default::default()
+            },
+        );
     }
 
     // ── Scope management ─────────────────────────────────────────────────
