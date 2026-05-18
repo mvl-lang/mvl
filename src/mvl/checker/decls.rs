@@ -77,17 +77,48 @@ impl TypeChecker {
             .iter()
             .map(|p| p.name().to_string())
             .collect();
-        self.env.define_fn(
-            fd.name.clone(),
-            FnInfo {
-                params,
-                ret,
-                effects: fd.effects.clone(),
-                totality: fd.totality.clone(),
-                type_params,
-                label_transparent: fd.is_label_transparent,
-            },
-        );
+        let info = FnInfo {
+            params,
+            ret,
+            effects: fd.effects.clone(),
+            totality: fd.totality.clone(),
+            type_params,
+            label_transparent: fd.is_label_transparent,
+        };
+        if let Some(recv_ty) = &fd.receiver_type {
+            // Validate receiver type is declared (#875 review).
+            if self.env.lookup_type(recv_ty.as_str()).is_none() {
+                self.emit(CheckError::UndefinedType {
+                    name: recv_ty.clone(),
+                    span: fd.span,
+                });
+                return;
+            }
+            // Enforce that `self` is the first parameter (#875 review).
+            if fd.params.first().map(|p| p.name.as_str()) != Some("self") {
+                self.emit(CheckError::TypeMismatch {
+                    expected: "self as first parameter of type-attached method".to_string(),
+                    found: fd
+                        .params
+                        .first()
+                        .map(|p| p.name.as_str())
+                        .unwrap_or("(no parameters)")
+                        .to_string(),
+                    span: fd.span,
+                });
+                return;
+            }
+            // Detect duplicate method on same type (#875 review).
+            let inner = self.method_table.entry(recv_ty.clone()).or_default();
+            if inner.insert(fd.name.clone(), info).is_some() {
+                self.emit(CheckError::UndefinedFunction {
+                    name: format!("duplicate method `{}` on type `{}`", fd.name, recv_ty),
+                    span: fd.span,
+                });
+            }
+        } else {
+            self.env.define_fn(fd.name.clone(), info);
+        }
     }
 
     /// Register all functions declared inside an `extern` block so that MVL

@@ -92,9 +92,46 @@ pub fn emit_fn_decl(cg: &mut RustEmitter, fd: &FnDecl) {
 
     // Function signature
     let generics = emit_generics_with_params(&fd.type_params, &fd.constraints, &fd.params);
-    let params_str = emit_params(&fd.params, &borrows, &mutated_params);
     let ret_str = emit_type_expr(&fd.return_type);
 
+    if let Some(recv_ty) = &fd.receiver_type {
+        // Type-attached method (#868): emit inside `impl ReceiverType { … }`.
+        // The `self` parameter (index 0) is replaced with `&self` in Rust.
+        let rest_params = emit_params(
+            fd.params.get(1..).unwrap_or(&[]),
+            borrows.get(1..).unwrap_or(&[]),
+            &mutated_params,
+        );
+        let params_str = if rest_params.is_empty() {
+            "&self".to_string()
+        } else {
+            format!("&self, {rest_params}")
+        };
+        cg.line(&format!("impl {recv_ty} {{"));
+        cg.push_indent();
+        cg.line(&format!(
+            "pub fn {}{generics}({params_str}) -> {ret_str} {{",
+            fd.name
+        ));
+        cg.push_indent();
+        // Fn-entry probe
+        if let Some(id) = cg.alloc_branch(fd.span.line, BranchKind::FnEntry) {
+            cg.emit_cov_hit(id);
+        }
+        for req_pred in &fd.requires {
+            let pred_str = emit_ref_expr_for_assert(req_pred, "self");
+            let msg = pred_str.replace('{', "{{").replace('}', "}}");
+            cg.line(&format!("assert!({pred_str}, \"requires: {msg}\");"));
+        }
+        emit_fn_body(cg, fd);
+        cg.pop_indent();
+        cg.line("}");
+        cg.pop_indent();
+        cg.line("}");
+        return;
+    }
+
+    let params_str = emit_params(&fd.params, &borrows, &mutated_params);
     cg.line(&format!(
         "pub fn {}{generics}({params_str}) -> {ret_str} {{",
         fd.name

@@ -556,9 +556,20 @@ impl<'ctx> LlvmBackend<'ctx> {
         for decl in &prog.declarations {
             if let Decl::Fn(fd) = decl {
                 if !fd.is_test {
+                    // Type-attached methods use a mangled name for LLVM lookup (#868).
+                    let llvm_name: String = if let Some(recv_ty) = &fd.receiver_type {
+                        format!("{}_{}", recv_ty, fd.name)
+                    } else {
+                        fd.name.clone()
+                    };
+                    // Note: duplicate fn_decls entries (same llvm_name) silently overwrite
+                    // here — prelude + program re-declarations are expected.  A free function
+                    // named `Logger_info` would shadow the mangled symbol for `fn Logger::info`;
+                    // this is caught at the MVL checker level (DuplicateFnDecl / UndefinedType)
+                    // before LLVM is reached (#875 review).
                     self.fn_return_types
-                        .insert(fd.name.clone(), *fd.return_type.clone());
-                    self.fn_decls.insert(fd.name.clone(), fd.clone());
+                        .insert(llvm_name.clone(), *fd.return_type.clone());
+                    self.fn_decls.insert(llvm_name, fd.clone());
                     if fd.type_params.is_empty() || fd.is_builtin {
                         self.declare_fn(fd);
                     }
@@ -676,11 +687,16 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     /// Declare a function signature without emitting its body.
     fn declare_fn(&self, fd: &FnDecl) {
-        if self.module.get_function(&fd.name).is_some() {
+        let llvm_name: String = if let Some(recv_ty) = &fd.receiver_type {
+            format!("{}_{}", recv_ty, fd.name)
+        } else {
+            fd.name.clone()
+        };
+        if self.module.get_function(&llvm_name).is_some() {
             return; // already declared
         }
         let (fn_ty, _) = self.build_fn_type(fd);
-        self.module.add_function(&fd.name, fn_ty, None);
+        self.module.add_function(&llvm_name, fn_ty, None);
     }
 
     /// Emit LLVM IR for `extern` blocks (issue #381).
@@ -2721,11 +2737,17 @@ impl<'ctx> LlvmBackend<'ctx> {
     // ── Function emission (L5-07) ────────────────────────────────────────────
 
     fn emit_fn(&mut self, fd: &FnDecl) {
-        let fn_val = match self.module.get_function(&fd.name) {
+        // Type-attached methods use a mangled LLVM name: `TypeName_method` (#868).
+        let llvm_name: String = if let Some(recv_ty) = &fd.receiver_type {
+            format!("{}_{}", recv_ty, fd.name)
+        } else {
+            fd.name.clone()
+        };
+        let fn_val = match self.module.get_function(&llvm_name) {
             Some(f) => f,
             None => {
                 let (fn_ty, _) = self.build_fn_type(fd);
-                self.module.add_function(&fd.name, fn_ty, None)
+                self.module.add_function(&llvm_name, fn_ty, None)
             }
         };
         let is_c_main = fd.name == "main";

@@ -2796,6 +2796,45 @@ fn main() -> Unit {
     );
 }
 
+// ── Type-attached method transpiler tests (#868, #875 review) ────────────────
+
+/// Type-attached method emits `impl Type { pub fn method(&self, ...) }`.
+/// Kills mutations in `emit_fn_decl` that drop the impl block or change visibility.
+#[test]
+fn type_attached_method_emits_impl_block() {
+    let src = r#"
+type Counter = struct { value: Int }
+fn Counter::get(self) -> Int { self.value }
+"#;
+    let rust = transpile_src(src);
+    assert!(
+        rust.contains("impl Counter {"),
+        "expected `impl Counter {{` in Rust output.\nGot:\n{rust}"
+    );
+    assert!(
+        rust.contains("pub fn get(") && rust.contains("&self"),
+        "expected `pub fn get(&self, ...)` in Rust output.\nGot:\n{rust}"
+    );
+}
+
+/// Type-attached method with extra parameters has correct `&self, param` signature.
+#[test]
+fn type_attached_method_with_params_emits_correct_signature() {
+    let src = r#"
+type Counter = struct { value: Int }
+fn Counter::add(self, n: Int) -> Int { self.value }
+"#;
+    let rust = transpile_src(src);
+    assert!(
+        rust.contains("impl Counter {"),
+        "expected `impl Counter {{` in Rust output.\nGot:\n{rust}"
+    );
+    assert!(
+        rust.contains("&self") && rust.contains("n:"),
+        "expected `&self` and `n:` params in method signature.\nGot:\n{rust}"
+    );
+}
+
 /// Actor behavior call emits `mvl_actor_send` with correct discriminant slot in LLVM IR.
 /// Kills mutations in `LlvmBackend::emit_actor_method_call` that corrupt discriminant
 /// or argument packing. (#703)

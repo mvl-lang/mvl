@@ -234,6 +234,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             is_builtin: false,
             is_label_transparent: false,
             totality: None,
+            receiver_type: None,
             name: lambda_name.clone(),
             type_params: vec![],
             params: params.to_vec(),
@@ -3458,13 +3459,49 @@ impl<'ctx> LlvmBackend<'ctx> {
                 self.emit_fn_call("fold", &all_args)
             }
 
-            // Phase 8 / #696: actor behavior calls
-            // Detect: receiver is a local of an actor type, method is a public behavior.
+            // Phase 8 / #696: actor behavior calls, and #868: user-defined type methods.
             _ => {
                 if let Some(actor_name) = self.resolve_actor_type_name(receiver) {
                     self.emit_actor_method_call(recv_val, &actor_name, method, args)
                 } else {
-                    None
+                    // #868: type-attached method — resolve receiver's MVL type and call
+                    // the mangled LLVM function `TypeName_method(self, args…)`.
+                    let recv_type_name = match receiver {
+                        Expr::Ident(name, _) => {
+                            self.local_mvl_types.get(name.as_str()).and_then(|t| {
+                                if let TypeExpr::Base { name: tn, .. } = t {
+                                    Some(tn.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                        }
+                        _ => None,
+                    };
+                    if let Some(type_name) = recv_type_name {
+                        let mangled = format!("{}_{}", type_name, method);
+                        if let Some(fn_val) = self.module.get_function(&mangled) {
+                            let mut call_args: Vec<inkwell::values::BasicMetadataValueEnum> =
+                                vec![recv_val.into()];
+                            for a in args {
+                                if let Some(v) = self.emit_expr(a) {
+                                    call_args.push(v.into());
+                                } else {
+                                    return None;
+                                }
+                            }
+                            let call = self
+                                .builder
+                                .build_call(fn_val, &call_args, "method_call")
+                                .unwrap();
+                            use inkwell::values::AnyValue;
+                            BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
                 }
             }
         }

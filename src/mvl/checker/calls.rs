@@ -344,6 +344,83 @@ impl TypeChecker {
             Ty::Result(ok_ty, _) => Self::result_method_ty(ok_ty.as_ref(), method, arg_tys),
             Ty::Map(k_ty, v_ty) => Self::map_method_ty(k_ty.as_ref(), v_ty.as_ref(), method),
             Ty::Set(t_ty) => Self::set_method_ty(t_ty.as_ref(), method),
+            Ty::Named(type_name, _) => {
+                // User-defined type-attached method (#868): look up method table.
+                // Clone to release the borrow on `self` before calling self.emit().
+                let method_info = self
+                    .method_table
+                    .get(type_name.as_str())
+                    .and_then(|m| m.get(method))
+                    .cloned();
+                if let Some(method_info) = method_info {
+                    // Arity: params[0] is `self` (implicit at the call site).
+                    let expected_args = method_info.params.len().saturating_sub(1);
+                    if expected_args != arg_tys.len() {
+                        self.emit(CheckError::WrongArgCount {
+                            name: format!("{type_name}.{method}"),
+                            expected: expected_args,
+                            found: arg_tys.len(),
+                            span,
+                        });
+                        return method_info.ret.clone();
+                    }
+                    // Per-argument type check (skip self at index 0).
+                    for (expected, found) in method_info.params[1..].iter().zip(arg_tys.iter()) {
+                        if !types_compatible(expected, found) {
+                            self.emit(CheckError::TypeMismatch {
+                                expected: expected.display(),
+                                found: found.display(),
+                                span,
+                            });
+                        }
+                    }
+                    // Effect propagation: caller must declare all effects of this method.
+                    for required in &method_info.effects {
+                        let covered = self
+                            .current_fn_effects
+                            .iter()
+                            .any(|declared| self.effect_satisfies(declared, required));
+                        if !covered {
+                            if self.current_fn_effects.is_empty() {
+                                self.emit(CheckError::UndeclaredEffect {
+                                    callee: format!("{type_name}.{method}"),
+                                    effect: required.to_string(),
+                                    span,
+                                });
+                            } else {
+                                self.emit(CheckError::MissingEffect {
+                                    caller: self.current_fn_name.clone(),
+                                    callee: format!("{type_name}.{method}"),
+                                    effect: required.to_string(),
+                                    span,
+                                });
+                            }
+                        }
+                    }
+                    // Totality: total caller must not call partial method.
+                    if matches!(method_info.totality, Some(Totality::Partial))
+                        && !matches!(self.current_fn_totality, Some(Totality::Partial))
+                    {
+                        self.emit(CheckError::PartialCallInTotal {
+                            callee: format!("{type_name}.{method}"),
+                            span,
+                        });
+                    }
+                    method_info.ret.clone()
+                } else {
+                    // Unknown method on a type that HAS declared methods: emit a
+                    // diagnostic (#875 review). Types with NO declared methods are
+                    // left silent — they may use externally-injected behaviors
+                    // (stub/adapter types like `UserStore` in auth_handler.mvl).
+                    if self.method_table.contains_key(type_name.as_str()) {
+                        self.emit(CheckError::UndefinedFunction {
+                            name: format!("{type_name}.{method}"),
+                            span,
+                        });
+                    }
+                    Ty::Unknown
+                }
+            }
             _ => Ty::Unknown,
         };
         // Only apply label when we resolved a concrete type.
