@@ -1,0 +1,16 @@
+// Spike 002-05: declassify() as the auditable exit — MUST compile (#872)
+// After declassify(), the value is Public and can flow to any sink.
+
+fn declassify_then_print(key: Secret[String]) -> Unit ! Console {
+    println(declassify(key))
+}
+
+fn declassify_then_return(key: Secret[String]) -> String {
+    declassify(key)
+}
+
+// Chain: Secret → declassify → concat → println
+fn declassify_and_format(key: Secret[String]) -> Unit ! Console {
+    let public_key: String = declassify(key);
+    println(public_key)
+}

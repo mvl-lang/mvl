@@ -22,9 +22,48 @@
 //   chdir  — changes global cwd; restoration not possible within MVL tests
 //   exit   — terminates the process; untestable by definition
 
-use std.env.{set, remove_var, args, current_dir, getuid, getgid,
+use std.env.{get_secret, set, remove_var, args, current_dir, getuid, getgid,
               sigint, sigterm, sighup, sigusr1, sigusr2, signal_on, signal_reset,
               signal_ignore, Signal}
+
+// ── get_secret ────────────────────────────────────────────────────────────
+
+fn env_get_secret_set_var() -> Result[Bool, String] ! Env {
+    let _: Unit = set("MVL_TEST_SECRET_99994", "super_secret")?;
+    let opt: Option[Secret[String]] = get_secret("MVL_TEST_SECRET_99994");
+    remove_var("MVL_TEST_SECRET_99994");
+    Ok(opt.is_some())
+}
+
+test fn env_get_secret_returns_some_when_set() -> Unit ! Env {
+    assert_eq(env_get_secret_set_var().unwrap_or(false), true);
+}
+
+fn env_get_secret_missing_var() -> Bool ! Env {
+    let opt: Option[Secret[String]] = get_secret("MVL_TEST_SECRET_DEFINITELY_NOT_SET_99995");
+    opt.is_none()
+}
+
+test fn env_get_secret_returns_none_when_missing() -> Unit ! Env {
+    assert_eq(env_get_secret_missing_var(), true);
+}
+
+fn env_get_secret_declassify_roundtrip() -> Result[Bool, String] ! Env {
+    let _: Unit = set("MVL_TEST_SECRET_99996", "roundtrip_value")?;
+    let opt: Option[Secret[String]] = get_secret("MVL_TEST_SECRET_99996");
+    remove_var("MVL_TEST_SECRET_99996");
+    match opt {
+        Some(s) => {
+            let plain: Public[String] = declassify(s);
+            Ok(plain == "roundtrip_value")
+        },
+        None => Ok(false),
+    }
+}
+
+test fn env_get_secret_declassify_roundtrip_correct() -> Unit ! Env {
+    assert_eq(env_get_secret_declassify_roundtrip().unwrap_or(false), true);
+}
 
 // ── set + remove_var lifecycle ────────────────────────────────────────────
 

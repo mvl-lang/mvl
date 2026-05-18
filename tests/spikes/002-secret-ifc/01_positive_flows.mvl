@@ -1,0 +1,32 @@
+// Spike 002-01: Secret[String] — positive flows that MUST compile (#872)
+// These represent valid uses of Secret values.
+
+// Secret → Secret (same label pass-through)
+fn pass_through(key: Secret[String]) -> Secret[String] {
+    key
+}
+
+// Secret inside Option
+fn wrap_option(key: Secret[String]) -> Option[Secret[String]] {
+    Some(key)
+}
+
+// Secret inside Result
+fn wrap_result(key: Secret[String]) -> Result[Secret[String], String] {
+    Ok(key)
+}
+
+// Upward flow: Tainted → Secret (allowed by lattice)
+fn tainted_to_secret(raw: Tainted[String]) -> Secret[String] {
+    raw
+}
+
+// Upward flow: Clean → Secret (allowed by lattice)
+fn clean_to_secret(clean: Clean[String]) -> Secret[String] {
+    clean
+}
+
+// Upward flow: Public → Secret (allowed by lattice)
+fn public_to_secret(pub_val: Public[String]) -> Secret[String] {
+    pub_val
+}

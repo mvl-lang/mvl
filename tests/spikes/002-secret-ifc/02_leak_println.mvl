@@ -1,0 +1,10 @@
+// Spike 002-02: Secret → println MUST be rejected (#872)
+// Downward flow: Secret → Public sink (Console)
+
+fn leak_to_stdout(key: Secret[String]) -> Unit ! Console {
+    println(key)
+}
+
+fn leak_to_stderr(key: Secret[String]) -> Unit ! Console {
+    eprintln(key)
+}

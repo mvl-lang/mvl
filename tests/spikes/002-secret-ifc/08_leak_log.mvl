@@ -1,0 +1,8 @@
+// Spike 002-08: Secret → log_info MUST be rejected (#872)
+// log functions reject Secret[T] and Tainted[T] at compile time.
+
+use std.log.{log_info}
+
+fn leak_to_log(key: Secret[String]) -> Unit ! Log {
+    log_info(key, {})
+}

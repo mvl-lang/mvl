@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.128.0] — 2026-05-18
+
+### Added
+
+- **`env::get_secret()` — Secret[String] for API keys and credentials** (#872): new stdlib function `pub fn get_secret(name: Clean[String]) -> Option[Secret[String]] ! Env` implemented as a pure MVL wrapper over `env::get()`. Upward flow (Tainted → Secret) is free in the IFC lattice — zero Rust runtime changes needed. Secrets loaded via this function cannot be passed to `println`, `log_*`, or any public sink without explicit `declassify()`. Corpus tests, runtime roundtrip tests, and spike validation suite included.
+
 ## [0.127.2] — 2026-05-18
 
 ### Fixed

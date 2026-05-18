@@ -1,0 +1,7 @@
+// Spike 002-07: Secret → format() MUST be rejected (#872)
+// format() takes String, Secret[String] is downward flow.
+
+fn leak_via_format(key: Secret[String]) -> Unit ! Console {
+    let msg: String = format(key);
+    println(msg)
+}

@@ -1,0 +1,11 @@
+// Spike 002-06: Secret struct field → println MUST be rejected (#872)
+// Accessing a Secret field and passing to a public sink.
+
+type ApiConfig = struct {
+    endpoint: String,
+    key: Secret[String],
+}
+
+fn leak_from_struct(config: ApiConfig) -> Unit ! Console {
+    println(config.key)
+}
