@@ -1642,4 +1642,45 @@ fn main() -> String { greet(String::new()) }"#;
             panic!("expected Fn decl");
         }
     }
+
+    #[test]
+    fn parse_type_attached_method_explicit_self_type_is_parsed_as_param() {
+        // GIVEN: fn Counter::get(self: Counter) — explicit `self: T` (non-bare form)
+        // THEN:  parsed normally; self param has type Counter, no rollback needed
+        let d = fn_decl("fn Counter::get(self: Counter) -> Int { 0 }");
+        assert_eq!(d.receiver_type, Some("Counter".to_string()));
+        assert_eq!(d.name, "get");
+        assert_eq!(d.params.len(), 1);
+        assert_eq!(d.params[0].name, "self");
+        assert!(
+            matches!(&d.params[0].ty, TypeExpr::Base { name, .. } if name == "Counter"),
+            "explicit self: Counter param should have Counter type"
+        );
+    }
+
+    #[test]
+    fn parse_type_attached_method_with_multiple_methods() {
+        // GIVEN: two methods on the same type
+        // THEN:  both parse without errors
+        let src = r#"
+fn Counter::get(self) -> Int { 0 }
+fn Counter::set(self, n: Int) -> Unit { }
+"#;
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        assert!(p.errors.is_empty(), "parse errors: {:?}", p.errors);
+        assert_eq!(prog.declarations.len(), 2);
+        let names: Vec<_> = prog
+            .declarations
+            .iter()
+            .filter_map(|d| {
+                if let Decl::Fn(fd) = d {
+                    Some(fd.name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(names.contains(&"get") && names.contains(&"set"));
+    }
 }

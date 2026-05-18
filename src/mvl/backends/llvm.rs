@@ -562,6 +562,11 @@ impl<'ctx> LlvmBackend<'ctx> {
                     } else {
                         fd.name.clone()
                     };
+                    // Note: duplicate fn_decls entries (same llvm_name) silently overwrite
+                    // here — prelude + program re-declarations are expected.  A free function
+                    // named `Logger_info` would shadow the mangled symbol for `fn Logger::info`;
+                    // this is caught at the MVL checker level (DuplicateFnDecl / UndefinedType)
+                    // before LLVM is reached (#875 review).
                     self.fn_return_types
                         .insert(llvm_name.clone(), *fd.return_type.clone());
                     self.fn_decls.insert(llvm_name, fd.clone());

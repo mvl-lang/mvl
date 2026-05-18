@@ -1326,4 +1326,113 @@ fn main() -> Int {
             result.errors
         );
     }
+
+    #[test]
+    fn type_attached_method_on_undefined_receiver_type_is_an_error() {
+        // GIVEN: fn Ghost::method — type `Ghost` is not declared
+        // THEN:  UndefinedType error
+        let src = r#"
+fn Ghost::haunt(self) -> Int { 0 }
+fn main() -> Int { 0 }
+"#;
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        let result = check(&prog);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CheckError::UndefinedType { .. })),
+            "expected UndefinedType error for unknown receiver, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn type_attached_method_without_self_param_is_an_error() {
+        // GIVEN: fn Counter::reset(n: Int) — no `self` first param
+        // THEN:  TypeMismatch error (self enforced as first param)
+        let src = r#"
+type Counter = struct { value: Int }
+fn Counter::reset(n: Int) -> Unit { }
+fn main() -> Unit { }
+"#;
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        let result = check(&prog);
+        assert!(
+            !result.is_ok(),
+            "expected error when self is missing from type-attached method"
+        );
+    }
+
+    #[test]
+    fn type_attached_method_duplicate_is_an_error() {
+        // GIVEN: two declarations of fn Counter::reset
+        // THEN:  error (duplicate method)
+        let src = r#"
+type Counter = struct { value: Int }
+fn Counter::reset(self) -> Int { 0 }
+fn Counter::reset(self) -> Int { 1 }
+fn main() -> Int { 0 }
+"#;
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        let result = check(&prog);
+        assert!(
+            !result.is_ok(),
+            "expected error for duplicate type-attached method, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn type_attached_method_wrong_arg_count_is_an_error() {
+        // GIVEN: method declared with one param, called with two
+        // THEN:  WrongArgCount error
+        let src = r#"
+type Counter = struct { value: Int }
+fn Counter::add(self, n: Int) -> Int { 0 }
+fn main() -> Int {
+    let c: Counter = Counter { value: 0 };
+    c.add(1, 2)
+}
+"#;
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        let result = check(&prog);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CheckError::WrongArgCount { .. })),
+            "expected WrongArgCount for extra arg, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn type_attached_method_undefined_call_is_an_error() {
+        // GIVEN: type with one declared method, different method call attempted
+        // THEN:  UndefinedFunction error (type is in method_table but method is absent)
+        let src = r#"
+type Foo = struct { x: Int }
+fn Foo::get(self) -> Int { 0 }
+fn main() -> Int {
+    let f: Foo = Foo { x: 1 };
+    f.nonexistent()
+}
+"#;
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        let result = check(&prog);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CheckError::UndefinedFunction { .. })),
+            "expected UndefinedFunction for missing method, got: {:?}",
+            result.errors
+        );
+    }
 }
