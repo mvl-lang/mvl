@@ -17,7 +17,7 @@
 //! Effects: Console + Env (all parse_args callers).
 
 use std.env.{args, exit}
-use std.collections.{map_get, map_put, map_without, map_contains_key}
+use std.collections.{map_get, map_put, map_contains_key, map_new}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -128,31 +128,6 @@ pub fn get_flag(args: Map[String, ArgValue], name: String) -> Bool {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-// `{}` parses as an empty block in MVL — use sentinel-and-remove pattern.
-fn empty_string_map() -> Map[String, String] {
-    let m: ref Map[String, String] = {"__mvl_args_init__": ""};
-    m = map_without(m, "__mvl_args_init__");
-    m
-}
-
-fn empty_arg_map() -> Map[String, ArgValue] {
-    let m: ref Map[String, ArgValue] = {"__mvl_args_init__": ArgValue::Bool(false)};
-    m = map_without(m, "__mvl_args_init__");
-    m
-}
-
-fn empty_clean_map() -> Map[String, Clean[String]] {
-    let m: ref Map[String, Clean[String]] = {"__mvl_args_init__": sanitize("")};
-    m = map_without(m, "__mvl_args_init__");
-    m
-}
-
-fn empty_bool_map() -> Map[String, Bool] {
-    let m: ref Map[String, Bool] = {"__mvl_args_init__": false};
-    m = map_without(m, "__mvl_args_init__");
-    m
-}
-
 fn type_label(ty: ArgType) -> String {
     match ty {
         ArgType::Str   => "Str",
@@ -163,7 +138,7 @@ fn type_label(ty: ArgType) -> String {
 
 /// Build a set of declared flag names for schema-aware tokenization.
 fn build_flag_set(schema: List[FieldSpec]) -> Map[String, Bool] {
-    let flags: ref Map[String, Bool] = empty_bool_map();
+    let flags: ref Map[String, Bool] = map_new();
     let len: Int = list_len(schema);
     let i: ref Int = 0;
     while i < len {
@@ -293,7 +268,7 @@ pub fn parse_args(schema: List[FieldSpec]) -> Map[String, ArgValue] ! Console + 
     // Schema-driven disambiguation: only names declared as Flag are treated as
     // boolean flags.  Value fields always consume the next token, even when it
     // starts with '-' (e.g. --threshold -0.5 is valid for a Float field).
-    let raw_named: ref Map[String, Clean[String]] = empty_clean_map();
+    let raw_named: ref Map[String, Clean[String]] = map_new();
     let positionals: ref List[Clean[String]] = [];
     let i: ref Int = 1;
     while i < argc {
@@ -352,7 +327,7 @@ pub fn parse_args(schema: List[FieldSpec]) -> Map[String, ArgValue] ! Console + 
     }
 
     // ── Second pass: resolve schema against collected tokens ──────────────────
-    let result: ref Map[String, ArgValue] = empty_arg_map();
+    let result: ref Map[String, ArgValue] = map_new();
     let pos_i: ref Int = 0;
     let schema_len: Int = list_len(schema);
     let si: ref Int = 0;

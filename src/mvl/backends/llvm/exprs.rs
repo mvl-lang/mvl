@@ -2076,6 +2076,11 @@ impl<'ctx> LlvmBackend<'ctx> {
                         }
                     }
                 }
+                // map_new[K, V]() → empty MvlMap via mvl_map_new.
+                if name == "map_new" && args.is_empty() {
+                    return self.emit_map_literal(&[]);
+                }
+
                 // list_push[T](arr, elem) → call mvl_array_push(arr, &elem), return arr.
                 // Handles the generic case where T may be a struct (e.g. Value), avoiding
                 // the type mismatch from the i64-defaulted pre-declaration.

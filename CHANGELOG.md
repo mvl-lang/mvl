@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.130.0] — 2026-05-18
+
+### Added
+
+- **`map_new[K, V]() -> Map[K, V]` builtin for empty map creation** (#860): new stdlib function to create empty maps without the sentinel-and-remove workaround. `{}` parses as an empty block, not a map literal; `map_new()` provides a clean alternative. Inline codegen in both backends: Rust → `HashMap::new()`, LLVM → `mvl_map_new(8)`. Removes four workaround helpers from `std/args.mvl` that existed solely for this limitation.
+
 ## [0.129.0] — 2026-05-18
 
 ### Added
