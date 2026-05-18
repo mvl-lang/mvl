@@ -18,12 +18,15 @@
 //! The C-ABI functions borrow both pointers — they do not drop or clone the
 //! MvlString or MvlMap. The LLVM caller retains ownership and drops as normal.
 
+#[cfg(test)]
 use std::collections::HashMap;
 use std::slice;
 
 use crate::memory::mvl_string_new;
 
-use crate::memory::{MvlMap, MvlString};
+#[cfg(test)]
+use crate::memory::MvlMap;
+use crate::memory::MvlString;
 use mvl_runtime::stdlib::log::{
     log_get_format_int, log_get_level_int, log_set_format, log_timestamp, log_write, LogFormat,
 };
@@ -46,6 +49,7 @@ unsafe fn read_mvl_string(s: *const MvlString) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
+#[cfg(test)]
 #[allow(unsafe_code)]
 unsafe fn read_mvl_map(m: *const MvlMap) -> HashMap<String, String> {
     let mut result = HashMap::new();
