@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.128.1] — 2026-05-18
+
+### Fixed
+
+- **Refinement subsumption: Ty::Refined now stores RefExpr AST, not Debug string** (#880): predicates are stored as `Box<RefExpr>` instead of `format!("{pred:?}")` strings. Structural `PartialEq` on `RefExpr` allows two refined types with syntactically different but semantically equivalent predicates (e.g. `x > 0 && x < 10` vs `x < 10 && x > 0`) to be correctly recognized as equal. This fixes subsumption checks that were falling back to `RuntimeCheck` due to string inequality. The string field was dead code (all match arms discarded it with `_`).
+
 ## [0.128.0] — 2026-05-18
 
 ### Added
