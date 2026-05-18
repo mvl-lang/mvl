@@ -70,7 +70,6 @@ Requirements: 1=Type Safety, 2=Memory Safety, 3=Exhaustive Match, 4=Null Elimina
 | 05_effects/io_basic.mvl | ✓ | | | | | | ✓ | | | | | Console + File |
 | 05_effects/log_output.mvl | ✓ | | | | | | ✓ | | | | ✓ | Log effect + IFC label |
 | 05_effects/logging.mvl | ✓ | | | | | | ✓ | | | | ✓ | Logging with labels |
-| 05_effects/parametrized.mvl | ✓ | | | | | | ✓ | | | | | Parametrized effects |
 | 05_effects/propagation.mvl | ✓ | | | | | | ✓ | | | | | Effect propagation to callers |
 | 05_effects/pure_vs_effectful.mvl | ✓ | | | | | | ✓ | | | | | Pure fn vs effectful fn |
 | 05_effects/random_choice.mvl | ✓ | | | | | | ✓ | | | | | Random effect |

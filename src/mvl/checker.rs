@@ -694,7 +694,7 @@ mod tests {
         );
     }
 
-    // ── Parametrized effects (002-effect-system Req 3 / issue #290) ──────
+    // ── Effect name validation (002-effect-system Req 2-3) ───────────────
 
     #[test]
     fn terminal_effect_name_accepted() {

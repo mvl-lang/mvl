@@ -164,7 +164,7 @@ pub enum VariantFieldsInfo {
 pub struct FnInfo {
     pub params: Vec<Ty>,
     pub ret: Ty,
-    /// Declared effects (Req 7): `! DB + Console` or `! FileRead("/path")`
+    /// Declared effects (Req 7): `! DB + Console`
     pub effects: Vec<Effect>,
     /// Totality annotation (Req 8): None = implicitly total, Some(Partial) = partial.
     pub totality: Option<Totality>,

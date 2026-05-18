@@ -108,8 +108,6 @@ impl TypeChecker {
             }
 
             // Req 7/8: Effect propagation — caller must declare all effects of callee.
-            // Req 3: Parametrized effects — declared `/data` covers required `/data/file.txt`
-            // (prefix subsetting via `effect_satisfies`).
             for required in &fn_info.effects {
                 let covered = self
                     .current_fn_effects
