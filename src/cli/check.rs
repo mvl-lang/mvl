@@ -176,12 +176,17 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
 
     let registry = PassRegistry::default_registry();
 
+    // #839: Load the implicit prelude (core.mvl, strings.mvl, lists.mvl) first so
+    // that println/print/eprintln/eprint (now pure MVL wrappers in core.mvl) are
+    // always visible without an explicit `use std.core`.
+    let mut stdlib_prelude = loader::load_implicit_prelude();
+
     // Pre-parse stdlib files imported by user programs so the checker knows
     // about their types and functions.  This covers `use std.io.{...}` etc.
-    let mut stdlib_prelude = loader::load_stdlib_prelude(
+    stdlib_prelude.extend(loader::load_stdlib_prelude(
         parsed.iter().take(check_count).map(|(_, p, _)| p),
         &stdlib_dir,
-    );
+    ));
 
     // Load any `pkg.*` package modules referenced by the user programs so the
     // checker can resolve their types and functions (mirrors build behaviour).

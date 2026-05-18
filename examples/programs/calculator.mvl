@@ -25,14 +25,14 @@ total fn max(a: Int, b: Int) -> Int {
 
 fn main() -> Unit ! Console {
     let x: Int = add(10, 5);
-    println("10 + 5 = {}", x);
+    println(format("10 + 5 = {}", x));
 
     let y: Int = sub(10, 5);
-    println("10 - 5 = {}", y);
+    println(format("10 - 5 = {}", y));
 
     let z: Int = mul(4, 7);
-    println("4 * 7 = {}", z);
+    println(format("4 * 7 = {}", z));
 
     let m: Int = max(17, 42);
-    println("max(17, 42) = {}", m);
+    println(format("max(17, 42) = {}", m));
 }

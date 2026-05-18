@@ -17,7 +17,7 @@ fn classify(n: Int) -> String {
 }
 
 fn main() -> Unit ! Console {
-    println("classify(5) = {}", classify(5));
-    println("classify(-3) = {}", classify(-3));
-    println("classify(0) = {}", classify(0));
+    println(format("classify(5) = {}", classify(5)));
+    println(format("classify(-3) = {}", classify(-3)));
+    println(format("classify(0) = {}", classify(0)));
 }

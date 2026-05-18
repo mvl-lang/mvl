@@ -8,5 +8,5 @@ use std.time.{DateTime, format_datetime}
 
 fn main() -> Unit ! Console {
     let dt: DateTime = DateTime { year: 2024, month: 3, day: 15, hour: 12, minute: 30, second: 45 };
-    println("{}", format_datetime(dt, "%Y-%m-%dT%H:%M:%S"));
+    println(format("{}", format_datetime(dt, "%Y-%m-%dT%H:%M:%S")));
 }

@@ -15,7 +15,7 @@ fn main() -> Unit ! Console {
     let h1: String = sha256("");
     let h2: String = sha256("abc");
     let h3: String = sha512("");
-    println("{}", h1);
-    println("{}", h2);
-    println("{}", h3);
+    println(format("{}", h1));
+    println(format("{}", h2));
+    println(format("{}", h3));
 }

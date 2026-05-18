@@ -4,20 +4,20 @@
 
 // Effect that logs a value
 fn consume_and_log(x: Int) -> Unit ! Console {
-    println(x)
+    println(format("{}", x))
 }
 
 // Mutable local with effect
 fn mutate_and_log(x: Int) -> Unit ! Console + DB {
     let y: ref Int = x;
     y = y + 1;
-    println(y)
+    println(format("{}", y))
 }
 
 // Clone-on-pass: Array is passed by value; original remains accessible
 total fn move_prevention(vec: Array[Int]) -> Int ! Console {
     let first: Int = match vec.first() { Some(v) => v, None => 0 };
-    println(first);
+    println(format("{}", first));
     vec.len()
 }
 

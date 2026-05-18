@@ -3,5 +3,5 @@
 
 fn main() -> Unit ! Console {
     let password: Secret[String] = "s3cr3t";
-    println("password: {}", password);
+    stdout_write(stdout(), password);
 }

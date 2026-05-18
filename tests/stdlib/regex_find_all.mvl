@@ -10,7 +10,7 @@ fn main() -> Unit ! Console {
     match compile(r"\d+") {
         Ok(re) => {
             let matches: List[Match] = find_all(re, "1 22 333");
-            println("{}", matches.len());
+            println(format("{}", matches.len()));
         }
         Err(_) => println("err"),
     }
@@ -18,7 +18,7 @@ fn main() -> Unit ! Console {
     match compile(r"\d+") {
         Ok(re2) => {
             let zero: List[Match] = find_all(re2, "abc");
-            println("{}", zero.len());
+            println(format("{}", zero.len()));
         }
         Err(_) => println("err"),
     }

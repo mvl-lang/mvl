@@ -29,7 +29,7 @@ fn main() -> Unit ! Console {
     // Generic function called with two different concrete types.
     let n: Int    = identity(42);
     let s: String = identity("hello");
-    println("{}", n);
+    println(format("{}", n));
     println(s);
 
     // Option[Point]: Some path exercises struct payload via pointer.

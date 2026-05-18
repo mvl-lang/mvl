@@ -88,6 +88,20 @@ pub struct Stdin {
     inner: std::io::Stdin,
 }
 
+/// Standard output handle — mirrors `Stdout` in `std/io.mvl`.
+///
+/// Obtained via [`stdout`]. Pass to [`stdout_write`] to write to stdout.
+pub struct Stdout {
+    inner: std::io::Stdout,
+}
+
+/// Standard error handle — mirrors `Stderr` in `std/io.mvl`.
+///
+/// Obtained via [`stderr`]. Pass to [`stderr_write`] to write to stderr.
+pub struct Stderr {
+    inner: std::io::Stderr,
+}
+
 // ── Path construction (pure) ───────────────────────────────────────────────
 
 /// Construct a [`Path`] from a `String`.
@@ -378,6 +392,34 @@ pub fn stdin_read_to_string(s: Stdin) -> Result<Tainted<String>, IoError> {
         .read_to_string(&mut buf)
         .map(|_| Tainted(buf))
         .map_err(|e| sanitize_io_error(&e))
+}
+
+// ── Standard output / error (! Console) ───────────────────────────────────
+
+/// Return the standard output handle.
+pub fn stdout() -> Stdout {
+    Stdout {
+        inner: std::io::stdout(),
+    }
+}
+
+/// Return the standard error handle.
+pub fn stderr() -> Stderr {
+    Stderr {
+        inner: std::io::stderr(),
+    }
+}
+
+/// Write a string to stdout without a trailing newline.
+pub fn stdout_write(s: Stdout, line: String) {
+    use std::io::Write as _;
+    let _ = s.inner.lock().write_all(line.as_bytes());
+}
+
+/// Write a string to stderr without a trailing newline.
+pub fn stderr_write(s: Stderr, line: String) {
+    use std::io::Write as _;
+    let _ = s.inner.lock().write_all(line.as_bytes());
 }
 
 // ── Error type ────────────────────────────────────────────────────────────

@@ -7,19 +7,28 @@
 //! Effects: varies by function (println → Console, read_file → FileRead, …).
 
 /// Print a value followed by a newline.
-pub builtin fn println(value: String) -> Unit
+pub fn println(value: String) -> Unit ! Console {
+    stdout_write(stdout(), str_concat(value, "\n"))
+}
 
 /// Print a value without a trailing newline.
-pub builtin fn print(value: String) -> Unit
+pub fn print(value: String) -> Unit ! Console {
+    stdout_write(stdout(), value)
+}
 
 /// Print a value to stderr followed by a newline.
-pub builtin fn eprintln(value: String) -> Unit
+pub fn eprintln(value: String) -> Unit ! Console {
+    stderr_write(stderr(), str_concat(value, "\n"))
+}
 
 /// Print a value to stderr without a trailing newline.
-pub builtin fn eprint(value: String) -> Unit
+pub fn eprint(value: String) -> Unit ! Console {
+    stderr_write(stderr(), value)
+}
 
 /// Format a value as a string.
-pub builtin fn format(value: String) -> String
+/// `transparent` ensures security labels propagate: format("{}", secret) → Secret[String].
+transparent pub builtin fn format(value: String) -> String
 
 /// Assert a condition; panic if false.
 pub builtin fn assert(condition: Bool) -> Unit
@@ -33,10 +42,11 @@ pub builtin fn panic(message: String) -> Never
 
 /// Generate a sequence of integers [start, end) — exclusive upper bound.
 /// Semantics: range(0, 5) produces [0, 1, 2, 3, 4].
-pub partial fn range(start: Int, end: Int) -> List[Int] {
+/// `decreases end - current` proves termination, making range callable from total functions.
+pub fn range(start: Int, end: Int) -> List[Int] {
     let result: ref List[Int] = [];
     let current: ref Int = start;
-    while current < end {
+    while current < end decreases end - current {
         result.push(current);
         current = current + 1
     }

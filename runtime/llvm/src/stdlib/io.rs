@@ -329,6 +329,47 @@ pub unsafe extern "C" fn _mvl_io_chmod(path: *const MvlString, mode: i64) -> Llv
     }
 }
 
+// ── Standard output / error ───────────────────────────────────────────────────
+
+/// `stdout() → Stdout` — return a unit struct (null ptr sentinel at LLVM level).
+///
+/// At the LLVM IR level `Stdout` is represented as an opaque pointer; we return
+/// a null pointer since the actual I/O uses libc directly in `_mvl_io_stdout_write`.
+#[no_mangle]
+pub extern "C" fn _mvl_io_stdout() -> *const c_void {
+    std::ptr::null()
+}
+
+/// `stderr() → Stderr` — return a unit struct (null ptr sentinel at LLVM level).
+#[no_mangle]
+pub extern "C" fn _mvl_io_stderr() -> *const c_void {
+    std::ptr::null()
+}
+
+/// `stdout_write(s: Stdout, line: String) → Unit`
+///
+/// # Safety
+/// `line` must be a valid `MvlString*` for the duration of the call.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn _mvl_io_stdout_write(_s: *const c_void, line: *const MvlString) {
+    use std::io::Write as _;
+    let s = read_mvl_string(line);
+    let _ = std::io::stdout().lock().write_all(s.as_bytes());
+}
+
+/// `stderr_write(s: Stderr, line: String) → Unit`
+///
+/// # Safety
+/// `line` must be a valid `MvlString*` for the duration of the call.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn _mvl_io_stderr_write(_s: *const c_void, line: *const MvlString) {
+    use std::io::Write as _;
+    let s = read_mvl_string(line);
+    let _ = std::io::stderr().lock().write_all(s.as_bytes());
+}
+
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

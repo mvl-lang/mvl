@@ -1030,10 +1030,11 @@ fn prelude_stub_with_empty_body_is_skipped() {
     );
 }
 
-/// MACRO_HANDLED names (println, print, eprintln, format) are excluded even
-/// when they have non-empty bodies.
+/// println is a pure-MVL wrapper (#839) and IS emitted as a regular Rust function
+/// from the prelude when it has a non-empty body. Only `format` (Rust macro) is
+/// excluded from prelude emission.
 #[test]
-fn macro_handled_names_are_excluded_from_prelude() {
+fn println_from_prelude_is_emitted_as_function() {
     let prelude_src = r#"pub fn println(value: String) -> Unit { let _x: String = value; }"#;
     let user_src = "fn f() -> Unit { }";
     let prelude = vec![parse_prog(prelude_src)];
@@ -1047,9 +1048,12 @@ fn macro_handled_names_are_excluded_from_prelude() {
         Default::default(),
         Default::default(),
     );
+    // println is no longer macro-handled (#839) so it IS emitted as a Rust function.
+    assert_contains(&out.main_rs, "fn println(");
+    // format is still macro-handled and must not appear as a regular function.
     assert!(
-        !out.main_rs.contains("fn println("),
-        "macro-handled fn must not appear as a regular function:\n{}",
+        !out.main_rs.contains("fn format("),
+        "format must not appear as a regular function:\n{}",
         out.main_rs
     );
 }
@@ -1598,30 +1602,45 @@ fn method_len_labeled_list_emits_label_wrapped_len() {
     assert_contains(&rust, ").0.len() as i64)");
 }
 
-// ── std/core.mvl: print/eprint/panic/assert (#556) ───────────────────────────
+// ── std/core.mvl: print/eprint/panic/assert (#556, #839) ─────────────────────
+// print/println/eprint/eprintln are now pure-MVL wrappers (#839) — they are
+// emitted as regular Rust function calls, not as Rust macros.
 
 #[test]
-fn print_emits_rust_macro() {
-    // print(s) → print!("{}", s) via macro arm
+fn print_emits_function_call() {
+    // print(s) → print(s.into()) — regular function call, not a macro (#839)
     let src = r#"fn f(s: String) -> Unit ! Console { print(s) }"#;
     let rust = transpile_src(src);
-    assert_contains(&rust, "print!(");
+    // Must NOT emit as Rust macro (that was the pre-#839 behavior)
+    assert!(
+        !rust.contains("print!("),
+        "print must not be emitted as a Rust macro:\n{rust}"
+    );
+    assert_contains(&rust, "print(");
 }
 
 #[test]
-fn eprint_emits_rust_macro() {
-    // eprint(s) → eprint!("{}", s) via macro arm
+fn eprint_emits_function_call() {
+    // eprint(s) → eprint(s.into()) — regular function call, not a macro (#839)
     let src = r#"fn f(s: String) -> Unit ! Console { eprint(s) }"#;
     let rust = transpile_src(src);
-    assert_contains(&rust, "eprint!(");
+    assert!(
+        !rust.contains("eprint!("),
+        "eprint must not be emitted as a Rust macro:\n{rust}"
+    );
+    assert_contains(&rust, "eprint(");
 }
 
 #[test]
-fn eprintln_emits_rust_macro() {
-    // eprintln(s) → eprintln!("{}", s) via macro arm
+fn eprintln_emits_function_call() {
+    // eprintln(s) → eprintln(s.into()) — regular function call, not a macro (#839)
     let src = r#"fn f(s: String) -> Unit ! Console { eprintln(s) }"#;
     let rust = transpile_src(src);
-    assert_contains(&rust, "eprintln!(");
+    assert!(
+        !rust.contains("eprintln!("),
+        "eprintln must not be emitted as a Rust macro:\n{rust}"
+    );
+    assert_contains(&rust, "eprintln(");
 }
 
 #[test]
@@ -1712,13 +1731,17 @@ fn from_int_call_emits_as_u8() {
 }
 
 #[test]
-fn emit_args_for_macro_non_literal_first_arg_generates_placeholder() {
-    // When println's first arg is not a string literal, a "{}" placeholder
-    // must be generated for each argument.
+fn println_with_variable_arg_emits_function_call() {
+    // println(msg) → println(msg.into()) — regular function call (#839).
+    // Before #839 this emitted println!("{}", msg) via the macro arm; now
+    // println is a pure-MVL wrapper so calls go through the function.
     let src = r#"fn f(msg: String) -> Unit { println(msg) }"#;
     let rust = transpile_src(src);
-    assert_contains(&rust, "println!(");
-    assert_contains(&rust, "\"{}\"");
+    assert!(
+        !rust.contains("println!("),
+        "println must not be emitted as a Rust macro:\n{rust}"
+    );
+    assert_contains(&rust, "println(");
 }
 
 #[test]

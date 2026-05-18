@@ -18,9 +18,9 @@ fn main() -> Unit ! Console {
     let map_len: Int    = scores.len();
     let has_alice: Bool = scores.contains_key("alice");
     let has_carol: Bool = scores.contains_key("carol");
-    println("map_len={}", map_len);
-    println("has_alice={}", has_alice);
-    println("has_carol={}", has_carol);
+    println(format("map_len={}", map_len));
+    println(format("has_alice={}", has_alice));
+    println(format("has_carol={}", has_carol));
 
     // ── Set ─────────────────────────────────────────────────────────────────
     let primes: Set[Int] = {2, 3, 5, 7};
@@ -28,7 +28,7 @@ fn main() -> Unit ! Console {
     let set_len: Int   = primes.len();
     let has_five: Bool = primes.contains(5);
     let has_nine: Bool = primes.contains(9);
-    println("set_len={}", set_len);
-    println("has_five={}", has_five);
-    println("has_nine={}", has_nine);
+    println(format("set_len={}", set_len));
+    println(format("has_five={}", has_five));
+    println(format("has_nine={}", has_nine));
 }
