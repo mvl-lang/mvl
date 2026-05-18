@@ -15,7 +15,7 @@ test fn test_value_int_round_trips() -> Unit {
     let v: Value = Value::Int(42);
     match v {
         Value::Int(n) => assert_eq(n, 42),
-        _ => assert_eq(1, 0),
+        _ => panic("unreachable: expected Value::Int"),
     }
 }
 
@@ -23,7 +23,7 @@ test fn test_value_text_round_trips() -> Unit {
     let v: Value = Value::Text("Alice");
     match v {
         Value::Text(s) => assert_eq(s, "Alice"),
-        _ => assert_eq(1, 0),
+        _ => panic("unreachable: expected Value::Text"),
     }
 }
 
@@ -31,7 +31,7 @@ test fn test_value_null_matches() -> Unit {
     let v: Value = Value::Null;
     match v {
         Value::Null => assert_eq(1, 1),
-        _ => assert_eq(1, 0),
+        _ => panic("unreachable: expected Value::Null"),
     }
 }
 
@@ -39,7 +39,7 @@ test fn test_value_bool_true() -> Unit {
     let v: Value = Value::Bool(true);
     match v {
         Value::Bool(b) => assert_eq(b, true),
-        _ => assert_eq(1, 0),
+        _ => panic("unreachable: expected Value::Bool(true)"),
     }
 }
 
@@ -47,7 +47,7 @@ test fn test_value_bool_false() -> Unit {
     let v: Value = Value::Bool(false);
     match v {
         Value::Bool(b) => assert_eq(b, false),
-        _ => assert_eq(1, 0),
+        _ => panic("unreachable: expected Value::Bool(false)"),
     }
 }
 
@@ -55,7 +55,7 @@ test fn test_value_float_round_trips() -> Unit {
     let v: Value = Value::Float(3.14);
     match v {
         Value::Float(f) => assert_eq(f > 3.0, true),
-        _ => assert_eq(1, 0),
+        _ => panic("unreachable: expected Value::Float"),
     }
 }
 
@@ -63,7 +63,7 @@ test fn test_value_blob_round_trips() -> Unit {
     let v: Value = Value::Blob([65, 66, 67]);
     match v {
         Value::Blob(b) => assert_eq(b.len(), 3),
-        _ => assert_eq(1, 0),
+        _ => panic("unreachable: expected Value::Blob"),
     }
 }
 
@@ -73,7 +73,7 @@ test fn test_error_not_found() -> Unit {
     let e: SqliteError = SqliteError::NotFound;
     match e {
         SqliteError::NotFound => assert_eq(1, 1),
-        _ => assert_eq(1, 0),
+        _ => panic("unreachable: expected SqliteError::NotFound"),
     }
 }
 
@@ -81,7 +81,7 @@ test fn test_error_busy() -> Unit {
     let e: SqliteError = SqliteError::Busy;
     match e {
         SqliteError::Busy => assert_eq(1, 1),
-        _ => assert_eq(1, 0),
+        _ => panic("unreachable: expected SqliteError::Busy"),
     }
 }
 
@@ -89,7 +89,7 @@ test fn test_error_constraint_carries_message() -> Unit {
     let e: SqliteError = SqliteError::ConstraintViolation("UNIQUE constraint failed");
     match e {
         SqliteError::ConstraintViolation(msg) => assert_eq(msg, "UNIQUE constraint failed"),
-        _ => assert_eq(1, 0),
+        _ => panic("unreachable: expected SqliteError::ConstraintViolation"),
     }
 }
 
@@ -97,7 +97,7 @@ test fn test_error_invalid_sql_carries_message() -> Unit {
     let e: SqliteError = SqliteError::InvalidSql("near \"SELCT\": syntax error");
     match e {
         SqliteError::InvalidSql(msg) => assert_eq(msg, "near \"SELCT\": syntax error"),
-        _ => assert_eq(1, 0),
+        _ => panic("unreachable: expected SqliteError::InvalidSql"),
     }
 }
 
@@ -105,6 +105,6 @@ test fn test_error_other_carries_message() -> Unit {
     let e: SqliteError = SqliteError::Other("disk full");
     match e {
         SqliteError::Other(msg) => assert_eq(msg, "disk full"),
-        _ => assert_eq(1, 0),
+        _ => panic("unreachable: expected SqliteError::Other"),
     }
 }
