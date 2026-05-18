@@ -118,8 +118,16 @@ impl LlvmCompiler {
         // #583: run the checker on the merged program so expr_types is available
         // for generic builtin call sites (choice[T], shuffle[T]) during emission.
         let check_result = crate::mvl::checker::check(&merged);
+        // ADR-0034: compute the monomorphization plan before emission so all
+        // generic instantiations are pre-emitted in emit_program's mono pass.
+        let mono = {
+            use crate::mvl::passes::mono::{collect_fns, monomorphize};
+            let all_fns = collect_fns(std::iter::once(&merged));
+            monomorphize(&merged, &all_fns, &check_result.expr_types)
+        };
         let mut backend = LlvmBackend::new(&self.context, module_name);
         backend.expr_types = check_result.expr_types;
+        backend.mono = Some(mono);
         backend.assert_mode = self.assert_mode;
         backend.emit_program(&merged);
         backend.verify()?;
@@ -460,6 +468,12 @@ struct LlvmBackend<'ctx> {
     /// type-specific inline IR without going through the C-ABI dispatch table.
     expr_types: HashMap<crate::mvl::parser::lexer::Span, crate::mvl::checker::types::Ty>,
 
+    // ── ADR-0034: pre-computed monomorphization plan ──────────────────────────
+    /// All generic instantiations discovered by the mono pass before emission.
+    /// Populated in `compile_to_ir_with_prelude`; consumed by the mono pre-emit
+    /// pass in `emit_program` so every call site finds the symbol already defined.
+    mono: Option<crate::mvl::passes::mono::MonoProgram>,
+
     // ── #588: lambda lowering ─────────────────────────────────────────────────
     /// Counter for generating unique names for lambda functions (`__lambda_N`).
     lambda_counter: u32,
@@ -499,6 +513,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             heap_locals: HashMap::new(),
             stdlib_imports: HashMap::new(),
             expr_types: HashMap::new(),
+            mono: None,
             lambda_counter: 0,
             assert_mode: crate::mvl::backends::AssertMode::Always,
             actor_decls: HashMap::new(),
@@ -579,6 +594,39 @@ impl<'ctx> LlvmBackend<'ctx> {
             let actors: Vec<ActorDecl> = self.actor_decls.values().cloned().collect();
             for ad in actors {
                 self.emit_actor_decl(&ad);
+            }
+        }
+
+        // ADR-0034 mono pass: pre-emit all monomorphized generic function copies so
+        // call sites find the symbol already defined instead of triggering JIT emission.
+        // Must run before the second pass so that user function bodies can call them.
+        if let Some(mono) = &self.mono {
+            struct MonoEntry {
+                mangled: String,
+                type_sub_exprs: Vec<(String, TypeExpr)>,
+                decl: crate::mvl::parser::ast::FnDecl,
+            }
+            let entries: Vec<MonoEntry> = mono
+                .fns
+                .iter()
+                .filter(|mf| !mf.type_subs.is_empty())
+                .map(|mf| MonoEntry {
+                    mangled: mf.mangled_name.clone(),
+                    type_sub_exprs: mf
+                        .type_subs
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                    decl: mf.decl.clone(),
+                })
+                .collect();
+            for entry in entries {
+                let llvm_subs: HashMap<String, BasicTypeEnum<'ctx>> = entry
+                    .type_sub_exprs
+                    .iter()
+                    .filter_map(|(k, v)| self.mvl_type_to_llvm(v).map(|t| (k.clone(), t)))
+                    .collect();
+                self.ensure_monomorphized(entry.decl, llvm_subs, &entry.mangled);
             }
         }
 

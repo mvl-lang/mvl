@@ -66,6 +66,10 @@ pub struct TranspileResult {
     pub mutants: Vec<MutantInfo>,
     /// MC/DC decision metadata, non-empty when `mcdc_start_id` was set.
     pub decisions: Vec<MCDCDecision>,
+    /// ADR-0034: monomorphization plan computed during the pipeline pass.
+    /// The Rust backend does not apply it to emission (Rust handles generics
+    /// natively), but computing it here establishes backend pipeline parity.
+    pub mono: crate::mvl::passes::mono::MonoProgram,
 }
 
 /// Output of a successful transpilation.
@@ -315,6 +319,19 @@ pub fn transpile(prog: &Program, config: TranspileConfig) -> TranspileResult {
         check_result.expr_types
     };
 
+    // ADR-0034: compute the monomorphization plan as part of the pipeline.
+    // The Rust backend does not apply it to emission (Rust generics are handled
+    // natively by the compiler), but this establishes pipeline parity with LLVM.
+    let mono = {
+        use crate::mvl::passes::mono::{collect_fns, monomorphize};
+        let all_fns = if has_prelude {
+            collect_fns(config.prelude_progs.iter().chain(std::iter::once(prog)))
+        } else {
+            collect_fns(std::iter::once(prog))
+        };
+        monomorphize(prog, &all_fns, &expr_types)
+    };
+
     let mut cg = RustEmitter::new();
     cg.expr_types = expr_types;
     cg.assert_mode = config.assert_mode;
@@ -375,6 +392,7 @@ pub fn transpile(prog: &Program, config: TranspileConfig) -> TranspileResult {
         branches,
         mutants,
         decisions,
+        mono,
     }
 }
 

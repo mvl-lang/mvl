@@ -2377,10 +2377,11 @@ impl<'ctx> LlvmBackend<'ctx> {
                             }
                         }
                     }
-                    // L5-08: generic function → monomorphize JIT and call the mangled version.
+                    // ADR-0034: generic function → call the pre-emitted monomorphized copy.
+                    // The mono pass in emit_program pre-emits all instantiations; ensure_monomorphized
+                    // here is a no-op for those and a fallback for any the pass may have missed.
                     // Builtin generic functions (e.g. list_get[T], list_len[T]) already have a
-                    // concrete body emitted by the fourth pass of emit_program using pointer-typed
-                    // parameters, so no monomorphization is needed — just call the base symbol.
+                    // concrete body emitted by the fourth pass using pointer-typed parameters.
                     if !fd.type_params.is_empty() && !fd.is_builtin {
                         // Emit all arguments first to get their concrete LLVM types.
                         let arg_vals: Vec<BasicValueEnum<'ctx>> =
