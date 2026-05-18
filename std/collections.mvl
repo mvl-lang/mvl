@@ -69,6 +69,10 @@ pub fn map_is_empty[K, V](m: Map[K, V]) -> Bool {
     m.len() == 0
 }
 
+/// Create a new empty map.
+/// Use when `{}` is ambiguous (parsed as empty block, not empty map literal).
+pub builtin fn map_new[K, V]() -> Map[K, V]
+
 // ── Set[T] ───────────────────────────────────────────────────────────────────
 
 /// True if `s` contains `x`.

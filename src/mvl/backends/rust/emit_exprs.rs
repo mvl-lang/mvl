@@ -640,6 +640,10 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                 cg.push("(");
                 emit_args_no_into(cg, args);
                 cg.push(")");
+            } else if name.as_str() == "map_new" {
+                // map_new[K, V]() → std::collections::HashMap::new().
+                // Type is inferred from the let-binding annotation.
+                cg.push("std::collections::HashMap::new()");
             } else if name.as_str() == "from_int" {
                 // from_int(n: Int) -> Byte — wrapping cast i64 → u8.
                 // The checker enforces exactly 1 Int argument; assert here as a
