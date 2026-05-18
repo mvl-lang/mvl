@@ -111,6 +111,7 @@ test-unit: ## Run unit tests only
 
 test-integration: ## Dev convenience: run all integration test binaries at once (may overlap with named targets in make test)
 	cargo test --tests
+	@bash tests/integration/compile_and_run/args.sh
 
 test-requirements: ## Run requirement verdict tests — one Proven + one Failed per requirement (1–11)
 	cargo test --test requirements -- --test-threads=1
