@@ -1766,6 +1766,23 @@ fn declassification_corpus_parses_and_checks() {
 }
 
 #[test]
+fn secret_env_corpus_parses_and_checks() {
+    // GIVEN: secret_env corpus (#872) — positive flows for Secret[String] IFC
+    // THEN: no type errors (UndefinedFunction for Token type is OK)
+    let src = include_str!("corpus/06_ifc/secret_env.mvl");
+    let result = check_src(src);
+    let serious_errors: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| !matches!(e, CheckError::UndefinedFunction { .. }))
+        .collect();
+    assert!(
+        serious_errors.is_empty(),
+        "secret_env corpus should have no IFC violations, got: {serious_errors:?}"
+    );
+}
+
+#[test]
 fn sanitize_tainted_returns_clean() {
     // GIVEN: sanitize(tainted_string) where tainted_string: Tainted[String]
     // THEN: no type error when returning Clean[String]
