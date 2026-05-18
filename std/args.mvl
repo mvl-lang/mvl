@@ -141,6 +141,12 @@ fn empty_arg_map() -> Map[String, ArgValue] {
     m
 }
 
+fn empty_clean_map() -> Map[String, Clean[String]] {
+    let m: ref Map[String, Clean[String]] = {"__mvl_args_init__": sanitize("")};
+    m = map_without(m, "__mvl_args_init__");
+    m
+}
+
 fn empty_bool_map() -> Map[String, Bool] {
     let m: ref Map[String, Bool] = {"__mvl_args_init__": false};
     m = map_without(m, "__mvl_args_init__");
@@ -218,9 +224,9 @@ fn build_usage(schema: List[FieldSpec]) -> String {
 
 /// Coerce a raw string token to the declared `ArgType`.
 /// Prints an error to stderr and exits 1 on failure.
-fn coerce_arg(name: String, raw: String, ty: ArgType) -> ArgValue ! Console + Env {
+fn coerce_arg(name: String, raw: Clean[String], ty: ArgType) -> ArgValue ! Console + Env {
     match ty {
-        ArgType::Str => ArgValue::Str(sanitize(raw)),
+        ArgType::Str => ArgValue::Str(raw),
         ArgType::Int => {
             match str_parse_int(raw) {
                 Ok(n)  => ArgValue::Int(n),
@@ -287,8 +293,8 @@ pub fn parse_args(schema: List[FieldSpec]) -> Map[String, ArgValue] ! Console + 
     // Schema-driven disambiguation: only names declared as Flag are treated as
     // boolean flags.  Value fields always consume the next token, even when it
     // starts with '-' (e.g. --threshold -0.5 is valid for a Float field).
-    let raw_named: ref Map[String, String] = empty_string_map();
-    let positionals: ref List[String] = [];
+    let raw_named: ref Map[String, Clean[String]] = empty_clean_map();
+    let positionals: ref List[Clean[String]] = [];
     let i: ref Int = 1;
     while i < argc {
         match list_get(argv, i) {
@@ -300,7 +306,8 @@ pub fn parse_args(schema: List[FieldSpec]) -> Map[String, ArgValue] ! Console + 
                         match str_find(token, "=") {
                             Some(eq_idx) => {
                                 let name: String = str_substring(token, 2, eq_idx);
-                                let value: String = str_substring(token, eq_idx + 1, str_len(token));
+                                let raw_val: String = str_substring(token, eq_idx + 1, str_len(token));
+                                let value: Clean[String] = sanitize(raw_val);
                                 raw_named = map_put(raw_named, name, value)
                             },
                             None => {},
@@ -310,7 +317,7 @@ pub fn parse_args(schema: List[FieldSpec]) -> Map[String, ArgValue] ! Console + 
                         let name: String = str_substring(token, 2, str_len(token));
                         if map_contains_key(flag_set, name) {
                             // Declared boolean flag: never consumes a value token
-                            raw_named = map_put(raw_named, name, "");
+                            raw_named = map_put(raw_named, name, sanitize(""));
                             i = i + 1
                         } else {
                             // Value field: next token is the value regardless of its prefix

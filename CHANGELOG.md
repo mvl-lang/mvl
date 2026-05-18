@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.127.2] — 2026-05-18
+
+### Fixed
+
+- **IFC soundness: Clean[String] label preserved through parse_args tokenizer** (#873): `raw_named` and `positionals` now typed as `Map[String, Clean[String]]` / `List[Clean[String]]`; `coerce_arg` receives `Clean[String]` and returns `ArgValue::Str` directly without re-sanitizing via String. Closes the trust-erosion gap from PR #859 review (Critical 1 & 2). Also fixes two pre-existing transpiler test regressions from commit 9a513f5b (`labeled_param_transpiles`, `corpus_args_transpiles`).
+
 ## [0.127.1] — 2026-05-18
 
 ### Fixed

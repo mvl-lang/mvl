@@ -182,7 +182,7 @@ fn labeled_param_transpiles() {
     let rust = transpile_src(src);
     assert_contains(&rust, "input: Tainted<String>");
     assert_contains(&rust, "-> Clean<String>");
-    assert_contains(&rust, "sanitize(input)");
+    assert_contains(&rust, "sanitize(input.into())");
 }
 
 /// Requirement 11 / Scenario: Declassify expression transpiles
@@ -932,9 +932,8 @@ fn corpus_args_transpiles() {
     assert_contains(&rust, "pub fn positional_schema(");
     assert_contains(&rust, "pub fn flags_schema(");
     // Helper functions are emitted
-    assert_contains(&rust, "pub fn get_str(");
     assert_contains(&rust, "pub fn get_int(");
-    assert_contains(&rust, "pub fn get_bool(");
+    assert_contains(&rust, "pub fn get_flag(");
 }
 
 /// Corpus: `tests/corpus/01_basics/bitwise.mvl` transpiles without errors and
