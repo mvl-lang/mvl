@@ -2889,6 +2889,26 @@ fn implicit_flow_else_branch_sink_verified() {
     );
 }
 
+/// For-loop over a tainted iterator must propagate the iterator label to the
+/// loop variable and raise an ImplicitFlowViolation when the body uses a public sink.
+///
+/// - GIVEN `fn f(items: Tainted[String]) -> Unit`
+/// - WHEN `for x in items { println(x) }`
+/// - THEN `ImplicitFlowViolation` with pc_label="Tainted" is emitted
+#[test]
+fn implicit_flow_for_loop_tainted_iterator_rejected() {
+    let errors = errors_for(
+        r#"fn f(items: Tainted[String]) -> Unit ! Console { for x in items { println(x); } }"#,
+    );
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::ImplicitFlowViolation { pc_label, sink, .. }
+                if pc_label == "Tainted" && sink == "println")
+        ),
+        "println inside for-loop over Tainted iterator should emit ImplicitFlowViolation, got: {errors:?}"
+    );
+}
+
 /// Implicit flow corpus: load and verify the implicit_flow.mvl corpus file.
 ///
 /// The corpus contains only INVALID programs that should each produce

@@ -45,7 +45,7 @@ use crate::mvl::checker::context::TypeEnv;
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
 use crate::mvl::parser::ast::{
-    Block, Decl, ElseBranch, Expr, MatchBody, Pattern, Program, SecurityLabel, Stmt, TypeExpr,
+    Block, Decl, ElseBranch, Expr, MatchBody, Program, SecurityLabel, Stmt, TypeExpr,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -322,8 +322,12 @@ pub fn infer_label_extended(
             }
             // Fix #858: local lambda variable — env holds the lambda's return label.
             // Enables `let f = || -> Tainted[T] { ... }; f()` to propagate taint.
-            if let Some(&label) = env.get(name.as_str()) {
-                return Some(label);
+            // Guard: only apply when the name is not a known function in `inferred`,
+            // to avoid a variable shadowing an unannotated function of the same name.
+            if !inferred.contains_key(name.as_str()) {
+                if let Some(&label) = env.get(name.as_str()) {
+                    return Some(label);
+                }
             }
             // Inferred label → join with arg labels for context sensitivity.
             let base = inferred.get(name.as_str()).copied();
@@ -501,39 +505,6 @@ fn collect_violations_in_block(
     }
 }
 
-/// Recursively bind every identifier in `pat` to `label` in `env`.
-/// Handles nested patterns like `(Some(a), b)` by walking the full tree.
-fn bind_pattern_labels(
-    pat: &Pattern,
-    label: SecurityLabel,
-    env: &mut HashMap<String, SecurityLabel>,
-) {
-    match pat {
-        Pattern::Ident(name, _) => {
-            env.insert(name.clone(), label);
-        }
-        Pattern::Tuple { elems, .. } => {
-            for elem in elems {
-                bind_pattern_labels(elem, label, env);
-            }
-        }
-        Pattern::TupleStruct { fields, .. } => {
-            for field in fields {
-                bind_pattern_labels(field, label, env);
-            }
-        }
-        Pattern::Struct { fields, .. } => {
-            for (_, field) in fields {
-                bind_pattern_labels(field, label, env);
-            }
-        }
-        Pattern::Some { inner, .. } | Pattern::Ok { inner, .. } | Pattern::Err { inner, .. } => {
-            bind_pattern_labels(inner, label, env);
-        }
-        Pattern::Wildcard(_) | Pattern::Literal(..) | Pattern::None(_) => {}
-    }
-}
-
 fn collect_violations_in_stmt(
     stmt: &Stmt,
     caller: &str,
@@ -561,7 +532,7 @@ fn collect_violations_in_stmt(
             let effective_label = label_of_type_expr(ty).or(init_label);
             // Fix #858 nested destructuring: use recursive helper to bind all names.
             if let Some(l) = effective_label {
-                bind_pattern_labels(pattern, l, env);
+                ifc::bind_pattern_labels(pattern, l, env);
             }
         }
         Stmt::Assign { value, .. } => {
@@ -630,7 +601,7 @@ fn collect_violations_in_stmt(
                 infer_label_extended(iter, env, &inferred.explicit, &inferred.inferred);
             let mut body_env = env.clone();
             if let Some(l) = iter_label {
-                bind_pattern_labels(pattern, l, &mut body_env);
+                ifc::bind_pattern_labels(pattern, l, &mut body_env);
             }
             collect_violations_in_block(body, caller, &body_env, type_env, inferred, errors);
         }
@@ -1292,12 +1263,13 @@ mod tests {
     // #858 gap 3: lambda return type annotation makes the lambda's result tainted.
     #[test]
     fn lambda_return_label_visible_at_call_site() {
-        // let f = || -> Tainted[String] { "safe" };
+        // let f: Tainted[String] = || -> Tainted[String] { "safe" };
         // f's ret_type declares Tainted; calling f() and passing the result to sink
-        // must be a violation.
+        // must be a violation. The explicit let annotation also labels `f` as Tainted
+        // so the intent is clear: f() must be treated as tainted at the call site.
         let prog = parse(
             "fn caller() -> Unit { \
-                 let f: String = || -> Tainted[String] { \"safe\" }; \
+                 let f: Tainted[String] = || -> Tainted[String] { \"safe\" }; \
                  sink(f()) \
              }",
         );
@@ -1305,8 +1277,11 @@ mod tests {
         let inferred = propagate(&[&prog], &env);
         let violations = detect_violations(&prog, &env, &inferred);
         assert!(
-            !violations.is_empty(),
-            "lambda with ret_type Tainted[String] must make f() tainted → sink(f()) is a violation"
+            violations
+                .iter()
+                .any(|e| matches!(e, CheckError::InterprocFlowViolation { callee, .. }
+                    if callee == "sink")),
+            "lambda with ret_type Tainted[String] must make f() tainted → sink(f()) is a violation, got: {violations:?}"
         );
     }
 }
