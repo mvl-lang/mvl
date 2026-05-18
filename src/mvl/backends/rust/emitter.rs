@@ -403,6 +403,16 @@ impl RustEmitter {
             if prelude_has_log && !all_modules.contains(&"log".to_string()) {
                 all_modules.push("log".to_string());
             }
+            // Similarly, env.mvl's builtin functions need `mvl_runtime::stdlib::env`.
+            let prelude_has_env = prelude_progs.iter().any(|p| {
+                p.declarations.iter().any(|d| match d {
+                    Decl::Fn(fd) => fd.is_builtin && fd.name == "env_var",
+                    _ => false,
+                })
+            });
+            if prelude_has_env && !all_modules.contains(&"env".to_string()) {
+                all_modules.push("env".to_string());
+            }
             for module in all_modules {
                 self.line(&format!("use mvl_runtime::stdlib::{}::*;", module));
                 for (m, fns) in STDLIB_CONFLICTS {
@@ -477,8 +487,26 @@ impl RustEmitter {
         // Emit type declarations from prelude programs before the functions that use them.
         // Deduplicate by name (keep first) so that multiple prelude modules defining the
         // same type (e.g. a shared helper struct) don't produce duplicate definitions.
-        // Note: rust-backed stdlib modules (io, env, …) are never in the prelude — they
-        // are skipped by load_mvl_native_stdlib_extras — so no conflict with mvl_runtime.
+        //
+        // Skip types from prelude programs that also have `builtin fn` declarations,
+        // because those types are already provided by `use mvl_runtime::stdlib::MODULE::*`
+        // and re-emitting them locally would create incompatible duplicate types.
+        let runtime_backed_type_names: std::collections::HashSet<&str> = prelude_progs
+            .iter()
+            .filter(|p| {
+                p.declarations
+                    .iter()
+                    .any(|d| matches!(d, Decl::Fn(fd) if fd.is_builtin))
+            })
+            .flat_map(|p| p.declarations.iter())
+            .filter_map(|d| {
+                if let Decl::Type(td) = d {
+                    Some(td.name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
         let mut seen_prelude_types: std::collections::HashSet<&str> =
             std::collections::HashSet::new();
         let prelude_types: Vec<&TypeDecl> = prelude_progs
@@ -491,6 +519,7 @@ impl RustEmitter {
                     None
                 }
             })
+            .filter(|td| !runtime_backed_type_names.contains(td.name.as_str()))
             .filter(|td| !user_type_names.contains(td.name.as_str()))
             .filter(|td| seen_prelude_types.insert(td.name.as_str()))
             .collect();

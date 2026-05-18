@@ -192,6 +192,20 @@ impl_label_into!(Clean);
 impl_label_into!(Public);
 impl_label_into!(Secret);
 
+// ── Cross-label upcast: Tainted → Secret ────────────────────────────────────
+//
+// A Tainted value (untrusted input) can be classified as Secret (confidential).
+// This is a valid IFC lattice flow: increasing confidentiality of untrusted input
+// (e.g. `get_secret` reads an env var as Tainted, returns it as Secret).
+// Note: this does NOT launder Tainted → plain; the value stays labeled.
+
+impl<T> From<Tainted<T>> for Secret<T> {
+    #[inline]
+    fn from(v: Tainted<T>) -> Self {
+        Secret(v.0)
+    }
+}
+
 // ── Cross-type equality for labeled strings ────────────────────────────────
 //
 // Allows comparing a labeled string directly with a plain String, e.g.

@@ -548,6 +548,17 @@ fn emit_expr_tail_with_return_type(
             cg.push(".into()");
             return;
         }
+        TypeExpr::Option { inner, .. }
+            if matches!(inner.as_ref(), TypeExpr::Labeled { .. })
+                && matches!(expr, Expr::FnCall { .. } | Expr::MethodCall { .. }) =>
+        {
+            // Option[Labeled[T]] return from a fn call returning Option[DifferentLabel[T]]:
+            // e.g. get_secret() returns Option[Secret[String]] but calls env_var() which
+            // returns Option[Tainted[String]]. `.map(Into::into)` converts the inner label.
+            emit_expr(cg, expr);
+            cg.push(".map(Into::into)");
+            return;
+        }
         TypeExpr::Result { ok, .. } => {
             // Ok(x) where x should be Labeled and x is a raw value: emit Ok(Label(x))
             if let TypeExpr::Labeled { label, .. } = ok.as_ref() {

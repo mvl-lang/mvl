@@ -157,12 +157,12 @@ pub fn has_std_imports(prog: &Program) -> bool {
 /// Pure-MVL modules (json, collections, strings, lists, math, …) are excluded:
 /// their symbols arrive via the prelude and need no `use mvl_runtime::stdlib::X::*` import.
 ///
-/// Note: `log` is intentionally absent — `std/log.mvl` contains pure-MVL wrappers
-/// (`log_debug` etc.) that are loaded by `load_mvl_native_stdlib_extras`.  The Rust
-/// runtime provides only atomic getters/setters; see `RUST_RUNTIME_IMPORTS`.
-pub const RUST_BACKED_STDLIB: &[&str] = &[
-    "crypto", "env", "io", "net", "process", "random", "regex", "time",
-];
+/// Note: `log` and `env` are intentionally absent — they contain pure-MVL wrappers
+/// (`log_debug`, `get_secret`, signal constructors, etc.) that must be loaded by
+/// `load_mvl_native_stdlib_extras`.  The Rust runtime provides only the builtin
+/// primitives; see `RUST_RUNTIME_IMPORTS`.
+pub const RUST_BACKED_STDLIB: &[&str] =
+    &["crypto", "io", "net", "process", "random", "regex", "time"];
 
 /// Modules for which the Rust emitter must emit `use mvl_runtime::stdlib::X::*`.
 ///
@@ -170,6 +170,7 @@ pub const RUST_BACKED_STDLIB: &[&str] = &[
 /// pure-MVL functions call `log_get_format`, `log_get_min_level`, `log_timestamp`,
 /// `log_set_format`, `log_set_min_level`, and `LogFormat`/`LogLevel` which live in
 /// `mvl_runtime::stdlib::log`.
+///
 pub const RUST_RUNTIME_IMPORTS: &[&str] = &[
     "crypto", "env", "io", "log", "net", "process", "random", "regex", "time",
 ];
