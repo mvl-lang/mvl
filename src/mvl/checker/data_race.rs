@@ -574,6 +574,7 @@ mod tests {
             is_builtin: false,
             is_label_transparent: false,
             totality: None,
+            receiver_type: None,
             name: name.into(),
             type_params: vec![],
             params,

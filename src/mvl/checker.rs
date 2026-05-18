@@ -43,7 +43,7 @@ pub mod types;
 pub use crate::mvl::checker::solver::SolverMode;
 
 use crate::mvl::checker::call_graph::CallGraph;
-use crate::mvl::checker::context::TypeEnv;
+use crate::mvl::checker::context::{FnInfo, TypeEnv};
 use crate::mvl::checker::effects::EffectHierarchy;
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc_propagation::InferredLabels;
@@ -277,6 +277,9 @@ struct TypeChecker {
     /// Types that implement `Iterator<T>`, mapped to their element type.
     /// Populated by `register_impl` for `impl Iterator<T> for X` declarations.
     iterator_impls: HashMap<String, Ty>,
+    /// Method table for type-attached methods (`fn TypeName::method(self, …)`).
+    /// Maps receiver type name → method name → signature.
+    method_table: HashMap<String, HashMap<String, FnInfo>>,
     /// Type parameter names in scope for the current function.
     current_type_params: HashSet<String>,
     /// Trait bounds for type params in the current function (from `where` clauses).
@@ -305,6 +308,7 @@ impl TypeChecker {
             extern_count: 0,
             lambda_scope_starts: Vec::new(),
             iterator_impls: HashMap::new(),
+            method_table: HashMap::new(),
             current_type_params: HashSet::new(),
             current_type_constraints: HashMap::new(),
             expr_types: HashMap::new(),
@@ -790,6 +794,7 @@ mod tests {
                 is_builtin: false,
                 is_label_transparent: false,
                 totality: None,
+                receiver_type: None,
                 name: "f".into(),
                 type_params: vec![],
                 params: vec![],
@@ -887,6 +892,7 @@ mod tests {
                 is_builtin: false,
                 is_label_transparent: false,
                 totality: None,
+                receiver_type: None,
                 name: "f".into(),
                 type_params: vec![],
                 params: vec![],
@@ -1270,6 +1276,53 @@ fn f(a: A, b: B) -> Bool { a == A::X && b == B::P }";
         assert!(
             result.is_ok(),
             "FastOnly should not error on Layer-1-provable ensures: {:?}",
+            result.errors
+        );
+    }
+
+    // ── Type-attached methods (#868) ──────────────────────────────────────────
+
+    #[test]
+    fn type_attached_method_resolves_on_dot_call() {
+        // GIVEN: a struct type and a type-attached method
+        // WHEN:  x.level() is called where x: Counter
+        // THEN:  no type errors (method resolved via method_table)
+        let src = r#"
+type Counter = struct { value: Int }
+fn Counter::get(self) -> Int { 0 }
+fn main() -> Int {
+    let c: Counter = Counter { value: 42 }
+    c.get()
+}
+"#;
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        let result = check(&prog);
+        assert!(
+            result.is_ok(),
+            "expected no errors for type-attached method call, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn type_attached_method_self_binds_receiver_type() {
+        // GIVEN: method body references self — must resolve as the receiver type
+        // THEN:  no undefined variable error
+        let src = r#"
+type Point = struct { x: Int, y: Int }
+fn Point::x_coord(self) -> Int { self.x }
+fn main() -> Int {
+    let p: Point = Point { x: 3, y: 4 }
+    p.x_coord()
+}
+"#;
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        let result = check(&prog);
+        assert!(
+            result.is_ok(),
+            "expected no errors for self field access in method, got: {:?}",
             result.errors
         );
     }

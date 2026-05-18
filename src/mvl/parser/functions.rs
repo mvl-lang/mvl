@@ -91,15 +91,24 @@ impl Parser {
         let fn_kw = self.expect(&TokenKind::Fn);
         self.require(fn_kw)?;
 
-        // Function name
+        // Function name — may be `TypeName::method` for type-attached methods (#868).
         let ident_result = self.expect_ident();
-        let (name, _) = self.require(ident_result)?;
+        let (first_name, _) = self.require(ident_result)?;
+
+        let (receiver_type, name) = if self.eat(&TokenKind::ColonColon) {
+            // `fn TypeName::method_name(…)` — extract receiver type and method name.
+            let method_result = self.expect_ident();
+            let (method_name, _) = self.require(method_result)?;
+            (Some(first_name), method_name)
+        } else {
+            (None, first_name)
+        };
 
         // Optional generic type parameters
         let type_params = self.parse_type_params_decl();
 
-        // Parameter list
-        let params = self.parse_param_list()?;
+        // Parameter list — passes receiver type so `self` can be synthesised.
+        let params = self.parse_param_list_with_receiver(receiver_type.as_deref())?;
 
         // `-> return_type`
         let arrow = self.expect(&TokenKind::Arrow);
@@ -166,6 +175,7 @@ impl Parser {
             is_builtin,
             is_label_transparent,
             totality,
+            receiver_type,
             name,
             type_params,
             params,
@@ -183,6 +193,19 @@ impl Parser {
     // ── Parameter list ────────────────────────────────────────────────────
 
     fn parse_param_list(&mut self) -> Result<Vec<Param>, ()> {
+        self.parse_param_list_with_receiver(None)
+    }
+
+    /// Parse a parameter list, optionally synthesising a `self` receiver param.
+    ///
+    /// When `receiver_type` is `Some("T")` and the first parameter is the bare
+    /// identifier `self` (no capability, no `: type`), a `Param { name: "self",
+    /// ty: T, … }` is synthesised automatically rather than requiring the author
+    /// to write `self: T`.
+    fn parse_param_list_with_receiver(
+        &mut self,
+        receiver_type: Option<&str>,
+    ) -> Result<Vec<Param>, ()> {
         let paren = self.expect(&TokenKind::LParen);
         self.require(paren)?;
 
@@ -191,10 +214,48 @@ impl Parser {
             if matches!(self.peek_kind(), TokenKind::RParen | TokenKind::Eof) {
                 break;
             }
-            match self.parse_param() {
-                Ok(p) => params.push(p),
-                Err(()) => break,
-            }
+            // Synthesise the receiver `self` param when:
+            //   - this is the first parameter
+            //   - a receiver type is set
+            //   - the current token is the identifier `self`
+            //   - the *next* token is `,` or `)` (not `:` which would mean `self: SomeType`)
+            let param = if params.is_empty() {
+                if let Some(recv_ty_name) = receiver_type {
+                    if let TokenKind::Ident(name) = self.peek_kind() {
+                        if name == "self" {
+                            let saved = self.pos;
+                            let span = self.peek_span();
+                            self.advance(); // consume `self`
+                            if matches!(self.peek_kind(), TokenKind::Comma | TokenKind::RParen) {
+                                // Bare `self` — synthesise param with receiver type.
+                                let ty = crate::mvl::parser::ast::TypeExpr::Base {
+                                    name: recv_ty_name.to_string(),
+                                    args: vec![],
+                                    span,
+                                };
+                                params.push(Param {
+                                    capability: None,
+                                    name: "self".to_string(),
+                                    ty,
+                                    refinement: None,
+                                    span,
+                                });
+                                if !self.eat(&TokenKind::Comma) {
+                                    break;
+                                }
+                                continue;
+                            } else {
+                                // Not bare `self` — roll back and parse normally.
+                                self.pos = saved;
+                            }
+                        }
+                    }
+                }
+                self.parse_param()?
+            } else {
+                self.parse_param()?
+            };
+            params.push(param);
             if !self.eat(&TokenKind::Comma) {
                 break;
             }
@@ -1516,5 +1577,69 @@ fn main() -> String { greet(String::new()) }"#;
         };
         assert_eq!(ed.name, "IO");
         assert_eq!(ed.subsumes, vec!["Console", "FileRead", "Net"]);
+    }
+
+    // ── Type-attached method tests (#868) ─────────────────────────────────────
+
+    #[test]
+    fn parse_type_attached_method_basic() {
+        // GIVEN: fn Logger::info(self, msg: String) -> Unit { }
+        // THEN: FnDecl with receiver_type="Logger", name="info", first param is self:Logger
+        let d = fn_decl("fn Logger::info(self, msg: String) -> Unit { }");
+        assert_eq!(d.receiver_type, Some("Logger".to_string()));
+        assert_eq!(d.name, "info");
+        assert_eq!(d.params.len(), 2);
+        assert_eq!(d.params[0].name, "self");
+        assert!(
+            matches!(&d.params[0].ty, TypeExpr::Base { name, .. } if name == "Logger"),
+            "expected self param type to be Logger"
+        );
+        assert_eq!(d.params[1].name, "msg");
+    }
+
+    #[test]
+    fn parse_type_attached_method_self_only() {
+        // GIVEN: fn Counter::reset(self) -> Unit { }
+        // THEN: FnDecl with receiver_type="Counter", single self param
+        let d = fn_decl("fn Counter::reset(self) -> Unit { }");
+        assert_eq!(d.receiver_type, Some("Counter".to_string()));
+        assert_eq!(d.name, "reset");
+        assert_eq!(d.params.len(), 1);
+        assert_eq!(d.params[0].name, "self");
+    }
+
+    #[test]
+    fn parse_type_attached_method_with_effects() {
+        // GIVEN: fn Logger::debug(self, msg: String) -> Unit ! Console { }
+        // THEN: FnDecl with effects=[Console]
+        let d = fn_decl("fn Logger::debug(self, msg: String) -> Unit ! Console { }");
+        assert_eq!(d.receiver_type, Some("Logger".to_string()));
+        assert_eq!(d.effects.len(), 1);
+        assert_eq!(d.effects[0].name, "Console");
+    }
+
+    #[test]
+    fn parse_ordinary_fn_has_no_receiver_type() {
+        // GIVEN: fn add(a: Int, b: Int) -> Int { }
+        // THEN: receiver_type is None
+        let d = fn_decl("fn add(a: Int, b: Int) -> Int { }");
+        assert_eq!(d.receiver_type, None);
+    }
+
+    #[test]
+    fn parse_type_attached_method_as_top_level_decl() {
+        // GIVEN: a program with a type-attached method
+        // THEN: Decl::Fn with receiver_type set
+        let src = "fn Point::scale(self, factor: Int) -> Point { self }";
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        assert!(p.errors.is_empty(), "parse errors: {:?}", p.errors);
+        assert_eq!(prog.declarations.len(), 1);
+        if let Decl::Fn(fd) = &prog.declarations[0] {
+            assert_eq!(fd.receiver_type, Some("Point".to_string()));
+            assert_eq!(fd.name, "scale");
+        } else {
+            panic!("expected Fn decl");
+        }
     }
 }

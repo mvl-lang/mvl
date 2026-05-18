@@ -1,8 +1,8 @@
 # ADR-0031: No Uniform Function Call Syntax (UFCS)
 
-**Status:** Accepted
-**Date:** 2026-05-16
-**Issues:** N/A (design clarification)
+**Status:** Amended
+**Date:** 2026-05-16 (amended 2026-05-18)
+**Issues:** #868
 
 ---
 
@@ -38,9 +38,20 @@ Arguments against UFCS:
 
 **MVL does not support UFCS.** All function calls use explicit syntax: `f(x, y)`.
 
-1. **No method syntax for standalone functions.** The expression `x.f()` is not valid for standalone functions. Only actor behaviors use dot syntax: `actor_ref.behavior()`.
+However, MVL **does** support type-attached methods via `fn TypeName::method(self, ...)` syntax (#868). These are explicitly distinct from UFCS — see "Amendment" below.
 
-2. **Chaining uses explicit intermediates.** The idiomatic MVL pattern is:
+1. **No UFCS for standalone functions.** The expression `x.f()` is not valid for arbitrary standalone functions. Only actor behaviors and type-attached methods use dot syntax.
+
+2. **Type-attached methods use `fn TypeName::method(self, ...)`**:
+   ```mvl
+   fn Logger::info(self, msg: String) -> Unit ! Console { … }
+
+   let log = Logger { min_level: Level::Info }
+   log.info("started")   // ✓ method call
+   info(log)             // ✗ not a valid standalone call
+   ```
+
+3. **Chaining uses explicit intermediates.** The idiomatic MVL pattern for standalone functions remains:
    ```mvl
    let parsed = parse(input)
    let transformed = transform(parsed)
@@ -48,9 +59,9 @@ Arguments against UFCS:
    let result = save(validated)
    ```
 
-3. **Autocomplete is a tooling concern.** LSP implementations can provide "functions accepting this type as first parameter" without language-level UFCS.
+4. **Autocomplete is a tooling concern.** LSP implementations can provide "functions accepting this type as first parameter" without language-level UFCS.
 
-4. **Stdlib naming is explicit.** Functions are named to be clear without method context: `map(list, f)` not `list.map(f)`. Type signatures disambiguate overloads.
+5. **Stdlib naming is explicit.** Free functions are named to be clear without method context: `map(list, f)` not `list.map(f)`. Type signatures disambiguate overloads.
 
 ---
 
@@ -60,11 +71,11 @@ Arguments against UFCS:
 
 1. **Unambiguous resolution.** `f(x)` always calls the function named `f`. No scope analysis needed.
 
-2. **LLM-friendly generation.** Code generators don't need to track imports to determine which function `x.f()` resolves to.
+2. **LLM-friendly generation.** Code generators don't need to track imports to determine which function `x.f()` resolves to. For type-attached methods, `x.method()` resolves only if `fn Type::method(self)` is declared — still deterministic.
 
-3. **One way to call functions.** No stylistic debates about `f(x)` vs `x.f()`.
+3. **One way to call each thing.** Standalone functions: `f(x)`. Type-attached methods: `x.method()`. Actor behaviors: `actor.behavior()`. No ambiguity.
 
-4. **Simpler mental model.** Functions are functions. Methods exist only on actors.
+4. **Type-attached methods are lightweight.** No impl blocks, no traits, no separate declaration context. `fn Logger::info(self, ...)` is a top-level declaration that is clearly attached to `Logger`.
 
 ### Negative
 
@@ -97,11 +108,13 @@ Arguments against UFCS:
 
 Add `x.method()` only for type-attached functions, but not UFCS for free functions.
 
-**Rejected because:**
-- Creates two kinds of functions (standalone vs type-attached)
-- Requires `impl` blocks or similar mechanism
-- MVL already has actor behaviors for stateful method syntax
-- Adds complexity without sufficient benefit
+**Originally rejected, now accepted as `fn TypeName::method(self, ...)` (#868).**
+
+The original concerns are addressed by the chosen syntax:
+- "Two kinds of functions" is intentional: methods and standalone functions are explicitly different, not ambiguous
+- No `impl` blocks needed: `fn Logger::info(self, ...)` is a top-level declaration
+- Actors remain the pattern for stateful/async behavior; type-attached methods serve stateless data-holder types
+- Net benefit: enables fluent APIs on structs without actor overhead (Logger, Builder, Money, etc.)
 
 ### Alternative C: Pipe operator only
 
@@ -145,9 +158,45 @@ The modularization documentation (`work/projects/mvl/modularization.md` in the k
 
 ---
 
+---
+
+## Amendment: Type-attached methods (#868, 2026-05-18)
+
+Alternative B was accepted. The syntax `fn TypeName::method(self, ...)` is now part of MVL.
+
+### Why this is NOT UFCS
+
+| UFCS (rejected) | Type-attached methods (accepted) |
+|-----------------|----------------------------------|
+| `x.f()` resolves to ANY `f(x, ...)` in scope | `x.method()` only resolves if `fn Type::method(self)` declared |
+| Scope-dependent resolution | Explicit type attachment |
+| Import changes can change resolution | Method is part of type definition |
+| Two ways to call same function | Methods and functions are distinct |
+
+```mvl
+fn Logger::info(self, msg: String) -> Unit ! Console { }  // Method
+fn log_info(l: Logger, msg: String) -> Unit ! Console { } // Function
+
+logger.info("msg")   // ✓ method call
+logger.log_info()    // ✗ no such method
+log_info(logger)     // ✓ function call
+info(logger)         // ✗ no such function
+```
+
+### Implementation
+
+| Component | Change |
+|-----------|--------|
+| AST | `FnDecl.receiver_type: Option<String>` |
+| Parser | Parses `fn TypeName::method(self, ...)` |
+| Checker | Method table per type; resolves `x.method()` via receiver type |
+| Rust backend | Emits `impl Type { fn method(&self, ...) }` |
+| LLVM backend | Emits `Type_method(self, ...)` with mangled name |
+
+---
+
 ## References
 
-- Nim UFCS: https://nim-lang.org/docs/manual.html#procedures-method-call-syntax
-- D UFCS: https://dlang.org/spec/function.html#pseudo-member
 - Go receiver syntax (explicit, not UFCS): https://go.dev/tour/methods/1
 - Rust impl blocks (explicit, not UFCS): https://doc.rust-lang.org/book/ch05-03-method-syntax.html
+- Issue #868: type-attached methods proposal

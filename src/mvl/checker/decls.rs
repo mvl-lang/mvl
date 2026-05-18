@@ -77,17 +77,23 @@ impl TypeChecker {
             .iter()
             .map(|p| p.name().to_string())
             .collect();
-        self.env.define_fn(
-            fd.name.clone(),
-            FnInfo {
-                params,
-                ret,
-                effects: fd.effects.clone(),
-                totality: fd.totality.clone(),
-                type_params,
-                label_transparent: fd.is_label_transparent,
-            },
-        );
+        let info = FnInfo {
+            params,
+            ret,
+            effects: fd.effects.clone(),
+            totality: fd.totality.clone(),
+            type_params,
+            label_transparent: fd.is_label_transparent,
+        };
+        if let Some(recv_ty) = &fd.receiver_type {
+            // Type-attached method: register in the method table for dot-call resolution.
+            self.method_table
+                .entry(recv_ty.clone())
+                .or_default()
+                .insert(fd.name.clone(), info);
+        } else {
+            self.env.define_fn(fd.name.clone(), info);
+        }
     }
 
     /// Register all functions declared inside an `extern` block so that MVL

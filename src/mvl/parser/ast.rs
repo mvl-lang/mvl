@@ -206,6 +206,9 @@ pub struct FnDecl {
     /// See ADR-0024: the checker joins argument labels and applies them to the return type.
     pub is_label_transparent: bool,
     pub totality: Option<Totality>,
+    /// For `fn TypeName::method(self, ...)` declarations: the receiver type name (`"TypeName"`).
+    /// `None` for ordinary top-level functions.
+    pub receiver_type: Option<String>,
     pub name: String,
     pub type_params: Vec<GenericParam>,
     pub params: Vec<Param>,
@@ -1042,6 +1045,7 @@ mod tests {
             is_builtin: false,
             is_label_transparent: false,
             totality: Some(Totality::Total),
+            receiver_type: None,
             name: "add".into(),
             type_params: vec![],
             params: vec![a_param, b_param],

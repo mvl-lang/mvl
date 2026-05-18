@@ -344,6 +344,18 @@ impl TypeChecker {
             Ty::Result(ok_ty, _) => Self::result_method_ty(ok_ty.as_ref(), method, arg_tys),
             Ty::Map(k_ty, v_ty) => Self::map_method_ty(k_ty.as_ref(), v_ty.as_ref(), method),
             Ty::Set(t_ty) => Self::set_method_ty(t_ty.as_ref(), method),
+            Ty::Named(type_name, _) => {
+                // User-defined type-attached method (#868): look up method table.
+                if let Some(method_info) = self
+                    .method_table
+                    .get(type_name.as_str())
+                    .and_then(|m| m.get(method))
+                {
+                    method_info.ret.clone()
+                } else {
+                    Ty::Unknown
+                }
+            }
             _ => Ty::Unknown,
         };
         // Only apply label when we resolved a concrete type.
