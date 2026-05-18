@@ -61,13 +61,7 @@ param          = [ capability ] IDENT ":" type_expr [ "where" refinement ] ;
 capability     = "iso" | "val" | "ref" | "tag" ;
 return_type    = type_expr [ "where" refinement ] ;
 effect_list    = effect { "+" effect } ;
-effect         = IDENT [ "(" STRING ")" ] ;
-(* Parametrized effects restrict an effect to a specific resource.  Examples:
-   ! FileRead("/etc/app/")    — read access limited to /etc/app/ and below
-   ! Net("api.example.com")   — network access limited to a specific host
-   ! DB("SELECT")             — read-only database access
-   A caller declaring ! FileRead("/etc/") satisfies a callee requiring
-   ! FileRead("/etc/app/config.toml") via prefix matching (subsetting). *)
+effect         = IDENT ;
 constraints    = constraint { "," constraint } ;
 constraint     = IDENT ":" trait_bound ;
 (* Phase 1 trait bounds — one bound per constraint; "+" compound bounds deferred to Phase 2 *)
