@@ -4,6 +4,15 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.127.0] — 2026-05-18
+
+### Added
+- **Monomorphization pass** (ADR-0034): compile-time polymorphism elimination (#838)
+  - Generic-to-monomorphic transformation: rewrite generic functions and actors into specialized versions for each type parameter binding
+  - `MonoProgram` structure carrying monomorphized functions, actors, and a `FnMonoIndex` for call-site type argument tracking
+  - Integration with LLVM and Rust backends: backend receives pre-monomorphized program, eliminating runtime polymorphic dispatch
+  - Full test coverage: generic function instantiation, actor specialization, type argument resolution, nested generics, standard library interaction
+
 ## [0.126.1] — 2026-05-17
 
 ### Fixed
