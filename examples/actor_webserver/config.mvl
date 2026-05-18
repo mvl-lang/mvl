@@ -48,8 +48,10 @@ fn load_toml_layer(path: String, base: ConfigValue) -> ConfigValue ! FileRead {
     match read_file(path) {
         Err(_) => base,
         Ok(raw) => {
-            // IFC: config files are operator-controlled — coerce Tainted→String.
-            let s: String = str_concat(raw, "");
+            // IFC: config files are operator-controlled — untaint explicitly.
+            // After PR #882 removed From<Tainted<T>> for T, we must call .into_inner()
+            // to extract the underlying String for passing to str_concat.
+            let s: String = str_concat(raw.into_inner(), "");
             match toml_decode(s) {
                 Err(_)   => base,
                 Ok(toml) => merge(base, from_toml(toml)),
