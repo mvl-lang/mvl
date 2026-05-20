@@ -10,6 +10,7 @@ pub mod statements;
 pub mod types;
 
 use crate::mvl::parser::lexer::{LexError, Lexer, Span, Token, TokenKind};
+use std::collections::HashSet;
 use std::fmt;
 
 // ── Parse error ────────────────────────────────────────────────────────────
@@ -47,6 +48,9 @@ pub struct Parser {
     pub(crate) errors: Vec<ParseError>,
     /// Current expression nesting depth — guards against stack overflow.
     depth: usize,
+    /// Declared IFC label names (#894). Pre-seeded with stdlib labels;
+    /// extended by `label` declarations encountered during parsing.
+    pub(crate) known_labels: HashSet<String>,
 }
 
 impl Parser {
@@ -56,6 +60,12 @@ impl Parser {
     pub fn new(src: &str) -> (Self, Vec<LexError>) {
         let (tokens, lex_errors) = Lexer::new(src).tokenize();
         let first_span = tokens.first().map(|t| t.span).unwrap_or_default();
+        // Pre-seed the stdlib IFC labels so `Tainted[T]` and `Secret[T]` parse
+        // correctly without requiring an explicit `label` declaration in scope.
+        let known_labels = ["Tainted", "Secret"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         (
             Parser {
                 tokens,
@@ -63,6 +73,7 @@ impl Parser {
                 last_span: first_span,
                 errors: Vec::new(),
                 depth: 0,
+                known_labels,
             },
             lex_errors,
         )

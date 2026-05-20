@@ -37,7 +37,7 @@ use std.log.{log_info, log_error}
 // ── Trust boundary: domain-specific pipeline logic ──────────────────────────
 
 extern "rust" {
-    fn analyze_and_format(content: Tainted[String], level: Option[Clean[String]]) -> Result[String, PipelineError];
+    fn analyze_and_format(content: Tainted[String], level: Option[String]) -> Result[String, PipelineError];
 }
 
 // ── Domain types ───────────────────────────────────────────────────────────
@@ -54,13 +54,13 @@ type RunError = enum {
 
 // ── Main pipeline ───────────────────────────────────────────────────────────
 
-fn run() -> Result[Unit, RunError] ! FileRead + Console + Log {
+fn run() -> Result[Unit, RunError] ! FileRead + Console + Log + Env {
     let args: Map[String, ArgValue] = parse_args([
         required("file",  ArgType::Str),
         optional("level", ArgType::Str),
     ]);
-    let file_path: Clean[String] = get_str(args, "file", "");
-    let level_opt: Option[Clean[String]] = get_str_opt(args, "level");
+    let file_path: String = get_str(args, "file", "");
+    let level_opt: Option[String] = get_str_opt(args, "level");
     match read_file(file_path) {
         Err(_) => Err(RunError::IOFailure),
         Ok(content) => {
@@ -91,7 +91,7 @@ fn handle_run_error(e: RunError) -> Unit ! Log {
     log_error("run failed", {"reason": run_error_message(e)})
 }
 
-fn main() -> Unit ! FileRead + Console + Log {
+fn main() -> Unit ! FileRead + Console + Log + Env {
     match run() {
         Ok(_)  => (),
         Err(e) => handle_run_error(e),
@@ -112,7 +112,7 @@ test fn check_run_error_io_failure_variant() -> Unit {
 // Option.map: None stays None, Some(v) maps through sanitize.
 test fn option_map_sanitize_none_stays_none() -> Unit {
     let level: Option[Tainted[String]] = None;
-    let sanitized: Option[Clean[String]] = level.map(|v: Tainted[String]| sanitize(v));
+    let sanitized: Option[String] = level.map(|v: Tainted[String]| relabel trust(v, "VALIDATED"));
     let is_none: Int = match sanitized {
         None    => 1,
         Some(_) => 0,
@@ -121,8 +121,8 @@ test fn option_map_sanitize_none_stays_none() -> Unit {
 }
 
 test fn option_map_sanitize_some_maps_value() -> Unit {
-    let level: Option[Tainted[String]] = Some("error");
-    let sanitized: Option[Clean[String]] = level.map(|v: Tainted[String]| sanitize(v));
+    let level: Option[Tainted[String]] = Some(relabel taint("error", "TEST-INPUT"));
+    let sanitized: Option[String] = level.map(|v: Tainted[String]| relabel trust(v, "VALIDATED"));
     let is_some: Int = match sanitized {
         Some(_) => 1,
         None    => 0,

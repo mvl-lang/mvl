@@ -1,16 +1,16 @@
-// Spike 002-05: declassify() as the auditable exit — MUST compile (#872)
-// After declassify(), the value is Public and can flow to any sink.
+// Spike 002-05: relabel release(, "AUTHORIZED") as the auditable exit — MUST compile (#872)
+// After relabel release(, "AUTHORIZED"), the value is Public and can flow to any sink.
 
 fn declassify_then_print(key: Secret[String]) -> Unit ! Console {
-    println(declassify(key))
+    println(relabel release(key, "AUTHORIZED"))
 }
 
 fn declassify_then_return(key: Secret[String]) -> String {
-    declassify(key)
+    relabel release(key, "AUTHORIZED")
 }
 
 // Chain: Secret → declassify → concat → println
 fn declassify_and_format(key: Secret[String]) -> Unit ! Console {
-    let public_key: String = declassify(key);
+    let public_key: String = relabel release(key, "AUTHORIZED");
     println(public_key)
 }

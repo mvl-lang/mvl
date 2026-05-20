@@ -25,5 +25,5 @@ fn main() -> Unit ! Console {
     let tail2: LinkedList = LinkedList::Cons(3, Box::new(LinkedList::Nil));
     let tail1: LinkedList = LinkedList::Cons(2, Box::new(tail2));
     let list: LinkedList  = LinkedList::Cons(1, Box::new(tail1));
-    println("length: {}", length(list));
+    println(format("length: {}", length(list)));
 }

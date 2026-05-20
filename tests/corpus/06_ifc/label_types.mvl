@@ -3,7 +3,7 @@
 
 // ── Basic labeled parameters and returns ──────────────────────────────────
 
-fn echo_public(s: Public[String]) -> Public[String] {
+fn echo_public(s: String) -> String {
     s
 }
 
@@ -15,21 +15,21 @@ fn echo_secret(k: Secret[Int]) -> Secret[Int] {
     k
 }
 
-fn echo_clean(s: Clean[String]) -> Clean[String] {
+fn echo_clean(s: String) -> String {
     s
 }
 
-// ── Upward flow: lower-sensitivity data may flow to higher slot ───────────
+// ── Explicit wrapping: bare data must be relabeled to create labeled types ──
 
-fn promote_to_secret(x: Public[Int]) -> Secret[Int] {
-    x
+fn wrap_as_secret(x: String) -> Secret[String] {
+    relabel classify(x, "WRAP-SECRET")
 }
 
-fn promote_to_tainted(x: Public[String]) -> Tainted[String] {
-    x
+fn wrap_as_tainted(x: String) -> Tainted[String] {
+    relabel taint(x, "WRAP-TAINT")
 }
 
-fn promote_to_clean(x: Public[String]) -> Clean[String] {
+fn keep_bare(x: String) -> String {
     x
 }
 

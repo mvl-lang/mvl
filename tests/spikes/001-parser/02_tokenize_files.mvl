@@ -18,8 +18,8 @@
 // IFC learning (building on experiment 01):
 //   - read_dir returns List[DirEntry]; entry paths are Public (not Tainted)
 //   - read_to_string returns Tainted[String]; file content is untrusted
-//   - sanitize() converts Tainted → Clean[String] for safe string processing
-//   - UFCS method calls on Clean[String] propagate the label transparently
+//   - relabel trust(, "VALIDATED") converts Tainted → String for safe string processing
+//   - UFCS method calls on String propagate the label transparently
 //   - Int results (token counts) are Public — safe to accumulate and print
 //
 // Note: read_dir is flat (no recursion).  Point --dir at a leaf directory
@@ -40,7 +40,7 @@ use std.args.{get_arg}
 // Count whitespace-separated tokens in one source file.
 //
 // IFC flow:
-//   raw: Tainted[String]  →  sanitize → src: Clean[String]
+//   raw: Tainted[String]  →  sanitize → src: String
 //   src.split("\n") propagates the Clean label in the type checker, but
 //   the transpiler strips labels via .into() in the UFCS trampoline, so the
 //   fold result is Option<Int> in the generated Rust (not Clean<Option<Int>>).
@@ -60,12 +60,12 @@ use std.args.{get_arg}
 // The let-binding is required because emit_expr_as_fn_arg only adds `.into()`
 // (Clean<String>→String) for identifier arguments, not for inline call results.
 fn dir_from_arg(v: Tainted[String]) -> Path {
-    let clean_dir: Clean[String] = sanitize(v);
+    let clean_dir: String = relabel trust(v, "VALIDATED");
     join(path("."), clean_dir)
 }
 
 fn count_tokens(raw: Tainted[String]) -> Int {
-    let src: Clean[String] = sanitize(raw);
+    let src: String = relabel trust(raw, "VALIDATED");
     // Match directly on the fold result — no annotated let binding needed.
     // Type checker: scrutinee is Clean<Option<Int>>; Some(n) strips the label
     // via scrutinee_ty.unlabeled() = Option<Int> → n: Int (Public).

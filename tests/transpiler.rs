@@ -188,9 +188,11 @@ fn labeled_param_transpiles() {
 /// Requirement 11 / Scenario: Declassify expression transpiles
 #[test]
 fn declassify_expr_transpiles() {
-    let src = "fn reveal(s: Secret[Int]) -> Public[Int] { declassify(s) }";
+    // Post-#894: declassify() removed; use relabel release() instead.
+    let src = r#"fn reveal(s: Secret[Int]) -> Int { relabel release(s, "AUTHORIZED") }"#;
     let rust = transpile_src(src);
-    assert_contains(&rust, "declassify(s)");
+    // relabel release emits (.0) unwrap in Rust
+    assert_contains(&rust, ".0");
 }
 
 // ── #32: Refinement types ─────────────────────────────────────────────────

@@ -28,7 +28,7 @@ pub fn eprint(value: String) -> Unit ! Console {
 
 /// Format a value as a string.
 /// `transparent` ensures security labels propagate: format("{}", secret) → Secret[String].
-transparent pub builtin fn format(value: String) -> String
+pub transparent builtin fn format(value: String) -> String
 
 /// Assert a condition; panic if false.
 pub builtin fn assert(condition: Bool) -> Unit

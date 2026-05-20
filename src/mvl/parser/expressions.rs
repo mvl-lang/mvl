@@ -287,29 +287,39 @@ impl Parser {
                     span,
                 })
             }
-            TokenKind::Declassify => {
-                self.advance();
+            // `relabel name(expr, "audit-tag")` — IFC relabel expression (#894).
+            TokenKind::Relabel => {
+                self.advance(); // consume `relabel`
+                let ident_result = self.expect_ident();
+                let (name, _) = self.require(ident_result)?;
                 let lp = self.expect(&TokenKind::LParen);
                 self.require(lp)?;
                 let inner = self.parse_expr()?;
+                let comma = self.expect(&TokenKind::Comma);
+                self.require(comma)?;
+                // Audit tag must be a string literal.
+                let tag = match self.peek_kind() {
+                    TokenKind::Str(s) => {
+                        let tag = s.clone();
+                        self.advance();
+                        tag
+                    }
+                    _ => {
+                        let err = crate::mvl::parser::ParseError {
+                            message: "relabel audit tag must be a string literal".into(),
+                            span: self.peek_span(),
+                        };
+                        self.push_recover(err);
+                        return Err(());
+                    }
+                };
                 let rp = self.expect(&TokenKind::RParen);
                 self.require(rp)?;
                 let span = self.span_from(start);
-                Ok(Expr::Declassify {
+                Ok(Expr::Relabel {
+                    name,
                     expr: Box::new(inner),
-                    span,
-                })
-            }
-            TokenKind::Sanitize => {
-                self.advance();
-                let lp = self.expect(&TokenKind::LParen);
-                self.require(lp)?;
-                let inner = self.parse_expr()?;
-                let rp = self.expect(&TokenKind::RParen);
-                self.require(rp)?;
-                let span = self.span_from(start);
-                Ok(Expr::Sanitize {
-                    expr: Box::new(inner),
+                    tag,
                     span,
                 })
             }
@@ -1000,24 +1010,31 @@ mod tests {
         );
     }
 
-    // ── Requirement 6 / Scenario: Parse sanitize ──────────────────────────
+    // ── Requirement 6 / Scenario: Parse relabel ───────────────────────────
 
     #[test]
-    fn parse_sanitize() {
-        // GIVEN: sanitize(user_input)
-        // THEN: SanitizeExpr wrapping an identifier
-        let e = parse_expr("sanitize(user_input)");
+    fn parse_relabel_trust() {
+        // GIVEN: relabel trust(user_input, "VALIDATED-01")
+        // THEN: RelabelExpr with name="trust", wrapping an identifier
+        let e = parse_expr(r#"relabel trust(user_input, "VALIDATED-01")"#);
         assert!(
-            matches!(&e, Expr::Sanitize { expr, .. } if matches!(expr.as_ref(), Expr::Ident(_, _))),
+            matches!(&e, Expr::Relabel { name, expr, tag, .. }
+                if name == "trust"
+                    && matches!(expr.as_ref(), Expr::Ident(_, _))
+                    && tag == "VALIDATED-01"),
             "got: {:?}",
             e
         );
     }
 
     #[test]
-    fn parse_declassify() {
-        let e = parse_expr("declassify(secret)");
-        assert!(matches!(&e, Expr::Declassify { .. }), "got: {:?}", e);
+    fn parse_relabel_release() {
+        let e = parse_expr(r#"relabel release(secret_key, "AUTH-001")"#);
+        assert!(
+            matches!(&e, Expr::Relabel { name, .. } if name == "release"),
+            "got: {:?}",
+            e
+        );
     }
 
     // ── Requirement 6 / Scenario: Parse if-expression ─────────────────────

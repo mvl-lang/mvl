@@ -1074,8 +1074,7 @@ fn analyze_expr(
         | Expr::FieldAccess { expr: inner, .. }
         | Expr::Propagate { expr: inner, .. }
         | Expr::Consume { expr: inner, .. }
-        | Expr::Declassify { expr: inner, .. }
-        | Expr::Sanitize { expr: inner, .. }
+        | Expr::Relabel { expr: inner, .. }
         | Expr::Borrow { expr: inner, .. } => {
             analyze_expr(
                 inner, var_refs, fn_params, type_refs, fn_decls, errors, counts,

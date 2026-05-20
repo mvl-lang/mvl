@@ -3,7 +3,7 @@
 
 type Counter = struct {
     count: ref Int,
-    label: String,
+    ifc_label: String,
 }
 
 // Immutable let — no assignment
@@ -28,5 +28,5 @@ fn increment(ref c: Counter) -> Counter {
 
 // Read immutable field — always allowed
 fn get_label(c: Counter) -> String {
-    c.label
+    c.ifc_label
 }

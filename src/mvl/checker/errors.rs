@@ -291,13 +291,30 @@ pub enum CheckError {
         span: Span,
     },
 
-    // ── Information flow control (#23) ───────────────────────────────────
-    /// `declassify()` applied to a non-`Secret<T>` type.
+    // ── Information flow control (#23, #894) ─────────────────────────────
+    /// `relabel name(expr, "tag")` applied to wrong input type (#894).
+    InvalidRelabel {
+        /// Name of the relabel transition (e.g. `"trust"`).
+        transition: String,
+        /// The label name the transition expects on input (or `"bare"`).
+        expected_from: String,
+        /// The actual type of the argument.
+        found: String,
+        span: Span,
+    },
+    /// `relabel name(...)` but `name` is not a declared relabel transition (#894).
+    UnknownRelabel {
+        name: String,
+        span: Span,
+    },
+    // Kept for error-code stability; callers that matched InvalidDeclassify/InvalidSanitize
+    // should migrate to InvalidRelabel.
+    #[allow(dead_code)]
     InvalidDeclassify {
         found: String,
         span: Span,
     },
-    /// `sanitize()` applied to a non-`Tainted<T>` type.
+    #[allow(dead_code)]
     InvalidSanitize {
         found: String,
         span: Span,
@@ -537,7 +554,9 @@ impl CheckError {
             | CheckError::SessionDeadlock { .. }
             | CheckError::SessionDuplicateLabel { .. } => 1,
             // Req 11: Information Flow Control
-            CheckError::InvalidDeclassify { .. }
+            CheckError::InvalidRelabel { .. }
+            | CheckError::UnknownRelabel { .. }
+            | CheckError::InvalidDeclassify { .. }
             | CheckError::InvalidSanitize { .. }
             | CheckError::LoggingLabelViolation { .. }
             | CheckError::ImplicitFlowViolation { .. }
@@ -601,6 +620,8 @@ impl CheckError {
             | CheckError::DuplicateActorMethod { span, .. }
             | CheckError::NonUnitBehaviorReturn { span, .. }
             | CheckError::LinearTypeBareBind { span, .. }
+            | CheckError::InvalidRelabel { span, .. }
+            | CheckError::UnknownRelabel { span, .. }
             | CheckError::InvalidDeclassify { span, .. }
             | CheckError::InvalidSanitize { span, .. }
             | CheckError::LoggingLabelViolation { span, .. }
@@ -777,17 +798,23 @@ impl CheckError {
             CheckError::LinearTypeBareBind { name, ty, .. } => format!(
                 "bare assignment of linear type `{ty}` — use `consume({name})` to transfer ownership (Pony destructive read semantics)"
             ),
+            CheckError::InvalidRelabel { transition, expected_from, found, .. } => format!(
+                "`relabel {transition}` expects `{expected_from}[T]` input, found `{found}` — check the declared transition type"
+            ),
+            CheckError::UnknownRelabel { name, .. } => format!(
+                "`relabel {name}` is not declared — add `relabel {name}: From -> To` to introduce it"
+            ),
             CheckError::InvalidDeclassify { found, .. } => format!(
-                "`declassify()` requires `Secret<T>`, found `{found}` — only Secret data can be declassified (for Tainted data use `sanitize()` instead)"
+                "`declassify()` is removed — use `relabel release({found}, \"TAG\")` instead"
             ),
             CheckError::InvalidSanitize { found, .. } => format!(
-                "`sanitize()` requires `Tainted<T>`, found `{found}` — only Tainted data can be sanitized (for Secret data use `declassify()` instead)"
+                "`sanitize()` is removed — use `relabel trust({found}, \"TAG\")` instead"
             ),
             CheckError::LoggingLabelViolation { label, .. } => format!(
-                "logging functions accept only `Public<T>` but argument has label `{label}` — declassify or sanitize before logging"
+                "logging functions accept only bare types but argument has label `{label}` — apply relabel before logging"
             ),
             CheckError::ImplicitFlowViolation { pc_label, sink, .. } => format!(
-                "implicit information flow: `{sink}` call inside a branch controlled by a `{pc_label}` condition leaks information via control flow — move the call outside the branch or declassify the condition"
+                "implicit information flow: `{sink}` call inside a branch controlled by a `{pc_label}` condition leaks information via control flow — move the call outside the branch or relabel the condition"
             ),
             CheckError::UnsupportedExternAbi { abi, .. } => format!(
                 "unsupported extern ABI `\"{abi}\"` — only \"rust\" and \"c\" are allowed"

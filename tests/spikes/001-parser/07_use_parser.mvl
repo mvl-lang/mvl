@@ -63,7 +63,7 @@ fn is_whitespace(c: String) -> Bool {
 }
 
 fn is_keyword(s: String) -> Bool {
-    let kws: String = " fn let mut match if else for while type total partial return extern use pub in true false builtin transparent move consume declassify sanitize const where struct enum impl test requires ensures invariant Public Tainted Secret Clean iso val ref tag ";
+    let kws: String = " fn let mut match if else for while type total partial return extern use pub in true false builtin transparent move consume label relabel const where struct enum impl test requires ensures invariant Tainted Secret iso val ref tag ";
     kws.contains(format(" {} ", s))
 }
 
@@ -343,7 +343,7 @@ total fn format_all_uses(uses: List[UseItem]) -> UseOutput {
 // ── IFC helpers ───────────────────────────────────────────────────────────────
 
 fn dir_from_arg(v: Tainted[String]) -> Path {
-    let clean_dir: Clean[String] = sanitize(v);
+    let clean_dir: String = relabel trust(v, "VALIDATED");
     join(path("."), clean_dir)
 }
 
@@ -351,7 +351,7 @@ transparent partial fn call_parse_uses(src: String) -> List[UseItem] {
     parse_file_uses(src)
 }
 
-// Bridge: Clean[List[UseItem]] → Clean[UseOutput]; field access on result strips label.
+// Bridge: List[UseItem]] → UseOutput; field access on result strips label.
 transparent partial fn call_format_uses(uses: List[UseItem]) -> UseOutput {
     format_all_uses(uses)
 }
@@ -378,9 +378,9 @@ partial fn main() -> Unit ! FileRead + Console {
                             match read_to_string(entry.path) {
                                 Err(_)  => (),
                                 Ok(raw) => {
-                                    let src: Clean[String] = sanitize(raw);
-                                    let uses: Clean[List[UseItem]] = call_parse_uses(src);
-                                    let out: Clean[UseOutput] = call_format_uses(uses);
+                                    let src: String = relabel trust(raw, "VALIDATED");
+                                    let uses: List[UseItem]] = call_parse_uses(src);
+                                    let out: UseOutput = call_format_uses(uses);
                                     if out.text != "" {
                                         println("{}", out.text)
                                     }

@@ -10,7 +10,7 @@ use crate::mvl::checker::context::{CapabilityState, TypeBodyInfo, VarInfo};
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
-use crate::mvl::parser::ast::{BinaryOp, Expr, Literal, SecurityLabel, UnaryOp};
+use crate::mvl::parser::ast::{BinaryOp, Expr, Literal, UnaryOp};
 use crate::mvl::parser::lexer::Span;
 
 use super::TypeChecker;
@@ -222,7 +222,7 @@ impl TypeChecker {
                 // IFC: extract the condition's security label for implicit flow promotion.
                 // Branching on Secret<Bool> must promote the result to at least Secret<T>;
                 // otherwise the choice of branch would leak the guard's value.
-                let cond_label = ifc::label_of(&cond_ty);
+                let cond_label = ifc::label_of(&cond_ty).map(|s| s.to_string());
                 if !cond_ty.is_bool() && !matches!(cond_ty, Ty::Unknown) {
                     self.emit(CheckError::TypeMismatch {
                         expected: "Bool".to_string(),
@@ -233,13 +233,19 @@ impl TypeChecker {
                 let then_ty = self.infer_block_type(then, None);
                 // Promote branch type by joining with the condition's label (#26 implicit flow).
                 let promoted_then = {
-                    let label = ifc::join_opt(cond_label, ifc::label_of(&then_ty));
+                    let label = ifc::join_opt(
+                        cond_label.clone(),
+                        ifc::label_of(&then_ty).map(|s| s.to_string()),
+                    );
                     ifc::apply_label(label, then_ty.unlabeled().clone())
                 };
                 if let Some(else_expr) = else_ {
                     let else_ty = self.infer_expr(else_expr);
                     let promoted_else = {
-                        let label = ifc::join_opt(cond_label, ifc::label_of(&else_ty));
+                        let label = ifc::join_opt(
+                            cond_label.clone(),
+                            ifc::label_of(&else_ty).map(|s| s.to_string()),
+                        );
                         ifc::apply_label(label, else_ty.unlabeled().clone())
                     };
                     if !matches!(promoted_then, Ty::Unknown)
@@ -288,20 +294,26 @@ impl TypeChecker {
                 // This ensures `{"k": secret_val}` is typed as
                 // `Secret<Map<String,String>>` rather than `Map<String,Secret<String>>`,
                 // making the standard `label_of` check work for log-sink enforcement.
-                let mut joined_label: Option<SecurityLabel> = None;
+                let mut joined_label: Option<String> = None;
                 let (key_ty, val_ty) = pairs
                     .first()
                     .map(|(k, v)| {
                         let kt = self.infer_expr(k);
                         let vt = self.infer_expr(v);
-                        joined_label = ifc::join_opt(joined_label, ifc::label_of(&vt));
+                        joined_label = ifc::join_opt(
+                            joined_label.clone(),
+                            ifc::label_of(&vt).map(|s| s.to_string()),
+                        );
                         (kt, vt.unlabeled().clone())
                     })
                     .unwrap_or((Ty::Unknown, Ty::Unknown));
                 for (k, v) in pairs.iter().skip(1) {
                     self.infer_expr(k);
                     let vt = self.infer_expr(v);
-                    joined_label = ifc::join_opt(joined_label, ifc::label_of(&vt));
+                    joined_label = ifc::join_opt(
+                        joined_label.clone(),
+                        ifc::label_of(&vt).map(|s| s.to_string()),
+                    );
                 }
                 let map_ty = Ty::Map(Box::new(key_ty), Box::new(val_ty));
                 ifc::apply_label(joined_label, map_ty)
@@ -361,39 +373,44 @@ impl TypeChecker {
                 ty
             }
 
-            // #27: declassify() — converts Secret<T> to Public<T>
-            Expr::Declassify { expr, span } => {
+            // #894: relabel(name, expr, "tag") — applies a declared IFC transition.
+            // Looks up the transition in the type environment, verifies input type,
+            // and returns the output type.
+            Expr::Relabel {
+                name,
+                expr,
+                tag: _,
+                span,
+            } => {
                 let inner_ty = self.infer_expr(expr);
-                match inner_ty.base() {
-                    Ty::Labeled(SecurityLabel::Secret, inner) => {
-                        Ty::Labeled(SecurityLabel::Public, inner.clone())
-                    }
-                    Ty::Unknown => Ty::Labeled(SecurityLabel::Public, Box::new(Ty::Unknown)),
-                    _ => {
-                        self.emit(CheckError::InvalidDeclassify {
+                // Look up the declared relabel transition.
+                if let Some((from, to)) = self.env.lookup_relabel(name) {
+                    let inner_base = inner_ty.base();
+                    let input_matches = match &from {
+                        None => !matches!(inner_base, Ty::Labeled(..)), // bare → not labeled
+                        Some(label) => matches!(inner_base, Ty::Labeled(l, _) if l == label),
+                    };
+                    if !input_matches && !matches!(inner_base, Ty::Unknown) {
+                        self.emit(CheckError::InvalidRelabel {
+                            transition: name.clone(),
+                            expected_from: from.as_deref().unwrap_or("bare").to_string(),
                             found: inner_ty.display(),
                             span: *span,
                         });
-                        Ty::Unknown
+                        return Ty::Unknown;
                     }
-                }
-            }
-
-            // #27: sanitize() — converts Tainted<T> to Clean<T>
-            Expr::Sanitize { expr, span } => {
-                let inner_ty = self.infer_expr(expr);
-                match inner_ty.base() {
-                    Ty::Labeled(SecurityLabel::Tainted, inner) => {
-                        Ty::Labeled(SecurityLabel::Clean, inner.clone())
+                    // Compute output type.
+                    let stripped = ifc::strip_label(inner_base);
+                    match to {
+                        None => stripped.clone(), // bare output
+                        Some(label) => Ty::Labeled(label, Box::new(stripped.clone())),
                     }
-                    Ty::Unknown => Ty::Labeled(SecurityLabel::Clean, Box::new(Ty::Unknown)),
-                    _ => {
-                        self.emit(CheckError::InvalidSanitize {
-                            found: inner_ty.display(),
-                            span: *span,
-                        });
-                        Ty::Unknown
-                    }
+                } else {
+                    self.emit(CheckError::UnknownRelabel {
+                        name: name.clone(),
+                        span: *span,
+                    });
+                    Ty::Unknown
                 }
             }
 
@@ -537,7 +554,10 @@ impl TypeChecker {
                     return Ty::Unknown;
                 }
                 // Propagate the join of labels to the result (#26)
-                let label = ifc::join_opt(ifc::label_of(&lt), ifc::label_of(&rt));
+                let label = ifc::join_opt(
+                    ifc::label_of(&lt).map(|s| s.to_string()),
+                    ifc::label_of(&rt).map(|s| s.to_string()),
+                );
                 let base = if matches!(lt_inner, Ty::Unknown) {
                     rt_inner
                 } else {
@@ -614,7 +634,10 @@ impl TypeChecker {
                         return Ty::Unknown;
                     }
                 }
-                let label = ifc::join_opt(ifc::label_of(&lt), ifc::label_of(&rt));
+                let label = ifc::join_opt(
+                    ifc::label_of(&lt).map(|s| s.to_string()),
+                    ifc::label_of(&rt).map(|s| s.to_string()),
+                );
                 let base = if matches!(lt_inner, Ty::Unknown) {
                     rt_inner
                 } else {

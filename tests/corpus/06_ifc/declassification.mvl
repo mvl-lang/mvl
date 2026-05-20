@@ -1,29 +1,29 @@
 // Corpus: Declassification as explicit chokepoints (Requirement 11, #27)
-// Only declassify() lowers Secret→Public; only sanitize() lowers Tainted→Clean.
+// Only relabel release(, "AUTHORIZED") lowers Secret→Public; only relabel trust(, "VALIDATED") lowers Tainted→Clean.
 
-// ── sanitize(): Tainted[T] → Clean[T] ────────────────────────────────────
+// ── relabel trust(, "VALIDATED"): Tainted[T] → T ────────────────────────────────────
 
-fn sanitize_string(input: Tainted[String]) -> Clean[String] {
-    sanitize(input)
+fn sanitize_string(input: Tainted[String]) -> String {
+    relabel trust(input, "VALIDATED")
 }
 
-fn sanitize_int(input: Tainted[Int]) -> Clean[Int] {
-    sanitize(input)
+fn sanitize_int(input: Tainted[Int]) -> Int {
+    relabel trust(input, "VALIDATED")
 }
 
-// ── declassify(): Secret[T] → Public[T] ──────────────────────────────────
+// ── relabel release(, "AUTHORIZED"): Secret[T] → T ──────────────────────────────────
 
-fn declassify_token(secret: Secret[Token]) -> Public[Token] {
-    declassify(secret)
+fn declassify_token(secret: Secret[Token]) -> Token {
+    relabel release(secret, "AUTHORIZED")
 }
 
-fn declassify_int(secret: Secret[Int]) -> Public[Int] {
-    declassify(secret)
+fn declassify_int(secret: Secret[Int]) -> Int {
+    relabel release(secret, "AUTHORIZED")
 }
 
 // ── Chained: sanitize then use ────────────────────────────────────────────
 
-fn process_input(raw: Tainted[String]) -> Clean[String] {
-    let clean: Clean[String] = sanitize(raw);
+fn process_input(raw: Tainted[String]) -> String {
+    let clean: String = relabel trust(raw, "VALIDATED");
     clean
 }

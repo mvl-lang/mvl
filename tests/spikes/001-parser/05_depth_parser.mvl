@@ -58,7 +58,7 @@ fn is_whitespace(c: String) -> Bool {
 }
 
 fn is_keyword(s: String) -> Bool {
-    let kws: String = " fn let mut match if else for while type total partial return extern use pub in true false builtin transparent move consume declassify sanitize const where struct enum impl test requires ensures invariant Public Tainted Secret Clean iso val ref tag ";
+    let kws: String = " fn let mut match if else for while type total partial return extern use pub in true false builtin transparent move consume label relabel const where struct enum impl test requires ensures invariant Tainted Secret iso val ref tag ";
     kws.contains(format(" {} ", s))
 }
 
@@ -336,7 +336,7 @@ total fn count_items(items: List[Item]) -> Counts {
 // ── IFC helpers ───────────────────────────────────────────────────────────────
 
 fn dir_from_arg(v: Tainted[String]) -> Path {
-    let clean_dir: Clean[String] = sanitize(v);
+    let clean_dir: String = relabel trust(v, "VALIDATED");
     join(path("."), clean_dir)
 }
 
@@ -387,9 +387,9 @@ partial fn main() -> Unit ! FileRead + Console {
                             match read_to_string(entry.path) {
                                 Err(_)  => (),
                                 Ok(raw) => {
-                                    let src: Clean[String] = sanitize(raw);
-                                    let items: Clean[List[Item]] = call_parse_file(src);
-                                    let c: Clean[Counts] = call_count_items(items);
+                                    let src: String = relabel trust(raw, "VALIDATED");
+                                    let items: List[Item]] = call_parse_file(src);
+                                    let c: Counts = call_count_items(items);
                                     fn_count   = fn_count   + c.fns;
                                     type_count = type_count + c.types;
                                     use_count  = use_count  + c.uses;

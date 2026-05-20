@@ -3,7 +3,7 @@
 // Demonstrates:
 //   1. Req 11 (IFC): Request.body is Tainted[String] — network input, must sanitize before use.
 //   2. Req 11 (IFC): verify_request_auth consumes the stored Secret[String] key internally;
-//      it CANNOT appear in any Response.body (body requires Clean[String]).
+//      it CANNOT appear in any Response.body (body requires String).
 //   3. Req 5  (Errors): Result[Response, HandlerError] for all failure paths.
 //   4. Req 7  (Effects): handlers are pure (no effects); effects confined to main.mvl.
 //
@@ -32,13 +32,13 @@ pub type Request = struct {
 
 // Outgoing HTTP response.
 // status: refined to valid HTTP status code range [100, 600).
-// body:   Clean[String] — only sanitized/validated content may appear here.
+// body:   String — only sanitized/validated content may appear here.
 //
 // IFC note: Secret[String] CANNOT be assigned to body — compile-time type error.
 // The api_key loaded in main.mvl can never reach this field.
 pub type Response = struct {
     status: Int where self >= 100 && self < 600,
-    body: Clean[String],
+    body: String,
 }
 
 // Named failure reasons for all handler paths.
@@ -58,14 +58,14 @@ extern "rust" {
     // log or response inclusion.
     fn verify_request_auth(provided: Tainted[String]) -> Result[Unit, HandlerError];
 
-    // Read a stored config value. Returns JSON-formatted Clean[String].
-    fn get_config_value(path: String) -> Result[Clean[String], HandlerError];
+    // Read a stored config value. Returns JSON-formatted String.
+    fn get_config_value(path: String) -> Result[String, HandlerError];
 
-    // Update a stored config value; value is Clean[String] (caller sanitizes).
-    fn put_config_value(path: String, value: Clean[String]) -> Result[Clean[String], HandlerError];
+    // Update a stored config value; value is String (caller sanitizes).
+    fn put_config_value(path: String, value: String) -> Result[String, HandlerError];
 
     // Reset a stored config key to its default value.
-    fn reset_config_value(path: String) -> Result[Clean[String], HandlerError];
+    fn reset_config_value(path: String) -> Result[String, HandlerError];
 }
 
 // ── Dispatch ──────────────────────────────────────────────────────────────
@@ -93,7 +93,7 @@ fn route(req: Request) -> Result[Response, HandlerError] {
 
 // GET /config/<key> — return the current value.
 fn handle_get(path: String) -> Result[Response, HandlerError] {
-    let body_result: Result[Clean[String], HandlerError] = get_config_value(path);
+    let body_result: Result[String, HandlerError] = get_config_value(path);
     match body_result {
         Err(e)   => Err(e),
         Ok(body) => Ok(Response { status: 200, body: body }),
@@ -101,11 +101,11 @@ fn handle_get(path: String) -> Result[Response, HandlerError] {
 }
 
 // PUT /config/<key> — update the value with a sanitized body.
-// IFC: body is Tainted[String] from the network; sanitize() is required before storage.
-// The compiler rejects storing the raw Tainted value — only Clean[String] is accepted.
+// IFC: body is Tainted[String] from the network; relabel trust(, "VALIDATED") is required before storage.
+// The compiler rejects storing the raw Tainted value — only String is accepted.
 fn handle_put(path: String, body: Tainted[String]) -> Result[Response, HandlerError] {
-    let clean: Clean[String] = sanitize(body);
-    let result: Result[Clean[String], HandlerError] = put_config_value(path, clean);
+    let clean: String = relabel trust(body, "VALIDATED");
+    let result: Result[String, HandlerError] = put_config_value(path, clean);
     match result {
         Err(e)   => Err(e),
         Ok(body) => Ok(Response { status: 200, body: body }),
@@ -114,7 +114,7 @@ fn handle_put(path: String, body: Tainted[String]) -> Result[Response, HandlerEr
 
 // DELETE /config/<key> — reset the value to its default.
 fn handle_delete(path: String) -> Result[Response, HandlerError] {
-    let result: Result[Clean[String], HandlerError] = reset_config_value(path);
+    let result: Result[String, HandlerError] = reset_config_value(path);
     match result {
         Err(e)   => Err(e),
         Ok(body) => Ok(Response { status: 200, body: body }),

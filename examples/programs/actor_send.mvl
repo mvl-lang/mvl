@@ -5,14 +5,14 @@
 
 actor Accumulator {
     sum: Int
-    label: String
+    name: String
 
     pub fn add(val amount: Int) { }
     pub fn clear() { }
 }
 
 fn main() -> Unit ! Console {
-    let a: Accumulator = actor Accumulator { sum: 0, label: "acc" };
+    let a: Accumulator = actor Accumulator { sum: 0, name: "acc" };
     a.add(10);
     a.add(20);
     a.add(30);

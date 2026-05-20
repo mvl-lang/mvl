@@ -44,10 +44,16 @@ use std::collections::{HashMap, HashSet};
 use crate::mvl::checker::context::TypeEnv;
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
-use crate::mvl::parser::ast::{
-    Block, Decl, ElseBranch, Expr, MatchBody, Program, SecurityLabel, Stmt, TypeExpr,
-};
+use crate::mvl::parser::ast::{Block, Decl, ElseBranch, Expr, MatchBody, Program, Stmt, TypeExpr};
 use crate::mvl::parser::lexer::Span;
+
+/// Sentinel value stored in the inferred label table for functions that explicitly
+/// strip labels via `relabel` (e.g. `relabel trust(x, "TAG")` → bare).
+///
+/// The leading `<` makes this impossible to match any valid MVL label name, which
+/// must start with `[A-Za-z_]`.  A user-defined `label` whose name happened to be
+/// `__stripped__` would have collided with the old string literal; this one cannot.
+const STRIPPED_SENTINEL: &str = "<stripped>";
 
 // ── External taint source registry (#833) ─────────────────────────────────────
 
@@ -88,18 +94,21 @@ const TAINT_SOURCES: &[&str] = &[
 ///   preserve context sensitivity for label-polymorphic wrappers.
 #[derive(Debug, Default, Clone)]
 pub struct InferredLabels {
-    explicit: HashMap<String, SecurityLabel>,
-    inferred: HashMap<String, SecurityLabel>,
+    explicit: HashMap<String, String>,
+    inferred: HashMap<String, String>,
 }
 
 impl InferredLabels {
     /// Return the return label for `fn_name`, if any.
     /// Explicit TypeEnv-seeded labels take precedence over propagation-derived ones.
-    pub fn get(&self, fn_name: &str) -> Option<SecurityLabel> {
-        self.explicit
+    pub fn get(&self, fn_name: &str) -> Option<String> {
+        let label = self
+            .explicit
             .get(fn_name)
             .or_else(|| self.inferred.get(fn_name))
-            .copied()
+            .cloned();
+        // Filter out the internal STRIPPED_SENTINEL — callers see None (bare).
+        label.filter(|l| l != STRIPPED_SENTINEL)
     }
 }
 
@@ -114,7 +123,7 @@ impl InferredLabels {
 /// Called from `check_with_two_preludes_mode` with the user-supplied programs
 /// (excluding prelude slices — their annotations are already in TypeEnv).
 pub fn propagate(programs: &[&Program], type_env: &TypeEnv) -> InferredLabels {
-    let mut table: HashMap<String, SecurityLabel> = HashMap::new();
+    let mut table: HashMap<String, String> = HashMap::new();
     // Track which names were seeded explicitly (TypeEnv or TAINT_SOURCES) so we can
     // split the table into explicit vs inferred at the end (#849).
     let mut explicit_names: HashSet<String> = HashSet::new();
@@ -122,7 +131,7 @@ pub fn propagate(programs: &[&Program], type_env: &TypeEnv) -> InferredLabels {
     // Seed 1: explicit return labels from TypeEnv (covers stdlib taint sources).
     for (name, fn_info) in &type_env.fns {
         if let Some(label) = ifc::label_of(&fn_info.ret) {
-            table.insert(name.clone(), label);
+            table.insert(name.clone(), label.to_string());
             explicit_names.insert(name.clone());
         }
     }
@@ -131,7 +140,7 @@ pub fn propagate(programs: &[&Program], type_env: &TypeEnv) -> InferredLabels {
     for &src in TAINT_SOURCES {
         table
             .entry(src.to_string())
-            .or_insert(SecurityLabel::Tainted);
+            .or_insert("Tainted".to_string());
         explicit_names.insert(src.to_string());
     }
 
@@ -176,23 +185,28 @@ pub fn propagate(programs: &[&Program], type_env: &TypeEnv) -> InferredLabels {
                         continue;
                     }
                     // Build param label env from declared annotations.
-                    let mut param_env: HashMap<String, SecurityLabel> = HashMap::new();
+                    let mut param_env: HashMap<String, String> = HashMap::new();
                     for param in params {
                         if let Some(l) = label_of_type_expr(&param.ty) {
                             param_env.insert(param.name.clone(), l);
                         }
                     }
                     // Infer return label from body return expressions.
+                    let has_labeled_params = !param_env.is_empty();
                     if let Some(label) = infer_return_label(body, &param_env, &table) {
-                        let current = table.get(name).copied();
-                        let new_label = match current {
-                            Some(c) => ifc::join(c, label),
-                            None => label,
-                        };
-                        if current != Some(new_label) {
+                        let current = table.get(name).cloned();
+                        // In the new model, any label is non-Public; keep the first label found.
+                        let new_label = current.clone().unwrap_or_else(|| label.clone());
+                        if current.as_deref() != Some(new_label.as_str()) {
                             table.insert(name.to_string(), new_label);
                             changed = true;
                         }
+                    } else if has_labeled_params && !table.contains_key(name) {
+                        // Function has labeled params but body explicitly returns bare (None).
+                        // Mark as "explicitly bare" so call sites don't apply label-polymorphic
+                        // propagation (which would incorrectly infer Tainted from arg labels).
+                        // STRIPPED_SENTINEL = function explicitly strips labels via relabel.
+                        table.insert(name.to_string(), STRIPPED_SENTINEL.to_string());
                     }
                 }
             }
@@ -203,8 +217,8 @@ pub fn propagate(programs: &[&Program], type_env: &TypeEnv) -> InferredLabels {
     }
 
     // Split combined table into explicit (TypeEnv-seeded) and inferred (body-analysis).
-    let mut explicit: HashMap<String, SecurityLabel> = HashMap::new();
-    let mut inferred: HashMap<String, SecurityLabel> = HashMap::new();
+    let mut explicit: HashMap<String, String> = HashMap::new();
+    let mut inferred: HashMap<String, String> = HashMap::new();
     for (name, label) in table {
         if explicit_names.contains(&name) {
             explicit.insert(name, label);
@@ -222,9 +236,9 @@ pub fn propagate(programs: &[&Program], type_env: &TypeEnv) -> InferredLabels {
 /// - The tail expression of the block (implicit return value).
 fn infer_return_label(
     block: &Block,
-    param_env: &HashMap<String, SecurityLabel>,
-    table: &HashMap<String, SecurityLabel>,
-) -> Option<SecurityLabel> {
+    param_env: &HashMap<String, String>,
+    table: &HashMap<String, String>,
+) -> Option<String> {
     // During propagation, table is the full combined table; pass it as both
     // explicit and inferred so all known labels are treated as authoritative.
     let returns = collect_explicit_returns(block, param_env, table);
@@ -241,9 +255,9 @@ fn infer_return_label(
 /// Walk a block collecting labels from explicit `return expr` statements.
 fn collect_explicit_returns(
     block: &Block,
-    env: &HashMap<String, SecurityLabel>,
-    table: &HashMap<String, SecurityLabel>,
-) -> Option<SecurityLabel> {
+    env: &HashMap<String, String>,
+    table: &HashMap<String, String>,
+) -> Option<String> {
     block
         .stmts
         .iter()
@@ -253,9 +267,9 @@ fn collect_explicit_returns(
 
 fn collect_returns_in_stmt(
     stmt: &Stmt,
-    env: &HashMap<String, SecurityLabel>,
-    table: &HashMap<String, SecurityLabel>,
-) -> Option<SecurityLabel> {
+    env: &HashMap<String, String>,
+    table: &HashMap<String, String>,
+) -> Option<String> {
     // Propagation helpers: pass table as both explicit and inferred (all labels authoritative).
     match stmt {
         Stmt::Return { value: Some(e), .. } => infer_label_extended(e, env, table, table),
@@ -309,37 +323,45 @@ fn collect_returns_in_stmt(
 /// detection, callers pass the split tables for context-sensitive precision.
 pub fn infer_label_extended(
     expr: &Expr,
-    env: &HashMap<String, SecurityLabel>,
-    explicit: &HashMap<String, SecurityLabel>,
-    inferred: &HashMap<String, SecurityLabel>,
-) -> Option<SecurityLabel> {
+    env: &HashMap<String, String>,
+    explicit: &HashMap<String, String>,
+    inferred: &HashMap<String, String>,
+) -> Option<String> {
     match expr {
-        Expr::Ident(name, _) => env.get(name.as_str()).copied(),
+        Expr::Ident(name, _) => env.get(name.as_str()).cloned(),
         Expr::FnCall { name, args, .. } => {
             // Explicit annotation → authoritative; short-circuit without examining args.
             if let Some(label) = explicit.get(name.as_str()) {
-                return Some(*label);
+                return Some(label.clone());
+            }
+            // STRIPPED_SENTINEL: function explicitly strips labels via relabel.
+            // Do not propagate arg labels — return None (bare).
+            if inferred
+                .get(name.as_str())
+                .is_some_and(|l| l == STRIPPED_SENTINEL)
+            {
+                return None;
             }
             // Fix #858: local lambda variable — env holds the lambda's return label.
             // Enables `let f = || -> Tainted[T] { ... }; f()` to propagate taint.
             // Guard: only apply when the name is not a known function in `inferred`,
             // to avoid a variable shadowing an unannotated function of the same name.
             if !inferred.contains_key(name.as_str()) {
-                if let Some(&label) = env.get(name.as_str()) {
-                    return Some(label);
+                if let Some(label) = env.get(name.as_str()) {
+                    return Some(label.clone());
                 }
             }
             // Inferred label → join with arg labels for context sensitivity.
-            let base = inferred.get(name.as_str()).copied();
+            let base = inferred.get(name.as_str()).cloned();
             let arg_join = args
                 .iter()
                 .map(|a| infer_label_extended(a, env, explicit, inferred))
                 .fold(None, ifc::join_opt);
             ifc::join_opt(base, arg_join)
         }
-        // declassify/sanitize always produce specific labels.
-        Expr::Declassify { .. } => Some(SecurityLabel::Public),
-        Expr::Sanitize { .. } => Some(SecurityLabel::Clean),
+        // relabel() produces the `to` side: bare (None) or labeled.
+        // Conservative: return None — the caller should check the declared transition.
+        Expr::Relabel { .. } => None,
         Expr::Binary { left, right, .. } => ifc::join_opt(
             infer_label_extended(left, env, explicit, inferred),
             infer_label_extended(right, env, explicit, inferred),
@@ -429,10 +451,10 @@ pub fn infer_label_extended(
 /// Return the label of the tail expression of a block, if it ends in an expression.
 fn tail_label_of_block(
     block: &Block,
-    env: &HashMap<String, SecurityLabel>,
-    explicit: &HashMap<String, SecurityLabel>,
-    inferred: &HashMap<String, SecurityLabel>,
-) -> Option<SecurityLabel> {
+    env: &HashMap<String, String>,
+    explicit: &HashMap<String, String>,
+    inferred: &HashMap<String, String>,
+) -> Option<String> {
     block.stmts.last().and_then(|s| {
         if let Stmt::Expr { expr, .. } = s {
             infer_label_extended(expr, env, explicit, inferred)
@@ -479,7 +501,7 @@ pub fn detect_violations(
             _ => continue,
         };
         for (name, params, body) in fns {
-            let mut param_env: HashMap<String, SecurityLabel> = HashMap::new();
+            let mut param_env: HashMap<String, String> = HashMap::new();
             for param in params {
                 if let Some(l) = label_of_type_expr(&param.ty) {
                     param_env.insert(param.name.clone(), l);
@@ -494,7 +516,7 @@ pub fn detect_violations(
 fn collect_violations_in_block(
     block: &Block,
     caller: &str,
-    env: &HashMap<String, SecurityLabel>,
+    env: &HashMap<String, String>,
     type_env: &TypeEnv,
     inferred: &InferredLabels,
     errors: &mut Vec<CheckError>,
@@ -508,7 +530,7 @@ fn collect_violations_in_block(
 fn collect_violations_in_stmt(
     stmt: &Stmt,
     caller: &str,
-    env: &mut HashMap<String, SecurityLabel>,
+    env: &mut HashMap<String, String>,
     type_env: &TypeEnv,
     inferred: &InferredLabels,
     errors: &mut Vec<CheckError>,
@@ -532,7 +554,7 @@ fn collect_violations_in_stmt(
             let effective_label = label_of_type_expr(ty).or(init_label);
             // Fix #858 nested destructuring: use recursive helper to bind all names.
             if let Some(l) = effective_label {
-                ifc::bind_pattern_labels(pattern, l, env);
+                ifc::bind_pattern_labels(pattern, &l, env);
             }
         }
         Stmt::Assign { value, .. } => {
@@ -601,7 +623,7 @@ fn collect_violations_in_stmt(
                 infer_label_extended(iter, env, &inferred.explicit, &inferred.inferred);
             let mut body_env = env.clone();
             if let Some(l) = iter_label {
-                ifc::bind_pattern_labels(pattern, l, &mut body_env);
+                ifc::bind_pattern_labels(pattern, &l, &mut body_env);
             }
             collect_violations_in_block(body, caller, &body_env, type_env, inferred, errors);
         }
@@ -611,7 +633,7 @@ fn collect_violations_in_stmt(
 fn collect_violations_in_expr(
     expr: &Expr,
     caller: &str,
-    env: &HashMap<String, SecurityLabel>,
+    env: &HashMap<String, String>,
     type_env: &TypeEnv,
     inferred: &InferredLabels,
     errors: &mut Vec<CheckError>,
@@ -638,8 +660,7 @@ fn collect_violations_in_expr(
         Expr::Unary { expr, .. }
         | Expr::Propagate { expr, .. }
         | Expr::Consume { expr, .. }
-        | Expr::Declassify { expr, .. }
-        | Expr::Sanitize { expr, .. }
+        | Expr::Relabel { expr, .. }
         | Expr::Borrow { expr, .. }
         | Expr::FieldAccess { expr, .. } => {
             collect_violations_in_expr(expr, caller, env, type_env, inferred, errors);
@@ -716,7 +737,7 @@ fn check_call_violations(
     args: &[Expr],
     call_span: Span,
     caller: &str,
-    env: &HashMap<String, SecurityLabel>,
+    env: &HashMap<String, String>,
     type_env: &TypeEnv,
     inferred: &InferredLabels,
     errors: &mut Vec<CheckError>,
@@ -734,26 +755,30 @@ fn check_call_violations(
     }
 
     for (param_idx, (arg, param_ty)) in args.iter().zip(fn_info.params.iter()).enumerate() {
-        let Some(required) = ifc::label_of(param_ty) else {
-            continue; // Param has no label requirement.
-        };
-        // Use split tables: explicit labels are authoritative; inferred labels join with
-        // arg labels to preserve context sensitivity for label-polymorphic wrappers (#849).
-        let Some(arg_label) =
-            infer_label_extended(arg, env, &inferred.explicit, &inferred.inferred)
-        else {
-            continue; // Cannot determine arg label.
-        };
-        if ifc::can_flow(arg_label, required) {
-            continue; // No violation.
+        // In the new model, both labeled and unlabeled params can be violated:
+        // - Arg is Tainted, param is bare → violation (labeled ≠ bare)
+        // - Arg is Tainted, param is Secret → violation (Tainted ≠ Secret)
+        // - Arg is bare, param is Tainted → violation (bare ≠ labeled, but caught by type checker)
+        let required = ifc::label_of(param_ty); // None = bare, Some(name) = labeled
+                                                // Use split tables: explicit labels are authoritative; inferred labels join with
+                                                // arg labels to preserve context sensitivity for label-polymorphic wrappers (#849).
+        let arg_label = infer_label_extended(arg, env, &inferred.explicit, &inferred.inferred);
+        // Violation: arg label ≠ required label (either side may be None = bare)
+        if arg_label.as_deref() == required {
+            continue; // Labels match exactly.
         }
+        // Only report violation when arg is labeled and required is bare or a different label.
+        // (bare arg to labeled param is caught by the direct type checker, not propagation)
+        let Some(ref al) = arg_label else {
+            continue; // Cannot determine arg label — skip.
+        };
         // Build a simplified call chain for the error message.
         let chain = extract_chain(arg, env, &inferred.explicit, &inferred.inferred);
         errors.push(CheckError::InterprocFlowViolation {
             callee: callee_name.to_string(),
             param_idx,
-            required_label: ifc::label_name(required).to_string(),
-            inferred_label: ifc::label_name(arg_label).to_string(),
+            required_label: required.unwrap_or("bare").to_string(),
+            inferred_label: al.clone(),
             chain,
             caller: caller.to_string(),
             span: call_span,
@@ -767,9 +792,9 @@ fn check_call_violations(
 /// path through which labeled data flows into the violation.
 fn extract_chain(
     expr: &Expr,
-    env: &HashMap<String, SecurityLabel>,
-    explicit: &HashMap<String, SecurityLabel>,
-    inferred: &HashMap<String, SecurityLabel>,
+    env: &HashMap<String, String>,
+    explicit: &HashMap<String, String>,
+    inferred: &HashMap<String, String>,
 ) -> Vec<String> {
     match expr {
         Expr::FnCall { name, args, .. } => {
@@ -814,7 +839,7 @@ mod tests {
         env.fns.insert(
             "source".into(),
             FnInfo {
-                ret: Ty::Labeled(SecurityLabel::Tainted, Box::new(Ty::String)),
+                ret: Ty::Labeled("Tainted".to_string(), Box::new(Ty::String)),
                 ..Default::default()
             },
         );
@@ -822,7 +847,7 @@ mod tests {
         env.fns.insert(
             "sink".into(),
             FnInfo {
-                params: vec![Ty::Labeled(SecurityLabel::Clean, Box::new(Ty::String))],
+                params: vec![Ty::String],
                 ret: Ty::Unit,
                 ..Default::default()
             },
@@ -837,8 +862,8 @@ mod tests {
         let prog = parse("");
         let env = TypeEnv::default();
         let labels = propagate(&[&prog], &env);
-        assert_eq!(labels.get("read_line"), Some(SecurityLabel::Tainted));
-        assert_eq!(labels.get("args"), Some(SecurityLabel::Tainted));
+        assert_eq!(labels.get("read_line"), Some("Tainted".to_string()));
+        assert_eq!(labels.get("args"), Some("Tainted".to_string()));
     }
 
     #[test]
@@ -846,7 +871,7 @@ mod tests {
         let prog = parse("");
         let env = env_with_taint_source();
         let labels = propagate(&[&prog], &env);
-        assert_eq!(labels.get("source"), Some(SecurityLabel::Tainted));
+        assert_eq!(labels.get("source"), Some("Tainted".to_string()));
     }
 
     #[test]
@@ -858,21 +883,20 @@ mod tests {
         let labels = propagate(&[&prog], &env);
         assert_eq!(
             labels.get("wrapper"),
-            Some(SecurityLabel::Tainted),
+            Some("Tainted".to_string()),
             "wrapper calling Tainted source should be inferred Tainted"
         );
     }
 
     #[test]
     fn annotated_fn_not_overridden() {
-        // fn clean() -> Clean[String] { source() }  — annotation wins
-        let prog = parse("fn clean() -> Clean[String] { source() }");
+        // fn labeled() -> Tainted[String] { source() }  — explicit annotation wins
+        let prog = parse("fn labeled() -> Tainted[String] { source() }");
         let env = env_with_taint_source();
         let labels = propagate(&[&prog], &env);
-        // clean() has explicit label Clean — propagation must not upgrade it
-        // (it's skipped by the "annotation wins" guard)
+        // labeled() has explicit annotation → propagation skips it (annotation wins)
         assert_eq!(
-            labels.get("clean"),
+            labels.get("labeled"),
             None,
             "explicitly annotated fn should not be inferred"
         );
@@ -885,10 +909,10 @@ mod tests {
         let prog = parse("fn step1() -> String { source() } fn step2() -> String { step1() }");
         let env = env_with_taint_source();
         let labels = propagate(&[&prog], &env);
-        assert_eq!(labels.get("step1"), Some(SecurityLabel::Tainted));
+        assert_eq!(labels.get("step1"), Some("Tainted".to_string()));
         assert_eq!(
             labels.get("step2"),
-            Some(SecurityLabel::Tainted),
+            Some("Tainted".to_string()),
             "step2 calling step1 (Tainted) should be inferred Tainted"
         );
     }
@@ -899,7 +923,7 @@ mod tests {
         let prog = parse("fn wrapper() -> String { read_line() }");
         let env = TypeEnv::default();
         let labels = propagate(&[&prog], &env);
-        assert_eq!(labels.get("wrapper"), Some(SecurityLabel::Tainted));
+        assert_eq!(labels.get("wrapper"), Some("Tainted".to_string()));
     }
 
     // ── Violation detection tests ─────────────────────────────────────────
@@ -968,8 +992,8 @@ mod tests {
         );
         let env = env_with_taint_source();
         let inferred = propagate(&[&prog], &env);
-        assert_eq!(inferred.get("get_input"), Some(SecurityLabel::Tainted));
-        assert_eq!(inferred.get("build_query"), Some(SecurityLabel::Tainted));
+        assert_eq!(inferred.get("get_input"), Some("Tainted".to_string()));
+        assert_eq!(inferred.get("build_query"), Some("Tainted".to_string()));
         let violations = detect_violations(&prog, &env, &inferred);
         assert!(
             !violations.is_empty(),
@@ -1011,8 +1035,8 @@ mod tests {
         let prog = parse("fn a() -> String { b() } fn b() -> String { read_line() }");
         let env = TypeEnv::default();
         let inferred = propagate(&[&prog], &env);
-        assert_eq!(inferred.get("b"), Some(SecurityLabel::Tainted));
-        assert_eq!(inferred.get("a"), Some(SecurityLabel::Tainted));
+        assert_eq!(inferred.get("b"), Some("Tainted".to_string()));
+        assert_eq!(inferred.get("a"), Some("Tainted".to_string()));
     }
 
     #[test]
@@ -1034,7 +1058,7 @@ mod tests {
             } => {
                 assert_eq!(callee, "sink");
                 assert_eq!(*param_idx, 0);
-                assert_eq!(required_label, "Clean");
+                assert_eq!(required_label, "bare"); // sink takes bare String (#894: no Clean label)
                 assert_eq!(inferred_label, "Tainted");
                 assert_eq!(caller, "caller");
             }
@@ -1053,7 +1077,7 @@ mod tests {
         env.fns.insert(
             "public_sink".into(),
             FnInfo {
-                params: vec![Ty::Labeled(SecurityLabel::Public, Box::new(Ty::String))],
+                params: vec![Ty::String],
                 ret: Ty::Unit,
                 ..Default::default()
             },
@@ -1083,26 +1107,21 @@ mod tests {
 
     // ── Tests for #849, #850, #851 ────────────────────────────────────────
 
-    // #849: label-polymorphic wrapper — explicit annotation is authoritative,
-    // inferred label must be joined with arg labels (not used as short-circuit).
+    // #849: label-polymorphic wrapper — relabel trust() strips the Tainted label;
+    // the result is bare and satisfies a bare-requiring sink → no violation.
     #[test]
-    fn explicit_annotation_authoritative_over_args() {
-        // Note: `sanitize` is a MVL built-in keyword; the parser produces
-        // Expr::Sanitize { .. } (always → Clean) rather than Expr::FnCall.
-        // The user-defined `fn sanitize` declaration is irrelevant — any call to
-        // `sanitize(x)` in MVL source is always treated as a clean-sanitize expression.
-        // This test verifies that Expr::Sanitize → Clean prevents a false positive at sink.
-        let prog = parse(
-            "fn sanitize(x: String) -> Clean[String] { x } \
-             fn caller() -> Unit { sink(sanitize(source())) }",
-        );
+    fn relabel_trust_strips_label_no_violation_at_bare_sink() {
+        // GIVEN: caller passes source() through relabel trust() before sink.
+        // relabel trust(source(), "VALIDATED-01") → bare String (Expr::Relabel → None).
+        // sink requires bare String → arg_label (None) == required (None) → no violation.
+        let prog =
+            parse(r#"fn caller() -> Unit { sink(relabel trust(source(), "VALIDATED-01")) }"#);
         let env = env_with_taint_source();
         let inferred = propagate(&[&prog], &env);
         let violations = detect_violations(&prog, &env, &inferred);
-        // sanitize has explicit annotation → Clean; sink requires Clean → no violation.
         assert!(
             violations.is_empty(),
-            "explicit Clean annotation on sanitize must prevent violation, got {violations:?}"
+            "relabel trust() strips the Tainted label — no violation expected at bare sink, got: {violations:?}"
         );
     }
 
@@ -1143,7 +1162,7 @@ mod tests {
         env.fns.insert(
             "pair_source".into(),
             FnInfo {
-                ret: Ty::Labeled(SecurityLabel::Tainted, Box::new(Ty::String)),
+                ret: Ty::Labeled("Tainted".to_string(), Box::new(Ty::String)),
                 ..Default::default()
             },
         );
@@ -1218,7 +1237,7 @@ mod tests {
         env.fns.insert(
             "source_iter".into(),
             FnInfo {
-                ret: Ty::Labeled(SecurityLabel::Tainted, Box::new(Ty::String)),
+                ret: Ty::Labeled("Tainted".to_string(), Box::new(Ty::String)),
                 ..Default::default()
             },
         );
@@ -1248,7 +1267,7 @@ mod tests {
         env.fns.insert(
             "pair_source".into(),
             FnInfo {
-                ret: Ty::Labeled(SecurityLabel::Tainted, Box::new(Ty::String)),
+                ret: Ty::Labeled("Tainted".to_string(), Box::new(Ty::String)),
                 ..Default::default()
             },
         );

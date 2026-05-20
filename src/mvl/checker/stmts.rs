@@ -8,9 +8,7 @@ use crate::mvl::checker::context::{CapabilityState, TypeBodyInfo};
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
-use crate::mvl::parser::ast::{
-    Block, ElseBranch, Expr, LValue, Pattern, SecurityLabel, Stmt, Totality,
-};
+use crate::mvl::parser::ast::{Block, ElseBranch, Expr, LValue, Pattern, Stmt, Totality};
 use crate::mvl::parser::lexer::Span;
 
 use super::TypeChecker;
@@ -28,7 +26,7 @@ impl TypeChecker {
     /// - and the branch yields a non-Unit, non-Unknown result.
     pub(super) fn check_branch_label_promotion(
         &mut self,
-        cond_label: Option<SecurityLabel>,
+        cond_label: Option<String>,
         branch_ty: &Ty,
         return_ty: Option<&Ty>,
         span: Span,
@@ -210,15 +208,20 @@ impl TypeChecker {
                 span: cond.span(),
             });
         }
-        let cond_label = ifc::label_of(&cond_ty);
+        let cond_label = ifc::label_of(&cond_ty).map(|s| s.to_string());
         let then_ty = self.infer_block_type(then, return_ty);
-        self.check_branch_label_promotion(cond_label, &then_ty, return_ty, span);
+        self.check_branch_label_promotion(cond_label.clone(), &then_ty, return_ty, span);
         let result_ty = then_ty;
         if let Some(else_branch) = else_ {
             match else_branch {
                 ElseBranch::Block(b) => {
                     let else_ty = self.infer_block_type(b, return_ty);
-                    self.check_branch_label_promotion(cond_label, &else_ty, return_ty, span);
+                    self.check_branch_label_promotion(
+                        cond_label.clone(),
+                        &else_ty,
+                        return_ty,
+                        span,
+                    );
                     if !matches!(result_ty, Ty::Unknown)
                         && !matches!(else_ty, Ty::Unknown)
                         && !types_compatible(&result_ty, &else_ty)
@@ -241,7 +244,12 @@ impl TypeChecker {
                     } = nested_if.as_ref()
                     {
                         let nested_ty = self.infer_tail_if(c, t, e, *s, return_ty);
-                        self.check_branch_label_promotion(cond_label, &nested_ty, return_ty, span);
+                        self.check_branch_label_promotion(
+                            cond_label.clone(),
+                            &nested_ty,
+                            return_ty,
+                            span,
+                        );
                         if !matches!(result_ty, Ty::Unknown)
                             && !matches!(nested_ty, Ty::Unknown)
                             && !types_compatible(&result_ty, &nested_ty)
@@ -433,13 +441,13 @@ impl TypeChecker {
                 // Extract the condition's security label for implicit return-type promotion.
                 // Branching on Secret<Bool> or Tainted<Bool> means the choice of branch
                 // reveals the condition's value; non-Unit results must be promoted.
-                let cond_label = ifc::label_of(&cond_ty);
+                let cond_label = ifc::label_of(&cond_ty).map(|s| s.to_string());
 
                 // Pass None: non-tail if-branch body types don't constrain the
                 // function return. Early `return` inside branches uses
                 // `current_return_ty` as fallback (see Stmt::Return above).
                 let then_ty = self.infer_block_type(then, None);
-                self.check_branch_label_promotion(cond_label, &then_ty, return_ty, *span);
+                self.check_branch_label_promotion(cond_label.clone(), &then_ty, return_ty, *span);
 
                 if let Some(else_branch) = else_ {
                     match else_branch {

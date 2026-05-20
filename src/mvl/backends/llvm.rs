@@ -1081,7 +1081,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 span: s,
             };
             let secret_list_int = TypeExpr::Labeled {
-                label: crate::mvl::parser::ast::SecurityLabel::Secret,
+                label: "Secret".to_string(),
                 inner: Box::new(list_int),
                 span: s,
             };

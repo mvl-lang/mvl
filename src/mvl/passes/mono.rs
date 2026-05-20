@@ -188,7 +188,7 @@ pub fn substitute_type(ty: &TypeExpr, subs: &TypeSubst) -> TypeExpr {
             span: *span,
         },
         TypeExpr::Labeled { label, inner, span } => TypeExpr::Labeled {
-            label: *label,
+            label: label.clone(),
             inner: Box::new(substitute_type(inner, subs)),
             span: *span,
         },
@@ -435,7 +435,7 @@ pub fn ty_to_type_expr(ty: &Ty) -> TypeExpr {
         },
         Ty::Refined(inner, _) => ty_to_type_expr(inner),
         Ty::Labeled(label, inner) => TypeExpr::Labeled {
-            label: *label,
+            label: label.clone(),
             inner: Box::new(ty_to_type_expr(inner)),
             span: sp,
         },
@@ -666,8 +666,7 @@ impl CallCollector {
             Expr::Block(b) => self.block(b),
             Expr::Propagate { expr, .. }
             | Expr::Consume { expr, .. }
-            | Expr::Declassify { expr, .. }
-            | Expr::Sanitize { expr, .. }
+            | Expr::Relabel { expr, .. }
             | Expr::Borrow { expr, .. } => self.expr(expr),
             Expr::Construct { fields, .. } | Expr::Spawn { fields, .. } => {
                 for (_, e) in fields {

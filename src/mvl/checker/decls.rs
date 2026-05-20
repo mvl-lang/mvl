@@ -32,6 +32,11 @@ impl TypeChecker {
                 Decl::Impl(id) => self.register_impl(id),
                 Decl::Actor(ad) => self.register_actor(ad),
                 Decl::EffectDecl(_) => {} // collected by EffectHierarchy pass, not here
+                Decl::Label(ld) => self.env.register_label(ld.name.clone()),
+                Decl::Relabel(rd) => {
+                    self.env
+                        .register_relabel(rd.name.clone(), rd.from.clone(), rd.to.clone())
+                }
             }
         }
     }
@@ -203,6 +208,7 @@ impl TypeChecker {
             Decl::Impl(_) => {} // bodies not yet type-checked; registration done in collect_declarations
             Decl::Actor(ad) => self.check_actor_decl(ad),
             Decl::EffectDecl(_) => {} // validated by EffectHierarchy pass
+            Decl::Label(_) | Decl::Relabel(_) => {} // registered in collect_declarations
         }
     }
 

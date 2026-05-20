@@ -129,8 +129,7 @@ fn collect_paths_from_expr(expr: &Expr, out: &mut Vec<String>) {
         | Expr::Borrow { expr: e, .. }
         | Expr::Propagate { expr: e, .. }
         | Expr::Consume { expr: e, .. }
-        | Expr::Declassify { expr: e, .. }
-        | Expr::Sanitize { expr: e, .. } => collect_paths_from_expr(e, out),
+        | Expr::Relabel { expr: e, .. } => collect_paths_from_expr(e, out),
         Expr::FnCall { args, .. } => {
             for a in args {
                 collect_paths_from_expr(a, out);

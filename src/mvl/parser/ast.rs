@@ -77,6 +77,10 @@ pub enum Decl {
     Actor(ActorDecl),
     /// `effect Name [> Parent [+ Parent]*]` — effect declaration (#852).
     EffectDecl(EffectDecl),
+    /// `label Name` — user-defined IFC label declaration (#894).
+    Label(LabelDecl),
+    /// `relabel name: From -> To` — IFC relabel transition declaration (#894).
+    Relabel(RelabelDecl),
 }
 
 impl Decl {
@@ -90,6 +94,8 @@ impl Decl {
             Decl::Impl(d) => d.span,
             Decl::Actor(d) => d.span,
             Decl::EffectDecl(d) => d.span,
+            Decl::Label(d) => d.span,
+            Decl::Relabel(d) => d.span,
         }
     }
 }
@@ -368,9 +374,9 @@ pub enum TypeExpr {
         inner: Box<TypeExpr>,
         span: Span,
     },
-    /// `Public<T>`, `Tainted<T>`, `Secret<T>`, `Clean<T>`
+    /// `Tainted[T]`, `Secret[T]`, or any user-declared label `L[T]` (#894).
     Labeled {
-        label: SecurityLabel,
+        label: String,
         inner: Box<TypeExpr>,
         span: Span,
     },
@@ -465,13 +471,29 @@ impl SessionOp {
     }
 }
 
-/// Security label keywords.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SecurityLabel {
-    Public,
-    Tainted,
-    Secret,
-    Clean,
+/// A user-declared IFC label (`label Tainted`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LabelDecl {
+    /// Whether the label is exported from this module (`pub`).
+    pub visible: bool,
+    pub name: String,
+    pub span: Span,
+}
+
+/// A relabel transition declaration (`relabel trust: Tainted -> _`).
+///
+/// `from` / `to` use `None` to represent the bare type (`_`) and
+/// `Some(name)` to represent a declared label.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelabelDecl {
+    /// Whether the transition is exported from this module (`pub`).
+    pub visible: bool,
+    pub name: String,
+    /// Source label: `None` = bare `_`, `Some("Tainted")` = that label.
+    pub from: Option<String>,
+    /// Destination label: `None` = bare `_`, `Some("Secret")` = that label.
+    pub to: Option<String>,
+    pub span: Span,
 }
 
 // ── Refinement predicates ──────────────────────────────────────────────────
@@ -671,12 +693,15 @@ pub enum Expr {
         expr: Box<Expr>,
         span: Span,
     },
-    Declassify {
+    /// `relabel name(expr, "audit-tag")` — IFC relabel expression (#894).
+    ///
+    /// Applies a declared relabel transition to `expr`.
+    /// `name` must match a `relabel` declaration in scope.
+    /// `tag` must be a string literal (audit trail).
+    Relabel {
+        name: String,
         expr: Box<Expr>,
-        span: Span,
-    },
-    Sanitize {
-        expr: Box<Expr>,
+        tag: String,
         span: Span,
     },
     /// Expression-level borrow: `val expr` (shared) or `ref expr` (mutable).
@@ -743,8 +768,7 @@ impl Expr {
             | Expr::Map { span, .. }
             | Expr::Set { span, .. }
             | Expr::Consume { span, .. }
-            | Expr::Declassify { span, .. }
-            | Expr::Sanitize { span, .. }
+            | Expr::Relabel { span, .. }
             | Expr::Borrow { span, .. }
             | Expr::Spawn { span, .. }
             | Expr::Select { span, .. }
@@ -1060,12 +1084,12 @@ mod tests {
 
     #[test]
     fn labeled_type_node_structure() {
-        // Represents: `fn f(x: Tainted<String>) -> Clean<String>`
+        // Represents: `fn f(x: Tainted<String>) -> Secret<String>` (post-#894)
         let param = Param {
             capability: None,
             name: "x".into(),
             ty: TypeExpr::Labeled {
-                label: SecurityLabel::Tainted,
+                label: "Tainted".to_string(),
                 inner: Box::new(TypeExpr::Base {
                     name: "String".into(),
                     args: vec![],
@@ -1077,7 +1101,7 @@ mod tests {
             span: dummy(),
         };
         let ret = TypeExpr::Labeled {
-            label: SecurityLabel::Clean,
+            label: "Secret".to_string(),
             inner: Box::new(TypeExpr::Base {
                 name: "String".into(),
                 args: vec![],
@@ -1087,38 +1111,21 @@ mod tests {
         };
 
         assert!(
-            matches!(
-                &param.ty,
-                TypeExpr::Labeled {
-                    label: SecurityLabel::Tainted,
-                    ..
-                }
-            ),
+            matches!(&param.ty, TypeExpr::Labeled { label, .. } if label == "Tainted"),
             "param type must be LabeledType(Tainted, String)"
         );
         assert!(
-            matches!(
-                &ret,
-                TypeExpr::Labeled {
-                    label: SecurityLabel::Clean,
-                    ..
-                }
-            ),
-            "return type must be LabeledType(Clean, String)"
+            matches!(&ret, TypeExpr::Labeled { label, .. } if label == "Secret"),
+            "return type must be LabeledType(Secret, String)"
         );
     }
 
     #[test]
     fn security_labels_all_variants() {
-        // All four security labels are representable
-        for label in [
-            SecurityLabel::Public,
-            SecurityLabel::Tainted,
-            SecurityLabel::Secret,
-            SecurityLabel::Clean,
-        ] {
+        // User-defined labels are now plain strings (#894)
+        for label in ["Tainted", "Secret", "CustomLabel"] {
             let ty = TypeExpr::Labeled {
-                label,
+                label: label.to_string(),
                 inner: Box::new(TypeExpr::Base {
                     name: "T".into(),
                     args: vec![],

@@ -291,8 +291,7 @@ fn check_requires_in_expr(
         Expr::Borrow { expr, .. }
         | Expr::Unary { expr, .. }
         | Expr::Consume { expr, .. }
-        | Expr::Declassify { expr, .. }
-        | Expr::Sanitize { expr, .. }
+        | Expr::Relabel { expr, .. }
         | Expr::Propagate { expr, .. }
         | Expr::FieldAccess { expr, .. } => {
             check_requires_in_expr(expr, fn_map, var_refs, fn_decls, errors, mode);
@@ -1820,8 +1819,7 @@ fn check_spawn_refinements_in_expr(
         Expr::Borrow { expr, .. }
         | Expr::Unary { expr, .. }
         | Expr::Consume { expr, .. }
-        | Expr::Declassify { expr, .. }
-        | Expr::Sanitize { expr, .. }
+        | Expr::Relabel { expr, .. }
         | Expr::Propagate { expr, .. }
         | Expr::FieldAccess { expr, .. } => {
             check_spawn_refinements_in_expr(expr, actor_fields, var_refs, fn_decls, errors, mode);

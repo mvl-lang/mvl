@@ -84,8 +84,8 @@ fn propagation(input: String) -> Result[Int, String] {
 
 // If-expression (as expression, not statement)
 fn if_expr(n: Int) -> String {
-    let label: String = if n > 0 { "positive" } else { "non-positive" };
-    label
+    let name: String = if n > 0 { "positive" } else { "non-positive" };
+    name
 }
 
 // Match expression
@@ -112,11 +112,11 @@ fn struct_construction() -> Point {
 }
 
 // Security-flow operations
-fn security_ops(raw: Tainted[String]) -> Clean[String] {
-    let clean: Clean[String] = sanitize(raw);
+fn security_ops(raw: Tainted[String]) -> String {
+    let clean: String = relabel trust(raw, "VALIDATED");
     clean
 }
 
 fn declassify_op(secret: Secret[Data]) -> Data {
-    declassify(secret)
+    relabel release(secret, "AUTHORIZED")
 }

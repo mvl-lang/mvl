@@ -1639,15 +1639,15 @@ fn secret_flows_to_public_rejected() {
 }
 
 #[test]
-fn public_flows_to_secret_accepted() {
-    // GIVEN: a function accepting Public[String] parameter assigned to Secret[String]
-    // THEN: no type error (upward flow)
-    let errors = errors_for(r#"fn store(x: Public[String]) -> Secret[String] { x }"#);
+fn public_flows_to_secret_rejected() {
+    // Post-#894: no lattice. bare String ≠ Secret[String].
+    // Use relabel classify to explicitly wrap.
+    let errors = errors_for(r#"fn store(x: String) -> Secret[String] { x }"#);
     assert!(
-        !errors
+        errors
             .iter()
             .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "upward flow Public→Secret should be accepted, got: {errors:?}"
+        "bare String must not flow to Secret[String] without relabel, got: {errors:?}"
     );
 }
 
@@ -1735,14 +1735,13 @@ fn arithmetic_label_join_propagates() {
 
 #[test]
 fn arithmetic_label_join_downgrade_rejected() {
-    // GIVEN: Secret[Int] + Public[Int] — trying to assign to Public[Int]
-    // THEN: TypeMismatch (result is Secret, expected Public)
-    let errors = errors_for(r#"fn add(a: Secret[Int], b: Public[Int]) -> Public[Int] { a + b }"#);
+    // Post-#894: Secret[Int] + Int — result is Secret[Int]; cannot return as Int (bare).
+    let errors = errors_for(r#"fn add(a: Secret[Int], b: Int) -> Int { a + b }"#);
     assert!(
         errors
             .iter()
             .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "Secret+Public result cannot flow to Public[Int], got: {errors:?}"
+        "Secret[Int] + Int result cannot flow to bare Int, got: {errors:?}"
     );
 }
 
@@ -1811,29 +1810,29 @@ fn declassify_secret_returns_public() {
 }
 
 #[test]
-fn sanitize_on_non_tainted_rejected() {
-    // GIVEN: sanitize() applied to Public[String] (not Tainted)
-    // THEN: InvalidSanitize error
+fn relabel_trust_on_non_tainted_rejected() {
+    // Post-#894: relabel trust() expects Tainted[T] input; bare String is rejected.
     let errors =
-        errors_for(r#"fn bad(input: Public[String]) -> Clean[String] { sanitize(input) }"#);
+        errors_for(r#"fn bad(input: String) -> String { relabel trust(input, "VALIDATED") }"#);
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::InvalidSanitize { .. })),
-        "sanitize on non-Tainted type should emit InvalidSanitize, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::InvalidRelabel { .. })),
+        "relabel trust on non-Tainted type should emit InvalidRelabel, got: {errors:?}"
     );
 }
 
 #[test]
-fn declassify_on_non_secret_rejected() {
-    // GIVEN: declassify() applied to Tainted[Int] (not Secret)
-    // THEN: InvalidDeclassify error
-    let errors = errors_for(r#"fn bad(input: Tainted[Int]) -> Public[Int] { declassify(input) }"#);
+fn relabel_release_on_non_secret_rejected() {
+    // Post-#894: relabel release() expects Secret[T] input; Tainted[Int] is rejected.
+    let errors = errors_for(
+        r#"fn bad(input: Tainted[Int]) -> Int { relabel release(input, "AUTHORIZED") }"#,
+    );
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::InvalidDeclassify { .. })),
-        "declassify on non-Secret type should emit InvalidDeclassify, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::InvalidRelabel { .. })),
+        "relabel release on non-Secret type should emit InvalidRelabel, got: {errors:?}"
     );
 }
 
@@ -1856,29 +1855,30 @@ fn direct_tainted_to_clean_without_sanitize_rejected() {
 }
 
 #[test]
-fn sanitize_on_clean_rejected() {
-    // GIVEN: sanitize() applied to Clean[String] (not Tainted)
-    // THEN: InvalidSanitize error
-    let errors = errors_for(r#"fn bad(input: Clean[String]) -> Clean[String] { sanitize(input) }"#);
+fn relabel_trust_on_secret_rejected() {
+    // Post-#894: relabel trust expects Tainted[T] input; Secret[String] is rejected.
+    let errors = errors_for(
+        r#"fn bad(input: Secret[String]) -> String { relabel trust(input, "VALIDATED") }"#,
+    );
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::InvalidSanitize { .. })),
-        "sanitize on Clean type should emit InvalidSanitize, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::InvalidRelabel { .. })),
+        "relabel trust on Secret type should emit InvalidRelabel, got: {errors:?}"
     );
 }
 
 #[test]
-fn sanitize_on_secret_rejected() {
-    // GIVEN: sanitize() applied to Secret[String] (not Tainted)
-    // THEN: InvalidSanitize error (use declassify for Secret)
-    let errors =
-        errors_for(r#"fn bad(input: Secret[String]) -> Clean[String] { sanitize(input) }"#);
+fn relabel_classify_on_tainted_rejected() {
+    // Post-#894: relabel classify expects bare T input; Tainted[String] is rejected.
+    let errors = errors_for(
+        r#"fn bad(input: Tainted[String]) -> Secret[String] { relabel classify(input, "ENV-SECRET") }"#,
+    );
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::InvalidSanitize { .. })),
-        "sanitize on Secret type should emit InvalidSanitize, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::InvalidRelabel { .. })),
+        "relabel classify on Tainted type should emit InvalidRelabel, got: {errors:?}"
     );
 }
 
@@ -1939,9 +1939,9 @@ fn secret_result_to_unlabeled_result_rejected() {
 }
 
 #[test]
-fn unlabeled_to_secret_param_accepted() {
-    // GIVEN: function with Secret[String] param called with unlabeled String
-    // THEN: accepted — unlabeled data is treated as Public, upward flow to Secret is fine
+fn unlabeled_to_secret_param_rejected() {
+    // Post-#894: no implicit flow. bare String ≠ Secret[String].
+    // Must use relabel classify() to wrap.
     let errors = errors_for(
         r#"
         fn vault(s: Secret[String]) -> Secret[String] { s }
@@ -1949,10 +1949,10 @@ fn unlabeled_to_secret_param_accepted() {
     "#,
     );
     assert!(
-        !errors
+        errors
             .iter()
             .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "unlabeled String should flow up to Secret[String] param, got: {errors:?}"
+        "bare String must not flow to Secret[String] param without relabel, got: {errors:?}"
     );
 }
 
@@ -2119,20 +2119,16 @@ fn use_extern(x: Int) -> Int {
 }
 
 #[test]
-fn sanitize_before_validation_guard_accepted() {
-    // GIVEN: sanitize() called after an explicit guard check (correct ordering)
-    // THEN: no type error — sanitize(Tainted[String]) → Clean[String] is valid
+fn relabel_trust_accepted() {
+    // Post-#894: relabel trust(Tainted[String], "TAG") → String is valid.
     let errors = errors_for(
-        r#"fn validate(raw: Tainted[String]) -> Result[Clean[String], String] {
-    if raw.len() < 8 {
-        return Err("too short".to_string());
-    }
-    Ok(sanitize(raw))
+        r#"fn validate(raw: Tainted[String]) -> String {
+    relabel trust(raw, "VALIDATED")
 }"#,
     );
     assert!(
         errors.is_empty(),
-        "sanitize after guard should be accepted, got: {errors:?}"
+        "relabel trust(Tainted[String]) should be accepted, got: {errors:?}"
     );
 }
 
@@ -2486,17 +2482,16 @@ fn println_accepts_public_argument() {
     );
 }
 
-/// `println` with a Clean argument MUST be rejected (003-information-flow/Req 6).
-/// Clean[T] is sanitized but not declassified — an explicit declassify() is required
-/// before logging.
+/// `println` with a Tainted argument MUST be rejected (003-information-flow/Req 6).
+/// Post-#894: only bare (unlabeled) values may be logged.
 #[test]
-fn println_rejects_clean_argument() {
-    let errors = errors_for(r#"fn f(s: Clean[String]) -> Unit ! Console { println(s); }"#);
+fn println_rejects_tainted_argument_in_logging() {
+    let errors = errors_for(r#"fn f(s: Tainted[String]) -> Unit ! Console { println(s); }"#);
     assert!(
         errors.iter().any(
-            |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Clean")
+            |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Tainted")
         ),
-        "println with Clean arg should emit LoggingLabelViolation, got: {errors:?}"
+        "println with Tainted arg should emit LoggingLabelViolation, got: {errors:?}"
     );
 }
 
@@ -3615,16 +3610,15 @@ fn log_error_rejects_tainted_argument() {
     );
 }
 
-/// `log_warn` with a Clean argument MUST be rejected — Clean is sanitized but
-/// not declassified; an explicit `declassify()` is required before logging (#54).
+/// `log_warn` with a Tainted argument MUST be rejected — only bare values may be logged (#54).
 #[test]
-fn log_warn_rejects_clean_argument() {
-    let errors = errors_for(r#"fn f(s: Clean[String]) -> Unit ! Log { log_warn(s, {}); }"#);
+fn log_warn_rejects_tainted_argument() {
+    let errors = errors_for(r#"fn f(s: Tainted[String]) -> Unit ! Log { log_warn(s, {}); }"#);
     assert!(
         errors.iter().any(
-            |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Clean")
+            |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Tainted")
         ),
-        "log_warn with Clean arg should emit LoggingLabelViolation, got: {errors:?}"
+        "log_warn with Tainted arg should emit LoggingLabelViolation, got: {errors:?}"
     );
 }
 
@@ -3724,14 +3718,14 @@ fn log_warn_rejects_tainted_value_in_fields_map() {
 }
 
 #[test]
-fn log_debug_rejects_clean_value_in_fields_map() {
+fn log_debug_rejects_tainted_value_in_fields_map() {
     let errors =
-        errors_for(r#"fn f(s: Clean[String]) -> Unit ! Log { log_debug("req", {"body": s}); }"#);
+        errors_for(r#"fn f(s: Tainted[String]) -> Unit ! Log { log_debug("req", {"body": s}); }"#);
     assert!(
         errors.iter().any(
-            |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Clean")
+            |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Tainted")
         ),
-        "log_debug with Clean value in fields map should emit LoggingLabelViolation, got: {errors:?}"
+        "log_debug with Tainted value in fields map should emit LoggingLabelViolation, got: {errors:?}"
     );
 }
 
@@ -3829,41 +3823,44 @@ fn decode_tainted_cannot_flow_to_unlabeled() {
     );
 }
 
-/// Multi-argument transparent fn: join(Tainted, Secret) == Secret.
+/// Multi-argument transparent fn: first arg's label propagates.
+/// Post-#894: no lattice — the first labeled arg (bare param) determines output label.
 #[test]
 fn transparent_fn_joins_mixed_labels_takes_highest() {
-    // GIVEN: transparent fn called with Tainted[String] and Secret[Int]
-    // THEN: result label is Secret (join of Tainted and Secret)
+    // GIVEN: transparent fn called with Tainted[String] (first bare param gets Tainted)
+    // THEN: result is Tainted[String] (first label wins)
     let errors = errors_for(
         r#"
-transparent fn combine(a: String, b: Int) -> String { a }
-fn f(s: Tainted[String], n: Secret[Int]) -> Secret[String] { combine(s, n) }
+transparent fn combine(a: String, b: String) -> String { a }
+fn f(s: Tainted[String], t: String) -> Tainted[String] { combine(s, t) }
 "#,
     );
     assert!(
         !errors
             .iter()
             .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "join(Tainted, Secret) should be Secret[String], got: {errors:?}"
+        "first labeled arg to transparent fn should propagate, got: {errors:?}"
     );
 }
 
-/// Multi-argument transparent fn: Secret result cannot flow to Tainted (lower label).
+/// Multi-argument transparent fn: result label is the label from arg (no lattice).
+/// Post-#894: in the new model, label propagation only applies when param is bare.
+/// Secret arg to labeled param doesn't propagate; Secret arg to bare param does.
 #[test]
 fn transparent_fn_joins_mixed_labels_reject_lower_bound() {
-    // GIVEN: combine(Tainted[String], Secret[Int]) — result is Secret[String]
-    // THEN: TypeMismatch — Secret[String] cannot flow to Tainted[String]
+    // GIVEN: combine(Tainted[String], String) — Tainted propagates to return
+    // THEN: result is Tainted[String]; cannot return as String (bare)
     let errors = errors_for(
         r#"
-transparent fn combine(a: String, b: Int) -> String { a }
-fn f(s: Tainted[String], n: Secret[Int]) -> Tainted[String] { combine(s, n) }
+transparent fn combine(a: String, b: String) -> String { a }
+fn f(s: Tainted[String], n: String) -> String { combine(s, n) }
 "#,
     );
     assert!(
         errors
             .iter()
             .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "Secret[String] must not flow down to Tainted[String], got: {errors:?}"
+        "Tainted[String] transparent result should not flow to bare String return, got: {errors:?}"
     );
 }
 
@@ -3886,41 +3883,39 @@ fn f(s: String) -> String { wrap(s) }
     );
 }
 
-/// Clean label propagates through transparent fn.
+/// Tainted label propagates through transparent fn (bare param).
 #[test]
-fn transparent_fn_propagates_clean_label() {
-    // GIVEN: transparent fn called with Clean[String]
-    // THEN: result is Clean[String]
+fn transparent_fn_propagates_tainted_label() {
+    // Post-#894: transparent fn with bare param propagates arg's Tainted label.
     let errors = errors_for(
         r#"
 transparent fn wrap(s: String) -> String { s }
-fn f(s: Clean[String]) -> Clean[String] { wrap(s) }
+fn f(s: Tainted[String]) -> Tainted[String] { wrap(s) }
 "#,
     );
     assert!(
         !errors
             .iter()
             .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "transparent fn with Clean[String] arg should yield Clean[String], got: {errors:?}"
+        "transparent fn with Tainted[String] arg should yield Tainted[String], got: {errors:?}"
     );
 }
 
-/// join(Clean, Tainted) == Tainted through transparent fn.
+/// join(Tainted, Secret) == Tainted (first label wins, no lattice).
 #[test]
-fn transparent_fn_join_clean_and_tainted_gives_tainted() {
-    // GIVEN: transparent fn called with Clean[String] and Tainted[String]
-    // THEN: result is Tainted[String] (Tainted > Clean in lattice)
+fn transparent_fn_join_two_labels_gives_first() {
+    // Post-#894: no lattice — join uses the first non-None label.
     let errors = errors_for(
         r#"
 transparent fn combine(a: String, b: String) -> String { a }
-fn f(a: Clean[String], b: Tainted[String]) -> Tainted[String] { combine(a, b) }
+fn f(a: Tainted[String], b: Secret[String]) -> Tainted[String] { combine(a, b) }
 "#,
     );
     assert!(
         !errors
             .iter()
             .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "join(Clean, Tainted) should be Tainted[String], got: {errors:?}"
+        "join(Tainted, Secret) should be Tainted[String] (first wins), got: {errors:?}"
     );
 }
 
@@ -5278,11 +5273,11 @@ fn bitwise_not_on_float_is_rejected() {
 /// IFC label propagation through bitwise operators (#483).
 #[test]
 fn bitwise_and_propagates_ifc_label() {
-    // Secret[Int] & Int → Secret[Int]; assigning to Secret[Int] is fine.
-    let errors = errors_for("fn f(a: Secret[Int], b: Public[Int]) -> Secret[Int] { a & b }");
+    // Post-#894: Secret[Int] & Int → Secret[Int]; assigning to Secret[Int] is fine.
+    let errors = errors_for("fn f(a: Secret[Int], b: Int) -> Secret[Int] { a & b }");
     assert!(
         errors.is_empty(),
-        "Secret[Int] & Public[Int] should yield Secret[Int], got: {errors:?}"
+        "Secret[Int] & Int should yield Secret[Int], got: {errors:?}"
     );
 }
 
@@ -7035,7 +7030,7 @@ fn actor_spawn_missing_field_rejected() {
         r#"
         actor Counter {
             count: Int
-            label: Int
+            ifc_label: Int
             pub fn tick() { }
         }
 

@@ -236,7 +236,7 @@ test fn io_remove_nonexistent_is_err() -> Unit ! FileDelete {
     assert_eq(result.is_err(), true);
 }
 
-// ── read_file (real filesystem, Clean[String] path) ───────────────────────
+// ── read_file (real filesystem, String path) ───────────────────────
 // read_file is not yet backed by the runtime — stub returns Err("").
 
 test fn io_read_file_nonexistent_is_err() -> Unit ! FileRead {

@@ -71,10 +71,10 @@ test fn args_opt_positional_builds_correct_variant() -> Unit {
 // ── ArgValue matching ─────────────────────────────────────────────────────
 
 test fn args_arg_value_str_extractable() -> Unit {
-    let v: ArgValue = ArgValue::Str(sanitize("hello"));
-    let s: Clean[String] = match v {
+    let v: ArgValue = ArgValue::Str(relabel trust("hello", "VALIDATED"));
+    let s: String = match v {
         ArgValue::Str(x) => x,
-        _ => sanitize(""),
+        _ => relabel trust("", "VALIDATED"),
     };
     assert_eq(s, "hello")
 }
@@ -109,27 +109,27 @@ test fn args_arg_value_bool_extractable() -> Unit {
 // ── Result accessors ──────────────────────────────────────────────────────
 
 test fn args_get_str_returns_value_when_present() -> Unit {
-    let m: ref Map[String, ArgValue] = {"k": ArgValue::Str(sanitize("hello"))};
-    let s: Clean[String] = get_str(m, "k", "default");
+    let m: ref Map[String, ArgValue] = {"k": ArgValue::Str(relabel trust("hello", "VALIDATED"))};
+    let s: String = get_str(m, "k", "default");
     assert_eq(s, "hello")
 }
 
 test fn args_get_str_returns_default_when_absent() -> Unit {
-    let m: ref Map[String, ArgValue] = {"k": ArgValue::Str(sanitize("x"))};
-    let s: Clean[String] = get_str(m, "missing", "default");
+    let m: ref Map[String, ArgValue] = {"k": ArgValue::Str(relabel trust("x", "VALIDATED"))};
+    let s: String = get_str(m, "missing", "default");
     assert_eq(s, "default")
 }
 
 test fn args_get_str_opt_returns_some_when_present() -> Unit {
-    let m: ref Map[String, ArgValue] = {"k": ArgValue::Str(sanitize("hi"))};
-    let opt: Option[Clean[String]] = get_str_opt(m, "k");
+    let m: ref Map[String, ArgValue] = {"k": ArgValue::Str(relabel trust("hi", "VALIDATED"))};
+    let opt: Option[String] = get_str_opt(m, "k");
     let is_some: Bool = match opt { Some(_) => true, None => false };
     assert_eq(is_some, true)
 }
 
 test fn args_get_str_opt_returns_none_when_absent() -> Unit {
-    let m: ref Map[String, ArgValue] = {"k": ArgValue::Str(sanitize("x"))};
-    let opt: Option[Clean[String]] = get_str_opt(m, "missing");
+    let m: ref Map[String, ArgValue] = {"k": ArgValue::Str(relabel trust("x", "VALIDATED"))};
+    let opt: Option[String] = get_str_opt(m, "missing");
     let is_none: Bool = match opt { None => true, Some(_) => false };
     assert_eq(is_none, true)
 }

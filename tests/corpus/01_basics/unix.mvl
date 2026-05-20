@@ -160,8 +160,8 @@ fn run_with_env_override() -> Result[Tainted[String], ProcessError] ! ProcessSpa
 
 // ── IFC: Tainted output must not be used as a path without sanitization ───
 
-// cmd must be Clean[String]; this function receives a validated command path.
-fn capture_output_safely(cmd: Clean[String]) -> Result[Bool, ProcessError] ! ProcessSpawn {
+// cmd must be String; this function receives a validated command path.
+fn capture_output_safely(cmd: String) -> Result[Bool, ProcessError] ! ProcessSpawn {
     let child: Child = spawn(cmd, [], Stdio::Devnull, Stdio::Capture, Stdio::Devnull)?;
     let out: ProcessOutput = wait(child)?;
     // out.stdout is Tainted[String] — we only inspect success, not the data,
@@ -169,9 +169,9 @@ fn capture_output_safely(cmd: Clean[String]) -> Result[Bool, ProcessError] ! Pro
     Ok(is_success(out.status))
 }
 
-fn process_env_value(key: Clean[String]) -> Bool ! Env {
+fn process_env_value(key: String) -> Bool ! Env {
     // Environment values are Tainted[String] — safe to inspect (return Bool)
-    // but must not be used as file paths or query parameters without sanitize().
+    // but must not be used as file paths or query parameters without relabel trust(, "VALIDATED").
     match get(key) {
         None => false,
         Some(_) => true,

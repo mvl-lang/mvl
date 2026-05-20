@@ -22,7 +22,7 @@ pub type MaxConns = Int where self > 0 && self <= 10000
 //
 // IFC invariant: api_key is Secret[String]. The compiler rejects any attempt to:
 //   - pass api_key to println() or log_info() / log_warn() / log_error()
-//   - assign api_key to a Response.body field (which requires Clean[String])
+//   - assign api_key to a Response.body field (which requires String)
 //   - return api_key from a function with non-Secret return type
 //
 // api_key may only flow to extern "rust" trust boundary functions (see storage.mvl).

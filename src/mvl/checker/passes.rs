@@ -336,8 +336,8 @@ impl VerificationPass for IFCPass {
             };
         }
 
-        // Count auditable declassification/sanitization points.
-        let (dc, sc) = ifc::count_declassifications(prog);
+        // Count auditable relabel call sites.
+        let relabel_count = ifc::count_relabels(prog);
 
         // Determine whether the program has any labeled types — if not, there
         // is nothing to prove and the pass is vacuously clean.
@@ -369,9 +369,7 @@ impl VerificationPass for IFCPass {
             Verdict::Proven {
                 evidence: format!(
                     "no direct, implicit, or interprocedural information flow violations; \
-                     {dc} declassif{} point(s), {sc} sanitiz{} point(s) auditable",
-                    if dc == 1 { "ication" } else { "ications" },
-                    if sc == 1 { "ation" } else { "ations" },
+                     {relabel_count} relabel point(s) auditable",
                 ),
             }
         } else {
@@ -809,14 +807,14 @@ fn alias_iso(channel: Channel, iso x: Payload) -> Unit {
     #[test]
     fn req11_proven_evidence_contains_audit_counts() {
         // GIVEN: a function with labeled types and no violations
-        // THEN: evidence string references declassification/sanitization counts
+        // THEN: evidence string references relabel point count (#894)
         let src = r#"fn secure(x: Secret[Bool]) -> Unit { }"#;
         let (prog, result) = check_src(src);
         let reg = PassRegistry::default_registry();
         if let Verdict::Proven { evidence } = reg.run_req(11, &prog, &result) {
             assert!(
-                evidence.contains("declassif"),
-                "evidence should mention declassification count, got: {evidence:?}"
+                evidence.contains("relabel point"),
+                "evidence should mention relabel count, got: {evidence:?}"
             );
         } else {
             panic!("expected Proven for labeled program with no violations");

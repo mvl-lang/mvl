@@ -123,7 +123,7 @@ pub type ProcessOutput = struct {
 
 /// Spawn a child process running `cmd` with the given arguments.
 ///
-/// Both `cmd` and each element of `args` must be `Clean[String]` — callers
+/// Both `cmd` and each element of `args` must be `String` — callers
 /// must sanitize any externally-sourced paths or argument values before
 /// passing them to `spawn`. This prevents command injection from tainted
 /// sources (env vars, process output, user input).
@@ -138,8 +138,8 @@ pub type ProcessOutput = struct {
 ///   let child = spawn("git", ["status"], Stdio::Inherit, Stdio::Capture, Stdio::Capture)?;
 ///   let out = wait(child)?;
 pub builtin fn spawn(
-    cmd: Clean[String],
-    args: List[Clean[String]],
+    cmd: String,
+    args: List[String],
     stdin_mode: Stdio,
     stdout_mode: Stdio,
     stderr_mode: Stdio,

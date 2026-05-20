@@ -27,7 +27,7 @@
 //     of a space-padded keyword list string.
 //
 // IFC notes (same as experiment 02):
-//   - read_to_string returns Tainted[String]; sanitize → Clean[String].
+//   - read_to_string returns Tainted[String]; sanitize → String.
 //   - lex() takes String; identifier argument gets .into() coercion.
 //   - dir_from_arg() helper avoids emit_match_arm spurious-semicolon bug.
 //
@@ -75,7 +75,7 @@ fn is_whitespace(c: String) -> Bool {
 // Avoids 40+ match arms while remaining O(n) per call (spike-acceptable).
 
 fn is_keyword(s: String) -> Bool {
-    let kws: String = " fn let mut match if else for while type total partial return extern use pub in true false builtin transparent move consume declassify sanitize const where struct enum impl test requires ensures invariant Public Tainted Secret Clean iso val ref tag ";
+    let kws: String = " fn let mut match if else for while type total partial return extern use pub in true false builtin transparent move consume label relabel const where struct enum impl test requires ensures invariant Tainted Secret iso val ref tag ";
     kws.contains(format(" {} ", s))
 }
 
@@ -212,19 +212,19 @@ partial fn lex_counts(src: String) -> Counts {
 // ── IFC helpers ───────────────────────────────────────────────────────────────
 
 fn dir_from_arg(v: Tainted[String]) -> Path {
-    let clean_dir: Clean[String] = sanitize(v);
+    let clean_dir: String = relabel trust(v, "VALIDATED");
     join(path("."), clean_dir)
 }
 
-// Label bridge: transparent accepts Clean[String] from IFC boundary; body is
+// Label bridge: transparent accepts String from IFC boundary; body is
 // type-checked with src: String so lex_counts(src) is valid.  Returns
-// Clean[Counts]; callers use field access which strips the label back to Int.
+// Counts; callers use field access which strips the label back to Int.
 transparent partial fn call_lex_counts(src: String) -> Counts {
     lex_counts(src)
 }
 
-partial fn count_for_file(raw: Tainted[String]) -> Clean[Counts] {
-    let src: Clean[String] = sanitize(raw);
+partial fn count_for_file(raw: Tainted[String]) -> Counts {
+    let src: String = relabel trust(raw, "VALIDATED");
     call_lex_counts(src)
 }
 
@@ -258,7 +258,7 @@ partial fn main() -> Unit ! FileRead + Console {
                             match read_to_string(entry.path) {
                                 Err(_)  => (),
                                 Ok(raw) => {
-                                    let c: Clean[Counts] = count_for_file(raw);
+                                    let c: Counts = count_for_file(raw);
                                     kw_total = kw_total + c.keywords;
                                     id_total = id_total + c.idents;
                                     nm_total = nm_total + c.numbers;

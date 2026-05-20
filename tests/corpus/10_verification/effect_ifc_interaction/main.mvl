@@ -16,19 +16,19 @@ fn fetch_and_label(url: String) -> Result[Tainted[String], String] ! Net {
 }
 
 // IFC flow law: Secret must not flow to Public output
-total fn compute_with_labels(a: Public[Int], b: Secret[Int]) -> Public[Int] {
+total fn compute_with_labels(a: Int, b: Secret[Int]) -> Int {
     // b cannot be used in a Public return — type system enforces this
     a
 }
 
 // Logging respects labels (spec 003-information-flow/Req 6)
-fn log_with_labels(public_data: Public[String], secret_data: Secret[String]) -> Unit ! Console {
+fn log_with_labels(public_data: String, secret_data: Secret[String]) -> Unit ! Console {
     println(public_data)
     // println(secret_data)  // would be rejected: Secret cannot flow to Console
 }
 
 // Sanitize tainted input before use
-fn process_input(input: Tainted[String]) -> Clean[String] ! Log {
-    let sanitized: Clean[String] = sanitize(input);
+fn process_input(input: Tainted[String]) -> String ! Log {
+    let sanitized: String = relabel trust(input, "VALIDATED");
     sanitized
 }

@@ -38,12 +38,12 @@ fn ref_fn(ref x: Int) -> Int { x }
 fn tag_fn(tag x: Int) -> Int { 0 }
 
 // IFC keywords: Tainted, Clean, Secret, Public
-fn check_tainted(input: Tainted[String]) -> Clean[String] {
-    sanitize(input)
+fn check_tainted(input: Tainted[String]) -> String {
+    relabel trust(input, "VALIDATED")
 }
 
 fn reveal(s: Secret[String]) -> String {
-    declassify(s)
+    relabel release(s, "AUTHORIZED")
 }
 
 // where keyword in refinement

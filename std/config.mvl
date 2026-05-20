@@ -378,9 +378,7 @@ pub fn as_map(v: ConfigValue) -> Result[Map[String, ConfigValue], ConfigError] {
 /// Tries Bool ("true"/"false"), then Int, then Float, then falls back to
 /// String. All comparisons are case-insensitive for Bool.
 fn parse_env_value(raw: Tainted[String]) -> ConfigValue {
-    // IFC: env var values are tainted (external input). Untaint explicitly
-    // after PR #882 removed From<Tainted<T>> for T.
-    let s: String = str_concat(raw.into_inner(), "");
+    let s: String = relabel trust(raw, "CONFIG-VALUE");
     let lower: String = str_to_lower(str_trim(s));
     if lower == "true" {
         ConfigValue::Bool(true)

@@ -531,7 +531,7 @@ fn emit_expr_tail_with_return_type(
             // Wrap only when the expression is a raw (unlabeled) value:
             // - literal → always raw
             // - ident that is a non-labeled parameter → raw
-            let label_name = emit_label(*label);
+            let label_name = emit_label(label.as_str());
             cg.push(&format!("{label_name}("));
             emit_expr(cg, expr);
             cg.push(")");
@@ -553,7 +553,7 @@ fn emit_expr_tail_with_return_type(
             if let TypeExpr::Labeled { label, .. } = ok.as_ref() {
                 if let Expr::FnCall { name, args, .. } = expr {
                     if name == "Ok" && args.len() == 1 && is_raw_value(&args[0], params) {
-                        let label_name = emit_label(*label);
+                        let label_name = emit_label(label.as_str());
                         cg.push("Ok(");
                         cg.push(&format!("{label_name}("));
                         emit_expr(cg, &args[0]);

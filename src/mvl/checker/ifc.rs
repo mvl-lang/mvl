@@ -5,11 +5,9 @@
 //!
 //! Implements Requirement 11 of the MVL spec (003-information-flow).
 //!
-//! Security lattice (highest to lowest sensitivity):
-//!   Secret (3) > Tainted (2) > Clean (1) > Public (0)
-//!
-//! Upward flow (lower → higher sensitivity) is always allowed.
-//! Downward flow requires `declassify()` (Secret→Public) or `sanitize()` (Tainted→Clean).
+//! User-defined label system (#894):
+//!   Labels are opaque types declared via `label Name`. No hierarchy, no lattice.
+//!   `relabel` transitions are the only bridge between labeled and bare types.
 //!
 //! # Implicit flow analysis (Phase 3)
 //!
@@ -21,72 +19,32 @@
 //! if secret_flag { println("branch taken") }
 //! ```
 //!
-//! Even though the `println` argument is a literal string (Public), whether the
+//! Even though the `println` argument is a literal string (bare), whether the
 //! print fires at all reveals whether `secret_flag` was truthy.  This is an
-//! implicit flow from the secret condition to the public output sink.
+//! implicit flow from the labeled condition to the public output sink.
 //!
-//! The analysis tracks the **Program Counter (PC) label**: the join of all
-//! security labels on conditions that control the current execution point.
-//! A public sink (`println`, `print`) inside a branch whose PC label is
-//! Secret or Tainted is flagged as `ImplicitFlowViolation`.
+//! The analysis tracks the **Program Counter (PC) label**: the label of any
+//! condition controlling the current execution point.
+//! A public sink (`println`, `print`) inside a branch whose PC is labeled
+//! is flagged as `ImplicitFlowViolation`.
 
 use std::collections::HashMap;
 
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{
-    Block, Decl, ElseBranch, Expr, MatchBody, Pattern, Program, SecurityLabel, Stmt, TypeExpr,
+    Block, Decl, ElseBranch, Expr, MatchBody, Pattern, Program, Stmt, TypeExpr,
 };
-
-/// Numeric rank for the security lattice (higher = more sensitive).
-pub fn lattice_rank(label: SecurityLabel) -> u8 {
-    match label {
-        SecurityLabel::Public => 0,
-        SecurityLabel::Clean => 1,
-        SecurityLabel::Tainted => 2,
-        SecurityLabel::Secret => 3,
-    }
-}
-
-/// True if data with label `from` may flow to a context requiring label `to`
-/// without explicit declassification or sanitization.
-///
-/// Upward flow (from lower to higher sensitivity) is always allowed.
-pub fn can_flow(from: SecurityLabel, to: SecurityLabel) -> bool {
-    lattice_rank(from) <= lattice_rank(to)
-}
-
-/// Compute the join (least upper bound) of two labels — the higher-sensitivity one.
-pub fn join(a: SecurityLabel, b: SecurityLabel) -> SecurityLabel {
-    if lattice_rank(a) >= lattice_rank(b) {
-        a
-    } else {
-        b
-    }
-}
-
-/// Compute the join of two optional labels.
-/// `None` represents an unlabeled type (treated as Public for join purposes).
-///
-/// Invariant: `join_opt(Some(L), None) == Some(L)` because `join(L, Public) == L`
-/// for any `L >= Public`. This follows from the "unlabeled = Public" convention.
-pub fn join_opt(a: Option<SecurityLabel>, b: Option<SecurityLabel>) -> Option<SecurityLabel> {
-    match (a, b) {
-        (None, None) => None,
-        (Some(l), None) | (None, Some(l)) => Some(l),
-        (Some(la), Some(lb)) => Some(join(la, lb)),
-    }
-}
 
 /// Extract the outermost security label from a type, if any.
 /// Looks through Refined wrappers to find the label.
 ///
-/// NOTE: Nested `Labeled` types (e.g., `Labeled(A, Labeled(B, T))`) are not
+/// NOTE: Nested `Labeled` types (e.g., `Labeled("A", Labeled("B", T))`) are not
 /// valid IR — the parser and checker must never produce them. This function
 /// only reads the outermost label, which is sufficient for valid IR.
-pub fn label_of(ty: &Ty) -> Option<SecurityLabel> {
+pub fn label_of(ty: &Ty) -> Option<&str> {
     match ty {
-        Ty::Labeled(l, _) => Some(*l),
+        Ty::Labeled(l, _) => Some(l.as_str()),
         Ty::Refined(inner, _) => label_of(inner),
         _ => None,
     }
@@ -105,20 +63,24 @@ pub fn strip_label(ty: &Ty) -> &Ty {
 }
 
 /// Wrap a type in a security label, or return it unchanged if label is None.
-pub fn apply_label(label: Option<SecurityLabel>, ty: Ty) -> Ty {
+pub fn apply_label(label: Option<String>, ty: Ty) -> Ty {
     match label {
         Some(l) => Ty::Labeled(l, Box::new(ty)),
         None => ty,
     }
 }
 
-/// Human-readable name for a security label.
-pub fn label_name(label: SecurityLabel) -> &'static str {
-    match label {
-        SecurityLabel::Public => "Public",
-        SecurityLabel::Tainted => "Tainted",
-        SecurityLabel::Secret => "Secret",
-        SecurityLabel::Clean => "Clean",
+/// Compute the "join" of two optional label names.
+/// In the user-defined label model there is no lattice order, so the join
+/// is used only for PC tracking: any labeled condition raises the PC.
+/// If both labels are the same, the result is that label; if they differ or
+/// either is None, the result is the non-None one (if any).
+pub fn join_opt(a: Option<String>, b: Option<String>) -> Option<String> {
+    match (a, b) {
+        (None, None) => None,
+        (Some(l), None) | (None, Some(l)) => Some(l),
+        // Two distinct labels: keep the first (conservative — any label is high enough)
+        (Some(la), Some(_lb)) => Some(la),
     }
 }
 
@@ -137,14 +99,10 @@ pub fn label_name(label: SecurityLabel) -> &'static str {
 /// the interprocedural analysis in `ifc_propagation` (#831).
 /// Recursively bind every identifier in `pat` to `label` in `env`.
 /// Handles nested patterns like `(Some(a), b)` by walking the full tree.
-pub(crate) fn bind_pattern_labels(
-    pat: &Pattern,
-    label: SecurityLabel,
-    env: &mut HashMap<String, SecurityLabel>,
-) {
+pub(crate) fn bind_pattern_labels(pat: &Pattern, label: &str, env: &mut HashMap<String, String>) {
     match pat {
         Pattern::Ident(name, _) => {
-            env.insert(name.clone(), label);
+            env.insert(name.clone(), label.to_string());
         }
         Pattern::Tuple { elems, .. } => {
             for elem in elems {
@@ -157,7 +115,6 @@ pub(crate) fn bind_pattern_labels(
             }
         }
         Pattern::Struct { fields, .. } => {
-            // `_` is the struct field name; the binding name is inside the sub-pattern.
             for (_, field) in fields {
                 bind_pattern_labels(field, label, env);
             }
@@ -173,25 +130,24 @@ pub fn check_implicit_flows(prog: &Program, errors: &mut Vec<CheckError>) {
     for decl in &prog.declarations {
         if let Decl::Fn(fd) = decl {
             // Build initial label env from parameter type annotations.
-            let mut env: HashMap<String, SecurityLabel> = HashMap::new();
+            let mut env: HashMap<String, String> = HashMap::new();
             for param in &fd.params {
                 if let Some(label) = label_of_type_expr(&param.ty) {
                     env.insert(param.name.clone(), label);
                 }
             }
-            // Walk the function body with pc_label = None (Public).
+            // Walk the function body with pc_label = None (unlabeled).
             check_block_flows(&fd.body, None, &mut env, errors);
         }
     }
 }
 
-/// Count all `declassify()` and `sanitize()` call sites in the program.
 /// Returns `true` if any prelude function that is called from `prog` carries
 /// IFC-labeled parameters or a labeled return type.
 ///
 /// Used to populate [`crate::mvl::checker::CheckResult::has_prelude_ifc_boundary`]
-/// so the IFC pass recognises cross-module security lattice exercise (e.g.
-/// `main.mvl` calling `execute(db, sql: Clean[String])`).
+/// so the IFC pass recognises cross-module security boundary exercise (e.g.
+/// `main.mvl` calling `execute(db, sql: Tainted[String])`).
 pub fn prelude_has_ifc_boundary(
     prelude_a: &[Program],
     prelude_b: &[&Program],
@@ -337,8 +293,7 @@ fn collect_calls_in_expr(expr: &Expr, names: &mut std::collections::HashSet<Stri
         Expr::Unary { expr, .. }
         | Expr::Propagate { expr, .. }
         | Expr::Consume { expr, .. }
-        | Expr::Declassify { expr, .. }
-        | Expr::Sanitize { expr, .. }
+        | Expr::Relabel { expr, .. }
         | Expr::Borrow { expr, .. } => collect_calls_in_expr(expr, names),
         Expr::FieldAccess { expr, .. } => collect_calls_in_expr(expr, names),
         Expr::Construct { fields, .. } => {
@@ -375,24 +330,24 @@ fn collect_calls_in_expr(expr: &Expr, names: &mut std::collections::HashSet<Stri
     }
 }
 
-/// Used by the IFC pass to include the audit trail in the `Proven` evidence.
+/// Count all `Expr::Relabel` call sites in the program.
 ///
-/// Returns `(declassify_count, sanitize_count)`.
-pub fn count_declassifications(prog: &Program) -> (usize, usize) {
-    let mut dc = 0usize;
-    let mut sc = 0usize;
+/// Used by the IFC pass to include the auditable relabel count in the `Proven` evidence.
+pub fn count_relabels(prog: &Program) -> usize {
+    let mut rc = 0usize;
+    let mut _ignored = 0usize;
     for decl in &prog.declarations {
         if let Decl::Fn(fd) = decl {
-            count_in_block(&fd.body, &mut dc, &mut sc);
+            count_in_block(&fd.body, &mut rc, &mut _ignored);
         }
     }
-    (dc, sc)
+    rc
 }
 
-/// Extract the outermost security label from a `TypeExpr`, if any.
-pub(crate) fn label_of_type_expr(te: &TypeExpr) -> Option<SecurityLabel> {
+/// Extract the outermost security label name from a `TypeExpr`, if any.
+pub(crate) fn label_of_type_expr(te: &TypeExpr) -> Option<String> {
     match te {
-        TypeExpr::Labeled { label, .. } => Some(*label),
+        TypeExpr::Labeled { label, .. } => Some(label.clone()),
         TypeExpr::Refined { inner, .. } => label_of_type_expr(inner),
         TypeExpr::Tuple { elems, .. } => elems.iter().find_map(label_of_type_expr),
         TypeExpr::Base { .. }
@@ -407,17 +362,17 @@ pub(crate) fn label_of_type_expr(te: &TypeExpr) -> Option<SecurityLabel> {
 
 /// Infer the security label of an expression from the current label env.
 /// Conservative: returns `None` if the label cannot be determined.
-fn infer_label(expr: &Expr, env: &HashMap<String, SecurityLabel>) -> Option<SecurityLabel> {
+fn infer_label(expr: &Expr, env: &HashMap<String, String>) -> Option<String> {
     match expr {
-        Expr::Ident(name, _) => env.get(name.as_str()).copied(),
+        Expr::Ident(name, _) => env.get(name.as_str()).cloned(),
         Expr::Binary { left, right, .. } => {
             join_opt(infer_label(left, env), infer_label(right, env))
         }
         Expr::Unary { expr, .. } | Expr::Borrow { expr, .. } => infer_label(expr, env),
         Expr::FieldAccess { expr, .. } => infer_label(expr, env),
-        // `declassify()` always produces Public; `sanitize()` produces Clean.
-        Expr::Declassify { .. } => Some(SecurityLabel::Public),
-        Expr::Sanitize { .. } => Some(SecurityLabel::Clean),
+        // `relabel` produces the `to` side label (None = bare). Conservative: treat as None
+        // (unlabeled after relabel), which avoids false positives in sink detection.
+        Expr::Relabel { .. } => None,
         // Function calls: join labels of arguments (conservative over-approximation).
         Expr::FnCall { args, .. } => args
             .iter()
@@ -436,34 +391,29 @@ fn infer_label(expr: &Expr, env: &HashMap<String, SecurityLabel>) -> Option<Secu
     }
 }
 
-/// True if a label is "high" (Secret or Tainted), meaning it should not
-/// control whether a public sink fires.
-fn is_high(label: SecurityLabel) -> bool {
-    matches!(label, SecurityLabel::Secret | SecurityLabel::Tainted)
-}
-
-/// True if a label is "high" (Secret or Tainted) — Option variant.
-fn is_high_opt(label: Option<SecurityLabel>) -> bool {
-    label.map(is_high).unwrap_or(false)
+/// True if `label` is present (any label is "high" in the new model — all labels
+/// are sensitive and should not control whether a public sink fires).
+fn is_high_opt(label: &Option<String>) -> bool {
+    label.is_some()
 }
 
 /// Walk a block, tracking the current PC label and the label env.
 /// Let bindings extend the env sequentially within the block.
 fn check_block_flows(
     block: &Block,
-    pc: Option<SecurityLabel>,
-    env: &mut HashMap<String, SecurityLabel>,
+    pc: Option<String>,
+    env: &mut HashMap<String, String>,
     errors: &mut Vec<CheckError>,
 ) {
     for stmt in &block.stmts {
-        check_stmt_flows(stmt, pc, env, errors);
+        check_stmt_flows(stmt, pc.clone(), env, errors);
     }
 }
 
 fn check_stmt_flows(
     stmt: &Stmt,
-    pc: Option<SecurityLabel>,
-    env: &mut HashMap<String, SecurityLabel>,
+    pc: Option<String>,
+    env: &mut HashMap<String, String>,
     errors: &mut Vec<CheckError>,
 ) {
     match stmt {
@@ -476,7 +426,7 @@ fn check_stmt_flows(
             // like `(Some(a), b)` are fully bound.
             let label = label_of_type_expr(ty).or_else(|| infer_label(init, env));
             if let Some(l) = label {
-                bind_pattern_labels(pattern, l, env);
+                bind_pattern_labels(pattern, &l, env);
             }
         }
         Stmt::Assign { value, .. } => {
@@ -493,10 +443,10 @@ fn check_stmt_flows(
             cond, then, else_, ..
         } => {
             let cond_label = infer_label(cond, env);
-            let body_pc = join_opt(pc, cond_label);
-            check_expr_flows(cond, pc, env, errors);
+            let body_pc = join_opt(pc.clone(), cond_label);
+            check_expr_flows(cond, pc.clone(), env, errors);
             let mut then_env = env.clone();
-            check_block_flows(then, body_pc, &mut then_env, errors);
+            check_block_flows(then, body_pc.clone(), &mut then_env, errors);
             match else_ {
                 Some(ElseBranch::Block(blk)) => {
                     let mut else_env = env.clone();
@@ -513,19 +463,23 @@ fn check_stmt_flows(
             scrutinee, arms, ..
         } => {
             let scr_label = infer_label(scrutinee, env);
-            let body_pc = join_opt(pc, scr_label);
+            let body_pc = join_opt(pc.clone(), scr_label);
             check_expr_flows(scrutinee, pc, env, errors);
             for arm in arms {
                 let mut arm_env = env.clone();
                 match &arm.body {
-                    MatchBody::Expr(expr) => check_expr_flows(expr, body_pc, &mut arm_env, errors),
-                    MatchBody::Block(blk) => check_block_flows(blk, body_pc, &mut arm_env, errors),
+                    MatchBody::Expr(expr) => {
+                        check_expr_flows(expr, body_pc.clone(), &mut arm_env, errors)
+                    }
+                    MatchBody::Block(blk) => {
+                        check_block_flows(blk, body_pc.clone(), &mut arm_env, errors)
+                    }
                 }
             }
         }
         Stmt::While { cond, body, .. } => {
             let cond_label = infer_label(cond, env);
-            let body_pc = join_opt(pc, cond_label);
+            let body_pc = join_opt(pc.clone(), cond_label);
             check_expr_flows(cond, pc, env, errors);
             let mut body_env = env.clone();
             check_block_flows(body, body_pc, &mut body_env, errors);
@@ -539,11 +493,11 @@ fn check_stmt_flows(
             ..
         } => {
             let iter_label = infer_label(iter, env);
-            let body_pc = join_opt(pc, iter_label);
+            let body_pc = join_opt(pc.clone(), iter_label.clone());
             check_expr_flows(iter, pc, env, errors);
             let mut body_env = env.clone();
             if let Some(l) = iter_label {
-                bind_pattern_labels(pattern, l, &mut body_env);
+                bind_pattern_labels(pattern, &l, &mut body_env);
             }
             check_block_flows(body, body_pc, &mut body_env, errors);
         }
@@ -565,8 +519,8 @@ const PUBLIC_SINKS: &[&str] = &[
 
 fn check_expr_flows(
     expr: &Expr,
-    pc: Option<SecurityLabel>,
-    env: &mut HashMap<String, SecurityLabel>,
+    pc: Option<String>,
+    env: &mut HashMap<String, String>,
     errors: &mut Vec<CheckError>,
 ) {
     match expr {
@@ -574,25 +528,25 @@ fn check_expr_flows(
             name, args, span, ..
         } => {
             // Detect public sink under high PC label.
-            if PUBLIC_SINKS.contains(&name.as_str()) && is_high_opt(pc) {
+            if PUBLIC_SINKS.contains(&name.as_str()) && is_high_opt(&pc) {
                 errors.push(CheckError::ImplicitFlowViolation {
-                    pc_label: label_name(pc.unwrap()).to_string(),
+                    pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
                     sink: name.clone(),
                     span: *span,
                 });
             }
             for arg in args {
-                check_expr_flows(arg, pc, env, errors);
+                check_expr_flows(arg, pc.clone(), env, errors);
             }
         }
         Expr::If {
             cond, then, else_, ..
         } => {
             let cond_label = infer_label(cond, env);
-            let body_pc = join_opt(pc, cond_label);
+            let body_pc = join_opt(pc.clone(), cond_label);
             check_expr_flows(cond, pc, env, errors);
             let mut then_env = env.clone();
-            check_block_flows(then, body_pc, &mut then_env, errors);
+            check_block_flows(then, body_pc.clone(), &mut then_env, errors);
             if let Some(e) = else_ {
                 let mut else_env = env.clone();
                 check_expr_flows(e, body_pc, &mut else_env, errors);
@@ -602,23 +556,26 @@ fn check_expr_flows(
             scrutinee, arms, ..
         } => {
             let scr_label = infer_label(scrutinee, env);
-            let body_pc = join_opt(pc, scr_label);
+            let body_pc = join_opt(pc.clone(), scr_label);
             check_expr_flows(scrutinee, pc, env, errors);
             for arm in arms {
                 let mut arm_env = env.clone();
                 match &arm.body {
-                    MatchBody::Expr(e) => check_expr_flows(e, body_pc, &mut arm_env, errors),
-                    MatchBody::Block(blk) => check_block_flows(blk, body_pc, &mut arm_env, errors),
+                    MatchBody::Expr(e) => {
+                        check_expr_flows(e, body_pc.clone(), &mut arm_env, errors)
+                    }
+                    MatchBody::Block(blk) => {
+                        check_block_flows(blk, body_pc.clone(), &mut arm_env, errors)
+                    }
                 }
             }
         }
         Expr::Binary { left, right, .. } => {
-            check_expr_flows(left, pc, env, errors);
+            check_expr_flows(left, pc.clone(), env, errors);
             check_expr_flows(right, pc, env, errors);
         }
         Expr::Unary { expr, .. }
-        | Expr::Declassify { expr, .. }
-        | Expr::Sanitize { expr, .. }
+        | Expr::Relabel { expr, .. }
         | Expr::Consume { expr, .. }
         | Expr::Propagate { expr, .. }
         | Expr::FieldAccess { expr, .. }
@@ -626,9 +583,9 @@ fn check_expr_flows(
             check_expr_flows(expr, pc, env, errors);
         }
         Expr::MethodCall { receiver, args, .. } => {
-            check_expr_flows(receiver, pc, env, errors);
+            check_expr_flows(receiver, pc.clone(), env, errors);
             for arg in args {
-                check_expr_flows(arg, pc, env, errors);
+                check_expr_flows(arg, pc.clone(), env, errors);
             }
         }
         Expr::Block(blk) => {
@@ -641,36 +598,36 @@ fn check_expr_flows(
         }
         Expr::Construct { fields, .. } => {
             for (_, v) in fields {
-                check_expr_flows(v, pc, env, errors);
+                check_expr_flows(v, pc.clone(), env, errors);
             }
         }
         Expr::List { elems, .. } | Expr::Set { elems, .. } => {
             for e in elems {
-                check_expr_flows(e, pc, env, errors);
+                check_expr_flows(e, pc.clone(), env, errors);
             }
         }
         Expr::Map { pairs, .. } => {
             for (k, v) in pairs {
-                check_expr_flows(k, pc, env, errors);
-                check_expr_flows(v, pc, env, errors);
+                check_expr_flows(k, pc.clone(), env, errors);
+                check_expr_flows(v, pc.clone(), env, errors);
             }
         }
         Expr::Spawn { fields, .. } => {
             for (_, v) in fields {
-                check_expr_flows(v, pc, env, errors);
+                check_expr_flows(v, pc.clone(), env, errors);
             }
         }
         Expr::Select { arms, .. } => {
             for arm in arms {
-                check_expr_flows(&arm.expr, pc, env, errors);
+                check_expr_flows(&arm.expr, pc.clone(), env, errors);
                 for stmt in &arm.body.stmts {
-                    check_stmt_flows(stmt, pc, env, errors);
+                    check_stmt_flows(stmt, pc.clone(), env, errors);
                 }
             }
         }
         Expr::Concurrently { body, .. } => {
             for stmt in &body.stmts {
-                check_stmt_flows(stmt, pc, env, errors);
+                check_stmt_flows(stmt, pc.clone(), env, errors);
             }
         }
         // Leaves — no sub-expressions to walk.
@@ -678,7 +635,7 @@ fn check_expr_flows(
     }
 }
 
-/// Recursively count `Expr::Declassify` and `Expr::Sanitize` nodes in a block.
+/// Recursively count `Expr::Relabel` nodes in a block.
 fn count_in_block(block: &Block, dc: &mut usize, sc: &mut usize) {
     for stmt in &block.stmts {
         count_in_stmt(stmt, dc, sc);
@@ -727,12 +684,8 @@ fn count_in_stmt(stmt: &Stmt, dc: &mut usize, sc: &mut usize) {
 
 fn count_in_expr(expr: &Expr, dc: &mut usize, sc: &mut usize) {
     match expr {
-        Expr::Declassify { expr, .. } => {
+        Expr::Relabel { expr, .. } => {
             *dc += 1;
-            count_in_expr(expr, dc, sc);
-        }
-        Expr::Sanitize { expr, .. } => {
-            *sc += 1;
             count_in_expr(expr, dc, sc);
         }
         Expr::FnCall { args, .. } => {
@@ -820,39 +773,22 @@ mod tests {
 
     #[test]
     fn join_opt_with_one_none_preserves_label() {
-        // Invariant: None (= unlabeled = Public) does not lower the result
         assert_eq!(
-            join_opt(Some(SecurityLabel::Secret), None),
-            Some(SecurityLabel::Secret)
+            join_opt(Some("Secret".to_string()), None),
+            Some("Secret".to_string())
         );
         assert_eq!(
-            join_opt(None, Some(SecurityLabel::Tainted)),
-            Some(SecurityLabel::Tainted)
-        );
-    }
-
-    #[test]
-    fn join_opt_takes_higher_label() {
-        assert_eq!(
-            join_opt(Some(SecurityLabel::Public), Some(SecurityLabel::Secret)),
-            Some(SecurityLabel::Secret)
-        );
-        assert_eq!(
-            join_opt(Some(SecurityLabel::Clean), Some(SecurityLabel::Tainted)),
-            Some(SecurityLabel::Tainted)
+            join_opt(None, Some("Tainted".to_string())),
+            Some("Tainted".to_string())
         );
     }
 
     #[test]
-    fn can_flow_upward_allowed() {
-        assert!(can_flow(SecurityLabel::Public, SecurityLabel::Secret));
-        assert!(can_flow(SecurityLabel::Clean, SecurityLabel::Tainted));
-        assert!(can_flow(SecurityLabel::Public, SecurityLabel::Public));
-    }
-
-    #[test]
-    fn can_flow_downward_rejected() {
-        assert!(!can_flow(SecurityLabel::Secret, SecurityLabel::Public));
-        assert!(!can_flow(SecurityLabel::Tainted, SecurityLabel::Clean));
+    fn join_opt_takes_first_label_when_both_present() {
+        // No lattice ordering; first label wins.
+        assert_eq!(
+            join_opt(Some("Tainted".to_string()), Some("Secret".to_string())),
+            Some("Tainted".to_string())
+        );
     }
 }
