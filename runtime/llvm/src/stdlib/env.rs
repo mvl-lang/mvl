@@ -60,7 +60,7 @@ pub extern "C" fn _mvl_env_get(name: *const c_char) -> MvlOption {
 pub extern "C" fn _mvl_env_set(name: *const c_char, value: *const c_char) -> MvlResult {
     let n = unsafe { c_to_string(name) };
     let v = unsafe { c_to_string(value) };
-    match mvl_runtime::stdlib::env::set(n, v) {
+    match mvl_runtime::stdlib::env::set(n, Tainted(v)) {
         Ok(()) => MvlResult::ok_unit(),
         Err(e) => MvlResult::err_str(&e),
     }
