@@ -324,12 +324,24 @@ impl TypeEnv {
                 ..Default::default()
             },
         );
-        // assert_eq — pure, for testing. IFC label guard enforced in checker/calls.rs.
+        // assert_eq / assert_ne — pure, polymorphic testing assertions (#902).
+        // Generic [T] so the checker skips type-checking (accepts Int, Bool, String, …).
+        // IFC label guard enforced separately in checker/calls.rs.
         self.fns.insert(
             "assert_eq".into(),
             FnInfo {
-                params: vec![],
+                params: vec![Ty::Unknown, Ty::Unknown],
                 ret: Ty::Unit,
+                type_params: HashSet::from(["T".to_string()]),
+                ..Default::default()
+            },
+        );
+        self.fns.insert(
+            "assert_ne".into(),
+            FnInfo {
+                params: vec![Ty::Unknown, Ty::Unknown],
+                ret: Ty::Unit,
+                type_params: HashSet::from(["T".to_string()]),
                 ..Default::default()
             },
         );
@@ -358,11 +370,11 @@ impl TypeEnv {
                 ..Default::default()
             },
         );
-        // parse_int — converts String to Result<Int, String>; variadic-flagged to skip arity check
+        // parse_int(s: String) -> Result[Int, String] — arity enforced (#902).
         self.fns.insert(
             "parse_int".into(),
             FnInfo {
-                params: vec![],
+                params: vec![Ty::String],
                 ret: Ty::Result(Box::new(Ty::Int), Box::new(Ty::String)),
                 ..Default::default()
             },
@@ -584,6 +596,7 @@ impl TypeEnv {
                 ..Default::default()
             },
         );
+        // float() → Float — 0-arg, arity now enforced by the checker (#902).
         self.fns.insert(
             "float".into(),
             FnInfo {
@@ -602,23 +615,25 @@ impl TypeEnv {
                 ..Default::default()
             },
         );
-        // choice(items: List<T>) -> Option<T> — variadic-flagged to skip arity/type check
+        // choice(items: List[T]) -> Option[T] — generic, arity/type-check skipped via is_generic (#902).
         self.fns.insert(
             "choice".into(),
             FnInfo {
-                params: vec![],
+                params: vec![Ty::Unknown],
                 ret: Ty::Option(Box::new(Ty::Unknown)),
                 effects: vec![Effect::new("Random", Span::new(0, 0, 0, 0))],
+                type_params: HashSet::from(["T".to_string()]),
                 ..Default::default()
             },
         );
-        // shuffle(items: List<T>) -> List<T> — variadic-flagged to skip arity/type check
+        // shuffle(items: List[T]) -> List[T] — generic, arity/type-check skipped via is_generic (#902).
         self.fns.insert(
             "shuffle".into(),
             FnInfo {
-                params: vec![],
+                params: vec![Ty::Unknown],
                 ret: Ty::List(Box::new(Ty::Unknown)),
                 effects: vec![Effect::new("Random", Span::new(0, 0, 0, 0))],
+                type_params: HashSet::from(["T".to_string()]),
                 ..Default::default()
             },
         );

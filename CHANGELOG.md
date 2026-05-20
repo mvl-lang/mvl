@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.130.1] — 2026-05-20
+
+### Fixed
+
+- **Eliminate `is_variadic_builtin` bypass for 6 stdlib functions** (#902): Removed type-safety escape hatch from checker. `assert_eq`, `assert_ne`, `parse_int`, `float`, `choice`, and `shuffle` now properly enforce arity and type checking. Only `format` remains in the bypass pending #901 redesign. Fixes hardcoded function registrations in `register_builtins()` by marking generic functions with `type_params` and correcting param counts for non-generic ones.
+
 ## [0.130.0] — 2026-05-18
 
 ### Added

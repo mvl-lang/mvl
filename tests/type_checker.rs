@@ -2549,6 +2549,50 @@ fn assert_eq_rejects_tainted_argument() {
     );
 }
 
+/// `assert_eq` MUST accept non-String types (generic — #902).
+#[test]
+fn assert_eq_accepts_int_args() {
+    let errors = errors_for(r#"fn f(a: Int, b: Int) -> Unit { assert_eq(a, b); }"#);
+    assert!(
+        errors.is_empty(),
+        "assert_eq with Int args should be accepted, got: {errors:?}"
+    );
+}
+
+/// `assert_ne` MUST accept non-String types and be callable without bypass (#902).
+#[test]
+fn assert_ne_accepts_bool_args() {
+    let errors = errors_for(r#"fn f(a: Bool, b: Bool) -> Unit { assert_ne(a, b); }"#);
+    assert!(
+        errors.is_empty(),
+        "assert_ne with Bool args should be accepted, got: {errors:?}"
+    );
+}
+
+/// `parse_int` arity MUST be enforced — 0 args rejected (#902).
+#[test]
+fn parse_int_wrong_arity_rejected() {
+    let errors = errors_for(r#"fn f() -> Result[Int, String] { parse_int() }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::WrongArgCount { name, .. } if name == "parse_int")),
+        "parse_int() with 0 args should emit WrongArgCount, got: {errors:?}"
+    );
+}
+
+/// `float` arity MUST be enforced — 1 arg rejected (#902).
+#[test]
+fn float_wrong_arity_rejected() {
+    let errors = errors_for(r#"fn f() -> Float ! Random { float("extra") }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::WrongArgCount { name, .. } if name == "float")),
+        "float(\"extra\") with 1 arg should emit WrongArgCount, got: {errors:?}"
+    );
+}
+
 // ── 002-effect-system/Req 2: Effect name validation ──────────────────────────
 
 /// Unknown effect name MUST be rejected (002-effect-system/Req 2, ADR-0035).

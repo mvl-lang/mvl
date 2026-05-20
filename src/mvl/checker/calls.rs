@@ -62,14 +62,9 @@ impl TypeChecker {
         }
 
         if let Some(fn_info) = self.env.lookup_fn(name).cloned() {
-            // Variadic built-ins (println, print, assert_eq) have an empty params
-            // vec as a sentinel — skip arity and type checking for them.
-            // log_* (#54) are also treated as variadic so that the IFC label check
-            // (above) validates each argument individually without a fixed-arity guard.
-            let is_variadic_builtin = matches!(
-                name,
-                "assert_eq" | "assert_ne" | "parse_int" | "format" | "choice" | "shuffle" | "float" // log_* are now pure MVL with fixed params; removed from variadic list
-            );
+            // `format` is the only remaining variadic builtin (#902 eliminated the others).
+            // It accepts N args until #901 redesigns it as format(template, List[String]).
+            let is_variadic_builtin = name == "format";
             // L5-08: Generic functions are monomorphized at the LLVM level.
             // Skip arity and type checking at call sites; the LLVM backend handles
             // concrete type dispatch.

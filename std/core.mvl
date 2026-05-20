@@ -34,7 +34,10 @@ transparent pub builtin fn format(value: String) -> String
 pub builtin fn assert(condition: Bool) -> Unit
 
 /// Assert two values are equal; panic if not.
-pub builtin fn assert_eq(left: String, right: String) -> Unit
+pub builtin fn assert_eq[T](left: T, right: T) -> Unit
+
+/// Assert two values are not equal; panic if they are.
+pub builtin fn assert_ne[T](left: T, right: T) -> Unit
 
 /// Unconditionally terminate with a message.
 /// Returns the Never (bottom) type — compatible with any expected type.
