@@ -41,10 +41,8 @@ total fn kind_name(k: TokenKind) -> String {
         TokenKind::KwEnum        => "KwEnum",
         TokenKind::KwTrue        => "KwTrue",
         TokenKind::KwFalse       => "KwFalse",
-        TokenKind::KwTainted     => "KwTainted",
-        TokenKind::KwClean       => "KwClean",
-        TokenKind::KwSecret      => "KwSecret",
-        TokenKind::KwPublic      => "KwPublic",
+        TokenKind::KwLabel       => "KwLabel",
+        TokenKind::KwRelabel     => "KwRelabel",
         TokenKind::KwIso         => "KwIso",
         TokenKind::KwVal         => "KwVal",
         TokenKind::KwRef         => "KwRef",
@@ -169,10 +167,15 @@ test fn keyword_transparent_test_impl() -> Unit {
 }
 
 test fn ifc_label_keywords() -> Unit {
-    assert_eq(kind_name(get_tok("Tainted", 0).kind), "KwTainted");
-    assert_eq(kind_name(get_tok("Clean",   0).kind), "KwClean");
-    assert_eq(kind_name(get_tok("Secret",  0).kind), "KwSecret");
-    assert_eq(kind_name(get_tok("Public",  0).kind), "KwPublic")
+    assert_eq(kind_name(get_tok("label",   0).kind), "KwLabel");
+    assert_eq(kind_name(get_tok("relabel", 0).kind), "KwRelabel")
+}
+
+test fn ifc_label_type_names_are_idents() -> Unit {
+    // Tainted/Secret/Public are type names (identifiers), not keywords
+    assert_eq(kind_name(get_tok("Tainted", 0).kind), "Ident");
+    assert_eq(kind_name(get_tok("Secret",  0).kind), "Ident");
+    assert_eq(kind_name(get_tok("Public",  0).kind), "Ident")
 }
 
 test fn capability_keywords() -> Unit {
