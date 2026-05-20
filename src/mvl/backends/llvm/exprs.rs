@@ -2560,7 +2560,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .build_alloca(val_val.get_type(), "val_slot")
                 .unwrap();
             self.builder.build_store(val_slot, val_val).unwrap();
-            let val_size = i64_ty.const_int(8, false);
+            let val_size =
+                i64_ty.const_int(self.llvm_type_byte_size(val_val.get_type()) as u64, false);
             self.builder
                 .build_call(
                     insert_fn,
@@ -2903,7 +2904,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                             .build_alloca(v_val.get_type(), "ins_v_slot")
                             .unwrap();
                         self.builder.build_store(val_slot, v_val).unwrap();
-                        let val_size = i64_ty.const_int(8, false);
+                        let val_size = i64_ty
+                            .const_int(self.llvm_type_byte_size(v_val.get_type()) as u64, false);
                         self.builder
                             .build_call(
                                 insert_fn,
