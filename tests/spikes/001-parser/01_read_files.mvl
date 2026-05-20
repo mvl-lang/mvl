@@ -13,7 +13,7 @@
 //   read_file returns Result[Tainted[String], String].
 //   File content is Tainted — it comes from an external (untrusted) source.
 //   Tainted/Clean values cannot be passed to println; only Public (unlabeled) values can.
-//   sanitize() lowers Tainted → Clean but Clean is still not printable.
+//   relabel trust(, "VALIDATED") lowers Tainted → Clean but Clean is still not printable.
 //
 //   Resolution for the parser (future experiments): parse the Tainted content into
 //   a Public-typed token stream or AST. Parsing is the sanitisation boundary —
@@ -28,16 +28,16 @@
 use std.io.{read_file}
 
 partial fn main() -> Unit ! Console + FileRead {
-    // String literals are Public and coerce upward to Clean[String] for read_file.
+    // String literals are Public and coerce upward to String for read_file.
     // filepath stays Public so it can be used in println below.
     let filepath: String = "examples/log_analyzer/main.mvl";
     match read_file(filepath) {
         Err(e)  => println("error reading {}: {}", filepath, e),
         Ok(raw) => {
             // raw: Tainted[String] — externally sourced, cannot be printed directly.
-            // sanitize() lowers to Clean[String] for safe processing (still not printable).
+            // relabel trust(, "VALIDATED") lowers to String for safe processing (still not printable).
             // Experiment 02 will tokenize: Tainted[String] → List[Token] (Public).
-            let _source: Clean[String] = sanitize(raw);
+            let _source: String = relabel trust(raw, "VALIDATED");
             println("read ok: {}", filepath);
         }
     }

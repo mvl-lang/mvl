@@ -13,8 +13,8 @@ use std.args.{parse_args, required, optional, flag, positional, opt_positional,
 
 // ── Result accessors (inline — corpus checker does not resolve cross-module) ─
 //
-// Note: get_str is intentionally absent.  ArgValue::Str carries Clean[String]
-// and the corpus checker enforces Clean[T] ≠ T, so a String-returning helper
+// Note: get_str is intentionally absent.  ArgValue::Str carries String
+// and the corpus checker enforces T ≠ T, so a String-returning helper
 // cannot be written here until the checker gains a coercion rule.
 // See tests/stdlib/args_test.mvl for the complete accessor suite.
 

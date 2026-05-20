@@ -6,7 +6,7 @@
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
 use crate::mvl::checker::types::{types_compatible, Ty};
-use crate::mvl::parser::ast::{Expr, SecurityLabel, Totality};
+use crate::mvl::parser::ast::{Expr, Totality};
 use crate::mvl::parser::lexer::Span;
 
 use super::TypeChecker;
@@ -18,18 +18,9 @@ impl TypeChecker {
         // Infer all argument types (for side-effect error collection)
         let arg_tys: Vec<Ty> = args.iter().map(|a| self.infer_expr(a)).collect();
 
-        // 003-information-flow/Req 6: public I/O sinks MUST accept only Public<T>.
-        // Reject any argument labeled Secret, Tainted, or Clean (Clean is sanitized
-        // but not declassified — an explicit declassify() is required before output).
-        // stdout_write/stderr_write are the raw primitives (#839); println/print/
-        // eprintln/eprint are the user-facing wrappers — both paths are guarded here
-        // because the checker does not do interprocedural analysis into callee bodies.
-        // log_debug/info/warn/error are covered by the same rule (#54).
-        //
-        // NOTE: since ADR-0024 all functions propagate labels (label_transparent=true),
-        // format("...", secret) now returns Secret[String] and println(Secret[String])
-        // will be caught by this sink check.  The explicit allowlist below is still
-        // needed because the checker is not interprocedural.
+        // 003-information-flow/Req 6: public I/O sinks MUST accept only bare types (#894).
+        // Any labeled argument (Tainted, Secret, or user-defined) must be relabeled
+        // before passing to a sink.
         if matches!(
             name,
             "println"
@@ -48,15 +39,10 @@ impl TypeChecker {
         ) {
             for (arg, arg_ty) in args.iter().zip(arg_tys.iter()) {
                 if let Some(label) = ifc::label_of(arg_ty) {
-                    if matches!(
-                        label,
-                        SecurityLabel::Secret | SecurityLabel::Tainted | SecurityLabel::Clean
-                    ) {
-                        self.emit(CheckError::LoggingLabelViolation {
-                            label: ifc::label_name(label).to_string(),
-                            span: arg.span(),
-                        });
-                    }
+                    self.emit(CheckError::LoggingLabelViolation {
+                        label: label.to_string(),
+                        span: arg.span(),
+                    });
                 }
             }
         }
@@ -82,13 +68,15 @@ impl TypeChecker {
                 for (i, (expected, found)) in fn_info.params.iter().zip(arg_tys.iter()).enumerate()
                 {
                     // ADR-0024: for label-transparent functions, strip the security label
-                    // from the argument before type-checking.  The label is collected
-                    // separately and applied to the return type below.
-                    let found_check = if fn_info.label_transparent {
-                        ifc::strip_label(found)
-                    } else {
-                        found
-                    };
+                    // from the argument before type-checking ONLY when the parameter is
+                    // bare (unlabeled). If the parameter is labeled, the argument must
+                    // match the label exactly — no label stripping (#894).
+                    let found_check =
+                        if fn_info.label_transparent && ifc::label_of(expected).is_none() {
+                            ifc::strip_label(found)
+                        } else {
+                            found
+                        };
                     if !types_compatible(expected, found_check) {
                         self.emit(CheckError::TypeMismatch {
                             expected: expected.display(),
@@ -157,25 +145,30 @@ impl TypeChecker {
             // The excess is then joined with the return type's own label, and applied to the
             // stripped (unlabeled) return type.
             if fn_info.label_transparent {
+                // In the user-defined label model (#894), label-transparent functions
+                // propagate labels from bare-typed arguments to the return type.
+                // Excess = arg has a label and param is bare (no label declared).
                 let arg_label = if fn_info.params.is_empty() || is_variadic_builtin {
-                    // Variadic: no declared params to compare against — propagate all arg labels.
-                    arg_tys
-                        .iter()
-                        .fold(None, |acc, ty| ifc::join_opt(acc, ifc::label_of(ty)))
+                    // Variadic: propagate all arg labels.
+                    arg_tys.iter().fold(None, |acc, ty| {
+                        ifc::join_opt(acc, ifc::label_of(ty).map(|s| s.to_string()))
+                    })
                 } else {
-                    // Non-variadic: propagate only label excess beyond declared param types.
+                    // Non-variadic: propagate label from args where param is bare.
                     fn_info.params.iter().zip(arg_tys.iter()).fold(
                         None,
                         |acc, (param_ty, arg_ty)| {
-                            let param_rank =
-                                ifc::label_of(param_ty).map(ifc::lattice_rank).unwrap_or(0);
-                            let excess = ifc::label_of(arg_ty)
-                                .filter(|&l| ifc::lattice_rank(l) > param_rank);
-                            ifc::join_opt(acc, excess)
+                            // Only propagate if param has no label (bare parameter).
+                            if ifc::label_of(param_ty).is_none() {
+                                let excess = ifc::label_of(arg_ty).map(|s| s.to_string());
+                                ifc::join_opt(acc, excess)
+                            } else {
+                                acc
+                            }
                         },
                     )
                 };
-                let ret_label = ifc::label_of(&fn_info.ret);
+                let ret_label = ifc::label_of(&fn_info.ret).map(|s| s.to_string());
                 let combined = ifc::join_opt(arg_label, ret_label);
                 return ifc::apply_label(combined, ifc::strip_label(&fn_info.ret).clone());
             }
@@ -345,10 +338,10 @@ impl TypeChecker {
         }
         // Join receiver label with all argument labels (Req 7: result sensitivity is
         // the join of all inputs, e.g. `public_str.replace("x", secret_arg)` → Secret<String>).
-        let recv_label = ifc::label_of(recv_ty);
-        let arg_label = arg_tys
-            .iter()
-            .fold(None, |acc, ty| ifc::join_opt(acc, ifc::label_of(ty)));
+        let recv_label = ifc::label_of(recv_ty).map(|s| s.to_string());
+        let arg_label = arg_tys.iter().fold(None, |acc, ty| {
+            ifc::join_opt(acc, ifc::label_of(ty).map(|s| s.to_string()))
+        });
         let label = ifc::join_opt(recv_label, arg_label);
         let base = recv_ty.unlabeled();
         let result = match base {

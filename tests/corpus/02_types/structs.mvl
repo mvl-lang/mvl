@@ -9,7 +9,7 @@ type Point = struct {
 // Struct with mutable field
 type Counter = struct {
     count: ref Int,
-    label: String,
+    ifc_label: String,
 }
 
 // Struct with generic fields
@@ -21,8 +21,8 @@ type Pair[A, B] = struct {
 // Struct with security-labeled fields
 type Session = struct {
     token: Secret[String],
-    user_id: Public[UserId],
-    expires_at: Public[Timestamp],
+    user_id: UserId,
+    expires_at: Timestamp,
 }
 
 // Struct with refined fields

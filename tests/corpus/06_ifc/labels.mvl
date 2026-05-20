@@ -3,13 +3,13 @@
 // ── Security-labeled types ────────────────────────────────────────────────
 
 // Tainted: untrusted external input that must be sanitized before use
-fn use_tainted(input: Tainted[String]) -> Clean[String] {
-    sanitize(input)
+fn use_tainted(input: Tainted[String]) -> String {
+    relabel trust(input, "VALIDATED")
 }
 
 // Secret: confidential data that must be declassified explicitly
-fn use_secret(data: Secret[String]) -> Public[String] {
-    declassify(data)
+fn use_secret(data: Secret[String]) -> String {
+    relabel release(data, "AUTHORIZED")
 }
 
 // ── Nested labels ─────────────────────────────────────────────────────────
@@ -18,7 +18,7 @@ fn use_secret(data: Secret[String]) -> Public[String] {
 fn tainted_result(res: Result[Tainted[String], String]) -> String {
     match res {
         Ok(raw) => {
-            let clean: Clean[String] = sanitize(raw);
+            let clean: String = relabel trust(raw, "VALIDATED");
             "ok"
         },
         Err(e) => "error",
@@ -31,18 +31,18 @@ fn tainted_result(res: Result[Tainted[String], String]) -> String {
 total fn authenticate(
     iso db: val DbConn,
     password: Tainted[String],
-    user_id: Public[Int],
-) -> Public[Int] {
+    user_id: Int,
+) -> Int {
     user_id
 }
 
 // Declassify: explicitly lower the secrecy level
-fn release_report(report: Secret[String]) -> Public[String] {
-    declassify(report)
+fn release_report(report: Secret[String]) -> String {
+    relabel release(report, "AUTHORIZED")
 }
 
 // ── Capability combined with security label ───────────────────────────────
 
-fn iso_tainted(iso db: val DbConn, raw: Tainted[String]) -> Clean[String] {
-    sanitize(raw)
+fn iso_tainted(iso db: val DbConn, raw: Tainted[String]) -> String {
+    relabel trust(raw, "VALIDATED")
 }

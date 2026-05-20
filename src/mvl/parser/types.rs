@@ -11,8 +11,8 @@
 //! - All type expressions including security labels (Requirement 7)
 
 use crate::mvl::parser::ast::{
-    ArithOp, Capability, CmpOp, Effect, FieldDecl, GenericParam, LogicOp, RefExpr, SecurityLabel,
-    SessionOp, TypeBody, TypeDecl, TypeExpr, Variant, VariantFields,
+    ArithOp, Capability, CmpOp, Effect, FieldDecl, GenericParam, LogicOp, RefExpr, SessionOp,
+    TypeBody, TypeDecl, TypeExpr, Variant, VariantFields,
 };
 use crate::mvl::parser::lexer::{Span, TokenKind};
 use crate::mvl::parser::{ParseError, Parser};
@@ -431,44 +431,6 @@ impl Parser {
                 Ok(TypeExpr::Tuple { elems, span })
             }
 
-            // Security-labeled types: Public[T], Tainted[T], Secret[T], Clean[T]
-            TokenKind::Public => {
-                self.advance();
-                let (inner, span) = self.parse_labeled_inner(start)?;
-                Ok(TypeExpr::Labeled {
-                    label: SecurityLabel::Public,
-                    inner,
-                    span,
-                })
-            }
-            TokenKind::Tainted => {
-                self.advance();
-                let (inner, span) = self.parse_labeled_inner(start)?;
-                Ok(TypeExpr::Labeled {
-                    label: SecurityLabel::Tainted,
-                    inner,
-                    span,
-                })
-            }
-            TokenKind::Secret => {
-                self.advance();
-                let (inner, span) = self.parse_labeled_inner(start)?;
-                Ok(TypeExpr::Labeled {
-                    label: SecurityLabel::Secret,
-                    inner,
-                    span,
-                })
-            }
-            TokenKind::Clean => {
-                self.advance();
-                let (inner, span) = self.parse_labeled_inner(start)?;
-                Ok(TypeExpr::Labeled {
-                    label: SecurityLabel::Clean,
-                    inner,
-                    span,
-                })
-            }
-
             // Named types: Option[T], Result[T, E], or generic Foo[A, B]
             TokenKind::Ident(name) => {
                 self.advance();
@@ -517,9 +479,25 @@ impl Parser {
         Ok((Box::new(inner), span))
     }
 
-    /// Parse `Option[T]`, `Result[T, E]`, or a generic `Foo[A, B]`.
+    /// Parse `Option[T]`, `Result[T, E]`, a labeled type `Label[T]`, or a generic `Foo[A, B]`.
     /// `name` has already been consumed; `start` is its span.
+    ///
+    /// Label detection: if `name` is in the parser's declared-label set (populated from
+    /// `label` declarations collected during the dual-pass resolution), the single-argument
+    /// bracketed form is parsed as `TypeExpr::Labeled`.  The stdlib labels `Tainted` and
+    /// `Secret` are pre-registered so they work without an explicit `label` import.
     fn parse_named_type(&mut self, name: String, start: Span) -> Result<TypeExpr, ()> {
+        // Is this a declared label (e.g. `Tainted[T]`, `Secret[T]`, or a user-defined label)?
+        if self.known_labels.contains(name.as_str())
+            && matches!(self.peek_kind(), TokenKind::LBracket)
+        {
+            let (inner, span) = self.parse_labeled_inner(start)?;
+            return Ok(TypeExpr::Labeled {
+                label: name,
+                inner,
+                span,
+            });
+        }
         match name.as_str() {
             "Option" => {
                 let lb = self.expect(&TokenKind::LBracket);
@@ -1233,16 +1211,10 @@ mod tests {
     #[test]
     fn parse_labeled_type_tainted() {
         // GIVEN: Tainted[String]
-        // THEN: LabeledType with label=Tainted, inner=String
+        // THEN: LabeledType with label="Tainted", inner=String
         let ty = type_expr("Tainted[String]");
         assert!(
-            matches!(
-                &ty,
-                TypeExpr::Labeled {
-                    label: SecurityLabel::Tainted,
-                    ..
-                }
-            ),
+            matches!(&ty, TypeExpr::Labeled { label, .. } if label == "Tainted"),
             "expected Tainted[String], got {:?}",
             ty
         );
@@ -1250,49 +1222,49 @@ mod tests {
 
     #[test]
     fn parse_all_security_labels() {
-        for (src, expected) in [
-            ("Public[Int]", SecurityLabel::Public),
-            ("Tainted[String]", SecurityLabel::Tainted),
-            ("Secret[Key]", SecurityLabel::Secret),
-            ("Clean[String]", SecurityLabel::Clean),
-        ] {
+        // Post-#894: Tainted and Secret are the only stdlib labels.
+        // Public and Clean are no longer labels — they're plain identifiers.
+        for (src, expected) in [("Tainted[String]", "Tainted"), ("Secret[Key]", "Secret")] {
             let ty = type_expr(src);
             let TypeExpr::Labeled { label, .. } = ty else {
                 panic!("expected labeled type for {}", src)
             };
             assert_eq!(label, expected);
         }
+        // Public[Int] and Clean[String] parse as base types, not labeled types.
+        let public_ty = type_expr("Public[Int]");
+        assert!(
+            matches!(public_ty, TypeExpr::Base { ref name, .. } if name == "Public"),
+            "Public is a plain identifier, got {:?}",
+            public_ty
+        );
     }
 
     // ── Requirement 7 / Scenario: Nested labels ───────────────────────────
 
     #[test]
     fn parse_nested_labeled_types() {
-        // GIVEN: Public[Option[Secret[Key]]]
-        // THEN: LabeledType(Public) → OptionType → LabeledType(Secret)
-        let ty = type_expr("Public[Option[Secret[Key]]]");
+        // GIVEN: Tainted[Option[Secret[Key]]]
+        // THEN: LabeledType("Tainted") → OptionType → LabeledType("Secret")
+        let ty = type_expr("Tainted[Option[Secret[Key]]]");
         let TypeExpr::Labeled {
-            label: SecurityLabel::Public,
-            inner: opt,
+            ref label,
+            inner: ref opt,
             ..
         } = ty
         else {
-            panic!("outer must be Public[…]")
+            panic!("outer must be Tainted[…], got {:?}", ty)
         };
+        assert_eq!(label, "Tainted");
         let TypeExpr::Option {
-            inner: secret_key, ..
-        } = *opt
+            inner: ref secret_key,
+            ..
+        } = **opt
         else {
             panic!("middle must be Option[…]")
         };
         assert!(
-            matches!(
-                *secret_key,
-                TypeExpr::Labeled {
-                    label: SecurityLabel::Secret,
-                    ..
-                }
-            ),
+            matches!(secret_key.as_ref(), TypeExpr::Labeled { label, .. } if label == "Secret"),
             "inner must be Secret[Key]"
         );
     }

@@ -3,7 +3,7 @@
 // Demonstrates Phase 4 security requirements as compile-time guarantees:
 //   1. extern "rust" trust boundary — demo fixture data (get_demo_hash) lives in Rust.
 //   2. IFC labels: Secret[String] password hash consumed at auth boundary;
-//      Clean[String] usernames are safe for structured log output.
+//      String usernames are safe for structured log output.
 //   3. Req 3 (Totality): check_permission from rbac module — exhaustive match.
 //   4. Effect declarations: ! Log on audit functions; ! CryptoRandom on authenticate().
 //   5. Req 5 (Errors): all failure modes are named in AppError, AuthError.
@@ -33,7 +33,7 @@ use std.log.{log_info, log_warn}
 
 extern "rust" {
     // Demo fixture: returns hardcoded hash for known usernames.
-    fn get_demo_hash(username: Clean[String]) -> Option[Secret[String]];
+    fn get_demo_hash(username: String) -> Option[Secret[String]];
 }
 
 // ── Audit helper ──────────────────────────────────────────────────────────
@@ -70,7 +70,7 @@ fn demo_auth() -> Unit ! Log + CryptoRandom {
     match hash_opt {
         None => log_warn("auth attempt: user not found", {"user": "alice"}),
         Some(stored_hash) => {
-            let auth_result: Result[Clean[String], AuthError] = authenticate("alice", "hunter2", stored_hash);
+            let auth_result: Result[String, AuthError] = authenticate("alice", "hunter2", stored_hash);
             match auth_result {
                 Ok(_)  => log_info("auth attempt: pass", {"user": "alice"}),
                 Err(_) => log_warn("auth attempt: fail", {"user": "alice"}),

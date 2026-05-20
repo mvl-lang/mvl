@@ -58,7 +58,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{
-    Capability, Effect, FieldDecl, GenericParam, RefExpr, SecurityLabel, Totality, Variant,
+    Capability, Effect, FieldDecl, GenericParam, RefExpr, Totality, Variant,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -218,6 +218,13 @@ pub struct TypeEnv {
     /// Registered `From` implementations: maps target type name → set of source type names.
     /// Populated from `impl From<A> for B` declarations.
     pub from_impls: HashMap<String, HashSet<String>>,
+    /// Declared IFC labels (#894). Maps label name → unit.
+    /// Pre-seeded with `Tainted` and `Secret` from std/ifc.mvl.
+    pub known_labels: HashSet<String>,
+    /// Declared IFC relabel transitions (#894).
+    /// Maps transition name → (from: Option<String>, to: Option<String>).
+    /// `None` = bare type; `Some(name)` = declared label.
+    pub relabels: HashMap<String, (Option<String>, Option<String>)>,
 }
 
 impl Default for TypeEnv {
@@ -228,14 +235,43 @@ impl Default for TypeEnv {
 
 impl TypeEnv {
     pub fn new() -> Self {
+        let mut known_labels = HashSet::new();
+        known_labels.insert("Tainted".to_string());
+        known_labels.insert("Secret".to_string());
+        // Pre-seed the four standard relabel transitions from std/ifc.mvl (#894).
+        // These are always available without an explicit `use std.ifc` import,
+        // mirroring how `Tainted` and `Secret` are pre-seeded as known labels.
+        let mut relabels: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
+        relabels.insert("classify".into(), (None, Some("Secret".into()))); // _ -> Secret
+        relabels.insert("taint".into(), (None, Some("Tainted".into()))); // _ -> Tainted
+        relabels.insert("trust".into(), (Some("Tainted".into()), None)); // Tainted -> _
+        relabels.insert("release".into(), (Some("Secret".into()), None)); // Secret -> _
         let mut env = TypeEnv {
             scopes: vec![HashMap::new()],
             types: HashMap::new(),
             fns: HashMap::new(),
             from_impls: HashMap::new(),
+            known_labels,
+            relabels,
         };
         env.register_builtins();
         env
+    }
+
+    /// Look up a relabel transition by name.
+    /// Returns `(from, to)` where `None` = bare and `Some(name)` = label.
+    pub fn lookup_relabel(&self, name: &str) -> Option<(Option<String>, Option<String>)> {
+        self.relabels.get(name).cloned()
+    }
+
+    /// Register a label declaration.
+    pub fn register_label(&mut self, name: String) {
+        self.known_labels.insert(name);
+    }
+
+    /// Register a relabel transition.
+    pub fn register_relabel(&mut self, name: String, from: Option<String>, to: Option<String>) {
+        self.relabels.insert(name, (from, to));
     }
 
     /// Register a `From<source>` impl for `target`.
@@ -660,7 +696,7 @@ impl TypeEnv {
             "crypto_random_bytes".into(),
             FnInfo {
                 params: vec![Ty::Int],
-                ret: Ty::Labeled(SecurityLabel::Secret, Box::new(Ty::List(Box::new(Ty::Int)))),
+                ret: Ty::Labeled("Secret".to_string(), Box::new(Ty::List(Box::new(Ty::Int)))),
                 effects: vec![Effect::new("CryptoRandom", Span::new(0, 0, 0, 0))],
                 ..Default::default()
             },

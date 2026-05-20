@@ -12,7 +12,7 @@
 
 use crate::mvl::parser::ast::{
     ActorDecl, ActorMethod, Constraint, EffectDecl, ExternDecl, ExternFnDecl, FnDecl, ImplDecl,
-    Param, Totality, UseDecl,
+    LabelDecl, Param, RelabelDecl, Totality, UseDecl,
 };
 use crate::mvl::parser::lexer::TokenKind;
 use crate::mvl::parser::{ParseError, Parser};
@@ -458,6 +458,14 @@ impl Parser {
                 Ok(Decl::Actor(d))
             }
             TokenKind::Effect => Ok(Decl::EffectDecl(self.parse_effect_decl()?)),
+            TokenKind::Label => {
+                let d = self.parse_label_decl(visible)?;
+                Ok(Decl::Label(d))
+            }
+            TokenKind::Relabel => {
+                let d = self.parse_relabel_decl(visible)?;
+                Ok(Decl::Relabel(d))
+            }
             _ => {
                 let err = ParseError {
                     message: format!("expected declaration, found `{}`", self.peek_kind()),
@@ -543,6 +551,81 @@ impl Parser {
             value,
             span,
         })
+    }
+
+    // ── IFC label / relabel declarations (#894) ───────────────────────────
+
+    /// Parse `label Name` — declares a user-defined IFC label.
+    /// Pre-condition: current token is `label`.
+    pub fn parse_label_decl(&mut self, visible: bool) -> Result<LabelDecl, ()> {
+        let start = self.peek_span();
+        self.advance(); // consume `label`
+        let ident_result = self.expect_ident();
+        let (name, _) = self.require(ident_result)?;
+        let span = self.span_from(start);
+        // Register in the parser's label set so subsequent type annotations work.
+        self.known_labels.insert(name.clone());
+        Ok(LabelDecl {
+            visible,
+            name,
+            span,
+        })
+    }
+
+    /// Parse `relabel name: From -> To` — declares an IFC relabel transition.
+    ///
+    /// `From` and `To` are either `_` (bare type) or a declared label name.
+    /// Pre-condition: current token is `relabel`.
+    pub fn parse_relabel_decl(&mut self, visible: bool) -> Result<RelabelDecl, ()> {
+        let start = self.peek_span();
+        self.advance(); // consume `relabel`
+        let ident_result = self.expect_ident();
+        let (name, _) = self.require(ident_result)?;
+
+        let colon = self.expect(&TokenKind::Colon);
+        self.require(colon)?;
+
+        let from = self.parse_relabel_side()?;
+
+        let arrow = self.expect(&TokenKind::Arrow);
+        self.require(arrow)?;
+
+        let to = self.parse_relabel_side()?;
+
+        let span = self.span_from(start);
+        Ok(RelabelDecl {
+            visible,
+            name,
+            from,
+            to,
+            span,
+        })
+    }
+
+    /// Parse one side of a relabel declaration: `_` (bare) or an ident (label name).
+    fn parse_relabel_side(&mut self) -> Result<Option<String>, ()> {
+        match self.peek_kind() {
+            TokenKind::Ident(name) if name == "_" => {
+                self.advance();
+                Ok(None)
+            }
+            TokenKind::Ident(name) => {
+                let name = name.clone();
+                self.advance();
+                Ok(Some(name))
+            }
+            _ => {
+                let err = ParseError {
+                    message: format!(
+                        "expected `_` or label name in relabel declaration, found `{}`",
+                        self.peek_kind()
+                    ),
+                    span: self.peek_span(),
+                };
+                self.push_recover(err);
+                Err(())
+            }
+        }
     }
 
     // ── Effect declaration ────────────────────────────────────────────────
@@ -996,32 +1079,21 @@ mod tests {
 
     #[test]
     fn parse_fn_with_security_labels() {
-        // GIVEN: fn handle(input: Tainted[String], key: Secret[ApiKey]) -> Public[Response]
-        // THEN: params have correct security labels, return has Public label
-        let d = fn_decl(
-            "fn handle(input: Tainted[String], key: Secret[ApiKey]) -> Public[Response] { }",
-        );
+        // GIVEN: fn handle(input: Tainted[String], key: Secret[ApiKey]) -> Response
+        // THEN: params have correct security labels; return is bare (unlabeled)
+        let d = fn_decl("fn handle(input: Tainted[String], key: Secret[ApiKey]) -> Response { }");
         assert_eq!(d.params.len(), 2);
         assert!(matches!(
             d.params[0].ty,
-            TypeExpr::Labeled {
-                label: SecurityLabel::Tainted,
-                ..
-            }
+            TypeExpr::Labeled { ref label, .. } if label == "Tainted"
         ));
         assert!(matches!(
             d.params[1].ty,
-            TypeExpr::Labeled {
-                label: SecurityLabel::Secret,
-                ..
-            }
+            TypeExpr::Labeled { ref label, .. } if label == "Secret"
         ));
         assert!(matches!(
             *d.return_type,
-            TypeExpr::Labeled {
-                label: SecurityLabel::Public,
-                ..
-            }
+            TypeExpr::Base { ref name, .. } if name == "Response"
         ));
     }
 
@@ -1086,11 +1158,11 @@ mod tests {
 
     #[test]
     fn parse_authenticate_from_corpus() {
-        // From tests/corpus/11_programs/auth_handler.mvl
+        // From tests/corpus/11_programs/auth_handler.mvl (updated for #894)
         let src = r#"total fn authenticate(
     iso db: val DbConn,
     input_password: Tainted[String],
-    user_id: Public[UserId]
+    user_id: UserId
 ) -> Result[Session, AuthError] ! DB + Console { }"#;
         let d = fn_decl(src);
         assert_eq!(d.totality, Some(Totality::Total));
@@ -1099,17 +1171,11 @@ mod tests {
         assert_eq!(d.params[0].capability, Some(Capability::Iso));
         assert!(matches!(
             d.params[1].ty,
-            TypeExpr::Labeled {
-                label: SecurityLabel::Tainted,
-                ..
-            }
+            TypeExpr::Labeled { ref label, .. } if label == "Tainted"
         ));
         assert!(matches!(
             d.params[2].ty,
-            TypeExpr::Labeled {
-                label: SecurityLabel::Public,
-                ..
-            }
+            TypeExpr::Base { ref name, .. } if name == "UserId"
         ));
         assert!(matches!(*d.return_type, TypeExpr::Result { .. }));
         assert_eq!(

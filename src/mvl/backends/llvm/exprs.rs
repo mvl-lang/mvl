@@ -40,9 +40,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             Expr::Block(block) => self.emit_block(block),
 
             // consume/declassify/sanitize: transparent at IR level.
-            Expr::Consume { expr, .. }
-            | Expr::Declassify { expr, .. }
-            | Expr::Sanitize { expr, .. } => self.emit_expr(expr),
+            Expr::Consume { expr, .. } | Expr::Relabel { expr, .. } => self.emit_expr(expr),
 
             Expr::If {
                 cond, then, else_, ..
@@ -654,8 +652,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
             Expr::Propagate { expr, .. }
             | Expr::Consume { expr, .. }
-            | Expr::Declassify { expr, .. }
-            | Expr::Sanitize { expr, .. }
+            | Expr::Relabel { expr, .. }
             | Expr::Borrow { expr, .. } => {
                 self.walk_expr_for_captures(expr, exclude, seen, captures);
             }
@@ -1848,13 +1845,7 @@ impl<'ctx> LlvmBackend<'ctx> {
     fn is_secret_labeled(&self, expr: &Expr) -> bool {
         if let Expr::Ident(name, _) = expr {
             if let Some(ty) = self.local_mvl_types.get(name.as_str()) {
-                return matches!(
-                    ty,
-                    TypeExpr::Labeled {
-                        label: crate::mvl::parser::ast::SecurityLabel::Secret,
-                        ..
-                    }
-                );
+                return matches!(ty, TypeExpr::Labeled { label, .. } if label == "Secret");
             }
         }
         false

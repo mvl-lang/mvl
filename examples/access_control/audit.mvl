@@ -4,7 +4,7 @@
 //   1. Req 7 (Effects): ! Log declares I/O impurity.
 //      Pure policy functions (rbac.mvl) cannot secretly write to logs —
 //      any function that writes must declare ! Log.
-//   2. Req 11 (IFC): only Clean[String] and plain values reach the log sink.
+//   2. Req 11 (IFC): only String and plain values reach the log sink.
 //      Secret[T] values are structurally excluded from audit output.
 //      There is no runtime check; the type system prevents leakage.
 //   3. Phase 4 (std.log): structured audit records via log_info / log_warn

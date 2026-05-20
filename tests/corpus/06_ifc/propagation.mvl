@@ -7,7 +7,7 @@ fn add_secrets(a: Secret[Int], b: Secret[Int]) -> Secret[Int] {
     a + b
 }
 
-fn add_public_to_secret(a: Public[Int], b: Secret[Int]) -> Secret[Int] {
+fn add_public_to_secret(a: Int, b: Secret[Int]) -> Secret[Int] {
     a + b
 }
 
@@ -15,7 +15,7 @@ fn add_tainted_to_tainted(a: Tainted[Int], b: Tainted[Int]) -> Tainted[Int] {
     a + b
 }
 
-fn mix_clean_and_public(a: Clean[Int], b: Public[Int]) -> Clean[Int] {
+fn mix_clean_and_public(a: Int, b: Int) -> Int {
     a + b
 }
 

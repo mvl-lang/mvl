@@ -16,25 +16,25 @@ type AccountId = Secret[String]
 
 // Stub: always returns Ok. The Err branches in main verify match exhaustiveness,
 // not runtime error path — a real implementation would return Err for zero input.
-fn to_nonzero(f: Float) -> Result[Public[Float], DivError] { Ok(f) }
+fn to_nonzero(f: Float) -> Result[Float, DivError] { Ok(f) }
 
 type DivError = enum { DivisionByZero }
 
 total fn safe_divide(
-    numerator: Public[Float],
-    denominator: Public[Float],
-) -> Public[Float] {
+    numerator: Float,
+    denominator: Float,
+) -> Float {
     numerator / denominator
 }
 
 total fn calculate_share(
     iso account: Secret[AccountId],
-    total_amount: Public[Float],
-    num_parties: Public[Int where self > 0],
-) -> Result[Public[Float], DivError] ! Console {
+    total_amount: Float,
+    num_parties: Int where self > 0,
+) -> Result[Float, DivError] ! Console {
 
-    let divisor: Public[Float] = to_nonzero(num_parties.to_float())?;
-    let share: Public[Float] = safe_divide(total_amount, divisor);
+    let divisor: Float = to_nonzero(num_parties.to_float())?;
+    let share: Float = safe_divide(total_amount, divisor);
 
     // OK: share is Public
     println(format("Calculated share: {}", share));

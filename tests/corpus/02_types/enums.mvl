@@ -39,6 +39,6 @@ type Message = enum {
 
 // Enum with security-labeled type parameter
 type Response[T] = enum {
-    Ok(Public[T]),
-    Err(Public[String]),
+    Ok(T),
+    Err(String),
 }

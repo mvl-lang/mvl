@@ -66,7 +66,7 @@ type Request = struct {
 
 type Response = struct {
     status: Int where self >= 100 && self < 600,
-    body: Clean[String],
+    body: String,
 }
 
 type HandlerError = enum {
@@ -95,16 +95,16 @@ extern "rust" {
 
     // Emit a response (demo: prints to stdout; production: TCP send).
     // ! Net + Console: network send + local display in the demo.
-    fn server_send(status: Int, body: Clean[String]) -> Unit ! Net + Console;
+    fn server_send(status: Int, body: String) -> Unit ! Net + Console;
 }
 
 // ── Dispatch re-declarations (workaround: #96) ───────────────────────────
 
 extern "rust" {
     fn verify_request_auth(provided: Tainted[String]) -> Result[Unit, HandlerError];
-    fn get_config_value(path: String) -> Result[Clean[String], HandlerError];
-    fn put_config_value(path: String, value: Clean[String]) -> Result[Clean[String], HandlerError];
-    fn reset_config_value(path: String) -> Result[Clean[String], HandlerError];
+    fn get_config_value(path: String) -> Result[String, HandlerError];
+    fn put_config_value(path: String, value: String) -> Result[String, HandlerError];
+    fn reset_config_value(path: String) -> Result[String, HandlerError];
 }
 
 fn dispatch(req: Request) -> Result[Response, HandlerError] {
@@ -125,7 +125,7 @@ fn route(req: Request) -> Result[Response, HandlerError] {
 }
 
 fn handle_get(path: String) -> Result[Response, HandlerError] {
-    let body_result: Result[Clean[String], HandlerError] = get_config_value(path);
+    let body_result: Result[String, HandlerError] = get_config_value(path);
     match body_result {
         Err(e)   => Err(e),
         Ok(body) => Ok(Response { status: 200, body: body }),
@@ -133,8 +133,8 @@ fn handle_get(path: String) -> Result[Response, HandlerError] {
 }
 
 fn handle_put(path: String, body: Tainted[String]) -> Result[Response, HandlerError] {
-    let clean: Clean[String] = sanitize(body);
-    let result: Result[Clean[String], HandlerError] = put_config_value(path, clean);
+    let clean: String = relabel trust(body, "VALIDATED");
+    let result: Result[String, HandlerError] = put_config_value(path, clean);
     match result {
         Err(e)   => Err(e),
         Ok(body) => Ok(Response { status: 200, body: body }),
@@ -142,7 +142,7 @@ fn handle_put(path: String, body: Tainted[String]) -> Result[Response, HandlerEr
 }
 
 fn handle_delete(path: String) -> Result[Response, HandlerError] {
-    let result: Result[Clean[String], HandlerError] = reset_config_value(path);
+    let result: Result[String, HandlerError] = reset_config_value(path);
     match result {
         Err(e)   => Err(e),
         Ok(body) => Ok(Response { status: 200, body: body }),
@@ -174,7 +174,7 @@ fn main() -> Unit ! FileRead + Net + Console + Log {
 //
 //   Request 0: GET  /config/timeout    (valid key)  → 200 with current value
 //   Request 1: PUT  /config/timeout    (valid key)  → 200 with updated value
-//              body "45" enters as Tainted[String], sanitize() required before storage
+//              body "45" enters as Tainted[String], relabel trust(, "VALIDATED") required before storage
 //   Request 2: GET  /config/timeout    (wrong key)  → 401 Unauthorized
 //              demonstrates: the stored Secret key cannot be guessed or leaked
 //

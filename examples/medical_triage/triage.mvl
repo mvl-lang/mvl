@@ -86,11 +86,10 @@ pub fn trauma_urgent(p: Patient) -> Bool {
 }
 
 /// True iff the patient needs infection-control isolation: high fever with a respiratory
-/// or fever complaint and no trauma.
+/// or fever complaint.
 pub fn needs_isolation(p: Patient) -> Bool {
     p.vitals.temperature > 390
     && (p.complaint == ChiefComplaint::Breathing || p.complaint == ChiefComplaint::Fever)
-    && p.complaint != ChiefComplaint::Trauma
 }
 
 /// True iff an elderly patient has low oxygen or low BP with a non-minor complaint.

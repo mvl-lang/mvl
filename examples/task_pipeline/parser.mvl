@@ -5,7 +5,7 @@
 //   2. Req 4 (Null elim):     missing CSV category field → None
 //   3. Req 5 (Errors):        Result[Record, ParseError] at every parse boundary
 //   4. Req 7 (Effects):       no ! annotations — pure parsing logic only
-//   6. IFC:                   raw CSV content stays Tainted; sanitize() is the
+//   6. IFC:                   raw CSV content stays Tainted; relabel trust(, "VALIDATED") is the
 //                             single trust boundary at parse_csv entry
 //
 // No extern, no effects — all parsing is pure MVL string manipulation.
@@ -142,14 +142,14 @@ fn csv_fold_step(acc: Result[List[Record], ParseError], line: String) -> Result[
 }
 
 /// Parse a complete CSV file (header + data rows) into a list of records.
-/// Inner implementation — takes Clean[String] so `parse_csv` can pass its
+/// Inner implementation — takes String so `parse_csv` can pass its
 /// sanitized binding without a cross-module borrow issue.
 ///
-/// IFC note: All method calls on `content: Clean[String]` produce labeled
+/// IFC note: All method calls on `content: String` produce labeled
 /// types in the checker.  We use `match` on those labeled values to strip
 /// the label (bind_match_pattern uses unlabeled() for Ok/Err/Some/None),
 /// which keeps the declared return type plain `Result[...]`.
-fn parse_csv_impl(content: Clean[String]) -> Result[List[Record], ParseError] {
+fn parse_csv_impl(content: String) -> Result[List[Record], ParseError] {
     let init: Result[List[Record], ParseError] = Ok([]);
     // match on Clean[Bool]: checker allows it; scrutinee label is NOT
     // promoted to arm bodies in check_match_arms (unlike `if`).
@@ -167,7 +167,7 @@ fn parse_csv_impl(content: Clean[String]) -> Result[List[Record], ParseError] {
 /// borrow inference → `content: Tainted<String>` (owned) in generated Rust.
 /// This prevents the cross-module `&String` mismatch when called from main.rs.
 pub fn parse_csv(content: Tainted[String]) -> Result[List[Record], ParseError] {
-    let clean: Clean[String] = sanitize(content);
+    let clean: String = relabel trust(content, "VALIDATED");
     parse_csv_impl(clean)
 }
 

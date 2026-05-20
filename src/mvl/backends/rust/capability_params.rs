@@ -314,10 +314,7 @@ fn expr_has_disqualifying_use(param: &str, expr: &Expr) -> bool {
         // it is being used as a direct operand (Sanitize, Declassify, Move,
         // Consume, Propagate all consume the value).  Treat that as
         // disqualifying.  For compound inner expressions, recurse.
-        Expr::Sanitize { expr, .. }
-        | Expr::Declassify { expr, .. }
-        | Expr::Consume { expr, .. }
-        | Expr::Propagate { expr, .. } => {
+        Expr::Relabel { expr, .. } | Expr::Consume { expr, .. } | Expr::Propagate { expr, .. } => {
             matches!(expr.as_ref(), Expr::Ident(n, _) if n == param)
                 || expr_has_disqualifying_use(param, expr)
         }
@@ -400,8 +397,7 @@ fn expr_mentions_param(param: &str, expr: &Expr) -> bool {
         }
         Expr::Unary { expr, .. }
         | Expr::FieldAccess { expr, .. }
-        | Expr::Sanitize { expr, .. }
-        | Expr::Declassify { expr, .. }
+        | Expr::Relabel { expr, .. }
         | Expr::Consume { expr, .. }
         | Expr::Propagate { expr, .. }
         | Expr::Borrow { expr, .. } => expr_mentions_param(param, expr),

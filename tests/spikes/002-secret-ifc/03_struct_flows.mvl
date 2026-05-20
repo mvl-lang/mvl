@@ -17,5 +17,5 @@ fn get_key(config: ApiConfig) -> Secret[String] {
 
 // Declassify from struct field — auditable exit
 fn declassify_from_struct(config: ApiConfig) -> String {
-    declassify(config.key)
+    relabel release(config.key, "AUTHORIZED")
 }

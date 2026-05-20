@@ -156,8 +156,7 @@ fn check_expr_ref_escape(expr: &Expr, ref_vars: &HashSet<&str>, errors: &mut Vec
         Expr::Unary { expr: inner, .. }
         | Expr::Propagate { expr: inner, .. }
         | Expr::FieldAccess { expr: inner, .. }
-        | Expr::Declassify { expr: inner, .. }
-        | Expr::Sanitize { expr: inner, .. }
+        | Expr::Relabel { expr: inner, .. }
         | Expr::Borrow { expr: inner, .. }
         | Expr::Consume { expr: inner, .. } => check_expr_ref_escape(inner, ref_vars, errors),
         Expr::Binary { left, right, .. } => {
@@ -438,8 +437,7 @@ fn check_expr_iso(expr: &Expr, iso_vars: &HashSet<&str>, errors: &mut Vec<CheckE
         Expr::Unary { expr: inner, .. }
         | Expr::Propagate { expr: inner, .. }
         | Expr::FieldAccess { expr: inner, .. }
-        | Expr::Declassify { expr: inner, .. }
-        | Expr::Sanitize { expr: inner, .. }
+        | Expr::Relabel { expr: inner, .. }
         | Expr::Borrow { expr: inner, .. } => check_expr_iso(inner, iso_vars, errors),
 
         Expr::Binary { left, right, .. } => {

@@ -138,8 +138,7 @@ fn collect_refs_expr(expr: &Expr, params: &[&str], out: &mut Vec<(String, Span)>
         Expr::Unary { expr: e, .. }
         | Expr::Propagate { expr: e, .. }
         | Expr::Consume { expr: e, .. }
-        | Expr::Declassify { expr: e, .. }
-        | Expr::Sanitize { expr: e, .. }
+        | Expr::Relabel { expr: e, .. }
         | Expr::Borrow { expr: e, .. } => collect_refs_expr(e, params, out),
         Expr::Binary { left, right, .. } => {
             collect_refs_expr(left, params, out);

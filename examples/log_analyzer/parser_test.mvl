@@ -9,7 +9,7 @@
 // so that call sites can pass literals directly.  String literals are subtype-
 // compatible with Tainted[String] (Public ⊑ Tainted), so the IFC invariants are
 // preserved — unlabeled data may flow into a Tainted context without error.
-// The Tainted→Clean sanitize() flow is exercised in parser.mvl itself.
+// The Tainted→Clean relabel trust(, "VALIDATED") flow is exercised in parser.mvl itself.
 //
 // Run with:  mvl test examples/log_analyzer/
 

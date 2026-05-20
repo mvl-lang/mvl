@@ -14,7 +14,7 @@ type Person = struct {
 
 type Counter = struct {
     count: ref Int,
-    label: String,
+    ifc_label: String,
 }
 
 // ── Enum types ────────────────────────────────────────────────────────────────

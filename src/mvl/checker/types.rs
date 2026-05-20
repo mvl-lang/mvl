@@ -6,8 +6,7 @@
 //! [`Ty`] is the checker's resolved type — separate from the AST's [`TypeExpr`]
 //! which is an unresolved syntactic form.  Conversion happens in [`resolve`].
 
-use crate::mvl::checker::ifc;
-use crate::mvl::parser::ast::{Effect, RefExpr, SecurityLabel, SessionOp, Totality, TypeExpr};
+use crate::mvl::parser::ast::{Effect, RefExpr, SessionOp, Totality, TypeExpr};
 
 /// Sentinel for an unresolved const-generic array size (e.g. `N` in `Array[T, N]`).
 /// Treated as size-compatible with any concrete size in `types_compatible`.
@@ -45,8 +44,8 @@ pub enum Ty {
     Set(Box<Ty>),
     // Refined type wrapper: underlying type + predicate AST node
     Refined(Box<Ty>, Box<RefExpr>),
-    // Security label wrapper: label + inner type (Requirement 11)
-    Labeled(SecurityLabel, Box<Ty>),
+    // Security label wrapper: label name + inner type (Requirement 11, #894)
+    Labeled(String, Box<Ty>),
     // Session type: typed communication protocol (Honda 1993, Phase 8)
     Session(Box<SessionTy>),
     // Placeholder for inference failures (error propagation)
@@ -182,7 +181,7 @@ impl Ty {
             Ty::Set(t) => format!("Set<{}>", t.display()),
             Ty::Refined(inner, _pred) => inner.display(),
             Ty::Labeled(label, inner) => {
-                format!("{}<{}>", ifc::label_name(*label), inner.display())
+                format!("{}<{}>", label, inner.display())
             }
             Ty::Session(s) => s.display(),
             Ty::Unknown => "<unknown>".to_string(),
@@ -309,8 +308,10 @@ pub fn resolve(expr: &TypeExpr) -> Ty {
             Ty::Result(Box::new(resolve(ok)), Box::new(resolve(err)))
         }
         TypeExpr::Ref { mutable, inner, .. } => Ty::Ref(*mutable, Box::new(resolve(inner))),
-        // Security labels are preserved as Ty::Labeled wrappers (Requirement 11)
-        TypeExpr::Labeled { label, inner, .. } => Ty::Labeled(*label, Box::new(resolve(inner))),
+        // Security labels are preserved as Ty::Labeled wrappers (Requirement 11, #894)
+        TypeExpr::Labeled { label, inner, .. } => {
+            Ty::Labeled(label.clone(), Box::new(resolve(inner)))
+        }
         TypeExpr::Refined { inner, pred, .. } => {
             Ty::Refined(Box::new(resolve(inner)), Box::new(pred.clone()))
         }
@@ -381,21 +382,13 @@ pub fn types_compatible(a: &Ty, b: &Ty) -> bool {
         return true;
     }
     match (a, b) {
-        // Both labeled: enforce lattice flow from b (found) to a (expected),
-        // then check structural compatibility of the inner types.
-        (Ty::Labeled(la, ia), Ty::Labeled(lb, ib)) => {
-            ifc::can_flow(*lb, *la) && types_compatible(ia, ib)
-        }
-        // Expected labeled, found unlabeled: check inner of expected vs found.
-        // Unlabeled data may be assigned to a labeled context (treated as Public).
-        (Ty::Labeled(_, ia), _) => types_compatible(ia, b),
-        // Expected unlabeled (treated as Public context), found labeled:
-        // Only allow if the found label can flow to Public — i.e., found = Public<T>.
-        // Secret<T>, Tainted<T>, Clean<T> must NOT flow silently to an unlabeled context;
-        // that would make any untyped parameter an implicit declassification sink.
-        (_, Ty::Labeled(lb, ib)) => {
-            ifc::can_flow(*lb, SecurityLabel::Public) && types_compatible(a, ib)
-        }
+        // Both labeled: labels must match exactly — no lattice, no implicit flow (#894).
+        // `Tainted[T]` is a distinct type from `Secret[T]` and from bare `T`.
+        (Ty::Labeled(la, ia), Ty::Labeled(lb, ib)) => la == lb && types_compatible(ia, ib),
+        // Expected labeled, found unlabeled: NOT compatible — labeled ≠ bare (#894).
+        (Ty::Labeled(..), _) => false,
+        // Expected unlabeled, found labeled: NOT compatible — relabel() required (#894).
+        (_, Ty::Labeled(..)) => false,
         // Structural cases
         (Ty::Option(ai), Ty::Option(bi)) => types_compatible(ai, bi),
         (Ty::Result(ao, ae), Ty::Result(bo, be)) => {
@@ -544,7 +537,7 @@ mod tests {
     #[test]
     fn resolve_labeled_preserves_label() {
         let expr = TypeExpr::Labeled {
-            label: SecurityLabel::Secret,
+            label: "Secret".to_string(),
             inner: Box::new(TypeExpr::Base {
                 name: "String".to_string(),
                 args: vec![],
@@ -554,7 +547,7 @@ mod tests {
         };
         assert_eq!(
             resolve(&expr),
-            Ty::Labeled(SecurityLabel::Secret, Box::new(Ty::String))
+            Ty::Labeled("Secret".to_string(), Box::new(Ty::String))
         );
     }
 
@@ -578,51 +571,52 @@ mod tests {
     }
 
     #[test]
-    fn types_compatible_upward_flow_allowed() {
-        // Public<String> may flow to Secret<String> slot (upward)
-        let public_str = Ty::Labeled(SecurityLabel::Public, Box::new(Ty::String));
-        let secret_str = Ty::Labeled(SecurityLabel::Secret, Box::new(Ty::String));
-        assert!(types_compatible(&secret_str, &public_str)); // expected=Secret, found=Public → ok
+    fn types_compatible_different_labels_rejected() {
+        // Tainted[String] ≠ Secret[String] — no lattice, exact match required (#894)
+        let tainted_str = Ty::Labeled("Tainted".to_string(), Box::new(Ty::String));
+        let secret_str = Ty::Labeled("Secret".to_string(), Box::new(Ty::String));
+        assert!(!types_compatible(&secret_str, &tainted_str));
+        assert!(!types_compatible(&tainted_str, &secret_str));
     }
 
     #[test]
-    fn types_compatible_downward_flow_rejected() {
-        // Secret<String> must NOT flow to Public<String> slot (downward)
-        let public_str = Ty::Labeled(SecurityLabel::Public, Box::new(Ty::String));
-        let secret_str = Ty::Labeled(SecurityLabel::Secret, Box::new(Ty::String));
-        assert!(!types_compatible(&public_str, &secret_str)); // expected=Public, found=Secret → rejected
+    fn types_compatible_labeled_vs_bare_rejected() {
+        // Tainted[String] ≠ String — labeled ≠ bare (#894)
+        let tainted_str = Ty::Labeled("Tainted".to_string(), Box::new(Ty::String));
+        assert!(!types_compatible(&Ty::String, &tainted_str));
+        assert!(!types_compatible(&tainted_str, &Ty::String));
     }
 
     #[test]
     fn types_compatible_same_label() {
-        let s1 = Ty::Labeled(SecurityLabel::Tainted, Box::new(Ty::String));
-        let s2 = Ty::Labeled(SecurityLabel::Tainted, Box::new(Ty::String));
+        let s1 = Ty::Labeled("Tainted".to_string(), Box::new(Ty::String));
+        let s2 = Ty::Labeled("Tainted".to_string(), Box::new(Ty::String));
         assert!(types_compatible(&s1, &s2));
     }
 
     #[test]
     fn types_compatible_label_inner_mismatch() {
         // Secret<Int> vs Secret<String> — same label, different inner → incompatible
-        let si = Ty::Labeled(SecurityLabel::Secret, Box::new(Ty::Int));
-        let ss = Ty::Labeled(SecurityLabel::Secret, Box::new(Ty::String));
+        let si = Ty::Labeled("Secret".to_string(), Box::new(Ty::Int));
+        let ss = Ty::Labeled("Secret".to_string(), Box::new(Ty::String));
         assert!(!types_compatible(&si, &ss));
     }
 
     #[test]
     fn unlabeled_strips_label() {
-        let labeled = Ty::Labeled(SecurityLabel::Secret, Box::new(Ty::Int));
+        let labeled = Ty::Labeled("Secret".to_string(), Box::new(Ty::Int));
         assert_eq!(labeled.unlabeled(), &Ty::Int);
     }
 
     #[test]
     fn is_numeric_through_label() {
-        let labeled = Ty::Labeled(SecurityLabel::Secret, Box::new(Ty::Int));
+        let labeled = Ty::Labeled("Secret".to_string(), Box::new(Ty::Int));
         assert!(labeled.is_numeric());
     }
 
     #[test]
     fn is_bool_through_label() {
-        let labeled = Ty::Labeled(SecurityLabel::Tainted, Box::new(Ty::Bool));
+        let labeled = Ty::Labeled("Tainted".to_string(), Box::new(Ty::Bool));
         assert!(labeled.is_bool());
     }
 

@@ -578,7 +578,7 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                         cg.expr_types.get(&receiver.span()).and_then(|ty| {
                             if let Ty::Labeled(label, inner) = ty {
                                 if matches!(inner.as_ref(), Ty::String) {
-                                    Some(emit_label(*label).to_string())
+                                    Some(emit_label(label.as_str()).to_string())
                                 } else {
                                     None
                                 }
@@ -935,15 +935,36 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
             // `consume` mirrors Pony's `consume` for iso; just emit the inner expr in Phase 1
             emit_expr(cg, expr);
         }
-        Expr::Declassify { expr, .. } => {
-            cg.push("declassify(");
-            emit_expr(cg, expr);
-            cg.push(")");
-        }
-        Expr::Sanitize { expr, .. } => {
-            cg.push("sanitize(");
-            emit_expr_as_fn_arg(cg, expr);
-            cg.push(")");
+        // `relabel name(expr, "tag")` — IFC label bridge (#894).
+        // At Rust codegen level, the newtype wrappers are the runtime representation:
+        //   - Unwrap transitions (Labeled → bare): emit `(expr).0`
+        //   - Wrap transitions (bare → Labeled): emit `LabelName((expr))`
+        // Standard transitions: trust/release unwrap; classify/taint wrap.
+        Expr::Relabel { name, expr, .. } => {
+            match name.as_str() {
+                // Unwrap: strip the label newtype to get the inner value.
+                "trust" | "release" => {
+                    cg.push("(");
+                    emit_expr(cg, expr);
+                    cg.push(").0");
+                }
+                // Wrap: construct the label newtype around the value.
+                "classify" => {
+                    cg.push("Secret((");
+                    emit_expr(cg, expr);
+                    cg.push("))");
+                }
+                "taint" => {
+                    cg.push("Tainted((");
+                    emit_expr(cg, expr);
+                    cg.push("))");
+                }
+                // User-defined transitions: conservative — just emit inner expr.
+                // TODO: look up from/to in the type env to emit correct wrapping.
+                _ => {
+                    emit_expr(cg, expr);
+                }
+            }
         }
         Expr::Lambda {
             params,
@@ -1537,7 +1558,7 @@ fn emit_len_direct(cg: &mut RustEmitter, receiver: &Expr, ty: Option<&Ty>) {
             cg.push(".chars().count() as i64)");
         }
         Some(Ty::Labeled(label, inner)) => {
-            let label_name = emit_label(*label);
+            let label_name = emit_label(label.as_str());
             let method = match inner.as_ref() {
                 Ty::String => ".chars().count()",
                 _ => ".len()",

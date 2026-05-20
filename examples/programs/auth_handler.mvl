@@ -19,11 +19,11 @@ type UserId = Int where self > 0
 type User = struct { id: UserId, password_hash: Secret[String] }
 type UserStore = struct {}
 
-fn verify_hash(pwd: Clean[String], stored: Secret[String]) -> Bool { true }
-fn generate_token(id: UserId) -> Secret[String] { "token" }
-fn now_plus(secs: Int) -> Public[Int] { 0 }
-// clean_input wraps sanitize; universal label propagation requires sanitize() at call sites.
-fn clean_input(s: Tainted[String]) -> Clean[String] { sanitize(s) }
+fn verify_hash(pwd: String, stored: Secret[String]) -> Bool { true }
+fn generate_token(id: UserId) -> Secret[String] { relabel classify("token", "GEN-TOKEN") }
+fn now_plus(secs: Int) -> Int { 0 }
+// clean_input wraps sanitize; universal label propagation requires relabel trust(, "VALIDATED") at call sites.
+fn clean_input(s: Tainted[String]) -> String { relabel trust(s, "VALIDATED") }
 
 type AuthError = enum {
     NotFound,
@@ -33,14 +33,14 @@ type AuthError = enum {
 
 type Session = struct {
     token: Secret[String],
-    user_id: Public[UserId],
-    expires_at: Public[Int],
+    user_id: UserId,
+    expires_at: Int,
 }
 
 total fn authenticate(
     iso store: val UserStore,
     input_password: Tainted[String],
-    user_id: Public[UserId],
+    user_id: UserId,
 ) -> Result[Session, AuthError] ! Console {
 
     let user: Option[User] = store.find_user(user_id)?;
@@ -48,12 +48,12 @@ total fn authenticate(
     match user {
         None => Err(AuthError::NotFound),
         Some(u) => {
-            // sanitize() explicitly erases the Tainted label (universal propagation
+            // relabel trust(, "VALIDATED") explicitly erases the Tainted label (universal propagation
             // means clean_input() alone would return Tainted<Clean<String>>).
-            let clean_pwd: Clean[String] = sanitize(input_password);
+            let clean_pwd: String = relabel trust(input_password, "VALIDATED");
             let stored: Secret[String] = u.password_hash;
             // verify_hash declares stored: Secret[String], so passing Secret[String] is not
-            // excess — no label propagates to the Bool return. No declassify() needed.
+            // excess — no label propagates to the Bool return. No relabel release(, "AUTHORIZED") needed.
             let valid: Bool = verify_hash(clean_pwd, stored);
 
             if valid {

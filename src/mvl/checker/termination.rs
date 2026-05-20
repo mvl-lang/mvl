@@ -180,8 +180,7 @@ fn check_expr(expr: &Expr, ctx: &TermCtx<'_>, errors: &mut Vec<CheckError>) {
         | Expr::Propagate { expr: inner, .. }
         | Expr::FieldAccess { expr: inner, .. }
         | Expr::Consume { expr: inner, .. }
-        | Expr::Declassify { expr: inner, .. }
-        | Expr::Sanitize { expr: inner, .. }
+        | Expr::Relabel { expr: inner, .. }
         | Expr::Borrow { expr: inner, .. } => check_expr(inner, ctx, errors),
 
         Expr::Binary { left, right, .. } => {

@@ -7,8 +7,8 @@
 //
 // This property is enforced statically by the type system, not at runtime:
 //
-//   - Response.body has type Clean[String]
-//   - Secret[String] is NOT assignable to Clean[String] (IFC sublattice: Secret > Clean)
+//   - Response.body has type String
+//   - Secret[String] is NOT assignable to String (IFC sublattice: Secret > Clean)
 //   - Therefore, the compiler rejects any code that tries to include a secret
 //     in the response body — the property holds for ALL possible handler paths.
 //
@@ -31,7 +31,7 @@ type Method = enum {
 
 type Response = struct {
     status: Int where self >= 100 && self < 600,
-    body: Clean[String],
+    body: String,
 }
 
 type HandlerError = enum {
@@ -43,7 +43,7 @@ type HandlerError = enum {
 
 // ── Helper constructors ───────────────────────────────────────────────────
 
-fn ok_response(body: Clean[String]) -> Response {
+fn ok_response(body: String) -> Response {
     Response { status: 200, body: body }
 }
 
@@ -113,8 +113,8 @@ test fn err_response_500_has_correct_status() -> Unit {
 }
 
 test fn response_body_is_clean_string() -> Unit {
-    // Clean[String] literal assigned to body compiles fine.
-    // This test documents that body accepts Clean[String] — not Secret or Tainted.
+    // String literal assigned to body compiles fine.
+    // This test documents that body accepts String — not Secret or Tainted.
     let resp: Response = Response { status: 200, body: "safe value" };
     let is_ok: Int = if resp.status == 200 { 1 } else { 0 };
     assert_eq(is_ok, 1);

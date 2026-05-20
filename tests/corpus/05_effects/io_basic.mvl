@@ -16,7 +16,7 @@ fn run_io() -> Result[Unit, IoError] ! FileRead + FileWrite + FileDelete + Conso
     let dir: Path = path("/tmp/mvl_io_test_dir_417");
 
     // write + read roundtrip: read_to_string returns Tainted[String] (external data).
-    // Printing tainted data directly violates IFC req11 (println requires Public[T]),
+    // Printing tainted data directly violates IFC req11 (println requires T),
     // so we verify the roundtrip succeeds and print a fixed confirmation.
     write(p, "hello io")?;
     let _: Tainted[String] = read_to_string(p)?;

@@ -13,8 +13,7 @@
 
 use crate::mvl::backends::rust::emitter::RustEmitter;
 use crate::mvl::parser::ast::{
-    FieldDecl, GenericParam, RefExpr, SecurityLabel, TypeBody, TypeDecl, TypeExpr, Variant,
-    VariantFields,
+    FieldDecl, GenericParam, RefExpr, TypeBody, TypeDecl, TypeExpr, Variant, VariantFields,
 };
 
 // ── Security label preamble ───────────────────────────────────────────────
@@ -410,8 +409,7 @@ pub fn emit_type_expr(ty: &TypeExpr) -> String {
             }
         }
         TypeExpr::Labeled { label, inner, .. } => {
-            let label_name = emit_label(*label);
-            format!("{}<{}>", label_name, emit_type_expr(inner))
+            format!("{}<{}>", label, emit_type_expr(inner))
         }
         TypeExpr::Refined { inner, .. } => {
             // Erase refinement at the type level; the newtype constructor handles it
@@ -456,13 +454,8 @@ fn map_base_type(name: &str) -> &str {
     }
 }
 
-pub fn emit_label(label: SecurityLabel) -> &'static str {
-    match label {
-        SecurityLabel::Public => "Public",
-        SecurityLabel::Tainted => "Tainted",
-        SecurityLabel::Secret => "Secret",
-        SecurityLabel::Clean => "Clean",
-    }
+pub fn emit_label(label: &str) -> &str {
+    label
 }
 
 // ── Refinement predicate → Rust assert expression ─────────────────────────

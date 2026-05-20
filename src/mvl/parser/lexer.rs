@@ -59,8 +59,10 @@ pub enum TokenKind {
     Partial,
     Return,
     Consume,
-    Declassify,
-    Sanitize,
+    /// `label` — declares a user-defined IFC label (#894).
+    Label,
+    /// `relabel` — relabel transition declaration or expression (#894).
+    Relabel,
     Const,
     Where,
     In,
@@ -110,12 +112,6 @@ pub enum TokenKind {
     Forall,
     /// `exists` — existential quantifier in ghost/contract predicates (Phase 5, #628).
     Exists,
-
-    // ── Security labels ───────────────────────────────────────────────────
-    Public,
-    Tainted,
-    Secret,
-    Clean,
 
     // ── Capability markers ────────────────────────────────────────────────
     Iso,
@@ -201,8 +197,8 @@ impl fmt::Display for TokenKind {
             TokenKind::Partial => write!(f, "partial"),
             TokenKind::Return => write!(f, "return"),
             TokenKind::Consume => write!(f, "consume"),
-            TokenKind::Declassify => write!(f, "declassify"),
-            TokenKind::Sanitize => write!(f, "sanitize"),
+            TokenKind::Label => write!(f, "label"),
+            TokenKind::Relabel => write!(f, "relabel"),
             TokenKind::Const => write!(f, "const"),
             TokenKind::Where => write!(f, "where"),
             TokenKind::In => write!(f, "in"),
@@ -228,10 +224,6 @@ impl fmt::Display for TokenKind {
             TokenKind::Effect => write!(f, "effect"),
             TokenKind::Forall => write!(f, "forall"),
             TokenKind::Exists => write!(f, "exists"),
-            TokenKind::Public => write!(f, "Public"),
-            TokenKind::Tainted => write!(f, "Tainted"),
-            TokenKind::Secret => write!(f, "Secret"),
-            TokenKind::Clean => write!(f, "Clean"),
             TokenKind::Iso => write!(f, "iso"),
             TokenKind::Val => write!(f, "val"),
             TokenKind::Ref => write!(f, "ref"),
@@ -937,8 +929,8 @@ fn keyword_or_ident(s: String) -> TokenKind {
         "partial" => TokenKind::Partial,
         "return" => TokenKind::Return,
         "consume" => TokenKind::Consume,
-        "declassify" => TokenKind::Declassify,
-        "sanitize" => TokenKind::Sanitize,
+        "label" => TokenKind::Label,
+        "relabel" => TokenKind::Relabel,
         "const" => TokenKind::Const,
         "where" => TokenKind::Where,
         "in" => TokenKind::In,
@@ -970,11 +962,6 @@ fn keyword_or_ident(s: String) -> TokenKind {
         // Boolean literals
         "true" => TokenKind::True,
         "false" => TokenKind::False,
-        // Security labels (capitalized)
-        "Public" => TokenKind::Public,
-        "Tainted" => TokenKind::Tainted,
-        "Secret" => TokenKind::Secret,
-        "Clean" => TokenKind::Clean,
         // Capability markers
         "iso" => TokenKind::Iso,
         "val" => TokenKind::Val,
@@ -1029,13 +1016,13 @@ mod tests {
 
     #[test]
     fn tokenize_extra_keywords() {
-        let kinds = lex_kinds_no_eof("consume declassify sanitize const where in while");
+        let kinds = lex_kinds_no_eof("consume label relabel const where in while");
         assert_eq!(
             kinds,
             vec![
                 TokenKind::Consume,
-                TokenKind::Declassify,
-                TokenKind::Sanitize,
+                TokenKind::Label,
+                TokenKind::Relabel,
                 TokenKind::Const,
                 TokenKind::Where,
                 TokenKind::In,
@@ -1101,21 +1088,23 @@ mod tests {
 
     #[test]
     fn tokenize_security_labels_and_capabilities() {
+        // Post-#894: Tainted/Secret/Public/Clean are ordinary identifiers, not keywords.
+        // `label` and `relabel` are the new IFC keywords.
         let src = "Public Tainted Secret Clean iso val ref tag";
         let kinds = lex_kinds_no_eof(src);
         assert_eq!(
             kinds,
             vec![
-                TokenKind::Public,
-                TokenKind::Tainted,
-                TokenKind::Secret,
-                TokenKind::Clean,
+                TokenKind::Ident("Public".to_string()),
+                TokenKind::Ident("Tainted".to_string()),
+                TokenKind::Ident("Secret".to_string()),
+                TokenKind::Ident("Clean".to_string()),
                 TokenKind::Iso,
                 TokenKind::Val,
                 TokenKind::Ref,
                 TokenKind::Tag,
             ],
-            "must produce exactly 8 keyword tokens"
+            "label names are now ordinary identifiers (#894)"
         );
     }
 

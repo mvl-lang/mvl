@@ -22,11 +22,11 @@ fn tainted_to_secret(raw: Tainted[String]) -> Secret[String] {
 }
 
 // Upward flow: Clean → Secret (allowed by lattice)
-fn clean_to_secret(clean: Clean[String]) -> Secret[String] {
+fn clean_to_secret(clean: String) -> Secret[String] {
     clean
 }
 
 // Upward flow: Public → Secret (allowed by lattice)
-fn public_to_secret(pub_val: Public[String]) -> Secret[String] {
+fn public_to_secret(pub_val: String) -> Secret[String] {
     pub_val
 }

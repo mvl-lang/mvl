@@ -52,7 +52,7 @@ fn main() -> Unit ! Console + Net {
         tcp_close_stream(server_stream);
         tcp_close_listener(listener);
         match read_result {
-            Ok(msg) => println(msg),
+            Ok(msg) => println(relabel trust(msg, "NET-READ")),
             Err(_) => println("read error"),
         }
     }

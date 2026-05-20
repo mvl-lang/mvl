@@ -54,7 +54,7 @@ fn env_get_secret_declassify_roundtrip() -> Result[Bool, String] ! Env {
     remove_var("MVL_TEST_SECRET_99996");
     match opt {
         Some(s) => {
-            let plain: Public[String] = declassify(s);
+            let plain: String = relabel release(s, "AUTHORIZED");
             Ok(plain == "roundtrip_value")
         },
         None => Ok(false),

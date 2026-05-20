@@ -1,0 +1,42 @@
+//! std.ifc — user-defined IFC label and relabel transition declarations.
+//!
+//! Replaces the hardcoded Denning lattice (Public < Clean < Tainted < Secret)
+//! with a category-based label system.  Labels are opaque wrapper types;
+//! no hierarchy, no implicit flow.  `relabel` is the only bridge. (#894)
+//!
+//! **Three type states:**
+//!   - `_`  (bare T)      — normal, unrestricted data
+//!   - `Tainted[T]`       — untrusted external input (env vars, stdin, HTTP)
+//!   - `Secret[T]`        — sensitive credentials (API keys, passwords, tokens)
+//!
+//! **Both directions blocked:** Labeled ≠ bare.  Every label crossing is
+//! explicit `relabel <name>(<expr>, "<audit-tag>")`.
+//!
+//! Import:
+//!   use std.ifc.{Tainted, Secret, classify, taint, trust, release}
+
+// ── Label declarations ──────────────────────────────────────────────────────
+
+/// Untrusted external input: environment variables, stdin, HTTP bodies, etc.
+pub label Tainted
+
+/// Sensitive credentials: API keys, tokens, database passwords.
+pub label Secret
+
+// ── Relabel transitions ─────────────────────────────────────────────────────
+
+/// Wrap bare data in `Secret` — marks it as a sensitive credential.
+/// Use when a raw OS call returns a value that must be treated as secret.
+pub relabel classify: _ -> Secret
+
+/// Wrap bare data in `Tainted` — marks it as untrusted external input.
+/// Use when a raw OS call returns data from an untrusted source.
+pub relabel taint: _ -> Tainted
+
+/// Unwrap `Tainted[T]` to bare `T` — declares the data has been validated.
+/// Requires an audit tag documenting the validation procedure ID.
+pub relabel trust: Tainted -> _
+
+/// Unwrap `Secret[T]` to bare `T` — authorised release of a credential.
+/// Requires an audit tag documenting the authorisation decision ID.
+pub relabel release: Secret -> _

@@ -6,7 +6,7 @@
 // Patterns exercised:
 //   1. std.env + std.io: both modules usable in the same file (compile-time check)
 //   2. Tainted[String] values from env flow through Option correctly
-//   3. sanitize(tainted) → Clean[String] → read_file: full IFC pipeline at runtime
+//   3. relabel trust(tainted, "VALIDATED") → String → read_file: full IFC pipeline at runtime
 //   4. env.env_var result flows into std.io via unwrap_or fallback (cross-module value flow)
 //   5. Missing env vars + missing files both produce expected None/Err values
 //
@@ -56,14 +56,14 @@ test fn composition_env_is_some_false_when_absent() -> Unit ! Console + Env {
 //
 // NOTE: Tainted[String] can only originate from untrusted runtime sources
 // (env vars, args). With absent vars returning None, runtime IFC flow
-// through sanitize() cannot be tested in the stdlib test suite.
+// through relabel trust(, "VALIDATED") cannot be tested in the stdlib test suite.
 // The tests below verify compile-time type annotations and the reachable runtime paths.
 
 test fn composition_sanitize_type_enforced_at_compile_time() -> Unit ! FileRead {
     // STUB: update when implemented — read_file always returns Err
-    // read_file requires Clean[String]; passing a literal String is legal because
-    // String (Public) can be used where Clean[String] is expected (upward coercion).
-    // This confirms the compiler enforces the Clean[String] boundary at the call site.
+    // read_file requires String; passing a literal String is legal because
+    // String (Public) can be used where String is expected (upward coercion).
+    // This confirms the compiler enforces the String boundary at the call site.
     let result: Result[Tainted[String], IoError] = read_file("/tmp/mvl_nonexistent_ifc_test_xyz");
     assert_eq(result.is_err(), true);
 }

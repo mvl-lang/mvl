@@ -65,12 +65,12 @@ total fn authenticate(
     db.find_and_verify(user_id, input_password)?
 }
 
-fn sanitize_input(raw: Tainted[String]) -> Clean[String] {
-    sanitize(raw)
+fn sanitize_input(raw: Tainted[String]) -> String {
+    relabel trust(raw, "VALIDATED")
 }
 
 fn declassify_result(secret: Secret[Data]) -> Data {
-    declassify(secret)
+    relabel release(secret, "AUTHORIZED")
 }
 
 // Function with where-clause constraints

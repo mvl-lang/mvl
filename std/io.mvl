@@ -105,7 +105,7 @@ pub fn path(s: String) -> Path {
 ///
 /// Inserts `/` between base and segment (Unix separator).
 /// Pure — no filesystem access.
-pub fn join(base: Path, segment: Clean[String]) -> Path { Path { inner: str_concat(str_concat(base.inner, "/"), segment) } }
+pub fn join(base: Path, segment: String) -> Path { Path { inner: str_concat(str_concat(base.inner, "/"), segment) } }
 
 /// Return the string representation of a path.
 /// Pure — no filesystem access.
@@ -150,17 +150,17 @@ pub builtin fn read_to_string(p: Path) -> Result[Tainted[String], IoError] ! Fil
 
 /// Read the entire contents of a file given a validated (Clean) path string.
 ///
-/// Convenience variant of `read_to_string` that accepts a `Clean[String]` path
+/// Convenience variant of `read_to_string` that accepts a `String` path
 /// directly, without requiring the caller to construct a `Path` value first.
-pub builtin fn read_file(p: Clean[String]) -> Result[Tainted[String], IoError] ! FileRead
+pub builtin fn read_file(p: String) -> Result[Tainted[String], IoError] ! FileRead
 
 /// Write a string to a file, creating it if it does not exist.
 ///
 /// Truncates the file if it already exists.
-pub builtin fn write(p: Path, content: Tainted[String]) -> Result[Unit, IoError] ! FileWrite
+pub builtin fn write(p: Path, content: String) -> Result[Unit, IoError] ! FileWrite
 
 /// Append a string to a file, creating it if it does not exist.
-pub builtin fn append(p: Path, content: Tainted[String]) -> Result[Unit, IoError] ! FileWrite
+pub builtin fn append(p: Path, content: String) -> Result[Unit, IoError] ! FileWrite
 
 /// Wrap a File handle in a BufReader for incremental line reading.
 pub builtin fn buf_reader(f: File) -> BufReader

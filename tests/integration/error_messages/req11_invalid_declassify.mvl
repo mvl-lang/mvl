@@ -1,8 +1,8 @@
-// Expected error: `declassify()` requires `Secret<T>`, found `Int`
+// Expected error: `relabel release(, "AUTHORIZED")` requires `Secret<T>`, found `Int`
 // Triggers: CheckError::InvalidDeclassify (req11)
 
 fn main() -> Unit ! Console {
     let x: Int = 42;
-    let y: Int = declassify(x);
+    let y: Int = relabel release(x, "AUTHORIZED");
     println("{}", y);
 }

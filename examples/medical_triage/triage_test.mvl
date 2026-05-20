@@ -68,7 +68,6 @@ fn trauma_urgent(p: Patient) -> Bool {
 fn needs_isolation(p: Patient) -> Bool {
     p.vitals.temperature > 390
     && (p.complaint == ChiefComplaint::Breathing || p.complaint == ChiefComplaint::Fever)
-    && p.complaint != ChiefComplaint::Trauma
 }
 
 fn elderly_risk(p: Patient) -> Bool {

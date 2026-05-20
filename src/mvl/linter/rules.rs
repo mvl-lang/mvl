@@ -13,8 +13,8 @@
 
 use crate::mvl::linter::{config::LintConfig, errors::LintDiag};
 use crate::mvl::parser::ast::{
-    BinaryOp, Block, Decl, ElseBranch, Expr, Literal, MatchArm, MatchBody, Pattern, Program,
-    SecurityLabel, Stmt, TypeBody, TypeExpr, VariantFields,
+    BinaryOp, Block, Decl, ElseBranch, Expr, Literal, MatchArm, MatchBody, Pattern, Program, Stmt,
+    TypeBody, TypeExpr, VariantFields,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -712,8 +712,7 @@ fn expr_has_calls(expr: &Expr) -> bool {
         Expr::Lambda { body, .. } => expr_has_calls(body),
         Expr::Propagate { expr: e, .. }
         | Expr::Consume { expr: e, .. }
-        | Expr::Declassify { expr: e, .. }
-        | Expr::Sanitize { expr: e, .. }
+        | Expr::Relabel { expr: e, .. }
         | Expr::Borrow { expr: e, .. } => expr_has_calls(e),
         Expr::Construct { fields, .. } => fields.iter().any(|(_, e)| expr_has_calls(e)),
         Expr::Spawn { fields, .. } => fields.iter().any(|(_, e)| expr_has_calls(e)),
@@ -778,27 +777,9 @@ pub fn redundant_ifc_labels(prog: &Program, cfg: &LintConfig, out: &mut Vec<Lint
     }
 }
 
+#[allow(clippy::only_used_in_recursion)]
 fn check_type_expr_ifc(ty: &TypeExpr, out: &mut Vec<LintDiag>) {
     match ty {
-        TypeExpr::Labeled {
-            label: SecurityLabel::Public,
-            inner,
-            span,
-        } => {
-            // Hint, not Warning: explicit Public[T] is the preferred style for generated
-            // and IFC-focused code. See ADR-0017 and Spec 011 Req 2.
-            out.push(LintDiag::hint(
-                "redundant-ifc-label",
-                format!(
-                    "`Public<{}>` is explicit — unannotated types are implicitly public; \
-                     consider dropping the label in non-IFC-focused code",
-                    type_expr_name(inner),
-                ),
-                span.line,
-                span.col,
-            ));
-            check_type_expr_ifc(inner, out);
-        }
         TypeExpr::Labeled { inner, .. } => check_type_expr_ifc(inner, out),
         TypeExpr::Option { inner, .. }
         | TypeExpr::Ref { inner, .. }
@@ -829,6 +810,7 @@ fn check_type_expr_ifc(ty: &TypeExpr, out: &mut Vec<LintDiag>) {
     }
 }
 
+#[allow(dead_code, clippy::only_used_in_recursion)]
 fn type_expr_name(ty: &TypeExpr) -> String {
     match ty {
         TypeExpr::Base { name, args, .. } if args.is_empty() => name.clone(),
@@ -847,13 +829,7 @@ fn type_expr_name(ty: &TypeExpr) -> String {
             format!("Result<{}, {}>", type_expr_name(ok), type_expr_name(err))
         }
         TypeExpr::Labeled { label, inner, .. } => {
-            let l = match label {
-                SecurityLabel::Public => "Public",
-                SecurityLabel::Tainted => "Tainted",
-                SecurityLabel::Secret => "Secret",
-                SecurityLabel::Clean => "Clean",
-            };
-            format!("{}<{}>", l, type_expr_name(inner))
+            format!("{}<{}>", label, type_expr_name(inner))
         }
         _ => "<type>".to_string(),
     }
@@ -1272,8 +1248,7 @@ fn cyclomatic_complexity_expr(expr: &Expr) -> usize {
         Expr::FieldAccess { expr: e, .. }
         | Expr::Propagate { expr: e, .. }
         | Expr::Consume { expr: e, .. }
-        | Expr::Declassify { expr: e, .. }
-        | Expr::Sanitize { expr: e, .. }
+        | Expr::Relabel { expr: e, .. }
         | Expr::Borrow { expr: e, .. } => cyclomatic_complexity_expr(e),
         Expr::Construct { fields, .. } | Expr::Spawn { fields, .. } => fields
             .iter()
@@ -1439,8 +1414,7 @@ fn max_match_depth_expr(expr: &Expr, depth: usize) -> usize {
         | Expr::FieldAccess { expr: e, .. }
         | Expr::Propagate { expr: e, .. }
         | Expr::Consume { expr: e, .. }
-        | Expr::Declassify { expr: e, .. }
-        | Expr::Sanitize { expr: e, .. }
+        | Expr::Relabel { expr: e, .. }
         | Expr::Borrow { expr: e, .. } => max_match_depth_expr(e, depth),
         Expr::FnCall { args, .. } => args
             .iter()
@@ -1931,18 +1905,15 @@ mod tests {
     // -- redundant_ifc_labels --
 
     #[test]
-    fn public_label_on_param_detected(/* Spec 011 Req 2 */) {
+    fn public_label_on_param_no_longer_detected(/* #894: Public is not a label anymore */) {
+        // Post-#894: `Public` is a plain identifier, not a label keyword.
+        // `Public[Int]` parses as a generic base type, not TypeExpr::Labeled.
+        // The redundant-ifc-label rule no longer fires for it.
         let src = "fn f(x: Public[Int]) -> Int { x }\n";
         let prog = parse(src);
         let mut diags = vec![];
         redundant_ifc_labels(&prog, &cfg(), &mut diags);
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].rule, "redundant-ifc-label");
-        assert_eq!(
-            diags[0].severity,
-            crate::mvl::linter::errors::Severity::Hint
-        );
-        assert!(diags[0].message.contains("Public"));
+        assert!(diags.is_empty(), "Public is no longer a label (#894)");
     }
 
     #[test]
@@ -1955,22 +1926,18 @@ mod tests {
     }
 
     #[test]
-    fn public_label_on_return_type_detected(/* Spec 011 Req 2 */) {
+    fn public_label_on_return_type_no_longer_detected() {
+        // Post-#894: `Public[String]` is just a generic type — no lint fires.
         let src = "fn f() -> Public[String] { \"hi\" }\n";
         let prog = parse(src);
         let mut diags = vec![];
         redundant_ifc_labels(&prog, &cfg(), &mut diags);
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].rule, "redundant-ifc-label");
-        assert_eq!(
-            diags[0].severity,
-            crate::mvl::linter::errors::Severity::Hint
-        );
+        assert!(diags.is_empty());
     }
 
     #[test]
     fn redundant_ifc_disabled() {
-        let src = "fn f(x: Public[Int]) -> Int { x }\n";
+        let src = "fn f(x: Tainted[Int]) -> Int { relabel trust(x, \"V-01\") }\n";
         let prog = parse(src);
         let mut diags = vec![];
         let mut c = cfg();
@@ -1980,23 +1947,23 @@ mod tests {
     }
 
     #[test]
-    fn public_label_on_struct_field_detected() {
+    fn public_label_on_struct_field_no_longer_detected() {
+        // Post-#894: `Public[Int]` in a struct is a generic type, not a labeled type.
         let src = "type Wrapper = struct { data: Public[Int] }\n";
         let prog = parse(src);
         let mut diags = vec![];
         redundant_ifc_labels(&prog, &cfg(), &mut diags);
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].rule, "redundant-ifc-label");
+        assert!(diags.is_empty());
     }
 
     #[test]
-    fn public_label_in_type_alias_detected() {
+    fn public_label_in_type_alias_no_longer_detected() {
+        // Post-#894: `Public[Int]` as type alias — not a labeled type.
         let src = "type MyInt = Public[Int]\n";
         let prog = parse(src);
         let mut diags = vec![];
         redundant_ifc_labels(&prog, &cfg(), &mut diags);
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].rule, "redundant-ifc-label");
+        assert!(diags.is_empty());
     }
 
     // -- redundant_match: missing config-disable test --

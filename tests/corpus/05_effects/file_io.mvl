@@ -47,11 +47,11 @@ fn first_line_of(p: Path) -> Result[Tainted[String], IoError] ! FileRead {
 
 // ── File write (! FileWrite) ───────────────────────────────────────────────
 
-fn save_report(p: Path, content: Tainted[String]) -> Result[Unit, IoError] ! FileWrite {
+fn save_report(p: Path, content: String) -> Result[Unit, IoError] ! FileWrite {
     write(p, content)
 }
 
-fn append_log_line(p: Path, line: Tainted[String]) -> Result[Unit, IoError] ! FileWrite {
+fn append_log_line(p: Path, line: String) -> Result[Unit, IoError] ! FileWrite {
     append(p, line)
 }
 
@@ -96,8 +96,9 @@ fn resolve_link(p: Path) -> Result[Tainted[String], IoError] ! FileRead {
 
 // ── Mixed effects (callers declare superset) ──────────────────────────────
 
-fn rotate_log(src: Path, dst: Path, new_content: Tainted[String]) -> Result[Unit, IoError] ! FileRead + FileWrite + FileDelete {
-    let old: Tainted[String] = read_to_string(src)?;
+fn rotate_log(src: Path, dst: Path, new_content: String) -> Result[Unit, IoError] ! FileRead + FileWrite + FileDelete {
+    let raw: Tainted[String] = read_to_string(src)?;
+    let old: String = relabel trust(raw, "FILE-READ");
     write(dst, old)?;
     remove(src)?;
     write(src, new_content)
@@ -118,12 +119,12 @@ fn check_regular_file(p: Path) -> Bool ! FileRead {
 fn sanitize_path(raw: Tainted[String]) -> Result[Path, String] {
     // TODO(#44): Path label tracking deferred to Phase 3.
     // Real sanitization MUST:
-    //   1. Call sanitize(raw) to convert Tainted[String] -> String
+    //   1. Call relabel trust(raw, "VALIDATED") to convert Tainted[String] -> String
     //   2. Reject segments containing ".." (path traversal)
     //   3. Reject absolute paths that escape the intended root
     //   4. Return Err("...") for any invalid input
     // Phase 3 example:
-    //   let s = sanitize(raw);
+    //   let s = relabel trust(raw, "VALIDATED");
     //   if s.contains("..") { return Err("path traversal rejected") }
     //   Ok(path(s))
     Err("path sanitization not yet implemented")

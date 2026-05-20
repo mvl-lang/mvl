@@ -269,8 +269,7 @@ fn collect_expr_edges(expr: &Expr, caller: &str, graph: &mut CallGraph) {
         Expr::Unary { expr, .. }
         | Expr::Propagate { expr, .. }
         | Expr::Consume { expr, .. }
-        | Expr::Declassify { expr, .. }
-        | Expr::Sanitize { expr, .. }
+        | Expr::Relabel { expr, .. }
         | Expr::Borrow { expr, .. } => collect_expr_edges(expr, caller, graph),
         Expr::FieldAccess { expr, .. } => collect_expr_edges(expr, caller, graph),
         Expr::Construct { fields, .. } => {
