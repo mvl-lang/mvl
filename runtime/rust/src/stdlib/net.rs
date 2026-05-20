@@ -152,7 +152,7 @@ pub fn tcp_read(stream: TcpStream) -> Result<Tainted<String>, NetError> {
 /// Raw private builtin: read one HTTP request, return bare `String` (#894 Pattern 002).
 ///
 /// Module-private in MVL — callers use `tcp_read_request`.
-pub(crate) fn _tcp_read_request(stream: TcpStream) -> Result<String, NetError> {
+pub fn _tcp_read_request(stream: TcpStream) -> Result<String, NetError> {
     let arc = lookup_stream(stream.0)?;
     let mut buf = Vec::new();
     let mut one = [0u8; 1];
