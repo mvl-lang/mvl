@@ -156,7 +156,15 @@ pub fn check_with_two_preludes_mode(
     termination::check_structural_recursion(prog, &mut checker.errors);
     data_race::check_iso_aliasing(prog, &mut checker.errors);
     data_race::check_ref_escape_to_spawn(prog, &mut checker.errors);
-    ifc::check_implicit_flows(prog, &mut checker.errors);
+    // Build the whole-program program slice — used by IFC cross-function analysis,
+    // the call graph, and the interprocedural label propagation pass.
+    let all_prog_refs: Vec<&Program> = prelude_a
+        .iter()
+        .chain(prelude_b.iter().copied())
+        .chain(std::iter::once(prog))
+        .collect();
+
+    ifc::check_implicit_flows(prog, &all_prog_refs, &mut checker.errors);
     let refinement_counts = refinements::check_refinements(
         prelude_a,
         prelude_b,
@@ -173,14 +181,6 @@ pub fn check_with_two_preludes_mode(
     // even when `prog` itself defines no labeled functions.
     let has_prelude_ifc_boundary = ifc::prelude_has_ifc_boundary(prelude_a, prelude_b, prog);
 
-    // Build the whole-program call graph from all visible programs + the
-    // resolved type environment.  Must happen before checker fields are moved
-    // into CheckResult.
-    let all_prog_refs: Vec<&Program> = prelude_a
-        .iter()
-        .chain(prelude_b.iter().copied())
-        .chain(std::iter::once(prog))
-        .collect();
     let call_graph = call_graph::build(&all_prog_refs, &checker.env);
 
     // Interprocedural IFC: forward label propagation (#830/#833) then violation

@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.132.0] — 2026-05-20
+
+### Added
+
+- **Cross-function implicit flows — PC label across call boundaries** (#832): the IFC implicit flow checker now detects public sinks reachable from callees invoked under a high-PC branch condition. `if secret { log_access("x") }` is now a compile error when `log_access` transitively calls `println`. Adds `CrossFunctionImplicitFlowViolation` (Req 11) with `pc_label`, `caller`, `callee`, and `sink` fields, and a BFS-based sink reachability analysis over user-defined function call edges.
+
 ## [0.131.1] — 2026-05-20
 
 ### Fixed

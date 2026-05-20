@@ -340,6 +340,23 @@ pub enum CheckError {
         sink: String,
         span: Span,
     },
+    /// A function is called inside a branch controlled by a labeled condition, and that
+    /// function transitively reaches a public sink — cross-function implicit flow.
+    ///
+    /// Example: `if secret { log_access("x") }` where `log_access` calls `println`.
+    /// Whether `log_access` fires reveals the secret condition value.
+    /// (Req 11, Phase 3 cross-function)
+    CrossFunctionImplicitFlowViolation {
+        /// The label of the controlling condition.
+        pc_label: String,
+        /// The function in which this call-under-high-PC occurs.
+        caller: String,
+        /// The function called under high PC.
+        callee: String,
+        /// The public sink reachable from `callee` (directly or transitively).
+        sink: String,
+        span: Span,
+    },
     /// `extern` block declares an unsupported ABI.
     UnsupportedExternAbi {
         abi: String,
@@ -560,6 +577,7 @@ impl CheckError {
             | CheckError::InvalidSanitize { .. }
             | CheckError::LoggingLabelViolation { .. }
             | CheckError::ImplicitFlowViolation { .. }
+            | CheckError::CrossFunctionImplicitFlowViolation { .. }
             | CheckError::TransparentFnNoParams { .. }
             | CheckError::TransparentFnLabeledReturn { .. }
             | CheckError::TransparentFnGeneric { .. }
@@ -626,6 +644,7 @@ impl CheckError {
             | CheckError::InvalidSanitize { span, .. }
             | CheckError::LoggingLabelViolation { span, .. }
             | CheckError::ImplicitFlowViolation { span, .. }
+            | CheckError::CrossFunctionImplicitFlowViolation { span, .. }
             | CheckError::UnsupportedExternAbi { span, .. }
             | CheckError::PropagateIncompatibleError { span, .. }
             | CheckError::NotIterator { span, .. }
@@ -815,6 +834,9 @@ impl CheckError {
             ),
             CheckError::ImplicitFlowViolation { pc_label, sink, .. } => format!(
                 "implicit information flow: `{sink}` call inside a branch controlled by a `{pc_label}` condition leaks information via control flow — move the call outside the branch or relabel the condition"
+            ),
+            CheckError::CrossFunctionImplicitFlowViolation { pc_label, caller, callee, sink, .. } => format!(
+                "cross-function implicit flow: `{callee}` called in `{caller}` inside a branch controlled by a `{pc_label}` condition reaches public sink `{sink}` — move the call outside the branch or guard `{sink}` inside `{callee}` against unlabeled callers"
             ),
             CheckError::UnsupportedExternAbi { abi, .. } => format!(
                 "unsupported extern ABI `\"{abi}\"` — only \"rust\" and \"c\" are allowed"
