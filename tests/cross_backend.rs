@@ -1027,3 +1027,12 @@ fn main() -> Unit { println("ok") }
         "LLVM IR for single-param `requires x > 0` must contain llvm.trap.\nIR:\n{ir}"
     );
 }
+
+/// #904: `.clone()` on a List creates an independent copy in the LLVM backend.
+///
+/// Clones a list, pushes an element onto the clone, and verifies the original
+/// length is unchanged (both backends must print "3").
+#[test]
+fn clone_list_independent_of_original() {
+    assert_parity(&corpus_basics("clone_heap_independence.mvl"), "3");
+}

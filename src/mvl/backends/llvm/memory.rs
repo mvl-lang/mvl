@@ -61,6 +61,16 @@ impl<'ctx> LlvmBackend<'ctx> {
         )
     }
 
+    /// `mvl_string_deep_clone(ptr) -> ptr` — independent copy with refcount = 1.
+    pub(crate) fn get_mvl_string_deep_clone(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "mvl_string_deep_clone",
+            &[self.context.ptr_type(AddressSpace::default()).into()],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
     /// `mvl_string_drop(ptr)`
     pub(crate) fn get_mvl_string_drop(&self) -> FunctionValue<'ctx> {
         self.get_or_declare_fn(
@@ -388,6 +398,16 @@ impl<'ctx> LlvmBackend<'ctx> {
         )
     }
 
+    /// `mvl_array_deep_clone(ptr) -> ptr` — independent copy with refcount = 1.
+    pub(crate) fn get_mvl_array_deep_clone(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "mvl_array_deep_clone",
+            &[self.context.ptr_type(AddressSpace::default()).into()],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
     /// `mvl_array_drop(ptr)`
     pub(crate) fn get_mvl_array_drop(&self) -> FunctionValue<'ctx> {
         self.get_or_declare_fn(
@@ -461,6 +481,16 @@ impl<'ctx> LlvmBackend<'ctx> {
     pub(crate) fn get_mvl_map_clone(&self) -> FunctionValue<'ctx> {
         self.get_or_declare_fn(
             "mvl_map_clone",
+            &[self.context.ptr_type(AddressSpace::default()).into()],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
+    /// `mvl_map_deep_clone(ptr) -> ptr` — independent copy with refcount = 1.
+    pub(crate) fn get_mvl_map_deep_clone(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "mvl_map_deep_clone",
             &[self.context.ptr_type(AddressSpace::default()).into()],
             Some(self.context.ptr_type(AddressSpace::default()).into()),
             false,

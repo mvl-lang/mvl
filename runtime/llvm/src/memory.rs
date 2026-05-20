@@ -162,6 +162,19 @@ pub unsafe extern "C" fn mvl_string_new(bytes: *const u8, len: usize) -> *mut Mv
     s
 }
 
+/// Create a fully independent copy of `s`.  Returns a new `MvlString` with
+/// the same byte content and `refcount = 1`.
+///
+/// # Safety
+/// `s` must be a valid non-null `MvlString` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn mvl_string_deep_clone(s: *mut MvlString) -> *mut MvlString {
+    if s.is_null() {
+        return s;
+    }
+    mvl_string_new((*s).ptr, (*s).len as usize)
+}
+
 /// Increment refcount and return the same pointer.
 ///
 /// # Safety
@@ -242,6 +255,41 @@ pub unsafe extern "C" fn mvl_array_new(elem_size: usize, initial_cap: usize) -> 
         refcount: 1,
     });
     a
+}
+
+/// Create a fully independent copy of `a` — allocates a new `MvlArray` header
+/// and a new data buffer, copying all live elements.  Returns a pointer with
+/// `refcount = 1`.  The caller is responsible for dropping both original and clone.
+///
+/// # Safety
+/// `a` must be a valid non-null `MvlArray` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn mvl_array_deep_clone(a: *mut MvlArray) -> *mut MvlArray {
+    if a.is_null() {
+        return a;
+    }
+    let elem_size = (*a).elem_size as usize;
+    let len = (*a).len as usize;
+    let cap = ((*a).cap as usize).max(len);
+    let data = if cap > 0 && elem_size > 0 {
+        let bytes = checked_mul_size(cap, elem_size);
+        let new_data = mvl_alloc(bytes);
+        if len > 0 && !(*a).ptr.is_null() {
+            ptr::copy_nonoverlapping((*a).ptr, new_data, checked_mul_size(len, elem_size));
+        }
+        new_data
+    } else {
+        ptr::null_mut()
+    };
+    let new_a = mvl_alloc(std::mem::size_of::<MvlArray>()) as *mut MvlArray;
+    new_a.write(MvlArray {
+        ptr: data,
+        len: (*a).len,
+        cap: cap as u64,
+        elem_size: (*a).elem_size,
+        refcount: 1,
+    });
+    new_a
 }
 
 /// Increment refcount and return the same pointer.
@@ -339,6 +387,47 @@ pub unsafe extern "C" fn mvl_map_new(initial_cap: usize) -> *mut MvlMap {
         refcount: 1,
     });
     m
+}
+
+/// Create a fully independent copy of `m`.  All slot key/value buffers are
+/// duplicated so mutations on the clone do not affect the original.
+/// Returns a pointer with `refcount = 1`.
+///
+/// # Safety
+/// `m` must be a valid non-null `MvlMap` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn mvl_map_deep_clone(m: *mut MvlMap) -> *mut MvlMap {
+    if m.is_null() {
+        return m;
+    }
+    let cap = (*m).cap as usize;
+    let slot_bytes = checked_mul_size(cap, SLOT_SIZE);
+    let new_slots = mvl_alloc(slot_bytes) as *mut MvlMapSlot;
+    ptr::write_bytes(new_slots as *mut u8, 0, slot_bytes);
+    for i in 0..cap {
+        let src = &*(*m).slots.add(i);
+        if src.occupied != 0 {
+            let key_copy = mvl_alloc(src.key_len as usize);
+            ptr::copy_nonoverlapping(src.key_ptr, key_copy, src.key_len as usize);
+            let val_copy = mvl_alloc(src.val_len as usize);
+            ptr::copy_nonoverlapping(src.val_ptr, val_copy, src.val_len as usize);
+            (*new_slots.add(i)) = MvlMapSlot {
+                occupied: src.occupied,
+                key_ptr: key_copy,
+                key_len: src.key_len,
+                val_ptr: val_copy,
+                val_len: src.val_len,
+            };
+        }
+    }
+    let new_m = mvl_alloc(std::mem::size_of::<MvlMap>()) as *mut MvlMap;
+    new_m.write(MvlMap {
+        slots: new_slots,
+        len: (*m).len,
+        cap: (*m).cap,
+        refcount: 1,
+    });
+    new_m
 }
 
 /// Increment refcount and return the same pointer.

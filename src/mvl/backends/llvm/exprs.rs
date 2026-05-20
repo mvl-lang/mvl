@@ -2759,11 +2759,45 @@ impl<'ctx> LlvmBackend<'ctx> {
                 }
             }
 
-            // ── push (Array / List) ───────────────────────────────────────────
-            // #588: `.clone()` — for primitive types this is a no-op copy;
-            // for pointer types this returns the same pointer (shallow clone).
-            // Deep clone for String/List requires runtime support (future work).
-            "clone" if args.is_empty() => Some(recv_val),
+            // ── clone ─────────────────────────────────────────────────────────
+            // #904: For heap types (String/List/Array/Set/Map) call the runtime
+            // clone function which bumps the refcount so copy-on-write mutations
+            // (e.g. push) create an independent copy.  Primitives are returned
+            // as-is (they are already value types).
+            "clone" if args.is_empty() => match recv_val {
+                BasicValueEnum::PointerValue(ptr) => {
+                    let recv_mvl_ty = match receiver {
+                        Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
+                        _ => None,
+                    };
+                    let base_name = recv_mvl_ty.as_ref().and_then(|t| {
+                        let inner = match t {
+                            TypeExpr::Labeled { inner, .. } => inner.as_ref(),
+                            other => other,
+                        };
+                        match inner {
+                            TypeExpr::Base { name, .. } => Some(name.as_str()),
+                            _ => None,
+                        }
+                    });
+                    let clone_fn = match base_name {
+                        Some("List") | Some("Array") | Some("Set") => {
+                            self.get_mvl_array_deep_clone()
+                        }
+                        Some("Map") => self.get_mvl_map_deep_clone(),
+                        _ => self.get_mvl_string_deep_clone(),
+                    };
+                    use inkwell::values::AnyValue;
+                    BasicValueEnum::try_from(
+                        self.builder
+                            .build_call(clone_fn, &[ptr.into()], "clone_val")
+                            .unwrap()
+                            .as_any_value_enum(),
+                    )
+                    .ok()
+                }
+                other => Some(other),
+            },
 
             "push" => {
                 let elem = self.emit_expr(args.first()?)?;
