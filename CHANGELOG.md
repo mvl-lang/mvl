@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.131.1] — 2026-05-20
+
+### Fixed
+
+- **LLVM backend `.clone()` for heap types creates independent copy** (#904): replaced no-op identity return with true deep-clone functions (`mvl_array_deep_clone`, `mvl_string_deep_clone`, `mvl_map_deep_clone`). Mutations on cloned collections no longer affect originals. Type-dispatched via receiver type lookup, matching `.len()` pattern. Also removed `tests/corpus/05_effects/parametrized.mvl` (unimplemented syntax from #290).
+
 ## [0.131.0] — 2026-05-20
 
 ### Added
