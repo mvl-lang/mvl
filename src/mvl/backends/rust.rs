@@ -161,7 +161,13 @@ pub fn has_std_imports(prog: &Program) -> bool {
 /// (`log_debug` etc.) that are loaded by `load_mvl_native_stdlib_extras`.  The Rust
 /// runtime provides only atomic getters/setters; see `RUST_RUNTIME_IMPORTS`.
 pub const RUST_BACKED_STDLIB: &[&str] = &[
-    "crypto", "env", "io", "net", "process", "random", "regex", "time",
+    "crypto", "io", "net", "process", "random", "regex",
+    "time",
+    // Note: `env` is intentionally absent — `std/env.mvl` contains pure-MVL wrappers
+    // (`get_secret`) that must be loaded by `load_mvl_native_stdlib_extras` and emitted
+    // as prelude functions.  The Rust runtime provides only the raw `_env_read` / `get`
+    // builtins; `env` stays in RUST_RUNTIME_IMPORTS so the `use mvl_runtime::stdlib::env::*`
+    // import is still emitted for those builtins (#897).
 ];
 
 /// Modules for which the Rust emitter must emit `use mvl_runtime::stdlib::X::*`.

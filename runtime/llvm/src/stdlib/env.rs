@@ -15,7 +15,7 @@
 //!   with `libc::free` after use.
 
 use libc::c_char;
-use mvl_runtime::ifc::{Clean, Tainted};
+use mvl_runtime::ifc::Tainted;
 
 use crate::abi::{c_to_string, string_to_c, MvlOption, MvlResult};
 
@@ -45,7 +45,7 @@ pub extern "C" fn _mvl_env_getgid() -> i64 {
 #[allow(unsafe_code)]
 pub extern "C" fn _mvl_env_get(name: *const c_char) -> MvlOption {
     let key = unsafe { c_to_string(name) };
-    match mvl_runtime::stdlib::env::get(Clean(key)) {
+    match mvl_runtime::stdlib::env::get(key) {
         Some(Tainted(s)) => MvlOption::some_str(string_to_c(&s)),
         None => MvlOption::none(),
     }
@@ -60,7 +60,7 @@ pub extern "C" fn _mvl_env_get(name: *const c_char) -> MvlOption {
 pub extern "C" fn _mvl_env_set(name: *const c_char, value: *const c_char) -> MvlResult {
     let n = unsafe { c_to_string(name) };
     let v = unsafe { c_to_string(value) };
-    match mvl_runtime::stdlib::env::set(Clean(n), Tainted(v)) {
+    match mvl_runtime::stdlib::env::set(n, v) {
         Ok(()) => MvlResult::ok_unit(),
         Err(e) => MvlResult::err_str(&e),
     }
@@ -71,7 +71,7 @@ pub extern "C" fn _mvl_env_set(name: *const c_char, value: *const c_char) -> Mvl
 #[allow(unsafe_code)]
 pub extern "C" fn _mvl_env_remove_var(name: *const c_char) {
     let n = unsafe { c_to_string(name) };
-    mvl_runtime::stdlib::env::remove_var(Clean(n));
+    mvl_runtime::stdlib::env::remove_var(n);
 }
 
 // ── Working directory ───────────────────────────────────────────────────────
@@ -93,7 +93,7 @@ pub extern "C" fn _mvl_env_current_dir() -> MvlResult {
 #[allow(unsafe_code)]
 pub extern "C" fn _mvl_env_chdir(path: *const c_char) -> MvlResult {
     let p = unsafe { c_to_string(path) };
-    match mvl_runtime::stdlib::env::chdir(Clean(p)) {
+    match mvl_runtime::stdlib::env::chdir(p) {
         Ok(()) => MvlResult::ok_unit(),
         Err(e) => MvlResult::err_str(&e),
     }

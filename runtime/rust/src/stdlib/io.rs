@@ -6,7 +6,7 @@
 //! Provides real file I/O backing for the stubs declared in `std/io.mvl`.
 //! These are re-exported via `mvl_runtime::prelude::*`.
 
-use crate::ifc::{Clean, Tainted};
+use crate::ifc::Tainted;
 
 /// Filesystem path — mirrors the `Path` struct declared in `std/io.mvl`.
 ///
@@ -185,14 +185,18 @@ pub fn read_to_string(p: Path) -> Result<Tainted<String>, IoError> {
         .map_err(|e| sanitize_io_error(&e))
 }
 
-/// Read the entire contents of a file given a validated (Clean) path string.
+/// Raw private builtin: read a file, return bare `String` (#894 Pattern 002).
 ///
-/// Convenience variant of [`read_to_string`] that accepts a `Clean<String>`
-/// path directly.
-pub fn read_file(p: Clean<String>) -> Result<Tainted<String>, IoError> {
-    std::fs::read_to_string(&*p)
-        .map(Tainted)
-        .map_err(|e| sanitize_io_error(&e))
+/// Module-private in MVL (`builtin fn _read_file`) — callers use `read_file`.
+pub fn _read_file(p: String) -> Result<String, IoError> {
+    std::fs::read_to_string(&p).map_err(|e| sanitize_io_error(&e))
+}
+
+/// Read the entire contents of a file given a path string.
+///
+/// Returns `Tainted[String]` — file contents are external (untrusted) data.
+pub fn read_file(p: String) -> Result<Tainted<String>, IoError> {
+    _read_file(p).map(Tainted)
 }
 
 /// Write a string to a file, truncating it if it already exists.
@@ -503,7 +507,7 @@ mod tests {
 
     #[test]
     fn read_file_missing_file_returns_err() {
-        let p = Clean("/tmp/mvl_nonexistent_file_xyz_12345".to_string());
+        let p = "/tmp/mvl_nonexistent_file_xyz_12345".to_string();
         assert!(read_file(p).is_err());
     }
 
@@ -511,7 +515,7 @@ mod tests {
     fn read_file_real_file() {
         let path_str = tmp("mvl_test_read_file.txt");
         std::fs::write(&path_str, "world mvl").unwrap();
-        let p = Clean(path_str.clone());
+        let p = path_str.clone();
         let result = read_file(p);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().0, "world mvl");

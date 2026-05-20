@@ -69,6 +69,14 @@ pub builtin fn tcp_connect(host: String, port: Int) -> Result[TcpStream, NetErro
 /// call `tcp_accept` again to accept further connections.
 pub builtin fn tcp_accept(listener: TcpListener) -> Result[TcpStream, NetError] ! Net
 
+/// Raw private builtin: read all bytes from `stream`, return bare `String` (Pattern 002).
+/// Module-private — callers use `tcp_read`.
+builtin fn _tcp_read(stream: TcpStream) -> Result[String, NetError] ! Net
+
+/// Raw private builtin: read one HTTP request, return bare `String` (Pattern 002).
+/// Module-private — callers use `tcp_read_request`.
+builtin fn _tcp_read_request(stream: TcpStream) -> Result[String, NetError] ! Net
+
 /// Read all available bytes from `stream` as a string.
 ///
 /// Returns `Tainted[String]` because the content originates from an untrusted
