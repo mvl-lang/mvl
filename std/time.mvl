@@ -35,8 +35,53 @@ pub builtin fn sleep(d: Duration) -> Unit ! Clock
 /// Formats an Instant as a string using the given format pattern.
 pub builtin fn format_instant(t: Instant, pattern: String) -> String
 
+fn dt_digit(n: Int) -> String {
+    if n == 0 { "0" } else if n == 1 { "1" } else if n == 2 { "2" }
+    else if n == 3 { "3" } else if n == 4 { "4" } else if n == 5 { "5" }
+    else if n == 6 { "6" } else if n == 7 { "7" } else if n == 8 { "8" }
+    else { "9" }
+}
+
+fn dt_pad2(n: Int) -> String {
+    str_concat(dt_digit(n / 10), dt_digit(n % 10))
+}
+
+fn dt_pad4(n: Int) -> String {
+    str_concat(
+        str_concat(dt_digit(n / 1000), dt_digit((n / 100) % 10)),
+        str_concat(dt_digit((n / 10) % 10), dt_digit(n % 10))
+    )
+}
+
 /// Formats a DateTime as a string using the given format pattern.
-pub builtin fn format_datetime(t: DateTime, pattern: String) -> String
+///
+/// Supported specifiers: %Y (4-digit year), %m (month), %d (day),
+/// %H (hour), %M (minute), %S (second). Other % sequences pass through literally.
+pub fn format_datetime(t: DateTime, pattern: String) -> String {
+    let n: Int = str_len(pattern);
+    let result: ref String = "";
+    let i: ref Int = 0;
+    while i < n decreases n - i {
+        let c: String = str_char_at(pattern, i);
+        if c == "%" && i + 1 < n {
+            let spec: String = str_char_at(pattern, i + 1);
+            let val: String =
+                if spec == "Y" { dt_pad4(t.year) }
+                else if spec == "m" { dt_pad2(t.month) }
+                else if spec == "d" { dt_pad2(t.day) }
+                else if spec == "H" { dt_pad2(t.hour) }
+                else if spec == "M" { dt_pad2(t.minute) }
+                else if spec == "S" { dt_pad2(t.second) }
+                else { str_concat("%", spec) };
+            result = str_concat(result, val);
+            i = i + 2
+        } else {
+            result = str_concat(result, c);
+            i = i + 1
+        }
+    };
+    result
+}
 
 /// Parses a datetime string using the given format pattern.
 /// Returns None if the string does not match the pattern.

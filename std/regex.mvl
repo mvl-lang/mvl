@@ -42,10 +42,34 @@ pub builtin fn compile(pattern: String) -> Result[Regex, RegexError]
 pub builtin fn find(re: Regex, s: String) -> Option[Match]
 
 /// Returns all non-overlapping matches of re in s.
-pub builtin fn find_all(re: Regex, s: String) -> List[Match]
+pub fn find_all(re: Regex, s: String) -> List[Match] {
+    let result: ref List[Match] = [];
+    let n: Int = str_len(s);
+    let pos: ref Int = 0;
+    while pos <= n decreases n + 1 - pos {
+        match find(re, str_substring(s, pos, n)) {
+            None => { pos = n + 1 },
+            Some(m) => {
+                result.push(Match { text: m.text, start: pos + m.start, end: pos + m.end });
+                pos = if m.end > m.start { pos + m.end } else { pos + 1 }
+            }
+        }
+    };
+    result
+}
 
 /// Replaces all matches of re in s with replacement.
-pub builtin fn replace(re: Regex, s: String, replacement: String) -> String
+pub fn replace(re: Regex, s: String, replacement: String) -> String {
+    let matches: List[Match] = find_all(re, s);
+    let result: ref String = "";
+    let pos: ref Int = 0;
+    for m in matches {
+        result = str_concat(result, str_substring(s, pos, m.start));
+        result = str_concat(result, replacement);
+        pos = m.end
+    };
+    str_concat(result, str_substring(s, pos, str_len(s)))
+}
 
 /// Returns the captures of the first match of re in s, or None.
 pub builtin fn captures(re: Regex, s: String) -> Option[Captures]

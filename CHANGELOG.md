@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.131.0] — 2026-05-20
+
+### Added
+
+- **Convert 12 reducible builtins to pure MVL** (#903): `str_contains`, `str_starts_with`, `str_ends_with`, `str_trim`, `str_to_upper`, `str_to_lower`, `str_replace` (strings.mvl); `env_var` (env.mvl); `path` (io.mvl); `format_datetime` (time.mvl); `find_all`, `replace` (regex.mvl). Shrinks the Rust stdlib surface and enables in-language testing of stdlib functions.
+
 ## [0.130.1] — 2026-05-20
 
 ### Fixed
