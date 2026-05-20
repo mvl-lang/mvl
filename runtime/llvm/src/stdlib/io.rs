@@ -355,7 +355,9 @@ pub extern "C" fn _mvl_io_stderr() -> *const c_void {
 pub unsafe extern "C" fn _mvl_io_stdout_write(_s: *const c_void, line: *const MvlString) {
     use std::io::Write as _;
     let s = read_mvl_string(line);
-    let _ = std::io::stdout().lock().write_all(s.as_bytes());
+    let mut out = std::io::stdout().lock();
+    let _ = out.write_all(s.as_bytes());
+    let _ = out.flush();
 }
 
 /// `stderr_write(s: Stderr, line: String) → Unit`
