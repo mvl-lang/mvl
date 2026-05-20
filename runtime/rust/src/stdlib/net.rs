@@ -92,7 +92,7 @@ fn sanitize_net_error(e: &std::io::Error) -> NetError {
         std::io::ErrorKind::ConnectionReset => NetError::ConnectionReset,
         std::io::ErrorKind::TimedOut => NetError::Timeout,
         std::io::ErrorKind::AddrInUse => NetError::AddressInUse,
-        _ => NetError::Other(e.to_string()),
+        _ => NetError::Other(e.kind().to_string()),
     }
 }
 
@@ -131,7 +131,7 @@ pub fn tcp_accept(listener: TcpListener) -> Result<TcpStream, NetError> {
 /// Raw private builtin: read all bytes from `stream`, return bare `String` (#894 Pattern 002).
 ///
 /// Module-private in MVL (`builtin fn _tcp_read`) — callers use `tcp_read`.
-pub fn _tcp_read(stream: TcpStream) -> Result<String, NetError> {
+pub(crate) fn _tcp_read(stream: TcpStream) -> Result<String, NetError> {
     let arc = lookup_stream(stream.0)?;
     let mut buf = Vec::new();
     (&*arc)
@@ -152,7 +152,7 @@ pub fn tcp_read(stream: TcpStream) -> Result<Tainted<String>, NetError> {
 /// Raw private builtin: read one HTTP request, return bare `String` (#894 Pattern 002).
 ///
 /// Module-private in MVL — callers use `tcp_read_request`.
-pub fn _tcp_read_request(stream: TcpStream) -> Result<String, NetError> {
+pub(crate) fn _tcp_read_request(stream: TcpStream) -> Result<String, NetError> {
     let arc = lookup_stream(stream.0)?;
     let mut buf = Vec::new();
     let mut one = [0u8; 1];

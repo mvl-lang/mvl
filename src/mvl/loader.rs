@@ -240,13 +240,18 @@ pub fn load_mvl_native_stdlib_extras(progs: &[Program]) -> Vec<Program> {
                                 if let Some(content) = stdlib::stdlib_content(&filename) {
                                     let (mut p, _) = Parser::new(content);
                                     let mut loaded_prog = p.parse_program();
-                                    // For modules that also have a Rust runtime backing
-                                    // (RUST_RUNTIME_IMPORTS), strip type declarations from the
+                                    // For hybrid modules (in RUST_RUNTIME_IMPORTS but not in
+                                    // RUST_BACKED_STDLIB), strip type declarations from the
                                     // prelude program.  Types for these modules come from
                                     // `use mvl_runtime::stdlib::X::*`; emitting them again from
                                     // MVL source would produce duplicate definitions that conflict
                                     // with the runtime versions (#897).
-                                    if RUST_RUNTIME_IMPORTS.contains(&m) {
+                                    // Scoped to hybrid modules only — purely Rust-backed modules
+                                    // (RUST_BACKED_STDLIB) are not loaded here at all; purely
+                                    // MVL modules define types that must be preserved.
+                                    if RUST_RUNTIME_IMPORTS.contains(&m)
+                                        && !RUST_BACKED_STDLIB.contains(&m)
+                                    {
                                         loaded_prog
                                             .declarations
                                             .retain(|d| !matches!(d, Decl::Type(_)));

@@ -65,7 +65,7 @@ pub fn signal_ignore(_sig: Signal) {}
 /// Raw private builtin: read an env var, return bare `String` (#894 Pattern 002).
 ///
 /// Module-private in MVL (`builtin fn _env_read`) — callers use `get` or `get_secret`.
-pub fn _env_read(name: String) -> Option<String> {
+pub(crate) fn _env_read(name: String) -> Option<String> {
     std::env::var(&name).ok()
 }
 
@@ -86,16 +86,16 @@ pub fn env_var(name: String) -> Option<Tainted<String>> {
 
 /// Set an environment variable for the current process.
 ///
-/// Returns `Err` if `name` contains `=` or a NUL byte (both are invalid on POSIX).
+/// Returns `Err` if `name` or `value` contains invalid bytes (NUL, `=` in name).
 #[allow(deprecated)]
-pub fn set(name: String, value: String) -> Result<(), String> {
-    if name.contains('=') || name.contains('\0') || name.is_empty() {
-        return Err("invalid environment variable name".to_string());
+pub fn set(name: String, value: Tainted<String>) -> Result<(), String> {
+    if name.contains('=') || name.contains('\0') || name.is_empty() || value.0.contains('\0') {
+        return Err("invalid environment variable name or value".to_string());
     }
     // set_var is deprecated in Rust 1.85 due to unsafety in multi-threaded code.
     // MVL programs that call std.env.set are expected to be single-threaded at the
     // point of mutation, matching the same restriction libc imposes.
-    std::env::set_var(&name, &value);
+    std::env::set_var(&name, &value.0);
     Ok(())
 }
 
@@ -204,7 +204,7 @@ mod tests {
     fn set_and_get_roundtrip() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let name = "MVL_ENV_TEST_SET_GET".to_string();
-        let value = "hello_mvl".to_string();
+        let value = Tainted("hello_mvl".to_string());
         set(name.clone(), value).expect("set must succeed");
         let got = get(name.clone()).expect("get must return Some after set");
         assert_eq!(got.0, "hello_mvl");
@@ -214,14 +214,28 @@ mod tests {
     #[test]
     fn set_rejects_name_with_equals() {
         let name = "BAD=NAME".to_string();
-        let value = "v".to_string();
+        let value = Tainted("v".to_string());
         assert!(set(name, value).is_err());
     }
 
     #[test]
     fn set_rejects_empty_name() {
         let name = String::new();
-        let value = "v".to_string();
+        let value = Tainted("v".to_string());
+        assert!(set(name, value).is_err());
+    }
+
+    #[test]
+    fn set_rejects_name_with_nul() {
+        let name = "NUL\0NAME".to_string();
+        let value = Tainted("v".to_string());
+        assert!(set(name, value).is_err());
+    }
+
+    #[test]
+    fn set_rejects_value_with_nul() {
+        let name = "MVL_ENV_TEST_NUL_VALUE".to_string();
+        let value = Tainted("bad\0value".to_string());
         assert!(set(name, value).is_err());
     }
 
