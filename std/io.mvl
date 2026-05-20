@@ -148,7 +148,11 @@ pub builtin fn close(f: File) -> Unit
 /// When IFC is inactive Tainted[String] is treated as String.
 pub builtin fn read_to_string(p: Path) -> Result[Tainted[String], IoError] ! FileRead
 
-/// Read the entire contents of a file given a validated (Clean) path string.
+/// Raw private builtin: read file, return bare `String` (Pattern 002).
+/// Module-private — callers use `read_file`.
+builtin fn _read_file(p: String) -> Result[String, IoError] ! FileRead
+
+/// Read the entire contents of a file given a path string.
 ///
 /// Convenience variant of `read_to_string` that accepts a `String` path
 /// directly, without requiring the caller to construct a `Path` value first.

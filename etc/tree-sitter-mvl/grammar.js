@@ -88,7 +88,9 @@ module.exports = grammar({
             $.extern_decl,
             $.impl_decl,
             $.actor_decl,
-            $.effect_decl
+            $.effect_decl,
+            $.label_decl,
+            $.relabel_decl
           )
         ),
         $.reexport_decl
@@ -165,6 +167,13 @@ module.exports = grammar({
         optional(seq(">", $.identifier, repeat(seq("+", $.identifier)))),
         ";"
       ),
+
+    // IFC label declaration: `label Tainted;` or `pub label Secret;` (#894)
+    label_decl: ($) => seq("label", $.identifier, ";"),
+
+    // IFC relabel transition: `relabel trust: Tainted -> Secret;` (#894)
+    relabel_decl: ($) =>
+      seq("relabel", $.identifier, ":", $.identifier, "->", $.identifier, ";"),
 
     // Extern trust boundary: `extern "rust" { fn foo(...) -> T; }`
     extern_decl: ($) =>

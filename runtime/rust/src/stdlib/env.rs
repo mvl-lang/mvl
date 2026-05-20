@@ -7,7 +7,7 @@
 //! backing for the stubs declared in `std/env.mvl`.
 //! Re-exported via `mvl_runtime::prelude::*`.
 
-use crate::ifc::{Clean, Tainted};
+use crate::ifc::Tainted;
 
 // ── Signal type ────────────────────────────────────────────────────────────
 
@@ -62,40 +62,47 @@ pub fn signal_ignore(_sig: Signal) {}
 
 // ── Environment variable access ────────────────────────────────────────────
 
-/// Read an environment variable by name.
-pub fn get(name: Clean<String>) -> Option<Tainted<String>> {
-    std::env::var(&**name).ok().map(Tainted)
+/// Raw private builtin: read an env var, return bare `String` (#894 Pattern 002).
+///
+/// Module-private in MVL (`builtin fn _env_read`) — callers use `get` or `get_secret`.
+pub(crate) fn _env_read(name: String) -> Option<String> {
+    std::env::var(&name).ok()
 }
 
 /// Read an environment variable by name.
 ///
-/// Alias for `get` with a collision-free name for use in modules that also
-/// import list-related functions (where the generic `get(xs, i)` list-index
-/// function would shadow `env::get` in the generated Rust scope).
-pub fn env_var(name: Clean<String>) -> Option<Tainted<String>> {
-    std::env::var(&**name).ok().map(Tainted)
+/// Returns `Tainted[String]` — env values are externally controlled.
+pub fn get(name: String) -> Option<Tainted<String>> {
+    _env_read(name).map(Tainted)
+}
+
+/// Read an environment variable by name (collision-free alias for `get`).
+///
+/// Alias for `get` — used in modules that also import list operations where the
+/// generic `get(xs, i)` list-index function would shadow `env::get`.
+pub fn env_var(name: String) -> Option<Tainted<String>> {
+    _env_read(name).map(Tainted)
 }
 
 /// Set an environment variable for the current process.
 ///
-/// Returns `Err` if `name` contains `=` or a NUL byte (both are invalid on POSIX).
+/// Returns `Err` if `name` or `value` contains invalid bytes (NUL, `=` in name).
 #[allow(deprecated)]
-pub fn set(name: Clean<String>, value: Tainted<String>) -> Result<(), String> {
-    let n = &**name;
-    if n.contains('=') || n.contains('\0') || n.is_empty() {
-        return Err("invalid environment variable name".to_string());
+pub fn set(name: String, value: Tainted<String>) -> Result<(), String> {
+    if name.contains('=') || name.contains('\0') || name.is_empty() || value.0.contains('\0') {
+        return Err("invalid environment variable name or value".to_string());
     }
     // set_var is deprecated in Rust 1.85 due to unsafety in multi-threaded code.
     // MVL programs that call std.env.set are expected to be single-threaded at the
     // point of mutation, matching the same restriction libc imposes.
-    std::env::set_var(n, &**value);
+    std::env::set_var(&name, &value.0);
     Ok(())
 }
 
 /// Unset an environment variable. No-op if not set.
 #[allow(deprecated)]
-pub fn remove_var(name: Clean<String>) {
-    std::env::remove_var(&**name);
+pub fn remove_var(name: String) {
+    std::env::remove_var(&name);
 }
 
 /// Return all environment variables as (name, value) pairs.
@@ -129,8 +136,8 @@ pub fn current_dir() -> Result<Tainted<String>, String> {
 }
 
 /// Change the current working directory.
-pub fn chdir(path: Clean<String>) -> Result<(), String> {
-    std::env::set_current_dir(&**path).map_err(|_| "no such directory".to_string())
+pub fn chdir(path: String) -> Result<(), String> {
+    std::env::set_current_dir(&path).map_err(|_| "no such directory".to_string())
 }
 
 // ── Unix identity ──────────────────────────────────────────────────────────
@@ -188,7 +195,7 @@ mod tests {
 
     #[test]
     fn get_returns_none_for_unknown_var() {
-        let name = Clean("MVL_ENV_TEST_NONEXISTENT_XYZ".to_string());
+        let name = "MVL_ENV_TEST_NONEXISTENT_XYZ".to_string();
         assert!(get(name).is_none());
     }
 
@@ -196,25 +203,39 @@ mod tests {
     #[allow(deprecated)]
     fn set_and_get_roundtrip() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let name = Clean("MVL_ENV_TEST_SET_GET".to_string());
+        let name = "MVL_ENV_TEST_SET_GET".to_string();
         let value = Tainted("hello_mvl".to_string());
         set(name.clone(), value).expect("set must succeed");
         let got = get(name.clone()).expect("get must return Some after set");
         assert_eq!(got.0, "hello_mvl");
-        std::env::remove_var(&**&name);
+        std::env::remove_var(&name);
     }
 
     #[test]
     fn set_rejects_name_with_equals() {
-        let name = Clean("BAD=NAME".to_string());
+        let name = "BAD=NAME".to_string();
         let value = Tainted("v".to_string());
         assert!(set(name, value).is_err());
     }
 
     #[test]
     fn set_rejects_empty_name() {
-        let name = Clean(String::new());
+        let name = String::new();
         let value = Tainted("v".to_string());
+        assert!(set(name, value).is_err());
+    }
+
+    #[test]
+    fn set_rejects_name_with_nul() {
+        let name = "NUL\0NAME".to_string();
+        let value = Tainted("v".to_string());
+        assert!(set(name, value).is_err());
+    }
+
+    #[test]
+    fn set_rejects_value_with_nul() {
+        let name = "MVL_ENV_TEST_NUL_VALUE".to_string();
+        let value = Tainted("bad\0value".to_string());
         assert!(set(name, value).is_err());
     }
 
@@ -222,9 +243,9 @@ mod tests {
     #[allow(deprecated)]
     fn remove_var_actually_removes() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let name = Clean("MVL_ENV_TEST_REMOVE".to_string());
+        let name = "MVL_ENV_TEST_REMOVE".to_string();
         // Set the var, verify it's present, then remove and verify it's gone.
-        std::env::set_var(&**&name, "present");
+        std::env::set_var(&name, "present");
         assert!(get(name.clone()).is_some(), "var must exist before remove");
         remove_var(name.clone());
         assert!(
@@ -278,7 +299,7 @@ mod tests {
         let original = std::env::current_dir().expect("must have cwd");
         let tmp = std::env::temp_dir().to_string_lossy().into_owned();
 
-        chdir(Clean(tmp.clone())).expect("chdir to temp_dir must succeed");
+        chdir(tmp.clone()).expect("chdir to temp_dir must succeed");
         let after = current_dir().expect("current_dir after chdir");
         // On macOS /tmp is a symlink to /private/tmp — compare canonical paths.
         let canonical_tmp = std::fs::canonicalize(&tmp).unwrap_or_else(|_| tmp.into());
@@ -291,7 +312,7 @@ mod tests {
 
     #[test]
     fn chdir_nonexistent_returns_err() {
-        let result = chdir(Clean("/mvl_nonexistent_dir_xyz_12345".to_string()));
+        let result = chdir("/mvl_nonexistent_dir_xyz_12345".to_string());
         assert!(result.is_err(), "chdir to nonexistent path must fail");
     }
 

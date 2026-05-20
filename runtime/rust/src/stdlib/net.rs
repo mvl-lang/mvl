@@ -92,7 +92,7 @@ fn sanitize_net_error(e: &std::io::Error) -> NetError {
         std::io::ErrorKind::ConnectionReset => NetError::ConnectionReset,
         std::io::ErrorKind::TimedOut => NetError::Timeout,
         std::io::ErrorKind::AddrInUse => NetError::AddressInUse,
-        _ => NetError::Other(e.to_string()),
+        _ => NetError::Other(e.kind().to_string()),
     }
 }
 
@@ -128,24 +128,31 @@ pub fn tcp_accept(listener: TcpListener) -> Result<TcpStream, NetError> {
     Ok(TcpStream(h))
 }
 
-/// Read all available bytes from `stream` (blocks until peer closes write half).
+/// Raw private builtin: read all bytes from `stream`, return bare `String` (#894 Pattern 002).
 ///
-/// Uses `Read for &TcpStream` — no exclusive lock held during the blocking read,
-/// so `tcp_close_stream` on a concurrent thread can call `shutdown()` to send EOF.
-pub fn tcp_read(stream: TcpStream) -> Result<Tainted<String>, NetError> {
+/// Module-private in MVL (`builtin fn _tcp_read`) — callers use `tcp_read`.
+pub(crate) fn _tcp_read(stream: TcpStream) -> Result<String, NetError> {
     let arc = lookup_stream(stream.0)?;
     let mut buf = Vec::new();
     (&*arc)
         .read_to_end(&mut buf)
         .map_err(|e| sanitize_net_error(&e))?;
-    Ok(Tainted(String::from_utf8_lossy(&buf).into_owned()))
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
-/// Read one HTTP request from `stream` — returns after the blank-line terminator.
+/// Read all available bytes from `stream` (blocks until peer closes write half).
 ///
-/// Unlike `tcp_read`, this does NOT wait for the peer to close the connection.
-/// Caps at 8 KiB; returns `Tainted[String]`.
-pub fn tcp_read_request(stream: TcpStream) -> Result<Tainted<String>, NetError> {
+/// Returns `Tainted[String]` — network data is always untrusted.
+/// Uses `Read for &TcpStream` — no exclusive lock held during the blocking read,
+/// so `tcp_close_stream` on a concurrent thread can call `shutdown()` to send EOF.
+pub fn tcp_read(stream: TcpStream) -> Result<Tainted<String>, NetError> {
+    _tcp_read(stream).map(Tainted)
+}
+
+/// Raw private builtin: read one HTTP request, return bare `String` (#894 Pattern 002).
+///
+/// Module-private in MVL — callers use `tcp_read_request`.
+pub(crate) fn _tcp_read_request(stream: TcpStream) -> Result<String, NetError> {
     let arc = lookup_stream(stream.0)?;
     let mut buf = Vec::new();
     let mut one = [0u8; 1];
@@ -164,7 +171,16 @@ pub fn tcp_read_request(stream: TcpStream) -> Result<Tainted<String>, NetError> 
             Err(e) => return Err(sanitize_net_error(&e)),
         }
     }
-    Ok(Tainted(String::from_utf8_lossy(&buf).into_owned()))
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// Read one HTTP request from `stream` — returns after the blank-line terminator.
+///
+/// Returns `Tainted[String]` — network data is always untrusted.
+/// Unlike `tcp_read`, this does NOT wait for the peer to close the connection.
+/// Caps at 8 KiB.
+pub fn tcp_read_request(stream: TcpStream) -> Result<Tainted<String>, NetError> {
+    _tcp_read_request(stream).map(Tainted)
 }
 
 /// Write `data` to `stream`.

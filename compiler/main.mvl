@@ -107,29 +107,28 @@ transparent partial fn lex_and_parse(src: String) -> Program {
 
 // ── Argument helpers ──────────────────────────────────────────────────────────
 
-total fn dir_from_arg(v: Tainted[String]) -> Path {
-    let clean_dir: Clean[String] = sanitize(v);
-    join(path("."), clean_dir)
+total fn dir_from_arg(v: String) -> Path {
+    join(path("."), v)
 }
 
 // ── File processor ───────────────────────────────────────────────────────────
 
-partial fn process_file(name: String, raw: Tainted[String]) -> Clean[Program] ! Console
+partial fn process_file(name: String, raw: Tainted[String]) -> Program ! Console
   requires len(name) > 0
 {
-    let src: Clean[String]  = sanitize(raw);
-    let prog: Clean[Program] = lex_and_parse(src);
+    let src: String  = relabel trust(raw, "VALIDATED");
+    let prog: Program = lex_and_parse(src);
 
-    println("── {} ──", name);
-    println("  fns:{} types:{} uses:{} consts:{} externs:{} impls:{} errors:{}",
+    println(format("── {} ──", name));
+    println(format("  fns:{} types:{} uses:{} consts:{} externs:{} impls:{} errors:{}",
         prog.fns.len(), prog.types.len(), prog.uses.len(),
         prog.consts.len(), prog.externs.len(), prog.impls.len(),
-        prog.errors.len());
+        prog.errors.len()));
 
     let i_fns: ref Int = 0;
     while i_fns < prog.fns.len() {
         if let Some(f) = prog.fns.get(i_fns) {
-            println("{}", format_fn_sig(f))
+            println(format_fn_sig(f))
         }
         i_fns = i_fns + 1
     }
@@ -143,8 +142,8 @@ partial fn process_file(name: String, raw: Tainted[String]) -> Clean[Program] ! 
                 TypeBodyKind::IsAlias  => "alias",
             };
             let vis_s: String = if t.visible { "pub " } else { "" };
-            println("  {}type {} = {} ({} fields/{} variants)",
-                vis_s, t.name, kind_str, t.fields.len(), t.variants.len())
+            println(format("  {}type {} = {} ({} fields/{} variants)",
+                vis_s, t.name, kind_str, t.fields.len(), t.variants.len()))
         }
         i_types = i_types + 1
     }
@@ -152,8 +151,8 @@ partial fn process_file(name: String, raw: Tainted[String]) -> Clean[Program] ! 
     let i_uses: ref Int = 0;
     while i_uses < prog.uses.len() {
         if let Some(u) = prog.uses.get(i_uses) {
-            println("  use {}.{{{}}}",
-                format_path(u.path), format_imports(u.imports))
+            println(format("  use {}.{{{}}}",
+                format_path(u.path), format_imports(u.imports)))
         }
         i_uses = i_uses + 1
     }
@@ -161,7 +160,7 @@ partial fn process_file(name: String, raw: Tainted[String]) -> Clean[Program] ! 
     let i_errs: ref Int = 0;
     while i_errs < prog.errors.len() {
         if let Some(e) = prog.errors.get(i_errs) {
-            println("  ERROR L{}: {}", e.span.line, e.message)
+            println(format("  ERROR L{}: {}", e.span.line, e.message))
         }
         i_errs = i_errs + 1
     }
@@ -307,10 +306,11 @@ test fn format_imports_multiple() -> Unit {
 
 partial fn main() -> Unit ! FileRead + Console + Env {
     let argv: List[Tainted[String]] = args();
-    let dir_path: Path = match argv.get(1) {
-        None    => path("compiler"),
-        Some(v) => dir_from_arg(v),
+    let dir_raw: Tainted[String] = match argv.get(1) {
+        None    => relabel taint("compiler", "DIR-DEFAULT"),
+        Some(v) => v,
     };
+    let dir_path: Path = path(relabel trust(dir_raw, "DIR-PATH"));
 
     match read_dir(dir_path) {
         Err(_) => println("error: could not read directory"),
@@ -330,7 +330,7 @@ partial fn main() -> Unit ! FileRead + Console + Env {
                         match read_to_string(entry.path) {
                             Err(_)  => (),
                             Ok(raw) => {
-                                let prog: Clean[Program] = process_file(name, raw);
+                                let prog: Program = process_file(name, raw);
                                 fn_total   = fn_total   + prog.fns.len();
                                 type_total = type_total + prog.types.len();
                                 use_total  = use_total  + prog.uses.len();
@@ -343,8 +343,8 @@ partial fn main() -> Unit ! FileRead + Console + Env {
             }
 
             println("");
-            println("totals: {} files  {} fns  {} types  {} uses  {} errors",
-                file_count, fn_total, type_total, use_total, err_total)
+            println(format("totals: {} files  {} fns  {} types  {} uses  {} errors",
+                file_count, fn_total, type_total, use_total, err_total))
         }
     }
 }

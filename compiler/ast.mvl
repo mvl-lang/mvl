@@ -40,8 +40,8 @@ pub type TokenKind = enum {
     KwReturn,
     KwMove,
     KwConsume,
-    KwDeclassify,
-    KwSanitize,
+    KwLabel,
+    KwRelabel,
     KwConst,
     KwWhere,
     KwIn,
@@ -62,11 +62,6 @@ pub type TokenKind = enum {
     KwDecreases,
     KwForall,
     KwExists,
-    // ── IFC security labels ─────────────────────────────────────────────
-    KwPublic,
-    KwTainted,
-    KwSecret,
-    KwClean,
     // ── Capability markers ──────────────────────────────────────────────
     KwIso,
     KwVal,

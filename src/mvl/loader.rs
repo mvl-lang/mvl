@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 
-use crate::mvl::backends::rust::RUST_BACKED_STDLIB;
+use crate::mvl::backends::rust::{RUST_BACKED_STDLIB, RUST_RUNTIME_IMPORTS};
 use crate::mvl::packages;
 use crate::mvl::parser::ast::{Decl, Program};
 use crate::mvl::parser::Parser;
@@ -239,7 +239,23 @@ pub fn load_mvl_native_stdlib_extras(progs: &[Program]) -> Vec<Program> {
                                 let filename = format!("{m}.mvl");
                                 if let Some(content) = stdlib::stdlib_content(&filename) {
                                     let (mut p, _) = Parser::new(content);
-                                    let loaded_prog = p.parse_program();
+                                    let mut loaded_prog = p.parse_program();
+                                    // For hybrid modules (in RUST_RUNTIME_IMPORTS but not in
+                                    // RUST_BACKED_STDLIB), strip type declarations from the
+                                    // prelude program.  Types for these modules come from
+                                    // `use mvl_runtime::stdlib::X::*`; emitting them again from
+                                    // MVL source would produce duplicate definitions that conflict
+                                    // with the runtime versions (#897).
+                                    // Scoped to hybrid modules only — purely Rust-backed modules
+                                    // (RUST_BACKED_STDLIB) are not loaded here at all; purely
+                                    // MVL modules define types that must be preserved.
+                                    if RUST_RUNTIME_IMPORTS.contains(&m)
+                                        && !RUST_BACKED_STDLIB.contains(&m)
+                                    {
+                                        loaded_prog
+                                            .declarations
+                                            .retain(|d| !matches!(d, Decl::Type(_)));
+                                    }
                                     next_pending.push(loaded_prog.clone());
                                     extras.push(loaded_prog);
                                 }

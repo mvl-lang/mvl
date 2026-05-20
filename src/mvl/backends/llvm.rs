@@ -951,7 +951,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             .into_iter()
             .filter_map(|decl| {
                 if let Decl::Fn(fd) = decl {
-                    if fd.is_builtin && fd.type_params.is_empty() {
+                    if fd.is_builtin && fd.type_params.is_empty() && !fd.name.starts_with('_') {
                         Some(fd)
                     } else {
                         None
