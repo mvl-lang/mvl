@@ -28,7 +28,7 @@
 //! A public sink (`println`, `print`) inside a branch whose PC is labeled
 //! is flagged as `ImplicitFlowViolation`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::types::Ty;
@@ -126,7 +126,75 @@ pub(crate) fn bind_pattern_labels(pat: &Pattern, label: &str, env: &mut HashMap<
     }
 }
 
-pub fn check_implicit_flows(prog: &Program, errors: &mut Vec<CheckError>) {
+/// Build a map from user-defined function name → name of public sink reachable from it.
+///
+/// Seeds from functions that directly call a [`PUBLIC_SINKS`] member, then propagates
+/// transitively via a fixed-point BFS so that `a→b→println` marks both `b` and `a`.
+fn build_sink_reachability(programs: &[&Program]) -> HashMap<String, String> {
+    // Step 1: collect per-function callee sets.
+    let mut callee_map: HashMap<String, HashSet<String>> = HashMap::new();
+    for prog in programs {
+        for decl in &prog.declarations {
+            match decl {
+                Decl::Fn(fd) => {
+                    let callees = callee_map.entry(fd.name.clone()).or_default();
+                    collect_calls_in_block(&fd.body, callees);
+                }
+                Decl::Impl(id) => {
+                    for m in &id.methods {
+                        let callees = callee_map.entry(m.name.clone()).or_default();
+                        collect_calls_in_block(&m.body, callees);
+                    }
+                }
+                Decl::Actor(ad) => {
+                    for m in &ad.methods {
+                        let callees = callee_map.entry(m.name.clone()).or_default();
+                        collect_calls_in_block(&m.body, callees);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    // Step 2: seed — functions that directly call a PUBLIC_SINK.
+    let mut reach: HashMap<String, String> = HashMap::new();
+    for (fn_name, callees) in &callee_map {
+        for callee in callees {
+            if PUBLIC_SINKS.contains(&callee.as_str()) {
+                reach
+                    .entry(fn_name.clone())
+                    .or_insert_with(|| callee.clone());
+            }
+        }
+    }
+    // Step 3: fixed-point propagation.
+    loop {
+        let mut changed = false;
+        for (fn_name, callees) in &callee_map {
+            if reach.contains_key(fn_name.as_str()) {
+                continue;
+            }
+            for callee in callees {
+                if let Some(sink) = reach.get(callee.as_str()).cloned() {
+                    reach.insert(fn_name.clone(), sink);
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    reach
+}
+
+pub fn check_implicit_flows(
+    prog: &Program,
+    all_programs: &[&Program],
+    errors: &mut Vec<CheckError>,
+) {
+    let sink_reach = build_sink_reachability(all_programs);
     for decl in &prog.declarations {
         if let Decl::Fn(fd) = decl {
             // Build initial label env from parameter type annotations.
@@ -137,7 +205,7 @@ pub fn check_implicit_flows(prog: &Program, errors: &mut Vec<CheckError>) {
                 }
             }
             // Walk the function body with pc_label = None (unlabeled).
-            check_block_flows(&fd.body, None, &mut env, errors);
+            check_block_flows(&fd.body, None, &mut env, &fd.name, &sink_reach, errors);
         }
     }
 }
@@ -403,10 +471,12 @@ fn check_block_flows(
     block: &Block,
     pc: Option<String>,
     env: &mut HashMap<String, String>,
+    caller_fn: &str,
+    sink_reach: &HashMap<String, String>,
     errors: &mut Vec<CheckError>,
 ) {
     for stmt in &block.stmts {
-        check_stmt_flows(stmt, pc.clone(), env, errors);
+        check_stmt_flows(stmt, pc.clone(), env, caller_fn, sink_reach, errors);
     }
 }
 
@@ -414,6 +484,8 @@ fn check_stmt_flows(
     stmt: &Stmt,
     pc: Option<String>,
     env: &mut HashMap<String, String>,
+    caller_fn: &str,
+    sink_reach: &HashMap<String, String>,
     errors: &mut Vec<CheckError>,
 ) {
     match stmt {
@@ -421,7 +493,7 @@ fn check_stmt_flows(
             pattern, ty, init, ..
         } => {
             // Walk the RHS under the current PC label.
-            check_expr_flows(init, pc, env, errors);
+            check_expr_flows(init, pc, env, caller_fn, sink_reach, errors);
             // Extend the label env; use recursive helper so nested patterns
             // like `(Some(a), b)` are fully bound.
             let label = label_of_type_expr(ty).or_else(|| infer_label(init, env));
@@ -430,31 +502,45 @@ fn check_stmt_flows(
             }
         }
         Stmt::Assign { value, .. } => {
-            check_expr_flows(value, pc, env, errors);
+            check_expr_flows(value, pc, env, caller_fn, sink_reach, errors);
         }
         Stmt::Return { value: Some(e), .. } => {
-            check_expr_flows(e, pc, env, errors);
+            check_expr_flows(e, pc, env, caller_fn, sink_reach, errors);
         }
         Stmt::Return { value: None, .. } => {}
         Stmt::Expr { expr, .. } => {
-            check_expr_flows(expr, pc, env, errors);
+            check_expr_flows(expr, pc, env, caller_fn, sink_reach, errors);
         }
         Stmt::If {
             cond, then, else_, ..
         } => {
             let cond_label = infer_label(cond, env);
             let body_pc = join_opt(pc.clone(), cond_label);
-            check_expr_flows(cond, pc.clone(), env, errors);
+            check_expr_flows(cond, pc.clone(), env, caller_fn, sink_reach, errors);
             let mut then_env = env.clone();
-            check_block_flows(then, body_pc.clone(), &mut then_env, errors);
+            check_block_flows(
+                then,
+                body_pc.clone(),
+                &mut then_env,
+                caller_fn,
+                sink_reach,
+                errors,
+            );
             match else_ {
                 Some(ElseBranch::Block(blk)) => {
                     let mut else_env = env.clone();
-                    check_block_flows(blk, body_pc, &mut else_env, errors);
+                    check_block_flows(blk, body_pc, &mut else_env, caller_fn, sink_reach, errors);
                 }
                 Some(ElseBranch::If(nested)) => {
                     let mut else_env = env.clone();
-                    check_stmt_flows(nested, body_pc, &mut else_env, errors);
+                    check_stmt_flows(
+                        nested,
+                        body_pc,
+                        &mut else_env,
+                        caller_fn,
+                        sink_reach,
+                        errors,
+                    );
                 }
                 None => {}
             }
@@ -464,25 +550,35 @@ fn check_stmt_flows(
         } => {
             let scr_label = infer_label(scrutinee, env);
             let body_pc = join_opt(pc.clone(), scr_label);
-            check_expr_flows(scrutinee, pc, env, errors);
+            check_expr_flows(scrutinee, pc, env, caller_fn, sink_reach, errors);
             for arm in arms {
                 let mut arm_env = env.clone();
                 match &arm.body {
-                    MatchBody::Expr(expr) => {
-                        check_expr_flows(expr, body_pc.clone(), &mut arm_env, errors)
-                    }
-                    MatchBody::Block(blk) => {
-                        check_block_flows(blk, body_pc.clone(), &mut arm_env, errors)
-                    }
+                    MatchBody::Expr(expr) => check_expr_flows(
+                        expr,
+                        body_pc.clone(),
+                        &mut arm_env,
+                        caller_fn,
+                        sink_reach,
+                        errors,
+                    ),
+                    MatchBody::Block(blk) => check_block_flows(
+                        blk,
+                        body_pc.clone(),
+                        &mut arm_env,
+                        caller_fn,
+                        sink_reach,
+                        errors,
+                    ),
                 }
             }
         }
         Stmt::While { cond, body, .. } => {
             let cond_label = infer_label(cond, env);
             let body_pc = join_opt(pc.clone(), cond_label);
-            check_expr_flows(cond, pc, env, errors);
+            check_expr_flows(cond, pc, env, caller_fn, sink_reach, errors);
             let mut body_env = env.clone();
-            check_block_flows(body, body_pc, &mut body_env, errors);
+            check_block_flows(body, body_pc, &mut body_env, caller_fn, sink_reach, errors);
         }
         // Fix #858: bind the for-loop pattern variable to the iterator label so
         // that uses inside the body see the correct security label.
@@ -494,12 +590,12 @@ fn check_stmt_flows(
         } => {
             let iter_label = infer_label(iter, env);
             let body_pc = join_opt(pc.clone(), iter_label.clone());
-            check_expr_flows(iter, pc, env, errors);
+            check_expr_flows(iter, pc, env, caller_fn, sink_reach, errors);
             let mut body_env = env.clone();
             if let Some(l) = iter_label {
                 bind_pattern_labels(pattern, &l, &mut body_env);
             }
-            check_block_flows(body, body_pc, &mut body_env, errors);
+            check_block_flows(body, body_pc, &mut body_env, caller_fn, sink_reach, errors);
         }
     }
 }
@@ -521,22 +617,35 @@ fn check_expr_flows(
     expr: &Expr,
     pc: Option<String>,
     env: &mut HashMap<String, String>,
+    caller_fn: &str,
+    sink_reach: &HashMap<String, String>,
     errors: &mut Vec<CheckError>,
 ) {
     match expr {
         Expr::FnCall {
             name, args, span, ..
         } => {
-            // Detect public sink under high PC label.
-            if PUBLIC_SINKS.contains(&name.as_str()) && is_high_opt(&pc) {
-                errors.push(CheckError::ImplicitFlowViolation {
-                    pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
-                    sink: name.clone(),
-                    span: *span,
-                });
+            if is_high_opt(&pc) {
+                if PUBLIC_SINKS.contains(&name.as_str()) {
+                    // Direct public sink under high PC — implicit flow.
+                    errors.push(CheckError::ImplicitFlowViolation {
+                        pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
+                        sink: name.clone(),
+                        span: *span,
+                    });
+                } else if let Some(sink) = sink_reach.get(name.as_str()) {
+                    // Callee transitively reaches a public sink — cross-function implicit flow.
+                    errors.push(CheckError::CrossFunctionImplicitFlowViolation {
+                        pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
+                        caller: caller_fn.to_string(),
+                        callee: name.clone(),
+                        sink: sink.clone(),
+                        span: *span,
+                    });
+                }
             }
             for arg in args {
-                check_expr_flows(arg, pc.clone(), env, errors);
+                check_expr_flows(arg, pc.clone(), env, caller_fn, sink_reach, errors);
             }
         }
         Expr::If {
@@ -544,12 +653,19 @@ fn check_expr_flows(
         } => {
             let cond_label = infer_label(cond, env);
             let body_pc = join_opt(pc.clone(), cond_label);
-            check_expr_flows(cond, pc, env, errors);
+            check_expr_flows(cond, pc, env, caller_fn, sink_reach, errors);
             let mut then_env = env.clone();
-            check_block_flows(then, body_pc.clone(), &mut then_env, errors);
+            check_block_flows(
+                then,
+                body_pc.clone(),
+                &mut then_env,
+                caller_fn,
+                sink_reach,
+                errors,
+            );
             if let Some(e) = else_ {
                 let mut else_env = env.clone();
-                check_expr_flows(e, body_pc, &mut else_env, errors);
+                check_expr_flows(e, body_pc, &mut else_env, caller_fn, sink_reach, errors);
             }
         }
         Expr::Match {
@@ -557,22 +673,32 @@ fn check_expr_flows(
         } => {
             let scr_label = infer_label(scrutinee, env);
             let body_pc = join_opt(pc.clone(), scr_label);
-            check_expr_flows(scrutinee, pc, env, errors);
+            check_expr_flows(scrutinee, pc, env, caller_fn, sink_reach, errors);
             for arm in arms {
                 let mut arm_env = env.clone();
                 match &arm.body {
-                    MatchBody::Expr(e) => {
-                        check_expr_flows(e, body_pc.clone(), &mut arm_env, errors)
-                    }
-                    MatchBody::Block(blk) => {
-                        check_block_flows(blk, body_pc.clone(), &mut arm_env, errors)
-                    }
+                    MatchBody::Expr(e) => check_expr_flows(
+                        e,
+                        body_pc.clone(),
+                        &mut arm_env,
+                        caller_fn,
+                        sink_reach,
+                        errors,
+                    ),
+                    MatchBody::Block(blk) => check_block_flows(
+                        blk,
+                        body_pc.clone(),
+                        &mut arm_env,
+                        caller_fn,
+                        sink_reach,
+                        errors,
+                    ),
                 }
             }
         }
         Expr::Binary { left, right, .. } => {
-            check_expr_flows(left, pc.clone(), env, errors);
-            check_expr_flows(right, pc, env, errors);
+            check_expr_flows(left, pc.clone(), env, caller_fn, sink_reach, errors);
+            check_expr_flows(right, pc, env, caller_fn, sink_reach, errors);
         }
         Expr::Unary { expr, .. }
         | Expr::Relabel { expr, .. }
@@ -580,54 +706,54 @@ fn check_expr_flows(
         | Expr::Propagate { expr, .. }
         | Expr::FieldAccess { expr, .. }
         | Expr::Borrow { expr, .. } => {
-            check_expr_flows(expr, pc, env, errors);
+            check_expr_flows(expr, pc, env, caller_fn, sink_reach, errors);
         }
         Expr::MethodCall { receiver, args, .. } => {
-            check_expr_flows(receiver, pc.clone(), env, errors);
+            check_expr_flows(receiver, pc.clone(), env, caller_fn, sink_reach, errors);
             for arg in args {
-                check_expr_flows(arg, pc.clone(), env, errors);
+                check_expr_flows(arg, pc.clone(), env, caller_fn, sink_reach, errors);
             }
         }
         Expr::Block(blk) => {
             let mut blk_env = env.clone();
-            check_block_flows(blk, pc, &mut blk_env, errors);
+            check_block_flows(blk, pc, &mut blk_env, caller_fn, sink_reach, errors);
         }
         Expr::Lambda { body, .. } => {
             // Lambdas capture the outer env but reset pc (they are called later).
-            check_expr_flows(body, None, env, errors);
+            check_expr_flows(body, None, env, caller_fn, sink_reach, errors);
         }
         Expr::Construct { fields, .. } => {
             for (_, v) in fields {
-                check_expr_flows(v, pc.clone(), env, errors);
+                check_expr_flows(v, pc.clone(), env, caller_fn, sink_reach, errors);
             }
         }
         Expr::List { elems, .. } | Expr::Set { elems, .. } => {
             for e in elems {
-                check_expr_flows(e, pc.clone(), env, errors);
+                check_expr_flows(e, pc.clone(), env, caller_fn, sink_reach, errors);
             }
         }
         Expr::Map { pairs, .. } => {
             for (k, v) in pairs {
-                check_expr_flows(k, pc.clone(), env, errors);
-                check_expr_flows(v, pc.clone(), env, errors);
+                check_expr_flows(k, pc.clone(), env, caller_fn, sink_reach, errors);
+                check_expr_flows(v, pc.clone(), env, caller_fn, sink_reach, errors);
             }
         }
         Expr::Spawn { fields, .. } => {
             for (_, v) in fields {
-                check_expr_flows(v, pc.clone(), env, errors);
+                check_expr_flows(v, pc.clone(), env, caller_fn, sink_reach, errors);
             }
         }
         Expr::Select { arms, .. } => {
             for arm in arms {
-                check_expr_flows(&arm.expr, pc.clone(), env, errors);
+                check_expr_flows(&arm.expr, pc.clone(), env, caller_fn, sink_reach, errors);
                 for stmt in &arm.body.stmts {
-                    check_stmt_flows(stmt, pc.clone(), env, errors);
+                    check_stmt_flows(stmt, pc.clone(), env, caller_fn, sink_reach, errors);
                 }
             }
         }
         Expr::Concurrently { body, .. } => {
             for stmt in &body.stmts {
-                check_stmt_flows(stmt, pc.clone(), env, errors);
+                check_stmt_flows(stmt, pc.clone(), env, caller_fn, sink_reach, errors);
             }
         }
         // Leaves — no sub-expressions to walk.
@@ -765,6 +891,112 @@ fn count_in_expr(expr: &Expr, dc: &mut usize, sc: &mut usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mvl::parser::Parser;
+
+    fn parse(src: &str) -> crate::mvl::parser::ast::Program {
+        let (mut p, _) = Parser::new(src);
+        p.parse_program()
+    }
+
+    fn cross_fn_violations(src: &str) -> Vec<CheckError> {
+        let prog = parse(src);
+        let prog_ref = &prog;
+        let mut errors = Vec::new();
+        check_implicit_flows(&prog, &[prog_ref], &mut errors);
+        errors
+            .into_iter()
+            .filter(|e| matches!(e, CheckError::CrossFunctionImplicitFlowViolation { .. }))
+            .collect()
+    }
+
+    // ── cross-function implicit flow tests (#832) ─────────────────────────
+
+    #[test]
+    fn direct_call_to_println_wrapper_under_high_pc() {
+        // fn log_access(msg: String) { println(msg) }
+        // fn check_auth(flag: Secret[Bool]) { if flag { log_access("x") } }
+        let violations = cross_fn_violations(
+            "label Secret \
+             fn log_access(msg: String) -> Unit { println(msg) } \
+             fn check_auth(flag: Secret[Bool]) -> Unit { if flag { log_access(\"x\") } }",
+        );
+        assert!(
+            !violations.is_empty(),
+            "call to println-wrapper under high PC should be a cross-function implicit flow"
+        );
+        if let Some(CheckError::CrossFunctionImplicitFlowViolation {
+            pc_label,
+            callee,
+            sink,
+            ..
+        }) = violations.first()
+        {
+            assert_eq!(pc_label, "Secret");
+            assert_eq!(callee, "log_access");
+            assert_eq!(sink, "println");
+        }
+    }
+
+    #[test]
+    fn transitive_chain_a_calls_b_calls_println() {
+        // fn a() calls b(), b() calls println
+        // if secret { a() } → cross-function implicit flow
+        let violations = cross_fn_violations(
+            "label Secret \
+             fn b(msg: String) -> Unit { println(msg) } \
+             fn a(msg: String) -> Unit { b(msg) } \
+             fn entry(flag: Secret[Bool]) -> Unit { if flag { a(\"x\") } }",
+        );
+        assert!(
+            !violations.is_empty(),
+            "transitive a→b→println under high PC should produce cross-function implicit flow"
+        );
+        if let Some(CheckError::CrossFunctionImplicitFlowViolation { callee, sink, .. }) =
+            violations.first()
+        {
+            assert_eq!(callee, "a");
+            assert_eq!(sink, "println");
+        }
+    }
+
+    #[test]
+    fn no_false_positive_for_unlabeled_branch() {
+        // if flag { log_access("x") } where flag is bare Bool — no violation
+        let violations = cross_fn_violations(
+            "fn log_access(msg: String) -> Unit { println(msg) } \
+             fn entry(flag: Bool) -> Unit { if flag { log_access(\"x\") } }",
+        );
+        assert!(
+            violations.is_empty(),
+            "unlabeled branch condition should not produce cross-function implicit flow: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn no_false_positive_for_fn_not_reaching_sink() {
+        // fn helper() -> Unit { 42 }  — no public sink
+        // if secret { helper() } → no cross-function implicit flow
+        let violations = cross_fn_violations(
+            "label Secret \
+             fn helper() -> Unit { } \
+             fn entry(flag: Secret[Bool]) -> Unit { if flag { helper() } }",
+        );
+        assert!(
+            violations.is_empty(),
+            "fn not reaching a public sink should not produce cross-function implicit flow: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn cross_fn_violation_has_req_11() {
+        let violations = cross_fn_violations(
+            "label Secret \
+             fn log(msg: String) -> Unit { println(msg) } \
+             fn entry(flag: Secret[Bool]) -> Unit { if flag { log(\"x\") } }",
+        );
+        assert!(!violations.is_empty());
+        assert_eq!(violations[0].requirement_number(), 11);
+    }
 
     #[test]
     fn join_opt_both_none_is_none() {
