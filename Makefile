@@ -49,9 +49,11 @@ doctor: ## Check that all dev tools are available
 	fi; \
 	echo
 
-install: build-release ## Install mvl binary to ~/.local/bin
+install: build-release build-llvm-runtime-release ## Install mvl binary + LLVM runtime to ~/.local/bin
 	@mkdir -p ~/.local/bin
 	cp target/release/mvl ~/.local/bin/mvl
+	cp target/release/libmvl_runtime_c.dylib ~/.local/bin/libmvl_runtime_c.dylib 2>/dev/null || true
+	cp target/release/libmvl_runtime_c.so    ~/.local/bin/libmvl_runtime_c.so    2>/dev/null || true
 	@echo "Installed: ~/.local/bin/mvl"
 
 # === Build ===
@@ -62,6 +64,9 @@ build: ## Build the MVL compiler
 
 build-llvm-runtime: ## Build the LLVM runtime cdylib (mvl_runtime_c at runtime/llvm)
 	cargo build -p mvl_runtime_c
+
+build-llvm-runtime-release: ## Build the LLVM runtime cdylib in release mode
+	cargo build --release -p mvl_runtime_c
 
 build-release: ## Build release binary
 	cargo build --release

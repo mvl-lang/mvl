@@ -3114,6 +3114,67 @@ impl<'ctx> LlvmBackend<'ctx> {
         subs
     }
 
+    /// Enhance type substitutions by resolving type params inside compound types
+    /// (e.g. `Map[K, V]`) using MVL-level type information from call-site arguments.
+    ///
+    /// `infer_type_subs` only handles bare type params like `key: K`.  For params
+    /// like `m: Map[K, V]`, K and V cannot be inferred from the LLVM type (opaque
+    /// ptr).  This method matches each formal param's type args against the actual
+    /// MVL type of the argument expression to extract the missing substitutions.
+    pub(crate) fn infer_type_subs_from_args(
+        &self,
+        fd: &FnDecl,
+        call_args: &[crate::mvl::parser::ast::Expr],
+        subs: &mut HashMap<String, BasicTypeEnum<'ctx>>,
+    ) {
+        for (param, arg_expr) in fd.params.iter().zip(call_args.iter()) {
+            if let TypeExpr::Base {
+                args: formal_args, ..
+            } = &param.ty
+            {
+                if formal_args.is_empty() {
+                    continue;
+                }
+                // Look up the actual MVL type of the argument expression.
+                let actual_ty = match arg_expr {
+                    crate::mvl::parser::ast::Expr::Ident(name, _) => {
+                        self.local_mvl_types.get(name.as_str())
+                    }
+                    _ => None,
+                };
+                let actual_ty = match actual_ty {
+                    Some(t) => Self::strip_type_wrappers(t),
+                    None => continue,
+                };
+                if let TypeExpr::Base {
+                    args: actual_args, ..
+                } = actual_ty
+                {
+                    for (formal_tp, actual_tp) in formal_args.iter().zip(actual_args.iter()) {
+                        if let TypeExpr::Base {
+                            name: tp_name,
+                            args: tp_args,
+                            ..
+                        } = formal_tp
+                        {
+                            if tp_args.is_empty()
+                                && fd
+                                    .type_params
+                                    .iter()
+                                    .any(|tp| tp.name() == tp_name.as_str())
+                                && !subs.contains_key(tp_name.as_str())
+                            {
+                                if let Some(llvm_ty) = self.mvl_type_to_llvm(actual_tp) {
+                                    subs.insert(tp_name.clone(), llvm_ty);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Produce a mangled LLVM name for a generic function given its type substitutions.
     ///
     /// Example: `identity` with `T=i64` → `identity_Int`.

@@ -2387,7 +2387,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                         if arg_vals.len() != args.len() {
                             return None;
                         }
-                        let type_subs = self.infer_type_subs(&fd, &arg_vals);
+                        let mut type_subs = self.infer_type_subs(&fd, &arg_vals);
+                        self.infer_type_subs_from_args(&fd, args, &mut type_subs);
                         let mangled = self.mangle_fn_name(&fd, &type_subs);
                         self.ensure_monomorphized(fd, type_subs, &mangled.clone());
                         let fn_val = self.module.get_function(&mangled)?;
@@ -3630,6 +3631,9 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
             Some(inkwell::types::BasicTypeEnum::FloatType(ft)) => {
                 self.builder.build_load(ft, raw_ptr, "mg_load").unwrap()
+            }
+            Some(inkwell::types::BasicTypeEnum::StructType(st)) => {
+                self.builder.build_load(st, raw_ptr, "mg_load").unwrap()
             }
             _ => {
                 // Default: pointer value (String or opaque struct).
