@@ -959,10 +959,14 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     emit_expr(cg, expr);
                     cg.push("))");
                 }
-                // User-defined transitions: conservative — just emit inner expr.
-                // TODO: look up from/to in the type env to emit correct wrapping.
+                // User-defined transitions: wrapping/unwrapping not yet implemented in
+                // the Rust backend (type env lookup needed to know from/to label names).
+                // Emit a runtime panic so the failure is visible rather than silently
+                // producing incorrect code.  Tracked as a follow-up TODO.
                 _ => {
-                    emit_expr(cg, expr);
+                    cg.push(&format!(
+                        "unimplemented!(\"relabel {name}: user-defined transitions not yet supported in Rust backend\")"
+                    ));
                 }
             }
         }

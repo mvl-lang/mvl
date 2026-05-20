@@ -38,10 +38,10 @@ pub type FieldSpec = enum {
 
 /// A parsed argument value.  Callers pattern-match on the variant.
 ///
-/// `Str` carries `String` — the parser called `` on every
+/// `Str` carries `String` — the parser called `relabel trust` on every
 /// argv token before returning.  Callers may use the value directly where
-/// `String` is expected (Clean coerces to String) or pass it to functions
-/// that require `String` without an extra sanitize call.
+/// `String` is expected, or pass it to functions that require `String`
+/// without an extra relabel call.
 pub type ArgValue = enum {
     Str(String),
     Int(Int),

@@ -8,7 +8,7 @@
 // This property is enforced statically by the type system, not at runtime:
 //
 //   - Response.body has type String
-//   - Secret[String] is NOT assignable to String (IFC sublattice: Secret > Clean)
+//   - Secret[String] is NOT assignable to String — labeled ≠ bare, no implicit flow (#894)
 //   - Therefore, the compiler rejects any code that tries to include a secret
 //     in the response body — the property holds for ALL possible handler paths.
 //

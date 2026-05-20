@@ -330,18 +330,18 @@ fn collect_calls_in_expr(expr: &Expr, names: &mut std::collections::HashSet<Stri
     }
 }
 
-/// Used by the IFC pass to include the audit trail in the `Proven` evidence.
+/// Count all `Expr::Relabel` call sites in the program.
 ///
-/// Returns `(relabel_count, 0)` — second field kept for backwards-compat with callers.
-pub fn count_declassifications(prog: &Program) -> (usize, usize) {
+/// Used by the IFC pass to include the auditable relabel count in the `Proven` evidence.
+pub fn count_relabels(prog: &Program) -> usize {
     let mut rc = 0usize;
-    let mut zero = 0usize;
+    let mut _ignored = 0usize;
     for decl in &prog.declarations {
         if let Decl::Fn(fd) = decl {
-            count_in_block(&fd.body, &mut rc, &mut zero);
+            count_in_block(&fd.body, &mut rc, &mut _ignored);
         }
     }
-    (rc, 0)
+    rc
 }
 
 /// Extract the outermost security label name from a `TypeExpr`, if any.

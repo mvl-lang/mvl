@@ -47,6 +47,14 @@ use crate::mvl::checker::ifc;
 use crate::mvl::parser::ast::{Block, Decl, ElseBranch, Expr, MatchBody, Program, Stmt, TypeExpr};
 use crate::mvl::parser::lexer::Span;
 
+/// Sentinel value stored in the inferred label table for functions that explicitly
+/// strip labels via `relabel` (e.g. `relabel trust(x, "TAG")` → bare).
+///
+/// The leading `<` makes this impossible to match any valid MVL label name, which
+/// must start with `[A-Za-z_]`.  A user-defined `label` whose name happened to be
+/// `__stripped__` would have collided with the old string literal; this one cannot.
+const STRIPPED_SENTINEL: &str = "<stripped>";
+
 // ── External taint source registry (#833) ─────────────────────────────────────
 
 /// Function names that always return `Tainted` data, independent of arguments.
@@ -99,8 +107,8 @@ impl InferredLabels {
             .get(fn_name)
             .or_else(|| self.inferred.get(fn_name))
             .cloned();
-        // Filter out the internal "__stripped__" sentinel — callers see None (bare).
-        label.filter(|l| l != "__stripped__")
+        // Filter out the internal STRIPPED_SENTINEL — callers see None (bare).
+        label.filter(|l| l != STRIPPED_SENTINEL)
     }
 }
 
@@ -197,8 +205,8 @@ pub fn propagate(programs: &[&Program], type_env: &TypeEnv) -> InferredLabels {
                         // Function has labeled params but body explicitly returns bare (None).
                         // Mark as "explicitly bare" so call sites don't apply label-polymorphic
                         // propagation (which would incorrectly infer Tainted from arg labels).
-                        // Sentinel "__stripped__" = function strips labels via relabel.
-                        table.insert(name.to_string(), "__stripped__".to_string());
+                        // STRIPPED_SENTINEL = function explicitly strips labels via relabel.
+                        table.insert(name.to_string(), STRIPPED_SENTINEL.to_string());
                     }
                 }
             }
@@ -326,11 +334,11 @@ pub fn infer_label_extended(
             if let Some(label) = explicit.get(name.as_str()) {
                 return Some(label.clone());
             }
-            // "__stripped__" sentinel: function explicitly strips labels via relabel.
+            // STRIPPED_SENTINEL: function explicitly strips labels via relabel.
             // Do not propagate arg labels — return None (bare).
             if inferred
                 .get(name.as_str())
-                .is_some_and(|l| l == "__stripped__")
+                .is_some_and(|l| l == STRIPPED_SENTINEL)
             {
                 return None;
             }
@@ -1099,23 +1107,22 @@ mod tests {
 
     // ── Tests for #849, #850, #851 ────────────────────────────────────────
 
-    // #849: label-polymorphic wrapper — explicit annotation is authoritative,
-    // inferred label must be joined with arg labels (not used as short-circuit).
+    // #849: label-polymorphic wrapper — relabel trust() strips the Tainted label;
+    // the result is bare and satisfies a bare-requiring sink → no violation.
     #[test]
-    fn explicit_annotation_authoritative_over_args() {
-        // fn trust_wrapper wraps source output via relabel → bare (no label).
-        // sink requires bare String → no violation.
-        let prog = parse(
-            "fn trust_wrapper(x: String) -> String { x } \
-             fn caller() -> Unit { sink(trust_wrapper(source())) }",
-        );
+    fn relabel_trust_strips_label_no_violation_at_bare_sink() {
+        // GIVEN: caller passes source() through relabel trust() before sink.
+        // relabel trust(source(), "VALIDATED-01") → bare String (Expr::Relabel → None).
+        // sink requires bare String → arg_label (None) == required (None) → no violation.
+        let prog =
+            parse(r#"fn caller() -> Unit { sink(relabel trust(source(), "VALIDATED-01")) }"#);
         let env = env_with_taint_source();
         let inferred = propagate(&[&prog], &env);
         let violations = detect_violations(&prog, &env, &inferred);
-        // trust_wrapper is unannotated → inferred label comes from arg-join with source() call.
-        // This is a violation (tainted through unannotated wrapper).
-        // We keep this test to document the behaviour: annotation wins over inference.
-        let _ = violations; // behaviour checked in inferred_wrapper_taint_propagates_through_tainted_arg
+        assert!(
+            violations.is_empty(),
+            "relabel trust() strips the Tainted label — no violation expected at bare sink, got: {violations:?}"
+        );
     }
 
     #[test]
