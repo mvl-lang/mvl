@@ -1,0 +1,23 @@
+// Corpus: no false positive for non-sink helpers called under high-PC branch
+// No violations expected — this file MUST produce no Req 11 errors.
+//
+// Calling a function that does NOT reach any public sink inside a Secret-controlled
+// branch is safe: no information is leaked through control flow.
+// This test verifies that the cross-function implicit flow check produces no false
+// positives for pure computation helpers without I/O side effects.
+//
+// The helper returns Unit so the if-expression result does not carry a Secret label
+// (avoiding the separate type-propagation concern in the result type).
+
+// Pure helper — reaches no public sink; performs only computation.
+fn record_metric(n: Int) -> Unit {
+    let _val: Int = n * n;
+}
+
+fn process_secret_flag(flag: Secret[Bool], n: Int) -> Unit {
+    // SAFE: record_metric is not in the sink-reach set.
+    // Calling it inside a Secret branch does not leak information via control flow.
+    if flag {
+        record_metric(n)
+    }
+}

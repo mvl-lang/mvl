@@ -1,0 +1,23 @@
+// Corpus: interprocedural taint chain through multiple functions (003-information-flow, Req 11)
+// corpus:expect-fail — transitive sink reachability through a two-hop call chain.
+//
+// Sink reachability propagates transitively via BFS: if A→B→println then calling A
+// inside a Tainted-controlled branch is a cross-function implicit flow violation.
+
+fn emit_log_line() -> Unit ! Console {
+    println("tainted path taken")
+}
+
+fn record_decision() -> Unit ! Console {
+    // record_decision → emit_log_line → println: transitively reaches a public sink.
+    emit_log_line()
+}
+
+fn route_user_request(input: Tainted[Bool]) -> Unit ! Console {
+    // VIOLATION: record_decision() transitively reaches println via emit_log_line().
+    // The Tainted branch condition controls whether the chain fires,
+    // leaking the value of `input` through control flow.
+    if input {
+        record_decision()
+    }
+}
