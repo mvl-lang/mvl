@@ -2813,6 +2813,16 @@ impl<'ctx> LlvmBackend<'ctx> {
         };
         let is_c_main = fd.name == "main";
 
+        // If the function already has a body (duplicate name from an earlier prelude
+        // module), delete it so the later declaration wins.  This handles name collisions
+        // between implicit-prelude functions and RUST_BACKED_STDLIB functions (e.g.
+        // strings.replace vs regex.replace).
+        if fn_val.count_basic_blocks() > 0 {
+            while let Some(bb) = fn_val.get_last_basic_block() {
+                unsafe { bb.delete().unwrap() };
+            }
+        }
+
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
         self.locals.clear();

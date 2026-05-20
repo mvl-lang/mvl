@@ -2459,10 +2459,11 @@ impl<'ctx> LlvmBackend<'ctx> {
         // For empty literals, fall back to the let-binding annotation (pending_let_ty)
         // so that List[Value] (9-byte elements) gets the correct size instead of 8.
         let elem_size = {
+            // Strip Ref/Labeled/Refined wrappers to get the underlying List[T] type.
+            let unwrapped_ty = self.pending_let_ty.as_ref().map(Self::strip_type_wrappers);
             let sz = if let Some(first) = elem_vals.first() {
                 self.llvm_type_byte_size(first.get_type())
-            } else if let Some(crate::mvl::parser::ast::TypeExpr::Base { args, .. }) =
-                self.pending_let_ty.as_ref()
+            } else if let Some(crate::mvl::parser::ast::TypeExpr::Base { args, .. }) = unwrapped_ty
             {
                 // Extract element type from List[T] / Array[T] annotation so that
                 // empty literals use the correct size (e.g. List[Value] = 9 bytes).

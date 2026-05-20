@@ -65,7 +65,7 @@ pub fn format_datetime(t: DateTime, pattern: String) -> String {
         let c: String = str_char_at(pattern, i);
         if c == "%" && i + 1 < n {
             let spec: String = str_char_at(pattern, i + 1);
-            let val: String =
+            let fmtd: String =
                 if spec == "Y" { dt_pad4(t.year) }
                 else if spec == "m" { dt_pad2(t.month) }
                 else if spec == "d" { dt_pad2(t.day) }
@@ -73,7 +73,7 @@ pub fn format_datetime(t: DateTime, pattern: String) -> String {
                 else if spec == "M" { dt_pad2(t.minute) }
                 else if spec == "S" { dt_pad2(t.second) }
                 else { str_concat("%", spec) };
-            result = str_concat(result, val);
+            result = str_concat(result, fmtd);
             i = i + 2
         } else {
             result = str_concat(result, c);
