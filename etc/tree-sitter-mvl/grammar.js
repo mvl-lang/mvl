@@ -636,6 +636,11 @@ module.exports = grammar({
 
     sanitize_expr: ($) => seq("sanitize", "(", $.expr, ")"),
 
+    label_decl: ($) => seq("label", $.identifier, ";"),
+
+    relabel_expr: ($) =>
+      seq("relabel", $.identifier, "(", $.expr, ",", $.expr, ")"),
+
     // Phase 8, #63: `actor TypeName { field: expr, … }` — create actor, returns ActorRef
     actor_create_expr: ($) =>
       prec(
