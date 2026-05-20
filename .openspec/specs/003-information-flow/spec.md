@@ -172,17 +172,17 @@ The `format()` function MUST be IFC-aware. The result label MUST be the join (hi
 
 ### Requirement 11: Implicit Flows Are Rejected [MUST]
 
-The compiler MUST detect implicit information flows via control flow (Program Counter label analysis). A `println` or `print` call that appears inside a branch controlled by a `Secret` or `Tainted` condition MUST be a compile error, even if the printed arguments are `Public`.
+The compiler MUST detect implicit information flows via control flow (Program Counter label analysis). A `println` or `print` call — whether invoked directly or through a chain of user-defined helper functions — that appears inside a branch controlled by a `Secret` or `Tainted` condition MUST be a compile error, even if the printed arguments are `Public`.
 
-> **Rationale:** Whether a print fires reveals the value of the controlling condition. This is a covert channel — information leaks through control flow rather than data flow.
+> **Rationale:** Whether a print fires reveals the value of the controlling condition. This is a covert channel — information leaks through control flow rather than data flow. The check is interprocedural: wrapping `println` in a helper does not bypass the rule.
 
-**Implementation:** `src/mvl/checker/ifc.rs` (`check_implicit_flows`), `src/mvl/checker.rs`
+**Implementation:** `src/mvl/checker/ifc.rs` (`check_implicit_flows`, `build_sink_reachability`), `src/mvl/checker.rs`
 
-**Tests:** `tests/type_checker.rs::implicit_flow_secret_if_condition_rejected`, `tests/type_checker.rs::implicit_flow_tainted_if_condition_rejected`, `tests/type_checker.rs::implicit_flow_public_condition_accepted`, `tests/type_checker.rs::implicit_flow_print_sink_rejected`, `tests/type_checker.rs::implicit_flow_else_branch_rejected`, `tests/type_checker.rs::implicit_flow_label_propagated_through_let`, `tests/type_checker.rs::implicit_flow_while_secret_condition_rejected`, `src/mvl/checker/passes.rs::req11_proven_for_labeled_types_with_no_violations`
+**Tests:** `tests/type_checker.rs::implicit_flow_secret_if_condition_rejected`, `tests/type_checker.rs::implicit_flow_tainted_if_condition_rejected`, `tests/type_checker.rs::implicit_flow_public_condition_accepted`, `tests/type_checker.rs::implicit_flow_print_sink_rejected`, `tests/type_checker.rs::implicit_flow_else_branch_rejected`, `tests/type_checker.rs::implicit_flow_label_propagated_through_let`, `tests/type_checker.rs::implicit_flow_while_secret_condition_rejected`, `tests/type_checker.rs::cross_function_implicit_corpus_has_violations`, `tests/type_checker.rs::interprocedural_taint_corpus_has_violations`, `tests/type_checker.rs::return_label_inference_corpus_has_no_req11_violations`, `tests/type_checker.rs::interprocedural_clean_corpus_has_no_req11_violations`, `tests/type_checker.rs::call_chain_error_names_callee_and_sink`, `src/mvl/checker/passes.rs::req11_proven_for_labeled_types_with_no_violations`
 
-**Corpus:** `tests/corpus/05_ifc/implicit_flow.mvl`
+**Corpus:** `tests/corpus/06_ifc/implicit_flow.mvl`, `tests/corpus/06_ifc/cross_function_implicit.mvl`, `tests/corpus/06_ifc/interprocedural_taint.mvl`, `tests/corpus/06_ifc/return_label_inference.mvl`, `tests/corpus/06_ifc/interprocedural_clean.mvl`, `tests/corpus/06_ifc/call_chain_error_message.mvl`
 
-#### Scenario: Secret condition controls println
+#### Scenario: Secret condition controls println directly
 
 - GIVEN `fn f(flag: Secret[Bool]) -> Unit`
 - WHEN `if flag { println("access granted") }`
@@ -200,8 +200,30 @@ The compiler MUST detect implicit information flows via control flow (Program Co
 - WHEN `if flag { 0 } else { println("denied") }`
 - THEN the compiler MUST reject: the else-branch is also controlled by the Secret condition
 
-### Known Limitations (Phase 3)
+#### Scenario: Cross-function implicit flow via helper wrapper
 
-- Cross-function implicit flows (a secret returned from a function that controls a branch in the caller) are not yet detected. Deferred to Phase 6.
+- GIVEN `fn log_access() -> Unit { println("access granted") }`
+- AND `fn check(flag: Secret[Bool]) -> Unit { if flag { log_access() } }`
+- THEN the compiler MUST reject: `log_access` transitively reaches `println`; calling it under a `Secret` branch leaks `flag`'s value
+
+#### Scenario: Transitive sink reachability through two hops
+
+- GIVEN `fn inner() { println("x") }`, `fn middle() { inner() }`, `fn outer(t: Tainted[Bool]) { if t { middle() } }`
+- THEN the compiler MUST reject: `middle` is in the transitive sink-reach set (via `inner`)
+
+#### Scenario: Pure computation helper under high-PC is safe
+
+- GIVEN `fn hash(s: Secret[String]) -> Int { s.len() }` (no I/O)
+- AND `fn process(flag: Secret[Bool], s: Secret[String]) -> Int { if flag { hash(s) } else { 0 } }`
+- THEN the compiler MUST accept: `hash` does not reach any public sink
+
+#### Scenario: Sink-reaching function called unconditionally is safe
+
+- GIVEN `fn announce(msg: String) -> Unit { println(msg) }` (reaches a public sink)
+- AND `fn send_status() -> Unit { announce("ok") }` (unconditional — no high-PC branch)
+- THEN the compiler MUST accept: the program counter label is `None` at the call site
+
+### Known Limitations
+
 - Label inference through unannotated intermediate bindings (without explicit type annotations) is conservative: the label may not be propagated. Users should annotate intermediate variables explicitly.
 - `match` scrutinee implicit flows are detected when the scrutinee is a directly labeled variable.
