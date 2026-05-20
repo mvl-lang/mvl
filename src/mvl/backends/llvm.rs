@@ -568,8 +568,17 @@ impl<'ctx> LlvmBackend<'ctx> {
                     // named `Logger_info` would shadow the mangled symbol for `fn Logger::info`;
                     // this is caught at the MVL checker level (DuplicateFnDecl / UndefinedType)
                     // before LLVM is reached (#875 review).
-                    self.fn_return_types
-                        .insert(llvm_name.clone(), *fd.return_type.clone());
+                    // Don't overwrite stdlib-registered return types: when a stdlib
+                    // function shadows a prelude function (e.g. regex.find vs strings.find),
+                    // the C-ABI dispatch always wins, so the return type must match.
+                    if self.stdlib_imports.contains_key(&fd.name) {
+                        self.fn_return_types
+                            .entry(llvm_name.clone())
+                            .or_insert(*fd.return_type.clone());
+                    } else {
+                        self.fn_return_types
+                            .insert(llvm_name.clone(), *fd.return_type.clone());
+                    }
                     self.fn_decls.insert(llvm_name, fd.clone());
                     if fd.type_params.is_empty() || fd.is_builtin {
                         self.declare_fn(fd);
@@ -2615,6 +2624,34 @@ impl<'ctx> LlvmBackend<'ctx> {
                     .expect("mvl_string_concat must return ptr");
                 self.builder.build_return(Some(&s_ptr)).unwrap();
             }
+            // str_len(s: String) -> Int: delegate to _mvl_str_len
+            "str_len" => {
+                self.emit_builtin_bridge_1_to_1(fn_val, "_mvl_str_len", i64_ty.into());
+            }
+            // str_char_at(s: String, i: Int) -> String: delegate to _mvl_str_char_at
+            "str_char_at" => {
+                self.emit_builtin_bridge_2_to_ptr(fn_val, "_mvl_str_char_at");
+            }
+            // str_substring(s: String, start: Int, end: Int) -> String
+            "str_substring" => {
+                self.emit_builtin_bridge_3_to_ptr(fn_val, "_mvl_str_substring");
+            }
+            // str_replace(s: String, from: String, to: String) -> String
+            "str_replace" => {
+                self.emit_builtin_bridge_3_to_ptr(fn_val, "_mvl_str_replace");
+            }
+            // str_split(s: String, sep: String) -> List[String]
+            "str_split" => {
+                self.emit_builtin_bridge_2_to_ptr(fn_val, "_mvl_str_split");
+            }
+            // String → String (1-arg): trim, to_lower, to_upper, from_chars, from_bytes
+            "str_trim" | "str_to_lower" | "str_to_upper" | "str_from_chars" | "str_from_bytes" => {
+                self.emit_builtin_bridge_1_to_1(
+                    fn_val,
+                    &format!("_mvl_{}", efn.name),
+                    self.context.ptr_type(AddressSpace::default()).into(),
+                );
+            }
             // list_len(list: List[T]) -> Int: delegate to mvl_array_len
             "list_len" => {
                 let arg0 = fn_val.get_first_param().expect("list_len: missing arg");
@@ -3109,6 +3146,80 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .unwrap_or_else(|| "Struct".into()),
             _ => "Unknown".into(),
         }
+    }
+
+    // ── Builtin bridge helpers ─────────────────────────────────────────────
+
+    /// Bridge a 1-arg builtin to a C-ABI function with the same signature shape.
+    fn emit_builtin_bridge_1_to_1(
+        &mut self,
+        fn_val: FunctionValue<'ctx>,
+        c_name: &str,
+        ret_ty: BasicTypeEnum<'ctx>,
+    ) {
+        use inkwell::values::AnyValue;
+        let arg0 = fn_val.get_first_param().expect("bridge_1: missing arg");
+        let c_fn = self.module.get_function(c_name).unwrap_or_else(|| {
+            let ft = ret_ty.fn_type(&[arg0.get_type().into()], false);
+            self.module
+                .add_function(c_name, ft, Some(Linkage::External))
+        });
+        let call = self
+            .builder
+            .build_call(c_fn, &[arg0.into()], "bridge")
+            .unwrap();
+        let rv = BasicValueEnum::try_from(call.as_any_value_enum()).expect("bridge_1 return");
+        self.builder.build_return(Some(&rv)).unwrap();
+    }
+
+    /// Bridge a 2-arg builtin to a C-ABI function returning ptr.
+    fn emit_builtin_bridge_2_to_ptr(&mut self, fn_val: FunctionValue<'ctx>, c_name: &str) {
+        use inkwell::values::AnyValue;
+        let params: Vec<_> = fn_val.get_param_iter().collect();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let c_fn = self.module.get_function(c_name).unwrap_or_else(|| {
+            let ft = ptr_ty.fn_type(
+                &[params[0].get_type().into(), params[1].get_type().into()],
+                false,
+            );
+            self.module
+                .add_function(c_name, ft, Some(Linkage::External))
+        });
+        let call = self
+            .builder
+            .build_call(c_fn, &[params[0].into(), params[1].into()], "bridge")
+            .unwrap();
+        let rv = BasicValueEnum::try_from(call.as_any_value_enum()).expect("bridge_2p return");
+        self.builder.build_return(Some(&rv)).unwrap();
+    }
+
+    /// Bridge a 3-arg builtin to a C-ABI function returning ptr.
+    fn emit_builtin_bridge_3_to_ptr(&mut self, fn_val: FunctionValue<'ctx>, c_name: &str) {
+        use inkwell::values::AnyValue;
+        let params: Vec<_> = fn_val.get_param_iter().collect();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let c_fn = self.module.get_function(c_name).unwrap_or_else(|| {
+            let ft = ptr_ty.fn_type(
+                &[
+                    params[0].get_type().into(),
+                    params[1].get_type().into(),
+                    params[2].get_type().into(),
+                ],
+                false,
+            );
+            self.module
+                .add_function(c_name, ft, Some(Linkage::External))
+        });
+        let call = self
+            .builder
+            .build_call(
+                c_fn,
+                &[params[0].into(), params[1].into(), params[2].into()],
+                "bridge",
+            )
+            .unwrap();
+        let rv = BasicValueEnum::try_from(call.as_any_value_enum()).expect("bridge_3p return");
+        self.builder.build_return(Some(&rv)).unwrap();
     }
 
     // ── Verification and IR output ───────────────────────────────────────────

@@ -271,6 +271,113 @@ pub fn load_mvl_native_stdlib_extras(progs: &[Program]) -> Vec<Program> {
     extras
 }
 
+/// Load pure-MVL function bodies from `RUST_BACKED_STDLIB` modules for the LLVM backend.
+///
+/// The Rust transpiler handles these modules entirely via `mvl_runtime::stdlib::X::*`,
+/// but the LLVM backend only dispatches `builtin fn` declarations to C-ABI symbols.
+/// Non-builtin functions (`find_all`, `replace`, `format_datetime`, etc.) are written
+/// in MVL and need their bodies compiled to LLVM IR.
+///
+/// This function loads each referenced RUST_BACKED_STDLIB module's `.mvl` source,
+/// strips type declarations (manually registered by `collect_stdlib_imports`) and
+/// `builtin fn` declarations (routed via the C-ABI dispatch table), and returns
+/// programs containing only the pure MVL function bodies.
+pub fn load_rust_backed_stdlib_fns(progs: &[Program]) -> Vec<Program> {
+    use std::collections::HashSet;
+    let mut loaded: HashSet<String> = HashSet::new();
+    let mut extras: Vec<Program> = Vec::new();
+
+    for prog in progs {
+        for decl in &prog.declarations {
+            if let Decl::Use(ud) = decl {
+                if ud.path.first().map(|s| s == "std").unwrap_or(false) {
+                    if let Some(module) = ud.path.get(1) {
+                        let m = module.as_str();
+                        if !RUST_BACKED_STDLIB.contains(&m) {
+                            continue;
+                        }
+                        if !loaded.insert(module.clone()) {
+                            continue;
+                        }
+                        let filename = format!("{m}.mvl");
+                        if let Some(content) = stdlib::stdlib_content(&filename) {
+                            let (mut p, _) = Parser::new(content);
+                            let mut loaded_prog = p.parse_program();
+                            // Collect names of builtin fns — the LLVM C-ABI dispatch
+                            // handles these, so we must not emit conflicting MVL bodies.
+                            // Also skip non-builtin pub fns that share a name with a
+                            // builtin (e.g. io.path shadows _mvl_io_path).
+                            let builtin_names: HashSet<String> = loaded_prog
+                                .declarations
+                                .iter()
+                                .filter_map(|d| {
+                                    if let Decl::Fn(fd) = d {
+                                        if fd.is_builtin {
+                                            return Some(fd.name.clone());
+                                        }
+                                    }
+                                    None
+                                })
+                                .collect();
+                            // Types the LLVM backend handles as opaque ptrs where
+                            // struct construction/destruction in MVL would fail.
+                            // Excludes String/List/Map etc. which are fine as opaque
+                            // ptrs in function signatures.
+                            const OPAQUE_PTR_TYPES: &[&str] =
+                                &["Path", "TcpListener", "TcpStream", "Stdout", "Stderr"];
+                            // Keep type declarations (structs/enums needed by
+                            // pure MVL functions) except for opaque-ptr types,
+                            // and non-builtin function declarations that don't
+                            // reference opaque-ptr types in their signature.
+                            loaded_prog.declarations.retain(|d| match d {
+                                Decl::Type(td) => !OPAQUE_PTR_TYPES.contains(&td.name.as_str()),
+                                Decl::Fn(fd) => {
+                                    if fd.is_builtin || builtin_names.contains(&fd.name) {
+                                        return false;
+                                    }
+                                    // Skip functions that use opaque-ptr types in
+                                    // params or return — the LLVM backend can't
+                                    // construct or destructure those types.
+                                    let uses_opaque = fd
+                                        .params
+                                        .iter()
+                                        .any(|p| type_uses_opaque(&p.ty, OPAQUE_PTR_TYPES))
+                                        || type_uses_opaque(&fd.return_type, OPAQUE_PTR_TYPES);
+                                    !uses_opaque
+                                }
+                                _ => false,
+                            });
+                            if !loaded_prog.declarations.is_empty() {
+                                extras.push(loaded_prog);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    extras
+}
+
+/// Check if a `TypeExpr` references any type in the opaque list.
+fn type_uses_opaque(ty: &crate::mvl::parser::ast::TypeExpr, opaque: &[&str]) -> bool {
+    use crate::mvl::parser::ast::TypeExpr;
+    match ty {
+        TypeExpr::Base { name, args, .. } => {
+            opaque.contains(&name.as_str()) || args.iter().any(|a| type_uses_opaque(a, opaque))
+        }
+        TypeExpr::Option { inner, .. }
+        | TypeExpr::Labeled { inner, .. }
+        | TypeExpr::Refined { inner, .. }
+        | TypeExpr::Ref { inner, .. } => type_uses_opaque(inner, opaque),
+        TypeExpr::Result { ok, err, .. } => {
+            type_uses_opaque(ok, opaque) || type_uses_opaque(err, opaque)
+        }
+        _ => false,
+    }
+}
+
 /// Load MVL source files from `pkg.*` packages referenced by `progs`.
 /// Checks local override first, then the global XDG cache.
 pub fn load_pkg_modules(progs: &[Program], project_root: &Path) -> Vec<Program> {

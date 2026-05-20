@@ -1538,6 +1538,32 @@ impl<'ctx> LlvmBackend<'ctx> {
             (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => {
                 self.emit_float_binop(op, l, r)
             }
+            // String equality/inequality: call mvl_string_eq and convert i32 → i1.
+            (BasicValueEnum::PointerValue(l), BasicValueEnum::PointerValue(r))
+                if matches!(op, BinaryOp::Eq | BinaryOp::Ne) =>
+            {
+                let eq_fn = self.get_mvl_string_eq();
+                let call = self
+                    .builder
+                    .build_call(eq_fn, &[l.into(), r.into()], "str_eq")
+                    .ok()?;
+                use inkwell::values::AnyValue;
+                let eq_i32 = BasicValueEnum::try_from(call.as_any_value_enum())
+                    .ok()?
+                    .into_int_value();
+                let zero = self.context.i32_type().const_int(0, false);
+                let pred = if matches!(op, BinaryOp::Eq) {
+                    IntPredicate::NE // eq_i32 != 0 means strings are equal
+                } else {
+                    IntPredicate::EQ // eq_i32 == 0 means strings are not equal
+                };
+                Some(
+                    self.builder
+                        .build_int_compare(pred, eq_i32, zero, "str_cmp")
+                        .unwrap()
+                        .into(),
+                )
+            }
             _ => None,
         }
     }
