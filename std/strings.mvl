@@ -31,26 +31,8 @@ pub builtin fn str_from_bytes(bytes: List[Byte]) -> String
 /// Concatenate two strings.
 pub builtin fn str_concat(s: String, other: String) -> String
 
-/// Remove leading and trailing ASCII whitespace.
-pub builtin fn str_trim(s: String) -> String
-
-/// Convert all characters to uppercase.
-pub builtin fn str_to_upper(s: String) -> String
-
-/// Convert all characters to lowercase.
-pub builtin fn str_to_lower(s: String) -> String
-
-/// True if `s` starts with `prefix`.
-pub builtin fn str_starts_with(s: String, prefix: String) -> Bool
-
-/// True if `s` ends with `suffix`.
-pub builtin fn str_ends_with(s: String, suffix: String) -> Bool
-
 /// Char-index of first occurrence of `sub`, or None.
 pub builtin fn str_find(s: String, sub: String) -> Option[Int]
-
-/// Replace all occurrences of `from` with `to`.
-pub builtin fn str_replace(s: String, from: String, to: String) -> String
 
 /// Split on `sep`, returning a list of substrings.
 pub builtin fn str_split(s: String, sep: String) -> List[String]
@@ -58,8 +40,95 @@ pub builtin fn str_split(s: String, sep: String) -> List[String]
 /// Char-index substring `[start, end)` with safe clamping.
 pub builtin fn str_substring(s: String, start: Int, end: Int) -> String
 
+// ── Pure MVL string operations (converted from builtins, #903) ───────────────
+
 /// True if `sub` is found anywhere in `s`.
-pub builtin fn str_contains(s: String, sub: String) -> Bool
+pub fn str_contains(s: String, sub: String) -> Bool {
+    is_some(str_find(s, sub))
+}
+
+/// True if `s` starts with `prefix`.
+pub fn str_starts_with(s: String, prefix: String) -> Bool {
+    str_substring(s, 0, str_len(prefix)) == prefix
+}
+
+/// True if `s` ends with `suffix`.
+pub fn str_ends_with(s: String, suffix: String) -> Bool {
+    let n: Int = str_len(s);
+    let m: Int = str_len(suffix);
+    if m > n { false }
+    else { str_substring(s, n - m, n) == suffix }
+}
+
+fn is_ws(c: String) -> Bool {
+    c == " " || c == "\t" || c == "\n" || c == "\r"
+}
+
+/// Remove leading and trailing ASCII whitespace.
+pub fn str_trim(s: String) -> String {
+    let n: Int = str_len(s);
+    let start: ref Int = 0;
+    while start < n && is_ws(str_char_at(s, start)) decreases n - start {
+        start = start + 1
+    };
+    let end: ref Int = n;
+    while end > start && is_ws(str_char_at(s, end - 1)) decreases end - start {
+        end = end - 1
+    };
+    str_substring(s, start, end)
+}
+
+/// Convert all ASCII lowercase characters to uppercase. Non-ASCII characters pass through unchanged.
+pub fn str_to_upper(s: String) -> String {
+    let result: ref List[String] = [];
+    for c in str_chars(s) {
+        let u: String =
+            if c == "a" { "A" } else if c == "b" { "B" } else if c == "c" { "C" }
+            else if c == "d" { "D" } else if c == "e" { "E" } else if c == "f" { "F" }
+            else if c == "g" { "G" } else if c == "h" { "H" } else if c == "i" { "I" }
+            else if c == "j" { "J" } else if c == "k" { "K" } else if c == "l" { "L" }
+            else if c == "m" { "M" } else if c == "n" { "N" } else if c == "o" { "O" }
+            else if c == "p" { "P" } else if c == "q" { "Q" } else if c == "r" { "R" }
+            else if c == "s" { "S" } else if c == "t" { "T" } else if c == "u" { "U" }
+            else if c == "v" { "V" } else if c == "w" { "W" } else if c == "x" { "X" }
+            else if c == "y" { "Y" } else if c == "z" { "Z" }
+            else { c };
+        result.push(u)
+    };
+    str_from_chars(result)
+}
+
+/// Convert all ASCII uppercase characters to lowercase. Non-ASCII characters pass through unchanged.
+pub fn str_to_lower(s: String) -> String {
+    let result: ref List[String] = [];
+    for c in str_chars(s) {
+        let l: String =
+            if c == "A" { "a" } else if c == "B" { "b" } else if c == "C" { "c" }
+            else if c == "D" { "d" } else if c == "E" { "e" } else if c == "F" { "f" }
+            else if c == "G" { "g" } else if c == "H" { "h" } else if c == "I" { "i" }
+            else if c == "J" { "j" } else if c == "K" { "k" } else if c == "L" { "l" }
+            else if c == "M" { "m" } else if c == "N" { "n" } else if c == "O" { "o" }
+            else if c == "P" { "p" } else if c == "Q" { "q" } else if c == "R" { "r" }
+            else if c == "S" { "s" } else if c == "T" { "t" } else if c == "U" { "u" }
+            else if c == "V" { "v" } else if c == "W" { "w" } else if c == "X" { "x" }
+            else if c == "Y" { "y" } else if c == "Z" { "z" }
+            else { c };
+        result.push(l)
+    };
+    str_from_chars(result)
+}
+
+/// Replace all occurrences of `from` with `to`.
+pub fn str_replace(s: String, from: String, to: String) -> String {
+    let parts: List[String] = str_split(s, from);
+    let result: ref String = "";
+    let first: ref Bool = true;
+    for part in parts {
+        if first { first = false } else { result = str_concat(result, to) };
+        result = str_concat(result, part)
+    };
+    result
+}
 
 // ── String parsing (2 functions) ─────────────────────────────────────────────
 
