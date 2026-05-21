@@ -651,31 +651,10 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
         }
 
-        // Second pass: emit bodies for non-generic functions only.
-        // Generic functions are emitted on-demand when their call sites are reached.
-        // Prelude stubs for inlined builtins are skipped — their call sites emit
-        // inline IR directly (e.g. printf for println), so the stub would be dead code.
-        for decl in &prog.declarations {
-            if let Decl::Fn(fd) = decl {
-                if !fd.is_test
-                    && !fd.is_builtin
-                    && fd.type_params.is_empty()
-                    && !is_inlined_builtin(&fd.name)
-                {
-                    self.emit_fn(fd);
-                }
-            }
-        }
-
-        // Third pass: wire extern blocks — emit LLVM IR bodies for `extern "rust"` functions.
-        for decl in &prog.declarations {
-            if let Decl::Extern(ext) = decl {
-                self.emit_extern_decl(ext);
-            }
-        }
-        // Fourth pass: emit LLVM IR bodies for `pub builtin fn` declarations.
-        // These are the type-operation kernel (string/list primitives) declared in the
-        // implicit prelude; treated identically to `extern "rust"` functions.
+        // Second pass: emit LLVM IR bodies for `pub builtin fn` declarations.
+        // #900: builtins run FIRST so that hybrid-module builtins (e.g. regex::find,
+        // regex::replace) claim their LLVM function name before same-named pure-MVL
+        // wrappers from strings.mvl get a chance to overwrite them.
         let i64_ty = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         for decl in &prog.declarations.clone() {
@@ -691,6 +670,31 @@ impl<'ctx> LlvmBackend<'ctx> {
                     };
                     self.emit_extern_rust_fn_body(&efn, i64_ty, ptr_ty);
                 }
+            }
+        }
+
+        // Third pass: emit bodies for non-generic non-builtin functions.
+        // Generic functions are emitted on-demand when their call sites are reached.
+        // Prelude stubs for inlined builtins are skipped — their call sites emit
+        // inline IR directly (e.g. printf for println), so the stub would be dead code.
+        // `emit_fn` skips functions that already have a body (first-definition wins),
+        // so same-named pure-MVL wrappers lose to the builtin bodies emitted above.
+        for decl in &prog.declarations {
+            if let Decl::Fn(fd) = decl {
+                if !fd.is_test
+                    && !fd.is_builtin
+                    && fd.type_params.is_empty()
+                    && !is_inlined_builtin(&fd.name)
+                {
+                    self.emit_fn(fd);
+                }
+            }
+        }
+
+        // Fourth pass: wire extern blocks — emit LLVM IR bodies for `extern "rust"` functions.
+        for decl in &prog.declarations {
+            if let Decl::Extern(ext) = decl {
+                self.emit_extern_decl(ext);
             }
         }
     }
@@ -2568,6 +2572,10 @@ impl<'ctx> LlvmBackend<'ctx> {
             };
             self.module.add_function(&efn.name, fn_ty, None)
         });
+        // First-definition wins (#900): skip if already bodied by a higher-priority builtin.
+        if fn_val.count_basic_blocks() > 0 {
+            return;
+        }
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
 
@@ -2811,6 +2819,11 @@ impl<'ctx> LlvmBackend<'ctx> {
                 self.module.add_function(&llvm_name, fn_ty, None)
             }
         };
+        // First-definition wins (#900): builtin pass runs first, so pure-MVL wrappers
+        // with the same name (e.g. strings::find vs regex::find) lose to the builtin body.
+        if fn_val.count_basic_blocks() > 0 {
+            return;
+        }
         let is_c_main = fd.name == "main";
 
         // If the function already has a body (duplicate name from an earlier prelude

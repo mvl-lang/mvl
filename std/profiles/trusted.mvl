@@ -11,31 +11,35 @@
 // See ADR-0022 for the three-category model.
 
 // ── Category 2: OS Builtins (always runtime) ──────────────────────────────────
-// pub builtin fn println, print, eprintln, eprint, format, assert, assert_eq, panic
+// format, assert, assert_eq, panic
 // Declared in std/core.mvl — implicitly available in all profiles.
+// Note: println, print, eprintln, eprint are pure MVL since #839.
 
 // ── Category 3: String type operations (runtime-backed) ───────────────────────
 // str_len, str_chars, str_char_at, str_from_chars, str_byte_at, str_from_bytes,
-// str_concat, str_trim, str_to_upper, str_to_lower, str_starts_with, str_ends_with,
-// str_find, str_replace, str_split, str_substring, str_contains,
+// str_concat, str_find, str_split, str_substring,
 // str_parse_int, str_parse_float
 // Declared as pub builtin fn in std/strings.mvl.
+// Note: str_trim, str_to_upper, str_to_lower, str_starts_with, str_ends_with,
+//       str_replace, str_contains are pure MVL since #903.
 
 // ── Category 3: List type operations (runtime-backed) ─────────────────────────
 // list_len, list_get, list_push, list_slice, list_concat, list_contains
 // Declared as pub builtin fn in std/lists.mvl.
 
 // ── Category 3: I/O operations (always OS-backed) ─────────────────────────────
-// path, exists, is_file, is_dir, open, close, read_to_string, read_file, write,
+// path_exists, is_file, is_dir, open, close, read_to_string, read_file, write,
 // append, buf_reader, buf_writer, read_line, write_line, create_dir_all, remove,
 // read_dir, metadata, chmod, create_symlink, read_link, stdin, stdin_read_line,
 // stdin_read_to_string
 // Declared as pub builtin fn in std/io.mvl.
+// Note: path is pure MVL since #903.
 
 // ── Category 3: Environment (always OS-backed) ────────────────────────────────
 // get, set, remove_var, all, args, exit, current_dir, chdir, getuid, getgid,
 // signal_on, signal_reset, signal_ignore
 // Declared as pub builtin fn in std/env.mvl.
+// Note: env_var is pure MVL since #903.
 
 // ── Category 3: Process (always OS-backed) ────────────────────────────────────
 // spawn, stdin_write, stdout_read, stderr_read, wait, kill
@@ -50,13 +54,17 @@
 // Declared as pub builtin fn in std/random.mvl.
 
 // ── Category 3: Time (runtime-backed) ─────────────────────────────────────────
-// now, sleep, format_instant, format_datetime, parse
+// now, sleep, format_instant, parse
 // Declared as pub builtin fn in std/time.mvl.
+// Note: format_datetime is pure MVL since #903.
 
 // ── Category 3: Regex (runtime-backed) ────────────────────────────────────────
-// compile, find, find_all, replace, captures
+// compile, find, replace, captures
 // Declared as pub builtin fn in std/regex.mvl.
+// Note: find_all is pure MVL since #903.
 
 // ── Category 3: Logging (always OS-backed) ────────────────────────────────────
-// log_debug, log_info, log_warn, log_error
+// log_set_format, log_set_min_level, log_get_format_int, log_get_level_int,
+// log_timestamp, log_write
 // Declared as pub builtin fn in std/log.mvl.
+// Note: log_debug, log_info, log_warn, log_error are pure MVL since #839.
