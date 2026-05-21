@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.135.1] — 2026-05-21
+
+### Fixed
+
+- **Support extension method syntax throughout compiler pipeline** (#928): Commit 86df6e7c migrated stdlib declarations to `fn Type::method(self)` syntax but did not update parser, checker, or backends. Fixed parser to handle receiver type params (`fn Type[T]::method`), checker to accept builtin types (String/List/Map/etc.) as receivers and resolve static `Type::method()` calls via method_table, Rust backend to emit correct standalone functions, and LLVM backend to compute correct bridge names and emit UFCS dispatch for extension methods. Updated `std/strings.mvl`, `std/log.mvl`, `std/args.mvl`, `std/json.mvl` to use method syntax.
+
 ## [0.135.0] — 2026-05-21
 
 ### Added
