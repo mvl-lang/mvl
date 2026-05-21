@@ -2983,6 +2983,124 @@ fn implicit_flow_corpus_has_violations() {
     );
 }
 
+// ── #834: Interprocedural IFC corpus tests (Req 11) ───────────────────────────
+
+/// Cross-function implicit flow corpus: wrapper around println called under
+/// a Secret-controlled branch MUST emit `CrossFunctionImplicitFlowViolation`.
+#[test]
+fn cross_function_implicit_corpus_has_violations() {
+    // GIVEN: a helper wrapping println called inside a Secret-controlled if
+    // THEN: CrossFunctionImplicitFlowViolation is emitted
+    let src = include_str!("corpus/06_ifc/cross_function_implicit.mvl");
+    let result = check_src(src);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::CrossFunctionImplicitFlowViolation { .. })),
+        "cross_function_implicit corpus should contain CrossFunctionImplicitFlowViolation, got: {:?}",
+        result.errors
+    );
+}
+
+/// Interprocedural taint chain corpus: a two-hop chain (caller→middle→println)
+/// where the top-level caller is invoked under a Tainted condition MUST emit
+/// `CrossFunctionImplicitFlowViolation`.
+#[test]
+fn interprocedural_taint_corpus_has_violations() {
+    // GIVEN: record_decision() → emit_log_line() → println; called under Tainted branch
+    // THEN: CrossFunctionImplicitFlowViolation is emitted
+    let src = include_str!("corpus/06_ifc/interprocedural_taint.mvl");
+    let result = check_src(src);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::CrossFunctionImplicitFlowViolation { .. })),
+        "interprocedural_taint corpus should contain CrossFunctionImplicitFlowViolation, got: {:?}",
+        result.errors
+    );
+}
+
+/// Return-label inference corpus: a pure helper (no public sink) called under a
+/// Secret-controlled branch MUST NOT produce any Req 11 violations.
+#[test]
+fn return_label_inference_corpus_has_no_req11_violations() {
+    // GIVEN: compute_hash_code reaches no public sink; called under Secret branch
+    // THEN: no ImplicitFlowViolation or CrossFunctionImplicitFlowViolation
+    let src = include_str!("corpus/06_ifc/return_label_inference.mvl");
+    let result = check_src(src);
+    let violations: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                CheckError::ImplicitFlowViolation { .. }
+                    | CheckError::CrossFunctionImplicitFlowViolation { .. }
+            )
+        })
+        .collect();
+    assert!(
+        violations.is_empty(),
+        "return_label_inference corpus must have no Req 11 violations, got: {violations:?}"
+    );
+}
+
+/// Interprocedural clean corpus: a sink-reaching function called unconditionally
+/// (PC = None) MUST NOT produce any Req 11 violations.
+#[test]
+fn interprocedural_clean_corpus_has_no_req11_violations() {
+    // GIVEN: announce_result() reaches println but is called with PC = None
+    // THEN: no ImplicitFlowViolation or CrossFunctionImplicitFlowViolation
+    let src = include_str!("corpus/06_ifc/interprocedural_clean.mvl");
+    let result = check_src(src);
+    let violations: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                CheckError::ImplicitFlowViolation { .. }
+                    | CheckError::CrossFunctionImplicitFlowViolation { .. }
+            )
+        })
+        .collect();
+    assert!(
+        violations.is_empty(),
+        "interprocedural_clean corpus must have no Req 11 violations, got: {violations:?}"
+    );
+}
+
+/// Call-chain error message corpus: the emitted `CrossFunctionImplicitFlowViolation`
+/// MUST name the direct callee and the public sink it reaches.
+#[test]
+fn call_chain_error_names_callee_and_sink() {
+    // GIVEN: write_audit_log() reaches println; called under Secret branch
+    // THEN: CrossFunctionImplicitFlowViolation with callee="write_audit_log", sink="println"
+    let src = include_str!("corpus/06_ifc/call_chain_error_message.mvl");
+    let result = check_src(src);
+    let violation = result
+        .errors
+        .iter()
+        .find(|e| matches!(e, CheckError::CrossFunctionImplicitFlowViolation { .. }));
+    assert!(
+        violation.is_some(),
+        "call_chain_error_message corpus should contain CrossFunctionImplicitFlowViolation, got: {:?}",
+        result.errors
+    );
+    if let Some(CheckError::CrossFunctionImplicitFlowViolation { callee, sink, .. }) = violation {
+        assert_eq!(
+            callee, "write_audit_log",
+            "error should name callee=write_audit_log, got: {callee}"
+        );
+        assert_eq!(
+            sink, "println",
+            "error should name sink=println, got: {sink}"
+        );
+    }
+}
+
 // ── #136: Refinement type solver — Req 10 (Phase 3) ──────────────────────────
 
 /// Literal zero violates `b != 0` refinement — should report RefinementViolated.

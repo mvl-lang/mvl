@@ -1,0 +1,18 @@
+// Corpus: sink-reaching function called outside any high-PC branch is safe
+// No violations expected — this file MUST produce no Req 11 errors.
+//
+// The cross-function implicit flow check only fires when a sink-reaching function
+// is called INSIDE a branch controlled by a Tainted or Secret condition.
+// Calling such a function unconditionally (PC = None) is always safe, because
+// no high-security condition controls whether the call fires.
+
+fn announce_result(msg: String) -> Unit ! Console {
+    // Directly reaches a public sink.
+    println(msg)
+}
+
+fn send_status() -> Unit ! Console {
+    // SAFE: announce_result is called unconditionally; the program counter label
+    // is None (no Tainted/Secret condition controls this call site).
+    announce_result("status: ok")
+}

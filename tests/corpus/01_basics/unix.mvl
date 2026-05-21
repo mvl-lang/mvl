@@ -91,7 +91,7 @@ fn read_home() -> Option[Tainted[String]] ! Env {
 }
 
 fn set_and_read() -> Result[Option[Tainted[String]], String] ! Env {
-    set("MY_VAR", "hello")?;
+    set("MY_VAR", relabel taint("hello", "user-set"))?;
     Ok(get("MY_VAR"))
 }
 
@@ -149,7 +149,7 @@ fn ignore_sighup() -> Unit ! Env {
 // ── Mixed effects: process + env ──────────────────────────────────────────
 
 fn run_with_env_override() -> Result[Tainted[String], ProcessError] ! ProcessSpawn + Env {
-    let _: Result[Unit, String] = set("GREETING", "hello");
+    let _: Result[Unit, String] = set("GREETING", relabel taint("hello", "override"));
     let child: Child = spawn("env", [], Stdio::Devnull, Stdio::Capture, Stdio::Devnull)?;
     let out: ProcessOutput = wait(child)?;
     match out.stdout {

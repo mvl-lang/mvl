@@ -1,0 +1,17 @@
+// Corpus: cross-function implicit flow — error message identifies callee and sink
+// corpus:expect-fail — this file intentionally contains a CrossFunctionImplicitFlowViolation.
+//
+// The emitted error MUST name the direct callee (write_audit_log) and the public
+// sink it reaches (println). This corpus is used to verify error message quality.
+
+fn write_audit_log() -> Unit ! Console {
+    println("audit: event recorded")
+}
+
+fn check_admin_access(admin: Secret[Bool]) -> Unit ! Console {
+    // VIOLATION: write_audit_log() reaches println.
+    // Error should name callee="write_audit_log" and sink="println".
+    if admin {
+        write_audit_log()
+    }
+}
