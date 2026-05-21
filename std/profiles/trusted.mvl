@@ -61,9 +61,9 @@
 // Note: format_datetime is pure MVL since #903.
 
 // ── Category 3: Regex (runtime-backed) ────────────────────────────────────────
-// compile, find, replace, captures
+// compile, find, captures
 // Declared as pub builtin fn in std/regex.mvl.
-// Note: find_all is pure MVL since #903.
+// Note: find_all, replace are pure MVL since #903.
 
 // ── Category 3: Logging (always OS-backed) ────────────────────────────────────
 // log_set_format, log_set_min_level, log_get_format_int, log_get_level_int,
