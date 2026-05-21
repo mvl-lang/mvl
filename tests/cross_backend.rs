@@ -1036,3 +1036,25 @@ fn main() -> Unit { println("ok") }
 fn clone_list_independent_of_original() {
     assert_parity(&corpus_basics("clone_heap_independence.mvl"), "3");
 }
+
+/// #906: UFCS String method parity — LLVM backend now has a dispatch table
+/// mirroring the Rust backend's STDLIB_UFCS_METHODS.
+///
+/// Tests: trim, to_lower, to_upper, starts_with, ends_with, contains (String),
+///        replace, substring, concat, split.
+#[test]
+fn cross_backend_string_ufcs_methods() {
+    assert_parity(
+        &corpus_basics("string_ufcs.mvl"),
+        "Hello, World!\nmvl\nMVL\nstarts_ok\nends_ok\ncontains_ok\nHello, MVL!\nHello\nfoobar\n3",
+    );
+}
+
+/// #906: UFCS List method parity — LLVM backend dispatches slice/take/skip
+/// directly via _mvl_list_slice C runtime (Group E/F dispatch table).
+///
+/// Tests: slice (ptr×i64×i64→ptr), take (slice from 0..n), skip (slice from n..len).
+#[test]
+fn cross_backend_list_ufcs_methods() {
+    assert_parity(&corpus_basics("list_ufcs.mvl"), "3\n3\n3");
+}

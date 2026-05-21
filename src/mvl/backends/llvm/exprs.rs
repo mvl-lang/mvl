@@ -2694,15 +2694,46 @@ impl<'ctx> LlvmBackend<'ctx> {
                 _ => None,
             },
 
-            // ── concat (String) ───────────────────────────────────────────────
-            "concat" => {
+            // ── UFCS String / List methods (#906) ────────────────────────────
+            //
+            // Mirrors the Rust backend's STDLIB_UFCS_METHODS table: each group
+            // routes method calls directly to the declared C runtime function via
+            // the corresponding memory.rs getter.  Adding a new simple method only
+            // requires a getter in memory.rs and an entry in the matching group.
+            //
+            // Group A: ptr → ptr  (0 extra args)
+            "trim" | "to_lower" | "to_upper" | "chars" if args.is_empty() => match recv_val {
+                BasicValueEnum::PointerValue(ptr) => {
+                    let f = match method {
+                        "trim" => self.get_mvl_str_trim(),
+                        "to_lower" => self.get_mvl_str_to_lower(),
+                        "to_upper" => self.get_mvl_str_to_upper(),
+                        "chars" => self.get_mvl_string_chars(),
+                        _ => unreachable!(),
+                    };
+                    let call = self
+                        .builder
+                        .build_call(f, &[ptr.into()], "str_method")
+                        .unwrap();
+                    use inkwell::values::AnyValue;
+                    BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+                }
+                _ => None,
+            },
+
+            // Group B: ptr × ptr → ptr  (1 string arg)
+            "concat" | "split" if args.len() == 1 => {
                 let arg = self.emit_expr(args.first()?)?;
                 match (recv_val, arg) {
                     (BasicValueEnum::PointerValue(a), BasicValueEnum::PointerValue(b)) => {
-                        let concat_fn = self.get_mvl_string_concat();
+                        let f = match method {
+                            "concat" => self.get_mvl_string_concat(),
+                            "split" => self.get_mvl_str_split(),
+                            _ => unreachable!(),
+                        };
                         let call = self
                             .builder
-                            .build_call(concat_fn, &[a.into(), b.into()], "str_concat")
+                            .build_call(f, &[a.into(), b.into()], "str_method2")
                             .unwrap();
                         use inkwell::values::AnyValue;
                         BasicValueEnum::try_from(call.as_any_value_enum()).ok()
@@ -2711,32 +2742,116 @@ impl<'ctx> LlvmBackend<'ctx> {
                 }
             }
 
-            // ── to_lower / to_upper (String) ─────────────────────────────────
-            "to_lower" => match recv_val {
-                BasicValueEnum::PointerValue(ptr) => {
-                    let f = self.get_mvl_str_to_lower();
-                    let call = self
-                        .builder
-                        .build_call(f, &[ptr.into()], "to_lower")
-                        .unwrap();
-                    use inkwell::values::AnyValue;
-                    BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+            // Group C: ptr × ptr → i64  (1 string arg; Bool result)
+            // `starts_with`/`ends_with` return 0/1 (Bool as i64) — safe direct C dispatch.
+            // Note: `find` returns Option[Int], NOT i64, so it is NOT included here;
+            // it is handled by the HOF dispatch arm via emit_fn_call("find", …).
+            "starts_with" | "ends_with" if args.len() == 1 => {
+                let arg = self.emit_expr(args.first()?)?;
+                match (recv_val, arg) {
+                    (BasicValueEnum::PointerValue(a), BasicValueEnum::PointerValue(b)) => {
+                        let f = match method {
+                            "starts_with" => self.get_mvl_str_starts_with(),
+                            "ends_with" => self.get_mvl_str_ends_with(),
+                            _ => unreachable!(),
+                        };
+                        let call = self
+                            .builder
+                            .build_call(f, &[a.into(), b.into()], "str_pred")
+                            .unwrap();
+                        use inkwell::values::AnyValue;
+                        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+                    }
+                    _ => None,
                 }
-                _ => None,
-            },
+            }
 
-            "to_upper" => match recv_val {
-                BasicValueEnum::PointerValue(ptr) => {
-                    let f = self.get_mvl_str_to_upper();
-                    let call = self
-                        .builder
-                        .build_call(f, &[ptr.into()], "to_upper")
-                        .unwrap();
-                    use inkwell::values::AnyValue;
-                    BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+            // Group D: ptr × ptr × ptr → ptr  (String.replace)
+            "replace" if args.len() == 2 => {
+                let from = self.emit_expr(&args[0])?;
+                let to = self.emit_expr(&args[1])?;
+                match (recv_val, from, to) {
+                    (
+                        BasicValueEnum::PointerValue(s),
+                        BasicValueEnum::PointerValue(f),
+                        BasicValueEnum::PointerValue(t),
+                    ) => {
+                        let fn_val = self.get_mvl_str_replace();
+                        let call = self
+                            .builder
+                            .build_call(fn_val, &[s.into(), f.into(), t.into()], "str_replace")
+                            .unwrap();
+                        use inkwell::values::AnyValue;
+                        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+                    }
+                    _ => None,
                 }
-                _ => None,
-            },
+            }
+
+            // Group E: ptr × i64 × i64 → ptr  (String.substring / List.slice)
+            "substring" | "slice" if args.len() == 2 => {
+                let start = self.emit_expr(&args[0])?;
+                let end_v = self.emit_expr(&args[1])?;
+                match (recv_val, start, end_v) {
+                    (
+                        BasicValueEnum::PointerValue(ptr),
+                        BasicValueEnum::IntValue(s),
+                        BasicValueEnum::IntValue(e),
+                    ) => {
+                        let f = match method {
+                            "substring" => self.get_mvl_str_substring(),
+                            "slice" => self.get_mvl_list_slice(),
+                            _ => unreachable!(),
+                        };
+                        let call = self
+                            .builder
+                            .build_call(f, &[ptr.into(), s.into(), e.into()], "ptr_slice")
+                            .unwrap();
+                        use inkwell::values::AnyValue;
+                        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+                    }
+                    _ => None,
+                }
+            }
+
+            // Group F: List.take(n) and List.skip(n) via _mvl_list_slice
+            // take(xs, n)  ≡ list_slice(xs, 0, n)
+            // skip(xs, n)  ≡ list_slice(xs, n, len(xs))
+            "take" | "skip" if args.len() == 1 => {
+                let n = self.emit_expr(&args[0])?;
+                match (recv_val, n) {
+                    (BasicValueEnum::PointerValue(ptr), BasicValueEnum::IntValue(n_val)) => {
+                        let slice_fn = self.get_mvl_list_slice();
+                        let i64_ty = self.context.i64_type();
+                        let (start, end_v) = if method == "take" {
+                            (i64_ty.const_int(0, false), n_val)
+                        } else {
+                            // skip: start=n, end=len(xs)
+                            let len_fn = self.get_mvl_array_len();
+                            let len_call = self
+                                .builder
+                                .build_call(len_fn, &[ptr.into()], "arr_len")
+                                .unwrap();
+                            use inkwell::values::AnyValue;
+                            let len_val = BasicValueEnum::try_from(len_call.as_any_value_enum())
+                                .ok()?
+                                .into_int_value();
+                            (n_val, len_val)
+                        };
+                        let call = self
+                            .builder
+                            .build_call(
+                                slice_fn,
+                                &[ptr.into(), start.into(), end_v.into()],
+                                "list_slice_n",
+                            )
+                            .unwrap();
+                        use inkwell::values::AnyValue;
+                        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+                    }
+                    _ => None,
+                }
+            }
 
             // ── parse_int / parse_float (String → Result) ─────────────────────
             "parse_int" => match recv_val {
@@ -3277,8 +3392,37 @@ impl<'ctx> LlvmBackend<'ctx> {
                 _ => None,
             },
 
-            // ── Set.contains(v) → Bool ────────────────────────────────────────
+            // ── contains(v) → Bool ───────────────────────────────────────────
+            // String.contains dispatches to _mvl_str_contains (C runtime, ptr×ptr→i64).
+            // Set/List.contains falls through to the loop-based implementation below.
             "contains" => {
+                // Detect String receiver by MVL type annotation.
+                let recv_mvl_ty = match receiver {
+                    Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
+                    _ => None,
+                };
+                let is_string = recv_mvl_ty.as_ref().is_some_and(|t| {
+                    let inner = match t {
+                        TypeExpr::Labeled { inner, .. } => inner.as_ref(),
+                        other => other,
+                    };
+                    matches!(inner, TypeExpr::Base { name, .. } if name == "String")
+                });
+                if is_string {
+                    let needle = self.emit_expr(args.first()?)?;
+                    match (recv_val, needle) {
+                        (BasicValueEnum::PointerValue(s), BasicValueEnum::PointerValue(n)) => {
+                            let f = self.get_mvl_str_contains();
+                            let call = self
+                                .builder
+                                .build_call(f, &[s.into(), n.into()], "str_contains")
+                                .unwrap();
+                            use inkwell::values::AnyValue;
+                            return BasicValueEnum::try_from(call.as_any_value_enum()).ok();
+                        }
+                        _ => return None,
+                    }
+                }
                 let needle = match self.emit_expr(args.first()?)? {
                     BasicValueEnum::IntValue(v) => v,
                     _ => return None,
@@ -3473,14 +3617,10 @@ impl<'ctx> LlvmBackend<'ctx> {
                 _ => None,
             },
 
-            // ── #421: HOF methods — dispatch to monomorphized stdlib function ──
-            // xs.filter(f)   → filter(xs, f)
-            // xs.map(f)      → map(xs, f)
-            // xs.fold(i, f)  → fold(xs, i, f)
-            // xs.any(f)      → any(xs, f)
-            // xs.all(f)      → all(xs, f)
-            // xs.find(f)     → find(xs, f)
-            // xs.take_while(f)/skip_while(f) likewise
+            // ── HOF methods (#421) ─────────────────────────────────────────────
+            // Dispatch `receiver.method(args…)` → `method(receiver, args…)` by
+            // calling the monomorphized MVL stdlib function directly.
+            // Note: take/skip handled above in Group F via _mvl_list_slice.
             "filter" | "map" | "any" | "all" | "find" | "take_while" | "skip_while"
                 if args.len() == 1 =>
             {
