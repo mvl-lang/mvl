@@ -20,6 +20,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 - **Fix `relabel taint` syntax in `env_var`**: Requires 2-arg form `relabel taint(v, "TAG")`, not 1-arg. This parse error cascaded, preventing resolution of `getuid`, `getgid`, `signal_on`, and other `std.env` functions, causing 5 corpus test failures.
 - **Add `relabel_expr` to grammar coverage tool** (`TS_KNOWN_EXTENSIONS`): Tree-sitter grammar extension now documented.
+- **Fix `&i64` pattern bindings in checked arithmetic** (#920): Pattern-bound variables in match arms on `&Enum` are `&i64`, not `i64`. The `as i64` cast fails on references. Use `<i64>::clone(&(expr))` which handles both types via auto-deref. Fixes huffman example build failure.
 
 ## [0.134.1] — 2026-05-21
 
