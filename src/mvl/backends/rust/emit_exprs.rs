@@ -791,13 +791,13 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                         BinaryOp::Mul => "checked_mul",
                         _ => unreachable!(),
                     };
-                    // Cast lhs to i64 so integer literals get a concrete type,
-                    // avoiding "ambiguous numeric type" errors from checked_add/sub/mul.
-                    cg.push("((");
+                    // Use <i64>::clone(&(expr)) to coerce both i64 and &i64
+                    // (pattern-bound variables in match arms on &Enum) to i64.
+                    cg.push("(<i64>::clone(&(");
                     emit_expr(cg, left);
-                    cg.push(&format!(" as i64).{method}("));
+                    cg.push(&format!(")).{method}(<i64>::clone(&("));
                     emit_expr(cg, right);
-                    cg.push(").expect(\"integer overflow\"))");
+                    cg.push("))).expect(\"integer overflow\"))");
                 } else {
                     cg.push("(");
                     emit_expr(cg, left);

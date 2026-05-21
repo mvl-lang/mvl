@@ -4,6 +4,24 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.135.0] — 2026-05-21
+
+### Added
+
+- **Convert `env_var` to pure MVL** (#900): Wrap `_env_read` + `relabel taint` instead of being a builtin alias. Removes redundant Rust runtime implementation.
+- **Convert `regex::replace` to pure MVL** (#900): Implement using `find_all` + `str_concat`/`str_substring`. Removes LLVM backend builtin revert introduced in #900 fix commit.
+
+### Changed
+
+- **Revert LLVM pass-ordering hack** (#900): Move builtin emission back to pass 4 (last), pure-MVL bodies to pass 2. Remove `count_basic_blocks() > 0` early-return guards from `emit_fn` and `emit_extern_rust_fn_body`. Last-definition-wins semantics now restored naturally via `load_rust_backed_stdlib_fns` appending hybrid-module bodies after implicit prelude.
+- **Update `trusted.mvl` profile manifest**: Note that `replace` joins `find_all` as pure MVL since #903.
+
+### Fixed
+
+- **Fix `relabel taint` syntax in `env_var`**: Requires 2-arg form `relabel taint(v, "TAG")`, not 1-arg. This parse error cascaded, preventing resolution of `getuid`, `getgid`, `signal_on`, and other `std.env` functions, causing 5 corpus test failures.
+- **Add `relabel_expr` to grammar coverage tool** (`TS_KNOWN_EXTENSIONS`): Tree-sitter grammar extension now documented.
+- **Fix `&i64` pattern bindings in checked arithmetic** (#920): Pattern-bound variables in match arms on `&Enum` are `&i64`, not `i64`. The `as i64` cast fails on references. Use `<i64>::clone(&(expr))` which handles both types via auto-deref. Fixes huffman example build failure.
+
 ## [0.134.1] — 2026-05-21
 
 ### Fixed
