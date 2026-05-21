@@ -780,21 +780,41 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     emit_binary_op(*op)
                 ));
             } else {
-                cg.push("(");
-                emit_expr(cg, left);
-                cg.push(" ");
-                cg.push(emit_binary_op(*op));
-                cg.push(" ");
-                // Rust requires `String + &str` for string concatenation.
-                // If the left side is a string-literal-rooted chain, borrow the right.
-                if *op == BinaryOp::Add && is_string_add_chain(left) {
-                    cg.push("&(");
+                // For Int arithmetic, emit checked methods to match LLVM backend
+                // overflow behaviour (trap on overflow rather than wrapping).
+                let is_int_arith = matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
+                    && matches!(cg.expr_types.get(span), Some(Ty::Int));
+                if is_int_arith {
+                    let method = match op {
+                        BinaryOp::Add => "checked_add",
+                        BinaryOp::Sub => "checked_sub",
+                        BinaryOp::Mul => "checked_mul",
+                        _ => unreachable!(),
+                    };
+                    // Cast lhs to i64 so integer literals get a concrete type,
+                    // avoiding "ambiguous numeric type" errors from checked_add/sub/mul.
+                    cg.push("((");
+                    emit_expr(cg, left);
+                    cg.push(&format!(" as i64).{method}("));
                     emit_expr(cg, right);
-                    cg.push(")");
+                    cg.push(").expect(\"integer overflow\"))");
                 } else {
-                    emit_expr(cg, right);
+                    cg.push("(");
+                    emit_expr(cg, left);
+                    cg.push(" ");
+                    cg.push(emit_binary_op(*op));
+                    cg.push(" ");
+                    // Rust requires `String + &str` for string concatenation.
+                    // If the left side is a string-literal-rooted chain, borrow the right.
+                    if *op == BinaryOp::Add && is_string_add_chain(left) {
+                        cg.push("&(");
+                        emit_expr(cg, right);
+                        cg.push(")");
+                    } else {
+                        emit_expr(cg, right);
+                    }
+                    cg.push(")");
                 }
-                cg.push(")");
             }
         }
         Expr::If {
