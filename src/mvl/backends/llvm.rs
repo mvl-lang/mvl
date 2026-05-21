@@ -568,8 +568,17 @@ impl<'ctx> LlvmBackend<'ctx> {
                     // named `Logger_info` would shadow the mangled symbol for `fn Logger::info`;
                     // this is caught at the MVL checker level (DuplicateFnDecl / UndefinedType)
                     // before LLVM is reached (#875 review).
-                    self.fn_return_types
-                        .insert(llvm_name.clone(), *fd.return_type.clone());
+                    // Don't overwrite stdlib-registered return types: when a stdlib
+                    // function shadows a prelude function (e.g. regex.find vs strings.find),
+                    // the C-ABI dispatch always wins, so the return type must match.
+                    if self.stdlib_imports.contains_key(&fd.name) {
+                        self.fn_return_types
+                            .entry(llvm_name.clone())
+                            .or_insert(*fd.return_type.clone());
+                    } else {
+                        self.fn_return_types
+                            .insert(llvm_name.clone(), *fd.return_type.clone());
+                    }
                     self.fn_decls.insert(llvm_name, fd.clone());
                     if fd.type_params.is_empty() || fd.is_builtin {
                         self.declare_fn(fd);
@@ -2615,6 +2624,34 @@ impl<'ctx> LlvmBackend<'ctx> {
                     .expect("mvl_string_concat must return ptr");
                 self.builder.build_return(Some(&s_ptr)).unwrap();
             }
+            // str_len(s: String) -> Int: delegate to _mvl_str_len
+            "str_len" => {
+                self.emit_builtin_bridge_1_to_1(fn_val, "_mvl_str_len", i64_ty.into());
+            }
+            // str_char_at(s: String, i: Int) -> String: delegate to _mvl_str_char_at
+            "str_char_at" => {
+                self.emit_builtin_bridge_2_to_ptr(fn_val, "_mvl_str_char_at");
+            }
+            // str_substring(s: String, start: Int, end: Int) -> String
+            "str_substring" => {
+                self.emit_builtin_bridge_3_to_ptr(fn_val, "_mvl_str_substring");
+            }
+            // str_replace(s: String, from: String, to: String) -> String
+            "str_replace" => {
+                self.emit_builtin_bridge_3_to_ptr(fn_val, "_mvl_str_replace");
+            }
+            // str_split(s: String, sep: String) -> List[String]
+            "str_split" => {
+                self.emit_builtin_bridge_2_to_ptr(fn_val, "_mvl_str_split");
+            }
+            // String → String (1-arg): trim, to_lower, to_upper, from_chars, from_bytes
+            "str_trim" | "str_to_lower" | "str_to_upper" | "str_from_chars" | "str_from_bytes" => {
+                self.emit_builtin_bridge_1_to_1(
+                    fn_val,
+                    &format!("_mvl_{}", efn.name),
+                    self.context.ptr_type(AddressSpace::default()).into(),
+                );
+            }
             // list_len(list: List[T]) -> Int: delegate to mvl_array_len
             "list_len" => {
                 let arg0 = fn_val.get_first_param().expect("list_len: missing arg");
@@ -2775,6 +2812,16 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
         };
         let is_c_main = fd.name == "main";
+
+        // If the function already has a body (duplicate name from an earlier prelude
+        // module), delete it so the later declaration wins.  This handles name collisions
+        // between implicit-prelude functions and RUST_BACKED_STDLIB functions (e.g.
+        // strings.replace vs regex.replace).
+        if fn_val.count_basic_blocks() > 0 {
+            while let Some(bb) = fn_val.get_last_basic_block() {
+                unsafe { bb.delete().unwrap() };
+            }
+        }
 
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
@@ -3067,6 +3114,67 @@ impl<'ctx> LlvmBackend<'ctx> {
         subs
     }
 
+    /// Enhance type substitutions by resolving type params inside compound types
+    /// (e.g. `Map[K, V]`) using MVL-level type information from call-site arguments.
+    ///
+    /// `infer_type_subs` only handles bare type params like `key: K`.  For params
+    /// like `m: Map[K, V]`, K and V cannot be inferred from the LLVM type (opaque
+    /// ptr).  This method matches each formal param's type args against the actual
+    /// MVL type of the argument expression to extract the missing substitutions.
+    pub(crate) fn infer_type_subs_from_args(
+        &self,
+        fd: &FnDecl,
+        call_args: &[crate::mvl::parser::ast::Expr],
+        subs: &mut HashMap<String, BasicTypeEnum<'ctx>>,
+    ) {
+        for (param, arg_expr) in fd.params.iter().zip(call_args.iter()) {
+            if let TypeExpr::Base {
+                args: formal_args, ..
+            } = &param.ty
+            {
+                if formal_args.is_empty() {
+                    continue;
+                }
+                // Look up the actual MVL type of the argument expression.
+                let actual_ty = match arg_expr {
+                    crate::mvl::parser::ast::Expr::Ident(name, _) => {
+                        self.local_mvl_types.get(name.as_str())
+                    }
+                    _ => None,
+                };
+                let actual_ty = match actual_ty {
+                    Some(t) => Self::strip_type_wrappers(t),
+                    None => continue,
+                };
+                if let TypeExpr::Base {
+                    args: actual_args, ..
+                } = actual_ty
+                {
+                    for (formal_tp, actual_tp) in formal_args.iter().zip(actual_args.iter()) {
+                        if let TypeExpr::Base {
+                            name: tp_name,
+                            args: tp_args,
+                            ..
+                        } = formal_tp
+                        {
+                            if tp_args.is_empty()
+                                && fd
+                                    .type_params
+                                    .iter()
+                                    .any(|tp| tp.name() == tp_name.as_str())
+                                && !subs.contains_key(tp_name.as_str())
+                            {
+                                if let Some(llvm_ty) = self.mvl_type_to_llvm(actual_tp) {
+                                    subs.insert(tp_name.clone(), llvm_ty);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Produce a mangled LLVM name for a generic function given its type substitutions.
     ///
     /// Example: `identity` with `T=i64` → `identity_Int`.
@@ -3109,6 +3217,80 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .unwrap_or_else(|| "Struct".into()),
             _ => "Unknown".into(),
         }
+    }
+
+    // ── Builtin bridge helpers ─────────────────────────────────────────────
+
+    /// Bridge a 1-arg builtin to a C-ABI function with the same signature shape.
+    fn emit_builtin_bridge_1_to_1(
+        &mut self,
+        fn_val: FunctionValue<'ctx>,
+        c_name: &str,
+        ret_ty: BasicTypeEnum<'ctx>,
+    ) {
+        use inkwell::values::AnyValue;
+        let arg0 = fn_val.get_first_param().expect("bridge_1: missing arg");
+        let c_fn = self.module.get_function(c_name).unwrap_or_else(|| {
+            let ft = ret_ty.fn_type(&[arg0.get_type().into()], false);
+            self.module
+                .add_function(c_name, ft, Some(Linkage::External))
+        });
+        let call = self
+            .builder
+            .build_call(c_fn, &[arg0.into()], "bridge")
+            .unwrap();
+        let rv = BasicValueEnum::try_from(call.as_any_value_enum()).expect("bridge_1 return");
+        self.builder.build_return(Some(&rv)).unwrap();
+    }
+
+    /// Bridge a 2-arg builtin to a C-ABI function returning ptr.
+    fn emit_builtin_bridge_2_to_ptr(&mut self, fn_val: FunctionValue<'ctx>, c_name: &str) {
+        use inkwell::values::AnyValue;
+        let params: Vec<_> = fn_val.get_param_iter().collect();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let c_fn = self.module.get_function(c_name).unwrap_or_else(|| {
+            let ft = ptr_ty.fn_type(
+                &[params[0].get_type().into(), params[1].get_type().into()],
+                false,
+            );
+            self.module
+                .add_function(c_name, ft, Some(Linkage::External))
+        });
+        let call = self
+            .builder
+            .build_call(c_fn, &[params[0].into(), params[1].into()], "bridge")
+            .unwrap();
+        let rv = BasicValueEnum::try_from(call.as_any_value_enum()).expect("bridge_2p return");
+        self.builder.build_return(Some(&rv)).unwrap();
+    }
+
+    /// Bridge a 3-arg builtin to a C-ABI function returning ptr.
+    fn emit_builtin_bridge_3_to_ptr(&mut self, fn_val: FunctionValue<'ctx>, c_name: &str) {
+        use inkwell::values::AnyValue;
+        let params: Vec<_> = fn_val.get_param_iter().collect();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let c_fn = self.module.get_function(c_name).unwrap_or_else(|| {
+            let ft = ptr_ty.fn_type(
+                &[
+                    params[0].get_type().into(),
+                    params[1].get_type().into(),
+                    params[2].get_type().into(),
+                ],
+                false,
+            );
+            self.module
+                .add_function(c_name, ft, Some(Linkage::External))
+        });
+        let call = self
+            .builder
+            .build_call(
+                c_fn,
+                &[params[0].into(), params[1].into(), params[2].into()],
+                "bridge",
+            )
+            .unwrap();
+        let rv = BasicValueEnum::try_from(call.as_any_value_enum()).expect("bridge_3p return");
+        self.builder.build_return(Some(&rv)).unwrap();
     }
 
     // ── Verification and IR output ───────────────────────────────────────────

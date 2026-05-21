@@ -49,9 +49,11 @@ doctor: ## Check that all dev tools are available
 	fi; \
 	echo
 
-install: build-release ## Install mvl binary to ~/.local/bin
+install: build-release build-llvm-runtime-release ## Install mvl binary + LLVM runtime to ~/.local/bin
 	@mkdir -p ~/.local/bin
 	cp target/release/mvl ~/.local/bin/mvl
+	cp target/release/libmvl_runtime_c.dylib ~/.local/bin/libmvl_runtime_c.dylib 2>/dev/null || true
+	cp target/release/libmvl_runtime_c.so    ~/.local/bin/libmvl_runtime_c.so    2>/dev/null || true
 	@echo "Installed: ~/.local/bin/mvl"
 
 # === Build ===
@@ -62,6 +64,9 @@ build: ## Build the MVL compiler
 
 build-llvm-runtime: ## Build the LLVM runtime cdylib (mvl_runtime_c at runtime/llvm)
 	cargo build -p mvl_runtime_c
+
+build-llvm-runtime-release: ## Build the LLVM runtime cdylib in release mode
+	cargo build --release -p mvl_runtime_c
 
 build-release: ## Build release binary
 	cargo build --release
@@ -210,7 +215,7 @@ test-backend-llvm: build build-llvm-runtime ## Run LLVM backend tests across ful
 			"  PASS: "*) f="$${line#  PASS: }"; short="$${f#tests/}"; printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1));; \
 			"  FAIL"*) f="$${line##*: }"; short="$${f#tests/}"; printf "  $$FAIL  %s\n" "$$short"; fail=$$((fail + 1));; \
 		esac; \
-	done < <({ $(MVL) test tests/corpus/ --backend=llvm --verbose; $(MVL) test tests/intrinsics/ --backend=llvm --verbose; } 2>&1); \
+	done < <({ $(MVL) test tests/corpus/ --backend=llvm --verbose; $(MVL) test tests/intrinsics/ --backend=llvm --verbose; $(MVL) test tests/stdlib/ --backend=llvm --verbose; } 2>&1); \
 	echo ""; \
 	if [ $$fail -eq 0 ]; then \
 		printf "  \033[32m✓  $$pass passed, 0 failed\033[0m\n\n"; \

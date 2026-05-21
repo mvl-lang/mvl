@@ -1538,6 +1538,32 @@ impl<'ctx> LlvmBackend<'ctx> {
             (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => {
                 self.emit_float_binop(op, l, r)
             }
+            // String equality/inequality: call mvl_string_eq and convert i32 → i1.
+            (BasicValueEnum::PointerValue(l), BasicValueEnum::PointerValue(r))
+                if matches!(op, BinaryOp::Eq | BinaryOp::Ne) =>
+            {
+                let eq_fn = self.get_mvl_string_eq();
+                let call = self
+                    .builder
+                    .build_call(eq_fn, &[l.into(), r.into()], "str_eq")
+                    .ok()?;
+                use inkwell::values::AnyValue;
+                let eq_i32 = BasicValueEnum::try_from(call.as_any_value_enum())
+                    .ok()?
+                    .into_int_value();
+                let zero = self.context.i32_type().const_int(0, false);
+                let pred = if matches!(op, BinaryOp::Eq) {
+                    IntPredicate::NE // eq_i32 != 0 means strings are equal
+                } else {
+                    IntPredicate::EQ // eq_i32 == 0 means strings are not equal
+                };
+                Some(
+                    self.builder
+                        .build_int_compare(pred, eq_i32, zero, "str_cmp")
+                        .unwrap()
+                        .into(),
+                )
+            }
             _ => None,
         }
     }
@@ -2361,7 +2387,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                         if arg_vals.len() != args.len() {
                             return None;
                         }
-                        let type_subs = self.infer_type_subs(&fd, &arg_vals);
+                        let mut type_subs = self.infer_type_subs(&fd, &arg_vals);
+                        self.infer_type_subs_from_args(&fd, args, &mut type_subs);
                         let mangled = self.mangle_fn_name(&fd, &type_subs);
                         self.ensure_monomorphized(fd, type_subs, &mangled.clone());
                         let fn_val = self.module.get_function(&mangled)?;
@@ -2433,10 +2460,11 @@ impl<'ctx> LlvmBackend<'ctx> {
         // For empty literals, fall back to the let-binding annotation (pending_let_ty)
         // so that List[Value] (9-byte elements) gets the correct size instead of 8.
         let elem_size = {
+            // Strip Ref/Labeled/Refined wrappers to get the underlying List[T] type.
+            let unwrapped_ty = self.pending_let_ty.as_ref().map(Self::strip_type_wrappers);
             let sz = if let Some(first) = elem_vals.first() {
                 self.llvm_type_byte_size(first.get_type())
-            } else if let Some(crate::mvl::parser::ast::TypeExpr::Base { args, .. }) =
-                self.pending_let_ty.as_ref()
+            } else if let Some(crate::mvl::parser::ast::TypeExpr::Base { args, .. }) = unwrapped_ty
             {
                 // Extract element type from List[T] / Array[T] annotation so that
                 // empty literals use the correct size (e.g. List[Value] = 9 bytes).
@@ -2533,7 +2561,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .build_alloca(val_val.get_type(), "val_slot")
                 .unwrap();
             self.builder.build_store(val_slot, val_val).unwrap();
-            let val_size = i64_ty.const_int(8, false);
+            let val_size =
+                i64_ty.const_int(self.llvm_type_byte_size(val_val.get_type()) as u64, false);
             self.builder
                 .build_call(
                     insert_fn,
@@ -2876,7 +2905,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                             .build_alloca(v_val.get_type(), "ins_v_slot")
                             .unwrap();
                         self.builder.build_store(val_slot, v_val).unwrap();
-                        let val_size = i64_ty.const_int(8, false);
+                        let val_size = i64_ty
+                            .const_int(self.llvm_type_byte_size(v_val.get_type()) as u64, false);
                         self.builder
                             .build_call(
                                 insert_fn,
@@ -3601,6 +3631,9 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
             Some(inkwell::types::BasicTypeEnum::FloatType(ft)) => {
                 self.builder.build_load(ft, raw_ptr, "mg_load").unwrap()
+            }
+            Some(inkwell::types::BasicTypeEnum::StructType(st)) => {
+                self.builder.build_load(st, raw_ptr, "mg_load").unwrap()
             }
             _ => {
                 // Default: pointer value (String or opaque struct).

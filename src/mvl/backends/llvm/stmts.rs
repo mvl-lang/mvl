@@ -683,28 +683,34 @@ impl<'ctx> LlvmBackend<'ctx> {
             _ => (None, false),
         };
         if let Some(inner) = inner_pat {
+            let BasicValueEnum::StructValue(sv) = scrutinee else {
+                return;
+            };
+            // L5-08: layout is {i8, ptr} — field 1 is a pointer to the payload value.
+            let payload_ptr_val = match self.builder.build_extract_value(sv, 1, "payload_ptr") {
+                Ok(v) => v,
+                Err(_) => return,
+            };
+            let llvm_ty: BasicTypeEnum = if is_err {
+                self.context.ptr_type(AddressSpace::default()).into()
+            } else {
+                ok_llvm_ty
+            };
+            let payload_ptr = payload_ptr_val.into_pointer_value();
+            let loaded = self
+                .builder
+                .build_load(llvm_ty, payload_ptr, "opt_payload")
+                .unwrap();
+
             if let Pattern::Ident(bind_name, _) = inner {
-                let BasicValueEnum::StructValue(sv) = scrutinee else {
-                    return;
-                };
-                // L5-08: layout is {i8, ptr} — field 1 is a pointer to the payload value.
-                let payload_ptr_val = match self.builder.build_extract_value(sv, 1, "payload_ptr") {
-                    Ok(v) => v,
-                    Err(_) => return,
-                };
-                let llvm_ty: BasicTypeEnum = if is_err {
-                    self.context.ptr_type(AddressSpace::default()).into()
-                } else {
-                    ok_llvm_ty
-                };
-                let payload_ptr = payload_ptr_val.into_pointer_value();
-                let loaded = self
-                    .builder
-                    .build_load(llvm_ty, payload_ptr, bind_name)
-                    .unwrap();
+                // Simple case: Some(x) — bind x to the payload value.
                 let alloca = self.builder.build_alloca(llvm_ty, bind_name).unwrap();
                 self.builder.build_store(alloca, loaded).unwrap();
                 self.locals.insert(bind_name.clone(), (alloca, llvm_ty));
+            } else {
+                // Nested pattern: Some(EnumVariant(x)) — recurse with the loaded payload
+                // as the new scrutinee.  This handles patterns like Some(ArgValue::Str(s)).
+                self.bind_pattern_vars(inner, loaded, ok_ty);
             }
             return;
         }

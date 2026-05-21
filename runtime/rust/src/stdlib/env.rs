@@ -65,7 +65,7 @@ pub fn signal_ignore(_sig: Signal) {}
 /// Raw private builtin: read an env var, return bare `String` (#894 Pattern 002).
 ///
 /// Module-private in MVL (`builtin fn _env_read`) — callers use `get` or `get_secret`.
-pub(crate) fn _env_read(name: String) -> Option<String> {
+pub fn _env_read(name: String) -> Option<String> {
     std::env::var(&name).ok()
 }
 

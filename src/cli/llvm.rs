@@ -16,6 +16,11 @@ pub(super) fn prepare_llvm(
     prelude.extend(loader::load_mvl_native_stdlib_extras(std::slice::from_ref(
         prog,
     )));
+    // Load pure MVL function bodies from RUST_BACKED_STDLIB modules (regex, time, etc.).
+    // The LLVM C-ABI dispatch handles `builtin fn`; non-builtin fns need their MVL bodies.
+    prelude.extend(loader::load_rust_backed_stdlib_fns(std::slice::from_ref(
+        prog,
+    )));
     (prelude, codegen::LlvmCompiler::new())
 }
 

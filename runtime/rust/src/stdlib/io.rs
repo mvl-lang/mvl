@@ -188,7 +188,7 @@ pub fn read_to_string(p: Path) -> Result<Tainted<String>, IoError> {
 /// Raw private builtin: read a file, return bare `String` (#894 Pattern 002).
 ///
 /// Module-private in MVL (`builtin fn _read_file`) — callers use `read_file`.
-pub(crate) fn _read_file(p: String) -> Result<String, IoError> {
+pub fn _read_file(p: String) -> Result<String, IoError> {
     std::fs::read_to_string(&p).map_err(|e| sanitize_io_error(&e))
 }
 

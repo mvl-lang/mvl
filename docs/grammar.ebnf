@@ -19,7 +19,8 @@
 program        = { use_decl } { declaration } ;
 declaration    = [ "pub" ] decl_body ;
 decl_body      = type_decl | fn_decl | const_decl | reexport_decl
-               | extern_decl | impl_decl | actor_decl | effect_decl ;
+               | extern_decl | impl_decl | actor_decl | effect_decl
+               | label_decl | relabel_decl ;
 
 (* === Modules and imports === *)
 (* One file = one module. Module name = filename without extension.        *)
@@ -85,6 +86,12 @@ actor_method   = [ "pub" ] "fn" IDENT "(" [ param_list ] ")" [ "->" return_type 
 (* === Effect declarations === *)
 (* `effect IO` — base effect; `effect FileIO > IO` — subsumes IO (#852). *)
 effect_decl    = "effect" IDENT [ ">" IDENT { "+" IDENT } ] ";" ;
+
+(* === IFC label declarations (#894) === *)
+(* `label Tainted;` — declares a user-defined security label for the module. *)
+(* `relabel trust: Tainted -> Secret;` — declares a label transition. *)
+label_decl     = "label" IDENT ";" ;
+relabel_decl   = "relabel" IDENT ":" IDENT "->" IDENT ";" ;
 
 (* === Extern blocks === *)
 (* Declares foreign functions.  "c" ABI: thin C-linkage declarations (linker provides body). *)
