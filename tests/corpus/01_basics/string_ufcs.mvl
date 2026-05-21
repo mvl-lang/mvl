@@ -1,0 +1,44 @@
+// Corpus: UFCS string methods parity (#906)
+// Exercises string methods added to the LLVM backend dispatch table.
+// Both backends must produce identical output.
+
+fn main() -> Unit ! Console {
+    // trim
+    let s: String = "  Hello, World!  ";
+    println(s.trim());
+
+    // to_lower / to_upper (existing, regression guard)
+    println("MVL".to_lower());
+    println("mvl".to_upper());
+
+    // starts_with / ends_with
+    let greeting: String = "Hello, World!";
+    if greeting.starts_with("Hello") {
+        println("starts_ok");
+    }
+    if greeting.ends_with("World!") {
+        println("ends_ok");
+    }
+
+    // contains (String)
+    if greeting.contains("World") {
+        println("contains_ok");
+    }
+
+    // replace
+    let replaced: String = greeting.replace("World", "MVL");
+    println(replaced);
+
+    // substring
+    let sub: String = greeting.substring(0, 5);
+    println(sub);
+
+    // concat
+    let a: String = "foo";
+    let b: String = "bar";
+    println(a.concat(b));
+
+    // split — print length of result list as simple parity check
+    let parts: List[String] = "a,b,c".split(",");
+    println(parts.len().to_string());
+}
