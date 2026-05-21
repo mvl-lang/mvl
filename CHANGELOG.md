@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.133.0] — 2026-05-21
+
+### Added
+
+- **UFCS dispatch table for string/list method parity** (#906): Unified Function Call Syntax for method calls in LLVM backend, matching Rust transpiler's MethodCall-to-dispatch-table approach. Organizes method call dispatch into six groups (A–F) by C runtime function signature (ptr→ptr, ptr×ptr→ptr, etc.). Includes string methods (trim, to_lower, to_upper, starts_with, ends_with, contains, replace, substring, concat, split) and list methods (slice, take, skip). Eliminates 30+ explicit match arms, reducing duplication and improving maintainability. Both backends now produce identical output for UFCS method calls via identical cross-backend corpus tests.
+
 ## [0.132.1] — 2026-05-21
 
 ### Fixed
