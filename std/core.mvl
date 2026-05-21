@@ -82,6 +82,14 @@ pub fn unwrap_or[T](opt: Option[T], default: T) -> T {
     }
 }
 
+/// Apply `f` to the contained value and return its result; propagate `None`.
+pub fn and_then[T, U](opt: Option[T], f: fn(T) -> Option[U]) -> Option[U] {
+    match opt {
+        Some(x) => f(x),
+        None => None
+    }
+}
+
 // ── Result predicates ─────────────────────────────────────────────────────────
 
 /// True if `res` is Ok.
