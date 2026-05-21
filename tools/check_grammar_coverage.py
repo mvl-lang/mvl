@@ -82,6 +82,7 @@ TS_KNOWN_EXTENSIONS = {
     "construct_expr",
     "lambda_expr",
     "declassify_expr",
+    "relabel_expr",
     "sanitize_expr",
     "grouped_expr",
     "block_expr",
