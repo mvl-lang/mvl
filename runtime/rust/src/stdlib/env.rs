@@ -76,14 +76,6 @@ pub fn get(name: String) -> Option<Tainted<String>> {
     _env_read(name).map(Tainted)
 }
 
-/// Read an environment variable by name (collision-free alias for `get`).
-///
-/// Alias for `get` — used in modules that also import list operations where the
-/// generic `get(xs, i)` list-index function would shadow `env::get`.
-pub fn env_var(name: String) -> Option<Tainted<String>> {
-    _env_read(name).map(Tainted)
-}
-
 /// Set an environment variable for the current process.
 ///
 /// Returns `Err` if `name` or `value` contains invalid bytes (NUL, `=` in name).
