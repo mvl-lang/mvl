@@ -54,13 +54,25 @@ On `Int` (arbitrary precision): no overflow possible.
 
 All comparison operators return `Bool`. Types must implement `Eq` (for `==`, `!=`) or `Ord` (for `<`, `>`, `<=`, `>=`).
 
-## 19.5 No Bitwise Operators
+## 19.5 Bitwise Operators
 
-Bitwise operations (`&`, `|`, `^`, `<<`, `>>`) are methods, not operators:
+Bitwise operations are first-class operators on integer types:
+
+| Operator | Precedence | Description |
+|----------|-----------|-------------|
+| `~` | 2 (prefix) | Bitwise NOT |
+| `<<` `>>` | 3.5 | Left / right shift |
+| `&` | 3.6 | Bitwise AND |
+| `^` | 3.7 | Bitwise XOR |
+| `\|` | 3.8 | Bitwise OR |
 
 ```mvl
-let mask = flags.bit_and(0xFF);
-let shifted = value.shift_left(3);
+let mask  = flags & 0xFF;
+let shifted = value << 3;
+let flipped = flags ^ mask;
+let inv   = ~flags;
 ```
 
-Rationale: bitwise operators are confusable with logical operators (`&` vs `&&`). Named methods are unambiguous.
+Note: bitwise operators bind more tightly than `&&`/`||` but more loosely than arithmetic. Right shift (`>>`) uses arithmetic (sign-extending) semantics.
+
+Method aliases (`bit_and`, `bit_or`, `shift_left`, etc.) are also supported for clarity.
