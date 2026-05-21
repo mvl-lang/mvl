@@ -1349,9 +1349,9 @@ fn main() -> Int { 0 }
     }
 
     #[test]
-    fn type_attached_method_without_self_param_is_an_error() {
+    fn type_attached_method_without_self_is_static() {
         // GIVEN: fn Counter::reset(n: Int) — no `self` first param
-        // THEN:  TypeMismatch error (self enforced as first param)
+        // THEN:  accepted as a static/associated function (#928)
         let src = r#"
 type Counter = struct { value: Int }
 fn Counter::reset(n: Int) -> Unit { }
@@ -1361,8 +1361,8 @@ fn main() -> Unit { }
         let prog = p.parse_program();
         let result = check(&prog);
         assert!(
-            !result.is_ok(),
-            "expected error when self is missing from type-attached method"
+            result.is_ok(),
+            "static methods (no self) should be accepted on type-attached functions"
         );
     }
 

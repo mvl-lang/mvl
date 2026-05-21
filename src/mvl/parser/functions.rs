@@ -91,12 +91,46 @@ impl Parser {
         let fn_kw = self.expect(&TokenKind::Fn);
         self.require(fn_kw)?;
 
-        // Function name — may be `TypeName::method` for type-attached methods (#868).
+        // Function name — may be `TypeName[T]::method` for type-attached methods (#868).
         let ident_result = self.expect_ident();
         let (first_name, _) = self.require(ident_result)?;
 
+        // #928: Receiver type args come between the type name and `::`, e.g.
+        // `fn Option[T]::is_some(self)` or `fn List[T]::push(self, x: T)`.
+        // Speculatively consume `[T, ...]`; if `::` follows, they are receiver
+        // type args. Otherwise rewind (they are fn-level generic type params).
+        let receiver_type_args: Vec<crate::mvl::parser::ast::TypeExpr> =
+            if *self.peek_kind() == TokenKind::LBracket {
+                let saved_pos = self.pos;
+                let saved_last_span = self.last_span;
+                let saved_errors_len = self.errors.len();
+                // parse_type_params_decl consumes `[T, U, ...]` and returns GenericParam list
+                let speculative_params = self.parse_type_params_decl();
+                if *self.peek_kind() == TokenKind::ColonColon {
+                    // Confirmed: these are receiver type args.  Convert GenericParam names
+                    // to TypeExpr::Base so they can be threaded into the self param type.
+                    let span = self.peek_span();
+                    speculative_params
+                        .iter()
+                        .map(|gp| crate::mvl::parser::ast::TypeExpr::Base {
+                            name: gp.name().to_string(),
+                            args: vec![],
+                            span,
+                        })
+                        .collect()
+                } else {
+                    // Not a receiver — rewind.
+                    self.pos = saved_pos;
+                    self.last_span = saved_last_span;
+                    self.errors.truncate(saved_errors_len);
+                    vec![]
+                }
+            } else {
+                vec![]
+            };
+
         let (receiver_type, name) = if self.eat(&TokenKind::ColonColon) {
-            // `fn TypeName::method_name(…)` — extract receiver type and method name.
+            // `fn TypeName[T]::method_name(…)` — extract receiver type and method name.
             let method_result = self.expect_ident();
             let (method_name, _) = self.require(method_result)?;
             (Some(first_name), method_name)
@@ -104,11 +138,37 @@ impl Parser {
             (None, first_name)
         };
 
-        // Optional generic type parameters
-        let type_params = self.parse_type_params_decl();
+        // Optional generic type parameters (for the function itself, not the receiver).
+        // Receiver type params (e.g. `T` from `List[T]::push`) are prepended so the
+        // emitted Rust function has all generic params in scope.  Concrete type args
+        // (e.g. `String` in `List[String]::join`) are NOT added.
+        let fn_type_params = self.parse_type_params_decl();
+        let type_params = {
+            use crate::mvl::parser::ast::GenericParam;
+            const CONCRETE_TYPES: &[&str] = &[
+                "String", "Int", "Float", "Bool", "Byte", "UByte", "UInt", "Unit", "List", "Map",
+                "Set", "Option", "Result",
+            ];
+            let mut all = Vec::new();
+            for rta in &receiver_type_args {
+                if let crate::mvl::parser::ast::TypeExpr::Base { name, .. } = rta {
+                    // Only add if it's a type variable (not a concrete type) and not
+                    // already present in the function's own type_params.
+                    if !CONCRETE_TYPES.contains(&name.as_str())
+                        && !fn_type_params.iter().any(|gp| gp.name() == name)
+                    {
+                        all.push(GenericParam::Type(name.clone()));
+                    }
+                }
+            }
+            all.extend(fn_type_params);
+            all
+        };
 
-        // Parameter list — passes receiver type so `self` can be synthesised.
-        let params = self.parse_param_list_with_receiver(receiver_type.as_deref())?;
+        // Parameter list — passes receiver type (and its type args) so `self`
+        // can be synthesised with the correct generic type.
+        let params =
+            self.parse_param_list_with_receiver(receiver_type.as_deref(), &receiver_type_args)?;
 
         // `-> return_type`
         let arrow = self.expect(&TokenKind::Arrow);
@@ -193,7 +253,7 @@ impl Parser {
     // ── Parameter list ────────────────────────────────────────────────────
 
     fn parse_param_list(&mut self) -> Result<Vec<Param>, ()> {
-        self.parse_param_list_with_receiver(None)
+        self.parse_param_list_with_receiver(None, &[])
     }
 
     /// Parse a parameter list, optionally synthesising a `self` receiver param.
@@ -202,9 +262,14 @@ impl Parser {
     /// identifier `self` (no capability, no `: type`), a `Param { name: "self",
     /// ty: T, … }` is synthesised automatically rather than requiring the author
     /// to write `self: T`.
+    ///
+    /// `receiver_type_args` carries the type arguments from the receiver (e.g.
+    /// `[T]` in `fn Option[T]::is_some(self)`) so the synthesised `self` param
+    /// has type `Option[T]` rather than bare `Option`.
     fn parse_param_list_with_receiver(
         &mut self,
         receiver_type: Option<&str>,
+        receiver_type_args: &[crate::mvl::parser::ast::TypeExpr],
     ) -> Result<Vec<Param>, ()> {
         let paren = self.expect(&TokenKind::LParen);
         self.require(paren)?;
@@ -227,10 +292,10 @@ impl Parser {
                             let span = self.peek_span();
                             self.advance(); // consume `self`
                             if matches!(self.peek_kind(), TokenKind::Comma | TokenKind::RParen) {
-                                // Bare `self` — synthesise param with receiver type.
+                                // Bare `self` — synthesise param with receiver type (and type args).
                                 let ty = crate::mvl::parser::ast::TypeExpr::Base {
                                     name: recv_ty_name.to_string(),
-                                    args: vec![],
+                                    args: receiver_type_args.to_vec(),
                                     span,
                                 };
                                 params.push(Param {

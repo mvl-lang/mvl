@@ -47,7 +47,7 @@ pub transparent partial fn encode(v: Value) -> String {
         Value::Null      => "null",
         Value::Bool(b)   => if b { "true" } else { "false" },
         Value::Number(n) => encode_number(n),
-        Value::String(s) => str_concat("\"", str_concat(json_escape(s), "\"")),
+        Value::String(s) => "\"".concat(json_escape(s).concat("\"")),
         Value::Array(a)  => encode_array(a),
         Value::Object(o) => encode_object(o),
     }
@@ -58,20 +58,20 @@ fn encode_number(n: Float) -> String {
 }
 
 partial fn json_escape(s: String) -> String {
-    let chars: List[String] = str_chars(s);
-    let len: Int = list_len(chars);
+    let chars: List[String] = s.chars();
+    let len: Int = chars.len();
     let out: ref String = "";
     let i: ref Int = 0;
     while i < len {
-        match list_get(chars, i) {
+        match chars.get(i) {
             None    => {},
             Some(c) => {
-                if      c == "\"" { out = str_concat(out, "\\\"") }
-                else if c == "\\" { out = str_concat(out, "\\\\") }
-                else if c == "\n" { out = str_concat(out, "\\n")  }
-                else if c == "\r" { out = str_concat(out, "\\r")  }
-                else if c == "\t" { out = str_concat(out, "\\t")  }
-                else              { out = str_concat(out, c)      }
+                if      c == "\"" { out = out.concat("\\\"") }
+                else if c == "\\" { out = out.concat("\\\\") }
+                else if c == "\n" { out = out.concat("\\n")  }
+                else if c == "\r" { out = out.concat("\\r")  }
+                else if c == "\t" { out = out.concat("\\t")  }
+                else              { out = out.concat(c)      }
             }
         }
         i = i + 1
@@ -80,48 +80,48 @@ partial fn json_escape(s: String) -> String {
 }
 
 partial fn encode_array(arr: List[Value]) -> String {
-    let len: Int = list_len(arr);
+    let len: Int = arr.len();
     if len == 0 {
         "[]"
     } else {
         let out: ref String = "[";
         let i: ref Int = 0;
         while i < len {
-            if i > 0 { out = str_concat(out, ",") } else {}
-            match list_get(arr, i) {
-                Some(v) => { out = str_concat(out, encode(v)) },
+            if i > 0 { out = out.concat(",") } else {}
+            match arr.get(i) {
+                Some(v) => { out = out.concat(encode(v)) },
                 None    => {},
             }
             i = i + 1
         }
-        str_concat(out, "]")
+        out.concat("]")
     }
 }
 
 partial fn encode_object(obj: Map[String, Value]) -> String {
     let keys: List[String] = obj.keys();
-    let len: Int = list_len(keys);
+    let len: Int = keys.len();
     if len == 0 {
         "{}"
     } else {
         let out: ref String = "{";
         let i: ref Int = 0;
         while i < len {
-            if i > 0 { out = str_concat(out, ",") } else {}
-            match list_get(keys, i) {
+            if i > 0 { out = out.concat(",") } else {}
+            match keys.get(i) {
                 None    => {},
                 Some(k) => {
-                    let kenc: String = str_concat("\"", str_concat(json_escape(k), "\""));
+                    let kenc: String = "\"".concat(json_escape(k).concat("\""));
                     let venc: String = match obj.get(k) {
                         Some(jv) => encode(jv),
                         None     => "null",
                     };
-                    out = str_concat(out, str_concat(kenc, str_concat(":", venc)))
+                    out = out.concat(kenc.concat(":".concat(venc)))
                 },
             }
             i = i + 1
         }
-        str_concat(out, "}")
+        out.concat("}")
     }
 }
 
@@ -136,7 +136,7 @@ partial fn encode_object(obj: Map[String, Value]) -> String {
 /// Future: migrate to `decode[L](s: L[String]) -> Result[L[Value], String]`
 /// when label-polymorphic generics land (phase 7+).
 pub transparent partial fn decode(s: String) -> Result[Value, JsonError] {
-    let chars: List[String] = str_chars(s);
+    let chars: List[String] = s.chars();
     match parse_value(chars, 0) {
         ValuePos::VPErr(e)   => Err(JsonError::ParseError(e)),
         ValuePos::VP(v, _)   => Ok(v),
@@ -146,11 +146,11 @@ pub transparent partial fn decode(s: String) -> Result[Value, JsonError] {
 // ── Parser helpers ────────────────────────────────────────────────────────────
 
 partial fn skip_ws(chars: List[String], pos: Int) -> Int {
-    let len: Int = list_len(chars);
+    let len: Int = chars.len();
     let cur: ref Int = pos;
     let go: ref Bool = true;
     while go && cur < len {
-        match list_get(chars, cur) {
+        match chars.get(cur) {
             None    => { go = false },
             Some(c) => {
                 if c == " " || c == "\t" || c == "\n" || c == "\r" {
@@ -166,11 +166,11 @@ partial fn skip_ws(chars: List[String], pos: Int) -> Int {
 
 partial fn parse_value(chars: List[String], pos: Int) -> ValuePos {
     let cur: Int = skip_ws(chars, pos);
-    let len: Int = list_len(chars);
+    let len: Int = chars.len();
     if cur >= len {
         ValuePos::VPErr("unexpected end of input")
     } else {
-        match list_get(chars, cur) {
+        match chars.get(cur) {
             None    => ValuePos::VPErr("unexpected end of input"),
             Some(c) => {
                 if      c == "\"" { parse_string_val(chars, cur)  }
@@ -180,7 +180,7 @@ partial fn parse_value(chars: List[String], pos: Int) -> ValuePos {
                 else if c == "f"  { parse_false(chars, cur)       }
                 else if c == "n"  { parse_null(chars, cur)        }
                 else if c == "-" || is_digit(c) { parse_number_val(chars, cur) }
-                else { ValuePos::VPErr(str_concat("unexpected character: ", c)) }
+                else { ValuePos::VPErr("unexpected character: ".concat(c)) }
             }
         }
     }
@@ -202,7 +202,7 @@ fn digit_of(c: String) -> Int {
 }
 
 fn char_at(chars: List[String], pos: Int) -> String {
-    match list_get(chars, pos) {
+    match chars.get(pos) {
         Some(c) => c,
         None    => "",
     }
@@ -250,14 +250,14 @@ partial fn parse_string_val(chars: List[String], pos: Int) -> ValuePos {
 }
 
 partial fn parse_string(chars: List[String], pos: Int) -> StrPos {
-    let len: Int = list_len(chars);
+    let len: Int = chars.len();
     let cur: ref Int = pos + 1;
     let out: ref String = "";
     let done: ref Bool = false;
     let err: ref String = "";
     let had_err: ref Bool = false;
     while done == false && had_err == false && cur < len {
-        match list_get(chars, cur) {
+        match chars.get(cur) {
             None    => { had_err = true; err = "unterminated string" },
             Some(c) => {
                 if c == "\"" {
@@ -268,22 +268,22 @@ partial fn parse_string(chars: List[String], pos: Int) -> StrPos {
                         had_err = true;
                         err = "escape at end of input"
                     } else {
-                        match list_get(chars, cur + 1) {
+                        match chars.get(cur + 1) {
                             None      => { had_err = true; err = "escape at end of input" },
                             Some(esc) => {
-                                if      esc == "\"" { out = str_concat(out, "\"") }
-                                else if esc == "\\" { out = str_concat(out, "\\") }
-                                else if esc == "n"  { out = str_concat(out, "\n") }
-                                else if esc == "r"  { out = str_concat(out, "\r") }
-                                else if esc == "t"  { out = str_concat(out, "\t") }
-                                else if esc == "/"  { out = str_concat(out, "/")  }
-                                else                { out = str_concat(out, esc)  }
+                                if      esc == "\"" { out = out.concat("\"") }
+                                else if esc == "\\" { out = out.concat("\\") }
+                                else if esc == "n"  { out = out.concat("\n") }
+                                else if esc == "r"  { out = out.concat("\r") }
+                                else if esc == "t"  { out = out.concat("\t") }
+                                else if esc == "/"  { out = out.concat("/")  }
+                                else                { out = out.concat(esc)  }
                                 cur = cur + 2
                             }
                         }
                     }
                 } else {
-                    out = str_concat(out, c);
+                    out = out.concat(c);
                     cur = cur + 1
                 }
             }
@@ -302,11 +302,11 @@ partial fn parse_number_val(chars: List[String], pos: Int) -> ValuePos {
 }
 
 partial fn parse_number(chars: List[String], pos: Int) -> FloatPos {
-    let len: Int = list_len(chars);
+    let len: Int = chars.len();
     let cur: ref Int = pos;
 
     let negative: ref Bool = false;
-    match list_get(chars, cur) {
+    match chars.get(cur) {
         None    => { return FloatPos::FPErr("empty number") },
         Some(c) => {
             if c == "-" { negative = true; cur = cur + 1 } else {}
@@ -317,7 +317,7 @@ partial fn parse_number(chars: List[String], pos: Int) -> FloatPos {
     let has_digit: ref Bool = false;
     let go: ref Bool = true;
     while go && cur < len {
-        match list_get(chars, cur) {
+        match chars.get(cur) {
             None    => { go = false },
             Some(c) => {
                 if is_digit(c) {
@@ -333,7 +333,7 @@ partial fn parse_number(chars: List[String], pos: Int) -> FloatPos {
     if has_digit == false { return FloatPos::FPErr("expected digit in number") } else {}
 
     let frac: ref Float = 0.0;
-    match list_get(chars, cur) {
+    match chars.get(cur) {
         None    => {},
         Some(c) => {
             if c == "." {
@@ -341,7 +341,7 @@ partial fn parse_number(chars: List[String], pos: Int) -> FloatPos {
                 let denom: ref Float = 10.0;
                 let fgo: ref Bool = true;
                 while fgo && cur < len {
-                    match list_get(chars, cur) {
+                    match chars.get(cur) {
                         None     => { fgo = false },
                         Some(fc) => {
                             if is_digit(fc) {
@@ -359,13 +359,13 @@ partial fn parse_number(chars: List[String], pos: Int) -> FloatPos {
     }
 
     let exp_mult: ref Float = 1.0;
-    match list_get(chars, cur) {
+    match chars.get(cur) {
         None    => {},
         Some(c) => {
             if c == "e" || c == "E" {
                 cur = cur + 1;
                 let exp_neg: ref Bool = false;
-                match list_get(chars, cur) {
+                match chars.get(cur) {
                     None     => {},
                     Some(sc) => {
                         if      sc == "-" { exp_neg = true; cur = cur + 1 }
@@ -376,7 +376,7 @@ partial fn parse_number(chars: List[String], pos: Int) -> FloatPos {
                 let exp_int: ref Int = 0;
                 let ego: ref Bool = true;
                 while ego && cur < len {
-                    match list_get(chars, cur) {
+                    match chars.get(cur) {
                         None     => { ego = false },
                         Some(ec) => {
                             if is_digit(ec) {
@@ -409,9 +409,9 @@ partial fn parse_array_val(chars: List[String], pos: Int) -> ValuePos {
 }
 
 partial fn parse_array(chars: List[String], pos: Int) -> ArrPos {
-    let len: Int = list_len(chars);
+    let len: Int = chars.len();
     let cur: ref Int = skip_ws(chars, pos + 1);
-    match list_get(chars, cur) {
+    match chars.get(cur) {
         None    => { return ArrPos::ArrPErr("unterminated array") },
         Some(c) => {
             if c == "]" { return ArrPos::ArrP([], cur + 1) } else {}
@@ -425,14 +425,14 @@ partial fn parse_array(chars: List[String], pos: Int) -> ArrPos {
         match parse_value(chars, cur) {
             ValuePos::VPErr(e)   => { had_err = true; err = e; go = false },
             ValuePos::VP(v, np)  => {
-                result = list_push(result, v);
+                result.push(v);
                 cur = skip_ws(chars, np);
-                match list_get(chars, cur) {
+                match chars.get(cur) {
                     None    => { had_err = true; err = "unterminated array"; go = false },
                     Some(c) => {
                         if      c == "]" { cur = cur + 1; go = false }
                         else if c == "," { cur = cur + 1 }
-                        else { had_err = true; err = str_concat("expected ',' or ']', got: ", c); go = false }
+                        else { had_err = true; err = "expected ',' or ']', got: ".concat(c); go = false }
                     }
                 }
             }
@@ -462,11 +462,11 @@ partial fn parse_kv(chars: List[String], pos: Int) -> KVPos {
         StrPos::SPErr(e)    => KVPos::KVPErr(e),
         StrPos::SP(key, np) => {
             let cur: Int = skip_ws(chars, np);
-            match list_get(chars, cur) {
+            match chars.get(cur) {
                 None        => KVPos::KVPErr("expected ':' after key"),
                 Some(colon) => {
                     if colon != ":" {
-                        KVPos::KVPErr(str_concat("expected ':', got: ", colon))
+                        KVPos::KVPErr("expected ':', got: ".concat(colon))
                     } else {
                         match parse_value(chars, cur + 1) {
                             ValuePos::VPErr(e)    => KVPos::KVPErr(e),
@@ -487,7 +487,7 @@ partial fn parse_object_step(chars: List[String], cur: Int, result: Map[String, 
             let r: ref Map[String, Value] = result;
             r.insert(key, jv);
             let c2: Int = skip_ws(chars, np);
-            match list_get(chars, c2) {
+            match chars.get(c2) {
                 None      => ObjectStep::OStepErr("unterminated object"),
                 Some(sep) => ObjectStep::OSep(r, c2, sep),
             }
@@ -496,9 +496,9 @@ partial fn parse_object_step(chars: List[String], cur: Int, result: Map[String, 
 }
 
 partial fn parse_object(chars: List[String], pos: Int) -> ObjPos {
-    let len: Int = list_len(chars);
+    let len: Int = chars.len();
     let cur: ref Int = skip_ws(chars, pos + 1);
-    match list_get(chars, cur) {
+    match chars.get(cur) {
         None    => { return ObjPos::ObjPErr("unterminated object") },
         Some(c) => {
             if c == "}" { return ObjPos::ObjP(empty_object(), cur + 1) } else {}
@@ -510,12 +510,12 @@ partial fn parse_object(chars: List[String], pos: Int) -> ObjPos {
     let had_err: ref Bool = false;
     while go {
         cur = skip_ws(chars, cur);
-        match list_get(chars, cur) {
+        match chars.get(cur) {
             None     => { had_err = true; err = "unterminated object"; go = false },
             Some(kc) => {
                 if kc != "\"" {
                     had_err = true;
-                    err = str_concat("expected '\"' for key, got: ", kc);
+                    err = "expected '\"' for key, got: ".concat(kc);
                     go = false
                 } else {
                     match parse_object_step(chars, cur, result) {
@@ -525,7 +525,7 @@ partial fn parse_object(chars: List[String], pos: Int) -> ObjPos {
                             cur    = c2;
                             if      sep == "}" { cur = cur + 1; go = false }
                             else if sep == "," { cur = cur + 1 }
-                            else { had_err = true; err = str_concat("expected ',' or '}', got: ", sep); go = false }
+                            else { had_err = true; err = "expected ',' or '}', got: ".concat(sep); go = false }
                         }
                     }
                 }

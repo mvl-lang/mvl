@@ -94,27 +94,22 @@ impl TypeChecker {
         };
         if let Some(recv_ty) = &fd.receiver_type {
             // Validate receiver type is declared (#875 review).
-            if self.env.lookup_type(recv_ty.as_str()).is_none() {
+            // #928: Builtin types are always valid receiver types for extension methods.
+            const BUILTIN_RECEIVER_TYPES: &[&str] = &[
+                "String", "Int", "Float", "Bool", "Byte", "UByte", "UInt", "List", "Map", "Set",
+                "Option", "Result",
+            ];
+            let is_builtin = BUILTIN_RECEIVER_TYPES.contains(&recv_ty.as_str());
+            if !is_builtin && self.env.lookup_type(recv_ty.as_str()).is_none() {
                 self.emit(CheckError::UndefinedType {
                     name: recv_ty.clone(),
                     span: fd.span,
                 });
                 return;
             }
-            // Enforce that `self` is the first parameter (#875 review).
-            if fd.params.first().map(|p| p.name.as_str()) != Some("self") {
-                self.emit(CheckError::TypeMismatch {
-                    expected: "self as first parameter of type-attached method".to_string(),
-                    found: fd
-                        .params
-                        .first()
-                        .map(|p| p.name.as_str())
-                        .unwrap_or("(no parameters)")
-                        .to_string(),
-                    span: fd.span,
-                });
-                return;
-            }
+            // #928: Type-attached methods without `self` are static/associated functions
+            // (e.g. `fn String::from_chars(chars: List[String])`). Only instance methods
+            // need `self`. We no longer enforce `self` as a hard requirement here.
             // Detect duplicate method on same type (#875 review).
             let inner = self.method_table.entry(recv_ty.clone()).or_default();
             if inner.insert(fd.name.clone(), info).is_some() {

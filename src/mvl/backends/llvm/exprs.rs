@@ -2173,6 +2173,33 @@ impl<'ctx> LlvmBackend<'ctx> {
                                 args,
                             );
                         }
+                        // #928: static extension method call, e.g. String::from_chars(arr).
+                        // Try the mangled name (Type_method) and C-ABI name (_mvl_prefix_method).
+                        let mangled_static = format!("{}_{}", type_name, variant_name);
+                        let cabi_static = match type_name.as_str() {
+                            "String" => Some(format!("_mvl_str_{}", variant_name)),
+                            "List" => Some(format!("_mvl_list_{}", variant_name)),
+                            "Map" => Some(format!("_mvl_map_{}", variant_name)),
+                            "Set" => Some(format!("_mvl_set_{}", variant_name)),
+                            _ => None,
+                        };
+                        let static_fn = self.module.get_function(&mangled_static).or_else(|| {
+                            cabi_static
+                                .as_deref()
+                                .and_then(|n| self.module.get_function(n))
+                        });
+                        if let Some(fn_val) = static_fn {
+                            let meta_args: Vec<inkwell::values::BasicMetadataValueEnum> = args
+                                .iter()
+                                .map(|a| self.emit_expr(a).map(Into::into))
+                                .collect::<Option<Vec<_>>>()?;
+                            let call = self
+                                .builder
+                                .build_call(fn_val, &meta_args, "static_method")
+                                .unwrap();
+                            use inkwell::values::AnyValue;
+                            return BasicValueEnum::try_from(call.as_any_value_enum()).ok();
+                        }
                     }
                 }
                 // map_new[K, V]() → empty MvlMap via mvl_map_new.
@@ -3737,7 +3764,20 @@ impl<'ctx> LlvmBackend<'ctx> {
                     };
                     if let Some(type_name) = recv_type_name {
                         let mangled = format!("{}_{}", type_name, method);
-                        if let Some(fn_val) = self.module.get_function(&mangled) {
+                        // Also try C-ABI name for builtin extension methods (#928).
+                        let cabi_name = match type_name.as_str() {
+                            "String" => Some(format!("_mvl_str_{}", method)),
+                            "List" => Some(format!("_mvl_list_{}", method)),
+                            "Map" => Some(format!("_mvl_map_{}", method)),
+                            "Set" => Some(format!("_mvl_set_{}", method)),
+                            _ => None,
+                        };
+                        let fn_val = self.module.get_function(&mangled).or_else(|| {
+                            cabi_name
+                                .as_deref()
+                                .and_then(|n| self.module.get_function(n))
+                        });
+                        if let Some(fn_val) = fn_val {
                             let mut call_args: Vec<inkwell::values::BasicMetadataValueEnum> =
                                 vec![recv_val.into()];
                             for a in args {

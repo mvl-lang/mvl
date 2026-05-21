@@ -1,21 +1,19 @@
 // Corpus: set algebra — intersection, difference, union (#587)
 //
-// Exercises set_intersection, set_difference, set_union on Int sets.
+// Exercises set intersection, difference, union on Int sets.
 // Both backends must produce the same sorted output.
 //
 // Used by: tests/cross_backend.rs::cross_backend_set_algebra
-
-use std.collections.{set_intersection, set_difference, set_union, set_contains, set_len}
 
 fn main() -> Unit ! Console {
     let a: Set[Int] = {1, 2, 3, 4};
     let b: Set[Int] = {3, 4, 5, 6};
 
-    let inter: Set[Int] = set_intersection(a, b);
-    let diff: Set[Int] = set_difference(a, b);
-    let uni: Set[Int] = set_union(a, b);
+    let inter: Set[Int] = a.intersection(b);
+    let diff: Set[Int] = a.difference(b);
+    let uni: Set[Int] = a.union(b);
 
-    println(format("{}", set_len(inter)));
-    println(format("{}", set_len(diff)));
-    println(format("{}", set_len(uni)));
+    println(format("{}", inter.len()));
+    println(format("{}", diff.len()));
+    println(format("{}", uni.len()));
 }
