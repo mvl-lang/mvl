@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.132.1] — 2026-05-21
+
+### Fixed
+
+- **LLVM backend correctly handles hybrid stdlib modules** (#900): regex and time modules contain both Rust-backed `pub builtin fn` declarations and pure-MVL helper functions. The LLVM backend now emits builtin bodies first (before pure-MVL), preventing same-named wrappers from overwriting C-ABI dispatches. Also marks `regex::replace` as a builtin to avoid collision with `strings::replace`. Fixes cross-backend tests: `cross_backend_regex_find_all`, `cross_backend_regex_replace`, `cross_backend_time_format_datetime`.
+
 ## [0.132.0] — 2026-05-20
 
 ### Added
