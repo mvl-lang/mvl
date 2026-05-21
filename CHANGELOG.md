@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.134.0] — 2026-05-21
+
+### Added
+
+- **Declare 30 hidden backend methods in stdlib** (#905): `pub fn` / `pub builtin fn` declarations for methods that already existed in the Rust/LLVM backends but were invisible to MVL programmers. Int: `int_bit_and/or/xor/not`, `int_shift_left/right`, `int_wrapping_add/sub/mul`, `int_checked_add/sub/mul/div`. Bool: `bool_to_string` (pure MVL). Byte: `from_int` (builtin), `byte_to_int`, `byte_to_string`, `byte_bit_and/or/xor/not`, `byte_shift_left/right`, `byte_wrapping_add/sub/mul`, `byte_checked_add/sub/mul`. List: `group_by`, `windows`, `chunks`. Option: `and_then` (pure MVL). Backend: auto-bound scan now includes return types (fixes `K: Hash+Eq` for `group_by`); `windows`/`chunks` cast size argument to `usize`.
+
 ## [0.133.0] — 2026-05-21
 
 ### Added

@@ -11,9 +11,10 @@
 // See ADR-0022 for the three-category model.
 
 // ── Category 2: OS Builtins (always runtime) ──────────────────────────────────
-// format, assert, assert_eq, panic
+// format, assert, assert_eq, assert_ne, panic
 // Declared in std/core.mvl — implicitly available in all profiles.
 // Note: println, print, eprintln, eprint are pure MVL since #839.
+// Note: and_then (Option) is pure MVL since #905.
 
 // ── Category 3: String type operations (runtime-backed) ───────────────────────
 // str_len, str_chars, str_char_at, str_from_chars, str_byte_at, str_from_bytes,
@@ -26,6 +27,7 @@
 // ── Category 3: List type operations (runtime-backed) ─────────────────────────
 // list_len, list_get, list_push, list_slice, list_concat, list_contains
 // Declared as pub builtin fn in std/lists.mvl.
+// Note: group_by, windows, chunks are transpiler-dispatched stubs since #905.
 
 // ── Category 3: I/O operations (always OS-backed) ─────────────────────────────
 // path_exists, is_file, is_dir, open, close, read_to_string, read_file, write,
@@ -68,3 +70,17 @@
 // log_timestamp, log_write
 // Declared as pub builtin fn in std/log.mvl.
 // Note: log_debug, log_info, log_warn, log_error are pure MVL since #839.
+
+// ── Category 3: Numeric/Byte operations (transpiler-dispatched) ───────────────
+// Int bitwise:   int_bit_and, int_bit_or, int_bit_xor, int_bit_not,
+//               int_shift_left, int_shift_right
+// Int wrapping:  int_wrapping_add, int_wrapping_sub, int_wrapping_mul
+// Int checked:   int_checked_add, int_checked_sub, int_checked_mul, int_checked_div
+// Byte cast:     from_int (pub builtin fn)
+// Byte convert:  byte_to_int, byte_to_string (transpiler-dispatched stubs)
+// Byte bitwise:  byte_bit_and, byte_bit_or, byte_bit_xor, byte_bit_not,
+//               byte_shift_left, byte_shift_right
+// Byte wrapping: byte_wrapping_add, byte_wrapping_sub, byte_wrapping_mul
+// Byte checked:  byte_checked_add, byte_checked_sub, byte_checked_mul
+// Declared in std/math.mvl since #905.
+// Note: bool_to_string is pure MVL since #905.

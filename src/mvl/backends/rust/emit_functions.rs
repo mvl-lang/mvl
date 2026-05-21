@@ -59,7 +59,12 @@ pub fn emit_fn_decl(cg: &mut RustEmitter, fd: &FnDecl) {
 
     if fd.is_test {
         cg.line("#[test]");
-        let generics = emit_generics_with_params(&fd.type_params, &fd.constraints, &fd.params);
+        let generics = emit_generics_with_params(
+            &fd.type_params,
+            &fd.constraints,
+            &fd.params,
+            &fd.return_type,
+        );
         let params_str = emit_params(&fd.params, &borrows, &mutated_params);
         let ret_str = emit_type_expr(&fd.return_type);
         cg.line(&format!(
@@ -91,7 +96,12 @@ pub fn emit_fn_decl(cg: &mut RustEmitter, fd: &FnDecl) {
     }
 
     // Function signature
-    let generics = emit_generics_with_params(&fd.type_params, &fd.constraints, &fd.params);
+    let generics = emit_generics_with_params(
+        &fd.type_params,
+        &fd.constraints,
+        &fd.params,
+        &fd.return_type,
+    );
     let ret_str = emit_type_expr(&fd.return_type);
 
     if let Some(recv_ty) = &fd.receiver_type {
@@ -253,6 +263,7 @@ fn emit_generics_with_params(
     type_params: &[GenericParam],
     constraints: &[Constraint],
     params: &[Param],
+    return_ty: &TypeExpr,
 ) -> String {
     if type_params.is_empty() {
         return String::new();
@@ -268,9 +279,10 @@ fn emit_generics_with_params(
     }
 
     // Auto-add Hash+Eq for Map/Set key type params and Clone for Map value params.
-    // This ensures the generated Rust compiles when collection methods are called
-    // (MvlGet, HashMap::insert, etc. all require these bounds on K/V).
+    // Scan both parameters and return type so that functions whose Map appears
+    // only in the return position (e.g. group_by) also get the correct bounds.
     collect_map_set_bounds(params, &mut bounds);
+    collect_type_bounds(return_ty, &mut bounds);
 
     let params_out: Vec<String> = type_params
         .iter()

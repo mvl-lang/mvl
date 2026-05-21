@@ -1,9 +1,9 @@
-//! std.math — numeric methods for Int and Float.
+//! std.math — numeric methods for Int, Float, Bool, and Byte.
 //!
 //! Declarations make arithmetic and predicate methods visible to the IFC
 //! label checker, effect tracker, and totality checker (#341).
 //! Pure MVL methods have real implementations; Rust-trait methods are stubs
-//! replaced at call sites by the transpiler (pow, clamp, abs, sqrt, …).
+//! replaced at call sites by the transpiler (pow, clamp, abs, sqrt, bitwise, …).
 //!
 //! Import: available as builtins; explicit import not required.
 //!
@@ -60,6 +60,61 @@ pub fn int_to_float(n: Int) -> Float { n.to_float() }
 pub fn int_to_string(n: Int) -> String {
     n.to_string()
 }
+
+// ── Int bitwise ───────────────────────────────────────────────────────────────
+//
+// Transpiler-handled: emitted as Rust operators (&, |, ^, !, wrapping_shl,
+// wrapping_shr) for both the Rust and LLVM backends (#233).
+// Stub bodies allow free-function call sites (e.g. int_bit_and(a, b)).
+
+/// Bitwise AND of `a` and `b`.
+pub fn int_bit_and(a: Int, b: Int) -> Int { a.bit_and(b) }
+
+/// Bitwise OR of `a` and `b`.
+pub fn int_bit_or(a: Int, b: Int) -> Int { a.bit_or(b) }
+
+/// Bitwise XOR of `a` and `b`.
+pub fn int_bit_xor(a: Int, b: Int) -> Int { a.bit_xor(b) }
+
+/// Bitwise complement of `n`.
+pub fn int_bit_not(n: Int) -> Int { n.bit_not() }
+
+/// Shift `n` left by `amount` bits (wrapping; no panic on out-of-range).
+pub fn int_shift_left(n: Int, amount: Int) -> Int { n.shift_left(amount) }
+
+/// Shift `n` right by `amount` bits (wrapping; no panic on out-of-range).
+pub fn int_shift_right(n: Int, amount: Int) -> Int { n.shift_right(amount) }
+
+// ── Int wrapping arithmetic ───────────────────────────────────────────────────
+//
+// Explicit wrapping arithmetic — documents intent and avoids silent truncation.
+// Transpiler emits Rust's wrapping_add/sub/mul directly.
+
+/// Add `a` and `b` with wrapping on overflow.
+pub fn int_wrapping_add(a: Int, b: Int) -> Int { a.wrapping_add(b) }
+
+/// Subtract `b` from `a` with wrapping on underflow.
+pub fn int_wrapping_sub(a: Int, b: Int) -> Int { a.wrapping_sub(b) }
+
+/// Multiply `a` and `b` with wrapping on overflow.
+pub fn int_wrapping_mul(a: Int, b: Int) -> Int { a.wrapping_mul(b) }
+
+// ── Int checked arithmetic ────────────────────────────────────────────────────
+//
+// Return `None` on overflow instead of panicking or wrapping.
+// Transpiler emits Rust's checked_add/sub/mul/div directly.
+
+/// Add `a` and `b`; returns `None` on overflow.
+pub fn int_checked_add(a: Int, b: Int) -> Option[Int] { a.checked_add(b) }
+
+/// Subtract `b` from `a`; returns `None` on overflow.
+pub fn int_checked_sub(a: Int, b: Int) -> Option[Int] { a.checked_sub(b) }
+
+/// Multiply `a` and `b`; returns `None` on overflow.
+pub fn int_checked_mul(a: Int, b: Int) -> Option[Int] { a.checked_mul(b) }
+
+/// Divide `a` by `b`; returns `None` on overflow or division by zero.
+pub fn int_checked_div(a: Int, b: Int) -> Option[Int] { a.checked_div(b) }
 
 // ── Float ─────────────────────────────────────────────────────────────────────
 
@@ -146,3 +201,66 @@ pub fn float_min(a: Float, b: Float) -> Float {
 pub fn float_max(a: Float, b: Float) -> Float {
     if a > b { a } else { b }
 }
+
+// ── Bool ──────────────────────────────────────────────────────────────────────
+
+/// Convert `b` to its string representation ("true" or "false").
+pub fn bool_to_string(b: Bool) -> String {
+    if b { "true" } else { "false" }
+}
+
+// ── Byte ──────────────────────────────────────────────────────────────────────
+//
+// Byte is an 8-bit unsigned integer (u8 in Rust).  All operations mirror the
+// Int set; types are Byte for both receiver and arguments unless noted.
+
+/// Cast `n: Int` to `Byte`, wrapping on overflow (i64 → u8 wrapping cast).
+pub builtin fn from_int(n: Int) -> Byte
+
+/// Reinterpret `b` as an `Int` (zero-extending u8 → i64).
+pub fn byte_to_int(b: Byte) -> Int { b.to_int() }
+
+/// Convert `b` to its decimal string representation.
+pub fn byte_to_string(b: Byte) -> String { b.to_string() }
+
+// Bitwise — transpiler emits Rust operators, same as Int (#233).
+
+/// Bitwise AND of `a` and `b`.
+pub fn byte_bit_and(a: Byte, b: Byte) -> Byte { a.bit_and(b) }
+
+/// Bitwise OR of `a` and `b`.
+pub fn byte_bit_or(a: Byte, b: Byte) -> Byte { a.bit_or(b) }
+
+/// Bitwise XOR of `a` and `b`.
+pub fn byte_bit_xor(a: Byte, b: Byte) -> Byte { a.bit_xor(b) }
+
+/// Bitwise complement of `b`.
+pub fn byte_bit_not(b: Byte) -> Byte { b.bit_not() }
+
+/// Shift `b` left by `amount` bits (wrapping).
+pub fn byte_shift_left(b: Byte, amount: Byte) -> Byte { b.shift_left(amount) }
+
+/// Shift `b` right by `amount` bits (wrapping).
+pub fn byte_shift_right(b: Byte, amount: Byte) -> Byte { b.shift_right(amount) }
+
+// Wrapping arithmetic — transpiler emits Rust's wrapping_add/sub/mul.
+
+/// Add `a` and `b` with wrapping on overflow.
+pub fn byte_wrapping_add(a: Byte, b: Byte) -> Byte { a.wrapping_add(b) }
+
+/// Subtract `b` from `a` with wrapping on underflow.
+pub fn byte_wrapping_sub(a: Byte, b: Byte) -> Byte { a.wrapping_sub(b) }
+
+/// Multiply `a` and `b` with wrapping on overflow.
+pub fn byte_wrapping_mul(a: Byte, b: Byte) -> Byte { a.wrapping_mul(b) }
+
+// Checked arithmetic — return None on overflow.
+
+/// Add `a` and `b`; returns `None` on overflow.
+pub fn byte_checked_add(a: Byte, b: Byte) -> Option[Byte] { a.checked_add(b) }
+
+/// Subtract `b` from `a`; returns `None` on overflow.
+pub fn byte_checked_sub(a: Byte, b: Byte) -> Option[Byte] { a.checked_sub(b) }
+
+/// Multiply `a` and `b`; returns `None` on overflow.
+pub fn byte_checked_mul(a: Byte, b: Byte) -> Option[Byte] { a.checked_mul(b) }

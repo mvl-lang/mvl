@@ -227,13 +227,17 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     }
                     cg.push("__x))");
                 }
-                // windows(n)/chunks(n) — Rust returns &[T] slices; collect into Vec<Vec<T>>
+                // windows(n)/chunks(n) — Rust returns &[T] slices; collect into Vec<Vec<T>>.
+                // MVL passes n as Int (i64); Rust requires usize, so cast.
                 "windows" | "chunks" => {
                     emit_expr(cg, receiver);
                     cg.push(".");
                     cg.push(method);
                     cg.push("(");
-                    emit_args(cg, args);
+                    if let Some(arg) = args.first() {
+                        emit_expr(cg, arg);
+                        cg.push(" as usize");
+                    }
                     cg.push(").map(|w| w.to_vec()).collect::<Vec<_>>()");
                 }
                 // partition(f) — turbofish needed so Rust can infer the element type

@@ -17,18 +17,20 @@
 
 // ── Already proven (pure MVL today) ───────────────────────────────────────────
 
-// std/math.mvl — all 26 functions are pure MVL
+// std/math.mvl — pure MVL functions
 //   int_abs, int_clamp, is_zero, int_is_positive, int_is_negative,
 //   int_min, int_max, int_to_string, float_abs, float_ceil, float_floor,
 //   float_round, float_is_positive, float_is_negative, float_is_nan,
 //   float_is_infinite, float_is_finite, float_to_int, float_to_string,
-//   float_clamp, float_min, float_max
-//   (int_pow, int_to_float, float_pow are transpiler-dispatched stubs)
+//   float_clamp, float_min, float_max, bool_to_string (since #905)
+//   (int_pow, int_to_float, float_pow, bitwise ops, wrapping/checked,
+//    byte_to_int, byte_to_string, from_int are transpiler-dispatched stubs)
 
 // std/lists.mvl — higher-order combinators (pure MVL, compose kernel builtins)
 //   slice, take, skip, first, last, flatten, reverse, len, is_empty, get,
 //   push, contains, rev, map, filter, fold, sort, partition, take_while,
 //   skip_while, any, all, min, max, str_join
+//   (group_by, windows, chunks are transpiler-dispatched stubs since #905)
 
 // std/collections.mvl — all 19 functions are pure MVL
 //   map_get, map_insert, map_put, map_without, map_remove, map_contains_key,
@@ -37,7 +39,7 @@
 //   set_intersection, set_difference, set_union
 
 // std/core.mvl — Option/Result predicates (pure MVL)
-//   is_some, is_none, unwrap_or, is_ok, is_err
+//   is_some, is_none, unwrap_or, is_ok, is_err, and_then (since #905)
 
 // std/strings.mvl — wrapper layer (pure MVL, delegates to kernel builtins)
 //   trim, to_upper, to_lower, chars, concat, starts_with, ends_with, find,

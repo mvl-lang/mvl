@@ -241,3 +241,27 @@ pub fn max[T](xs: List[T]) -> Option[T] where T: Clone {
 pub fn str_join(xs: List[String], sep: String) -> String {
     ""
 }
+
+/// Group elements of `xs` by the key returned by `f`, producing a map from
+/// each key to the list of elements that produced it (order within groups preserved).
+///
+/// Transpiler-handled: emits a Rust HashMap fold; no native Rust `group_by` equivalent.
+pub fn group_by[T, K](xs: List[T], f: fn(T) -> K) -> Map[K, List[T]] where T: Clone, K: Clone {
+    xs.group_by(f)
+}
+
+/// Return all contiguous windows of length `n`.  If `n` > `len(xs)` the result
+/// is empty.  Each window is a new list of exactly `n` elements.
+///
+/// Transpiler-handled: emits `xs.windows(n).map(|w| w.to_vec()).collect()`.
+pub fn windows[T](xs: List[T], n: Int) -> List[List[T]] where T: Clone {
+    xs.windows(n)
+}
+
+/// Divide `xs` into non-overlapping chunks of at most `n` elements.  The last
+/// chunk may be shorter than `n`.
+///
+/// Transpiler-handled: emits `xs.chunks(n).map(|c| c.to_vec()).collect()`.
+pub fn chunks[T](xs: List[T], n: Int) -> List[List[T]] where T: Clone {
+    xs.chunks(n)
+}
