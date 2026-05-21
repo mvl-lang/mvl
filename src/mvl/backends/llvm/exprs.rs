@@ -1528,6 +1528,11 @@ impl<'ctx> LlvmBackend<'ctx> {
         left: &Expr,
         right: &Expr,
     ) -> Option<BasicValueEnum<'ctx>> {
+        // Short-circuit evaluation: && and || must not eagerly evaluate the rhs.
+        if matches!(op, BinaryOp::And | BinaryOp::Or) {
+            return self.emit_logical_short_circuit(op, left, right);
+        }
+
         let lhs = self.emit_expr(left)?;
         let rhs = self.emit_expr(right)?;
 
@@ -1619,8 +1624,10 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .build_int_compare(IntPredicate::SGE, l, r, "ge")
                 .unwrap()
                 .into(),
-            BinaryOp::And => self.builder.build_and(l, r, "and").unwrap().into(),
-            BinaryOp::Or => self.builder.build_or(l, r, "or").unwrap().into(),
+            // And/Or are intercepted in emit_binary for short-circuit evaluation.
+            BinaryOp::And | BinaryOp::Or => {
+                unreachable!("And/Or handled by emit_logical_short_circuit")
+            }
             BinaryOp::BitAnd => self.builder.build_and(l, r, "bitand").unwrap().into(),
             BinaryOp::BitOr => self.builder.build_or(l, r, "bitor").unwrap().into(),
             BinaryOp::BitXor => self.builder.build_xor(l, r, "bitxor").unwrap().into(),
@@ -1705,6 +1712,81 @@ impl<'ctx> LlvmBackend<'ctx> {
         self.builder.position_at_end(ok_bb);
 
         Some(val)
+    }
+
+    /// Emit `&&` / `||` with proper short-circuit semantics via conditional branches.
+    ///
+    /// The rhs is only evaluated when the lhs does not already determine the result:
+    /// - `&&`: rhs is skipped (result = false) when lhs is false
+    /// - `||`: rhs is skipped (result = true)  when lhs is true
+    pub(crate) fn emit_logical_short_circuit(
+        &mut self,
+        op: &BinaryOp,
+        left: &Expr,
+        right: &Expr,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let lhs_val = self.emit_expr(left)?;
+        let lhs_int = match lhs_val {
+            BasicValueEnum::IntValue(v) => {
+                if v.get_type().get_bit_width() != 1 {
+                    self.builder
+                        .build_int_truncate(v, self.context.bool_type(), "lhs_trunc")
+                        .unwrap()
+                } else {
+                    v
+                }
+            }
+            _ => return None,
+        };
+
+        let lhs_block = self.builder.get_insert_block().unwrap();
+        let parent_fn = lhs_block.get_parent().unwrap();
+        let rhs_bb = self.context.append_basic_block(parent_fn, "sc_rhs");
+        let merge_bb = self.context.append_basic_block(parent_fn, "sc_merge");
+        let bool_ty = self.context.bool_type();
+
+        // For &&: jump to rhs when lhs is true; short-circuit to merge (false) when lhs is false.
+        // For ||: jump to merge (true) when lhs is true; evaluate rhs otherwise.
+        match op {
+            BinaryOp::And => self
+                .builder
+                .build_conditional_branch(lhs_int, rhs_bb, merge_bb)
+                .unwrap(),
+            BinaryOp::Or => self
+                .builder
+                .build_conditional_branch(lhs_int, merge_bb, rhs_bb)
+                .unwrap(),
+            _ => unreachable!(),
+        };
+
+        // rhs block — only reached when the lhs alone does not determine the result
+        self.builder.position_at_end(rhs_bb);
+        let rhs_val = self.emit_expr(right)?;
+        let rhs_int = match rhs_val {
+            BasicValueEnum::IntValue(v) => {
+                if v.get_type().get_bit_width() != 1 {
+                    self.builder
+                        .build_int_truncate(v, bool_ty, "rhs_trunc")
+                        .unwrap()
+                } else {
+                    v
+                }
+            }
+            _ => return None,
+        };
+        let rhs_block = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        // merge block — phi selects between the short-circuit constant and the rhs value
+        self.builder.position_at_end(merge_bb);
+        let short_val = match op {
+            BinaryOp::And => bool_ty.const_int(0, false), // && short-circuits to false
+            BinaryOp::Or => bool_ty.const_int(1, false),  // || short-circuits to true
+            _ => unreachable!(),
+        };
+        let phi = self.builder.build_phi(bool_ty, "sc_result").unwrap();
+        phi.add_incoming(&[(&short_val, lhs_block), (&rhs_int, rhs_block)]);
+        Some(phi.as_basic_value())
     }
 
     pub(crate) fn emit_float_binop(

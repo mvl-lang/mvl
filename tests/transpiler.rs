@@ -2075,28 +2075,28 @@ fn group_by_with_ref_string_key_emits_borrow_on_clone() {
 // entry (e.g. "+" → "-") produces a test failure.  Without these tests every
 // entry in `emit_binary_op` is a surviving mutant.
 
-/// Addition operator emits `+`.
+/// Addition on Int emits checked_add (overflow traps, matching LLVM backend).
 #[test]
 fn binary_add_emits_plus() {
     let src = "fn f(a: Int, b: Int) -> Int { a + b }";
     let rust = transpile_src(src);
-    assert_contains(&rust, "a + b");
+    assert_contains(&rust, ".checked_add(");
 }
 
-/// Subtraction operator emits `-`.
+/// Subtraction on Int emits checked_sub (overflow traps, matching LLVM backend).
 #[test]
 fn binary_sub_emits_minus() {
     let src = "fn f(a: Int, b: Int) -> Int { a - b }";
     let rust = transpile_src(src);
-    assert_contains(&rust, "a - b");
+    assert_contains(&rust, ".checked_sub(");
 }
 
-/// Multiplication operator emits `*`.
+/// Multiplication on Int emits checked_mul (overflow traps, matching LLVM backend).
 #[test]
 fn binary_mul_emits_star() {
     let src = "fn f(a: Int, b: Int) -> Int { a * b }";
     let rust = transpile_src(src);
-    assert_contains(&rust, "a * b");
+    assert_contains(&rust, ".checked_mul(");
 }
 
 /// Division operator emits `/`.
