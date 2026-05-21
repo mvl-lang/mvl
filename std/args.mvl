@@ -17,7 +17,6 @@
 //! Effects: Console + Env (all parse_args callers).
 
 use std.env.{args, exit}
-use std.collections.{map_get, map_put, map_contains_key, map_new}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -80,7 +79,7 @@ pub fn opt_positional(name: String, ty: ArgType) -> FieldSpec {
 
 /// Extract a `String` value; returns `default` if absent or wrong type.
 pub fn get_str(args: Map[String, ArgValue], name: String, default: String) -> String {
-    match map_get(args, name) {
+    match args.get(name) {
         Some(ArgValue::Str(s)) => s,
         _ => default,
     }
@@ -88,7 +87,7 @@ pub fn get_str(args: Map[String, ArgValue], name: String, default: String) -> St
 
 /// Extract an optional `String`; returns `None` if absent.
 pub fn get_str_opt(args: Map[String, ArgValue], name: String) -> Option[String] {
-    match map_get(args, name) {
+    match args.get(name) {
         Some(ArgValue::Str(s)) => Some(s),
         _ => None,
     }
@@ -96,7 +95,7 @@ pub fn get_str_opt(args: Map[String, ArgValue], name: String) -> Option[String] 
 
 /// Extract an `Int` value; returns `default` if absent or wrong type.
 pub fn get_int(args: Map[String, ArgValue], name: String, default: Int) -> Int {
-    match map_get(args, name) {
+    match args.get(name) {
         Some(ArgValue::Int(n)) => n,
         _ => default,
     }
@@ -104,7 +103,7 @@ pub fn get_int(args: Map[String, ArgValue], name: String, default: Int) -> Int {
 
 /// Extract a `Float` value; returns `default` if absent or wrong type.
 pub fn get_float(args: Map[String, ArgValue], name: String, default: Float) -> Float {
-    match map_get(args, name) {
+    match args.get(name) {
         Some(ArgValue::Float(v)) => v,
         _ => default,
     }
@@ -112,7 +111,7 @@ pub fn get_float(args: Map[String, ArgValue], name: String, default: Float) -> F
 
 /// Extract an optional `Float`; returns `None` if absent.
 pub fn get_float_opt(args: Map[String, ArgValue], name: String) -> Option[Float] {
-    match map_get(args, name) {
+    match args.get(name) {
         Some(ArgValue::Float(v)) => Some(v),
         _ => None,
     }
@@ -120,7 +119,7 @@ pub fn get_float_opt(args: Map[String, ArgValue], name: String) -> Option[Float]
 
 /// Extract a boolean flag value; returns `false` if absent.
 pub fn get_flag(args: Map[String, ArgValue], name: String) -> Bool {
-    match map_get(args, name) {
+    match args.get(name) {
         Some(ArgValue::Bool(b)) => b,
         _ => false,
     }
@@ -138,15 +137,15 @@ fn type_label(ty: ArgType) -> String {
 
 /// Build a set of declared flag names for schema-aware tokenization.
 fn build_flag_set(schema: List[FieldSpec]) -> Map[String, Bool] {
-    let flags: ref Map[String, Bool] = map_new();
-    let len: Int = list_len(schema);
+    let flags: ref Map[String, Bool] = Map::new();
+    let len: Int = schema.len();
     let i: ref Int = 0;
     while i < len {
-        match list_get(schema, i) {
+        match schema.get(i) {
             Some(f) => {
                 match f {
                     FieldSpec::Flag { name: n } => {
-                        flags = map_put(flags, n, true)
+                        flags.insert(n, true)
                     },
                     _ => {},
                 }
@@ -162,31 +161,31 @@ fn build_flag_set(schema: List[FieldSpec]) -> Map[String, Bool] {
 fn build_usage(schema: List[FieldSpec]) -> String {
     let synopsis: ref String = "Usage: <program>";
     let details: ref String = "\nArguments:\n";
-    let len: Int = list_len(schema);
+    let len: Int = schema.len();
     let i: ref Int = 0;
     while i < len {
-        match list_get(schema, i) {
+        match schema.get(i) {
             Some(f) => {
                 match f {
                     FieldSpec::Required { name: n, ty: t } => {
-                        synopsis = str_concat(synopsis, str_concat(" --", str_concat(n, str_concat(" <", str_concat(type_label(t), ">")))));
-                        details  = str_concat(details,  str_concat("  --", str_concat(n, str_concat(" <", str_concat(type_label(t), ">  required\n")))));
+                        synopsis = synopsis.concat(" --").concat(n).concat(" <").concat(type_label(t)).concat(">");
+                        details  = details.concat("  --").concat(n).concat(" <").concat(type_label(t)).concat(">  required\n");
                     },
                     FieldSpec::Optional { name: n, ty: t } => {
-                        synopsis = str_concat(synopsis, str_concat(" [--", str_concat(n, str_concat(" <", str_concat(type_label(t), ">]")))));
-                        details  = str_concat(details,  str_concat("  [--", str_concat(n, str_concat(" <", str_concat(type_label(t), ">]  optional\n")))));
+                        synopsis = synopsis.concat(" [--").concat(n).concat(" <").concat(type_label(t)).concat(">]");
+                        details  = details.concat("  [--").concat(n).concat(" <").concat(type_label(t)).concat(">]  optional\n");
                     },
                     FieldSpec::Flag { name: n } => {
-                        synopsis = str_concat(synopsis, str_concat(" [--", str_concat(n, "]")));
-                        details  = str_concat(details,  str_concat("  [--", str_concat(n, "]  flag\n")));
+                        synopsis = synopsis.concat(" [--").concat(n).concat("]");
+                        details  = details.concat("  [--").concat(n).concat("]  flag\n");
                     },
                     FieldSpec::Positional { name: n, ty: t } => {
-                        synopsis = str_concat(synopsis, str_concat(" <", str_concat(n, ">")));
-                        details  = str_concat(details,  str_concat("  <", str_concat(n, str_concat(">  ", str_concat(type_label(t), " (required)\n")))));
+                        synopsis = synopsis.concat(" <").concat(n).concat(">");
+                        details  = details.concat("  <").concat(n).concat(">  ").concat(type_label(t)).concat(" (required)\n");
                     },
                     FieldSpec::OptPositional { name: n, ty: t } => {
-                        synopsis = str_concat(synopsis, str_concat(" [<", str_concat(n, ">]")));
-                        details  = str_concat(details,  str_concat("  [<", str_concat(n, str_concat(">]  ", str_concat(type_label(t), " (optional)\n")))));
+                        synopsis = synopsis.concat(" [<").concat(n).concat(">]");
+                        details  = details.concat("  [<").concat(n).concat(">]  ").concat(type_label(t)).concat(" (optional)\n");
                     },
                 }
             },
@@ -194,7 +193,7 @@ fn build_usage(schema: List[FieldSpec]) -> String {
         }
         i = i + 1
     }
-    str_concat(synopsis, str_concat("\n", str_concat(details, "  -h, --help  Show this message and exit\n")))
+    synopsis.concat("\n").concat(details).concat("  -h, --help  Show this message and exit\n")
 }
 
 /// Coerce a raw string token to the declared `ArgType`.
@@ -203,19 +202,19 @@ fn coerce_arg(name: String, raw: String, ty: ArgType) -> ArgValue ! Console + En
     match ty {
         ArgType::Str => ArgValue::Str(raw),
         ArgType::Int => {
-            match str_parse_int(raw) {
+            match raw.parse_int() {
                 Ok(n)  => ArgValue::Int(n),
                 Err(_) => {
-                    eprintln(str_concat("error: --", str_concat(name, " expects an integer")));
+                    eprintln("error: --".concat(name).concat(" expects an integer"));
                     exit(1)
                 },
             }
         },
         ArgType::Float => {
-            match str_parse_float(raw) {
+            match raw.parse_float() {
                 Ok(f)  => ArgValue::Float(f),
                 Err(_) => {
-                    eprintln(str_concat("error: --", str_concat(name, " expects a float")));
+                    eprintln("error: --".concat(name).concat(" expects a float"));
                     exit(1)
                 },
             }
@@ -238,12 +237,12 @@ fn coerce_arg(name: String, raw: String, ty: ArgType) -> ArgValue ! Console + En
 /// from the leading non-flag argv tokens.
 pub fn parse_args(schema: List[FieldSpec]) -> Map[String, ArgValue] ! Console + Env {
     let argv: List[Tainted[String]] = args();
-    let argc: Int = list_len(argv);
+    let argc: Int = argv.len();
 
     // ── Pre-scan for -h / --help ──────────────────────────────────────────────
     let h: ref Int = 1;
     while h < argc {
-        match list_get(argv, h) {
+        match argv.get(h) {
             Some(t) => {
                 let s: String = relabel trust(t, "ARGS-INPUT");
                 if s == "-h" || s == "--help" {
@@ -260,65 +259,57 @@ pub fn parse_args(schema: List[FieldSpec]) -> Map[String, ArgValue] ! Console + 
     let flag_set: Map[String, Bool] = build_flag_set(schema);
 
     // ── First pass: tokenize argv into named args and positionals ─────────────
-    //
-    // Named args: --name value  or  --name=value
-    // Flags:      --name  (declared Flag fields only — schema-aware)
-    // Positionals: bare tokens (do not start with '--')
-    //
-    // Schema-driven disambiguation: only names declared as Flag are treated as
-    // boolean flags.  Value fields always consume the next token, even when it
-    // starts with '-' (e.g. --threshold -0.5 is valid for a Float field).
-    let raw_named: ref Map[String, String] = map_new();
+    let raw_named: ref Map[String, String] = Map::new();
     let positionals: ref List[String] = [];
     let i: ref Int = 1;
     while i < argc {
-        match list_get(argv, i) {
+        match argv.get(i) {
             Some(t) => {
                 let token: String = relabel trust(t, "ARGS-INPUT");
-                if str_starts_with(token, "--") {
-                    if str_contains(token, "=") {
+                if token.starts_with("--") {
+                    if token.contains("=") {
                         // --name=value form: always unambiguous
-                        match str_find(token, "=") {
+                        match token.find("=") {
                             Some(eq_idx) => {
-                                let name: String = str_substring(token, 2, eq_idx);
-                                let raw_val: String = str_substring(token, eq_idx + 1, str_len(token));
+                                let name: String = token.substring(2, eq_idx);
+                                let raw_val: String = token.substring(eq_idx + 1, token.len());
                                 let value: String = raw_val;
-                                raw_named = map_put(raw_named, name, value)
+                                raw_named.insert(name, value)
                             },
                             None => {},
                         }
                         i = i + 1
                     } else {
-                        let name: String = str_substring(token, 2, str_len(token));
-                        if map_contains_key(flag_set, name) {
+                        let name: String = token.substring(2, token.len());
+                        if flag_set.contains_key(name) {
                             // Declared boolean flag: never consumes a value token
-                            raw_named = map_put(raw_named, name, "");
+                            raw_named.insert(name, "");
                             i = i + 1
                         } else {
                             // Value field: next token is the value regardless of its prefix
                             let next_idx: Int = i + 1;
                             if next_idx < argc {
-                                match list_get(argv, next_idx) {
+                                match argv.get(next_idx) {
                                     Some(nt) => {
                                         let next_tok: String = relabel trust(nt, "ARGS-INPUT");
-                                        raw_named = map_put(raw_named, name, next_tok);
+                                        raw_named.insert(name, next_tok);
                                         i = i + 2
                                     },
                                     None => {
-                                        eprintln(str_concat("error: --", str_concat(name, " requires a value")));
+                                        eprintln("error: --".concat(name).concat(" requires a value"));
                                         eprintln(usage);
                                         exit(1)
                                     },
                                 }
                             } else {
-                                eprintln(str_concat("error: --", str_concat(name, " requires a value")));
+                                eprintln("error: --".concat(name).concat(" requires a value"));
                                 eprintln(usage);
                                 exit(1)
                             }
                         }
                     }
                 } else {
-                    positionals = list_push(positionals, token);
+                    positionals.push(token);
                     i = i + 1
                 }
             },
@@ -327,55 +318,55 @@ pub fn parse_args(schema: List[FieldSpec]) -> Map[String, ArgValue] ! Console + 
     }
 
     // ── Second pass: resolve schema against collected tokens ──────────────────
-    let result: ref Map[String, ArgValue] = map_new();
+    let result: ref Map[String, ArgValue] = Map::new();
     let pos_i: ref Int = 0;
-    let schema_len: Int = list_len(schema);
+    let schema_len: Int = schema.len();
     let si: ref Int = 0;
     while si < schema_len {
-        match list_get(schema, si) {
+        match schema.get(si) {
             Some(field) => {
                 match field {
                     FieldSpec::Required { name: n, ty: t } => {
-                        match map_get(raw_named, n) {
+                        match raw_named.get(n) {
                             Some(raw) => {
-                                result = map_put(result, n, coerce_arg(n, raw, t))
+                                result.insert(n, coerce_arg(n, raw, t))
                             },
                             None => {
-                                eprintln(str_concat("error: missing required flag --", n));
+                                eprintln("error: missing required flag --".concat(n));
                                 eprintln(usage);
                                 exit(1)
                             },
                         }
                     },
                     FieldSpec::Optional { name: n, ty: t } => {
-                        match map_get(raw_named, n) {
+                        match raw_named.get(n) {
                             Some(raw) => {
-                                result = map_put(result, n, coerce_arg(n, raw, t))
+                                result.insert(n, coerce_arg(n, raw, t))
                             },
                             None => {},
                         }
                     },
                     FieldSpec::Flag { name: n } => {
-                        let present: Bool = map_contains_key(raw_named, n);
-                        result = map_put(result, n, ArgValue::Bool(present))
+                        let present: Bool = flag_set.contains_key(n);
+                        result.insert(n, ArgValue::Bool(present))
                     },
                     FieldSpec::Positional { name: n, ty: t } => {
-                        match list_get(positionals, pos_i) {
+                        match positionals.get(pos_i) {
                             Some(raw) => {
-                                result = map_put(result, n, coerce_arg(n, raw, t));
+                                result.insert(n, coerce_arg(n, raw, t));
                                 pos_i = pos_i + 1
                             },
                             None => {
-                                eprintln(str_concat("error: missing required argument <", str_concat(n, ">")));
+                                eprintln("error: missing required argument <".concat(n).concat(">"));
                                 eprintln(usage);
                                 exit(1)
                             },
                         }
                     },
                     FieldSpec::OptPositional { name: n, ty: t } => {
-                        match list_get(positionals, pos_i) {
+                        match positionals.get(pos_i) {
                             Some(raw) => {
-                                result = map_put(result, n, coerce_arg(n, raw, t));
+                                result.insert(n, coerce_arg(n, raw, t));
                                 pos_i = pos_i + 1
                             },
                             None => {},

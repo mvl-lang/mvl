@@ -686,15 +686,40 @@ impl<'ctx> LlvmBackend<'ctx> {
         for decl in &prog.declarations.clone() {
             if let Decl::Fn(fd) = decl {
                 if fd.is_builtin && !is_inlined_builtin(&fd.name) {
+                    // #928: Extension methods on builtin types use mangled names in the
+                    // LLVM module (e.g. `String_chars`). The bridge body match arms use
+                    // the old-style prefixed names (e.g. `str_chars`), so we translate.
+                    let bridge_name = if let Some(recv_ty) = &fd.receiver_type {
+                        let prefix = match recv_ty.as_str() {
+                            "String" => "str",
+                            "List" => "list",
+                            "Map" => "map",
+                            "Set" => "set",
+                            "Option" => "option",
+                            "Result" => "result",
+                            _ => recv_ty.as_str(),
+                        };
+                        format!("{}_{}", prefix, fd.name)
+                    } else {
+                        fd.name.clone()
+                    };
+                    // Use the mangled LLVM name so the bridge body is attached to the
+                    // function that call sites actually reference.
+                    let llvm_name = if let Some(recv) = &fd.receiver_type {
+                        format!("{}_{}", recv, fd.name)
+                    } else {
+                        fd.name.clone()
+                    };
                     let efn = ExternFnDecl {
-                        name: fd.name.clone(),
+                        name: bridge_name,
                         params: fd.params.clone(),
                         return_type: fd.return_type.clone(),
                         effects: fd.effects.clone(),
                         totality: fd.totality.clone(),
                         span: fd.span,
                     };
-                    self.emit_extern_rust_fn_body(&efn, i64_ty, ptr_ty);
+                    // Override: attach bridge body to the mangled LLVM name.
+                    self.emit_extern_rust_fn_body_named(&efn, i64_ty, ptr_ty, &llvm_name);
                 }
             }
         }
@@ -2550,12 +2575,26 @@ impl<'ctx> LlvmBackend<'ctx> {
     ///   `roll_dice() -> Int`  →  `rand() % 6 + 1`  (libc rand, seeded by OS)
     ///
     /// All other functions get a stub that returns 0 / null.
-    #[allow(clippy::too_many_lines)]
     fn emit_extern_rust_fn_body(
         &mut self,
         efn: &ExternFnDecl,
         i64_ty: inkwell::types::IntType<'ctx>,
+        ptr_ty: inkwell::types::PointerType<'ctx>,
+    ) {
+        self.emit_extern_rust_fn_body_named(efn, i64_ty, ptr_ty, &efn.name.clone());
+    }
+
+    /// Like `emit_extern_rust_fn_body` but attaches the body to `llvm_name` in the module
+    /// instead of `efn.name`. Used by the fourth pass for builtin extension methods whose
+    /// LLVM name is mangled (e.g. `String_chars`) but whose bridge match key is the old
+    /// prefixed name (e.g. `str_chars`). (#928)
+    #[allow(clippy::too_many_lines)]
+    fn emit_extern_rust_fn_body_named(
+        &mut self,
+        efn: &ExternFnDecl,
+        i64_ty: inkwell::types::IntType<'ctx>,
         _ptr_ty: inkwell::types::PointerType<'ctx>,
+        llvm_name: &str,
     ) {
         let ret_llvm = self.mvl_type_to_llvm(&efn.return_type);
         let param_tys: Vec<BasicMetadataTypeEnum> = efn
@@ -2566,12 +2605,12 @@ impl<'ctx> LlvmBackend<'ctx> {
             .collect();
 
         // Reuse existing declaration (pre-declared in first pass) or create new.
-        let fn_val = self.module.get_function(&efn.name).unwrap_or_else(|| {
+        let fn_val = self.module.get_function(llvm_name).unwrap_or_else(|| {
             let fn_ty = match ret_llvm {
                 Some(rt) => rt.fn_type(&param_tys, false),
                 None => self.context.void_type().fn_type(&param_tys, false),
             };
-            self.module.add_function(&efn.name, fn_ty, None)
+            self.module.add_function(llvm_name, fn_ty, None)
         });
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);

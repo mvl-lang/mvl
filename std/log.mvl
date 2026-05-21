@@ -15,8 +15,6 @@
 //! Effects: Log (emit functions). log_set_format/log_set_min_level have no effect (pure config).
 //! See #54, ADR-0006.
 
-use std.collections.{map_get, map_keys}
-
 // ── Output format ──────────────────────────────────────────────────────────
 
 /// Selects the output format for all subsequent log calls in this process.
@@ -110,31 +108,31 @@ fn level_ord(level: String) -> Int {
 
 /// Sanitize a string for log output: escape control characters.
 fn sanitize_log(s: String) -> String {
-    let s1: String = str_replace(s, "\n", "\\n");
-    let s2: String = str_replace(s1, "\r", "\\r");
-    let s3: String = str_replace(s2, "\t", "\\t");
-    str_replace(s3, "\0", "\\0")
+    let s1: String = s.replace("\n", "\\n");
+    let s2: String = s1.replace("\r", "\\r");
+    let s3: String = s2.replace("\t", "\\t");
+    s3.replace("\0", "\\0")
 }
 
 /// Escape a string for embedding in a JSON value (escapes \, ", and control chars).
 fn json_escape(s: String) -> String {
-    let s1: String = str_replace(s, "\\", "\\\\");
-    let s2: String = str_replace(s1, "\"", "\\\"");
-    let s3: String = str_replace(s2, "\n", "\\n");
-    let s4: String = str_replace(s3, "\r", "\\r");
-    let s5: String = str_replace(s4, "\t", "\\t");
-    str_replace(s5, "\0", "\\u0000")
+    let s1: String = s.replace("\\", "\\\\");
+    let s2: String = s1.replace("\"", "\\\"");
+    let s3: String = s2.replace("\n", "\\n");
+    let s4: String = s3.replace("\r", "\\r");
+    let s5: String = s4.replace("\t", "\\t");
+    s5.replace("\0", "\\u0000")
 }
 
 /// Pad a level name to 5 characters for plain-format column alignment.
 /// INFO and WARN (4 chars) need one trailing space; DEBUG/ERROR are already 5.
 fn pad_level(level: String) -> String {
-    if str_length(level) < 5 { str_concat(level, " ") } else { level }
+    if level.len() < 5 { level.concat(" ") } else { level }
 }
 
 /// Look up a map value by key, returning empty string if absent.
 fn field_or_empty(fields: Map[String, String], k: String) -> String {
-    match map_get(fields, k) {
+    match fields.get(k) {
         Some(v) => v,
         None => ""
     }
@@ -142,19 +140,19 @@ fn field_or_empty(fields: Map[String, String], k: String) -> String {
 
 /// Format a single plain/logfmt key=value pair with sanitization.
 fn format_kv_pair(k: String, v: String) -> String {
-    str_concat(str_concat(sanitize_log(k), "="), sanitize_log(v))
+    sanitize_log(k).concat("=").concat(sanitize_log(v))
 }
 
 /// Accumulate sorted key=value pairs from a field map (sanitized).
 fn format_fields_kv(fields: Map[String, String]) -> String {
-    let keys: List[String] = map_keys(fields).sort();
+    let keys: List[String] = fields.keys().sort();
     let result: ref String = "";
     for k in keys {
         let pair: String = format_kv_pair(k, field_or_empty(fields, k));
-        if str_is_empty(result) {
+        if result.is_empty() {
             result = pair
         } else {
-            result = str_concat(str_concat(result, " "), pair)
+            result = result.concat(" ").concat(pair)
         }
     };
     result
@@ -165,52 +163,46 @@ fn format_fields_kv(fields: Map[String, String]) -> String {
 /// Plain format: `2026-05-16 14:32:00 INFO  msg [key=value ...]`
 fn format_plain_line(level: String, ts: String, msg: String, fields: Map[String, String]) -> String {
     // Replace 'T' separator with space; remove trailing 'Z'.
-    let ts_plain: String = str_replace(str_replace(ts, "T", " "), "Z", "");
+    let ts_plain: String = ts.replace("T", " ").replace("Z", "");
     let safe_msg: String = sanitize_log(msg);
     let field_str: String = format_fields_kv(fields);
-    if str_is_empty(field_str) {
-        str_concat(str_concat(str_concat(ts_plain, " "), str_concat(pad_level(level), " ")), safe_msg)
+    if field_str.is_empty() {
+        ts_plain.concat(" ").concat(pad_level(level).concat(" ")).concat(safe_msg)
     } else {
-        str_concat(str_concat(str_concat(str_concat(str_concat(ts_plain, " "), str_concat(pad_level(level), " ")), safe_msg), " "), field_str)
+        ts_plain.concat(" ").concat(pad_level(level).concat(" ")).concat(safe_msg).concat(" ").concat(field_str)
     }
 }
 
 /// Logfmt format: `level=INFO ts=<ISO8601> msg="<msg>" [key=value ...]`
 fn format_logfmt_line(level: String, ts: String, msg: String, fields: Map[String, String]) -> String {
     let safe_msg: String = sanitize_log(msg);
-    let quoted_msg: String = if str_contains_sub(safe_msg, " ") {
-        str_concat(str_concat("\"", safe_msg), "\"")
+    let quoted_msg: String = if safe_msg.contains(" ") {
+        "\"".concat(safe_msg).concat("\"")
     } else {
         safe_msg
     };
-    let header: String = str_concat(
-        str_concat(str_concat(str_concat("level=", level), " ts="), ts),
-        str_concat(" msg=", quoted_msg)
-    );
-    let keys: List[String] = map_keys(fields).sort();
+    let header: String = "level=".concat(level).concat(" ts=").concat(ts).concat(" msg=").concat(quoted_msg);
+    let keys: List[String] = fields.keys().sort();
     let result: ref String = header;
     for k in keys {
         let v: String = sanitize_log(field_or_empty(fields, k));
-        let qv: String = if str_contains_sub(v, " ") { str_concat(str_concat("\"", v), "\"") } else { v };
-        result = str_concat(str_concat(str_concat(str_concat(result, " "), sanitize_log(k)), "="), qv)
+        let qv: String = if v.contains(" ") { "\"".concat(v).concat("\"") } else { v };
+        result = result.concat(" ").concat(sanitize_log(k)).concat("=").concat(qv)
     };
     result
 }
 
 /// JSON format: `{"level":"INFO","ts":"...","msg":"...","key":"value",...}`
 fn format_json_line(level: String, ts: String, msg: String, fields: Map[String, String]) -> String {
-    let header: String = str_concat(
-        str_concat(str_concat(str_concat("{\"level\":\"", json_escape(level)), "\",\"ts\":\""), json_escape(ts)),
-        str_concat("\",\"msg\":\"", str_concat(json_escape(msg), "\""))
-    );
-    let keys: List[String] = map_keys(fields).sort();
+    let header: String = "{\"level\":\"".concat(json_escape(level)).concat("\",\"ts\":\"").concat(json_escape(ts)).concat("\",\"msg\":\"").concat(json_escape(msg)).concat("\"");
+    let keys: List[String] = fields.keys().sort();
     let result: ref String = header;
     for k in keys {
         let ek: String = json_escape(k);
         let ev: String = json_escape(field_or_empty(fields, k));
-        result = str_concat(str_concat(str_concat(str_concat(result, ",\""), ek), str_concat("\":\"", ev)), "\"")
+        result = result.concat(",\"").concat(ek).concat("\":\"").concat(ev).concat("\"")
     };
-    str_concat(result, "}")
+    result.concat("}")
 }
 
 // ── Core emit ─────────────────────────────────────────────────────────────

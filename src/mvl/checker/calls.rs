@@ -292,6 +292,18 @@ impl TypeChecker {
                 }
                 return ret_ty;
             }
+            // #928: Static method call `Type::method(args)` — resolve via method_table.
+            if let Some((type_name, method_name)) = name.split_once("::") {
+                if let Some(methods) = self.method_table.get(type_name) {
+                    if let Some(fn_info) = methods.get(method_name) {
+                        let is_generic = !fn_info.type_params.is_empty();
+                        if is_generic {
+                            return Ty::Unknown;
+                        }
+                        return fn_info.ret.clone();
+                    }
+                }
+            }
             // Not in function table — could be builtin or foreign; emit Unknown
             self.emit(CheckError::UndefinedFunction {
                 name: name.to_string(),

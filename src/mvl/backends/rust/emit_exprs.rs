@@ -22,29 +22,41 @@ use crate::mvl::passes::mcdc::analysis::count_clauses_ref;
 ///
 /// Phase 4 (ADR-0003): replaces per-method hardcoded Rust emission with an explicit
 /// trust boundary declared as `pub builtin fn` in std/strings.mvl and std/lists.mvl.
+/// Pure MVL stdlib methods — transpiled as free functions, dispatched via UFCS
+/// as `method(receiver.clone().into(), args)`.
 const STDLIB_UFCS_METHODS: &[&str] = &[
-    // std/strings.mvl
+    // std/strings.mvl (pure MVL, have bodies)
     "trim",
     "to_upper",
     "to_lower",
-    "chars",
-    "concat",
     "starts_with",
     "ends_with",
-    "find",
     "replace",
-    "split",
-    "substring",
-    "parse_int",
-    "parse_float",
-    // std/lists.mvl
-    "slice",
+    // Note: `contains` and `is_empty` have hardcoded type-aware handlers above.
+    // std/lists.mvl (pure MVL, have bodies)
     "take",
     "skip",
     "first",
     "last",
     "flatten",
     "reverse",
+];
+
+/// Builtin stdlib methods that are unambiguous (only one receiver type).
+/// Dispatched as `runtime_fn(receiver.clone().into(), args)`.
+const STDLIB_BUILTIN_METHODS: &[(&str, &str)] = &[
+    // String-only methods
+    ("chars", "str_chars"),
+    ("find", "str_find"),
+    ("split", "str_split"),
+    ("substring", "str_substring"),
+    ("parse_int", "str_parse_int"),
+    ("parse_float", "str_parse_float"),
+    ("char_at", "str_char_at"),
+    ("byte_at", "str_byte_at"),
+    // List-only methods
+    ("slice", "list_slice"),
+    ("get", "list_get"),
 ];
 
 /// String methods that return a `String` with the same IFC label as their receiver.
@@ -96,7 +108,14 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
             }
             emit_literal(cg, lit);
         }
-        Expr::Ident(name, _) => cg.push(&map_ident(name)),
+        Expr::Ident(name, _) => {
+            // #928: in free-function extension method bodies, `self` → `self_`.
+            if name == "self" && cg.self_as_free_param {
+                cg.push("self_");
+            } else {
+                cg.push(&map_ident(name));
+            }
+        }
         Expr::FieldAccess { expr, field, .. } => {
             emit_expr(cg, expr);
             cg.push(".");
@@ -397,6 +416,24 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     }
                 }
 
+                // concat(x) — type-aware dispatch (#928):
+                //   String: str_concat(receiver, other)
+                //   List:   list_concat(receiver, other)
+                "concat" if args.len() == 1 => {
+                    let receiver_ty = cg.expr_types.get(&receiver.span()).cloned();
+                    let rust_fn = match receiver_ty.as_ref() {
+                        Some(Ty::List(_)) => "list_concat",
+                        _ => "str_concat",
+                    };
+                    cg.push(rust_fn);
+                    cg.push("(");
+                    emit_expr(cg, receiver);
+                    cg.push(".clone().into()");
+                    cg.push(", ");
+                    emit_args(cg, args);
+                    cg.push(")");
+                }
+
                 // ── Map / Set / List unified method traits ────────────────────────
                 //
                 // These methods share a name across multiple collection types (Map,
@@ -610,6 +647,26 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     }
                 }
 
+                // ── Builtin stdlib method dispatch (#928) ───────────────────────────
+                // Builtin kernel methods are implemented by the runtime as free
+                // functions (e.g. `str_concat`, `list_get`).  Emit as
+                // `runtime_fn(receiver.clone().into(), args)`.
+                m if STDLIB_BUILTIN_METHODS.iter().any(|(mvl, _)| *mvl == m) => {
+                    let (_, rust_fn) = STDLIB_BUILTIN_METHODS
+                        .iter()
+                        .find(|(mvl, _)| *mvl == m)
+                        .unwrap();
+                    cg.push(rust_fn);
+                    cg.push("(");
+                    emit_expr(cg, receiver);
+                    cg.push(".clone().into()");
+                    if !args.is_empty() {
+                        cg.push(", ");
+                        emit_args(cg, args);
+                    }
+                    cg.push(")");
+                }
+
                 // ── Generic Rust method fallthrough ───────────────────────────────
                 _ => {
                     emit_expr(cg, receiver);
@@ -644,8 +701,8 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                 cg.push("(");
                 emit_args_no_into(cg, args);
                 cg.push(")");
-            } else if name.as_str() == "map_new" {
-                // map_new[K, V]() → std::collections::HashMap::new().
+            } else if name.as_str() == "map_new" || name.as_str() == "Map::new" {
+                // map_new[K, V]() / Map::new() → std::collections::HashMap::new().
                 // Type is inferred from the let-binding annotation.
                 cg.push("std::collections::HashMap::new()");
             } else if name.as_str() == "from_int" {
@@ -659,6 +716,15 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     emit_expr(cg, arg);
                 }
                 cg.push(" as u8)");
+            } else if name == "String::from_chars" {
+                // #928: static builtin method → runtime free function.
+                cg.push("str_from_chars(");
+                emit_args(cg, args);
+                cg.push(")");
+            } else if name == "String::from_bytes" {
+                cg.push("str_from_bytes(");
+                emit_args(cg, args);
+                cg.push(")");
             } else {
                 let is_extern = cg.extern_fns.contains(name.as_str());
                 if is_extern {
@@ -1554,8 +1620,6 @@ pub fn emit_block_as_value(cg: &mut RustEmitter, stmts: &[crate::mvl::parser::as
 // ── Name mappings ─────────────────────────────────────────────────────────
 
 fn map_ident(name: &str) -> String {
-    // MVL `self` inside refinements → Rust parameter name is substituted upstream;
-    // as an expression ident, pass through as-is
     name.to_string()
 }
 

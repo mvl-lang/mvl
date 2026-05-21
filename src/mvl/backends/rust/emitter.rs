@@ -125,6 +125,9 @@ pub struct RustEmitter {
     /// `self._self_ref.as_ref().unwrap().clone()` — the actor's own handle
     /// stored in the state by `_start_<name>`.
     pub actor_self_type: String,
+    /// #928: True when emitting a free-function body for an extension method on a
+    /// built-in type. Causes `self` identifiers to be emitted as `self_`.
+    pub self_as_free_param: bool,
 }
 
 impl RustEmitter {

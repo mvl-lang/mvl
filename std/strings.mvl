@@ -44,7 +44,7 @@ pub builtin fn String::substring(self, start: Int, end: Int) -> String
 
 /// True if `sub` is found anywhere in the string.
 pub fn String::contains(self, sub: String) -> Bool {
-    is_some(self.find(sub))
+    self.find(sub).is_some()
 }
 
 /// True if the string starts with `prefix`.

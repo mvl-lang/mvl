@@ -105,40 +105,68 @@ pub fn emit_fn_decl(cg: &mut RustEmitter, fd: &FnDecl) {
     let ret_str = emit_type_expr(&fd.return_type);
 
     if let Some(recv_ty) = &fd.receiver_type {
-        // Type-attached method (#868): emit inside `impl ReceiverType { … }`.
-        // The `self` parameter (index 0) is replaced with `&self` in Rust.
-        let rest_params = emit_params(
-            fd.params.get(1..).unwrap_or(&[]),
-            borrows.get(1..).unwrap_or(&[]),
-            &mutated_params,
+        // #928: Built-in types (String, List, Map, etc.) cannot have `impl` blocks
+        // in Rust because they are defined outside the crate.  Emit their extension
+        // methods as free functions so the UFCS dispatch table can call them.
+        let is_builtin_type = matches!(
+            recv_ty.as_str(),
+            "String"
+                | "Int"
+                | "Float"
+                | "Bool"
+                | "Byte"
+                | "UByte"
+                | "UInt"
+                | "List"
+                | "Map"
+                | "Set"
+                | "Option"
+                | "Result"
         );
-        let params_str = if rest_params.is_empty() {
-            "&self".to_string()
-        } else {
-            format!("&self, {rest_params}")
-        };
-        cg.line(&format!("impl {recv_ty} {{"));
-        cg.push_indent();
-        cg.line(&format!(
-            "pub fn {}{generics}({params_str}) -> {ret_str} {{",
-            fd.name
-        ));
-        cg.push_indent();
-        // Fn-entry probe
-        if let Some(id) = cg.alloc_branch(fd.span.line, BranchKind::FnEntry) {
-            cg.emit_cov_hit(id);
+        if !is_builtin_type {
+            // Type-attached method (#868): emit inside `impl ReceiverType { … }`.
+            // The `self` parameter (index 0) is replaced with `&self` in Rust.
+            let rest_params = emit_params(
+                fd.params.get(1..).unwrap_or(&[]),
+                borrows.get(1..).unwrap_or(&[]),
+                &mutated_params,
+            );
+            let params_str = if rest_params.is_empty() {
+                "&self".to_string()
+            } else {
+                format!("&self, {rest_params}")
+            };
+            cg.line(&format!("impl {recv_ty} {{"));
+            cg.push_indent();
+            cg.line(&format!(
+                "pub fn {}{generics}({params_str}) -> {ret_str} {{",
+                fd.name
+            ));
+            cg.push_indent();
+            // Fn-entry probe
+            if let Some(id) = cg.alloc_branch(fd.span.line, BranchKind::FnEntry) {
+                cg.emit_cov_hit(id);
+            }
+            for req_pred in &fd.requires {
+                let pred_str = emit_ref_expr_for_assert(req_pred, "self");
+                let msg = pred_str.replace('{', "{{").replace('}', "}}");
+                cg.line(&format!("assert!({pred_str}, \"requires: {msg}\");"));
+            }
+            emit_fn_body(cg, fd);
+            cg.pop_indent();
+            cg.line("}");
+            cg.pop_indent();
+            cg.line("}");
+            return;
         }
-        for req_pred in &fd.requires {
-            let pred_str = emit_ref_expr_for_assert(req_pred, "self");
-            let msg = pred_str.replace('{', "{{").replace('}', "}}");
-            cg.line(&format!("assert!({pred_str}, \"requires: {msg}\");"));
-        }
-        emit_fn_body(cg, fd);
-        cg.pop_indent();
-        cg.line("}");
-        cg.pop_indent();
-        cg.line("}");
-        return;
+        // Fall through: emit as a free function with `self` as a regular parameter.
+    }
+
+    // #928: extension methods on built-in types are emitted as free functions
+    // where `self` is renamed to `self_` (Rust keyword).
+    let has_self_param = fd.receiver_type.is_some();
+    if has_self_param {
+        cg.self_as_free_param = true;
     }
 
     let params_str = emit_params(&fd.params, &borrows, &mutated_params);
@@ -163,6 +191,10 @@ pub fn emit_fn_decl(cg: &mut RustEmitter, fd: &FnDecl) {
     emit_fn_body(cg, fd);
     cg.pop_indent();
     cg.line("}");
+
+    if has_self_param {
+        cg.self_as_free_param = false;
+    }
 }
 
 /// Emit the statements and return-refinement check for a function body.
@@ -506,7 +538,13 @@ fn emit_params(
             } else {
                 ""
             };
-            format!("{cap_comment}{mut_prefix}{}: {ty_str}", p.name)
+            // #928: `self` is a keyword in Rust — rename to `self_` in free functions.
+            let param_name = if p.name == "self" {
+                "self_"
+            } else {
+                p.name.as_str()
+            };
+            format!("{cap_comment}{mut_prefix}{param_name}: {ty_str}")
         })
         .collect::<Vec<_>>()
         .join(", ")
