@@ -378,6 +378,7 @@ fn type_uses_opaque(ty: &crate::mvl::parser::ast::TypeExpr, opaque: &[&str]) -> 
     }
 }
 
+
 /// Load MVL source files from `pkg.*` packages referenced by `progs`.
 /// Checks local override first, then the global XDG cache.
 pub fn load_pkg_modules(progs: &[Program], project_root: &Path) -> Vec<Program> {

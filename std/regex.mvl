@@ -59,17 +59,7 @@ pub fn find_all(re: Regex, s: String) -> List[Match] {
 }
 
 /// Replaces all matches of re in s with replacement.
-pub fn replace(re: Regex, s: String, replacement: String) -> String {
-    let matches: List[Match] = find_all(re, s);
-    let result: ref String = "";
-    let pos: ref Int = 0;
-    for m in matches {
-        result = str_concat(result, str_substring(s, pos, m.start));
-        result = str_concat(result, replacement);
-        pos = m.end
-    };
-    str_concat(result, str_substring(s, pos, str_len(s)))
-}
+pub builtin fn replace(re: Regex, s: String, replacement: String) -> String
 
 /// Returns the captures of the first match of re in s, or None.
 pub builtin fn captures(re: Regex, s: String) -> Option[Captures]
