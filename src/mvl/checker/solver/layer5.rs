@@ -208,16 +208,29 @@ fn impl_z3(
     match solver.check() {
         SatResult::Unsat => Some(RefResult::Proven),
         SatResult::Sat => {
-            // Z3 found a satisfying assignment for ¬pred, meaning pred can fail for some
-            // input.  This may be a definite violation (constrained literal arg) or a
-            // potential violation (unconstrained variable arg).  We return None here so
-            // the solver cascade falls through to RuntimeCheck rather than Failed.
-            //
-            // TODO(#627): In Phase 4, split this into:
-            //   - Sat on a fully-constrained arg → Failed { counterexample: Some(...) }
-            //   - Sat on a symbolic arg          → None (RuntimeCheck, deferred)
-            // Use solver.get_model() to extract the witness at that point.
-            None
+            // Z3 found a satisfying assignment for ¬pred — pred fails for some input.
+            // Two cases:
+            //   - Fully-constrained literal arg: the violation is definite at compile
+            //     time → extract the Z3 model witness and return Failed.
+            //   - Symbolic/variable arg: the violation is only potential (the caller
+            //     might pass a value that satisfies pred) → fall through to RuntimeCheck.
+            if is_constrained_literal(arg, pred_uses_len) {
+                let model = solver.get_model()?;
+                let val = model.eval(&arg_int, true)?;
+                let label = if pred_uses_len {
+                    if let Expr::Literal(crate::mvl::parser::ast::Literal::Str(_), _) = arg {
+                        "len(self)"
+                    } else {
+                        "self"
+                    }
+                } else {
+                    "self"
+                };
+                let counterexample = val.as_i64().map(|n| format!("{label}={n}"));
+                Some(RefResult::Failed { counterexample })
+            } else {
+                None
+            }
         }
         _ => None,
     }
@@ -389,6 +402,40 @@ fn expr_to_int<'ctx>(
     }
 }
 
+// ── Literal-constraint detection ──────────────────────────────────────────────
+
+/// Returns `true` when `arg` is fully constrained at compile time — i.e. its
+/// integer value (or length, for string literals in len-predicate context) is
+/// a known constant that requires no runtime information.
+///
+/// Used by the `SatResult::Sat` arm to decide whether a Z3 counterexample is
+/// definite (literal → `Failed`) or only potential (variable → `RuntimeCheck`).
+#[cfg(feature = "z3")]
+fn is_constrained_literal(arg: &Expr, pred_uses_len: bool) -> bool {
+    use crate::mvl::parser::ast::{BinaryOp, Literal, UnaryOp};
+    match arg {
+        Expr::Literal(Literal::Integer(_), _) => true,
+        // A string literal is constrained when the predicate is len-typed: Z3
+        // receives the concrete byte-length, so a Sat result is definite.
+        Expr::Literal(Literal::Str(_), _) => pred_uses_len,
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            expr: inner,
+            ..
+        } => is_constrained_literal(inner, pred_uses_len),
+        Expr::Binary {
+            op, left, right, ..
+        } => {
+            matches!(
+                op,
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem
+            ) && is_constrained_literal(left, pred_uses_len)
+                && is_constrained_literal(right, pred_uses_len)
+        }
+        _ => false,
+    }
+}
+
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(all(test, feature = "z3"))]
@@ -436,14 +483,19 @@ mod tests {
         assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::Proven));
     }
 
-    /// Literal 0 does NOT satisfy self > 0: Z3 finds a counterexample (Sat).
+    /// Literal 0 does NOT satisfy self > 0: Z3 returns Failed with counterexample.
     #[test]
     fn z3_finds_counterexample_for_zero() {
         let pred = self_gt(0); // self > 0
         let arg = int_lit(0);
         let var_refs = HashMap::new();
-        // Z3 returns Sat (not UNSAT), so try_z3 returns None (cannot prove, RuntimeCheck).
-        assert_eq!(try_z3(&pred, &arg, &var_refs), None);
+        // Literal arg → definite violation → Failed with Z3 model witness.
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs),
+            Some(RefResult::Failed {
+                counterexample: Some("self=0".to_string())
+            })
+        );
     }
 
     /// y > 5 implies y > 3: proven even when the hypothesis uses a different
@@ -546,15 +598,20 @@ mod tests {
         assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::Proven));
     }
 
-    /// String literal "hello" does NOT satisfy `len(self) < 3` — Z3 returns None
-    /// (Sat means a counterexample exists; we fall through to RuntimeCheck).
+    /// String literal "hello" does NOT satisfy `len(self) < 3` — Z3 returns Failed.
     #[test]
-    fn z3_axiom_string_literal_len_too_long_returns_none() {
+    fn z3_axiom_string_literal_len_too_long_returns_failed() {
         let pred = len_self_lt(3);
         let arg = Expr::Literal(Literal::Str("hello".into()), dummy_span());
         let var_refs = HashMap::new();
-        // Z3 finds a model where len_self = 5, which violates len < 3 → Sat → None.
-        assert_eq!(try_z3(&pred, &arg, &var_refs), None);
+        // String literal in len-predicate context is constrained: len("hello")=5 → definite
+        // violation → Failed with Z3 model witness.
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs),
+            Some(RefResult::Failed {
+                counterexample: Some("len(self)=5".to_string())
+            })
+        );
     }
 
     /// Variable `s` with hypothesis `len(self) > 10` satisfies `len(self) >= 0`.
