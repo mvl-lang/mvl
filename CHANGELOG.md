@@ -4,6 +4,14 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.132.2] — 2026-05-21
+
+### Fixed
+
+- **Docs §19.5 corrected** (#919): section "No Bitwise Operators" was wrong — `&`, `|`, `^`, `~`, `<<`, `>>` are first-class operators implemented in the parser, AST, and both backends. Section rewritten with precedence table and examples.
+- **Rust backend: Int arithmetic traps on overflow** (#920): `+`, `-`, `*` on `Int` now emit `.checked_add/sub/mul().expect("integer overflow")` instead of bare operators, matching the LLVM backend's overflow-trap behaviour.
+- **LLVM backend: `&&`/`||` now short-circuit** (#921): previously emitted as bitwise `and`/`or` instructions (eager evaluation). Now uses conditional branch + phi-node pattern; rhs is only evaluated when lhs does not determine the result.
+
 ## [0.132.1] — 2026-05-21
 
 ### Fixed
