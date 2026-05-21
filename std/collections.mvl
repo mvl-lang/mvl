@@ -1,121 +1,120 @@
-//! std.collections — Map[K, V] and Set[T] implementations.
+//! std.collections — Map[K, V] and Set[T] via extension methods.
 //!
 //! Pure MVL implementations dispatched by both the Rust transpiler (direct
 //! Rust emission via checker type info, #554) and the LLVM backend (explicit
-//! codegen in exprs.rs). Both paths handle `m.get(key)`, `m.len()`, etc.
-//! Deferred to #436: Map.remove, Map.keys, Map.values, Set set-algebra (LLVM).
+//! codegen in exprs.rs). Deferred to #436: Map.remove, Map.keys, Map.values,
+//! Set set-algebra (LLVM).
 //!
 //! Import: available as builtins; explicit import not required.
 //!
 //! Effects: none (all functions are pure).
 
-// ── Map[K, V] ────────────────────────────────────────────────────────────────
-
-/// Look up `key` in `m`, returning `Some(value)` or `None` if absent.
-pub fn map_get[K, V](m: Map[K, V], key: K) -> Option[V] {
-    m.get(key)
-}
-
-/// Insert `key → value` into `m`, overwriting any existing entry.
-/// Returns Unit; the old value is discarded.
-pub fn map_insert[K, V](m: Map[K, V], key: K, value: V) -> Unit {
-    m.insert(key, value)
-}
-
-/// Insert `key → value` and return the updated map (value semantics).
-/// Ownership of `m` is transferred in; the modified map is returned.
-pub fn map_put[K, V](m: Map[K, V], key: K, value: V) -> Map[K, V] {
-    m.insert(key, value);
-    m
-}
-
-/// Remove `key` from `m` and return the updated map (value semantics).
-/// If `key` is absent the map is returned unchanged.
-pub fn map_without[K, V](m: Map[K, V], key: K) -> Map[K, V] {
-    m.remove(key);
-    m
-}
-
-/// Remove `key` from `m`, returning the old value if present.
-// LLVM: deferred to #436 — no codegen arm for `remove` in exprs.rs yet.
-pub fn map_remove[K, V](m: Map[K, V], key: K) -> Option[V] {
-    m.remove(key)
-}
-
-/// True if `m` contains an entry for `key`.
-pub fn map_contains_key[K, V](m: Map[K, V], key: K) -> Bool {
-    m.contains_key(key)
-}
-
-/// Return all keys of `m` as a list (order unspecified).
-// LLVM: deferred to #436 — no codegen arm for `keys` in exprs.rs yet.
-pub fn map_keys[K, V](m: Map[K, V]) -> List[K] {
-    m.keys()
-}
-
-/// Return all values of `m` as a list (order unspecified).
-// LLVM: deferred to #436 — no codegen arm for `values` in exprs.rs yet.
-pub fn map_values[K, V](m: Map[K, V]) -> List[V] {
-    m.values()
-}
-
-/// Number of entries in `m`.
-pub fn map_len[K, V](m: Map[K, V]) -> Int {
-    m.len()
-}
-
-/// True if `m` has no entries.
-pub fn map_is_empty[K, V](m: Map[K, V]) -> Bool {
-    m.len() == 0
-}
+// ── Map[K, V] ──────────────────────────────────────────────────────────────
 
 /// Create a new empty map.
 /// Use when `{}` is ambiguous (parsed as empty block, not empty map literal).
-pub builtin fn map_new[K, V]() -> Map[K, V]
+pub builtin fn Map[K, V]::new() -> Map[K, V]
 
-// ── Set[T] ───────────────────────────────────────────────────────────────────
-
-/// True if `s` contains `x`.
-pub fn set_contains[T](s: Set[T], x: T) -> Bool {
-    s.contains(x)
+/// Look up `key`, returning `Some(value)` or `None` if absent.
+pub fn Map[K, V]::get(self, key: K) -> Option[V] {
+    self.get(key)
 }
 
-/// Insert `x` into `s`. No-op if already present.
-pub fn set_insert[T](s: Set[T], x: T) -> Unit {
-    s.insert(x)
+/// Insert `key → value`, overwriting any existing entry.
+/// Returns Unit; the old value is discarded.
+pub fn Map[K, V]::insert(self, key: K, value: V) -> Unit {
+    self.insert(key, value)
 }
 
-/// Remove `x` from `s`. No-op if absent.
-pub fn set_remove[T](s: Set[T], x: T) -> Unit {
-    s.remove(x)
+/// Insert `key → value` and return the updated map (value semantics).
+pub fn Map[K, V]::put(self, key: K, value: V) -> Map[K, V] {
+    self.insert(key, value);
+    self
 }
 
-/// Return all elements of `s` as a list (order unspecified).
-pub fn set_to_list[T](s: Set[T]) -> List[T] {
-    s.to_list()
+/// Remove `key` and return the updated map (value semantics).
+/// If `key` is absent the map is returned unchanged.
+pub fn Map[K, V]::without(self, key: K) -> Map[K, V] {
+    self.remove(key);
+    self
 }
 
-/// Number of elements in `s`.
-pub fn set_len[T](s: Set[T]) -> Int {
-    s.len()
+/// Remove `key`, returning the old value if present.
+// LLVM: deferred to #436 — no codegen arm for `remove` in exprs.rs yet.
+pub fn Map[K, V]::remove(self, key: K) -> Option[V] {
+    self.remove(key)
 }
 
-/// True if `s` has no elements.
-pub fn set_is_empty[T](s: Set[T]) -> Bool {
-    s.len() == 0
+/// True if the map contains an entry for `key`.
+pub fn Map[K, V]::contains_key(self, key: K) -> Bool {
+    self.contains_key(key)
 }
 
-/// Elements present in both `a` and `b`.
-pub fn set_intersection[T](a: Set[T], b: Set[T]) -> Set[T] {
-    a.intersection(b)
+/// Return all keys as a list (order unspecified).
+// LLVM: deferred to #436.
+pub fn Map[K, V]::keys(self) -> List[K] {
+    self.keys()
 }
 
-/// Elements present in `a` but not `b`.
-pub fn set_difference[T](a: Set[T], b: Set[T]) -> Set[T] {
-    a.difference(b)
+/// Return all values as a list (order unspecified).
+// LLVM: deferred to #436.
+pub fn Map[K, V]::values(self) -> List[V] {
+    self.values()
 }
 
-/// Elements present in either `a` or `b`.
-pub fn set_union[T](a: Set[T], b: Set[T]) -> Set[T] {
-    a.union(b)
+/// Number of entries.
+pub fn Map[K, V]::len(self) -> Int {
+    self.len()
+}
+
+/// True if the map has no entries.
+pub fn Map[K, V]::is_empty(self) -> Bool {
+    self.len() == 0
+}
+
+// ── Set[T] ─────────────────────────────────────────────────────────────────
+
+/// True if the set contains `x`.
+pub fn Set[T]::contains(self, x: T) -> Bool {
+    self.contains(x)
+}
+
+/// Insert `x`. No-op if already present.
+pub fn Set[T]::insert(self, x: T) -> Unit {
+    self.insert(x)
+}
+
+/// Remove `x`. No-op if absent.
+pub fn Set[T]::remove(self, x: T) -> Unit {
+    self.remove(x)
+}
+
+/// Return all elements as a list (order unspecified).
+pub fn Set[T]::to_list(self) -> List[T] {
+    self.to_list()
+}
+
+/// Number of elements.
+pub fn Set[T]::len(self) -> Int {
+    self.len()
+}
+
+/// True if the set has no elements.
+pub fn Set[T]::is_empty(self) -> Bool {
+    self.len() == 0
+}
+
+/// Elements present in both sets.
+pub fn Set[T]::intersection(self, other: Set[T]) -> Set[T] {
+    self.intersection(other)
+}
+
+/// Elements present in self but not other.
+pub fn Set[T]::difference(self, other: Set[T]) -> Set[T] {
+    self.difference(other)
+}
+
+/// Elements present in either set.
+pub fn Set[T]::union(self, other: Set[T]) -> Set[T] {
+    self.union(other)
 }

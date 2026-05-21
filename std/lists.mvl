@@ -1,66 +1,66 @@
-//! std.lists — List type operations and method implementations.
+//! std.lists — List type operations via extension methods.
 //!
-//! Builtin kernel functions are the trust boundary between MVL and Rust
+//! Builtin kernel methods are the trust boundary between MVL and Rust
 //! (Category 3: type operations), implemented in mvl_runtime::stdlib::primitives.
-//! Pure MVL methods compose only these builtins. UFCS: `xs.take(n)` → `take(xs, n)`.
-//! Higher-order methods (filter, fold, map, …) expose the verification surface
-//! to the IFC label checker, effect tracker, and totality checker (#341).
+//! Pure MVL methods compose only these builtins. Higher-order methods (filter,
+//! fold, map, ...) expose the verification surface to the IFC label checker,
+//! effect tracker, and totality checker (#341).
 //!
 //! Import: available as builtins; explicit import not required.
 //!
 //! Effects: none (all functions are pure).
 
-// ── List kernel (6 functions) ─────────────────────────────────────────────────
+// ── List kernel (6 builtin methods) ─────────────────────────────────────────
 
 /// Number of elements.
-pub builtin fn list_len[T](xs: List[T]) -> Int
+pub builtin fn List[T]::len(self) -> Int
 
 /// Element at index `i`, or None if out of range.
-pub builtin fn list_get[T](xs: List[T], i: Int) -> Option[T]
+pub builtin fn List[T]::get(self, i: Int) -> Option[T]
 
-/// Append `x` to `xs`, returning the new list.
-pub builtin fn list_push[T](xs: List[T], x: T) -> List[T]
+/// Append `x` to the list, returning the new list.
+pub builtin fn List[T]::push(self, x: T) -> List[T]
 
 /// Safe slice `[start, end)` — clamped, never panics.
-pub builtin fn list_slice[T](xs: List[T], start: Int, end: Int) -> List[T]
+pub builtin fn List[T]::slice(self, start: Int, end: Int) -> List[T]
 
 /// Concatenate two lists.
-pub builtin fn list_concat[T](xs: List[T], ys: List[T]) -> List[T]
+pub builtin fn List[T]::concat(self, other: List[T]) -> List[T]
 
-/// True if `xs` contains `x`.
-pub builtin fn list_contains[T](xs: List[T], x: T) -> Bool
+/// True if the list contains `x`.
+pub builtin fn List[T]::contains(self, x: T) -> Bool
 
-// ── Pure MVL list method implementations ─────────────────────────────────────
+// ── Pure MVL list methods ───────────────────────────────────────────────────
 
-/// Safe slice `[start, end)` — clamped, never panics. Wraps the list_slice kernel.
-pub fn slice[T](xs: List[T], start: Int, end: Int) -> List[T] where T: Clone {
-    list_slice(xs, start, end)
+/// True if the list has no elements.
+pub fn List[T]::is_empty(self) -> Bool {
+    self.len() == 0
 }
 
-/// Return the first `n` elements of `xs`.
-pub fn take[T](xs: List[T], n: Int) -> List[T] where T: Clone {
-    list_slice(xs, 0, n)
+/// Return the first `n` elements.
+pub fn List[T]::take(self, n: Int) -> List[T] where T: Clone {
+    self.slice(0, n)
 }
 
-/// Drop the first `n` elements of `xs`.
-pub fn skip[T](xs: List[T], n: Int) -> List[T] where T: Clone {
-    list_slice(xs, n, list_len(xs))
+/// Drop the first `n` elements.
+pub fn List[T]::skip(self, n: Int) -> List[T] where T: Clone {
+    self.slice(n, self.len())
 }
 
-/// Return `Some(xs[0])` or `None` if the list is empty.
-pub fn first[T](xs: List[T]) -> Option[T] where T: Clone {
-    list_get(xs, 0)
+/// Return `Some(first element)` or `None` if empty.
+pub fn List[T]::first(self) -> Option[T] where T: Clone {
+    self.get(0)
 }
 
-/// Return `Some(xs[last])` or `None` if the list is empty.
-pub fn last[T](xs: List[T]) -> Option[T] where T: Clone {
-    list_get(xs, list_len(xs) - 1)
+/// Return `Some(last element)` or `None` if empty.
+pub fn List[T]::last(self) -> Option[T] where T: Clone {
+    self.get(self.len() - 1)
 }
 
 /// Flatten a list of lists into a single list.
-pub fn flatten[T](xs: List[List[T]]) -> List[T] where T: Clone {
+pub fn List[List[T]]::flatten(self) -> List[T] where T: Clone {
     let result: ref List[T] = [];
-    for inner in xs {
+    for inner in self {
         for x in inner {
             result.push(x)
         }
@@ -68,73 +68,43 @@ pub fn flatten[T](xs: List[List[T]]) -> List[T] where T: Clone {
     result
 }
 
-/// Reverse a list.
-pub fn reverse[T](xs: List[T]) -> List[T] where T: Clone {
+/// Reverse the list.
+pub fn List[T]::reverse(self) -> List[T] where T: Clone {
     let result: ref List[T] = [];
-    for x in xs {
-        result = list_concat([x], result)
+    for x in self {
+        result = [x].concat(result)
     };
     result
 }
 
-// ── Primitive wrappers ────────────────────────────────────────────────────────
-
-/// Number of elements in `xs`.
-pub fn len[T](xs: List[T]) -> Int {
-    list_len(xs)
+/// Alias for `reverse`.
+pub fn List[T]::rev(self) -> List[T] where T: Clone {
+    self.reverse()
 }
 
-/// True if `xs` has no elements.
-pub fn is_empty[T](xs: List[T]) -> Bool {
-    list_len(xs) == 0
-}
-
-/// Element at index `i`, or None if out of range.
-pub fn get[T](xs: List[T], i: Int) -> Option[T] where T: Clone {
-    list_get(xs, i)
-}
-
-/// Append `x` to `xs`, returning the new list.
-pub fn push[T](xs: List[T], x: T) -> List[T] where T: Clone {
-    list_push(xs, x)
-}
-
-/// True if `xs` contains `x`.
-pub fn contains[T](xs: List[T], x: T) -> Bool where T: Clone, T: PartialEq {
-    list_contains(xs, x)
-}
-
-/// Reverse `xs`. Alias for `reverse`.
-pub fn rev[T](xs: List[T]) -> List[T] where T: Clone {
-    reverse(xs)
-}
-
-// ── Higher-order operations ───────────────────────────────────────────────────
+// ── Higher-order methods ────────────────────────────────────────────────────
 //
 // Phase 4 (ADR-0003): pure MVL implementations replacing transpiler special
-// cases.  Each function uses only `for`/`while` loops and kernel primitives
-// (list_get, list_len, slice).  The transpiler emits these as-is, with the
-// function-type parameter `f` emitted as `impl Fn(…)` so that both bare
-// function pointers and closures are accepted at call sites.
+// cases. Each method uses only `for`/`while` loops and kernel primitives.
 
-/// Apply `f` to each element of `xs`, collecting results.
+/// Apply `f` to each element, collecting results.
 ///
 /// Note: `xs.map(f)` call sites dispatch through the `MvlMap` trait path in
-/// the transpiler (for Option/Result polymorphism), not through this function
-/// body.  This body is compiled into the stdlib but is only reachable via
-/// direct free-function call `map(xs, f)`.
-pub fn map[T, U](xs: List[T], f: fn(T) -> U) -> List[U] where T: Clone, U: Clone {
+/// the transpiler (for Option/Result polymorphism), not through this method
+/// body. This body is compiled into the stdlib but is only reachable via
+/// direct qualified call `List::map(xs, f)`.
+pub fn List[T]::map[U](self, f: fn(T) -> U) -> List[U] where T: Clone, U: Clone {
     let result: ref List[U] = [];
-    for x in xs {
+    for x in self {
         result.push(f(x))
     };
     result
 }
 
-/// Retain elements of `xs` satisfying predicate `f`.
-pub fn filter[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
+/// Retain elements satisfying predicate `f`.
+pub fn List[T]::filter(self, f: fn(T) -> Bool) -> List[T] where T: Clone {
     let result: ref List[T] = [];
-    for x in xs {
+    for x in self {
         if f(x.clone()) {
             result.push(x)
         }
@@ -142,40 +112,39 @@ pub fn filter[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
     result
 }
 
-/// Left fold: reduce `xs` to a single value using `f` and accumulator `init`.
+/// Left fold: reduce to a single value using `f` and accumulator `init`.
 ///
 /// `U: Clone` is required by the generated Rust: the emitted `let mut acc = init`
 /// binding and the `acc = f(acc, x)` rebinding both move `acc`, so the
-/// transpiled code needs `U: Clone` to re-bind after each iteration.  This
-/// is an implementation constraint, not a semantic requirement of fold itself.
-pub fn fold[T, U](xs: List[T], init: U, f: fn(U, T) -> U) -> U where T: Clone, U: Clone {
+/// transpiled code needs `U: Clone` to re-bind after each iteration.
+pub fn List[T]::fold[U](self, init: U, f: fn(U, T) -> U) -> U where T: Clone, U: Clone {
     let acc: ref U = init;
-    for x in xs {
+    for x in self {
         acc = f(acc, x)
     };
     acc
 }
 
-/// Sort `xs` in ascending order using natural ordering.
+/// Sort in ascending order using natural ordering.
 ///
 /// Stub: requires PartialOrd which MVL cannot express as a where-bound yet.
 /// The transpiler's sort arm handles actual semantics at `xs.sort()` call sites.
-pub fn sort[T](xs: List[T]) -> List[T] where T: Clone {
-    slice(xs, 0, list_len(xs))
+pub fn List[T]::sort(self) -> List[T] where T: Clone {
+    self.slice(0, self.len())
 }
 
-/// Split `xs` into elements satisfying `f` and those that do not.
+/// Split into elements satisfying `f` and those that do not.
 ///
 /// Stub: MVL has no tuple-construction expression yet; the transpiler's
 /// partition arm handles actual semantics at `xs.partition(f)` call sites.
-pub fn partition[T](xs: List[T], f: fn(T) -> Bool) -> (List[T], List[T]) where T: Clone {
-    xs.partition(f)
+pub fn List[T]::partition(self, f: fn(T) -> Bool) -> (List[T], List[T]) where T: Clone {
+    self.partition(f)
 }
 
 /// Retain leading elements while `f` returns true; stop at first false.
-pub fn take_while[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
+pub fn List[T]::take_while(self, f: fn(T) -> Bool) -> List[T] where T: Clone {
     let result: ref List[T] = [];
-    for x in xs {
+    for x in self {
         if f(x.clone()) {
             result.push(x)
         } else {
@@ -186,10 +155,10 @@ pub fn take_while[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
 }
 
 /// Drop leading elements while `f` returns true; keep from first false onward.
-pub fn skip_while[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
+pub fn List[T]::skip_while(self, f: fn(T) -> Bool) -> List[T] where T: Clone {
     let result: ref List[T] = [];
     let skipping: ref Bool = true;
-    for x in xs {
+    for x in self {
         if skipping && f(x.clone()) {
             // still in the prefix — discard
         } else {
@@ -203,8 +172,8 @@ pub fn skip_while[T](xs: List[T], f: fn(T) -> Bool) -> List[T] where T: Clone {
 /// True if at least one element satisfies `f`.
 ///
 /// Short-circuits: stops at the first element where `f` returns true.
-pub fn any[T](xs: List[T], f: fn(T) -> Bool) -> Bool where T: Clone {
-    for x in xs {
+pub fn List[T]::any(self, f: fn(T) -> Bool) -> Bool where T: Clone {
+    for x in self {
         if f(x) {
             return true
         }
@@ -213,55 +182,54 @@ pub fn any[T](xs: List[T], f: fn(T) -> Bool) -> Bool where T: Clone {
 }
 
 /// True if every element satisfies `f`.
-pub fn all[T](xs: List[T], f: fn(T) -> Bool) -> Bool where T: Clone {
-    xs.skip_while(f).is_empty()
+pub fn List[T]::all(self, f: fn(T) -> Bool) -> Bool where T: Clone {
+    self.skip_while(f).is_empty()
 }
 
 /// Smallest element, or None for an empty list.
 ///
 /// Stub body delegates to `first`; the transpiler's generic fallthrough handles
 /// actual min semantics at `xs.min()` call sites.
-pub fn min[T](xs: List[T]) -> Option[T] where T: Clone {
-    first(xs)
+pub fn List[T]::min(self) -> Option[T] where T: Clone {
+    self.first()
 }
 
 /// Largest element, or None for an empty list.
 ///
 /// Stub body delegates to `last`; the transpiler's generic fallthrough handles
 /// actual max semantics at `xs.max()` call sites.
-pub fn max[T](xs: List[T]) -> Option[T] where T: Clone {
-    last(xs)
+pub fn List[T]::max(self) -> Option[T] where T: Clone {
+    self.last()
 }
 
 /// Join a list of strings with separator `sep`.
 ///
 /// Stub body returns empty string; the transpiler's generic fallthrough handles
 /// actual semantics at `xs.join(sep)` call sites (delegates to Rust's slice::join).
-/// Named `str_join` to avoid collision with `io::join(Path, String) -> Path`.
-pub fn str_join(xs: List[String], sep: String) -> String {
+pub fn List[String]::join(self, sep: String) -> String {
     ""
 }
 
-/// Group elements of `xs` by the key returned by `f`, producing a map from
+/// Group elements by the key returned by `f`, producing a map from
 /// each key to the list of elements that produced it (order within groups preserved).
 ///
-/// Transpiler-handled: emits a Rust HashMap fold; no native Rust `group_by` equivalent.
-pub fn group_by[T, K](xs: List[T], f: fn(T) -> K) -> Map[K, List[T]] where T: Clone, K: Clone {
-    xs.group_by(f)
+/// Transpiler-handled: emits a Rust HashMap fold.
+pub fn List[T]::group_by[K](self, f: fn(T) -> K) -> Map[K, List[T]] where T: Clone, K: Clone {
+    self.group_by(f)
 }
 
-/// Return all contiguous windows of length `n`.  If `n` > `len(xs)` the result
-/// is empty.  Each window is a new list of exactly `n` elements.
+/// Return all contiguous windows of length `n`. If `n` > `len` the result
+/// is empty. Each window is a new list of exactly `n` elements.
 ///
 /// Transpiler-handled: emits `xs.windows(n).map(|w| w.to_vec()).collect()`.
-pub fn windows[T](xs: List[T], n: Int) -> List[List[T]] where T: Clone {
-    xs.windows(n)
+pub fn List[T]::windows(self, n: Int) -> List[List[T]] where T: Clone {
+    self.windows(n)
 }
 
-/// Divide `xs` into non-overlapping chunks of at most `n` elements.  The last
+/// Divide into non-overlapping chunks of at most `n` elements. The last
 /// chunk may be shorter than `n`.
 ///
 /// Transpiler-handled: emits `xs.chunks(n).map(|c| c.to_vec()).collect()`.
-pub fn chunks[T](xs: List[T], n: Int) -> List[List[T]] where T: Clone {
-    xs.chunks(n)
+pub fn List[T]::chunks(self, n: Int) -> List[List[T]] where T: Clone {
+    self.chunks(n)
 }

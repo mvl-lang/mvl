@@ -1,14 +1,14 @@
 //! std.core — implicit prelude, loaded before any user source.
 //!
 //! Everything declared here is available without an explicit `use`.
-//! Type declarations (Int, String, Bool, Option, Result, List, …) are
+//! Type declarations (Int, String, Bool, Option, Result, List, ...) are
 //! resolved by the type checker from this file.
 //!
-//! Effects: varies by function (println → Console, read_file → FileRead, …).
+//! Effects: varies by function (println -> Console, read_file -> FileRead, ...).
 
 /// Print a value followed by a newline.
 pub fn println(value: String) -> Unit ! Console {
-    stdout_write(stdout(), str_concat(value, "\n"))
+    stdout_write(stdout(), value.concat("\n"))
 }
 
 /// Print a value without a trailing newline.
@@ -18,7 +18,7 @@ pub fn print(value: String) -> Unit ! Console {
 
 /// Print a value to stderr followed by a newline.
 pub fn eprintln(value: String) -> Unit ! Console {
-    stderr_write(stderr(), str_concat(value, "\n"))
+    stderr_write(stderr(), value.concat("\n"))
 }
 
 /// Print a value to stderr without a trailing newline.
@@ -27,7 +27,7 @@ pub fn eprint(value: String) -> Unit ! Console {
 }
 
 /// Format a value as a string.
-/// `transparent` ensures security labels propagate: format("{}", secret) → Secret[String].
+/// `transparent` ensures security labels propagate: format("{}", secret) -> Secret[String].
 pub transparent builtin fn format(value: String) -> String
 
 /// Assert a condition; panic if false.
@@ -56,53 +56,53 @@ pub fn range(start: Int, end: Int) -> List[Int] {
     result
 }
 
-// ── Option predicates ─────────────────────────────────────────────────────────
+// ── Option methods ──────────────────────────────────────────────────────────
 
-/// True if `opt` holds a value.
-pub fn is_some[T](opt: Option[T]) -> Bool {
-    match opt {
+/// True if the option holds a value.
+pub fn Option[T]::is_some(self) -> Bool {
+    match self {
         Some(_) => true,
         None => false
     }
 }
 
-/// True if `opt` is empty.
-pub fn is_none[T](opt: Option[T]) -> Bool {
-    match opt {
+/// True if the option is empty.
+pub fn Option[T]::is_none(self) -> Bool {
+    match self {
         Some(_) => false,
         None => true
     }
 }
 
 /// Return the contained value, or `default` if None.
-pub fn unwrap_or[T](opt: Option[T], default: T) -> T {
-    match opt {
+pub fn Option[T]::unwrap_or(self, default: T) -> T {
+    match self {
         Some(v) => v,
         None => default
     }
 }
 
 /// Apply `f` to the contained value and return its result; propagate `None`.
-pub fn and_then[T, U](opt: Option[T], f: fn(T) -> Option[U]) -> Option[U] {
-    match opt {
+pub fn Option[T]::and_then[U](self, f: fn(T) -> Option[U]) -> Option[U] {
+    match self {
         Some(x) => f(x),
         None => None
     }
 }
 
-// ── Result predicates ─────────────────────────────────────────────────────────
+// ── Result methods ──────────────────────────────────────────────────────────
 
-/// True if `res` is Ok.
-pub fn is_ok[T, E](res: Result[T, E]) -> Bool {
-    match res {
+/// True if the result is Ok.
+pub fn Result[T, E]::is_ok(self) -> Bool {
+    match self {
         Ok(_) => true,
         Err(_) => false
     }
 }
 
-/// True if `res` is Err.
-pub fn is_err[T, E](res: Result[T, E]) -> Bool {
-    match res {
+/// True if the result is Err.
+pub fn Result[T, E]::is_err(self) -> Bool {
+    match self {
         Ok(_) => false,
         Err(_) => true
     }

@@ -1,63 +1,63 @@
-//! std.strings — String type operations and method implementations.
+//! std.strings — String type operations via extension methods.
 //!
-//! Builtin kernel functions are the trust boundary between MVL and Rust
+//! Builtin kernel methods are the trust boundary between MVL and Rust
 //! (Category 3: type operations), implemented in mvl_runtime::stdlib::primitives.
-//! Pure MVL wrappers compose only these builtins. UFCS: `s.trim()` → `trim(s)`.
+//! Pure MVL methods compose only these builtins.
 //!
 //! Import: available as builtins; explicit import not required.
 //!
 //! Effects: none (all functions are pure).
 
-// ── String kernel (17 functions) ─────────────────────────────────────────────
+// ── String kernel (10 builtin methods) ──────────────────────────────────────
 
 /// Character count (Unicode scalar values), not byte count.
-pub builtin fn str_len(s: String) -> Int
+pub builtin fn String::len(self) -> Int
 
 /// Decompose a string into a list of single-character strings.
-pub builtin fn str_chars(s: String) -> List[String]
+pub builtin fn String::chars(self) -> List[String]
 
 /// Single character at char-index `i`. Returns `""` if out of range.
-pub builtin fn str_char_at(s: String, i: Int) -> String
+pub builtin fn String::char_at(self, i: Int) -> String
 
 /// Reconstruct a String from a list of single-character strings.
-pub builtin fn str_from_chars(chars: List[String]) -> String
+pub builtin fn String::from_chars(chars: List[String]) -> String
 
 /// Raw byte at byte-index `i`. Returns 0 if out of range.
-pub builtin fn str_byte_at(s: String, i: Int) -> Byte
+pub builtin fn String::byte_at(self, i: Int) -> Byte
 
 /// Reconstruct a String from a list of bytes (UTF-8, lossy).
-pub builtin fn str_from_bytes(bytes: List[Byte]) -> String
+pub builtin fn String::from_bytes(bytes: List[Byte]) -> String
 
 /// Concatenate two strings.
-pub builtin fn str_concat(s: String, other: String) -> String
+pub builtin fn String::concat(self, other: String) -> String
 
 /// Char-index of first occurrence of `sub`, or None.
-pub builtin fn str_find(s: String, sub: String) -> Option[Int]
+pub builtin fn String::find(self, sub: String) -> Option[Int]
 
 /// Split on `sep`, returning a list of substrings.
-pub builtin fn str_split(s: String, sep: String) -> List[String]
+pub builtin fn String::split(self, sep: String) -> List[String]
 
 /// Char-index substring `[start, end)` with safe clamping.
-pub builtin fn str_substring(s: String, start: Int, end: Int) -> String
+pub builtin fn String::substring(self, start: Int, end: Int) -> String
 
-// ── Pure MVL string operations (converted from builtins, #903) ───────────────
+// ── Pure MVL string methods (#903, #928) ────────────────────────────────────
 
-/// True if `sub` is found anywhere in `s`.
-pub fn str_contains(s: String, sub: String) -> Bool {
-    is_some(str_find(s, sub))
+/// True if `sub` is found anywhere in the string.
+pub fn String::contains(self, sub: String) -> Bool {
+    is_some(self.find(sub))
 }
 
-/// True if `s` starts with `prefix`.
-pub fn str_starts_with(s: String, prefix: String) -> Bool {
-    str_substring(s, 0, str_len(prefix)) == prefix
+/// True if the string starts with `prefix`.
+pub fn String::starts_with(self, prefix: String) -> Bool {
+    self.substring(0, prefix.len()) == prefix
 }
 
-/// True if `s` ends with `suffix`.
-pub fn str_ends_with(s: String, suffix: String) -> Bool {
-    let n: Int = str_len(s);
-    let m: Int = str_len(suffix);
+/// True if the string ends with `suffix`.
+pub fn String::ends_with(self, suffix: String) -> Bool {
+    let n: Int = self.len();
+    let m: Int = suffix.len();
     if m > n { false }
-    else { str_substring(s, n - m, n) == suffix }
+    else { self.substring(n - m, n) == suffix }
 }
 
 fn is_ws(c: String) -> Bool {
@@ -65,23 +65,23 @@ fn is_ws(c: String) -> Bool {
 }
 
 /// Remove leading and trailing ASCII whitespace.
-pub fn str_trim(s: String) -> String {
-    let n: Int = str_len(s);
+pub fn String::trim(self) -> String {
+    let n: Int = self.len();
     let start: ref Int = 0;
-    while start < n && is_ws(str_char_at(s, start)) decreases n - start {
+    while start < n && is_ws(self.char_at(start)) decreases n - start {
         start = start + 1
     };
     let end: ref Int = n;
-    while end > start && is_ws(str_char_at(s, end - 1)) decreases end - start {
+    while end > start && is_ws(self.char_at(end - 1)) decreases end - start {
         end = end - 1
     };
-    str_substring(s, start, end)
+    self.substring(start, end)
 }
 
 /// Convert all ASCII lowercase characters to uppercase. Non-ASCII characters pass through unchanged.
-pub fn str_to_upper(s: String) -> String {
+pub fn String::to_upper(self) -> String {
     let result: ref List[String] = [];
-    for c in str_chars(s) {
+    for c in self.chars() {
         let u: String =
             if c == "a" { "A" } else if c == "b" { "B" } else if c == "c" { "C" }
             else if c == "d" { "D" } else if c == "e" { "E" } else if c == "f" { "F" }
@@ -95,13 +95,13 @@ pub fn str_to_upper(s: String) -> String {
             else { c };
         result.push(u)
     };
-    str_from_chars(result)
+    String::from_chars(result)
 }
 
 /// Convert all ASCII uppercase characters to lowercase. Non-ASCII characters pass through unchanged.
-pub fn str_to_lower(s: String) -> String {
+pub fn String::to_lower(self) -> String {
     let result: ref List[String] = [];
-    for c in str_chars(s) {
+    for c in self.chars() {
         let l: String =
             if c == "A" { "a" } else if c == "B" { "b" } else if c == "C" { "c" }
             else if c == "D" { "d" } else if c == "E" { "e" } else if c == "F" { "f" }
@@ -115,118 +115,30 @@ pub fn str_to_lower(s: String) -> String {
             else { c };
         result.push(l)
     };
-    str_from_chars(result)
+    String::from_chars(result)
 }
 
 /// Replace all occurrences of `from` with `to`.
-pub fn str_replace(s: String, from: String, to: String) -> String {
-    let parts: List[String] = str_split(s, from);
+pub fn String::replace(self, from: String, to: String) -> String {
+    let parts: List[String] = self.split(from);
     let result: ref String = "";
     let first: ref Bool = true;
     for part in parts {
-        if first { first = false } else { result = str_concat(result, to) };
-        result = str_concat(result, part)
+        if first { first = false } else { result = result.concat(to) };
+        result = result.concat(part)
     };
     result
 }
 
-// ── String parsing (2 functions) ─────────────────────────────────────────────
-
-/// Parse `s` as a signed 64-bit integer; Err on failure.
-pub builtin fn str_parse_int(s: String) -> Result[Int, String]
-
-/// Parse `s` as a 64-bit float; Err on failure.
-pub builtin fn str_parse_float(s: String) -> Result[Float, String]
-
-// ── Pure MVL string method implementations ───────────────────────────────────
-
-/// Remove leading and trailing ASCII whitespace.
-pub fn trim(s: String) -> String {
-    str_trim(s)
+/// True if the string has no characters.
+pub fn String::is_empty(self) -> Bool {
+    self.len() == 0
 }
 
-/// Convert all characters to uppercase.
-pub fn to_upper(s: String) -> String {
-    str_to_upper(s)
-}
+// ── String parsing (2 builtin methods) ──────────────────────────────────────
 
-/// Convert all characters to lowercase.
-pub fn to_lower(s: String) -> String {
-    str_to_lower(s)
-}
+/// Parse as a signed 64-bit integer; Err on failure.
+pub builtin fn String::parse_int(self) -> Result[Int, String]
 
-/// Decompose a string into a list of single-character strings.
-pub fn chars(s: String) -> List[String] {
-    str_chars(s)
-}
-
-/// Concatenate `other` onto `s`.
-pub fn concat(s: String, other: String) -> String {
-    str_concat(s, other)
-}
-
-/// True if `s` starts with `prefix`.
-pub fn starts_with(s: String, prefix: String) -> Bool {
-    str_starts_with(s, prefix)
-}
-
-/// True if `s` ends with `suffix`.
-pub fn ends_with(s: String, suffix: String) -> Bool {
-    str_ends_with(s, suffix)
-}
-
-/// Char-index of first occurrence of `sub` in `s`, or None.
-pub fn find(s: String, sub: String) -> Option[Int] {
-    str_find(s, sub)
-}
-
-/// Replace all occurrences of `from` with `to` in `s`.
-pub fn replace(s: String, from: String, to: String) -> String {
-    str_replace(s, from, to)
-}
-
-/// Split `s` on `sep`, returning a list of substrings.
-pub fn split(s: String, sep: String) -> List[String] {
-    str_split(s, sep)
-}
-
-/// Char-index substring `[start, end)` with safe clamping.
-pub fn substring(s: String, start: Int, end: Int) -> String {
-    str_substring(s, start, end)
-}
-
-// ── Additional wrappers ───────────────────────────────────────────────────────
-// These are declared for documentation and IFC-label visibility. The
-// transpiler resolves s.len() / s.is_empty() / s.contains() via infer_method_call;
-// the free-function forms below use type-prefixed names to avoid collisions
-// with the identically-named List wrappers in lists.mvl.
-
-/// Number of Unicode scalar values (characters) in `s`.
-/// Call as `s.len()` in user code; `str_len(s)` for primitive access.
-pub fn str_length(s: String) -> Int {
-    str_len(s)
-}
-
-/// True if `s` has no characters.
-/// Call as `s.is_empty()` in user code.
-pub fn str_is_empty(s: String) -> Bool {
-    str_len(s) == 0
-}
-
-/// True if `sub` appears anywhere in `s`.
-/// Call as `s.contains(sub)` in user code.
-pub fn str_contains_sub(s: String, sub: String) -> Bool {
-    str_contains(s, sub)
-}
-
-/// Parse `s` as an integer, returning Ok(n) or Err(message).
-/// Call as `s.parse_int()` in user code.
-pub fn parse_int(s: String) -> Result[Int, String] {
-    str_parse_int(s)
-}
-
-/// Parse `s` as a float, returning Ok(x) or Err(message).
-/// Call as `s.parse_float()` in user code.
-pub fn parse_float(s: String) -> Result[Float, String] {
-    str_parse_float(s)
-}
+/// Parse as a 64-bit float; Err on failure.
+pub builtin fn String::parse_float(self) -> Result[Float, String]
