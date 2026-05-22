@@ -1,0 +1,33 @@
+// Corpus: select on behaviors with timeout (Spec 015 Req 9)
+//
+// The `select` expression waits for the first of several pending actor
+// messages or a timeout to fire. It evaluates to Unit.
+
+actor Fetcher {
+    url: String
+
+    pub fn fetch() { }
+}
+
+// select with timeout fires when no branch ready
+fn wait_with_timeout(ch: Channel) -> Unit {
+    select {
+        ch.recv() => { }
+        timeout(100) => { }
+    }
+}
+
+// select fires first ready branch
+fn wait_multiple(a: Channel, b: Channel) -> Unit {
+    select {
+        a.recv() => { }
+        b.recv() => { }
+    }
+}
+
+// select with binding captures result
+fn wait_and_capture(ch: Channel) -> Unit {
+    select {
+        msg = ch.recv() => { }
+    }
+}

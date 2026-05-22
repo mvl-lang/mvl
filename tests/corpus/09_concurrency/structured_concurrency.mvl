@@ -1,0 +1,28 @@
+// Corpus: structured concurrency — scope lifetime (Spec 015 Req 8)
+//
+// Actors created inside a `concurrently` block are scoped to that block.
+// When the block exits, the runtime drains all pending messages for actors
+// created within the block before returning control to the enclosing scope.
+
+type Message = struct { text: String }
+
+actor Worker {
+    id: Int
+
+    pub fn process(val msg: String) { }
+    pub fn finish() { }
+}
+
+// concurrently block scopes actor lifetime
+fn run_workers() -> Unit {
+    concurrently {
+        let w1: Worker = actor Worker { id: 1 };
+        let w2: Worker = actor Worker { id: 2 };
+        w1.process("task-a");
+        w2.process("task-b");
+        w1.finish();
+        w2.finish();
+    }
+    // w1 and w2 are no longer accessible here;
+    // runtime has drained their mailboxes before continuing.
+}

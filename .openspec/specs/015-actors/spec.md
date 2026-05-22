@@ -339,6 +339,8 @@ The only permitted interaction with an actor from the outside is sending a messa
 
 **Tests:** `tests/corpus/actors/actor_ref.mvl`
 
+**Corpus:** `tests/corpus/09_concurrency/actor_ref.mvl`
+
 #### Scenario: ActorRef is tag-sendable
 
 - GIVEN `tag counter: ActorRef = actor Counter { count: 0 }` and `worker.set_target(counter)`
@@ -374,6 +376,8 @@ by the scope in which it was created.
 
 **Tests:** `tests/corpus/actors/structured_concurrency.mvl`,
 `tests/corpus/negative/req09_data_race/actor_escape_scope.mvl`
+
+**Corpus:** `tests/corpus/09_concurrency/structured_concurrency.mvl`
 
 #### Scenario: Actor does not escape concurrently block
 
@@ -418,6 +422,8 @@ The `select` expression:
 
 **Tests:** `tests/corpus/actors/select.mvl`,
 `tests/corpus/negative/req09_data_race/select_no_timeout.mvl`
+
+**Corpus:** `tests/corpus/09_concurrency/select.mvl`
 
 #### Scenario: Select fires first ready branch
 
