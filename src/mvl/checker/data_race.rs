@@ -26,7 +26,7 @@ use std::collections::HashSet;
 
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::parser::ast::{
-    Block, Capability, Decl, ElseBranch, Expr, FnDecl, MatchBody, Param, Program, Stmt,
+    Block, Capability, Decl, ElseBranch, Expr, FnDecl, MatchBody, Param, Pattern, Program, Stmt,
 };
 
 // ── Public entry points ───────────────────────────────────────────────────────
@@ -309,30 +309,48 @@ fn check_fn_iso(fd: &FnDecl, errors: &mut Vec<CheckError>) {
 /// Check iso aliasing given a parameter list and body block.
 /// Used for both top-level `fn` declarations and actor methods.
 fn check_params_and_body_iso(params: &[Param], body: &Block, errors: &mut Vec<CheckError>) {
-    let iso_params: HashSet<&str> = params
+    let mut iso_vars: HashSet<String> = params
         .iter()
         .filter(|p| matches!(p.capability, Some(Capability::Iso)))
-        .map(|p| p.name.as_str())
+        .map(|p| p.name.clone())
         .collect();
 
-    if iso_params.is_empty() {
+    if iso_vars.is_empty() {
         return; // no iso params — nothing to alias-check
     }
 
-    check_block_iso(body, &iso_params, errors);
+    check_block_iso(body, &mut iso_vars, errors);
 }
 
 // ── Block / statement walker ──────────────────────────────────────────────────
 
-fn check_block_iso(block: &Block, iso_vars: &HashSet<&str>, errors: &mut Vec<CheckError>) {
+fn check_block_iso(block: &Block, iso_vars: &mut HashSet<String>, errors: &mut Vec<CheckError>) {
     for stmt in &block.stmts {
         check_stmt_iso(stmt, iso_vars, errors);
     }
 }
 
-fn check_stmt_iso(stmt: &Stmt, iso_vars: &HashSet<&str>, errors: &mut Vec<CheckError>) {
+fn check_stmt_iso(stmt: &Stmt, iso_vars: &mut HashSet<String>, errors: &mut Vec<CheckError>) {
     match stmt {
-        Stmt::Let { init, span, .. } => {
+        Stmt::Let {
+            pattern,
+            init,
+            span,
+            ..
+        } => {
+            // L5 fix: `let y = consume(x)` transfers iso ownership from x to y.
+            if let Expr::Consume { expr: inner, .. } = init {
+                if let Expr::Ident(consumed, _) = inner.as_ref() {
+                    if iso_vars.remove(consumed.as_str()) {
+                        // Transfer ownership to the new binding.
+                        if let Pattern::Ident(new_name, _) = pattern {
+                            iso_vars.insert(new_name.clone());
+                        }
+                        return; // consume() is not an alias
+                    }
+                }
+            }
+
             // `let y = iso_x` — bare ident binding without consume() creates an alias.
             if let Expr::Ident(src, _) = init {
                 if iso_vars.contains(src.as_str()) {
@@ -367,9 +385,13 @@ fn check_stmt_iso(stmt: &Stmt, iso_vars: &HashSet<&str>, errors: &mut Vec<CheckE
             cond, then, else_, ..
         } => {
             check_expr_iso(cond, iso_vars, errors);
-            check_block_iso(then, iso_vars, errors);
+            // Branches get a snapshot — ownership changes inside branches
+            // don't leak to the outer scope (conservative).
+            let mut then_vars = iso_vars.clone();
+            check_block_iso(then, &mut then_vars, errors);
             if let Some(eb) = else_ {
-                check_else_iso(eb, iso_vars, errors);
+                let mut else_vars = iso_vars.clone();
+                check_else_iso(eb, &mut else_vars, errors);
             }
         }
         Stmt::Match {
@@ -377,24 +399,27 @@ fn check_stmt_iso(stmt: &Stmt, iso_vars: &HashSet<&str>, errors: &mut Vec<CheckE
         } => {
             check_expr_iso(scrutinee, iso_vars, errors);
             for arm in arms {
+                let mut arm_vars = iso_vars.clone();
                 match &arm.body {
-                    MatchBody::Expr(e) => check_expr_iso(e, iso_vars, errors),
-                    MatchBody::Block(b) => check_block_iso(b, iso_vars, errors),
+                    MatchBody::Expr(e) => check_expr_iso(e, &mut arm_vars, errors),
+                    MatchBody::Block(b) => check_block_iso(b, &mut arm_vars, errors),
                 }
             }
         }
         Stmt::For { iter, body, .. } => {
             check_expr_iso(iter, iso_vars, errors);
-            check_block_iso(body, iso_vars, errors);
+            let mut body_vars = iso_vars.clone();
+            check_block_iso(body, &mut body_vars, errors);
         }
         Stmt::While { cond, body, .. } => {
             check_expr_iso(cond, iso_vars, errors);
-            check_block_iso(body, iso_vars, errors);
+            let mut body_vars = iso_vars.clone();
+            check_block_iso(body, &mut body_vars, errors);
         }
     }
 }
 
-fn check_else_iso(eb: &ElseBranch, iso_vars: &HashSet<&str>, errors: &mut Vec<CheckError>) {
+fn check_else_iso(eb: &ElseBranch, iso_vars: &mut HashSet<String>, errors: &mut Vec<CheckError>) {
     match eb {
         ElseBranch::Block(b) => check_block_iso(b, iso_vars, errors),
         ElseBranch::If(stmt) => check_stmt_iso(stmt, iso_vars, errors),
@@ -403,7 +428,7 @@ fn check_else_iso(eb: &ElseBranch, iso_vars: &HashSet<&str>, errors: &mut Vec<Ch
 
 // ── Expression walker ─────────────────────────────────────────────────────────
 
-fn check_expr_iso(expr: &Expr, iso_vars: &HashSet<&str>, errors: &mut Vec<CheckError>) {
+fn check_expr_iso(expr: &Expr, iso_vars: &mut HashSet<String>, errors: &mut Vec<CheckError>) {
     match expr {
         // `consume()` is an ownership-transfer operation — not an alias.
         // Do NOT recurse: the inner ident is being consumed, not aliased.
@@ -449,9 +474,11 @@ fn check_expr_iso(expr: &Expr, iso_vars: &HashSet<&str>, errors: &mut Vec<CheckE
             cond, then, else_, ..
         } => {
             check_expr_iso(cond, iso_vars, errors);
-            check_block_iso(then, iso_vars, errors);
+            let mut then_vars = iso_vars.clone();
+            check_block_iso(then, &mut then_vars, errors);
             if let Some(e) = else_ {
-                check_expr_iso(e, iso_vars, errors);
+                let mut else_vars = iso_vars.clone();
+                check_expr_iso(e, &mut else_vars, errors);
             }
         }
 
@@ -460,9 +487,10 @@ fn check_expr_iso(expr: &Expr, iso_vars: &HashSet<&str>, errors: &mut Vec<CheckE
         } => {
             check_expr_iso(scrutinee, iso_vars, errors);
             for arm in arms {
+                let mut arm_vars = iso_vars.clone();
                 match &arm.body {
-                    MatchBody::Expr(e) => check_expr_iso(e, iso_vars, errors),
-                    MatchBody::Block(b) => check_block_iso(b, iso_vars, errors),
+                    MatchBody::Expr(e) => check_expr_iso(e, &mut arm_vars, errors),
+                    MatchBody::Block(b) => check_block_iso(b, &mut arm_vars, errors),
                 }
             }
         }
@@ -492,13 +520,13 @@ fn check_expr_iso(expr: &Expr, iso_vars: &HashSet<&str>, errors: &mut Vec<CheckE
         // lambda parameters that shadow outer names.  A lambda that captures an
         // outer iso variable and re-binds it inside the body creates an alias.
         Expr::Lambda { params, body, .. } => {
-            let inner_iso_vars: HashSet<&str> = iso_vars
+            let mut inner_iso_vars: HashSet<String> = iso_vars
                 .iter()
-                .copied()
-                .filter(|name| !params.iter().any(|p| p.name.as_str() == *name))
+                .filter(|name| !params.iter().any(|p| p.name.as_str() == name.as_str()))
+                .cloned()
                 .collect();
             if !inner_iso_vars.is_empty() {
-                check_expr_iso(body, &inner_iso_vars, errors);
+                check_expr_iso(body, &mut inner_iso_vars, errors);
             }
         }
 
@@ -511,7 +539,8 @@ fn check_expr_iso(expr: &Expr, iso_vars: &HashSet<&str>, errors: &mut Vec<CheckE
         Expr::Select { arms, .. } => {
             for arm in arms {
                 check_expr_iso(&arm.expr, iso_vars, errors);
-                check_block_iso(&arm.body, iso_vars, errors);
+                let mut arm_vars = iso_vars.clone();
+                check_block_iso(&arm.body, &mut arm_vars, errors);
             }
         }
         Expr::Concurrently { body, .. } => check_block_iso(body, iso_vars, errors),
@@ -681,6 +710,84 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, CheckError::IsoAliasingViolation { .. })),
             "lambda param shadowing outer iso should not be flagged, got: {errors:?}"
+        );
+    }
+
+    // ── L5 fix: post-consume ownership tracking ──────────────────────────────
+
+    #[test]
+    fn iso_rebound_after_consume_detected() {
+        // fn f(iso x: Int) -> Int {
+        //     let a: Int = consume(x);   // a is now iso
+        //     let b: Int = a;            // aliasing a → should be rejected
+        // }
+        let let_a = Stmt::Let {
+            kind: LetKind::Regular,
+            pattern: Pattern::Ident("a".into(), S),
+            ty: int_ty(),
+            init: Expr::Consume {
+                expr: Box::new(Expr::Ident("x".into(), S)),
+                span: S,
+            },
+            span: S,
+        };
+        let let_b = Stmt::Let {
+            kind: LetKind::Regular,
+            pattern: Pattern::Ident("b".into(), S),
+            ty: int_ty(),
+            init: Expr::Ident("a".into(), S),
+            span: S,
+        };
+        let p = prog(vec![fn_with_body(
+            "f",
+            vec![iso_param("x")],
+            vec![let_a, let_b],
+        )]);
+        let mut errors = Vec::new();
+        check_iso_aliasing(&p, &mut errors);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, CheckError::IsoAliasingViolation { name, .. } if name == "a")),
+            "aliasing of rebound iso variable (after consume) should be detected, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn iso_consumed_original_no_longer_tracked() {
+        // fn f(iso x: Int) -> Int {
+        //     let a: Int = consume(x);   // x consumed, a is now iso
+        //     let b: Int = x;            // x is no longer iso — not an aliasing error
+        // }
+        let let_a = Stmt::Let {
+            kind: LetKind::Regular,
+            pattern: Pattern::Ident("a".into(), S),
+            ty: int_ty(),
+            init: Expr::Consume {
+                expr: Box::new(Expr::Ident("x".into(), S)),
+                span: S,
+            },
+            span: S,
+        };
+        let let_b = Stmt::Let {
+            kind: LetKind::Regular,
+            pattern: Pattern::Ident("b".into(), S),
+            ty: int_ty(),
+            init: Expr::Ident("x".into(), S),
+            span: S,
+        };
+        let p = prog(vec![fn_with_body(
+            "f",
+            vec![iso_param("x")],
+            vec![let_a, let_b],
+        )]);
+        let mut errors = Vec::new();
+        check_iso_aliasing(&p, &mut errors);
+        assert!(
+            !errors
+                .iter()
+                .any(|e| matches!(e, CheckError::IsoAliasingViolation { name, .. } if name == "x")),
+            "consumed iso variable should no longer be tracked, got: {errors:?}"
         );
     }
 }

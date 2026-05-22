@@ -402,7 +402,6 @@ impl Parser {
         } else {
             None
         };
-
         let arrow = self.expect(&TokenKind::FatArrow);
         self.require(arrow)?;
 
@@ -737,6 +736,51 @@ mod tests {
                     Pattern::Literal(Literal::Integer(0), _)
                 ));
                 assert!(matches!(arms[1].pattern, Pattern::Wildcard(_)));
+            }
+            _ => panic!("expected match stmt, got: {:?}", s),
+        }
+    }
+
+    // ── Guard patterns (#938) ─────────────────────────────────────────────
+
+    #[test]
+    fn parse_match_guard_simple() {
+        let s = one_stmt("{ match n { x if x > 0 => 1, _ => 0 } }");
+        match &s {
+            Stmt::Match { arms, .. } => {
+                assert_eq!(arms.len(), 2);
+                assert!(matches!(arms[0].pattern, Pattern::Ident(..)));
+                assert!(
+                    arms[0].guard.is_some(),
+                    "first arm should have a guard, got: {:?}",
+                    arms[0]
+                );
+                assert!(arms[1].guard.is_none(), "wildcard arm has no guard");
+            }
+            _ => panic!("expected match stmt, got: {:?}", s),
+        }
+    }
+
+    #[test]
+    fn parse_match_guard_compound() {
+        let s = one_stmt("{ match n { x if x > 0 && x < 100 => 1, _ => 0 } }");
+        match &s {
+            Stmt::Match { arms, .. } => {
+                assert_eq!(arms.len(), 2);
+                assert!(matches!(arms[0].guard, Some(RefExpr::LogicOp { .. })));
+            }
+            _ => panic!("expected match stmt, got: {:?}", s),
+        }
+    }
+
+    #[test]
+    fn parse_match_guard_with_block_body() {
+        let s = one_stmt("{ match n { x if x > 0 => { x }, _ => { 0 } } }");
+        match &s {
+            Stmt::Match { arms, .. } => {
+                assert_eq!(arms.len(), 2);
+                assert!(arms[0].guard.is_some());
+                assert!(matches!(arms[0].body, MatchBody::Block(..)));
             }
             _ => panic!("expected match stmt, got: {:?}", s),
         }

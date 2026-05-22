@@ -1549,11 +1549,9 @@ fn iso_passed_to_fn_call_not_detected_l1() {
 }
 
 #[test]
-fn iso_rebound_after_consume_not_detected_l5() {
-    // L5: After `let y = consume(x)`, `y` becomes the new iso owner but is NOT
-    // added to iso_vars.  Subsequent aliasing of `y` is therefore undetected.
-    // This is a known Phase 3 limitation — full tracking requires mutable scope
-    // analysis (Phase 6).
+fn iso_rebound_after_consume_detected() {
+    // L5 fix: After `let a = consume(x)`, `a` becomes the new iso owner.
+    // Subsequent aliasing of `a` (e.g., `let b = a`) is now detected.
     let src = r#"
         fn rebound_alias(iso x: Payload) -> Unit {
             let a: Payload = consume(x);
@@ -1563,10 +1561,10 @@ fn iso_rebound_after_consume_not_detected_l5() {
     "#;
     let errors = errors_for(src);
     assert!(
-        !errors
+        errors
             .iter()
             .any(|e| matches!(e, CheckError::IsoAliasingViolation { name, .. } if name == "a")),
-        "L5: aliasing of rebound iso (after consume) is not yet detected, got: {errors:?}"
+        "aliasing of rebound iso variable should be detected, got: {errors:?}"
     );
 }
 
