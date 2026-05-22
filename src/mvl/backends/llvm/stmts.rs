@@ -411,21 +411,27 @@ impl<'ctx> LlvmBackend<'ctx> {
             // Guard support (#938): if a guard is present, evaluate it and
             // conditionally branch to either the body block or the next arm/fallback.
             if let Some(guard) = &arm.guard {
-                if let Some(cond) = self.emit_guard_ref_expr(guard) {
-                    let body_bb = self
-                        .context
-                        .append_basic_block(parent_fn, &format!("arm{i}_body"));
-                    // If guard fails, fall through to the next arm or the fallback.
-                    let guard_fail_target = if i + 1 < arm_blocks.len() {
-                        arm_blocks[i + 1]
-                    } else {
-                        actual_default
-                    };
-                    self.builder
-                        .build_conditional_branch(cond, body_bb, guard_fail_target)
-                        .unwrap();
-                    self.builder.position_at_end(body_bb);
-                }
+                let cond = self
+                    .emit_guard_ref_expr(guard)
+                    .expect("ICE: unsupported guard expression shape reached LLVM codegen");
+                let body_bb = self
+                    .context
+                    .append_basic_block(parent_fn, &format!("arm{i}_body"));
+                // If guard fails, fall through to the next arm or the fallback.
+                // NOTE: for consecutive same-variant guarded arms the switch
+                // dispatches to the *first* arm block for that discriminant,
+                // so later same-variant arms are only reachable via guard-fail
+                // chains — this works correctly for sequential arms but would
+                // need a more sophisticated dispatch for interleaved patterns.
+                let guard_fail_target = if i + 1 < arm_blocks.len() {
+                    arm_blocks[i + 1]
+                } else {
+                    actual_default
+                };
+                self.builder
+                    .build_conditional_branch(cond, body_bb, guard_fail_target)
+                    .unwrap();
+                self.builder.position_at_end(body_bb);
             }
 
             let arm_val = match &arm.body {
@@ -1286,6 +1292,21 @@ impl<'ctx> LlvmBackend<'ctx> {
                 Some(self.builder.build_not(v, "guard_not").unwrap())
             }
             RefExpr::Grouped { inner, .. } => self.emit_guard_ref_expr(inner),
+            // A bare identifier used as a guard must be Bool (i1).
+            RefExpr::Ident { name, .. } => {
+                let (alloca, ty) = self.locals.get(name).copied()?;
+                let val = self.builder.build_load(ty, alloca, name).unwrap();
+                if let BasicValueEnum::IntValue(iv) = val {
+                    // Only accept i1 (Bool) — wider integers are not boolean guards.
+                    if iv.get_type().get_bit_width() == 1 {
+                        Some(iv)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }
@@ -1299,7 +1320,11 @@ impl<'ctx> LlvmBackend<'ctx> {
             RefExpr::Ident { name, .. } => {
                 let (alloca, ty) = self.locals.get(name).copied()?;
                 let val = self.builder.build_load(ty, alloca, name).unwrap();
-                Some(val.into_int_value())
+                if let BasicValueEnum::IntValue(iv) = val {
+                    Some(iv)
+                } else {
+                    None
+                }
             }
             RefExpr::ArithOp {
                 op, left, right, ..
