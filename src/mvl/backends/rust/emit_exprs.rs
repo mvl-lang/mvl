@@ -1051,10 +1051,13 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
         //   - Unwrap transitions (Labeled → bare): emit `(expr).0`
         //   - Wrap transitions (bare → Labeled): emit `LabelName((expr))`
         // Standard transitions: trust/release unwrap; classify/taint wrap.
+        // Capability labels: db_url/config_path/api_endpoint/audit_target wrap;
+        // undb_url/unconfig_path/unapi_endpoint/unaudit_target unwrap.
         Expr::Relabel { name, expr, .. } => {
             match name.as_str() {
                 // Unwrap: strip the label newtype to get the inner value.
-                "trust" | "release" => {
+                "trust" | "release" | "undb_url" | "unconfig_path" | "unapi_endpoint"
+                | "unaudit_target" => {
                     cg.push("(");
                     emit_expr(cg, expr);
                     cg.push(").0");
@@ -1070,13 +1073,31 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     emit_expr(cg, expr);
                     cg.push("))");
                 }
-                // User-defined transitions: wrapping/unwrapping not yet implemented in
-                // the Rust backend (type env lookup needed to know from/to label names).
-                // Emit a runtime panic so the failure is visible rather than silently
-                // producing incorrect code.  Tracked as a follow-up TODO.
+                // Capability label wraps: db_url, config_path, api_endpoint, audit_target
+                "db_url" => {
+                    cg.push("DbUrl((");
+                    emit_expr(cg, expr);
+                    cg.push("))");
+                }
+                "config_path" => {
+                    cg.push("ConfigPath((");
+                    emit_expr(cg, expr);
+                    cg.push("))");
+                }
+                "api_endpoint" => {
+                    cg.push("ApiEndpoint((");
+                    emit_expr(cg, expr);
+                    cg.push("))");
+                }
+                "audit_target" => {
+                    cg.push("AuditTarget((");
+                    emit_expr(cg, expr);
+                    cg.push("))");
+                }
+                // Unknown transitions: emit a runtime panic.
                 _ => {
                     cg.push(&format!(
-                        "unimplemented!(\"relabel {name}: user-defined transitions not yet supported in Rust backend\")"
+                        "unimplemented!(\"relabel {name}: unknown transition\")"
                     ));
                 }
             }
