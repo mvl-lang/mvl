@@ -27,7 +27,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 - **Assurance gap closure — specs 015/016 fully covered** (#943): All 14 requirements across Spec 015 (Actors) and Spec 016 (Session Types) now have complete test evidence and corpus. Spec 015 Reqs 7-9 have new corpus files (ActorRef tag semantics, structured concurrency scope, select with timeout). Spec 016 Reqs 4-5 have scenario definitions, test links, and negative corpus for duplicate branch labels. Assurance dashboard improved: Corpus 12/14 → 20/22, Coverage 94 → 96, Assurance 88 → 90.
 - **Actor design evaluation** (#854): Comprehensive analysis of five open design questions (reduction budget, bidirectional links, supervisor scope, scheduling/session interaction, failure model completeness). All questions resolved with no blocking issues for Phase 8.
 
-## [Unreleased]
+## [0.140.0] - 2026-05-22
 
 ### Added
 
@@ -752,8 +752,6 @@ See issues #742–#745 for remaining Phase 8 work:
 - **Function pointer parameters emit as bare `fn` instead of `impl Fn`** — Matches enum variant field emission and ensures `Copy+Clone` compatibility for function-typed values stored in enum variants. Fixes type mismatch when user-defined functions with `List[T]` parameters are passed as callbacks to higher-order functions.
 - **Prelude programs scanned for Rust-backed stdlib imports** — `emitter.rs` now includes stdlib imports from both user and prelude programs, enabling `std/pbt.mvl`'s `use std.random.*` to auto-generate `use mvl_runtime::stdlib::random::*` in transpiled output.
 
-
-## [Unreleased]
 
 ## [0.92.0] — 2026-05-10
 
