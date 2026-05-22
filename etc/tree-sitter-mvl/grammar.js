@@ -469,7 +469,7 @@ module.exports = grammar({
           $.block,
           optional(seq("else", choice($.if_stmt, $.block)))
         ),
-        seq("if", "let", $.pattern, "=", $.expr, $.block)
+        seq("if", "let", $.pattern, "=", $.expr, $.block, optional(seq("else", $.block)))
       ),
 
     match_stmt: ($) =>
@@ -617,7 +617,10 @@ module.exports = grammar({
       ),
 
     if_expr: ($) =>
-      seq("if", $.expr, $.block, "else", $.block),
+      choice(
+        seq("if", $.expr, $.block, "else", $.block),
+        seq("if", "let", $.pattern, "=", $.expr, $.block, "else", $.block)
+      ),
 
     match_expr: ($) =>
       seq("match", $.expr, "{", repeat($.match_arm), "}"),

@@ -75,9 +75,10 @@ extern "rust" {
 // Pure: no effect annotations — all I/O effects are confined to main.mvl.
 pub fn dispatch(req: Request) -> Result[Response, HandlerError] {
     let auth: Result[Unit, HandlerError] = verify_request_auth(req.api_key_header);
-    match auth {
-        Err(e) => Err(e),
-        Ok(_)  => route(req),
+    if let Err(e) = auth {
+        Err(e)
+    } else {
+        route(req)
     }
 }
 

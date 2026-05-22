@@ -10,6 +10,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 - **Complete stdlib extension method migration** (#928): Migrated ~300+ call sites across ~35 MVL files from old-style free function calls (`map_get(m, k)`) to extension method syntax (`m.get(k)`). Fixed codegen issues: `join`/`to_string` name collision with io module, set operation use-after-move, LLVM use-after-free on function parameter drops, LLVM HOF/set method dispatch for mangled extension names. Fixed tree-sitter unnecessary grammar conflicts and spike parser type annotation typos.
 
+## [0.136.0] — 2026-05-22
+
+### Added
+
+- **If-let-else syntax** (#891): Added expression and statement forms of if-let-else for concise single-pattern matching. Supports `if let Pattern(v) = expr { ... } else { ... }` syntax. Parser desugars to exhaustive match at parse time. Modernized `config_server` and `task_pipeline` examples to use if-let instead of verbose match expressions.
+
 ## [0.135.2] — 2026-05-22
 
 ### Fixed
