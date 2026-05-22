@@ -1,5 +1,5 @@
 // corpus:expect-fail
-// expect-requirement: 2
+// expect-requirement: 6
 // Scenario: bare assignment of linear type without consume() — forbidden.
 // MVL uses Pony destructive-read semantics: ownership transfer requires consume(x).
 // Triggers: CheckError::LinearTypeBareBind

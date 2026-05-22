@@ -535,7 +535,8 @@ impl CheckError {
             // Req 6: Ownership (immutability / linearity)
             CheckError::AssignToImmutable { .. }
             | CheckError::MutateImmutableField { .. }
-            | CheckError::CaptureMutabilityViolation { .. } => 6,
+            | CheckError::CaptureMutabilityViolation { .. }
+            | CheckError::LinearTypeBareBind { .. } => 6,
             // Req 7: Effect Tracking (includes invalid names)
             CheckError::InvalidEffectName { .. }
             | CheckError::UnknownEffectParent { .. }
@@ -589,8 +590,6 @@ impl CheckError {
             CheckError::NotIterator { .. } => 1,
             // Req 9: Generics — constraint enforcement
             CheckError::MissingConstraint { .. } => 9,
-            // Req 2: Memory Safety — linear type ownership
-            CheckError::LinearTypeBareBind { .. } => 2,
         }
     }
 
