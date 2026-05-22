@@ -1,0 +1,17 @@
+// Expected error: non-exhaustive match — guarded wildcard doesn't satisfy exhaustiveness
+// A guarded catch-all arm does not guarantee coverage because the guard may fail.
+// Triggers: CheckError::NonExhaustiveMatch (req3, #938)
+
+type Color = enum { Red, Green, Blue }
+
+fn describe(c: Color, n: Int) -> String {
+    match c {
+        Red   => "red",
+        Green => "green",
+        _ if n > 0 => "other",
+    }
+}
+
+fn main() -> Unit ! Console {
+    println("{}", describe(Color::Blue, 1));
+}

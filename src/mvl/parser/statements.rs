@@ -396,6 +396,13 @@ impl Parser {
         let start = self.peek_span();
         let pattern = self.parse_pattern()?;
 
+        // Optional guard: `pattern if expr => body` (#938)
+        let guard = if self.eat(&TokenKind::If) {
+            Some(self.parse_ref_expr()?)
+        } else {
+            None
+        };
+
         let arrow = self.expect(&TokenKind::FatArrow);
         self.require(arrow)?;
 
@@ -408,12 +415,9 @@ impl Parser {
         self.eat(&TokenKind::Comma);
 
         let span = self.span_from(start);
-        // Fix #9 / TODO: guard patterns (`pat if expr =>`) are not yet parsed.
-        // `guard` is always None. A literal `if` after the pattern will be
-        // parsed as an if-expression in the arm body instead, which is wrong.
         Ok(MatchArm {
             pattern,
-            guard: None,
+            guard,
             body,
             span,
         })

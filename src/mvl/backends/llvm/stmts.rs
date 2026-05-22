@@ -12,8 +12,8 @@ use crate::mvl::backends::llvm::HeapKind;
 use crate::mvl::parser::ast::TypeExpr;
 
 use crate::mvl::parser::ast::{
-    Block, ElseBranch, Expr, LValue, LetKind, Literal, MatchArm, MatchBody, Pattern, Stmt,
-    VariantFields,
+    ArithOp, Block, CmpOp, ElseBranch, Expr, LValue, LetKind, Literal, LogicOp, MatchArm,
+    MatchBody, Pattern, RefExpr, Stmt, VariantFields,
 };
 
 use super::LlvmBackend;
@@ -407,6 +407,32 @@ impl<'ctx> LlvmBackend<'ctx> {
 
             // Bind pattern variables if needed (Phase B: simple cases only).
             self.bind_pattern_vars(&arm.pattern, scrutinee_val, ok_ty_opt);
+
+            // Guard support (#938): if a guard is present, evaluate it and
+            // conditionally branch to either the body block or the next arm/fallback.
+            if let Some(guard) = &arm.guard {
+                let cond = self
+                    .emit_guard_ref_expr(guard)
+                    .expect("ICE: unsupported guard expression shape reached LLVM codegen");
+                let body_bb = self
+                    .context
+                    .append_basic_block(parent_fn, &format!("arm{i}_body"));
+                // If guard fails, fall through to the next arm or the fallback.
+                // NOTE: for consecutive same-variant guarded arms the switch
+                // dispatches to the *first* arm block for that discriminant,
+                // so later same-variant arms are only reachable via guard-fail
+                // chains — this works correctly for sequential arms but would
+                // need a more sophisticated dispatch for interleaved patterns.
+                let guard_fail_target = if i + 1 < arm_blocks.len() {
+                    arm_blocks[i + 1]
+                } else {
+                    actual_default
+                };
+                self.builder
+                    .build_conditional_branch(cond, body_bb, guard_fail_target)
+                    .unwrap();
+                self.builder.position_at_end(body_bb);
+            }
 
             let arm_val = match &arm.body {
                 MatchBody::Expr(e) => self.emit_expr(e),
@@ -1224,6 +1250,103 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
 
         self.builder.position_at_end(exit_bb);
+    }
+
+    // ── Guard expression emission (#938) ──────────────────────────────────
+
+    /// Evaluate a match guard `RefExpr` as an LLVM i1 boolean using
+    /// pattern-bound local variables.  Returns `None` for unsupported shapes.
+    fn emit_guard_ref_expr(&mut self, pred: &RefExpr) -> Option<inkwell::values::IntValue<'ctx>> {
+        match pred {
+            RefExpr::Compare {
+                op, left, right, ..
+            } => {
+                let lv = self.emit_guard_ref_int(left)?;
+                let rv = self.emit_guard_ref_int(right)?;
+                let pred_op = match op {
+                    CmpOp::Eq => IntPredicate::EQ,
+                    CmpOp::Ne => IntPredicate::NE,
+                    CmpOp::Lt => IntPredicate::SLT,
+                    CmpOp::Gt => IntPredicate::SGT,
+                    CmpOp::Le => IntPredicate::SLE,
+                    CmpOp::Ge => IntPredicate::SGE,
+                };
+                Some(
+                    self.builder
+                        .build_int_compare(pred_op, lv, rv, "guard_cmp")
+                        .unwrap(),
+                )
+            }
+            RefExpr::LogicOp {
+                op, left, right, ..
+            } => {
+                let lv = self.emit_guard_ref_expr(left)?;
+                let rv = self.emit_guard_ref_expr(right)?;
+                Some(match op {
+                    LogicOp::And => self.builder.build_and(lv, rv, "guard_and").unwrap(),
+                    LogicOp::Or => self.builder.build_or(lv, rv, "guard_or").unwrap(),
+                })
+            }
+            RefExpr::Not { inner, .. } => {
+                let v = self.emit_guard_ref_expr(inner)?;
+                Some(self.builder.build_not(v, "guard_not").unwrap())
+            }
+            RefExpr::Grouped { inner, .. } => self.emit_guard_ref_expr(inner),
+            // A bare identifier used as a guard must be Bool (i1).
+            RefExpr::Ident { name, .. } => {
+                let (alloca, ty) = self.locals.get(name).copied()?;
+                let val = self.builder.build_load(ty, alloca, name).unwrap();
+                if let BasicValueEnum::IntValue(iv) = val {
+                    // Only accept i1 (Bool) — wider integers are not boolean guards.
+                    if iv.get_type().get_bit_width() == 1 {
+                        Some(iv)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Evaluate a `RefExpr` as an i64 integer, resolving identifiers from local variables.
+    fn emit_guard_ref_int(&mut self, pred: &RefExpr) -> Option<inkwell::values::IntValue<'ctx>> {
+        match pred {
+            RefExpr::Integer { value, .. } => {
+                Some(self.context.i64_type().const_int(*value as u64, true))
+            }
+            RefExpr::Ident { name, .. } => {
+                let (alloca, ty) = self.locals.get(name).copied()?;
+                let val = self.builder.build_load(ty, alloca, name).unwrap();
+                if let BasicValueEnum::IntValue(iv) = val {
+                    Some(iv)
+                } else {
+                    None
+                }
+            }
+            RefExpr::ArithOp {
+                op, left, right, ..
+            } => {
+                let lv = self.emit_guard_ref_int(left)?;
+                let rv = self.emit_guard_ref_int(right)?;
+                Some(match op {
+                    ArithOp::Add => self.builder.build_int_add(lv, rv, "guard_add").unwrap(),
+                    ArithOp::Sub => self.builder.build_int_sub(lv, rv, "guard_sub").unwrap(),
+                    ArithOp::Mul => self.builder.build_int_mul(lv, rv, "guard_mul").unwrap(),
+                    ArithOp::Div => self
+                        .builder
+                        .build_int_signed_div(lv, rv, "guard_div")
+                        .unwrap(),
+                    ArithOp::Rem => self
+                        .builder
+                        .build_int_signed_rem(lv, rv, "guard_rem")
+                        .unwrap(),
+                })
+            }
+            _ => None,
+        }
     }
 }
 

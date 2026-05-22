@@ -160,6 +160,16 @@ fn req3_non_exhaustive_match_lists_missing_variants() {
     );
 }
 
+#[test]
+fn req3_guard_non_exhaustive_missing_variant() {
+    let stderr = check_fails("req3_guard_non_exhaustive.mvl");
+    assert_contains(
+        &stderr,
+        "req3_guard_non_exhaustive.mvl",
+        &["error[req3]", "non-exhaustive", "Blue"],
+    );
+}
+
 // ── Req 4: Null Elimination ───────────────────────────────────────────────────
 
 #[test]

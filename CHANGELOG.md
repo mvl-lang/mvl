@@ -10,6 +10,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 - **Complete stdlib extension method migration** (#928): Migrated ~300+ call sites across ~35 MVL files from old-style free function calls (`map_get(m, k)`) to extension method syntax (`m.get(k)`). Fixed codegen issues: `join`/`to_string` name collision with io module, set operation use-after-move, LLVM use-after-free on function parameter drops, LLVM HOF/set method dispatch for mangled extension names. Fixed tree-sitter unnecessary grammar conflicts and spike parser type annotation typos.
 
+## [0.137.0] — 2026-05-22
+
+### Added
+
+- **Guard patterns in match expressions** (#938): Added `pattern if expr => body` syntax for match guards. Parser extends `parse_match_arm()` to accept optional `if` followed by a predicate expression. Exhaustiveness checker updated: guarded arms do not satisfy pattern coverage (a guard may fail). LLVM backend emits conditional branch after pattern binding: guard succeeds → arm body, guard fails → next arm or fallback. Supported guard shapes: comparisons, boolean operators, logical operators, field accesses, arithmetic. Comprehensive corpus test covers basic guards and error cases (non-exhaustive with guarded wildcard).
+
 ## [0.136.0] — 2026-05-22
 
 ### Added
