@@ -7585,3 +7585,53 @@ fn actor_field_refinement_violated_from_impl_method() {
         "expected RefinementViolated for spawn inside impl method, got: {errors:?}"
     );
 }
+
+// ── #822: toml.mvl in proven-mode ─────────────────────────────────────────────
+
+/// std/toml.mvl must pass proven-mode checking with the other proven-stdlib
+/// files as prelude (same setup as check_proven_stdlib in cli/check.rs).
+#[test]
+fn toml_mvl_passes_proven_mode() {
+    use mvl::mvl::checker::check_with_prelude;
+    use mvl::mvl::stdlib::stdlib_content;
+
+    let proven_files = &[
+        "core.mvl",
+        "strings.mvl",
+        "lists.mvl",
+        "math.mvl",
+        "collections.mvl",
+        "json.mvl",
+        "toml.mvl",
+    ];
+
+    let programs: Vec<mvl::mvl::parser::ast::Program> = proven_files
+        .iter()
+        .filter_map(|name| {
+            stdlib_content(name).map(|src| {
+                let (mut p, _) = Parser::new(src);
+                p.parse_program()
+            })
+        })
+        .collect();
+
+    // Find toml index
+    let toml_idx = proven_files
+        .iter()
+        .position(|n| *n == "toml.mvl")
+        .expect("toml.mvl not in list");
+
+    let prelude: Vec<mvl::mvl::parser::ast::Program> = programs
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != toml_idx)
+        .map(|(_, p)| p.clone())
+        .collect();
+
+    let result = check_with_prelude(&prelude, &programs[toml_idx]);
+    assert!(
+        result.is_ok(),
+        "toml.mvl should pass proven-mode checks, got: {:?}",
+        result.errors
+    );
+}

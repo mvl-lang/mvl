@@ -36,8 +36,7 @@ pub(super) const PROVEN_STDLIB_FILES: &[&str] = &[
     "math.mvl",
     "collections.mvl",
     "json.mvl",
-    // toml.mvl: excluded pending verified string model (#314) — requires
-    // str_chars, list_len, and other string/list kernel functions
+    "toml.mvl",
     // pbt.mvl: excluded pending checker fix for while-loop return type in
     // generic match arms (#538 follow-up, tracked separately)
 ];

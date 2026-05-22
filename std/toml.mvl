@@ -447,7 +447,7 @@ partial fn toml_parse_array(chars: List[String], pos: Int) -> TVPos {
     while go {
         cur = toml_skip_ws_comments(chars, cur);
         match toml_parse_value(chars, cur) {
-            TVPos::TVPErr(e)  => { had_err = true; err = e; go = false },
+            TVPos::TVPErr(e)  => { had_err = true; err = consume(e); go = false },
             TVPos::TVP(v, np) => {
                 result.push(v);
                 cur = toml_skip_ws_comments(chars, np);
@@ -497,7 +497,7 @@ partial fn toml_parse_document(chars: List[String]) -> TVPos {
                 // Parse [section_name].
                 cur = cur + 1;
                 match toml_parse_key(chars, cur) {
-                    TKPos::TKPErr(e)      => { had_err = true; err = e },
+                    TKPos::TKPErr(e)      => { had_err = true; err = consume(e) },
                     TKPos::TKP(name, np)  => {
                         cur = toml_skip_ws(chars, np);
                         if toml_char_at(chars, cur) != "]" {
@@ -505,7 +505,7 @@ partial fn toml_parse_document(chars: List[String]) -> TVPos {
                             err = "expected ']' after table name, got: ".concat(toml_char_at(chars, cur))
                         } else {
                             cur = cur + 1;
-                            section_name = name;
+                            section_name = consume(name);
                             section_map  = toml_empty_table();
                             in_section   = true
                         }
@@ -514,7 +514,7 @@ partial fn toml_parse_document(chars: List[String]) -> TVPos {
             } else {
                 // key = value line.
                 match toml_parse_key(chars, cur) {
-                    TKPos::TKPErr(e)     => { had_err = true; err = e },
+                    TKPos::TKPErr(e)     => { had_err = true; err = consume(e) },
                     TKPos::TKP(key, np)  => {
                         let ac: Int = toml_skip_ws(chars, np);
                         if toml_char_at(chars, ac) != "=" {
@@ -522,7 +522,7 @@ partial fn toml_parse_document(chars: List[String]) -> TVPos {
                             err = "expected '=' after key, got: ".concat(toml_char_at(chars, ac))
                         } else {
                             match toml_parse_value(chars, ac + 1) {
-                                TVPos::TVPErr(e)   => { had_err = true; err = e },
+                                TVPos::TVPErr(e)   => { had_err = true; err = consume(e) },
                                 TVPos::TVP(v, np2) => {
                                     cur = toml_skip_to_eol(chars, np2);
                                     if in_section {
