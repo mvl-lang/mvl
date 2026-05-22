@@ -478,7 +478,7 @@ module.exports = grammar({
     match_arm: ($) =>
       seq(
         $.pattern,
-        optional(seq("if", $.expr)),
+        optional(seq("if", $.ref_expr)),
         "=>",
         $.expr,
         optional(",")

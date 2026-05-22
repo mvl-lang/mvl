@@ -6,6 +6,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ## [Unreleased]
 
+### Added
+
+- **Guard patterns in match** (#938): Parser now accepts `pattern if expr => body` syntax for conditional match arms. Guard expressions use the refinement expression language (comparisons, logic ops). Guarded arms don't count toward exhaustiveness checking — a wildcard catch-all is still required. All backends (Rust, LLVM) and MC/DC analysis already supported guards; only the parser was missing.
+
+### Fixed
+
+- **Post-consume iso ownership tracking (L5)** (#938): After `let y = consume(x)`, `y` is now tracked as the new iso owner. Subsequent aliasing `let z = y` correctly emits `IsoAliasingViolation`. The consumed variable `x` is removed from tracking. Branch-scoped iso tracking uses snapshot semantics (conservative). Resolves spec 014 Known Limitation L5.
+
 ### Changed
 
 - **Req 6 fully proven — reclassify `LinearTypeBareBind` under Ownership**: `LinearTypeBareBind` now maps to requirement 6 (Ownership / linearity) instead of requirement 2 (Memory Safety). Linear resource consumption (must use `consume()`) is an ownership/linearity concern. Negative corpus tests `bare_linear_assignment.mvl` and `linear_assignment_without_consume.mvl` moved from `tests/negative/req02/` to `tests/negative/req06/`. Req 6 `BasicCheckPass` evidence updated. ADR-0001 Req 6 status updated from "partial" to fully proven at Phase 1.

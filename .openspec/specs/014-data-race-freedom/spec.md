@@ -175,12 +175,13 @@ Each `let y = iso_x` statement generates a separate `IsoAliasingViolation`.
 Multiple alias sites in the same block are each reported independently — this is
 the intended behaviour.
 
-### L5: iso Rebinding After consume()
+### L5: iso Rebinding After consume() [RESOLVED]
 
-After `let y = consume(x)`, the variable `y` becomes the new iso owner but is
-**not** added to the tracked iso-vars set.  Subsequent aliasing of `y`
-(e.g., `let z = y`) is therefore undetected in Phase 3.  Full ownership-transfer
-tracking requires mutable scope-aware analysis (Phase 6).
+After `let y = consume(x)`, the variable `y` becomes the new iso owner and is
+added to the tracked iso-vars set.  The original `x` is removed from tracking.
+Subsequent aliasing of `y` (e.g., `let z = y`) is now detected as an
+`IsoAliasingViolation`.  Branch-scoped iso tracking uses snapshot semantics
+(conservative: ownership changes inside branches don't leak to outer scope).
 
 ---
 

@@ -35,7 +35,7 @@ Seven common constructs in popular languages break LL(1). MVL avoids all by desi
 3. **Lambda vs grouping** (JavaScript arrow functions) — MVL: lambdas use `|params|`, not `(params) =>`
 4. **Ternary operator** — MVL: no ternary; use `if`/`else` expression
 5. **Type annotation vs label** (TypeScript) — MVL: `where` keyword disambiguates refinements
-6. **Pattern matching with guards** — MVL: `where` after pattern, unambiguous
+6. **Pattern matching with guards** — MVL: `if expr` after pattern, unambiguous (`if` cannot start a pattern)
 7. **String interpolation** — MVL: no interpolation; use `format()`
 8. **Visibility prefix** — `pub` could precede multiple declaration kinds. MVL factors it out: `declaration = [ "pub" ] decl_body` where each `decl_body` alternative (`type`, `fn`/totality, `const`, `use`) starts with a distinct token, so LL(1) is preserved.
 

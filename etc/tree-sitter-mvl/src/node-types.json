@@ -910,6 +910,10 @@
         {
           "type": "expr",
           "named": true
+        },
+        {
+          "type": "pattern",
+          "named": true
         }
       ]
     }
@@ -1143,6 +1147,10 @@
         },
         {
           "type": "pattern",
+          "named": true
+        },
+        {
+          "type": "ref_expr",
           "named": true
         }
       ]
