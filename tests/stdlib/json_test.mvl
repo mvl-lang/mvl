@@ -4,7 +4,6 @@
 // JSON strings; decode round-trips them back; error cases return Err.
 
 use std.json.{Value, JsonError, encode, decode}
-use std.collections.{map_len, map_get, list_len}
 
 // ── encode: primitives ────────────────────────────────────────────────────────
 
@@ -116,21 +115,21 @@ test fn decode_string_escape_quote() -> Unit {
 
 test fn decode_empty_array() -> Unit {
     match decode("[]") {
-        Ok(Value::Array(a)) => assert_eq(list_len(a), 0),
+        Ok(Value::Array(a)) => assert_eq(a.len(), 0),
         _                   => assert(false),
     }
 }
 
 test fn decode_array_numbers() -> Unit {
     match decode("[1,2,3]") {
-        Ok(Value::Array(a)) => assert_eq(list_len(a), 3),
+        Ok(Value::Array(a)) => assert_eq(a.len(), 3),
         _                   => assert(false),
     }
 }
 
 test fn decode_empty_object() -> Unit {
     match decode("{}") {
-        Ok(Value::Object(o)) => assert_eq(map_len(o), 0),
+        Ok(Value::Object(o)) => assert_eq(o.len(), 0),
         _                    => assert(false),
     }
 }
@@ -138,8 +137,8 @@ test fn decode_empty_object() -> Unit {
 test fn decode_object_single_key() -> Unit {
     match decode("{\"x\":1}") {
         Ok(Value::Object(o)) => {
-            assert_eq(map_len(o), 1);
-            match map_get(o, "x") {
+            assert_eq(o.len(), 1);
+            match o.get("x") {
                 Some(Value::Number(n)) => assert_eq(n, 1.0),
                 _                      => assert(false),
             }
@@ -191,7 +190,7 @@ test fn roundtrip_nested_array() -> Unit {
     let v: Value = Value::Array([Value::Null, Value::Array(inner)]);
     let encoded: String = encode(v);
     match decode(encoded) {
-        Ok(Value::Array(a)) => assert_eq(list_len(a), 2),
+        Ok(Value::Array(a)) => assert_eq(a.len(), 2),
         _                   => assert(false),
     }
 }

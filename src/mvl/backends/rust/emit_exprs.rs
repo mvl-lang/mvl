@@ -490,6 +490,26 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     cg.push("); }");
                 }
 
+                // put(key, value) — Map: insert + return updated map (MVL value semantics).
+                "put" if args.len() == 2 => {
+                    cg.push("{ let mut __m = ");
+                    emit_expr(cg, receiver);
+                    cg.push(".clone(); __m.insert(");
+                    emit_expr_as_arg(cg, &args[0]);
+                    cg.push(", ");
+                    emit_expr_as_arg(cg, &args[1]);
+                    cg.push("); __m }");
+                }
+
+                // without(key) — Map: remove key + return updated map (MVL value semantics).
+                "without" if args.len() == 1 => {
+                    cg.push("{ let mut __m = ");
+                    emit_expr(cg, receiver);
+                    cg.push(".clone(); __m.remove(&(");
+                    emit_expr(cg, &args[0]);
+                    cg.push(").clone()); __m }");
+                }
+
                 // remove(key) — Map: HashMap::remove returns Option<V> (correct for MVL).
                 //               Set: HashSet::remove returns bool (discarded as stmt).
                 "remove" if args.len() == 1 => {

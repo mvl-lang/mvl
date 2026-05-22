@@ -22,7 +22,6 @@ use std.env.{env_var}
 use std.io.{path, path_exists}
 use std.json.{Value}
 use std.toml.{TomlValue}
-use std.collections.{map_get, map_put, map_keys, map_len}
 
 // ── Error type ────────────────────────────────────────────────────────────────
 
@@ -91,12 +90,12 @@ pub transparent partial fn from_json(v: Value) -> ConfigValue {
 }
 
 partial fn from_json_list(arr: List[Value]) -> List[ConfigValue] {
-    let len: Int = list_len(arr);
+    let len: Int = arr.len();
     let out: ref List[ConfigValue] = [];
     let i: ref Int = 0;
     while i < len {
-        match list_get(arr, i) {
-            Some(v) => { out = list_push(out, from_json(v)) },
+        match arr.get(i) {
+            Some(v) => { out.push(from_json(v)) },
             None    => {},
         }
         i = i + 1
@@ -105,15 +104,15 @@ partial fn from_json_list(arr: List[Value]) -> List[ConfigValue] {
 }
 
 partial fn from_json_map(obj: Map[String, Value]) -> Map[String, ConfigValue] {
-    let keys: List[String] = map_keys(obj);
-    let len: Int = list_len(keys);
+    let keys: List[String] = obj.keys();
+    let len: Int = keys.len();
     let out: ref Map[String, ConfigValue] = empty_config_map();
     let i: ref Int = 0;
     while i < len {
-        match list_get(keys, i) {
+        match keys.get(i) {
             Some(k) => {
-                match map_get(obj, k) {
-                    Some(v) => { out = map_put(out, k, from_json(v)) },
+                match obj.get(k) {
+                    Some(v) => { out = out.put(k, from_json(v)) },
                     None    => {},
                 }
             },
@@ -143,12 +142,12 @@ pub transparent partial fn from_toml(v: TomlValue) -> ConfigValue {
 }
 
 partial fn from_toml_list(arr: List[TomlValue]) -> List[ConfigValue] {
-    let len: Int = list_len(arr);
+    let len: Int = arr.len();
     let out: ref List[ConfigValue] = [];
     let i: ref Int = 0;
     while i < len {
-        match list_get(arr, i) {
-            Some(v) => { out = list_push(out, from_toml(v)) },
+        match arr.get(i) {
+            Some(v) => { out.push(from_toml(v)) },
             None    => {},
         }
         i = i + 1
@@ -157,15 +156,15 @@ partial fn from_toml_list(arr: List[TomlValue]) -> List[ConfigValue] {
 }
 
 partial fn from_toml_map(tbl: Map[String, TomlValue]) -> Map[String, ConfigValue] {
-    let keys: List[String] = map_keys(tbl);
-    let len: Int = list_len(keys);
+    let keys: List[String] = tbl.keys();
+    let len: Int = keys.len();
     let out: ref Map[String, ConfigValue] = empty_config_map();
     let i: ref Int = 0;
     while i < len {
-        match list_get(keys, i) {
+        match keys.get(i) {
             Some(k) => {
-                match map_get(tbl, k) {
-                    Some(v) => { out = map_put(out, k, from_toml(v)) },
+                match tbl.get(k) {
+                    Some(v) => { out = out.put(k, from_toml(v)) },
                     None    => {},
                 }
             },
@@ -206,20 +205,20 @@ partial fn merge_maps(
     base: Map[String, ConfigValue],
     overlay: Map[String, ConfigValue],
 ) -> Map[String, ConfigValue] {
-    let keys: List[String] = map_keys(overlay);
-    let len: Int = list_len(keys);
+    let keys: List[String] = overlay.keys();
+    let len: Int = keys.len();
     let out: ref Map[String, ConfigValue] = base;
     let i: ref Int = 0;
     while i < len {
-        match list_get(keys, i) {
+        match keys.get(i) {
             Some(k) => {
-                match map_get(overlay, k) {
+                match overlay.get(k) {
                     Some(ov) => {
-                        let merged_val: ConfigValue = match map_get(out, k) {
+                        let merged_val: ConfigValue = match out.get(k) {
                             Some(bv) => merge(bv, ov),
                             None     => ov,
                         };
-                        out = map_put(out, k, merged_val)
+                        out = out.put(k, merged_val)
                     },
                     None => {},
                 }
@@ -242,20 +241,20 @@ partial fn merge_maps(
 ///   get_path(cfg, "database.pool_size")  // → Some(Int(10))
 ///   get_path(cfg, "missing")             // → None
 pub transparent partial fn get_path(cfg: ConfigValue, key_path: String) -> Option[ConfigValue] {
-    let parts: List[String] = str_split(key_path, ".");
+    let parts: List[String] = key_path.split(".");
     get_path_parts(cfg, parts, 0)
 }
 
 partial fn get_path_parts(cfg: ConfigValue, parts: List[String], idx: Int) -> Option[ConfigValue] {
-    let len: Int = list_len(parts);
+    let len: Int = parts.len();
     if idx >= len {
         Some(cfg)
     } else {
         match cfg {
             ConfigValue::Map(m) => {
-                match list_get(parts, idx) {
+                match parts.get(idx) {
                     Some(key) => {
-                        match map_get(m, key) {
+                        match m.get(key) {
                             Some(v) => get_path_parts(v, parts, idx + 1),
                             None    => None,
                         }
@@ -280,10 +279,10 @@ pub fn as_int(v: ConfigValue) -> Result[Int, ConfigError] {
         ConfigValue::Int(n)    => Ok(n),
         ConfigValue::Bool(b)   => Ok(if b { 1 } else { 0 }),
         ConfigValue::String(s) => {
-            match str_parse_int(str_trim(s)) {
+            match s.trim().parse_int() {
                 Ok(n)  => Ok(n),
                 Err(_) => Err(ConfigError::TypeMismatch(
-                    str_concat("expected Int, got String: ", s)
+                    "expected Int, got String: ".concat(s)
                 )),
             }
         },
@@ -316,14 +315,14 @@ pub fn as_bool(v: ConfigValue) -> Result[Bool, ConfigError] {
     match v {
         ConfigValue::Bool(b)   => Ok(b),
         ConfigValue::String(s) => {
-            let lower: String = str_to_lower(str_trim(s));
+            let lower: String = s.trim().to_lower();
             if lower == "true" {
                 Ok(true)
             } else if lower == "false" {
                 Ok(false)
             } else {
                 Err(ConfigError::TypeMismatch(
-                    str_concat("expected Bool (true/false), got: ", s)
+                    "expected Bool (true/false), got: ".concat(s)
                 ))
             }
         },
@@ -341,10 +340,10 @@ pub fn as_float(v: ConfigValue) -> Result[Float, ConfigError] {
         ConfigValue::Float(f)  => Ok(f),
         ConfigValue::Int(n)    => Ok(n.to_float()),
         ConfigValue::String(s) => {
-            match str_parse_float(str_trim(s)) {
+            match s.trim().parse_float() {
                 Ok(f)  => Ok(f),
                 Err(_) => Err(ConfigError::TypeMismatch(
-                    str_concat("expected Float, got String: ", s)
+                    "expected Float, got String: ".concat(s)
                 )),
             }
         },
@@ -379,16 +378,16 @@ pub fn as_map(v: ConfigValue) -> Result[Map[String, ConfigValue], ConfigError] {
 /// String. All comparisons are case-insensitive for Bool.
 fn parse_env_value(raw: Tainted[String]) -> ConfigValue {
     let s: String = relabel trust(raw, "CONFIG-VALUE");
-    let lower: String = str_to_lower(str_trim(s));
+    let lower: String = s.trim().to_lower();
     if lower == "true" {
         ConfigValue::Bool(true)
     } else if lower == "false" {
         ConfigValue::Bool(false)
     } else {
-        match str_parse_int(str_trim(s)) {
+        match s.trim().parse_int() {
             Ok(n)  => ConfigValue::Int(n),
             Err(_) => {
-                match str_parse_float(str_trim(s)) {
+                match s.trim().parse_float() {
                     Ok(f)  => ConfigValue::Float(f),
                     Err(_) => ConfigValue::String(s),
                 }
@@ -410,37 +409,37 @@ partial fn build_env_overlay(
 ) -> ConfigValue ! Env {
     match cfg {
         ConfigValue::Map(m) => {
-            let keys: List[String] = map_keys(m);
-            let len: Int = list_len(keys);
+            let keys: List[String] = m.keys();
+            let len: Int = keys.len();
             let overlay: ref Map[String, ConfigValue] = empty_config_map();
             let i: ref Int = 0;
             while i < len {
-                match list_get(keys, i) {
+                match keys.get(i) {
                     Some(k) => {
-                        let upper_k: String = str_to_upper(k);
-                        let env_key: String = if str_len(parent_path) == 0 {
-                            str_concat(prefix, str_concat("_", upper_k))
+                        let upper_k: String = k.to_upper();
+                        let env_key: String = if parent_path.len() == 0 {
+                            prefix.concat("_".concat(upper_k))
                         } else {
-                            str_concat(prefix, str_concat("_",
-                                str_concat(parent_path, str_concat("_", upper_k))))
+                            prefix.concat("_".concat(
+                                parent_path.concat("_".concat(upper_k))))
                         };
-                        match map_get(m, k) {
+                        match m.get(k) {
                             Some(child) => {
                                 match child {
                                     ConfigValue::Map(_) => {
-                                        let child_path: String = if str_len(parent_path) == 0 {
+                                        let child_path: String = if parent_path.len() == 0 {
                                             upper_k
                                         } else {
-                                            str_concat(parent_path, str_concat("_", upper_k))
+                                            parent_path.concat("_".concat(upper_k))
                                         };
                                         let child_overlay: ConfigValue =
                                             build_env_overlay(child, prefix, child_path);
-                                        overlay = map_put(overlay, k, child_overlay)
+                                        overlay = overlay.put(k, child_overlay)
                                     },
                                     _ => {
                                         match env_var(env_key) {
                                             Some(raw) => {
-                                                overlay = map_put(overlay, k,
+                                                overlay = overlay.put(k,
                                                     parse_env_value(raw))
                                             },
                                             None => {},
@@ -488,10 +487,10 @@ pub partial fn with_env(cfg: ConfigValue, prefix: String) -> Result[ConfigValue,
 /// Falls back to the literal "~/.config" when HOME is also unset.
 pub fn xdg_config_home() -> String ! Env {
     match env_var("XDG_CONFIG_HOME") {
-        Some(v) => str_concat(v.into_inner(), ""),
+        Some(v) => v.into_inner().concat(""),
         None    => {
             match env_var("HOME") {
-                Some(h) => str_concat(h.into_inner(), "/.config"),
+                Some(h) => h.into_inner().concat("/.config"),
                 None    => "~/.config",
             }
         },
@@ -503,10 +502,10 @@ pub fn xdg_config_home() -> String ! Env {
 /// Uses $XDG_DATA_HOME if set, otherwise $HOME/.local/share.
 pub fn xdg_data_home() -> String ! Env {
     match env_var("XDG_DATA_HOME") {
-        Some(v) => str_concat(v.into_inner(), ""),
+        Some(v) => v.into_inner().concat(""),
         None    => {
             match env_var("HOME") {
-                Some(h) => str_concat(h.into_inner(), "/.local/share"),
+                Some(h) => h.into_inner().concat("/.local/share"),
                 None    => "~/.local/share",
             }
         },
@@ -518,10 +517,10 @@ pub fn xdg_data_home() -> String ! Env {
 /// Uses $XDG_CACHE_HOME if set, otherwise $HOME/.cache.
 pub fn xdg_cache_home() -> String ! Env {
     match env_var("XDG_CACHE_HOME") {
-        Some(v) => str_concat(v.into_inner(), ""),
+        Some(v) => v.into_inner().concat(""),
         None    => {
             match env_var("HOME") {
-                Some(h) => str_concat(h.into_inner(), "/.cache"),
+                Some(h) => h.into_inner().concat("/.cache"),
                 None    => "~/.cache",
             }
         },
@@ -550,21 +549,21 @@ pub fn find_config(app_name: String, filename: String) -> Option[String] ! Env +
     } else {
         // 2. Local hidden directory
         let local_hidden: String =
-            str_concat(".", str_concat(app_name, str_concat("/", filename)));
+            ".".concat(app_name.concat("/".concat(filename)));
         if path_exists(path(local_hidden)) {
             Some(local_hidden)
         } else {
             // 3. XDG config home
             let xdg_dir: String = xdg_config_home();
             let xdg_cfg: String =
-                str_concat(xdg_dir, str_concat("/",
-                    str_concat(app_name, str_concat("/", filename))));
+                xdg_dir.concat("/".concat(
+                    app_name.concat("/".concat(filename))));
             if path_exists(path(xdg_cfg)) {
                 Some(xdg_cfg)
             } else {
                 // 4. System config
                 let sys_cfg: String =
-                    str_concat("/etc/", str_concat(app_name, str_concat("/", filename)));
+                    "/etc/".concat(app_name.concat("/".concat(filename)));
                 if path_exists(path(sys_cfg)) {
                     Some(sys_cfg)
                 } else {

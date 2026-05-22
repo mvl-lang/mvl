@@ -16,8 +16,6 @@ use std.pbt.{
     IntGen, BoolGen, FloatGen, StringGen, ListIntGen,
     BytesGen, RawStringGen, FuzzConfig,
 }
-use std.lists.{list_len}
-use std.strings.{str_len}
 
 // ── Phase A: basic property checks ────────────────────────────────────────────
 
@@ -41,7 +39,8 @@ partial fn test_bool_property() -> Unit ! Random {
 
 // Property: list length is always non-negative.
 fn fn_list_len_nonneg(xs: List[Int]) -> Bool {
-    list_len(xs) >= 0
+    let ys: List[Int] = xs;
+    ys.len() >= 0
 }
 
 partial fn test_list_len_nonneg() -> Unit ! Random {
@@ -55,7 +54,8 @@ partial fn test_list_len_nonneg() -> Unit ! Random {
 
 // Property: string length is always non-negative.
 fn fn_string_len_nonneg(s: String) -> Bool {
-    str_len(s) >= 0
+    let t: String = s;
+    t.len() >= 0
 }
 
 partial fn test_string_len_nonneg() -> Unit ! Random {
@@ -169,7 +169,8 @@ partial fn test_mutation_based_pbt() -> Unit ! Random {
 
 // Property: any byte sequence has non-negative length.
 fn fn_bytes_len_nonneg(bs: List[Int]) -> Bool {
-    list_len(bs) >= 0
+    let xs: List[Int] = bs;
+    xs.len() >= 0
 }
 
 partial fn test_fuzz_bytes() -> Unit ! Random {
@@ -183,7 +184,8 @@ partial fn test_fuzz_bytes() -> Unit ! Random {
 
 // Property: raw string has non-negative length (robustness: never panics).
 fn fn_raw_string_len_nonneg(s: String) -> Bool {
-    str_len(s) >= 0
+    let t: String = s;
+    t.len() >= 0
 }
 
 partial fn test_fuzz_string() -> Unit ! Random {

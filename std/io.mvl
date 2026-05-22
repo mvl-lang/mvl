@@ -105,7 +105,7 @@ pub fn path(s: String) -> Path {
 ///
 /// Inserts `/` between base and segment (Unix separator).
 /// Pure — no filesystem access.
-pub fn join(base: Path, segment: String) -> Path { Path { inner: str_concat(str_concat(base.inner, "/"), segment) } }
+pub fn join(base: Path, segment: String) -> Path { Path { inner: base.inner.concat("/").concat(segment) } }
 
 /// Return the string representation of a path.
 /// Pure — no filesystem access.

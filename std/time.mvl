@@ -43,13 +43,12 @@ fn dt_digit(n: Int) -> String {
 }
 
 fn dt_pad2(n: Int) -> String {
-    str_concat(dt_digit(n / 10), dt_digit(n % 10))
+    dt_digit(n / 10).concat(dt_digit(n % 10))
 }
 
 fn dt_pad4(n: Int) -> String {
-    str_concat(
-        str_concat(dt_digit(n / 1000), dt_digit((n / 100) % 10)),
-        str_concat(dt_digit((n / 10) % 10), dt_digit(n % 10))
+    dt_digit(n / 1000).concat(dt_digit((n / 100) % 10)).concat(
+        dt_digit((n / 10) % 10).concat(dt_digit(n % 10))
     )
 }
 
@@ -58,13 +57,13 @@ fn dt_pad4(n: Int) -> String {
 /// Supported specifiers: %Y (4-digit year), %m (month), %d (day),
 /// %H (hour), %M (minute), %S (second). Other % sequences pass through literally.
 pub fn format_datetime(t: DateTime, pattern: String) -> String {
-    let n: Int = str_len(pattern);
+    let n: Int = pattern.len();
     let result: ref String = "";
     let i: ref Int = 0;
     while i < n decreases n - i {
-        let c: String = str_char_at(pattern, i);
+        let c: String = pattern.char_at(i);
         if c == "%" && i + 1 < n {
-            let spec: String = str_char_at(pattern, i + 1);
+            let spec: String = pattern.char_at(i + 1);
             let fmtd: String =
                 if spec == "Y" { dt_pad4(t.year) }
                 else if spec == "m" { dt_pad2(t.month) }
@@ -72,11 +71,11 @@ pub fn format_datetime(t: DateTime, pattern: String) -> String {
                 else if spec == "H" { dt_pad2(t.hour) }
                 else if spec == "M" { dt_pad2(t.minute) }
                 else if spec == "S" { dt_pad2(t.second) }
-                else { str_concat("%", spec) };
-            result = str_concat(result, fmtd);
+                else { "%".concat(spec) };
+            result = result.concat(fmtd);
             i = i + 2
         } else {
-            result = str_concat(result, c);
+            result = result.concat(c);
             i = i + 1
         }
     };

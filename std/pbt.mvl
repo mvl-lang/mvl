@@ -156,12 +156,12 @@ pub fn fuzz_default_config() -> FuzzConfig {
 // Draw one value from a weighted discrete distribution.
 // `vals` and `wts` are parallel arrays; at least one weight must be positive.
 partial fn sample_weighted_int(vals: List[Int], wts: List[Int]) -> Int ! Random {
-    let n: Int = list_len(vals);
+    let n: Int = vals.len();
     if n == 0 { panic("gen_weighted_int: empty values list") };
     let weight_sum: ref Int = 0;
     let k: ref Int = 0;
     while k < n {
-        let w: Int = match list_get(wts, k) { Some(x) => x, None => 0 };
+        let w: Int = match wts.get(k) { Some(x) => x, None => 0 };
         weight_sum = weight_sum + w;
         k = k + 1
     };
@@ -169,10 +169,10 @@ partial fn sample_weighted_int(vals: List[Int], wts: List[Int]) -> Int ! Random 
     let pick: Int = int(0, weight_sum - 1);
     let acc: ref Int = 0;
     let j: ref Int = 0;
-    let result: ref Int = match list_get(vals, n - 1) { Some(x) => x, None => 0 };
+    let result: ref Int = match vals.get(n - 1) { Some(x) => x, None => 0 };
     while j < n {
-        let w: Int = match list_get(wts, j) { Some(x) => x, None => 0 };
-        let vj: Int = match list_get(vals, j) { Some(x) => x, None => 0 };
+        let w: Int = match wts.get(j) { Some(x) => x, None => 0 };
+        let vj: Int = match vals.get(j) { Some(x) => x, None => 0 };
         acc = acc + w;
         if pick < acc { result = vj; j = n };
         j = j + 1
@@ -213,15 +213,15 @@ partial fn shrink_int_loop(x: Int, prop: fn(Int) -> Bool) -> Int {
 
 // One shrink step for String: try dropping last char, then first char.
 fn shrink_string_step(s: String, prop: fn(String) -> Bool) -> String {
-    let n: Int = str_len(s);
+    let n: Int = s.len();
     if n == 0 {
         s
     } else {
-        let without_last: String = str_substring(s, 0, n - 1);
+        let without_last: String = s.substring(0, n - 1);
         if !prop(without_last) {
             without_last
         } else {
-            let without_first: String = str_substring(s, 1, n);
+            let without_first: String = s.substring(1, n);
             if !prop(without_first) { without_first } else { s }
         }
     }
@@ -234,7 +234,7 @@ partial fn shrink_string_loop(s: String, prop: fn(String) -> Bool) -> String {
     let steps: ref Int = 0;
     while shrinking && steps < 100 {
         let next: String = shrink_string_step(shrunk, prop);
-        if str_len(next) < str_len(shrunk) { shrunk = next } else { shrinking = false };
+        if next.len() < shrunk.len() { shrunk = next } else { shrinking = false };
         steps = steps + 1
     };
     shrunk
@@ -242,15 +242,15 @@ partial fn shrink_string_loop(s: String, prop: fn(String) -> Bool) -> String {
 
 // One shrink step for List[Int]: try dropping last element, then first.
 fn shrink_list_int_step(xs: List[Int], prop: fn(List[Int]) -> Bool) -> List[Int] {
-    let n: Int = list_len(xs);
+    let n: Int = xs.len();
     if n == 0 {
         xs
     } else {
-        let without_last: List[Int] = list_slice(xs, 0, n - 1);
+        let without_last: List[Int] = xs.slice(0, n - 1);
         if !prop(without_last) {
             without_last
         } else {
-            let without_first: List[Int] = list_slice(xs, 1, n);
+            let without_first: List[Int] = xs.slice(1, n);
             if !prop(without_first) { without_first } else { xs }
         }
     }
@@ -263,7 +263,7 @@ partial fn shrink_list_int_loop(xs: List[Int], prop: fn(List[Int]) -> Bool) -> L
     let steps: ref Int = 0;
     while shrinking && steps < 100 {
         let next: List[Int] = shrink_list_int_step(shrunk, prop);
-        if list_len(next) < list_len(shrunk) { shrunk = next } else { shrinking = false };
+        if next.len() < shrunk.len() { shrunk = next } else { shrinking = false };
         steps = steps + 1
     };
     shrunk
@@ -303,11 +303,11 @@ partial fn run_property_int(
             }
         },
         IntGen::OneOf(opts) => {
-            let n: Int = list_len(opts);
+            let n: Int = opts.len();
             if n == 0 { panic("gen_one_of_int: empty list") };
             while i < iterations && !failed {
                 let idx: Int = int(0, n - 1);
-                let v: Int = match list_get(opts, idx) {
+                let v: Int = match opts.get(idx) {
                     Some(x) => x,
                     None => panic("gen_one_of_int: index out of range"),
                 };
@@ -398,7 +398,7 @@ partial fn run_property_string(
         let j: ref Int = 0;
         while j < len {
             let idx: Int = int(0, 94);
-            s = str_concat(s, str_char_at(printable, idx));
+            s = s.concat(printable.char_at(idx));
             j = j + 1
         };
         if !prop(s) { failed = true; failing_val = s };
@@ -442,7 +442,7 @@ pub partial fn property_check_int(
 ) -> Unit ! Random {
     match run_property_int(gen, prop, iterations) {
         None => {},
-        Some(v) => panic(str_concat(str_concat(name, ": falsified for "), v.to_string())),
+        Some(v) => panic(name.concat(": falsified for ").concat(v.to_string())),
     }
 }
 
@@ -455,7 +455,7 @@ pub partial fn property_check_bool(
 ) -> Unit ! Random {
     match run_property_bool(gen, prop, iterations) {
         None => {},
-        Some(v) => panic(str_concat(str_concat(name, ": falsified for "), v.to_string())),
+        Some(v) => panic(name.concat(": falsified for ").concat(v.to_string())),
     }
 }
 
@@ -468,7 +468,7 @@ pub partial fn property_check_float(
 ) -> Unit ! Random {
     match run_property_float(gen, prop, iterations) {
         None => {},
-        Some(v) => panic(str_concat(str_concat(name, ": falsified for "), v.to_string())),
+        Some(v) => panic(name.concat(": falsified for ").concat(v.to_string())),
     }
 }
 
@@ -481,7 +481,7 @@ pub partial fn property_check_string(
 ) -> Unit ! Random {
     match run_property_string(gen, prop, iterations) {
         None => {},
-        Some(v) => panic(str_concat(str_concat(str_concat(name, ": falsified for \""), v), "\"")),
+        Some(v) => panic(name.concat(": falsified for \"").concat(v).concat("\"")),
     }
 }
 
@@ -494,7 +494,7 @@ pub partial fn property_check_list_int(
 ) -> Unit ! Random {
     match run_property_list_int(gen, prop, iterations) {
         None => {},
-        Some(_) => panic(str_concat(name, ": falsified for a list input")),
+        Some(_) => panic(name.concat(": falsified for a list input")),
     }
 }
 
@@ -510,7 +510,7 @@ pub partial fn property_check_int_verbose(
 ) -> Unit ! Random + Console {
     match run_property_int(gen, prop, iterations) {
         None => println(format("{}: OK, passed {} tests.", name, iterations.to_string())),
-        Some(v) => panic(str_concat(str_concat(name, ": falsified for "), v.to_string())),
+        Some(v) => panic(name.concat(": falsified for ").concat(v.to_string())),
     }
 }
 
@@ -523,7 +523,7 @@ pub partial fn property_check_string_verbose(
 ) -> Unit ! Random + Console {
     match run_property_string(gen, prop, iterations) {
         None => println(format("{}: OK, passed {} tests.", name, iterations.to_string())),
-        Some(v) => panic(str_concat(str_concat(str_concat(name, ": falsified for \""), v), "\"")),
+        Some(v) => panic(name.concat(": falsified for \"").concat(v).concat("\"")),
     }
 }
 
@@ -536,7 +536,7 @@ pub partial fn property_check_list_int_verbose(
 ) -> Unit ! Random + Console {
     match run_property_list_int(gen, prop, iterations) {
         None => println(format("{}: OK, passed {} tests.", name, iterations.to_string())),
-        Some(_) => panic(str_concat(name, ": falsified for a list input")),
+        Some(_) => panic(name.concat(": falsified for a list input")),
     }
 }
 
@@ -557,7 +557,7 @@ fn save_counterexample(name: String, value: String) -> Unit ! FileWrite {
     match create_dir_all(dir) {
         Ok(_) => {
             let p: Path = path("tests/.proptest-regressions/failures.txt");
-            let entry: String = str_concat(str_concat(str_concat(name, ": "), value), "\n");
+            let entry: String = name.concat(": ").concat(value).concat("\n");
             match append(p, taint_string(entry)) {
                 Ok(_) => {},
                 Err(_) => {},
@@ -579,7 +579,7 @@ pub partial fn property_check_int_persist(
         None => {},
         Some(v) => {
             save_counterexample(name, v.to_string());
-            panic(str_concat(str_concat(name, ": falsified for "), v.to_string()))
+            panic(name.concat(": falsified for ").concat(v.to_string()))
         },
     }
 }
@@ -595,7 +595,7 @@ pub partial fn property_check_string_persist(
         None => {},
         Some(v) => {
             save_counterexample(name, v);
-            panic(str_concat(str_concat(str_concat(name, ": falsified for \""), v), "\""))
+            panic(name.concat(": falsified for \"").concat(v).concat("\""))
         },
     }
 }
@@ -625,22 +625,22 @@ pub fn mutate_float(x: Float) -> Float ! Random {
 
 /// Produce a mutated variant of `s` (drop last char, prepend dup, swap first two).
 pub fn mutate_string(s: String) -> String ! Random {
-    let n: Int = str_len(s);
+    let n: Int = s.len();
     if n == 0 {
         s
     } else {
         match int(0, 2) {
-            0 => str_substring(s, 0, n - 1),
+            0 => s.substring(0, n - 1),
             1 => {
-                let c: String = str_char_at(s, 0);
-                str_concat(c, s)
+                let c: String = s.char_at(0);
+                c.concat(s)
             },
             _ => {
                 if n >= 2 {
-                    let a: String = str_char_at(s, 0);
-                    let b: String = str_char_at(s, 1);
-                    let rest: String = str_substring(s, 2, n);
-                    str_concat(str_concat(b, a), rest)
+                    let a: String = s.char_at(0);
+                    let b: String = s.char_at(1);
+                    let rest: String = s.substring(2, n);
+                    b.concat(a).concat(rest)
                 } else {
                     s
                 }
@@ -651,25 +651,25 @@ pub fn mutate_string(s: String) -> String ! Random {
 
 /// Produce a mutated variant of `xs` (drop last, prepend dup of first, swap first two).
 pub fn mutate_list_int(xs: List[Int]) -> List[Int] ! Random {
-    let n: Int = list_len(xs);
+    let n: Int = xs.len();
     if n == 0 {
         xs
     } else {
         match int(0, 2) {
-            0 => list_slice(xs, 0, n - 1),
+            0 => xs.slice(0, n - 1),
             1 => {
-                let first: Int = match list_get(xs, 0) {
+                let first: Int = match xs.get(0) {
                     Some(v) => v,
                     None => 0,
                 };
-                list_concat([first, first], list_slice(xs, 1, n))
+                [first, first].concat(xs.slice(1, n))
             },
             _ => {
                 if n >= 2 {
-                    let a: Int = match list_get(xs, 0) { Some(v) => v, None => 0 };
-                    let b: Int = match list_get(xs, 1) { Some(v) => v, None => 0 };
-                    let rest: List[Int] = list_slice(xs, 2, n);
-                    list_concat([b, a], rest)
+                    let a: Int = match xs.get(0) { Some(v) => v, None => 0 };
+                    let b: Int = match xs.get(1) { Some(v) => v, None => 0 };
+                    let rest: List[Int] = xs.slice(2, n);
+                    [b, a].concat(rest)
                 } else {
                     xs
                 }
@@ -702,7 +702,7 @@ pub partial fn property_check_targeted_int(
                 if d < best_dist { best = v; best_dist = d };
                 if !prop(v) {
                     let shrunk: Int = shrink_int_loop(v, prop);
-                    panic(str_concat(str_concat(name, ": falsified for "), shrunk.to_string()))
+                    panic(name.concat(": falsified for ").concat(shrunk.to_string()))
                 };
                 i = i + 1
             }
@@ -728,10 +728,10 @@ pub partial fn property_check_with_mutation_int(
             let i: ref Int = 0;
             let corpus: ref List[Int] = [];
             while i < iterations {
-                let n: Int = list_len(corpus);
+                let n: Int = corpus.len();
                 let v: Int = if n > 0 && float() < mutation_ratio {
                     let idx: Int = int(0, n - 1);
-                    let base: Int = match list_get(corpus, idx) {
+                    let base: Int = match corpus.get(idx) {
                         Some(x) => x,
                         None => int(lo, hi),
                     };
@@ -742,7 +742,7 @@ pub partial fn property_check_with_mutation_int(
                 corpus.push(v);
                 if !prop(v) {
                     let shrunk: Int = shrink_int_loop(v, prop);
-                    panic(str_concat(str_concat(name, ": falsified for "), shrunk.to_string()))
+                    panic(name.concat(": falsified for ").concat(shrunk.to_string()))
                 };
                 i = i + 1
             }
@@ -769,10 +769,10 @@ pub partial fn property_check_with_mutation_int_verbose(
             let fresh_count: ref Int = 0;
             let mutated_count: ref Int = 0;
             while i < iterations {
-                let n: Int = list_len(corpus);
+                let n: Int = corpus.len();
                 let v: Int = if n > 0 && float() < mutation_ratio {
                     let idx: Int = int(0, n - 1);
-                    let base: Int = match list_get(corpus, idx) {
+                    let base: Int = match corpus.get(idx) {
                         Some(x) => x,
                         None => int(lo, hi),
                     };
@@ -785,7 +785,7 @@ pub partial fn property_check_with_mutation_int_verbose(
                 corpus.push(v);
                 if !prop(v) {
                     let shrunk: Int = shrink_int_loop(v, prop);
-                    panic(str_concat(str_concat(name, ": falsified for "), shrunk.to_string()))
+                    panic(name.concat(": falsified for ").concat(shrunk.to_string()))
                 };
                 i = i + 1
             };
@@ -824,7 +824,7 @@ pub partial fn fuzz_check_bytes(
         let n: Int = int(gen.min_len, gen.max_len);
         let bs: List[Int] = bytes(n);
         if !prop(bs) {
-            panic(str_concat(name, ": property failed on raw byte input"))
+            panic(name.concat(": property failed on raw byte input"))
         };
         i = i + 1
     }
@@ -843,7 +843,7 @@ pub partial fn fuzz_check_string(
     config: FuzzConfig
 ) -> Unit ! Random {
     let charset: String = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\t\n";
-    let charset_len: Int = str_len(charset);
+    let charset_len: Int = charset.len();
     let i: ref Int = 0;
     while i < config.max_cases {
         let n: Int = int(gen.min_len, gen.max_len);
@@ -851,12 +851,12 @@ pub partial fn fuzz_check_string(
         let j: ref Int = 0;
         while j < n {
             let idx: Int = int(0, charset_len - 1);
-            s = str_concat(s, str_char_at(charset, idx));
+            s = s.concat(charset.char_at(idx));
             j = j + 1
         };
         if !prop(s) {
             let shrunk: String = shrink_string_loop(s, prop);
-            panic(str_concat(str_concat(name, ": property failed for: "), shrunk))
+            panic(name.concat(": property failed for: ").concat(shrunk))
         };
         i = i + 1
     }

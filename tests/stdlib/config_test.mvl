@@ -42,11 +42,11 @@ test fn config_merge_maps_additive() -> Unit {
     let result: ConfigValue = merge(base, overlay);
     match result {
         ConfigValue::Map(m) => {
-            let port_ok: Bool = match map_get(m, "port") {
+            let port_ok: Bool = match m.get("port") {
                 Some(ConfigValue::Int(n)) => n == 8080,
                 _                         => false,
             };
-            let host_ok: Bool = match map_get(m, "host") {
+            let host_ok: Bool = match m.get("host") {
                 Some(ConfigValue::String(s)) => s == "prod",
                 _                            => false,
             };
@@ -63,7 +63,7 @@ test fn config_merge_maps_overlay_wins_on_conflict() -> Unit {
     let result: ConfigValue = merge(ConfigValue::Map(base_m), ConfigValue::Map(over_m));
     match result {
         ConfigValue::Map(m) => {
-            assert_eq(match map_get(m, "port") {
+            assert_eq(match m.get("port") {
                 Some(ConfigValue::Int(n)) => n,
                 _                         => 0,
             }, 9090)
@@ -74,8 +74,7 @@ test fn config_merge_maps_overlay_wins_on_conflict() -> Unit {
 
 test fn config_merge_nested_maps_deep() -> Unit {
     // base: { db: { pool: 5, host: "localhost" } }
-    let inner_base: Map[String, ConfigValue] = map_put(
-        {"pool": ConfigValue::Int(5)},
+    let inner_base: Map[String, ConfigValue] = {"pool": ConfigValue::Int(5)}.put(
         "host", ConfigValue::String("localhost")
     );
     let base: ConfigValue = ConfigValue::Map({"db": ConfigValue::Map(inner_base)});
@@ -87,13 +86,13 @@ test fn config_merge_nested_maps_deep() -> Unit {
     let result: ConfigValue = merge(base, overlay);
     match result {
         ConfigValue::Map(m) => {
-            match map_get(m, "db") {
+            match m.get("db") {
                 Some(ConfigValue::Map(db)) => {
-                    let pool: Int = match map_get(db, "pool") {
+                    let pool: Int = match db.get("pool") {
                         Some(ConfigValue::Int(n)) => n,
                         _                         => 0,
                     };
-                    let host: String = match map_get(db, "host") {
+                    let host: String = match db.get("host") {
                         Some(ConfigValue::String(s)) => s,
                         _                            => "",
                     };
@@ -297,8 +296,7 @@ test fn config_from_toml_datetime_becomes_string() -> Unit {
 // ── with_env ──────────────────────────────────────────────────────────────────
 
 fn setup_env_cfg() -> ConfigValue {
-    let m: Map[String, ConfigValue] = map_put(
-        {"port": ConfigValue::Int(8080)},
+    let m: Map[String, ConfigValue] = {"port": ConfigValue::Int(8080)}.put(
         "verbose", ConfigValue::Bool(false)
     );
     ConfigValue::Map(m)

@@ -4,7 +4,6 @@
 // TOML strings; toml_decode round-trips them back; error cases return Err.
 
 use std.toml.{TomlValue, TomlError, toml_encode, toml_decode}
-use std.collections.{map_len, map_get, list_len}
 
 // ── encode: primitives ────────────────────────────────────────────────────────
 
@@ -63,7 +62,7 @@ test fn encode_mixed_array() -> Unit {
 test fn decode_bool_true() -> Unit {
     match toml_decode("enabled = true") {
         Ok(TomlValue::TTable(t)) => {
-            match map_get(t, "enabled") {
+            match t.get("enabled") {
                 Some(TomlValue::TBool(b)) => assert_eq(b, true),
                 _                         => assert(false),
             }
@@ -75,7 +74,7 @@ test fn decode_bool_true() -> Unit {
 test fn decode_bool_false() -> Unit {
     match toml_decode("enabled = false") {
         Ok(TomlValue::TTable(t)) => {
-            match map_get(t, "enabled") {
+            match t.get("enabled") {
                 Some(TomlValue::TBool(b)) => assert_eq(b, false),
                 _                         => assert(false),
             }
@@ -87,7 +86,7 @@ test fn decode_bool_false() -> Unit {
 test fn decode_integer() -> Unit {
     match toml_decode("port = 8080") {
         Ok(TomlValue::TTable(t)) => {
-            match map_get(t, "port") {
+            match t.get("port") {
                 Some(TomlValue::TInt(n)) => assert_eq(n, 8080),
                 _                        => assert(false),
             }
@@ -99,7 +98,7 @@ test fn decode_integer() -> Unit {
 test fn decode_negative_integer() -> Unit {
     match toml_decode("offset = -5") {
         Ok(TomlValue::TTable(t)) => {
-            match map_get(t, "offset") {
+            match t.get("offset") {
                 Some(TomlValue::TInt(n)) => assert_eq(n, -5),
                 _                        => assert(false),
             }
@@ -111,7 +110,7 @@ test fn decode_negative_integer() -> Unit {
 test fn decode_float() -> Unit {
     match toml_decode("pi = 3.14") {
         Ok(TomlValue::TTable(t)) => {
-            match map_get(t, "pi") {
+            match t.get("pi") {
                 Some(TomlValue::TFloat(f)) => assert_eq(f, 3.14),
                 _                          => assert(false),
             }
@@ -123,7 +122,7 @@ test fn decode_float() -> Unit {
 test fn decode_basic_string() -> Unit {
     match toml_decode("name = \"hello\"") {
         Ok(TomlValue::TTable(t)) => {
-            match map_get(t, "name") {
+            match t.get("name") {
                 Some(TomlValue::TStr(s)) => assert_eq(s, "hello"),
                 _                        => assert(false),
             }
@@ -135,7 +134,7 @@ test fn decode_basic_string() -> Unit {
 test fn decode_literal_string() -> Unit {
     match toml_decode("path = 'C:\\Users\\foo'") {
         Ok(TomlValue::TTable(t)) => {
-            match map_get(t, "path") {
+            match t.get("path") {
                 Some(TomlValue::TStr(s)) => assert_eq(s, "C:\\Users\\foo"),
                 _                        => assert(false),
             }
@@ -146,21 +145,21 @@ test fn decode_literal_string() -> Unit {
 
 test fn decode_empty_document() -> Unit {
     match toml_decode("") {
-        Ok(TomlValue::TTable(t)) => assert_eq(map_len(t), 0),
+        Ok(TomlValue::TTable(t)) => assert_eq(t.len(), 0),
         _                        => assert(false),
     }
 }
 
 test fn decode_comment_only() -> Unit {
     match toml_decode("# this is a comment") {
-        Ok(TomlValue::TTable(t)) => assert_eq(map_len(t), 0),
+        Ok(TomlValue::TTable(t)) => assert_eq(t.len(), 0),
         _                        => assert(false),
     }
 }
 
 test fn decode_multiple_keys() -> Unit {
     match toml_decode("host = \"localhost\"\nport = 3000") {
-        Ok(TomlValue::TTable(t)) => assert_eq(map_len(t), 2),
+        Ok(TomlValue::TTable(t)) => assert_eq(t.len(), 2),
         _                        => assert(false),
     }
 }
@@ -168,8 +167,8 @@ test fn decode_multiple_keys() -> Unit {
 test fn decode_array() -> Unit {
     match toml_decode("ports = [8080, 8081, 8082]") {
         Ok(TomlValue::TTable(t)) => {
-            match map_get(t, "ports") {
-                Some(TomlValue::TArray(a)) => assert_eq(list_len(a), 3),
+            match t.get("ports") {
+                Some(TomlValue::TArray(a)) => assert_eq(a.len(), 3),
                 _                          => assert(false),
             }
         },
@@ -180,8 +179,8 @@ test fn decode_array() -> Unit {
 test fn decode_string_array() -> Unit {
     match toml_decode("tags = [\"web\", \"api\"]") {
         Ok(TomlValue::TTable(t)) => {
-            match map_get(t, "tags") {
-                Some(TomlValue::TArray(a)) => assert_eq(list_len(a), 2),
+            match t.get("tags") {
+                Some(TomlValue::TArray(a)) => assert_eq(a.len(), 2),
                 _                          => assert(false),
             }
         },
@@ -192,10 +191,10 @@ test fn decode_string_array() -> Unit {
 test fn decode_table_section() -> Unit {
     match toml_decode("[server]\nhost = \"localhost\"\nport = 8080") {
         Ok(TomlValue::TTable(root)) => {
-            match map_get(root, "server") {
+            match root.get("server") {
                 Some(TomlValue::TTable(srv)) => {
-                    assert_eq(map_len(srv), 2);
-                    match map_get(srv, "port") {
+                    assert_eq(srv.len(), 2);
+                    match srv.get("port") {
                         Some(TomlValue::TInt(n)) => assert_eq(n, 8080),
                         _                        => assert(false),
                     }
@@ -209,7 +208,7 @@ test fn decode_table_section() -> Unit {
 
 test fn decode_multiple_sections() -> Unit {
     match toml_decode("[a]\nx = 1\n[b]\ny = 2") {
-        Ok(TomlValue::TTable(root)) => assert_eq(map_len(root), 2),
+        Ok(TomlValue::TTable(root)) => assert_eq(root.len(), 2),
         _                           => assert(false),
     }
 }
@@ -217,7 +216,7 @@ test fn decode_multiple_sections() -> Unit {
 test fn decode_comment_inline() -> Unit {
     match toml_decode("port = 8080 # default port") {
         Ok(TomlValue::TTable(t)) => {
-            match map_get(t, "port") {
+            match t.get("port") {
                 Some(TomlValue::TInt(n)) => assert_eq(n, 8080),
                 _                        => assert(false),
             }
@@ -232,7 +231,7 @@ test fn decode_comment_inline() -> Unit {
 test fn roundtrip_bool() -> Unit {
     match toml_decode("flag = true") {
         Ok(TomlValue::TTable(t)) => {
-            match map_get(t, "flag") {
+            match t.get("flag") {
                 Some(TomlValue::TBool(b)) => assert_eq(b, true),
                 _                         => assert(false),
             }
@@ -244,7 +243,7 @@ test fn roundtrip_bool() -> Unit {
 test fn roundtrip_int() -> Unit {
     match toml_decode("n = 42") {
         Ok(TomlValue::TTable(t)) => {
-            match map_get(t, "n") {
+            match t.get("n") {
                 Some(TomlValue::TInt(n)) => assert_eq(n, 42),
                 _                        => assert(false),
             }
@@ -256,7 +255,7 @@ test fn roundtrip_int() -> Unit {
 test fn roundtrip_float() -> Unit {
     match toml_decode("f = 1.5") {
         Ok(TomlValue::TTable(t)) => {
-            match map_get(t, "f") {
+            match t.get("f") {
                 Some(TomlValue::TFloat(f)) => assert_eq(f, 1.5),
                 _                          => assert(false),
             }
@@ -268,7 +267,7 @@ test fn roundtrip_float() -> Unit {
 test fn roundtrip_string() -> Unit {
     match toml_decode("s = \"hello world\"") {
         Ok(TomlValue::TTable(t)) => {
-            match map_get(t, "s") {
+            match t.get("s") {
                 Some(TomlValue::TStr(r)) => assert_eq(r, "hello world"),
                 _                        => assert(false),
             }
