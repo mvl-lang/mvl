@@ -2225,24 +2225,33 @@ impl<'ctx> LlvmBackend<'ctx> {
                     return Some(arr_ptr.into());
                 }
 
-                // #583: generic builtins — inline emit using expr_types.
-                // Excluded from StdlibSig table (no single C-ABI calling convention).
+                // #583/#907: generic builtins — choice uses runtime index + inline
+                // type-dependent load; shuffle is fully delegated to runtime_c.
                 if name == "choice" && args.len() == 1 {
                     return self.emit_random_choice(&args[0]);
                 }
                 if name == "shuffle" && args.len() == 1 {
-                    return self.emit_random_shuffle(&args[0]);
+                    let list_val = self.emit_expr(&args[0])?;
+                    // C function deep-clones then shuffles; returns a new MvlArray*
+                    // so source and result are independent (value semantics).
+                    return self.emit_stdlib_call_ptr_identity("_mvl_random_shuffle", list_val);
                 }
 
-                // #587: set algebra — inline-emit without HOF.
+                // #587/#907: set algebra — delegate to mvl_runtime_c.
                 if name == "set_intersection" && args.len() == 2 {
-                    return self.emit_set_intersection(&args[0], &args[1]);
+                    let a = self.emit_expr(&args[0])?;
+                    let b = self.emit_expr(&args[1])?;
+                    return self.emit_stdlib_call_ptr_two_ptr_args("_mvl_set_intersection", a, b);
                 }
                 if name == "set_difference" && args.len() == 2 {
-                    return self.emit_set_difference(&args[0], &args[1]);
+                    let a = self.emit_expr(&args[0])?;
+                    let b = self.emit_expr(&args[1])?;
+                    return self.emit_stdlib_call_ptr_two_ptr_args("_mvl_set_difference", a, b);
                 }
                 if name == "set_union" && args.len() == 2 {
-                    return self.emit_set_union(&args[0], &args[1]);
+                    let a = self.emit_expr(&args[0])?;
+                    let b = self.emit_expr(&args[1])?;
+                    return self.emit_stdlib_call_ptr_two_ptr_args("_mvl_set_union", a, b);
                 }
 
                 // ADR-0019: dispatch to libmvl_runtime_c C-ABI for stdlib imports.
@@ -3743,10 +3752,22 @@ impl<'ctx> LlvmBackend<'ctx> {
                 self.emit_fn_call("List_fold", &all_args)
             }
 
-            // #587: set algebra — inline-emit without HOF.
-            "intersection" if args.len() == 1 => self.emit_set_intersection(receiver, &args[0]),
-            "difference" if args.len() == 1 => self.emit_set_difference(receiver, &args[0]),
-            "union" if args.len() == 1 => self.emit_set_union(receiver, &args[0]),
+            // #587/#907: set algebra — delegate to mvl_runtime_c.
+            "intersection" if args.len() == 1 => {
+                let a = self.emit_expr(receiver)?;
+                let b = self.emit_expr(&args[0])?;
+                self.emit_stdlib_call_ptr_two_ptr_args("_mvl_set_intersection", a, b)
+            }
+            "difference" if args.len() == 1 => {
+                let a = self.emit_expr(receiver)?;
+                let b = self.emit_expr(&args[0])?;
+                self.emit_stdlib_call_ptr_two_ptr_args("_mvl_set_difference", a, b)
+            }
+            "union" if args.len() == 1 => {
+                let a = self.emit_expr(receiver)?;
+                let b = self.emit_expr(&args[0])?;
+                self.emit_stdlib_call_ptr_two_ptr_args("_mvl_set_union", a, b)
+            }
 
             // Phase 8 / #696: actor behavior calls, and #868: user-defined type methods.
             _ => {
@@ -3994,407 +4015,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .build_load(result_ty, alloca, "none_val")
                 .unwrap(),
         )
-    }
-
-    // ── #587: set algebra inline helpers ─────────────────────────────────────
-
-    /// Push `val` (i64) into `arr_ptr` (MvlArray*) by storing to a stack slot.
-    fn emit_set_push_i64_slot(
-        &mut self,
-        arr_ptr: inkwell::values::PointerValue<'ctx>,
-        val: inkwell::values::IntValue<'ctx>,
-    ) {
-        let i64_ty = self.context.i64_type();
-        let slot = self.builder.build_alloca(i64_ty, "set_slot").unwrap();
-        self.builder.build_store(slot, val).unwrap();
-        let push_fn = self.get_mvl_array_push();
-        self.builder
-            .build_call(push_fn, &[arr_ptr.into(), slot.into()], "")
-            .unwrap();
-    }
-
-    /// Emit a linear-scan contains check for `arr_ptr` (MvlArray*).
-    ///
-    /// Returns an `i1` IntValue: 1 if `needle` is found, 0 otherwise.
-    /// `label` is used as a prefix for basic-block names to avoid collisions.
-    fn emit_set_contains_loop(
-        &mut self,
-        arr_ptr: inkwell::values::PointerValue<'ctx>,
-        needle: inkwell::values::IntValue<'ctx>,
-        label: &str,
-    ) -> Option<inkwell::values::IntValue<'ctx>> {
-        use inkwell::values::AnyValue;
-        let i64_ty = self.context.i64_type();
-        let bool_ty = self.context.bool_type();
-
-        let len_fn = self.get_mvl_array_len();
-        let len_call = self
-            .builder
-            .build_call(len_fn, &[arr_ptr.into()], "len")
-            .ok()?;
-        let len = inkwell::values::BasicValueEnum::try_from(len_call.as_any_value_enum())
-            .ok()?
-            .into_int_value();
-
-        let found_slot = self.builder.build_alloca(bool_ty, "found").unwrap();
-        let j_slot = self.builder.build_alloca(i64_ty, "j").unwrap();
-        self.builder
-            .build_store(found_slot, bool_ty.const_int(0, false))
-            .unwrap();
-        self.builder
-            .build_store(j_slot, i64_ty.const_int(0, false))
-            .unwrap();
-
-        let parent = self.builder.get_insert_block()?.get_parent()?;
-        let cond_bb = self
-            .context
-            .append_basic_block(parent, &format!("{label}_cond"));
-        let body_bb = self
-            .context
-            .append_basic_block(parent, &format!("{label}_body"));
-        let exit_bb = self
-            .context
-            .append_basic_block(parent, &format!("{label}_exit"));
-
-        self.builder.build_unconditional_branch(cond_bb).unwrap();
-
-        // Cond: j < len && !found
-        self.builder.position_at_end(cond_bb);
-        let j = self
-            .builder
-            .build_load(i64_ty, j_slot, "j")
-            .unwrap()
-            .into_int_value();
-        let found = self
-            .builder
-            .build_load(bool_ty, found_slot, "found")
-            .unwrap()
-            .into_int_value();
-        let j_lt = self
-            .builder
-            .build_int_compare(IntPredicate::SLT, j, len, "j_lt")
-            .unwrap();
-        let not_found = self.builder.build_not(found, "nf").unwrap();
-        let go = self.builder.build_and(j_lt, not_found, "go").unwrap();
-        self.builder
-            .build_conditional_branch(go, body_bb, exit_bb)
-            .unwrap();
-
-        // Body: load element, compare, update found, advance j
-        self.builder.position_at_end(body_bb);
-        let get_fn = self.get_mvl_array_get();
-        let ep_call = self
-            .builder
-            .build_call(get_fn, &[arr_ptr.into(), j.into()], "ep")
-            .ok()?;
-        let ep = inkwell::values::BasicValueEnum::try_from(ep_call.as_any_value_enum())
-            .ok()?
-            .into_pointer_value();
-        let elem = self
-            .builder
-            .build_load(i64_ty, ep, "elem")
-            .unwrap()
-            .into_int_value();
-        let eq = self
-            .builder
-            .build_int_compare(IntPredicate::EQ, elem, needle, "eq")
-            .unwrap();
-        // found |= eq  (once set, stays set)
-        let found_new = self.builder.build_or(found, eq, "found_new").unwrap();
-        self.builder.build_store(found_slot, found_new).unwrap();
-        let j_next = self
-            .builder
-            .build_int_add(j, i64_ty.const_int(1, false), "j_next")
-            .unwrap();
-        self.builder.build_store(j_slot, j_next).unwrap();
-        self.builder.build_unconditional_branch(cond_bb).unwrap();
-
-        // Exit
-        self.builder.position_at_end(exit_bb);
-        Some(
-            self.builder
-                .build_load(bool_ty, found_slot, "contains_r")
-                .unwrap()
-                .into_int_value(),
-        )
-    }
-
-    /// Iterate `src` (MvlArray*); push each element to `dst` (MvlArray*) if
-    /// `include_if_found == contains(filter, elem)`.
-    ///
-    /// Used for both intersection (`include_if_found = true`) and
-    /// difference (`include_if_found = false`).
-    fn emit_set_filter_append(
-        &mut self,
-        src: inkwell::values::PointerValue<'ctx>,
-        filter: inkwell::values::PointerValue<'ctx>,
-        include_if_found: bool,
-        dst: inkwell::values::PointerValue<'ctx>,
-        label: &str,
-    ) -> Option<()> {
-        use inkwell::values::AnyValue;
-        let i64_ty = self.context.i64_type();
-
-        let len_fn = self.get_mvl_array_len();
-        let len_call = self
-            .builder
-            .build_call(len_fn, &[src.into()], "src_len")
-            .ok()?;
-        let src_len = inkwell::values::BasicValueEnum::try_from(len_call.as_any_value_enum())
-            .ok()?
-            .into_int_value();
-
-        let i_slot = self.builder.build_alloca(i64_ty, "i").unwrap();
-        self.builder
-            .build_store(i_slot, i64_ty.const_int(0, false))
-            .unwrap();
-
-        let parent = self.builder.get_insert_block()?.get_parent()?;
-        let outer_cond = self
-            .context
-            .append_basic_block(parent, &format!("{label}_ocond"));
-        let outer_body = self
-            .context
-            .append_basic_block(parent, &format!("{label}_obody"));
-        let outer_exit = self
-            .context
-            .append_basic_block(parent, &format!("{label}_oexit"));
-
-        self.builder.build_unconditional_branch(outer_cond).unwrap();
-
-        // Outer cond: i < src_len
-        self.builder.position_at_end(outer_cond);
-        let i = self
-            .builder
-            .build_load(i64_ty, i_slot, "i")
-            .unwrap()
-            .into_int_value();
-        let i_lt = self
-            .builder
-            .build_int_compare(IntPredicate::SLT, i, src_len, "i_lt")
-            .unwrap();
-        self.builder
-            .build_conditional_branch(i_lt, outer_body, outer_exit)
-            .unwrap();
-
-        // Outer body: fetch element, run contains, conditionally push
-        self.builder.position_at_end(outer_body);
-        let get_fn = self.get_mvl_array_get();
-        let ep_call = self
-            .builder
-            .build_call(get_fn, &[src.into(), i.into()], "ep")
-            .ok()?;
-        let ep = inkwell::values::BasicValueEnum::try_from(ep_call.as_any_value_enum())
-            .ok()?
-            .into_pointer_value();
-        let elem = self
-            .builder
-            .build_load(i64_ty, ep, "elem")
-            .unwrap()
-            .into_int_value();
-
-        let found = self.emit_set_contains_loop(filter, elem, &format!("{label}_inner"))?;
-
-        // Branch: push to dst if (found == include_if_found)
-        let push_cond = if include_if_found {
-            found
-        } else {
-            self.builder.build_not(found, "not_found").unwrap()
-        };
-
-        let do_push = self
-            .context
-            .append_basic_block(parent, &format!("{label}_push"));
-        let skip_push = self
-            .context
-            .append_basic_block(parent, &format!("{label}_skip"));
-
-        self.builder
-            .build_conditional_branch(push_cond, do_push, skip_push)
-            .unwrap();
-
-        // do_push: push elem to dst
-        self.builder.position_at_end(do_push);
-        self.emit_set_push_i64_slot(dst, elem);
-        self.builder.build_unconditional_branch(skip_push).unwrap();
-
-        // skip_push: advance i, loop
-        self.builder.position_at_end(skip_push);
-        let i_next = self
-            .builder
-            .build_int_add(i, i64_ty.const_int(1, false), "i_next")
-            .unwrap();
-        self.builder.build_store(i_slot, i_next).unwrap();
-        self.builder.build_unconditional_branch(outer_cond).unwrap();
-
-        // Exit
-        self.builder.position_at_end(outer_exit);
-        Some(())
-    }
-
-    /// Copy all elements of `src` (MvlArray*) to `dst` (MvlArray*) unconditionally.
-    fn emit_set_copy_all(
-        &mut self,
-        src: inkwell::values::PointerValue<'ctx>,
-        dst: inkwell::values::PointerValue<'ctx>,
-        label: &str,
-    ) -> Option<()> {
-        use inkwell::values::AnyValue;
-        let i64_ty = self.context.i64_type();
-
-        let len_fn = self.get_mvl_array_len();
-        let len_call = self
-            .builder
-            .build_call(len_fn, &[src.into()], "src_len")
-            .ok()?;
-        let src_len = inkwell::values::BasicValueEnum::try_from(len_call.as_any_value_enum())
-            .ok()?
-            .into_int_value();
-
-        let i_slot = self.builder.build_alloca(i64_ty, "i").unwrap();
-        self.builder
-            .build_store(i_slot, i64_ty.const_int(0, false))
-            .unwrap();
-
-        let parent = self.builder.get_insert_block()?.get_parent()?;
-        let cond_bb = self
-            .context
-            .append_basic_block(parent, &format!("{label}_cond"));
-        let body_bb = self
-            .context
-            .append_basic_block(parent, &format!("{label}_body"));
-        let exit_bb = self
-            .context
-            .append_basic_block(parent, &format!("{label}_exit"));
-
-        self.builder.build_unconditional_branch(cond_bb).unwrap();
-
-        self.builder.position_at_end(cond_bb);
-        let i = self
-            .builder
-            .build_load(i64_ty, i_slot, "i")
-            .unwrap()
-            .into_int_value();
-        let i_lt = self
-            .builder
-            .build_int_compare(IntPredicate::SLT, i, src_len, "i_lt")
-            .unwrap();
-        self.builder
-            .build_conditional_branch(i_lt, body_bb, exit_bb)
-            .unwrap();
-
-        self.builder.position_at_end(body_bb);
-        let get_fn = self.get_mvl_array_get();
-        let ep_call = self
-            .builder
-            .build_call(get_fn, &[src.into(), i.into()], "ep")
-            .ok()?;
-        let ep = inkwell::values::BasicValueEnum::try_from(ep_call.as_any_value_enum())
-            .ok()?
-            .into_pointer_value();
-        let elem = self
-            .builder
-            .build_load(i64_ty, ep, "elem")
-            .unwrap()
-            .into_int_value();
-        self.emit_set_push_i64_slot(dst, elem);
-        let i_next = self
-            .builder
-            .build_int_add(i, i64_ty.const_int(1, false), "i_next")
-            .unwrap();
-        self.builder.build_store(i_slot, i_next).unwrap();
-        self.builder.build_unconditional_branch(cond_bb).unwrap();
-
-        self.builder.position_at_end(exit_bb);
-        Some(())
-    }
-
-    /// Emit `set_intersection(a, b)` as inline LLVM IR.
-    /// Returns elements of `a` that are also in `b`.
-    pub(crate) fn emit_set_intersection(
-        &mut self,
-        a: &Expr,
-        b: &Expr,
-    ) -> Option<BasicValueEnum<'ctx>> {
-        let a_ptr = self.emit_expr(a)?.into_pointer_value();
-        let b_ptr = self.emit_expr(b)?.into_pointer_value();
-        let i64_ty = self.context.i64_type();
-        let new_fn = self.get_mvl_array_new();
-        use inkwell::values::AnyValue;
-        let r_call = self
-            .builder
-            .build_call(
-                new_fn,
-                &[
-                    i64_ty.const_int(8, false).into(),
-                    i64_ty.const_int(4, false).into(),
-                ],
-                "result",
-            )
-            .ok()?;
-        let result_ptr = inkwell::values::BasicValueEnum::try_from(r_call.as_any_value_enum())
-            .ok()?
-            .into_pointer_value();
-        self.emit_set_filter_append(a_ptr, b_ptr, true, result_ptr, "intr")?;
-        Some(result_ptr.into())
-    }
-
-    /// Emit `set_difference(a, b)` as inline LLVM IR.
-    /// Returns elements of `a` that are NOT in `b`.
-    pub(crate) fn emit_set_difference(
-        &mut self,
-        a: &Expr,
-        b: &Expr,
-    ) -> Option<BasicValueEnum<'ctx>> {
-        let a_ptr = self.emit_expr(a)?.into_pointer_value();
-        let b_ptr = self.emit_expr(b)?.into_pointer_value();
-        let i64_ty = self.context.i64_type();
-        let new_fn = self.get_mvl_array_new();
-        use inkwell::values::AnyValue;
-        let r_call = self
-            .builder
-            .build_call(
-                new_fn,
-                &[
-                    i64_ty.const_int(8, false).into(),
-                    i64_ty.const_int(4, false).into(),
-                ],
-                "result",
-            )
-            .ok()?;
-        let result_ptr = inkwell::values::BasicValueEnum::try_from(r_call.as_any_value_enum())
-            .ok()?
-            .into_pointer_value();
-        self.emit_set_filter_append(a_ptr, b_ptr, false, result_ptr, "diff")?;
-        Some(result_ptr.into())
-    }
-
-    /// Emit `set_union(a, b)` as inline LLVM IR.
-    /// Returns all elements of `a` plus elements of `b` not already in `a`.
-    pub(crate) fn emit_set_union(&mut self, a: &Expr, b: &Expr) -> Option<BasicValueEnum<'ctx>> {
-        let a_ptr = self.emit_expr(a)?.into_pointer_value();
-        let b_ptr = self.emit_expr(b)?.into_pointer_value();
-        let i64_ty = self.context.i64_type();
-        let new_fn = self.get_mvl_array_new();
-        use inkwell::values::AnyValue;
-        let r_call = self
-            .builder
-            .build_call(
-                new_fn,
-                &[
-                    i64_ty.const_int(8, false).into(),
-                    i64_ty.const_int(4, false).into(),
-                ],
-                "result",
-            )
-            .ok()?;
-        let result_ptr = inkwell::values::BasicValueEnum::try_from(r_call.as_any_value_enum())
-            .ok()?
-            .into_pointer_value();
-        // Copy all of a, then add elements from b not in a.
-        self.emit_set_copy_all(a_ptr, result_ptr, "union_a")?;
-        self.emit_set_filter_append(b_ptr, a_ptr, false, result_ptr, "union_b")?;
-        Some(result_ptr.into())
     }
 }
 

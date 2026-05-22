@@ -1364,14 +1364,13 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
     }
 
-    // ── #583: generic builtin inline emitters ────────────────────────────────
+    // ── #583/#907: generic builtin inline emitters ─────────────────────────
 
     /// Emit inline IR for `choice[T](list) -> Option[T]`.
     ///
-    /// If the list is empty, returns `None`.  Otherwise picks a random index via
-    /// `_mvl_random_int` and returns `Some(list[idx])`.  The element load type is
-    /// derived from `expr_types` at the call site so Int/Float are loaded as scalars
-    /// and all other types are loaded as opaque pointers.
+    /// Delegates random index selection to `_mvl_random_choice_index` (C-ABI),
+    /// then does the type-dependent element load inline (Int/Float vs ptr) and
+    /// wraps in `Some` / `None`.
     pub(crate) fn emit_random_choice(
         &mut self,
         list_expr: &crate::mvl::parser::ast::Expr,
@@ -1382,23 +1381,17 @@ impl<'ctx> LlvmBackend<'ctx> {
 
         let list_ptr = self.emit_expr(list_expr)?.into_pointer_value();
 
-        use inkwell::values::AnyValue;
-        let len_fn = self.get_mvl_array_len();
-        let len = inkwell::values::BasicValueEnum::try_from(
-            self.builder
-                .build_call(len_fn, &[list_ptr.into()], "ch_len")
-                .unwrap()
-                .as_any_value_enum(),
-        )
-        .ok()?
-        .into_int_value();
+        // Call _mvl_random_choice_index(arr) → i64 (index or -1).
+        let idx = self
+            .emit_stdlib_call_i64_one_ptr_arg("_mvl_random_choice_index", list_ptr.into())?
+            .into_int_value();
 
         let parent_fn = self.current_fn?;
         let is_empty = self
             .builder
             .build_int_compare(
-                inkwell::IntPredicate::EQ,
-                len,
+                inkwell::IntPredicate::SLT,
+                idx,
                 i64_ty.const_zero(),
                 "ch_empty",
             )
@@ -1411,20 +1404,10 @@ impl<'ctx> LlvmBackend<'ctx> {
             .build_conditional_branch(is_empty, none_bb, some_bb)
             .unwrap();
 
-        // Some branch: random index → load element → wrap in Some.
+        // Some branch: load element at idx, wrap in Some.
         self.builder.position_at_end(some_bb);
         self.terminated = false;
-        let max_idx = self
-            .builder
-            .build_int_sub(len, i64_ty.const_int(1, false), "ch_max")
-            .unwrap();
-        let idx = self
-            .emit_stdlib_call_i64_two_args(
-                "_mvl_random_int",
-                i64_ty.const_zero().into(),
-                max_idx.into(),
-            )?
-            .into_int_value();
+        use inkwell::values::AnyValue;
         let get_fn = self.get_mvl_array_get();
         let elem_ptr = inkwell::values::BasicValueEnum::try_from(
             self.builder
@@ -1473,110 +1456,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             .unwrap();
         phi.add_incoming(&[(&some_val, some_end), (&none_val, none_end)]);
         Some(phi.as_basic_value())
-    }
-
-    /// Emit inline IR for `shuffle[T](list) -> List[T]`.
-    ///
-    /// Fisher-Yates in-place shuffle using `_mvl_random_int`.  All element slots
-    /// are pointer-sized (8 bytes) on 64-bit targets, so swapping as raw `i64`
-    /// words is type-safe regardless of T (Int/Float/ptr all fit in 8 bytes).
-    pub(crate) fn emit_random_shuffle(
-        &mut self,
-        list_expr: &crate::mvl::parser::ast::Expr,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
-        let i64_ty = self.context.i64_type();
-        let one = i64_ty.const_int(1, false);
-
-        let list_ptr = self.emit_expr(list_expr)?.into_pointer_value();
-
-        use inkwell::values::AnyValue;
-        let len_fn = self.get_mvl_array_len();
-        let len = inkwell::values::BasicValueEnum::try_from(
-            self.builder
-                .build_call(len_fn, &[list_ptr.into()], "sh_len")
-                .unwrap()
-                .as_any_value_enum(),
-        )
-        .ok()?
-        .into_int_value();
-
-        let parent_fn = self.current_fn?;
-
-        // i starts at len - 1.
-        let init_i = self.builder.build_int_sub(len, one, "sh_init").unwrap();
-        let i_slot = self.builder.build_alloca(i64_ty, "sh_i").unwrap();
-        self.builder.build_store(i_slot, init_i).unwrap();
-
-        let cond_bb = self.context.append_basic_block(parent_fn, "sh_cond");
-        let body_bb = self.context.append_basic_block(parent_fn, "sh_body");
-        let exit_bb = self.context.append_basic_block(parent_fn, "sh_exit");
-
-        self.builder.build_unconditional_branch(cond_bb).unwrap();
-
-        // Cond: i >= 1.
-        self.builder.position_at_end(cond_bb);
-        self.terminated = false;
-        let i_val = self
-            .builder
-            .build_load(i64_ty, i_slot, "sh_ival")
-            .unwrap()
-            .into_int_value();
-        let keep_going = self
-            .builder
-            .build_int_compare(inkwell::IntPredicate::SGE, i_val, one, "sh_cond")
-            .unwrap();
-        self.builder
-            .build_conditional_branch(keep_going, body_bb, exit_bb)
-            .unwrap();
-
-        // Body: j = random(0, i); swap arr[i] and arr[j] as raw i64 words.
-        self.builder.position_at_end(body_bb);
-        self.terminated = false;
-        let i_val = self
-            .builder
-            .build_load(i64_ty, i_slot, "sh_i")
-            .unwrap()
-            .into_int_value();
-        let j_val = self
-            .emit_stdlib_call_i64_two_args(
-                "_mvl_random_int",
-                i64_ty.const_zero().into(),
-                i_val.into(),
-            )?
-            .into_int_value();
-
-        let get_fn = self.get_mvl_array_get();
-        let ptr_i = inkwell::values::BasicValueEnum::try_from(
-            self.builder
-                .build_call(get_fn, &[list_ptr.into(), i_val.into()], "sh_pi")
-                .unwrap()
-                .as_any_value_enum(),
-        )
-        .ok()?
-        .into_pointer_value();
-        let ptr_j = inkwell::values::BasicValueEnum::try_from(
-            self.builder
-                .build_call(get_fn, &[list_ptr.into(), j_val.into()], "sh_pj")
-                .unwrap()
-                .as_any_value_enum(),
-        )
-        .ok()?
-        .into_pointer_value();
-
-        // Load both slots as i64 (safe: all MVL element slots are 8 bytes).
-        let val_i = self.builder.build_load(i64_ty, ptr_i, "sh_vi").unwrap();
-        let val_j = self.builder.build_load(i64_ty, ptr_j, "sh_vj").unwrap();
-        self.builder.build_store(ptr_i, val_j).unwrap();
-        self.builder.build_store(ptr_j, val_i).unwrap();
-
-        let dec = self.builder.build_int_sub(i_val, one, "sh_dec").unwrap();
-        self.builder.build_store(i_slot, dec).unwrap();
-        self.builder.build_unconditional_branch(cond_bb).unwrap();
-
-        // Exit: return the in-place-modified list pointer.
-        self.builder.position_at_end(exit_bb);
-        self.terminated = false;
-        Some(list_ptr.into())
     }
 
     pub(crate) fn emit_stdlib_call_i64(
@@ -2571,10 +2450,8 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     /// Emit an LLVM IR function body for a single `extern "rust"` declaration.
     ///
-    /// Known bridges:
-    ///   `roll_dice() -> Int`  →  `rand() % 6 + 1`  (libc rand, seeded by OS)
-    ///
-    /// All other functions get a stub that returns 0 / null.
+    /// Known bridges delegate to C-ABI runtime functions (str_chars, str_concat,
+    /// etc.).  Unrecognized functions get a stub that returns 0 / null.
     fn emit_extern_rust_fn_body(
         &mut self,
         efn: &ExternFnDecl,
@@ -2616,30 +2493,6 @@ impl<'ctx> LlvmBackend<'ctx> {
         self.builder.position_at_end(entry);
 
         match efn.name.as_str() {
-            // roll_dice() -> Int: return rand() % 6 + 1
-            "roll_dice" => {
-                // declare i32 @rand()
-                let rand_fn = self.module.get_function("rand").unwrap_or_else(|| {
-                    let rand_ty = self.context.i32_type().fn_type(&[], false);
-                    self.module
-                        .add_function("rand", rand_ty, Some(Linkage::External))
-                });
-                let rand_call = self.builder.build_call(rand_fn, &[], "rand_call").unwrap();
-                use inkwell::values::AnyValue;
-                let r32 = BasicValueEnum::try_from(rand_call.as_any_value_enum())
-                    .expect("rand() must return i32");
-                // sext i32 to i64
-                let r64 = self
-                    .builder
-                    .build_int_s_extend(r32.into_int_value(), i64_ty, "rand64")
-                    .unwrap();
-                // abs: ensure non-negative (rand() is ≥ 0 but defensive)
-                let six = i64_ty.const_int(6, false);
-                let one = i64_ty.const_int(1, false);
-                let rem = self.builder.build_int_signed_rem(r64, six, "rem").unwrap();
-                let result = self.builder.build_int_add(rem, one, "dice").unwrap();
-                self.builder.build_return(Some(&result)).unwrap();
-            }
             // str_chars(s: String) -> List[String]: delegate to mvl_string_chars
             "str_chars" => {
                 let arg0 = fn_val.get_first_param().expect("str_chars: missing arg");
@@ -2759,26 +2612,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                     .unwrap();
                 self.builder.build_return(Some(&result)).unwrap();
             }
-            // ── pkg.tui stubs ────────────────────────────────────────────────
-            // The LLVM backend cannot run interactive terminal I/O, so these
-            // stubs return neutral values that keep unit-test programs alive.
-            // tui_init() → 1 (success handle; tests don't use the terminal)
-            "tui_init" => {
-                let one = i64_ty.const_int(1, false);
-                self.builder.build_return(Some(&one)).unwrap();
-            }
-            // tui_drop, tui_clear, tui_set_cursor, tui_print → void no-ops
-            "tui_drop" | "tui_clear" | "tui_set_cursor" | "tui_print" => {
-                self.builder.build_return(None).unwrap();
-            }
-            // tui_size() → 24*1000+80 = 24080 (safe default 24×80 terminal)
-            "tui_size" => {
-                let sz = i64_ty.const_int(24_080, false);
-                self.builder.build_return(Some(&sz)).unwrap();
-            }
             // Generic stub: return zero / null / None-struct.
-            // Note: tui_read_key / tui_read_key_timeout return String (a Rust struct),
-            // so the StructType arm below returns a correctly zeroed value for them.
             _ => match ret_llvm {
                 Some(BasicTypeEnum::IntType(it)) => {
                     let zero = it.const_zero();

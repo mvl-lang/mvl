@@ -17,8 +17,6 @@
 //! `_mvl_random_choice_index` and `_mvl_random_shuffle_i64` use the old
 //! length-prefixed i64 layout and are deferred pending LLVM wiring.
 
-use libc::c_void;
-
 use mvl_runtime::stdlib::random;
 
 // ── Primitive dispatch ────────────────────────────────────────────────────────
@@ -55,39 +53,63 @@ pub extern "C" fn _mvl_random_bytes(n: i64) -> *mut crate::memory::MvlArray {
     arr
 }
 
-/// Return the index of a random element in a length-prefixed i64 array, or -1 if empty.
+/// Return a random index from a `MvlArray*`, or -1 if empty.
 ///
-/// Input: `*mut c_void` with layout `[len: i64][elem0: i64]...`
-/// LLVM codegen wiring is deferred pending `MvlArray*` marshalling support.
+/// Used by the LLVM backend for `choice[T](list)`: the backend calls this to
+/// get the index, then does the type-dependent element load itself.
+/// Calling convention: `(ptr) → i64`.
 #[no_mangle]
 #[allow(unsafe_code)]
-pub extern "C" fn _mvl_random_choice_index(arr: *mut c_void) -> i64 {
+pub extern "C" fn _mvl_random_choice_index(arr: *mut crate::memory::MvlArray) -> i64 {
     if arr.is_null() {
         return -1;
     }
-    let len = unsafe { (arr as *const i64).read() } as usize;
+    let len = unsafe { crate::memory_ops::mvl_array_len(arr as *const crate::memory::MvlArray) };
     if len == 0 {
         return -1;
     }
     random::int(0, (len - 1) as i64)
 }
 
-/// Shuffle an i64 array in place (length-prefix layout). Returns void.
+/// Deep-clone the array, then Fisher-Yates shuffle the clone. Returns a new `MvlArray*`.
 ///
-/// Input: `*mut c_void` with layout `[len: i64][elem0: i64]...`
-/// LLVM codegen wiring is deferred pending `MvlArray*` marshalling support.
+/// Returns a new array so that the source and result are independent — MVL has
+/// value semantics and `let ys = shuffle(xs)` must not alias `xs`.
+/// All MVL element slots are 8 bytes (i64/f64/ptr all fit), so swapping as raw
+/// i64 words is type-safe regardless of the actual element type.
+/// Calling convention: `(ptr) → ptr`.
 #[no_mangle]
 #[allow(unsafe_code)]
-pub extern "C" fn _mvl_random_shuffle_i64(arr: *mut c_void) {
+pub extern "C" fn _mvl_random_shuffle(
+    arr: *mut crate::memory::MvlArray,
+) -> *mut crate::memory::MvlArray {
     if arr.is_null() {
-        return;
+        return arr;
     }
-    let ptr = arr as *mut i64;
-    let len = unsafe { ptr.read() } as usize;
-    let mut items: Vec<i64> = (0..len).map(|i| unsafe { ptr.add(1 + i).read() }).collect();
-    items = random::shuffle(items);
-    for (i, v) in items.iter().enumerate() {
-        unsafe { ptr.add(1 + i).write(*v) };
+    unsafe {
+        // Deep-clone so source and result are independent (value semantics).
+        let clone = crate::memory::mvl_array_deep_clone(arr);
+        let len =
+            crate::memory_ops::mvl_array_len(clone as *const crate::memory::MvlArray) as usize;
+        if len <= 1 {
+            return clone;
+        }
+        // Fisher-Yates: iterate i from len-1 down to 1, swap clone[i] with clone[rand(0..=i)].
+        for i in (1..len).rev() {
+            let j = random::int(0, i as i64) as usize;
+            if i != j {
+                let ptr_i =
+                    crate::memory_ops::mvl_array_get(clone as *const crate::memory::MvlArray, i)
+                        as *mut i64;
+                let ptr_j =
+                    crate::memory_ops::mvl_array_get(clone as *const crate::memory::MvlArray, j)
+                        as *mut i64;
+                let tmp = ptr_i.read();
+                ptr_i.write(ptr_j.read());
+                ptr_j.write(tmp);
+            }
+        }
+        clone
     }
 }
 
