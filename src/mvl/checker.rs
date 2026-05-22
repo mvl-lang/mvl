@@ -49,7 +49,7 @@ use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc_propagation::InferredLabels;
 use crate::mvl::checker::refinements::RefinementCounts;
 use crate::mvl::checker::types::Ty;
-use crate::mvl::parser::ast::{Decl, Effect, EffectDecl, Program, Totality};
+use crate::mvl::parser::ast::{Decl, Effect, EffectDecl, Program, Totality, UseDecl};
 use crate::mvl::parser::lexer::Span;
 use std::collections::{HashMap, HashSet};
 
@@ -290,6 +290,10 @@ struct TypeChecker {
     expr_types: HashMap<Span, Ty>,
     /// Resolved effect subsumption hierarchy, built from all parsed EffectDecl nodes (#853).
     effect_hierarchy: EffectHierarchy,
+    /// Module-level import aliases: `use std.json` → `"json" → ["std", "json"]`.
+    /// Populated from the user program's use declarations in `check_program`.
+    /// Enables qualified calls: `json.decode(s)` resolves as a function call (#820).
+    module_aliases: HashMap<String, Vec<String>>,
 }
 
 impl TypeChecker {
@@ -313,6 +317,7 @@ impl TypeChecker {
             current_type_constraints: HashMap::new(),
             expr_types: HashMap::new(),
             effect_hierarchy: hierarchy,
+            module_aliases: HashMap::new(),
         }
     }
 
@@ -334,6 +339,20 @@ impl TypeChecker {
     // ── Program ──────────────────────────────────────────────────────────
 
     fn check_program(&mut self, prog: &Program) {
+        // Collect module-level aliases before checking so qualified calls like
+        // `json.decode(s)` (from `use std.json`) can be resolved (#820).
+        for decl in &prog.declarations {
+            if let Decl::Use(UseDecl {
+                module_only: true,
+                path,
+                ..
+            }) = decl
+            {
+                if let Some(qualifier) = path.last() {
+                    self.module_aliases.insert(qualifier.clone(), path.clone());
+                }
+            }
+        }
         self.collect_declarations(&prog.declarations);
         for decl in &prog.declarations {
             self.check_decl(decl);

@@ -88,7 +88,6 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
             .iter()
             .map(|f| super::parse_or_exit(&f.display().to_string()).0)
             .collect();
-        stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_test_progs));
         let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         stdlib_prelude_progs.extend(loader::load_pkg_modules(&all_test_progs, &project_root));
 
@@ -149,10 +148,14 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                 }
             }
         }
-        // Sibling library files may import pure-MVL stdlib modules not referenced
-        // by the test files themselves (e.g. config.mvl using std.args).  Run a
-        // second pass so those stdlib modules end up in the prelude.
-        stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&sibling_progs));
+        // Single pass over all programs (test files + sibling library files) mirrors
+        // cli/build.rs and ensures transitive stdlib deps are discovered together (#865).
+        let all_for_extras: Vec<_> = all_test_progs
+            .iter()
+            .chain(sibling_progs.iter())
+            .cloned()
+            .collect();
+        stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_for_extras));
     }
 
     // Build a combined Rust test file from all test modules.

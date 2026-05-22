@@ -7851,3 +7851,138 @@ fn actor_field_refinement_violated_from_impl_method() {
         "expected RefinementViolated for spawn inside impl method, got: {errors:?}"
     );
 }
+
+// ── #820: qualified module imports ────────────────────────────────────────────
+
+/// `use std.json` (no braces) should mark `json` as a module alias so that
+/// `json.decode(s)` is redirected to a function call rather than producing
+/// `UndefinedVariable("json")`.
+#[test]
+fn qualified_import_resolves_fn_call() {
+    // Without stdlib prelude `decode` is still unknown, but the error must be
+    // `UndefinedFunction("decode")` — NOT `UndefinedVariable("json")`.
+    // That confirms the module-alias redirect fired correctly (#820).
+    let src = r#"
+        use std.json;
+        fn f(s: String) -> Bool {
+            json.decode(s)
+        }
+    "#;
+    let result = check_src(src);
+    let has_undefined_json = result
+        .errors
+        .iter()
+        .any(|e| matches!(e, CheckError::UndefinedVariable { name, .. } if name == "json"));
+    assert!(
+        !has_undefined_json,
+        "`use std.json` should suppress UndefinedVariable(\"json\"), got: {:?}",
+        result.errors
+    );
+}
+
+/// Without `use std.json`, `json.decode()` must produce `UndefinedVariable("json")` —
+/// `json` is not in scope as either a variable or a module alias.
+#[test]
+fn unqualified_module_call_without_import_errors() {
+    let src = r#"fn f(s: String) -> Bool { json.decode(s) }"#;
+    let result = check_src(src);
+    let has_undefined_json = result
+        .errors
+        .iter()
+        .any(|e| matches!(e, CheckError::UndefinedVariable { name, .. } if name == "json"));
+    assert!(
+        has_undefined_json,
+        "json.decode without use std.json should produce UndefinedVariable(\"json\"), got: {:?}",
+        result.errors
+    );
+}
+
+/// `use std.json.{decode}` (brace form) must NOT create a module alias —
+/// `json.decode()` should still produce `UndefinedVariable("json")`.
+#[test]
+fn brace_import_does_not_create_module_alias() {
+    let src = r#"
+        use std.json.{decode};
+        fn f(s: String) -> Bool {
+            json.decode(s)
+        }
+    "#;
+    let result = check_src(src);
+    let has_undefined_json = result
+        .errors
+        .iter()
+        .any(|e| matches!(e, CheckError::UndefinedVariable { name, .. } if name == "json"));
+    assert!(
+        has_undefined_json,
+        "brace import must not create module alias; expected UndefinedVariable(\"json\"), got: {:?}",
+        result.errors
+    );
+}
+
+// ── #822: toml.mvl in proven-mode ─────────────────────────────────────────────
+
+/// std/toml.mvl must pass proven-mode checking with the other proven-stdlib
+/// files as prelude (same setup as check_proven_stdlib in cli/check.rs).
+#[test]
+fn toml_mvl_passes_proven_mode() {
+    use mvl::mvl::checker::check_with_prelude;
+    use mvl::mvl::stdlib::stdlib_content;
+
+    let proven_files = &[
+        "core.mvl",
+        "strings.mvl",
+        "lists.mvl",
+        "math.mvl",
+        "collections.mvl",
+        "json.mvl",
+        "toml.mvl",
+    ];
+
+    let programs: Vec<mvl::mvl::parser::ast::Program> = proven_files
+        .iter()
+        .filter_map(|name| {
+            stdlib_content(name).map(|src| {
+                let (mut p, _) = Parser::new(src);
+                p.parse_program()
+            })
+        })
+        .collect();
+
+    // Find toml index
+    let toml_idx = proven_files
+        .iter()
+        .position(|n| *n == "toml.mvl")
+        .expect("toml.mvl not in list");
+
+    let prelude: Vec<mvl::mvl::parser::ast::Program> = programs
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != toml_idx)
+        .map(|(_, p)| p.clone())
+        .collect();
+
+    let result = check_with_prelude(&prelude, &programs[toml_idx]);
+    assert!(
+        result.is_ok(),
+        "toml.mvl should pass proven-mode checks, got: {:?}",
+        result.errors
+    );
+
+    // Also verify json.mvl still passes when toml.mvl is in its prelude.
+    let json_idx = proven_files
+        .iter()
+        .position(|n| *n == "json.mvl")
+        .expect("json.mvl not in list");
+    let json_prelude: Vec<mvl::mvl::parser::ast::Program> = programs
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != json_idx)
+        .map(|(_, p)| p.clone())
+        .collect();
+    let json_result = check_with_prelude(&json_prelude, &programs[json_idx]);
+    assert!(
+        json_result.is_ok(),
+        "json.mvl should pass proven-mode checks (with toml.mvl in prelude), got: {:?}",
+        json_result.errors
+    );
+}

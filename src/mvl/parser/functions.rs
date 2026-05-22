@@ -606,6 +606,7 @@ impl Parser {
         let span = self.span_from(start);
         Ok(UseDecl {
             reexport,
+            module_only: !brace_group && path.len() >= 2,
             path,
             span,
         })
