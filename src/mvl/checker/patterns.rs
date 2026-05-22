@@ -6,7 +6,7 @@
 use crate::mvl::checker::context::{TypeBodyInfo, VarInfo, VariantFieldsInfo};
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::types::Ty;
-use crate::mvl::parser::ast::{MatchArm, MatchBody, Pattern};
+use crate::mvl::parser::ast::{MatchArm, MatchBody, Pattern, RefExpr};
 use crate::mvl::parser::lexer::Span;
 
 use super::TypeChecker;
@@ -36,6 +36,10 @@ impl TypeChecker {
         for arm in arms {
             self.env.push_scope();
             self.bind_match_pattern(&arm.pattern, scrutinee_ty);
+            // Validate guard expression variables are in scope (#938).
+            if let Some(guard) = &arm.guard {
+                self.check_guard_ref_expr(guard);
+            }
             let body_ty = match &arm.body {
                 MatchBody::Expr(e) => self.infer_expr(e),
                 // Use infer_block_type so the last Stmt::Expr is treated as
@@ -65,18 +69,25 @@ impl TypeChecker {
     ) {
         let base = scrutinee_ty.unlabeled().clone();
 
+        // Guarded arms don't guarantee coverage — a guard may fail, so
+        // only unguarded arms count toward exhaustiveness (#938).
+        let unguarded: Vec<&MatchArm> = arms.iter().filter(|a| a.guard.is_none()).collect();
+
         match &base {
             // Option<T>: must cover Some(_) and None
             Ty::Option(_) => {
                 // A bare `_` or non-Option-variant ident is a wildcard → exhaustive
-                if arms.iter().any(|a| is_wildcard_pattern(&a.pattern, &[])) {
+                if unguarded
+                    .iter()
+                    .any(|a| is_wildcard_pattern(&a.pattern, &[]))
+                {
                     return;
                 }
-                let has_some = arms.iter().any(|a| {
+                let has_some = unguarded.iter().any(|a| {
                     matches!(a.pattern, Pattern::Some { .. })
                         || matches!(&a.pattern, Pattern::TupleStruct { name, .. } if name == "Some")
                 });
-                let has_none = arms.iter().any(|a| {
+                let has_none = unguarded.iter().any(|a| {
                     matches!(a.pattern, Pattern::None(_))
                         || matches!(&a.pattern, Pattern::Ident(n, _) if n == "None")
                 });
@@ -94,14 +105,17 @@ impl TypeChecker {
 
             // Result<T,E>: must cover Ok(_) and Err(_)
             Ty::Result(_, _) => {
-                if arms.iter().any(|a| is_wildcard_pattern(&a.pattern, &[])) {
+                if unguarded
+                    .iter()
+                    .any(|a| is_wildcard_pattern(&a.pattern, &[]))
+                {
                     return;
                 }
-                let has_ok = arms.iter().any(|a| {
+                let has_ok = unguarded.iter().any(|a| {
                     matches!(a.pattern, Pattern::Ok { .. })
                         || matches!(&a.pattern, Pattern::TupleStruct { name, .. } if name == "Ok")
                 });
-                let has_err = arms.iter().any(|a| {
+                let has_err = unguarded.iter().any(|a| {
                     matches!(a.pattern, Pattern::Err { .. })
                         || matches!(&a.pattern, Pattern::TupleStruct { name, .. } if name == "Err")
                 });
@@ -125,7 +139,7 @@ impl TypeChecker {
                             variants.iter().map(|v| v.name.clone()).collect();
 
                         // A wildcard is any Pattern::Wildcard OR a bare ident not in the enum's variants
-                        if arms
+                        if unguarded
                             .iter()
                             .any(|a| is_wildcard_pattern(&a.pattern, &variant_names))
                         {
@@ -133,7 +147,7 @@ impl TypeChecker {
                         }
 
                         // Collect which variant names are explicitly covered
-                        let covered: Vec<String> = arms
+                        let covered: Vec<String> = unguarded
                             .iter()
                             .filter_map(|arm| covered_variant_name(&arm.pattern, &variant_names))
                             .collect();
@@ -256,6 +270,48 @@ impl TypeChecker {
                     let ty = elem_tys.get(i).cloned().unwrap_or(Ty::Unknown);
                     self.bind_match_pattern(p, &ty);
                 }
+            }
+        }
+    }
+
+    /// Validate a match guard's RefExpr — check that referenced identifiers
+    /// are in scope.  Since RefExpr is a predicate language (Compare, LogicOp,
+    /// Not, etc.), the result is always boolean by construction (#938).
+    fn check_guard_ref_expr(&mut self, expr: &RefExpr) {
+        match expr {
+            RefExpr::Ident { name, span } => {
+                if self.env.lookup(name).is_none() {
+                    self.emit(CheckError::UndefinedVariable {
+                        name: name.clone(),
+                        span: *span,
+                    });
+                }
+            }
+            RefExpr::LogicOp { left, right, .. }
+            | RefExpr::Compare { left, right, .. }
+            | RefExpr::ArithOp { left, right, .. } => {
+                self.check_guard_ref_expr(left);
+                self.check_guard_ref_expr(right);
+            }
+            RefExpr::Not { inner, .. }
+            | RefExpr::Grouped { inner, .. }
+            | RefExpr::Old { inner, .. } => {
+                self.check_guard_ref_expr(inner);
+            }
+            RefExpr::FieldAccess { object, .. } => {
+                self.check_guard_ref_expr(object);
+            }
+            RefExpr::Len { ident, span } => {
+                if self.env.lookup(ident).is_none() {
+                    self.emit(CheckError::UndefinedVariable {
+                        name: ident.clone(),
+                        span: *span,
+                    });
+                }
+            }
+            RefExpr::Integer { .. } | RefExpr::Float { .. } => {}
+            RefExpr::Forall { body, .. } | RefExpr::Exists { body, .. } => {
+                self.check_guard_ref_expr(body);
             }
         }
     }
