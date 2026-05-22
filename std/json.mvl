@@ -423,7 +423,7 @@ partial fn parse_array(chars: List[String], pos: Int) -> ArrPos {
     let had_err: ref Bool = false;
     while go {
         match parse_value(chars, cur) {
-            ValuePos::VPErr(e)   => { had_err = true; err = e; go = false },
+            ValuePos::VPErr(e)   => { had_err = true; err = consume(e); go = false },
             ValuePos::VP(v, np)  => {
                 result.push(v);
                 cur = skip_ws(chars, np);
@@ -519,9 +519,9 @@ partial fn parse_object(chars: List[String], pos: Int) -> ObjPos {
                     go = false
                 } else {
                     match parse_object_step(chars, cur, result) {
-                        ObjectStep::OStepErr(e)          => { had_err = true; err = e; go = false },
+                        ObjectStep::OStepErr(e)          => { had_err = true; err = consume(e); go = false },
                         ObjectStep::OSep(r2, c2, sep)    => {
-                            result = r2;
+                            result = consume(r2);
                             cur    = c2;
                             if      sep == "}" { cur = cur + 1; go = false }
                             else if sep == "," { cur = cur + 1 }
