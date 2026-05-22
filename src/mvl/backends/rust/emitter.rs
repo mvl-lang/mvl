@@ -27,10 +27,15 @@ use crate::mvl::passes::mutation::{
 
 /// Stdlib function names that shadow Rust built-ins or prelude items and must be
 /// emitted as fully-qualified paths to avoid silent name resolution to the wrong symbol (#420).
-const STDLIB_CONFLICTS: &[(&str, &[&str])] = &[(
-    "regex",
-    &["compile", "find", "find_all", "replace", "captures"],
-)];
+const STDLIB_CONFLICTS: &[(&str, &[&str])] = &[
+    (
+        "regex",
+        &["compile", "find", "find_all", "replace", "captures"],
+    ),
+    // #928: List[String]::join emits a prelude free function `fn join(...)` that
+    // shadows the runtime's `io::join(Path, String) -> Path`. Same for `to_string`.
+    ("io", &["join", "to_string"]),
+];
 
 ///// Code-generation context: accumulates Rust source text.
 #[derive(Default)]

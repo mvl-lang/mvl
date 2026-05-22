@@ -96,28 +96,33 @@ impl Parser {
         let (first_name, _) = self.require(ident_result)?;
 
         // #928: Receiver type args come between the type name and `::`, e.g.
-        // `fn Option[T]::is_some(self)` or `fn List[T]::push(self, x: T)`.
-        // Speculatively consume `[T, ...]`; if `::` follows, they are receiver
-        // type args. Otherwise rewind (they are fn-level generic type params).
+        // `fn Option[T]::is_some(self)` or `fn List[List[T]]::flatten(self)`.
+        // Speculatively consume `[T, ...]` as type expressions; if `::` follows,
+        // they are receiver type args. Otherwise rewind (they are fn-level
+        // generic type params parsed later).
         let receiver_type_args: Vec<crate::mvl::parser::ast::TypeExpr> =
             if *self.peek_kind() == TokenKind::LBracket {
                 let saved_pos = self.pos;
                 let saved_last_span = self.last_span;
                 let saved_errors_len = self.errors.len();
-                // parse_type_params_decl consumes `[T, U, ...]` and returns GenericParam list
-                let speculative_params = self.parse_type_params_decl();
+                // Parse as type expressions to support nested types like List[T].
+                self.advance(); // consume `[`
+                let mut args = Vec::new();
+                while !matches!(self.peek_kind(), TokenKind::RBracket | TokenKind::Eof) {
+                    if let Ok(te) = self.parse_type_expr() {
+                        args.push(te);
+                    } else {
+                        break;
+                    }
+                    if !self.eat(&TokenKind::Comma) {
+                        break;
+                    }
+                }
+                let _ = self.eat(&TokenKind::RBracket);
                 if *self.peek_kind() == TokenKind::ColonColon {
-                    // Confirmed: these are receiver type args.  Convert GenericParam names
-                    // to TypeExpr::Base so they can be threaded into the self param type.
-                    let span = self.peek_span();
-                    speculative_params
-                        .iter()
-                        .map(|gp| crate::mvl::parser::ast::TypeExpr::Base {
-                            name: gp.name().to_string(),
-                            args: vec![],
-                            span,
-                        })
-                        .collect()
+                    // Confirmed: these are receiver type args.
+                    self.errors.truncate(saved_errors_len);
+                    args
                 } else {
                     // Not a receiver — rewind.
                     self.pos = saved_pos;
@@ -150,16 +155,30 @@ impl Parser {
                 "Set", "Option", "Result",
             ];
             let mut all = Vec::new();
-            for rta in &receiver_type_args {
-                if let crate::mvl::parser::ast::TypeExpr::Base { name, .. } = rta {
-                    // Only add if it's a type variable (not a concrete type) and not
-                    // already present in the function's own type_params.
-                    if !CONCRETE_TYPES.contains(&name.as_str())
-                        && !fn_type_params.iter().any(|gp| gp.name() == name)
+            // Recursively collect type variables from receiver type args.
+            // e.g. `List[List[T]]::flatten` has receiver_type_args = [List[T]];
+            // `List` is concrete (skipped), but `T` inside it is a type variable.
+            fn collect_type_vars(
+                te: &crate::mvl::parser::ast::TypeExpr,
+                concrete: &[&str],
+                fn_params: &[GenericParam],
+                out: &mut Vec<GenericParam>,
+            ) {
+                if let crate::mvl::parser::ast::TypeExpr::Base { name, args, .. } = te {
+                    if !concrete.contains(&name.as_str())
+                        && !fn_params.iter().any(|gp| gp.name() == name)
+                        && !out.iter().any(|gp| gp.name() == name)
                     {
-                        all.push(GenericParam::Type(name.clone()));
+                        out.push(GenericParam::Type(name.clone()));
+                    }
+                    // Recurse into nested type args (e.g. T inside List[T]).
+                    for arg in args {
+                        collect_type_vars(arg, concrete, fn_params, out);
                     }
                 }
+            }
+            for rta in &receiver_type_args {
+                collect_type_vars(rta, CONCRETE_TYPES, &fn_type_params, &mut all);
             }
             all.extend(fn_type_params);
             all

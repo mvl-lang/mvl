@@ -550,11 +550,12 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
 
                 // intersection(b) / union(b) / difference(b) — Set operations.
                 // These return iterators; collect into HashSet.
+                // Clone the argument to avoid consuming it when used multiple times.
                 "intersection" if args.len() == 1 => {
                     let b = &args[0];
                     cg.push("{ let __b = ");
                     emit_expr(cg, b);
-                    cg.push("; ");
+                    cg.push(".clone(); ");
                     emit_expr(cg, receiver);
                     cg.push(
                         ".intersection(&__b).cloned().collect::<std::collections::HashSet<_>>() }",
@@ -564,7 +565,7 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     let b = &args[0];
                     cg.push("{ let __b = ");
                     emit_expr(cg, b);
-                    cg.push("; ");
+                    cg.push(".clone(); ");
                     emit_expr(cg, receiver);
                     cg.push(".union(&__b).cloned().collect::<std::collections::HashSet<_>>() }");
                 }
@@ -572,7 +573,7 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     let b = &args[0];
                     cg.push("{ let __b = ");
                     emit_expr(cg, b);
-                    cg.push("; ");
+                    cg.push(".clone(); ");
                     emit_expr(cg, receiver);
                     cg.push(
                         ".difference(&__b).cloned().collect::<std::collections::HashSet<_>>() }",
