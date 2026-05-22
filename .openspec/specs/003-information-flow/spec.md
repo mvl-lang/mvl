@@ -223,11 +223,13 @@ The compiler MUST detect implicit information flows via control flow (Program Co
 - AND `fn send_status() -> Unit { announce("ok") }` (unconditional — no high-PC branch)
 - THEN the compiler MUST accept: the program counter label is `None` at the call site
 
-### Requirement 12: Capability Labels as IFC Tokens [SHOULD]
+### Requirement 12: Capability Labels as IFC Tokens [MUST]
 
-IFC labels SHOULD be usable as capability tokens for resource provenance tracking. The same `label`/`relabel` machinery that tracks `Tainted` and `Secret` data SHOULD also track configuration-sourced values that gate access to external resources.
+IFC labels MUST be usable as capability tokens for resource provenance tracking. The same `label`/`relabel` machinery that tracks `Tainted` and `Secret` data MUST also track configuration-sourced values that gate access to external resources. The compiler MUST enforce label compatibility at call boundaries — bare `String` or differently-labeled values MUST be rejected where a capability label is expected.
 
 Capability labels absorb the "Capability Security" requirement (originally proposed as Req 13, absorbed into Req 11 per #931). Effects (`! FileRead`) tell you the *class* of action; capability labels tell you *which* resource — completing the security picture.
+
+**Security model:** Capability labels are provenance-tracking tokens, not access-control tokens. Any code that can call the wrap `relabel` transition can create a labeled value; the guarantee is that every label transition is auditable (grep for `relabel config_path` / `relabel unconfig_path` finds every crossing). For stronger isolation, restrict imports of the wrap relabel to designated producer modules.
 
 **Standard capability labels:**
 
@@ -240,7 +242,7 @@ Capability labels absorb the "Capability Security" requirement (originally propo
 
 **Implementation:** `std/config.mvl`, `std/db.mvl`, `std/net.mvl`, `std/audit.mvl`, `src/mvl/parser.rs`, `src/mvl/checker/context.rs`
 
-**Tests:** `tests/type_checker.rs::capability_labels_corpus_parses_and_checks`, `tests/type_checker.rs::config_path_rejects_raw_string`, `tests/type_checker.rs::raw_string_to_config_path_rejected`, `tests/type_checker.rs::db_url_rejects_tainted_string`, `tests/type_checker.rs::api_endpoint_rejects_raw_string`, `tests/type_checker.rs::audit_target_rejects_raw_string`, `tests/type_checker.rs::config_path_relabel_roundtrip`, `tests/type_checker.rs::capability_labels_are_distinct`
+**Tests:** `tests/type_checker.rs::capability_labels_corpus_parses_and_checks`, `tests/type_checker.rs::config_path_to_bare_string_return_rejected`, `tests/type_checker.rs::raw_string_to_config_path_rejected`, `tests/type_checker.rs::db_url_rejects_tainted_string`, `tests/type_checker.rs::api_endpoint_rejects_raw_string`, `tests/type_checker.rs::audit_target_rejects_raw_string`, `tests/type_checker.rs::config_path_relabel_roundtrip`, `tests/type_checker.rs::capability_labels_are_distinct`, `tests/type_checker.rs::config_path_call_site_rejects_raw_string`, `tests/type_checker.rs::db_url_call_site_rejects_raw_string`, `tests/type_checker.rs::api_endpoint_call_site_rejects_raw_string`, `tests/type_checker.rs::audit_target_call_site_rejects_raw_string`, `tests/type_checker.rs::db_url_relabel_roundtrip`, `tests/type_checker.rs::api_endpoint_relabel_roundtrip`, `tests/type_checker.rs::audit_target_relabel_roundtrip`, `tests/type_checker.rs::unconfig_path_on_bare_string_invalid`, `tests/type_checker.rs::undb_url_on_config_path_invalid`
 
 **Corpus:** `tests/corpus/06_ifc/capability_labels.mvl`
 

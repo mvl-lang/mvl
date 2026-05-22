@@ -6,9 +6,13 @@
 //!
 //! Import:
 //!   use std.net.{TcpListener, TcpStream, tcp_listen, tcp_accept,
-//!                tcp_read, tcp_write, tcp_close_listener, tcp_close_stream}
+//!                tcp_read, tcp_write, tcp_close_listener, tcp_close_stream,
+//!                ApiEndpoint, api_endpoint, unapi_endpoint,
+//!                load_endpoint, default_endpoint,
+//!                endpoint_connect, endpoint_listen}
 //!
 //! Effects:
+//!   Env — load_endpoint (reads env var)
 //!   Net — any operation that touches a network socket.
 //!
 //! IFC: bytes received from a remote peer are Tainted[String].
@@ -27,12 +31,17 @@ use std.env.{_env_read}
 
 /// A configuration-sourced API endpoint URL (capability token).
 ///
-/// `ApiEndpoint[String]` proves the wrapped URL came from audited configuration,
-/// not from user input or tainted sources.  Network connect functions accept
-/// `ApiEndpoint[String]`, not raw `String`, enforcing provenance at compile time.
+/// `ApiEndpoint[String]` is an IFC label that records provenance — the audit
+/// tag tracks whether the URL was loaded from an env var (`ENDPOINT-LOAD`) or
+/// supplied as a compile-time default (`ENDPOINT-DEFAULT`).  Capability-aware
+/// wrappers like `endpoint_connect` accept `ApiEndpoint[String]`, not raw
+/// `String`, so the compiler enforces label compatibility at call boundaries.
+///
+/// **Security model:** Capability labels are provenance-tracking tokens, not
+/// access-control tokens.  See `std.config.ConfigPath` for details.
 ///
 /// Produced by: `load_endpoint`, `default_endpoint`
-/// Consumed by: `tcp_connect`, `tcp_listen`, etc.
+/// Consumed by: `endpoint_connect`, `endpoint_listen`
 pub label ApiEndpoint
 
 /// Wrap a bare string in `ApiEndpoint` — marks it as an audited endpoint.
@@ -178,18 +187,20 @@ pub fn net_error_msg(e: NetError) -> String {
 // enforcing compile-time provenance for network endpoints.  The raw builtins
 // above remain available for backward compatibility and stdlib-internal use.
 
-/// Connect to a remote TCP server using a capability-verified endpoint.
+/// Connect to a remote TCP server using a capability-labeled endpoint.
 ///
-/// Accepts `ApiEndpoint[String]` — the compiler rejects raw `String` or
-/// `Tainted[String]`, ensuring only audited endpoints reach the network layer.
+/// Accepts `ApiEndpoint[String]` — the compiler enforces label compatibility,
+/// requiring an explicit `relabel` transition to convert raw `String` or
+/// `Tainted[String]`.
 pub fn endpoint_connect(endpoint: ApiEndpoint[String], port: Int) -> Result[TcpStream, NetError] ! Net {
     let host: String = relabel unapi_endpoint(endpoint, "NET-CONNECT");
     tcp_connect(host, port)
 }
 
-/// Bind a TCP listener using a capability-verified endpoint.
+/// Bind a TCP listener using a capability-labeled endpoint.
 ///
-/// Accepts `ApiEndpoint[String]` for the host — only audited hosts allowed.
+/// Accepts `ApiEndpoint[String]` for the host — requires explicit `relabel`
+/// to convert raw strings.
 pub fn endpoint_listen(endpoint: ApiEndpoint[String], port: Int) -> Result[TcpListener, NetError] ! Net {
     let host: String = relabel unapi_endpoint(endpoint, "NET-LISTEN");
     tcp_listen(host, port)

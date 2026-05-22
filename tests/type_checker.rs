@@ -1785,24 +1785,20 @@ fn secret_env_corpus_parses_and_checks() {
 fn capability_labels_corpus_parses_and_checks() {
     // GIVEN: capability_labels corpus (#931) — positive flows for ConfigPath,
     //        DbUrl, ApiEndpoint, AuditTarget capability labels
-    // THEN: no type errors (UndefinedFunction for stdlib is OK)
+    // THEN: no type errors (corpus uses only relabel expressions and inline fns)
     let src = include_str!("corpus/06_ifc/capability_labels.mvl");
     let result = check_src(src);
-    let serious_errors: Vec<_> = result
-        .errors
-        .iter()
-        .filter(|e| !matches!(e, CheckError::UndefinedFunction { .. }))
-        .collect();
     assert!(
-        serious_errors.is_empty(),
-        "capability_labels corpus should have no IFC violations, got: {serious_errors:?}"
+        result.is_ok(),
+        "capability_labels corpus should have no errors, got: {:?}",
+        result.errors
     );
 }
 
 #[test]
-fn config_path_rejects_raw_string() {
-    // GIVEN: a function expecting ConfigPath[String] but receiving bare String
-    // THEN: TypeMismatch — raw String cannot flow to ConfigPath[String]
+fn config_path_to_bare_string_return_rejected() {
+    // GIVEN: a function returning bare String but body yields ConfigPath[String]
+    // THEN: TypeMismatch — ConfigPath[String] cannot implicitly flow to String
     let errors = errors_for(r#"fn use_path(p: ConfigPath[String]) -> String { p }"#);
     assert!(
         errors
@@ -1895,6 +1891,157 @@ fn capability_labels_are_distinct() {
             .iter()
             .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
         "ConfigPath[String] must not flow to DbUrl[String], got: {errors:?}"
+    );
+}
+
+// ── #931: Call-site rejection tests (caller passes wrong type to capability param) ──
+
+#[test]
+fn config_path_call_site_rejects_raw_string() {
+    // GIVEN: a function expecting ConfigPath[String]
+    // WHEN: caller passes bare String at the call site
+    // THEN: TypeMismatch
+    let src = r#"
+        fn needs_config(p: ConfigPath[String]) -> ConfigPath[String] { p }
+        fn caller(s: String) -> ConfigPath[String] { needs_config(s) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "bare String at call site must not satisfy ConfigPath[String], got: {errors:?}"
+    );
+}
+
+#[test]
+fn db_url_call_site_rejects_raw_string() {
+    // GIVEN: a function expecting DbUrl[String]
+    // WHEN: caller passes bare String at the call site
+    // THEN: TypeMismatch
+    let src = r#"
+        fn needs_db(u: DbUrl[String]) -> DbUrl[String] { u }
+        fn caller(s: String) -> DbUrl[String] { needs_db(s) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "bare String at call site must not satisfy DbUrl[String], got: {errors:?}"
+    );
+}
+
+#[test]
+fn api_endpoint_call_site_rejects_raw_string() {
+    // GIVEN: a function expecting ApiEndpoint[String]
+    // WHEN: caller passes bare String at the call site
+    // THEN: TypeMismatch
+    let src = r#"
+        fn needs_endpoint(e: ApiEndpoint[String]) -> ApiEndpoint[String] { e }
+        fn caller(s: String) -> ApiEndpoint[String] { needs_endpoint(s) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "bare String at call site must not satisfy ApiEndpoint[String], got: {errors:?}"
+    );
+}
+
+#[test]
+fn audit_target_call_site_rejects_raw_string() {
+    // GIVEN: a function expecting AuditTarget[String]
+    // WHEN: caller passes bare String at the call site
+    // THEN: TypeMismatch
+    let src = r#"
+        fn needs_target(t: AuditTarget[String]) -> AuditTarget[String] { t }
+        fn caller(s: String) -> AuditTarget[String] { needs_target(s) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "bare String at call site must not satisfy AuditTarget[String], got: {errors:?}"
+    );
+}
+
+// ── #931: Roundtrip tests for DbUrl, ApiEndpoint, AuditTarget ───────────────
+
+#[test]
+fn db_url_relabel_roundtrip() {
+    let src = r#"
+        fn roundtrip(s: String) -> String {
+            let u: DbUrl[String] = relabel db_url(s, "TEST");
+            relabel undb_url(u, "TEST")
+        }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "DbUrl relabel round-trip should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn api_endpoint_relabel_roundtrip() {
+    let src = r#"
+        fn roundtrip(s: String) -> String {
+            let e: ApiEndpoint[String] = relabel api_endpoint(s, "TEST");
+            relabel unapi_endpoint(e, "TEST")
+        }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "ApiEndpoint relabel round-trip should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn audit_target_relabel_roundtrip() {
+    let src = r#"
+        fn roundtrip(s: String) -> String {
+            let t: AuditTarget[String] = relabel audit_target(s, "TEST");
+            relabel unaudit_target(t, "TEST")
+        }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "AuditTarget relabel round-trip should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+// ── #931: InvalidRelabel tests for capability transitions ───────────────────
+
+#[test]
+fn unconfig_path_on_bare_string_invalid() {
+    // unconfig_path requires ConfigPath input, not bare String
+    let errors = errors_for(r#"fn bad(s: String) -> String { relabel unconfig_path(s, "X") }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::InvalidRelabel { .. })),
+        "unconfig_path on bare String should be InvalidRelabel, got: {errors:?}"
+    );
+}
+
+#[test]
+fn undb_url_on_config_path_invalid() {
+    // undb_url requires DbUrl input, not ConfigPath
+    let errors =
+        errors_for(r#"fn bad(p: ConfigPath[String]) -> String { relabel undb_url(p, "X") }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::InvalidRelabel { .. })),
+        "undb_url on ConfigPath should be InvalidRelabel, got: {errors:?}"
     );
 }
 

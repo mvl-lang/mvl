@@ -4,7 +4,8 @@
 //   ConfigPath, DbUrl, ApiEndpoint, AuditTarget
 //
 // These labels use identical machinery to Tainted/Secret: opaque wrappers,
-// unforgeable, designated sources, relabel as the only bridge.
+// designated producers, relabel as the only bridge.  Capability labels are
+// provenance-tracking tokens — every crossing is auditable.
 //
 // Positive flows only. Negative cases (raw String where ConfigPath expected,
 // etc.) are covered in tests/type_checker.rs.
@@ -91,7 +92,15 @@ fn db_url_through_generic(u: DbUrl[String]) -> DbUrl[String] {
     identity(u)
 }
 
-// ── Cross-label: capability labels are distinct from Tainted/Secret ─────────
+// ── Cross-label escape hatches (advanced) ───────────────────────────────────
+//
+// These patterns demonstrate that relabel transitions are composable: you can
+// strip one label and apply another.  This is by design — capability labels
+// are provenance-tracking tokens, not access-control tokens.  Every crossing
+// is auditable (grep for `relabel trust` / `relabel config_path`).
+//
+// In production code, prefer using the designated producers (load_path,
+// default_path, etc.) rather than manually composing relabel chains.
 
 fn tainted_to_config(raw: Tainted[String]) -> ConfigPath[String] {
     let bare: String = relabel trust(raw, "VALIDATED");

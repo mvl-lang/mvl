@@ -52,7 +52,7 @@ Every `match` must cover all cases. The compiler rejects incomplete logic. Addin
 
 ### 10. Effect Tracking (Req 7)
 
-Side effects declared in function signatures: `! Console`, `! FileRead`, `! Net`, `! DB`, etc. 13 fine-grained effects. Pure functions (no `!`) are provably pure — the compiler rejects any I/O in them. Absorbs capability-based security (Req 13).
+Side effects declared in function signatures: `! Console`, `! FileRead`, `! Net`, `! DB`, etc. 13 fine-grained effects. Pure functions (no `!`) are provably pure — the compiler rejects any I/O in them. Effects tell you the *class* of action; capability labels (Req 11, IFC) tell you *which* resource (#931).
 
 ### 11. Termination Checking (Req 8)
 

@@ -21,11 +21,15 @@ use std.env.{_env_read}
 
 /// A configuration-sourced audit log destination (capability token).
 ///
-/// `AuditTarget[String]` is the root-of-trust label for the audit subsystem.
-/// It proves the wrapped path came from audited configuration (env var or
-/// compile-time default), not from user input.  The audit actor accepts
-/// `AuditTarget[String]` at initialization — once set, all subsequent relabel
-/// transitions produce audit events written to that destination.
+/// `AuditTarget[String]` is an IFC label that records provenance for the
+/// audit subsystem's destination.  The audit tag tracks whether the path was
+/// loaded from an env var (`AUDIT-BOOTSTRAP`) or supplied as a compile-time
+/// default (`AUDIT-DEFAULT`).  The audit actor accepts `AuditTarget[String]`
+/// at initialization — once set, all subsequent relabel transitions produce
+/// audit events written to that destination.
+///
+/// **Security model:** Capability labels are provenance-tracking tokens, not
+/// access-control tokens.  See `std.config.ConfigPath` for details.
 ///
 /// Produced by: `load_audit_target`, `default_audit_target`
 /// Consumed by: audit actor initialization

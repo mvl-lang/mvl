@@ -20,9 +20,14 @@ use std.env.{_env_read}
 
 /// A configuration-sourced database connection URL (capability token).
 ///
-/// `DbUrl[String]` proves the wrapped URL came from audited configuration,
-/// not from user input or tainted sources.  Database connect functions accept
-/// `DbUrl[String]`, not raw `String`, enforcing provenance at compile time.
+/// `DbUrl[String]` is an IFC label that records provenance — the audit tag
+/// tracks whether the URL was loaded from an env var (`DB-URL-LOAD`) or
+/// supplied as a compile-time default (`DB-URL-DEFAULT`).  Database connect
+/// wrappers accept `DbUrl[String]`, not raw `String`, so the compiler
+/// enforces label compatibility at call boundaries.
+///
+/// **Security model:** Capability labels are provenance-tracking tokens, not
+/// access-control tokens.  See `std.config.ConfigPath` for details.
 ///
 /// Produced by: `load_db_url`, `default_db_url`
 /// Consumed by: `pkg.sqlite.open`, `pkg.postgres.connect`, etc.
