@@ -223,6 +223,53 @@ The compiler MUST detect implicit information flows via control flow (Program Co
 - AND `fn send_status() -> Unit { announce("ok") }` (unconditional — no high-PC branch)
 - THEN the compiler MUST accept: the program counter label is `None` at the call site
 
+### Requirement 12: Capability Labels as IFC Tokens [MUST]
+
+IFC labels MUST be usable as capability tokens for resource provenance tracking. The same `label`/`relabel` machinery that tracks `Tainted` and `Secret` data MUST also track configuration-sourced values that gate access to external resources. The compiler MUST enforce label compatibility at call boundaries — bare `String` or differently-labeled values MUST be rejected where a capability label is expected.
+
+Capability labels absorb the "Capability Security" requirement (originally proposed as Req 13, absorbed into Req 11 per #931). Effects (`! FileRead`) tell you the *class* of action; capability labels tell you *which* resource — completing the security picture.
+
+**Security model:** Capability labels are provenance-tracking tokens, not access-control tokens. Any code that can call the wrap `relabel` transition can create a labeled value; the guarantee is that every label transition is auditable (grep for `relabel config_path` / `relabel unconfig_path` finds every crossing). For stronger isolation, restrict imports of the wrap relabel to designated producer modules.
+
+**Standard capability labels:**
+
+| Label | Produced by | Consumed by |
+|-------|-------------|-------------|
+| `ConfigPath[T]` | `config.load_path` / `config.default_path` | `io.read_config_file`, `io.write_config_file` |
+| `DbUrl[T]` | `db.load_db_url` / `db.default_db_url` | database connect functions |
+| `ApiEndpoint[T]` | `net.load_endpoint` / `net.default_endpoint` | `net.endpoint_connect`, `net.endpoint_listen` |
+| `AuditTarget[T]` | `audit.load_audit_target` / `audit.default_audit_target` | audit actor initialization |
+
+**Implementation:** `std/config.mvl`, `std/db.mvl`, `std/net.mvl`, `std/audit.mvl`, `src/mvl/parser.rs`, `src/mvl/checker/context.rs`
+
+**Tests:** `tests/type_checker.rs::capability_labels_corpus_parses_and_checks`, `tests/type_checker.rs::config_path_to_bare_string_return_rejected`, `tests/type_checker.rs::raw_string_to_config_path_rejected`, `tests/type_checker.rs::db_url_rejects_tainted_string`, `tests/type_checker.rs::api_endpoint_rejects_raw_string`, `tests/type_checker.rs::audit_target_rejects_raw_string`, `tests/type_checker.rs::config_path_relabel_roundtrip`, `tests/type_checker.rs::capability_labels_are_distinct`, `tests/type_checker.rs::config_path_call_site_rejects_raw_string`, `tests/type_checker.rs::db_url_call_site_rejects_raw_string`, `tests/type_checker.rs::api_endpoint_call_site_rejects_raw_string`, `tests/type_checker.rs::audit_target_call_site_rejects_raw_string`, `tests/type_checker.rs::db_url_relabel_roundtrip`, `tests/type_checker.rs::api_endpoint_relabel_roundtrip`, `tests/type_checker.rs::audit_target_relabel_roundtrip`, `tests/type_checker.rs::unconfig_path_on_bare_string_invalid`, `tests/type_checker.rs::undb_url_on_config_path_invalid`
+
+**Corpus:** `tests/corpus/06_ifc/capability_labels.mvl`
+
+#### Scenario: Raw string rejected at capability boundary
+
+- GIVEN `fn read_config_file(p: ConfigPath[String]) -> Result[Tainted[String], IoError] ! FileRead`
+- WHEN the caller passes a bare `String`
+- THEN the compiler MUST reject: "expected `ConfigPath[String]`, got `String`"
+
+#### Scenario: Tainted string rejected at capability boundary
+
+- GIVEN `fn endpoint_connect(endpoint: ApiEndpoint[String], port: Int) -> Result[TcpStream, NetError] ! Net`
+- WHEN the caller passes `Tainted[String]` from user input
+- THEN the compiler MUST reject: different labels are not interchangeable
+
+#### Scenario: Capability labels are distinct
+
+- GIVEN a function expecting `DbUrl[String]`
+- WHEN the caller passes `ConfigPath[String]`
+- THEN the compiler MUST reject: `ConfigPath` and `DbUrl` are distinct labels
+
+#### Scenario: Relabel round-trip preserves type safety
+
+- GIVEN `relabel config_path(s, "CONFIG-DEFAULT")` wraps bare String as ConfigPath
+- AND `relabel unconfig_path(p, "IO-READ")` unwraps ConfigPath to bare String
+- THEN the round-trip type-checks and each transition produces an audit event
+
 ### Known Limitations
 
 - Label inference through unannotated intermediate bindings (without explicit type annotations) is conservative: the label may not be propagated. Users should annotate intermediate variables explicitly.

@@ -6,9 +6,13 @@
 //!
 //! Import:
 //!   use std.net.{TcpListener, TcpStream, tcp_listen, tcp_accept,
-//!                tcp_read, tcp_write, tcp_close_listener, tcp_close_stream}
+//!                tcp_read, tcp_write, tcp_close_listener, tcp_close_stream,
+//!                ApiEndpoint, api_endpoint, unapi_endpoint,
+//!                load_endpoint, default_endpoint,
+//!                endpoint_connect, endpoint_listen}
 //!
 //! Effects:
+//!   Env — load_endpoint (reads env var)
 //!   Net — any operation that touches a network socket.
 //!
 //! IFC: bytes received from a remote peer are Tainted[String].
@@ -20,6 +24,50 @@
 //!   does not invalidate the handle; the listener stays open until
 //!   `tcp_close_listener` is called or the program exits.
 //!   TcpStream is likewise `Copy`.
+
+use std.env.{_env_read}
+
+// ── Capability label: ApiEndpoint (#931) ────────────────────────────────────
+
+/// A configuration-sourced API endpoint URL (capability token).
+///
+/// `ApiEndpoint[String]` is an IFC label that records provenance — the audit
+/// tag tracks whether the URL was loaded from an env var (`ENDPOINT-LOAD`) or
+/// supplied as a compile-time default (`ENDPOINT-DEFAULT`).  Capability-aware
+/// wrappers like `endpoint_connect` accept `ApiEndpoint[String]`, not raw
+/// `String`, so the compiler enforces label compatibility at call boundaries.
+///
+/// **Security model:** Capability labels are provenance-tracking tokens, not
+/// access-control tokens.  See `std.config.ConfigPath` for details.
+///
+/// Produced by: `load_endpoint`, `default_endpoint`
+/// Consumed by: `endpoint_connect`, `endpoint_listen`
+pub label ApiEndpoint
+
+/// Wrap a bare string in `ApiEndpoint` — marks it as an audited endpoint.
+pub relabel api_endpoint: _ -> ApiEndpoint
+
+/// Unwrap `ApiEndpoint[T]` to bare `T` — explicit escape hatch with audit tag.
+pub relabel unapi_endpoint: ApiEndpoint -> _
+
+/// Load an API endpoint from an environment variable.
+///
+/// Returns `Some(ApiEndpoint[String])` if the env var is set, `None` otherwise.
+/// The audit tag `ENDPOINT-LOAD` records that this endpoint came from the environment.
+pub fn load_endpoint(key: String) -> Option[ApiEndpoint[String]] ! Env {
+    match _env_read(key) {
+        Some(v) => Some(relabel api_endpoint(v, "ENDPOINT-LOAD")),
+        None => None,
+    }
+}
+
+/// Wrap a compile-time default endpoint as `ApiEndpoint[String]`.
+///
+/// Use when no environment override is available. The audit tag `ENDPOINT-DEFAULT`
+/// records that this endpoint is a hardcoded fallback.
+pub fn default_endpoint(fallback: String) -> ApiEndpoint[String] {
+    relabel api_endpoint(fallback, "ENDPOINT-DEFAULT")
+}
 
 // ── Error type ────────────────────────────────────────────────────────────────
 
@@ -131,4 +179,29 @@ pub fn net_error_msg(e: NetError) -> String {
         NetError::HostUnreachable   => "host unreachable",
         NetError::Other(msg)        => msg,
     }
+}
+
+// ── Capability-aware network operations (#931) ──────────────────────────────
+//
+// These wrappers accept `ApiEndpoint[String]` instead of raw `String`,
+// enforcing compile-time provenance for network endpoints.  The raw builtins
+// above remain available for backward compatibility and stdlib-internal use.
+
+/// Connect to a remote TCP server using a capability-labeled endpoint.
+///
+/// Accepts `ApiEndpoint[String]` — the compiler enforces label compatibility,
+/// requiring an explicit `relabel` transition to convert raw `String` or
+/// `Tainted[String]`.
+pub fn endpoint_connect(endpoint: ApiEndpoint[String], port: Int) -> Result[TcpStream, NetError] ! Net {
+    let host: String = relabel unapi_endpoint(endpoint, "NET-CONNECT");
+    tcp_connect(host, port)
+}
+
+/// Bind a TCP listener using a capability-labeled endpoint.
+///
+/// Accepts `ApiEndpoint[String]` for the host — requires explicit `relabel`
+/// to convert raw strings.
+pub fn endpoint_listen(endpoint: ApiEndpoint[String], port: Int) -> Result[TcpListener, NetError] ! Net {
+    let host: String = relabel unapi_endpoint(endpoint, "NET-LISTEN");
+    tcp_listen(host, port)
 }

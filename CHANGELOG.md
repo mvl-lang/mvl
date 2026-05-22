@@ -4,6 +4,16 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.139.0] - 2026-05-22
+
+### Added
+
+- **Capability labels as IFC tokens** (#931, #932): Four new `label` types (`ConfigPath`, `DbUrl`, `ApiEndpoint`, `AuditTarget`) reuse existing IFC machinery to provide provenance tracking for resource identifiers. Type system enforces label compatibility at call boundaries — bare `String` or mismatched labels are rejected where a capability label is expected. Capability-aware wrapper functions in `std/io.mvl` and `std/net.mvl` accept labeled types; raw builtins remain available for backward compatibility. Parser and checker pre-seed all 4 labels and 8 relabel transitions. ADR-0001 and specs 002-003 updated: capability security absorbed into Req 11 (IFC labels), not Req 7 (effects).
+
+### Changed
+
+- **Req 13 absorption clarification** (#932): Capability-based security absorbed into Req 11 (IFC labels as capability tokens) + std/audit (runtime policy), not Req 7. Effects (`! FileRead`) tell you the *class* of action; capability labels tell you *which* resource.
+
 ## [0.138.0] - 2026-05-22
 
 ### Added

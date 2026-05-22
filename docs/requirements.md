@@ -349,9 +349,11 @@ let clean = sanitize(validate(user_input));  // Tainted → Clean (explicit)
 log_msg(declassify(clean));                  // Clean → Public (auditable)
 ```
 
-**OWASP coverage:** 9/10 categories addressed. A03 (Injection) → tainted input can't reach query builder. A07 (Auth Failures) → credentials tracked as `Secret`. A10 (SSRF) → tainted URLs can't reach network calls.
+**Capability security absorbed:** IFC labels double as capability tokens (#931). `ConfigPath[String]`, `DbUrl[String]`, `ApiEndpoint[String]` prove resource identifiers came from audited configuration — the compiler rejects raw or tainted strings at builtin boundaries. Effects (`! FileRead`) tell you the class of action; capability labels tell you which resource.
 
-**What it eliminates:** SQL injection, XSS, SSRF, secret leakage to logs, tainted data in trusted sinks.
+**OWASP coverage:** 9/10 categories addressed. A03 (Injection) → tainted input can't reach query builder. A07 (Auth Failures) → credentials tracked as `Secret`. A10 (SSRF) → tainted URLs can't reach network calls. A01 (Broken Access Control) → capability labels enforce resource provenance.
+
+**What it eliminates:** SQL injection, XSS, SSRF, secret leakage to logs, tainted data in trusted sinks, unaudited resource access.
 
 **Manual:** [Information Flow Control](manual/10-ifc.md)
 

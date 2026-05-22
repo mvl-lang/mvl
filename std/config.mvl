@@ -12,16 +12,64 @@
 //!   use std.config.{ConfigValue, ConfigError, merge, with_env, get_path,
 //!                   as_int, as_string, as_bool, as_float, as_list, as_map,
 //!                   from_json, from_toml,
-//!                   find_config, xdg_config_home, xdg_data_home, xdg_cache_home}
+//!                   find_config, xdg_config_home, xdg_data_home, xdg_cache_home,
+//!                   ConfigPath, config_path, unconfig_path,
+//!                   load_path, default_path}
 //!
 //! Effects:
-//!   Env            — with_env, xdg_config_home, xdg_data_home, xdg_cache_home
+//!   Env            — with_env, xdg_config_home, xdg_data_home, xdg_cache_home,
+//!                    load_path
 //!   Env + FileRead — find_config
 
-use std.env.{env_var}
+use std.env.{env_var, _env_read}
 use std.io.{path, path_exists}
 use std.json.{Value}
 use std.toml.{TomlValue}
+
+// ── Capability label: ConfigPath (#931) ─────────────────────────────────────
+
+/// A configuration-sourced filesystem path (capability token).
+///
+/// `ConfigPath[String]` is an IFC label that records provenance — the audit tag
+/// tracks whether the value was loaded from an env var (`CONFIG-LOAD`) or
+/// supplied as a compile-time default (`CONFIG-DEFAULT`).  Capability-aware
+/// wrappers like `read_config_file` accept `ConfigPath[String]`, not raw
+/// `String`, so the compiler enforces label compatibility at call boundaries.
+///
+/// **Security model:** Capability labels are provenance-tracking tokens, not
+/// access-control tokens.  Any code that can call `relabel config_path` can
+/// wrap a value; the guarantee is that every label transition is auditable
+/// (grep for `relabel config_path` / `relabel unconfig_path` finds every
+/// crossing).  For stronger isolation, restrict imports of the wrap relabel.
+///
+/// Produced by: `load_path`, `default_path`
+/// Consumed by: `std.io.read_config_file`, `std.io.write_config_file`
+pub label ConfigPath
+
+/// Wrap a bare string in `ConfigPath` — marks it as an audited config value.
+pub relabel config_path: _ -> ConfigPath
+
+/// Unwrap `ConfigPath[T]` to bare `T` — explicit escape hatch with audit tag.
+pub relabel unconfig_path: ConfigPath -> _
+
+/// Load a config path from an environment variable.
+///
+/// Returns `Some(ConfigPath[String])` if the env var is set, `None` otherwise.
+/// The audit tag `CONFIG-LOAD` records that this path came from the environment.
+pub fn load_path(key: String) -> Option[ConfigPath[String]] ! Env {
+    match _env_read(key) {
+        Some(v) => Some(relabel config_path(v, "CONFIG-LOAD")),
+        None => None,
+    }
+}
+
+/// Wrap a compile-time default path as `ConfigPath[String]`.
+///
+/// Use when no environment override is available. The audit tag `CONFIG-DEFAULT`
+/// records that this path is a hardcoded fallback.
+pub fn default_path(fallback: String) -> ConfigPath[String] {
+    relabel config_path(fallback, "CONFIG-DEFAULT")
+}
 
 // ── Error type ────────────────────────────────────────────────────────────────
 

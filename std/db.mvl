@@ -14,6 +14,50 @@
 //!
 //! See #790, ADR-0007.
 
+use std.env.{_env_read}
+
+// ── Capability label: DbUrl (#931) ───────────────────────────────────────────
+
+/// A configuration-sourced database connection URL (capability token).
+///
+/// `DbUrl[String]` is an IFC label that records provenance — the audit tag
+/// tracks whether the URL was loaded from an env var (`DB-URL-LOAD`) or
+/// supplied as a compile-time default (`DB-URL-DEFAULT`).  Database connect
+/// wrappers accept `DbUrl[String]`, not raw `String`, so the compiler
+/// enforces label compatibility at call boundaries.
+///
+/// **Security model:** Capability labels are provenance-tracking tokens, not
+/// access-control tokens.  See `std.config.ConfigPath` for details.
+///
+/// Produced by: `load_db_url`, `default_db_url`
+/// Consumed by: `pkg.sqlite.open`, `pkg.postgres.connect`, etc.
+pub label DbUrl
+
+/// Wrap a bare string in `DbUrl` — marks it as an audited database URL.
+pub relabel db_url: _ -> DbUrl
+
+/// Unwrap `DbUrl[T]` to bare `T` — explicit escape hatch with audit tag.
+pub relabel undb_url: DbUrl -> _
+
+/// Load a database URL from an environment variable.
+///
+/// Returns `Some(DbUrl[String])` if the env var is set, `None` otherwise.
+/// The audit tag `DB-URL-LOAD` records that this URL came from the environment.
+pub fn load_db_url(key: String) -> Option[DbUrl[String]] ! Env {
+    match _env_read(key) {
+        Some(v) => Some(relabel db_url(v, "DB-URL-LOAD")),
+        None => None,
+    }
+}
+
+/// Wrap a compile-time default database URL as `DbUrl[String]`.
+///
+/// Use when no environment override is available. The audit tag `DB-URL-DEFAULT`
+/// records that this URL is a hardcoded fallback.
+pub fn default_db_url(fallback: String) -> DbUrl[String] {
+    relabel db_url(fallback, "DB-URL-DEFAULT")
+}
+
 // ── Value ─────────────────────────────────────────────────────────────────────
 
 /// A typed value that can be stored in or read from any database.

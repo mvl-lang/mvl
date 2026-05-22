@@ -269,3 +269,29 @@ pub builtin fn stdout_write(s: Stdout, line: String) -> Unit ! Console
 /// Does not append a newline. Use `eprintln` (from the implicit prelude) for
 /// newline-terminated output.
 pub builtin fn stderr_write(s: Stderr, line: String) -> Unit ! Console
+
+// ── Capability-aware file operations (#931) ─────────────────────────────────
+//
+// These wrappers accept `ConfigPath[String]` instead of raw `String`,
+// enforcing compile-time provenance for filesystem paths.  The raw builtins
+// above remain available for backward compatibility and stdlib-internal use.
+
+/// Read a file using a capability-labeled config path.
+///
+/// Accepts `ConfigPath[String]` — the compiler enforces label compatibility,
+/// requiring an explicit `relabel` transition to convert raw `String` or
+/// `Tainted[String]`.  Returns `Tainted[String]` because file contents are
+/// untrusted.
+pub fn read_config_file(p: ConfigPath[String]) -> Result[Tainted[String], IoError] ! FileRead {
+    let raw: String = relabel unconfig_path(p, "IO-READ");
+    read_file(raw)
+}
+
+/// Write to a file using a capability-labeled config path.
+///
+/// Accepts `ConfigPath[String]` for the path.  Content is bare `String` —
+/// callers must sanitize `Tainted[String]` via `relabel trust` before writing.
+pub fn write_config_file(p: ConfigPath[String], content: String) -> Result[Unit, IoError] ! FileWrite {
+    let raw: String = relabel unconfig_path(p, "IO-WRITE");
+    write(path(raw), content)
+}

@@ -13,7 +13,9 @@ The MVL effect system tracks side effects for security audit and functional safe
 
 A function signature tells the full truth about what the function can do. If a function reads a file, it says so. If it's pure, the absence of effects proves it. The signature IS the threat model.
 
-**Purpose:** Security tracking and functional safety — not abstraction or composition. Effects propagate; they do not discharge. Closest language: Austral (capability tracking).
+**Purpose:** Security tracking and functional safety — not abstraction or composition. Effects propagate; they do not discharge. Closest language: Austral (effect tracking).
+
+**Note on capability security:** Effects tell you the *class* of action (`! FileRead`), not *which* resource. Resource-level capability security is handled by Req 11 (IFC labels as capability tokens: `ConfigPath[String]`, `DbUrl[String]`, etc.) — see #931.
 
 ## Requirements
 
