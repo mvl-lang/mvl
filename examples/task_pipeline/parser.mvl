@@ -14,7 +14,6 @@
 
 use model::Record;
 use model::ParseError;
-use std.lists.{list_concat}
 
 // ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -134,7 +133,7 @@ fn csv_fold_step(acc: Result[List[Record], ParseError], line: String) -> Result[
             Ok(records) => {
                 match parse_record(trimmed) {
                     Err(e)     => Err(e),
-                    Ok(record) => Ok(list_concat(records, [record])),
+                    Ok(record) => Ok(records.concat([record])),
                 }
             }
         }

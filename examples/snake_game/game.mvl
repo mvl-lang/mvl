@@ -11,7 +11,6 @@
 //
 // Assurance note: 0 extern blocks.
 
-use std.lists.{list_concat}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -129,7 +128,7 @@ total fn update(game: Game, input: Option[Direction], next_food: Pos) -> Game {
             board:     game.board,
         }
     } else {
-        let grew: List[Pos]      = list_concat([new_head], game.snake);
+        let grew: List[Pos]      = [new_head].concat(game.snake);
         let ate: Bool            = new_head.x == cur_food.x && new_head.y == cur_food.y;
         let new_snake: List[Pos] = if ate { grew } else { grew.take(game.snake.len()) };
         let new_food:  Pos       = if ate { next_food } else { cur_food };

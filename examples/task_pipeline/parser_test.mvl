@@ -131,7 +131,7 @@ fn parse_csv(content: String) -> Result[List[Record], ParseError] {
                         Ok(records) => {
                             match parse_record(trimmed) {
                                 Err(e)      => Err(e),
-                                Ok(record)  => Ok(list_concat(records, [record])),
+                                Ok(record)  => Ok(records.concat([record])),
                             }
                         }
                     }

@@ -13,7 +13,6 @@
 
 use model::Record;
 use model::Summary;
-use std.lists.{list_concat}
 
 // ── Filtering ─────────────────────────────────────────────────────────────
 
@@ -74,7 +73,7 @@ pub fn enrich_high_value(records: List[Record], threshold: Float) -> List[Record
             } else {
                 r
             };
-            list_concat(acc, [out])
+            acc.concat([out])
         }
     )
 }
