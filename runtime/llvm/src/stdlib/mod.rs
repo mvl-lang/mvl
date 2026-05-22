@@ -16,4 +16,5 @@ pub mod net;
 pub mod process;
 pub mod random;
 pub mod regex;
+pub mod set;
 pub mod time;
