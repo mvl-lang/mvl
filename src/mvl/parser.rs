@@ -62,10 +62,18 @@ impl Parser {
         let first_span = tokens.first().map(|t| t.span).unwrap_or_default();
         // Pre-seed the stdlib IFC labels so `Tainted[T]` and `Secret[T]` parse
         // correctly without requiring an explicit `label` declaration in scope.
-        let known_labels = ["Tainted", "Secret"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let known_labels = [
+            "Tainted",
+            "Secret",
+            // Capability labels (#931): IFC labels as capability tokens (Req 13 → Req 11).
+            "ConfigPath",
+            "DbUrl",
+            "ApiEndpoint",
+            "AuditTarget",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         (
             Parser {
                 tokens,

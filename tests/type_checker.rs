@@ -1779,6 +1779,125 @@ fn secret_env_corpus_parses_and_checks() {
     );
 }
 
+// ── #931: Capability labels (IFC labels as capability tokens) ─────────────────
+
+#[test]
+fn capability_labels_corpus_parses_and_checks() {
+    // GIVEN: capability_labels corpus (#931) — positive flows for ConfigPath,
+    //        DbUrl, ApiEndpoint, AuditTarget capability labels
+    // THEN: no type errors (UndefinedFunction for stdlib is OK)
+    let src = include_str!("corpus/06_ifc/capability_labels.mvl");
+    let result = check_src(src);
+    let serious_errors: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| !matches!(e, CheckError::UndefinedFunction { .. }))
+        .collect();
+    assert!(
+        serious_errors.is_empty(),
+        "capability_labels corpus should have no IFC violations, got: {serious_errors:?}"
+    );
+}
+
+#[test]
+fn config_path_rejects_raw_string() {
+    // GIVEN: a function expecting ConfigPath[String] but receiving bare String
+    // THEN: TypeMismatch — raw String cannot flow to ConfigPath[String]
+    let errors = errors_for(r#"fn use_path(p: ConfigPath[String]) -> String { p }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "ConfigPath[String] return as String should be rejected, got: {errors:?}"
+    );
+}
+
+#[test]
+fn raw_string_to_config_path_rejected() {
+    // GIVEN: a function returning ConfigPath[String] but body is bare String
+    // THEN: TypeMismatch — bare String needs relabel config_path to become ConfigPath
+    let errors = errors_for(r#"fn make_path(s: String) -> ConfigPath[String] { s }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "bare String must not flow to ConfigPath[String] without relabel, got: {errors:?}"
+    );
+}
+
+#[test]
+fn db_url_rejects_tainted_string() {
+    // GIVEN: a function expecting DbUrl[String] but receiving Tainted[String]
+    // THEN: TypeMismatch — Tainted[String] cannot flow to DbUrl[String]
+    let errors = errors_for(r#"fn connect(url: Tainted[String]) -> DbUrl[String] { url }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "Tainted[String] must not flow to DbUrl[String] without relabel, got: {errors:?}"
+    );
+}
+
+#[test]
+fn api_endpoint_rejects_raw_string() {
+    // GIVEN: a function returning ApiEndpoint[String] but body is bare String
+    // THEN: TypeMismatch
+    let errors = errors_for(r#"fn make_endpoint(s: String) -> ApiEndpoint[String] { s }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "bare String must not flow to ApiEndpoint[String] without relabel, got: {errors:?}"
+    );
+}
+
+#[test]
+fn audit_target_rejects_raw_string() {
+    // GIVEN: a function returning AuditTarget[String] but body is bare String
+    // THEN: TypeMismatch
+    let errors = errors_for(r#"fn make_target(s: String) -> AuditTarget[String] { s }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "bare String must not flow to AuditTarget[String] without relabel, got: {errors:?}"
+    );
+}
+
+#[test]
+fn config_path_relabel_roundtrip() {
+    // GIVEN: relabel config_path wraps, relabel unconfig_path unwraps
+    // THEN: no type errors on the round-trip
+    let src = r#"
+        fn roundtrip(s: String) -> String {
+            let p: ConfigPath[String] = relabel config_path(s, "TEST");
+            relabel unconfig_path(p, "TEST")
+        }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "ConfigPath relabel round-trip should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn capability_labels_are_distinct() {
+    // GIVEN: ConfigPath[String] where DbUrl[String] is expected
+    // THEN: TypeMismatch — different capability labels are not interchangeable
+    let src = r#"
+        fn wrong_label(p: ConfigPath[String]) -> DbUrl[String] { p }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "ConfigPath[String] must not flow to DbUrl[String], got: {errors:?}"
+    );
+}
+
 #[test]
 fn sanitize_tainted_returns_clean() {
     // GIVEN: sanitize(tainted_string) where tainted_string: Tainted[String]

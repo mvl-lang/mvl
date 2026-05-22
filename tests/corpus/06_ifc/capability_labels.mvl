@@ -1,0 +1,104 @@
+// Corpus: Capability labels — IFC labels as capability tokens (#931)
+//
+// Validates the full IFC chain for capability labels:
+//   ConfigPath, DbUrl, ApiEndpoint, AuditTarget
+//
+// These labels use identical machinery to Tainted/Secret: opaque wrappers,
+// unforgeable, designated sources, relabel as the only bridge.
+//
+// Positive flows only. Negative cases (raw String where ConfigPath expected,
+// etc.) are covered in tests/type_checker.rs.
+
+// ── ConfigPath: audited filesystem path ─────────────────────────────────────
+
+fn wrap_config_path(s: String) -> ConfigPath[String] {
+    relabel config_path(s, "CONFIG-DEFAULT")
+}
+
+fn unwrap_config_path(p: ConfigPath[String]) -> String {
+    relabel unconfig_path(p, "IO-READ")
+}
+
+fn config_path_roundtrip(s: String) -> String {
+    let labeled: ConfigPath[String] = relabel config_path(s, "CONFIG-DEFAULT");
+    relabel unconfig_path(labeled, "IO-READ")
+}
+
+// ── DbUrl: audited database connection URL ──────────────────────────────────
+
+fn wrap_db_url(s: String) -> DbUrl[String] {
+    relabel db_url(s, "DB-URL-DEFAULT")
+}
+
+fn unwrap_db_url(u: DbUrl[String]) -> String {
+    relabel undb_url(u, "DB-CONNECT")
+}
+
+fn db_url_roundtrip(s: String) -> String {
+    let labeled: DbUrl[String] = relabel db_url(s, "DB-URL-DEFAULT");
+    relabel undb_url(labeled, "DB-CONNECT")
+}
+
+// ── ApiEndpoint: audited network endpoint ───────────────────────────────────
+
+fn wrap_api_endpoint(s: String) -> ApiEndpoint[String] {
+    relabel api_endpoint(s, "ENDPOINT-DEFAULT")
+}
+
+fn unwrap_api_endpoint(e: ApiEndpoint[String]) -> String {
+    relabel unapi_endpoint(e, "NET-CONNECT")
+}
+
+fn api_endpoint_roundtrip(s: String) -> String {
+    let labeled: ApiEndpoint[String] = relabel api_endpoint(s, "ENDPOINT-DEFAULT");
+    relabel unapi_endpoint(labeled, "NET-CONNECT")
+}
+
+// ── AuditTarget: audited log destination ────────────────────────────────────
+
+fn wrap_audit_target(s: String) -> AuditTarget[String] {
+    relabel audit_target(s, "AUDIT-BOOTSTRAP")
+}
+
+fn unwrap_audit_target(t: AuditTarget[String]) -> String {
+    relabel unaudit_target(t, "AUDIT-READ")
+}
+
+fn audit_target_roundtrip(s: String) -> String {
+    let labeled: AuditTarget[String] = relabel audit_target(s, "AUDIT-BOOTSTRAP");
+    relabel unaudit_target(labeled, "AUDIT-READ")
+}
+
+// ── Capability labels in generic containers ─────────────────────────────────
+
+fn option_config_path(p: Option[ConfigPath[String]]) -> Option[ConfigPath[String]] {
+    p
+}
+
+fn result_db_url(r: Result[DbUrl[String], String]) -> Result[DbUrl[String], String] {
+    r
+}
+
+// ── Capability labels through generic identity ──────────────────────────────
+
+fn identity[T](x: T) -> T { x }
+
+fn config_path_through_generic(p: ConfigPath[String]) -> ConfigPath[String] {
+    identity(p)
+}
+
+fn db_url_through_generic(u: DbUrl[String]) -> DbUrl[String] {
+    identity(u)
+}
+
+// ── Cross-label: capability labels are distinct from Tainted/Secret ─────────
+
+fn tainted_to_config(raw: Tainted[String]) -> ConfigPath[String] {
+    let bare: String = relabel trust(raw, "VALIDATED");
+    relabel config_path(bare, "CONFIG-LOAD")
+}
+
+fn secret_to_db_url(secret: Secret[String]) -> DbUrl[String] {
+    let bare: String = relabel release(secret, "AUTHORIZED");
+    relabel db_url(bare, "DB-URL-FROM-SECRET")
+}

@@ -1,0 +1,57 @@
+//! std.audit — audit target configuration and audit actor bootstrap.
+//!
+//! The audit actor receives all relabel audit events (provenance transitions)
+//! and writes them to a configured target.  The target itself is a capability
+//! token: `AuditTarget[String]` proves the destination came from audited
+//! configuration, not from user input.
+//!
+//! Import:
+//!   use std.audit.{AuditTarget, audit_target, unaudit_target,
+//!                  load_audit_target, default_audit_target}
+//!
+//! Effects:
+//!   Env       — load_audit_target (reads env var)
+//!   FileWrite — audit actor writes to the target path
+//!
+//! See #931, #808, #896.
+
+use std.env.{_env_read}
+
+// ── Capability label: AuditTarget (#931) ────────────────────────────────────
+
+/// A configuration-sourced audit log destination (capability token).
+///
+/// `AuditTarget[String]` is the root-of-trust label for the audit subsystem.
+/// It proves the wrapped path came from audited configuration (env var or
+/// compile-time default), not from user input.  The audit actor accepts
+/// `AuditTarget[String]` at initialization — once set, all subsequent relabel
+/// transitions produce audit events written to that destination.
+///
+/// Produced by: `load_audit_target`, `default_audit_target`
+/// Consumed by: audit actor initialization
+pub label AuditTarget
+
+/// Wrap a bare string in `AuditTarget` — marks it as an audited destination.
+pub relabel audit_target: _ -> AuditTarget
+
+/// Unwrap `AuditTarget[T]` to bare `T` — explicit escape hatch with audit tag.
+pub relabel unaudit_target: AuditTarget -> _
+
+/// Load an audit target path from an environment variable.
+///
+/// Returns `Some(AuditTarget[String])` if the env var is set, `None` otherwise.
+/// The audit tag `AUDIT-BOOTSTRAP` records that this path came from the environment.
+pub fn load_audit_target(key: String) -> Option[AuditTarget[String]] ! Env {
+    match _env_read(key) {
+        Some(v) => Some(relabel audit_target(v, "AUDIT-BOOTSTRAP")),
+        None => None,
+    }
+}
+
+/// Wrap a compile-time default audit target as `AuditTarget[String]`.
+///
+/// Use when no environment override is available. The audit tag `AUDIT-DEFAULT`
+/// records that this path is a hardcoded fallback.
+pub fn default_audit_target(fallback: String) -> AuditTarget[String] {
+    relabel audit_target(fallback, "AUDIT-DEFAULT")
+}

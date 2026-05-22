@@ -21,6 +21,45 @@
 //!   `tcp_close_listener` is called or the program exits.
 //!   TcpStream is likewise `Copy`.
 
+use std.env.{_env_read}
+
+// ── Capability label: ApiEndpoint (#931) ────────────────────────────────────
+
+/// A configuration-sourced API endpoint URL (capability token).
+///
+/// `ApiEndpoint[String]` proves the wrapped URL came from audited configuration,
+/// not from user input or tainted sources.  Network connect functions accept
+/// `ApiEndpoint[String]`, not raw `String`, enforcing provenance at compile time.
+///
+/// Produced by: `load_endpoint`, `default_endpoint`
+/// Consumed by: `tcp_connect`, `tcp_listen`, etc.
+pub label ApiEndpoint
+
+/// Wrap a bare string in `ApiEndpoint` — marks it as an audited endpoint.
+pub relabel api_endpoint: _ -> ApiEndpoint
+
+/// Unwrap `ApiEndpoint[T]` to bare `T` — explicit escape hatch with audit tag.
+pub relabel unapi_endpoint: ApiEndpoint -> _
+
+/// Load an API endpoint from an environment variable.
+///
+/// Returns `Some(ApiEndpoint[String])` if the env var is set, `None` otherwise.
+/// The audit tag `ENDPOINT-LOAD` records that this endpoint came from the environment.
+pub fn load_endpoint(key: String) -> Option[ApiEndpoint[String]] ! Env {
+    match _env_read(key) {
+        Some(v) => Some(relabel api_endpoint(v, "ENDPOINT-LOAD")),
+        None => None,
+    }
+}
+
+/// Wrap a compile-time default endpoint as `ApiEndpoint[String]`.
+///
+/// Use when no environment override is available. The audit tag `ENDPOINT-DEFAULT`
+/// records that this endpoint is a hardcoded fallback.
+pub fn default_endpoint(fallback: String) -> ApiEndpoint[String] {
+    relabel api_endpoint(fallback, "ENDPOINT-DEFAULT")
+}
+
 // ── Error type ────────────────────────────────────────────────────────────────
 
 /// Structured errors returned by TCP stdlib functions.
@@ -131,4 +170,27 @@ pub fn net_error_msg(e: NetError) -> String {
         NetError::HostUnreachable   => "host unreachable",
         NetError::Other(msg)        => msg,
     }
+}
+
+// ── Capability-aware network operations (#931) ──────────────────────────────
+//
+// These wrappers accept `ApiEndpoint[String]` instead of raw `String`,
+// enforcing compile-time provenance for network endpoints.  The raw builtins
+// above remain available for backward compatibility and stdlib-internal use.
+
+/// Connect to a remote TCP server using a capability-verified endpoint.
+///
+/// Accepts `ApiEndpoint[String]` — the compiler rejects raw `String` or
+/// `Tainted[String]`, ensuring only audited endpoints reach the network layer.
+pub fn endpoint_connect(endpoint: ApiEndpoint[String], port: Int) -> Result[TcpStream, NetError] ! Net {
+    let host: String = relabel unapi_endpoint(endpoint, "NET-CONNECT");
+    tcp_connect(host, port)
+}
+
+/// Bind a TCP listener using a capability-verified endpoint.
+///
+/// Accepts `ApiEndpoint[String]` for the host — only audited hosts allowed.
+pub fn endpoint_listen(endpoint: ApiEndpoint[String], port: Int) -> Result[TcpListener, NetError] ! Net {
+    let host: String = relabel unapi_endpoint(endpoint, "NET-LISTEN");
+    tcp_listen(host, port)
 }

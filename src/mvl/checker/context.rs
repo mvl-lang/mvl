@@ -238,6 +238,11 @@ impl TypeEnv {
         let mut known_labels = HashSet::new();
         known_labels.insert("Tainted".to_string());
         known_labels.insert("Secret".to_string());
+        // Capability labels (#931): IFC labels as capability tokens (Req 13 → Req 11).
+        known_labels.insert("ConfigPath".to_string());
+        known_labels.insert("DbUrl".to_string());
+        known_labels.insert("ApiEndpoint".to_string());
+        known_labels.insert("AuditTarget".to_string());
         // Pre-seed the four standard relabel transitions from std/ifc.mvl (#894).
         // These are always available without an explicit `use std.ifc` import,
         // mirroring how `Tainted` and `Secret` are pre-seeded as known labels.
@@ -246,6 +251,16 @@ impl TypeEnv {
         relabels.insert("taint".into(), (None, Some("Tainted".into()))); // _ -> Tainted
         relabels.insert("trust".into(), (Some("Tainted".into()), None)); // Tainted -> _
         relabels.insert("release".into(), (Some("Secret".into()), None)); // Secret -> _
+
+        // Capability relabel transitions (#931): IFC labels as capability tokens.
+        relabels.insert("config_path".into(), (None, Some("ConfigPath".into()))); // _ -> ConfigPath
+        relabels.insert("unconfig_path".into(), (Some("ConfigPath".into()), None)); // ConfigPath -> _
+        relabels.insert("db_url".into(), (None, Some("DbUrl".into()))); // _ -> DbUrl
+        relabels.insert("undb_url".into(), (Some("DbUrl".into()), None)); // DbUrl -> _
+        relabels.insert("api_endpoint".into(), (None, Some("ApiEndpoint".into()))); // _ -> ApiEndpoint
+        relabels.insert("unapi_endpoint".into(), (Some("ApiEndpoint".into()), None)); // ApiEndpoint -> _
+        relabels.insert("audit_target".into(), (None, Some("AuditTarget".into()))); // _ -> AuditTarget
+        relabels.insert("unaudit_target".into(), (Some("AuditTarget".into()), None)); // AuditTarget -> _
         let mut env = TypeEnv {
             scopes: vec![HashMap::new()],
             types: HashMap::new(),

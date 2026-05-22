@@ -32,7 +32,7 @@ Requirements 8-11 were known but considered impractical: the annotation burden w
 
 Research identified 15 candidates. Four were absorbed:
 - Session types → fold into Req 6 (linearity) via typestate
-- Capability security → fold into Req 7 (fine-grained effects)
+- Capability security → fold into Req 11 (IFC labels as capability tokens, #931) + std/audit (runtime policy)
 - Numeric overflow → fold into Req 10 (refinement types)
 - Deadlock freedom → architectural (actor model, no locks)
 
