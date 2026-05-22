@@ -109,6 +109,10 @@ pub struct UseDecl {
     pub reexport: bool,
     /// Path segments, e.g. `["std", "io", "File"]`
     pub path: Vec<String>,
+    /// True when the import has no brace group and `path.len() >= 2`.
+    /// Signals a module-level import: `use std.json` creates the qualifier
+    /// `json` so that `json.decode()` resolves as a qualified function call.
+    pub module_only: bool,
     pub span: Span,
 }
 

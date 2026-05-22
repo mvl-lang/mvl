@@ -3,6 +3,7 @@
 
 //! Function and method call type inference for the MVL type checker.
 
+use crate::mvl::checker::context::TypeBodyInfo;
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
 use crate::mvl::checker::types::{types_compatible, Ty};
@@ -216,12 +217,20 @@ impl TypeChecker {
                 }
                 _ => {}
             }
-            // User-defined enum tuple-variant constructor (bare or path form)
-            let variant_name = if let Some((_, v)) = name.split_once("::") {
-                v
-            } else {
-                name
-            };
+            // User-defined enum tuple-variant constructor (bare or path form).
+            // When qualified (`Type::Variant`), prefer the specific type to avoid
+            // returning the wrong enum when multiple enums share a variant name
+            // (e.g. JsonError::ParseError vs TomlError::ParseError — #822).
+            if let Some((type_prefix, variant)) = name.split_once("::") {
+                if let Some(type_info) = self.env.types.get(type_prefix) {
+                    if let TypeBodyInfo::Enum(variants) = &type_info.body {
+                        if variants.iter().any(|v| v.name == variant) {
+                            return Ty::Named(type_prefix.to_string(), vec![]);
+                        }
+                    }
+                }
+            }
+            let variant_name = name.split_once("::").map_or(name, |(_, v)| v);
             if let Some(enum_ty) = self.lookup_enum_for_variant(variant_name) {
                 return enum_ty;
             }

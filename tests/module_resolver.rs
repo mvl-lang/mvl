@@ -204,6 +204,7 @@ fn reexport_private_rejected() {
     // Construct a program with `pub use mod_a::secret` where secret is private
     let ud = UseDecl {
         reexport: true,
+        module_only: false,
         path: vec!["mod_a".to_string(), "secret".to_string()],
         span: Span::default(),
     };

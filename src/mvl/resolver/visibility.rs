@@ -120,6 +120,7 @@ mod tests {
 
         let ud = UseDecl {
             reexport: true,
+            module_only: false,
             path: vec!["mod_a".to_string(), "Foo".to_string()],
             span: Span::default(),
         };
@@ -143,6 +144,7 @@ mod tests {
 
         let ud = UseDecl {
             reexport: true,
+            module_only: false,
             path: vec!["mod_a".to_string(), "secret".to_string()],
             span: Span::default(),
         };

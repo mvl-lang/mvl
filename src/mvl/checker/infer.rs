@@ -188,6 +188,14 @@ impl TypeChecker {
                 args,
                 span,
             } => {
+                // Qualified module call: `json.decode(s)` where `json` is a
+                // module alias from `use std.json`. Redirect to a function
+                // call so stdlib lookup tables resolve `decode` correctly (#820).
+                if let Expr::Ident(name, _) = receiver.as_ref() {
+                    if self.module_aliases.contains_key(name.as_str()) {
+                        return self.infer_fn_call(method, args, *span);
+                    }
+                }
                 let recv_ty = self.infer_expr(receiver);
                 let arg_tys: Vec<Ty> = args.iter().map(|a| self.infer_expr(a)).collect();
                 // Req 9: capability check for actor-boundary crossings.
