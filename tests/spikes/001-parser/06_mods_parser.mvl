@@ -412,7 +412,7 @@ partial fn main() -> Unit ! FileRead + Console {
                                 Err(_)  => (),
                                 Ok(raw) => {
                                     let src: String = relabel trust(raw, "VALIDATED");
-                                    let items: List[Item]] = call_parse_file(src);
+                                    let items: List[Item] = call_parse_file(src);
                                     let c: Counts = call_count_items(items);
                                     fn_count   = fn_count   + c.fns;
                                     type_count = type_count + c.types;

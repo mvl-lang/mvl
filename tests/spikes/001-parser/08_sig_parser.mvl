@@ -843,7 +843,7 @@ partial fn main() -> Unit ! FileRead + Console {
                                 Err(_)  => (),
                                 Ok(raw) => {
                                     let src: String = relabel trust(raw, "VALIDATED");
-                                    let items: List[SigItem]] = call_parse(src);
+                                    let items: List[SigItem] = call_parse(src);
                                     let out: SigOutput = call_format(items);
                                     if out.text != "" {
                                         println("{}", out.text)

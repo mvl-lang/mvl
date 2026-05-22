@@ -378,7 +378,7 @@ partial fn main() -> Unit ! FileRead + Console {
                                 Err(_)  => (),
                                 Ok(raw) => {
                                     let src: String = relabel trust(raw, "VALIDATED");
-                                    let uses: List[UseItem]] = call_parse_uses(src);
+                                    let uses: List[UseItem] = call_parse_uses(src);
                                     let out: UseOutput = call_format_uses(uses);
                                     if out.text != "" {
                                         println("{}", out.text)
