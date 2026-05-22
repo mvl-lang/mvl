@@ -4,6 +4,17 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.135.2] — 2026-05-22
+
+### Fixed
+
+- **Reject linear type assignment without consume()** (#934): `check_assignment()` now enforces the same linear-type rule as `let` bindings — assignment of linear types (String, List, Map, Set) requires explicit `consume()`. Added checks in Stmt::Assign mirroring stmts.rs:297-310 logic. Fixed 3 bare linear assignments caught in `std/json.mvl`.
+- **Verify BorrowState transitions** (#935): Investigated claim that transitions were not implemented. Confirmed all 6 acceptance criteria met by existing code (stmts.rs:331-392, infer.rs:145-164, context.rs:755-772 with comprehensive test coverage). Closed as already implemented.
+
+### Changed
+
+- **Update Spec 009 borrow inference phase status**: Documented Phase B (borrow parameter inference) as implemented per #660. Phase B algorithms (parameter analysis, disqualifying uses, borrow kinds) now explicitly described with implementation and test links. Corrected stale "Phase B deferred" / "Phase C target" references.
+
 ## [0.135.1] — 2026-05-21
 
 ### Fixed
