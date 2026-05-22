@@ -434,7 +434,7 @@ impl PassRegistry {
             Box::new(BasicCheckPass {
                 req: 6,
                 pass_name: "Ownership",
-                ok_evidence: "no immutability violations",
+                ok_evidence: "no immutability or linear-type consumption violations",
             }),
             Box::new(BasicCheckPass {
                 req: 7,

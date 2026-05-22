@@ -8,6 +8,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This p
 
 ### Changed
 
+- **Req 6 fully proven — reclassify `LinearTypeBareBind` under Ownership**: `LinearTypeBareBind` now maps to requirement 6 (Ownership / linearity) instead of requirement 2 (Memory Safety). Linear resource consumption (must use `consume()`) is an ownership/linearity concern. Negative corpus tests `bare_linear_assignment.mvl` and `linear_assignment_without_consume.mvl` moved from `tests/negative/req02/` to `tests/negative/req06/`. Req 6 `BasicCheckPass` evidence updated. ADR-0001 Req 6 status updated from "partial" to fully proven at Phase 1.
+
 - **Complete stdlib extension method migration** (#928): Migrated ~300+ call sites across ~35 MVL files from old-style free function calls (`map_get(m, k)`) to extension method syntax (`m.get(k)`). Fixed codegen issues: `join`/`to_string` name collision with io module, set operation use-after-move, LLVM use-after-free on function parameter drops, LLVM HOF/set method dispatch for mangled extension names. Fixed tree-sitter unnecessary grammar conflicts and spike parser type annotation typos.
 
 ## [0.136.0] — 2026-05-22
