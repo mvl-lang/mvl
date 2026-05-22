@@ -25,15 +25,14 @@ fn parse_age(s: String) -> Result[Int, ParseError] {
         Err(ParseError::InvalidAge)
     } else {
         let result: Result[Int, String] = s.parse_int();
-        match result {
-            Err(_)  => Err(ParseError::InvalidAge),
-            Ok(age) => {
-                if age > 0 && age <= 150 {
-                    Ok(age)
-                } else {
-                    Err(ParseError::InvalidAge)
-                }
+        if let Ok(age) = result {
+            if age > 0 && age <= 150 {
+                Ok(age)
+            } else {
+                Err(ParseError::InvalidAge)
             }
+        } else {
+            Err(ParseError::InvalidAge)
         }
     }
 }
@@ -46,15 +45,14 @@ fn parse_amount(s: String) -> Result[Float, ParseError] {
         Err(ParseError::InvalidAmount)
     } else {
         let result: Result[Float, String] = s.parse_float();
-        match result {
-            Err(_)     => Err(ParseError::InvalidAmount),
-            Ok(amount) => {
-                if amount >= 0.0 {
-                    Ok(amount)
-                } else {
-                    Err(ParseError::InvalidAmount)
-                }
+        if let Ok(amount) = result {
+            if amount >= 0.0 {
+                Ok(amount)
+            } else {
+                Err(ParseError::InvalidAmount)
             }
+        } else {
+            Err(ParseError::InvalidAmount)
         }
     }
 }

@@ -1,4 +1,4 @@
-// Corpus: if let — single-arm Option/Result binding (#704)
+// Corpus: if let — single-arm Option/Result binding (#704), with-else form (#891)
 // Desugars to exhaustive match at parse time.
 
 fn process_some(opt: Option[Int]) -> Int {
@@ -12,7 +12,7 @@ fn process_some(opt: Option[Int]) -> Int {
 fn process_ok(res: Result[String, Int]) -> String {
     let out: ref String = "";
     if let Ok(s) = res {
-        out = s;
+        out = consume(s);
     }
     return out;
 }
@@ -20,7 +20,7 @@ fn process_ok(res: Result[String, Int]) -> String {
 fn process_err(res: Result[Int, String]) -> String {
     let msg: ref String = "no error";
     if let Err(e) = res {
-        msg = e;
+        msg = consume(e);
     }
     return msg;
 }
@@ -31,4 +31,30 @@ fn wildcard_binding(opt: Option[Int]) -> Bool {
         found = true;
     }
     return found;
+}
+
+// if let with else — desugars to exhaustive match expression (#891)
+
+fn ok_or_default(res: Result[Int, String]) -> Int {
+    if let Ok(n) = res {
+        n
+    } else {
+        0
+    }
+}
+
+fn err_or_empty(res: Result[Int, String]) -> String {
+    if let Err(e) = res {
+        e
+    } else {
+        ""
+    }
+}
+
+fn some_or_zero(opt: Option[Int]) -> Int {
+    if let Some(v) = opt {
+        v
+    } else {
+        0
+    }
 }
