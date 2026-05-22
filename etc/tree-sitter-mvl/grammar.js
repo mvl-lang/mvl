@@ -56,12 +56,6 @@ module.exports = grammar({
     [$.if_stmt, $.if_expr],
     // effect: `identifier (` — parameterized effect string vs outer expression
     [$.effect],
-    // `]` inside `Public[Int where self > 0]`: close generic vs comparison (> 0).
-    // GLR explores both; only the one that closes the generic succeeds.
-    [$.ref_expr, $.labeled_type],
-    [$.ref_expr, $.base_type],
-    [$.ref_expr, $.result_type],
-    [$.ref_expr, $.option_type],
     // `[` after identifier in base_type: generic args vs other uses of `[`
     [$.base_type],
   ],

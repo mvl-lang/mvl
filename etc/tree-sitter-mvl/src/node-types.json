@@ -396,6 +396,10 @@
           "named": true
         },
         {
+          "type": "effect_decl",
+          "named": true
+        },
+        {
           "type": "extern_decl",
           "named": true
         },
@@ -408,7 +412,15 @@
           "named": true
         },
         {
+          "type": "label_decl",
+          "named": true
+        },
+        {
           "type": "reexport_decl",
+          "named": true
+        },
+        {
+          "type": "relabel_decl",
           "named": true
         },
         {
@@ -447,6 +459,21 @@
         },
         {
           "type": "string_literal",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "effect_decl",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "identifier",
           "named": true
         }
       ]
@@ -932,6 +959,21 @@
         },
         {
           "type": "type_list",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "label_decl",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "identifier",
           "named": true
         }
       ]
@@ -1437,6 +1479,21 @@
       "types": [
         {
           "type": "ref_expr",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "relabel_decl",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "identifier",
           "named": true
         }
       ]
@@ -2284,6 +2341,10 @@
     "named": false
   },
   {
+    "type": "effect",
+    "named": false
+  },
+  {
     "type": "else",
     "named": false
   },
@@ -2360,6 +2421,10 @@
     "named": false
   },
   {
+    "type": "label",
+    "named": false
+  },
+  {
     "type": "len",
     "named": false
   },
@@ -2405,6 +2470,10 @@
   },
   {
     "type": "ref",
+    "named": false
+  },
+  {
+    "type": "relabel",
     "named": false
   },
   {
