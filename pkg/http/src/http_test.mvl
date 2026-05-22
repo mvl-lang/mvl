@@ -1,0 +1,237 @@
+// pkg.http tests — unit tests for HTTP types, parsing, and serialization.
+//
+// All functions here are pure (no effects).
+// Assurance note: 0 extern blocks.
+
+// ── Type re-declarations (workaround: #96) ────────────────────────────────
+
+type Method = enum { Get, Post, Put, Delete, Patch, Head, Options }
+
+type Request = struct {
+    method: Method,
+    path:   String,
+}
+
+type Response = struct {
+    status:  Int,
+    headers: Map[String, String],
+    body:    String,
+}
+
+type HttpError = enum {
+    BadRequest(String),
+    NotFound,
+    MethodNotAllowed,
+    ParseError(String),
+    InternalError(String),
+}
+
+// ── Helpers (mirror pkg.http logic for standalone testing) ─────────────────
+
+fn require(opt: Option[String], msg: String) -> Result[String, HttpError] {
+    match opt {
+        Some(v) => Ok(v),
+        None    => Err(HttpError::ParseError(msg)),
+    }
+}
+
+fn parse_method(s: String) -> Result[Method, HttpError] {
+    if s == "GET"     { Ok(Method::Get) }
+    else if s == "POST"    { Ok(Method::Post) }
+    else if s == "PUT"     { Ok(Method::Put) }
+    else if s == "DELETE"  { Ok(Method::Delete) }
+    else if s == "PATCH"   { Ok(Method::Patch) }
+    else if s == "HEAD"    { Ok(Method::Head) }
+    else if s == "OPTIONS" { Ok(Method::Options) }
+    else { Err(HttpError::BadRequest(s.concat(": unknown method"))) }
+}
+
+fn parse_request_str(s: String) -> Result[Request, HttpError] {
+    let lines: List[String] = s.split("\r\n");
+    let request_line: String = require(lines.get(0), "empty request")?;
+    let parts: List[String] = request_line.split(" ");
+    let method_str: String = require(parts.get(0), "missing method")?;
+    let path: String = require(parts.get(1), "missing path")?;
+    let method: Method = parse_method(method_str)?;
+    Ok(Request { method: method, path: path })
+}
+
+fn status_reason(status: Int) -> String {
+    if status == 200 { "OK" }
+    else if status == 201 { "Created" }
+    else if status == 204 { "No Content" }
+    else if status == 400 { "Bad Request" }
+    else if status == 404 { "Not Found" }
+    else if status == 405 { "Method Not Allowed" }
+    else if status == 500 { "Internal Server Error" }
+    else { "Unknown" }
+}
+
+fn serialize_response(resp: val Response) -> String {
+    let status_line: String = "HTTP/1.0 "
+        .concat(resp.status.to_string())
+        .concat(" ")
+        .concat(status_reason(resp.status))
+        .concat("\r\n");
+    let content_length: String = "Content-Length: "
+        .concat(resp.body.len().to_string())
+        .concat("\r\n");
+    status_line.concat("Content-Type: text/plain\r\n").concat(content_length).concat("\r\n").concat(resp.body)
+}
+
+fn ok(body: String) -> Response {
+    Response { status: 200, headers: {"Content-Type": "text/plain"}, body: body }
+}
+
+fn not_found() -> Response {
+    Response { status: 404, headers: {"Content-Type": "text/plain"}, body: "" }
+}
+
+fn bad_request(msg: String) -> Response {
+    Response { status: 400, headers: {"Content-Type": "text/plain"}, body: msg }
+}
+
+// ── Method parsing tests ──────────────────────────────────────────────────
+
+test fn parse_get() -> Unit {
+    assert_eq(parse_method("GET"), Ok(Method::Get))
+}
+
+test fn parse_post() -> Unit {
+    assert_eq(parse_method("POST"), Ok(Method::Post))
+}
+
+test fn parse_put() -> Unit {
+    assert_eq(parse_method("PUT"), Ok(Method::Put))
+}
+
+test fn parse_delete() -> Unit {
+    assert_eq(parse_method("DELETE"), Ok(Method::Delete))
+}
+
+test fn parse_patch() -> Unit {
+    assert_eq(parse_method("PATCH"), Ok(Method::Patch))
+}
+
+test fn parse_head() -> Unit {
+    assert_eq(parse_method("HEAD"), Ok(Method::Head))
+}
+
+test fn parse_options() -> Unit {
+    assert_eq(parse_method("OPTIONS"), Ok(Method::Options))
+}
+
+test fn parse_unknown_method_is_error() -> Unit {
+    match parse_method("TRACE") {
+        Err(HttpError::BadRequest(_)) => assert_eq(true, true),
+        _ => assert_eq(true, false),
+    }
+}
+
+// ── Request parsing tests ─────────────────────────────────────────────────
+
+test fn parse_simple_get() -> Unit {
+    let result: Result[Request, HttpError] = parse_request_str("GET /health HTTP/1.1\r\n\r\n");
+    match result {
+        Ok(req) => {
+            assert_eq(req.method, Method::Get);
+            assert_eq(req.path, "/health")
+        },
+        Err(_) => assert_eq(true, false),
+    }
+}
+
+test fn parse_post_with_path() -> Unit {
+    let result: Result[Request, HttpError] = parse_request_str("POST /users HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    match result {
+        Ok(req) => {
+            assert_eq(req.method, Method::Post);
+            assert_eq(req.path, "/users")
+        },
+        Err(_) => assert_eq(true, false),
+    }
+}
+
+test fn parse_empty_request_is_error() -> Unit {
+    match parse_request_str("") {
+        Err(HttpError::ParseError(_)) => assert_eq(true, true),
+        _ => assert_eq(true, false),
+    }
+}
+
+test fn parse_missing_path_is_error() -> Unit {
+    match parse_request_str("GET\r\n\r\n") {
+        Err(HttpError::ParseError(_)) => assert_eq(true, true),
+        _ => assert_eq(true, false),
+    }
+}
+
+test fn parse_bad_method_is_error() -> Unit {
+    match parse_request_str("TRACE /foo HTTP/1.1\r\n\r\n") {
+        Err(HttpError::BadRequest(_)) => assert_eq(true, true),
+        _ => assert_eq(true, false),
+    }
+}
+
+// ── Status reason tests ───────────────────────────────────────────────────
+
+test fn reason_200() -> Unit { assert_eq(status_reason(200), "OK") }
+test fn reason_404() -> Unit { assert_eq(status_reason(404), "Not Found") }
+test fn reason_500() -> Unit { assert_eq(status_reason(500), "Internal Server Error") }
+test fn reason_unknown() -> Unit { assert_eq(status_reason(999), "Unknown") }
+
+// ── Response serialization tests ──────────────────────────────────────────
+
+test fn serialize_ok_response() -> Unit {
+    let resp: Response = ok("hello");
+    let raw: String = serialize_response(resp);
+    assert_eq(raw.starts_with("HTTP/1.0 200 OK\r\n"), true)
+}
+
+test fn serialize_includes_content_length() -> Unit {
+    let resp: Response = ok("hello");
+    let raw: String = serialize_response(resp);
+    assert_eq(raw.contains("Content-Length: 5"), true)
+}
+
+test fn serialize_includes_content_type() -> Unit {
+    let resp: Response = ok("hello");
+    let raw: String = serialize_response(resp);
+    assert_eq(raw.contains("Content-Type: text/plain"), true)
+}
+
+test fn serialize_includes_body() -> Unit {
+    let resp: Response = ok("hello");
+    let raw: String = serialize_response(resp);
+    assert_eq(raw.ends_with("hello"), true)
+}
+
+test fn serialize_not_found() -> Unit {
+    let resp: Response = not_found();
+    let raw: String = serialize_response(resp);
+    assert_eq(raw.starts_with("HTTP/1.0 404 Not Found\r\n"), true)
+}
+
+test fn serialize_empty_body_has_zero_length() -> Unit {
+    let resp: Response = not_found();
+    let raw: String = serialize_response(resp);
+    assert_eq(raw.contains("Content-Length: 0"), true)
+}
+
+// ── Convenience constructor tests ─────────────────────────────────────────
+
+test fn ok_status_is_200() -> Unit {
+    assert_eq(ok("x").status, 200)
+}
+
+test fn not_found_status_is_404() -> Unit {
+    assert_eq(not_found().status, 404)
+}
+
+test fn bad_request_status_is_400() -> Unit {
+    assert_eq(bad_request("oops").status, 400)
+}
+
+test fn bad_request_body_preserved() -> Unit {
+    assert_eq(bad_request("oops").body, "oops")
+}

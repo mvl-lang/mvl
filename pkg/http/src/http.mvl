@@ -1,0 +1,188 @@
+// pkg.http — HTTP types, request parsing, and response serialization.
+//
+// Pure MVL package built on std.net primitives.  No extern blocks.
+//
+// Import:
+//   use pkg.http.{Method, Request, Response, HttpError,
+//                  parse_request, serialize_response, ok, not_found}
+//
+// Effects: none (all functions are pure).
+//
+// See #783.
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+/// HTTP request method.
+pub type Method = enum {
+    Get,
+    Post,
+    Put,
+    Delete,
+    Patch,
+    Head,
+    Options,
+}
+
+/// Parsed HTTP request (method + path).
+///
+/// Headers and body parsing deferred to Phase 2.
+pub type Request = struct {
+    method: Method,
+    path:   String,
+}
+
+/// HTTP response.
+pub type Response = struct {
+    status:  Int,
+    headers: Map[String, String],
+    body:    String,
+}
+
+/// Errors from HTTP parsing or routing.
+pub type HttpError = enum {
+    BadRequest(String),
+    NotFound,
+    MethodNotAllowed,
+    ParseError(String),
+    InternalError(String),
+}
+
+// ── Parsing ───────────────────────────────────────────────────────────────────
+
+/// Convert an Option to a Result, mapping None to a ParseError.
+fn require(opt: Option[String], msg: String) -> Result[String, HttpError] {
+    match opt {
+        Some(v) => Ok(v),
+        None    => Err(HttpError::ParseError(msg)),
+    }
+}
+
+/// Parse an HTTP method string ("GET", "POST", etc.) into a Method enum.
+pub fn parse_method(s: String) -> Result[Method, HttpError] {
+    if s == "GET"     { Ok(Method::Get) }
+    else if s == "POST"    { Ok(Method::Post) }
+    else if s == "PUT"     { Ok(Method::Put) }
+    else if s == "DELETE"  { Ok(Method::Delete) }
+    else if s == "PATCH"   { Ok(Method::Patch) }
+    else if s == "HEAD"    { Ok(Method::Head) }
+    else if s == "OPTIONS" { Ok(Method::Options) }
+    else { Err(HttpError::BadRequest(s.concat(": unknown method"))) }
+}
+
+/// Parse a raw HTTP/1.x request into a Request.
+///
+/// IFC trust boundary: the raw tainted input is detainted here for protocol
+/// parsing only.  The path is structural (routing), not user-supplied data.
+/// When body parsing is added (Phase 2), the body will remain Tainted.
+pub fn parse_request(raw: Tainted[String]) -> Result[Request, HttpError] {
+    let s: String = raw.into_inner();
+    let lines: List[String] = s.split("\r\n");
+    let request_line: String = require(lines.get(0), "empty request")?;
+    let parts: List[String] = request_line.split(" ");
+    let method_str: String = require(parts.get(0), "missing method")?;
+    let path: String = require(parts.get(1), "missing path")?;
+    let method: Method = parse_method(method_str)?;
+    Ok(Request { method: method, path: path })
+}
+
+// ── Serialization ─────────────────────────────────────────────────────────────
+
+/// Map a status code to its reason phrase.
+pub fn status_reason(status: Int) -> String {
+    if status == 200 { "OK" }
+    else if status == 201 { "Created" }
+    else if status == 204 { "No Content" }
+    else if status == 400 { "Bad Request" }
+    else if status == 401 { "Unauthorized" }
+    else if status == 403 { "Forbidden" }
+    else if status == 404 { "Not Found" }
+    else if status == 405 { "Method Not Allowed" }
+    else if status == 500 { "Internal Server Error" }
+    else { "Unknown" }
+}
+
+/// Format response headers as HTTP header lines.
+fn format_headers(headers: Map[String, String]) -> String {
+    let keys: List[String] = headers.keys().sort();
+    let result: ref String = "";
+    for k in keys {
+        let v: String = match headers.get(k) {
+            Some(v) => v,
+            None => "",
+        };
+        if v.len() > 0 {
+            result = result.concat(k).concat(": ").concat(v).concat("\r\n")
+        }
+    };
+    result
+}
+
+/// Serialize a Response to an HTTP/1.0 response string.
+pub fn serialize_response(resp: val Response) -> String {
+    let status_line: String = "HTTP/1.0 "
+        .concat(resp.status.to_string())
+        .concat(" ")
+        .concat(status_reason(resp.status))
+        .concat("\r\n");
+    let content_length: String = "Content-Length: "
+        .concat(resp.body.len().to_string())
+        .concat("\r\n");
+    let header_str: String = format_headers(resp.headers);
+    status_line.concat(header_str).concat(content_length).concat("\r\n").concat(resp.body)
+}
+
+// ── Convenience constructors ──────────────────────────────────────────────────
+
+/// 200 OK with a text/plain body.
+pub fn ok(body: String) -> Response {
+    Response {
+        status: 200,
+        headers: {"Content-Type": "text/plain"},
+        body: body,
+    }
+}
+
+/// 201 Created with a text/plain body.
+pub fn created(body: String) -> Response {
+    Response {
+        status: 201,
+        headers: {"Content-Type": "text/plain"},
+        body: body,
+    }
+}
+
+/// 400 Bad Request.
+pub fn bad_request(msg: String) -> Response {
+    Response {
+        status: 400,
+        headers: {"Content-Type": "text/plain"},
+        body: msg,
+    }
+}
+
+/// 404 Not Found with empty body.
+pub fn not_found() -> Response {
+    Response {
+        status: 404,
+        headers: {"Content-Type": "text/plain"},
+        body: "",
+    }
+}
+
+/// 405 Method Not Allowed with empty body.
+pub fn method_not_allowed() -> Response {
+    Response {
+        status: 405,
+        headers: {"Content-Type": "text/plain"},
+        body: "",
+    }
+}
+
+/// 500 Internal Server Error.
+pub fn internal_error(msg: String) -> Response {
+    Response {
+        status: 500,
+        headers: {"Content-Type": "text/plain"},
+        body: msg,
+    }
+}

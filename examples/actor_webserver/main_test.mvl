@@ -1,7 +1,7 @@
 // actor_webserver/main_test.mvl — Unit tests for pure request-routing logic.
 //
-// Tests the routing decisions and SQL selection without actor concurrency
-// or Console effects.  All functions here are pure (no side effects).
+// Tests the routing decisions without actor concurrency or effects.
+// All functions here are pure (no side effects).
 //
 // Actor-per-request isolation property (tests 11–15):
 // RequestHandler has no fields — every routing decision is made from scratch
@@ -9,112 +9,110 @@
 // pure routing helpers produce the same result regardless of call order or
 // how many times they are invoked (simulating concurrent actors).
 //
-// Type declarations duplicate main.mvl because cross-file type resolution is
-// not yet wired into the per-file checker (issue #96).  When #96 lands these
-// can be replaced with:
-//   use main::{Method, Route, Request, QueryResult};
+// Type declarations mirror pkg.http types because cross-file type resolution
+// is not yet wired into the per-file checker (issue #96).
 //
 // Assurance note: 0 extern blocks.
 
 // ── Type re-declarations (workaround: #96) ────────────────────────────────
 
-type Method = enum { Get, Post, Delete, Unknown }
-type Route  = enum { Users, Health, Unknown }
+type Method = enum { Get, Post, Put, Delete, Patch, Head, Options }
 
 type Request = struct {
-    id:     Int,
     method: Method,
-    route:  Route,
+    path:   String,
 }
 
-type QueryResult = struct { data: String }
+type Response = struct {
+    status:  Int,
+    headers: Map[String, String],
+    body:    String,
+}
 
-// ── Pure logic helpers (mirror RequestHandler routing) ────────────────────
+// ── Pure routing logic (mirrors main.mvl::route) ──────────────────────────
 
-// Does this route require a database query?
-fn needs_db(route: Route) -> Bool {
-    match route {
-        Route::Users   => true,
-        Route::Health  => false,
-        Route::Unknown => false,
+fn ok(body: String) -> Response {
+    Response { status: 200, headers: {"Content-Type": "text/plain"}, body: body }
+}
+
+fn not_found() -> Response {
+    Response { status: 404, headers: {"Content-Type": "text/plain"}, body: "" }
+}
+
+fn route(req: val Request) -> Response {
+    if req.path.starts_with("/health") {
+        ok("ok")
+    } else if req.path.starts_with("/users") {
+        ok("[{name: Alice}, {name: Bob}]")
+    } else {
+        not_found()
     }
 }
 
-// SQL query string for routes that require the database.
-fn sql_for_route(route: Route) -> String {
-    match route {
-        Route::Users   => "SELECT * FROM users",
-        Route::Health  => "",
-        Route::Unknown => "",
-    }
+fn make_request(method: Method, path: String) -> Request {
+    Request { method: method, path: path }
 }
 
-// Expected HTTP status code for a route (no auth errors, no DB failures).
-fn http_status(route: Route) -> Int {
-    match route {
-        Route::Users   => 200,
-        Route::Health  => 200,
-        Route::Unknown => 404,
-    }
+// ── Routing tests ─────────────────────────────────────────────────────────
+
+// 1. /health returns 200.
+test fn health_returns_200() -> Unit {
+    let resp: Response = route(make_request(Method::Get, "/health"));
+    assert_eq(resp.status, 200)
 }
 
-// Build a request for testing.
-fn make_request(id: Int, route: Route) -> Request {
-    Request { id: id, method: Method::Get, route: route }
+// 2. /health body is "ok".
+test fn health_body_is_ok() -> Unit {
+    let resp: Response = route(make_request(Method::Get, "/health"));
+    assert_eq(resp.body, "ok")
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────
-
-// 1. /users route requires a database query.
-test fn users_route_needs_db() -> Unit {
-    assert_eq(needs_db(Route::Users), true)
+// 3. /users returns 200.
+test fn users_returns_200() -> Unit {
+    let resp: Response = route(make_request(Method::Get, "/users"));
+    assert_eq(resp.status, 200)
 }
 
-// 2. /health route is a lightweight ping — no DB needed.
-test fn health_route_skips_db() -> Unit {
-    assert_eq(needs_db(Route::Health), false)
+// 4. /users body contains Alice.
+test fn users_body_has_alice() -> Unit {
+    let resp: Response = route(make_request(Method::Get, "/users"));
+    assert_eq(resp.body.contains("Alice"), true)
 }
 
-// 3. Unknown routes never hit the database.
-test fn unknown_route_skips_db() -> Unit {
-    assert_eq(needs_db(Route::Unknown), false)
+// 5. /users body contains Bob.
+test fn users_body_has_bob() -> Unit {
+    let resp: Response = route(make_request(Method::Get, "/users"));
+    assert_eq(resp.body.contains("Bob"), true)
 }
 
-// 4. /users maps to the expected SQL query.
-test fn users_route_has_correct_sql() -> Unit {
-    assert_eq(sql_for_route(Route::Users), "SELECT * FROM users")
+// 6. Unknown path returns 404.
+test fn unknown_returns_404() -> Unit {
+    let resp: Response = route(make_request(Method::Get, "/nope"));
+    assert_eq(resp.status, 404)
 }
 
-// 5. Non-DB routes produce empty SQL (no query sent to pool).
-test fn health_route_has_no_sql() -> Unit {
-    assert_eq(sql_for_route(Route::Health), "")
+// 7. 404 body is empty.
+test fn unknown_body_is_empty() -> Unit {
+    let resp: Response = route(make_request(Method::Get, "/nope"));
+    assert_eq(resp.body, "")
 }
 
-// 6. Known routes return HTTP 200.
-test fn users_route_returns_200() -> Unit {
-    assert_eq(http_status(Route::Users), 200)
+// 8. /health/check also matches /health prefix.
+test fn health_subpath_matches() -> Unit {
+    let resp: Response = route(make_request(Method::Get, "/health/check"));
+    assert_eq(resp.status, 200)
 }
 
-// 7. Health check returns HTTP 200.
-test fn health_route_returns_200() -> Unit {
-    assert_eq(http_status(Route::Health), 200)
+// 9. /users/123 also matches /users prefix.
+test fn users_subpath_matches() -> Unit {
+    let resp: Response = route(make_request(Method::Get, "/users/123"));
+    assert_eq(resp.status, 200)
 }
 
-// 8. Unrecognised routes return HTTP 404.
-test fn unknown_route_returns_404() -> Unit {
-    assert_eq(http_status(Route::Unknown), 404)
-}
-
-// 9. Request ID is preserved through construction.
-test fn request_id_preserved() -> Unit {
-    let req: Request = make_request(42, Route::Users);
-    assert_eq(req.id, 42)
-}
-
-// 10. Route is preserved through construction.
-test fn request_route_preserved() -> Unit {
-    let req: Request = make_request(1, Route::Health);
-    assert_eq(needs_db(req.route), false)
+// 10. Root path returns 404.
+test fn root_returns_404() -> Unit {
+    let resp: Response = route(make_request(Method::Get, "/"));
+    assert_eq(resp.status, 404)
 }
 
 // ── Actor-per-request isolation tests ─────────────────────────────────────
@@ -124,41 +122,38 @@ test fn request_route_preserved() -> Unit {
 // one simulated handler is unaffected by any other handler running before or
 // concurrently with it.
 
-// 11. Two actors handling the same route make independent, identical decisions.
+// 11. Two handlers for the same route make independent, identical decisions.
 test fn two_handlers_same_route_are_independent() -> Unit {
-    let first:  Int = http_status(Route::Health);
-    let second: Int = http_status(Route::Health);
+    let first:  Int = route(make_request(Method::Get, "/health")).status;
+    let second: Int = route(make_request(Method::Get, "/health")).status;
     assert_eq(first, second)
 }
 
-// 12. Actors for different routes make independent decisions without interference.
+// 12. Handlers for different routes make independent decisions.
 test fn two_handlers_different_routes_are_independent() -> Unit {
-    assert_eq(http_status(Route::Health),  200);
-    assert_eq(http_status(Route::Users),   200);
-    assert_eq(http_status(Route::Unknown), 404)
+    assert_eq(route(make_request(Method::Get, "/health")).status, 200);
+    assert_eq(route(make_request(Method::Get, "/users")).status,  200);
+    assert_eq(route(make_request(Method::Get, "/nope")).status,   404)
 }
 
-// 13. DB decision is per-handler — a health handler never sets the db flag
-//     for a concurrent users handler.
-test fn db_decision_is_per_handler() -> Unit {
-    let health_needs: Bool = needs_db(Route::Health);
-    let users_needs:  Bool = needs_db(Route::Users);
-    assert_eq(health_needs, false);
-    assert_eq(users_needs,  true)
+// 13. Response body is per-handler — a health response never leaks into a users response.
+test fn body_is_per_handler() -> Unit {
+    let health_body: String = route(make_request(Method::Get, "/health")).body;
+    let users_body:  String = route(make_request(Method::Get, "/users")).body;
+    assert_eq(health_body, "ok");
+    assert_eq(users_body.contains("Alice"), true)
 }
 
-// 14. SQL is actor-local — a users handler's SQL does not pollute the
-//     health handler running in parallel.
-test fn sql_is_actor_local() -> Unit {
-    let _users_sql: String  = sql_for_route(Route::Users);
-    let health_sql: String  = sql_for_route(Route::Health);
-    assert_eq(health_sql, "")
-}
-
-// 15. Unknown-route handlers always return 404 regardless of request order
-//     relative to other actors.
+// 14. Unknown-route handlers always return 404 regardless of request order.
 test fn unknown_handler_always_404() -> Unit {
-    let _first:  Int = http_status(Route::Users);
-    let _second: Int = http_status(Route::Health);
-    assert_eq(http_status(Route::Unknown), 404)
+    let _first:  Response = route(make_request(Method::Get, "/users"));
+    let _second: Response = route(make_request(Method::Get, "/health"));
+    assert_eq(route(make_request(Method::Get, "/unknown")).status, 404)
+}
+
+// 15. POST to the same paths produces the same routing result (method-agnostic routing).
+test fn post_routes_same_as_get() -> Unit {
+    assert_eq(route(make_request(Method::Post, "/health")).status, 200);
+    assert_eq(route(make_request(Method::Post, "/users")).status,  200);
+    assert_eq(route(make_request(Method::Post, "/nope")).status,   404)
 }

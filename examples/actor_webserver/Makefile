@@ -1,11 +1,8 @@
 # actor_webserver — concurrent HTTP server with actor-per-request pattern
 #
+# Uses pkg.http for HTTP types, parsing, and response serialization.
 # Each accepted TCP connection is handed to a fresh RequestHandler actor that
-# owns the socket exclusively (iso capability).  The actor reads the request,
-# routes it, writes the response, and terminates — no shared mutable state.
-#
-# Demonstrates Phase 8 actor model: iso capability, fire-and-forget actors,
-# and layered configuration (defaults → TOML → env → CLI).
+# owns the socket exclusively (iso capability).
 #
 # Run from this directory or from the repo root.
 .PHONY: help guard-mvl lint check test test-llvm assurance run clean
