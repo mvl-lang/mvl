@@ -74,6 +74,8 @@ Supported forms:
 `src/mvl/parser/ast.rs::SessionOp`,
 `src/mvl/parser/types.rs::parse_session_op`
 
+**Corpus:** `tests/corpus/09_concurrency/session_types.mvl`
+
 #### Scenario: Simple send/receive protocol
 
 - GIVEN `type Ping = !Int. ?Bool. end`
@@ -109,6 +111,8 @@ resolved to checker `Ty` values.
 `src/mvl/checker/types.rs::SessionTy`,
 `src/mvl/checker/types.rs::resolve_session_op`
 
+**Corpus:** `tests/corpus/09_concurrency/session_types.mvl`
+
 #### Scenario: Resolve send/receive protocol
 
 - GIVEN `type Ping = !Int. ?Bool. end`
@@ -133,6 +137,8 @@ Rules:
 **Implementation:** `src/mvl/checker/types.rs::SessionTy::dual`,
 `src/mvl/checker/session.rs::check_dual`
 
+**Corpus:** `tests/corpus/09_concurrency/session_types.mvl`
+
 #### Scenario: Duality of send is receive
 
 - GIVEN `SessionTy::Send(Int, End)`
@@ -156,10 +162,35 @@ Rules:
 
 The checker MUST reject session types with empty choice blocks.  A `+{}` or
 `&{}` with no branches is a parse error (caught in the parser) and a checker
-error (defence-in-depth).
+error (defence-in-depth).  Additionally, duplicate branch labels within a
+choice block MUST be rejected as they produce unreachable states.
 
 **Implementation:** `src/mvl/checker/session.rs::check_session_well_formed`,
 `src/mvl/checker/errors.rs::CheckError::SessionProtocolMismatch`
+
+**Tests:** `tests/type_checker.rs::session_duplicate_label_in_internal_choice_is_rejected`,
+`tests/type_checker.rs::session_duplicate_label_in_external_choice_is_rejected`,
+`tests/type_checker.rs::session_unique_labels_accepted`
+
+**Corpus:** `tests/corpus/09_concurrency/session_types.mvl`,
+`tests/negative/req01/session_duplicate_label.mvl`
+
+#### Scenario: Duplicate branch label rejected
+
+- GIVEN `type BadChoice = +{ ok: end, ok: !Int. end }`
+- WHEN the checker processes the session type declaration
+- THEN the compiler MUST emit `CheckError::SessionDuplicateLabel`:
+  "session protocol unreachable state: duplicate branch label `ok`"
+
+**Tests:** `tests/type_checker.rs::session_duplicate_label_in_internal_choice_is_rejected`
+
+#### Scenario: Well-formed choice accepted
+
+- GIVEN `type GoodChoice = +{ left: end, right: end, middle: !Int. end }`
+- WHEN the checker processes the session type declaration
+- THEN the compiler MUST accept — all labels are distinct
+
+**Tests:** `tests/type_checker.rs::session_unique_labels_accepted`
 
 ---
 
@@ -168,10 +199,40 @@ error (defence-in-depth).
 All session type violations MUST produce structured errors with source
 location (span), human-readable description, and a Requirement 1 classification.
 
+The following error variants MUST exist:
+- `SessionProtocolMismatch`: operation does not match declared protocol
+- `SessionDualityMismatch`: two types are not duals of each other
+- `SessionDeadlock`: both sides simultaneously in `Receive` state
+- `SessionDuplicateLabel`: duplicate branch label in choice block
+- `SessionUnknownBranch`: selected branch not in protocol
+- `SessionAfterEnd`: operation after protocol `end`
+
 **Implementation:** `src/mvl/checker/errors.rs::CheckError::SessionProtocolMismatch`,
 `src/mvl/checker/errors.rs::CheckError::SessionDualityMismatch`,
 `src/mvl/checker/errors.rs::CheckError::SessionUnknownBranch`,
 `src/mvl/checker/errors.rs::CheckError::SessionAfterEnd`
+
+**Tests:** `tests/type_checker.rs::session_duality_mismatch_non_deadlock_returns_mismatch_error`,
+`tests/type_checker.rs::session_mutual_blocking_detected_by_check_dual`,
+`tests/type_checker.rs::session_deadlock_in_choice_branch_detected`
+
+**Corpus:** `tests/corpus/09_concurrency/session_types.mvl`
+
+#### Scenario: Deadlock detected as structured error
+
+- GIVEN two types where both start with `Receive` (both wait, neither sends)
+- WHEN `check_dual` is called on the pair
+- THEN the result MUST be `CheckError::SessionDeadlock` with the declaration span
+
+**Tests:** `tests/type_checker.rs::session_mutual_blocking_detected_by_check_dual`
+
+#### Scenario: Duality mismatch produces structured error
+
+- GIVEN two session types that are not duals and do not mutually block
+- WHEN `check_dual` is called on the pair
+- THEN the result MUST be `CheckError::SessionDualityMismatch` with both protocol descriptions
+
+**Tests:** `tests/type_checker.rs::session_duality_mismatch_non_deadlock_returns_mismatch_error`
 
 ---
 

@@ -4,6 +4,13 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.138.0] - 2026-05-22
+
+### Added
+
+- **Assurance gap closure — specs 015/016 fully covered** (#943): All 14 requirements across Spec 015 (Actors) and Spec 016 (Session Types) now have complete test evidence and corpus. Spec 015 Reqs 7-9 have new corpus files (ActorRef tag semantics, structured concurrency scope, select with timeout). Spec 016 Reqs 4-5 have scenario definitions, test links, and negative corpus for duplicate branch labels. Assurance dashboard improved: Corpus 12/14 → 20/22, Coverage 94 → 96, Assurance 88 → 90.
+- **Actor design evaluation** (#854): Comprehensive analysis of five open design questions (reduction budget, bidirectional links, supervisor scope, scheduling/session interaction, failure model completeness). All questions resolved with no blocking issues for Phase 8.
+
 ## [Unreleased]
 
 ### Added

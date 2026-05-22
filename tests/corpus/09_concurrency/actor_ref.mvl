@@ -1,0 +1,32 @@
+// Corpus: ActorRef semantics — tag capability (Spec 015 Req 7)
+//
+// An actor creation expression returns an ActorRef with tag capability.
+// - tag is sendable across actor boundaries
+// - tag provides identity only — no field access
+// - tag values may be compared for identity
+
+type Payload = struct { data: String }
+
+// Actor that accepts another actor's reference (tag capability)
+actor Logger {
+    prefix: String
+
+    pub fn log(val msg: String) { }
+}
+
+// Actor that holds a reference to another actor (tag-sendable)
+actor Worker {
+    logger: Logger
+
+    pub fn run(val task: String) { }
+    pub fn set_logger(tag target: Logger) { }
+}
+
+// Actor creation returns ActorRef with tag capability
+fn start_system() -> Unit {
+    let logger: Logger = actor Logger { prefix: "sys" };
+    let worker: Worker = actor Worker { logger: logger };
+    // tag is sendable — passing logger ref to another actor's behavior
+    worker.set_logger(logger);
+    worker.run("task-1")
+}

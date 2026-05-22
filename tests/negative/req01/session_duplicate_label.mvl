@@ -1,0 +1,18 @@
+// corpus:expect-fail
+// expect-requirement: 1
+// Scenario: session type choice block contains duplicate branch labels.
+// The checker must reject this as it produces unreachable states.
+// Triggers: CheckError::SessionDuplicateLabel (req1, session types)
+
+// Internal choice with duplicate "ok" label
+type BadInternalChoice = +{
+    ok: end,
+    ok: !Int. end
+}
+
+// External choice with duplicate "read" label
+type BadExternalChoice = &{
+    read: !String. end,
+    write: ?String. end,
+    read: end
+}
