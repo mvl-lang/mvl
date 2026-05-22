@@ -289,7 +289,7 @@ docs-serve: ## Serve documentation locally (http://localhost:8000)
 tree-sitter-build: ## Build tree-sitter grammar for Zed/Neovim
 	cd etc/tree-sitter-mvl && npm install && npm run build
 
-test-tree-sitter: ## Run tree-sitter corpus tests (grammar derived from docs/grammar.ebnf)
+test-tree-sitter: tree-sitter-build ## Run tree-sitter corpus tests (grammar derived from docs/grammar.ebnf)
 	cd etc/tree-sitter-mvl && npm test
 
 test-grammar-coverage: ## Cross-validate docs/grammar.ebnf against tree-sitter grammar.js
