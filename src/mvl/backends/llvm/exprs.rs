@@ -488,7 +488,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                     let alloca = self.builder.build_alloca(ty, &param.name).unwrap();
                     self.builder.build_store(alloca, param_val).unwrap();
                     self.locals.insert(param.name.clone(), (alloca, ty));
-                    self.maybe_register_heap_param(param, ty);
                 }
                 self.local_mvl_types
                     .insert(param.name.clone(), param.ty.clone());

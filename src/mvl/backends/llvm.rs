@@ -39,7 +39,7 @@ use inkwell::{
 use std::collections::{HashMap, HashSet};
 
 use crate::mvl::parser::ast::{
-    ActorDecl, Block, Decl, Expr, ExternDecl, ExternFnDecl, FnDecl, Param, Program, Stmt, TypeExpr,
+    ActorDecl, Block, Decl, Expr, ExternDecl, ExternFnDecl, FnDecl, Program, Stmt, TypeExpr,
 };
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -2883,7 +2883,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                     let alloca = self.builder.build_alloca(ty, &param.name).unwrap();
                     self.builder.build_store(alloca, param_val).unwrap();
                     self.locals.insert(param.name.clone(), (alloca, ty));
-                    self.maybe_register_heap_param(param, ty);
                 }
                 // L5-08: record MVL type for Ok/Some payload inference in match arms.
                 self.local_mvl_types
@@ -3032,7 +3031,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                     let alloca = self.builder.build_alloca(ty, &param.name).unwrap();
                     self.builder.build_store(alloca, param_val).unwrap();
                     self.locals.insert(param.name.clone(), (alloca, ty));
-                    self.maybe_register_heap_param(param, ty);
                 }
                 // L5-08: record MVL type for Ok/Some payload inference in match arms.
                 self.local_mvl_types
@@ -3079,18 +3077,6 @@ impl<'ctx> LlvmBackend<'ctx> {
     /// Return the name of the last expression in `block` if it is a bare identifier
     /// tracked as a heap local.  Used to exclude the implicit return value from drops
     /// (returning a heap pointer transfers ownership to the caller).
-    /// L5-15: register a value parameter in `heap_locals` if it is a heap type.
-    /// Borrow params (`val T`/`ref T`) are skipped — the caller retains ownership.
-    fn maybe_register_heap_param(&mut self, param: &Param, llvm_ty: BasicTypeEnum) {
-        if !matches!(&param.ty, TypeExpr::Ref { .. }) {
-            if let Some(kind) = stmts::heap_kind_of(&param.ty) {
-                if matches!(llvm_ty, BasicTypeEnum::PointerType(_)) {
-                    self.heap_locals.insert(param.name.clone(), kind);
-                }
-            }
-        }
-    }
-
     fn heap_return_ident<'b>(&self, block: &'b Block) -> Option<&'b str> {
         let last = block.stmts.last()?;
         let Stmt::Expr { expr, .. } = last else {
