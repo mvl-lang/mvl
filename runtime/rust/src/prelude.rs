@@ -12,6 +12,7 @@
 //! re-exported here. The transpiler emits explicit `use mvl_runtime::stdlib::X::*`
 //! imports for each `use std.X.*` declaration in the MVL source (#488 / #489).
 
+pub use crate::capability::{ApiEndpoint, AuditTarget, ConfigPath, DbUrl};
 pub use crate::ifc::{declassify, sanitize, Clean, Public, Secret, Tainted};
 pub use crate::mvl_refine;
 

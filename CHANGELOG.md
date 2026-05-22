@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.139.1] - 2026-05-22
+
+### Fixed
+
+- **Rust backend capability label support** (#931): Add `DbUrl`, `ConfigPath`, `ApiEndpoint`, `AuditTarget` newtype wrappers to `mvl_runtime::capability` and implement relabel codegen for all 8 capability transitions (4 wrap + 4 unwrap). Fixes compilation errors in examples using `std.db` or `std.audit` capability-labeled functions.
+
 ## [0.139.0] - 2026-05-22
 
 ### Added
