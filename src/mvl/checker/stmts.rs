@@ -402,6 +402,16 @@ impl TypeChecker {
                 span,
             } => {
                 let val_ty = self.infer_expr(value);
+                // #934: linear types require consume() on assignment, same as let bindings.
+                if val_ty.is_linear() {
+                    if let Expr::Ident(src, _) = value {
+                        self.emit(CheckError::LinearTypeBareBind {
+                            name: src.clone(),
+                            ty: val_ty.display(),
+                            span: value.span(),
+                        });
+                    }
+                }
                 self.check_assignment(target, &val_ty, *span);
             }
 

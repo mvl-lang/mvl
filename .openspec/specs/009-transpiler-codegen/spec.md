@@ -79,6 +79,40 @@ to one function and never used again.
 
 **Tests:** `tests/borrow.rs` — 12 targeted Phase A tests.
 
+#### Phase B: Borrow parameter inference (implemented, issue #660)
+
+The transpiler analyses each function's parameters to determine whether they can be
+passed by borrow (`&T` or `&mut T`) instead of by value. This is a cross-function
+analysis performed by `src/mvl/backends/rust/capability_params.rs::build_capability_params_map`.
+
+**Algorithm:**
+1. For each function, examine every parameter.
+2. A parameter qualifies for borrow if it has NO disqualifying uses in the function body.
+3. Disqualifying uses: returned from function, assigned to a variable, destructured,
+   passed to a free function (which may store it), used in a lambda capture, used as
+   a field access base in assignment position.
+4. Conservative rules: loop variables and lambda captures are always disqualified.
+5. Qualified parameters are emitted as `&T` (shared borrow) or `&mut T` (mutable borrow)
+   depending on whether the parameter is used in mutable position.
+
+**Implementation:** `src/mvl/backends/rust/capability_params.rs`
+
+**Tests:** `tests/parser/borrow.rs` — 40+ targeted Phase B tests.
+
+#### Scenario: Read-only parameter borrowed (Phase B)
+
+- GIVEN `fn show(p: Point) -> String { format("{}", p.x) }` where `p` is only read
+- WHEN transpiled with Phase B
+- THEN the emitted Rust signature contains `p: &Point`
+- AND call sites pass `&p` instead of `p.clone()`
+
+#### Scenario: Mutated parameter remains owned (Phase B)
+
+- GIVEN `fn consume(s: String) -> String { s }` where `s` is returned
+- WHEN transpiled with Phase B
+- THEN the emitted Rust signature keeps `s: String` (owned)
+- AND the parameter is not borrowed (disqualifying use: returned)
+
 #### Scenario: Single-use variable is moved (Phase A)
 
 - GIVEN `fn f(p: Point) -> Int { show(p) }` where `p` is used exactly once
@@ -107,18 +141,19 @@ to one function and never used again.
 - THEN every call to `f(b)` inside the loop emits `f(b.clone())`
 - AND the outside-loop use of `b` also clones if `b` appears anywhere in the loop
 
-#### Scenario: Copy types not cloned (Phase B/C target)
+#### Scenario: Copy types not cloned (Phase C target)
 
-> **Phase A note:** The transpiler has no type information at emit time. Copy types
-> (`Int`, `Bool`, `Char`) still emit `.clone()` when used in non-last-use positions.
-> `.clone()` on a Copy type is a no-op optimised away by the compiler.
-> Copy inference is deferred to a future phase.
+> **Note:** Phase B (borrow parameter inference) is implemented and eliminates many
+> unnecessary clones by passing parameters by reference. However, Copy type inference
+> (`Int`, `Bool`, `Char` auto-derive Copy on structs) remains deferred to Phase C.
+> Copy types still emit `.clone()` when used in non-last-use positions, but `.clone()`
+> on a Copy type is a no-op optimised away by the Rust compiler.
 >
 > **Tests:** `tests/transpiler.rs::copy_type_ident_clone_is_emitted_but_harmless`
 
 - GIVEN `fn add(a: Int, b: Int) -> Int { a + b }`
 - AND `let x = 1; add(x, x);`
-- WHEN transpiled (future phase)
+- WHEN transpiled (Phase C)
 - THEN the emitted Rust contains `add(x, x)` without `.clone()`
 
 #### Scenario: Collection iterable cloned before for-in
@@ -275,8 +310,8 @@ for item in get_items().clone() { ... }  // .clone() chains on return value, not
 
 These are explicitly out of scope for the current transpiler:
 
-- **Clone elision beyond Phase A:** Phase A (last-use move) is implemented. Phase B (Copy inference, cross-scope borrow) is deferred.
-- **Copy inference:** Don't auto-derive Copy on structs. Derive Clone uniformly.
+- **Clone elision beyond Phase B:** Phase A (last-use move) and Phase B (borrow parameter inference) are implemented. Phase C (Copy inference, cross-scope borrow) is deferred.
+- **Copy inference:** Don't auto-derive Copy on structs. Derive Clone uniformly. (Phase C target.)
 - **Expression-level type tracking in emitter:** The transpiler operates on AST nodes, not typed IR. Type-aware emission is Phase 3.
 - **Rust formatting:** The emitted Rust does not need to pass `rustfmt`. Correctness over style.
 - **Lifetime annotations:** All cloned values are owned. No borrows in emitted Rust (Phase 1).

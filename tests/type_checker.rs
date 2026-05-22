@@ -6824,6 +6824,66 @@ fn string_literal_assignment_accepted() {
     );
 }
 
+// ── #934: linear type assignment (not let) without consume() ──────────────────
+
+/// Reassignment of linear type without consume() is rejected.
+#[test]
+fn linear_reassignment_without_consume_rejected() {
+    // GIVEN: t = s where s: String (no consume)
+    // THEN: LinearTypeBareBind error
+    let src = r#"
+        fn f() -> Unit {
+            let mut t: String = "a";
+            let s: String = "b";
+            t = s;
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::LinearTypeBareBind { .. })),
+        "expected LinearTypeBareBind for bare linear reassignment, got: {errors:?}"
+    );
+}
+
+/// Reassignment of linear type with consume() is accepted.
+#[test]
+fn linear_reassignment_with_consume_accepted() {
+    let src = r#"
+        fn f() -> Unit {
+            let mut t: String = "a";
+            let s: String = "b";
+            t = consume(s);
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::LinearTypeBareBind { .. })),
+        "consume() should satisfy linear reassignment, got: {errors:?}"
+    );
+}
+
+/// Reassignment from literal is accepted (no consume needed).
+#[test]
+fn linear_reassignment_from_literal_accepted() {
+    let src = r#"
+        fn f() -> Unit {
+            let mut t: String = "a";
+            t = "b";
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::LinearTypeBareBind { .. })),
+        "literal reassignment should not require consume, got: {errors:?}"
+    );
+}
+
 // ── #506: Actor behavior parameter sendability ────────────────────────────────
 
 /// `pub fn` behavior with `ref` parameter is rejected — ref is not sendable.
