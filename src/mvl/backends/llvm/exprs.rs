@@ -488,7 +488,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                     let alloca = self.builder.build_alloca(ty, &param.name).unwrap();
                     self.builder.build_store(alloca, param_val).unwrap();
                     self.locals.insert(param.name.clone(), (alloca, ty));
-                    self.maybe_register_heap_param(param, ty);
                 }
                 self.local_mvl_types
                     .insert(param.name.clone(), param.ty.clone());
@@ -3727,21 +3726,27 @@ impl<'ctx> LlvmBackend<'ctx> {
             },
 
             // ── HOF methods (#421) ─────────────────────────────────────────────
-            // Dispatch `receiver.method(args…)` → `method(receiver, args…)` by
-            // calling the monomorphized MVL stdlib function directly.
+            // Dispatch `receiver.method(args…)` → `List_method(receiver, args…)` by
+            // calling the monomorphized MVL stdlib extension method directly.
             // Note: take/skip handled above in Group F via _mvl_list_slice.
             "filter" | "map" | "any" | "all" | "find" | "take_while" | "skip_while"
                 if args.len() == 1 =>
             {
                 let mut all_args = vec![receiver.clone()];
                 all_args.extend_from_slice(args);
-                self.emit_fn_call(method, &all_args)
+                let mangled = format!("List_{method}");
+                self.emit_fn_call(&mangled, &all_args)
             }
             "fold" if args.len() == 2 => {
                 let mut all_args = vec![receiver.clone()];
                 all_args.extend_from_slice(args);
-                self.emit_fn_call("fold", &all_args)
+                self.emit_fn_call("List_fold", &all_args)
             }
+
+            // #587: set algebra — inline-emit without HOF.
+            "intersection" if args.len() == 1 => self.emit_set_intersection(receiver, &args[0]),
+            "difference" if args.len() == 1 => self.emit_set_difference(receiver, &args[0]),
+            "union" if args.len() == 1 => self.emit_set_union(receiver, &args[0]),
 
             // Phase 8 / #696: actor behavior calls, and #868: user-defined type methods.
             _ => {

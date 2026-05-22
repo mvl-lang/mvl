@@ -25,9 +25,6 @@
 // See #785, ADR-0007.
 
 use std.db.{Value}
-use std.strings.{str_split, str_parse_int}
-use std.lists.{list_push}
-use std.collections.{map_put}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -75,7 +72,7 @@ total fn wire_to_blob(csv: String) -> List[Int] {
     if csv == "" {
         []
     } else {
-        str_split(csv, ",").map(|s: String| str_parse_int(s).unwrap_or(0))
+        csv.split(",").map(|s: String| s.parse_int().unwrap_or(0))
     }
 }
 
@@ -117,7 +114,7 @@ partial fn collect_rows(rh: Int) -> List[Map[String, Value]] {
     let col_names: ref List[String] = [];
     let ci: ref Int = 0;
     while ci < n_cols {
-        col_names = list_push(col_names, sqlite_result_col_name(rh, ci));
+        col_names.push(sqlite_result_col_name(rh, ci));
         ci = ci + 1;
     }
 

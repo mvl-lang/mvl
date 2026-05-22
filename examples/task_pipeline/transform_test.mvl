@@ -66,7 +66,7 @@ fn enrich_high_value(records: List[Record], threshold: Float) -> List[Record] {
             } else {
                 r
             };
-            list_concat(acc, [out])
+            acc.concat([out])
         }
     )
 }

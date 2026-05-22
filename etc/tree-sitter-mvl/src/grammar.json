@@ -65,6 +65,18 @@
                 {
                   "type": "SYMBOL",
                   "name": "actor_decl"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "effect_decl"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "label_decl"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "relabel_decl"
                 }
               ]
             }
@@ -421,6 +433,110 @@
         {
           "type": "SYMBOL",
           "name": "block"
+        }
+      ]
+    },
+    "effect_decl": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "effect"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "identifier"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": ">"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "identifier"
+                },
+                {
+                  "type": "REPEAT",
+                  "content": {
+                    "type": "SEQ",
+                    "members": [
+                      {
+                        "type": "STRING",
+                        "value": "+"
+                      },
+                      {
+                        "type": "SYMBOL",
+                        "name": "identifier"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "STRING",
+          "value": ";"
+        }
+      ]
+    },
+    "label_decl": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "label"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "identifier"
+        },
+        {
+          "type": "STRING",
+          "value": ";"
+        }
+      ]
+    },
+    "relabel_decl": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "relabel"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "identifier"
+        },
+        {
+          "type": "STRING",
+          "value": ":"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "identifier"
+        },
+        {
+          "type": "STRING",
+          "value": "->"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "identifier"
+        },
+        {
+          "type": "STRING",
+          "value": ";"
         }
       ]
     },
@@ -3304,6 +3420,39 @@
         }
       ]
     },
+    "relabel_expr": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "relabel"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "identifier"
+        },
+        {
+          "type": "STRING",
+          "value": "("
+        },
+        {
+          "type": "SYMBOL",
+          "name": "expr"
+        },
+        {
+          "type": "STRING",
+          "value": ","
+        },
+        {
+          "type": "SYMBOL",
+          "name": "expr"
+        },
+        {
+          "type": "STRING",
+          "value": ")"
+        }
+      ]
+    },
     "actor_create_expr": {
       "type": "PREC",
       "value": -1,
@@ -4175,22 +4324,6 @@
     ],
     [
       "effect"
-    ],
-    [
-      "ref_expr",
-      "labeled_type"
-    ],
-    [
-      "ref_expr",
-      "base_type"
-    ],
-    [
-      "ref_expr",
-      "result_type"
-    ],
-    [
-      "ref_expr",
-      "option_type"
     ],
     [
       "base_type"

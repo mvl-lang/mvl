@@ -12,7 +12,6 @@
 use pkg.sqlite.{SqliteDb, SqliteError, open, execute, query, query_scalar, query_by_min_age, close}
 use std.db.{Value}
 use std.io.{println}
-use std.collections.{map_get}
 
 partial fn main() -> Unit ! DB + FileRead + FileWrite + Console {
     let db: SqliteDb = match open(":memory:") {
@@ -65,21 +64,21 @@ partial fn main() -> Unit ! DB + FileRead + FileWrite + Console {
         match rows.get(ri) {
             None => (),
             Some(row) => {
-                let id: String = match map_get(row, "id") {
+                let id: String = match row.get("id") {
                     None => "?",
                     Some(cell) => match cell {
                         Value::Int(v) => v.to_string(),
                         _ => "?",
                     },
                 };
-                let name: String = match map_get(row, "name") {
+                let name: String = match row.get("name") {
                     None => "?",
                     Some(cell) => match cell {
                         Value::Text(v) => v,
                         _ => "?",
                     },
                 };
-                let age: String = match map_get(row, "age") {
+                let age: String = match row.get("age") {
                     None => "?",
                     Some(cell) => match cell {
                         Value::Int(v) => v.to_string(),

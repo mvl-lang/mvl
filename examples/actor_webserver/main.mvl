@@ -21,7 +21,6 @@ use config::{ServerConfig, ConfigLoadError, load_config}
 use std.net.{TcpListener, TcpStream, tcp_listen, tcp_accept, tcp_read_request, tcp_write,
              tcp_close_listener, tcp_close_stream, http_request_path, net_error_msg,
              NetError}
-use std.strings.{str_starts_with}
 use std.log.{LogLevel, LogFormat, log_debug, log_info, log_warn, log_error,
              log_set_format, log_set_min_level}
 
@@ -37,9 +36,9 @@ fn not_found_response() -> String {
 }
 
 fn route(path: String) -> String {
-    if str_starts_with(path, "/health") {
+    if path.starts_with("/health") {
         ok_response("ok")
-    } else if str_starts_with(path, "/users") {
+    } else if path.starts_with("/users") {
         ok_response("[{name: Alice}, {name: Bob}]")
     } else {
         not_found_response()

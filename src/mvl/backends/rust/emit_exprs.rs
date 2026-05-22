@@ -490,6 +490,26 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     cg.push("); }");
                 }
 
+                // put(key, value) — Map: insert + return updated map (MVL value semantics).
+                "put" if args.len() == 2 => {
+                    cg.push("{ let mut __m = ");
+                    emit_expr(cg, receiver);
+                    cg.push(".clone(); __m.insert(");
+                    emit_expr_as_arg(cg, &args[0]);
+                    cg.push(", ");
+                    emit_expr_as_arg(cg, &args[1]);
+                    cg.push("); __m }");
+                }
+
+                // without(key) — Map: remove key + return updated map (MVL value semantics).
+                "without" if args.len() == 1 => {
+                    cg.push("{ let mut __m = ");
+                    emit_expr(cg, receiver);
+                    cg.push(".clone(); __m.remove(&(");
+                    emit_expr(cg, &args[0]);
+                    cg.push(").clone()); __m }");
+                }
+
                 // remove(key) — Map: HashMap::remove returns Option<V> (correct for MVL).
                 //               Set: HashSet::remove returns bool (discarded as stmt).
                 "remove" if args.len() == 1 => {
@@ -530,11 +550,12 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
 
                 // intersection(b) / union(b) / difference(b) — Set operations.
                 // These return iterators; collect into HashSet.
+                // Clone the argument to avoid consuming it when used multiple times.
                 "intersection" if args.len() == 1 => {
                     let b = &args[0];
                     cg.push("{ let __b = ");
                     emit_expr(cg, b);
-                    cg.push("; ");
+                    cg.push(".clone(); ");
                     emit_expr(cg, receiver);
                     cg.push(
                         ".intersection(&__b).cloned().collect::<std::collections::HashSet<_>>() }",
@@ -544,7 +565,7 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     let b = &args[0];
                     cg.push("{ let __b = ");
                     emit_expr(cg, b);
-                    cg.push("; ");
+                    cg.push(".clone(); ");
                     emit_expr(cg, receiver);
                     cg.push(".union(&__b).cloned().collect::<std::collections::HashSet<_>>() }");
                 }
@@ -552,7 +573,7 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     let b = &args[0];
                     cg.push("{ let __b = ");
                     emit_expr(cg, b);
-                    cg.push("; ");
+                    cg.push(".clone(); ");
                     emit_expr(cg, receiver);
                     cg.push(
                         ".difference(&__b).cloned().collect::<std::collections::HashSet<_>>() }",

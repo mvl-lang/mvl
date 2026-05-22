@@ -1,138 +1,136 @@
 // tests/stdlib/lists_test.mvl — List[T] stdlib functions
 //
-// Verifies list_len, list_get, list_push, take, skip, first, last,
+// Verifies len, get, push, take, skip, first, last,
 // is_empty, contains, reverse, and flatten from std/lists.mvl.
 // Run with:  mvl test tests/stdlib/
 
-use std.lists.{take, skip, first, last, is_empty, contains, reverse, flatten, len}
-
-// ── len / list_len ──────────────────────────────────────────────────────────
+// ── len ───────────────────────────────────────────────────────────────────
 
 test fn lists_len_empty() -> Unit {
     let xs: List[Int] = [];
-    assert_eq(len(xs), 0);
+    assert_eq(xs.len(), 0);
 }
 
 test fn lists_len_nonempty() -> Unit {
     let xs: List[Int] = [1, 2, 3];
-    assert_eq(len(xs), 3);
+    assert_eq(xs.len(), 3);
 }
 
 // ── is_empty ────────────────────────────────────────────────────────────────
 
 test fn lists_is_empty_true_for_empty() -> Unit {
     let xs: List[Int] = [];
-    assert_eq(is_empty(xs), true);
+    assert_eq(xs.is_empty(), true);
 }
 
 test fn lists_is_empty_false_for_nonempty() -> Unit {
     let xs: List[Int] = [0];
-    assert_eq(is_empty(xs), false);
+    assert_eq(xs.is_empty(), false);
 }
 
 // ── contains ───────────────────────────────────────────────────────────────
 
 test fn lists_contains_existing_element() -> Unit {
     let xs: List[Int] = [1, 2, 3];
-    assert_eq(contains(xs, 2), true);
+    assert_eq(xs.contains(2), true);
 }
 
 test fn lists_contains_missing_element() -> Unit {
     let xs: List[Int] = [1, 2, 3];
-    assert_eq(contains(xs, 9), false);
+    assert_eq(xs.contains(9), false);
 }
 
 test fn lists_contains_empty_list() -> Unit {
     let xs: List[Int] = [];
-    assert_eq(contains(xs, 1), false);
+    assert_eq(xs.contains(1), false);
 }
 
 // ── first / last ────────────────────────────────────────────────────────────
 
 test fn lists_first_nonempty() -> Unit {
     let xs: List[Int] = [10, 20, 30];
-    assert_eq(first(xs).unwrap_or(-1), 10);
+    assert_eq(xs.first().unwrap_or(-1), 10);
 }
 
 test fn lists_first_empty_returns_none() -> Unit {
     let xs: List[Int] = [];
-    assert_eq(is_none(first(xs)), true);
+    assert_eq(is_none(xs.first()), true);
 }
 
 test fn lists_last_nonempty() -> Unit {
     let xs: List[Int] = [10, 20, 30];
-    assert_eq(last(xs).unwrap_or(-1), 30);
+    assert_eq(xs.last().unwrap_or(-1), 30);
 }
 
 test fn lists_last_empty_returns_none() -> Unit {
     let xs: List[Int] = [];
-    assert_eq(is_none(last(xs)), true);
+    assert_eq(is_none(xs.last()), true);
 }
 
 // ── take ────────────────────────────────────────────────────────────────────
 
 test fn lists_take_fewer_than_length() -> Unit {
     let xs: List[Int] = [1, 2, 3, 4, 5];
-    assert_eq(take(xs, 3).len(), 3);
+    assert_eq(xs.take(3).len(), 3);
 }
 
 test fn lists_take_zero_returns_empty() -> Unit {
     let xs: List[Int] = [1, 2, 3];
-    assert_eq(take(xs, 0).len(), 0);
+    assert_eq(xs.take(0).len(), 0);
 }
 
 test fn lists_take_more_than_length_returns_all() -> Unit {
     let xs: List[Int] = [1, 2];
-    assert_eq(take(xs, 10).len(), 2);
+    assert_eq(xs.take(10).len(), 2);
 }
 
 // ── skip ────────────────────────────────────────────────────────────────────
 
 test fn lists_skip_fewer_than_length() -> Unit {
     let xs: List[Int] = [1, 2, 3, 4, 5];
-    assert_eq(skip(xs, 2).len(), 3);
+    assert_eq(xs.skip(2).len(), 3);
 }
 
 test fn lists_skip_all_returns_empty() -> Unit {
     let xs: List[Int] = [1, 2, 3];
-    assert_eq(skip(xs, 3).len(), 0);
+    assert_eq(xs.skip(3).len(), 0);
 }
 
 test fn lists_skip_zero_returns_all() -> Unit {
     let xs: List[Int] = [1, 2, 3];
-    assert_eq(skip(xs, 0).len(), 3);
+    assert_eq(xs.skip(0).len(), 3);
 }
 
 // ── reverse ─────────────────────────────────────────────────────────────────
 
 test fn lists_reverse_length_preserved() -> Unit {
     let xs: List[Int] = [1, 2, 3];
-    assert_eq(reverse(xs).len(), 3);
+    assert_eq(xs.reverse().len(), 3);
 }
 
 test fn lists_reverse_first_becomes_last() -> Unit {
     let xs: List[Int] = [1, 2, 3];
-    assert_eq(first(reverse(xs)).unwrap_or(-1), 3);
+    assert_eq(xs.reverse().first().unwrap_or(-1), 3);
 }
 
 test fn lists_reverse_empty_is_empty() -> Unit {
     let xs: List[Int] = [];
-    assert_eq(reverse(xs).len(), 0);
+    assert_eq(xs.reverse().len(), 0);
 }
 
 // ── flatten ─────────────────────────────────────────────────────────────────
 
 test fn lists_flatten_two_sublists() -> Unit {
     let xs: List[List[Int]] = [[1, 2], [3, 4]];
-    assert_eq(flatten(xs).len(), 4);
+    assert_eq(xs.flatten().len(), 4);
 }
 
 test fn lists_flatten_empty_outer_list() -> Unit {
     let xs: List[List[Int]] = [];
-    assert_eq(flatten(xs).len(), 0);
+    assert_eq(xs.flatten().len(), 0);
 }
 
 test fn lists_flatten_empty_inner_lists() -> Unit {
     let xs: List[List[Int]] = [[], []];
-    assert_eq(flatten(xs).len(), 0);
+    assert_eq(xs.flatten().len(), 0);
 }
