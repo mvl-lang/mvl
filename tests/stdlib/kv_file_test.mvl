@@ -1,0 +1,265 @@
+// tests/stdlib/kv_file_test.mvl — std.kv.file correctness (#963)
+//
+// Verifies the file-based KV store: pure accessors (set/get/delete/keys/len)
+// and an effectful round-trip (save → open → compare).
+
+use std.kv.file.{FileKv, KvValue, kv_new, kv_open, kv_get, kv_get_text, kv_get_int,
+                  kv_get_bool, kv_get_float, kv_get_blob, kv_set, kv_delete,
+                  kv_save, kv_keys, kv_len}
+use std.io.{IoError}
+
+// ── construction ──────────────────────────────────────────────────────────────
+
+test fn new_store_is_empty() -> Unit {
+    let store: FileKv = kv_new("test.kv");
+    assert_eq(kv_len(store), 0)
+}
+
+test fn new_store_has_no_keys() -> Unit {
+    let store: FileKv = kv_new("test.kv");
+    assert_eq(kv_keys(store).len(), 0)
+}
+
+// ── set / get: KvValue::Int ───────────────────────────────────────────────────
+
+test fn set_and_get_int() -> Unit {
+    let s0: FileKv = kv_new("t.kv");
+    let s1: FileKv = kv_set(s0, "age", KvValue::Int(30));
+    match kv_get(s1, "age") {
+        Some(KvValue::Int(n)) => assert_eq(n, 30),
+        _                     => assert(false),
+    }
+}
+
+test fn get_int_helper() -> Unit {
+    let s0: FileKv = kv_new("t.kv");
+    let s1: FileKv = kv_set(s0, "port", KvValue::Int(8080));
+    match kv_get_int(s1, "port") {
+        Some(n) => assert_eq(n, 8080),
+        None    => assert(false),
+    }
+}
+
+test fn get_int_negative() -> Unit {
+    let s0: FileKv = kv_new("t.kv");
+    let s1: FileKv = kv_set(s0, "offset", KvValue::Int(-5));
+    match kv_get_int(s1, "offset") {
+        Some(n) => assert_eq(n, -5),
+        None    => assert(false),
+    }
+}
+
+// ── set / get: KvValue::Text ──────────────────────────────────────────────────
+
+test fn set_and_get_text() -> Unit {
+    let s0: FileKv = kv_new("t.kv");
+    let s1: FileKv = kv_set(s0, "name", KvValue::Text("Alice"));
+    match kv_get_text(s1, "name") {
+        Some(s) => assert_eq(s, "Alice"),
+        None    => assert(false),
+    }
+}
+
+test fn get_text_empty_string() -> Unit {
+    let s0: FileKv = kv_new("t.kv");
+    let s1: FileKv = kv_set(s0, "empty", KvValue::Text(""));
+    match kv_get_text(s1, "empty") {
+        Some(s) => assert_eq(s.len(), 0),
+        None    => assert(false),
+    }
+}
+
+// ── set / get: KvValue::Bool ──────────────────────────────────────────────────
+
+test fn set_and_get_bool_true() -> Unit {
+    let s0: FileKv = kv_new("t.kv");
+    let s1: FileKv = kv_set(s0, "flag", KvValue::Bool(true));
+    match kv_get_bool(s1, "flag") {
+        Some(b) => assert_eq(b, true),
+        None    => assert(false),
+    }
+}
+
+test fn set_and_get_bool_false() -> Unit {
+    let s0: FileKv = kv_new("t.kv");
+    let s1: FileKv = kv_set(s0, "flag", KvValue::Bool(false));
+    match kv_get_bool(s1, "flag") {
+        Some(b) => assert_eq(b, false),
+        None    => assert(false),
+    }
+}
+
+// ── set / get: KvValue::Float ─────────────────────────────────────────────────
+
+test fn set_and_get_float() -> Unit {
+    let s0: FileKv = kv_new("t.kv");
+    let s1: FileKv = kv_set(s0, "pi", KvValue::Float(3.14));
+    match kv_get_float(s1, "pi") {
+        Some(f) => assert_eq(f, 3.14),
+        None    => assert(false),
+    }
+}
+
+// ── set / get: KvValue::Null ──────────────────────────────────────────────────
+
+test fn set_and_get_null() -> Unit {
+    let s0: FileKv = kv_new("t.kv");
+    let s1: FileKv = kv_set(s0, "missing", KvValue::Null);
+    match kv_get(s1, "missing") {
+        Some(KvValue::Null) => assert(true),
+        _                   => assert(false),
+    }
+}
+
+// ── set / get: KvValue::Blob ──────────────────────────────────────────────────
+
+test fn set_and_get_blob() -> Unit {
+    let s0: FileKv = kv_new("t.kv");
+    let s1: FileKv = kv_set(s0, "raw", KvValue::Blob([65, 66, 67]));
+    match kv_get_blob(s1, "raw") {
+        Some(bs) => assert_eq(bs.len(), 3),
+        None     => assert(false),
+    }
+}
+
+test fn set_and_get_empty_blob() -> Unit {
+    let s0: FileKv = kv_new("t.kv");
+    let s1: FileKv = kv_set(s0, "empty.blob", KvValue::Blob([]));
+    match kv_get_blob(s1, "empty.blob") {
+        Some(bs) => assert_eq(bs.len(), 0),
+        None     => assert(false),
+    }
+}
+
+// ── get: missing and wrong-type cases ─────────────────────────────────────────
+
+test fn get_missing_key_is_none() -> Unit {
+    let store: FileKv = kv_new("t.kv");
+    match kv_get(store, "missing") {
+        None    => assert(true),
+        Some(_) => assert(false),
+    }
+}
+
+test fn get_text_wrong_type_is_none() -> Unit {
+    let s0: FileKv = kv_new("t.kv");
+    let s1: FileKv = kv_set(s0, "n", KvValue::Int(42));
+    match kv_get_text(s1, "n") {
+        None    => assert(true),
+        Some(_) => assert(false),
+    }
+}
+
+test fn get_int_wrong_type_is_none() -> Unit {
+    let s0: FileKv = kv_new("t.kv");
+    let s1: FileKv = kv_set(s0, "s", KvValue::Text("hello"));
+    match kv_get_int(s1, "s") {
+        None    => assert(true),
+        Some(_) => assert(false),
+    }
+}
+
+test fn get_bool_wrong_type_is_none() -> Unit {
+    let s0: FileKv = kv_new("t.kv");
+    let s1: FileKv = kv_set(s0, "n", KvValue::Int(1));
+    match kv_get_bool(s1, "n") {
+        None    => assert(true),
+        Some(_) => assert(false),
+    }
+}
+
+// ── delete ────────────────────────────────────────────────────────────────────
+
+test fn delete_existing_key() -> Unit {
+    let s0: FileKv = kv_new("t.kv");
+    let s1: FileKv = kv_set(s0, "x", KvValue::Int(1));
+    let s2: FileKv = kv_delete(s1, "x");
+    match kv_get(s2, "x") {
+        None    => assert(true),
+        Some(_) => assert(false),
+    }
+}
+
+test fn delete_missing_key_is_noop() -> Unit {
+    let s0: FileKv = kv_new("t.kv");
+    let s1: FileKv = kv_set(s0, "x", KvValue::Int(1));
+    let s2: FileKv = kv_delete(s1, "nothere");
+    assert_eq(kv_len(s2), 1)
+}
+
+test fn delete_reduces_len() -> Unit {
+    let s0: FileKv = kv_new("t.kv");
+    let s1: FileKv = kv_set(s0, "a", KvValue::Int(1));
+    let s2: FileKv = kv_set(s1, "b", KvValue::Int(2));
+    let s3: FileKv = kv_delete(s2, "a");
+    assert_eq(kv_len(s3), 1)
+}
+
+// ── keys / len ────────────────────────────────────────────────────────────────
+
+test fn len_grows_with_set() -> Unit {
+    let s0: FileKv = kv_new("t.kv");
+    let s1: FileKv = kv_set(s0, "a", KvValue::Int(1));
+    let s2: FileKv = kv_set(s1, "b", KvValue::Int(2));
+    assert_eq(kv_len(s2), 2)
+}
+
+test fn keys_contains_set_key() -> Unit {
+    let s0: FileKv = kv_new("t.kv");
+    let s1: FileKv = kv_set(s0, "hello", KvValue::Text("world"));
+    assert(kv_keys(s1).contains("hello"))
+}
+
+test fn set_same_key_overwrites() -> Unit {
+    let s0: FileKv = kv_new("t.kv");
+    let s1: FileKv = kv_set(s0, "x", KvValue::Int(1));
+    let s2: FileKv = kv_set(s1, "x", KvValue::Int(2));
+    assert_eq(kv_len(s2), 1);
+    match kv_get_int(s2, "x") {
+        Some(n) => assert_eq(n, 2),
+        None    => assert(false),
+    }
+}
+
+// ── round-trip: save → open ───────────────────────────────────────────────────
+
+test fn roundtrip_all_types() -> Unit ! FileRead + FileWrite + FileDelete {
+    let p: String = "/tmp/mvl_kv_file_test_963.kv";
+    let s0: FileKv = kv_new(p);
+    let s1: FileKv = kv_set(s0, "user.name",    KvValue::Text("Bob"));
+    let s2: FileKv = kv_set(s1, "user.age",     KvValue::Int(25));
+    let s3: FileKv = kv_set(s2, "pi",           KvValue::Float(3.14));
+    let s4: FileKv = kv_set(s3, "enabled",      KvValue::Bool(true));
+    let s5: FileKv = kv_set(s4, "raw",          KvValue::Blob([1, 2, 3]));
+    let s6: FileKv = kv_set(s5, "empty",        KvValue::Null);
+    let _: Result[Unit, IoError] = kv_save(s6);
+    match kv_open(p) {
+        Err(_)       => assert(false),
+        Ok(reloaded) => {
+            assert_eq(kv_len(reloaded), 6);
+            match kv_get_text(reloaded, "user.name") {
+                Some(s) => assert_eq(s, "Bob"),
+                None    => assert(false),
+            }
+            match kv_get_int(reloaded, "user.age") {
+                Some(n) => assert_eq(n, 25),
+                None    => assert(false),
+            }
+            match kv_get_bool(reloaded, "enabled") {
+                Some(b) => assert_eq(b, true),
+                None    => assert(false),
+            }
+            match kv_get(reloaded, "empty") {
+                Some(KvValue::Null) => assert(true),
+                _                   => assert(false),
+            }
+        }
+    }
+}
+
+test fn open_missing_file_returns_empty() -> Unit ! FileRead {
+    match kv_open("/tmp/mvl_kv_file_no_such_file_963.kv") {
+        Err(_)   => assert(false),
+        Ok(store) => assert_eq(kv_len(store), 0),
+    }
+}

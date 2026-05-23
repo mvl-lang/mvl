@@ -102,7 +102,18 @@ fn extract(target: &Path) {
         return;
     }
     for (name, content) in STDLIB_FILES {
-        if let Err(e) = fs::write(target.join(name), content) {
+        let dest = target.join(name);
+        // Create parent directories for subdirectory stdlib files (e.g. kv/file.mvl).
+        if let Some(parent) = dest.parent() {
+            if let Err(e) = fs::create_dir_all(parent) {
+                eprintln!(
+                    "mvl: warning: could not create stdlib subdir {}: {e}",
+                    parent.display()
+                );
+                return;
+            }
+        }
+        if let Err(e) = fs::write(&dest, content) {
             eprintln!("mvl: warning: could not write stdlib file {name}: {e}");
             return;
         }
