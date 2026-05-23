@@ -86,6 +86,25 @@ pub fn parse_log_format(s: String) -> LogFormat {
     else { LogFormat::Plain }
 }
 
+/// Return the canonical lowercase name for a LogLevel.
+pub fn log_level_name(l: LogLevel) -> String {
+    match l {
+        LogLevel::Debug => "debug",
+        LogLevel::Info  => "info",
+        LogLevel::Warn  => "warn",
+        LogLevel::Error => "error",
+    }
+}
+
+/// Return the canonical lowercase name for a LogFormat.
+pub fn log_format_name(f: LogFormat) -> String {
+    match f {
+        LogFormat::Plain  => "plain",
+        LogFormat::Logfmt => "logfmt",
+        LogFormat::Json   => "json",
+    }
+}
+
 // ── Internal helpers ───────────────────────────────────────────────────────
 
 /// Write a pre-formatted log line to stderr.

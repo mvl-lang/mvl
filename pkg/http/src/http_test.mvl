@@ -32,9 +32,11 @@ type Status = enum {
 type Method = enum { Get, Post, Put, Delete, Patch, Head, Options }
 
 type Request = struct {
-    method: Method,
-    path:   String,
-    query:  Map[String, List[Tainted[String]]],
+    method:  Method,
+    path:    String,
+    query:   Map[String, List[Tainted[String]]],
+    headers: Map[String, String],
+    body:    Tainted[String],
 }
 
 type PathQuery = struct {
@@ -51,6 +53,21 @@ type Response = struct {
 type HttpError = struct {
     status: Status,
     detail: String,
+}
+
+type Route = struct {
+    method:  Method,
+    pattern: String,
+    name:    String,
+}
+
+type MatchedRoute = struct {
+    name:   String,
+    params: Map[String, String],
+}
+
+type Router = struct {
+    routes: List[Route],
 }
 
 // ── Helpers (mirror pkg.http logic for standalone testing) ─────────────────
@@ -272,6 +289,25 @@ fn split_target(target: String) -> PathQuery {
     }
 }
 
+fn parse_headers(lines: List[String]) -> Map[String, String] {
+    let m: ref Map[String, String] = Map::new();
+    for line in lines {
+        match line.find(":") {
+            None    => {},
+            Some(i) => {
+                let k: String = line.substring(0, i).trim().to_lower();
+                let v: String = line.substring(i + 1, line.len()).trim();
+                if k.len() > 0 { m.insert(k, v) } else {}
+            },
+        }
+    }
+    m
+}
+
+fn header(req: val Request, key: String) -> Option[String] {
+    req.headers.get(key.to_lower())
+}
+
 fn parse_request_str(s: String) -> Result[Request, HttpError] {
     let lines: List[String] = s.split("\r\n");
     let request_line: String = require(lines.get(0), "empty request")?;
@@ -281,7 +317,111 @@ fn parse_request_str(s: String) -> Result[Request, HttpError] {
     let method: Method = parse_method(method_str)?;
     let pq: PathQuery = split_target(target);
     let query: Map[String, List[Tainted[String]]] = parse_query(pq.query);
-    Ok(Request { method: method, path: pq.path, query: query })
+    let n: Int = lines.len();
+    let blank_idx: ref Int = n;
+    let found_blank: ref Bool = false;
+    let idx: ref Int = 1;
+    for line in lines.slice(1, n) {
+        if !found_blank && line.len() == 0 {
+            blank_idx = idx;
+            found_blank = true
+        } else {}
+        idx = idx + 1
+    }
+    let header_lines: List[String] = if found_blank && blank_idx > 1 {
+        lines.slice(1, blank_idx)
+    } else {
+        []
+    };
+    let headers: Map[String, String] = parse_headers(header_lines);
+    let body_str: String = if found_blank && blank_idx + 1 < n {
+        let body_lines: List[String] = lines.slice(blank_idx + 1, n);
+        let acc: ref String = "";
+        let body_first: ref Bool = true;
+        for bl in body_lines {
+            if body_first {
+                acc = bl;
+                body_first = false
+            } else {
+                acc = acc.concat("\r\n").concat(bl)
+            }
+        }
+        acc
+    } else {
+        ""
+    };
+    let body: Tainted[String] = relabel taint(body_str, "HTTP-BODY");
+    Ok(Request { method: method, path: pq.path, query: query, headers: headers, body: body })
+}
+
+fn new_router() -> Router {
+    Router { routes: [] }
+}
+
+fn route(r: val Router, method: Method, pattern: String, name: String) -> Router {
+    let new_routes: ref List[Route] = r.routes;
+    new_routes.push(Route { method: method, pattern: pattern, name: name });
+    Router { routes: new_routes }
+}
+
+fn match_path(pattern: String, path: String) -> Option[Map[String, String]] {
+    let pat_segs: List[String] = pattern.split("/");
+    let path_segs: List[String] = path.split("/");
+    if pat_segs.len() != path_segs.len() {
+        None
+    } else {
+        let params: ref Map[String, String] = Map::new();
+        let matched: ref Bool = true;
+        let i: ref Int = 0;
+        for ps in pat_segs {
+            if matched {
+                let pv: String = match path_segs.get(i) {
+                    Some(v) => v,
+                    None    => { matched = false; "" },
+                };
+                let ps_len: Int = ps.len();
+                if ps.starts_with("{") && ps.ends_with("}") && ps_len > 2 {
+                    let param_name: String = ps.substring(1, ps_len - 1);
+                    params.insert(param_name, pv)
+                } else if ps != pv {
+                    matched = false
+                } else {}
+            } else {}
+            i = i + 1
+        }
+        if matched { Some(params) } else { None }
+    }
+}
+
+fn dispatch(r: val Router, req: val Request) -> Result[MatchedRoute, HttpError] {
+    let path_matched: ref Bool = false;
+    let result: ref Option[MatchedRoute] = None;
+    for rt in r.routes {
+        match match_path(rt.pattern, req.path) {
+            None => {},
+            Some(params) => {
+                path_matched = true;
+                match result {
+                    Some(_) => {},
+                    None    => {
+                        if rt.method == req.method {
+                            result = Some(MatchedRoute { name: rt.name, params: params })
+                        } else {}
+                    },
+                }
+            },
+        }
+    }
+    match result {
+        Some(m) => Ok(m),
+        None    => {
+            if path_matched {
+                Err(HttpError { status: Status::Http405MethodNotAllowed, detail: "method not allowed" })
+            } else {
+                Err(HttpError { status: Status::Http404NotFound, detail: req.path })
+            }
+        },
+    }
 }
 
 fn serialize_response(resp: val Response) -> String {
@@ -641,6 +781,234 @@ test fn parse_request_fragment_after_query_stripped() -> Unit {
                 None    => assert_eq(true, false),
                 Some(t) => assert_eq(relabel trust(t, "TEST"), "val"),
             }
+        },
+    }
+}
+
+// ── Header parsing tests ──────────────────────────────────────────────────────
+
+test fn parse_request_single_header() -> Unit {
+    match parse_request_str("GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => match header(req, "host") {
+            None    => assert_eq(true, false),
+            Some(v) => assert_eq(v, "localhost"),
+        },
+    }
+}
+
+test fn parse_request_header_case_insensitive_lower() -> Unit {
+    match parse_request_str("GET /health HTTP/1.1\r\nContent-Type: text/plain\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => match header(req, "content-type") {
+            None    => assert_eq(true, false),
+            Some(v) => assert_eq(v, "text/plain"),
+        },
+    }
+}
+
+test fn parse_request_header_case_insensitive_mixed() -> Unit {
+    match parse_request_str("GET /health HTTP/1.1\r\nContent-Type: text/plain\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => match header(req, "Content-Type") {
+            None    => assert_eq(true, false),
+            Some(v) => assert_eq(v, "text/plain"),
+        },
+    }
+}
+
+test fn parse_request_multiple_headers() -> Unit {
+    match parse_request_str("GET /health HTTP/1.1\r\nHost: api.example.com\r\nAccept: application/json\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => {
+            assert_eq(req.headers.len(), 2);
+            assert_eq(req.headers.contains_key("host"), true);
+            assert_eq(req.headers.contains_key("accept"), true)
+        },
+    }
+}
+
+test fn parse_request_no_headers_yields_empty_map() -> Unit {
+    match parse_request_str("GET /health HTTP/1.1\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => assert_eq(req.headers.is_empty(), true),
+    }
+}
+
+test fn parse_request_absent_header_is_none() -> Unit {
+    match parse_request_str("GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => assert_eq(header(req, "authorization").is_none(), true),
+    }
+}
+
+// ── Body parsing tests ────────────────────────────────────────────────────────
+
+test fn parse_get_request_has_empty_body() -> Unit {
+    match parse_request_str("GET /health HTTP/1.1\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => assert_eq(relabel trust(req.body, "TEST"), ""),
+    }
+}
+
+test fn parse_post_request_with_body() -> Unit {
+    match parse_request_str("POST /users HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{\"name\":\"alice\"}") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => assert_eq(relabel trust(req.body, "TEST"), "{\"name\":\"alice\"}"),
+    }
+}
+
+test fn parse_post_multiline_body() -> Unit {
+    match parse_request_str("POST /data HTTP/1.1\r\n\r\nline1\r\nline2") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => assert_eq(relabel trust(req.body, "TEST"), "line1\r\nline2"),
+    }
+}
+
+test fn parse_request_body_does_not_bleed_into_headers() -> Unit {
+    match parse_request_str("POST /data HTTP/1.1\r\nHost: x\r\n\r\nbody=val") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => {
+            assert_eq(req.headers.len(), 1);
+            assert_eq(relabel trust(req.body, "TEST"), "body=val")
+        },
+    }
+}
+
+// ── match_path tests ──────────────────────────────────────────────────────────
+
+test fn match_path_exact_hit() -> Unit {
+    match match_path("/health", "/health") {
+        None    => assert_eq(true, false),
+        Some(p) => assert_eq(p.is_empty(), true),
+    }
+}
+
+test fn match_path_exact_miss() -> Unit {
+    assert_eq(match_path("/health", "/status").is_none(), true)
+}
+
+test fn match_path_different_lengths() -> Unit {
+    assert_eq(match_path("/a/b", "/a").is_none(), true)
+}
+
+test fn match_path_single_param() -> Unit {
+    match match_path("/users/{id}", "/users/42") {
+        None    => assert_eq(true, false),
+        Some(p) => match p.get("id") {
+            None    => assert_eq(true, false),
+            Some(v) => assert_eq(v, "42"),
+        },
+    }
+}
+
+test fn match_path_two_params() -> Unit {
+    match match_path("/posts/{post_id}/comments/{cid}", "/posts/7/comments/99") {
+        None    => assert_eq(true, false),
+        Some(p) => {
+            match p.get("post_id") {
+                None    => assert_eq(true, false),
+                Some(v) => assert_eq(v, "7"),
+            }
+            match p.get("cid") {
+                None    => assert_eq(true, false),
+                Some(v) => assert_eq(v, "99"),
+            }
+        },
+    }
+}
+
+test fn match_path_param_prefix_literal_mismatch() -> Unit {
+    assert_eq(match_path("/users/{id}", "/items/42").is_none(), true)
+}
+
+// ── Router dispatch tests ─────────────────────────────────────────────────────
+
+test fn dispatch_exact_match_returns_route_name() -> Unit {
+    let r: Router = route(route(new_router(), Method::Get, "/health", "health"), Method::Get, "/users", "list_users");
+    match parse_request_str("GET /health HTTP/1.1\r\n\r\n") {
+        Err(_)   => assert_eq(true, false),
+        Ok(req)  => match dispatch(r, req) {
+            Err(_)  => assert_eq(true, false),
+            Ok(m)   => assert_eq(m.name, "health"),
+        },
+    }
+}
+
+test fn dispatch_path_param_extracted() -> Unit {
+    let r: Router = route(new_router(), Method::Get, "/users/{id}", "get_user");
+    match parse_request_str("GET /users/42 HTTP/1.1\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => match dispatch(r, req) {
+            Err(_) => assert_eq(true, false),
+            Ok(m)  => {
+                assert_eq(m.name, "get_user");
+                match m.params.get("id") {
+                    None    => assert_eq(true, false),
+                    Some(v) => assert_eq(v, "42"),
+                }
+            },
+        },
+    }
+}
+
+test fn dispatch_no_route_is_404() -> Unit {
+    let r: Router = route(new_router(), Method::Get, "/health", "health");
+    match parse_request_str("GET /missing HTTP/1.1\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => match dispatch(r, req) {
+            Ok(_)  => assert_eq(true, false),
+            Err(e) => assert_eq(e.status, Status::Http404NotFound),
+        },
+    }
+}
+
+test fn dispatch_wrong_method_is_405() -> Unit {
+    let r: Router = route(new_router(), Method::Get, "/users", "list_users");
+    match parse_request_str("POST /users HTTP/1.1\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => match dispatch(r, req) {
+            Ok(_)  => assert_eq(true, false),
+            Err(e) => assert_eq(e.status, Status::Http405MethodNotAllowed),
+        },
+    }
+}
+
+test fn dispatch_first_match_wins() -> Unit {
+    let r: Router = route(
+        route(new_router(), Method::Get, "/users/{id}", "first"),
+        Method::Get, "/users/{id}", "second"
+    );
+    match parse_request_str("GET /users/1 HTTP/1.1\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => match dispatch(r, req) {
+            Err(_) => assert_eq(true, false),
+            Ok(m)  => assert_eq(m.name, "first"),
+        },
+    }
+}
+
+test fn dispatch_post_route_selected() -> Unit {
+    let r: Router = route(
+        route(new_router(), Method::Get, "/users", "list"),
+        Method::Post, "/users", "create"
+    );
+    match parse_request_str("POST /users HTTP/1.1\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => match dispatch(r, req) {
+            Err(_) => assert_eq(true, false),
+            Ok(m)  => assert_eq(m.name, "create"),
+        },
+    }
+}
+
+test fn dispatch_empty_router_is_404() -> Unit {
+    let r: Router = new_router();
+    match parse_request_str("GET /anything HTTP/1.1\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => match dispatch(r, req) {
+            Ok(_)  => assert_eq(true, false),
+            Err(e) => assert_eq(e.status, Status::Http404NotFound),
         },
     }
 }

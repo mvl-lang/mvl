@@ -131,18 +131,20 @@ pub type Method = enum {
 
 // ── Request / Response / HttpError ────────────────────────────────────────────
 
-/// Parsed HTTP request (method + path + query).
+/// Parsed HTTP request (method + path + query + headers + body).
 ///
 /// `path` is the URL path with `?query` and `#fragment` stripped.
 /// `query` maps each key to all values supplied (FastAPI/Starlette-style multi-value):
 ///   `?x=1&x=2` → `{"x": [taint("1"), taint("2")]}`. Values stay `Tainted` —
 ///   they are user-supplied data. Use `query_first`/`query_all` to read.
-///
-/// Headers and body parsing deferred to Phase 2.
+/// `headers` stores lowercased header names — use `header()` for lookup.
+/// `body` is the raw request body, labelled `Tainted` (HTTP-BODY).
 pub type Request = struct {
-    method: Method,
-    path:   String,
-    query:  Map[String, List[Tainted[String]]],
+    method:  Method,
+    path:    String,
+    query:   Map[String, List[Tainted[String]]],
+    headers: Map[String, String],
+    body:    Tainted[String],
 }
 
 /// HTTP response.
@@ -172,6 +174,19 @@ fn require(opt: Option[String], msg: String) -> Result[String, HttpError] {
 }
 
 /// Parse an HTTP method string ("GET", "POST", etc.) into a Method enum.
+/// Return the canonical uppercase name for a Method.
+pub fn method_name(m: val Method) -> String {
+    match m {
+        Method::Get     => "GET",
+        Method::Post    => "POST",
+        Method::Put     => "PUT",
+        Method::Delete  => "DELETE",
+        Method::Patch   => "PATCH",
+        Method::Head    => "HEAD",
+        Method::Options => "OPTIONS",
+    }
+}
+
 pub fn parse_method(s: String) -> Result[Method, HttpError] {
     if s == "GET"     { Ok(Method::Get) }
     else if s == "POST"    { Ok(Method::Post) }
@@ -336,6 +351,26 @@ fn parse_query(raw: String) -> Map[String, List[Tainted[String]]] {
     result
 }
 
+/// Parse HTTP header lines into a lowercased-key map.
+///
+/// Each line must be of the form `Name: Value`.  Names are lowercased so
+/// callers can look up with any case (e.g. `header(req, "content-type")`).
+/// Lines that don't contain `:` are silently skipped.
+fn parse_headers(lines: List[String]) -> Map[String, String] {
+    let m: ref Map[String, String] = Map::new();
+    for line in lines {
+        match line.find(":") {
+            None    => {},
+            Some(i) => {
+                let k: String = line.substring(0, i).trim().to_lower();
+                let v: String = line.substring(i + 1, line.len()).trim();
+                if k.len() > 0 { m.insert(k, v) } else {}
+            },
+        }
+    }
+    m
+}
+
 // ── Query accessors ───────────────────────────────────────────────────────────
 
 /// First value supplied for `key`, or `None` if the key is absent.
@@ -360,6 +395,13 @@ pub fn query_all(req: val Request, key: String) -> List[Tainted[String]] {
         None       => [],
         Some(vals) => vals,
     }
+}
+
+/// Look up a request header by name (case-insensitive).
+///
+/// Header names are stored lowercased; callers may pass any case.
+pub fn header(req: val Request, key: String) -> Option[String] {
+    req.headers.get(key.to_lower())
 }
 
 // ── Request parsing ───────────────────────────────────────────────────────────
@@ -390,8 +432,9 @@ fn split_target(target: String) -> PathQuery {
 ///
 /// IFC trust boundary: the raw tainted input is detainted here for protocol
 /// parsing only.  The path is structural (routing), not user-supplied data.
-/// Query *values* are re-tainted inside `parse_query` since they ARE user data.
-/// When body parsing is added (Phase 2), the body will remain Tainted.
+/// Query *values* are re-tainted inside `parse_query`; the body is re-tainted
+/// with `HTTP-BODY` — both remain `Tainted` to prevent accidental logging.
+/// Header names are lowercased for case-insensitive lookup via `header()`.
 pub fn parse_request(raw: Tainted[String]) -> Result[Request, HttpError] {
     let s: String = relabel trust(raw, "HTTP-REQUEST-LINE");
     let lines: List[String] = s.split("\r\n");
@@ -402,7 +445,42 @@ pub fn parse_request(raw: Tainted[String]) -> Result[Request, HttpError] {
     let method: Method = parse_method(method_str)?;
     let pq: PathQuery = split_target(target);
     let query: Map[String, List[Tainted[String]]] = parse_query(pq.query);
-    Ok(Request { method: method, path: pq.path, query: query })
+    // Find the blank line separating headers from body.
+    let n: Int = lines.len();
+    let blank_idx: ref Int = n;
+    let found_blank: ref Bool = false;
+    let idx: ref Int = 1;
+    for line in lines.slice(1, n) {
+        if !found_blank && line.len() == 0 {
+            blank_idx = idx;
+            found_blank = true
+        } else {}
+        idx = idx + 1
+    }
+    let header_lines: List[String] = if found_blank && blank_idx > 1 {
+        lines.slice(1, blank_idx)
+    } else {
+        []
+    };
+    let headers: Map[String, String] = parse_headers(header_lines);
+    let body_str: String = if found_blank && blank_idx + 1 < n {
+        let body_lines: List[String] = lines.slice(blank_idx + 1, n);
+        let acc: ref String = "";
+        let body_first: ref Bool = true;
+        for bl in body_lines {
+            if body_first {
+                acc = bl;
+                body_first = false
+            } else {
+                acc = acc.concat("\r\n").concat(bl)
+            }
+        }
+        acc
+    } else {
+        ""
+    };
+    let body: Tainted[String] = relabel taint(body_str, "HTTP-BODY");
+    Ok(Request { method: method, path: pq.path, query: query, headers: headers, body: body })
 }
 
 // ── Serialization ─────────────────────────────────────────────────────────────
@@ -471,4 +549,108 @@ pub fn created(body: String) -> Response {
 /// 404 Not Found with empty body.
 pub fn not_found() -> Response {
     respond(Status::Http404NotFound, "")
+}
+
+// ── Router ────────────────────────────────────────────────────────────────────
+
+/// A named route: HTTP method + URL pattern + handler name.
+///
+/// Patterns use `{name}` for path parameters: `/users/{id}` matches
+/// `/users/42` and extracts `{"id": "42"}`.  `name` identifies the handler —
+/// callers use it after `dispatch()` returns to invoke the actual handler.
+pub type Route = struct {
+    method:  Method,
+    pattern: String,
+    name:    String,
+}
+
+/// Extracted path-parameter bindings from a matched route.
+pub type MatchedRoute = struct {
+    name:   String,
+    params: Map[String, String],
+}
+
+/// Ordered list of routes — first match wins.
+pub type Router = struct {
+    routes: List[Route],
+}
+
+/// Create an empty router.
+pub fn new_router() -> Router {
+    Router { routes: [] }
+}
+
+/// Append a route to the router (first registered, first matched).
+pub fn route(r: val Router, method: Method, pattern: String, name: String) -> Router {
+    let new_routes: ref List[Route] = r.routes;
+    new_routes.push(Route { method: method, pattern: pattern, name: name });
+    Router { routes: new_routes }
+}
+
+/// Match a URL pattern against a concrete path, extracting `{param}` bindings.
+///
+/// Returns `None` if the segment count differs or any literal segment mismatches.
+fn match_path(pattern: String, path: String) -> Option[Map[String, String]] {
+    let pat_segs: List[String] = pattern.split("/");
+    let path_segs: List[String] = path.split("/");
+    if pat_segs.len() != path_segs.len() {
+        None
+    } else {
+        let params: ref Map[String, String] = Map::new();
+        let matched: ref Bool = true;
+        let i: ref Int = 0;
+        for ps in pat_segs {
+            if matched {
+                let pv: String = match path_segs.get(i) {
+                    Some(v) => v,
+                    None    => { matched = false; "" },
+                };
+                let ps_len: Int = ps.len();
+                if ps.starts_with("{") && ps.ends_with("}") && ps_len > 2 {
+                    let param_name: String = ps.substring(1, ps_len - 1);
+                    params.insert(param_name, pv)
+                } else if ps != pv {
+                    matched = false
+                } else {}
+            } else {}
+            i = i + 1
+        }
+        if matched { Some(params) } else { None }
+    }
+}
+
+/// Dispatch a request against the router (first match wins).
+///
+/// Returns the matched route name and extracted path params on success.
+/// Returns `Http405MethodNotAllowed` if the path matches but no route accepts
+/// the method; `Http404NotFound` if no route matches the path at all.
+pub fn dispatch(r: val Router, req: val Request) -> Result[MatchedRoute, HttpError] {
+    let path_matched: ref Bool = false;
+    let result: ref Option[MatchedRoute] = None;
+    for rt in r.routes {
+        match match_path(rt.pattern, req.path) {
+            None => {},
+            Some(params) => {
+                path_matched = true;
+                match result {
+                    Some(_) => {},
+                    None    => {
+                        if rt.method == req.method {
+                            result = Some(MatchedRoute { name: rt.name, params: params })
+                        } else {}
+                    },
+                }
+            },
+        }
+    }
+    match result {
+        Some(m) => Ok(m),
+        None    => {
+            if path_matched {
+                Err(HttpError { status: Status::Http405MethodNotAllowed, detail: "method not allowed" })
+            } else {
+                Err(HttpError { status: Status::Http404NotFound, detail: req.path })
+            }
+        },
+    }
 }
