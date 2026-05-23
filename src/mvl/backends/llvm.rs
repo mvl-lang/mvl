@@ -52,10 +52,7 @@ fn is_inlined_builtin(name: &str) -> bool {
     // #839: println/print/eprintln/eprint removed — they are now pure-MVL wrappers
     // in std/core.mvl that call stdout_write(stdout(), ...) / stderr_write(stderr(), ...).
     // Their bodies are compiled in the second pass like any other user-defined function.
-    matches!(
-        name,
-        "format" | "assert" | "assert_eq" | "assert_ne" | "panic"
-    )
+    matches!(name, "assert" | "assert_eq" | "assert_ne" | "panic")
 }
 
 /// A reusable LLVM compiler that owns its `Context`.

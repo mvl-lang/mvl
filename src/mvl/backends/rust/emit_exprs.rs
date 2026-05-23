@@ -725,10 +725,9 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
             args,
             ..
         } => {
-            // format!/panic! are Rust macros: first arg must be a bare string literal,
-            // not a `.to_string()` expression.  println/print/eprintln/eprint are now
-            // pure-MVL wrappers in std/core.mvl (#839) and compile as regular functions.
-            if matches!(name.as_str(), "format" | "panic") {
+            // panic! is a Rust macro: first arg must be a bare string literal.
+            // format is now a regular 2-arg function (#901).
+            if name.as_str() == "panic" {
                 cg.push(&format!("{name}!"));
                 cg.push("(");
                 emit_args_for_macro(cg, args);

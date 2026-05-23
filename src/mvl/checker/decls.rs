@@ -88,6 +88,7 @@ impl TypeChecker {
             effects: fd.effects.clone(),
             totality: fd.totality.clone(),
             type_params,
+            is_sink: fd.is_sink,
             // ADR-0024: all functions are label-transparent by default (universal propagation).
             // The `transparent` keyword in MVL source is accepted but now a no-op.
             ..Default::default()
@@ -138,7 +139,7 @@ impl TypeChecker {
                     ret,
                     effects: f.effects.clone(),
                     totality: None,
-                    type_params: HashSet::new(), // extern fns may or may not terminate
+                    type_params: vec![], // extern fns may or may not terminate
                     ..Default::default()
                 },
             );
@@ -257,7 +258,7 @@ impl TypeChecker {
                     ret,
                     effects: method.effects.clone(),
                     totality: None,
-                    type_params: HashSet::new(),
+                    type_params: vec![],
                     ..Default::default()
                 },
             );

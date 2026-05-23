@@ -19,7 +19,7 @@ total fn pure_map[A, B](f: fn(A) -> B, xs: List[A]) -> List[B] {
 
 // Total with effect (terminates, but uses I/O)
 total fn log_count(n: Int where self >= 0) -> Unit ! Console {
-    println(format("{}", n))
+    println(format("{}", [n.to_string()]))
 }
 
 // Partial with effects

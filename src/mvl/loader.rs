@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 const IMPLICIT_PRELUDE_STEMS: &[&str] = &["core", "strings", "lists", "effects", "io"];
 
+/// Format an error message with source line and caret indicator.
 fn format_error_with_source(src: &str, span: Span, message: &str) -> String {
     let line_text = src.lines().nth((span.line - 1) as usize).unwrap_or("");
     let line_num = span.line.to_string();

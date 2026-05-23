@@ -8,6 +8,6 @@
 
 fn main() -> Unit ! Console {
     for i in range(0, 5) {
-        println(format("{}", i));
+        println(format("{}", [i.to_string()]));
     }
 }

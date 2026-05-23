@@ -183,12 +183,15 @@ pub struct FnInfo {
     pub effects: Vec<Effect>,
     /// Totality annotation (Req 8): None = implicitly total, Some(Partial) = partial.
     pub totality: Option<Totality>,
-    /// Type parameter names declared on this function (e.g. `T` in `fn f[T](...)`).
-    /// Non-empty iff the function is generic; used to skip argument type checking at call sites.
-    pub type_params: HashSet<String>,
+    /// Ordered type parameter names declared on this function (e.g. `["T"]` in `fn f[T](...)`).
+    /// Non-empty iff the function is generic. Order preserved for type-arg substitution (#989).
+    pub type_params: Vec<String>,
     /// Whether this function propagates security labels from arguments to return type (ADR-0024).
     /// When true, the checker joins all argument labels and applies them to the declared return type.
     pub label_transparent: bool,
+    /// Whether this function is a public IFC sink (#956).
+    /// The checker rejects any argument carrying a security label at call sites.
+    pub is_sink: bool,
 }
 
 impl Default for FnInfo {
@@ -198,11 +201,12 @@ impl Default for FnInfo {
             ret: Ty::Unit,
             effects: vec![],
             totality: None,
-            type_params: HashSet::new(),
+            type_params: vec![],
             // ADR-0024: all functions propagate security labels by default.
             // Labels flow upward through all computations; only declassify()
             // and sanitize() (AST-level nodes) erase labels explicitly.
             label_transparent: true,
+            is_sink: false,
         }
     }
 }
@@ -349,6 +353,7 @@ impl TypeEnv {
                 params: vec![fd_ty.clone(), Ty::String],
                 ret: Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty)),
                 effects: console_eff,
+                is_sink: true,
                 ..Default::default()
             },
         );
@@ -381,7 +386,8 @@ impl TypeEnv {
             FnInfo {
                 params: vec![Ty::Unknown, Ty::Unknown],
                 ret: Ty::Unit,
-                type_params: HashSet::from(["T".to_string()]),
+                type_params: vec!["T".to_string()],
+                is_sink: true,
                 ..Default::default()
             },
         );
@@ -390,7 +396,8 @@ impl TypeEnv {
             FnInfo {
                 params: vec![Ty::Unknown, Ty::Unknown],
                 ret: Ty::Unit,
-                type_params: HashSet::from(["T".to_string()]),
+                type_params: vec!["T".to_string()],
+                is_sink: true,
                 ..Default::default()
             },
         );
@@ -428,12 +435,12 @@ impl TypeEnv {
                 ..Default::default()
             },
         );
-        // format — string interpolation, variadic (template + args), pure
-        // label_transparent: joins argument labels so `format("x={}", secret)` returns Secret<String>
+        // format — string interpolation (#901): format(template, values) -> String
+        // label_transparent: joins argument labels so `format("{}", [secret])` returns Secret[String]
         self.fns.insert(
             "format".into(),
             FnInfo {
-                params: vec![],
+                params: vec![Ty::String, Ty::List(Box::new(Ty::String))],
                 ret: Ty::String,
                 label_transparent: true,
                 ..Default::default()
@@ -662,7 +669,7 @@ impl TypeEnv {
                 params: vec![Ty::Unknown],
                 ret: Ty::Option(Box::new(Ty::Unknown)),
                 effects: vec![Effect::new("Random", Span::new(0, 0, 0, 0))],
-                type_params: HashSet::from(["T".to_string()]),
+                type_params: vec!["T".to_string()],
                 ..Default::default()
             },
         );
@@ -673,7 +680,7 @@ impl TypeEnv {
                 params: vec![Ty::Unknown],
                 ret: Ty::List(Box::new(Ty::Unknown)),
                 effects: vec![Effect::new("Random", Span::new(0, 0, 0, 0))],
-                type_params: HashSet::from(["T".to_string()]),
+                type_params: vec!["T".to_string()],
                 ..Default::default()
             },
         );

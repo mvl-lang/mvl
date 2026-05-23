@@ -11,11 +11,118 @@
 //! - Totality annotations, effect lists, and where-clause constraints
 
 use crate::mvl::parser::ast::{
-    ActorDecl, ActorMethod, Constraint, EffectDecl, ExternDecl, ExternFnDecl, FnDecl, ImplDecl,
-    LabelDecl, Param, RelabelDecl, Totality, UseDecl,
+    ActorDecl, ActorMethod, BinaryOp, Constraint, EffectDecl, Expr, ExternDecl, ExternFnDecl,
+    FnDecl, ImplDecl, LabelDecl, Literal, Param, RefExpr, RelabelDecl, Totality, UnaryOp, UseDecl,
 };
 use crate::mvl::parser::lexer::TokenKind;
 use crate::mvl::parser::{ParseError, Parser};
+
+/// Convert a `RefExpr` back to an `Expr` for storage in the widened AST (#983).
+/// Note: Currently unused; RefExpr quantifiers are wrapped directly as `Expr::Quantifier`.
+/// Kept for potential future use in other contract refinements.
+#[allow(dead_code)]
+fn ref_expr_to_expr(re: &RefExpr) -> Expr {
+    use crate::mvl::parser::ast::{ArithOp, CmpOp, LogicOp};
+    match re {
+        RefExpr::Ident { name, span } => Expr::Ident(name.clone(), *span),
+        RefExpr::Integer { value, span } => Expr::Literal(Literal::Integer(*value), *span),
+        RefExpr::Float { value, span } => Expr::Literal(Literal::Float(*value), *span),
+        RefExpr::Compare {
+            op,
+            left,
+            right,
+            span,
+        } => {
+            let bop = match op {
+                CmpOp::Lt => BinaryOp::Lt,
+                CmpOp::Gt => BinaryOp::Gt,
+                CmpOp::Le => BinaryOp::Le,
+                CmpOp::Ge => BinaryOp::Ge,
+                CmpOp::Eq => BinaryOp::Eq,
+                CmpOp::Ne => BinaryOp::Ne,
+            };
+            Expr::Binary {
+                op: bop,
+                left: Box::new(ref_expr_to_expr(left)),
+                right: Box::new(ref_expr_to_expr(right)),
+                span: *span,
+            }
+        }
+        RefExpr::LogicOp {
+            op,
+            left,
+            right,
+            span,
+        } => {
+            let bop = match op {
+                LogicOp::And => BinaryOp::And,
+                LogicOp::Or => BinaryOp::Or,
+            };
+            Expr::Binary {
+                op: bop,
+                left: Box::new(ref_expr_to_expr(left)),
+                right: Box::new(ref_expr_to_expr(right)),
+                span: *span,
+            }
+        }
+        RefExpr::ArithOp {
+            op,
+            left,
+            right,
+            span,
+        } => {
+            let bop = match op {
+                ArithOp::Add => BinaryOp::Add,
+                ArithOp::Sub => BinaryOp::Sub,
+                ArithOp::Mul => BinaryOp::Mul,
+                ArithOp::Div => BinaryOp::Div,
+                ArithOp::Rem => BinaryOp::Rem,
+            };
+            Expr::Binary {
+                op: bop,
+                left: Box::new(ref_expr_to_expr(left)),
+                right: Box::new(ref_expr_to_expr(right)),
+                span: *span,
+            }
+        }
+        RefExpr::Not { inner, span } => Expr::Unary {
+            op: UnaryOp::Not,
+            expr: Box::new(ref_expr_to_expr(inner)),
+            span: *span,
+        },
+        RefExpr::Grouped { inner, .. } => ref_expr_to_expr(inner),
+        RefExpr::Len { ident, span } => {
+            // len(x) → x.len() as a method call
+            Expr::MethodCall {
+                receiver: Box::new(Expr::Ident(ident.clone(), *span)),
+                method: "len".to_string(),
+                args: vec![],
+                span: *span,
+            }
+        }
+        RefExpr::FieldAccess {
+            object,
+            field,
+            span,
+        } => Expr::FieldAccess {
+            expr: Box::new(ref_expr_to_expr(object)),
+            field: field.clone(),
+            span: *span,
+        },
+        // Old/Forall/Exists: preserve as-is by wrapping in a dummy.
+        // The checker's expr_to_ref_expr_ext will handle these via fallback.
+        RefExpr::Old { inner, .. } => ref_expr_to_expr(inner),
+        RefExpr::Forall { .. } | RefExpr::Exists { .. } => {
+            // These cannot be cleanly represented as Expr; use an Ident placeholder
+            // that expr_to_ref_expr_ext won't match, triggering RuntimeCheck.
+            let span = match re {
+                RefExpr::Forall { span, .. } | RefExpr::Exists { span, .. } => *span,
+                _ => unreachable!(),
+            };
+            Expr::Ident("__quantifier_placeholder".to_string(), span)
+        }
+    }
+}
 
 impl Parser {
     // ── Function declarations ─────────────────────────────────────────────
@@ -27,6 +134,23 @@ impl Parser {
 
         // Optional `test` marker
         let is_test = if *self.peek_kind() == TokenKind::Test {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
+        // Optional `sink` marker (#956): IFC sink — rejects labeled arguments.
+        // May be combined with `transparent`, totality, or `builtin`, but not with `test`.
+        let is_sink = if *self.peek_kind() == TokenKind::Sink {
+            if is_test {
+                let err = ParseError {
+                    message: "`sink` cannot be combined with `test`".into(),
+                    span: self.peek_span(),
+                };
+                self.push_recover(err);
+                return Err(());
+            }
             self.advance();
             true
         } else {
@@ -206,6 +330,10 @@ impl Parser {
         let constraints = self.parse_where_constraints();
 
         // Optional contract clauses: `requires pred` / `ensures pred`
+        // Uses parse_expr() instead of parse_ref_expr() (#983) so complex expressions
+        // (method calls, etc.) produce a hard parse error instead of being silently dropped.
+        // Falls back to parse_ref_expr() for quantifiers (forall/exists) which are
+        // RefExpr-only constructs not supported by the main expression parser.
         let mut requires = Vec::new();
         let mut ensures = Vec::new();
         loop {
@@ -247,6 +375,7 @@ impl Parser {
             is_test,
             is_builtin,
             is_label_transparent,
+            is_sink,
             totality,
             receiver_type,
             name,
@@ -510,7 +639,8 @@ impl Parser {
             | TokenKind::Partial
             | TokenKind::Test
             | TokenKind::Builtin
-            | TokenKind::Transparent => {
+            | TokenKind::Transparent
+            | TokenKind::Sink => {
                 let mut d = self.parse_fn_decl()?;
                 d.visible = visible;
                 if d.is_test && d.visible {

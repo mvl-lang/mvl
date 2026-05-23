@@ -94,6 +94,9 @@ pub enum TokenKind {
     /// `transparent` — marks a function as label-transparent (ADR-0024):
     /// the checker joins argument security labels and applies them to the return type.
     Transparent,
+    /// `sink` — marks a function as a public IFC sink (#956):
+    /// the checker rejects any argument carrying an IFC label (Secret/Tainted/user-defined).
+    Sink,
     /// `requires` — function contract precondition.
     Requires,
     /// `ensures` — function contract postcondition.
@@ -215,6 +218,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Concurrently => write!(f, "concurrently"),
             TokenKind::Builtin => write!(f, "builtin"),
             TokenKind::Transparent => write!(f, "transparent"),
+            TokenKind::Sink => write!(f, "sink"),
             TokenKind::Requires => write!(f, "requires"),
             TokenKind::Ensures => write!(f, "ensures"),
             TokenKind::Invariant => write!(f, "invariant"),
@@ -950,6 +954,7 @@ fn keyword_or_ident(s: String) -> TokenKind {
         // possible future use but never produced by the lexer (Phase 8, #63).
         "builtin" => TokenKind::Builtin,
         "transparent" => TokenKind::Transparent,
+        "sink" => TokenKind::Sink,
         "requires" => TokenKind::Requires,
         "ensures" => TokenKind::Ensures,
         "invariant" => TokenKind::Invariant,

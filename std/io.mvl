@@ -144,7 +144,7 @@ pub builtin fn close(fd: Fd) -> Unit
 ///
 /// Works for stdout (fd 1), stderr (fd 2), or any open file.
 /// Returns Result — use `let _ = write(...)` to explicitly discard errors.
-pub builtin fn write(fd: Fd, msg: String) -> Result[Unit, IoError] ! Console
+pub sink builtin fn write(fd: Fd, msg: String) -> Result[Unit, IoError] ! Console
 
 /// Read up to `max_bytes` bytes from a file descriptor.
 ///
@@ -179,10 +179,10 @@ pub builtin fn read_file(p: String) -> Result[Tainted[String], IoError] ! FileRe
 ///
 /// Truncates the file if it already exists.
 /// Use `write(fd, msg)` for open file descriptors.
-pub builtin fn write_file(p: Path, content: String) -> Result[Unit, IoError] ! FileWrite
+pub sink builtin fn write_file(p: Path, content: String) -> Result[Unit, IoError] ! FileWrite
 
 /// Append a string to a file, creating it if it does not exist.
-pub builtin fn append(p: Path, content: String) -> Result[Unit, IoError] ! FileWrite
+pub sink builtin fn append(p: Path, content: String) -> Result[Unit, IoError] ! FileWrite
 
 // ── Filesystem operations — runtime: mvl_runtime::stdlib::io ─────────────
 

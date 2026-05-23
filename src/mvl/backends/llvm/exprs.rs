@@ -231,6 +231,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             is_test: false,
             is_builtin: false,
             is_label_transparent: false,
+            is_sink: false,
             totality: None,
             receiver_type: None,
             name: lambda_name.clone(),
@@ -1985,7 +1986,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         args: &[Expr],
     ) -> Option<BasicValueEnum<'ctx>> {
         match name {
-            "format" => self.emit_format(args),
+            // format is now a regular 2-arg function (#901), compiled via its MVL body.
             // assert(condition) — trap if condition is false.
             "assert" if args.len() == 1 => {
                 let cond = match self.emit_expr(&args[0])? {

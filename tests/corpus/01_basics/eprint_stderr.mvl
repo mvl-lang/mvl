@@ -4,5 +4,5 @@
 fn main() -> Unit ! Console {
     eprint("error: ");
     eprintln("something went wrong");
-    eprintln(format("count={}", 42));
+    eprintln(format("count={}", [42.to_string()]));
 }

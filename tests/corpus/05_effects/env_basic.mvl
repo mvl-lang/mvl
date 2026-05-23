@@ -11,6 +11,6 @@ use std.env.{getuid, getgid}
 fn main() -> Unit ! Env + Console {
     let uid: Int = getuid();
     let gid: Int = getgid();
-    println(format("{}", uid));
-    println(format("{}", gid));
+    println(format("{}", [uid.to_string()]));
+    println(format("{}", [gid.to_string()]));
 }

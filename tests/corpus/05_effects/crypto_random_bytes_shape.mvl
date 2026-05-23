@@ -10,5 +10,5 @@
 
 fn main() -> Unit ! CryptoRandom + Console {
     let bs: Secret[List[Int]] = crypto_random_bytes(16);
-    println(format("{}", relabel release(bs, "AUTHORIZED").len()));
+    println(format("{}", [relabel release(bs, "AUTHORIZED").len().to_string()]));
 }
