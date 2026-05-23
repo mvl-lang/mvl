@@ -484,6 +484,23 @@ impl<'ctx> LlvmBackend<'ctx> {
         for (i, param) in fd.params.iter().enumerate() {
             if let Some(param_val) = fn_val.get_nth_param((i as u32) + 1) {
                 param_val.set_name(&param.name);
+                // val/ref params arrive as ptr (signature uses ptr for TypeExpr::Ref).
+                // Dereference immediately: load the struct, alloca with the inner type,
+                // and store so the rest of the body treats the local as a plain struct.
+                if let crate::mvl::parser::ast::TypeExpr::Ref { inner, .. } = &param.ty {
+                    if let Some(inner_ty) = self.mvl_type_to_llvm(inner) {
+                        let loaded = self
+                            .builder
+                            .build_load(inner_ty, param_val.into_pointer_value(), &param.name)
+                            .unwrap();
+                        let alloca = self.builder.build_alloca(inner_ty, &param.name).unwrap();
+                        self.builder.build_store(alloca, loaded).unwrap();
+                        self.locals.insert(param.name.clone(), (alloca, inner_ty));
+                        self.local_mvl_types
+                            .insert(param.name.clone(), *inner.clone());
+                        continue;
+                    }
+                }
                 if let Some(ty) = self.mvl_type_to_llvm(&param.ty) {
                     let alloca = self.builder.build_alloca(ty, &param.name).unwrap();
                     self.builder.build_store(alloca, param_val).unwrap();
@@ -2510,7 +2527,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                         self.ensure_monomorphized(fd, type_subs, &mangled.clone());
                         let fn_val = self.module.get_function(&mangled)?;
                         let meta_args: Vec<inkwell::values::BasicMetadataValueEnum> =
-                            arg_vals.iter().map(|v| (*v).into()).collect();
+                            self.coerce_args_to_signature(&arg_vals, fn_val);
                         let call = self.builder.build_call(fn_val, &meta_args, "call").unwrap();
                         use inkwell::values::AnyValue;
                         return BasicValueEnum::try_from(call.as_any_value_enum()).ok();
@@ -2520,15 +2537,50 @@ impl<'ctx> LlvmBackend<'ctx> {
                 let fn_val = self.module.get_function(name)?;
                 // If any argument fails to emit, propagate the failure rather than
                 // silently substituting undef, which would produce undefined behaviour.
-                let meta_args: Vec<inkwell::values::BasicMetadataValueEnum> = args
-                    .iter()
-                    .map(|a| self.emit_expr(a).map(Into::into))
-                    .collect::<Option<Vec<_>>>()?;
+                let arg_vals: Vec<BasicValueEnum<'ctx>> =
+                    args.iter().filter_map(|a| self.emit_expr(a)).collect();
+                if arg_vals.len() != args.len() {
+                    return None;
+                }
+                let meta_args: Vec<inkwell::values::BasicMetadataValueEnum> =
+                    self.coerce_args_to_signature(&arg_vals, fn_val);
                 let call = self.builder.build_call(fn_val, &meta_args, "call").unwrap();
                 use inkwell::values::AnyValue;
                 BasicValueEnum::try_from(call.as_any_value_enum()).ok()
             }
         }
+    }
+
+    /// Coerce emitted argument values to match the LLVM function signature.
+    /// When the signature expects `ptr` but we have a `StructValue` (val/ref param),
+    /// alloca the struct on the stack and pass the pointer instead.
+    fn coerce_args_to_signature(
+        &self,
+        arg_vals: &[BasicValueEnum<'ctx>],
+        fn_val: inkwell::values::FunctionValue<'ctx>,
+    ) -> Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> {
+        let ptr_ty: inkwell::types::BasicMetadataTypeEnum = self
+            .context
+            .ptr_type(inkwell::AddressSpace::default())
+            .into();
+        let param_types = fn_val.get_type().get_param_types();
+        arg_vals
+            .iter()
+            .enumerate()
+            .map(|(i, val)| {
+                if param_types.get(i).copied() == Some(ptr_ty) {
+                    if let BasicValueEnum::StructValue(sv) = val {
+                        let slot = self
+                            .builder
+                            .build_alloca(sv.get_type(), "struct_arg")
+                            .unwrap();
+                        self.builder.build_store(slot, *sv).unwrap();
+                        return slot.into();
+                    }
+                }
+                (*val).into()
+            })
+            .collect()
     }
 
     // ── Collection literals ──────────────────────────────────────────────────

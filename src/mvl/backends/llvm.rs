@@ -2723,6 +2723,22 @@ impl<'ctx> LlvmBackend<'ctx> {
         for (i, param) in fd.params.iter().enumerate() {
             if let Some(param_val) = fn_val.get_nth_param(i as u32) {
                 param_val.set_name(&param.name);
+                // val/ref params arrive as ptr. Dereference immediately into a struct-typed
+                // alloca so field access in the body works without special-casing.
+                if let TypeExpr::Ref { inner, .. } = &param.ty {
+                    if let Some(inner_ty) = self.mvl_type_to_llvm(inner) {
+                        let loaded = self
+                            .builder
+                            .build_load(inner_ty, param_val.into_pointer_value(), &param.name)
+                            .unwrap();
+                        let alloca = self.builder.build_alloca(inner_ty, &param.name).unwrap();
+                        self.builder.build_store(alloca, loaded).unwrap();
+                        self.locals.insert(param.name.clone(), (alloca, inner_ty));
+                        self.local_mvl_types
+                            .insert(param.name.clone(), *inner.clone());
+                        continue;
+                    }
+                }
                 if let Some(ty) = self.mvl_type_to_llvm(&param.ty) {
                     let alloca = self.builder.build_alloca(ty, &param.name).unwrap();
                     self.builder.build_store(alloca, param_val).unwrap();
