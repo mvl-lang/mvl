@@ -4,6 +4,7 @@
 use crate::mvl::backends::rust::{RUST_BACKED_STDLIB, RUST_RUNTIME_IMPORTS};
 use crate::mvl::packages;
 use crate::mvl::parser::ast::{Decl, Program};
+use crate::mvl::parser::lexer::Span;
 use crate::mvl::parser::Parser;
 use crate::mvl::stdlib;
 use std::fs;
@@ -15,6 +16,19 @@ const IMPLICIT_PRELUDE_STEMS: &[&str] = &["core", "strings", "lists", "effects"]
 /// lists which type names are owned by the Rust runtime and must be stripped from
 /// the MVL prelude to avoid duplicate definitions.
 const RUNTIME_OWNED_TYPES: &[(&str, &[&str])] = &[];
+
+fn format_error_with_source(src: &str, span: Span, message: &str) -> String {
+    let line_text = src.lines().nth((span.line - 1) as usize).unwrap_or("");
+    let line_num = span.line.to_string();
+    let padding = " ".repeat(line_num.len());
+    let caret_col = (span.col as usize).saturating_sub(1);
+    let caret = "^".repeat((span.len as usize).max(1));
+    format!(
+        "error at {line_num}:{col}: {message}\n{padding} | {line_text}\n{padding} | {spaces}{caret}",
+        col = span.col,
+        spaces = " ".repeat(caret_col),
+    )
+}
 
 /// Find all `.mvl` files under `path`, filtering by whether they are test files.
 pub fn mvl_files(path: &str, test_only: bool) -> Vec<PathBuf> {
@@ -103,7 +117,7 @@ pub fn parse_file(path: &str) -> Result<(Program, String), String> {
     if !lex_errors.is_empty() {
         let lines: Vec<_> = lex_errors
             .iter()
-            .map(|e| format!("lex error: {e:?}"))
+            .map(|e| format_error_with_source(&src, e.span, &e.message))
             .collect();
         return Err(lines.join("\n"));
     }
@@ -112,7 +126,7 @@ pub fn parse_file(path: &str) -> Result<(Program, String), String> {
     if !parse_errors.is_empty() {
         let lines: Vec<_> = parse_errors
             .iter()
-            .map(|e| format!("parse error: {e:?}"))
+            .map(|e| format_error_with_source(&src, e.span, &e.message))
             .collect();
         return Err(lines.join("\n"));
     }
