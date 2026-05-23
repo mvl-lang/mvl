@@ -1,10 +1,11 @@
 // tests/stdlib/log_test.mvl — std.log module correctness
 //
-// Verifies runtime behavior of the log stdlib: log_debug, log_info,
-// log_warn, log_error — all four severity levels.
+// Verifies runtime behavior of the log stdlib: Logger.debug, Logger.info,
+// Logger.warn, Logger.error — all four severity levels.
 // Run with:  mvl test tests/stdlib/
 //
-// Log functions are no-op stubs (correct signatures, no output).
+// Logger is local state (no globals): each test constructs its own Logger
+// value and threads it explicitly through log calls.
 // Tests verify:
 //   - All severity levels accept public String data without panic
 //   - Structured key-value fields (Map[String, String]) are accepted
@@ -13,162 +14,159 @@
 // IFC enforcement (Secret[T]/Tainted[T] rejection) is a compile-time type
 // error, not a runtime check — those cases belong in tests/corpus/06_ifc/.
 //
-// Note: Empty map {} is syntactically a block expression in MVL.
-// Use a sentinel field {"_": "_"} when no real fields are needed.
+// TODO: Log output is not yet observable in tests (no injectable log sink).
+// Sanitization correctness (newline/NUL/JSON escaping) from the deleted
+// runtime/rust/src/stdlib/log.rs tests is not yet covered here.
 
-use std.log.{log_debug, log_info, log_warn, log_error}
+use std.log.{Logger, LogLevel, LogFormat, default_logger}
 
 // ── Helper: wrap each log level, return observable Bool ──────────────────
 
-fn call_log_debug(msg: String) -> Bool ! Log {
-    log_debug(msg, {"level": "debug"});
+fn call_log_debug(logger: val Logger, msg: String) -> Bool ! Log {
+    logger.debug(msg, {"level": "debug"});
     true
 }
 
-fn call_log_info(msg: String) -> Bool ! Log {
-    log_info(msg, {"level": "info"});
+fn call_log_info(logger: val Logger, msg: String) -> Bool ! Log {
+    logger.info(msg, {"level": "info"});
     true
 }
 
-fn call_log_warn(msg: String) -> Bool ! Log {
-    log_warn(msg, {"level": "warn"});
+fn call_log_warn(logger: val Logger, msg: String) -> Bool ! Log {
+    logger.warn(msg, {"level": "warn"});
     true
 }
 
-fn call_log_error(msg: String) -> Bool ! Log {
-    log_error(msg, {"level": "error"});
+fn call_log_error(logger: val Logger, msg: String) -> Bool ! Log {
+    logger.error(msg, {"level": "error"});
     true
 }
 
-// ── log_debug (! Log) ─────────────────────────────────────────────────────
-// STUB: update when implemented — log functions are no-ops.
-// assert_eq(true, true) is intentional: log output is not observable at runtime.
-// TODO: capture log sink output and assert message/field values once a log sink is injectable.
+// ── Logger.debug (! Log) ─────────────────────────────────────────────────
+// Log output is not observable at runtime in tests; assert_eq(true, true)
+// is intentional. TODO: capture log sink output and assert message/field
+// values once a log sink is injectable.
 
 test fn log_debug_single_field_does_not_panic() -> Unit ! Log {
-    // STUB: update when implemented
-    log_debug("debug event", {"key": "value"});
+    let logger: Logger = default_logger();
+    logger.debug("debug event", {"key": "value"});
     assert_eq(true, true);
 }
 
 test fn log_debug_multiple_fields_does_not_panic() -> Unit ! Log {
-    // STUB: update when implemented
-    log_debug("cache miss", {"key": "user:42", "ttl": "300"});
+    let logger: Logger = default_logger();
+    logger.debug("cache miss", {"key": "user:42", "ttl": "300"});
     assert_eq(true, true);
 }
 
 test fn log_debug_returns_unit_via_helper() -> Unit ! Log {
-    // STUB: update when implemented
-    assert_eq(call_log_debug("processing"), true);
+    let logger: Logger = default_logger();
+    assert_eq(call_log_debug(logger, "processing"), true);
 }
 
-// ── log_info (! Log) ──────────────────────────────────────────────────────
-// STUB: update when implemented — log functions are no-ops.
+// ── Logger.info (! Log) ──────────────────────────────────────────────────
 
 test fn log_info_single_field_does_not_panic() -> Unit ! Log {
-    // STUB: update when implemented
-    log_info("server started", {"port": "8080"});
+    let logger: Logger = default_logger();
+    logger.info("server started", {"port": "8080"});
     assert_eq(true, true);
 }
 
 test fn log_info_with_multiple_fields() -> Unit ! Log {
-    // STUB: update when implemented
-    log_info("request received", {"method": "GET", "path": "/health"});
+    let logger: Logger = default_logger();
+    logger.info("request received", {"method": "GET", "path": "/health"});
     assert_eq(true, true);
 }
 
 test fn log_info_request_id_field() -> Unit ! Log {
-    // STUB: update when implemented
-    log_info("user registered", {"user_id": "u-1234"});
+    let logger: Logger = default_logger();
+    logger.info("user registered", {"user_id": "u-1234"});
     assert_eq(true, true);
 }
 
 test fn log_info_returns_unit_via_helper() -> Unit ! Log {
-    // STUB: update when implemented
-    assert_eq(call_log_info("request handled"), true);
+    let logger: Logger = default_logger();
+    assert_eq(call_log_info(logger, "request handled"), true);
 }
 
-// ── log_warn (! Log) ──────────────────────────────────────────────────────
-// STUB: update when implemented — log functions are no-ops.
+// ── Logger.warn (! Log) ──────────────────────────────────────────────────
 
 test fn log_warn_single_field_does_not_panic() -> Unit ! Log {
-    // STUB: update when implemented
-    log_warn("quota running low", {"user_id": "u-99"});
+    let logger: Logger = default_logger();
+    logger.warn("quota running low", {"user_id": "u-99"});
     assert_eq(true, true);
 }
 
 test fn log_warn_retry_context() -> Unit ! Log {
-    // STUB: update when implemented
-    log_warn("retry attempt", {"attempt": "3", "max": "5"});
+    let logger: Logger = default_logger();
+    logger.warn("retry attempt", {"attempt": "3", "max": "5"});
     assert_eq(true, true);
 }
 
 test fn log_warn_returns_unit_via_helper() -> Unit ! Log {
-    // STUB: update when implemented
-    assert_eq(call_log_warn("disk space low"), true);
+    let logger: Logger = default_logger();
+    assert_eq(call_log_warn(logger, "disk space low"), true);
 }
 
-// ── log_error (! Log) ─────────────────────────────────────────────────────
-// STUB: update when implemented — log functions are no-ops.
+// ── Logger.error (! Log) ─────────────────────────────────────────────────
 
 test fn log_error_single_field_does_not_panic() -> Unit ! Log {
-    // STUB: update when implemented
-    log_error("connection refused", {"host": "db"});
+    let logger: Logger = default_logger();
+    logger.error("connection refused", {"host": "db"});
     assert_eq(true, true);
 }
 
 test fn log_error_with_reason_field() -> Unit ! Log {
-    // STUB: update when implemented
-    log_error("component failed", {"component": "db", "reason": "timeout"});
+    let logger: Logger = default_logger();
+    logger.error("component failed", {"component": "db", "reason": "timeout"});
     assert_eq(true, true);
 }
 
 test fn log_error_returns_unit_via_helper() -> Unit ! Log {
-    // STUB: update when implemented
-    assert_eq(call_log_error("request failed"), true);
+    let logger: Logger = default_logger();
+    assert_eq(call_log_error(logger, "request failed"), true);
 }
 
 // ── Effect propagation ────────────────────────────────────────────────────
 
-fn audit_login(user_id: String, success: Bool) -> Unit ! Log {
+fn audit_login(logger: val Logger, user_id: String, success: Bool) -> Unit ! Log {
     if success {
-        log_info("login succeeded", {"user_id": user_id})
+        logger.info("login succeeded", {"user_id": user_id})
     } else {
-        log_warn("login failed", {"user_id": user_id})
+        logger.warn("login failed", {"user_id": user_id})
     }
 }
 
 test fn log_effect_propagates_through_caller_success() -> Unit ! Log {
-    // STUB: update when implemented
-    audit_login("u-42", true);
+    let logger: Logger = default_logger();
+    audit_login(logger, "u-42", true);
     assert_eq(true, true);
 }
 
 test fn log_effect_propagates_through_caller_failure() -> Unit ! Log {
-    // STUB: update when implemented
-    audit_login("u-99", false);
+    let logger: Logger = default_logger();
+    audit_login(logger, "u-99", false);
     assert_eq(true, true);
 }
 
-fn log_all_levels(event: String) -> Unit ! Log {
-    log_debug(event, {"level": "debug"});
-    log_info(event, {"level": "info"});
-    log_warn(event, {"level": "warn"});
-    log_error(event, {"level": "error"})
+fn log_all_levels(logger: val Logger, event: String) -> Unit ! Log {
+    logger.debug(event, {"level": "debug"});
+    logger.info(event, {"level": "info"});
+    logger.warn(event, {"level": "warn"});
+    logger.error(event, {"level": "error"})
 }
 
 test fn log_all_severity_levels_in_sequence() -> Unit ! Log {
-    // STUB: update when implemented
-    log_all_levels("test event");
+    let logger: Logger = default_logger();
+    log_all_levels(logger, "test event");
     assert_eq(true, true);
 }
 
 // ── Structured field format ───────────────────────────────────────────────
-// STUB: update when implemented — output not observable (no log sink in tests).
 
 test fn log_structured_fields_three_pairs() -> Unit ! Log {
-    // STUB: update when implemented
-    log_info("order processed", {
+    let logger: Logger = default_logger();
+    logger.info("order processed", {
         "order_id": "ord-7",
         "amount": "99",
         "currency": "USD"
@@ -177,8 +175,8 @@ test fn log_structured_fields_three_pairs() -> Unit ! Log {
 }
 
 test fn log_structured_field_with_numeric_string_value() -> Unit ! Log {
-    // STUB: update when implemented
-    log_info("metric recorded", {"name": "latency_ms", "value": "42"});
+    let logger: Logger = default_logger();
+    logger.info("metric recorded", {"name": "latency_ms", "value": "42"});
     assert_eq(true, true);
 }
 
@@ -187,43 +185,42 @@ test fn log_structured_field_with_numeric_string_value() -> Unit ! Log {
 // Verifies that logging inside an error branch does not change the return
 // value of the enclosing function (log calls are pure side-effects).
 
-fn process_value(n: Int) -> Result[Int, String] ! Log {
+fn process_value(logger: val Logger, n: Int) -> Result[Int, String] ! Log {
     if n > 0 {
         Ok(n * 2)
     } else {
-        log_error("invalid value", {"value": n.to_string()});
+        logger.error("invalid value", {"value": n.to_string()});
         Err("not positive")
     }
 }
 
 test fn log_helper_via_result_ok_path_unchanged() -> Unit ! Log {
-    let result: Result[Int, String] = process_value(5);
+    let logger: Logger = default_logger();
+    let result: Result[Int, String] = process_value(logger, 5);
     assert_eq(result.is_ok(), true);
     assert_eq(result.unwrap_or(0), 10);
 }
 
 test fn log_helper_via_result_err_path_logs_and_returns_err() -> Unit ! Log {
-    let result: Result[Int, String] = process_value(-3);
+    let logger: Logger = default_logger();
+    let result: Result[Int, String] = process_value(logger, -3);
     assert_eq(result.is_err(), true);
     assert_eq(result.unwrap_or(0), 0);
 }
 
 test fn log_in_branch_does_not_affect_return_value() -> Unit ! Log {
-    // Two calls with different outcomes; log side-effects are invisible to caller
-    let r1: Result[Int, String] = process_value(10);
-    let r2: Result[Int, String] = process_value(-1);
+    let logger: Logger = default_logger();
+    let r1: Result[Int, String] = process_value(logger, 10);
+    let r2: Result[Int, String] = process_value(logger, -1);
     assert_eq(r1.is_ok(), true);
     assert_eq(r2.is_err(), true);
 }
 
 // ── multiple fields map completeness ──────────────────────────────────────
-// STUB: update when implemented — output not observable (no log sink in tests).
 
 test fn log_info_four_fields_map() -> Unit ! Log {
-    // STUB: update when implemented
-    // Compile-time: verifies the effect system accepts a 4-field map without panic.
-    // Runtime log output is not observable in tests; assert_eq(true, true) is intentional.
-    log_info("request complete", {
+    let logger: Logger = default_logger();
+    logger.info("request complete", {
         "method": "POST",
         "path": "/api/v1/items",
         "status": "201",
@@ -233,10 +230,8 @@ test fn log_info_four_fields_map() -> Unit ! Log {
 }
 
 test fn log_error_with_context_fields() -> Unit ! Log {
-    // STUB: update when implemented
-    // Compile-time: verifies the effect system accepts a 3-field error map without panic.
-    // Runtime log output is not observable in tests; assert_eq(true, true) is intentional.
-    log_error("db query failed", {
+    let logger: Logger = default_logger();
+    logger.error("db query failed", {
         "table": "users",
         "operation": "select",
         "error_code": "42P01"

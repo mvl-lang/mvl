@@ -56,9 +56,10 @@
 // Declared as pub builtin fn in std/random.mvl.
 
 // ── Category 3: Time (runtime-backed) ─────────────────────────────────────────
-// now, sleep, format_instant, parse
+// now, sleep, parse, _instant_epoch_seconds
 // Declared as pub builtin fn in std/time.mvl.
-// Note: format_datetime is pure MVL since #903.
+// Note: format_instant, format_datetime are pure MVL since #899.
+//       _instant_epoch_seconds is module-private (#899) — backs pure-MVL formatting.
 
 // ── Category 3: Regex (runtime-backed) ────────────────────────────────────────
 // compile, find, captures
@@ -66,10 +67,10 @@
 // Note: find_all, replace are pure MVL since #903.
 
 // ── Category 3: Logging (always OS-backed) ────────────────────────────────────
-// log_set_format, log_set_min_level, log_get_format_int, log_get_level_int,
-// log_timestamp, log_write
+// log_write
 // Declared as pub builtin fn in std/log.mvl.
-// Note: log_debug, log_info, log_warn, log_error are pure MVL since #839.
+// Note: Logger::debug/info/warn/error and all formatting are pure MVL
+//       (Logger struct threads format + level explicitly — no global state).
 
 // ── Category 3: Numeric/Byte operations (transpiler-dispatched) ───────────────
 // Int bitwise:   int_bit_and, int_bit_or, int_bit_xor, int_bit_not,

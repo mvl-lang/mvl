@@ -10,7 +10,20 @@ use crate::mvl::stdlib;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const IMPLICIT_PRELUDE_STEMS: &[&str] = &["core", "strings", "lists"];
+const IMPLICIT_PRELUDE_STEMS: &[&str] = &["core", "strings", "lists", "effects"];
+
+fn format_error_with_source(src: &str, span: Span, message: &str) -> String {
+    let line_text = src.lines().nth((span.line - 1) as usize).unwrap_or("");
+    let line_num = span.line.to_string();
+    let padding = " ".repeat(line_num.len());
+    let caret_col = (span.col as usize).saturating_sub(1);
+    let caret = "^".repeat((span.len as usize).max(1));
+    format!(
+        "error at {line_num}:{col}: {message}\n{padding} | {line_text}\n{padding} | {spaces}{caret}",
+        col = span.col,
+        spaces = " ".repeat(caret_col),
+    )
+}
 
 fn format_error_with_source(src: &str, span: Span, message: &str) -> String {
     let line_text = src.lines().nth((span.line - 1) as usize).unwrap_or("");
@@ -213,10 +226,11 @@ pub fn find_module_file(entry_dir: &Path, mod_name: &str) -> Option<PathBuf> {
     None
 }
 
-/// Build the implicit prelude: `core.mvl` + `strings.mvl` + `lists.mvl`.
-/// Every compile path loads these three files so their builtins are always visible.
+/// Build the implicit prelude: `core.mvl` + `strings.mvl` + `lists.mvl` + `effects.mvl`.
+/// Every compile path loads these so their builtins and the effect hierarchy
+/// (`Log > Clock`, `IO > Log + …`) are always visible.
 pub fn load_implicit_prelude() -> Vec<Program> {
-    const IMPLICIT: &[&str] = &["core.mvl", "strings.mvl", "lists.mvl"];
+    const IMPLICIT: &[&str] = &["core.mvl", "strings.mvl", "lists.mvl", "effects.mvl"];
     let mut progs = Vec::new();
     for name in IMPLICIT {
         let content = stdlib::stdlib_content(name)
@@ -255,17 +269,18 @@ pub fn load_mvl_native_stdlib_extras(progs: &[Program]) -> Vec<Program> {
                                     let (mut p, _) = Parser::new(content);
                                     let mut loaded_prog = p.parse_program();
                                     // For hybrid modules (in RUST_RUNTIME_IMPORTS but not in
-                                    // RUST_BACKED_STDLIB), strip type declarations from the
-                                    // prelude program.  Types for these modules come from
-                                    // `use mvl_runtime::stdlib::X::*`; emitting them again from
-                                    // MVL source would produce duplicate definitions that conflict
-                                    // with the runtime versions (#897).
-                                    // Scoped to hybrid modules only — purely Rust-backed modules
-                                    // (RUST_BACKED_STDLIB) are not loaded here at all; purely
-                                    // MVL modules define types that must be preserved.
+                                    // RUST_BACKED_STDLIB), types normally come from
+                                    // `use mvl_runtime::stdlib::X::*` and must be stripped to
+                                    // avoid duplicate definitions (#897).
+                                    // Exception: if RUNTIME_OWNED_TYPES lists specific names for
+                                    // this module, only those are stripped — any types absent from
+                                    // the list exist only in MVL and must pass through (e.g.
+                                    // `Logger` in the `log` module, which is MVL-only).
                                     if RUST_RUNTIME_IMPORTS.contains(&m)
                                         && !RUST_BACKED_STDLIB.contains(&m)
                                     {
+                                        // Hybrid modules: types come from `use mvl_runtime::stdlib::X::*`
+                                        // — strip MVL type decls to avoid duplicate definitions (#897).
                                         loaded_prog
                                             .declarations
                                             .retain(|d| !matches!(d, Decl::Type(_)));

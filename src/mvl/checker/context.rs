@@ -483,21 +483,12 @@ impl TypeEnv {
                 ..Default::default()
             },
         );
-        // format_instant(t: Instant, fmt: String) -> String — pure
+        // _instant_epoch_seconds(t: Instant) -> Int — module-private builtin (#899)
         self.fns.insert(
-            "format_instant".into(),
+            "_instant_epoch_seconds".into(),
             FnInfo {
-                params: vec![Ty::Named("Instant".into(), vec![]), Ty::String],
-                ret: Ty::String,
-                ..Default::default()
-            },
-        );
-        // format_datetime(t: DateTime, fmt: String) -> String — pure
-        self.fns.insert(
-            "format_datetime".into(),
-            FnInfo {
-                params: vec![Ty::Named("DateTime".into(), vec![]), Ty::String],
-                ret: Ty::String,
+                params: vec![Ty::Named("Instant".into(), vec![])],
+                ret: Ty::Int,
                 ..Default::default()
             },
         );
@@ -716,40 +707,10 @@ impl TypeEnv {
                 ..Default::default()
             },
         );
-        // std.log — atomic getters and write primitive (ADR-0024).
-        // log_debug/info/warn/error are now pure MVL in std/log.mvl and are NOT
-        // registered here — they come in via load_mvl_native_stdlib_extras.
-        // These four builtins provide the irreducible Rust-backed primitives:
-        //   log_get_format_int() — reads AtomicU8 FORMAT as Int (0=Plain,1=Logfmt,2=Json)
-        //   log_get_level_int()  — reads AtomicU8 MIN_LEVEL as Int (0=Debug..3=Error)
-        //   log_timestamp()      — returns ISO-8601 now() string (hides ! Clock internally)
-        //   log_write(line)      — writes a pre-formatted line to stderr under ! Log
-        self.fns.insert(
-            "log_get_format_int".into(),
-            FnInfo {
-                params: vec![],
-                ret: Ty::Int,
-                ..Default::default()
-            },
-        );
-        self.fns.insert(
-            "log_get_level_int".into(),
-            FnInfo {
-                params: vec![],
-                ret: Ty::Int,
-                ..Default::default()
-            },
-        );
-        self.fns.insert(
-            "log_timestamp".into(),
-            FnInfo {
-                params: vec![],
-                ret: Ty::String,
-                ..Default::default()
-            },
-        );
-        // log_write — writes a pre-formatted line to stderr under the ! Log effect.
-        // Lets pure-MVL log_emit output to stderr without declaring ! Console.
+        // std.log — only one Rust-backed primitive (Phase B, local Logger).
+        // All four severity methods (Logger::debug/info/warn/error) and the
+        // format/level/timestamp helpers are pure MVL in std/log.mvl.
+        //   log_write(line) — writes a pre-formatted line to stderr under ! Log
         self.fns.insert(
             "log_write".into(),
             FnInfo {

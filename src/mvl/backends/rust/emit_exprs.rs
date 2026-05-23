@@ -1406,6 +1406,15 @@ fn emit_expr_as_fn_arg(cg: &mut RustEmitter, expr: &Expr) {
         Expr::Ident(name, _) if name == "self" && !cg.actor_self_type.is_empty() => {
             cg.push("self._self_ref.as_ref().unwrap().clone()");
         }
+        // `self` in a type-attached method (`&self` receiver) cannot be moved — always
+        // clone first so `self.clone().into()` works for any `T: Clone` type.
+        // (Emitted as free function for built-in types, so `self_as_free_param` handles
+        // that case separately via the general ident path below.)
+        Expr::Ident(name, _)
+            if name == "self" && cg.actor_self_type.is_empty() && !cg.self_as_free_param =>
+        {
+            cg.push("self.clone().into()");
+        }
         // Function-typed identifiers (callbacks, named function references) must NOT
         // get `.into()` — Rust function items do not implement `Into<_>` generically.
         Expr::Ident(_, span) if matches!(cg.expr_types.get(span), Some(Ty::Fn(..))) => {

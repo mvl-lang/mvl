@@ -172,12 +172,12 @@ pub const RUST_BACKED_STDLIB: &[&str] = &[
 
 /// Modules for which the Rust emitter must emit `use mvl_runtime::stdlib::X::*`.
 ///
-/// A superset of `RUST_BACKED_STDLIB` — includes `log` because `std/log.mvl`'s
-/// pure-MVL functions call `log_get_format`, `log_get_min_level`, `log_timestamp`,
-/// `log_set_format`, `log_set_min_level`, and `LogFormat`/`LogLevel` which live in
-/// `mvl_runtime::stdlib::log`.
+/// A superset of `RUST_BACKED_STDLIB` — includes modules whose runtime symbols
+/// are needed by compiled MVL output (builtins, extern functions, etc.).
+/// Pure-MVL stdlib modules are excluded: their symbols reach the generated code
+/// via the prelude, not via `mvl_runtime::stdlib`.
 pub const RUST_RUNTIME_IMPORTS: &[&str] = &[
-    "crypto", "env", "io", "log", "net", "process", "random", "regex", "time",
+    "crypto", "env", "io", "net", "process", "random", "regex", "time",
 ];
 
 /// Returns the deduplicated list of `std.*` sub-module names used in this program

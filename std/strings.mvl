@@ -142,3 +142,44 @@ pub builtin fn String::parse_int(self) -> Result[Int, String]
 
 /// Parse as a 64-bit float; Err on failure.
 pub builtin fn String::parse_float(self) -> Result[Float, String]
+
+// ── Safe-output helpers ─────────────────────────────────────────────────────
+
+/// Escape ASCII control characters (`\n \r \t \0`) into their literal forms.
+///
+/// Use before emitting untrusted strings on line-oriented output channels
+/// (log files, console). Does not escape quotes, backslashes, or non-ASCII.
+pub fn sanitize_control(s: String) -> String {
+    let s1: String = s.replace("\n", "\\n");
+    let s2: String = s1.replace("\r", "\\r");
+    let s3: String = s2.replace("\t", "\\t");
+    s3.replace("\0", "\\0")
+}
+
+/// Escape a string for embedding as a JSON string value.
+///
+/// Escapes backslash, double-quote, and the four control characters.
+/// `\0` is emitted as a six-character `\u0000` sequence (not a JSON literal).
+pub fn json_escape(s: String) -> String {
+    let s1: String = s.replace("\\", "\\\\");
+    let s2: String = s1.replace("\"", "\\\"");
+    let s3: String = s2.replace("\n", "\\n");
+    let s4: String = s3.replace("\r", "\\r");
+    let s5: String = s4.replace("\t", "\\t");
+    s5.replace("\0", "\\u0000")
+}
+
+/// Right-pad a string with `fill` until its length is at least `n` characters.
+///
+/// Returns `s` unchanged if it is already `n` or more characters long.
+/// `fill` is appended one repetition at a time, so the result length may
+/// exceed `n` if `fill` is longer than one character.
+pub fn pad_right(s: String, n: Int, fill: String) -> String {
+    let result: ref String = s;
+    let fuel: ref Int = n;
+    while result.len() < n decreases fuel {
+        result = result.concat(fill);
+        fuel = fuel - 1
+    }
+    result
+}

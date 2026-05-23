@@ -32,8 +32,48 @@ pub builtin fn now() -> Instant ! Clock
 /// Suspends execution for the given duration. Requires `! Clock`.
 pub builtin fn sleep(d: Duration) -> Unit ! Clock
 
+/// Returns whole seconds since the Unix epoch for the given Instant.
+/// Module-private (per #899) — used by `format_instant` to drive pure-MVL formatting.
+builtin fn _instant_epoch_seconds(t: Instant) -> Int
+
+/// Convert Unix epoch seconds (UTC) into a `DateTime` using the proleptic
+/// Gregorian calendar.  Implements Howard Hinnant's days-from-civil algorithm:
+/// http://howardhinnant.github.io/date_algorithms.html
+fn epoch_secs_to_datetime(epoch: Int) -> DateTime {
+    let second: Int = epoch % 60;
+    let mins_total: Int = epoch / 60;
+    let minute: Int = mins_total % 60;
+    let hours_total: Int = mins_total / 60;
+    let hour: Int = hours_total % 24;
+    let days: Int = hours_total / 24;
+    let days_shifted: Int = days + 719468;
+    let era: Int = if days_shifted >= 0 {
+        days_shifted / 146097
+    } else {
+        (days_shifted - 146096) / 146097
+    };
+    let doe: Int = days_shifted - era * 146097;
+    let yoe: Int = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y0: Int = yoe + era * 400;
+    let doy: Int = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp: Int = (5 * doy + 2) / 153;
+    let d: Int = doy - (153 * mp + 2) / 5 + 1;
+    let m: Int = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y: Int = if m <= 2 { y0 + 1 } else { y0 };
+    DateTime { year: y, month: m, day: d, hour: hour, minute: minute, second: second }
+}
+
+/// Convert an Instant to its calendar representation in UTC.
+pub fn instant_to_datetime(t: Instant) -> DateTime {
+    epoch_secs_to_datetime(_instant_epoch_seconds(t))
+}
+
 /// Formats an Instant as a string using the given format pattern.
-pub builtin fn format_instant(t: Instant, pattern: String) -> String
+///
+/// Supported specifiers: %Y %m %d %H %M %S (see `format_datetime`).
+pub fn format_instant(t: Instant, pattern: String) -> String {
+    format_datetime(instant_to_datetime(t), pattern)
+}
 
 fn dt_digit(n: Int) -> String {
     if n == 0 { "0" } else if n == 1 { "1" } else if n == 2 { "2" }
