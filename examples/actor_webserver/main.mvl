@@ -17,6 +17,11 @@
 //   make run                              (reads config.toml, defaults to 127.0.0.1:8080)
 //   WEBSERVER_PORT=9090 make run          (env override)
 //   ../../target/debug/mvl run main.mvl -- --port 9090  (CLI override)
+//
+// Note: pkg.http Phase 3 adds HttpServer / ConnectionHandler actors for
+// simple route-name responses.  RequestHandler is kept here for custom
+// per-route handlers and structured logging.  See examples/http_server.mvl
+// for the pkg.http actor API.
 
 use config::{ServerConfig, ConfigLoadError, load_config}
 use pkg.http.{Status, Method, Request, Response, HttpError, Router, MatchedRoute,
