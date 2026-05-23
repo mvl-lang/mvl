@@ -2552,8 +2552,18 @@ impl<'ctx> LlvmBackend<'ctx> {
     }
 
     /// Coerce emitted argument values to match the LLVM function signature.
-    /// When the signature expects `ptr` but we have a `StructValue` (val/ref param),
-    /// alloca the struct on the stack and pass the pointer instead.
+    ///
+    /// `val T` and `ref T` parameters are lowered to `ptr` in the signature
+    /// (see `mvl_type_to_llvm` for `TypeExpr::Ref`).  Their bodies dereference
+    /// the pointer on entry into a local alloca.  But the expression layer
+    /// emits arguments as by-value (Struct for records, Int for enum tags,
+    /// Float/Array for other aggregates).  Pass them through unchanged and
+    /// LLVM IR verification rejects the call as a type mismatch.
+    ///
+    /// The fix is symmetric to the callee side: spill any non-pointer
+    /// argument to a stack slot and pass its address.  Covers both struct
+    /// types (#969 original) and enum tags (#969 follow-up, e.g. `val Status`
+    /// extracted as `i8` at the call site).
     fn coerce_args_to_signature(
         &self,
         arg_vals: &[BasicValueEnum<'ctx>],
@@ -2568,15 +2578,13 @@ impl<'ctx> LlvmBackend<'ctx> {
             .iter()
             .enumerate()
             .map(|(i, val)| {
-                if param_types.get(i).copied() == Some(ptr_ty) {
-                    if let BasicValueEnum::StructValue(sv) = val {
-                        let slot = self
-                            .builder
-                            .build_alloca(sv.get_type(), "struct_arg")
-                            .unwrap();
-                        self.builder.build_store(slot, *sv).unwrap();
-                        return slot.into();
-                    }
+                if param_types.get(i).copied() == Some(ptr_ty)
+                    && !matches!(val, BasicValueEnum::PointerValue(_))
+                {
+                    let ty = val.get_type();
+                    let slot = self.builder.build_alloca(ty, "byval_arg").unwrap();
+                    self.builder.build_store(slot, *val).unwrap();
+                    return slot.into();
                 }
                 (*val).into()
             })
