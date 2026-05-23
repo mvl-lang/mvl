@@ -8,11 +8,23 @@ use std::fs;
 use std::path::PathBuf;
 use std::process;
 
+struct FuzzParam {
+    name: String,
+    ty_name: String,
+    is_tainted: bool,
+}
+
 /// A fuzz target derived from a single function signature.
 struct FuzzTarget {
     fn_name: String,
-    /// Each Tainted[T] parameter: (param_name, inner_type_name).
-    tainted_params: Vec<(String, String)>,
+    /// All parameters; Tainted ones receive fuzz input, others get zero-value defaults.
+    params: Vec<FuzzParam>,
+}
+
+impl FuzzTarget {
+    fn tainted_params(&self) -> impl Iterator<Item = &FuzzParam> {
+        self.params.iter().filter(|p| p.is_tainted)
+    }
 }
 
 pub fn run(
@@ -36,7 +48,7 @@ pub fn run(
         } else {
             println!("Fuzzable functions in {path}:");
             for t in &targets {
-                println!("  {} ({})", t.fn_name, format_params(&t.tainted_params));
+                println!("  {} ({})", t.fn_name, format_tainted_params(t));
             }
         }
         return;
@@ -53,7 +65,7 @@ pub fn run(
     println!(
         "Fuzzing: {} ({})",
         fuzz_target.fn_name,
-        format_params(&fuzz_target.tainted_params)
+        format_tainted_params(fuzz_target)
     );
 
     let tmp_dir = std::env::temp_dir().join(format!("mvl_fuzz_{}", process::id()));
@@ -74,22 +86,32 @@ fn collect_fuzz_targets(files: &[PathBuf], path: &str) -> Vec<FuzzTarget> {
                 if fd.is_builtin || fd.is_test {
                     continue;
                 }
-                let tainted: Vec<(String, String)> = fd
+                let all_params: Vec<FuzzParam> = fd
                     .params
                     .iter()
-                    .filter_map(|p| {
-                        if let TypeExpr::Labeled { label, inner, .. } = &p.ty {
-                            if label == "Tainted" {
-                                return Some((p.name.clone(), inner_type_name(inner)));
-                            }
+                    .map(|p| {
+                        let (ty_name, is_tainted) =
+                            if let TypeExpr::Labeled { label, inner, .. } = &p.ty {
+                                if label == "Tainted" {
+                                    (inner_type_name(inner), true)
+                                } else {
+                                    (inner_type_name(inner), false)
+                                }
+                            } else {
+                                (inner_type_name(&p.ty), false)
+                            };
+                        FuzzParam {
+                            name: p.name.clone(),
+                            ty_name,
+                            is_tainted,
                         }
-                        None
                     })
                     .collect();
-                if !tainted.is_empty() {
+                let has_tainted = all_params.iter().any(|p| p.is_tainted);
+                if has_tainted {
                     targets.push(FuzzTarget {
                         fn_name: fd.name.clone(),
-                        tainted_params: tainted,
+                        params: all_params,
                     });
                 }
             }
@@ -172,6 +194,15 @@ fn build_fuzz_workspace(
     });
 
     // fuzz/Cargo.toml — cargo-fuzz sub-crate.
+    // mvl_runtime is a direct dep so the harness can use Tainted/Clean/Secret directly.
+    let fuzz_runtime_dep = if runtime_src.exists() {
+        format!(
+            "[dependencies.mvl_runtime]\npath = \"{}\"\n\n",
+            runtime_src.display()
+        )
+    } else {
+        String::new()
+    };
     fs::write(
         fuzz_dir.join("Cargo.toml"),
         format!(
@@ -180,6 +211,7 @@ fn build_fuzz_workspace(
              [package.metadata]\ncargo-fuzz = true\n\n\
              [dependencies]\nlibfuzzer-sys = \"0.4\"\n\n\
              [dependencies.mvl_fuzz_lib]\npath = \"..\"\n\n\
+             {fuzz_runtime_dep}\
              [[bin]]\nname = \"{fn_name}\"\npath = \"fuzz_targets/{fn_name}.rs\"\ntest = false\ndoc = false\n",
             fn_name = target.fn_name
         ),
@@ -247,29 +279,37 @@ fn transpile_to_lib(files: &[PathBuf]) -> (String, bool) {
 
 fn generate_harness(target: &FuzzTarget) -> String {
     let fn_name = &target.fn_name;
-    let count = target.tainted_params.len();
+    let tainted_count = target.tainted_params().count();
 
     let mut setup = String::new();
     let mut call_args: Vec<String> = Vec::new();
 
-    if count == 1 {
-        let (name, ty) = &target.tainted_params[0];
-        setup.push_str(&gen_param_from_bytes(name, ty, "data"));
-        call_args.push(name.clone());
-    } else {
-        // Split the fuzz input evenly across multiple Tainted params.
-        setup.push_str(&format!("    let chunk = data.len() / {count};\n"));
-        for (i, (name, ty)) in target.tainted_params.iter().enumerate() {
-            let slice = if i + 1 == count {
-                format!("&data[chunk * {i}..]")
+    // Split fuzz input evenly across Tainted params; assign chunk indices.
+    let mut tainted_idx = 0usize;
+    if tainted_count > 1 {
+        setup.push_str(&format!("    let chunk = data.len() / {tainted_count};\n"));
+    }
+
+    for p in &target.params {
+        if p.is_tainted {
+            let bytes_var = if tainted_count == 1 {
+                "data".to_string()
             } else {
-                format!("&data[chunk * {i}..chunk * {}]", i + 1)
+                let var = format!("{}_bytes", p.name);
+                let slice = if tainted_idx + 1 == tainted_count {
+                    format!("&data[chunk * {tainted_idx}..]")
+                } else {
+                    format!("&data[chunk * {tainted_idx}..chunk * {}]", tainted_idx + 1)
+                };
+                setup.push_str(&format!("    let {var} = {slice};\n"));
+                tainted_idx += 1;
+                var
             };
-            let var = format!("{name}_bytes");
-            setup.push_str(&format!("    let {var} = {slice};\n"));
-            setup.push_str(&gen_param_from_bytes(name, ty, &var));
-            call_args.push(name.clone());
+            setup.push_str(&gen_tainted_from_bytes(&p.name, &p.ty_name, &bytes_var));
+        } else {
+            setup.push_str(&gen_plain_default(&p.name, &p.ty_name));
         }
+        call_args.push(p.name.clone());
     }
 
     format!(
@@ -278,7 +318,7 @@ fn generate_harness(target: &FuzzTarget) -> String {
          #[allow(unused_imports)]\n\
          use mvl_fuzz_lib::*;\n\
          #[allow(unused_imports)]\n\
-         use mvl_runtime::{{Tainted, Clean, Secret}};\n\n\
+         use mvl_runtime::prelude::{{Tainted, Clean, Secret}};\n\n\
          fuzz_target!(|data: &[u8]| {{\n\
          {setup}\
              let _ = {fn_name}({args});\n\
@@ -287,8 +327,7 @@ fn generate_harness(target: &FuzzTarget) -> String {
     )
 }
 
-/// Emit Rust setup code to produce `let <name> = Tainted::new(...)` from `bytes_var`.
-fn gen_param_from_bytes(name: &str, ty: &str, bytes_var: &str) -> String {
+fn gen_tainted_from_bytes(name: &str, ty: &str, bytes_var: &str) -> String {
     match ty {
         "String" => format!(
             "    let {name} = Tainted::new(String::from_utf8_lossy({bytes_var}).into_owned());\n"
@@ -305,14 +344,24 @@ fn gen_param_from_bytes(name: &str, ty: &str, bytes_var: &str) -> String {
             "    if {bytes_var}.is_empty() {{ return; }}\n\
              \x20   let {name} = Tainted::new({bytes_var}[0] & 1 == 1);\n"
         ),
-        // List[Byte] or Bytes -> Vec<u8>
         "List" | "Byte" | "Bytes" => {
             format!("    let {name} = Tainted::new({bytes_var}.to_vec());\n")
         }
-        // Fallback: treat as String
         _ => format!(
             "    let {name} = Tainted::new(String::from_utf8_lossy({bytes_var}).into_owned());\n"
         ),
+    }
+}
+
+/// Emit a zero-value default for a non-Tainted parameter.
+fn gen_plain_default(name: &str, ty: &str) -> String {
+    match ty {
+        "String" => format!("    let {name} = String::new();\n"),
+        "Int" => format!("    let {name} = 0i64;\n"),
+        "Float" => format!("    let {name} = 0.0f64;\n"),
+        "Bool" => format!("    let {name} = false;\n"),
+        "List" | "Byte" | "Bytes" => format!("    let {name} = Vec::new();\n"),
+        _ => format!("    let {name} = Default::default();\n"),
     }
 }
 
@@ -328,10 +377,10 @@ fn inner_type_name(ty: &TypeExpr) -> String {
     }
 }
 
-fn format_params(params: &[(String, String)]) -> String {
-    params
-        .iter()
-        .map(|(n, ty)| format!("{n}: Tainted[{ty}]"))
+fn format_tainted_params(target: &FuzzTarget) -> String {
+    target
+        .tainted_params()
+        .map(|p| format!("{}: Tainted[{}]", p.name, p.ty_name))
         .collect::<Vec<_>>()
         .join(", ")
 }
