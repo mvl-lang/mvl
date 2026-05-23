@@ -3,7 +3,7 @@
 
 use mvl::mvl::backends::rust as transpiler;
 use mvl::mvl::loader;
-use mvl::mvl::parser::ast::{Decl, TypeExpr};
+use mvl::mvl::parser::ast::{Block, Decl, ElseBranch, Expr, ExternDecl, MatchBody, Stmt, TypeExpr};
 use std::fs;
 use std::path::PathBuf;
 use std::process;
@@ -76,14 +76,142 @@ pub fn run(
 
 // ── Target collection ────────────────────────────────────────────────────────
 
+fn file_extern_names(decls: &[Decl]) -> Vec<String> {
+    decls
+        .iter()
+        .filter_map(|d| {
+            if let Decl::Extern(e) = d {
+                Some(e)
+            } else {
+                None
+            }
+        })
+        .flat_map(|e: &ExternDecl| e.fns.iter().map(|f| f.name.clone()))
+        .collect()
+}
+
+// ── Extern call detection (AST walk) ─────────────────────────────────────────
+
+fn block_calls_extern(block: &Block, names: &[String]) -> bool {
+    block.stmts.iter().any(|s| stmt_calls_extern(s, names))
+}
+
+fn stmt_calls_extern(stmt: &Stmt, names: &[String]) -> bool {
+    match stmt {
+        Stmt::Let { init, .. } => expr_calls_extern(init, names),
+        Stmt::Assign { value, .. } => expr_calls_extern(value, names),
+        Stmt::Return { value, .. } => value.as_ref().is_some_and(|e| expr_calls_extern(e, names)),
+        Stmt::If {
+            cond, then, else_, ..
+        } => {
+            expr_calls_extern(cond, names)
+                || block_calls_extern(then, names)
+                || else_.as_ref().is_some_and(|e| match e {
+                    ElseBranch::Block(b) => block_calls_extern(b, names),
+                    ElseBranch::If(s) => stmt_calls_extern(s, names),
+                })
+        }
+        Stmt::Match {
+            scrutinee, arms, ..
+        } => {
+            expr_calls_extern(scrutinee, names)
+                || arms.iter().any(|arm| match &arm.body {
+                    MatchBody::Expr(e) => expr_calls_extern(e, names),
+                    MatchBody::Block(b) => block_calls_extern(b, names),
+                })
+        }
+        Stmt::For { iter, body, .. } => {
+            expr_calls_extern(iter, names) || block_calls_extern(body, names)
+        }
+        Stmt::While {
+            cond,
+            body,
+            decreases,
+            ..
+        } => {
+            expr_calls_extern(cond, names)
+                || block_calls_extern(body, names)
+                || decreases
+                    .as_ref()
+                    .is_some_and(|d| expr_calls_extern(d, names))
+        }
+        Stmt::Expr { expr, .. } => expr_calls_extern(expr, names),
+    }
+}
+
+fn expr_calls_extern(expr: &Expr, names: &[String]) -> bool {
+    match expr {
+        Expr::FnCall { name, args, .. } => {
+            names.iter().any(|n| n == name) || args.iter().any(|a| expr_calls_extern(a, names))
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            expr_calls_extern(receiver, names) || args.iter().any(|a| expr_calls_extern(a, names))
+        }
+        Expr::FieldAccess { expr, .. }
+        | Expr::Unary { expr, .. }
+        | Expr::Propagate { expr, .. }
+        | Expr::Consume { expr, .. }
+        | Expr::Borrow { expr, .. } => expr_calls_extern(expr, names),
+        Expr::Relabel { expr, .. } => expr_calls_extern(expr, names),
+        Expr::Binary { left, right, .. } => {
+            expr_calls_extern(left, names) || expr_calls_extern(right, names)
+        }
+        Expr::If {
+            cond, then, else_, ..
+        } => {
+            expr_calls_extern(cond, names)
+                || block_calls_extern(then, names)
+                || else_.as_ref().is_some_and(|e| expr_calls_extern(e, names))
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            expr_calls_extern(scrutinee, names)
+                || arms.iter().any(|arm| match &arm.body {
+                    MatchBody::Expr(e) => expr_calls_extern(e, names),
+                    MatchBody::Block(b) => block_calls_extern(b, names),
+                })
+        }
+        Expr::Lambda { body, .. } => expr_calls_extern(body, names),
+        Expr::Block(b) => block_calls_extern(b, names),
+        Expr::Construct { fields, .. } | Expr::Spawn { fields, .. } => {
+            fields.iter().any(|(_, e)| expr_calls_extern(e, names))
+        }
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+            elems.iter().any(|e| expr_calls_extern(e, names))
+        }
+        Expr::Map { pairs, .. } => pairs
+            .iter()
+            .any(|(k, v)| expr_calls_extern(k, names) || expr_calls_extern(v, names)),
+        Expr::Select { arms, .. } => arms
+            .iter()
+            .any(|arm| expr_calls_extern(&arm.expr, names) || block_calls_extern(&arm.body, names)),
+        Expr::Concurrently { body, .. } => block_calls_extern(body, names),
+        Expr::Literal(_, _) | Expr::Ident(_, _) => false,
+    }
+}
+
 fn collect_fuzz_targets(files: &[PathBuf], path: &str) -> Vec<FuzzTarget> {
     let mut targets = Vec::new();
     for file in files {
         let file_str = file.display().to_string();
         let (prog, _src) = super::parse_or_exit(&file_str);
+        let extern_names = file_extern_names(&prog.declarations);
+
         for decl in &prog.declarations {
             if let Decl::Fn(fd) = decl {
                 if fd.is_builtin || fd.is_test {
+                    continue;
+                }
+                // Skip functions that directly call extern bridge functions — their stubs
+                // panic on every input, making fuzzing meaningless without a linked bridge.
+                if !extern_names.is_empty() && block_calls_extern(&fd.body, &extern_names) {
+                    eprintln!(
+                        "note: skipping {}::{} — calls extern bridge functions; \
+                         fuzz via the bridge test suite instead",
+                        file.file_name().unwrap_or_default().to_string_lossy(),
+                        fd.name
+                    );
                     continue;
                 }
                 let all_params: Vec<FuzzParam> = fd
@@ -117,7 +245,6 @@ fn collect_fuzz_targets(files: &[PathBuf], path: &str) -> Vec<FuzzTarget> {
             }
         }
     }
-    // Warn about non-fuzzable files only when no targets found (avoid noise).
     if targets.is_empty() {
         eprintln!("hint: searched {} file(s) under {path}", files.len());
     }
@@ -209,9 +336,6 @@ fn build_fuzz_workspace(
             "[workspace]\n\n\
              [package]\nname = \"mvl-fuzz\"\nversion = \"0.0.0\"\npublish = false\nedition = \"2021\"\n\n\
              [package.metadata]\ncargo-fuzz = true\n\n\
-             # panic = \"unwind\" is required so catch_unwind can intercept todo!(\"extern stub\")\n\
-             # panics from unlinked bridge functions; cargo-fuzz defaults to abort.\n\
-             [profile.release]\npanic = \"unwind\"\n\n\
              [dependencies]\nlibfuzzer-sys = \"0.4\"\n\n\
              [dependencies.mvl_fuzz_lib]\npath = \"..\"\n\n\
              {fuzz_runtime_dep}\
@@ -327,17 +451,7 @@ fn generate_harness(target: &FuzzTarget) -> String {
          use mvl_runtime::prelude::{{Tainted, Clean, Secret}};\n\n\
          fuzz_target!(|data: &[u8]| {{\n\
          {setup}\
-             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{\n\
-                 let _ = {fn_name}({args});\n\
-             }}));\n\
-             if let Err(payload) = result {{\n\
-                 let msg = payload.downcast_ref::<&str>().copied()\n\
-                     .or_else(|| payload.downcast_ref::<String>().map(String::as_str))\n\
-                     .unwrap_or(\"\");\n\
-                 if !msg.contains(\"extern stub\") {{\n\
-                     std::panic::resume_unwind(payload);\n\
-                 }}\n\
-             }}\n\
+             let _ = {fn_name}({args});\n\
          }});\n"
     )
 }
