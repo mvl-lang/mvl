@@ -242,6 +242,32 @@ pub fn transpile_project(
     >,
     assert_mode: crate::mvl::backends::AssertMode,
 ) -> ProjectOutput {
+    transpile_project_with_options(
+        entry_name,
+        entry_prog,
+        siblings,
+        prelude_progs,
+        expr_types,
+        assert_mode,
+        false,
+    )
+}
+
+/// Like [`transpile_project`], but with an `extern_stubs` flag controlling whether
+/// `extern "rust"` blocks are emitted as real extern declarations (default) or replaced
+/// with `todo!()` stubs (used by `mvl fuzz` so the harness links without bridges).
+pub fn transpile_project_with_options(
+    entry_name: &str,
+    entry_prog: &Program,
+    siblings: &[(String, Program)],
+    prelude_progs: &[Program],
+    expr_types: std::collections::HashMap<
+        crate::mvl::parser::lexer::Span,
+        crate::mvl::checker::types::Ty,
+    >,
+    assert_mode: crate::mvl::backends::AssertMode,
+    extern_stubs: bool,
+) -> ProjectOutput {
     let has_main = has_main_fn(entry_prog);
     let extern_count = count_extern_decls(entry_prog);
     let has_extern_rust =
@@ -258,6 +284,7 @@ pub fn transpile_project(
     let mut cg = RustEmitter::new();
     cg.expr_types = expr_types;
     cg.assert_mode = assert_mode;
+    cg.test_extern_stubs = extern_stubs;
     cg.emit_program_with_mods(entry_prog, &sibling_names, prelude_progs);
     let main_rs = cg.finish();
 
@@ -278,6 +305,7 @@ pub fn transpile_project(
             sibling_expr_types.extend(sibling_check.expr_types);
             cg.expr_types = sibling_expr_types;
             cg.assert_mode = assert_mode;
+            cg.test_extern_stubs = extern_stubs;
             if entry_uses_runtime {
                 cg.emit_sibling_module(prog, prelude_progs);
             } else {

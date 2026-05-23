@@ -5,7 +5,7 @@
 # All transform functions in transform.mvl are provably pure.
 #
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl check lint test-solver test assurance mcdc mutate run run-threshold all clean
+.PHONY: help guard-mvl check lint test-solver test assurance mcdc mutate fuzz run run-threshold all clean
 
 .DEFAULT_GOAL := help
 
@@ -65,6 +65,9 @@ mcdc: guard-mvl ## Run MC/DC coverage analysis (ARGS="--masking" to exempt coupl
 
 mutate: guard-mvl ## Run mutation testing
 	$(MVL) mutate $(DIR)
+
+fuzz: guard-mvl ## Type-directed fuzzing of parse_csv (requires nightly + cargo-fuzz; ARGS="--time 60s")
+	$(MVL) fuzz $(DIR) --target parse_csv $(ARGS)
 
 run: guard-mvl ## Run the pipeline with the bundled sample CSV
 	$(MVL) run $(DIR)main.mvl -- --input $(DIR)sample.csv

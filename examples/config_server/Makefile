@@ -8,7 +8,7 @@
 #   LLVM                 — pure tests only (handler_test.mvl); extern stubs return defaults
 #
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl build check lint test-solver test test-llvm assurance mcdc mutate run all clean
+.PHONY: help guard-mvl build check lint test-solver test test-llvm assurance mcdc mutate fuzz run all clean
 
 .DEFAULT_GOAL := help
 
@@ -72,6 +72,11 @@ mcdc: guard-mvl ## Run MC/DC coverage analysis (ARGS="--masking" to exempt coupl
 
 mutate: guard-mvl ## Run mutation testing
 	$(MVL) mutate $(DIR)
+
+fuzz: guard-mvl ## Show fuzz target analysis (all functions call extern bridges; fuzz via bridge integration tests)
+	@echo "note: config_server functions call extern Rust bridges — no pure-MVL fuzz targets exist."
+	@echo "      Fuzz the bridge implementation directly in its Rust integration test suite."
+	$(MVL) fuzz $(DIR) --list
 
 all: check test assurance mcdc ## Run full quality pipeline: check + test + assurance + mcdc
 

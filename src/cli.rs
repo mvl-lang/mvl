@@ -6,6 +6,7 @@ pub mod assurance;
 pub mod build;
 pub mod check;
 pub mod complexity;
+pub mod fuzz;
 pub mod lint;
 #[cfg(feature = "llvm")]
 pub mod llvm;
@@ -152,6 +153,23 @@ pub(super) fn dispatch(args: &[String]) {
                 .find(|w| w[0] == "--limit")
                 .and_then(|w| w[1].parse().ok());
             mutate::run(&path, quiet, gen_boundary, limit);
+        }
+        "fuzz" => {
+            let path = args::require_path_arg(args, "fuzz");
+            let target = args
+                .windows(2)
+                .find(|w| w[0] == "--target")
+                .map(|w| w[1].as_str());
+            let time_secs: Option<u64> = args
+                .windows(2)
+                .find(|w| w[0] == "--time")
+                .and_then(|w| w[1].trim_end_matches('s').parse().ok());
+            let corpus = args
+                .windows(2)
+                .find(|w| w[0] == "--corpus")
+                .map(|w| w[1].as_str());
+            let list = args.iter().any(|a| a == "--list");
+            fuzz::run(&path, target, time_secs, corpus, list);
         }
         "mcdc" => {
             let path = args::require_path_arg(args, "mcdc");
