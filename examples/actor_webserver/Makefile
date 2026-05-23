@@ -4,13 +4,14 @@
 # Each accepted TCP connection is handed to a fresh RequestHandler actor that
 # owns the socket exclusively (iso capability).
 #
-# Run from this directory or from the repo root.
+# All commands run from REPO_ROOT so pkg.* imports resolve correctly.
 .PHONY: help guard-mvl lint check test test-llvm assurance run clean
 
 .DEFAULT_GOAL := help
 
-MVL  := ../../target/debug/mvl
-DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+MVL       := ../../target/debug/mvl
+DIR       := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+REPO_ROOT := $(abspath $(DIR)../..)
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -25,22 +26,22 @@ guard-mvl: ## Validate MVL binary is present and working
 	}
 
 lint: guard-mvl ## Lint main.mvl
-	$(MVL) lint $(DIR)main.mvl
+	cd $(REPO_ROOT) && $(abspath $(MVL)) lint $(DIR)main.mvl
 
 check: guard-mvl ## Type-check main.mvl
-	$(MVL) check $(DIR)main.mvl
+	cd $(REPO_ROOT) && $(abspath $(MVL)) check $(DIR)main.mvl
 
 test: guard-mvl ## Run unit tests (pure routing logic)
-	$(MVL) test $(DIR)
+	cd $(REPO_ROOT) && $(abspath $(MVL)) test $(DIR)
 
 test-llvm: guard-mvl ## Run smoke tests via LLVM backend (checks // expect: annotations)
-	$(MVL) test $(DIR) --backend=llvm
+	cd $(REPO_ROOT) && $(abspath $(MVL)) test $(DIR) --backend=llvm
 
 assurance: guard-mvl ## Assurance report for main.mvl
-	$(MVL) assurance $(DIR)main.mvl
+	cd $(REPO_ROOT) && $(abspath $(MVL)) assurance $(DIR)main.mvl
 
 run: guard-mvl ## Start the HTTP server on 127.0.0.1:8080 (Ctrl-C to stop)
-	$(MVL) run $(DIR)main.mvl
+	cd $(REPO_ROOT) && $(abspath $(MVL)) run $(DIR)main.mvl
 
 clean: ## Remove build artifacts
 	rm -rf $(TMPDIR)mvl_build_actor_webserver
