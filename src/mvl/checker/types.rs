@@ -433,8 +433,34 @@ pub fn types_compatible(a: &Ty, b: &Ty) -> bool {
         // Session types are compatible when structurally equal.
         // Duality is checked separately (both sides must be declared as duals).
         (Ty::Session(sa), Ty::Session(sb)) => session_types_compatible(sa, sb),
+        // Function types: compare structurally. Effects are compared by name only,
+        // not span — two identical effect names parsed from different locations
+        // must be treated as equal (#954).
+        (Ty::Fn(ap, ar, ae, at), Ty::Fn(bp, br, be, bt)) => {
+            ap.len() == bp.len()
+                && ap
+                    .iter()
+                    .zip(bp.iter())
+                    .all(|(x, y)| types_compatible(x, y))
+                && types_compatible(ar, br)
+                && effects_name_eq(ae, be)
+                && at == bt
+        }
         _ => a == b,
     }
+}
+
+/// Compare two effect lists by name only, order-insensitive.
+/// Effect spans differ depending on parse site but are semantically irrelevant (#954).
+fn effects_name_eq(a: &[Effect], b: &[Effect]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut a_names: Vec<&str> = a.iter().map(|e| e.name.as_str()).collect();
+    let mut b_names: Vec<&str> = b.iter().map(|e| e.name.as_str()).collect();
+    a_names.sort_unstable();
+    b_names.sort_unstable();
+    a_names == b_names
 }
 
 /// Structural compatibility for session types.

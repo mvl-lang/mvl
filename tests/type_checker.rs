@@ -6990,6 +6990,94 @@ fn hof_effectful_param_accepted_when_caller_declares_effect() {
     );
 }
 
+// ── #953: fn-type alias loses callability ─────────────────────────────────────
+
+/// A parameter typed via a fn-type alias must be callable at the call site (#953).
+#[test]
+fn fn_type_alias_param_is_callable() {
+    let src = r#"
+        type Pred = fn(Int) -> Bool
+        fn use_pred(p: Pred, n: Int) -> Bool {
+            p(n)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.is_empty(),
+        "fn-type alias param should be callable, got: {errors:?}"
+    );
+}
+
+/// Return type of a call through a fn-type alias is the alias's return type (#953).
+#[test]
+fn fn_type_alias_call_returns_correct_type() {
+    let src = r#"
+        type Transform = fn(Int) -> String
+        fn apply(f: Transform, n: Int) -> String {
+            f(n)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.is_empty(),
+        "call through fn-type alias should return the aliased return type, got: {errors:?}"
+    );
+}
+
+// ── #954: effect-bearing fn-typed struct fields fail type equality ─────────────
+
+/// Assigning an effect-bearing function to a struct field must not produce a
+/// spurious TypeMismatch when the declared and inferred types are identical (#954).
+#[test]
+fn effect_bearing_fn_field_construction_accepted() {
+    let src = r#"
+        use std.log.{log_info}
+        type Handler = struct {
+            f: fn(Int) -> Bool ! Log,
+        }
+        fn h_one(n: Int) -> Bool ! Log {
+            log_info("h", {"n": n.to_string()});
+            n > 0
+        }
+        fn make_handler() -> Handler ! Log {
+            Handler { f: h_one }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "effect-bearing fn field construction should not emit TypeMismatch, got: {errors:?}"
+    );
+}
+
+/// Calling a method through an effect-bearing fn struct field must not produce a
+/// spurious TypeMismatch (#954).
+#[test]
+fn effect_bearing_fn_field_call_accepted() {
+    let src = r#"
+        use std.log.{log_info}
+        type Handler = struct {
+            f: fn(Int) -> Bool ! Log,
+        }
+        fn h_one(n: Int) -> Bool ! Log {
+            log_info("h", {"n": n.to_string()});
+            n > 0
+        }
+        fn run(h: Handler, n: Int) -> Bool ! Log {
+            h.f(n)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "calling effect-bearing fn field should not emit TypeMismatch, got: {errors:?}"
+    );
+}
+
 // ── #687: Array[T, N] const-generic unknown size ──────────────────────────────
 
 /// Array[T, N] where N is a type variable resolves to unknown size, not 0.
