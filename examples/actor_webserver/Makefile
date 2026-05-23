@@ -4,7 +4,8 @@
 # Each accepted TCP connection is handed to a fresh RequestHandler actor that
 # owns the socket exclusively (iso capability).
 #
-# All commands run from REPO_ROOT so pkg.* imports resolve correctly.
+# Package resolution: .mvl/pkg/http symlinks to ../../pkg/http so that
+# mvl commands run from this directory can find the package.
 .PHONY: help guard-mvl lint check test test-llvm assurance run clean
 
 .DEFAULT_GOAL := help
@@ -25,23 +26,28 @@ guard-mvl: ## Validate MVL binary is present and working
 		exit 1; \
 	}
 
-lint: guard-mvl ## Lint main.mvl
-	cd $(REPO_ROOT) && $(abspath $(MVL)) lint $(DIR)main.mvl
+# Ensure .mvl/pkg/http symlink exists for local package resolution.
+.mvl/pkg/http:
+	@mkdir -p .mvl/pkg
+	@ln -sfn $(REPO_ROOT)/pkg/http .mvl/pkg/http
 
-check: guard-mvl ## Type-check main.mvl
-	cd $(REPO_ROOT) && $(abspath $(MVL)) check $(DIR)main.mvl
+lint: guard-mvl .mvl/pkg/http ## Lint main.mvl
+	$(MVL) lint $(DIR)main.mvl
 
-test: guard-mvl ## Run unit tests (pure routing logic)
-	cd $(REPO_ROOT) && $(abspath $(MVL)) test $(DIR)
+check: guard-mvl .mvl/pkg/http ## Type-check main.mvl
+	$(MVL) check $(DIR)main.mvl
 
-test-llvm: guard-mvl ## Run smoke tests via LLVM backend (checks // expect: annotations)
-	cd $(REPO_ROOT) && $(abspath $(MVL)) test $(DIR) --backend=llvm
+test: guard-mvl .mvl/pkg/http ## Run unit tests (pure routing logic)
+	$(MVL) test $(DIR)
 
-assurance: guard-mvl ## Assurance report for main.mvl
-	cd $(REPO_ROOT) && $(abspath $(MVL)) assurance $(DIR)main.mvl
+test-llvm: guard-mvl .mvl/pkg/http ## Run smoke tests via LLVM backend
+	$(MVL) test $(DIR) --backend=llvm
 
-run: guard-mvl ## Start the HTTP server on 127.0.0.1:8080 (Ctrl-C to stop)
-	cd $(REPO_ROOT) && $(abspath $(MVL)) run $(DIR)main.mvl
+assurance: guard-mvl .mvl/pkg/http ## Assurance report for main.mvl
+	$(MVL) assurance $(DIR)main.mvl
+
+run: guard-mvl .mvl/pkg/http ## Start the HTTP server (Ctrl-C to stop)
+	$(MVL) run $(DIR)main.mvl
 
 clean: ## Remove build artifacts
-	rm -rf $(TMPDIR)mvl_build_actor_webserver
+	rm -rf $(TMPDIR)mvl_build_actor_webserver .mvl
