@@ -44,8 +44,8 @@ use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::refinements::check_arg_against_pred;
 use crate::mvl::checker::solver::{RefResult, SolverMode};
 use crate::mvl::parser::ast::{
-    ActorDecl, ArithOp, BinaryOp, Block, CmpOp, Decl, ElseBranch, Expr, FieldDecl, FnDecl, LValue,
-    LetKind, Literal, LogicOp, MatchBody, Param, Program, RefExpr, Stmt, UnaryOp,
+    expr_to_ref_expr_ext, ActorDecl, ArithOp, Block, CmpOp, Decl, ElseBranch, Expr, FieldDecl,
+    FnDecl, LValue, LetKind, Literal, LogicOp, MatchBody, Param, Program, RefExpr, Stmt,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -127,7 +127,7 @@ pub fn check_contracts(prog: &Program, errors: &mut Vec<CheckError>, mode: Solve
 /// Per-function contract information used when checking call sites.
 struct FnContracts {
     params: Vec<Param>,
-    requires: Vec<RefExpr>,
+    requires: Vec<Expr>,
 }
 
 fn build_fn_contract_map(prog: &Program) -> HashMap<String, FnContracts> {
@@ -341,8 +341,8 @@ fn check_requires_in_expr(
         Expr::Concurrently { body, .. } => {
             check_requires_in_block(body, fn_map, var_refs, fn_decls, errors, mode);
         }
-        // Leaves: Literal, Ident — no sub-expressions.
-        Expr::Literal(_, _) | Expr::Ident(_, _) => {}
+        // Leaves: Literal, Ident, Quantifier — no sub-expressions.
+        Expr::Literal(_, _) | Expr::Ident(_, _) | Expr::Quantifier(..) => {}
     }
 }
 
@@ -374,17 +374,22 @@ fn check_requires_at_call(
 ) {
     let params = &contracts.params;
 
-    for req_pred in &contracts.requires {
+    for req_expr in &contracts.requires {
+        // Expressions the solver can't handle (e.g. method calls) fall back to
+        // RuntimeCheck — no static verification, but the clause is never silently dropped.
+        let Some(req_pred) = expr_to_ref_expr_ext(req_expr, call_span) else {
+            continue;
+        };
         // Find which single parameter name this predicate references.
-        match single_param_ref(req_pred, params) {
+        match single_param_ref(&req_pred, params) {
             Some((param_idx, param_name)) if param_idx < args.len() => {
-                let normalized = normalize_pred(req_pred, &param_name);
+                let normalized = normalize_pred(&req_pred, &param_name);
                 let arg = &args[param_idx];
                 let outcome = check_arg_against_pred(arg, &normalized, var_refs, fn_decls, mode);
                 if let RefResult::Failed { counterexample } = outcome {
                     errors.push(CheckError::PreconditionViolated {
                         fn_name: fn_name.to_string(),
-                        pred: display_pred(req_pred),
+                        pred: display_pred(&req_pred),
                         span: call_span,
                         counterexample,
                     });
@@ -394,7 +399,7 @@ fn check_requires_at_call(
             _ => {
                 // Phase 2: try multi-param substitution when all referenced args are literals.
                 check_multi_param_requires_literal(
-                    fn_name, req_pred, params, args, var_refs, fn_decls, errors, call_span, mode,
+                    fn_name, &req_pred, params, args, var_refs, fn_decls, errors, call_span, mode,
                 );
             }
         }
@@ -406,7 +411,7 @@ fn check_requires_at_call(
 fn check_ensures_in_block(
     block: &Block,
     fn_name: &str,
-    ensures: &[RefExpr],
+    ensures: &[Expr],
     params: &[Param],
     fn_decls: &HashMap<String, FnDecl>,
     errors: &mut Vec<CheckError>,
@@ -465,7 +470,7 @@ fn check_ensures_in_block(
 fn check_ensures_in_stmt(
     stmt: &Stmt,
     fn_name: &str,
-    ensures: &[RefExpr],
+    ensures: &[Expr],
     params: &[Param],
     fn_decls: &HashMap<String, FnDecl>,
     errors: &mut Vec<CheckError>,
@@ -490,7 +495,7 @@ fn check_ensures_in_stmt(
 fn check_ensures_in_match_body(
     body: &MatchBody,
     fn_name: &str,
-    ensures: &[RefExpr],
+    ensures: &[Expr],
     params: &[Param],
     fn_decls: &HashMap<String, FnDecl>,
     errors: &mut Vec<CheckError>,
@@ -519,7 +524,7 @@ fn check_ensures_for_return(
     ret_expr: &Expr,
     ret_span: Span,
     fn_name: &str,
-    ensures: &[RefExpr],
+    ensures: &[Expr],
     params: &[Param],
     fn_decls: &HashMap<String, FnDecl>,
     errors: &mut Vec<CheckError>,
@@ -531,9 +536,14 @@ fn check_ensures_for_return(
     // parameter is annotated `n: Int where self >= 0`.
     let var_refs = build_param_var_refs(params);
 
-    for ens_pred in ensures {
+    for ens_expr in ensures {
+        // Expressions the solver can't handle (e.g. method calls) fall back to
+        // RuntimeCheck — no static verification, but the clause is never silently dropped.
+        let Some(ens_pred) = expr_to_ref_expr_ext(ens_expr, ret_span) else {
+            continue;
+        };
         // Normalise "result" → "self" so the solver recognises the return value.
-        let normalized = normalize_pred(ens_pred, "result");
+        let normalized = normalize_pred(&ens_pred, "result");
 
         // Let the solver decide: Proven (silent), Failed (emit error),
         // or RuntimeCheck (silent — deferred to runtime).
@@ -541,7 +551,7 @@ fn check_ensures_for_return(
         if let RefResult::Failed { counterexample } = outcome {
             errors.push(CheckError::PostconditionViolated {
                 fn_name: fn_name.to_string(),
-                pred: display_pred(ens_pred),
+                pred: display_pred(&ens_pred),
                 span: ret_span,
                 counterexample,
             });
@@ -920,13 +930,17 @@ fn check_invariants_in_stmt(
             span,
             ..
         } => {
-            for inv_pred in invariants {
+            for inv_expr in invariants {
+                // Expressions the solver can't handle fall back to RuntimeCheck.
+                let Some(inv_pred) = expr_to_ref_expr_ext(inv_expr, *span) else {
+                    continue;
+                };
                 check_invariant_at_entry(
-                    fn_name, inv_pred, var_refs, fn_decls, errors, *span, mode,
+                    fn_name, &inv_pred, var_refs, fn_decls, errors, *span, mode,
                 );
                 // Phase 5: also verify the invariant is preserved across iterations.
                 check_invariant_preserved(
-                    fn_name, inv_pred, body, var_refs, fn_decls, errors, *span, mode,
+                    fn_name, &inv_pred, body, var_refs, fn_decls, errors, *span, mode,
                 );
             }
             // Phase 5: verify the decreases measure.
@@ -964,13 +978,17 @@ fn check_invariants_in_stmt(
             span,
             ..
         } => {
-            for inv_pred in invariants {
+            for inv_expr in invariants {
+                // Expressions the solver can't handle fall back to RuntimeCheck.
+                let Some(inv_pred) = expr_to_ref_expr_ext(inv_expr, *span) else {
+                    continue;
+                };
                 check_invariant_at_entry(
-                    fn_name, inv_pred, var_refs, fn_decls, errors, *span, mode,
+                    fn_name, &inv_pred, var_refs, fn_decls, errors, *span, mode,
                 );
                 // Phase 5: also verify the invariant is preserved across iterations.
                 check_invariant_preserved(
-                    fn_name, inv_pred, body, var_refs, fn_decls, errors, *span, mode,
+                    fn_name, &inv_pred, body, var_refs, fn_decls, errors, *span, mode,
                 );
             }
             // Recurse into the body for nested loops.
@@ -1169,71 +1187,6 @@ fn extract_simple_assignments(body: &Block) -> Option<HashMap<String, Expr>> {
         }
     }
     Some(effects)
-}
-
-/// Convert a simple `Expr` to a `RefExpr` for use in predicate substitution.
-///
-/// Handles integer/float literals, identifiers, binary arithmetic (`+`, `-`,
-/// `*`, `/`, `%`), and unary negation.  Returns `None` for anything more
-/// complex, triggering a fallback to `RuntimeCheck` in the caller.
-fn expr_to_ref_expr_ext(expr: &Expr, fallback_span: Span) -> Option<RefExpr> {
-    match expr {
-        Expr::Literal(Literal::Integer(n), span) => Some(RefExpr::Integer {
-            value: *n,
-            span: *span,
-        }),
-        Expr::Literal(Literal::Float(f), span) => Some(RefExpr::Float {
-            value: *f,
-            span: *span,
-        }),
-        Expr::Ident(name, span) => Some(RefExpr::Ident {
-            name: name.clone(),
-            span: *span,
-        }),
-        Expr::Binary {
-            op,
-            left,
-            right,
-            span,
-        } => {
-            let l = expr_to_ref_expr_ext(left, *span)?;
-            let r = expr_to_ref_expr_ext(right, *span)?;
-            let aop = match op {
-                BinaryOp::Add => ArithOp::Add,
-                BinaryOp::Sub => ArithOp::Sub,
-                BinaryOp::Mul => ArithOp::Mul,
-                BinaryOp::Div => ArithOp::Div,
-                BinaryOp::Rem => ArithOp::Rem,
-                _ => return None,
-            };
-            Some(RefExpr::ArithOp {
-                op: aop,
-                left: Box::new(l),
-                right: Box::new(r),
-                span: *span,
-            })
-        }
-        Expr::Unary {
-            op: UnaryOp::Neg,
-            expr: inner,
-            span,
-        } => {
-            let inner_ref = expr_to_ref_expr_ext(inner, *span)?;
-            Some(RefExpr::ArithOp {
-                op: ArithOp::Sub,
-                left: Box::new(RefExpr::Integer {
-                    value: 0,
-                    span: *span,
-                }),
-                right: Box::new(inner_ref),
-                span: *span,
-            })
-        }
-        _ => {
-            let _ = fallback_span;
-            None
-        }
-    }
 }
 
 /// Substitute all free identifiers in `pred` with their post-iteration values
@@ -1903,6 +1856,6 @@ fn check_spawn_refinements_in_expr(
             check_spawn_refinements_in_block(body, actor_fields, var_refs, fn_decls, errors, mode);
         }
         // Leaves: no sub-expressions to walk.
-        Expr::Literal(_, _) | Expr::Ident(_, _) => {}
+        Expr::Literal(_, _) | Expr::Ident(_, _) | Expr::Quantifier(..) => {}
     }
 }

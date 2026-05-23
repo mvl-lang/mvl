@@ -217,7 +217,7 @@ fn check_expr_ref_escape(expr: &Expr, ref_vars: &HashSet<&str>, errors: &mut Vec
             }
         }
         Expr::Concurrently { body, .. } => check_block_ref_escape(body, ref_vars, errors),
-        Expr::Literal(..) | Expr::Ident(..) => {}
+        Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => {}
     }
 }
 
@@ -546,7 +546,7 @@ fn check_expr_iso(expr: &Expr, iso_vars: &mut HashSet<String>, errors: &mut Vec<
         Expr::Concurrently { body, .. } => check_block_iso(body, iso_vars, errors),
 
         // Leaves — no aliasing possible.
-        Expr::Literal(..) | Expr::Ident(..) => {}
+        Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => {}
     }
 }
 

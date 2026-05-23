@@ -18,8 +18,10 @@ use crate::mvl::backends::rust::emit_types::{
 use crate::mvl::backends::rust::emitter::RustEmitter;
 use crate::mvl::backends::rust::last_use::compute_last_uses;
 use crate::mvl::parser::ast::{
-    Block, Capability, Constraint, Expr, FnDecl, GenericParam, Param, Stmt, Totality, TypeExpr,
+    expr_to_ref_expr_ext, Block, Capability, Constraint, Expr, FnDecl, GenericParam, Param, Stmt,
+    Totality, TypeExpr,
 };
+use crate::mvl::parser::lexer::Span;
 use crate::mvl::passes::coverage::BranchKind;
 
 /// Emit a function-parameter type.
@@ -147,10 +149,12 @@ pub fn emit_fn_decl(cg: &mut RustEmitter, fd: &FnDecl) {
             if let Some(id) = cg.alloc_branch(fd.span.line, BranchKind::FnEntry) {
                 cg.emit_cov_hit(id);
             }
-            for req_pred in &fd.requires {
-                let pred_str = emit_ref_expr_for_assert(req_pred, "self");
-                let msg = pred_str.replace('{', "{{").replace('}', "}}");
-                cg.line(&format!("assert!({pred_str}, \"requires: {msg}\");"));
+            for req_expr in &fd.requires {
+                if let Some(req_pred) = expr_to_ref_expr_ext(req_expr, Span::default()) {
+                    let pred_str = emit_ref_expr_for_assert(&req_pred, "self");
+                    let msg = pred_str.replace('{', "{{").replace('}', "}}");
+                    cg.line(&format!("assert!({pred_str}, \"requires: {msg}\");"));
+                }
             }
             emit_fn_body(cg, fd);
             cg.pop_indent();
@@ -183,10 +187,12 @@ pub fn emit_fn_decl(cg: &mut RustEmitter, fd: &FnDecl) {
     // These catch contract violations at runtime when the static checker deferred
     // to RuntimeCheck (e.g. when the predicate involves multiple parameters or
     // complex arithmetic that the solver could not prove).
-    for req_pred in &fd.requires {
-        let pred_str = emit_ref_expr_for_assert(req_pred, "self");
-        let msg = pred_str.replace('{', "{{").replace('}', "}}");
-        cg.line(&format!("assert!({pred_str}, \"requires: {msg}\");"));
+    for req_expr in &fd.requires {
+        if let Some(req_pred) = expr_to_ref_expr_ext(req_expr, Span::default()) {
+            let pred_str = emit_ref_expr_for_assert(&req_pred, "self");
+            let msg = pred_str.replace('{', "{{").replace('}', "}}");
+            cg.line(&format!("assert!({pred_str}, \"requires: {msg}\");"));
+        }
     }
     emit_fn_body(cg, fd);
     cg.pop_indent();
@@ -282,10 +288,13 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
                         emit_expr_tail_with_return_type(cg, expr, &fd.return_type, &fd.params);
                         cg.push(";");
                         cg.nl();
-                        for ens_pred in &fd.ensures {
-                            let pred_str = emit_ref_expr_for_assert(ens_pred, "_result");
-                            let msg = pred_str.replace('{', "{{").replace('}', "}}");
-                            cg.line(&format!("assert!({pred_str}, \"ensures: {msg}\");"));
+                        for ens_expr in &fd.ensures {
+                            if let Some(ens_pred) = expr_to_ref_expr_ext(ens_expr, Span::default())
+                            {
+                                let pred_str = emit_ref_expr_for_assert(&ens_pred, "_result");
+                                let msg = pred_str.replace('{', "{{").replace('}', "}}");
+                                cg.line(&format!("assert!({pred_str}, \"ensures: {msg}\");"));
+                            }
                         }
                         cg.line("_result");
                     } else {

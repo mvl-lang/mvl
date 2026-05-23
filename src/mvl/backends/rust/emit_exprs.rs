@@ -1190,6 +1190,8 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
         // Phase 8 (#743): select { arm => { body } … } — first-ready-wins stub.
         // Emits the first arm's handler body; full scheduler (try_recv polling)
         // is deferred until bidirectional channel receive is implemented.
+        // Quantifier predicates are only valid in contract positions — never emitted.
+        Expr::Quantifier(..) => unreachable!("Quantifier in codegen position"),
         Expr::Select { arms, .. } => {
             cg.push("{");
             cg.nl();

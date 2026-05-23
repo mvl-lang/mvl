@@ -688,7 +688,7 @@ fn stmt_has_calls(stmt: &Stmt) -> bool {
 fn expr_has_calls(expr: &Expr) -> bool {
     match expr {
         Expr::FnCall { .. } | Expr::MethodCall { .. } => true,
-        Expr::Literal(..) | Expr::Ident(..) => false,
+        Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => false,
         Expr::FieldAccess { expr: e, .. } => expr_has_calls(e),
         Expr::Unary { expr: e, .. } => expr_has_calls(e),
         Expr::Binary { left, right, .. } => expr_has_calls(left) || expr_has_calls(right),
@@ -1261,6 +1261,7 @@ fn cyclomatic_complexity_expr(expr: &Expr) -> usize {
             })
             .sum(),
         Expr::Concurrently { body, .. } => cyclomatic_complexity_block_inner(body),
+        Expr::Quantifier(..) => 0,
         Expr::List { elems, .. } | Expr::Set { elems, .. } => {
             elems.iter().map(cyclomatic_complexity_expr).sum()
         }
@@ -1445,6 +1446,7 @@ fn max_match_depth_expr(expr: &Expr, depth: usize) -> usize {
             .map(|s| max_match_depth_stmt(s, depth))
             .max()
             .unwrap_or(depth),
+        Expr::Quantifier(..) => depth,
         Expr::List { elems, .. } | Expr::Set { elems, .. } => elems
             .iter()
             .map(|e| max_match_depth_expr(e, depth))

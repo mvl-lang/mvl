@@ -1165,8 +1165,8 @@ fn analyze_expr(
                 body, var_refs, fn_params, type_refs, fn_decls, errors, counts,
             );
         }
-        // Leaves: Literal, Ident — no sub-expressions to walk.
-        Expr::Literal(_, _) | Expr::Ident(_, _) => {}
+        // Leaves: Literal, Ident, Quantifier — no sub-expressions to walk.
+        Expr::Literal(_, _) | Expr::Ident(_, _) | Expr::Quantifier(..) => {}
     }
 }
 

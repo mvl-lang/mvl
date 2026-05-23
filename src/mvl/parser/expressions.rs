@@ -34,6 +34,24 @@ use crate::mvl::parser::{ParseError, Parser};
 impl Parser {
     // ── Entry point ────────────────────────────────────────────────────────
 
+    /// Parse a contract clause expression (`requires`/`ensures`/`invariant`).
+    ///
+    /// Like `parse_expr()` but also recognises `forall`/`exists` quantifiers,
+    /// which are only valid in contract positions, not in general expressions.
+    /// Quantifiers are wrapped in `Expr::Quantifier` so they can be stored
+    /// in `Vec<Expr>` contract fields without splitting the AST type (#983).
+    pub fn parse_contract_expr(&mut self) -> Result<Expr, ()> {
+        match self.peek_kind() {
+            TokenKind::Forall | TokenKind::Exists => {
+                let start = self.peek_span();
+                let ref_pred = self.parse_ref_expr()?;
+                let span = self.span_from(start);
+                Ok(Expr::Quantifier(Box::new(ref_pred), span))
+            }
+            _ => self.parse_expr(),
+        }
+    }
+
     pub fn parse_expr(&mut self) -> Result<Expr, ()> {
         if self.depth >= crate::mvl::parser::MAX_PARSE_DEPTH {
             let err = crate::mvl::parser::ParseError {

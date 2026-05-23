@@ -193,6 +193,7 @@ fn collect_refs_expr(expr: &Expr, params: &[&str], out: &mut Vec<(String, Span)>
             }
         }
         Expr::Concurrently { body, .. } => collect_refs_block(body, params, out),
+        Expr::Quantifier(..) => {}
     }
 }
 

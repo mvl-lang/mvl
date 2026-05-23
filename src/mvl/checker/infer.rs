@@ -513,6 +513,10 @@ impl TypeChecker {
                 self.lambda_scope_starts.pop();
                 Ty::Fn(param_tys, Box::new(ret_ty), vec![], None)
             }
+
+            // Quantifier predicates only appear in contract positions (requires/ensures/invariants),
+            // never in expression positions that type inference walks.
+            Expr::Quantifier(..) => unreachable!("Quantifier in type-inference position"),
         }
     }
 

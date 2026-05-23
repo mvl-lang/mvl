@@ -212,17 +212,11 @@ impl Parser {
             match self.peek_kind() {
                 TokenKind::Requires => {
                     self.advance();
-                    match self.parse_ref_expr() {
-                        Ok(pred) => requires.push(pred),
-                        Err(()) => break,
-                    }
+                    requires.push(self.parse_contract_expr()?);
                 }
                 TokenKind::Ensures => {
                     self.advance();
-                    match self.parse_ref_expr() {
-                        Ok(pred) => ensures.push(pred),
-                        Err(()) => break,
-                    }
+                    ensures.push(self.parse_contract_expr()?);
                 }
                 _ => break,
             }
@@ -1630,7 +1624,7 @@ fn main() -> String { greet(String::new()) }"#;
         let d = fn_decl("fn divide(a: Int, b: Int) -> Int\n  requires b != 0\n{ }");
         assert_eq!(d.requires.len(), 1, "expected one requires clause");
         assert!(d.ensures.is_empty(), "no ensures expected");
-        assert!(matches!(d.requires[0], RefExpr::Compare { .. }));
+        assert!(matches!(d.requires[0], Expr::Binary { .. }));
     }
 
     #[test]
@@ -1640,7 +1634,7 @@ fn main() -> String { greet(String::new()) }"#;
         let d = fn_decl("fn nonneg(n: Int) -> Int\n  ensures result >= 0\n{ }");
         assert_eq!(d.ensures.len(), 1, "expected one ensures clause");
         assert!(d.requires.is_empty(), "no requires expected");
-        assert!(matches!(d.ensures[0], RefExpr::Compare { .. }));
+        assert!(matches!(d.ensures[0], Expr::Binary { .. }));
     }
 
     #[test]
@@ -1651,8 +1645,8 @@ fn main() -> String { greet(String::new()) }"#;
             fn_decl("fn factorial(n: Int) -> Int\n  requires n >= 0\n  ensures result >= 1\n{ }");
         assert_eq!(d.requires.len(), 1, "expected one requires clause");
         assert_eq!(d.ensures.len(), 1, "expected one ensures clause");
-        assert!(matches!(d.requires[0], RefExpr::Compare { .. }));
-        assert!(matches!(d.ensures[0], RefExpr::Compare { .. }));
+        assert!(matches!(d.requires[0], Expr::Binary { .. }));
+        assert!(matches!(d.ensures[0], Expr::Binary { .. }));
     }
 
     #[test]
@@ -1675,6 +1669,38 @@ fn main() -> String { greet(String::new()) }"#;
             )
         });
         assert!(has_ghost, "expected a ghost let binding in body");
+    }
+
+    // ── Contract clause with method call (#983) ────────────────────────────
+
+    #[test]
+    fn parse_fn_requires_method_call_not_dropped() {
+        // GIVEN: requires clause with method call expression (e.g. items.len() > 0)
+        // THEN: clause is parsed and stored — NOT silently dropped (#983)
+        let d = fn_decl(
+            "fn process(items: List[Int]) -> List[Int]\n  requires items.len() > 0\n{ items }",
+        );
+        assert_eq!(
+            d.requires.len(),
+            1,
+            "requires clause must not be silently dropped (#983)"
+        );
+        assert!(matches!(d.requires[0], Expr::Binary { .. }));
+    }
+
+    #[test]
+    fn parse_fn_ensures_method_call_not_dropped() {
+        // GIVEN: ensures clause with method call expression
+        // THEN: clause is parsed and stored — NOT silently dropped (#983)
+        let d = fn_decl(
+            "fn process(items: List[Int]) -> List[Int]\n  ensures result.len() > 0\n{ items }",
+        );
+        assert_eq!(
+            d.ensures.len(),
+            1,
+            "ensures clause must not be silently dropped (#983)"
+        );
+        assert!(matches!(d.ensures[0], Expr::Binary { .. }));
     }
 
     // ── Effect declaration tests (#852) ────────────────────────────────────

@@ -4,6 +4,13 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.146.1] - 2026-05-23
+
+### Fixed
+
+- **parser: requires/ensures/invariant no longer silently drop complex expressions** (#983): Contract clauses containing method calls (e.g. `requires items.len() > 0`) or other constructs not supported by `RefExpr` were silently discarded. Fix mirrors #968 (`decreases` fix): AST widened to `Vec<Expr>`, new `parse_contract_expr()` uses `parse_expr()` for general expressions and wraps `forall`/`exists` in a new `Expr::Quantifier` variant. Extended `expr_to_ref_expr_ext` handles comparisons, logical ops, field access, and `x.len()` calls for static verification. Unsupported shapes degrade to `RuntimeCheck` rather than being dropped. 3 regression tests added.
+- **loader: restore `format_error_with_source` accidentally removed in #982** (#988): Function was called but not defined, breaking compilation of the LLVM backend and benchmarks.
+
 ## [0.146.0] - 2026-05-23
 
 ### Added
