@@ -207,6 +207,8 @@ impl LastUseTracker {
                     self.visit_expr(v, in_loop);
                 }
             }
+            // Quantifier predicates are contract-only — no identifiers to track.
+            Expr::Quantifier(..) => {}
         }
     }
 }

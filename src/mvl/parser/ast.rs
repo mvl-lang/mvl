@@ -216,10 +216,10 @@ pub struct FnDecl {
     /// Preconditions: `requires pred` — checked at call sites.
     /// The special identifier `self` in a pred refers to the argument value.
     /// Param names are normalised to `self` during contract checking.
-    pub requires: Vec<RefExpr>,
+    pub requires: Vec<Expr>,
     /// Postconditions: `ensures pred` — checked at return points.
     /// The special identifier `result` refers to the return value.
-    pub ensures: Vec<RefExpr>,
+    pub ensures: Vec<Expr>,
     pub body: Block,
     pub span: Span,
 }
@@ -737,6 +737,9 @@ pub enum Expr {
         body: Block,
         span: Span,
     },
+    /// `forall`/`exists` quantifier — valid only in `requires`/`ensures`/`invariant`
+    /// contract positions (#983).  Wraps the `RefExpr` produced by `parse_ref_expr()`.
+    Quantifier(Box<RefExpr>, Span),
 }
 
 /// One arm of a `select` expression.
@@ -778,6 +781,7 @@ impl Expr {
             | Expr::Select { span, .. }
             | Expr::Concurrently { span, .. } => *span,
             Expr::Block(b) => b.span,
+            Expr::Quantifier(_, s) => *s,
         }
     }
 }
@@ -872,14 +876,14 @@ pub enum Stmt {
         pattern: Pattern,
         iter: Expr,
         /// Loop invariant predicates — `invariant pred` clauses (Phase 3, #621).
-        invariants: Vec<RefExpr>,
+        invariants: Vec<Expr>,
         body: Block,
         span: Span,
     },
     While {
         cond: Expr,
         /// Loop invariant predicates — `invariant pred` clauses (Phase 3, #621).
-        invariants: Vec<RefExpr>,
+        invariants: Vec<Expr>,
         /// Optional termination measure — `decreases expr` clause (Phase 5, #628).
         decreases: Option<Box<Expr>>,
         body: Block,
@@ -998,6 +1002,156 @@ impl Pattern {
             | Pattern::Some { span, .. }
             | Pattern::Ok { span, .. }
             | Pattern::Err { span, .. } => *span,
+        }
+    }
+}
+
+// ── Contract predicate conversion ──────────────────────────────────────────
+
+/// Convert a contract `Expr` to a `RefExpr` for static solver use.
+///
+/// Handles comparisons, logical ops, arithmetic, literals, identifiers,
+/// field access, and the `x.len()` pattern.  Returns `None` for unsupported
+/// shapes (e.g. arbitrary method calls), which callers treat as `RuntimeCheck`.
+pub(crate) fn expr_to_ref_expr_ext(expr: &Expr, fallback_span: Span) -> Option<RefExpr> {
+    match expr {
+        Expr::Literal(Literal::Integer(n), span) => Some(RefExpr::Integer {
+            value: *n,
+            span: *span,
+        }),
+        Expr::Literal(Literal::Float(f), span) => Some(RefExpr::Float {
+            value: *f,
+            span: *span,
+        }),
+        Expr::Ident(name, span) => Some(RefExpr::Ident {
+            name: name.clone(),
+            span: *span,
+        }),
+        Expr::FieldAccess {
+            expr: inner,
+            field,
+            span,
+        } => {
+            let inner_ref = expr_to_ref_expr_ext(inner, *span)?;
+            Some(RefExpr::FieldAccess {
+                object: Box::new(inner_ref),
+                field: field.clone(),
+                span: *span,
+            })
+        }
+        // x.len() → RefExpr::Len
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            span,
+        } if method == "len" && args.is_empty() => {
+            if let Expr::Ident(name, _) = receiver.as_ref() {
+                Some(RefExpr::Len {
+                    ident: name.clone(),
+                    span: *span,
+                })
+            } else {
+                None
+            }
+        }
+        Expr::Binary {
+            op,
+            left,
+            right,
+            span,
+        } => match op {
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
+                let l = expr_to_ref_expr_ext(left, *span)?;
+                let r = expr_to_ref_expr_ext(right, *span)?;
+                let aop = match op {
+                    BinaryOp::Add => ArithOp::Add,
+                    BinaryOp::Sub => ArithOp::Sub,
+                    BinaryOp::Mul => ArithOp::Mul,
+                    BinaryOp::Div => ArithOp::Div,
+                    BinaryOp::Rem => ArithOp::Rem,
+                    _ => unreachable!(),
+                };
+                Some(RefExpr::ArithOp {
+                    op: aop,
+                    left: Box::new(l),
+                    right: Box::new(r),
+                    span: *span,
+                })
+            }
+            BinaryOp::Eq
+            | BinaryOp::Ne
+            | BinaryOp::Lt
+            | BinaryOp::Gt
+            | BinaryOp::Le
+            | BinaryOp::Ge => {
+                let l = expr_to_ref_expr_ext(left, *span)?;
+                let r = expr_to_ref_expr_ext(right, *span)?;
+                let cop = match op {
+                    BinaryOp::Eq => CmpOp::Eq,
+                    BinaryOp::Ne => CmpOp::Ne,
+                    BinaryOp::Lt => CmpOp::Lt,
+                    BinaryOp::Gt => CmpOp::Gt,
+                    BinaryOp::Le => CmpOp::Le,
+                    BinaryOp::Ge => CmpOp::Ge,
+                    _ => unreachable!(),
+                };
+                Some(RefExpr::Compare {
+                    op: cop,
+                    left: Box::new(l),
+                    right: Box::new(r),
+                    span: *span,
+                })
+            }
+            BinaryOp::And | BinaryOp::Or => {
+                let l = expr_to_ref_expr_ext(left, *span)?;
+                let r = expr_to_ref_expr_ext(right, *span)?;
+                let lop = match op {
+                    BinaryOp::And => LogicOp::And,
+                    BinaryOp::Or => LogicOp::Or,
+                    _ => unreachable!(),
+                };
+                Some(RefExpr::LogicOp {
+                    op: lop,
+                    left: Box::new(l),
+                    right: Box::new(r),
+                    span: *span,
+                })
+            }
+            _ => None,
+        },
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            expr: inner,
+            span,
+        } => {
+            let inner_ref = expr_to_ref_expr_ext(inner, *span)?;
+            Some(RefExpr::ArithOp {
+                op: ArithOp::Sub,
+                left: Box::new(RefExpr::Integer {
+                    value: 0,
+                    span: *span,
+                }),
+                right: Box::new(inner_ref),
+                span: *span,
+            })
+        }
+        Expr::Unary {
+            op: UnaryOp::Not,
+            expr: inner,
+            span,
+        } => {
+            let inner_ref = expr_to_ref_expr_ext(inner, *span)?;
+            Some(RefExpr::Not {
+                inner: Box::new(inner_ref),
+                span: *span,
+            })
+        }
+        // forall/exists quantifiers — pass through directly.
+        Expr::Quantifier(ref_expr, _) => Some(*ref_expr.clone()),
+        _ => {
+            let _ = fallback_span;
+            None
         }
     }
 }

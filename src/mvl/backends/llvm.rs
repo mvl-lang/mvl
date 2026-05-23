@@ -39,7 +39,8 @@ use inkwell::{
 use std::collections::{HashMap, HashSet};
 
 use crate::mvl::parser::ast::{
-    ActorDecl, Block, Decl, Expr, ExternDecl, ExternFnDecl, FnDecl, Program, Stmt, TypeExpr,
+    expr_to_ref_expr_ext, ActorDecl, Block, Decl, Expr, ExternDecl, ExternFnDecl, FnDecl, Program,
+    Stmt, TypeExpr,
 };
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -2767,8 +2768,11 @@ impl<'ctx> LlvmBackend<'ctx> {
                     }
                 }
             }
-            for req_pred in &fd.requires {
-                if let Some(cond) = self.emit_requires_pred_bool(req_pred, &param_vals) {
+            for req_expr in &fd.requires {
+                let Some(req_pred) = expr_to_ref_expr_ext(req_expr, Default::default()) else {
+                    continue;
+                };
+                if let Some(cond) = self.emit_requires_pred_bool(&req_pred, &param_vals) {
                     match self.assert_mode {
                         // Note: LLVM IR has no concept of `debug_assertions`, so
                         // DebugOnly emits the same unconditional trap as Always.

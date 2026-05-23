@@ -14,7 +14,7 @@
 //! - Expression statements (trailing `;` optional for block-final expressions)
 
 use crate::mvl::parser::ast::{
-    Block, ElseBranch, Expr, LValue, Literal, MatchArm, MatchBody, Pattern, RefExpr, Stmt,
+    Block, ElseBranch, Expr, LValue, Literal, MatchArm, MatchBody, Pattern, Stmt,
 };
 use crate::mvl::parser::lexer::TokenKind;
 use crate::mvl::parser::{ParseError, Parser};
@@ -292,13 +292,10 @@ impl Parser {
         let iter = self.parse_expr()?;
 
         // Optional invariant clauses: `invariant pred`* (Phase 3, #621)
-        let mut invariants: Vec<RefExpr> = Vec::new();
+        let mut invariants = Vec::new();
         while matches!(self.peek_kind(), TokenKind::Invariant) {
             self.advance(); // consume `invariant`
-            match self.parse_ref_expr() {
-                Ok(pred) => invariants.push(pred),
-                Err(()) => break,
-            }
+            invariants.push(self.parse_contract_expr()?);
         }
 
         let body = self.parse_block()?;
@@ -322,13 +319,10 @@ impl Parser {
         let cond = self.parse_expr()?;
 
         // Optional invariant clauses: `invariant pred`* (Phase 3, #621)
-        let mut invariants: Vec<RefExpr> = Vec::new();
+        let mut invariants = Vec::new();
         while matches!(self.peek_kind(), TokenKind::Invariant) {
             self.advance(); // consume `invariant`
-            match self.parse_ref_expr() {
-                Ok(pred) => invariants.push(pred),
-                Err(()) => break,
-            }
+            invariants.push(self.parse_contract_expr()?);
         }
 
         // Optional termination measure: `decreases expr` (Phase 5, #628)
@@ -970,5 +964,18 @@ mod tests {
         let errs = parse_stmts_with_errors("{ catch e { handle(e); } }");
         assert!(!errs.is_empty(), "expected parse error for catch");
         assert!(errs[0].message.contains("Result<T, E>"));
+    }
+
+    // ── Invariant with method call (#983) ────────────────────────────────
+
+    #[test]
+    fn while_invariant_method_call_not_dropped() {
+        // GIVEN: while loop with invariant containing a method call
+        // THEN: invariant clause is NOT silently dropped (#983)
+        let s = one_stmt("{ while i < n invariant items.len() > 0 { i = i + 1; } }");
+        assert!(
+            matches!(&s, Stmt::While { invariants, .. } if invariants.len() == 1),
+            "while invariant with method call must not be silently dropped (#983)"
+        );
     }
 }

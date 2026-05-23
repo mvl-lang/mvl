@@ -404,7 +404,7 @@ fn collect_calls_in_expr(expr: &Expr, names: &mut std::collections::HashSet<Stri
         }
         Expr::Concurrently { body, .. } => collect_calls_in_block(body, names),
         // Leaf expressions — no sub-expressions.
-        Expr::Literal(..) | Expr::Ident(..) => {}
+        Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => {}
     }
 }
 
@@ -793,7 +793,7 @@ fn check_expr_flows(
             }
         }
         // Leaves — no sub-expressions to walk.
-        Expr::Literal(..) | Expr::Ident(..) => {}
+        Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => {}
     }
 }
 
@@ -920,7 +920,7 @@ fn count_in_expr(expr: &Expr, dc: &mut usize, sc: &mut usize) {
             }
         }
         Expr::Concurrently { body, .. } => count_in_block(body, dc, sc),
-        Expr::Literal(..) | Expr::Ident(..) => {}
+        Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => {}
     }
 }
 

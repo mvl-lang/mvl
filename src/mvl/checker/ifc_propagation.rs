@@ -444,7 +444,7 @@ pub fn infer_label_extended(
             .map(|a| infer_label_extended(&a.expr, env, explicit, inferred))
             .fold(None, ifc::join_opt),
         Expr::Concurrently { body, .. } => tail_label_of_block(body, env, explicit, inferred),
-        Expr::Literal(..) => None,
+        Expr::Literal(..) | Expr::Quantifier(..) => None,
     }
 }
 
@@ -726,7 +726,7 @@ fn collect_violations_in_expr(
         Expr::Concurrently { body, .. } => {
             collect_violations_in_block(body, caller, env, type_env, inferred, errors)
         }
-        Expr::Literal(..) | Expr::Ident(..) => {}
+        Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => {}
     }
 }
 

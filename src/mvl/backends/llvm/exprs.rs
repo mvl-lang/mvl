@@ -703,6 +703,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                 self.walk_block_for_captures(body, exclude, seen, captures);
             }
             Expr::Literal(_, _) => {}
+            // Quantifier predicates are only valid in contract positions — never emitted.
+            Expr::Quantifier(..) => unreachable!("Quantifier in codegen position"),
         }
     }
 
