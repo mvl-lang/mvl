@@ -4,11 +4,14 @@
 //
 // Import:
 //   use pkg.http.{Status, Method, Request, Response, HttpError,
-//                  parse_request, serialize_response, respond, error_response}
+//                  parse_request, serialize_response, respond, error_response,
+//                  query_first, query_all}
 //
 // Effects: none (all functions are pure).
 //
 // See #783.
+
+use std.ifc.{Tainted}
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
@@ -128,12 +131,18 @@ pub type Method = enum {
 
 // ── Request / Response / HttpError ────────────────────────────────────────────
 
-/// Parsed HTTP request (method + path).
+/// Parsed HTTP request (method + path + query).
+///
+/// `path` is the URL path with `?query` and `#fragment` stripped.
+/// `query` maps each key to all values supplied (FastAPI/Starlette-style multi-value):
+///   `?x=1&x=2` → `{"x": [taint("1"), taint("2")]}`. Values stay `Tainted` —
+///   they are user-supplied data. Use `query_first`/`query_all` to read.
 ///
 /// Headers and body parsing deferred to Phase 2.
 pub type Request = struct {
     method: Method,
     path:   String,
+    query:  Map[String, List[Tainted[String]]],
 }
 
 /// HTTP response.
@@ -174,20 +183,204 @@ pub fn parse_method(s: String) -> Result[Method, HttpError] {
     else { Err(HttpError { status: Status::Http400BadRequest, detail: s.concat(": unknown method") }) }
 }
 
+// ── Percent decoding ──────────────────────────────────────────────────────────
+//
+// WHATWG application/x-www-form-urlencoded shape:
+//   - `+` decodes to space
+//   - `%XX` (two hex digits) decodes to the byte 0xXX
+//   - Malformed escapes (`%`, `%Z`, `%ZZ`) keep `%` literal and continue
+//     (lenient, matches WHATWG; strict-mode is a parser-differential surface).
+//
+// Output is already decoded — do NOT pass it back into another percent-decoder
+// (double-decode is the dangerous bug class; the value carries Tainted, the
+// decoded form does not need re-decoding).
+
+fn hex_digit(c: String) -> Option[Int] {
+    if      c == "0" { Some(0) } else if c == "1" { Some(1) }
+    else if c == "2" { Some(2) } else if c == "3" { Some(3) }
+    else if c == "4" { Some(4) } else if c == "5" { Some(5) }
+    else if c == "6" { Some(6) } else if c == "7" { Some(7) }
+    else if c == "8" { Some(8) } else if c == "9" { Some(9) }
+    else if c == "a" || c == "A" { Some(10) }
+    else if c == "b" || c == "B" { Some(11) }
+    else if c == "c" || c == "C" { Some(12) }
+    else if c == "d" || c == "D" { Some(13) }
+    else if c == "e" || c == "E" { Some(14) }
+    else if c == "f" || c == "F" { Some(15) }
+    else { None }
+}
+
+fn hex_byte(h1: String, h2: String) -> Option[Byte] {
+    match hex_digit(h1) {
+        None     => None,
+        Some(n1) => match hex_digit(h2) {
+            None     => None,
+            Some(n2) => Some(from_int(n1 * 16 + n2)),
+        },
+    }
+}
+
+fn flush_bytes(out: String, pending: List[Byte]) -> String {
+    if pending.len() == 0 { out } else { out.concat(String::from_bytes(pending)) }
+}
+
+/// Lenient percent-decoder for query strings (WHATWG application/x-www-form-urlencoded).
+/// `%XX` runs are accumulated as bytes so multi-byte UTF-8 sequences (e.g. `%C3%A9`
+/// → `é`) decode correctly.  Malformed escapes pass through as literal `%`.
+pub partial fn percent_decode(s: String) -> String {
+    let chars: List[String] = s.chars();
+    let len: Int = chars.len();
+    let out: ref String = "";
+    let pending: ref List[Byte] = [];
+    let i: ref Int = 0;
+    while i < len {
+        let c: String = match chars.get(i) { Some(cv) => cv, None => "" };
+        if c == "%" && i + 2 < len {
+            let h1: String = match chars.get(i + 1) { Some(cv) => cv, None => "" };
+            let h2: String = match chars.get(i + 2) { Some(cv) => cv, None => "" };
+            match hex_byte(h1, h2) {
+                Some(b) => { pending.push(b); i = i + 3 },
+                None    => {
+                    out     = flush_bytes(out, pending);
+                    pending = [];
+                    out     = out.concat("%");
+                    i       = i + 1
+                },
+            }
+        } else if c == "+" {
+            out     = flush_bytes(out, pending);
+            pending = [];
+            out     = out.concat(" ");
+            i       = i + 1
+        } else {
+            out     = flush_bytes(out, pending);
+            pending = [];
+            out     = out.concat(c);
+            i       = i + 1
+        }
+    }
+    flush_bytes(out, pending)
+}
+
+// ── Query parsing ─────────────────────────────────────────────────────────────
+
+// `{}` parses as an empty block, not an empty map literal — workaround taken
+// from std.json.empty_object.
+fn empty_query_map() -> Map[String, List[Tainted[String]]] {
+    let m: ref Map[String, List[Tainted[String]]] = {"__mvl_query_init__": []};
+    m.remove("__mvl_query_init__");
+    m
+}
+
+fn append_query(m: Map[String, List[Tainted[String]]], key: String, value: Tainted[String]) -> Map[String, List[Tainted[String]]] {
+    let r: ref Map[String, List[Tainted[String]]] = m;
+    let updated: ref List[Tainted[String]] = match r.get(key) {
+        Some(existing) => existing,
+        None           => [],
+    };
+    updated.push(value);
+    r.insert(key, updated);
+    r
+}
+
+/// Parse a raw query string (the part after `?`, without the leading `?`).
+///
+/// Returns a multi-value map: repeated keys collect all values in order
+/// (`?x=1&x=2` → `{"x": [taint("1"), taint("2")]}`).  Pairs with empty keys
+/// are skipped.  Values without `=` (e.g. `?flag`) decode to `""`.
+///
+/// Values are re-wrapped in `Tainted` (audit tag `"HTTP-QUERY-VALUE"`) since
+/// they originate from user-supplied URL input.  Keys remain plain — they are
+/// part of the routing contract, not data.
+pub partial fn parse_query(raw: String) -> Map[String, List[Tainted[String]]] {
+    let result: ref Map[String, List[Tainted[String]]] = empty_query_map();
+    if raw.len() == 0 { return result } else {}
+    let pairs: List[String] = raw.split("&");
+    let n: Int = pairs.len();
+    let i: ref Int = 0;
+    while i < n {
+        match pairs.get(i) {
+            None    => {},
+            Some(p) => {
+                if p.len() > 0 {
+                    let eq_split: List[String] = p.split("=");
+                    let raw_key: String = match eq_split.get(0) { Some(k) => k, None => "" };
+                    let raw_val: String = match eq_split.get(1) { Some(v) => v, None => "" };
+                    let key: String = percent_decode(raw_key);
+                    if key.len() > 0 {
+                        let decoded: String = percent_decode(raw_val);
+                        let tainted: Tainted[String] = relabel taint(decoded, "HTTP-QUERY-VALUE");
+                        result = append_query(result, key, tainted)
+                    } else {}
+                } else {}
+            },
+        }
+        i = i + 1
+    }
+    result
+}
+
+// ── Query accessors ───────────────────────────────────────────────────────────
+
+/// First value supplied for `key`, or `None` if the key is absent.
+/// FastAPI/Starlette equivalent: `request.query_params["key"]`.
+pub fn query_first(req: val Request, key: String) -> Option[Tainted[String]] {
+    match req.query.get(key) {
+        None       => None,
+        Some(vals) => vals.get(0),
+    }
+}
+
+/// All values supplied for `key` in order (empty list if absent).
+/// FastAPI/Starlette equivalent: `request.query_params.getlist("key")`.
+pub fn query_all(req: val Request, key: String) -> List[Tainted[String]] {
+    match req.query.get(key) {
+        None       => [],
+        Some(vals) => vals,
+    }
+}
+
+// ── Request parsing ───────────────────────────────────────────────────────────
+
+type PathQuery = struct {
+    path:  String,
+    query: String,
+}
+
+/// Split a request target on the first `?` and strip any `#fragment`.
+fn split_target(target: String) -> PathQuery {
+    let target_len: Int = target.len();
+    let no_frag: String = match target.find("#") {
+        None    => target.substring(0, target_len),
+        Some(i) => target.substring(0, i),
+    };
+    let nf_len: Int = no_frag.len();
+    match no_frag.find("?") {
+        None    => PathQuery { path: no_frag.substring(0, nf_len), query: "" },
+        Some(i) => PathQuery {
+            path:  no_frag.substring(0, i),
+            query: no_frag.substring(i + 1, nf_len),
+        },
+    }
+}
+
 /// Parse a raw HTTP/1.x request into a Request.
 ///
 /// IFC trust boundary: the raw tainted input is detainted here for protocol
 /// parsing only.  The path is structural (routing), not user-supplied data.
+/// Query *values* are re-tainted inside `parse_query` since they ARE user data.
 /// When body parsing is added (Phase 2), the body will remain Tainted.
-pub fn parse_request(raw: Tainted[String]) -> Result[Request, HttpError] {
-    let s: String = raw.into_inner();
+pub partial fn parse_request(raw: Tainted[String]) -> Result[Request, HttpError] {
+    let s: String = relabel trust(raw, "HTTP-REQUEST-LINE");
     let lines: List[String] = s.split("\r\n");
     let request_line: String = require(lines.get(0), "empty request")?;
     let parts: List[String] = request_line.split(" ");
     let method_str: String = require(parts.get(0), "missing method")?;
-    let path: String = require(parts.get(1), "missing path")?;
+    let target: String = require(parts.get(1), "missing path")?;
     let method: Method = parse_method(method_str)?;
-    Ok(Request { method: method, path: path })
+    let pq: PathQuery = split_target(target);
+    let query: Map[String, List[Tainted[String]]] = parse_query(pq.query);
+    Ok(Request { method: method, path: pq.path, query: query })
 }
 
 // ── Serialization ─────────────────────────────────────────────────────────────
@@ -204,7 +397,7 @@ fn format_headers(headers: Map[String, String]) -> String {
         if v.len() > 0 {
             result = result.concat(k).concat(": ").concat(v).concat("\r\n")
         }
-    };
+    }
     result
 }
 
