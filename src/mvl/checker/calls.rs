@@ -289,7 +289,18 @@ impl TypeChecker {
             // #928: Static method call `Type::method(args)` — resolve via method_table.
             if let Some((type_name, method_name)) = name.split_once("::") {
                 if let Some(methods) = self.method_table.get(type_name) {
-                    if let Some(fn_info) = methods.get(method_name) {
+                    if let Some(fn_info) = methods.get(method_name).cloned() {
+                        // #956: sink check for static method calls (e.g. Logger::debug(secret)).
+                        if fn_info.is_sink {
+                            for (arg, arg_ty) in args.iter().zip(arg_tys.iter()) {
+                                if let Some(label) = ifc::label_of(arg_ty) {
+                                    self.emit(CheckError::LoggingLabelViolation {
+                                        label: label.to_string(),
+                                        span: arg.span(),
+                                    });
+                                }
+                            }
+                        }
                         let is_generic = !fn_info.type_params.is_empty();
                         if is_generic {
                             return Ty::Unknown;
@@ -447,6 +458,7 @@ impl TypeChecker {
             && matches!(
                 base,
                 Ty::Int
+                    | Ty::Bool
                     | Ty::Byte
                     | Ty::UByte
                     | Ty::UInt

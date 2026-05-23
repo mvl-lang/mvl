@@ -128,7 +128,7 @@ pub(crate) fn bind_pattern_labels(pat: &Pattern, label: &str, env: &mut HashMap<
 
 /// Build a map from user-defined function name → name of public sink reachable from it.
 ///
-/// Seeds from functions that directly call a [`PUBLIC_SINKS`] member, then propagates
+/// Seeds from functions that directly call a declared sink, then propagates
 /// transitively via a fixed-point BFS so that `a→b→println` marks both `b` and `a`.
 fn build_sink_reachability(
     programs: &[&Program],
@@ -343,10 +343,11 @@ fn collect_calls_in_expr(expr: &Expr, names: &mut std::collections::HashSet<Stri
             args,
             ..
         } => {
-            // Insert the qualified sink name so build_sink_reachability can seed from
-            // Logger method calls in the transitive analysis (#973).
-            if matches!(method.as_str(), "debug" | "info" | "warn" | "error") {
-                names.insert(format!("Logger::{method}"));
+            // Insert both bare method name and qualified `Receiver::method` so
+            // build_sink_reachability can seed from any sink method call (#956).
+            names.insert(method.clone());
+            if let Expr::Ident(recv_name, _) = receiver.as_ref() {
+                names.insert(format!("{recv_name}::{method}"));
             }
             collect_calls_in_expr(receiver, names);
             for a in args {
@@ -628,14 +629,22 @@ fn collect_sink_names(programs: &[&Program]) -> HashSet<String> {
     let mut sinks = HashSet::new();
     for prog in programs {
         for decl in &prog.declarations {
-            if let Decl::Fn(fd) = decl {
-                if fd.is_sink {
+            match decl {
+                Decl::Fn(fd) if fd.is_sink => {
                     if let Some(recv_ty) = &fd.receiver_type {
                         sinks.insert(format!("{}::{}", recv_ty, fd.name));
                     } else {
                         sinks.insert(fd.name.clone());
                     }
                 }
+                Decl::Impl(id) => {
+                    for m in &id.methods {
+                        if m.is_sink {
+                            sinks.insert(format!("{}::{}", id.type_name, m.name));
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -748,20 +757,11 @@ fn check_expr_flows(
         } => {
             // Method calls: check for implicit flow using qualified name in sink_reach (#956).
             if is_high_opt(&pc) {
-                // Build qualified name matching the convention used by collect_sink_names.
-                // For now, use the method name for all receivers — sink_reach only contains
-                // entries for declared sinks, so false positives are impossible.
+                // Build candidate qualified names matching collect_calls_in_expr / collect_sink_names.
+                let mut qualified_names: Vec<String> = vec![method.clone()];
                 if let Expr::Ident(recv_name, _) = receiver.as_ref() {
-                    // Ignore — module-qualified calls are handled by FnCall branch above.
-                    let _ = recv_name;
+                    qualified_names.push(format!("{recv_name}::{method}"));
                 }
-                // Try common qualified forms that might be in sink_reach via collect_calls_in_expr.
-                let qualified_names: Vec<String> = {
-                    let mut v = vec![method.clone()];
-                    // Logger::method pattern — collect_calls_in_expr inserts these.
-                    v.push(format!("Logger::{method}"));
-                    v
-                };
                 for qn in &qualified_names {
                     if let Some(sink) = sink_reach.get(qn.as_str()) {
                         if sink == qn {

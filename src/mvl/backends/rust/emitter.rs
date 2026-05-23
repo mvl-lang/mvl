@@ -429,13 +429,11 @@ impl RustEmitter {
         }
 
         // Emit stdlib prelude functions that have real bodies (non-stubs).
-        // Stubs (empty body) are skipped; built-in names handled as Rust macros
-        // (format, panic) are skipped; test functions are skipped.
+        // Stubs (empty body) are skipped; test functions are skipped.
         // println/print/eprintln/eprint are now pure-MVL wrappers (#839) and
         // are emitted as regular Rust functions (not excluded here).
         // Functions already declared in the user program are skipped to prevent
         // duplicate Rust definitions when the user shadows a prelude function.
-        const MACRO_HANDLED: &[&str] = &[];
         let user_fn_names: std::collections::HashSet<&str> = prog
             .declarations
             .iter()
@@ -468,7 +466,6 @@ impl RustEmitter {
             .filter_map(|d| if let Decl::Fn(fd) = d { Some(fd) } else { None })
             .filter(|fd| !fd.is_builtin) // builtin fns have no body; runtime provides them
             .filter(|fd| !fd.body.stmts.is_empty())
-            .filter(|fd| !MACRO_HANDLED.contains(&fd.name.as_str()))
             .filter(|fd| !fd.is_test)
             .filter(|fd| !user_fn_names.contains(fd.name.as_str()))
             .filter(|fd| seen_prelude_fns.insert(fd.name.as_str()))
