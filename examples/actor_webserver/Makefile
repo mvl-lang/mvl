@@ -1,19 +1,18 @@
 # actor_webserver — concurrent HTTP server with actor-per-request pattern
 #
+# Uses pkg.http for HTTP types, parsing, and response serialization.
 # Each accepted TCP connection is handed to a fresh RequestHandler actor that
-# owns the socket exclusively (iso capability).  The actor reads the request,
-# routes it, writes the response, and terminates — no shared mutable state.
+# owns the socket exclusively (iso capability).
 #
-# Demonstrates Phase 8 actor model: iso capability, fire-and-forget actors,
-# and layered configuration (defaults → TOML → env → CLI).
-#
-# Run from this directory or from the repo root.
+# Package resolution: .mvl/pkg/http symlinks to ../../pkg/http so that
+# mvl commands run from this directory can find the package.
 .PHONY: help guard-mvl lint check test test-llvm assurance run clean
 
 .DEFAULT_GOAL := help
 
-MVL  := ../../target/debug/mvl
-DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+MVL       := ../../target/debug/mvl
+DIR       := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+REPO_ROOT := $(abspath $(DIR)../..)
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -27,23 +26,28 @@ guard-mvl: ## Validate MVL binary is present and working
 		exit 1; \
 	}
 
-lint: guard-mvl ## Lint main.mvl
+# Ensure .mvl/pkg/http symlink exists for local package resolution.
+.mvl/pkg/http:
+	@mkdir -p .mvl/pkg
+	@ln -sfn $(REPO_ROOT)/pkg/http .mvl/pkg/http
+
+lint: guard-mvl .mvl/pkg/http ## Lint main.mvl
 	$(MVL) lint $(DIR)main.mvl
 
-check: guard-mvl ## Type-check main.mvl
+check: guard-mvl .mvl/pkg/http ## Type-check main.mvl
 	$(MVL) check $(DIR)main.mvl
 
-test: guard-mvl ## Run unit tests (pure routing logic)
+test: guard-mvl .mvl/pkg/http ## Run unit tests (pure routing logic)
 	$(MVL) test $(DIR)
 
-test-llvm: guard-mvl ## Run smoke tests via LLVM backend (checks // expect: annotations)
+test-llvm: guard-mvl .mvl/pkg/http ## Run smoke tests via LLVM backend
 	$(MVL) test $(DIR) --backend=llvm
 
-assurance: guard-mvl ## Assurance report for main.mvl
+assurance: guard-mvl .mvl/pkg/http ## Assurance report for main.mvl
 	$(MVL) assurance $(DIR)main.mvl
 
-run: guard-mvl ## Start the HTTP server on 127.0.0.1:8080 (Ctrl-C to stop)
+run: guard-mvl .mvl/pkg/http ## Start the HTTP server (Ctrl-C to stop)
 	$(MVL) run $(DIR)main.mvl
 
 clean: ## Remove build artifacts
-	rm -rf $(TMPDIR)mvl_build_actor_webserver
+	rm -rf $(TMPDIR)mvl_build_actor_webserver .mvl

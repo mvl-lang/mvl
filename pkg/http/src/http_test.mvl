@@ -1,0 +1,287 @@
+// pkg.http tests — unit tests for HTTP types, parsing, and serialization.
+//
+// All functions here are pure (no effects).
+// Assurance note: 0 extern blocks.
+
+// ── Type re-declarations (workaround: #96) ────────────────────────────────
+
+type Status = enum {
+    Http200Ok,
+    Http201Created,
+    Http202Accepted,
+    Http204NoContent,
+    Http301MovedPermanently,
+    Http302Found,
+    Http304NotModified,
+    Http400BadRequest,
+    Http401Unauthorized,
+    Http403Forbidden,
+    Http404NotFound,
+    Http405MethodNotAllowed,
+    Http409Conflict,
+    Http410Gone,
+    Http422UnprocessableEntity,
+    Http429TooManyRequests,
+    Http500InternalServerError,
+    Http501NotImplemented,
+    Http502BadGateway,
+    Http503ServiceUnavailable,
+    Http504GatewayTimeout,
+}
+
+type Method = enum { Get, Post, Put, Delete, Patch, Head, Options }
+
+type Request = struct {
+    method: Method,
+    path:   String,
+}
+
+type Response = struct {
+    status:  Status,
+    headers: Map[String, String],
+    body:    String,
+}
+
+type HttpError = struct {
+    status: Status,
+    detail: String,
+}
+
+// ── Helpers (mirror pkg.http logic for standalone testing) ─────────────────
+
+fn status_code(s: val Status) -> Int {
+    match s {
+        Status::Http200Ok                  => 200,
+        Status::Http201Created             => 201,
+        Status::Http202Accepted            => 202,
+        Status::Http204NoContent           => 204,
+        Status::Http301MovedPermanently    => 301,
+        Status::Http302Found              => 302,
+        Status::Http304NotModified         => 304,
+        Status::Http400BadRequest          => 400,
+        Status::Http401Unauthorized        => 401,
+        Status::Http403Forbidden           => 403,
+        Status::Http404NotFound            => 404,
+        Status::Http405MethodNotAllowed    => 405,
+        Status::Http409Conflict            => 409,
+        Status::Http410Gone               => 410,
+        Status::Http422UnprocessableEntity => 422,
+        Status::Http429TooManyRequests     => 429,
+        Status::Http500InternalServerError => 500,
+        Status::Http501NotImplemented      => 501,
+        Status::Http502BadGateway          => 502,
+        Status::Http503ServiceUnavailable  => 503,
+        Status::Http504GatewayTimeout      => 504,
+    }
+}
+
+fn status_reason(s: val Status) -> String {
+    match s {
+        Status::Http200Ok                  => "OK",
+        Status::Http201Created             => "Created",
+        Status::Http202Accepted            => "Accepted",
+        Status::Http204NoContent           => "No Content",
+        Status::Http301MovedPermanently    => "Moved Permanently",
+        Status::Http302Found              => "Found",
+        Status::Http304NotModified         => "Not Modified",
+        Status::Http400BadRequest          => "Bad Request",
+        Status::Http401Unauthorized        => "Unauthorized",
+        Status::Http403Forbidden           => "Forbidden",
+        Status::Http404NotFound            => "Not Found",
+        Status::Http405MethodNotAllowed    => "Method Not Allowed",
+        Status::Http409Conflict            => "Conflict",
+        Status::Http410Gone               => "Gone",
+        Status::Http422UnprocessableEntity => "Unprocessable Entity",
+        Status::Http429TooManyRequests     => "Too Many Requests",
+        Status::Http500InternalServerError => "Internal Server Error",
+        Status::Http501NotImplemented      => "Not Implemented",
+        Status::Http502BadGateway          => "Bad Gateway",
+        Status::Http503ServiceUnavailable  => "Service Unavailable",
+        Status::Http504GatewayTimeout      => "Gateway Timeout",
+    }
+}
+
+fn is_success(s: val Status) -> Bool {
+    let code: Int = status_code(s);
+    if code >= 200 { code < 300 } else { false }
+}
+
+fn is_error(s: val Status) -> Bool {
+    status_code(s) >= 400
+}
+
+fn require(opt: Option[String], msg: String) -> Result[String, HttpError] {
+    match opt {
+        Some(v) => Ok(v),
+        None    => Err(HttpError { status: Status::Http400BadRequest, detail: msg }),
+    }
+}
+
+fn parse_method(s: String) -> Result[Method, HttpError] {
+    if s == "GET"     { Ok(Method::Get) }
+    else if s == "POST"    { Ok(Method::Post) }
+    else if s == "PUT"     { Ok(Method::Put) }
+    else if s == "DELETE"  { Ok(Method::Delete) }
+    else if s == "PATCH"   { Ok(Method::Patch) }
+    else if s == "HEAD"    { Ok(Method::Head) }
+    else if s == "OPTIONS" { Ok(Method::Options) }
+    else { Err(HttpError { status: Status::Http400BadRequest, detail: s.concat(": unknown method") }) }
+}
+
+fn parse_request_str(s: String) -> Result[Request, HttpError] {
+    let lines: List[String] = s.split("\r\n");
+    let request_line: String = require(lines.get(0), "empty request")?;
+    let parts: List[String] = request_line.split(" ");
+    let method_str: String = require(parts.get(0), "missing method")?;
+    let path: String = require(parts.get(1), "missing path")?;
+    let method: Method = parse_method(method_str)?;
+    Ok(Request { method: method, path: path })
+}
+
+fn serialize_response(resp: val Response) -> String {
+    let status_line: String = "HTTP/1.0 "
+        .concat(status_code(resp.status).to_string())
+        .concat(" ")
+        .concat(status_reason(resp.status))
+        .concat("\r\n");
+    let content_length: String = "Content-Length: "
+        .concat(resp.body.len().to_string())
+        .concat("\r\n");
+    status_line.concat("Content-Type: text/plain\r\n").concat(content_length).concat("\r\n").concat(resp.body)
+}
+
+fn respond(status: Status, body: String) -> Response {
+    Response { status: status, headers: {"Content-Type": "text/plain"}, body: body }
+}
+
+fn ok(body: String) -> Response { respond(Status::Http200Ok, body) }
+fn not_found() -> Response { respond(Status::Http404NotFound, "") }
+fn error_response(e: val HttpError) -> Response { respond(e.status, e.detail) }
+
+// ── Status code tests ─────────────────────────────────────────────────────
+
+test fn code_200() -> Unit { assert_eq(status_code(Status::Http200Ok), 200) }
+test fn code_201() -> Unit { assert_eq(status_code(Status::Http201Created), 201) }
+test fn code_204() -> Unit { assert_eq(status_code(Status::Http204NoContent), 204) }
+test fn code_301() -> Unit { assert_eq(status_code(Status::Http301MovedPermanently), 301) }
+test fn code_400() -> Unit { assert_eq(status_code(Status::Http400BadRequest), 400) }
+test fn code_401() -> Unit { assert_eq(status_code(Status::Http401Unauthorized), 401) }
+test fn code_403() -> Unit { assert_eq(status_code(Status::Http403Forbidden), 403) }
+test fn code_404() -> Unit { assert_eq(status_code(Status::Http404NotFound), 404) }
+test fn code_405() -> Unit { assert_eq(status_code(Status::Http405MethodNotAllowed), 405) }
+test fn code_409() -> Unit { assert_eq(status_code(Status::Http409Conflict), 409) }
+test fn code_422() -> Unit { assert_eq(status_code(Status::Http422UnprocessableEntity), 422) }
+test fn code_429() -> Unit { assert_eq(status_code(Status::Http429TooManyRequests), 429) }
+test fn code_500() -> Unit { assert_eq(status_code(Status::Http500InternalServerError), 500) }
+test fn code_502() -> Unit { assert_eq(status_code(Status::Http502BadGateway), 502) }
+test fn code_503() -> Unit { assert_eq(status_code(Status::Http503ServiceUnavailable), 503) }
+test fn code_504() -> Unit { assert_eq(status_code(Status::Http504GatewayTimeout), 504) }
+
+// ── Status reason tests ───────────────────────────────────────────────────
+
+test fn reason_200() -> Unit { assert_eq(status_reason(Status::Http200Ok), "OK") }
+test fn reason_404() -> Unit { assert_eq(status_reason(Status::Http404NotFound), "Not Found") }
+test fn reason_500() -> Unit { assert_eq(status_reason(Status::Http500InternalServerError), "Internal Server Error") }
+
+// ── Status classification tests ───────────────────────────────────────────
+
+test fn ok_is_success() -> Unit { assert_eq(is_success(Status::Http200Ok), true) }
+test fn created_is_success() -> Unit { assert_eq(is_success(Status::Http201Created), true) }
+test fn not_found_is_not_success() -> Unit { assert_eq(is_success(Status::Http404NotFound), false) }
+test fn bad_request_is_error() -> Unit { assert_eq(is_error(Status::Http400BadRequest), true) }
+test fn server_error_is_error() -> Unit { assert_eq(is_error(Status::Http500InternalServerError), true) }
+test fn ok_is_not_error() -> Unit { assert_eq(is_error(Status::Http200Ok), false) }
+
+// ── Method parsing tests ──────────────────────────────────────────────────
+
+test fn parse_get() -> Unit { assert_eq(parse_method("GET"), Ok(Method::Get)) }
+test fn parse_post() -> Unit { assert_eq(parse_method("POST"), Ok(Method::Post)) }
+test fn parse_put() -> Unit { assert_eq(parse_method("PUT"), Ok(Method::Put)) }
+test fn parse_delete() -> Unit { assert_eq(parse_method("DELETE"), Ok(Method::Delete)) }
+test fn parse_patch() -> Unit { assert_eq(parse_method("PATCH"), Ok(Method::Patch)) }
+test fn parse_head() -> Unit { assert_eq(parse_method("HEAD"), Ok(Method::Head)) }
+test fn parse_options() -> Unit { assert_eq(parse_method("OPTIONS"), Ok(Method::Options)) }
+
+test fn parse_unknown_method_is_error() -> Unit {
+    match parse_method("TRACE") {
+        Err(e) => assert_eq(e.status, Status::Http400BadRequest),
+        Ok(_) => assert_eq(true, false),
+    }
+}
+
+// ── Request parsing tests ─────────────────────────────────────────────────
+
+test fn parse_simple_get() -> Unit {
+    match parse_request_str("GET /health HTTP/1.1\r\n\r\n") {
+        Ok(req) => {
+            assert_eq(req.method, Method::Get);
+            assert_eq(req.path, "/health")
+        },
+        Err(_) => assert_eq(true, false),
+    }
+}
+
+test fn parse_post_with_path() -> Unit {
+    match parse_request_str("POST /users HTTP/1.1\r\nHost: localhost\r\n\r\n") {
+        Ok(req) => {
+            assert_eq(req.method, Method::Post);
+            assert_eq(req.path, "/users")
+        },
+        Err(_) => assert_eq(true, false),
+    }
+}
+
+test fn parse_empty_request_is_error() -> Unit {
+    match parse_request_str("") {
+        Err(e) => assert_eq(e.status, Status::Http400BadRequest),
+        Ok(_) => assert_eq(true, false),
+    }
+}
+
+test fn parse_bad_method_is_error() -> Unit {
+    match parse_request_str("TRACE /foo HTTP/1.1\r\n\r\n") {
+        Err(e) => assert_eq(e.status, Status::Http400BadRequest),
+        Ok(_) => assert_eq(true, false),
+    }
+}
+
+// ── Response serialization tests ──────────────────────────────────────────
+
+test fn serialize_ok_response() -> Unit {
+    let raw: String = serialize_response(ok("hello"));
+    assert_eq(raw.starts_with("HTTP/1.0 200 OK\r\n"), true)
+}
+
+test fn serialize_includes_content_length() -> Unit {
+    let raw: String = serialize_response(ok("hello"));
+    assert_eq(raw.contains("Content-Length: 5"), true)
+}
+
+test fn serialize_includes_body() -> Unit {
+    let raw: String = serialize_response(ok("hello"));
+    assert_eq(raw.ends_with("hello"), true)
+}
+
+test fn serialize_not_found() -> Unit {
+    let raw: String = serialize_response(not_found());
+    assert_eq(raw.starts_with("HTTP/1.0 404 Not Found\r\n"), true)
+}
+
+test fn serialize_empty_body_has_zero_length() -> Unit {
+    let raw: String = serialize_response(not_found());
+    assert_eq(raw.contains("Content-Length: 0"), true)
+}
+
+// ── HttpError / error_response tests ──────────────────────────────────────
+
+test fn error_response_uses_status() -> Unit {
+    let e: HttpError = HttpError { status: Status::Http403Forbidden, detail: "nope" };
+    let resp: Response = error_response(e);
+    assert_eq(resp.status, Status::Http403Forbidden)
+}
+
+test fn error_response_uses_detail_as_body() -> Unit {
+    let e: HttpError = HttpError { status: Status::Http500InternalServerError, detail: "oops" };
+    let resp: Response = error_response(e);
+    assert_eq(resp.body, "oops")
+}

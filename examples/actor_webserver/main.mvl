@@ -18,30 +18,23 @@
 //   ../../target/debug/mvl run main.mvl -- --port 9090  (CLI override)
 
 use config::{ServerConfig, ConfigLoadError, load_config}
+use pkg.http.{Status, Request, Response, HttpError,
+              parse_request, serialize_response, ok, not_found, error_response}
 use std.net.{TcpListener, TcpStream, tcp_listen, tcp_accept, tcp_read_request, tcp_write,
-             tcp_close_listener, tcp_close_stream, http_request_path, net_error_msg,
-             NetError}
+             tcp_close_listener, tcp_close_stream, net_error_msg, NetError}
 use std.log.{LogLevel, LogFormat, log_debug, log_info, log_warn, log_error,
              log_set_format, log_set_min_level}
+use std.env.{exit}
 
-fn ok_response(body: String) -> String {
-    "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: "
-        .concat(body.len().to_string())
-        .concat("\r\n\r\n")
-        .concat(body)
-}
+// ── Routing ─────────────────────────────────────────────────────────────────
 
-fn not_found_response() -> String {
-    "HTTP/1.0 404 Not Found\r\nContent-Length: 0\r\n\r\n"
-}
-
-fn route(path: String) -> String {
-    if path.starts_with("/health") {
-        ok_response("ok")
-    } else if path.starts_with("/users") {
-        ok_response("[{name: Alice}, {name: Bob}]")
+fn route(req: val Request) -> Result[Response, HttpError] {
+    if req.path.starts_with("/health") {
+        Ok(ok("ok"))
+    } else if req.path.starts_with("/users") {
+        Ok(ok("[{name: Alice}, {name: Bob}]"))
     } else {
-        not_found_response()
+        Err(HttpError { status: Status::Http404NotFound, detail: req.path })
     }
 }
 
@@ -52,7 +45,6 @@ fn route(path: String) -> String {
 // and then terminates.  No state persists between requests.
 
 actor RequestHandler {
-    // No fields — each actor is stateless.  All data lives on the stack.
 
     // Behavior: read one HTTP request, route it, reply, close.
     //
@@ -62,10 +54,17 @@ actor RequestHandler {
         match tcp_read_request(stream) {
             Err(e) => log_warn("read error", {"error": net_error_msg(e)}),
             Ok(raw) => {
-                let path: String = http_request_path(raw);
-                log_debug("request", {"path": path});
-                let resp: String = route(path);
-                match tcp_write(stream, resp) {
+                let resp: Response = match parse_request(raw) {
+                    Err(e) => error_response(e),
+                    Ok(req) => {
+                        log_debug("request", {"path": req.path});
+                        match route(req) {
+                            Ok(r)  => r,
+                            Err(e) => error_response(e),
+                        }
+                    },
+                };
+                match tcp_write(stream, serialize_response(resp)) {
                     Ok(_)  => tcp_close_stream(stream),
                     Err(e) => {
                         log_error("write error", {"error": net_error_msg(e)});
@@ -84,9 +83,6 @@ partial fn serve(listener: TcpListener) -> Unit ! Log + Net {
         match tcp_accept(listener) {
             Err(e)     => log_warn("accept error", {"error": net_error_msg(e)}),
             Ok(stream) => {
-                // Spawn a fresh actor and transfer stream ownership.
-                // The handle is immediately dropped; the actor terminates
-                // after its one message is processed.
                 let h: RequestHandler = actor RequestHandler {};
                 h.handle(consume(stream))
             },
@@ -96,13 +92,9 @@ partial fn serve(listener: TcpListener) -> Unit ! Log + Net {
 
 partial fn main() -> Unit ! Env + FileRead + Log + Net {
     let cfg: ServerConfig = match load_config() {
-        Err(_) => ServerConfig {
-            host: "127.0.0.1", port: 8080, debug: false,
-            log_level: LogLevel::Info, log_format: LogFormat::Plain,
-        },
-        Ok(c) => c,
+        Err(_)  => { log_error("config load failed", {"reason": "see stderr"}); exit(1) },
+        Ok(c)   => c,
     };
-    // Initialise log subsystem from config before first log call.
     log_set_format(cfg.log_format);
     log_set_min_level(cfg.log_level);
     log_info("server starting", {
