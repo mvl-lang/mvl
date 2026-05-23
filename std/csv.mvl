@@ -1,0 +1,401 @@
+//! std.csv — CSV parsing and serialization with IFC-aware file I/O.
+//!
+//! Pure encode/parse functions operate on String.
+//! File I/O functions are stubs backed by mvl_runtime::stdlib::csv (Rust).
+//!
+//! Import:
+//!   use std.csv.{CsvError, CsvOptions, CsvWithHeaders, TaintedCsvWithHeaders,
+//!                default_options,
+//!                parse_rows, parse_rows_with, parse_with_headers,
+//!                encode_rows, encode_rows_with, encode_with_headers,
+//!                read_rows, read_rows_with, write_rows,
+//!                read_with_headers, write_with_headers,
+//!                read_structs, write_structs}
+//!
+//! Effects:
+//!   FileRead  — reading CSV files.
+//!   FileWrite — writing CSV files.
+//!
+//! IFC: cells read from files are Tainted[String].
+//!      Pass through a decode/validate function to obtain clean data. See ADR-0006.
+
+// ── Error type ────────────────────────────────────────────────────────────────
+
+/// Structured errors returned by CSV functions.
+///
+/// `ParseError(line, msg)`         — 1-based line number and message.
+/// `WrongColumnCount(expected, got)` — field count mismatch.
+/// `InvalidField(column, msg)`     — 0-based column index and message.
+pub type CsvError = enum {
+    IoError(String),
+    ParseError(Int, String),
+    WrongColumnCount(Int, Int),
+    InvalidField(Int, String),
+}
+
+// ── Options ───────────────────────────────────────────────────────────────────
+
+/// Options controlling CSV parsing and encoding.
+pub type CsvOptions = struct {
+    delimiter: String,
+    quote: String,
+    has_header: Bool,
+}
+
+/// Default CSV options: comma delimiter, double-quote, with header row.
+pub fn default_options() -> CsvOptions {
+    CsvOptions {
+        delimiter: ",",
+        quote: "\"",
+        has_header: true,
+    }
+}
+
+// ── Result types for header-aware operations ──────────────────────────────────
+
+/// Result of `parse_with_headers`: clean (untainted) headers and data rows.
+pub type CsvWithHeaders = struct {
+    headers: List[String],
+    rows: List[List[String]],
+}
+
+/// Result of `read_with_headers`: tainted headers and data rows from a file.
+pub type TaintedCsvWithHeaders = struct {
+    headers: List[Tainted[String]],
+    rows: List[List[Tainted[String]]],
+}
+
+// ── Internal parser position types ───────────────────────────────────────────
+// MVL has no tuple-construction syntax, so helpers return dedicated enums.
+
+type FieldPos = enum { FP(String, Int), FPErr(String) }
+type RowPos   = enum { RP(List[String], Int), RPErr(String) }
+
+// ── encode ────────────────────────────────────────────────────────────────────
+
+/// Encode rows to a CSV string using default options (comma, double-quote).
+pub partial fn encode_rows(rows: List[List[String]]) -> String {
+    encode_rows_with(rows, default_options())
+}
+
+/// Encode rows to a CSV string with custom options.
+pub partial fn encode_rows_with(rows: List[List[String]], opts: CsvOptions) -> String {
+    let num_rows: Int = rows.len();
+    let out: ref String = "";
+    let ri: ref Int = 0;
+    while ri < num_rows {
+        match rows.get(ri) {
+            None      => {},
+            Some(row) => { out = out.concat(encode_row(row, opts)).concat("\n") },
+        }
+        ri = ri + 1
+    }
+    out
+}
+
+/// Encode a header row followed by data rows to a CSV string.
+pub partial fn encode_with_headers(headers: List[String], rows: List[List[String]]) -> String {
+    let opts: CsvOptions = default_options();
+    encode_row(headers, opts).concat("\n").concat(encode_rows_with(rows, opts))
+}
+
+partial fn encode_row(row: List[String], opts: CsvOptions) -> String {
+    let num_fields: Int = row.len();
+    let out: ref String = "";
+    let fi: ref Int = 0;
+    while fi < num_fields {
+        if fi > 0 { out = out.concat(opts.delimiter) } else {}
+        match row.get(fi) {
+            None    => {},
+            Some(f) => { out = out.concat(encode_field(f, opts)) },
+        }
+        fi = fi + 1
+    }
+    out
+}
+
+partial fn encode_field(field: String, opts: CsvOptions) -> String {
+    let needs_quote: Bool = field.contains(opts.delimiter)
+        || field.contains(opts.quote)
+        || field.contains("\n")
+        || field.contains("\r");
+    if needs_quote {
+        opts.quote.concat(escape_quotes(field, opts.quote)).concat(opts.quote)
+    } else {
+        field
+    }
+}
+
+partial fn escape_quotes(s: String, quote: String) -> String {
+    let chars: List[String] = s.chars();
+    let len: Int = chars.len();
+    let out: ref String = "";
+    let i: ref Int = 0;
+    while i < len {
+        match chars.get(i) {
+            None    => {},
+            Some(c) => {
+                if c == quote {
+                    out = out.concat(quote).concat(quote)
+                } else {
+                    out = out.concat(c)
+                }
+            },
+        }
+        i = i + 1
+    }
+    out
+}
+
+// ── parse ─────────────────────────────────────────────────────────────────────
+
+/// Parse a CSV string into rows using default options.
+///
+/// Label-transparent: taint on the input string propagates to each cell.
+pub transparent partial fn parse_rows(content: String) -> Result[List[List[String]], CsvError] {
+    parse_rows_with(content, default_options())
+}
+
+/// Parse a CSV string into rows with custom options.
+///
+/// Label-transparent: taint on the input string propagates to each cell.
+pub transparent partial fn parse_rows_with(content: String, opts: CsvOptions) -> Result[List[List[String]], CsvError] {
+    let chars: List[String] = content.chars();
+    let len: Int = chars.len();
+    let rows: ref List[List[String]] = [];
+    let pos: ref Int = 0;
+    let line: ref Int = 1;
+    let had_err: ref Bool = false;
+    let err_line: ref Int = 1;
+    let err_msg: ref String = "";
+
+    while had_err == false && pos < len {
+        match parse_row(chars, pos, opts) {
+            RowPos::RPErr(msg) => {
+                had_err = true;
+                err_line = line;
+                err_msg = consume(msg)
+            },
+            RowPos::RP(row, next_pos) => {
+                if next_pos == pos {
+                    had_err = true;
+                    err_line = line;
+                    err_msg = "internal parser error: no progress"
+                } else {
+                    let skip: Bool = is_empty_row(row) && next_pos >= len;
+                    if skip {
+                        pos = next_pos
+                    } else {
+                        rows = rows.concat([row]);
+                        line = line + 1;
+                        pos = next_pos
+                    }
+                }
+            },
+        }
+    }
+
+    if had_err {
+        Err(CsvError::ParseError(err_line, err_msg))
+    } else {
+        Ok(rows)
+    }
+}
+
+/// Parse a CSV string, returning headers and data rows separately.
+///
+/// The first row is treated as headers. Returns Err if input is empty.
+pub transparent partial fn parse_with_headers(content: String) -> Result[CsvWithHeaders, CsvError] {
+    match parse_rows(content) {
+        Err(e) => Err(e),
+        Ok(rows) => {
+            if rows.len() == 0 {
+                Err(CsvError::ParseError(1, "empty CSV — no header row"))
+            } else {
+                match rows.get(0) {
+                    None => Err(CsvError::ParseError(1, "missing header row")),
+                    Some(headers) => {
+                        let data: List[List[String]] = rows.skip(1);
+                        Ok(CsvWithHeaders { headers: headers, rows: data })
+                    },
+                }
+            }
+        },
+    }
+}
+
+fn is_empty_row(row: List[String]) -> Bool {
+    if row.len() == 0 {
+        true
+    } else if row.len() == 1 {
+        match row.get(0) {
+            None    => true,
+            Some(s) => s.is_empty(),
+        }
+    } else {
+        false
+    }
+}
+
+partial fn parse_row(chars: List[String], start: Int, opts: CsvOptions) -> RowPos {
+    let len: Int = chars.len();
+    let fields: ref List[String] = [];
+    let pos: ref Int = start;
+    let done: ref Bool = false;
+    let had_err: ref Bool = false;
+    let err_msg: ref String = "";
+
+    while had_err == false && done == false {
+        if pos >= len {
+            done = true
+        } else {
+            match parse_field(chars, pos, opts) {
+                FieldPos::FPErr(msg) => {
+                    had_err = true;
+                    err_msg = consume(msg)
+                },
+                FieldPos::FP(field, next_pos) => {
+                    fields = fields.concat([field]);
+                    pos = next_pos;
+                    match chars.get(pos) {
+                        None => { done = true },
+                        Some(c) => {
+                            if c == opts.delimiter {
+                                pos = pos + 1
+                            } else if c == "\n" {
+                                pos = pos + 1;
+                                done = true
+                            } else if c == "\r" {
+                                pos = pos + 1;
+                                match chars.get(pos) {
+                                    Some(nc) => { if nc == "\n" { pos = pos + 1 } else {} },
+                                    None     => {},
+                                }
+                                done = true
+                            } else {
+                                had_err = true;
+                                err_msg = "unexpected character after field: ".concat(c)
+                            }
+                        },
+                    }
+                },
+            }
+        }
+    }
+
+    if had_err {
+        RowPos::RPErr(err_msg)
+    } else {
+        RowPos::RP(fields, pos)
+    }
+}
+
+partial fn parse_field(chars: List[String], pos: Int, opts: CsvOptions) -> FieldPos {
+    match chars.get(pos) {
+        None    => FieldPos::FP("", pos),
+        Some(c) => {
+            if c == opts.quote {
+                parse_quoted_field(chars, pos, opts)
+            } else {
+                parse_plain_field(chars, pos, opts)
+            }
+        },
+    }
+}
+
+partial fn parse_plain_field(chars: List[String], start: Int, opts: CsvOptions) -> FieldPos {
+    let len: Int = chars.len();
+    let out: ref String = "";
+    let pos: ref Int = start;
+    let done: ref Bool = false;
+    while done == false && pos < len {
+        match chars.get(pos) {
+            None    => { done = true },
+            Some(c) => {
+                if c == opts.delimiter || c == "\n" || c == "\r" {
+                    done = true
+                } else {
+                    out = out.concat(c);
+                    pos = pos + 1
+                }
+            },
+        }
+    }
+    FieldPos::FP(out, pos)
+}
+
+partial fn parse_quoted_field(chars: List[String], start: Int, opts: CsvOptions) -> FieldPos {
+    let len: Int = chars.len();
+    let out: ref String = "";
+    let pos: ref Int = start + 1;  // skip opening quote
+    let done: ref Bool = false;
+    let had_err: ref Bool = false;
+    let err_msg: ref String = "";
+
+    while had_err == false && done == false && pos < len {
+        match chars.get(pos) {
+            None => {
+                had_err = true;
+                err_msg = "unterminated quoted field"
+            },
+            Some(c) => {
+                if c == opts.quote {
+                    // Either an escaped quote ("") or the end of the quoted field
+                    match chars.get(pos + 1) {
+                        Some(nc) => {
+                            if nc == opts.quote {
+                                // Escaped quote — emit one quote, advance past both
+                                out = out.concat(opts.quote);
+                                pos = pos + 2
+                            } else {
+                                // Closing quote
+                                done = true;
+                                pos = pos + 1
+                            }
+                        },
+                        None => {
+                            // Quote at end of input — close the field
+                            done = true;
+                            pos = pos + 1
+                        },
+                    }
+                } else {
+                    out = out.concat(c);
+                    pos = pos + 1
+                }
+            },
+        }
+    }
+
+    if had_err {
+        FieldPos::FPErr(err_msg)
+    } else if done == false {
+        FieldPos::FPErr("unterminated quoted field")
+    } else {
+        FieldPos::FP(out, pos)
+    }
+}
+
+// ── File I/O: builtin stubs ───────────────────────────────────────────────────
+
+/// Read a CSV file into rows of tainted strings (one tainted cell per field).
+pub builtin fn read_rows(path: String) -> Result[List[List[Tainted[String]]], CsvError] ! FileRead
+
+/// Read a CSV file with custom options.
+pub builtin fn read_rows_with(path: String, opts: CsvOptions) -> Result[List[List[Tainted[String]]], CsvError] ! FileRead
+
+/// Write rows to a CSV file using default options.
+pub builtin fn write_rows(path: String, rows: List[List[String]]) -> Result[Unit, CsvError] ! FileWrite
+
+/// Read a CSV file, returning tainted headers and tainted data rows.
+pub builtin fn read_with_headers(path: String) -> Result[TaintedCsvWithHeaders, CsvError] ! FileRead
+
+/// Write a CSV file with an explicit header row.
+pub builtin fn write_with_headers(path: String, headers: List[String], rows: List[List[String]]) -> Result[Unit, CsvError] ! FileWrite
+
+/// Read a CSV file and decode each row to type T.
+/// The decode function receives tainted strings and is responsible for validation.
+pub builtin fn read_structs[T](path: String, decode: fn(List[Tainted[String]]) -> Result[T, CsvError]) -> Result[List[T], CsvError] ! FileRead
+
+/// Write a list of T to a CSV file using an encode function and explicit headers.
+pub builtin fn write_structs[T](path: String, headers: List[String], values: List[T], encode: fn(T) -> List[String]) -> Result[Unit, CsvError] ! FileWrite

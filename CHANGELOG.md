@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.145.0] - 2026-05-23
+
+### Added
+
+- **std.csv: RFC 4180 CSV parser with IFC-aware encode/decode** (#978): Pure MVL CSV implementation with cell-level taint tracking. Includes `parse_rows`, `parse_rows_with`, `parse_with_headers` functions returning `Tainted[String]` cells (external input is untrusted). Encode counterparts (`encode_rows`, `encode_with_headers`) transform clean structs to CSV strings. Supports quoted fields, embedded commas/newlines, escaped quotes, custom delimiters (TSV), CRLF/LF line endings. Decode functions validate tainted cells and call `relabel trust()` at trust boundaries — explicit audit points. CsvError enum with variants for IO, parse, column count, and field validation errors. Example demonstrates end-to-end pipeline: read CSV file, parse with headers, show all rows, re-encode to stdout.
+
 ## [0.144.0] - 2026-05-23
 
 ### Added
