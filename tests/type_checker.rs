@@ -6793,6 +6793,47 @@ fn decreases_parses_in_while_loop() {
 }
 
 #[test]
+fn decreases_method_call_parses_and_preserves_body() {
+    // GIVEN: `decreases` clause contains a method call expression (#968)
+    // THEN: parses without error AND loop body is not silently dropped
+    let src = r#"
+        partial fn pad_right(s: String, n: Int, fill: String) -> String {
+            let result: ref String = s;
+            while result.len() < n decreases n - result.len() {
+                result = result.concat(fill);
+            }
+            result
+        }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "decreases with method call should parse and type-check, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn decreases_arithmetic_expr_parses_and_preserves_body() {
+    // GIVEN: `decreases` clause with binary arithmetic expression (#968)
+    // THEN: parses without error and the loop body is present
+    let src = r#"
+        partial fn f(n: Int, step: Int) -> Unit {
+            let i: ref Int = n;
+            while i > 0 decreases i - step {
+                i = i - step;
+            }
+        }
+    "#;
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "decreases with arithmetic expr should parse and type-check, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
 fn while_with_decreases_allowed_in_total_fn() {
     // GIVEN: implicit-total function with `while … decreases expr`
     // THEN: no UnboundedLoopInTotal error (decreases makes it bounded)

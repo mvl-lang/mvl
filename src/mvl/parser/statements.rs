@@ -334,10 +334,7 @@ impl Parser {
         // Optional termination measure: `decreases expr` (Phase 5, #628)
         let decreases = if matches!(self.peek_kind(), TokenKind::Decreases) {
             self.advance(); // consume `decreases`
-            match self.parse_ref_expr() {
-                Ok(expr) => Some(Box::new(expr)),
-                Err(()) => None,
-            }
+            Some(Box::new(self.parse_expr()?))
         } else {
             None
         };
