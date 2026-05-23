@@ -209,6 +209,9 @@ fn build_fuzz_workspace(
             "[workspace]\n\n\
              [package]\nname = \"mvl-fuzz\"\nversion = \"0.0.0\"\npublish = false\nedition = \"2021\"\n\n\
              [package.metadata]\ncargo-fuzz = true\n\n\
+             # panic = \"unwind\" is required so catch_unwind can intercept todo!(\"extern stub\")\n\
+             # panics from unlinked bridge functions; cargo-fuzz defaults to abort.\n\
+             [profile.release]\npanic = \"unwind\"\n\n\
              [dependencies]\nlibfuzzer-sys = \"0.4\"\n\n\
              [dependencies.mvl_fuzz_lib]\npath = \"..\"\n\n\
              {fuzz_runtime_dep}\
