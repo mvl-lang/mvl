@@ -314,6 +314,7 @@ fn generate_harness(target: &FuzzTarget) -> String {
         call_args.push(p.name.clone());
     }
 
+    let args = call_args.join(", ");
     format!(
         "#![no_main]\n\
          use libfuzzer_sys::fuzz_target;\n\
@@ -323,9 +324,18 @@ fn generate_harness(target: &FuzzTarget) -> String {
          use mvl_runtime::prelude::{{Tainted, Clean, Secret}};\n\n\
          fuzz_target!(|data: &[u8]| {{\n\
          {setup}\
-             let _ = {fn_name}({args});\n\
-         }});\n",
-        args = call_args.join(", ")
+             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{\n\
+                 let _ = {fn_name}({args});\n\
+             }}));\n\
+             if let Err(payload) = result {{\n\
+                 let msg = payload.downcast_ref::<&str>().copied()\n\
+                     .or_else(|| payload.downcast_ref::<String>().map(String::as_str))\n\
+                     .unwrap_or(\"\");\n\
+                 if !msg.contains(\"extern stub\") {{\n\
+                     std::panic::resume_unwind(payload);\n\
+                 }}\n\
+             }}\n\
+         }});\n"
     )
 }
 
