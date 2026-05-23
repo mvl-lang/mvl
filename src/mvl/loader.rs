@@ -10,23 +10,9 @@ use crate::mvl::stdlib;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Format an error message with source line and caret indicator.
-fn format_error_with_source(src: &str, span: Span, message: &str) -> String {
-    let line_num = span.line as usize;
-    if let Some(line_text) = src.lines().nth(line_num.saturating_sub(1)) {
-        let col = (span.col as usize).saturating_sub(1);
-        let caret = format!("{:>width$}^", "", width = col);
-        format!(
-            "error at {}:{}: {}\n  |\n{} | {}\n  | {}",
-            span.line, span.col, message, span.line, line_text, caret
-        )
-    } else {
-        format!("error at {}:{}: {}", span.line, span.col, message)
-    }
-}
-
 const IMPLICIT_PRELUDE_STEMS: &[&str] = &["core", "strings", "lists", "effects", "io"];
 
+/// Format an error message with source line and caret indicator.
 fn format_error_with_source(src: &str, span: Span, message: &str) -> String {
     let line_text = src.lines().nth((span.line - 1) as usize).unwrap_or("");
     let line_num = span.line.to_string();
