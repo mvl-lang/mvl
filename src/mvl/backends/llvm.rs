@@ -1079,7 +1079,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         // core.mvl's println/print/eprintln/eprint call write(stdout(), ...); both
         // write() and stdout()/stderr()/stdin() must be reachable without an explicit
         // import so that the implicit prelude compiles correctly.
-        // stdout()/stderr()/stdin() are pure MVL fns in io.mvl but are also registered
+        // stdout()/stderr()/stdin() are `pub builtin fn` in io.mvl; they are registered
         // here as C-ABI calls (returning *const MvlFd) so the LLVM prelude can resolve
         // them even for programs that do not `use std.io`.
         module_cache

@@ -153,9 +153,10 @@ pub fn open(p: Path) -> Result<Fd, IoError> {
 ///
 /// Takes [`Fd`] by value to prevent use-after-close.
 /// Only closes fds that were opened via [`open`] (fd > 2); stdin/stdout/stderr are never closed.
+/// Out-of-range fd values are silently ignored (no panic).
 #[allow(unsafe_code)]
 pub fn close(fd: Fd) -> () {
-    if fd.inner > 2 {
+    if fd.inner > 2 && fd.inner <= i32::MAX as i64 {
         // Reconstruct the File and let it drop, which closes the underlying fd.
         // SAFETY: fd.inner was obtained from IntoRawFd via open(), so it is valid and owned.
         let _ = unsafe {
@@ -167,10 +168,18 @@ pub fn close(fd: Fd) -> () {
 /// Write a string to a file descriptor (stdout, stderr, or any open file).
 ///
 /// Returns `Ok(())` on success, `Err(IoError)` on failure.
+/// Returns `Err(IoError::PermissionDenied)` when `fd` is stdin (fd 0) — writing to
+/// stdin is meaningless and is almost certainly a caller bug.
 #[allow(unsafe_code)]
 pub fn write(fd: Fd, msg: String) -> Result<(), IoError> {
     use std::io::Write as _;
-    // SAFETY: fd.inner is either a well-known fd (0-2) or was returned by open().
+    if fd.inner < 0 || fd.inner > i32::MAX as i64 {
+        return Err(IoError::Other("fd out of range".into()));
+    }
+    if fd.inner == 0 {
+        return Err(IoError::PermissionDenied);
+    }
+    // SAFETY: fd.inner is either a well-known fd (1-2) or was returned by open().
     let mut f =
         unsafe { <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(fd.inner as i32) };
     let result = f
@@ -184,10 +193,17 @@ pub fn write(fd: Fd, msg: String) -> Result<(), IoError> {
 /// Read up to `max_bytes` bytes from a file descriptor.
 ///
 /// Returns `Ok(Tainted<String>)` on success, `Ok(Tainted(""))` at EOF.
+/// Returns `Err(IoError::PermissionDenied)` when `fd` is stdout or stderr (fds 1/2).
 #[allow(unsafe_code)]
 pub fn read(fd: Fd, max_bytes: i64) -> Result<Tainted<String>, IoError> {
     use std::io::Read as _;
-    // SAFETY: fd.inner is either a well-known fd (0-2) or was returned by open().
+    if fd.inner < 0 || fd.inner > i32::MAX as i64 {
+        return Err(IoError::Other("fd out of range".into()));
+    }
+    if fd.inner == 1 || fd.inner == 2 {
+        return Err(IoError::PermissionDenied);
+    }
+    // SAFETY: fd.inner is either stdin (0) or was returned by open().
     let mut f =
         unsafe { <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(fd.inner as i32) };
     let mut buf = vec![0u8; max_bytes.max(0) as usize];
@@ -202,10 +218,17 @@ pub fn read(fd: Fd, max_bytes: i64) -> Result<Tainted<String>, IoError> {
 /// Read one line (up to and including `\n`) from a file descriptor.
 ///
 /// Returns `Ok(Tainted<String>)` on success, `Ok(Tainted(""))` at EOF.
+/// Returns `Err(IoError::PermissionDenied)` when `fd` is stdout or stderr (fds 1/2).
 #[allow(unsafe_code)]
 pub fn read_line(fd: Fd) -> Result<Tainted<String>, IoError> {
     use std::io::{BufRead as _, BufReader};
-    // SAFETY: fd.inner is either a well-known fd (0-2) or was returned by open().
+    if fd.inner < 0 || fd.inner > i32::MAX as i64 {
+        return Err(IoError::Other("fd out of range".into()));
+    }
+    if fd.inner == 1 || fd.inner == 2 {
+        return Err(IoError::PermissionDenied);
+    }
+    // SAFETY: fd.inner is either stdin (0) or was returned by open().
     let f =
         unsafe { <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(fd.inner as i32) };
     let mut reader = BufReader::new(f);
@@ -562,6 +585,86 @@ mod tests {
         let line = read_line(fd).unwrap();
         assert_eq!(line.0, "", "EOF should return empty string");
         std::fs::remove_file(&path_str).ok();
+    }
+
+    #[test]
+    fn write_to_stdout_fd_succeeds() {
+        // write(stdout(), msg) must succeed — verifies unified Fd works for well-known fds.
+        let result = write(stdout(), "".to_string());
+        assert!(result.is_ok(), "write to stdout fd should succeed");
+    }
+
+    #[test]
+    fn write_to_stderr_fd_succeeds() {
+        let result = write(stderr(), "".to_string());
+        assert!(result.is_ok(), "write to stderr fd should succeed");
+    }
+
+    #[test]
+    fn write_to_stdin_fd_is_rejected() {
+        let result = write(stdin(), "hello".to_string());
+        assert!(result.is_err(), "write to stdin fd should be rejected");
+        assert!(matches!(result.unwrap_err(), IoError::PermissionDenied));
+    }
+
+    #[test]
+    fn read_partial_bytes_from_file() {
+        let path_str = tmp("mvl_test_read_partial.txt");
+        std::fs::write(&path_str, "abcdefgh").unwrap();
+        let fd = open(path(path_str.clone())).unwrap();
+        let result = read(fd, 4).unwrap();
+        assert_eq!(result.0, "abcd", "read(fd, 4) should return first 4 bytes");
+        std::fs::remove_file(&path_str).ok();
+    }
+
+    #[test]
+    fn read_zero_bytes_returns_empty() {
+        let path_str = tmp("mvl_test_read_zero.txt");
+        std::fs::write(&path_str, "content").unwrap();
+        let fd = open(path(path_str.clone())).unwrap();
+        let result = read(fd, 0).unwrap();
+        assert_eq!(result.0, "", "read(fd, 0) should return empty string");
+        std::fs::remove_file(&path_str).ok();
+    }
+
+    #[test]
+    fn read_more_than_file_size_returns_all() {
+        let path_str = tmp("mvl_test_read_over.txt");
+        std::fs::write(&path_str, "hi").unwrap();
+        let fd = open(path(path_str.clone())).unwrap();
+        let result = read(fd, 1024).unwrap();
+        assert_eq!(result.0, "hi", "read(fd, n>size) should return all content");
+        std::fs::remove_file(&path_str).ok();
+    }
+
+    #[test]
+    fn read_from_stdout_fd_is_rejected() {
+        let result = read(stdout(), 10);
+        assert!(result.is_err(), "read from stdout fd should be rejected");
+        assert!(matches!(result.unwrap_err(), IoError::PermissionDenied));
+    }
+
+    #[test]
+    fn close_well_known_fds_is_noop() {
+        // Closing stdin/stdout/stderr must not close the actual fds.
+        close(stdin());
+        close(stdout());
+        close(stderr());
+        // If fds were accidentally closed, this write would fail.
+        assert!(write(stdout(), "".to_string()).is_ok());
+    }
+
+    #[test]
+    fn write_out_of_range_fd_returns_err() {
+        let result = write(Fd { inner: -1 }, "x".to_string());
+        assert!(result.is_err());
+        let result2 = write(
+            Fd {
+                inner: i32::MAX as i64 + 1,
+            },
+            "x".to_string(),
+        );
+        assert!(result2.is_err());
     }
 
     // ── Filesystem operations ──────────────────────────────────────────────

@@ -107,7 +107,7 @@ impl LlvmResult {
 
 // ── C-ABI exports ─────────────────────────────────────────────────────────────
 
-/// Heap-allocated Fd value returned by `_mvl_io_stdout/stderr/stdin`.
+/// `Fd` value used by LLVM-compiled MVL programs.
 ///
 /// At the LLVM IR level `Fd` is represented as an opaque pointer to this struct.
 /// The `inner` field holds the raw Unix file descriptor number.
@@ -116,22 +116,29 @@ pub struct MvlFd {
     pub inner: i64,
 }
 
-/// `stdout() → Fd` — returns a heap-allocated `MvlFd { inner: 1 }`.
+// Static `MvlFd` instances for the three standard streams.
+// `_mvl_io_stdout/stderr/stdin` return pointers to these globals — no heap
+// allocation on every call, so `println` no longer leaks memory (#976).
+static MVL_STDOUT: MvlFd = MvlFd { inner: 1 };
+static MVL_STDERR: MvlFd = MvlFd { inner: 2 };
+static MVL_STDIN: MvlFd = MvlFd { inner: 0 };
+
+/// `stdout() → Fd` — returns a pointer to the static `Fd { inner: 1 }`.
 #[no_mangle]
 pub extern "C" fn _mvl_io_stdout() -> *const MvlFd {
-    Box::into_raw(Box::new(MvlFd { inner: 1 }))
+    &MVL_STDOUT
 }
 
-/// `stderr() → Fd` — returns a heap-allocated `MvlFd { inner: 2 }`.
+/// `stderr() → Fd` — returns a pointer to the static `Fd { inner: 2 }`.
 #[no_mangle]
 pub extern "C" fn _mvl_io_stderr() -> *const MvlFd {
-    Box::into_raw(Box::new(MvlFd { inner: 2 }))
+    &MVL_STDERR
 }
 
-/// `stdin() → Fd` — returns a heap-allocated `MvlFd { inner: 0 }`.
+/// `stdin() → Fd` — returns a pointer to the static `Fd { inner: 0 }`.
 #[no_mangle]
 pub extern "C" fn _mvl_io_stdin() -> *const MvlFd {
-    Box::into_raw(Box::new(MvlFd { inner: 0 }))
+    &MVL_STDIN
 }
 
 /// `path(s: String) → Path` — identity at the LLVM level (both are `*mut MvlString`).
@@ -155,7 +162,20 @@ pub unsafe extern "C" fn _mvl_io_path(s: *const MvlString) -> *const MvlString {
 pub unsafe extern "C" fn _mvl_io_write(fd: *const MvlFd, content: *const MvlString) -> LlvmResult {
     use std::io::Write as _;
     use std::os::unix::io::FromRawFd;
-    let fd_num = (*fd).inner as i32;
+    if fd.is_null() {
+        return LlvmResult::err(&std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "null fd",
+        ));
+    }
+    let raw = (*fd).inner;
+    if raw < 0 || raw > i32::MAX as i64 {
+        return LlvmResult::err(&std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "fd out of range",
+        ));
+    }
+    let fd_num = raw as i32;
     let c = read_mvl_string(content);
     let mut f = std::fs::File::from_raw_fd(fd_num);
     let result = f.write_all(c.as_bytes());
@@ -486,13 +506,26 @@ mod tests {
     }
 
     #[test]
-    fn write_err_on_bad_path() {
+    fn write_err_on_bad_fd() {
+        // Verify _mvl_io_write returns Err when given an invalid (unopen) fd number.
+        // Uses a proper *const MvlFd — the old test incorrectly passed *const MvlString,
+        // causing type confusion / UB (#982 review finding).
         unsafe {
-            let path_ms = make_str("/nonexistent_dir_mvl/file.txt");
+            let bad_fd = Box::into_raw(Box::new(MvlFd { inner: 9999 }));
             let content_ms = make_str("data");
-            let wr = _mvl_io_write(path_ms, content_ms);
-            assert_eq!(wr.tag, 1, "write to bad path should fail");
-            mvl_string_drop(path_ms);
+            let wr = _mvl_io_write(bad_fd, content_ms);
+            assert_eq!(wr.tag, 1, "write to invalid fd should fail");
+            drop(Box::from_raw(bad_fd));
+            mvl_string_drop(content_ms);
+        }
+    }
+
+    #[test]
+    fn write_err_on_null_fd() {
+        unsafe {
+            let content_ms = make_str("data");
+            let wr = _mvl_io_write(std::ptr::null(), content_ms);
+            assert_eq!(wr.tag, 1, "write with null fd should fail");
             mvl_string_drop(content_ms);
         }
     }

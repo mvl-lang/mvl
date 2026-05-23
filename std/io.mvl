@@ -1,7 +1,12 @@
 //! std.io — file I/O, path utilities, filesystem operations, and stdin.
 //!
-//! Pure functions (path, join, to_string, stdout, stderr, stdin) are implemented in MVL.
-//! All I/O functions are stubs backed by mvl_runtime::stdlib::io (Rust).
+//! `pub builtin fn` declarations are backed by mvl_runtime::stdlib::io (Rust).
+//! Pure MVL functions: path, join, to_string, read_config_file, write_config_file.
+//!
+//! Implicit prelude (#976): `std.io` is loaded as part of the implicit prelude, so
+//! `stdout`, `stderr`, `stdin`, `write`, `Fd`, `IoError` are available without an
+//! explicit `use std.io` import. Other symbols (e.g. `open`, `read_line`) still
+//! require an explicit import.
 //!
 //! Import:
 //!   use std.io.{Fd, Path, read_to_string, write, write_file, append, path_exists,
@@ -12,7 +17,9 @@
 //!   FileRead   — reading files, directories, or metadata.
 //!   FileWrite  — writing, creating, or modifying files and directories.
 //!   FileDelete — removing files or directories.
-//!   Console    — line-oriented stdin/stdout.
+//!   Console    — reading from stdin or writing to stdout/stderr/any open fd.
+//!                Note: write(fd, msg) carries ! Console regardless of whether fd
+//!                was obtained from stdout() or open() — see #976 trade-off.
 //!
 //! IFC: file contents and stdin are Tainted[String]; sanitize before use in
 //! security-sensitive contexts. See #44, ADR-0006.
@@ -120,10 +127,14 @@ pub builtin fn is_dir(p: Path) -> Bool ! FileRead
 /// Open a file for reading/writing, creating it if it does not exist.
 ///
 /// Returns an `Fd` that can be passed to `write`, `read_line`, or `read`.
-/// Callers MUST call `close` to flush and release the file descriptor.
+/// Callers MUST call `close` to release the file descriptor.
+///
+/// No effect annotation by design: `open` is the capability entry point —
+/// the file-system effects become visible only when `write`/`read`/`read_line`
+/// are called on the returned `Fd`.
 pub builtin fn open(p: Path) -> Result[Fd, IoError]
 
-/// Close a file descriptor and flush any pending writes.
+/// Close a file descriptor and release the OS resource.
 ///
 /// Takes Fd by value to prevent use-after-close.
 /// No effect annotation — closing is a resource release, not an observable side-effect.

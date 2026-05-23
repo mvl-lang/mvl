@@ -52,7 +52,7 @@ fn append_log_line(p: Path, line: String) -> Result[Unit, IoError] ! FileWrite {
 
 fn write_lines(p: Path) -> Result[Unit, IoError] ! Console {
     let fd: Fd = open(p)?;
-    let _: Result[Unit, IoError] = write(fd, "header\n");
+    write(fd, "header\n")?;
     Ok(close(fd))
 }
 

@@ -24,6 +24,9 @@
 //! |-------------|-------------|--------------------|-----------------------------|
 //! | `println`   | `Console`   | args must be Public| 003-information-flow/Req 6  |
 //! | `print`     | `Console`   | args must be Public| 003-information-flow/Req 6  |
+//! | `stdout`    | (none)      | —                  | std.io Fd factory (#976)    |
+//! | `stderr`    | (none)      | —                  | std.io Fd factory (#976)    |
+//! | `write`     | `Console`   | msg must be Public | 003-information-flow/Req 6  |
 //! | `assert_eq` | (none)      | —                  | 004-testing/Req 4           |
 //! | `abs`       | (none)      | —                  | stdlib math                 |
 //! | `max`       | (none)      | —                  | stdlib math                 |
@@ -315,7 +318,7 @@ impl TypeEnv {
         // Registered globally (no `use std.io` needed) so that std/core.mvl's
         // wrappers can call them without an import.
         //
-        // stdout()/stderr() are pure MVL fns in std/io.mvl that return Fd; registered
+        // stdout()/stderr() are `pub builtin fn` in std/io.mvl that return Fd; registered
         // here so std/core.mvl can call them without `use std.io`.
         //
         // IFC NOTE (003-information-flow Req 6):

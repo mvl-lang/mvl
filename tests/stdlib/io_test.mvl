@@ -339,17 +339,21 @@ test fn io_read_file_ok_after_write() -> Unit ! FileRead + FileWrite + FileDelet
 
 test fn io_open_ok_on_existing_file() -> Unit ! FileRead + FileWrite + FileDelete {
     let p: Path = path("/tmp/mvl_io_open_417.txt");
-    let _: Result[Unit, IoError] = write_file(p,"open me");
-    let result: Result[Fd, IoError] = open(p);
-    assert_eq(result.is_ok(), true);
+    let _: Result[Unit, IoError] = write_file(p, "open me");
+    match open(p) {
+        Ok(fd) => { close(fd); }
+        Err(_) => { assert_eq(true, false); }
+    }
     let _: Result[Unit, IoError] = remove(p);
 }
 
 test fn io_open_creates_new_file() -> Unit ! FileRead + FileWrite + FileDelete {
     // open with create=true — file need not exist beforehand
     let p: Path = path("/tmp/mvl_io_open_new_417.txt");
-    let result: Result[Fd, IoError] = open(p);
-    assert_eq(result.is_ok(), true);
+    match open(p) {
+        Ok(fd) => { close(fd); }
+        Err(_) => { assert_eq(true, false); }
+    }
     let _: Result[Unit, IoError] = remove(p);
 }
 

@@ -29,6 +29,8 @@ impl TypeChecker {
                 | "eprintln"
                 | "eprint"
                 | "write"
+                | "write_file"
+                | "append"
                 | "log_write"
                 | "Logger::debug"
                 | "Logger::info"
