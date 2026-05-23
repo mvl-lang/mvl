@@ -18,7 +18,9 @@ use crate::mvl::parser::lexer::TokenKind;
 use crate::mvl::parser::{ParseError, Parser};
 
 /// Convert a `RefExpr` back to an `Expr` for storage in the widened AST (#983).
-/// Used when `parse_ref_expr()` is called as a fallback for quantifiers.
+/// Note: Currently unused; RefExpr quantifiers are wrapped directly as `Expr::Quantifier`.
+/// Kept for potential future use in other contract refinements.
+#[allow(dead_code)]
 fn ref_expr_to_expr(re: &RefExpr) -> Expr {
     use crate::mvl::parser::ast::{ArithOp, CmpOp, LogicOp};
     match re {
