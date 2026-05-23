@@ -102,22 +102,21 @@ actor RequestHandler {
 
 // ── Accept loop ───────────────────────────────────────────────────────────
 
-partial fn serve(listener: TcpListener, logger: val Logger, router: val Router) -> Result[Unit, NetError] ! Log + Net {
-    match tcp_accept(listener) {
-        Err(NetError::ConnectionReset) => {
-            logger.warn("client dropped before accept", {"reason": "connection reset"});
-            serve(listener, logger, router)
-        },
-        Err(NetError::Timeout) => {
-            logger.warn("accept timed out", {"reason": "timeout"});
-            serve(listener, logger, router)
-        },
-        Err(e)     => Err(e),
-        Ok(stream) => {
-            let h: RequestHandler = actor RequestHandler { logger: logger, router: router };
-            h.handle(consume(stream));
-            serve(listener, logger, router)
-        },
+partial fn serve(listener: TcpListener, logger: val Logger, router: val Router) -> Unit ! Log + Net {
+    let running: ref Bool = true;
+    while running {
+        match tcp_accept(listener) {
+            Err(NetError::ConnectionReset) => { logger.warn("client dropped before accept", {"reason": "connection reset"}) },
+            Err(NetError::Timeout)         => { logger.warn("accept timed out", {"reason": "timeout"}) },
+            Err(e)                         => {
+                logger.error("accept failed", {"error": net_error_msg(e)});
+                running = false
+            },
+            Ok(stream) => {
+                let h: RequestHandler = actor RequestHandler { logger: logger, router: router };
+                h.handle(consume(stream))
+            },
+        }
     }
 }
 
@@ -148,9 +147,6 @@ partial fn main() -> Unit ! Console + Env + FileRead + Log + Net {
 
     match tcp_listen(cfg.host, cfg.port) {
         Err(e)       => logger.error("listen failed", {"error": net_error_msg(e)}),
-        Ok(listener) => match serve(listener, logger, router) {
-            Err(e) => logger.error("accept failed", {"error": net_error_msg(e)}),
-            Ok(_)  => {},
-        },
+        Ok(listener) => serve(listener, logger, router),
     }
 }
