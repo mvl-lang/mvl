@@ -34,6 +34,12 @@ type Method = enum { Get, Post, Put, Delete, Patch, Head, Options }
 type Request = struct {
     method: Method,
     path:   String,
+    query:  Map[String, List[Tainted[String]]],
+}
+
+type PathQuery = struct {
+    path:  String,
+    query: String,
 }
 
 type Response = struct {
@@ -125,7 +131,145 @@ fn parse_method(s: String) -> Result[Method, HttpError] {
     else if s == "PATCH"   { Ok(Method::Patch) }
     else if s == "HEAD"    { Ok(Method::Head) }
     else if s == "OPTIONS" { Ok(Method::Options) }
-    else { Err(HttpError { status: Status::Http400BadRequest, detail: s.concat(": unknown method") }) }
+    else { Err(HttpError { status: Status::Http400BadRequest, detail: "unknown HTTP method" }) }
+}
+
+fn hex_digit(c: String) -> Option[Int] {
+    if      c == "0" { Some(0) } else if c == "1" { Some(1) }
+    else if c == "2" { Some(2) } else if c == "3" { Some(3) }
+    else if c == "4" { Some(4) } else if c == "5" { Some(5) }
+    else if c == "6" { Some(6) } else if c == "7" { Some(7) }
+    else if c == "8" { Some(8) } else if c == "9" { Some(9) }
+    else if c == "a" || c == "A" { Some(10) }
+    else if c == "b" || c == "B" { Some(11) }
+    else if c == "c" || c == "C" { Some(12) }
+    else if c == "d" || c == "D" { Some(13) }
+    else if c == "e" || c == "E" { Some(14) }
+    else if c == "f" || c == "F" { Some(15) }
+    else { None }
+}
+
+fn flush_bytes(out: String, pending: List[Byte]) -> String {
+    if pending.len() == 0 { out } else { out.concat(String::from_bytes(pending)) }
+}
+
+fn percent_decode(s: String) -> String {
+    let out: ref String = "";
+    let pending: ref List[Byte] = [];
+    let pct_buf: ref String = "";
+    let hex_high: ref Int = 0;
+    for c in s.chars() {
+        if pct_buf == "%" {
+            match hex_digit(c) {
+                Some(h) => {
+                    pct_buf  = pct_buf.concat(c);
+                    hex_high = h
+                },
+                None    => {
+                    out     = flush_bytes(out, pending);
+                    pending = [];
+                    out     = out.concat("%");
+                    pct_buf = "";
+                    if      c == "+" { out = out.concat(" ") }
+                    else if c == "%" { pct_buf = "%" }
+                    else             { out = out.concat(c) }
+                },
+            }
+        } else if pct_buf.len() == 2 {
+            match hex_digit(c) {
+                Some(h) => {
+                    pending.push(from_int(hex_high * 16 + h));
+                    pct_buf = ""
+                },
+                None    => {
+                    out     = flush_bytes(out, pending);
+                    pending = [];
+                    out     = out.concat(pct_buf);
+                    pct_buf = "";
+                    if      c == "+" { out = out.concat(" ") }
+                    else if c == "%" { pct_buf = "%" }
+                    else             { out = out.concat(c) }
+                },
+            }
+        } else {
+            if c == "%" {
+                pct_buf = "%"
+            } else {
+                out     = flush_bytes(out, pending);
+                pending = [];
+                if c == "+" { out = out.concat(" ") } else { out = out.concat(c) }
+            }
+        }
+    }
+    out = flush_bytes(out, pending);
+    if pct_buf.len() > 0 { out.concat(pct_buf) } else { out }
+}
+
+fn append_query(m: Map[String, List[Tainted[String]]], key: String, value: Tainted[String]) -> Map[String, List[Tainted[String]]] {
+    let r: ref Map[String, List[Tainted[String]]] = m;
+    let updated: ref List[Tainted[String]] = match r.get(key) {
+        Some(existing) => existing,
+        None           => [],
+    };
+    updated.push(value);
+    r.insert(key, updated);
+    r
+}
+
+fn empty_query_map() -> Map[String, List[Tainted[String]]] {
+    let m: ref Map[String, List[Tainted[String]]] = {"__mvl_query_init__": []};
+    m.remove("__mvl_query_init__");
+    m
+}
+
+fn parse_query(raw: String) -> Map[String, List[Tainted[String]]] {
+    let result: ref Map[String, List[Tainted[String]]] = empty_query_map();
+    if raw.len() > 0 {
+        for p in raw.split("&") {
+            if p.len() > 0 {
+                let p_len: Int = p.len();
+                let raw_key: String = match p.find("=") { Some(i) => p.substring(0, i),         None => p.substring(0, p_len) };
+                let raw_val: String = match p.find("=") { Some(i) => p.substring(i + 1, p_len), None => "" };
+                let key: String = percent_decode(raw_key);
+                if key.len() > 0 {
+                    let decoded: String = percent_decode(raw_val);
+                    let tainted: Tainted[String] = relabel taint(decoded, "HTTP-QUERY-VALUE");
+                    result = append_query(result, key, tainted)
+                } else {}
+            } else {}
+        }
+    } else {}
+    result
+}
+
+fn query_first(req: val Request, key: String) -> Option[Tainted[String]] {
+    match req.query.get(key) {
+        None       => None,
+        Some(vals) => vals.get(0),
+    }
+}
+
+fn query_all(req: val Request, key: String) -> List[Tainted[String]] {
+    match req.query.get(key) {
+        None       => [],
+        Some(vals) => vals,
+    }
+}
+
+fn split_target(target: String) -> PathQuery {
+    let target_len: Int = target.len();
+    let no_frag: String = match target.find("#") {
+        None    => target.substring(0, target_len),
+        Some(i) => target.substring(0, i),
+    };
+    let nf_len: Int = no_frag.len();
+    match no_frag.find("?") {
+        None    => PathQuery { path: no_frag.substring(0, nf_len), query: "" },
+        Some(i) => PathQuery {
+            path:  no_frag.substring(0, i),
+            query: no_frag.substring(i + 1, nf_len),
+        },
+    }
 }
 
 fn parse_request_str(s: String) -> Result[Request, HttpError] {
@@ -133,9 +277,11 @@ fn parse_request_str(s: String) -> Result[Request, HttpError] {
     let request_line: String = require(lines.get(0), "empty request")?;
     let parts: List[String] = request_line.split(" ");
     let method_str: String = require(parts.get(0), "missing method")?;
-    let path: String = require(parts.get(1), "missing path")?;
+    let target: String = require(parts.get(1), "missing path")?;
     let method: Method = parse_method(method_str)?;
-    Ok(Request { method: method, path: path })
+    let pq: PathQuery = split_target(target);
+    let query: Map[String, List[Tainted[String]]] = parse_query(pq.query);
+    Ok(Request { method: method, path: pq.path, query: query })
 }
 
 fn serialize_response(resp: val Response) -> String {
@@ -284,4 +430,217 @@ test fn error_response_uses_detail_as_body() -> Unit {
     let e: HttpError = HttpError { status: Status::Http500InternalServerError, detail: "oops" };
     let resp: Response = error_response(e);
     assert_eq(resp.body, "oops")
+}
+
+// ── Percent-decode tests ───────────────────────────────────────────────────
+
+test fn decode_plain_string() -> Unit { assert_eq(percent_decode("hello"), "hello") }
+test fn decode_plus_to_space() -> Unit { assert_eq(percent_decode("a+b+c"), "a b c") }
+test fn decode_percent_space() -> Unit { assert_eq(percent_decode("a%20b"), "a b") }
+test fn decode_percent_upper_hex() -> Unit { assert_eq(percent_decode("%2F"), "/") }
+test fn decode_percent_lower_hex() -> Unit { assert_eq(percent_decode("%2f"), "/") }
+test fn decode_mixed() -> Unit { assert_eq(percent_decode("hello+world%21"), "hello world!") }
+
+// Multi-byte UTF-8: "%C3%A9" is the UTF-8 byte sequence for "é".
+test fn decode_utf8_multibyte() -> Unit { assert_eq(percent_decode("caf%C3%A9"), "café") }
+
+// Lenient (WHATWG): malformed escapes keep `%` literal.
+test fn decode_lone_percent_at_end() -> Unit { assert_eq(percent_decode("ab%"), "ab%") }
+test fn decode_percent_one_char() -> Unit { assert_eq(percent_decode("a%Z"), "a%Z") }
+test fn decode_invalid_hex_keeps_literal() -> Unit { assert_eq(percent_decode("a%ZZb"), "a%ZZb") }
+test fn decode_empty() -> Unit { assert_eq(percent_decode(""), "") }
+
+// ── parse_query tests ─────────────────────────────────────────────────────
+
+test fn query_empty_string_is_empty_map() -> Unit {
+    let q: Map[String, List[Tainted[String]]] = parse_query("");
+    assert_eq(q.is_empty(), true)
+}
+
+test fn query_single_pair() -> Unit {
+    let q: Map[String, List[Tainted[String]]] = parse_query("foo=bar");
+    match q.get("foo") {
+        None       => assert_eq(true, false),
+        Some(vals) => {
+            assert_eq(vals.len(), 1);
+            match vals.get(0) {
+                None    => assert_eq(true, false),
+                Some(t) => assert_eq(relabel trust(t, "TEST"), "bar"),
+            }
+        },
+    }
+}
+
+test fn query_multiple_pairs() -> Unit {
+    let q: Map[String, List[Tainted[String]]] = parse_query("a=1&b=2");
+    assert_eq(q.len(), 2);
+    assert_eq(q.contains_key("a"), true);
+    assert_eq(q.contains_key("b"), true)
+}
+
+test fn query_repeated_keys_collected() -> Unit {
+    let q: Map[String, List[Tainted[String]]] = parse_query("x=1&x=2&x=3");
+    match q.get("x") {
+        None       => assert_eq(true, false),
+        Some(vals) => assert_eq(vals.len(), 3),
+    }
+}
+
+test fn query_repeated_keys_preserve_order_first() -> Unit {
+    let q: Map[String, List[Tainted[String]]] = parse_query("x=a&x=b");
+    match q.get("x") {
+        None       => assert_eq(true, false),
+        Some(vals) => match vals.get(0) {
+            None    => assert_eq(true, false),
+            Some(t) => assert_eq(relabel trust(t, "TEST"), "a"),
+        },
+    }
+}
+
+test fn query_repeated_keys_preserve_order_second() -> Unit {
+    let q: Map[String, List[Tainted[String]]] = parse_query("x=a&x=b");
+    match q.get("x") {
+        None       => assert_eq(true, false),
+        Some(vals) => match vals.get(1) {
+            None    => assert_eq(true, false),
+            Some(t) => assert_eq(relabel trust(t, "TEST"), "b"),
+        },
+    }
+}
+
+test fn query_no_value_decodes_empty() -> Unit {
+    let q: Map[String, List[Tainted[String]]] = parse_query("flag");
+    match q.get("flag") {
+        None       => assert_eq(true, false),
+        Some(vals) => match vals.get(0) {
+            None    => assert_eq(true, false),
+            Some(t) => assert_eq(relabel trust(t, "TEST"), ""),
+        },
+    }
+}
+
+test fn query_percent_decodes_key_and_value() -> Unit {
+    let q: Map[String, List[Tainted[String]]] = parse_query("a%20b=c%2Bd");
+    match q.get("a b") {
+        None       => assert_eq(true, false),
+        Some(vals) => match vals.get(0) {
+            None    => assert_eq(true, false),
+            Some(t) => assert_eq(relabel trust(t, "TEST"), "c+d"),
+        },
+    }
+}
+
+test fn query_plus_in_value_is_space() -> Unit {
+    let q: Map[String, List[Tainted[String]]] = parse_query("q=hello+world");
+    match q.get("q") {
+        None       => assert_eq(true, false),
+        Some(vals) => match vals.get(0) {
+            None    => assert_eq(true, false),
+            Some(t) => assert_eq(relabel trust(t, "TEST"), "hello world"),
+        },
+    }
+}
+
+test fn query_empty_key_skipped() -> Unit {
+    let q: Map[String, List[Tainted[String]]] = parse_query("=value&real=ok");
+    assert_eq(q.contains_key(""), false);
+    assert_eq(q.contains_key("real"), true)
+}
+
+// ── Request parsing with query/fragment ───────────────────────────────────
+
+test fn parse_request_strips_query_from_path() -> Unit {
+    match parse_request_str("GET /users?id=42 HTTP/1.1\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => {
+            assert_eq(req.path, "/users");
+            assert_eq(req.query.contains_key("id"), true)
+        },
+    }
+}
+
+test fn parse_request_strips_fragment() -> Unit {
+    match parse_request_str("GET /docs#section HTTP/1.1\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => assert_eq(req.path, "/docs"),
+    }
+}
+
+test fn parse_request_no_query_yields_empty_map() -> Unit {
+    match parse_request_str("GET /health HTTP/1.1\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => assert_eq(req.query.is_empty(), true),
+    }
+}
+
+test fn parse_request_multi_value_query() -> Unit {
+    match parse_request_str("GET /search?tag=a&tag=b HTTP/1.1\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => {
+            let tags: List[Tainted[String]] = query_all(req, "tag");
+            assert_eq(tags.len(), 2)
+        },
+    }
+}
+
+test fn parse_request_query_first_returns_first() -> Unit {
+    match parse_request_str("GET /search?tag=a&tag=b HTTP/1.1\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => match query_first(req, "tag") {
+            None    => assert_eq(true, false),
+            Some(t) => assert_eq(relabel trust(t, "TEST"), "a"),
+        },
+    }
+}
+
+test fn parse_request_query_first_missing_key() -> Unit {
+    match parse_request_str("GET /search?x=1 HTTP/1.1\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => assert_eq(query_first(req, "nope").is_none(), true),
+    }
+}
+
+// Value containing a literal `=` — must split on first `=` only.
+test fn query_value_with_equals_sign() -> Unit {
+    let q: Map[String, List[Tainted[String]]] = parse_query("a=b=c");
+    match q.get("a") {
+        None       => assert_eq(true, false),
+        Some(vals) => match vals.get(0) {
+            None    => assert_eq(true, false),
+            Some(t) => assert_eq(relabel trust(t, "TEST"), "b=c"),
+        },
+    }
+}
+
+// Explicit empty value (`key=`) — distinct code path from no-`=` form (`flag`).
+test fn query_explicit_empty_value() -> Unit {
+    let q: Map[String, List[Tainted[String]]] = parse_query("key=");
+    match q.get("key") {
+        None       => assert_eq(true, false),
+        Some(vals) => match vals.get(0) {
+            None    => assert_eq(true, false),
+            Some(t) => assert_eq(relabel trust(t, "TEST"), ""),
+        },
+    }
+}
+
+test fn query_all_missing_key_returns_empty() -> Unit {
+    match parse_request_str("GET /search?x=1 HTTP/1.1\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => assert_eq(query_all(req, "nope").len(), 0),
+    }
+}
+
+// Fragment AFTER a query: query must not be contaminated by the fragment.
+test fn parse_request_fragment_after_query_stripped() -> Unit {
+    match parse_request_str("GET /path?key=val#section HTTP/1.1\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => {
+            assert_eq(req.path, "/path");
+            match query_first(req, "key") {
+                None    => assert_eq(true, false),
+                Some(t) => assert_eq(relabel trust(t, "TEST"), "val"),
+            }
+        },
+    }
 }

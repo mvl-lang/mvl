@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.143.0] - 2026-05-23
+
+### Added
+
+- **pkg/http query string parsing** (#957): `Request` now carries `query: Map[String, List[Tainted[String]]]` populated by `parse_request`. Implements FastAPI/Starlette-style multi-value semantics with values kept `Tainted` as they originate from user-supplied URL input. Adds `percent_decode` (lenient WHATWG — `+` → space, multi-byte UTF-8 via byte-accumulation, malformed `%XX` passed through as literal `%`) and `parse_query` (splits on `&`, decodes both sides, skips empty-key pairs, re-wraps values with `relabel taint`). Convenience accessors `query_first` / `query_all` mirror FastAPI's `query_params[key]` / `getlist(key)`. 21 new tests covering ASCII, multi-byte UTF-8 (`café`), `+`, malformed escapes, repeated keys, fragment stripping, and `query_first`/`query_all`.
+
 ## [0.142.0] - 2026-05-23
 
 ### Added
