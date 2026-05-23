@@ -219,7 +219,9 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
     // #960: for HOF params (fn-typed parameters), temporarily insert their inner
     // parameter borrow flags into capability_params_map so that calls through
     // the fn pointer use `&x` instead of `x.clone().into()` for `val T` params.
-    let mut hof_param_names: Vec<String> = Vec::new();
+    // Save the displaced entry (if any) so we can restore it on cleanup — a HOF
+    // param name that collides with a top-level function name must not clobber it.
+    let mut hof_param_entries: Vec<(String, Option<Vec<Option<bool>>>)> = Vec::new();
     for param in &fd.params {
         if let TypeExpr::Fn {
             params: fn_params, ..
@@ -236,8 +238,8 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
                 })
                 .collect();
             if flags.iter().any(|b| b.is_some()) {
-                cg.capability_params_map.insert(param.name.clone(), flags);
-                hof_param_names.push(param.name.clone());
+                let previous = cg.capability_params_map.insert(param.name.clone(), flags);
+                hof_param_entries.push((param.name.clone(), previous));
             }
         }
     }
@@ -308,10 +310,16 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
         ));
     }
 
-    // #960: clean up HOF param entries added above so they don't bleed into
-    // subsequent function bodies that may use the same parameter name.
-    for name in hof_param_names {
-        cg.capability_params_map.remove(&name);
+    // #960: restore capability_params_map entries displaced above.
+    for (name, previous) in hof_param_entries {
+        match previous {
+            Some(v) => {
+                cg.capability_params_map.insert(name, v);
+            }
+            None => {
+                cg.capability_params_map.remove(&name);
+            }
+        }
     }
 }
 

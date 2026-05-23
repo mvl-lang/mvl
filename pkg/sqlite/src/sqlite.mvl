@@ -148,9 +148,9 @@ partial fn collect_rows(rh: Int) -> List[Map[String, Value]] {
 
 /// Open a SQLite database at `path`, creating it if it does not exist.
 ///
-/// `path` must be a trusted string — use a literal or a value validated by
-/// the caller. This mirrors the `String` requirement on `execute`/`query`
-/// and prevents tainted user input from reaching the filesystem.
+/// `path` must be a bare `String` — `Tainted[String]` is rejected at the type level.
+/// If `path` comes from user input or an external source, relabel it first:
+///   `let safe = relabel trust(tainted_path, "VALIDATED");`
 pub total fn open(path: String) -> Result[SqliteDb, SqliteError] ! DB + FileRead + FileWrite {
     let h: Int = sqlite_open(path);
     if h == -1 {
@@ -162,8 +162,10 @@ pub total fn open(path: String) -> Result[SqliteDb, SqliteError] ! DB + FileRead
 
 /// Execute a write statement (INSERT, UPDATE, DELETE, CREATE, DROP).
 ///
-/// `sql` must be a trusted string literal or validated query — use `?`
-/// placeholders and `params` for untrusted values (prevents SQL injection).
+/// `sql` must be a bare `String` — `Tainted[String]` is rejected at the type level.
+/// Use `?` placeholders and `params` for any runtime values (prevents SQL injection).
+/// If `sql` is derived from external input, relabel it first:
+///   `let safe = relabel trust(tainted_sql, "VALIDATED");`
 /// Returns the number of rows affected.
 pub total fn execute(val db: SqliteDb, sql: String, params: List[Value]) -> Result[Int, SqliteError] ! DB {
     bind_params(db._handle, params);
@@ -177,7 +179,8 @@ pub total fn execute(val db: SqliteDb, sql: String, params: List[Value]) -> Resu
 
 /// Run a SELECT query and return all matching rows.
 ///
-/// `sql` must be a trusted string — use `?` placeholders for runtime values.
+/// `sql` must be a bare `String` — `Tainted[String]` is rejected at the type level.
+/// Use `?` placeholders for runtime values; relabel external strings before passing.
 pub partial fn query(val db: SqliteDb, sql: String, params: List[Value]) -> Result[List[Map[String, Value]], SqliteError] ! DB {
     bind_params(db._handle, params);
     let rh: Int = sqlite_query(db._handle, sql);
@@ -191,6 +194,9 @@ pub partial fn query(val db: SqliteDb, sql: String, params: List[Value]) -> Resu
 }
 
 /// Execute a query that returns a single scalar value (e.g. COUNT, MAX, SUM).
+///
+/// `sql` must be a bare `String` — `Tainted[String]` is rejected at the type level.
+/// Use `?` placeholders for runtime values; relabel external strings before passing.
 ///
 /// Returns the value at row 0, column 0 of the result set.
 /// The literal indices `0` and `0` passed to `read_cell` satisfy the

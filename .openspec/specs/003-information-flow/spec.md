@@ -1,8 +1,8 @@
 ---
 domain: language
-version: 0.1.0
+version: 0.2.0
 status: draft
-date: 2026-04-11
+date: 2026-05-23
 ---
 
 # 003 — Information Flow Control
@@ -11,48 +11,44 @@ The MVL information flow control system covers Requirement 11 (IFC). Security la
 
 ## Philosophy
 
-Every value carries a security label. Data flows up the security lattice freely; flowing down requires explicit declassification. The compiler enforces the lattice — the LLM cannot generate code that leaks secrets or passes tainted input to queries. This converts OWASP Top 10 categories A01, A03, A05, A07, A08, and A10 from discipline-based prevention to compile-time errors.
+Values are either bare (unlabeled, implicitly public) or carry an explicit security label. Labels are opaque category identifiers — there is no hierarchy or lattice. A `Tainted[String]` and a bare `String` are distinct types; assignment between them requires an explicit `relabel` transition. The compiler enforces label compatibility at every call site — the LLM cannot generate code that passes tainted input to trusted sinks without a visible, auditable relabeling step. This converts OWASP Top 10 categories A01, A03, A05, A07, A08, and A10 from discipline-based prevention to compile-time errors.
 
-**Origin:** Denning's lattice model (1976). Perl's taint mode (1989) — runtime taint tracking. Jif (Myers, 1999) — compile-time IFC. The MVL makes it compile-time and LLM-annotated.
+**Origin:** Denning's lattice model (1976) — inspiration. Perl's taint mode (1989) — runtime taint tracking. Jif (Myers, 1999) — compile-time IFC. MVL departs from the lattice model (#894): labels are user-defined categories with no implicit ordering. Transitions between labels (including removing a label) require explicit `relabel` calls, making every trust-boundary crossing auditable by grep.
 
-## The Security Lattice
+## Labels
 
-```
-Secret          (highest — cryptographic material, passwords, keys)
-   |
-Tainted         (from external sources — user input, network, env vars)
-   |
-Clean           (sanitized — passed through explicit validation)
-   |
-Public          (lowest — safe for any output channel)
-```
+Two labels are pre-seeded in `std/ifc.mvl`:
 
-Data flows UP freely: `Public` → `Tainted` is always allowed (safe data in an unsafe context is fine).
-Data flows DOWN only via explicit declassification: `Tainted` → `Clean` requires calling a `sanitize` function. `Secret` → `Public` requires calling a `declassify` function.
+| Label | Meaning | Produced by | Removed by |
+|-------|---------|-------------|------------|
+| `Tainted[T]` | From external sources — user input, network, env vars | `relabel taint(v, "TAG")` | `relabel trust(v, "TAG")` |
+| `Secret[T]` | Cryptographic material, passwords, keys | `relabel classify(v, "TAG")` | `relabel release(v, "TAG")` |
+
+Bare `T` (no label) represents public/trusted data. `Tainted[T]` and `Secret[T]` are distinct types from each other and from bare `T` — no implicit conversions exist.
 
 ## Requirements
 
 ### Requirement 1: Security Labels on Types [MUST]
 
-Every type MUST support security labels: `Public[T]`, `Tainted[T]`, `Secret[T]`, `Clean[T]`. Labels MUST be part of the type — `Public[String]` and `Secret[String]` are different types.
+Types MUST support user-defined security labels via the `label`/`relabel` system. Pre-seeded labels are `Tainted[T]` and `Secret[T]`. Labels MUST be part of the type — `Tainted[String]` and `Secret[String]` and bare `String` are three distinct, mutually incompatible types. No implicit conversions exist between labeled and unlabeled types in either direction.
 
-This is Design Principle 7 ("Security labels on all data"). `Public`, `Tainted`, `Secret` are types, not conventions or documentation — the compiler enforces them.
+This is Design Principle 7 ("Security labels on all data"). Labels are types, not conventions — the compiler enforces them.
 
 **Implementation:** `src/mvl/checker/types.rs`, `src/mvl/checker/ifc.rs`, `src/mvl/parser/ast.rs`
 
-**Tests:** `tests/type_checker.rs::secret_flows_to_public_rejected`, `tests/type_checker.rs::public_flows_to_secret_accepted`, `tests/type_checker.rs::label_types_corpus_parses_and_checks`
+**Tests:** `tests/type_checker.rs::secret_flows_to_public_rejected`, `tests/type_checker.rs::label_types_corpus_parses_and_checks`, `tests/type_checker.rs::types_compatible_labeled_vs_bare_rejected`, `tests/type_checker.rs::types_compatible_different_labels_rejected`
 
 #### Scenario: Label mismatch
 
-- GIVEN `fn log_message(msg: Public[String]) ! Log`
+- GIVEN `fn log_message(msg: String) ! Log`
 - WHEN the caller passes `secret_password: Secret[String]`
-- THEN the compiler MUST reject: "cannot pass `Secret[String]` where `Public[String]` is expected"
+- THEN the compiler MUST reject: "cannot pass `Secret[String]` where `String` is expected"
 
-#### Scenario: Label compatibility (upward flow)
+#### Scenario: Labeled type incompatible with bare type
 
-- GIVEN `fn store_in_vault(data: Secret[String])`
-- WHEN the caller passes `public_name: Public[String]`
-- THEN the compiler MUST accept: `Public` flows up to `Secret` freely
+- GIVEN `fn needs_string(s: String) -> Int`
+- WHEN the caller passes `t: Tainted[String]`
+- THEN the compiler MUST reject: `Tainted[String]` ≠ `String` — `relabel trust` required first
 
 ### Requirement 2: External Input is Tainted [MUST] *(Deferred — Phase 2)*
 
@@ -68,33 +64,33 @@ Data from external sources MUST be automatically labeled `Tainted`. This include
 
 #### Scenario: Network response is tainted
 
-- GIVEN `fn http_get(url: Clean[Url]) -> Result[Tainted[Response], NetError] ! Net`
-- WHEN the response body is used in `db.query(format("SELECT {}", response.body))`
-- THEN the compiler MUST reject: "`Tainted[String]` cannot be used where `Clean[Query]` is expected"
+- GIVEN `fn http_get(url: String) -> Result[Tainted[Response], NetError] ! Net`
+- WHEN the response body is used in `db.execute(db, format("SELECT {}", response.body), [])`
+- THEN the compiler MUST reject: "`Tainted[String]` cannot be used where `String` is expected"
 
-### Requirement 3: Declassification is Explicit [MUST]
+### Requirement 3: Label Transitions are Explicit [MUST]
 
-Lowering a security label MUST require an explicit function call. The declassification functions MUST be:
-- `sanitize(input: Tainted[T]) -> Clean[T]` — for input validation
-- `declassify(secret: Secret[T]) -> Public[T]` — for intentional secret release
+Removing or changing a security label MUST require an explicit `relabel` call. The standard transitions are:
+- `relabel trust(input: Tainted[T], tag: String) -> T` — validate tainted input at a trust boundary
+- `relabel release(secret: Secret[T], tag: String) -> T` — intentional secret release
 
-These functions MUST be auditable — `grep declassify` and `grep sanitize` finds every point where the security boundary is crossed.
+These transitions MUST be auditable — `grep "relabel trust"` and `grep "relabel release"` finds every point where the security boundary is crossed. The `tag` string documents the reason.
 
-**Implementation:** `src/mvl/checker.rs`
+**Implementation:** `src/mvl/checker.rs`, `src/mvl/checker/ifc.rs`, `std/ifc.mvl`
 
-**Tests:** `tests/type_checker.rs::sanitize_tainted_returns_clean`, `tests/type_checker.rs::declassify_secret_returns_public`, `tests/type_checker.rs::sanitize_on_non_tainted_rejected`, `tests/type_checker.rs::declassify_on_non_secret_rejected`, `tests/type_checker.rs::direct_tainted_to_clean_without_sanitize_rejected`
+**Tests:** `tests/type_checker.rs::tainted_string_rejected_where_bare_string_expected`, `tests/type_checker.rs::types_compatible_labeled_vs_bare_rejected`
 
 #### Scenario: SQL injection prevention
 
 - GIVEN user input `name: Tainted[String]`
-- WHEN `db.query(format("SELECT * WHERE name = '{}'", name))`
-- THEN the compiler MUST reject: tainted data in query
+- WHEN `execute(db, format("SELECT * WHERE name = '{}'", name), [])`
+- THEN the compiler MUST reject: `format` propagates `Tainted` — result is `Tainted[String]`, incompatible with `String`
 
-#### Scenario: Explicit sanitization
+#### Scenario: Explicit trust transition
 
 - GIVEN user input `name: Tainted[String]`
-- WHEN `let clean_name: Clean[String] = sanitize(name)` followed by the query
-- THEN the compiler MUST accept: data was explicitly sanitized
+- WHEN `let safe: String = relabel trust(name, "VALIDATED")` followed by the query
+- THEN the compiler MUST accept: the transition is explicit and auditable
 
 ### Requirement 4: Secret Preservation [MUST]
 
@@ -147,9 +143,9 @@ Logging functions MUST accept only `Public[T]` arguments. Logging a `Secret` or 
 - GIVEN `log.info("Password: {}", password)` where `password: Secret[String]`
 - THEN the compiler MUST reject: "`Secret[String]` cannot be logged"
 
-#### Scenario: Logging a public value
+#### Scenario: Logging a bare value
 
-- GIVEN `log.info("User logged in: {}", username)` where `username: Public[String]`
+- GIVEN `log.info("User logged in: {}", username)` where `username: String` (bare, unlabeled)
 - THEN the compiler MUST accept
 
 ### Requirement 7: IFC Applies to String Formatting and Transform Functions [MUST]

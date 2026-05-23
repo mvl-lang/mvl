@@ -693,37 +693,29 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     // #959: if `method` is a fn-typed struct field, emit `(receiver.field)(args)`
                     // instead of `receiver.field(args)` — Rust interprets the latter as a method
                     // call on the struct and cannot find the method in the impl block.
-                    let receiver_struct = if let Some(Ty::Named(type_name, args)) =
+                    let is_fn_typed_field = if let Some(Ty::Named(type_name, type_args)) =
                         cg.expr_types.get(&receiver.span())
                     {
-                        if args.is_empty()
+                        type_args.is_empty()
                             && cg
                                 .fn_typed_struct_fields
                                 .contains(&(type_name.clone(), method.clone()))
-                        {
-                            Some(())
-                        } else {
-                            None
-                        }
                     } else {
-                        None
+                        false
                     };
-                    if receiver_struct.is_some() {
+                    if is_fn_typed_field {
                         cg.push("(");
-                        emit_expr(cg, receiver);
-                        cg.push(".");
-                        cg.push(method);
-                        cg.push(")(");
-                        emit_args(cg, args);
-                        cg.push(")");
-                    } else {
-                        emit_expr(cg, receiver);
-                        cg.push(".");
-                        cg.push(method);
-                        cg.push("(");
-                        emit_args(cg, args);
-                        cg.push(")");
                     }
+                    emit_expr(cg, receiver);
+                    cg.push(".");
+                    cg.push(method);
+                    if is_fn_typed_field {
+                        cg.push(")(");
+                    } else {
+                        cg.push("(");
+                    }
+                    emit_args(cg, args);
+                    cg.push(")");
                 }
             }
         }

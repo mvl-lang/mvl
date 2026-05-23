@@ -456,6 +456,9 @@ fn effects_name_eq(a: &[Effect], b: &[Effect]) -> bool {
     if a.len() != b.len() {
         return false;
     }
+    if a.is_empty() {
+        return true;
+    }
     let mut a_names: Vec<&str> = a.iter().map(|e| e.name.as_str()).collect();
     let mut b_names: Vec<&str> = b.iter().map(|e| e.name.as_str()).collect();
     a_names.sort_unstable();

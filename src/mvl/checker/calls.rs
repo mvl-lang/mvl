@@ -236,22 +236,11 @@ impl TypeChecker {
             }
             // HOF: `name` may be a local variable with a function type fn(T...) -> R.
             // This covers stdlib patterns like `map(xs, f)` where `f: fn(T) -> U`.
-            // Also dereferences fn-type aliases (type Pred = fn(Int) -> Bool) — #953.
-            let hof_var_ty: Option<Ty> = self.env.lookup(name).map(|vi| vi.ty.clone());
-            let hof_var_ty = hof_var_ty.map(|ty| match ty {
-                Ty::Named(ref type_name, ref args) if args.is_empty() => {
-                    if let Some(ti) = self.env.types.get(type_name.as_str()) {
-                        if let TypeBodyInfo::Alias(alias_ty) = &ti.body {
-                            alias_ty.clone()
-                        } else {
-                            ty
-                        }
-                    } else {
-                        ty
-                    }
-                }
-                _ => ty,
-            });
+            // resolve_alias() dereferences fn-type aliases (type Pred = fn(Int) -> Bool) — #953.
+            let hof_var_ty = self
+                .env
+                .lookup(name)
+                .map(|vi| self.resolve_alias(vi.ty.clone()));
             if let Some(hof_fn) = hof_var_ty.and_then(|ty| {
                 if let Ty::Fn(pts, rt, effects, totality) = ty {
                     Some((pts, *rt, effects, totality))

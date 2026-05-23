@@ -7078,6 +7078,93 @@ fn effect_bearing_fn_field_call_accepted() {
     );
 }
 
+// ── #953/#954 edge cases ──────────────────────────────────────────────────────
+
+/// Calling through a non-fn type alias must still be rejected (#953 guard).
+#[test]
+fn non_fn_type_alias_not_callable() {
+    let src = r#"
+        type Count = Int
+        fn f(c: Count) -> Bool {
+            c(0)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors.is_empty(),
+        "calling a non-fn type alias should produce a type error"
+    );
+}
+
+/// Effect lists in different orders must still be compatible (#954).
+#[test]
+fn effect_fn_field_multi_effect_order_independent() {
+    let src = r#"
+        use std.log.{log_info}
+        type Handler = struct {
+            f: fn(Int) -> Bool ! Log + Console,
+        }
+        fn h(n: Int) -> Bool ! Console + Log {
+            log_info("h", {"n": n.to_string()});
+            n > 0
+        }
+        fn make() -> Handler ! Log + Console {
+            Handler { f: h }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "multi-effect fn field with reversed order should not emit TypeMismatch, got: {errors:?}"
+    );
+}
+
+/// A real effect mismatch on a fn field must still be rejected (#954 guard).
+#[test]
+fn effect_fn_field_mismatch_still_rejected() {
+    let src = r#"
+        use std.log.{log_info}
+        type Handler = struct {
+            f: fn(Int) -> Bool ! Log,
+        }
+        fn h(n: Int) -> Bool {
+            n > 0
+        }
+        fn make() -> Handler {
+            Handler { f: h }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "fn field with mismatched effects should emit TypeMismatch, got: {errors:?}"
+    );
+}
+
+/// Tainted[String] passed where bare String expected must be a type error (#966).
+#[test]
+fn tainted_string_rejected_where_bare_string_expected() {
+    let src = r#"
+        use std.ifc.{taint}
+        fn needs_string(s: String) -> Int {
+            s.len()
+        }
+        fn caller(raw: String) -> Int {
+            let t: Tainted[String] = taint(raw, "TEST");
+            needs_string(t)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors.is_empty(),
+        "Tainted[String] passed to String param should be a type error"
+    );
+}
+
 // ── #687: Array[T, N] const-generic unknown size ──────────────────────────────
 
 /// Array[T, N] where N is a type variable resolves to unknown size, not 0.
