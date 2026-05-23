@@ -27,6 +27,35 @@
 //   make run   (from examples/actor_trading/)
 
 use types::{Order, Fill, Side, OrderStatus}
+use std.ifc.{taint}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRE-TRADE COMPLIANCE
+//
+// Two static guarantees that exercise the compiler's verification passes:
+//
+//   - Req 10 (Refinement types):  pre_trade_check carries `where` predicates
+//     on its scalar parameters.  Every call site must prove the predicates
+//     by construction; the 5-layer solver discharges literals in Layer 1.
+//
+//   - Req 11 (Information flow):  client_order_id arrives as Tainted[Int]
+//     (untrusted external input) and is only released to the matching engine
+//     after an explicit `relabel trust(...)` audit checkpoint.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Free function with refinement predicates — every call site is statically
+// proven by the layered refinement solver.  A call with a non-positive literal
+// is a compile error, not a runtime check.
+fn pre_trade_check(price: Int where price > 0, qty: Int where qty > 0) -> Bool {
+    price > 0 && qty > 0
+}
+
+// Sanitisation step at the trust boundary.  External client order IDs arrive
+// as `Tainted[Int]`; `relabel trust` is the auditable downgrade that records
+// the validation procedure used to clear the value for downstream use.
+fn admit_client_order_id(raw: Tainted[Int]) -> Int {
+    relabel trust(raw, "ORDER-ID-RANGE-CHECK")
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // RISK CHECKER
@@ -235,6 +264,14 @@ actor OrderGateway {
 
 fn main() -> Unit ! Console {
     println("=== Verified Trading Engine ===")
+
+    // ── Pre-trade compliance ───────────────────────────────────────────────
+    // Req 10: literals satisfy the refinement predicates by construction; the
+    // checker proves `100 > 0 && 10 > 0` at compile time (no runtime branch).
+    // Req 11: a `Tainted[Int]` value crosses the IFC boundary only via the
+    // explicit `relabel trust(...)` inside admit_client_order_id.
+    let _gate_ok: Bool = pre_trade_check(100, 10);
+    let _admitted: Int = admit_client_order_id(relabel taint(4242, "CLIENT-FIX-MSG"));
 
     // Scenario 1: ask rests, bid crosses it.
     // Ask #0: sell 10 lots @ 100  → rests (no bid)
