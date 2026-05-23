@@ -1,0 +1,104 @@
+// examples/csv_transactions — std.csv IFC-aware encode/decode demonstration
+//
+// Demonstrates:
+//   - Pure parse/encode API (no file I/O, fully testable)
+//   - Decode function: receives Tainted[String] cells, validates, returns clean struct
+//   - Encode function: clean struct to plain List[String]
+//   - read_structs / write_structs pattern (file I/O via builtins)
+//
+// Run:  mvl run examples/csv_transactions/main.mvl
+// Test: make test-corpus
+
+use std.csv.{CsvError, CsvWithHeaders, parse_with_headers, encode_with_headers,
+              read_structs, write_structs}
+use std.io.{println}
+use std.ifc.{Tainted, trust}
+
+// ── Domain type ───────────────────────────────────────────────────────────────
+
+type Transaction = struct {
+    date: String,
+    description: String,
+    amount_cents: Int,
+}
+
+// ── Decode: Tainted[String] cells → clean Transaction ─────────────────────────
+//
+// The decode function is the trust boundary. It receives one row of tainted
+// strings (from a CSV file) and is responsible for validation and label removal.
+// Each relabel trust(v, "TAG") call is an explicit audit point.
+
+partial fn decode_transaction(row: List[Tainted[String]]) -> Result[Transaction, CsvError] {
+    if row.len() != 3 {
+        Err(CsvError::WrongColumnCount(3, row.len()))
+    } else {
+        let cell0: Option[Tainted[String]] = row.get(0);
+        let cell1: Option[Tainted[String]] = row.get(1);
+        let cell2: Option[Tainted[String]] = row.get(2);
+        if let Some(raw_date) = cell0 {
+            if let Some(raw_desc) = cell1 {
+                if let Some(raw_amt) = cell2 {
+                    let date: String    = relabel trust(raw_date, "CSV-TX-DATE");
+                    let desc: String    = relabel trust(raw_desc, "CSV-TX-DESC");
+                    let amt_str: String = relabel trust(raw_amt, "CSV-TX-AMT");
+                    let n_result: Result[Int, String] = amt_str.parse_int();
+                    if let Ok(n) = n_result {
+                        Ok(Transaction { date: date, description: desc, amount_cents: n })
+                    } else {
+                        Err(CsvError::InvalidField(2, "amount must be an integer"))
+                    }
+                } else {
+                    Err(CsvError::InvalidField(2, "missing amount"))
+                }
+            } else {
+                Err(CsvError::InvalidField(1, "missing description"))
+            }
+        } else {
+            Err(CsvError::InvalidField(0, "missing date"))
+        }
+    }
+}
+
+// ── Encode: clean Transaction → List[String] ──────────────────────────────────
+
+fn encode_transaction(tx: Transaction) -> List[String] {
+    [tx.date, tx.description, tx.amount_cents.to_string()]
+}
+
+// ── Pure demonstration (no file I/O) ─────────────────────────────────────────
+
+partial fn demo_pure() -> Unit ! Console {
+    let csv: String = "date,description,amount\n2024-01-15,Coffee,-350\n2024-01-16,Salary,500000\n";
+    match parse_with_headers(csv) {
+        Err(_)     => println("parse failed"),
+        Ok(result) => {
+            println("Headers: ".concat(result.headers.len().to_string()).concat(" columns"));
+            println("Rows: ".concat(result.rows.len().to_string()));
+            let re_encoded: String = encode_with_headers(result.headers, result.rows);
+            println("Re-encoded CSV:");
+            println(re_encoded)
+        },
+    }
+}
+
+// ── File I/O pattern (requires runtime support) ───────────────────────────────
+//
+// read_structs reads the CSV file and calls decode_transaction on each row.
+// Each cell arrives as Tainted[String]; decode_transaction removes the taint.
+// write_structs encodes clean structs back to CSV using encode_transaction.
+
+partial fn process_file(input_path: String, output_path: String) -> Result[Unit, CsvError] ! FileRead + FileWrite {
+    match read_structs(input_path, decode_transaction) {
+        Err(e)  => Err(e),
+        Ok(txs) => {
+            let headers: List[String] = ["date", "description", "amount"];
+            write_structs(output_path, headers, txs, encode_transaction)
+        },
+    }
+}
+
+// ── main ──────────────────────────────────────────────────────────────────────
+
+partial fn main() -> Unit ! Console {
+    demo_pure()
+}

@@ -25,19 +25,6 @@ fn format_error_with_source(src: &str, span: Span, message: &str) -> String {
     )
 }
 
-fn format_error_with_source(src: &str, span: Span, message: &str) -> String {
-    let line_text = src.lines().nth((span.line - 1) as usize).unwrap_or("");
-    let line_num = span.line.to_string();
-    let padding = " ".repeat(line_num.len());
-    let caret_col = (span.col as usize).saturating_sub(1);
-    let caret = "^".repeat((span.len as usize).max(1));
-    format!(
-        "error at {line_num}:{col}: {message}\n{padding} | {line_text}\n{padding} | {spaces}{caret}",
-        col = span.col,
-        spaces = " ".repeat(caret_col),
-    )
-}
-
 /// Find all `.mvl` files under `path`, filtering by whether they are test files.
 pub fn mvl_files(path: &str, test_only: bool) -> Vec<PathBuf> {
     let p = Path::new(path);

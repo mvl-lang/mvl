@@ -1,0 +1,315 @@
+// tests/stdlib/csv_test.mvl — std.csv encode/parse correctness (#978)
+//
+// Verifies the native-MVL CSV implementation: encode_rows produces well-formed
+// CSV strings; parse_rows round-trips them back; error cases return Err.
+
+use std.csv.{CsvError, CsvOptions, CsvWithHeaders, default_options,
+              parse_rows, parse_rows_with, parse_with_headers,
+              encode_rows, encode_rows_with, encode_with_headers}
+
+// ── encode: basic ─────────────────────────────────────────────────────────────
+
+test fn encode_empty_rows() -> Unit {
+    let rows: List[List[String]] = [];
+    assert_eq(encode_rows(rows), "")
+}
+
+test fn encode_single_row() -> Unit {
+    let rows: List[List[String]] = [["a", "b", "c"]];
+    assert_eq(encode_rows(rows), "a,b,c\n")
+}
+
+test fn encode_two_rows() -> Unit {
+    let rows: List[List[String]] = [["a", "b"], ["c", "d"]];
+    assert_eq(encode_rows(rows), "a,b\nc,d\n")
+}
+
+test fn encode_empty_field() -> Unit {
+    let rows: List[List[String]] = [["a", "", "c"]];
+    assert_eq(encode_rows(rows), "a,,c\n")
+}
+
+test fn encode_single_field_row() -> Unit {
+    let rows: List[List[String]] = [["hello"]];
+    assert_eq(encode_rows(rows), "hello\n")
+}
+
+// ── encode: quoting ───────────────────────────────────────────────────────────
+
+test fn encode_field_with_comma() -> Unit {
+    let rows: List[List[String]] = [["one,two", "three"]];
+    assert_eq(encode_rows(rows), "\"one,two\",three\n")
+}
+
+test fn encode_field_with_quote() -> Unit {
+    let rows: List[List[String]] = [["say \"hi\""]];
+    assert_eq(encode_rows(rows), "\"say \"\"hi\"\"\"\n")
+}
+
+test fn encode_field_with_newline() -> Unit {
+    let rows: List[List[String]] = [["line1\nline2"]];
+    assert_eq(encode_rows(rows), "\"line1\nline2\"\n")
+}
+
+test fn encode_plain_field_no_quoting() -> Unit {
+    let rows: List[List[String]] = [["hello world"]];
+    assert_eq(encode_rows(rows), "hello world\n")
+}
+
+// ── encode: custom options ────────────────────────────────────────────────────
+
+test fn encode_tsv() -> Unit {
+    let opts: CsvOptions = CsvOptions { delimiter: "\t", quote: "\"", has_header: false };
+    let rows: List[List[String]] = [["a", "b", "c"]];
+    assert_eq(encode_rows_with(rows, opts), "a\tb\tc\n")
+}
+
+// ── encode: with headers ──────────────────────────────────────────────────────
+
+test fn encode_with_headers_basic() -> Unit {
+    let headers: List[String] = ["name", "age"];
+    let rows: List[List[String]] = [["Alice", "30"], ["Bob", "25"]];
+    assert_eq(encode_with_headers(headers, rows), "name,age\nAlice,30\nBob,25\n")
+}
+
+test fn encode_with_headers_empty_data() -> Unit {
+    let headers: List[String] = ["id", "value"];
+    let rows: List[List[String]] = [];
+    assert_eq(encode_with_headers(headers, rows), "id,value\n")
+}
+
+// ── parse: basic ──────────────────────────────────────────────────────────────
+
+test fn parse_empty_string() -> Unit {
+    match parse_rows("") {
+        Err(_)  => assert(false),
+        Ok(rows) => assert_eq(rows.len(), 0),
+    }
+}
+
+test fn parse_single_row() -> Unit {
+    match parse_rows("a,b,c\n") {
+        Err(_)   => assert(false),
+        Ok(rows) => {
+            assert_eq(rows.len(), 1);
+            match rows.get(0) {
+                None      => assert(false),
+                Some(row) => assert_eq(row.len(), 3),
+            }
+        },
+    }
+}
+
+test fn parse_single_row_no_trailing_newline() -> Unit {
+    match parse_rows("a,b,c") {
+        Err(_)   => assert(false),
+        Ok(rows) => assert_eq(rows.len(), 1),
+    }
+}
+
+test fn parse_two_rows() -> Unit {
+    match parse_rows("a,b\nc,d\n") {
+        Err(_)   => assert(false),
+        Ok(rows) => assert_eq(rows.len(), 2),
+    }
+}
+
+test fn parse_field_values() -> Unit {
+    match parse_rows("hello,world\n") {
+        Err(_)   => assert(false),
+        Ok(rows) => {
+            match rows.get(0) {
+                None      => assert(false),
+                Some(row) => {
+                    assert_eq(row.get(0), Some("hello"));
+                    assert_eq(row.get(1), Some("world"))
+                },
+            }
+        },
+    }
+}
+
+// ── parse: empty fields ───────────────────────────────────────────────────────
+
+test fn parse_empty_field_middle() -> Unit {
+    match parse_rows("a,,c\n") {
+        Err(_)   => assert(false),
+        Ok(rows) => {
+            match rows.get(0) {
+                None      => assert(false),
+                Some(row) => {
+                    assert_eq(row.len(), 3);
+                    assert_eq(row.get(1), Some(""))
+                },
+            }
+        },
+    }
+}
+
+test fn parse_empty_field_start() -> Unit {
+    match parse_rows(",b,c\n") {
+        Err(_)   => assert(false),
+        Ok(rows) => {
+            match rows.get(0) {
+                None      => assert(false),
+                Some(row) => assert_eq(row.get(0), Some("")),
+            }
+        },
+    }
+}
+
+test fn parse_empty_field_end() -> Unit {
+    match parse_rows("a,b,\n") {
+        Err(_)   => assert(false),
+        Ok(rows) => {
+            match rows.get(0) {
+                None      => assert(false),
+                Some(row) => assert_eq(row.get(2), Some("")),
+            }
+        },
+    }
+}
+
+// ── parse: quoted fields ──────────────────────────────────────────────────────
+
+test fn parse_field_quoted_basic() -> Unit {
+    match parse_rows("\"hello world\",b\n") {
+        Err(_)   => assert(false),
+        Ok(rows) => {
+            match rows.get(0) {
+                None      => assert(false),
+                Some(row) => assert_eq(row.get(0), Some("hello world")),
+            }
+        },
+    }
+}
+
+test fn parse_field_quoted_with_comma() -> Unit {
+    match parse_rows("\"one,two\",three\n") {
+        Err(_)   => assert(false),
+        Ok(rows) => {
+            match rows.get(0) {
+                None      => assert(false),
+                Some(row) => assert_eq(row.get(0), Some("one,two")),
+            }
+        },
+    }
+}
+
+test fn parse_field_escaped_quote() -> Unit {
+    match parse_rows("\"say \"\"hi\"\"\"\n") {
+        Err(_)   => assert(false),
+        Ok(rows) => {
+            match rows.get(0) {
+                None      => assert(false),
+                Some(row) => assert_eq(row.get(0), Some("say \"hi\"")),
+            }
+        },
+    }
+}
+
+test fn parse_field_with_embedded_newline() -> Unit {
+    match parse_rows("\"line1\nline2\",b\n") {
+        Err(_)   => assert(false),
+        Ok(rows) => {
+            match rows.get(0) {
+                None      => assert(false),
+                Some(row) => assert_eq(row.get(0), Some("line1\nline2")),
+            }
+        },
+    }
+}
+
+// ── parse: CRLF line endings ──────────────────────────────────────────────────
+
+test fn parse_crlf_line_endings() -> Unit {
+    match parse_rows("a,b\r\nc,d\r\n") {
+        Err(_)   => assert(false),
+        Ok(rows) => assert_eq(rows.len(), 2),
+    }
+}
+
+// ── parse: custom options ─────────────────────────────────────────────────────
+
+test fn parse_tsv() -> Unit {
+    let opts: CsvOptions = CsvOptions { delimiter: "\t", quote: "\"", has_header: false };
+    match parse_rows_with("a\tb\tc\n", opts) {
+        Err(_)   => assert(false),
+        Ok(rows) => {
+            match rows.get(0) {
+                None      => assert(false),
+                Some(row) => assert_eq(row.len(), 3),
+            }
+        },
+    }
+}
+
+// ── parse: round-trip ─────────────────────────────────────────────────────────
+
+test fn round_trip_basic() -> Unit {
+    let rows: List[List[String]] = [["a", "b"], ["c", "d"]];
+    let csv: String = encode_rows(rows);
+    match parse_rows(csv) {
+        Err(_)        => assert(false),
+        Ok(recovered) => assert_eq(recovered.len(), 2),
+    }
+}
+
+test fn round_trip_with_commas_in_fields() -> Unit {
+    let rows: List[List[String]] = [["hello, world", "foo"]];
+    let csv: String = encode_rows(rows);
+    match parse_rows(csv) {
+        Err(_)   => assert(false),
+        Ok(recovered) => {
+            match recovered.get(0) {
+                None      => assert(false),
+                Some(row) => assert_eq(row.get(0), Some("hello, world")),
+            }
+        },
+    }
+}
+
+test fn round_trip_with_embedded_quotes() -> Unit {
+    let rows: List[List[String]] = [["say \"hi\""]];
+    let csv: String = encode_rows(rows);
+    match parse_rows(csv) {
+        Err(_)   => assert(false),
+        Ok(recovered) => {
+            match recovered.get(0) {
+                None      => assert(false),
+                Some(row) => assert_eq(row.get(0), Some("say \"hi\"")),
+            }
+        },
+    }
+}
+
+// ── parse_with_headers ────────────────────────────────────────────────────────
+
+test fn parse_with_headers_basic() -> Unit {
+    match parse_with_headers("name,age\nAlice,30\nBob,25\n") {
+        Err(_)   => assert(false),
+        Ok(result) => {
+            assert_eq(result.headers.len(), 2);
+            assert_eq(result.rows.len(), 2);
+            assert_eq(result.headers.get(0), Some("name"));
+            assert_eq(result.headers.get(1), Some("age"))
+        },
+    }
+}
+
+test fn parse_with_headers_only() -> Unit {
+    match parse_with_headers("id,value\n") {
+        Err(_)   => assert(false),
+        Ok(result) => {
+            assert_eq(result.headers.len(), 2);
+            assert_eq(result.rows.len(), 0)
+        },
+    }
+}
+
+test fn parse_with_headers_empty_input() -> Unit {
+    match parse_with_headers("") {
+        Err(CsvError::ParseError(_, _)) => assert(true),
+        _ => assert(false),
+    }
+}
