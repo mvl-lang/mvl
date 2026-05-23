@@ -235,36 +235,49 @@ actor OrderGateway {
 
 fn main() -> Unit ! Console {
     println("=== Verified Trading Engine ===")
+
+    // Scenario 1: ask rests, bid crosses it.
+    // Ask #0: sell 10 lots @ 100  → rests (no bid)
+    // Bid #1: buy  10 lots @ 102  → crosses → executes @ 100 (ask price)
     println("")
+    println("--- scenario 1: resting ask crossed by aggressive bid ---")
     concurrently {
         let risk:    RiskChecker  = actor RiskChecker  { accepted: 0, rejected: 0 };
         let matcher: Matcher      = actor Matcher      { risk: risk };
         let book:    OrderBook    = actor OrderBook    { matcher: matcher, best_bid: None, best_ask: None };
         let gw:      OrderGateway = actor OrderGateway { book: book, next_id: 0 };
-
-        // Scenario 1: ask rests, bid crosses it.
-        // Ask #0: sell 10 lots @ 100  → rests (no bid)
-        // Bid #1: buy  10 lots @ 102  → crosses → executes @ 100 (ask price)
-        println("--- scenario 1: resting ask crossed by aggressive bid ---")
         gw.new_ask(100, 10)
         gw.new_bid(102, 10)
+    }
 
-        // Scenario 2: bid rests, ask crosses it.
-        // Bid #2: buy  5 lots @ 99  → rests (no ask)
-        // Ask #3: sell 5 lots @ 97  → crosses → executes @ 97 (ask price)
-        println("")
-        println("--- scenario 2: resting bid crossed by aggressive ask ---")
+    // Scenario 2: bid rests, ask crosses it.
+    // Bid #0: buy  5 lots @ 99  → rests (no ask)
+    // Ask #1: sell 5 lots @ 97  → crosses → executes @ 97 (ask price)
+    println("")
+    println("--- scenario 2: resting bid crossed by aggressive ask ---")
+    concurrently {
+        let risk:    RiskChecker  = actor RiskChecker  { accepted: 0, rejected: 0 };
+        let matcher: Matcher      = actor Matcher      { risk: risk };
+        let book:    OrderBook    = actor OrderBook    { matcher: matcher, best_bid: None, best_ask: None };
+        let gw:      OrderGateway = actor OrderGateway { book: book, next_id: 0 };
         gw.new_bid(99, 5)
         gw.new_ask(97, 5)
+    }
 
-        // Scenario 3: no cross — orders rest.
-        println("")
-        println("--- scenario 3: no cross (bid below ask) ---")
+    // Scenario 3: no cross — orders rest.
+    // Bid #0: buy  3 lots @ 95  → rests
+    // Ask #1: sell 3 lots @ 98  → rests (95 < 98, no crossing)
+    println("")
+    println("--- scenario 3: no cross (bid below ask) ---")
+    concurrently {
+        let risk:    RiskChecker  = actor RiskChecker  { accepted: 0, rejected: 0 };
+        let matcher: Matcher      = actor Matcher      { risk: risk };
+        let book:    OrderBook    = actor OrderBook    { matcher: matcher, best_bid: None, best_ask: None };
+        let gw:      OrderGateway = actor OrderGateway { book: book, next_id: 0 };
         gw.new_bid(95, 3)
         gw.new_ask(98, 3)
-
-        risk.summary()
     }
+
     println("")
     println("Done.")
 }
