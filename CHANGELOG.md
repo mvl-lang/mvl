@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.147.1] - 2026-05-23
+
+### Fixed
+
+- **compiler: eliminate todo!/panic stubs, audit unreachables, 4-way sync docs** (#990, #991, #992): Added `check_impl_decl()` validation to prevent 7 unimplemented todo!/unimplemented!() stubs in Rust backend from being reached at runtime — trait impl methods now fail at compile time if bodies are missing (#990). All production unreachable!() sites annotated with GitHub issue numbers and layer-specific context to clarify legitimacy and support regression audits (#991). Added `make audit-panics` Makefile target that counts unreachable!/panic! calls across codebase with budget of 100, establishing baseline at 98 and failing CI if exceeded. Comprehensive 4-way sync documentation added to all method-definition and emission points (std/*.mvl, method_types.rs, emit_exprs.rs, llvm/exprs.rs) explaining the requirement to keep Type → Checker → Rust backend → LLVM backend in lockstep when adding builtin methods (#992). Full architectural fix (method desugaring) deferred to Phase 9.
+
 ## [0.147.0] - 2026-05-23
 
 ### Added

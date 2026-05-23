@@ -201,7 +201,7 @@ impl TypeChecker {
             Decl::Const(cd) => self.check_const_decl(cd),
             Decl::Extern(ed) => self.check_extern_decl(ed),
             Decl::Use(_) => {} // resolved by the module resolver, not the type checker
-            Decl::Impl(_) => {} // bodies not yet type-checked; registration done in collect_declarations
+            Decl::Impl(id) => self.check_impl_decl(id),
             Decl::Actor(ad) => self.check_actor_decl(ad),
             Decl::EffectDecl(_) => {} // validated by EffectHierarchy pass
             Decl::Label(_) | Decl::Relabel(_) => {} // registered in collect_declarations
@@ -317,6 +317,29 @@ impl TypeChecker {
         // Remove temporary private helper registrations from the global fn table.
         for name in &private_method_names {
             self.env.fns.remove(name);
+        }
+    }
+
+    /// Validate that a trait `impl` block supplies all required methods (#990).
+    ///
+    /// The transpiler emits `todo!()` stubs when a required method is absent.
+    /// Catching this here turns the silent runtime panic into an MVL compile error.
+    fn check_impl_decl(&mut self, id: &ImplDecl) {
+        let required: &[&str] = match id.trait_name.as_str() {
+            "Display" => &["fmt"],
+            "Iterator" => &["next"],
+            "From" => &["from"],
+            _ => &[],
+        };
+        for &method in required {
+            if !id.methods.iter().any(|m| m.name == method) {
+                self.emit(CheckError::MissingTraitMethod {
+                    trait_name: id.trait_name.clone(),
+                    type_name: id.type_name.clone(),
+                    method: method.to_string(),
+                    span: id.span,
+                });
+            }
         }
     }
 

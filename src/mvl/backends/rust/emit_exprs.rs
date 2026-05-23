@@ -24,6 +24,12 @@ use crate::mvl::passes::mcdc::analysis::count_clauses_ref;
 /// trust boundary declared as `pub builtin fn` in std/strings.mvl and std/lists.mvl.
 /// Pure MVL stdlib methods — transpiled as free functions, dispatched via UFCS
 /// as `method(receiver.clone().into(), args)`.
+///
+/// # 4-way sync (#992)
+///
+/// This list is one of **four** places that must stay in sync when adding a new builtin
+/// method.  See `checker/method_types.rs` for the authoritative list and full explanation.
+/// The planned fix (method desugaring) is tracked in issue #992.
 const STDLIB_UFCS_METHODS: &[&str] = &[
     // std/strings.mvl (pure MVL, have bodies)
     "trim",
@@ -895,6 +901,7 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                         BinaryOp::Add => "checked_add",
                         BinaryOp::Sub => "checked_sub",
                         BinaryOp::Mul => "checked_mul",
+                        // Unreachable: `is_int_arith` is only true for Add/Sub/Mul (#991).
                         _ => unreachable!(),
                     };
                     // Use <i64>::clone(&(expr)) to coerce both i64 and &i64
@@ -1116,11 +1123,12 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                     emit_expr(cg, expr);
                     cg.push("))");
                 }
-                // Unknown transitions: emit a runtime panic.
+                // Unknown relabel transitions are rejected by CheckError::UnknownRelabel
+                // before transpilation (#990), so this arm is unreachable in well-typed programs.
                 _ => {
-                    cg.push(&format!(
-                        "unimplemented!(\"relabel {name}: unknown transition\")"
-                    ));
+                    unreachable!(
+                        "relabel '{name}': unknown transition — blocked by checker (#990)"
+                    );
                 }
             }
         }

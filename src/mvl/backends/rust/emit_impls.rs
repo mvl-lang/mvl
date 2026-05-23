@@ -77,7 +77,7 @@ fn emit_display_impl(cg: &mut RustEmitter, id: &ImplDecl) {
     cg.line(&format!("impl std::fmt::Display for {} {{", id.type_name));
     cg.push_indent();
 
-    // Find the `fmt` method; if not present, emit a todo!()
+    // Find the `fmt` method.  Absence is rejected by the checker before transpilation (#990).
     let fmt_method = id.methods.iter().find(|m| m.name == "fmt");
 
     cg.line("fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {");
@@ -103,11 +103,12 @@ fn emit_display_impl(cg: &mut RustEmitter, id: &ImplDecl) {
                     Stmt::Expr { expr, .. } => emit_expr(cg, expr),
                     _non_expr => {
                         // A non-expression final statement (let, assign, etc.) cannot
-                        // produce a value for write!. Emit a todo!() so the Rust
-                        // compiler surfaces this as a runtime panic rather than a
-                        // silent type error. MVL's type checker should reject this
-                        // before transpilation in a future phase.
-                        cg.push("todo!(\"Display::fmt body must end with an expression\")");
+                        // produce a value for write!.  MVL's block type checker ensures
+                        // the tail is an Expr statement, so this arm is unreachable
+                        // in well-typed programs.
+                        unreachable!(
+                            "Display::fmt body must end with an expression — enforced by checker"
+                        );
                     }
                 }
                 cg.push(")");
@@ -115,7 +116,8 @@ fn emit_display_impl(cg: &mut RustEmitter, id: &ImplDecl) {
             }
         }
         None => {
-            cg.line("todo!(\"Display::fmt not implemented\")");
+            // Absence of `fmt` is rejected by the checker before transpilation (#990).
+            unreachable!("impl Display missing `fmt` — blocked by checker (#990)");
         }
     }
 
@@ -162,7 +164,8 @@ fn emit_iterator_impl(cg: &mut RustEmitter, id: &ImplDecl) {
 
     match next_method {
         Some(fd) => match fd.body.stmts.split_last() {
-            None => cg.line("todo!(\"Iterator::next not implemented\")"),
+            // Empty `next` body — caught as TypeMismatch by checker (#990).
+            None => unreachable!("impl Iterator `next` has empty body — blocked by checker (#990)"),
             Some((last, head)) => {
                 // Phase A: last-use analysis for clone elision within the next method body.
                 cg.last_uses = compute_last_uses(&fd.body);
@@ -177,7 +180,8 @@ fn emit_iterator_impl(cg: &mut RustEmitter, id: &ImplDecl) {
                 }
             }
         },
-        None => cg.line("todo!(\"Iterator::next not implemented\")"),
+        // Absence of `next` is rejected by the checker before transpilation (#990).
+        None => unreachable!("impl Iterator missing `next` — blocked by checker (#990)"),
     }
 
     cg.pop_indent();
@@ -222,7 +226,8 @@ fn emit_from_impl(cg: &mut RustEmitter, id: &ImplDecl) {
             cg.last_uses = compute_last_uses(&fd.body);
             let stmts = &fd.body.stmts;
             if stmts.is_empty() {
-                cg.line("todo!(\"From::from not implemented\")");
+                // Empty body caught as TypeMismatch by checker (#990).
+                unreachable!("impl From `from` has empty body — blocked by checker (#990)");
             } else {
                 let (head, tail) = stmts.split_at(stmts.len() - 1);
                 emit_block_stmts(cg, head);
@@ -239,7 +244,8 @@ fn emit_from_impl(cg: &mut RustEmitter, id: &ImplDecl) {
             }
         }
         None => {
-            cg.line("todo!(\"From::from not implemented\")");
+            // Absence of `from` is rejected by the checker before transpilation (#990).
+            unreachable!("impl From missing `from` — blocked by checker (#990)");
         }
     }
 
