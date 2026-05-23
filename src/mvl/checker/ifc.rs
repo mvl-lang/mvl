@@ -130,7 +130,10 @@ pub(crate) fn bind_pattern_labels(pat: &Pattern, label: &str, env: &mut HashMap<
 ///
 /// Seeds from functions that directly call a [`PUBLIC_SINKS`] member, then propagates
 /// transitively via a fixed-point BFS so that `a→b→println` marks both `b` and `a`.
-fn build_sink_reachability(programs: &[&Program]) -> HashMap<String, String> {
+fn build_sink_reachability(
+    programs: &[&Program],
+    sink_names: &HashSet<String>,
+) -> HashMap<String, String> {
     // Step 1: collect per-function callee sets.
     let mut callee_map: HashMap<String, HashSet<String>> = HashMap::new();
     for prog in programs {
@@ -156,11 +159,11 @@ fn build_sink_reachability(programs: &[&Program]) -> HashMap<String, String> {
             }
         }
     }
-    // Step 2: seed — functions that directly call a PUBLIC_SINK.
+    // Step 2: seed — functions that directly call a sink.
     let mut reach: HashMap<String, String> = HashMap::new();
     for (fn_name, callees) in &callee_map {
         for callee in callees {
-            if PUBLIC_SINKS.contains(&callee.as_str()) {
+            if sink_names.contains(callee.as_str()) {
                 reach
                     .entry(fn_name.clone())
                     .or_insert_with(|| callee.clone());
@@ -194,7 +197,16 @@ pub fn check_implicit_flows(
     all_programs: &[&Program],
     errors: &mut Vec<CheckError>,
 ) {
-    let sink_reach = build_sink_reachability(all_programs);
+    let sink_names = collect_sink_names(all_programs);
+    let mut sink_reach = build_sink_reachability(all_programs, &sink_names);
+    // Merge direct sinks into the reachability map so check_expr_flows can use
+    // a single lookup: sink_reach.get(name) covers both direct sinks and
+    // functions that transitively call sinks.
+    for name in &sink_names {
+        sink_reach
+            .entry(name.clone())
+            .or_insert_with(|| name.clone());
+    }
     for decl in &prog.declarations {
         if let Decl::Fn(fd) = decl {
             // Build initial label env from parameter type annotations.
@@ -610,18 +622,25 @@ fn check_stmt_flows(
     }
 }
 
-/// Check the public-sink names that must not appear inside high-PC contexts.
-/// Includes std.log functions (#54): a log call inside a Secret branch leaks
-/// whether the branch was taken (implicit flow via the log record's presence).
-const PUBLIC_SINKS: &[&str] = &[
-    "println",
-    "print",
-    "print_styled",
-    "Logger::debug",
-    "Logger::info",
-    "Logger::warn",
-    "Logger::error",
-];
+/// Build a set of public-sink names from programs by scanning for `is_sink` FnDecl (#956).
+/// Returns qualified names for methods (e.g. "Logger::debug") and bare names for functions.
+fn collect_sink_names(programs: &[&Program]) -> HashSet<String> {
+    let mut sinks = HashSet::new();
+    for prog in programs {
+        for decl in &prog.declarations {
+            if let Decl::Fn(fd) = decl {
+                if fd.is_sink {
+                    if let Some(recv_ty) = &fd.receiver_type {
+                        sinks.insert(format!("{}::{}", recv_ty, fd.name));
+                    } else {
+                        sinks.insert(fd.name.clone());
+                    }
+                }
+            }
+        }
+    }
+    sinks
+}
 
 fn check_expr_flows(
     expr: &Expr,
@@ -636,22 +655,24 @@ fn check_expr_flows(
             name, args, span, ..
         } => {
             if is_high_opt(&pc) {
-                if PUBLIC_SINKS.contains(&name.as_str()) {
-                    // Direct public sink under high PC — implicit flow.
-                    errors.push(CheckError::ImplicitFlowViolation {
-                        pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
-                        sink: name.clone(),
-                        span: *span,
-                    });
-                } else if let Some(sink) = sink_reach.get(name.as_str()) {
-                    // Callee transitively reaches a public sink — cross-function implicit flow.
-                    errors.push(CheckError::CrossFunctionImplicitFlowViolation {
-                        pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
-                        caller: caller_fn.to_string(),
-                        callee: name.clone(),
-                        sink: sink.clone(),
-                        span: *span,
-                    });
+                if let Some(sink) = sink_reach.get(name.as_str()) {
+                    if sink == name {
+                        // Direct public sink under high PC — implicit flow.
+                        errors.push(CheckError::ImplicitFlowViolation {
+                            pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
+                            sink: name.clone(),
+                            span: *span,
+                        });
+                    } else {
+                        // Callee transitively reaches a public sink — cross-function implicit flow.
+                        errors.push(CheckError::CrossFunctionImplicitFlowViolation {
+                            pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
+                            caller: caller_fn.to_string(),
+                            callee: name.clone(),
+                            sink: sink.clone(),
+                            span: *span,
+                        });
+                    }
                 }
             }
             for arg in args {
@@ -725,24 +746,41 @@ fn check_expr_flows(
             span,
             ..
         } => {
-            // Logger.{debug,info,warn,error} are public sinks — check for implicit flow
-            // exactly as for FnCall with PUBLIC_SINKS (#973).
-            if is_high_opt(&pc) && matches!(method.as_str(), "debug" | "info" | "warn" | "error") {
-                let qualified = format!("Logger::{method}");
-                if PUBLIC_SINKS.contains(&qualified.as_str()) {
-                    errors.push(CheckError::ImplicitFlowViolation {
-                        pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
-                        sink: qualified.clone(),
-                        span: *span,
-                    });
-                } else if let Some(sink) = sink_reach.get(qualified.as_str()) {
-                    errors.push(CheckError::CrossFunctionImplicitFlowViolation {
-                        pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
-                        caller: caller_fn.to_string(),
-                        callee: qualified,
-                        sink: sink.clone(),
-                        span: *span,
-                    });
+            // Method calls: check for implicit flow using qualified name in sink_reach (#956).
+            if is_high_opt(&pc) {
+                // Build qualified name matching the convention used by collect_sink_names.
+                // For now, use the method name for all receivers — sink_reach only contains
+                // entries for declared sinks, so false positives are impossible.
+                if let Expr::Ident(recv_name, _) = receiver.as_ref() {
+                    // Ignore — module-qualified calls are handled by FnCall branch above.
+                    let _ = recv_name;
+                }
+                // Try common qualified forms that might be in sink_reach via collect_calls_in_expr.
+                let qualified_names: Vec<String> = {
+                    let mut v = vec![method.clone()];
+                    // Logger::method pattern — collect_calls_in_expr inserts these.
+                    v.push(format!("Logger::{method}"));
+                    v
+                };
+                for qn in &qualified_names {
+                    if let Some(sink) = sink_reach.get(qn.as_str()) {
+                        if sink == qn {
+                            errors.push(CheckError::ImplicitFlowViolation {
+                                pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
+                                sink: qn.clone(),
+                                span: *span,
+                            });
+                        } else {
+                            errors.push(CheckError::CrossFunctionImplicitFlowViolation {
+                                pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
+                                caller: caller_fn.to_string(),
+                                callee: qn.clone(),
+                                sink: sink.clone(),
+                                span: *span,
+                            });
+                        }
+                        break;
+                    }
                 }
             }
             check_expr_flows(receiver, pc.clone(), env, caller_fn, sink_reach, errors);
@@ -953,8 +991,9 @@ mod tests {
         // fn check_auth(flag: Secret[Bool]) { if flag { log_access("x") } }
         let violations = cross_fn_violations(
             "label Secret \
-             fn log_access(msg: String) -> Unit { println(msg) } \
-             fn check_auth(flag: Secret[Bool]) -> Unit { if flag { log_access(\"x\") } }",
+             sink fn println(msg: String) -> Unit ! Console { } \
+             fn log_access(msg: String) -> Unit ! Console { println(msg) } \
+             fn check_auth(flag: Secret[Bool]) -> Unit ! Console { if flag { log_access(\"x\") } }",
         );
         assert!(
             !violations.is_empty(),
@@ -979,9 +1018,10 @@ mod tests {
         // if secret { a() } → cross-function implicit flow
         let violations = cross_fn_violations(
             "label Secret \
-             fn b(msg: String) -> Unit { println(msg) } \
-             fn a(msg: String) -> Unit { b(msg) } \
-             fn entry(flag: Secret[Bool]) -> Unit { if flag { a(\"x\") } }",
+             sink fn println(msg: String) -> Unit ! Console { } \
+             fn b(msg: String) -> Unit ! Console { println(msg) } \
+             fn a(msg: String) -> Unit ! Console { b(msg) } \
+             fn entry(flag: Secret[Bool]) -> Unit ! Console { if flag { a(\"x\") } }",
         );
         assert!(
             !violations.is_empty(),
@@ -999,8 +1039,9 @@ mod tests {
     fn no_false_positive_for_unlabeled_branch() {
         // if flag { log_access("x") } where flag is bare Bool — no violation
         let violations = cross_fn_violations(
-            "fn log_access(msg: String) -> Unit { println(msg) } \
-             fn entry(flag: Bool) -> Unit { if flag { log_access(\"x\") } }",
+            "sink fn println(msg: String) -> Unit ! Console { } \
+             fn log_access(msg: String) -> Unit ! Console { println(msg) } \
+             fn entry(flag: Bool) -> Unit ! Console { if flag { log_access(\"x\") } }",
         );
         assert!(
             violations.is_empty(),
@@ -1014,6 +1055,7 @@ mod tests {
         // if secret { helper() } → no cross-function implicit flow
         let violations = cross_fn_violations(
             "label Secret \
+             sink fn println(msg: String) -> Unit ! Console { } \
              fn helper() -> Unit { } \
              fn entry(flag: Secret[Bool]) -> Unit { if flag { helper() } }",
         );
@@ -1027,8 +1069,9 @@ mod tests {
     fn cross_fn_violation_has_req_11() {
         let violations = cross_fn_violations(
             "label Secret \
-             fn log(msg: String) -> Unit { println(msg) } \
-             fn entry(flag: Secret[Bool]) -> Unit { if flag { log(\"x\") } }",
+             sink fn println(msg: String) -> Unit ! Console { } \
+             fn log(msg: String) -> Unit ! Console { println(msg) } \
+             fn entry(flag: Secret[Bool]) -> Unit ! Console { if flag { log(\"x\") } }",
         );
         assert!(!violations.is_empty());
         assert_eq!(violations[0].requirement_number(), 11);

@@ -72,5 +72,5 @@ fn example_return_unit() -> Unit {
 }
 
 fn example_expr_stmt(n: Int) -> Unit ! Console {
-    println(format("{}", n));
+    println(format("{}", [n.to_string()]));
 }

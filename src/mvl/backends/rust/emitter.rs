@@ -435,7 +435,7 @@ impl RustEmitter {
         // are emitted as regular Rust functions (not excluded here).
         // Functions already declared in the user program are skipped to prevent
         // duplicate Rust definitions when the user shadows a prelude function.
-        const MACRO_HANDLED: &[&str] = &["format"];
+        const MACRO_HANDLED: &[&str] = &[];
         let user_fn_names: std::collections::HashSet<&str> = prog
             .declarations
             .iter()

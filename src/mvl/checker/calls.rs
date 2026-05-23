@@ -19,45 +19,23 @@ impl TypeChecker {
         // Infer all argument types (for side-effect error collection)
         let arg_tys: Vec<Ty> = args.iter().map(|a| self.infer_expr(a)).collect();
 
-        // 003-information-flow/Req 6: public I/O sinks MUST accept only bare types (#894).
-        // Any labeled argument (Tainted, Secret, or user-defined) must be relabeled
-        // before passing to a sink.
-        if matches!(
-            name,
-            "println"
-                | "print"
-                | "eprintln"
-                | "eprint"
-                | "write"
-                | "write_file"
-                | "append"
-                | "log_write"
-                | "Logger::debug"
-                | "Logger::info"
-                | "Logger::warn"
-                | "Logger::error"
-                | "assert_eq"
-                | "assert_ne"
-        ) {
-            for (arg, arg_ty) in args.iter().zip(arg_tys.iter()) {
-                if let Some(label) = ifc::label_of(arg_ty) {
-                    self.emit(CheckError::LoggingLabelViolation {
-                        label: label.to_string(),
-                        span: arg.span(),
-                    });
+        if let Some(fn_info) = self.env.lookup_fn(name).cloned() {
+            // 003-information-flow/Req 6: public I/O sinks MUST accept only bare types (#956).
+            // Any labeled argument (Tainted, Secret, or user-defined) must be relabeled
+            // before passing to a sink.  Driven by the declarative `sink` modifier.
+            if fn_info.is_sink {
+                for (arg, arg_ty) in args.iter().zip(arg_tys.iter()) {
+                    if let Some(label) = ifc::label_of(arg_ty) {
+                        self.emit(CheckError::LoggingLabelViolation {
+                            label: label.to_string(),
+                            span: arg.span(),
+                        });
+                    }
                 }
             }
-        }
-
-        if let Some(fn_info) = self.env.lookup_fn(name).cloned() {
-            // `format` is the only remaining variadic builtin (#902 eliminated the others).
-            // It accepts N args until #901 redesigns it as format(template, List[String]).
-            let is_variadic_builtin = name == "format";
-            // L5-08: Generic functions are monomorphized at the LLVM level.
-            // Skip arity and type checking at call sites; the LLVM backend handles
-            // concrete type dispatch.
             let is_generic = !fn_info.type_params.is_empty();
-            if !is_variadic_builtin && !is_generic && fn_info.params.len() != arg_tys.len() {
+            // #989: Always check arity, even for generic functions.
+            if fn_info.params.len() != arg_tys.len() {
                 self.emit(CheckError::WrongArgCount {
                     name: name.to_string(),
                     expected: fn_info.params.len(),
@@ -66,7 +44,8 @@ impl TypeChecker {
                 });
                 return fn_info.ret.clone();
             }
-            if !is_variadic_builtin && !is_generic {
+            // Type check: skip for generics (type params not yet substituted).
+            if !is_generic {
                 for (i, (expected, found)) in fn_info.params.iter().zip(arg_tys.iter()).enumerate()
                 {
                     // ADR-0024: for label-transparent functions, strip the security label
@@ -150,8 +129,8 @@ impl TypeChecker {
                 // In the user-defined label model (#894), label-transparent functions
                 // propagate labels from bare-typed arguments to the return type.
                 // Excess = arg has a label and param is bare (no label declared).
-                let arg_label = if fn_info.params.is_empty() || is_variadic_builtin {
-                    // Variadic: propagate all arg labels.
+                let arg_label = if fn_info.params.is_empty() {
+                    // No declared params: propagate all arg labels.
                     arg_tys.iter().fold(None, |acc, ty| {
                         ifc::join_opt(acc, ifc::label_of(ty).map(|s| s.to_string()))
                     })
@@ -462,6 +441,30 @@ impl TypeChecker {
             }
             _ => Ty::Unknown,
         };
+        // #985: For closed builtin types, Ty::Unknown from the method dispatch means
+        // "method not found" — emit a diagnostic instead of silently propagating Unknown.
+        if matches!(result, Ty::Unknown)
+            && matches!(
+                base,
+                Ty::Int
+                    | Ty::Byte
+                    | Ty::UByte
+                    | Ty::UInt
+                    | Ty::Float
+                    | Ty::String
+                    | Ty::List(..)
+                    | Ty::Map(..)
+                    | Ty::Set(..)
+                    | Ty::Option(..)
+                    | Ty::Result(..)
+            )
+        {
+            self.emit(CheckError::UnknownMethod {
+                receiver_ty: base.display(),
+                method: method.to_string(),
+                span,
+            });
+        }
         // Only apply label when we resolved a concrete type.
         // Leaving Ty::Unknown unwrapped preserves the "Unknown = unresolved" sentinel;
         // wrapping it (e.g. Tainted<Unknown>) confuses downstream operators like `?`.

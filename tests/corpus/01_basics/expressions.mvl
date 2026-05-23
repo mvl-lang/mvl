@@ -27,7 +27,7 @@ fn method_call(xs: List[Int]) -> Int {
 }
 
 fn chained_method(s: String) -> String {
-    s.trim().to_uppercase()
+    s.trim().to_upper()
 }
 
 // Function calls

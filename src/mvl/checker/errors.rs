@@ -44,6 +44,12 @@ pub enum CheckError {
         name: String,
         span: Span,
     },
+    /// Method not found on a builtin type with a closed method set (#985).
+    UnknownMethod {
+        receiver_ty: String,
+        method: String,
+        span: Span,
+    },
     WrongArgCount {
         name: String,
         expected: usize,
@@ -511,6 +517,7 @@ impl CheckError {
             | CheckError::ArithmeticTypeMismatch { .. }
             | CheckError::LogicTypeMismatch { .. }
             | CheckError::UndefinedFunction { .. }
+            | CheckError::UnknownMethod { .. }
             | CheckError::WrongArgCount { .. }
             | CheckError::MissingField { .. }
             | CheckError::UnknownField { .. }
@@ -602,6 +609,7 @@ impl CheckError {
             | CheckError::ArithmeticTypeMismatch { span, .. }
             | CheckError::LogicTypeMismatch { span, .. }
             | CheckError::UndefinedFunction { span, .. }
+            | CheckError::UnknownMethod { span, .. }
             | CheckError::WrongArgCount { span, .. }
             | CheckError::MissingField { span, .. }
             | CheckError::UnknownField { span, .. }
@@ -686,6 +694,11 @@ impl CheckError {
                 format!("logical operator `{op}` requires `Bool`, found `{ty}`")
             }
             CheckError::UndefinedFunction { name, .. } => format!("undefined function `{name}`"),
+            CheckError::UnknownMethod {
+                receiver_ty,
+                method,
+                ..
+            } => format!("no method `{method}` on type `{receiver_ty}`"),
             CheckError::WrongArgCount {
                 name,
                 expected,

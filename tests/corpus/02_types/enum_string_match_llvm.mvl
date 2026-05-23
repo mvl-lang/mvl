@@ -17,5 +17,5 @@ fn main() -> Unit ! Console {
     println(describe(MathError::DivisionByZero));
     println(describe(MathError::Overflow));
     let err: MathError = MathError::DivisionByZero;
-    println(format("MathError: {}", describe(err)));
+    println(format("MathError: {}", [describe(err)]));
 }

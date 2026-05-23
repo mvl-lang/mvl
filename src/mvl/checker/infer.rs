@@ -205,13 +205,15 @@ impl TypeChecker {
                         self.check_send_capability(first_arg, *span);
                     }
                 }
-                // 003-information-flow/Req 6: public I/O sinks must reject labeled args.
-                // Logger.{debug,info,warn,error} are public sinks — same treatment as
-                // println/log_write in `infer_fn_call`.
+                // 003-information-flow/Req 6: public I/O sinks must reject labeled args (#956).
+                // Driven by the declarative `is_sink` flag on methods in the method table.
                 if let Ty::Named(type_name, _) = recv_ty.unlabeled() {
-                    if type_name == "Logger"
-                        && matches!(method.as_str(), "debug" | "info" | "warn" | "error")
-                    {
+                    let method_is_sink = self
+                        .method_table
+                        .get(type_name.as_str())
+                        .and_then(|m| m.get(method.as_str()))
+                        .is_some_and(|mi| mi.is_sink);
+                    if method_is_sink {
                         for (arg, arg_ty) in args.iter().zip(arg_tys.iter()) {
                             if let Some(label) = ifc::label_of(arg_ty) {
                                 self.emit(CheckError::LoggingLabelViolation {

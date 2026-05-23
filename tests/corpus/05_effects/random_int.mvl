@@ -11,6 +11,6 @@ use std.random.{int}
 fn main() -> Unit ! Random + Console {
     let a: Int = int(42, 42);
     let b: Int = int(0, 0);
-    println(format("{}", a));
-    println(format("{}", b));
+    println(format("{}", [a.to_string()]));
+    println(format("{}", [b.to_string()]));
 }

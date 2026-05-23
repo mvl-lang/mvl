@@ -11,10 +11,10 @@ fn main() -> Unit ! Random + Console {
     // Single-element list — always returns [7].
     let xs: List[Int] = [7];
     let ys: List[Int] = shuffle(xs);
-    println(format("{}", ys.len()));
+    println(format("{}", [ys.len().to_string()]));
 
     // Empty list — always returns [].
     let empty: List[Int] = [];
     let r: List[Int] = shuffle(empty);
-    println(format("{}", r.len()));
+    println(format("{}", [r.len().to_string()]));
 }

@@ -199,6 +199,9 @@ pub struct FnDecl {
     /// Whether the function propagates security labels from arguments to return type (`transparent fn`).
     /// See ADR-0024: the checker joins argument labels and applies them to the return type.
     pub is_label_transparent: bool,
+    /// Whether the function is a public IFC sink (`sink fn`) (#956).
+    /// The checker rejects any argument carrying an IFC label at call sites.
+    pub is_sink: bool,
     pub totality: Option<Totality>,
     /// For `fn TypeName::method(self, ...)` declarations: the receiver type name (`"TypeName"`).
     /// `None` for ordinary top-level functions.
@@ -1210,6 +1213,7 @@ mod tests {
             is_test: false,
             is_builtin: false,
             is_label_transparent: false,
+            is_sink: false,
             totality: Some(Totality::Total),
             receiver_type: None,
             name: "add".into(),

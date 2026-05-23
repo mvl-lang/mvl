@@ -16,7 +16,7 @@ fn sum(p: Point) -> Int { p.x + p.y }
 
 fn main() -> Unit ! Console {
     let p: Point = Point { x: 10, y: 20 };
-    println(format("{}", get_x(p)));
-    println(format("{}", get_y(p)));
-    println(format("{}", sum(p)));
+    println(format("{}", [get_x(p).to_string()]));
+    println(format("{}", [get_y(p).to_string()]));
+    println(format("{}", [sum(p).to_string()]));
 }
