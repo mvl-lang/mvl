@@ -3025,20 +3025,17 @@ fn user_defined_effect_subsumption() {
     );
 }
 
-/// `! Log` does NOT satisfy `! Console` (they share no subsumption).
+/// `! Log` satisfies `! Console` because `Log > Clock + Console`.
 #[test]
-fn log_does_not_subsume_console() {
+fn log_subsumes_console() {
     let src = r#"
         fn printer() -> Unit ! Console { }
         fn logger() -> Unit ! Log { printer() }
     "#;
     let result = check_with_effects(src);
     assert!(
-        result.errors.iter().any(|e| matches!(
-            e,
-            CheckError::MissingEffect { effect, .. } if effect == "Console"
-        )),
-        "! Log should NOT satisfy ! Console, got: {:?}",
+        result.errors.is_empty(),
+        "! Log should satisfy ! Console (Log > Clock + Console), got: {:?}",
         result.errors
     );
 }
@@ -3838,16 +3835,28 @@ fn sha512_accepts_plain_string() {
     );
 }
 
+/// Minimal Logger stub for inline IFC tests (avoids loading std/log.mvl).
+/// The checker recognizes `Logger.{debug,info,warn,error}` as IFC sinks.
+const LOGGER_STUB: &str = r#"
+type Logger = struct { dummy: Int }
+fn Logger::debug(self, msg: String, fields: Map[String, String]) -> Unit ! Log { }
+fn Logger::info(self, msg: String, fields: Map[String, String]) -> Unit ! Log { }
+fn Logger::warn(self, msg: String, fields: Map[String, String]) -> Unit ! Log { }
+fn Logger::error(self, msg: String, fields: Map[String, String]) -> Unit ! Log { }
+fn make_logger() -> Logger { Logger { dummy: 0 } }
+"#;
+
 #[test]
 fn crypto_random_bytes_result_rejected_by_log_info() {
     // GIVEN: crypto_random_bytes returns Secret[List[Int]]
-    // THEN: passing the result to log_info is a LoggingLabelViolation
-    let errors = errors_for(
-        r#"fn leak_attempt(n: Int) -> Unit ! CryptoRandom + Log {
+    // THEN: passing the result to Logger.info is a LoggingLabelViolation
+    let src = format!(
+        "{LOGGER_STUB}fn leak_attempt(logger: val Logger, n: Int) -> Unit ! CryptoRandom + Log {{
     let bytes: Secret[List[Int]] = crypto_random_bytes(n);
-    log_info("{}", bytes);
-}"#,
+    logger.info(bytes, {{\"k\": \"v\"}});
+}}"
     );
+    let errors = errors_for(&src);
     assert!(
         errors
             .iter()
@@ -3966,52 +3975,61 @@ fn logging_corpus_parses_and_checks() {
     );
 }
 
-/// `log_info` with a Secret argument MUST be rejected (#54, 003-information-flow/Req 6).
+/// `Logger.info` with a Secret argument MUST be rejected (#54, 003-information-flow/Req 6).
 /// "Don't log secrets" is a type error in MVL, not a code review rule.
 #[test]
 fn log_info_rejects_secret_argument() {
-    let errors = errors_for(r#"fn f(pwd: Secret[String]) -> Unit ! Log { log_info(pwd, {}); }"#);
+    let src = format!(
+        "{LOGGER_STUB}fn f(logger: val Logger, pwd: Secret[String]) -> Unit ! Log {{ logger.info(pwd, {{\"k\": \"v\"}}); }}"
+    );
+    let errors = errors_for(&src);
     assert!(
         errors.iter().any(
             |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Secret")
         ),
-        "log_info with Secret arg should emit LoggingLabelViolation, got: {errors:?}"
+        "Logger.info with Secret arg should emit LoggingLabelViolation, got: {errors:?}"
     );
 }
 
-/// `log_error` with a Tainted argument MUST be rejected (#54, 003-information-flow/Req 6).
+/// `Logger.error` with a Tainted argument MUST be rejected (#54, 003-information-flow/Req 6).
 #[test]
 fn log_error_rejects_tainted_argument() {
-    let errors =
-        errors_for(r#"fn f(input: Tainted[String]) -> Unit ! Log { log_error(input, {}); }"#);
+    let src = format!(
+        "{LOGGER_STUB}fn f(logger: val Logger, input: Tainted[String]) -> Unit ! Log {{ logger.error(input, {{\"k\": \"v\"}}); }}"
+    );
+    let errors = errors_for(&src);
     assert!(
         errors.iter().any(
             |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Tainted")
         ),
-        "log_error with Tainted arg should emit LoggingLabelViolation, got: {errors:?}"
+        "Logger.error with Tainted arg should emit LoggingLabelViolation, got: {errors:?}"
     );
 }
 
-/// `log_warn` with a Tainted argument MUST be rejected — only bare values may be logged (#54).
+/// `Logger.warn` with a Tainted argument MUST be rejected — only bare values may be logged (#54).
 #[test]
 fn log_warn_rejects_tainted_argument() {
-    let errors = errors_for(r#"fn f(s: Tainted[String]) -> Unit ! Log { log_warn(s, {}); }"#);
+    let src = format!(
+        "{LOGGER_STUB}fn f(logger: val Logger, s: Tainted[String]) -> Unit ! Log {{ logger.warn(s, {{\"k\": \"v\"}}); }}"
+    );
+    let errors = errors_for(&src);
     assert!(
         errors.iter().any(
             |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Tainted")
         ),
-        "log_warn with Tainted arg should emit LoggingLabelViolation, got: {errors:?}"
+        "Logger.warn with Tainted arg should emit LoggingLabelViolation, got: {errors:?}"
     );
 }
 
-/// A caller of `log_info` MUST declare `! Log`; without it UndeclaredEffect is reported.
+/// A caller of `Logger.info` MUST declare `! Log`; without it UndeclaredEffect is reported.
 #[test]
 fn caller_missing_log_effect_rejected() {
-    let src = r#"
-        fn do_log() -> Unit ! Log { log_info("msg", {}) }
-        fn caller() -> Unit { do_log() }
-    "#;
-    let errors = errors_for(src);
+    let src = format!(
+        "{LOGGER_STUB}fn do_log(logger: val Logger) -> Unit ! Log {{ logger.info(\"msg\", {{\"k\": \"v\"}}) }}
+        fn caller(logger: val Logger) -> Unit {{ do_log(logger) }}
+    "
+    );
+    let errors = errors_for(&src);
     assert!(
         errors.iter().any(|e| matches!(
             e,
@@ -4027,11 +4045,12 @@ fn caller_missing_log_effect_rejected() {
 fn caller_missing_log_effect_with_other_effects_rejected() {
     // GIVEN: fn do_log ! Log; fn caller ! Net calls do_log (has effects, but not Log)
     // THEN: MissingEffect(do_log, Log) reported — not UndeclaredEffect
-    let src = r#"
-        fn do_log() -> Unit ! Log { log_info("msg", {}) }
-        fn caller() -> Unit ! Net { do_log() }
-    "#;
-    let errors = errors_for(src);
+    let src = format!(
+        "{LOGGER_STUB}fn do_log(logger: val Logger) -> Unit ! Log {{ logger.info(\"msg\", {{\"k\": \"v\"}}) }}
+        fn caller(logger: val Logger) -> Unit ! Net {{ do_log(logger) }}
+    "
+    );
+    let errors = errors_for(&src);
     assert!(
         errors.iter().any(|e| matches!(
             e,
@@ -4042,32 +4061,36 @@ fn caller_missing_log_effect_with_other_effects_rejected() {
     );
 }
 
-/// `log_debug` with a Secret argument MUST be rejected (#54, 003-information-flow/Req 6).
+/// `Logger.debug` with a Secret argument MUST be rejected (#54, 003-information-flow/Req 6).
 #[test]
 fn log_debug_rejects_secret_argument() {
-    let errors = errors_for(r#"fn f(pwd: Secret[String]) -> Unit ! Log { log_debug(pwd, {}); }"#);
+    let src = format!(
+        "{LOGGER_STUB}fn f(logger: val Logger, pwd: Secret[String]) -> Unit ! Log {{ logger.debug(pwd, {{\"k\": \"v\"}}); }}"
+    );
+    let errors = errors_for(&src);
     assert!(
         errors.iter().any(
             |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Secret")
         ),
-        "log_debug with Secret arg should emit LoggingLabelViolation, got: {errors:?}"
+        "Logger.debug with Secret arg should emit LoggingLabelViolation, got: {errors:?}"
     );
 }
 
-/// `log_info` with a plain String argument MUST be accepted (#54).
+/// `Logger.info` with a plain String argument MUST be accepted (#54).
 /// Guards against over-rejection — the checker must not reject all log calls.
 #[test]
 fn log_info_accepts_public_argument() {
-    let errors = errors_for(
-        r#"fn f(name: String) -> Unit ! Log { log_info("user logged in", {"user": name}); }"#,
+    let src = format!(
+        "{LOGGER_STUB}fn f(logger: val Logger, name: String) -> Unit ! Log {{ logger.info(\"user logged in\", {{\"user\": name}}); }}"
     );
+    let errors = errors_for(&src);
     let ifc_errors: Vec<_> = errors
         .iter()
         .filter(|e| matches!(e, CheckError::LoggingLabelViolation { .. }))
         .collect();
     assert!(
         ifc_errors.is_empty(),
-        "log_info with plain String arg should not emit LoggingLabelViolation, got: {ifc_errors:?}"
+        "Logger.info with plain String arg should not emit LoggingLabelViolation, got: {ifc_errors:?}"
     );
 }
 
@@ -4075,39 +4098,43 @@ fn log_info_accepts_public_argument() {
 /// "Don't log secrets" applies to structured fields too — not just the msg argument.
 #[test]
 fn log_info_rejects_secret_value_in_fields_map() {
-    let errors = errors_for(
-        r#"fn f(pwd: Secret[String]) -> Unit ! Log { log_info("login", {"password": pwd}); }"#,
+    let src = format!(
+        "{LOGGER_STUB}fn f(logger: val Logger, pwd: Secret[String]) -> Unit ! Log {{ logger.info(\"login\", {{\"password\": pwd}}); }}"
     );
+    let errors = errors_for(&src);
     assert!(
         errors.iter().any(
             |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Secret")
         ),
-        "log_info with Secret value in fields map should emit LoggingLabelViolation, got: {errors:?}"
+        "Logger.info with Secret value in fields map should emit LoggingLabelViolation, got: {errors:?}"
     );
 }
 
 #[test]
 fn log_warn_rejects_tainted_value_in_fields_map() {
-    let errors = errors_for(
-        r#"fn f(raw: Tainted[String]) -> Unit ! Log { log_warn("req", {"body": raw}); }"#,
+    let src = format!(
+        "{LOGGER_STUB}fn f(logger: val Logger, raw: Tainted[String]) -> Unit ! Log {{ logger.warn(\"req\", {{\"body\": raw}}); }}"
     );
+    let errors = errors_for(&src);
     assert!(
         errors.iter().any(
             |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Tainted")
         ),
-        "log_warn with Tainted value in fields map should emit LoggingLabelViolation, got: {errors:?}"
+        "Logger.warn with Tainted value in fields map should emit LoggingLabelViolation, got: {errors:?}"
     );
 }
 
 #[test]
 fn log_debug_rejects_tainted_value_in_fields_map() {
-    let errors =
-        errors_for(r#"fn f(s: Tainted[String]) -> Unit ! Log { log_debug("req", {"body": s}); }"#);
+    let src = format!(
+        "{LOGGER_STUB}fn f(logger: val Logger, s: Tainted[String]) -> Unit ! Log {{ logger.debug(\"req\", {{\"body\": s}}); }}"
+    );
+    let errors = errors_for(&src);
     assert!(
         errors.iter().any(
             |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Tainted")
         ),
-        "log_debug with Tainted value in fields map should emit LoggingLabelViolation, got: {errors:?}"
+        "Logger.debug with Tainted value in fields map should emit LoggingLabelViolation, got: {errors:?}"
     );
 }
 

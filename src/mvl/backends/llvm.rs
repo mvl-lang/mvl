@@ -883,6 +883,8 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
             // ── Bool predicates: ptr → i64 ────────────────────────────────────
             ("Bool", 1) if Self::is_ptr_type(p0) => Some(StdlibSig::I64OnePtrArg(symbol)),
+            // ── Int from opaque handle: ptr → i64 (e.g. _instant_epoch_seconds) ──
+            ("Int", 1) if Self::is_ptr_type(p0) => Some(StdlibSig::I64OnePtrArg(symbol)),
             // ── Result returns (must precede generic ptr patterns) ────────────
             ("Result", 1) => {
                 let ok_base = if let TypeExpr::Result { ok, .. } = unlabeled_ret {
@@ -980,17 +982,25 @@ impl<'ctx> LlvmBackend<'ctx> {
         use crate::mvl::parser::Parser;
         use crate::mvl::stdlib::stdlib_content;
 
+        // Modules that have `_`-prefixed builtins with C-ABI backing in mvl_runtime_c.
+        // Only these modules expose private builtins the LLVM JIT must resolve (#899).
+        const MODULES_WITH_PRIVATE_BUILTINS: &[&str] = &["time"];
+
         let filename = format!("{module}.mvl");
         let Some(content) = stdlib_content(&filename) else {
             return Vec::new();
         };
         let (mut parser, _) = Parser::new(content);
         let prog = parser.parse_program();
+        let include_private = MODULES_WITH_PRIVATE_BUILTINS.contains(&module);
         prog.declarations
             .into_iter()
             .filter_map(|decl| {
                 if let Decl::Fn(fd) = decl {
-                    if fd.is_builtin && fd.type_params.is_empty() && !fd.name.starts_with('_') {
+                    if fd.is_builtin
+                        && fd.type_params.is_empty()
+                        && (!fd.name.starts_with('_') || include_private)
+                    {
                         Some(fd)
                     } else {
                         None

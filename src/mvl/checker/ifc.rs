@@ -607,10 +607,10 @@ const PUBLIC_SINKS: &[&str] = &[
     "println",
     "print",
     "print_styled",
-    "log_debug",
-    "log_info",
-    "log_warn",
-    "log_error",
+    "Logger::debug",
+    "Logger::info",
+    "Logger::warn",
+    "Logger::error",
 ];
 
 fn check_expr_flows(

@@ -55,16 +55,25 @@ pub fn sleep(d: Duration) {
     std::thread::sleep(StdDuration::new(secs, nanos));
 }
 
-// ── Pure formatting functions ──────────────────────────────────────────────
-
-/// Formats an `Instant` as an ISO 8601 UTC string.
+/// Returns whole seconds since the Unix epoch for the given `Instant`.
 ///
-/// Supported tokens (strftime subset): `%Y %m %d %H %M %S`. All other
-/// characters are passed through verbatim. UTC-only; timezone offsets are
-/// not implemented in Phase A.
+/// Module-private MVL builtin (`builtin fn _instant_epoch_seconds`, #899).
+/// Drives pure-MVL `format_instant`/`instant_to_datetime` formatting.
+pub fn _instant_epoch_seconds(t: Instant) -> i64 {
+    t.0.duration_since(UNIX_EPOCH)
+        .unwrap_or(StdDuration::ZERO)
+        .as_secs() as i64
+}
+
+// ── Pure formatting functions ──────────────────────────────────────────────
+//
+// `format_instant` and `format_datetime` are Rust-internal helpers — no longer
+// exposed as MVL builtins (pure-MVL equivalents live in std/time.mvl).
+// Retained for log.rs internals and the legacy `_mvl_time_iso8601_format`.
+
+/// Formats an `Instant` as a string using the given format pattern.
 pub fn format_instant(t: Instant, pattern: String) -> String {
-    let dt = instant_to_datetime(t);
-    apply_format(&dt, &pattern)
+    apply_format(&instant_to_datetime(t), &pattern)
 }
 
 /// Formats a `DateTime` as a string using the given format pattern.

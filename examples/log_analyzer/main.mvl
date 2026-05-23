@@ -32,7 +32,7 @@ use utils::is_positive;
 
 use std.args.{parse_args, required, optional, get_str, get_str_opt, ArgType, ArgValue}
 use std.io.{read_file}
-use std.log.{log_info, log_error}
+use std.log.{Logger, default_logger}
 
 // ── Trust boundary: domain-specific pipeline logic ──────────────────────────
 
@@ -54,7 +54,7 @@ type RunError = enum {
 
 // ── Main pipeline ───────────────────────────────────────────────────────────
 
-fn run() -> Result[Unit, RunError] ! FileRead + Console + Log + Env {
+fn run(logger: val Logger) -> Result[Unit, RunError] ! FileRead + Console + Log + Env {
     let args: Map[String, ArgValue] = parse_args([
         required("file",  ArgType::Str),
         optional("level", ArgType::Str),
@@ -68,7 +68,7 @@ fn run() -> Result[Unit, RunError] ! FileRead + Console + Log + Env {
             match pipeline_result {
                 Err(_) => Err(RunError::PipelineFailed),
                 Ok(json_report) => {
-                    log_info("analysis complete", {"output": "json"});
+                    logger.info("analysis complete", {"output": "json"});
                     println(json_report);
                     Ok(())
                 }
@@ -87,14 +87,15 @@ fn run_error_message(e: RunError) -> String {
 
 /// Handle a run-time error: log it with the human-readable reason.
 /// Effect is ! Log only — tighter than main's full effect list.
-fn handle_run_error(e: RunError) -> Unit ! Log {
-    log_error("run failed", {"reason": run_error_message(e)})
+fn handle_run_error(logger: val Logger, e: RunError) -> Unit ! Log {
+    logger.error("run failed", {"reason": run_error_message(e)})
 }
 
 fn main() -> Unit ! FileRead + Console + Log + Env {
-    match run() {
+    let logger: Logger = default_logger();
+    match run(logger) {
         Ok(_)  => (),
-        Err(e) => handle_run_error(e),
+        Err(e) => handle_run_error(logger, e),
     }
 }
 

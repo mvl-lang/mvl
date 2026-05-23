@@ -9,7 +9,12 @@ use crate::mvl::stdlib;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const IMPLICIT_PRELUDE_STEMS: &[&str] = &["core", "strings", "lists"];
+const IMPLICIT_PRELUDE_STEMS: &[&str] = &["core", "strings", "lists", "effects"];
+
+/// For hybrid stdlib modules (in RUST_RUNTIME_IMPORTS but not RUST_BACKED_STDLIB),
+/// lists which type names are owned by the Rust runtime and must be stripped from
+/// the MVL prelude to avoid duplicate definitions.
+const RUNTIME_OWNED_TYPES: &[(&str, &[&str])] = &[];
 
 /// Find all `.mvl` files under `path`, filtering by whether they are test files.
 pub fn mvl_files(path: &str, test_only: bool) -> Vec<PathBuf> {
@@ -199,10 +204,11 @@ pub fn find_module_file(entry_dir: &Path, mod_name: &str) -> Option<PathBuf> {
     None
 }
 
-/// Build the implicit prelude: `core.mvl` + `strings.mvl` + `lists.mvl`.
-/// Every compile path loads these three files so their builtins are always visible.
+/// Build the implicit prelude: `core.mvl` + `strings.mvl` + `lists.mvl` + `effects.mvl`.
+/// Every compile path loads these so their builtins and the effect hierarchy
+/// (`Log > Clock`, `IO > Log + …`) are always visible.
 pub fn load_implicit_prelude() -> Vec<Program> {
-    const IMPLICIT: &[&str] = &["core.mvl", "strings.mvl", "lists.mvl"];
+    const IMPLICIT: &[&str] = &["core.mvl", "strings.mvl", "lists.mvl", "effects.mvl"];
     let mut progs = Vec::new();
     for name in IMPLICIT {
         let content = stdlib::stdlib_content(name)
@@ -241,20 +247,34 @@ pub fn load_mvl_native_stdlib_extras(progs: &[Program]) -> Vec<Program> {
                                     let (mut p, _) = Parser::new(content);
                                     let mut loaded_prog = p.parse_program();
                                     // For hybrid modules (in RUST_RUNTIME_IMPORTS but not in
-                                    // RUST_BACKED_STDLIB), strip type declarations from the
-                                    // prelude program.  Types for these modules come from
-                                    // `use mvl_runtime::stdlib::X::*`; emitting them again from
-                                    // MVL source would produce duplicate definitions that conflict
-                                    // with the runtime versions (#897).
-                                    // Scoped to hybrid modules only — purely Rust-backed modules
-                                    // (RUST_BACKED_STDLIB) are not loaded here at all; purely
-                                    // MVL modules define types that must be preserved.
+                                    // RUST_BACKED_STDLIB), types normally come from
+                                    // `use mvl_runtime::stdlib::X::*` and must be stripped to
+                                    // avoid duplicate definitions (#897).
+                                    // Exception: if RUNTIME_OWNED_TYPES lists specific names for
+                                    // this module, only those are stripped — any types absent from
+                                    // the list exist only in MVL and must pass through (e.g.
+                                    // `Logger` in the `log` module, which is MVL-only).
                                     if RUST_RUNTIME_IMPORTS.contains(&m)
                                         && !RUST_BACKED_STDLIB.contains(&m)
                                     {
-                                        loaded_prog
-                                            .declarations
-                                            .retain(|d| !matches!(d, Decl::Type(_)));
+                                        match RUNTIME_OWNED_TYPES
+                                            .iter()
+                                            .find(|(mod_name, _)| *mod_name == m)
+                                        {
+                                            Some((_, runtime_types)) => {
+                                                loaded_prog.declarations.retain(|d| match d {
+                                                    Decl::Type(td) => {
+                                                        !runtime_types.contains(&td.name.as_str())
+                                                    }
+                                                    _ => true,
+                                                });
+                                            }
+                                            None => {
+                                                loaded_prog
+                                                    .declarations
+                                                    .retain(|d| !matches!(d, Decl::Type(_)));
+                                            }
+                                        }
                                     }
                                     next_pending.push(loaded_prog.clone());
                                     extras.push(loaded_prog);

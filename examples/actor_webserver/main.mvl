@@ -22,8 +22,7 @@ use pkg.http.{Status, Request, Response, HttpError,
               parse_request, serialize_response, ok, not_found, error_response}
 use std.net.{TcpListener, TcpStream, tcp_listen, tcp_accept, tcp_read_request, tcp_write,
              tcp_close_listener, tcp_close_stream, net_error_msg, NetError}
-use std.log.{LogLevel, LogFormat, log_debug, log_info, log_warn, log_error,
-             log_set_format, log_set_min_level}
+use std.log.{Logger, LogLevel, LogFormat}
 use std.env.{exit}
 
 // ── Routing ─────────────────────────────────────────────────────────────────
@@ -45,6 +44,7 @@ fn route(req: val Request) -> Result[Response, HttpError] {
 // and then terminates.  No state persists between requests.
 
 actor RequestHandler {
+    logger: Logger,
 
     // Behavior: read one HTTP request, route it, reply, close.
     //
@@ -52,12 +52,12 @@ actor RequestHandler {
     //                Compiler guarantees no other actor or thread touches it.
     pub fn handle(iso stream: TcpStream) ! Log + Net {
         match tcp_read_request(stream) {
-            Err(e) => log_warn("read error", {"error": net_error_msg(e)}),
+            Err(e) => self.logger.warn("read error", {"error": net_error_msg(e)}),
             Ok(raw) => {
                 let resp: Response = match parse_request(raw) {
                     Err(e) => error_response(e),
                     Ok(req) => {
-                        log_debug("request", {"path": req.path});
+                        self.logger.debug("request", {"path": req.path});
                         match route(req) {
                             Ok(r)  => r,
                             Err(e) => error_response(e),
@@ -67,7 +67,7 @@ actor RequestHandler {
                 match tcp_write(stream, serialize_response(resp)) {
                     Ok(_)  => tcp_close_stream(stream),
                     Err(e) => {
-                        log_error("write error", {"error": net_error_msg(e)});
+                        self.logger.error("write error", {"error": net_error_msg(e)});
                         tcp_close_stream(stream)
                     },
                 }
@@ -78,42 +78,45 @@ actor RequestHandler {
 
 // ── Accept loop ───────────────────────────────────────────────────────────
 
-partial fn serve(listener: TcpListener) -> Result[Unit, NetError] ! Log + Net {
+partial fn serve(listener: TcpListener, logger: val Logger) -> Result[Unit, NetError] ! Log + Net {
     match tcp_accept(listener) {
         Err(NetError::ConnectionReset) => {
-            log_warn("client dropped before accept", {"reason": "connection reset"});
-            serve(listener)
+            logger.warn("client dropped before accept", {"reason": "connection reset"});
+            serve(listener, logger)
         },
         Err(NetError::Timeout) => {
-            log_warn("accept timed out", {"reason": "timeout"});
-            serve(listener)
+            logger.warn("accept timed out", {"reason": "timeout"});
+            serve(listener, logger)
         },
         Err(e)     => Err(e),
         Ok(stream) => {
-            let h: RequestHandler = actor RequestHandler {};
+            let h: RequestHandler = actor RequestHandler { logger: logger };
             h.handle(consume(stream));
-            serve(listener)
+            serve(listener, logger)
         },
     }
 }
 
 partial fn main() -> Unit ! Console + Env + FileRead + Log + Net {
     let cfg: ServerConfig = match load_config() {
-        Err(_)  => { log_error("config load failed", {"reason": "see stderr"}); exit(1) },
+        Err(_)  => {
+            let l: Logger = Logger { format: LogFormat::Plain, min_level: LogLevel::Error };
+            l.error("config load failed", {"reason": "see stderr"});
+            exit(1)
+        },
         Ok(c)   => c,
     };
-    log_set_format(cfg.log_format);
-    log_set_min_level(cfg.log_level);
-    log_info("server starting", {
+    let logger: Logger = Logger { format: cfg.log_format, min_level: cfg.log_level };
+    logger.info("server starting", {
         "host":       cfg.host,
         "port":       cfg.port.to_string(),
         "log_level":  "from_config",
         "log_format": "from_config",
     });
     match tcp_listen(cfg.host, cfg.port) {
-        Err(e)       => log_error("listen failed", {"error": net_error_msg(e)}),
-        Ok(listener) => match serve(listener) {
-            Err(e) => log_error("accept failed", {"error": net_error_msg(e)}),
+        Err(e)       => logger.error("listen failed", {"error": net_error_msg(e)}),
+        Ok(listener) => match serve(listener, logger) {
+            Err(e) => logger.error("accept failed", {"error": net_error_msg(e)}),
             Ok(_)  => {},
         },
     }

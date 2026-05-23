@@ -7,9 +7,9 @@
 //   2. Req 11 (IFC): only String and plain values reach the log sink.
 //      Secret[T] values are structurally excluded from audit output.
 //      There is no runtime check; the type system prevents leakage.
-//   3. Phase 4 (std.log): structured audit records via log_info / log_warn
+//   3. Phase 4 (std.log): structured audit records via Logger.info / Logger.warn
 //      replace raw println — each field is individually IFC-checked.
-//      Grant decisions → log_info; deny decisions → log_warn.
+//      Grant decisions → Logger.info; deny decisions → Logger.warn.
 //
 // No extern — audit output uses std.log (Log effect).
 // Assurance note: 0 extern blocks (effect-declared I/O only).
@@ -18,7 +18,7 @@ use model::Resource;
 use model::Action;
 use model::Permission;
 
-use std.log.{log_info, log_warn}
+use std.log.{Logger}
 
 // ── Audit helpers — pure, no effects ──────────────────────────────────────
 
@@ -66,6 +66,7 @@ fn log_level_for_decision(decision: Permission) -> String {
 // username is a plain String — callers are responsible for passing clean values.
 /// Log an access decision to the structured audit trail with IFC-safe fields.
 pub fn log_access(
+    logger: val Logger,
     username: String,
     resource: Resource,
     action: Action,
@@ -76,8 +77,8 @@ pub fn log_access(
     let decision_str: String = permission_name(decision);
     let fields: Map[String, String] = {"user": username, "resource": resource_str, "action": action_str, "decision": decision_str};
     match decision {
-        Permission::Allow => log_info("access granted", fields),
-        Permission::Deny  => log_warn("access denied",  fields),
+        Permission::Allow => logger.info("access granted", fields),
+        Permission::Deny  => logger.warn("access denied",  fields),
     }
 }
 

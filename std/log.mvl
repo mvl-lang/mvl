@@ -1,41 +1,36 @@
-//! std.log — structured logging with compile-time IFC enforcement.
+//! std.log — structured logging with a thread-local Logger value.
 //!
 //! Four severity levels: debug, info, warn, error.
 //! A function without `! Log` in its signature provably never logs — the
 //! compiler enforces this statically; no runtime check needed.
 //! IFC: Secret[T] arguments are rejected at compile time (R6, #54).
 //! "Don't log secrets" is not a code review rule in MVL — it's a type error.
-//! Output format is configurable at runtime via log_set_format (#801).
-//! Minimum level is configurable at runtime via log_set_min_level.
+//!
+//! No process-global state: callers construct a `Logger` (format + min level)
+//! and thread it explicitly through the call graph. Each log call takes the
+//! logger as its first argument.
 //!
 //! Import:
-//!   use std.log.{log_debug, log_info, log_warn, log_error,
-//!                LogFormat, log_set_format, LogLevel, log_set_min_level}
+//!   use std.log.{Logger, LogFormat, LogLevel, default_logger,
+//!                parse_log_level, parse_log_format}
 //!
-//! Effects: Log (emit functions). log_set_format/log_set_min_level have no effect (pure config).
+//! Effects: Log (emit functions). Constructors and parsers are pure.
 //! See #54, ADR-0006.
+
+use std.time.{now, format_instant}
 
 // ── Output format ──────────────────────────────────────────────────────────
 
-/// Selects the output format for all subsequent log calls in this process.
+/// Selects the output format for a Logger.
 ///
-/// Plain   — `2026-05-16 14:32:00 INFO  msg key=value` (default; human-readable)
+/// Plain   — `2026-05-16 14:32:00 INFO  msg key=value` (human-readable)
 /// Logfmt  — `level=INFO ts=2026-05-16T14:32:00Z msg="msg" key=value`
 /// Json    — `{"level":"INFO","ts":"...","msg":"msg","key":"value"}`
-///
-/// Used by std.runtime.log_manifest (#803) to emit the startup manifest
-/// in the same format as the rest of the application's log stream.
 pub type LogFormat = enum {
-    Plain,   // human-readable console output (default)
+    Plain,   // human-readable console output
     Logfmt,  // structured key=value, grep-friendly
     Json,    // machine-readable JSONL
 }
-
-/// Set the output format for all subsequent log calls.
-///
-/// Process-global (thread-local). Default is Plain.
-/// No effect required — this is pure runtime configuration.
-pub builtin fn log_set_format(fmt: LogFormat) -> Unit
 
 // ── Level filtering ────────────────────────────────────────────────────────
 
@@ -44,18 +39,27 @@ pub builtin fn log_set_format(fmt: LogFormat) -> Unit
 /// Records below the configured level are silently dropped at the call site.
 /// Ordered Debug < Info < Warn < Error.
 pub type LogLevel = enum {
-    Debug,  // verbose diagnostics — not emitted in production by default
-    Info,   // normal operational events (default)
+    Debug,  // verbose diagnostics
+    Info,   // normal operational events
     Warn,   // recoverable anomalies
     Error,  // operation-level failures
 }
 
-/// Set the minimum log level.  Records below this level are silently dropped.
+// ── Logger value ───────────────────────────────────────────────────────────
+
+/// Holds the output format and minimum level for a stream of log calls.
 ///
-/// Process-global (thread-local). Default is Debug (all levels emitted unless restricted).
-/// Applications call this at startup to apply their configured level.
-/// No effect required — this is pure runtime configuration.
-pub builtin fn log_set_min_level(level: LogLevel) -> Unit
+/// Plain old data — `val`-shareable across actors. Each log call takes a
+/// Logger as its first argument; no process-global state.
+pub type Logger = struct {
+    format:    LogFormat,
+    min_level: LogLevel,
+}
+
+/// Construct a Logger with the default settings (Plain format, Debug minimum).
+pub fn default_logger() -> Logger {
+    Logger { format: LogFormat::Plain, min_level: LogLevel::Debug }
+}
 
 // ── Parsing helpers ────────────────────────────────────────────────────────
 
@@ -80,26 +84,40 @@ pub fn parse_log_format(s: String) -> LogFormat {
     else { LogFormat::Plain }
 }
 
-// ── Rust-backed primitives (ADR-0024) ──────────────────────────────────────
-
-/// Returns the current log format as an integer discriminant (0=Plain, 1=Logfmt, 2=Json).
-pub builtin fn log_get_format_int() -> Int
-
-/// Returns the current minimum level as an integer discriminant (0=Debug, 1=Info, 2=Warn, 3=Error).
-pub builtin fn log_get_level_int() -> Int
-
-/// Returns a formatted ISO-8601 timestamp string for the current instant.
-/// The wall-clock read is internal to the ! Log effect — callers need not declare ! Clock.
-pub builtin fn log_timestamp() -> String
-
-/// Write a pre-formatted log line to stderr.
-/// Requires ! Log — the only effect needed to drive log output.
-pub builtin fn log_write(line: String) -> Unit ! Log
-
 // ── Internal helpers ───────────────────────────────────────────────────────
 
-/// Map a level string to its ordinal (matches log_get_level_int discriminants).
-fn level_ord(level: String) -> Int {
+/// Write a pre-formatted log line to stderr.
+/// Pure MVL: delegates to eprintln, which is subsumed by ! Log > Console.
+pub fn log_write(line: String) -> Unit ! Log {
+    eprintln(line)
+}
+
+/// Module-private: ISO-8601 timestamp for the current wall-clock instant.
+/// The `! Clock` is subsumed by `! Log` (see effects.mvl), so callers
+/// declaring only `! Log` can invoke this without an extra effect.
+fn _log_timestamp() -> String ! Clock {
+    format_instant(now(), "%Y-%m-%dT%H:%M:%SZ")
+}
+
+fn format_ord(f: LogFormat) -> Int {
+    match f {
+        LogFormat::Plain  => 0,
+        LogFormat::Logfmt => 1,
+        LogFormat::Json   => 2,
+    }
+}
+
+fn level_ord_enum(l: LogLevel) -> Int {
+    match l {
+        LogLevel::Debug => 0,
+        LogLevel::Info  => 1,
+        LogLevel::Warn  => 2,
+        LogLevel::Error => 3,
+    }
+}
+
+/// Map a level string to its ordinal (matches LogLevel discriminants).
+fn level_str_ord(level: String) -> Int {
     if level == "DEBUG" { 0 }
     else if level == "WARN" { 2 }
     else if level == "ERROR" { 3 }
@@ -125,7 +143,6 @@ fn json_escape(s: String) -> String {
 }
 
 /// Pad a level name to 5 characters for plain-format column alignment.
-/// INFO and WARN (4 chars) need one trailing space; DEBUG/ERROR are already 5.
 fn pad_level(level: String) -> String {
     if level.len() < 5 { level.concat(" ") } else { level }
 }
@@ -147,14 +164,13 @@ fn format_kv_pair(k: String, v: String) -> String {
 fn format_fields_kv(fields: Map[String, String]) -> String {
     let keys: List[String] = fields.keys().sort();
     let result: ref String = "";
+    let first: ref Bool = true;
     for k in keys {
         let pair: String = format_kv_pair(k, field_or_empty(fields, k));
-        if result.is_empty() {
-            result = pair
-        } else {
-            result = result.concat(" ").concat(pair)
-        }
-    };
+        let sep: String = if first { "" } else { " " };
+        result = result.concat(sep).concat(pair);
+        first = false
+    }
     result
 }
 
@@ -162,7 +178,6 @@ fn format_fields_kv(fields: Map[String, String]) -> String {
 
 /// Plain format: `2026-05-16 14:32:00 INFO  msg [key=value ...]`
 fn format_plain_line(level: String, ts: String, msg: String, fields: Map[String, String]) -> String {
-    // Replace 'T' separator with space; remove trailing 'Z'.
     let ts_plain: String = ts.replace("T", " ").replace("Z", "");
     let safe_msg: String = sanitize_log(msg);
     let field_str: String = format_fields_kv(fields);
@@ -188,7 +203,7 @@ fn format_logfmt_line(level: String, ts: String, msg: String, fields: Map[String
         let v: String = sanitize_log(field_or_empty(fields, k));
         let qv: String = if v.contains(" ") { "\"".concat(v).concat("\"") } else { v };
         result = result.concat(" ").concat(sanitize_log(k)).concat("=").concat(qv)
-    };
+    }
     result
 }
 
@@ -201,22 +216,21 @@ fn format_json_line(level: String, ts: String, msg: String, fields: Map[String, 
         let ek: String = json_escape(k);
         let ev: String = json_escape(field_or_empty(fields, k));
         result = result.concat(",\"").concat(ek).concat("\":\"").concat(ev).concat("\"")
-    };
+    }
     result.concat("}")
 }
 
 // ── Core emit ─────────────────────────────────────────────────────────────
 
-/// Emit a structured log record at the given level if it meets the minimum threshold.
-///
-/// Selects the output format from the process-global setting, formats the record,
-/// and writes it to stderr via log_write.
-fn log_emit(level: String, msg: String, fields: Map[String, String]) -> Unit ! Log {
-    let level_n: Int = level_ord(level);
-    let min_n: Int = log_get_level_int();
+/// Emit a structured log record at the given level if it meets the logger's
+/// minimum threshold. Selects the output format from the logger and writes
+/// to stderr via log_write.
+fn log_emit(logger: Logger, level: String, msg: String, fields: Map[String, String]) -> Unit ! Log {
+    let level_n: Int = level_str_ord(level);
+    let min_n:   Int = level_ord_enum(logger.min_level);
     if level_n >= min_n {
-        let ts: String = log_timestamp();
-        let fmt: Int = log_get_format_int();
+        let ts:   String = _log_timestamp();
+        let fmt:  Int    = format_ord(logger.format);
         let line: String = if fmt == 1 {
             format_logfmt_line(level, ts, msg, fields)
         } else if fmt == 2 {
@@ -228,44 +242,27 @@ fn log_emit(level: String, msg: String, fields: Map[String, String]) -> Unit ! L
     }
 }
 
-// ── Public API ─────────────────────────────────────────────────────────────
+// ── Public API (methods on Logger) ─────────────────────────────────────────
 
 /// Emit a DEBUG-level structured log record.
 ///
-/// `msg` is a short human-readable description.
-/// `fields` is a map of key-value context (all values must be Public).
-///
-/// Requires `! Log`. A function that calls `log_debug` without `! Log`
-/// in its own signature is a compile error.
-///
-/// IFC: Secret[T] or Tainted[T] arguments are rejected at compile time.
-pub fn log_debug(msg: String, fields: Map[String, String]) -> Unit ! Log {
-    log_emit("DEBUG", msg, fields)
+/// Requires `! Log`. A function that calls this without `! Log` is a compile
+/// error. IFC: Secret[T] or Tainted[T] arguments cause a compile error.
+pub fn Logger::debug(self, msg: String, fields: Map[String, String]) -> Unit ! Log {
+    log_emit(self, "DEBUG", msg, fields)
 }
 
-/// Emit an INFO-level structured log record.
-///
-/// Use for normal operational events (server started, request handled, etc.).
-///
-/// Requires `! Log`. IFC: Secret[T] or Tainted[T] arguments cause a compile error.
-pub fn log_info(msg: String, fields: Map[String, String]) -> Unit ! Log {
-    log_emit("INFO", msg, fields)
+/// Emit an INFO-level structured log record (normal operational events).
+pub fn Logger::info(self, msg: String, fields: Map[String, String]) -> Unit ! Log {
+    log_emit(self, "INFO", msg, fields)
 }
 
-/// Emit a WARN-level structured log record.
-///
-/// Use for recoverable anomalies that may need attention.
-///
-/// Requires `! Log`. IFC: Secret[T] or Tainted[T] arguments cause a compile error.
-pub fn log_warn(msg: String, fields: Map[String, String]) -> Unit ! Log {
-    log_emit("WARN", msg, fields)
+/// Emit a WARN-level structured log record (recoverable anomalies).
+pub fn Logger::warn(self, msg: String, fields: Map[String, String]) -> Unit ! Log {
+    log_emit(self, "WARN", msg, fields)
 }
 
-/// Emit an ERROR-level structured log record.
-///
-/// Use for failures that affect a specific operation but not the whole process.
-///
-/// Requires `! Log`. IFC: Secret[T] or Tainted[T] arguments cause a compile error.
-pub fn log_error(msg: String, fields: Map[String, String]) -> Unit ! Log {
-    log_emit("ERROR", msg, fields)
+/// Emit an ERROR-level structured log record (per-operation failures).
+pub fn Logger::error(self, msg: String, fields: Map[String, String]) -> Unit ! Log {
+    log_emit(self, "ERROR", msg, fields)
 }

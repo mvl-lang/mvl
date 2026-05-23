@@ -205,6 +205,23 @@ impl TypeChecker {
                         self.check_send_capability(first_arg, *span);
                     }
                 }
+                // 003-information-flow/Req 6: public I/O sinks must reject labeled args.
+                // Logger.{debug,info,warn,error} are public sinks — same treatment as
+                // println/log_write in `infer_fn_call`.
+                if let Ty::Named(type_name, _) = recv_ty.unlabeled() {
+                    if type_name == "Logger"
+                        && matches!(method.as_str(), "debug" | "info" | "warn" | "error")
+                    {
+                        for (arg, arg_ty) in args.iter().zip(arg_tys.iter()) {
+                            if let Some(label) = ifc::label_of(arg_ty) {
+                                self.emit(CheckError::LoggingLabelViolation {
+                                    label: label.to_string(),
+                                    span: arg.span(),
+                                });
+                            }
+                        }
+                    }
+                }
                 // Stdlib method resolution (#43): dispatch on receiver type.
                 // IFC labels propagate through method results via the receiver label.
                 self.infer_method_call(&recv_ty, method, &arg_tys, *span)

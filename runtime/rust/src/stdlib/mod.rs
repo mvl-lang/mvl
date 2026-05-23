@@ -10,15 +10,12 @@
 //!
 //! # Design
 //!
-//! - Phase 2: stubs in `.mvl` files gain real Rust implementations here.
-//! - Phase 3: implementations move to MVL source compiled from `.mvl` files.
 //! - Minimal dependencies — `sha2`, `hex`, `getrandom` for crypto backing; everything else uses `std` only.
 
 pub mod args;
 pub mod crypto;
 pub mod env;
 pub mod io;
-pub mod log;
 pub mod net;
 pub mod primitives;
 pub mod process;
