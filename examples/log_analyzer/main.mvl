@@ -2,7 +2,7 @@
 //
 // Demonstrates:
 //   1. extern "rust" trust boundary — domain-specific pipeline logic in Rust
-//   2. IFC labels: Tainted CLI input sanitized to Clean before use
+//   2. IFC labels: Tainted[String] from read_file — trust boundary crossed inside Rust bridge
 //   3. Effect declarations: FileRead + Console + Log on I/O functions
 //   4. Multi-module design: use imports document cross-module dependencies
 //   5. stdlib usage: std.io, std.args, std.log

@@ -159,16 +159,17 @@ IFC flow in the example:
 ```
 CLI args / filesystem (Rust, unverified)
     │
-    │  extern "rust" boundary
+    │  extern "rust" boundary (read_file)
     ▼
-Tainted[String]   ← read_log_file() returns raw file contents
+Tainted[String]   ← read_file() returns raw file contents
     │
-    │  sanitize()  (MVL built-in, explicit lattice step)
+    │  extern "rust" boundary (analyze_and_format)
+    │  Tainted[String] accepted — Rust bridge handles trust internally
     ▼
-Clean[String]     ← count_and_format() receives verified-clean content
+Result[String, PipelineError]   ← trust boundary crossed inside Rust
     │
     ▼
-String            ← returned to fn main, printed to stdout
+String            ← json_report printed to stdout
 ```
 
 **Tests:** `make run` in `examples/log_analyzer/` (end-to-end smoke test)
