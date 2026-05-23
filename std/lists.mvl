@@ -9,6 +9,15 @@
 //! Import: available as builtins; explicit import not required.
 //!
 //! Effects: none (all functions are pure).
+//!
+//! # 4-way sync (#992)
+//!
+//! Adding a new method here requires **synchronized changes** in three other places:
+//!   1. `checker/method_types.rs` — add the return type mapping
+//!   2. `backends/rust/emit_exprs.rs` — add STDLIB_UFCS_METHODS or a match arm
+//!   3. `backends/llvm/exprs.rs` — add the LLVM emission arm
+//!
+//! See issue #992 for the planned method-desugaring fix that removes this requirement.
 
 // ── List kernel (6 builtin methods) ─────────────────────────────────────────
 

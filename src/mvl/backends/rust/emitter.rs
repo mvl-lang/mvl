@@ -583,14 +583,17 @@ impl RustEmitter {
                 self.line(&format!("pub struct {name};"));
                 self.blank();
 
-                // Emit impl block with any method stubs collected from call sites
+                // Emit impl block with any method stubs collected from call sites.
+                // These todo!() stubs are intentional: external types are opaque
+                // placeholders whose actual implementations live outside this module.
+                // They compile but panic if called — acceptable for Phase 1 stubs (#990).
                 let methods = collect_method_stubs_for_type(prog, name, &stubs);
                 if !methods.is_empty() {
                     self.line(&format!("impl {name} {{"));
                     for m in &methods {
                         self.push_indent();
                         self.line(&format!(
-                            "pub fn {}(&self, {}) -> {} {{ todo!() }}",
+                            "pub fn {}(&self, {}) -> {} {{ todo!(\"external type stub — provide a real impl\") }}",
                             m.name, m.args_str, m.return_type
                         ));
                         self.pop_indent();

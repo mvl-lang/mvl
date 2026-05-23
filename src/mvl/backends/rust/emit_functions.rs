@@ -253,11 +253,12 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
     let stmts = &fd.body.stmts;
     if stmts.is_empty() {
         // Unit-returning functions with an empty body are valid in Rust (implicit `()`).
-        // Non-Unit empty bodies get a `todo!` placeholder so the generated code compiles.
+        // Non-Unit empty bodies are rejected by the checker before transpilation (#990),
+        // so this path is unreachable in a well-typed program.
         let is_unit =
             matches!(fd.return_type.as_ref(), TypeExpr::Base { name, .. } if name == "Unit");
         if !is_unit {
-            cg.line("todo!(\"empty body\")");
+            unreachable!("non-Unit function with empty body — blocked by checker (#990)");
         }
     } else {
         // Emit all but the last statement normally

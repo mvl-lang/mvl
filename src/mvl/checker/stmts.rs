@@ -64,6 +64,22 @@ impl TypeChecker {
         let stmts = &block.stmts;
         let n = stmts.len();
         let mut last_ty = Ty::Unit;
+
+        // An empty block implicitly returns Unit.  Reject non-Unit return types so
+        // the transpiler never needs to emit todo!("empty body") (#990).
+        if stmts.is_empty() {
+            if let Some(ret) = return_ty {
+                let resolved = self.resolve_alias(ret.clone());
+                if !matches!(resolved, Ty::Unit | Ty::Unknown) {
+                    self.emit(CheckError::TypeMismatch {
+                        expected: ret.display(),
+                        found: "Unit".to_string(),
+                        span: block.span,
+                    });
+                }
+            }
+        }
+
         for (i, stmt) in stmts.iter().enumerate() {
             if i + 1 == n {
                 // Tail-position statement: infer its type so the block propagates the

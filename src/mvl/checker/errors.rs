@@ -291,6 +291,21 @@ pub enum CheckError {
         span: Span,
     },
 
+    // ── Trait impl completeness (#990) ───────────────────────────────────
+    /// A trait `impl` block is missing a required method.
+    ///
+    /// This is caught before transpilation so the backend never emits `todo!()`
+    /// stubs for unfilled trait methods (#990).
+    MissingTraitMethod {
+        /// The trait being implemented (e.g. `"Display"`).
+        trait_name: String,
+        /// The type implementing the trait (e.g. `"Point"`).
+        type_name: String,
+        /// The method name that must be provided (e.g. `"fmt"`).
+        method: String,
+        span: Span,
+    },
+
     // ── Information flow control (#23, #894) ─────────────────────────────
     /// `relabel name(expr, "tag")` applied to wrong input type (#894).
     InvalidRelabel {
@@ -590,6 +605,8 @@ impl CheckError {
             CheckError::NotIterator { .. } => 1,
             // Req 9: Generics — constraint enforcement
             CheckError::MissingConstraint { .. } => 9,
+            // Req 1: Type Safety — trait impl completeness (#990)
+            CheckError::MissingTraitMethod { .. } => 1,
         }
     }
 
@@ -665,7 +682,8 @@ impl CheckError {
             | CheckError::SessionAfterEnd { span }
             | CheckError::SessionDeadlock { span }
             | CheckError::SessionDuplicateLabel { span, .. }
-            | CheckError::InterprocFlowViolation { span, .. } => *span,
+            | CheckError::InterprocFlowViolation { span, .. }
+            | CheckError::MissingTraitMethod { span, .. } => *span,
         }
     }
 
@@ -929,6 +947,9 @@ impl CheckError {
                      use sanitize() or declassify(){chain_str}"
                 )
             }
+            CheckError::MissingTraitMethod { trait_name, type_name, method, .. } => format!(
+                "`impl {trait_name} for {type_name}` is missing required method `{method}` — add a `fn {method}` body to the impl block"
+            ),
         }
     }
 }

@@ -608,6 +608,8 @@ impl TypeChecker {
                 let required_bound = match op {
                     BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge => "Ord",
                     BinaryOp::Eq | BinaryOp::Ne => "Eq",
+                    // Unreachable: the outer match arm already constrains `op` to the
+                    // six comparison operators listed above (#991).
                     _ => unreachable!(),
                 };
                 for operand_ty in [&lt, &rt] {

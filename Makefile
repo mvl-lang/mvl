@@ -270,6 +270,21 @@ assurance: ## Assurance dashboard (add VERBOSE=true for full output with legend)
 assurance-gate: ## CI gate: fail if below 75% completeness/coverage
 	@python3 tools/assurance.py --min 0.75
 
+# Budget for total unreachable!/panic! calls in src/mvl/ (production + inline tests).
+# This count includes test assertion helpers (which are fine) alongside production
+# unreachables.  The purpose is to detect new additions: raise the budget only when
+# a deliberate new unreachable!/panic! is added with a documented reason (#991).
+# Baseline after #990 cleanup: 98.
+PANIC_BUDGET := 100
+audit-panics: ## Count unreachable!/panic! in src/mvl — fail if over budget (#991)
+	@count=$$(grep -rn 'unreachable!\|panic!' src/mvl/ --include='*.rs' \
+	    | grep -v '"panic"\|"panic!' \
+	    | wc -l | tr -d ' '); \
+	echo "unreachable!/panic! count: $$count (budget: $(PANIC_BUDGET))"; \
+	if [ "$$count" -gt "$(PANIC_BUDGET)" ]; then \
+	    echo "FAIL: count $$count exceeds budget $(PANIC_BUDGET) — see issue #991"; exit 1; \
+	fi
+
 check-adr: ## Check ADR structure (required sections, no duplicate numbers)
 	@python3 tools/check_adr.py --verbose
 

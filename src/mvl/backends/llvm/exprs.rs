@@ -1774,6 +1774,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .builder
                 .build_conditional_branch(lhs_int, merge_bb, rhs_bb)
                 .unwrap(),
+            // Unreachable: emit_logical_short_circuit is only called with And/Or (#991).
             _ => unreachable!(),
         };
 
@@ -1800,6 +1801,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         let short_val = match op {
             BinaryOp::And => bool_ty.const_int(0, false), // && short-circuits to false
             BinaryOp::Or => bool_ty.const_int(1, false),  // || short-circuits to true
+            // Unreachable: emit_logical_short_circuit is only called with And/Or (#991).
             _ => unreachable!(),
         };
         let phi = self.builder.build_phi(bool_ty, "sc_result").unwrap();
@@ -2817,6 +2819,12 @@ impl<'ctx> LlvmBackend<'ctx> {
     // ── Method call emission ─────────────────────────────────────────────────
 
     /// Emit `receiver.method(args)`.
+    ///
+    /// # 4-way sync (#992)
+    ///
+    /// This match block is one of **four** places that must stay in sync when adding a
+    /// new builtin method.  See `checker/method_types.rs` for the authoritative list
+    /// and full explanation.  The planned fix (method desugaring) is tracked in issue #992.
     pub(crate) fn emit_method_call(
         &mut self,
         receiver: &Expr,
