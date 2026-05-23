@@ -1,0 +1,170 @@
+// pkg.http server layer tests — Phase 3 (#800)
+//
+// Tests verify the routing and dispatch logic used by `ConnectionHandler` and
+// `HttpServer`.  Actor instantiation requires real TCP sockets and is exercised
+// by examples/actor_webserver/ instead.
+//
+// Note: `Dispatcher = fn(Request, MatchedRoute) -> Response` is declared in
+// http.mvl as a public API type.  Calling Dispatcher values currently requires
+// runtime support for by-value function pointers with struct arguments — a
+// known limitation tracked separately.  These tests cover the underlying
+// routing behaviour that the actors depend on.
+//
+// Type re-declarations: workaround for #96 (same structure as http.mvl).
+
+// ── Type re-declarations (must match http.mvl exactly) ───────────────────────
+
+type Status = enum {
+    Http200Ok,
+    Http201Created,
+    Http202Accepted,
+    Http204NoContent,
+    Http301MovedPermanently,
+    Http302Found,
+    Http304NotModified,
+    Http400BadRequest,
+    Http401Unauthorized,
+    Http403Forbidden,
+    Http404NotFound,
+    Http405MethodNotAllowed,
+    Http409Conflict,
+    Http410Gone,
+    Http422UnprocessableEntity,
+    Http429TooManyRequests,
+    Http500InternalServerError,
+    Http501NotImplemented,
+    Http502BadGateway,
+    Http503ServiceUnavailable,
+    Http504GatewayTimeout,
+}
+
+type Method = enum { Get, Post, Put, Delete, Patch, Head, Options }
+
+type Request = struct {
+    method:  Method,
+    path:    String,
+    query:   Map[String, List[Tainted[String]]],
+    headers: Map[String, String],
+    body:    Tainted[String],
+}
+
+type Response = struct {
+    status:  Status,
+    headers: Map[String, String],
+    body:    String,
+}
+
+type HttpError = struct {
+    status: Status,
+    detail: String,
+}
+
+type Route = struct {
+    method:  Method,
+    pattern: String,
+    name:    String,
+}
+
+type MatchedRoute = struct {
+    name:   String,
+    params: Map[String, String],
+}
+
+type Router = struct {
+    routes: List[Route],
+}
+
+// `new_router`, `route`, `dispatch` — pub in http.mvl, available here.
+// `parse_request_str` — test helper wrapping the pub `parse_request`.
+
+fn parse_request_str(s: String) -> Result[Request, HttpError] {
+    parse_request(relabel taint(s, "HTTP-TEST"))
+}
+
+// ── Routing tests (underpins ConnectionHandler.handle behaviour) ─────────────
+
+test fn server_router_dispatches_static_path() -> Unit {
+    let r: Router = route(new_router(), Method::Get, "/health", "health");
+    match parse_request_str("GET /health HTTP/1.0\r\n\r\n") {
+        Err(_)  => assert(false),
+        Ok(req) => match dispatch(r, req) {
+            Err(_)      => assert(false),
+            Ok(matched) => assert_eq(matched.name, "health"),
+        },
+    }
+}
+
+test fn server_router_extracts_path_param() -> Unit {
+    let r: Router = route(new_router(), Method::Get, "/users/{id}", "user");
+    match parse_request_str("GET /users/42 HTTP/1.0\r\n\r\n") {
+        Err(_)  => assert(false),
+        Ok(req) => match dispatch(r, req) {
+            Err(_)      => assert(false),
+            Ok(matched) => {
+                assert_eq(matched.name, "user");
+                match matched.params.get("id") {
+                    None    => assert(false),
+                    Some(v) => assert_eq(v, "42"),
+                }
+            },
+        },
+    }
+}
+
+test fn server_router_returns_404_for_unknown_path() -> Unit {
+    let r: Router = route(new_router(), Method::Get, "/known", "known");
+    match parse_request_str("GET /unknown HTTP/1.0\r\n\r\n") {
+        Err(_)  => assert(false),
+        Ok(req) => match dispatch(r, req) {
+            Ok(_)   => assert(false),
+            Err(e)  => assert_eq(e.status, Status::Http404NotFound),
+        },
+    }
+}
+
+test fn server_router_returns_405_for_wrong_method() -> Unit {
+    let r: Router = route(new_router(), Method::Get, "/data", "data");
+    match parse_request_str("POST /data HTTP/1.0\r\n\r\n") {
+        Err(_)  => assert(false),
+        Ok(req) => match dispatch(r, req) {
+            Ok(_)   => assert(false),
+            Err(e)  => assert_eq(e.status, Status::Http405MethodNotAllowed),
+        },
+    }
+}
+
+test fn server_router_first_match_wins() -> Unit {
+    let r: Router = route(route(new_router(),
+        Method::Get, "/x", "first"),
+        Method::Get, "/x", "second");
+    match parse_request_str("GET /x HTTP/1.0\r\n\r\n") {
+        Err(_)  => assert(false),
+        Ok(req) => match dispatch(r, req) {
+            Err(_)      => assert(false),
+            Ok(matched) => assert_eq(matched.name, "first"),
+        },
+    }
+}
+
+test fn server_router_multi_segment_path_param() -> Unit {
+    let r: Router = route(new_router(), Method::Get, "/api/{version}/items/{id}", "item");
+    match parse_request_str("GET /api/v2/items/99 HTTP/1.0\r\n\r\n") {
+        Err(_)  => assert(false),
+        Ok(req) => match dispatch(r, req) {
+            Err(_)      => assert(false),
+            Ok(matched) => {
+                assert_eq(matched.name, "item");
+                match matched.params.get("version") {
+                    None    => assert(false),
+                    Some(v) => {
+                        assert_eq(v, "v2");
+                        match matched.params.get("id") {
+                            None     => assert(false),
+                            Some(id) => assert_eq(id, "99"),
+                        }
+                    },
+                }
+            },
+        },
+    }
+}

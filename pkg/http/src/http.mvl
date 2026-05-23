@@ -1,17 +1,23 @@
-// pkg.http — HTTP types, request parsing, and response serialization.
+// pkg.http — HTTP types, request parsing, response serialization, and server actors.
 //
-// Pure MVL package built on std.net primitives.  No extern blocks.
+// Built on std.net primitives.  No extern blocks.
 //
-// Import:
+// Import (types + parsing):
 //   use pkg.http.{Status, Method, Request, Response, HttpError,
 //                  parse_request, serialize_response, respond, error_response,
 //                  query_first, query_all}
 //
-// Effects: none (all functions are pure).
+// Import (server):
+//   use pkg.http.{Dispatcher, ConnectionHandler, HttpServer, serve}
 //
-// See #783.
+// Effects: parsing/routing functions are pure; server actors require ! Net + Console.
+//
+// See #783, #800.
 
 use std.ifc.{Tainted}
+use std.net.{TcpListener, TcpStream, NetError,
+             tcp_listen, tcp_accept, tcp_read_request, tcp_write,
+             tcp_close_listener, tcp_close_stream, net_error_msg}
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
@@ -651,6 +657,138 @@ pub fn dispatch(r: val Router, req: val Request) -> Result[MatchedRoute, HttpErr
             } else {
                 Err(HttpError { status: Status::Http404NotFound, detail: req.path })
             }
+        },
+    }
+}
+
+// ── Server actors ─────────────────────────────────────────────────────────────
+//
+// Phase 3 of #783.  Builds on the router (Phase 2) to provide a full
+// actor-based HTTP server.
+//
+// Usage:
+//   let router: Router = route(route(new_router(),
+//       Method::Get, "/hello", "hello"),
+//       Method::Post, "/echo", "echo");
+//
+//   fn my_dispatch(req: Request, matched: MatchedRoute) -> Response {
+//       match matched.name {
+//           "hello" => ok("Hello, world!"),
+//           "echo"  => ok(req.body),
+//           _       => not_found(),
+//       }
+//   }
+//
+//   serve(router, my_dispatch, "127.0.0.1:8080")
+
+/// A function that maps a matched route + request to a response.
+///
+/// Applications implement this to route by name to handler logic.
+/// Use with the `serve()` convenience function or directly in the accept loop.
+pub type Dispatcher = fn(Request, MatchedRoute) -> Response
+
+/// Actor that owns a single TCP connection and handles one HTTP request/response cycle.
+///
+/// Reads one HTTP request, dispatches via the router, responds with the route
+/// name as a plain-text body (applications use `Dispatcher` with `serve()` for
+/// custom response logic), closes the stream, and terminates.
+///
+/// Lifecycle: spawned by `HttpServer`, one actor per accepted connection.
+pub actor ConnectionHandler {
+    stream: TcpStream,
+    router: Router,
+
+    /// Read one HTTP request, dispatch, write response, close stream.
+    pub fn handle() ! Net {
+        match tcp_read_request(self.stream) {
+            Err(_)  => tcp_close_stream(self.stream),
+            Ok(raw) => {
+                let resp: Response = match parse_request(raw) {
+                    Err(e)  => error_response(e),
+                    Ok(req) => match dispatch(self.router, req) {
+                        Err(e)      => error_response(e),
+                        Ok(matched) => ok(matched.name),
+                    },
+                };
+                match tcp_write(self.stream, serialize_response(resp)) {
+                    Ok(_)  => tcp_close_stream(self.stream),
+                    Err(_) => tcp_close_stream(self.stream),
+                }
+            },
+        }
+    }
+}
+
+/// Actor that owns a `TcpListener` and spawns a `ConnectionHandler` per connection.
+///
+/// Uses recursive self-messaging for the accept loop: after each accepted
+/// connection it re-enqueues `serve()` on itself, keeping the mailbox active.
+pub actor HttpServer {
+    listener: TcpListener,
+    router:   Router,
+
+    /// Accept one connection, spawn a `ConnectionHandler`, then re-enqueue self.
+    pub fn serve() ! Net + Console {
+        match tcp_accept(self.listener) {
+            Err(NetError::ConnectionReset) => self.serve(),
+            Err(NetError::Timeout)         => self.serve(),
+            Err(_)                         => tcp_close_listener(self.listener),
+            Ok(stream) => {
+                let h: ConnectionHandler = actor ConnectionHandler {
+                    stream: stream,
+                    router: self.router,
+                };
+                h.handle();
+                self.serve()
+            },
+        }
+    }
+}
+
+/// Accept loop used by `serve()`.  Inline dispatch via `Dispatcher` callback —
+/// this path supports custom response logic without the `ConnectionHandler` actor.
+partial fn accept_loop(listener: TcpListener, r: Router, dispatcher: Dispatcher) -> Result[Unit, HttpError] ! Net + Console {
+    match tcp_accept(listener) {
+        Err(NetError::ConnectionReset) => accept_loop(listener, r, dispatcher),
+        Err(NetError::Timeout)         => accept_loop(listener, r, dispatcher),
+        Err(_)                         => Ok(()),
+        Ok(stream) => {
+            let resp: Response = match tcp_read_request(stream) {
+                Err(_)  => error_response(HttpError { status: Status::Http500InternalServerError, detail: "read error" }),
+                Ok(raw) => match parse_request(raw) {
+                    Err(e)  => error_response(e),
+                    Ok(req) => match dispatch(r, req) {
+                        Err(e)      => error_response(e),
+                        Ok(matched) => dispatcher(req, matched),
+                    },
+                },
+            };
+            match tcp_write(stream, serialize_response(resp)) {
+                Ok(_)  => { tcp_close_stream(stream); accept_loop(listener, r, dispatcher) },
+                Err(_) => { tcp_close_stream(stream); accept_loop(listener, r, dispatcher) },
+            }
+        },
+    }
+}
+
+/// Convenience entry point: parse `addr` ("host:port"), bind, and serve forever.
+///
+/// Uses `Dispatcher` for custom response logic — more flexible than `HttpServer`
+/// for applications that need full control over responses.  Returns an error if
+/// the address is malformed or the port cannot be bound.
+pub partial fn serve(r: Router, dispatcher: Dispatcher, addr: String) -> Result[Unit, HttpError] ! Net + Console {
+    let parts: List[String] = addr.split(":");
+    match parts.get(0) {
+        None       => Err(HttpError { status: Status::Http400BadRequest, detail: "invalid addr: missing host" }),
+        Some(host) => match parts.get(1) {
+            None           => Err(HttpError { status: Status::Http400BadRequest, detail: "invalid addr: missing port" }),
+            Some(port_str) => match port_str.parse_int() {
+                Err(_)   => Err(HttpError { status: Status::Http400BadRequest, detail: "invalid addr: bad port" }),
+                Ok(port) => match tcp_listen(host, port) {
+                    Err(e)       => Err(HttpError { status: Status::Http503ServiceUnavailable, detail: net_error_msg(e) }),
+                    Ok(listener) => accept_loop(listener, r, dispatcher),
+                },
+            },
         },
     }
 }
