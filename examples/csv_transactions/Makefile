@@ -16,7 +16,7 @@ help: ## Show this help
 guard-mvl:
 	@$(MVL) --version > /dev/null 2>&1 || { echo "Run 'make build' from repo root first."; exit 1; }
 
-check: guard-mvl ## Type-check main.mvl
+check: guard-mvl ## Type-check main.mvl (note: uses Tainted[String] from read_file — IFC is exercised)
 	cd $(REPO_ROOT) && $(abspath $(MVL)) check $(DIR)main.mvl
 
 test-solver: guard-mvl ## Show per-file solver statistics
@@ -46,8 +46,8 @@ assurance: guard-mvl ## Full assurance: check + unit tests + assurance report
 	cd $(REPO_ROOT) && $(abspath $(MVL)) test $(DIR)
 	cd $(REPO_ROOT) && $(abspath $(MVL)) assurance $(DIR) --verbose
 
-run: guard-mvl ## Run the example (prints CSV round-trip to stdout)
-	cd $(REPO_ROOT) && $(abspath $(MVL)) run $(DIR)main.mvl
+run: guard-mvl ## Run the example with the bundled sample CSV
+	cd $(REPO_ROOT) && $(abspath $(MVL)) run $(DIR)main.mvl -- --input $(DIR)sample.csv
 
 clean: ## Remove build artifacts
 	rm -rf $(TMPDIR)mvl_build_csv_transactions

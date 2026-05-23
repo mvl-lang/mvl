@@ -1,18 +1,19 @@
 // examples/csv_transactions — std.csv IFC-aware encode/decode demonstration
 //
 // Demonstrates:
-//   - Pure parse/encode API (no file I/O, fully testable)
+//   - Reading a CSV file with IFC taint tracking (read_file → Tainted[String])
+//   - Trusting own-data files with relabel trust (explicit audit point)
+//   - Pure parse/encode API: parse_with_headers, encode_with_headers
 //   - Decode function: receives Tainted[String] cells, validates, returns clean struct
-//   - Encode function: clean struct to plain List[String]
-//   - read_structs / write_structs pattern (file I/O via builtins)
+//   - Encode function: clean struct → plain List[String]
 //
-// Run:  mvl run examples/csv_transactions/main.mvl
-// Test: make test-corpus
+// Run:  mvl run examples/csv_transactions/main.mvl -- --input examples/csv_transactions/sample.csv
+// Test: make test
 
-use std.csv.{CsvError, CsvWithHeaders, parse_with_headers, encode_with_headers,
-              read_structs, write_structs}
-use std.io.{println}
+use std.csv.{CsvError, CsvWithHeaders, parse_with_headers, encode_with_headers}
+use std.io.{read_file, println}
 use std.ifc.{Tainted, trust}
+use std.args.{parse_args, required, get_str, ArgType, ArgValue}
 
 // ── Domain type ───────────────────────────────────────────────────────────────
 
@@ -65,43 +66,34 @@ fn encode_transaction(tx: Transaction) -> List[String] {
     [tx.date, tx.description, tx.amount_cents.to_string()]
 }
 
-// ── Pure demonstration (no file I/O) ─────────────────────────────────────────
+// ── Pipeline ──────────────────────────────────────────────────────────────────
 
-partial fn demo_pure() -> Unit ! Console {
-    let csv: String = "date,description,amount\n2024-01-15,Coffee,-350\n2024-01-16,Salary,500000\n";
-    match parse_with_headers(csv) {
-        Err(_)     => println("parse failed"),
-        Ok(result) => {
-            println("Headers: ".concat(result.headers.len().to_string()).concat(" columns"));
-            println("Rows: ".concat(result.rows.len().to_string()));
-            let re_encoded: String = encode_with_headers(result.headers, result.rows);
-            println("Re-encoded CSV:");
-            println(re_encoded)
+partial fn run() -> Unit ! FileRead + Console + Env {
+    let cli: Map[String, ArgValue] = parse_args([required("input", ArgType::Str)]);
+    let path: String = get_str(cli, "input", "");
+
+    match read_file(path) {
+        Err(_)       => println("error: could not read file"),
+        Ok(raw)      => {
+            // Own-data file: trust the content for parsing.
+            let content: String = relabel trust(raw, "CSV-OWN-DATA");
+            match parse_with_headers(content) {
+                Err(_)     => println("error: failed to parse CSV"),
+                Ok(result) => {
+                    println("=== csv_transactions: ".concat(path).concat(" ==="));
+                    println("Columns: ".concat(result.headers.len().to_string())
+                            .concat("  Rows: ").concat(result.rows.len().to_string()));
+                    println("");
+                    let re_encoded: String = encode_with_headers(result.headers, result.rows);
+                    println(re_encoded)
+                },
+            }
         },
     }
 }
 
-// ── File I/O pattern ─────────────────────────────────────────────────────────
-//
-// When std.csv file I/O builtins are backed by the runtime, the idiomatic
-// pattern is:
-//
-//   partial fn process_file(input: String, output: String)
-//       -> Result[Unit, CsvError] ! FileRead + FileWrite {
-//     match read_structs(input, decode_transaction) {
-//       Err(e)  => Err(e),
-//       Ok(txs) => {
-//         let headers: List[String] = ["date", "description", "amount"];
-//         write_structs(output, headers, txs, encode_transaction)
-//       },
-//     }
-//   }
-//
-// Each CSV cell arrives as Tainted[String]; decode_transaction is the
-// trust boundary that validates and removes the label.
-
 // ── main ──────────────────────────────────────────────────────────────────────
 
-partial fn main() -> Unit ! Console {
-    demo_pure()
+partial fn main() -> Unit ! FileRead + Console + Env {
+    run()
 }
