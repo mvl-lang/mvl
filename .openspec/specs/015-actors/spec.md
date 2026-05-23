@@ -25,6 +25,54 @@ capability set (`iso`, `val`, `ref`, `tag`) as documented in ADR-0029.  Unlike P
 runtime scheduler, MVL's Rust backend emits `async fn` / Tokio actors, and the LLVM
 backend uses a mailbox runtime.  Semantics are backend-independent.
 
+## Scheduling Model
+
+MVL actors use **cooperative, reduction-budgeted scheduling** — matching Erlang's approach
+where reduction counting is transparent to the programmer.
+
+- Actors yield only at **message boundaries** — no OS-level preemption mid-behavior
+- A fixed reduction budget prevents starvation: after processing a configurable number of
+  messages, the scheduler yields to other actors
+- **Phase 8 default:** budget is fixed per actor; per-class configuration is deferred to Phase 9
+- **Rust backend:** Tokio task-per-actor with `SyncSender` mailbox
+- **LLVM backend:** C-ABI mailbox runtime (`mvl_actor_spawn`/`send`/`drop`)
+- Scheduling semantics are **backend-independent** — programs must not rely on execution order
+  across actors
+
+No fairness guarantee is made for Phase 8 (see also L3 in Known Limitations).
+
+## Failure Philosophy
+
+MVL uses a **three-layer failure model**:
+
+| Layer | Handles |
+|-------|---------|
+| Compiler | Type errors, data races, missing effects, contract violations |
+| `Result[T, E]` | Expected operational failures (network, DB, external APIs) |
+| Actor isolation | Residual unexpected failures — actor terminates; future supervision restarts |
+
+"Let it crash" applies only to what the compiler cannot verify.  Crashing for something
+the compiler should have caught is a design failure, not runtime recovery work.
+
+**Mailbox overflow (Phase 8):** When a mailbox is full, `try_send` **drops the message
+silently**.  This is fire-and-forget semantics — callers MUST NOT rely on message delivery
+under load.  Mailbox capacity is fixed at **256 messages** per actor in both backends.
+Configurable capacity and backpressure are deferred to Phase 9.
+
+**Actor failure handling (Phase 8):** If a behavior panics, the actor thread terminates.
+No automatic restart occurs.  Supervision tree support via `std.actors.Supervisor` is
+planned for Phase 9 with `one_for_one`, `one_for_all`, and `rest_for_one` strategies.
+
+## Supervision (Phase 9 Preview)
+
+No dedicated language construct exists for supervision in Phase 8.  The design decision
+(issue #854) is:
+
+- `std.actors.Supervisor` will provide standard restart strategies in Phase 9
+- Erlang-style **bidirectional links** are the Phase 8 primitive — pass `tag ActorRef`
+  references between actors to build callback / notification patterns
+- One-way monitors (observe failure without coupling fate) are a Phase 9 addition
+
 ## Capability Sendability Recap
 
 | Capability | Sendable across actor boundary |
@@ -259,6 +307,14 @@ The compiler MUST reject a behavior call that passes an `iso` value without cons
 
 **Tests:** `tests/corpus/actors/message_send.mvl`
 
+#### Scenario: Mailbox full — message is dropped silently
+
+- GIVEN an actor with a full mailbox (256 pending messages)
+- WHEN a behavior call is made via `try_send`
+- THEN the message IS dropped — no error is raised, no blocking occurs
+
+**Tests:** `tests/corpus/actors/mailbox_overflow.mvl`
+
 ---
 
 ### Requirement 5: Sendability Rules [MUST]
@@ -358,6 +414,16 @@ The only permitted interaction with an actor from the outside is sending a messa
 
 **Tests:** `tests/corpus/actors/actor_ref.mvl`
 
+#### Scenario: Reply pattern — passing ActorRef for callbacks
+
+- GIVEN a `Requester` actor that calls `worker.compute(consume(data), self_ref)`
+  where `self_ref: tag ActorRef` is a reference to the requester
+- WHEN the worker completes processing
+- THEN the worker MAY call `self_ref.on_result(consume(result))` to deliver the reply
+- AND the compiler MUST accept — `tag ActorRef` is sendable and carries only identity
+
+**Tests:** `tests/corpus/actors/actor_ref.mvl`, `examples/programs/actor_pingpong.mvl`
+
 ---
 
 ### Requirement 8: Structured Concurrency — Scope Lifetime [SHOULD]
@@ -393,8 +459,13 @@ by the scope in which it was created.
 - WHEN the block exits normally
 - THEN all pending messages for actors created within the block MUST be processed
   before the enclosing scope continues
+- AND this drain is **guaranteed**, not best-effort
 
 **Tests:** `tests/corpus/actors/structured_concurrency.mvl`
+
+**Note:** Graceful shutdown ordering — when a `concurrently` block is stopped externally
+or an actor within it panics, drain-before-return semantics are **not guaranteed** in
+Phase 8.  A `Supervisor.stop()` method with ordered shutdown is tracked for Phase 9.
 
 ---
 
@@ -465,3 +536,14 @@ These limitations are accepted for Phase 8 and tracked as follow-up work:
   may require additional type-checking passes (deferred).
 - **L3**: select fairness — when multiple branches are simultaneously ready, branch selection
   is implementation-defined (Rust/LLVM schedulers differ). No fairness guarantee is made.
+- **L4**: failure handling — if a behavior panics, the actor thread terminates with no
+  automatic restart. No panic recovery or supervision tree exists in Phase 8.  Supervision
+  via `std.actors.Supervisor` is a Phase 9 feature.
+- **L5**: one-way monitors — Phase 8 supports only bidirectional links (passing `tag ActorRef`
+  references for reply/notification patterns). Erlang-style one-way monitors (observe failure
+  without coupling fate) are deferred to Phase 9.
+- **L6**: mailbox capacity — fixed at 256 messages per actor; overflow silently drops
+  messages. Configurable capacity, blocking send, and backpressure are Phase 9 features.
+- **L7**: graceful shutdown ordering — `concurrently` block drain is guaranteed on normal
+  exit but not on actor panic or external stop. Ordered shutdown via `Supervisor.stop()` is
+  deferred to Phase 9.
