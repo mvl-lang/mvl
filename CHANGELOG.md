@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.142.0] - 2026-05-23
+
+### Added
+
+- **pkg.http testing utilities** (#951): Adds `pkg/http/src/testing.mvl` with response parsing and BDD-style assertion helpers. Includes `test_request(method, path)` for building raw HTTP/1.0 request strings, `parse_response(raw)` for parsing status line/headers/body, and `expect_status` / `expect_body_contains` / `expect_header` assertion helpers. 20 unit tests covering happy path and edge cases. Pure MVL, no extern blocks or runtime dependencies.
+
 ## [0.141.1] - 2026-05-23
 
 ### Fixed
