@@ -26,7 +26,7 @@ type ParseError = enum {
 }
 
 /// Log severity level for a parsed log entry.
-pub type LogLevel = enum {
+pub type Severity = enum {
     Debug,
     Info,
     Warn,
@@ -42,7 +42,7 @@ type RawEntry = struct {
 
 /// Validated log entry with sanitized message text.
 pub type LogEntry = struct {
-    level:     LogLevel,
+    level:     Severity,
     message:   String,
     timestamp: Int,
 }
@@ -58,15 +58,15 @@ pub type Report = struct {
 // ── MVL-verified parsing logic ─────────────────────────────────────────────
 
 /// Parse a log level string, case-insensitively (uses `to_lower`).
-/// "ERROR", "Error", and "error" all resolve to `LogLevel::Error`.
-pub total fn parse_level(raw: Tainted[String]) -> Result[LogLevel, ParseError] {
+/// "ERROR", "Error", and "error" all resolve to `Severity::Error`.
+pub total fn parse_level(raw: Tainted[String]) -> Result[Severity, ParseError] {
     let clean: String = relabel trust(raw, "VALIDATED");
     let lower: String = clean.to_lower();
     match lower {
-        "debug" => Ok(LogLevel::Debug),
-        "info"  => Ok(LogLevel::Info),
-        "warn"  => Ok(LogLevel::Warn),
-        "error" => Ok(LogLevel::Error),
+        "debug" => Ok(Severity::Debug),
+        "info"  => Ok(Severity::Info),
+        "warn"  => Ok(Severity::Warn),
+        "error" => Ok(Severity::Error),
         _       => Err(ParseError::UnknownLevel),
     }
 }
@@ -75,7 +75,7 @@ pub total fn parse_level(raw: Tainted[String]) -> Result[LogLevel, ParseError] {
 /// The `?` operator short-circuits on `Err`, equivalent to `.and_then()` chaining.
 pub total fn parse_line(raw: Tainted[String]) -> Result[LogEntry, ParseError] {
     let entry: RawEntry = serde_json_parse_entry(raw)?;
-    let level: LogLevel = parse_level(entry.level)?;
+    let level: Severity = parse_level(entry.level)?;
     Ok(LogEntry {
         level:     level,
         message:   relabel trust(entry.message, "VALIDATED"),
@@ -96,19 +96,19 @@ pub fn build_report(entries: List[LogEntry]) -> Report {
     entries.fold(
         Report { count: 0, errors: 0, warnings: 0, infos: 0 },
         |acc: Report, entry: LogEntry| match entry.level {
-            LogLevel::Error => Report {
+            Severity::Error => Report {
                 count: acc.count + 1, errors: acc.errors + 1,
                 warnings: acc.warnings, infos: acc.infos
             },
-            LogLevel::Warn  => Report {
+            Severity::Warn  => Report {
                 count: acc.count + 1, errors: acc.errors,
                 warnings: acc.warnings + 1, infos: acc.infos
             },
-            LogLevel::Info  => Report {
+            Severity::Info  => Report {
                 count: acc.count + 1, errors: acc.errors,
                 warnings: acc.warnings, infos: acc.infos + 1
             },
-            LogLevel::Debug => Report {
+            Severity::Debug => Report {
                 count: acc.count + 1, errors: acc.errors,
                 warnings: acc.warnings, infos: acc.infos
             },
@@ -119,10 +119,10 @@ pub fn build_report(entries: List[LogEntry]) -> Report {
 /// Summarize a log entry as a human-readable string for map → display pipeline.
 pub fn entry_summary(entry: LogEntry) -> String {
     match entry.level {
-        LogLevel::Error => "ERROR",
-        LogLevel::Warn  => "WARN",
-        LogLevel::Info  => "INFO",
-        LogLevel::Debug => "DEBUG",
+        Severity::Error => "ERROR",
+        Severity::Warn  => "WARN",
+        Severity::Info  => "INFO",
+        Severity::Debug => "DEBUG",
     }
 }
 
@@ -130,7 +130,7 @@ pub fn entry_summary(entry: LogEntry) -> String {
 /// Used as a named filter argument: `entries.filter(is_error_level)`.
 pub fn is_error_level(entry: LogEntry) -> Bool {
     match entry.level {
-        LogLevel::Error => true,
+        Severity::Error => true,
         _               => false,
     }
 }
@@ -140,7 +140,7 @@ pub fn is_error_level(entry: LogEntry) -> Bool {
 // unlabeled data flows freely into a Tainted context (Public ⊑ Tainted).
 
 test fn check_debug_level_is_ok() -> Unit {
-    let result: Result[LogLevel, ParseError] = parse_level(relabel taint("debug", "TEST"));
+    let result: Result[Severity, ParseError] = parse_level(relabel taint("debug", "TEST"));
     let ok: Int = match result {
         Ok(_)  => 1,
         Err(_) => 0,
@@ -149,7 +149,7 @@ test fn check_debug_level_is_ok() -> Unit {
 }
 
 test fn check_error_level_is_ok() -> Unit {
-    let result: Result[LogLevel, ParseError] = parse_level(relabel taint("error", "TEST"));
+    let result: Result[Severity, ParseError] = parse_level(relabel taint("error", "TEST"));
     let ok: Int = match result {
         Ok(_)  => 1,
         Err(_) => 0,
@@ -159,7 +159,7 @@ test fn check_error_level_is_ok() -> Unit {
 
 // to_lower() enables case-insensitive level parsing (Phase 4).
 test fn check_uppercase_error_level_is_ok() -> Unit {
-    let result: Result[LogLevel, ParseError] = parse_level(relabel taint("ERROR", "TEST"));
+    let result: Result[Severity, ParseError] = parse_level(relabel taint("ERROR", "TEST"));
     let ok: Int = match result {
         Ok(_)  => 1,
         Err(_) => 0,
@@ -168,7 +168,7 @@ test fn check_uppercase_error_level_is_ok() -> Unit {
 }
 
 test fn check_unknown_level_is_err() -> Unit {
-    let result: Result[LogLevel, ParseError] = parse_level(relabel taint("verbose", "TEST"));
+    let result: Result[Severity, ParseError] = parse_level(relabel taint("verbose", "TEST"));
     let err: Int = match result {
         Ok(_)  => 0,
         Err(_) => 1,
@@ -177,7 +177,7 @@ test fn check_unknown_level_is_err() -> Unit {
 }
 
 test fn check_empty_level_is_err() -> Unit {
-    let result: Result[LogLevel, ParseError] = parse_level(relabel taint("", "TEST"));
+    let result: Result[Severity, ParseError] = parse_level(relabel taint("", "TEST"));
     let err: Int = match result {
         Ok(_)  => 0,
         Err(_) => 1,
@@ -195,9 +195,9 @@ test fn build_report_empty_list_is_zero() -> Unit {
 
 test fn build_report_counts_total() -> Unit {
     let entries: List[LogEntry] = [
-        LogEntry { level: LogLevel::Info,  message: "msg1", timestamp: 1 },
-        LogEntry { level: LogLevel::Error, message: "msg2", timestamp: 2 },
-        LogEntry { level: LogLevel::Warn,  message: "msg3", timestamp: 3 },
+        LogEntry { level: Severity::Info,  message: "msg1", timestamp: 1 },
+        LogEntry { level: Severity::Error, message: "msg2", timestamp: 2 },
+        LogEntry { level: Severity::Warn,  message: "msg3", timestamp: 3 },
     ];
     let report: Report = build_report(entries);
     assert_eq(report.count, 3);
@@ -205,9 +205,9 @@ test fn build_report_counts_total() -> Unit {
 
 test fn build_report_counts_errors() -> Unit {
     let entries: List[LogEntry] = [
-        LogEntry { level: LogLevel::Error, message: "e1", timestamp: 1 },
-        LogEntry { level: LogLevel::Error, message: "e2", timestamp: 2 },
-        LogEntry { level: LogLevel::Info,  message: "i1", timestamp: 3 },
+        LogEntry { level: Severity::Error, message: "e1", timestamp: 1 },
+        LogEntry { level: Severity::Error, message: "e2", timestamp: 2 },
+        LogEntry { level: Severity::Info,  message: "i1", timestamp: 3 },
     ];
     let report: Report = build_report(entries);
     assert_eq(report.errors, 2);
@@ -215,8 +215,8 @@ test fn build_report_counts_errors() -> Unit {
 
 test fn build_report_counts_warnings() -> Unit {
     let entries: List[LogEntry] = [
-        LogEntry { level: LogLevel::Warn, message: "w1", timestamp: 1 },
-        LogEntry { level: LogLevel::Warn, message: "w2", timestamp: 2 },
+        LogEntry { level: Severity::Warn, message: "w1", timestamp: 1 },
+        LogEntry { level: Severity::Warn, message: "w2", timestamp: 2 },
     ];
     let report: Report = build_report(entries);
     assert_eq(report.warnings, 2);
@@ -224,8 +224,8 @@ test fn build_report_counts_warnings() -> Unit {
 
 test fn build_report_counts_infos() -> Unit {
     let entries: List[LogEntry] = [
-        LogEntry { level: LogLevel::Info,  message: "i1", timestamp: 1 },
-        LogEntry { level: LogLevel::Debug, message: "d1", timestamp: 2 },
+        LogEntry { level: Severity::Info,  message: "i1", timestamp: 1 },
+        LogEntry { level: Severity::Debug, message: "d1", timestamp: 2 },
     ];
     let report: Report = build_report(entries);
     assert_eq(report.infos, 1);
@@ -236,10 +236,10 @@ test fn build_report_counts_infos() -> Unit {
 // entry_summary produces "ERROR" strings (map output is observed).
 test fn pipeline_filter_map_fold_error_count() -> Unit {
     let entries: List[LogEntry] = [
-        LogEntry { level: LogLevel::Info,  message: "i1", timestamp: 1 },
-        LogEntry { level: LogLevel::Error, message: "e1", timestamp: 2 },
-        LogEntry { level: LogLevel::Error, message: "e2", timestamp: 3 },
-        LogEntry { level: LogLevel::Warn,  message: "w1", timestamp: 4 },
+        LogEntry { level: Severity::Info,  message: "i1", timestamp: 1 },
+        LogEntry { level: Severity::Error, message: "e1", timestamp: 2 },
+        LogEntry { level: Severity::Error, message: "e2", timestamp: 3 },
+        LogEntry { level: Severity::Warn,  message: "w1", timestamp: 4 },
     ];
     // fold observes the string values from entry_summary to verify the map step.
     let error_count: Int = entries
@@ -255,25 +255,25 @@ test fn pipeline_filter_map_fold_error_count() -> Unit {
 // ── entry_summary tests ───────────────────────────────────────────────────
 
 test fn entry_summary_error() -> Unit {
-    let entry: LogEntry = LogEntry { level: LogLevel::Error, message: "e", timestamp: 0 };
+    let entry: LogEntry = LogEntry { level: Severity::Error, message: "e", timestamp: 0 };
     let ok: Int = match entry_summary(entry) { "ERROR" => 1, _ => 0 };
     assert_eq(ok, 1);
 }
 
 test fn entry_summary_warn() -> Unit {
-    let entry: LogEntry = LogEntry { level: LogLevel::Warn, message: "w", timestamp: 0 };
+    let entry: LogEntry = LogEntry { level: Severity::Warn, message: "w", timestamp: 0 };
     let ok: Int = match entry_summary(entry) { "WARN" => 1, _ => 0 };
     assert_eq(ok, 1);
 }
 
 test fn entry_summary_info() -> Unit {
-    let entry: LogEntry = LogEntry { level: LogLevel::Info, message: "i", timestamp: 0 };
+    let entry: LogEntry = LogEntry { level: Severity::Info, message: "i", timestamp: 0 };
     let ok: Int = match entry_summary(entry) { "INFO" => 1, _ => 0 };
     assert_eq(ok, 1);
 }
 
 test fn entry_summary_debug() -> Unit {
-    let entry: LogEntry = LogEntry { level: LogLevel::Debug, message: "d", timestamp: 0 };
+    let entry: LogEntry = LogEntry { level: Severity::Debug, message: "d", timestamp: 0 };
     let ok: Int = match entry_summary(entry) { "DEBUG" => 1, _ => 0 };
     assert_eq(ok, 1);
 }
@@ -281,22 +281,22 @@ test fn entry_summary_debug() -> Unit {
 // ── is_error_level tests ──────────────────────────────────────────────────
 
 test fn is_error_level_true_for_error() -> Unit {
-    let entry: LogEntry = LogEntry { level: LogLevel::Error, message: "e", timestamp: 0 };
+    let entry: LogEntry = LogEntry { level: Severity::Error, message: "e", timestamp: 0 };
     assert_eq(is_error_level(entry), true);
 }
 
 test fn is_error_level_false_for_warn() -> Unit {
-    let entry: LogEntry = LogEntry { level: LogLevel::Warn, message: "w", timestamp: 0 };
+    let entry: LogEntry = LogEntry { level: Severity::Warn, message: "w", timestamp: 0 };
     assert_eq(is_error_level(entry), false);
 }
 
 test fn is_error_level_false_for_info() -> Unit {
-    let entry: LogEntry = LogEntry { level: LogLevel::Info, message: "i", timestamp: 0 };
+    let entry: LogEntry = LogEntry { level: Severity::Info, message: "i", timestamp: 0 };
     assert_eq(is_error_level(entry), false);
 }
 
 test fn is_error_level_false_for_debug() -> Unit {
-    let entry: LogEntry = LogEntry { level: LogLevel::Debug, message: "d", timestamp: 0 };
+    let entry: LogEntry = LogEntry { level: Severity::Debug, message: "d", timestamp: 0 };
     assert_eq(is_error_level(entry), false);
 }
 
@@ -305,8 +305,8 @@ test fn is_error_level_false_for_debug() -> Unit {
 // Debug entries increment count only — errors/warnings/infos stay at zero.
 test fn build_report_debug_increments_count_only() -> Unit {
     let entries: List[LogEntry] = [
-        LogEntry { level: LogLevel::Debug, message: "d1", timestamp: 1 },
-        LogEntry { level: LogLevel::Debug, message: "d2", timestamp: 2 },
+        LogEntry { level: Severity::Debug, message: "d1", timestamp: 1 },
+        LogEntry { level: Severity::Debug, message: "d2", timestamp: 2 },
     ];
     let report: Report = build_report(entries);
     assert_eq(report.count,    2);
