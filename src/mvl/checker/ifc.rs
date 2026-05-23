@@ -325,7 +325,17 @@ fn collect_calls_in_expr(expr: &Expr, names: &mut std::collections::HashSet<Stri
                 collect_calls_in_expr(a, names);
             }
         }
-        Expr::MethodCall { receiver, args, .. } => {
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            // Insert the qualified sink name so build_sink_reachability can seed from
+            // Logger method calls in the transitive analysis (#973).
+            if matches!(method.as_str(), "debug" | "info" | "warn" | "error") {
+                names.insert(format!("Logger::{method}"));
+            }
             collect_calls_in_expr(receiver, names);
             for a in args {
                 collect_calls_in_expr(a, names);
@@ -708,7 +718,33 @@ fn check_expr_flows(
         | Expr::Borrow { expr, .. } => {
             check_expr_flows(expr, pc, env, caller_fn, sink_reach, errors);
         }
-        Expr::MethodCall { receiver, args, .. } => {
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            span,
+            ..
+        } => {
+            // Logger.{debug,info,warn,error} are public sinks — check for implicit flow
+            // exactly as for FnCall with PUBLIC_SINKS (#973).
+            if is_high_opt(&pc) && matches!(method.as_str(), "debug" | "info" | "warn" | "error") {
+                let qualified = format!("Logger::{method}");
+                if PUBLIC_SINKS.contains(&qualified.as_str()) {
+                    errors.push(CheckError::ImplicitFlowViolation {
+                        pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
+                        sink: qualified.clone(),
+                        span: *span,
+                    });
+                } else if let Some(sink) = sink_reach.get(qualified.as_str()) {
+                    errors.push(CheckError::CrossFunctionImplicitFlowViolation {
+                        pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
+                        caller: caller_fn.to_string(),
+                        callee: qualified,
+                        sink: sink.clone(),
+                        span: *span,
+                    });
+                }
+            }
             check_expr_flows(receiver, pc.clone(), env, caller_fn, sink_reach, errors);
             for arg in args {
                 check_expr_flows(arg, pc.clone(), env, caller_fn, sink_reach, errors);

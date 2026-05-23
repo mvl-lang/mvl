@@ -22,7 +22,7 @@ use pkg.http.{Status, Request, Response, HttpError,
               parse_request, serialize_response, ok, not_found, error_response}
 use std.net.{TcpListener, TcpStream, tcp_listen, tcp_accept, tcp_read_request, tcp_write,
              tcp_close_listener, tcp_close_stream, net_error_msg, NetError}
-use std.log.{Logger, LogLevel, LogFormat}
+use std.log.{Logger, LogLevel, LogFormat, default_logger}
 use std.env.{exit}
 
 // ── Routing ─────────────────────────────────────────────────────────────────
@@ -100,8 +100,7 @@ partial fn serve(listener: TcpListener, logger: val Logger) -> Result[Unit, NetE
 partial fn main() -> Unit ! Console + Env + FileRead + Log + Net {
     let cfg: ServerConfig = match load_config() {
         Err(_)  => {
-            let l: Logger = Logger { format: LogFormat::Plain, min_level: LogLevel::Error };
-            l.error("config load failed", {"reason": "see stderr"});
+            default_logger().error("config load failed", {"reason": "see stderr"});
             exit(1)
         },
         Ok(c)   => c,

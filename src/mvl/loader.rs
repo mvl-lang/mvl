@@ -12,11 +12,6 @@ use std::path::{Path, PathBuf};
 
 const IMPLICIT_PRELUDE_STEMS: &[&str] = &["core", "strings", "lists", "effects"];
 
-/// For hybrid stdlib modules (in RUST_RUNTIME_IMPORTS but not RUST_BACKED_STDLIB),
-/// lists which type names are owned by the Rust runtime and must be stripped from
-/// the MVL prelude to avoid duplicate definitions.
-const RUNTIME_OWNED_TYPES: &[(&str, &[&str])] = &[];
-
 fn format_error_with_source(src: &str, span: Span, message: &str) -> String {
     let line_text = src.lines().nth((span.line - 1) as usize).unwrap_or("");
     let line_num = span.line.to_string();
@@ -271,24 +266,11 @@ pub fn load_mvl_native_stdlib_extras(progs: &[Program]) -> Vec<Program> {
                                     if RUST_RUNTIME_IMPORTS.contains(&m)
                                         && !RUST_BACKED_STDLIB.contains(&m)
                                     {
-                                        match RUNTIME_OWNED_TYPES
-                                            .iter()
-                                            .find(|(mod_name, _)| *mod_name == m)
-                                        {
-                                            Some((_, runtime_types)) => {
-                                                loaded_prog.declarations.retain(|d| match d {
-                                                    Decl::Type(td) => {
-                                                        !runtime_types.contains(&td.name.as_str())
-                                                    }
-                                                    _ => true,
-                                                });
-                                            }
-                                            None => {
-                                                loaded_prog
-                                                    .declarations
-                                                    .retain(|d| !matches!(d, Decl::Type(_)));
-                                            }
-                                        }
+                                        // Hybrid modules: types come from `use mvl_runtime::stdlib::X::*`
+                                        // — strip MVL type decls to avoid duplicate definitions (#897).
+                                        loaded_prog
+                                            .declarations
+                                            .retain(|d| !matches!(d, Decl::Type(_)));
                                     }
                                     next_pending.push(loaded_prog.clone());
                                     extras.push(loaded_prog);

@@ -13,6 +13,10 @@
 //
 // IFC enforcement (Secret[T]/Tainted[T] rejection) is a compile-time type
 // error, not a runtime check — those cases belong in tests/corpus/06_ifc/.
+//
+// TODO: Log output is not yet observable in tests (no injectable log sink).
+// Sanitization correctness (newline/NUL/JSON escaping) from the deleted
+// runtime/rust/src/stdlib/log.rs tests is not yet covered here.
 
 use std.log.{Logger, LogLevel, LogFormat, default_logger}
 

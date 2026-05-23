@@ -3836,14 +3836,15 @@ fn sha512_accepts_plain_string() {
 }
 
 /// Minimal Logger stub for inline IFC tests (avoids loading std/log.mvl).
-/// The checker recognizes `Logger.{debug,info,warn,error}` as IFC sinks.
+/// Field layout (`dummy: Int`) is irrelevant — tests exercise sink-name and
+/// label checks, not Logger construction. The checker identifies Logger sinks
+/// by type name + method name, not by struct fields.
 const LOGGER_STUB: &str = r#"
 type Logger = struct { dummy: Int }
 fn Logger::debug(self, msg: String, fields: Map[String, String]) -> Unit ! Log { }
 fn Logger::info(self, msg: String, fields: Map[String, String]) -> Unit ! Log { }
 fn Logger::warn(self, msg: String, fields: Map[String, String]) -> Unit ! Log { }
 fn Logger::error(self, msg: String, fields: Map[String, String]) -> Unit ! Log { }
-fn make_logger() -> Logger { Logger { dummy: 0 } }
 "#;
 
 #[test]
@@ -4135,6 +4136,28 @@ fn log_debug_rejects_tainted_value_in_fields_map() {
             |e| matches!(e, CheckError::LoggingLabelViolation { label, .. } if label == "Tainted")
         ),
         "Logger.debug with Tainted value in fields map should emit LoggingLabelViolation, got: {errors:?}"
+    );
+}
+
+/// Logger method inside a Secret-conditional branch MUST be rejected (implicit flow).
+///
+/// Even though the argument to `logger.info` is a literal, the presence of the
+/// log record reveals whether `flag` was truthy — an implicit flow via the log sink.
+///
+/// Regression for #973: `Expr::MethodCall` was not checked against PUBLIC_SINKS.
+#[test]
+fn logger_method_implicit_flow_secret_branch_rejected() {
+    let errors = errors_for(&format!(
+        "{LOGGER_STUB}fn f(flag: Secret[Bool], logger: val Logger) -> Unit ! Log {{
+            if flag {{ logger.info(\"branch taken\", {{\"k\": \"v\"}}); }}
+        }}"
+    ));
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::ImplicitFlowViolation { pc_label, sink, .. }
+                if pc_label == "Secret" && sink.starts_with("Logger::"))
+        ),
+        "Logger.info inside Secret branch should emit ImplicitFlowViolation, got: {errors:?}"
     );
 }
 

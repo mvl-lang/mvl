@@ -57,6 +57,8 @@ pub type Logger = struct {
 }
 
 /// Construct a Logger with the default settings (Plain format, Debug minimum).
+/// Emits all log levels — suitable for development. Production callers should
+/// use `LogLevel::Info` or higher to suppress debug noise.
 pub fn default_logger() -> Logger {
     Logger { format: LogFormat::Plain, min_level: LogLevel::Debug }
 }
@@ -88,7 +90,7 @@ pub fn parse_log_format(s: String) -> LogFormat {
 
 /// Write a pre-formatted log line to stderr.
 /// Pure MVL: delegates to eprintln, which is subsumed by ! Log > Console.
-pub fn log_write(line: String) -> Unit ! Log {
+fn log_write(line: String) -> Unit ! Log {
     eprintln(line)
 }
 
