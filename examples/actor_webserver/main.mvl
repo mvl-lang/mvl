@@ -22,7 +22,7 @@ use pkg.http.{Status, Request, Response, HttpError,
               parse_request, serialize_response, ok, not_found, error_response}
 use std.net.{TcpListener, TcpStream, tcp_listen, tcp_accept, tcp_read_request, tcp_write,
              tcp_close_listener, tcp_close_stream, net_error_msg, NetError}
-use std.log.{Logger, LogLevel, LogFormat, default_logger}
+use std.log.{Logger, LogLevel, LogFormat, default_logger, parse_log_level, parse_log_format}
 use std.env.{exit}
 
 // ── Pre-listen admission ────────────────────────────────────────────────────
@@ -119,12 +119,12 @@ partial fn main() -> Unit ! Console + Env + FileRead + Log + Net {
         },
         Ok(c)   => c,
     };
-    let logger: Logger = Logger { format: cfg.log_format, min_level: cfg.log_level };
+    let logger: Logger = Logger { format: parse_log_format(cfg.log_format), min_level: parse_log_level(cfg.log_level) };
     logger.info("server starting", {
         "host":       cfg.host,
         "port":       cfg.port.to_string(),
-        "log_level":  "from_config",
-        "log_format": "from_config",
+        "log_level":  cfg.log_level,
+        "log_format": cfg.log_format,
     });
     match tcp_listen(cfg.host, cfg.port) {
         Err(e)       => logger.error("listen failed", {"error": net_error_msg(e)}),

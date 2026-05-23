@@ -11,17 +11,20 @@ use std.config.{ConfigValue, ConfigError, merge, with_env, get_path,
 use std.toml.{toml_decode}
 use std.io.{read_file}
 use std.args.{parse_args, optional, flag, ArgType, ArgValue}
-use std.log.{LogFormat, LogLevel, parse_log_level, parse_log_format}
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 /// Resolved server configuration.
+///
+/// `log_level` and `log_format` are kept as strings to avoid cross-module
+/// type duplication in the code generator; callers convert with
+/// `parse_log_level` / `parse_log_format` from std.log.
 pub type ServerConfig = struct {
     host:       String,
     port:       Int,
     debug:      Bool,
-    log_level:  LogLevel,
-    log_format: LogFormat,
+    log_level:  String,
+    log_format: String,
 }
 
 /// Errors that can occur while loading configuration.
@@ -106,12 +109,8 @@ partial fn extract(cfg: ConfigValue) -> Result[ServerConfig, ConfigError] {
         host:  as_string(get_path(cfg, "host").unwrap_or(ConfigValue::String("127.0.0.1")))?,
         port:  as_int(get_path(cfg, "port").unwrap_or(ConfigValue::Int(8080)))?,
         debug: as_bool(get_path(cfg, "debug").unwrap_or(ConfigValue::Bool(false))).unwrap_or(false),
-        log_level:  parse_log_level(
-            as_string(get_path(cfg, "log_level").unwrap_or(ConfigValue::String("info"))).unwrap_or("info")
-        ),
-        log_format: parse_log_format(
-            as_string(get_path(cfg, "log_format").unwrap_or(ConfigValue::String("plain"))).unwrap_or("plain")
-        ),
+        log_level:  as_string(get_path(cfg, "log_level").unwrap_or(ConfigValue::String("info"))).unwrap_or("info"),
+        log_format: as_string(get_path(cfg, "log_format").unwrap_or(ConfigValue::String("plain"))).unwrap_or("plain"),
     })
 }
 
