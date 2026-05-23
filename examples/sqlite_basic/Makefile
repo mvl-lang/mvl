@@ -1,5 +1,5 @@
 # examples/sqlite_basic — SQLite basic example Makefile
-.PHONY: help guard-mvl run check test assurance clean
+.PHONY: help guard-mvl run check test-solver test assurance clean
 
 .DEFAULT_GOAL := help
 
@@ -15,6 +15,25 @@ guard-mvl:
 
 check: guard-mvl ## Type-check example files (main.mvl + main_test.mvl)
 	cd $(REPO_ROOT) && $(abspath $(MVL)) check $(DIR)
+
+test-solver: guard-mvl ## Show per-file solver statistics
+	@pass=0; fail=0; \
+	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
+	for f in $(DIR)main.mvl; do \
+		name=$$(basename "$$f"); \
+		out=$$(cd $(REPO_ROOT) && $(abspath $(MVL)) check "$$f" 2>&1); rc=$$?; \
+		if [ $$rc -eq 0 ]; then \
+			printf "  $$OK  %s\n" "$$name"; pass=$$((pass + 1)); \
+		else \
+			printf "  $$FAIL  %s\n" "$$name"; printf "%s\n" "$$out" | sed 's/^/         /'; fail=$$((fail + 1)); \
+		fi; \
+	done; \
+	echo ""; \
+	if [ $$fail -eq 0 ]; then \
+		printf "  \033[32m✓  $$pass passed, 0 failed\033[0m\n\n"; \
+	else \
+		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
+	fi
 
 test: guard-mvl ## Run unit tests from main_test.mvl
 	cd $(REPO_ROOT) && $(abspath $(MVL)) test $(DIR)

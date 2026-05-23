@@ -88,7 +88,7 @@ fn option_str_or(opt: Option[String], default: String) -> String {
     // `let d = default` is a let-binding identity: the borrow_params analysis
     // treats this as a disqualifying use, so `default` stays String (owned)
     // in the generated Rust rather than being inferred as &String.
-    let d: String = default;
+    let d: String = consume(default);
     match opt {
         Some(s) => s,
         None    => d,

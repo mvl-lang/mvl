@@ -149,9 +149,9 @@ partial fn collect_rows(rh: Int) -> List[Map[String, Value]] {
 /// Open a SQLite database at `path`, creating it if it does not exist.
 ///
 /// `path` must be a trusted string — use a literal or a value validated by
-/// the caller. This mirrors the `Clean[String]` requirement on `execute`/`query`
+/// the caller. This mirrors the `String` requirement on `execute`/`query`
 /// and prevents tainted user input from reaching the filesystem.
-pub total fn open(path: Clean[String]) -> Result[SqliteDb, SqliteError] ! DB + FileRead + FileWrite {
+pub total fn open(path: String) -> Result[SqliteDb, SqliteError] ! DB + FileRead + FileWrite {
     let h: Int = sqlite_open(path);
     if h == -1 {
         Err(make_error(-1))
@@ -165,7 +165,7 @@ pub total fn open(path: Clean[String]) -> Result[SqliteDb, SqliteError] ! DB + F
 /// `sql` must be a trusted string literal or validated query — use `?`
 /// placeholders and `params` for untrusted values (prevents SQL injection).
 /// Returns the number of rows affected.
-pub total fn execute(val db: SqliteDb, sql: Clean[String], params: List[Value]) -> Result[Int, SqliteError] ! DB {
+pub total fn execute(val db: SqliteDb, sql: String, params: List[Value]) -> Result[Int, SqliteError] ! DB {
     bind_params(db._handle, params);
     let affected: Int = sqlite_execute(db._handle, sql);
     if affected == -1 {
@@ -178,7 +178,7 @@ pub total fn execute(val db: SqliteDb, sql: Clean[String], params: List[Value]) 
 /// Run a SELECT query and return all matching rows.
 ///
 /// `sql` must be a trusted string — use `?` placeholders for runtime values.
-pub partial fn query(val db: SqliteDb, sql: Clean[String], params: List[Value]) -> Result[List[Map[String, Value]], SqliteError] ! DB {
+pub partial fn query(val db: SqliteDb, sql: String, params: List[Value]) -> Result[List[Map[String, Value]], SqliteError] ! DB {
     bind_params(db._handle, params);
     let rh: Int = sqlite_query(db._handle, sql);
     if rh == -1 {
@@ -199,7 +199,7 @@ pub partial fn query(val db: SqliteDb, sql: Clean[String], params: List[Value]) 
 ///
 /// Example:
 ///   let n = query_scalar(db, "SELECT COUNT(*) FROM users", [])?;
-pub partial fn query_scalar(val db: SqliteDb, sql: Clean[String], params: List[Value]) -> Result[Value, SqliteError] ! DB {
+pub partial fn query_scalar(val db: SqliteDb, sql: String, params: List[Value]) -> Result[Value, SqliteError] ! DB {
     bind_params(db._handle, params);
     let rh: Int = sqlite_query(db._handle, sql);
     if rh == -1 {
