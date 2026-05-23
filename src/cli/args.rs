@@ -48,6 +48,11 @@ pub fn print_usage() {
     eprintln!(
         "  mvl mutate <file|dir> --gen-boundary — show boundary values that kill surviving comparison/threshold mutants"
     );
+    eprintln!("  mvl fuzz   <file|dir>               — type-directed input fuzzing from Tainted[T] signatures (Phase 8)");
+    eprintln!("  mvl fuzz   <file|dir> --list        — list fuzzable functions (those with Tainted[T] params)");
+    eprintln!("  mvl fuzz   <file|dir> --target <fn> — fuzz a specific function");
+    eprintln!("  mvl fuzz   <file|dir> --time <Ns>   — stop after N seconds (e.g. --time 60s)");
+    eprintln!("  mvl fuzz   <file|dir> --corpus <dir> — seed corpus directory");
     eprintln!("  mvl mcdc   <file|dir>               — MC/DC coverage analysis (DO-178C DAL-A)");
     eprintln!("  mvl mcdc   <file|dir> -q            — quiet: only show MC/DC score");
     eprintln!("  mvl mcdc   <file|dir> --verbose     — full covered/missed clause report");
