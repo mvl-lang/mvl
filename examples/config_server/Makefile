@@ -73,8 +73,10 @@ mcdc: guard-mvl ## Run MC/DC coverage analysis (ARGS="--masking" to exempt coupl
 mutate: guard-mvl ## Run mutation testing
 	$(MVL) mutate $(DIR)
 
-fuzz: guard-mvl ## Type-directed fuzzing of handler.mvl Tainted[String] params (requires nightly + cargo-fuzz; ARGS="--time 60s")
-	$(MVL) fuzz $(DIR)handler.mvl $(ARGS)
+fuzz: guard-mvl ## Show fuzz target analysis (all functions call extern bridges; fuzz via bridge integration tests)
+	@echo "note: config_server functions call extern Rust bridges — no pure-MVL fuzz targets exist."
+	@echo "      Fuzz the bridge implementation directly in its Rust integration test suite."
+	$(MVL) fuzz $(DIR) --list
 
 all: check test assurance mcdc ## Run full quality pipeline: check + test + assurance + mcdc
 
