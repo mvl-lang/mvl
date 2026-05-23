@@ -3,14 +3,117 @@
 // Pure MVL package built on std.net primitives.  No extern blocks.
 //
 // Import:
-//   use pkg.http.{Method, Request, Response, HttpError,
-//                  parse_request, serialize_response, ok, not_found}
+//   use pkg.http.{Status, Method, Request, Response, HttpError,
+//                  parse_request, serialize_response, respond, error_response}
 //
 // Effects: none (all functions are pure).
 //
 // See #783.
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// ── Status ────────────────────────────────────────────────────────────────────
+
+/// HTTP status code as a type-safe enum.
+///
+/// Each variant encodes the status class (2xx/3xx/4xx/5xx) and meaning.
+/// Use status_code() to extract the numeric value, status_reason() for the
+/// reason phrase.
+pub type Status = enum {
+    // 2xx Success
+    Http200Ok,
+    Http201Created,
+    Http202Accepted,
+    Http204NoContent,
+
+    // 3xx Redirection
+    Http301MovedPermanently,
+    Http302Found,
+    Http304NotModified,
+
+    // 4xx Client Error
+    Http400BadRequest,
+    Http401Unauthorized,
+    Http403Forbidden,
+    Http404NotFound,
+    Http405MethodNotAllowed,
+    Http409Conflict,
+    Http410Gone,
+    Http422UnprocessableEntity,
+    Http429TooManyRequests,
+
+    // 5xx Server Error
+    Http500InternalServerError,
+    Http501NotImplemented,
+    Http502BadGateway,
+    Http503ServiceUnavailable,
+    Http504GatewayTimeout,
+}
+
+/// Extract the numeric status code.
+pub fn status_code(s: val Status) -> Int {
+    match s {
+        Status::Http200Ok                  => 200,
+        Status::Http201Created             => 201,
+        Status::Http202Accepted            => 202,
+        Status::Http204NoContent           => 204,
+        Status::Http301MovedPermanently    => 301,
+        Status::Http302Found              => 302,
+        Status::Http304NotModified         => 304,
+        Status::Http400BadRequest          => 400,
+        Status::Http401Unauthorized        => 401,
+        Status::Http403Forbidden           => 403,
+        Status::Http404NotFound            => 404,
+        Status::Http405MethodNotAllowed    => 405,
+        Status::Http409Conflict            => 409,
+        Status::Http410Gone               => 410,
+        Status::Http422UnprocessableEntity => 422,
+        Status::Http429TooManyRequests     => 429,
+        Status::Http500InternalServerError => 500,
+        Status::Http501NotImplemented      => 501,
+        Status::Http502BadGateway          => 502,
+        Status::Http503ServiceUnavailable  => 503,
+        Status::Http504GatewayTimeout      => 504,
+    }
+}
+
+/// Extract the reason phrase.
+pub fn status_reason(s: val Status) -> String {
+    match s {
+        Status::Http200Ok                  => "OK",
+        Status::Http201Created             => "Created",
+        Status::Http202Accepted            => "Accepted",
+        Status::Http204NoContent           => "No Content",
+        Status::Http301MovedPermanently    => "Moved Permanently",
+        Status::Http302Found              => "Found",
+        Status::Http304NotModified         => "Not Modified",
+        Status::Http400BadRequest          => "Bad Request",
+        Status::Http401Unauthorized        => "Unauthorized",
+        Status::Http403Forbidden           => "Forbidden",
+        Status::Http404NotFound            => "Not Found",
+        Status::Http405MethodNotAllowed    => "Method Not Allowed",
+        Status::Http409Conflict            => "Conflict",
+        Status::Http410Gone               => "Gone",
+        Status::Http422UnprocessableEntity => "Unprocessable Entity",
+        Status::Http429TooManyRequests     => "Too Many Requests",
+        Status::Http500InternalServerError => "Internal Server Error",
+        Status::Http501NotImplemented      => "Not Implemented",
+        Status::Http502BadGateway          => "Bad Gateway",
+        Status::Http503ServiceUnavailable  => "Service Unavailable",
+        Status::Http504GatewayTimeout      => "Gateway Timeout",
+    }
+}
+
+/// True for 2xx status codes.
+pub fn is_success(s: val Status) -> Bool {
+    let code: Int = status_code(s);
+    if code >= 200 { code < 300 } else { false }
+}
+
+/// True for 4xx and 5xx status codes.
+pub fn is_error(s: val Status) -> Bool {
+    status_code(s) >= 400
+}
+
+// ── Method ────────────────────────────────────────────────────────────────────
 
 /// HTTP request method.
 pub type Method = enum {
@@ -23,6 +126,8 @@ pub type Method = enum {
     Options,
 }
 
+// ── Request / Response / HttpError ────────────────────────────────────────────
+
 /// Parsed HTTP request (method + path).
 ///
 /// Headers and body parsing deferred to Phase 2.
@@ -33,27 +138,27 @@ pub type Request = struct {
 
 /// HTTP response.
 pub type Response = struct {
-    status:  Int,
+    status:  Status,
     headers: Map[String, String],
     body:    String,
 }
 
-/// Errors from HTTP parsing or routing.
-pub type HttpError = enum {
-    BadRequest(String),
-    NotFound,
-    MethodNotAllowed,
-    ParseError(String),
-    InternalError(String),
+/// HTTP error — carries a status code and detail message.
+///
+/// Analogous to FastAPI's HTTPException(status_code, detail).
+/// Use http_error() to construct, error_response() to convert to a Response.
+pub type HttpError = struct {
+    status: Status,
+    detail: String,
 }
 
 // ── Parsing ───────────────────────────────────────────────────────────────────
 
-/// Convert an Option to a Result, mapping None to a ParseError.
+/// Convert an Option to a Result, mapping None to a parse-error HttpError.
 fn require(opt: Option[String], msg: String) -> Result[String, HttpError] {
     match opt {
         Some(v) => Ok(v),
-        None    => Err(HttpError::ParseError(msg)),
+        None    => Err(HttpError { status: Status::Http400BadRequest, detail: msg }),
     }
 }
 
@@ -66,7 +171,7 @@ pub fn parse_method(s: String) -> Result[Method, HttpError] {
     else if s == "PATCH"   { Ok(Method::Patch) }
     else if s == "HEAD"    { Ok(Method::Head) }
     else if s == "OPTIONS" { Ok(Method::Options) }
-    else { Err(HttpError::BadRequest(s.concat(": unknown method"))) }
+    else { Err(HttpError { status: Status::Http400BadRequest, detail: s.concat(": unknown method") }) }
 }
 
 /// Parse a raw HTTP/1.x request into a Request.
@@ -87,20 +192,6 @@ pub fn parse_request(raw: Tainted[String]) -> Result[Request, HttpError] {
 
 // ── Serialization ─────────────────────────────────────────────────────────────
 
-/// Map a status code to its reason phrase.
-pub fn status_reason(status: Int) -> String {
-    if status == 200 { "OK" }
-    else if status == 201 { "Created" }
-    else if status == 204 { "No Content" }
-    else if status == 400 { "Bad Request" }
-    else if status == 401 { "Unauthorized" }
-    else if status == 403 { "Forbidden" }
-    else if status == 404 { "Not Found" }
-    else if status == 405 { "Method Not Allowed" }
-    else if status == 500 { "Internal Server Error" }
-    else { "Unknown" }
-}
-
 /// Format response headers as HTTP header lines.
 fn format_headers(headers: Map[String, String]) -> String {
     let keys: List[String] = headers.keys().sort();
@@ -120,7 +211,7 @@ fn format_headers(headers: Map[String, String]) -> String {
 /// Serialize a Response to an HTTP/1.0 response string.
 pub fn serialize_response(resp: val Response) -> String {
     let status_line: String = "HTTP/1.0 "
-        .concat(resp.status.to_string())
+        .concat(status_code(resp.status).to_string())
         .concat(" ")
         .concat(status_reason(resp.status))
         .concat("\r\n");
@@ -131,58 +222,38 @@ pub fn serialize_response(resp: val Response) -> String {
     status_line.concat(header_str).concat(content_length).concat("\r\n").concat(resp.body)
 }
 
-// ── Convenience constructors ──────────────────────────────────────────────────
+// ── Constructors ──────────────────────────────────────────────────────────────
 
-/// 200 OK with a text/plain body.
-pub fn ok(body: String) -> Response {
+/// Build a Response from a status and body.
+pub fn respond(status: Status, body: String) -> Response {
     Response {
-        status: 200,
+        status: status,
         headers: {"Content-Type": "text/plain"},
         body: body,
     }
+}
+
+/// Build a Response from an HttpError.
+pub fn error_response(e: val HttpError) -> Response {
+    respond(e.status, e.detail)
+}
+
+/// Build an HttpError.
+pub fn http_error(status: Status, detail: String) -> HttpError {
+    HttpError { status: status, detail: detail }
+}
+
+/// 200 OK with a text/plain body.
+pub fn ok(body: String) -> Response {
+    respond(Status::Http200Ok, body)
 }
 
 /// 201 Created with a text/plain body.
 pub fn created(body: String) -> Response {
-    Response {
-        status: 201,
-        headers: {"Content-Type": "text/plain"},
-        body: body,
-    }
-}
-
-/// 400 Bad Request.
-pub fn bad_request(msg: String) -> Response {
-    Response {
-        status: 400,
-        headers: {"Content-Type": "text/plain"},
-        body: msg,
-    }
+    respond(Status::Http201Created, body)
 }
 
 /// 404 Not Found with empty body.
 pub fn not_found() -> Response {
-    Response {
-        status: 404,
-        headers: {"Content-Type": "text/plain"},
-        body: "",
-    }
-}
-
-/// 405 Method Not Allowed with empty body.
-pub fn method_not_allowed() -> Response {
-    Response {
-        status: 405,
-        headers: {"Content-Type": "text/plain"},
-        body: "",
-    }
-}
-
-/// 500 Internal Server Error.
-pub fn internal_error(msg: String) -> Response {
-    Response {
-        status: 500,
-        headers: {"Content-Type": "text/plain"},
-        body: msg,
-    }
+    respond(Status::Http404NotFound, "")
 }

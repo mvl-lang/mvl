@@ -3,18 +3,36 @@
 // Tests the routing decisions without actor concurrency or effects.
 // All functions here are pure (no side effects).
 //
-// Actor-per-request isolation property (tests 11–15):
-// RequestHandler has no fields — every routing decision is made from scratch
-// for each actor instance.  These tests verify that property by showing the
-// pure routing helpers produce the same result regardless of call order or
-// how many times they are invoked (simulating concurrent actors).
-//
 // Type declarations mirror pkg.http types because cross-file type resolution
 // is not yet wired into the per-file checker (issue #96).
 //
 // Assurance note: 0 extern blocks.
 
 // ── Type re-declarations (workaround: #96) ────────────────────────────────
+
+type Status = enum {
+    Http200Ok,
+    Http201Created,
+    Http202Accepted,
+    Http204NoContent,
+    Http301MovedPermanently,
+    Http302Found,
+    Http304NotModified,
+    Http400BadRequest,
+    Http401Unauthorized,
+    Http403Forbidden,
+    Http404NotFound,
+    Http405MethodNotAllowed,
+    Http409Conflict,
+    Http410Gone,
+    Http422UnprocessableEntity,
+    Http429TooManyRequests,
+    Http500InternalServerError,
+    Http501NotImplemented,
+    Http502BadGateway,
+    Http503ServiceUnavailable,
+    Http504GatewayTimeout,
+}
 
 type Method = enum { Get, Post, Put, Delete, Patch, Head, Options }
 
@@ -24,28 +42,44 @@ type Request = struct {
 }
 
 type Response = struct {
-    status:  Int,
+    status:  Status,
     headers: Map[String, String],
     body:    String,
 }
 
-// ── Pure routing logic (mirrors main.mvl::route) ──────────────────────────
+type HttpError = struct {
+    status: Status,
+    detail: String,
+}
+
+// ── Pure routing logic (mirrors main.mvl) ─────────────────────────────────
 
 fn ok(body: String) -> Response {
-    Response { status: 200, headers: {"Content-Type": "text/plain"}, body: body }
+    Response { status: Status::Http200Ok, headers: {"Content-Type": "text/plain"}, body: body }
 }
 
 fn not_found() -> Response {
-    Response { status: 404, headers: {"Content-Type": "text/plain"}, body: "" }
+    Response { status: Status::Http404NotFound, headers: {"Content-Type": "text/plain"}, body: "" }
 }
 
-fn route(req: val Request) -> Response {
+fn error_response(e: val HttpError) -> Response {
+    Response { status: e.status, headers: {"Content-Type": "text/plain"}, body: e.detail }
+}
+
+fn route(req: val Request) -> Result[Response, HttpError] {
     if req.path.starts_with("/health") {
-        ok("ok")
+        Ok(ok("ok"))
     } else if req.path.starts_with("/users") {
-        ok("[{name: Alice}, {name: Bob}]")
+        Ok(ok("[{name: Alice}, {name: Bob}]"))
     } else {
-        not_found()
+        Err(HttpError { status: Status::Http404NotFound, detail: req.path })
+    }
+}
+
+fn handle_route(req: val Request) -> Response {
+    match route(req) {
+        Ok(r)  => r,
+        Err(e) => error_response(e),
     }
 }
 
@@ -55,105 +89,85 @@ fn make_request(method: Method, path: String) -> Request {
 
 // ── Routing tests ─────────────────────────────────────────────────────────
 
-// 1. /health returns 200.
 test fn health_returns_200() -> Unit {
-    let resp: Response = route(make_request(Method::Get, "/health"));
-    assert_eq(resp.status, 200)
+    let resp: Response = handle_route(make_request(Method::Get, "/health"));
+    assert_eq(resp.status, Status::Http200Ok)
 }
 
-// 2. /health body is "ok".
 test fn health_body_is_ok() -> Unit {
-    let resp: Response = route(make_request(Method::Get, "/health"));
+    let resp: Response = handle_route(make_request(Method::Get, "/health"));
     assert_eq(resp.body, "ok")
 }
 
-// 3. /users returns 200.
 test fn users_returns_200() -> Unit {
-    let resp: Response = route(make_request(Method::Get, "/users"));
-    assert_eq(resp.status, 200)
+    let resp: Response = handle_route(make_request(Method::Get, "/users"));
+    assert_eq(resp.status, Status::Http200Ok)
 }
 
-// 4. /users body contains Alice.
 test fn users_body_has_alice() -> Unit {
-    let resp: Response = route(make_request(Method::Get, "/users"));
+    let resp: Response = handle_route(make_request(Method::Get, "/users"));
     assert_eq(resp.body.contains("Alice"), true)
 }
 
-// 5. /users body contains Bob.
 test fn users_body_has_bob() -> Unit {
-    let resp: Response = route(make_request(Method::Get, "/users"));
+    let resp: Response = handle_route(make_request(Method::Get, "/users"));
     assert_eq(resp.body.contains("Bob"), true)
 }
 
-// 6. Unknown path returns 404.
 test fn unknown_returns_404() -> Unit {
-    let resp: Response = route(make_request(Method::Get, "/nope"));
-    assert_eq(resp.status, 404)
+    let resp: Response = handle_route(make_request(Method::Get, "/nope"));
+    assert_eq(resp.status, Status::Http404NotFound)
 }
 
-// 7. 404 body is empty.
-test fn unknown_body_is_empty() -> Unit {
-    let resp: Response = route(make_request(Method::Get, "/nope"));
-    assert_eq(resp.body, "")
+test fn unknown_body_has_path() -> Unit {
+    let resp: Response = handle_route(make_request(Method::Get, "/nope"));
+    assert_eq(resp.body, "/nope")
 }
 
-// 8. /health/check also matches /health prefix.
 test fn health_subpath_matches() -> Unit {
-    let resp: Response = route(make_request(Method::Get, "/health/check"));
-    assert_eq(resp.status, 200)
+    let resp: Response = handle_route(make_request(Method::Get, "/health/check"));
+    assert_eq(resp.status, Status::Http200Ok)
 }
 
-// 9. /users/123 also matches /users prefix.
 test fn users_subpath_matches() -> Unit {
-    let resp: Response = route(make_request(Method::Get, "/users/123"));
-    assert_eq(resp.status, 200)
+    let resp: Response = handle_route(make_request(Method::Get, "/users/123"));
+    assert_eq(resp.status, Status::Http200Ok)
 }
 
-// 10. Root path returns 404.
 test fn root_returns_404() -> Unit {
-    let resp: Response = route(make_request(Method::Get, "/"));
-    assert_eq(resp.status, 404)
+    let resp: Response = handle_route(make_request(Method::Get, "/"));
+    assert_eq(resp.status, Status::Http404NotFound)
 }
 
 // ── Actor-per-request isolation tests ─────────────────────────────────────
-//
-// RequestHandler actors carry no fields.  Routing is fully delegated to pure
-// functions.  The tests below verify the isolation property: the outcome for
-// one simulated handler is unaffected by any other handler running before or
-// concurrently with it.
 
-// 11. Two handlers for the same route make independent, identical decisions.
 test fn two_handlers_same_route_are_independent() -> Unit {
-    let first:  Int = route(make_request(Method::Get, "/health")).status;
-    let second: Int = route(make_request(Method::Get, "/health")).status;
+    let first:  Status = handle_route(make_request(Method::Get, "/health")).status;
+    let second: Status = handle_route(make_request(Method::Get, "/health")).status;
     assert_eq(first, second)
 }
 
-// 12. Handlers for different routes make independent decisions.
 test fn two_handlers_different_routes_are_independent() -> Unit {
-    assert_eq(route(make_request(Method::Get, "/health")).status, 200);
-    assert_eq(route(make_request(Method::Get, "/users")).status,  200);
-    assert_eq(route(make_request(Method::Get, "/nope")).status,   404)
+    assert_eq(handle_route(make_request(Method::Get, "/health")).status, Status::Http200Ok);
+    assert_eq(handle_route(make_request(Method::Get, "/users")).status,  Status::Http200Ok);
+    assert_eq(handle_route(make_request(Method::Get, "/nope")).status,   Status::Http404NotFound)
 }
 
-// 13. Response body is per-handler — a health response never leaks into a users response.
 test fn body_is_per_handler() -> Unit {
-    let health_body: String = route(make_request(Method::Get, "/health")).body;
-    let users_body:  String = route(make_request(Method::Get, "/users")).body;
+    let health_body: String = handle_route(make_request(Method::Get, "/health")).body;
+    let users_body:  String = handle_route(make_request(Method::Get, "/users")).body;
     assert_eq(health_body, "ok");
     assert_eq(users_body.contains("Alice"), true)
 }
 
-// 14. Unknown-route handlers always return 404 regardless of request order.
 test fn unknown_handler_always_404() -> Unit {
-    let _first:  Response = route(make_request(Method::Get, "/users"));
-    let _second: Response = route(make_request(Method::Get, "/health"));
-    assert_eq(route(make_request(Method::Get, "/unknown")).status, 404)
+    let _first:  Response = handle_route(make_request(Method::Get, "/users"));
+    let _second: Response = handle_route(make_request(Method::Get, "/health"));
+    assert_eq(handle_route(make_request(Method::Get, "/unknown")).status, Status::Http404NotFound)
 }
 
-// 15. POST to the same paths produces the same routing result (method-agnostic routing).
 test fn post_routes_same_as_get() -> Unit {
-    assert_eq(route(make_request(Method::Post, "/health")).status, 200);
-    assert_eq(route(make_request(Method::Post, "/users")).status,  200);
-    assert_eq(route(make_request(Method::Post, "/nope")).status,   404)
+    assert_eq(handle_route(make_request(Method::Post, "/health")).status, Status::Http200Ok);
+    assert_eq(handle_route(make_request(Method::Post, "/users")).status,  Status::Http200Ok);
+    assert_eq(handle_route(make_request(Method::Post, "/nope")).status,   Status::Http404NotFound)
 }

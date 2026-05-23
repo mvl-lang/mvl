@@ -18,8 +18,8 @@
 //   ../../target/debug/mvl run main.mvl -- --port 9090  (CLI override)
 
 use config::{ServerConfig, ConfigLoadError, load_config}
-use pkg.http.{Request, Response, HttpError, parse_request, serialize_response,
-              ok, not_found, bad_request}
+use pkg.http.{Status, Request, Response, HttpError,
+              parse_request, serialize_response, ok, not_found, error_response}
 use std.net.{TcpListener, TcpStream, tcp_listen, tcp_accept, tcp_read_request, tcp_write,
              tcp_close_listener, tcp_close_stream, net_error_msg, NetError}
 use std.log.{LogLevel, LogFormat, log_debug, log_info, log_warn, log_error,
@@ -27,13 +27,13 @@ use std.log.{LogLevel, LogFormat, log_debug, log_info, log_warn, log_error,
 
 // ── Routing ─────────────────────────────────────────────────────────────────
 
-fn route(req: val Request) -> Response {
+fn route(req: val Request) -> Result[Response, HttpError] {
     if req.path.starts_with("/health") {
-        ok("ok")
+        Ok(ok("ok"))
     } else if req.path.starts_with("/users") {
-        ok("[{name: Alice}, {name: Bob}]")
+        Ok(ok("[{name: Alice}, {name: Bob}]"))
     } else {
-        not_found()
+        Err(HttpError { status: Status::Http404NotFound, detail: req.path })
     }
 }
 
@@ -53,21 +53,21 @@ actor RequestHandler {
         match tcp_read_request(stream) {
             Err(e) => log_warn("read error", {"error": net_error_msg(e)}),
             Ok(raw) => {
-                match parse_request(raw) {
-                    Err(_) => {
-                        let _: Result[Unit, NetError] = tcp_write(stream, serialize_response(bad_request("invalid request")));
-                        tcp_close_stream(stream)
-                    },
+                let resp: Response = match parse_request(raw) {
+                    Err(e) => error_response(e),
                     Ok(req) => {
-                        let resp: Response = route(req);
-                        log_debug("request", {"path": req.path, "status": resp.status.to_string()});
-                        match tcp_write(stream, serialize_response(resp)) {
-                            Ok(_)  => tcp_close_stream(stream),
-                            Err(e) => {
-                                log_error("write error", {"error": net_error_msg(e)});
-                                tcp_close_stream(stream)
-                            },
+                        log_debug("request", {"path": req.path});
+                        match route(req) {
+                            Ok(r)  => r,
+                            Err(e) => error_response(e),
                         }
+                    },
+                };
+                match tcp_write(stream, serialize_response(resp)) {
+                    Ok(_)  => tcp_close_stream(stream),
+                    Err(e) => {
+                        log_error("write error", {"error": net_error_msg(e)});
+                        tcp_close_stream(stream)
                     },
                 }
             },
