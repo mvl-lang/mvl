@@ -210,16 +210,6 @@ fn hex_digit(c: String) -> Option[Int] {
     else { None }
 }
 
-fn hex_byte(h1: String, h2: String) -> Option[Byte] {
-    match hex_digit(h1) {
-        None     => None,
-        Some(n1) => match hex_digit(h2) {
-            None     => None,
-            Some(n2) => Some(from_int(n1 * 16 + n2)),
-        },
-    }
-}
-
 fn flush_bytes(out: String, pending: List[Byte]) -> String {
     if pending.len() == 0 { out } else { out.concat(String::from_bytes(pending)) }
 }
@@ -227,39 +217,62 @@ fn flush_bytes(out: String, pending: List[Byte]) -> String {
 /// Lenient percent-decoder for query strings (WHATWG application/x-www-form-urlencoded).
 /// `%XX` runs are accumulated as bytes so multi-byte UTF-8 sequences (e.g. `%C3%A9`
 /// → `é`) decode correctly.  Malformed escapes pass through as literal `%`.
-pub partial fn percent_decode(s: String) -> String {
-    let chars: List[String] = s.chars();
-    let len: Int = chars.len();
+///
+/// Total — implemented as a state-machine fold over `chars()`.  `pct_buf` is
+/// `""` (normal), `"%"` (saw `%`, expecting first hex), or `"%X"` (have first
+/// hex digit `X`, expecting second).  On malformed escapes we flush `pct_buf`
+/// as literal text and reprocess the current char.
+pub fn percent_decode(s: String) -> String {
     let out: ref String = "";
     let pending: ref List[Byte] = [];
-    let i: ref Int = 0;
-    while i < len {
-        let c: String = match chars.get(i) { Some(cv) => cv, None => "" };
-        if c == "%" && i + 2 < len {
-            let h1: String = match chars.get(i + 1) { Some(cv) => cv, None => "" };
-            let h2: String = match chars.get(i + 2) { Some(cv) => cv, None => "" };
-            match hex_byte(h1, h2) {
-                Some(b) => { pending.push(b); i = i + 3 },
+    let pct_buf: ref String = "";
+    let hex_high: ref Int = 0;
+    for c in s.chars() {
+        if pct_buf == "%" {
+            match hex_digit(c) {
+                Some(h) => {
+                    pct_buf  = pct_buf.concat(c);
+                    hex_high = h
+                },
                 None    => {
                     out     = flush_bytes(out, pending);
                     pending = [];
                     out     = out.concat("%");
-                    i       = i + 1
+                    pct_buf = "";
+                    if      c == "+" { out = out.concat(" ") }
+                    else if c == "%" { pct_buf = "%" }
+                    else             { out = out.concat(c) }
                 },
             }
-        } else if c == "+" {
-            out     = flush_bytes(out, pending);
-            pending = [];
-            out     = out.concat(" ");
-            i       = i + 1
+        } else if pct_buf.len() == 2 {
+            match hex_digit(c) {
+                Some(h) => {
+                    pending.push(from_int(hex_high * 16 + h));
+                    pct_buf = ""
+                },
+                None    => {
+                    out     = flush_bytes(out, pending);
+                    pending = [];
+                    out     = out.concat(pct_buf);
+                    pct_buf = "";
+                    if      c == "+" { out = out.concat(" ") }
+                    else if c == "%" { pct_buf = "%" }
+                    else             { out = out.concat(c) }
+                },
+            }
         } else {
-            out     = flush_bytes(out, pending);
-            pending = [];
-            out     = out.concat(c);
-            i       = i + 1
+            if c == "%" {
+                pct_buf = "%"
+            } else {
+                out     = flush_bytes(out, pending);
+                pending = [];
+                if c == "+" { out = out.concat(" ") } else { out = out.concat(c) }
+            }
         }
     }
-    flush_bytes(out, pending)
+    // Flush trailing state: pending bytes, then any partial escape (`%` or `%X`).
+    out = flush_bytes(out, pending);
+    if pct_buf.len() > 0 { out.concat(pct_buf) } else { out }
 }
 
 // ── Query parsing ─────────────────────────────────────────────────────────────
@@ -292,31 +305,23 @@ fn append_query(m: Map[String, List[Tainted[String]]], key: String, value: Taint
 /// Values are re-wrapped in `Tainted` (audit tag `"HTTP-QUERY-VALUE"`) since
 /// they originate from user-supplied URL input.  Keys remain plain — they are
 /// part of the routing contract, not data.
-pub partial fn parse_query(raw: String) -> Map[String, List[Tainted[String]]] {
+pub fn parse_query(raw: String) -> Map[String, List[Tainted[String]]] {
     let result: ref Map[String, List[Tainted[String]]] = empty_query_map();
-    if raw.len() == 0 { return result } else {}
-    let pairs: List[String] = raw.split("&");
-    let n: Int = pairs.len();
-    let i: ref Int = 0;
-    while i < n {
-        match pairs.get(i) {
-            None    => {},
-            Some(p) => {
-                if p.len() > 0 {
-                    let eq_split: List[String] = p.split("=");
-                    let raw_key: String = match eq_split.get(0) { Some(k) => k, None => "" };
-                    let raw_val: String = match eq_split.get(1) { Some(v) => v, None => "" };
-                    let key: String = percent_decode(raw_key);
-                    if key.len() > 0 {
-                        let decoded: String = percent_decode(raw_val);
-                        let tainted: Tainted[String] = relabel taint(decoded, "HTTP-QUERY-VALUE");
-                        result = append_query(result, key, tainted)
-                    } else {}
+    if raw.len() > 0 {
+        for p in raw.split("&") {
+            if p.len() > 0 {
+                let eq_split: List[String] = p.split("=");
+                let raw_key: String = match eq_split.get(0) { Some(k) => k, None => "" };
+                let raw_val: String = match eq_split.get(1) { Some(v) => v, None => "" };
+                let key: String = percent_decode(raw_key);
+                if key.len() > 0 {
+                    let decoded: String = percent_decode(raw_val);
+                    let tainted: Tainted[String] = relabel taint(decoded, "HTTP-QUERY-VALUE");
+                    result = append_query(result, key, tainted)
                 } else {}
-            },
+            } else {}
         }
-        i = i + 1
-    }
+    } else {}
     result
 }
 
@@ -370,7 +375,7 @@ fn split_target(target: String) -> PathQuery {
 /// parsing only.  The path is structural (routing), not user-supplied data.
 /// Query *values* are re-tainted inside `parse_query` since they ARE user data.
 /// When body parsing is added (Phase 2), the body will remain Tainted.
-pub partial fn parse_request(raw: Tainted[String]) -> Result[Request, HttpError] {
+pub fn parse_request(raw: Tainted[String]) -> Result[Request, HttpError] {
     let s: String = relabel trust(raw, "HTTP-REQUEST-LINE");
     let lines: List[String] = s.split("\r\n");
     let request_line: String = require(lines.get(0), "empty request")?;
