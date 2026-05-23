@@ -216,6 +216,32 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
         }
     }
 
+    // #960: for HOF params (fn-typed parameters), temporarily insert their inner
+    // parameter borrow flags into capability_params_map so that calls through
+    // the fn pointer use `&x` instead of `x.clone().into()` for `val T` params.
+    let mut hof_param_names: Vec<String> = Vec::new();
+    for param in &fd.params {
+        if let TypeExpr::Fn {
+            params: fn_params, ..
+        } = &param.ty
+        {
+            let flags: Vec<Option<bool>> = fn_params
+                .iter()
+                .map(|p| {
+                    if let TypeExpr::Ref { mutable, .. } = p {
+                        Some(*mutable)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if flags.iter().any(|b| b.is_some()) {
+                cg.capability_params_map.insert(param.name.clone(), flags);
+                hof_param_names.push(param.name.clone());
+            }
+        }
+    }
+
     let stmts = &fd.body.stmts;
     if stmts.is_empty() {
         // Unit-returning functions with an empty body are valid in Rust (implicit `()`).
@@ -280,6 +306,12 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
         cg.line(&format!(
             "// return refinement: assert!({pred_str}) — checked by MVL type checker"
         ));
+    }
+
+    // #960: clean up HOF param entries added above so they don't bleed into
+    // subsequent function bodies that may use the same parameter name.
+    for name in hof_param_names {
+        cg.capability_params_map.remove(&name);
     }
 }
 

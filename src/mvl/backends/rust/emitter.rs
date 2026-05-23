@@ -133,6 +133,11 @@ pub struct RustEmitter {
     /// #928: True when emitting a free-function body for an extension method on a
     /// built-in type. Causes `self` identifiers to be emitted as `self_`.
     pub self_as_free_param: bool,
+    /// (struct_type_name, field_name) pairs where the field type is a function type.
+    ///
+    /// Used to distinguish `(obj.field)(args)` (fn-pointer call) from
+    /// `obj.method(args)` (regular method call) in Rust output (#959).
+    pub fn_typed_struct_fields: std::collections::HashSet<(String, String)>,
 }
 
 impl RustEmitter {
@@ -507,6 +512,9 @@ impl RustEmitter {
         // call sites can emit `&x` instead of `x.clone()` for reference params.
         self.capability_params_map = build_capability_params_map(prog, &prelude_fns);
 
+        // #959: collect (struct_name, field_name) pairs where the field is fn-typed.
+        self.fn_typed_struct_fields = collect_fn_typed_struct_fields(prog);
+
         // Collect extern "rust" declarations from package prelude programs (pkg.*).
         // These are distinct from Rust-backed stdlib modules: the extern fns are
         // implemented in the package's bridge.rs, not in mvl_runtime.
@@ -770,6 +778,23 @@ fn emit_extern_decl(cg: &mut RustEmitter, ed: &ExternDecl) {
 /// not defined by a `TypeDecl` in this program and are not MVL built-ins.
 /// Returns a sorted, deduplicated list suitable for emitting stub structs.
 /// `prelude_progs` types are treated as already-defined so they are never stubbed.
+/// Collect (struct_type_name, field_name) pairs where the field is declared as a fn type (#959).
+fn collect_fn_typed_struct_fields(prog: &Program) -> std::collections::HashSet<(String, String)> {
+    let mut out = std::collections::HashSet::new();
+    for decl in &prog.declarations {
+        if let Decl::Type(td) = decl {
+            if let crate::mvl::parser::ast::TypeBody::Struct { fields, .. } = &td.body {
+                for field in fields {
+                    if matches!(&field.ty, TypeExpr::Fn { .. }) {
+                        out.insert((td.name.clone(), field.name.clone()));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 fn collect_undefined_types(prog: &Program, prelude_progs: &[Program]) -> Vec<String> {
     // Collect defined type names
     let mut defined: std::collections::HashSet<String> = std::collections::HashSet::new();
