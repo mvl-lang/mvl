@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.144.0] - 2026-05-23
+
+### Added
+
+- **std.log: explicit Logger value replaces global log state** (#973): Removes process-global `log_set_format` / `log_set_min_level` in favour of a `Logger` struct that carries `format` and `min_level` as plain values. Callers construct a `Logger` (or use `default_logger()`) and thread it explicitly through the call graph — no hidden global state, no thread-safety concerns. `log_debug/info/warn/error` free functions replaced by `Logger::debug/info/warn/error` methods. `runtime/rust` and `runtime/llvm` log shims deleted (~770 lines). IFC implicit-flow enforcement extended to `Expr::MethodCall` nodes so Secret-conditional `logger.info(...)` branches are rejected at compile time. `effect Log > Clock + Console` reflects that logging writes to stderr; `log_write` made module-private; `sanitize_log`/`json_escape`/`pad_right` added to `std/strings.mvl`.
+
 ## [0.143.1] - 2026-05-23
 
 ### Fixed
