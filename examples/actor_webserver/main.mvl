@@ -24,6 +24,7 @@ use std.net.{TcpListener, TcpStream, tcp_listen, tcp_accept, tcp_read_request, t
              tcp_close_listener, tcp_close_stream, net_error_msg, NetError}
 use std.log.{LogLevel, LogFormat, log_debug, log_info, log_warn, log_error,
              log_set_format, log_set_min_level}
+use std.env.{exit}
 
 // ── Routing ─────────────────────────────────────────────────────────────────
 
@@ -90,21 +91,20 @@ partial fn serve(listener: TcpListener) -> Unit ! Log + Net {
 }
 
 partial fn main() -> Unit ! Env + FileRead + Log + Net {
-    match load_config() {
-        Err(_) => log_error("config load failed", {}),
-        Ok(cfg) => {
-            log_set_format(cfg.log_format);
-            log_set_min_level(cfg.log_level);
-            log_info("server starting", {
-                "host":       cfg.host,
-                "port":       cfg.port.to_string(),
-                "log_level":  "from_config",
-                "log_format": "from_config",
-            });
-            match tcp_listen(cfg.host, cfg.port) {
-                Err(e)       => log_error("listen failed", {"error": net_error_msg(e)}),
-                Ok(listener) => serve(listener),
-            }
-        },
+    let cfg: ServerConfig = match load_config() {
+        Err(_)  => { log_error("config load failed", {}); exit(1) },
+        Ok(c)   => c,
+    };
+    log_set_format(cfg.log_format);
+    log_set_min_level(cfg.log_level);
+    log_info("server starting", {
+        "host":       cfg.host,
+        "port":       cfg.port.to_string(),
+        "log_level":  "from_config",
+        "log_format": "from_config",
+    });
+    match tcp_listen(cfg.host, cfg.port) {
+        Err(e)       => log_error("listen failed", {"error": net_error_msg(e)}),
+        Ok(listener) => serve(listener),
     }
 }
