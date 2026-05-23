@@ -180,7 +180,7 @@ pub fn parse_method(s: String) -> Result[Method, HttpError] {
     else if s == "PATCH"   { Ok(Method::Patch) }
     else if s == "HEAD"    { Ok(Method::Head) }
     else if s == "OPTIONS" { Ok(Method::Options) }
-    else { Err(HttpError { status: Status::Http400BadRequest, detail: s.concat(": unknown method") }) }
+    else { Err(HttpError { status: Status::Http400BadRequest, detail: "unknown HTTP method" }) }
 }
 
 // ── Percent decoding ──────────────────────────────────────────────────────────
@@ -222,7 +222,10 @@ fn flush_bytes(out: String, pending: List[Byte]) -> String {
 /// `""` (normal), `"%"` (saw `%`, expecting first hex), or `"%X"` (have first
 /// hex digit `X`, expecting second).  On malformed escapes we flush `pct_buf`
 /// as literal text and reprocess the current char.
-pub fn percent_decode(s: String) -> String {
+///
+/// Module-private: callers should use `parse_query` (which re-taints values).
+/// Exposing this would let a downstream caller double-decode and bypass taint.
+fn percent_decode(s: String) -> String {
     let out: ref String = "";
     let pending: ref List[Byte] = [];
     let pct_buf: ref String = "";
@@ -303,16 +306,24 @@ fn append_query(m: Map[String, List[Tainted[String]]], key: String, value: Taint
 /// are skipped.  Values without `=` (e.g. `?flag`) decode to `""`.
 ///
 /// Values are re-wrapped in `Tainted` (audit tag `"HTTP-QUERY-VALUE"`) since
-/// they originate from user-supplied URL input.  Keys remain plain — they are
-/// part of the routing contract, not data.
-pub fn parse_query(raw: String) -> Map[String, List[Tainted[String]]] {
+/// they originate from user-supplied URL input.  Keys are plain `String` —
+/// safe ONLY for equality lookup against known literals (e.g.
+/// `req.query.contains_key("id")`).  Never iterate over keys or forward them
+/// to a sink (shell, SQL, template, URL) without re-tainting first — the
+/// attacker controls the key set.
+///
+/// Module-private: caller is `parse_request`.
+fn parse_query(raw: String) -> Map[String, List[Tainted[String]]] {
     let result: ref Map[String, List[Tainted[String]]] = empty_query_map();
     if raw.len() > 0 {
         for p in raw.split("&") {
             if p.len() > 0 {
-                let eq_split: List[String] = p.split("=");
-                let raw_key: String = match eq_split.get(0) { Some(k) => k, None => "" };
-                let raw_val: String = match eq_split.get(1) { Some(v) => v, None => "" };
+                // Split on the FIRST `=` only — values may contain literal `=`
+                // (base64 padding, redirect URLs, etc.).  `split("=")` would
+                // truncate after the second `=`.
+                let p_len: Int = p.len();
+                let raw_key: String = match p.find("=") { Some(i) => p.substring(0, i),         None => p.substring(0, p_len) };
+                let raw_val: String = match p.find("=") { Some(i) => p.substring(i + 1, p_len), None => "" };
                 let key: String = percent_decode(raw_key);
                 if key.len() > 0 {
                     let decoded: String = percent_decode(raw_val);
@@ -329,6 +340,9 @@ pub fn parse_query(raw: String) -> Map[String, List[Tainted[String]]] {
 
 /// First value supplied for `key`, or `None` if the key is absent.
 /// FastAPI/Starlette equivalent: `request.query_params["key"]`.
+///
+/// Distinguishes "absent" (`None`) from "present with empty value" (`Some("")`),
+/// e.g. `?flag` → `Some("")`.  Use `query_all` when you need every value.
 pub fn query_first(req: val Request, key: String) -> Option[Tainted[String]] {
     match req.query.get(key) {
         None       => None,
@@ -338,6 +352,9 @@ pub fn query_first(req: val Request, key: String) -> Option[Tainted[String]] {
 
 /// All values supplied for `key` in order (empty list if absent).
 /// FastAPI/Starlette equivalent: `request.query_params.getlist("key")`.
+///
+/// Returns `[]` for both "absent" and "present with no values" — these cases
+/// are indistinguishable.  Use `query_first` if you need to tell them apart.
 pub fn query_all(req: val Request, key: String) -> List[Tainted[String]] {
     match req.query.get(key) {
         None       => [],

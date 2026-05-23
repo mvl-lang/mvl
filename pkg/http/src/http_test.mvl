@@ -131,7 +131,7 @@ fn parse_method(s: String) -> Result[Method, HttpError] {
     else if s == "PATCH"   { Ok(Method::Patch) }
     else if s == "HEAD"    { Ok(Method::Head) }
     else if s == "OPTIONS" { Ok(Method::Options) }
-    else { Err(HttpError { status: Status::Http400BadRequest, detail: s.concat(": unknown method") }) }
+    else { Err(HttpError { status: Status::Http400BadRequest, detail: "unknown HTTP method" }) }
 }
 
 fn hex_digit(c: String) -> Option[Int] {
@@ -227,9 +227,9 @@ fn parse_query(raw: String) -> Map[String, List[Tainted[String]]] {
     if raw.len() > 0 {
         for p in raw.split("&") {
             if p.len() > 0 {
-                let eq_split: List[String] = p.split("=");
-                let raw_key: String = match eq_split.get(0) { Some(k) => k, None => "" };
-                let raw_val: String = match eq_split.get(1) { Some(v) => v, None => "" };
+                let p_len: Int = p.len();
+                let raw_key: String = match p.find("=") { Some(i) => p.substring(0, i),         None => p.substring(0, p_len) };
+                let raw_val: String = match p.find("=") { Some(i) => p.substring(i + 1, p_len), None => "" };
                 let key: String = percent_decode(raw_key);
                 if key.len() > 0 {
                     let decoded: String = percent_decode(raw_val);
@@ -597,5 +597,50 @@ test fn parse_request_query_first_missing_key() -> Unit {
     match parse_request_str("GET /search?x=1 HTTP/1.1\r\n\r\n") {
         Err(_)  => assert_eq(true, false),
         Ok(req) => assert_eq(query_first(req, "nope").is_none(), true),
+    }
+}
+
+// Value containing a literal `=` — must split on first `=` only.
+test fn query_value_with_equals_sign() -> Unit {
+    let q: Map[String, List[Tainted[String]]] = parse_query("a=b=c");
+    match q.get("a") {
+        None       => assert_eq(true, false),
+        Some(vals) => match vals.get(0) {
+            None    => assert_eq(true, false),
+            Some(t) => assert_eq(relabel trust(t, "TEST"), "b=c"),
+        },
+    }
+}
+
+// Explicit empty value (`key=`) — distinct code path from no-`=` form (`flag`).
+test fn query_explicit_empty_value() -> Unit {
+    let q: Map[String, List[Tainted[String]]] = parse_query("key=");
+    match q.get("key") {
+        None       => assert_eq(true, false),
+        Some(vals) => match vals.get(0) {
+            None    => assert_eq(true, false),
+            Some(t) => assert_eq(relabel trust(t, "TEST"), ""),
+        },
+    }
+}
+
+test fn query_all_missing_key_returns_empty() -> Unit {
+    match parse_request_str("GET /search?x=1 HTTP/1.1\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => assert_eq(query_all(req, "nope").len(), 0),
+    }
+}
+
+// Fragment AFTER a query: query must not be contaminated by the fragment.
+test fn parse_request_fragment_after_query_stripped() -> Unit {
+    match parse_request_str("GET /path?key=val#section HTTP/1.1\r\n\r\n") {
+        Err(_)  => assert_eq(true, false),
+        Ok(req) => {
+            assert_eq(req.path, "/path");
+            match query_first(req, "key") {
+                None    => assert_eq(true, false),
+                Some(t) => assert_eq(relabel trust(t, "TEST"), "val"),
+            }
+        },
     }
 }
