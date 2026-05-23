@@ -18,8 +18,8 @@ pub builtin fn List[T]::len(self) -> Int
 /// Element at index `i`, or None if out of range.
 pub builtin fn List[T]::get(self, i: Int) -> Option[T]
 
-/// Append `x` to the list, returning the new list.
-pub builtin fn List[T]::push(self, x: T) -> List[T]
+/// Append `x` to the list in place.
+pub builtin fn List[T]::push(self, x: T) -> Unit
 
 /// Safe slice `[start, end)` — clamped, never panics.
 pub builtin fn List[T]::slice(self, start: Int, end: Int) -> List[T]

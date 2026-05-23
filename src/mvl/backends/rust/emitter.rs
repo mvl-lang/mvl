@@ -133,6 +133,11 @@ pub struct RustEmitter {
     /// #928: True when emitting a free-function body for an extension method on a
     /// built-in type. Causes `self` identifiers to be emitted as `self_`.
     pub self_as_free_param: bool,
+    /// (struct_type_name, field_name) pairs where the field type is a function type.
+    ///
+    /// Used to distinguish `(obj.field)(args)` (fn-pointer call) from
+    /// `obj.method(args)` (regular method call) in Rust output (#959).
+    pub fn_typed_struct_fields: std::collections::HashSet<(String, String)>,
 }
 
 impl RustEmitter {
@@ -507,6 +512,9 @@ impl RustEmitter {
         // call sites can emit `&x` instead of `x.clone()` for reference params.
         self.capability_params_map = build_capability_params_map(prog, &prelude_fns);
 
+        // #959: collect (struct_name, field_name) pairs where the field is fn-typed.
+        self.fn_typed_struct_fields = collect_fn_typed_struct_fields(prog, prelude_progs);
+
         // Collect extern "rust" declarations from package prelude programs (pkg.*).
         // These are distinct from Rust-backed stdlib modules: the extern fns are
         // implemented in the package's bridge.rs, not in mvl_runtime.
@@ -875,6 +883,31 @@ fn collect_undefined_types(prog: &Program, prelude_progs: &[Program]) -> Vec<Str
         .collect();
     stubs.sort();
     stubs
+}
+
+/// Collect `(struct_type_name, field_name)` pairs where the field is declared as a fn type (#959).
+/// Includes both the main program and all prelude programs so that stdlib/package structs
+/// with fn-typed fields emit `(obj.field)(args)` correctly.
+fn collect_fn_typed_struct_fields(
+    prog: &Program,
+    prelude_progs: &[Program],
+) -> std::collections::HashSet<(String, String)> {
+    let mut out = std::collections::HashSet::new();
+    let all_progs = std::iter::once(prog).chain(prelude_progs.iter());
+    for p in all_progs {
+        for decl in &p.declarations {
+            if let Decl::Type(td) = decl {
+                if let crate::mvl::parser::ast::TypeBody::Struct { fields, .. } = &td.body {
+                    for field in fields {
+                        if matches!(&field.ty, TypeExpr::Fn { .. }) {
+                            out.insert((td.name.clone(), field.name.clone()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 fn collect_types_in_type_expr(ty: &TypeExpr, out: &mut std::collections::HashSet<String>) {

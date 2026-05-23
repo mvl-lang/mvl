@@ -1,6 +1,6 @@
 # snake_game — terminal Snake game demonstrating pkg.tui, effects, and game loop.
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl build check test assurance run clean
+.PHONY: help guard-mvl build check test-solver test assurance run clean
 
 .DEFAULT_GOAL := help
 
@@ -27,6 +27,25 @@ check: guard-mvl ## Type-check all source files
 	$(MVL) check $(DIR)input.mvl
 	$(MVL) check $(DIR)render.mvl
 	$(MVL) check $(DIR)main.mvl
+
+test-solver: guard-mvl ## Show per-file solver statistics
+	@pass=0; fail=0; \
+	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
+	for f in $(DIR)game.mvl $(DIR)input.mvl $(DIR)render.mvl $(DIR)main.mvl; do \
+		name=$$(basename "$$f"); \
+		out=$$($(MVL) check "$$f" 2>&1); rc=$$?; \
+		if [ $$rc -eq 0 ]; then \
+			printf "  $$OK  %s\n" "$$name"; pass=$$((pass + 1)); \
+		else \
+			printf "  $$FAIL  %s\n" "$$name"; printf "%s\n" "$$out" | sed 's/^/         /'; fail=$$((fail + 1)); \
+		fi; \
+	done; \
+	echo ""; \
+	if [ $$fail -eq 0 ]; then \
+		printf "  \033[32m✓  $$pass passed, 0 failed\033[0m\n\n"; \
+	else \
+		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
+	fi
 
 test: guard-mvl ## Run game logic tests (no terminal required)
 	$(MVL) test $(DIR)game_test.mvl

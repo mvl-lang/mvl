@@ -2,7 +2,7 @@
 # Run from this directory or via `make test-examples` from the repo root.
 .ONESHELL:
 SHELL := /bin/bash
-.PHONY: help check lint test assurance run clean
+.PHONY: help check lint test-solver test assurance run clean
 
 MVL := ../../target/debug/mvl
 DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
@@ -31,6 +31,8 @@ check: ## Type-check all example programs
 
 lint: ## Lint all example programs
 	$(MVL) lint $(DIR)
+
+test-solver: check ## Alias for check — per-file solver statistics
 
 test: check ## Alias for check (programs dir has no test functions)
 

@@ -28,6 +28,7 @@ use model::AuthError;
 use model::AppError;
 
 use std.log.{log_info, log_warn}
+use std.ifc.{taint}
 
 // ── Trust boundary: demo fixture data lives in Rust ───────────────────────
 
@@ -70,7 +71,7 @@ fn demo_auth() -> Unit ! Log + CryptoRandom {
     match hash_opt {
         None => log_warn("auth attempt: user not found", {"user": "alice"}),
         Some(stored_hash) => {
-            let auth_result: Result[String, AuthError] = authenticate("alice", "hunter2", stored_hash);
+            let auth_result: Result[String, AuthError] = authenticate(relabel taint("alice", "DEMO"), relabel taint("hunter2", "DEMO"), stored_hash);
             match auth_result {
                 Ok(_)  => log_info("auth attempt: pass", {"user": "alice"}),
                 Err(_) => log_warn("auth attempt: fail", {"user": "alice"}),

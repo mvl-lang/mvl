@@ -97,7 +97,7 @@ partial fn serve(listener: TcpListener) -> Result[Unit, NetError] ! Log + Net {
     }
 }
 
-partial fn main() -> Unit ! Env + FileRead + Log + Net {
+partial fn main() -> Unit ! Console + Env + FileRead + Log + Net {
     let cfg: ServerConfig = match load_config() {
         Err(_)  => { log_error("config load failed", {"reason": "see stderr"}); exit(1) },
         Ok(c)   => c,
