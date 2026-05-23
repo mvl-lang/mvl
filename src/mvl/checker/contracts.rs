@@ -930,13 +930,17 @@ fn check_invariants_in_stmt(
                 );
             }
             // Phase 5: verify the decreases measure.
+            // Expressions that can't be converted to RefExpr (e.g. method calls) fall back
+            // to RuntimeCheck — no static verification, but the loop body is never lost.
             if let Some(dec_expr) = decreases {
-                check_decreases_at_entry(
-                    fn_name, dec_expr, var_refs, fn_decls, errors, *span, mode,
-                );
-                check_decreases_across_iteration(
-                    fn_name, dec_expr, body, var_refs, fn_decls, errors, *span, mode,
-                );
+                if let Some(dec_ref) = expr_to_ref_expr_ext(dec_expr, *span) {
+                    check_decreases_at_entry(
+                        fn_name, &dec_ref, var_refs, fn_decls, errors, *span, mode,
+                    );
+                    check_decreases_across_iteration(
+                        fn_name, &dec_ref, body, var_refs, fn_decls, errors, *span, mode,
+                    );
+                }
             }
             // Recurse into the body for nested loops.
             check_invariants_in_block(body, fn_name, var_refs, fn_decls, errors, mode);

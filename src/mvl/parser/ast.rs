@@ -881,7 +881,7 @@ pub enum Stmt {
         /// Loop invariant predicates — `invariant pred` clauses (Phase 3, #621).
         invariants: Vec<RefExpr>,
         /// Optional termination measure — `decreases expr` clause (Phase 5, #628).
-        decreases: Option<Box<RefExpr>>,
+        decreases: Option<Box<Expr>>,
         body: Block,
         span: Span,
     },
