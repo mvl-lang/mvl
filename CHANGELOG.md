@@ -4,6 +4,22 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.141.0] - 2026-05-23
+
+### Added
+
+- **pkg.http HTTP package** (#783, #799, #800, #913): Extract HTTP types and functions into a standalone pure MVL package. Includes Status enum with 20 HTTP status codes (Http200Ok → Http504GatewayTimeout), HttpError struct for FastAPI-style error responses, Request/Response types, and helper functions (parse_request, serialize_response, ok, not_found, error_response). No extern blocks or native dependencies required. Enables examples/actor_webserver to use pkg.http instead of stdlib utilities.
+- **HTTP status code classification helpers**: is_success() and is_error() predicates for status code ranges (2xx, 4xx+).
+
+### Changed
+
+- **examples/actor_webserver refactored for pkg.http** (#783, #799, #800, #913): Route function now returns Result[Response, HttpError]. Removed Status parameter from config layers. RequestHandler actor unchanged (iso stream ownership preserved). Main function flattened: config loading + logging setup + server startup in sequence, with explicit exit(1) on config error instead of fallback defaults. Layered config system (defaults → TOML → env → CLI) harmonized: single default source in config.mvl, no duplicate in main. Package resolution via .mvl/pkg/http local symlink (preference over global pkg/).
+
+### Fixed
+
+- **Config load error handling** (#913): Removed duplicate config defaults that shadowed config.toml and environment overrides. Configuration now fails explicitly with exit(1) on load error, preventing silent fallback to incorrect defaults.
+- **Local package resolution** (#800): Created .mvl/pkg/http symlink pattern to prefer local packages over global pkg/ directory resolution.
+
 ## [0.139.1] - 2026-05-22
 
 ### Fixed
