@@ -1,18 +1,25 @@
 //! std.io — file I/O, path utilities, filesystem operations, and stdin.
 //!
-//! Pure functions (path, join, to_string) are implemented in MVL.
-//! All I/O functions are stubs backed by mvl_runtime::stdlib::io (Rust).
+//! `pub builtin fn` declarations are backed by mvl_runtime::stdlib::io (Rust).
+//! Pure MVL functions: path, join, to_string, read_config_file, write_config_file.
+//!
+//! Implicit prelude (#976): `std.io` is loaded as part of the implicit prelude, so
+//! `stdout`, `stderr`, `stdin`, `write`, `Fd`, `IoError` are available without an
+//! explicit `use std.io` import. Other symbols (e.g. `open`, `read_line`) still
+//! require an explicit import.
 //!
 //! Import:
-//!   use std.io.{File, Path, read_to_string, write, append, path_exists,
+//!   use std.io.{Fd, Path, read_to_string, write, write_file, append, path_exists,
 //!               is_file, is_dir, create_dir_all, remove, read_dir,
-//!               stdin, stdin_read_line, stdin_read_to_string, ...}
+//!               stdin, read_line, read, ...}
 //!
 //! Effects:
 //!   FileRead   — reading files, directories, or metadata.
 //!   FileWrite  — writing, creating, or modifying files and directories.
 //!   FileDelete — removing files or directories.
-//!   Console    — line-oriented stdin/stdout.
+//!   Console    — reading from stdin or writing to stdout/stderr/any open fd.
+//!                Note: write(fd, msg) carries ! Console regardless of whether fd
+//!                was obtained from stdout() or open() — see #976 trade-off.
 //!
 //! IFC: file contents and stdin are Tainted[String]; sanitize before use in
 //! security-sensitive contexts. See #44, ADR-0006.
@@ -32,11 +39,14 @@ pub type IoError = enum {
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
-/// A handle to an open file.
+/// A file descriptor — stdout (1), stderr (2), stdin (0), or any open file.
 ///
-/// Returned by `open`. Pass to `buf_reader` or `buf_writer` for buffered I/O.
-/// Callers MUST call `close` explicitly to flush and release the file descriptor.
-pub type File = struct {}
+/// Obtain standard streams via `stdout()`, `stderr()`, `stdin()` (pure).
+/// Obtain file descriptors via `open(path)`.
+/// Pass to `write`, `read`, `read_line`. Close with `close`.
+pub type Fd = struct {
+    inner: Int,
+}
 
 /// A filesystem path (absolute or relative).
 ///
@@ -44,16 +54,6 @@ pub type File = struct {}
 pub type Path = struct {
     inner: String,
 }
-
-/// A buffered reader wrapping a File handle.
-///
-/// Use `read_line` for incremental line-by-line reading.
-pub type BufReader = struct {}
-
-/// A buffered writer wrapping a File handle.
-///
-/// Use `write_line` for line-oriented output.
-pub type BufWriter = struct {}
 
 /// A single entry returned by `read_dir`.
 pub type DirEntry = struct {
@@ -75,23 +75,22 @@ pub type Metadata = struct {
     permissions: Int,
 }
 
-/// A handle to standard input.
-///
-/// Obtained via `stdin()`. Use `stdin_read_line` and `stdin_read_to_string`
-/// to read user input. Input is always Tainted[String].
-pub type Stdin = struct {}
+// ── Standard streams (pure — no I/O, just the fd number) ─────────────────
 
-/// A handle to standard output.
+/// Return the standard output file descriptor (fd 1).
 ///
-/// Obtained via `stdout()`. Pass to `stdout_write` to write to stdout.
-/// Symmetric with `Stdin` for consistent I/O handle patterns.
-pub type Stdout = struct {}
+/// Pure — no I/O. Use with `write` to write to stdout.
+pub builtin fn stdout() -> Fd
 
-/// A handle to standard error.
+/// Return the standard error file descriptor (fd 2).
 ///
-/// Obtained via `stderr()`. Pass to `stderr_write` to write to stderr.
-/// Also used internally by `std.log` as the logging sink.
-pub type Stderr = struct {}
+/// Pure — no I/O. Use with `write` to write to stderr.
+pub builtin fn stderr() -> Fd
+
+/// Return the standard input file descriptor (fd 0).
+///
+/// Pure — no I/O. Use with `read_line` or `read` to read from stdin.
+pub builtin fn stdin() -> Fd
 
 // ── Path construction (pure) ──────────────────────────────────────────────
 
@@ -123,29 +122,47 @@ pub builtin fn is_file(p: Path) -> Bool ! FileRead
 /// Return true if the path refers to a directory.
 pub builtin fn is_dir(p: Path) -> Bool ! FileRead
 
-// ── File I/O — runtime: mvl_runtime::stdlib::io ───────────────────────────
+// ── File descriptor I/O — runtime: mvl_runtime::stdlib::io ───────────────
 
 /// Open a file for reading/writing, creating it if it does not exist.
 ///
-/// Note: `open` itself does not require `! FileRead` — it is the capability
-/// entry point that grants the File handle. Callers that read from the handle
-/// declare `! FileRead`.
+/// Returns an `Fd` that can be passed to `write`, `read_line`, or `read`.
+/// Callers MUST call `close` to release the file descriptor.
 ///
-/// Note: `open` has no mode parameter; `! FileWrite` becomes visible only when
-/// `write_line` or `write` is called, not at the `open` call site.
-pub builtin fn open(p: Path) -> Result[File, IoError]
+/// No effect annotation by design: `open` is the capability entry point —
+/// the file-system effects become visible only when `write`/`read`/`read_line`
+/// are called on the returned `Fd`.
+pub builtin fn open(p: Path) -> Result[Fd, IoError]
 
-/// Close a file handle and flush any pending writes.
+/// Close a file descriptor and release the OS resource.
 ///
-/// Takes File by value to prevent use-after-close.
-/// No effect annotation — closing a file descriptor is a resource release,
-/// not an observable I/O side-effect in the capability sense.
-pub builtin fn close(f: File) -> Unit
+/// Takes Fd by value to prevent use-after-close.
+/// No effect annotation — closing is a resource release, not an observable side-effect.
+pub builtin fn close(fd: Fd) -> Unit
+
+/// Write a string to a file descriptor.
+///
+/// Works for stdout (fd 1), stderr (fd 2), or any open file.
+/// Returns Result — use `let _ = write(...)` to explicitly discard errors.
+pub builtin fn write(fd: Fd, msg: String) -> Result[Unit, IoError] ! Console
+
+/// Read up to `max_bytes` bytes from a file descriptor.
+///
+/// Returns Tainted[String] because the data comes from an external source.
+/// Returns Ok("") at end-of-file.
+pub builtin fn read(fd: Fd, max_bytes: Int) -> Result[Tainted[String], IoError] ! Console
+
+/// Read one line from a file descriptor (up to and including `\n`).
+///
+/// Returns Tainted[String] because the data comes from an external source.
+/// Returns Ok("") at end-of-file.
+pub builtin fn read_line(fd: Fd) -> Result[Tainted[String], IoError] ! Console
+
+// ── Whole-file convenience — runtime: mvl_runtime::stdlib::io ────────────
 
 /// Read the entire contents of a file into a string.
 ///
 /// Returns Tainted[String] because file contents are external (untrusted) data.
-/// When IFC is inactive Tainted[String] is treated as String.
 pub builtin fn read_to_string(p: Path) -> Result[Tainted[String], IoError] ! FileRead
 
 /// Raw private builtin: read file, return bare `String` (Pattern 002).
@@ -158,28 +175,14 @@ builtin fn _read_file(p: String) -> Result[String, IoError] ! FileRead
 /// directly, without requiring the caller to construct a `Path` value first.
 pub builtin fn read_file(p: String) -> Result[Tainted[String], IoError] ! FileRead
 
-/// Write a string to a file, creating it if it does not exist.
+/// Write a string to a file path, creating it if it does not exist.
 ///
 /// Truncates the file if it already exists.
-pub builtin fn write(p: Path, content: String) -> Result[Unit, IoError] ! FileWrite
+/// Use `write(fd, msg)` for open file descriptors.
+pub builtin fn write_file(p: Path, content: String) -> Result[Unit, IoError] ! FileWrite
 
 /// Append a string to a file, creating it if it does not exist.
 pub builtin fn append(p: Path, content: String) -> Result[Unit, IoError] ! FileWrite
-
-/// Wrap a File handle in a BufReader for incremental line reading.
-pub builtin fn buf_reader(f: File) -> BufReader
-
-/// Wrap a File handle in a BufWriter for buffered line writing.
-pub builtin fn buf_writer(f: File) -> BufWriter
-
-/// Read the next line from a BufReader (up to and including `\n`).
-///
-/// Returns Tainted[String] because lines come from an external file.
-/// Returns Ok("") at end-of-file.
-pub builtin fn read_line(r: BufReader) -> Result[Tainted[String], IoError] ! FileRead
-
-/// Write a line (followed by `\n`) to a BufWriter.
-pub builtin fn write_line(w: BufWriter, line: String) -> Result[Unit, IoError] ! FileWrite
 
 // ── Filesystem operations — runtime: mvl_runtime::stdlib::io ─────────────
 
@@ -225,51 +228,6 @@ pub builtin fn create_symlink(target: Path, link: Path) -> Result[Unit, IoError]
 /// to prevent path traversal via attacker-controlled symlink targets.
 pub builtin fn read_link(p: Path) -> Result[Tainted[String], IoError] ! FileRead
 
-// ── Standard input — runtime: mvl_runtime::stdlib::io ────────────────────
-
-/// Return the standard input handle.
-///
-/// Note: `stdin()` itself does not require `! Console` — it is the capability
-/// entry point. Callers that read from the returned handle declare `! Console`.
-pub builtin fn stdin() -> Stdin
-
-/// Read one line from stdin (up to and including `\n`).
-///
-/// Returns Tainted[String] because stdin is user-controlled (untrusted) input.
-/// The line includes the trailing `\n`. Returns Ok("") at end-of-file.
-pub builtin fn stdin_read_line(s: Stdin) -> Result[Tainted[String], IoError] ! Console
-
-/// Read all of stdin into a string.
-///
-/// Returns Tainted[String] because stdin is user-controlled (untrusted) input.
-pub builtin fn stdin_read_to_string(s: Stdin) -> Result[Tainted[String], IoError] ! Console
-
-// ── Standard output / error — runtime: mvl_runtime::stdlib::io ───────────
-
-/// Return the standard output handle.
-///
-/// Note: `stdout()` itself does not require `! Console` — it is the capability
-/// entry point. Callers that write to the returned handle declare `! Console`.
-pub builtin fn stdout() -> Stdout
-
-/// Return the standard error handle.
-///
-/// Note: `stderr()` itself does not require `! Console` — it is the capability
-/// entry point. Callers that write to the returned handle declare `! Console`.
-pub builtin fn stderr() -> Stderr
-
-/// Write a string to stdout.
-///
-/// Does not append a newline. Use `println` (from the implicit prelude) for
-/// newline-terminated output.
-pub builtin fn stdout_write(s: Stdout, line: String) -> Unit ! Console
-
-/// Write a string to stderr.
-///
-/// Does not append a newline. Use `eprintln` (from the implicit prelude) for
-/// newline-terminated output.
-pub builtin fn stderr_write(s: Stderr, line: String) -> Unit ! Console
-
 // ── Capability-aware file operations (#931) ─────────────────────────────────
 //
 // These wrappers accept `ConfigPath[String]` instead of raw `String`,
@@ -293,5 +251,5 @@ pub fn read_config_file(p: ConfigPath[String]) -> Result[Tainted[String], IoErro
 /// callers must sanitize `Tainted[String]` via `relabel trust` before writing.
 pub fn write_config_file(p: ConfigPath[String], content: String) -> Result[Unit, IoError] ! FileWrite {
     let raw: String = relabel unconfig_path(p, "IO-WRITE");
-    write(path(raw), content)
+    write_file(path(raw), content)
 }

@@ -396,10 +396,7 @@ pub(crate) enum StdlibSig {
     /// via pointer-sized cast.  Used for `tcp_listener_port`.
     ResultI64OnePtrArg(String),
 
-    // ── #839: std.io stdout/stderr writes ─────────────────────────────────────
     /// `(ptr, ptr) → void` — two opaque-pointer args, no return.
-    /// Used for `stdout_write(s: Stdout, line: String)` and
-    /// `stderr_write(s: Stderr, line: String)`.
     VoidTwoPtrArgs(String),
 }
 
@@ -877,7 +874,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             ("Unit", 2) if p0 == "String" && p1 == "Map" => {
                 Some(StdlibSig::VoidStringMapArg(symbol))
             }
-            // ── #839: (ptr, ptr) → void — stdout_write / stderr_write ─────────
+            // ── (ptr, ptr) → void ─────────────────────────────────────────────
             ("Unit", 2) if Self::is_ptr_type(p0) && Self::is_ptr_type(p1) => {
                 Some(StdlibSig::VoidTwoPtrArgs(symbol))
             }
@@ -1078,13 +1075,17 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
         }
 
-        // #839: io handle builtins — always available, no `use std.io` required.
-        // core.mvl's println/print/eprintln/eprint call these; they must be reachable
-        // without an explicit import so that the implicit prelude compiles correctly.
+        // #839/#976: io builtins — always available, no `use std.io` required.
+        // core.mvl's println/print/eprintln/eprint call write(stdout(), ...); both
+        // write() and stdout()/stderr()/stdin() must be reachable without an explicit
+        // import so that the implicit prelude compiles correctly.
+        // stdout()/stderr()/stdin() are `pub builtin fn` in io.mvl; they are registered
+        // here as C-ABI calls (returning *const MvlFd) so the LLVM prelude can resolve
+        // them even for programs that do not `use std.io`.
         module_cache
             .entry("io".to_string())
             .or_insert_with(|| Self::load_module_builtins("io"));
-        for fn_name in &["stdout", "stderr", "stdout_write", "stderr_write"] {
+        for fn_name in &["write", "stdout", "stderr", "stdin"] {
             if let Some(fd) = module_cache
                 .get("io")
                 .and_then(|fns| fns.iter().find(|fd| fd.name.as_str() == *fn_name))

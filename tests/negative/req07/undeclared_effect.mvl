@@ -1,7 +1,9 @@
 // corpus:expect-fail
 // expect-requirement: 7
-// Scenario: function calls println but does not declare ! Console in its signature.
+// Scenario: function calls write but does not declare ! Console in its signature.
 // Triggers: CheckError::UndeclaredEffect (req7)
+
+use std.io.{Fd, stdout, write, IoError}
 
 type Event = struct {
     name: String,
@@ -9,9 +11,9 @@ type Event = struct {
 }
 
 fn log_event(ev: Event) -> Unit {
-    // BUG: `stdout_write` requires `! Console` but the signature declares no effects.
-    let h = stdout();
-    stdout_write(h, ev.name);
+    // BUG: `write` requires `! Console` but the signature declares no effects.
+    let h: Fd = stdout();
+    let _: Result[Unit, IoError] = write(h, ev.name);
 }
 
 fn main() -> Unit ! Console {

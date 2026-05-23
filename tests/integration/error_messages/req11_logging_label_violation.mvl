@@ -1,7 +1,9 @@
 // Expected error: logging functions accept only `Public<T>` but argument has label `Secret`
 // Triggers: CheckError::LoggingLabelViolation (req11)
 
+use std.io.{Fd, IoError}
+
 fn main() -> Unit ! Console {
     let password: Secret[String] = "s3cr3t";
-    stdout_write(stdout(), password);
+    let _: Result[Unit, IoError] = write(stdout(), password);
 }

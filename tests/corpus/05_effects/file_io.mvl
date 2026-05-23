@@ -3,18 +3,16 @@
 //            input; Result wrapping; stdin as ! Console; pure path construction.
 //
 // All declarations are valid: effect annotations match actual usage.
-// Note: reference arguments (val T) use pass-by-value syntax in corpus tests;
-// the stdlib stubs declare val T parameters but callers omit val as is conventional
-// in MVL corpus tests (see ADR-0010).
+// Updated in #976: Fd unifies stdout/stderr/file handles.
 
 use std.io.{
-    File, Path, BufReader, BufWriter, DirEntry, Metadata, Stdin, IoError,
+    Fd, Path, DirEntry, Metadata, IoError,
     path, join, to_string, path_exists, is_file, is_dir,
-    open, close, read_to_string, write, append,
-    buf_reader, buf_writer, read_line, write_line,
+    open, close, read_to_string, write_file, append,
+    read_line, write,
     create_dir_all, remove, read_dir, metadata, chmod,
     create_symlink, read_link,
-    stdin, stdin_read_line, stdin_read_to_string,
+    stdin,
 }
 
 // ── Pure path construction (no effects) ───────────────────────────────────
@@ -37,28 +35,25 @@ fn load_config() -> Result[Tainted[String], IoError] ! FileRead {
     read_to_string(config_path())
 }
 
-fn first_line_of(p: Path) -> Result[Tainted[String], IoError] ! FileRead {
-    let f: File = open(p)?;
-    let r: BufReader = buf_reader(f);
-    // Note: buf_reader consumes f, so close is called on the BufReader's underlying
-    // handle in Phase 3 via RAII Drop. In Phase 2 we accept the fd leak here.
-    read_line(r)
+fn first_line_of(p: Path) -> Result[Tainted[String], IoError] ! Console + FileRead {
+    let fd: Fd = open(p)?;
+    read_line(fd)
 }
 
 // ── File write (! FileWrite) ───────────────────────────────────────────────
 
 fn save_report(p: Path, content: String) -> Result[Unit, IoError] ! FileWrite {
-    write(p, content)
+    write_file(p, content)
 }
 
 fn append_log_line(p: Path, line: String) -> Result[Unit, IoError] ! FileWrite {
     append(p, line)
 }
 
-fn write_lines(p: Path) -> Result[Unit, IoError] ! FileWrite {
-    let f: File = open(p)?;
-    let w: BufWriter = buf_writer(f);
-    write_line(w, "header")
+fn write_lines(p: Path) -> Result[Unit, IoError] ! Console {
+    let fd: Fd = open(p)?;
+    write(fd, "header\n")?;
+    Ok(close(fd))
 }
 
 // ── Filesystem operations ─────────────────────────────────────────────────
@@ -99,9 +94,9 @@ fn resolve_link(p: Path) -> Result[Tainted[String], IoError] ! FileRead {
 fn rotate_log(src: Path, dst: Path, new_content: String) -> Result[Unit, IoError] ! FileRead + FileWrite + FileDelete {
     let raw: Tainted[String] = read_to_string(src)?;
     let old: String = relabel trust(raw, "FILE-READ");
-    write(dst, old)?;
+    write_file(dst, old)?;
     remove(src)?;
-    write(src, new_content)
+    write_file(src, new_content)
 }
 
 // ── Path queries (! FileRead) ─────────────────────────────────────────────
@@ -147,20 +142,20 @@ fn read_and_process(p: Path) -> Result[Bool, IoError] ! FileRead {
 
 fn prompt(msg: String) -> Result[Tainted[String], IoError] ! Console {
     println(msg);
-    let s: Stdin = stdin();
-    stdin_read_line(s)
+    let fd: Fd = stdin();
+    read_line(fd)
 }
 
 fn read_all_stdin() -> Result[Tainted[String], IoError] ! Console {
-    let s: Stdin = stdin();
-    stdin_read_to_string(s)
+    let fd: Fd = stdin();
+    read(fd, 65536)
 }
 
 // ── Combined I/O and Console ──────────────────────────────────────────────
 
 fn interactive_save(output_path: Path) -> Result[Unit, IoError] ! Console + FileWrite {
-    let s: Stdin = stdin();
-    let _: Tainted[String] = stdin_read_to_string(s)?;
+    let fd: Fd = stdin();
+    let _: Tainted[String] = read(fd, 65536)?;
     // Write user input to a known, trusted output_path (not derived from stdin input).
-    write(output_path, "received input")
+    write_file(output_path, "received input")
 }

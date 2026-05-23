@@ -388,8 +388,8 @@ impl RustEmitter {
             // The prelude no longer re-exports OS modules; each module is imported explicitly.
             // Also include Rust-backed modules needed by prelude programs (e.g. pbt uses random
             // internally — #555).
-            // #839: std/core.mvl's pure-MVL println/print/eprintln/eprint call stdout_write /
-            // stderr_write from mvl_runtime::stdlib::io, so `io` must always be imported when
+            // #839/#976: std/core.mvl's pure-MVL println/print/eprintln/eprint call write()
+            // from mvl_runtime::stdlib::io, so `io` must always be imported when
             // the prelude contains functions from core.mvl (i.e. whenever mvl_runtime is in use).
             let mut all_modules = collect_stdlib_modules(prog);
             for pp in prelude_progs {

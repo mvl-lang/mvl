@@ -542,14 +542,6 @@ pub partial fn property_check_list_int_verbose(
 
 // ── Phase A: counterexample persistence ───────────────────────────────────
 
-// Upcast a plain String to Tainted[String].
-// Required because append() takes Tainted[String] (all file contents are
-// considered potentially external data) and the String we build from test
-// failure info needs an explicit label to satisfy the IFC type.
-fn taint_string(s: String) -> Tainted[String] {
-    s
-}
-
 // Write one counterexample entry to tests/.proptest-regressions/failures.txt.
 // Errors are silently ignored — persistence is best-effort.
 fn save_counterexample(name: String, value: String) -> Unit ! FileWrite {
@@ -558,7 +550,7 @@ fn save_counterexample(name: String, value: String) -> Unit ! FileWrite {
         Ok(_) => {
             let p: Path = path("tests/.proptest-regressions/failures.txt");
             let entry: String = name.concat(": ").concat(value).concat("\n");
-            match append(p, taint_string(entry)) {
+            match append(p, entry) {
                 Ok(_) => {},
                 Err(_) => {},
             }

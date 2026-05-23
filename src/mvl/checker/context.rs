@@ -24,6 +24,9 @@
 //! |-------------|-------------|--------------------|-----------------------------|
 //! | `println`   | `Console`   | args must be Public| 003-information-flow/Req 6  |
 //! | `print`     | `Console`   | args must be Public| 003-information-flow/Req 6  |
+//! | `stdout`    | (none)      | —                  | std.io Fd factory (#976)    |
+//! | `stderr`    | (none)      | —                  | std.io Fd factory (#976)    |
+//! | `write`     | `Console`   | msg must be Public | 003-information-flow/Req 6  |
 //! | `assert_eq` | (none)      | —                  | 004-testing/Req 4           |
 //! | `abs`       | (none)      | —                  | stdlib math                 |
 //! | `max`       | (none)      | —                  | stdlib math                 |
@@ -309,22 +312,26 @@ impl TypeEnv {
     /// These correspond to the MVL standard library tier 1 (core) functions
     /// that every program has access to without an import.
     fn register_builtins(&mut self) {
-        // Console I/O primitives (#839) — the raw write builtins that back the
+        // Console I/O primitives (#839, #976) — the builtins that back the
         // pure-MVL println/print/eprintln/eprint wrappers in std/core.mvl.
         //
         // Registered globally (no `use std.io` needed) so that std/core.mvl's
-        // pure-MVL wrappers can call them without an import — same pattern as
-        // str_concat being available from std/strings.mvl.
+        // wrappers can call them without an import.
+        //
+        // stdout()/stderr() are `pub builtin fn` in std/io.mvl that return Fd; registered
+        // here so std/core.mvl can call them without `use std.io`.
         //
         // IFC NOTE (003-information-flow Req 6):
-        // stdout_write / stderr_write are public sinks — reject Secret/Tainted/Clean
-        // arguments (enforced via LoggingLabelViolation in calls.rs).
+        // write(fd, msg) is a public sink — rejects Secret/Tainted/Clean msg arguments
+        // (enforced via LoggingLabelViolation in calls.rs).
         let console_eff = vec![Effect::new("Console", Span::new(0, 0, 0, 0))];
+        let io_error_ty = Ty::Named("IoError".into(), vec![]);
+        let fd_ty = Ty::Named("Fd".into(), vec![]);
         self.fns.insert(
             "stdout".into(),
             FnInfo {
                 params: vec![],
-                ret: Ty::Named("Stdout".into(), vec![]),
+                ret: fd_ty.clone(),
                 ..Default::default()
             },
         );
@@ -332,24 +339,15 @@ impl TypeEnv {
             "stderr".into(),
             FnInfo {
                 params: vec![],
-                ret: Ty::Named("Stderr".into(), vec![]),
+                ret: fd_ty.clone(),
                 ..Default::default()
             },
         );
         self.fns.insert(
-            "stdout_write".into(),
+            "write".into(),
             FnInfo {
-                params: vec![Ty::Named("Stdout".into(), vec![]), Ty::String],
-                ret: Ty::Unit,
-                effects: console_eff.clone(),
-                ..Default::default()
-            },
-        );
-        self.fns.insert(
-            "stderr_write".into(),
-            FnInfo {
-                params: vec![Ty::Named("Stderr".into(), vec![]), Ty::String],
-                ret: Ty::Unit,
+                params: vec![fd_ty.clone(), Ty::String],
+                ret: Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty)),
                 effects: console_eff,
                 ..Default::default()
             },
