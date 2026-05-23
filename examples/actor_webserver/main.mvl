@@ -90,23 +90,21 @@ partial fn serve(listener: TcpListener) -> Unit ! Log + Net {
 }
 
 partial fn main() -> Unit ! Env + FileRead + Log + Net {
-    let cfg: ServerConfig = match load_config() {
-        Err(_) => ServerConfig {
-            host: "127.0.0.1", port: 8080, debug: false,
-            log_level: LogLevel::Info, log_format: LogFormat::Plain,
+    match load_config() {
+        Err(_) => log_error("config load failed", {}),
+        Ok(cfg) => {
+            log_set_format(cfg.log_format);
+            log_set_min_level(cfg.log_level);
+            log_info("server starting", {
+                "host":       cfg.host,
+                "port":       cfg.port.to_string(),
+                "log_level":  "from_config",
+                "log_format": "from_config",
+            });
+            match tcp_listen(cfg.host, cfg.port) {
+                Err(e)       => log_error("listen failed", {"error": net_error_msg(e)}),
+                Ok(listener) => serve(listener),
+            }
         },
-        Ok(c) => c,
-    };
-    log_set_format(cfg.log_format);
-    log_set_min_level(cfg.log_level);
-    log_info("server starting", {
-        "host":       cfg.host,
-        "port":       cfg.port.to_string(),
-        "log_level":  "from_config",
-        "log_format": "from_config",
-    });
-    match tcp_listen(cfg.host, cfg.port) {
-        Err(e)       => log_error("listen failed", {"error": net_error_msg(e)}),
-        Ok(listener) => serve(listener),
     }
 }
