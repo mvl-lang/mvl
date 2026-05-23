@@ -25,6 +25,16 @@ use std.net.{TcpListener, TcpStream, tcp_listen, tcp_accept, tcp_read_request, t
 use std.log.{Logger, LogLevel, LogFormat, default_logger}
 use std.env.{exit}
 
+// ── Pre-listen admission ────────────────────────────────────────────────────
+//
+// Req 10 (Refinements) — `where` predicates carry a static guarantee that
+// the literal default port falls inside the IANA-valid TCP range.  The
+// layered refinement solver discharges the literal call below in Layer 1
+// (interval check), so the cost is zero at runtime but the property is
+// proven by the compiler rather than asserted.
+
+fn validate_port_range(p: Int where p > 0 && p < 65536) -> Int { p }
+
 // ── Routing ─────────────────────────────────────────────────────────────────
 
 fn route(req: val Request) -> Result[Response, HttpError] {
@@ -98,6 +108,10 @@ partial fn serve(listener: TcpListener, logger: val Logger) -> Result[Unit, NetE
 }
 
 partial fn main() -> Unit ! Console + Env + FileRead + Log + Net {
+    // Req 10: prove the literal default port lies in the valid TCP range.
+    // Discharged statically (Layer 1, interval) — no runtime branch emitted.
+    let _default_port_ok: Int = validate_port_range(8080);
+
     let cfg: ServerConfig = match load_config() {
         Err(_)  => {
             default_logger().error("config load failed", {"reason": "see stderr"});
