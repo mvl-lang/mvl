@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.146.0] - 2026-05-23
+
+### Added
+
+- **std.kv: file-based human-readable key-value store** (#963): Pure MVL KV implementation with cat-able `key : type = value` format. Zero external dependencies; suitable for config files and embedded/ESP32 use cases. Supported types: Null, Bool, Int, Float, Text, Blob. Public API prefixed `kv_` to avoid prelude namespace collisions: `kv_new`, `kv_open`, `kv_save`, `kv_get`, `kv_get_text`, `kv_get_int`, `kv_get_bool`, `kv_get_float`, `kv_get_blob`, `kv_set`, `kv_delete`, `kv_keys`, `kv_len`. Infrastructure: recursive std/ directory scan in `build.rs`, subdirectory creation in `stdlib.rs`, multi-component path support in `loader.rs`. 25 tests covering all value types, edge cases, and effectful round-trip.
+
 ## [0.145.0] - 2026-05-23
 
 ### Added

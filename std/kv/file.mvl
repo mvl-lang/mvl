@@ -1,0 +1,446 @@
+//! std.kv.file — file-based key-value store with human-readable format. (#963)
+//!
+//! Zero external dependencies. Human-readable, debuggable, cat-able format.
+//! Suitable for ESP32/embedded, config files, small caches.
+//!
+//! Import:
+//!   use std.kv.file.{FileKv, KvValue, kv_new, kv_open, kv_get, kv_get_text,
+//!                    kv_get_int, kv_get_bool, kv_get_float, kv_get_blob,
+//!                    kv_set, kv_delete, kv_save, kv_keys, kv_len}
+//!
+//! Effects:
+//!   open — ! FileRead  (reads existing file; returns empty store if not found)
+//!   save — ! FileWrite (full rewrite on every save)
+//!
+//! File format:
+//!   # MVL Key-Value Store v1
+//!   # Format: key : type = value
+//!
+//!   user.name    : text  = "Alice"
+//!   user.age     : int   = 30
+//!   pi           : float = 3.14
+//!   feature.flag : bool  = true
+//!   raw.data     : blob  = [65, 66, 67]
+//!   missing      : null  = null
+//!
+//! Note: KvValue mirrors std.db.Value but is defined locally to avoid name
+//! collisions with other stdlib modules (e.g. std.json.Value).
+//!
+//! Trade-offs vs pkg.sled (#788):
+//!   No deps, human-readable, embeddable — but no ACID, full rewrite on save.
+//!
+//! See: #963, #788
+
+use std.io.{path, read_file, write, IoError}
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+/// Typed value stored in a `FileKv` entry.
+///
+/// Mirrors `std.db.Value` in structure.  Defined locally to avoid name
+/// collisions when both `std.kv.file` and `std.json` are in scope.
+pub type KvValue = enum {
+    Null,
+    Bool(Bool),
+    Int(Int),
+    Float(Float),
+    Text(String),
+    Blob(List[Int]),
+}
+
+/// An in-memory key-value store backed by a file path.
+///
+/// Load with `open`, persist with `save`.
+/// `set` and `delete` return a new `FileKv`; call `save` to write to disk.
+pub type FileKv = struct {
+    path: String,
+    data: Map[String, KvValue],
+}
+
+// Internal parse result for one line.
+type KvLine = enum {
+    KvPair(String, KvValue),
+    KvSkip,
+    KvErr(String),
+}
+
+// ── Internal helpers ──────────────────────────────────────────────────────────
+
+// {} parses as empty block in MVL, not an empty map literal.
+// Workaround: create a sentinel entry and remove it (see also std/toml.mvl).
+fn kv_empty_map() -> Map[String, KvValue] {
+    let m: ref Map[String, KvValue] = {"__kv_init__": KvValue::Null};
+    m.remove("__kv_init__");
+    m
+}
+
+// ── Text escaping ─────────────────────────────────────────────────────────────
+
+partial fn kv_escape(s: String) -> String {
+    let chars: List[String] = s.chars();
+    let n: Int = chars.len();
+    let out: ref String = "";
+    let i: ref Int = 0;
+    while i < n {
+        match chars.get(i) {
+            None    => {},
+            Some(c) => {
+                if      c == "\\" { out = out.concat("\\\\") }
+                else if c == "\"" { out = out.concat("\\\"") }
+                else if c == "\n" { out = out.concat("\\n")  }
+                else if c == "\r" { out = out.concat("\\r")  }
+                else              { out = out.concat(c)      }
+            }
+        }
+        i = i + 1
+    }
+    out
+}
+
+partial fn kv_unescape(s: String) -> Result[String, String] {
+    let chars: List[String] = s.chars();
+    let n: Int = chars.len();
+    let out: ref String = "";
+    let i: ref Int = 0;
+    let had_err: ref Bool = false;
+    let err: ref String = "";
+    while i < n && had_err == false {
+        match chars.get(i) {
+            None    => {},
+            Some(c) => {
+                if c == "\\" {
+                    if i + 1 >= n {
+                        had_err = true;
+                        err = "trailing backslash in text value"
+                    } else {
+                        match chars.get(i + 1) {
+                            None    => { had_err = true; err = "trailing backslash" },
+                            Some(e) => {
+                                if      e == "\\" { out = out.concat("\\") }
+                                else if e == "\"" { out = out.concat("\"") }
+                                else if e == "n"  { out = out.concat("\n") }
+                                else if e == "r"  { out = out.concat("\r") }
+                                else              { out = out.concat(e)    }
+                            }
+                        }
+                        i = i + 1
+                    }
+                } else {
+                    out = out.concat(c)
+                }
+            }
+        }
+        i = i + 1
+    }
+    if had_err { Err(err) } else { Ok(out) }
+}
+
+// ── Blob serialization ────────────────────────────────────────────────────────
+
+partial fn kv_serialize_blob(bytes: List[Int]) -> String {
+    let n: Int = bytes.len();
+    if n == 0 {
+        "[]"
+    } else {
+        let out: ref String = "[";
+        let i: ref Int = 0;
+        while i < n {
+            if i > 0 { out = out.concat(", ") } else {}
+            match bytes.get(i) {
+                Some(b) => { out = out.concat(b.to_string()) },
+                None    => {},
+            }
+            i = i + 1
+        }
+        out.concat("]")
+    }
+}
+
+// ── Blob parsing ──────────────────────────────────────────────────────────────
+
+// Parse "[65, 66, 67]" into List[Int].
+partial fn kv_parse_blob(s: String) -> Result[List[Int], String] {
+    let trimmed: String = s.trim();
+    let n: Int = trimmed.len();
+    if n < 2 || trimmed.char_at(0) != "[" || trimmed.char_at(n - 1) != "]" {
+        Err("blob must be enclosed in [ ]")
+    } else {
+        let inner: String = trimmed.substring(1, n - 1).trim();
+        if inner.len() == 0 {
+            Ok([])
+        } else {
+            let parts: List[String] = inner.split(",");
+            let result: ref List[Int] = [];
+            let cnt: Int = parts.len();
+            let i: ref Int = 0;
+            let had_err: ref Bool = false;
+            let err: ref String = "";
+            while i < cnt && had_err == false {
+                match parts.get(i) {
+                    None    => {},
+                    Some(p) => {
+                        match p.trim().parse_int() {
+                            Err(e) => { had_err = true; err = consume(e) },
+                            Ok(b)  => { result.push(b) },
+                        }
+                    }
+                }
+                i = i + 1
+            }
+            if had_err { Err(err) } else { Ok(result) }
+        }
+    }
+}
+
+// ── Value type tag ────────────────────────────────────────────────────────────
+
+fn kv_type_tag(v: KvValue) -> String {
+    match v {
+        KvValue::Null     => "null",
+        KvValue::Bool(_)  => "bool",
+        KvValue::Int(_)   => "int",
+        KvValue::Float(_) => "float",
+        KvValue::Text(_)  => "text",
+        KvValue::Blob(_)  => "blob",
+    }
+}
+
+// ── Value serialization ───────────────────────────────────────────────────────
+
+partial fn kv_serialize_value(v: KvValue) -> String {
+    match v {
+        KvValue::Null      => "null",
+        KvValue::Bool(b)   => if b { "true" } else { "false" },
+        KvValue::Int(n)    => n.to_string(),
+        KvValue::Float(f)  => f.to_string(),
+        KvValue::Text(s)   => "\"".concat(kv_escape(s).concat("\"")),
+        KvValue::Blob(bs)  => kv_serialize_blob(bs),
+    }
+}
+
+// ── Full store serialization ──────────────────────────────────────────────────
+
+partial fn kv_serialize(data: Map[String, KvValue]) -> String {
+    let ks: List[String] = data.keys();
+    let n: Int = ks.len();
+    let out: ref String = "# MVL Key-Value Store v1\n# Format: key : type = value\n\n";
+    let i: ref Int = 0;
+    while i < n {
+        match ks.get(i) {
+            None    => {},
+            Some(k) => {
+                match data.get(k) {
+                    None    => {},
+                    Some(v) => {
+                        out = out
+                            .concat(k)
+                            .concat(" : ")
+                            .concat(kv_type_tag(v))
+                            .concat(" = ")
+                            .concat(kv_serialize_value(v))
+                            .concat("\n")
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    out
+}
+
+// ── Value parsing ─────────────────────────────────────────────────────────────
+
+partial fn kv_parse_value(type_str: String, val_str: String) -> Result[KvValue, String] {
+    if type_str == "null" {
+        Ok(KvValue::Null)
+    } else if type_str == "bool" {
+        if val_str == "true"       { Ok(KvValue::Bool(true))  }
+        else if val_str == "false" { Ok(KvValue::Bool(false)) }
+        else                       { Err("invalid bool value: ".concat(val_str)) }
+    } else if type_str == "int" {
+        match val_str.parse_int() {
+            Ok(n)  => Ok(KvValue::Int(n)),
+            Err(e) => Err("invalid int: ".concat(consume(e))),
+        }
+    } else if type_str == "float" {
+        match val_str.parse_float() {
+            Ok(f)  => Ok(KvValue::Float(f)),
+            Err(e) => Err("invalid float: ".concat(consume(e))),
+        }
+    } else if type_str == "text" {
+        let n: Int = val_str.len();
+        if n < 2 || val_str.char_at(0) != "\"" || val_str.char_at(n - 1) != "\"" {
+            Err("text value must be double-quoted")
+        } else {
+            let inner: String = val_str.substring(1, n - 1);
+            match kv_unescape(inner) {
+                Err(e) => Err(consume(e)),
+                Ok(s)  => Ok(KvValue::Text(s)),
+            }
+        }
+    } else if type_str == "blob" {
+        match kv_parse_blob(val_str) {
+            Err(e)  => Err(consume(e)),
+            Ok(bs)  => Ok(KvValue::Blob(bs)),
+        }
+    } else {
+        Err("unknown type tag: ".concat(type_str))
+    }
+}
+
+// ── Line parsing ──────────────────────────────────────────────────────────────
+
+partial fn kv_parse_line(line: String) -> KvLine {
+    let trimmed: String = line.trim();
+    if trimmed.len() == 0 || trimmed.starts_with("#") {
+        KvLine::KvSkip
+    } else {
+        match trimmed.find(" : ") {
+            None            => KvLine::KvErr("missing ' : ' separator: ".concat(trimmed)),
+            Some(colon_pos) => {
+                let key: String = trimmed.substring(0, colon_pos).trim();
+                let rest: String = trimmed.substring(colon_pos + 3, trimmed.len());
+                match rest.find(" = ") {
+                    None         => KvLine::KvErr("missing ' = ' separator: ".concat(trimmed)),
+                    Some(eq_pos) => {
+                        let type_str: String = rest.substring(0, eq_pos).trim();
+                        let val_str: String = rest.substring(eq_pos + 3, rest.len()).trim();
+                        match kv_parse_value(type_str, val_str) {
+                            Err(e) => KvLine::KvErr(consume(e)),
+                            Ok(v)  => KvLine::KvPair(key, v),
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Document parsing ──────────────────────────────────────────────────────────
+
+partial fn kv_parse(content: String) -> Result[Map[String, KvValue], String] {
+    let lines: List[String] = content.split("\n");
+    let data: ref Map[String, KvValue] = kv_empty_map();
+    let n: Int = lines.len();
+    let i: ref Int = 0;
+    let had_err: ref Bool = false;
+    let err: ref String = "";
+    while i < n && had_err == false {
+        match lines.get(i) {
+            None       => {},
+            Some(line) => {
+                match kv_parse_line(line) {
+                    KvLine::KvSkip       => {},
+                    KvLine::KvErr(e)     => { had_err = true; err = consume(e) },
+                    KvLine::KvPair(k, v) => { data.insert(k, v) },
+                }
+            }
+        }
+        i = i + 1
+    }
+    if had_err { Err(err) } else { Ok(data) }
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/// Create an empty in-memory store at path `p`.
+///
+/// No filesystem access — use `kv_save` to persist, `kv_open` to reload.
+pub fn kv_new(p: String) -> FileKv {
+    FileKv { path: p, data: kv_empty_map() }
+}
+
+/// Open a file-backed KV store from path `p`.
+///
+/// Returns an empty in-memory store if the file does not exist.
+/// Returns `Err` on permission or other I/O errors.
+pub partial fn kv_open(p: String) -> Result[FileKv, IoError] ! FileRead {
+    match read_file(p) {
+        Err(IoError::NotFound) => Ok(FileKv { path: p, data: kv_empty_map() }),
+        Err(e)                 => Err(e),
+        Ok(raw)                => {
+            let content: String = relabel trust(raw, "KV-PARSE");
+            match kv_parse(content) {
+                Err(msg) => Err(IoError::Other(consume(msg))),
+                Ok(data) => Ok(FileKv { path: p, data: data }),
+            }
+        }
+    }
+}
+
+/// Return the raw `KvValue` for `key`, or `None` if absent.
+pub fn kv_get(store: FileKv, key: String) -> Option[KvValue] {
+    store.data.get(key)
+}
+
+/// Return the text payload of a `KvValue::Text` entry, or `None`.
+pub fn kv_get_text(store: FileKv, key: String) -> Option[String] {
+    match store.data.get(key) {
+        Some(KvValue::Text(s)) => Some(s),
+        _                      => None,
+    }
+}
+
+/// Return the integer payload of a `KvValue::Int` entry, or `None`.
+pub fn kv_get_int(store: FileKv, key: String) -> Option[Int] {
+    match store.data.get(key) {
+        Some(KvValue::Int(n)) => Some(n),
+        _                     => None,
+    }
+}
+
+/// Return the boolean payload of a `KvValue::Bool` entry, or `None`.
+pub fn kv_get_bool(store: FileKv, key: String) -> Option[Bool] {
+    match store.data.get(key) {
+        Some(KvValue::Bool(b)) => Some(b),
+        _                      => None,
+    }
+}
+
+/// Return the float payload of a `KvValue::Float` entry, or `None`.
+pub fn kv_get_float(store: FileKv, key: String) -> Option[Float] {
+    match store.data.get(key) {
+        Some(KvValue::Float(f)) => Some(f),
+        _                       => None,
+    }
+}
+
+/// Return the blob payload of a `KvValue::Blob` entry, or `None`.
+pub fn kv_get_blob(store: FileKv, key: String) -> Option[List[Int]] {
+    match store.data.get(key) {
+        Some(KvValue::Blob(bs)) => Some(bs),
+        _                       => None,
+    }
+}
+
+/// Insert or update `key` with `value`. Returns a new `FileKv`.
+///
+/// Call `kv_save` to persist changes to disk.
+pub fn kv_set(store: FileKv, key: String, value: KvValue) -> FileKv {
+    FileKv { path: store.path, data: store.data.put(key, value) }
+}
+
+/// Remove `key` from the store. Returns a new `FileKv`.
+///
+/// No-op if the key is absent. Call `kv_save` to persist changes.
+pub fn kv_delete(store: FileKv, key: String) -> FileKv {
+    FileKv { path: store.path, data: store.data.without(key) }
+}
+
+/// Persist the store to its file path.
+///
+/// Rewrites the entire file. Suitable for config-scale data.
+pub partial fn kv_save(store: FileKv) -> Result[Unit, IoError] ! FileWrite {
+    let content: String = kv_serialize(store.data);
+    write(path(store.path), content)
+}
+
+/// Return all keys in the store (unordered).
+pub fn kv_keys(store: FileKv) -> List[String] {
+    store.data.keys()
+}
+
+/// Return the number of entries in the store.
+pub fn kv_len(store: FileKv) -> Int {
+    store.data.len()
+}

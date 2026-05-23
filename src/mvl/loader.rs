@@ -242,39 +242,40 @@ pub fn load_mvl_native_stdlib_extras(progs: &[Program]) -> Vec<Program> {
         for prog in &pending {
             for decl in &prog.declarations {
                 if let Decl::Use(ud) = decl {
-                    if ud.path.first().map(|s| s == "std").unwrap_or(false) {
-                        if let Some(module) = ud.path.get(1) {
-                            let m = module.as_str();
-                            if RUST_BACKED_STDLIB.contains(&m)
-                                || IMPLICIT_PRELUDE_STEMS.contains(&m)
-                            {
-                                continue;
-                            }
-                            if loaded.insert(module.clone()) {
-                                let filename = format!("{m}.mvl");
-                                if let Some(content) = stdlib::stdlib_content(&filename) {
-                                    let (mut p, _) = Parser::new(content);
-                                    let mut loaded_prog = p.parse_program();
-                                    // For hybrid modules (in RUST_RUNTIME_IMPORTS but not in
-                                    // RUST_BACKED_STDLIB), types normally come from
-                                    // `use mvl_runtime::stdlib::X::*` and must be stripped to
-                                    // avoid duplicate definitions (#897).
-                                    // Exception: if RUNTIME_OWNED_TYPES lists specific names for
-                                    // this module, only those are stripped — any types absent from
-                                    // the list exist only in MVL and must pass through (e.g.
-                                    // `Logger` in the `log` module, which is MVL-only).
-                                    if RUST_RUNTIME_IMPORTS.contains(&m)
-                                        && !RUST_BACKED_STDLIB.contains(&m)
-                                    {
-                                        // Hybrid modules: types come from `use mvl_runtime::stdlib::X::*`
-                                        // — strip MVL type decls to avoid duplicate definitions (#897).
-                                        loaded_prog
-                                            .declarations
-                                            .retain(|d| !matches!(d, Decl::Type(_)));
-                                    }
-                                    next_pending.push(loaded_prog.clone());
-                                    extras.push(loaded_prog);
+                    if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
+                        // Top-level module name, e.g. "kv" in std.kv.file or "toml" in std.toml.
+                        let m = ud.path[1].as_str();
+                        if RUST_BACKED_STDLIB.contains(&m) || IMPLICIT_PRELUDE_STEMS.contains(&m) {
+                            continue;
+                        }
+                        // Cache key: "kv.file" for std.kv.file, "toml" for std.toml.
+                        // Filename: "kv/file.mvl" for std.kv.file, "toml.mvl" for std.toml.
+                        let subpath = &ud.path[1..];
+                        let cache_key = subpath.join(".");
+                        let filename = format!("{}.mvl", subpath.join("/"));
+                        if loaded.insert(cache_key) {
+                            if let Some(content) = stdlib::stdlib_content(&filename) {
+                                let (mut p, _) = Parser::new(content);
+                                let mut loaded_prog = p.parse_program();
+                                // For hybrid modules (in RUST_RUNTIME_IMPORTS but not in
+                                // RUST_BACKED_STDLIB), types normally come from
+                                // `use mvl_runtime::stdlib::X::*` and must be stripped to
+                                // avoid duplicate definitions (#897).
+                                // Exception: if RUNTIME_OWNED_TYPES lists specific names for
+                                // this module, only those are stripped — any types absent from
+                                // the list exist only in MVL and must pass through (e.g.
+                                // `Logger` in the `log` module, which is MVL-only).
+                                if RUST_RUNTIME_IMPORTS.contains(&m)
+                                    && !RUST_BACKED_STDLIB.contains(&m)
+                                {
+                                    // Hybrid modules: types come from `use mvl_runtime::stdlib::X::*`
+                                    // — strip MVL type decls to avoid duplicate definitions (#897).
+                                    loaded_prog
+                                        .declarations
+                                        .retain(|d| !matches!(d, Decl::Type(_)));
                                 }
+                                next_pending.push(loaded_prog.clone());
+                                extras.push(loaded_prog);
                             }
                         }
                     }
