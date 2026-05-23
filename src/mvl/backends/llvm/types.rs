@@ -376,4 +376,21 @@ impl<'ctx> LlvmBackend<'ctx> {
         // Unknown payload type — return None so callers treat it as Unit (no payload load).
         None
     }
+
+    /// Given an expression whose value is a `Result[T, E]`, return the LLVM type
+    /// of the Err payload.  Returns `None` when the scrutinee isn't a Result or
+    /// the error type cannot be determined (caller falls back to ptr).
+    pub(crate) fn infer_result_err_llvm_ty(&self, expr: &Expr) -> Option<BasicTypeEnum<'ctx>> {
+        let mvl_ty: Option<&TypeExpr> = match expr {
+            Expr::FnCall { name, .. } => self.fn_return_types.get(name.as_str()),
+            Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()),
+            _ => None,
+        };
+        let ret_ty = mvl_ty?;
+        let inner = Self::strip_type_wrappers(ret_ty);
+        if let TypeExpr::Result { err, .. } = inner {
+            return self.mvl_type_to_llvm(Self::strip_type_wrappers(err));
+        }
+        None
+    }
 }
