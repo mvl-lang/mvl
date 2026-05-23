@@ -529,11 +529,36 @@ impl RustEmitter {
                 emit_extern_decl(self, ed);
                 self.blank();
             }
-            for td in prelude_types {
-                emit_type_decl(self, td);
+            for td in &prelude_types {
+                if force_runtime {
+                    // Sibling module: re-export the type from the crate root instead
+                    // of redefining it.  This ensures `config::LogFormat` is the same
+                    // Rust type as `crate::LogFormat` (= `main::LogFormat`), preventing
+                    // "mismatched types" errors at cross-module call sites.
+                    self.line(&format!("pub use crate::{};", td.name));
+                } else {
+                    emit_type_decl(self, td);
+                }
                 self.blank();
             }
+            // Names of types we re-export from the crate root in this sibling module.
+            // Methods on these types must not be re-emitted here: their `impl` block is
+            // in the entry module, and the type identity is shared via `pub use`.
+            let reexported_type_names: std::collections::HashSet<&str> = if force_runtime {
+                prelude_types.iter().map(|td| td.name.as_str()).collect()
+            } else {
+                std::collections::HashSet::new()
+            };
             for fd in prelude_fns {
+                if let Some(rty) = &fd.receiver_type {
+                    if reexported_type_names.contains(rty.as_str()) {
+                        // Skip methods on prelude types in sibling modules — the impl
+                        // block is already emitted in the entry module, and emitting it
+                        // again produces E0592 ("duplicate definitions") because the
+                        // type is shared via `pub use crate::TypeName;`.
+                        continue;
+                    }
+                }
                 emit_fn_decl(self, fd);
                 self.blank();
             }

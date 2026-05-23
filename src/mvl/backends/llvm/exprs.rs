@@ -484,6 +484,23 @@ impl<'ctx> LlvmBackend<'ctx> {
         for (i, param) in fd.params.iter().enumerate() {
             if let Some(param_val) = fn_val.get_nth_param((i as u32) + 1) {
                 param_val.set_name(&param.name);
+                // val/ref params arrive as ptr (signature uses ptr for TypeExpr::Ref).
+                // Dereference immediately: load the struct, alloca with the inner type,
+                // and store so the rest of the body treats the local as a plain struct.
+                if let crate::mvl::parser::ast::TypeExpr::Ref { inner, .. } = &param.ty {
+                    if let Some(inner_ty) = self.mvl_type_to_llvm(inner) {
+                        let loaded = self
+                            .builder
+                            .build_load(inner_ty, param_val.into_pointer_value(), &param.name)
+                            .unwrap();
+                        let alloca = self.builder.build_alloca(inner_ty, &param.name).unwrap();
+                        self.builder.build_store(alloca, loaded).unwrap();
+                        self.locals.insert(param.name.clone(), (alloca, inner_ty));
+                        self.local_mvl_types
+                            .insert(param.name.clone(), *inner.clone());
+                        continue;
+                    }
+                }
                 if let Some(ty) = self.mvl_type_to_llvm(&param.ty) {
                     let alloca = self.builder.build_alloca(ty, &param.name).unwrap();
                     self.builder.build_store(alloca, param_val).unwrap();
@@ -2510,7 +2527,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                         self.ensure_monomorphized(fd, type_subs, &mangled.clone());
                         let fn_val = self.module.get_function(&mangled)?;
                         let meta_args: Vec<inkwell::values::BasicMetadataValueEnum> =
-                            arg_vals.iter().map(|v| (*v).into()).collect();
+                            self.coerce_args_to_signature(&arg_vals, fn_val);
                         let call = self.builder.build_call(fn_val, &meta_args, "call").unwrap();
                         use inkwell::values::AnyValue;
                         return BasicValueEnum::try_from(call.as_any_value_enum()).ok();
@@ -2520,15 +2537,71 @@ impl<'ctx> LlvmBackend<'ctx> {
                 let fn_val = self.module.get_function(name)?;
                 // If any argument fails to emit, propagate the failure rather than
                 // silently substituting undef, which would produce undefined behaviour.
-                let meta_args: Vec<inkwell::values::BasicMetadataValueEnum> = args
-                    .iter()
-                    .map(|a| self.emit_expr(a).map(Into::into))
-                    .collect::<Option<Vec<_>>>()?;
+                let arg_vals: Vec<BasicValueEnum<'ctx>> =
+                    args.iter().filter_map(|a| self.emit_expr(a)).collect();
+                if arg_vals.len() != args.len() {
+                    return None;
+                }
+                let meta_args: Vec<inkwell::values::BasicMetadataValueEnum> =
+                    self.coerce_args_to_signature(&arg_vals, fn_val);
                 let call = self.builder.build_call(fn_val, &meta_args, "call").unwrap();
                 use inkwell::values::AnyValue;
                 BasicValueEnum::try_from(call.as_any_value_enum()).ok()
             }
         }
+    }
+
+    /// Coerce emitted argument values to match the LLVM function signature.
+    ///
+    /// `val T` and `ref T` parameters are lowered to `ptr` in the signature
+    /// (see `mvl_type_to_llvm` for `TypeExpr::Ref`).  Their bodies dereference
+    /// the pointer on entry into a local alloca.  But the expression layer
+    /// emits arguments as by-value (Struct for records, Int for enum tags,
+    /// Float/Array for other aggregates).  Pass them through unchanged and
+    /// LLVM IR verification rejects the call as a type mismatch.
+    ///
+    /// The fix is symmetric to the callee side: spill any non-pointer
+    /// argument to a stack slot and pass its address.  Covers both struct
+    /// types (#969 original) and enum tags (#969 follow-up, e.g. `val Status`
+    /// extracted as `i8` at the call site).
+    fn coerce_args_to_signature(
+        &self,
+        arg_vals: &[BasicValueEnum<'ctx>],
+        fn_val: inkwell::values::FunctionValue<'ctx>,
+    ) -> Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> {
+        let ptr_ty: inkwell::types::BasicMetadataTypeEnum = self
+            .context
+            .ptr_type(inkwell::AddressSpace::default())
+            .into();
+        let param_types = fn_val.get_type().get_param_types();
+        arg_vals
+            .iter()
+            .enumerate()
+            .map(|(i, val)| {
+                let expected = param_types.get(i).copied();
+                // ── Direction 1: signature wants ptr, we have a by-value scalar/aggregate ──
+                // Spill to stack and pass the address. (#969 — val/ref struct & enum.)
+                if expected == Some(ptr_ty) && !matches!(val, BasicValueEnum::PointerValue(_)) {
+                    let ty = val.get_type();
+                    let slot = self.builder.build_alloca(ty, "byval_arg").unwrap();
+                    self.builder.build_store(slot, *val).unwrap();
+                    return slot.into();
+                }
+                // ── Direction 2: signature wants aggregate-by-value, we have a ptr ──
+                // Happens when an Option/Result returned by a runtime helper (e.g.
+                // mvl_array_get -> ptr to Option<T>) is forwarded into a function
+                // declared as `(Option[T], …)`.  Load the aggregate from the ptr.
+                if let (
+                    Some(inkwell::types::BasicMetadataTypeEnum::StructType(st)),
+                    BasicValueEnum::PointerValue(p),
+                ) = (expected, val)
+                {
+                    let loaded = self.builder.build_load(st, *p, "byref_to_byval").unwrap();
+                    return loaded.into();
+                }
+                (*val).into()
+            })
+            .collect()
     }
 
     // ── Collection literals ──────────────────────────────────────────────────
@@ -2860,7 +2933,11 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
 
             // Group C: ptr × ptr → i64  (1 string arg; Bool result)
-            // `starts_with`/`ends_with` return 0/1 (Bool as i64) — safe direct C dispatch.
+            // `starts_with`/`ends_with` return 0/1 from the C runtime as i64, but MVL
+            // Bool lowers to i1.  Truncate at the call site so downstream consumers
+            // (assert_eq, conditional branches, &&/||) see a consistent i1.  Without
+            // this, `assert_eq(s.starts_with(p), true)` builds an `icmp i64, i1`
+            // which fails LLVM IR verification.
             // Note: `find` returns Option[Int], NOT i64, so it is NOT included here;
             // it is handled by the HOF dispatch arm via emit_fn_call("find", …).
             "starts_with" | "ends_with" if args.len() == 1 => {
@@ -2877,7 +2954,14 @@ impl<'ctx> LlvmBackend<'ctx> {
                             .build_call(f, &[a.into(), b.into()], "str_pred")
                             .unwrap();
                         use inkwell::values::AnyValue;
-                        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+                        let raw_i64 = BasicValueEnum::try_from(call.as_any_value_enum())
+                            .ok()?
+                            .into_int_value();
+                        let bool_i1 = self
+                            .builder
+                            .build_int_truncate(raw_i64, self.context.bool_type(), "str_pred_i1")
+                            .unwrap();
+                        Some(bool_i1.into())
                     }
                     _ => None,
                 }
@@ -3535,7 +3619,20 @@ impl<'ctx> LlvmBackend<'ctx> {
                                 .build_call(f, &[s.into(), n.into()], "str_contains")
                                 .unwrap();
                             use inkwell::values::AnyValue;
-                            return BasicValueEnum::try_from(call.as_any_value_enum()).ok();
+                            // C runtime returns i64; MVL Bool is i1. Truncate so the
+                            // downstream consumer (assert_eq, if-cond) sees an i1.
+                            let raw_i64 = BasicValueEnum::try_from(call.as_any_value_enum())
+                                .ok()?
+                                .into_int_value();
+                            let bool_i1 = self
+                                .builder
+                                .build_int_truncate(
+                                    raw_i64,
+                                    self.context.bool_type(),
+                                    "str_contains_i1",
+                                )
+                                .unwrap();
+                            return Some(bool_i1.into());
                         }
                         _ => return None,
                     }

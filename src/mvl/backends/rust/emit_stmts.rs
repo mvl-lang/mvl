@@ -172,6 +172,11 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &Stmt) {
             cg.indent();
             cg.push("match ");
             emit_expr(cg, scrutinee);
+            // Field access on self (e.g. `self.best_ask`) cannot be moved out of
+            // `&mut self`; clone so the field is unaffected by the match binding.
+            if scrutinee_needs_clone(scrutinee) {
+                cg.push(".clone()");
+            }
 
             // Allocate MC/DC arm-coverage decision (Match kind, one "clause" per arm).
             let match_mcdc_id: Option<usize> = if arms.len() >= 2 {
@@ -338,6 +343,17 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &Stmt) {
             cg.push(";");
             cg.nl();
         }
+    }
+}
+
+/// Returns true when the match scrutinee is a direct field access on `self`
+/// (e.g. `self.best_ask`). Such expressions cannot be moved out of `&mut self`,
+/// so the emitter appends `.clone()` to the scrutinee.
+pub(crate) fn scrutinee_needs_clone(expr: &Expr) -> bool {
+    if let Expr::FieldAccess { expr: base, .. } = expr {
+        matches!(base.as_ref(), Expr::Ident(n, _) if n == "self" || n == "self_")
+    } else {
+        false
     }
 }
 

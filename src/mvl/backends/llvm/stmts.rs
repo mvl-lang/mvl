@@ -343,6 +343,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         arms: &[MatchArm],
     ) -> Option<BasicValueEnum<'ctx>> {
         let ok_ty_opt = self.infer_result_ok_llvm_ty(scrutinee);
+        let err_ty_opt = self.infer_result_err_llvm_ty(scrutinee);
         let scrutinee_val = self.emit_expr(scrutinee)?;
 
         // String literal match: arms contain Pattern::Literal(Str) patterns.
@@ -406,7 +407,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             self.terminated = false;
 
             // Bind pattern variables if needed (Phase B: simple cases only).
-            self.bind_pattern_vars(&arm.pattern, scrutinee_val, ok_ty_opt);
+            self.bind_pattern_vars(&arm.pattern, scrutinee_val, ok_ty_opt, err_ty_opt);
 
             // Guard support (#938): if a guard is present, evaluate it and
             // conditionally branch to either the body block or the next arm/fallback.
@@ -696,9 +697,12 @@ impl<'ctx> LlvmBackend<'ctx> {
         pat: &Pattern,
         scrutinee: BasicValueEnum<'ctx>,
         ok_ty: Option<BasicTypeEnum<'ctx>>,
+        err_ty: Option<BasicTypeEnum<'ctx>>,
     ) {
         let default_ok_ty: BasicTypeEnum = self.context.i64_type().into();
         let ok_llvm_ty = ok_ty.unwrap_or(default_ok_ty);
+        let default_err_ty: BasicTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
+        let err_llvm_ty = err_ty.unwrap_or(default_err_ty);
 
         // Built-in Pattern::Ok(inner), Pattern::Err(inner), Pattern::Some(inner).
         let (inner_pat, is_err) = match pat {
@@ -717,11 +721,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 Ok(v) => v,
                 Err(_) => return,
             };
-            let llvm_ty: BasicTypeEnum = if is_err {
-                self.context.ptr_type(AddressSpace::default()).into()
-            } else {
-                ok_llvm_ty
-            };
+            let llvm_ty: BasicTypeEnum = if is_err { err_llvm_ty } else { ok_llvm_ty };
             let payload_ptr = payload_ptr_val.into_pointer_value();
             let loaded = self
                 .builder
@@ -736,7 +736,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             } else {
                 // Nested pattern: Some(EnumVariant(x)) — recurse with the loaded payload
                 // as the new scrutinee.  This handles patterns like Some(ArgValue::Str(s)).
-                self.bind_pattern_vars(inner, loaded, ok_ty);
+                self.bind_pattern_vars(inner, loaded, ok_ty, err_ty);
             }
             return;
         }
@@ -774,7 +774,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 let is_err_variant =
                     matches!(name.as_str(), "Err" | "Result::Err" | "Option::None");
                 let llvm_ty: BasicTypeEnum = if is_err_variant {
-                    self.context.ptr_type(AddressSpace::default()).into()
+                    err_llvm_ty
                 } else {
                     ok_llvm_ty
                 };

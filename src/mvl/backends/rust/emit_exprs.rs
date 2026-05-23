@@ -3,7 +3,7 @@
 
 //! Emit Rust expressions from MVL [`Expr`] nodes.
 
-use crate::mvl::backends::rust::emit_stmts::emit_mcdc_guard_block;
+use crate::mvl::backends::rust::emit_stmts::{emit_mcdc_guard_block, scrutinee_needs_clone};
 use crate::mvl::backends::rust::emit_types::{emit_label, emit_type_expr};
 use crate::mvl::backends::rust::emitter::RustEmitter;
 use crate::mvl::backends::rust::mcdc_instr::DecisionKind;
@@ -956,6 +956,9 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
             // MC/DC IDs before the match-level decisions (mirrors analysis order).
             cg.push("match ");
             emit_expr(cg, scrutinee);
+            if scrutinee_needs_clone(scrutinee) {
+                cg.push(".clone()");
+            }
             // Allocate MC/DC arm-coverage decision after scrutinee.
             let match_mcdc_id: Option<usize> = if arms.len() >= 2 {
                 cg.alloc_mcdc_decision(span.line, arms.len(), DecisionKind::Match, vec![])

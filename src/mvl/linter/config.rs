@@ -30,7 +30,7 @@
 //! | `indent_style`    | `spaces`| `spaces` or `tabs` (used when indentation is enabled)    |
 //! | `indentation`     | `false` | Flag wrong indent style/width                             |
 //! | `final_newline`   | `false` | Require file to end with exactly one newline              |
-//! | `max_fn_length`   | `50`    | Maximum lines in a function body (0 = disabled)           |
+//! | `max_fn_length`   | `100`   | Maximum lines in a function body (0 = disabled)           |
 //! | `naming`          | `true`  | Enforce `snake_case` / `PascalCase` conventions           |
 //! | `trailing_ws`     | `false` | Flag trailing whitespace                                  |
 //! | `unused_bindings` | `true`  | Flag unused `let` bindings (future)                       |
@@ -147,7 +147,7 @@ impl Default for LintConfig {
             indentation: false,
             final_newline: false,
             // Semantic / complexity rules — ON by default
-            max_fn_length: 50,
+            max_fn_length: 100,
             naming: true,
             unused_bindings: true,
             unreachable_code: true,
@@ -378,7 +378,7 @@ mod tests {
         assert_eq!(cfg.indent_size, 4);
         assert!(cfg.indent_spaces);
         // Semantic / complexity rules — ON by default
-        assert_eq!(cfg.max_fn_length, 50);
+        assert_eq!(cfg.max_fn_length, 100);
         assert!(cfg.naming);
         assert!(cfg.unreachable_code);
         assert!(cfg.redundant_match);

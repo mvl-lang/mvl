@@ -1,0 +1,158 @@
+// actor_trading/main_test.mvl — Unit tests for pure matching logic.
+//
+// Tests the crossing, execution price, and quantity conservation rules
+// without actor concurrency or effects.  All functions here are pure.
+//
+// Type declarations are repeated here as a workaround for per-file
+// cross-module type resolution (issue #96).
+
+// ── Type re-declarations (workaround: #96) ────────────────────────────────
+
+type Side = enum { Bid, Ask }
+
+type OrderStatus = enum { Open, Filled, Cancelled }
+
+type Order = struct {
+    id:       Int,
+    side:     Side,
+    price:    Int,
+    quantity: Int,
+    status:   OrderStatus,
+}
+
+type Fill = struct {
+    bid_order: Int,
+    ask_order: Int,
+    price:     Int,
+    quantity:  Int,
+}
+
+// ── Pure matching logic (mirrors Matcher and OrderBook in main.mvl) ────────
+
+// True when a bid and ask cross (bid is willing to pay at least the ask price).
+fn crosses(bid_price: Int, ask_price: Int) -> Bool {
+    bid_price >= ask_price
+}
+
+// Execution price: passive (ask) side sets the price.
+fn exec_price(bid_price: Int, ask_price: Int) -> Int {
+    ask_price
+}
+
+// Fill quantity: min of both sides.
+fn exec_qty(bid_qty: Int, ask_qty: Int) -> Int {
+    if bid_qty < ask_qty { bid_qty } else { ask_qty }
+}
+
+fn make_fill(bid: val Order, ask: val Order) -> Fill {
+    Fill {
+        bid_order: bid.id,
+        ask_order: ask.id,
+        price:     exec_price(bid.price, ask.price),
+        quantity:  exec_qty(bid.quantity, ask.quantity),
+    }
+}
+
+fn make_order(id: Int, side: Side, price: Int, quantity: Int) -> Order {
+    Order { id: id, side: side, price: price, quantity: quantity, status: OrderStatus::Open }
+}
+
+// ── Crossing tests ────────────────────────────────────────────────────────
+
+test fn bid_above_ask_crosses() -> Unit {
+    assert_eq(crosses(102, 100), true)
+}
+
+test fn bid_equal_ask_crosses() -> Unit {
+    assert_eq(crosses(100, 100), true)
+}
+
+test fn bid_below_ask_does_not_cross() -> Unit {
+    assert_eq(crosses(99, 100), false)
+}
+
+// ── Execution price tests (P1: no worse than limit) ───────────────────────
+
+// Fill at ask price (passive side): bid always gets price <= its limit.
+test fn exec_price_is_ask_price() -> Unit {
+    assert_eq(exec_price(102, 100), 100)
+}
+
+test fn exec_price_equals_ask_when_equal() -> Unit {
+    assert_eq(exec_price(100, 100), 100)
+}
+
+// P1: fill price must be between ask and bid limits.
+test fn fill_price_no_worse_than_bid_limit() -> Unit {
+    let bid: Order = make_order(1, Side::Bid, 102, 10);
+    let ask: Order = make_order(0, Side::Ask, 100, 10);
+    let fill: Fill = make_fill(bid, ask);
+    assert_eq(fill.price <= bid.price, true)
+}
+
+test fn fill_price_no_worse_than_ask_limit() -> Unit {
+    let bid: Order = make_order(1, Side::Bid, 102, 10);
+    let ask: Order = make_order(0, Side::Ask, 100, 10);
+    let fill: Fill = make_fill(bid, ask);
+    assert_eq(fill.price >= ask.price, true)
+}
+
+// ── Quantity conservation tests (P2) ─────────────────────────────────────
+
+test fn qty_limited_by_smaller_bid() -> Unit {
+    assert_eq(exec_qty(3, 10), 3)
+}
+
+test fn qty_limited_by_smaller_ask() -> Unit {
+    assert_eq(exec_qty(10, 3), 3)
+}
+
+test fn qty_equal_when_sides_equal() -> Unit {
+    assert_eq(exec_qty(5, 5), 5)
+}
+
+test fn fill_qty_leq_bid_qty() -> Unit {
+    let bid: Order = make_order(1, Side::Bid, 102, 3);
+    let ask: Order = make_order(0, Side::Ask, 100, 10);
+    let fill: Fill = make_fill(bid, ask);
+    assert_eq(fill.quantity <= bid.quantity, true)
+}
+
+test fn fill_qty_leq_ask_qty() -> Unit {
+    let bid: Order = make_order(1, Side::Bid, 102, 10);
+    let ask: Order = make_order(0, Side::Ask, 100, 4);
+    let fill: Fill = make_fill(bid, ask);
+    assert_eq(fill.quantity <= ask.quantity, true)
+}
+
+// ── Fill metadata tests ───────────────────────────────────────────────────
+
+test fn fill_records_bid_order_id() -> Unit {
+    let bid: Order = make_order(7, Side::Bid, 100, 5);
+    let ask: Order = make_order(3, Side::Ask, 98,  5);
+    let fill: Fill = make_fill(bid, ask);
+    assert_eq(fill.bid_order, 7)
+}
+
+test fn fill_records_ask_order_id() -> Unit {
+    let bid: Order = make_order(7, Side::Bid, 100, 5);
+    let ask: Order = make_order(3, Side::Ask, 98,  5);
+    let fill: Fill = make_fill(bid, ask);
+    assert_eq(fill.ask_order, 3)
+}
+
+// ── Refinement boundary tests ─────────────────────────────────────────────
+
+// The solver proves price > 0 at literal call sites (Layer 1, no Z3 needed).
+// These helper functions accept the refined parameter — the checker verifies
+// the literal argument satisfies the predicate statically.
+fn accept_positive_price(price: Int where price > 0) -> Bool { price > 0 }
+fn accept_positive_qty(qty: Int where qty > 0) -> Bool { qty > 0 }
+
+test fn minimum_valid_price_is_one() -> Unit {
+    assert_eq(accept_positive_price(1), true)
+}
+
+test fn minimum_valid_quantity_is_one() -> Unit {
+    assert_eq(accept_positive_qty(1), true)
+}

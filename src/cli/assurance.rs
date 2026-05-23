@@ -57,7 +57,7 @@ pub fn run(path: &str, json: bool, verbose: bool) {
     let mut verdict_cache = VerdictCache::default();
     let mut per_file_verdicts: Vec<[Verdict; 12]> = Vec::new();
 
-    let parsed_assurance: Vec<(String, Program, String)> = files
+    let mut parsed_assurance: Vec<(String, Program, String)> = files
         .iter()
         .map(|f| {
             let file_str = f.display().to_string();
@@ -65,8 +65,43 @@ pub fn run(path: &str, json: bool, verbose: bool) {
             (file_str, prog, src)
         })
         .collect();
-    let mut assurance_prelude =
-        loader::load_stdlib_prelude(parsed_assurance.iter().map(|(_, p, _)| p), &stdlib_dir);
+    // Number of files explicitly requested by the user; auto-loaded siblings
+    // appended below are excluded from per-file iteration and the report.
+    let requested_count = parsed_assurance.len();
+
+    // When the user passes a single file, auto-load any imported sibling modules
+    // so cross-module type and function references resolve (mirrors check.rs).
+    // Without this, `use types::{Order, ...}` from a sibling file would surface
+    // as unresolved-name errors even though the project as a whole type-checks.
+    if Path::new(path).is_file() {
+        let already_loaded: std::collections::HashSet<String> = parsed_assurance
+            .iter()
+            .map(|(f, _, _)| loader::stem(f))
+            .collect();
+        let entry_dir = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
+        if let Some((_, entry_prog, _)) = parsed_assurance.first() {
+            let extra_mods = loader::collect_imported_module_names(entry_prog);
+            for mod_name in extra_mods {
+                if already_loaded.contains(&mod_name) {
+                    continue;
+                }
+                if let Some(mod_path) = loader::find_module_file(entry_dir, &mod_name) {
+                    let mod_str = mod_path.display().to_string();
+                    let (sib_prog, sib_src) = super::parse_or_exit(&mod_str);
+                    parsed_assurance.push((mod_str, sib_prog, sib_src));
+                }
+            }
+        }
+    }
+    // Implicit prelude first (core.mvl, strings.mvl, lists.mvl, effects.mvl):
+    // these are always visible without an explicit `use std.…` and must be loaded
+    // before any user-imported stdlib modules so the checker can resolve built-in
+    // effects (Console, Log, …) and primitive operations.
+    let mut assurance_prelude = loader::load_implicit_prelude();
+    assurance_prelude.extend(loader::load_stdlib_prelude(
+        parsed_assurance.iter().map(|(_, p, _)| p),
+        &stdlib_dir,
+    ));
     let all_assurance_progs: Vec<Program> =
         parsed_assurance.iter().map(|(_, p, _)| p.clone()).collect();
     // Load any `pkg.*` package modules referenced by the checked files so the
@@ -91,7 +126,7 @@ pub fn run(path: &str, json: bool, verbose: bool) {
         })
         .count();
 
-    for (idx, (file_str, prog, src)) in parsed_assurance.iter().enumerate() {
+    for (idx, (file_str, prog, src)) in parsed_assurance.iter().take(requested_count).enumerate() {
         let file_str = file_str.as_str();
         let stats = collect_assurance_stats(prog, verbose);
         let (before, after_with_self) = all_assurance_progs.split_at(idx);
