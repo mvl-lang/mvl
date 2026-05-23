@@ -8,7 +8,7 @@
 #   LLVM                 — pure tests only (handler_test.mvl); extern stubs return defaults
 #
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl build check lint test-solver test test-llvm assurance mcdc mutate run all clean
+.PHONY: help guard-mvl build check lint test-solver test test-llvm assurance mcdc mutate fuzz run all clean
 
 .DEFAULT_GOAL := help
 
@@ -72,6 +72,9 @@ mcdc: guard-mvl ## Run MC/DC coverage analysis (ARGS="--masking" to exempt coupl
 
 mutate: guard-mvl ## Run mutation testing
 	$(MVL) mutate $(DIR)
+
+fuzz: guard-mvl ## Type-directed fuzzing of handler.mvl Tainted[String] params (requires nightly + cargo-fuzz; ARGS="--time 60s")
+	$(MVL) fuzz $(DIR)handler.mvl $(ARGS)
 
 all: check test assurance mcdc ## Run full quality pipeline: check + test + assurance + mcdc
 

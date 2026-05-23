@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-requirements test-error-messages test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples coverage validate-keywords lint mvl-lint format format-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff mutants mutants-actors
+.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-requirements test-error-messages test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples coverage validate-keywords lint mvl-lint format format-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -316,6 +316,28 @@ fuzz-diff: ## [Phase 3] Differential fuzzing: Rust vs LLVM backends (subprocess 
 	@command -v cargo >/dev/null && test -f target/debug/mvl || { echo "Run 'make build' first — fuzz-diff needs the mvl binary."; exit 1; }
 	cargo +nightly fuzz run transpile_diff -- -max_total_time=$(FUZZ_TIMEOUT) -timeout=30
 	@echo "All clear — no divergences found."
+
+fuzz-mvl: build ## [Phase 8] Type-directed runtime fuzzing of MVL programs (Tainted[T] params; set FUZZ_TIMEOUT=60 for real runs)
+	@command -v cargo +nightly >/dev/null 2>&1 || { echo "error: nightly toolchain required — rustup toolchain install nightly"; exit 1; }
+	target/debug/mvl fuzz examples/log_analyzer --target parse_line --time $(FUZZ_TIMEOUT)s
+
+test-fuzz-list: build ## Smoke-test mvl fuzz --list on all examples with Tainted[T] params (no nightly required)
+	@echo "Checking fuzz target discovery..."
+	@ok=0; fail=0; \
+	for dir in examples/log_analyzer examples/task_pipeline examples/config_server; do \
+		out=$$(target/debug/mvl fuzz $$dir --list 2>&1); rc=$$?; \
+		if [ $$rc -eq 0 ]; then \
+			printf "  \033[32m✓\033[0m  $$dir\n"; echo "$$out" | sed 's/^/       /'; ok=$$((ok+1)); \
+		else \
+			printf "  \033[31m✗\033[0m  $$dir\n"; echo "$$out" | sed 's/^/       /'; fail=$$((fail+1)); \
+		fi; \
+	done; \
+	echo ""; \
+	if [ $$fail -eq 0 ]; then \
+		printf "  \033[32m✓  $$ok example(s) — fuzz target discovery working\033[0m\n\n"; \
+	else \
+		printf "  \033[31m✗  $$fail example(s) failed\033[0m\n\n"; exit 1; \
+	fi
 
 # === Mutation testing (long-running — not part of per-PR CI) ===
 # Scores transpiler emit_*.rs modules; target: ≥80% mutation score.
