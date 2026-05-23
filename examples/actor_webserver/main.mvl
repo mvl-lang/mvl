@@ -78,15 +78,22 @@ actor RequestHandler {
 
 // ── Accept loop ───────────────────────────────────────────────────────────
 
-partial fn serve(listener: TcpListener) -> Unit ! Log + Net {
-    while true {
-        match tcp_accept(listener) {
-            Err(e)     => log_warn("accept error", {"error": net_error_msg(e)}),
-            Ok(stream) => {
-                let h: RequestHandler = actor RequestHandler {};
-                h.handle(consume(stream))
-            },
-        }
+partial fn serve(listener: TcpListener) -> Result[Unit, NetError] ! Log + Net {
+    match tcp_accept(listener) {
+        Err(NetError::ConnectionReset) => {
+            log_warn("client dropped before accept", {"reason": "connection reset"});
+            serve(listener)
+        },
+        Err(NetError::Timeout) => {
+            log_warn("accept timed out", {"reason": "timeout"});
+            serve(listener)
+        },
+        Err(e)     => Err(e),
+        Ok(stream) => {
+            let h: RequestHandler = actor RequestHandler {};
+            h.handle(consume(stream));
+            serve(listener)
+        },
     }
 }
 
@@ -105,6 +112,9 @@ partial fn main() -> Unit ! Env + FileRead + Log + Net {
     });
     match tcp_listen(cfg.host, cfg.port) {
         Err(e)       => log_error("listen failed", {"error": net_error_msg(e)}),
-        Ok(listener) => serve(listener),
+        Ok(listener) => match serve(listener) {
+            Err(e) => log_error("accept failed", {"error": net_error_msg(e)}),
+            Ok(_)  => {},
+        },
     }
 }
