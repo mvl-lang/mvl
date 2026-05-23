@@ -1,0 +1,306 @@
+// pkg.http.testing tests — response parsing and BDD assertion helpers.
+//
+// All functions here are pure (no effects).
+// Type and helper re-declarations: workaround for #96 (test files cannot
+// import from the package under test).
+
+// ── Type re-declarations ─────────────────────────────────────────────────────
+
+type Status = enum {
+    Http200Ok,
+    Http201Created,
+    Http202Accepted,
+    Http204NoContent,
+    Http301MovedPermanently,
+    Http302Found,
+    Http304NotModified,
+    Http400BadRequest,
+    Http401Unauthorized,
+    Http403Forbidden,
+    Http404NotFound,
+    Http405MethodNotAllowed,
+    Http409Conflict,
+    Http410Gone,
+    Http422UnprocessableEntity,
+    Http429TooManyRequests,
+    Http500InternalServerError,
+    Http501NotImplemented,
+    Http502BadGateway,
+    Http503ServiceUnavailable,
+    Http504GatewayTimeout,
+}
+
+type Response = struct {
+    status:  Status,
+    headers: Map[String, String],
+    body:    String,
+}
+
+type HttpError = struct {
+    status: Status,
+    detail: String,
+}
+
+// ── Helpers mirrored from http.mvl ───────────────────────────────────────────
+
+fn status_code(s: val Status) -> Int {
+    match s {
+        Status::Http200Ok                  => 200,
+        Status::Http201Created             => 201,
+        Status::Http202Accepted            => 202,
+        Status::Http204NoContent           => 204,
+        Status::Http301MovedPermanently    => 301,
+        Status::Http302Found              => 302,
+        Status::Http304NotModified         => 304,
+        Status::Http400BadRequest          => 400,
+        Status::Http401Unauthorized        => 401,
+        Status::Http403Forbidden           => 403,
+        Status::Http404NotFound            => 404,
+        Status::Http405MethodNotAllowed    => 405,
+        Status::Http409Conflict            => 409,
+        Status::Http410Gone               => 410,
+        Status::Http422UnprocessableEntity => 422,
+        Status::Http429TooManyRequests     => 429,
+        Status::Http500InternalServerError => 500,
+        Status::Http501NotImplemented      => 501,
+        Status::Http502BadGateway          => 502,
+        Status::Http503ServiceUnavailable  => 503,
+        Status::Http504GatewayTimeout      => 504,
+    }
+}
+
+fn http_error(status: Status, detail: String) -> HttpError {
+    HttpError { status: status, detail: detail }
+}
+
+// ── Helpers mirrored from testing.mvl ────────────────────────────────────────
+
+fn status_from_code(code: Int) -> Result[Status, HttpError] {
+    if code == 200      { Ok(Status::Http200Ok) }
+    else if code == 201 { Ok(Status::Http201Created) }
+    else if code == 400 { Ok(Status::Http400BadRequest) }
+    else if code == 404 { Ok(Status::Http404NotFound) }
+    else if code == 500 { Ok(Status::Http500InternalServerError) }
+    else { Err(http_error(Status::Http400BadRequest, "unknown status code")) }
+}
+
+fn test_request(method: String, path: String) -> String {
+    method.concat(" ").concat(path).concat(" HTTP/1.0\r\n\r\n")
+}
+
+partial fn parse_rest(lines: List[String], status: Status) -> Response {
+    let headers:    ref Map[String, String] = Map::new();
+    let i:          ref Int                 = 1;
+    let n:          Int                     = lines.len();
+    let body_start: ref Int                 = n;
+    let in_body:    ref Bool                = false;
+    while i < n && !in_body {
+        let line: String = match lines.get(i) { Some(s) => s, None => "" };
+        if line == "" {
+            body_start = i + 1;
+            in_body = true
+        } else {
+            let kv: List[String] = line.split(": ");
+            if kv.len() >= 2 {
+                let k: String = match kv.get(0) { Some(s) => s, None => "" };
+                let v: String = match kv.get(1) { Some(s) => s, None => "" };
+                headers.insert(k, v)
+            }
+            i = i + 1
+        }
+    }
+
+    let body:  ref String = "";
+    let j:     ref Int    = body_start;
+    let first: ref Bool   = true;
+    while j < n {
+        let line: String = match lines.get(j) { Some(s) => s, None => "" };
+        if first {
+            body = line;
+            first = false
+        } else {
+            body = body.concat("\r\n").concat(line)
+        }
+        j = j + 1
+    }
+
+    Response { status: status, headers: headers, body: body }
+}
+
+fn parse_response(raw: String) -> Result[Response, HttpError] {
+    let lines: List[String] = raw.split("\r\n");
+    let status_line: String = match lines.get(0) { Some(s) => s, None => "" };
+    if status_line == "" {
+        Err(http_error(Status::Http400BadRequest, "empty response"))
+    } else {
+        let parts: List[String] = status_line.split(" ");
+        if parts.len() < 3 {
+            Err(http_error(Status::Http400BadRequest, "malformed status line"))
+        } else {
+            let code_str: String = match parts.get(1) { Some(s) => s, None => "" };
+            match code_str.parse_int() {
+                Err(_)   => Err(http_error(Status::Http400BadRequest, "non-numeric")),
+                Ok(code) => match status_from_code(code) {
+                    Err(e)     => Err(e),
+                    Ok(status) => Ok(parse_rest(lines, status)),
+                },
+            }
+        }
+    }
+}
+
+fn expect_status(raw: String, expected: Status) -> Bool {
+    match parse_response(raw) {
+        Ok(r)  => status_code(r.status) == status_code(expected),
+        Err(_) => false,
+    }
+}
+
+fn expect_body_contains(raw: String, expected: String) -> Bool {
+    match parse_response(raw) {
+        Ok(r)  => r.body.contains(expected),
+        Err(_) => false,
+    }
+}
+
+fn expect_header(raw: String, key: String, value: String) -> Bool {
+    match parse_response(raw) {
+        Ok(r)  => match r.headers.get(key) {
+            Some(v) => v == value,
+            None    => false,
+        },
+        Err(_) => false,
+    }
+}
+
+// ── test_request ────────────────────────────────────────────────────────────
+
+test fn test_request_get_health() -> Unit {
+    assert_eq(test_request("GET", "/health"), "GET /health HTTP/1.0\r\n\r\n")
+}
+
+test fn test_request_post_users() -> Unit {
+    assert_eq(test_request("POST", "/users"), "POST /users HTTP/1.0\r\n\r\n")
+}
+
+// ── parse_response ──────────────────────────────────────────────────────────
+
+test fn parse_response_status_200() -> Unit {
+    let raw: String = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nok";
+    match parse_response(raw) {
+        Ok(r)  => assert_eq(status_code(r.status), 200),
+        Err(_) => assert_eq(true, false),
+    }
+}
+
+test fn parse_response_status_404() -> Unit {
+    let raw: String = "HTTP/1.0 404 Not Found\r\nContent-Length: 0\r\n\r\n";
+    match parse_response(raw) {
+        Ok(r)  => assert_eq(status_code(r.status), 404),
+        Err(_) => assert_eq(true, false),
+    }
+}
+
+test fn parse_response_extracts_header() -> Unit {
+    let raw: String = "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nok";
+    match parse_response(raw) {
+        Ok(r)  => match r.headers.get("Content-Type") {
+            Some(v) => assert_eq(v, "text/plain"),
+            None    => assert_eq(true, false),
+        },
+        Err(_) => assert_eq(true, false),
+    }
+}
+
+test fn parse_response_extracts_body() -> Unit {
+    let raw: String = "HTTP/1.0 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+    match parse_response(raw) {
+        Ok(r)  => assert_eq(r.body, "hello"),
+        Err(_) => assert_eq(true, false),
+    }
+}
+
+test fn parse_response_empty_body() -> Unit {
+    let raw: String = "HTTP/1.0 404 Not Found\r\nContent-Length: 0\r\n\r\n";
+    match parse_response(raw) {
+        Ok(r)  => assert_eq(r.body, ""),
+        Err(_) => assert_eq(true, false),
+    }
+}
+
+test fn parse_response_rejects_empty() -> Unit {
+    match parse_response("") {
+        Ok(_)  => assert_eq(true, false),
+        Err(e) => assert_eq(status_code(e.status), 400),
+    }
+}
+
+test fn parse_response_rejects_malformed_status_line() -> Unit {
+    match parse_response("HTTP/1.0 200\r\n\r\n") {
+        Ok(_)  => assert_eq(true, false),
+        Err(e) => assert_eq(status_code(e.status), 400),
+    }
+}
+
+test fn parse_response_rejects_non_numeric_status() -> Unit {
+    match parse_response("HTTP/1.0 NaN OK\r\n\r\n") {
+        Ok(_)  => assert_eq(true, false),
+        Err(e) => assert_eq(status_code(e.status), 400),
+    }
+}
+
+test fn parse_response_rejects_unknown_status_code() -> Unit {
+    match parse_response("HTTP/1.0 999 Wat\r\n\r\n") {
+        Ok(_)  => assert_eq(true, false),
+        Err(e) => assert_eq(status_code(e.status), 400),
+    }
+}
+
+// ── expect_status ───────────────────────────────────────────────────────────
+
+test fn expect_status_matches() -> Unit {
+    let raw: String = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nok";
+    assert_eq(expect_status(raw, Status::Http200Ok), true)
+}
+
+test fn expect_status_differs() -> Unit {
+    let raw: String = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nok";
+    assert_eq(expect_status(raw, Status::Http404NotFound), false)
+}
+
+test fn expect_status_false_on_malformed() -> Unit {
+    assert_eq(expect_status("garbage", Status::Http200Ok), false)
+}
+
+// ── expect_body_contains ────────────────────────────────────────────────────
+
+test fn expect_body_contains_hit() -> Unit {
+    let raw: String = "HTTP/1.0 200 OK\r\nContent-Length: 11\r\n\r\nhello world";
+    assert_eq(expect_body_contains(raw, "world"), true)
+}
+
+test fn expect_body_contains_miss() -> Unit {
+    let raw: String = "HTTP/1.0 200 OK\r\nContent-Length: 11\r\n\r\nhello world";
+    assert_eq(expect_body_contains(raw, "zzz"), false)
+}
+
+test fn expect_body_contains_false_on_malformed() -> Unit {
+    assert_eq(expect_body_contains("garbage", "x"), false)
+}
+
+// ── expect_header ───────────────────────────────────────────────────────────
+
+test fn expect_header_match() -> Unit {
+    let raw: String = "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nok";
+    assert_eq(expect_header(raw, "Content-Type", "text/plain"), true)
+}
+
+test fn expect_header_wrong_value() -> Unit {
+    let raw: String = "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nok";
+    assert_eq(expect_header(raw, "Content-Type", "application/json"), false)
+}
+
+test fn expect_header_missing_key() -> Unit {
+    let raw: String = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nok";
+    assert_eq(expect_header(raw, "X-Custom", "v"), false)
+}

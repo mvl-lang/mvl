@@ -1,0 +1,146 @@
+// pkg.http.testing — response parsing and BDD-style assertion helpers.
+//
+// Pure MVL.  No runtime dependencies — works today with stdlib-only.
+//
+// Usage:
+//   use pkg.http.{test_request, parse_response, expect_status,
+//                 expect_body_contains, expect_header}
+//
+// See #951.
+
+use pkg.http.{Status, Response, HttpError, status_code, http_error}
+
+// ── Status reconstruction ────────────────────────────────────────────────────
+
+/// Map a numeric status code back to a Status enum.  Unknown codes are
+/// rejected with a 400-class error.
+fn status_from_code(code: Int) -> Result[Status, HttpError] {
+    if code == 200      { Ok(Status::Http200Ok) }
+    else if code == 201 { Ok(Status::Http201Created) }
+    else if code == 202 { Ok(Status::Http202Accepted) }
+    else if code == 204 { Ok(Status::Http204NoContent) }
+    else if code == 301 { Ok(Status::Http301MovedPermanently) }
+    else if code == 302 { Ok(Status::Http302Found) }
+    else if code == 304 { Ok(Status::Http304NotModified) }
+    else if code == 400 { Ok(Status::Http400BadRequest) }
+    else if code == 401 { Ok(Status::Http401Unauthorized) }
+    else if code == 403 { Ok(Status::Http403Forbidden) }
+    else if code == 404 { Ok(Status::Http404NotFound) }
+    else if code == 405 { Ok(Status::Http405MethodNotAllowed) }
+    else if code == 409 { Ok(Status::Http409Conflict) }
+    else if code == 410 { Ok(Status::Http410Gone) }
+    else if code == 422 { Ok(Status::Http422UnprocessableEntity) }
+    else if code == 429 { Ok(Status::Http429TooManyRequests) }
+    else if code == 500 { Ok(Status::Http500InternalServerError) }
+    else if code == 501 { Ok(Status::Http501NotImplemented) }
+    else if code == 502 { Ok(Status::Http502BadGateway) }
+    else if code == 503 { Ok(Status::Http503ServiceUnavailable) }
+    else if code == 504 { Ok(Status::Http504GatewayTimeout) }
+    else { Err(http_error(Status::Http400BadRequest, "unknown status code")) }
+}
+
+// ── Request builder ──────────────────────────────────────────────────────────
+
+/// Build a raw HTTP/1.0 request string suitable for feeding into parse_request.
+pub fn test_request(method: String, path: String) -> String {
+    method.concat(" ").concat(path).concat(" HTTP/1.0\r\n\r\n")
+}
+
+// ── Response parser ──────────────────────────────────────────────────────────
+
+/// Parse a raw HTTP/1.x response string into a Response.
+///
+/// Inverse of serialize_response — enables round-trip testing.
+pub fn parse_response(raw: String) -> Result[Response, HttpError] {
+    let lines: List[String] = raw.split("\r\n");
+    let status_line: String = match lines.get(0) {
+        Some(s) => s,
+        None    => "",
+    };
+    if status_line == "" {
+        Err(http_error(Status::Http400BadRequest, "empty response"))
+    } else {
+        let parts: List[String] = status_line.split(" ");
+        if parts.len() < 3 {
+            Err(http_error(Status::Http400BadRequest, "malformed status line"))
+        } else {
+            let code_str: String = match parts.get(1) { Some(s) => s, None => "" };
+            match code_str.parse_int() {
+                Err(_)   => Err(http_error(Status::Http400BadRequest, "non-numeric status code")),
+                Ok(code) => match status_from_code(code) {
+                    Err(e)     => Err(e),
+                    Ok(status) => Ok(parse_rest(lines, status)),
+                },
+            }
+        }
+    }
+}
+
+/// Parse headers + body given the lines (after status line) and the status enum.
+partial fn parse_rest(lines: List[String], status: Status) -> Response {
+    let headers:    ref Map[String, String] = Map::new();
+    let i:          ref Int                 = 1;
+    let n:          Int                     = lines.len();
+    let body_start: ref Int                 = n;
+    let in_body:    ref Bool                = false;
+    while i < n && !in_body {
+        let line: String = match lines.get(i) { Some(s) => s, None => "" };
+        if line == "" {
+            body_start = i + 1;
+            in_body = true
+        } else {
+            let kv: List[String] = line.split(": ");
+            if kv.len() >= 2 {
+                let k: String = match kv.get(0) { Some(s) => s, None => "" };
+                let v: String = match kv.get(1) { Some(s) => s, None => "" };
+                headers.insert(k, v)
+            }
+            i = i + 1
+        }
+    }
+
+    let body: ref String = "";
+    let j:    ref Int    = body_start;
+    let first: ref Bool  = true;
+    while j < n {
+        let line: String = match lines.get(j) { Some(s) => s, None => "" };
+        if first {
+            body = line;
+            first = false
+        } else {
+            body = body.concat("\r\n").concat(line)
+        }
+        j = j + 1
+    }
+
+    Response { status: status, headers: headers, body: body }
+}
+
+// ── BDD-style assertion helpers ──────────────────────────────────────────────
+
+/// True if the raw response's status code equals `expected`.
+pub fn expect_status(raw: String, expected: Status) -> Bool {
+    match parse_response(raw) {
+        Ok(r)  => status_code(r.status) == status_code(expected),
+        Err(_) => false,
+    }
+}
+
+/// True if the raw response's body contains `expected` as a substring.
+pub fn expect_body_contains(raw: String, expected: String) -> Bool {
+    match parse_response(raw) {
+        Ok(r)  => r.body.contains(expected),
+        Err(_) => false,
+    }
+}
+
+/// True if the raw response contains a header `key: value`.
+pub fn expect_header(raw: String, key: String, value: String) -> Bool {
+    match parse_response(raw) {
+        Ok(r)  => match r.headers.get(key) {
+            Some(v) => v == value,
+            None    => false,
+        },
+        Err(_) => false,
+    }
+}
